@@ -11,17 +11,6 @@ float3 defaultFresnelSchlick(float cosine, float3 f0) {
     return f0 + (1.0 - f0) * (m2 * m2 * m);
 }
 
-float defaultFresnelDielectric(float cosine, float etaI, float etaT) {
-    float c = clamp(cosine, 0.0, 1.0);
-    float eta = etaI / etaT;
-    float sinT2 = eta * eta * max(0.0, 1.0 - c * c);
-    if (sinT2 >= 1.0) return 1.0;
-    float cosT = sqrt(max(0.0, 1.0 - sinT2));
-    float rs = (etaI * c - etaT * cosT) / (etaI * c + etaT * cosT);
-    float rp = (etaT * c - etaI * cosT) / (etaT * c + etaI * cosT);
-    return 0.5 * (rs * rs + rp * rp);
-}
-
 float defaultGgxD(float ndh, float alpha) {
     float a2 = alpha * alpha;
     float d = ndh * ndh * (a2 - 1.0) + 1.0;
@@ -105,6 +94,9 @@ public PackBsdfEvaluation defaultEvaluateBsdf(PackBsdfQuery query) {
     return result;
 }
 
+// The engine never calls this for a transmissive closure (transmission > 0) — it routes those through
+// its own dielectric interface (engineSampleDielectricInterface) instead, since Fresnel choice,
+// reflect/refract, and the medium a ray continues into are engine-owned in full.
 public PackBsdfSample defaultSampleBsdf(PackBsdfSampleQuery query) {
     PackBsdfSample result;
     result.incomingDirection = float3(0.0);
@@ -115,31 +107,6 @@ public PackBsdfSample defaultSampleBsdf(PackBsdfSampleQuery query) {
     float3 n = query.surface.shadingNormal;
     float ndv = max(0.0, dot(n, query.outgoingDirection));
     if (ndv <= 0.0) return result;
-
-    if (query.surface.transmission > 0.0) {
-        float fresnel = defaultFresnelDielectric(ndv, query.incidentIor, query.transmittedIor);
-        if (query.random.x < fresnel) {
-            result.incomingDirection = reflect(-query.outgoingDirection, n);
-            result.throughputWeight = float3(1.0);
-            result.pdf = fresnel;
-            result.eventFlags = PACK_EVENT_SPECULAR | PACK_EVENT_REFLECTION;
-        } else {
-            float3 refracted = refract(-query.outgoingDirection, n,
-                    query.incidentIor / query.transmittedIor);
-            if (dot(refracted, refracted) == 0.0) {
-                result.incomingDirection = reflect(-query.outgoingDirection, n);
-                result.throughputWeight = float3(1.0);
-                result.pdf = 1.0;
-                result.eventFlags = PACK_EVENT_SPECULAR | PACK_EVENT_REFLECTION;
-            } else {
-                result.incomingDirection = normalize(refracted);
-                result.throughputWeight = float3(query.surface.transmission);
-                result.pdf = 1.0 - fresnel;
-                result.eventFlags = PACK_EVENT_SPECULAR | PACK_EVENT_TRANSMISSION;
-            }
-        }
-        return result;
-    }
 
     float specularProbability = defaultSpecularProbability(query.surface);
     float selector = query.random.x;
@@ -163,8 +130,6 @@ public PackBsdfSample defaultSampleBsdf(PackBsdfSampleQuery query) {
     evaluationQuery.surface = query.surface;
     evaluationQuery.outgoingDirection = query.outgoingDirection;
     evaluationQuery.incomingDirection = result.incomingDirection;
-    evaluationQuery.incidentIor = query.incidentIor;
-    evaluationQuery.transmittedIor = query.transmittedIor;
     PackBsdfEvaluation evaluation = defaultEvaluateBsdf(evaluationQuery);
     result.pdf = evaluation.pdf;
     result.throughputWeight = evaluation.value
@@ -173,4 +138,9 @@ public PackBsdfSample defaultSampleBsdf(PackBsdfSampleQuery query) {
             ? PACK_EVENT_GLOSSY | PACK_EVENT_REFLECTION
             : PACK_EVENT_DIFFUSE | PACK_EVENT_REFLECTION;
     return result;
+}
+
+// Identity: the reference look applies no stylization to a shaded contribution.
+public float3 defaultEvaluateResponse(float3 radiance, PackSurfaceClosure surface) {
+    return radiance;
 }

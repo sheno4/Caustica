@@ -53,6 +53,10 @@ public struct EngineSurfaceVertexOutput {
     public float3 guideNormal;
     public float guideRoughness;
     public uint eventFlags;
+    // Engine-derived from eventFlags (see engineShowsCelestial); never set by the pack. The caller's
+    // next miss/hit should pass this straight through as EngineMissInput.showCelestialBodies /
+    // the emitter direct-hit gate, so both double-count invariants are computed exactly once.
+    public bool showsCelestial;
     public uint continuationValid;
 };
 
@@ -67,4 +71,13 @@ public struct EngineMediumSegmentResult {
     public PackMedium medium;
     public float3 transmittance;
     public float3 emittedRadiance;
+};
+
+// Result of the engine-owned dielectric interface (see engineSampleDielectricInterface). A pack never
+// produces this: Fresnel choice, reflection vs. refraction, and total-internal-reflection fallback are
+// engine invariants, not appearance.
+public struct EngineDielectricSample {
+    public float3 direction;
+    public float3 throughputWeight;
+    public uint eventFlags;
 };

@@ -53,7 +53,7 @@ float3 exerciseEnginePipeline<TPack : IRayPack>(TPack pack) {
         EngineDirectLightCandidate sun = engineSampleDirectionalLight(pack, frame, 0u, 0.5,
                 float2(0.25, 0.75));
         engineConsiderDirectCandidate(pack, surface, surfaceInput.outgoingDirection,
-                1.0, surface.interiorIor, sun, 0.3, directReservoir);
+                sun, 0.3, directReservoir);
     }
 
     EngineDirectLightCandidate emissive;
@@ -63,7 +63,7 @@ float3 exerciseEnginePipeline<TPack : IRayPack>(TPack pack) {
     emissive.sourceId = 17u;
     emissive.flags = ENGINE_LIGHT_FINITE_DISTANCE;
     engineConsiderDirectCandidate(pack, surface, surfaceInput.outgoingDirection,
-            1.0, surface.interiorIor, emissive, 0.8, directReservoir);
+            emissive, 0.8, directReservoir);
 
     EngineSurfaceVertexInput vertex;
     vertex.surfaceInput = surfaceInput;

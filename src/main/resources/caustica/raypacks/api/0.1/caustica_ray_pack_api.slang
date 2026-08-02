@@ -2,6 +2,22 @@ module caustica_ray_pack_api;
 
 // Ray-pack colours and radiance are scene-linear ACEScg. Distances are Minecraft blocks, treated as
 // metres by the default pack. Directions are normalized and point away from the shaded position.
+//
+// Ownership invariants for anyone extending this module (see docs/RAY_PACK_ARCHITECTURE.md):
+//   - Materials are content, not pack data. PackMaterialInput is engine-decoded from resource-pack
+//     JSON/LabPBR; a ray pack never defines material facts, only interprets them in createSurface.
+//   - A pack produces no canonical render product but scene radiance. The engine may query exactly
+//     two guide values from the closure it already has (shadingNormal, diffuseAlbedo as the
+//     demodulation-albedo default) — it never asks the pack to write a guide image.
+//   - Dielectric interfaces (Fresnel choice, reflection vs. refraction, the medium a ray continues
+//     into) are engine-owned in full. evaluateBsdf/sampleBsdf only ever see reflective closures.
+//   - The BSDF (evaluateBsdf/sampleBsdf) is the estimator's target function: value/pdf must agree,
+//     stay finite, and stay non-negative, or every engine lighting backend is biased. Look policy
+//     (banding, palette snapping, tinting) belongs in evaluateResponse, which is applied to an
+//     already-shaded contribution and is never seen by the estimator.
+//   - Loop invariants that look like appearance but are correctness — celestial-disc visibility and
+//     emitter direct-hit gating — are derived by the engine from PackBsdfSample.eventFlags, never
+//     set by the pack. See engineShowsCelestial / engineGatesEmitterDirectHit.
 
 public static const uint PACK_SURFACE_TWO_SIDED = 0x1u;
 public static const uint PACK_SURFACE_THIN = 0x2u;
@@ -75,12 +91,14 @@ public struct PackSurfaceClosure {
     public uint flags;
 };
 
+// Reflection-lobe estimator query. Dielectric transmission (Fresnel choice, reflect/refract, and the
+// medium the ray continues into) is engine-owned in full — see caustica_ray_engine_integrator's
+// engineSampleDielectricInterface — so no IOR crosses this boundary. A closure with transmission > 0
+// always evaluates to zero here (see evaluateBsdf's contract) and is never passed to sampleBsdf.
 public struct PackBsdfQuery {
     public PackSurfaceClosure surface;
     public float3 outgoingDirection;
     public float3 incomingDirection;
-    public float incidentIor;
-    public float transmittedIor;
 };
 
 public struct PackBsdfEvaluation {
@@ -90,11 +108,11 @@ public struct PackBsdfEvaluation {
     public uint eventFlags;
 };
 
+// sampleBsdf is only ever called for a reflective closure (transmission == 0); the engine routes
+// transmissive closures through its own dielectric interface instead. No IOR is needed here.
 public struct PackBsdfSampleQuery {
     public PackSurfaceClosure surface;
     public float3 outgoingDirection;
-    public float incidentIor;
-    public float transmittedIor;
     // The engine supplies independent uniform variates so replay and scheduling remain engine-owned.
     public float3 random;
 };
@@ -168,6 +186,10 @@ public interface IPackSurfaceModel {
     public PackSurfaceClosure createSurface(PackSurfaceInput input);
     public PackBsdfEvaluation evaluateBsdf(PackBsdfQuery query);
     public PackBsdfSample sampleBsdf(PackBsdfSampleQuery query);
+    // Look policy applied to an already-shaded, already-estimated contribution (emission + direct
+    // lighting) at this surface. Unconstrained and non-physical by design — quantization, palette
+    // snapping, tinting. Never called by the estimator and never affects a BSDF value or pdf.
+    public float3 evaluateResponse(float3 radiance, PackSurfaceClosure surface);
 };
 
 public interface IPackEnvironmentModel {

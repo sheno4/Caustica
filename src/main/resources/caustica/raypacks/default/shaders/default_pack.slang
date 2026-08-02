@@ -22,6 +22,10 @@ public struct DefaultRayPack : IRayPack {
         return defaultSampleBsdf(query);
     }
 
+    public float3 evaluateResponse(float3 radiance, PackSurfaceClosure surface) {
+        return defaultEvaluateResponse(radiance, surface);
+    }
+
     public float3 evaluateEnvironment(PackEnvironmentQuery query) {
         return defaultEvaluateEnvironment(query);
     }

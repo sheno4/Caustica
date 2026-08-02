@@ -56,19 +56,18 @@ public EngineDirectLightCandidate engineSampleDirectionalLight<TPack : IPackEnvi
     return candidate;
 }
 
+// A transmissive closure (surface.transmission > 0) always evaluates to zero here: dielectrics have
+// no diffuse/glossy response and are handled by the engine's own interface routine instead, never by
+// NEE. No IOR is needed for a reflective evaluateBsdf, so none crosses this boundary.
 public float3 engineEvaluateDirectCandidate<TPack : IPackSurfaceModel>(
         TPack pack,
         PackSurfaceClosure surface,
         float3 outgoingDirection,
-        float incidentIor,
-        float transmittedIor,
         EngineDirectLightCandidate candidate) {
     PackBsdfQuery query;
     query.surface = surface;
     query.outgoingDirection = outgoingDirection;
     query.incomingDirection = candidate.direction;
-    query.incidentIor = incidentIor;
-    query.transmittedIor = transmittedIor;
     PackBsdfEvaluation bsdf = pack.evaluateBsdf(query);
     float receiverCosine = abs(dot(surface.shadingNormal, candidate.direction));
     return bsdf.value * receiverCosine * candidate.radianceOverProposalPdf;
@@ -80,13 +79,10 @@ public void engineConsiderDirectCandidate<TPack : IPackSurfaceModel>(
         TPack pack,
         PackSurfaceClosure surface,
         float3 outgoingDirection,
-        float incidentIor,
-        float transmittedIor,
         EngineDirectLightCandidate candidate,
         float replacementRandom,
         inout EngineDirectLightingReservoir reservoir) {
-    float3 contribution = engineEvaluateDirectCandidate(pack, surface, outgoingDirection,
-            incidentIor, transmittedIor, candidate);
+    float3 contribution = engineEvaluateDirectCandidate(pack, surface, outgoingDirection, candidate);
     float target = engineDirectTarget(contribution);
     reservoir.sampleCount += 1u;
     reservoir.weightSum += target;
@@ -103,8 +99,6 @@ public EngineDirectLightingResult engineResolveDirectLighting<TPack : IPackSurfa
         TPack pack,
         PackSurfaceClosure surface,
         float3 outgoingDirection,
-        float incidentIor,
-        float transmittedIor,
         EngineDirectLightingReservoir reservoir,
         float visibility) {
     EngineDirectLightingResult result;
@@ -117,7 +111,7 @@ public EngineDirectLightingResult engineResolveDirectLighting<TPack : IPackSurfa
             || reservoir.selectedTarget <= 0.0) return result;
 
     float3 selectedContribution = engineEvaluateDirectCandidate(pack, surface, outgoingDirection,
-            incidentIor, transmittedIor, reservoir.selected);
+            reservoir.selected);
     float normalization = reservoir.weightSum
             / (float(reservoir.sampleCount) * reservoir.selectedTarget);
     result.radiance = selectedContribution * normalization * clamp(visibility, 0.0, 1.0);
