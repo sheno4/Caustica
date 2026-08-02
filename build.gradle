@@ -1,5 +1,7 @@
 import javax.inject.Inject
 import org.gradle.process.ExecOperations
+import groovy.json.JsonOutput
+import java.security.MessageDigest
 import dev.comfyfluffy.caustica.build.GenerateShaderRecords
 import dev.comfyfluffy.caustica.build.GenerateRtBindings
 
@@ -67,6 +69,10 @@ dependencies {
 	// ModConfigSpec is built on.
 	include implementation("com.electronwill.night-config:core:3.8.3")
 	include implementation("com.electronwill.night-config:toml:3.8.3")
+
+	// Runtime validation for the source-only ray-pack manifest. The validator uses
+	// Gson already provided by Minecraft, so only this dependency needs nesting.
+	include implementation("dev.harrel:json-schema:1.9.1")
 }
 
 processResources {
@@ -189,6 +195,56 @@ def compileShaders = tasks.register("compileShaders", CompileShaders) {
 	slangc = resolveVulkanTool("slangc")
 }
 
+abstract class ValidateRayPackContract extends DefaultTask {
+	@InputFile abstract RegularFileProperty getProbeSource()
+	@InputFile abstract RegularFileProperty getPackRootModule()
+	@InputDirectory abstract DirectoryProperty getApiSourceDir()
+	@InputDirectory abstract DirectoryProperty getEngineSourceDir()
+	@InputDirectory abstract DirectoryProperty getPackSourceDir()
+	@OutputFile abstract RegularFileProperty getOutputSpirv()
+	@Input abstract Property<String> getSpirvVal()
+	@Input abstract Property<String> getSlangc()
+
+	@Inject abstract ExecOperations getExecOps()
+
+	@TaskAction
+	void validate() {
+		def output = outputSpirv.get().asFile
+		output.parentFile.mkdirs()
+		execOps.exec {
+			commandLine slangc.get(), probeSource.get().asFile.absolutePath,
+					packRootModule.get().asFile.absolutePath,
+					"-entry", "main", "-specialize", "DefaultRayPack",
+					"-target", "spirv", "-profile", "spirv_1_5", "-matrix-layout-column-major",
+					"-warnings-as-errors", "all", "-warnings-disable", "41012",
+					"-I", apiSourceDir.get().asFile.absolutePath,
+					"-I", engineSourceDir.get().asFile.absolutePath,
+					"-I", packSourceDir.get().asFile.absolutePath,
+					"-o", output.absolutePath
+		}
+		execOps.exec {
+			commandLine spirvVal.get(), "--target-env", "vulkan1.2", output.absolutePath
+		}
+	}
+}
+
+def validateRayPackContract = tasks.register("validateRayPackContract", ValidateRayPackContract) {
+	group = "verification"
+	description = "Type-checks the engine shader boundary against the source-only default ray pack."
+	probeSource = file("src/test/resources/caustica/raypacks/tests/engine_pipeline_probe.slang")
+	packRootModule = file("src/main/resources/caustica/raypacks/default/shaders/default_pack.slang")
+	apiSourceDir = file("src/main/resources/caustica/raypacks/api/0.1")
+	engineSourceDir = file("src/main/resources/caustica/raypacks/engine/0.1")
+	packSourceDir = file("src/main/resources/caustica/raypacks/default/shaders")
+	outputSpirv = layout.buildDirectory.file("validation/raypacks/engine-default-pack-probe.spv")
+	spirvVal = resolveVulkanTool("spirv-val")
+	slangc = resolveVulkanTool("slangc")
+}
+
+tasks.named("check") {
+	dependsOn(validateRayPackContract)
+}
+
 def generateShaderRecords = tasks.register("generateShaderRecords", GenerateShaderRecords) {
 	group = "build"
 	description = "Generates typed Java shader records and serializers from Slang reflection."
@@ -218,6 +274,183 @@ sourceSets.main.java.srcDir(files(rtBindingsGenRoot).builtBy(generateRtBindings)
 // Emit the .spv into the main resources so they land in the jar / on the runClient classpath at the
 // same /caustica/shaders/ path the pipeline loaders read. builtBy wires the dependency.
 sourceSets.main.resources.srcDir(files(shaderGenRoot).builtBy(compileShaders))
+
+def slangRuntimeVersion = project.property("slang_runtime_version").toString()
+def slangRuntimeGenRoot = layout.buildDirectory.dir("generated/slang-runtime")
+def slangRuntimeInputRoot = providers.gradleProperty("slangRuntimeInputRoot").map { file(it) }
+def slangShimConfig = (findProperty("slangShimConfig") ?: "release").toString().toLowerCase(java.util.Locale.ROOT)
+def slangShimOutDir = layout.buildDirectory.dir("native/slang_shim/${slangShimConfig}").get().asFile
+def currentSlangPlatform = {
+	def os = org.gradle.internal.os.OperatingSystem.current()
+	def arch = System.getProperty("os.arch", "").toLowerCase(java.util.Locale.ROOT)
+	def x64 = arch == "x86_64" || arch == "amd64"
+	if (os.windows && x64) {
+		return "windows-x64"
+	}
+	if (os.linux && x64) {
+		return "linux-x64"
+	}
+	return null
+}()
+def requestedSlangPlatforms = (findProperty("slangPlatforms") ?: "current").toString()
+		.split(",")
+		.collect { it.trim() }
+		.findAll { !it.isEmpty() }
+		.collect { it == "current" ? currentSlangPlatform : it }
+def supportedSlangPlatforms = ["windows-x64", "linux-x64"]
+if (requestedSlangPlatforms.any { it == null || !supportedSlangPlatforms.contains(it) }) {
+	throw new GradleException("Unsupported Slang runtime platform(s): ${requestedSlangPlatforms}")
+}
+
+def bundleSlangRuntime = tasks.register("bundleSlangRuntime") {
+	group = "build"
+	description = "Bundles the Slang shared-library compiler runtime into mod resources."
+	inputs.property "slangRuntimeVersion", slangRuntimeVersion
+	inputs.property "slangPlatforms", requestedSlangPlatforms.join(",")
+	inputs.property "slangShimConfig", slangShimConfig
+	if (slangRuntimeInputRoot.isPresent()) {
+		inputs.dir(slangRuntimeInputRoot)
+	} else {
+		inputs.dir(slangShimOutDir)
+		def sdk = System.getenv("VULKAN_SDK")
+		if (sdk) {
+			inputs.files(fileTree(new File(sdk, "Bin")) {
+				include "slang*.dll"
+				include "slang-standard-module-*/**"
+			})
+			inputs.files(fileTree(new File(sdk, "bin")) {
+				include "libslang*.so*"
+				include "slang-standard-module-*/**"
+			})
+			inputs.files(fileTree(new File(sdk, "lib")) {
+				include "libslang*.so*"
+				include "slang-standard-module-*/**"
+			})
+		}
+	}
+	outputs.dir(slangRuntimeGenRoot)
+
+	doLast {
+		def outputRoot = slangRuntimeGenRoot.get().asFile
+		delete(outputRoot)
+		def scratchRoot = new File(temporaryDir, "runtime")
+		delete(scratchRoot)
+		scratchRoot.mkdirs()
+
+		requestedSlangPlatforms.each { platform ->
+			def destination = new File(scratchRoot,
+					"caustica/natives/slang/${slangRuntimeVersion}/${platform}")
+			destination.mkdirs()
+			if (slangRuntimeInputRoot.isPresent()) {
+				def source = new File(slangRuntimeInputRoot.get(), platform)
+				if (!source.isDirectory()) {
+					throw new GradleException("Missing prepared Slang runtime directory ${source}")
+				}
+				copy {
+					from(source)
+					exclude "runtime.json"
+					into(destination)
+				}
+			} else {
+				if (platform != currentSlangPlatform) {
+					throw new GradleException("Platform ${platform} requires -PslangRuntimeInputRoot")
+				}
+				def sdkPath = System.getenv("VULKAN_SDK")
+				if (!sdkPath) {
+					throw new GradleException("VULKAN_SDK environment variable is not set")
+				}
+				def sdk = file(sdkPath)
+				copy {
+					from(slangShimOutDir) {
+						include platform == "windows-x64" ? "causticaslang.dll" : "libcausticaslang.so"
+					}
+					if (platform == "windows-x64") {
+						from(new File(sdk, "Bin")) {
+							include "slang*.dll"
+							include "slang-standard-module-*/**"
+						}
+					} else {
+						from(new File(sdk, "lib")) {
+							include "libslang*.so*"
+							include "slang-standard-module-*/**"
+						}
+						from(new File(sdk, "bin")) {
+							include "libslang*.so*"
+							include "slang-standard-module-*/**"
+						}
+					}
+					into(destination)
+				}
+			}
+
+			def shimName = platform == "windows-x64" ? "causticaslang.dll" : "libcausticaslang.so"
+			def coreName = platform == "windows-x64" ? "slang.dll" : "libslang.so"
+			def compilerName = platform == "windows-x64" ? "slang-compiler.dll" : "libslang-compiler.so"
+			def missing = [shimName, coreName, compilerName].findAll { !new File(destination, it).isFile() }
+			if (!missing.empty) {
+				throw new GradleException("Incomplete Slang runtime for ${platform}; missing ${missing.join(', ')}")
+			}
+
+			def files = fileTree(destination).files.sort { a, b -> a.path <=> b.path }
+			def digest = { File source ->
+				def md = MessageDigest.getInstance("SHA-256")
+				source.withInputStream { input ->
+					byte[] buffer = new byte[64 * 1024]
+					for (int read = input.read(buffer); read >= 0; read = input.read(buffer)) {
+						if (read > 0) md.update(buffer, 0, read)
+					}
+				}
+				return md.digest().encodeHex().toString()
+			}
+			def entries = files.collect { source ->
+				[
+					path: destination.toPath().relativize(source.toPath()).toString().replace('\\', '/'),
+					size: source.length(),
+					sha256: digest(source),
+				]
+			}
+			def bundleDigest = MessageDigest.getInstance("SHA-256")
+			entries.each { entry ->
+				bundleDigest.update(entry.path.getBytes(java.nio.charset.StandardCharsets.UTF_8))
+				bundleDigest.update((byte) 0)
+				bundleDigest.update(entry.sha256.getBytes(java.nio.charset.StandardCharsets.US_ASCII))
+			}
+			def manifest = [
+				format: 1,
+				abi: 2,
+				slangVersion: slangRuntimeVersion,
+				platform: platform,
+				shim: shimName,
+				bundleSha256: bundleDigest.digest().encodeHex().toString(),
+				files: entries,
+			]
+			new File(destination, "runtime.json").text = JsonOutput.prettyPrint(JsonOutput.toJson(manifest)) + "\n"
+		}
+		def indexFile = new File(scratchRoot, "caustica/natives/slang/runtime.json")
+		indexFile.parentFile.mkdirs()
+		indexFile.text = JsonOutput.prettyPrint(JsonOutput.toJson([
+			format: 1,
+			slangVersion: slangRuntimeVersion,
+			platforms: requestedSlangPlatforms,
+		])) + "\n"
+
+		copy {
+			from(scratchRoot)
+			into(outputRoot)
+		}
+	}
+}
+
+sourceSets.main.resources.srcDir(files(slangRuntimeGenRoot).builtBy(bundleSlangRuntime))
+
+tasks.named("test", Test) {
+	dependsOn(bundleSlangRuntime)
+	jvmArgs "--enable-native-access=ALL-UNNAMED"
+	doFirst {
+		systemProperty "caustica.test.slangRuntimeDir", new File(slangRuntimeGenRoot.get().asFile,
+				"caustica/natives/slang/${slangRuntimeVersion}/${currentSlangPlatform}").absolutePath
+	}
+}
 
 def ngxNativeGenRoot = layout.buildDirectory.dir("generated/ngx-natives")
 def requestedTaskNames = gradle.startParameter.taskNames.collect { it.toLowerCase(java.util.Locale.ROOT) }

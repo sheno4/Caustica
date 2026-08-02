@@ -13,5 +13,6 @@ See [COPYING](COPYING) for the GNU General Public License version 3 text and
 version 3 additional permissions.
 
 Third-party components are not relicensed by this notice. Release artifacts may
-include NVIDIA DLSS/NGX SDK binaries and related components under NVIDIA's own
-license terms; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+include NVIDIA DLSS/NGX SDK binaries under NVIDIA's terms and Slang compiler
+libraries under Apache 2.0 with LLVM Exception; see
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

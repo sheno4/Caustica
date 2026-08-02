@@ -59,7 +59,7 @@ public final class CausticaConfig {
             Rt.ENABLED, Rt.Composite.SPP, Rt.Composite.MAX_BOUNCES, Rt.Terrain.ASYNC_DISPATCH_PER_PASS, Rt.Omm.ENABLED,
             Rt.Entities.ENABLED, Rt.Entities.GLOW_ENABLED, Rt.EntityTextures.MAX_TEXTURES, Rt.DlssRr.ENABLED, Rt.Fg.ENABLED,
             Rt.Reflex.ENABLED, Rt.Exposure.MODE, Rt.Tonemap.GAMMA, Rt.FrameStats.ENABLED,
-            Rt.Screenshots.EXR_ENABLED, Rt.Hdr.ENABLED, Ngx.PATH,
+            Rt.Screenshots.EXR_ENABLED, Rt.Hdr.ENABLED, Ngx.PATH, Slang.PATH,
         };
     }
 
@@ -917,6 +917,13 @@ public final class CausticaConfig {
         public static final OptionalStringSetting PATH = optionalString("caustica.ngx.path", "ngx.path");
 
         private Ngx() {
+        }
+    }
+
+    public static final class Slang {
+        public static final OptionalStringSetting PATH = optionalString("caustica.slang.path", "slang.path");
+
+        private Slang() {
         }
     }
 

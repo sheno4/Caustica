@@ -38,7 +38,7 @@ env:
 
 jobs:
   native-windows:
-    name: Build Windows NGX shim
+    name: Build Windows native shims
     runs-on: windows-2022
 
     steps:
@@ -52,12 +52,11 @@ jobs:
           ref: ${{ env.DLSS_SDK_REF }}
           path: ${{ env.DLSS_SDK_PATH }}
 
-      - name: Setup Vulkan SDK
-        uses: humbletim/setup-vulkan-sdk@v1.2.1
+      - name: Install Vulkan SDK
+        uses: humbletim/install-vulkan-sdk@v1.2
         with:
-          vulkan-query-version: ${{ env.VULKAN_SDK_VERSION }}
-          vulkan-components: Vulkan-Headers, Vulkan-Loader
-          vulkan-use-cache: true
+          version: ${{ env.VULKAN_SDK_VERSION }}
+          cache: true
 
       - name: Configure NGX shim
         shell: pwsh
@@ -73,6 +72,28 @@ jobs:
         shell: pwsh
         run: cmake --build build/cmake/ngx_shim --config Release
 
+      - name: Configure Slang shim
+        shell: pwsh
+        run: >
+          cmake -S native/slang_shim
+          -B build/cmake/slang_shim
+          -G "Visual Studio 17 2022"
+          -A x64
+
+      - name: Build Slang shim
+        shell: pwsh
+        run: cmake --build build/cmake/slang_shim --config Release
+
+      - name: Prepare Windows Slang runtime
+        shell: pwsh
+        run: |
+          $destination = "build/slang-runtime-input/windows-x64"
+          New-Item -ItemType Directory -Force -Path $destination | Out-Null
+          Copy-Item "build/native/slang_shim/release/causticaslang.dll" $destination
+          Get-ChildItem "$env:VULKAN_SDK/Bin" -Filter "slang*.dll" | Copy-Item -Destination $destination
+          Get-ChildItem "$env:VULKAN_SDK/Bin" -Directory -Filter "slang-standard-module-*" |
+            Copy-Item -Destination $destination -Recurse
+
       - name: Upload Windows NGX shim
         uses: actions/upload-artifact@v4
         with:
@@ -80,8 +101,15 @@ jobs:
           path: build/native/ngx_shim/release/ngxshim.dll
           if-no-files-found: error
 
+      - name: Upload Windows Slang runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: slang-runtime-windows-x64
+          path: build/slang-runtime-input
+          if-no-files-found: error
+
   native-linux:
-    name: Build Linux NGX shim
+    name: Build Linux native shims
     runs-on: ubuntu-latest
 
     steps:
@@ -98,12 +126,17 @@ jobs:
       - name: Install native build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build glslang-tools spirv-tools libvulkan-dev
+          sudo apt-get install -y cmake ninja-build
+
+      - name: Install Vulkan SDK
+        uses: humbletim/install-vulkan-sdk@v1.2
+        with:
+          version: ${{ env.VULKAN_SDK_VERSION }}
+          cache: true
 
       - name: Configure NGX shim
         env:
           DLSS_SDK: ${{ github.workspace }}/${{ env.DLSS_SDK_PATH }}
-          VULKAN_SDK: /usr
         run: >
           cmake -S native/ngx_shim
           -B build/cmake/ngx_shim
@@ -113,11 +146,38 @@ jobs:
       - name: Build NGX shim
         run: cmake --build build/cmake/ngx_shim --config Release
 
+      - name: Configure Slang shim
+        run: >
+          cmake -S native/slang_shim
+          -B build/cmake/slang_shim
+          -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build Slang shim
+        run: cmake --build build/cmake/slang_shim --config Release
+
+      - name: Prepare Linux Slang runtime
+        run: |
+          destination="build/slang-runtime-input/linux-x64"
+          mkdir -p "${destination}"
+          cp "build/native/slang_shim/release/libcausticaslang.so" "${destination}/"
+          find "${VULKAN_SDK}/lib" -maxdepth 1 -type f -name 'libslang*.so*' -exec cp -L '{}' "${destination}/" \;
+          find "${VULKAN_SDK}/lib" -maxdepth 1 -type l -name 'libslang*.so*' -exec cp -L '{}' "${destination}/" \;
+          find "${VULKAN_SDK}/bin" -maxdepth 1 -type f -name 'libslang*.so*' -exec cp -L '{}' "${destination}/" \;
+          find "${VULKAN_SDK}" -maxdepth 3 -type d -name 'slang-standard-module-*' -exec cp -R '{}' "${destination}/" \;
+
       - name: Upload Linux NGX shim
         uses: actions/upload-artifact@v4
         with:
           name: ngxshim-linux-x64
           path: build/native/ngx_shim/release/libngxshim.so
+          if-no-files-found: error
+
+      - name: Upload Linux Slang runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: slang-runtime-linux-x64
+          path: build/slang-runtime-input
           if-no-files-found: error
 
   package:
@@ -171,6 +231,13 @@ jobs:
           path: build/native/ngx_shim/release
           merge-multiple: true
 
+      - name: Download Slang runtimes
+        uses: actions/download-artifact@v4
+        with:
+          pattern: slang-runtime-*
+          path: build/slang-runtime-input
+          merge-multiple: true
+
       - name: Build bundled jar
         env:
           DLSS_SDK: ${{ github.workspace }}/${{ env.DLSS_SDK_PATH }}
@@ -179,6 +246,8 @@ jobs:
           -PngxPlatforms=windows-x64,linux-x64
           -PngxVendorConfig=${{ env.NGX_VENDOR_CONFIG }}
           -PngxShimConfig=${{ env.NGX_SHIM_CONFIG }}
+          -PslangPlatforms=windows-x64,linux-x64
+          -PslangRuntimeInputRoot=build/slang-runtime-input
 
       - name: Upload bundled jar
         uses: actions/upload-artifact@v4

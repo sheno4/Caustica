@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://caustica.dev/schemas/ray-pack/0.1/pack.schema.json",
+  "title": "Caustica Ray Pack Manifest 0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "id",
+    "version",
+    "api",
+    "slang",
+    "lookPackage"
+  ],
+  "properties": {
+    "format": {
+      "const": 1
+    },
+    "id": {
+      "$ref": "#/$defs/rayPackId"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$"
+    },
+    "api": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["major", "minor"],
+      "properties": {
+        "major": {
+          "const": 0
+        },
+        "minor": {
+          "const": 1
+        }
+      }
+    },
+    "slang": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["module", "type", "sourceRoot"],
+      "properties": {
+        "module": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_.]*$"
+        },
+        "type": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_:]*$"
+        },
+        "sourceRoot": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$",
+          "not": {
+            "pattern": "(?:^|/)\\.\\.(?:$|/)"
+          }
+        }
+      }
+    },
+    "lookPackage": {
+      "$ref": "#/$defs/rayPackId"
+    }
+  },
+  "$defs": {
+    "rayPackId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_.-]*:[a-z0-9][a-z0-9_.-]*$"
+    }
+  }
+}

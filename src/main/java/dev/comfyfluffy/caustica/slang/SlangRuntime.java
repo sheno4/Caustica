@@ -1,0 +1,222 @@
+package dev.comfyfluffy.caustica.slang;
+
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+
+import dev.comfyfluffy.caustica.CausticaConfig;
+import dev.comfyfluffy.caustica.CausticaMod;
+
+import net.fabricmc.loader.api.FabricLoader;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.lang.foreign.MemorySegment;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Objects;
+import java.util.Set;
+
+public final class SlangRuntime {
+    public static final SlangRuntime INSTANCE = new SlangRuntime();
+
+    private static final String RESOURCE_ROOT = "/caustica/natives/slang/";
+
+    private SlangLibrary library;
+    private MemorySegment runtime = MemorySegment.NULL;
+    private Path runtimeDirectory;
+    private final Set<SlangSession> sessions = new HashSet<>();
+
+    private SlangRuntime() {
+    }
+
+    public synchronized SlangSession openSession(List<Path> searchPaths, boolean debugInformation,
+                                                 boolean warningsAsErrors) {
+        Objects.requireNonNull(searchPaths, "searchPaths");
+        initialize();
+        int flags = (debugInformation ? SlangLibrary.SESSION_DEBUG_INFO : 0)
+                | (warningsAsErrors ? SlangLibrary.SESSION_WARNINGS_AS_ERRORS : 0);
+        MemorySegment sessionHandle = library.createSession(runtime, List.copyOf(searchPaths), flags);
+        SlangSession session = new SlangSession(library, sessionHandle, () -> removeSession(sessionHandle));
+        sessions.add(session);
+        return session;
+    }
+
+    public synchronized String compilerVersion() {
+        initialize();
+        return library.compilerVersion();
+    }
+
+    public synchronized Path runtimeDirectory() {
+        initialize();
+        return runtimeDirectory;
+    }
+
+    public synchronized boolean isInitialized() {
+        return !runtime.equals(MemorySegment.NULL);
+    }
+
+    public synchronized void shutdown() {
+        for (SlangSession session : List.copyOf(sessions)) {
+            session.close();
+        }
+        sessions.clear();
+        if (!runtime.equals(MemorySegment.NULL)) {
+            library.destroyRuntime(runtime);
+        }
+        runtime = MemorySegment.NULL;
+        library = null;
+        runtimeDirectory = null;
+    }
+
+    private synchronized void removeSession(MemorySegment ignoredHandle) {
+        sessions.removeIf(session -> session.isClosed());
+    }
+
+    private void initialize() {
+        if (!runtime.equals(MemorySegment.NULL)) {
+            return;
+        }
+        SlangPlatform platform = SlangPlatform.current();
+        Path directory = locateRuntime(platform);
+        SlangLibrary loaded = SlangLibrary.load(directory, platform);
+        MemorySegment loadedRuntime = loaded.createRuntime();
+        String compilerVersion = loaded.compilerVersion();
+        String expectedVersion = bundledVersion();
+        if (!compilerVersion.startsWith(expectedVersion)) {
+            loaded.destroyRuntime(loadedRuntime);
+            throw new IllegalStateException("Bundled Slang version mismatch: expected " + expectedVersion
+                    + ", loaded " + compilerVersion);
+        }
+        library = loaded;
+        runtime = loadedRuntime;
+        runtimeDirectory = directory;
+        CausticaMod.LOGGER.info("Slang compiler initialized (version {}, runtime {})", compilerVersion, directory);
+    }
+
+    private static Path locateRuntime(SlangPlatform platform) {
+        String override = CausticaConfig.Slang.PATH.get();
+        if (override != null && !override.isBlank()) {
+            Path path = Path.of(override).toAbsolutePath().normalize();
+            Path directory = Files.isDirectory(path) ? path : path.getParent();
+            if (directory == null || !Files.isRegularFile(directory.resolve(platform.shimName()))) {
+                throw new IllegalStateException("Slang runtime override does not contain " + platform.shimName()
+                        + ": " + path);
+            }
+            return directory;
+        }
+        return extractBundledRuntime(platform);
+    }
+
+    private static Path extractBundledRuntime(SlangPlatform platform) {
+        String version = bundledVersion();
+        String manifestResource = RESOURCE_ROOT + version + "/" + platform.resourceName() + "/runtime.json";
+        SlangRuntimeManifest manifest;
+        try (InputStream input = SlangRuntime.class.getResourceAsStream(manifestResource)) {
+            if (input == null) {
+                throw new IllegalStateException("Bundled Slang runtime is missing for " + platform.resourceName());
+            }
+            manifest = SlangRuntimeManifest.read(new InputStreamReader(input, StandardCharsets.UTF_8));
+        } catch (IOException e) {
+            throw new IllegalStateException("Could not read bundled Slang runtime manifest", e);
+        }
+        if (!manifest.slangVersion().equals(version) || !manifest.platform().equals(platform.resourceName())
+                || !manifest.shim().equals(platform.shimName())) {
+            throw new IllegalStateException("Bundled Slang runtime manifest identity mismatch");
+        }
+
+        Path directory = FabricLoader.getInstance().getGameDir().resolve("caustica-slang")
+                .resolve(version).resolve(platform.resourceName()).resolve(manifest.bundleSha256());
+        try {
+            Files.createDirectories(directory);
+            for (SlangRuntimeManifest.FileEntry file : manifest.files()) {
+                Path destination = directory.resolve(file.path()).normalize();
+                if (!destination.startsWith(directory)) {
+                    throw new IOException("Slang runtime path escaped extraction directory: " + file.path());
+                }
+                if (matches(destination, file)) {
+                    continue;
+                }
+                String resource = RESOURCE_ROOT + version + "/" + platform.resourceName() + "/" + file.path();
+                extractResource(resource, destination, file);
+            }
+            return directory;
+        } catch (IOException e) {
+            throw new IllegalStateException("Could not extract bundled Slang runtime to " + directory, e);
+        }
+    }
+
+    private static String bundledVersion() {
+        try (InputStream input = SlangRuntime.class.getResourceAsStream(RESOURCE_ROOT + "runtime.json")) {
+            if (input == null) {
+                throw new IllegalStateException("Bundled Slang runtime index is missing");
+            }
+            JsonObject root = JsonParser.parseReader(new InputStreamReader(input, StandardCharsets.UTF_8))
+                    .getAsJsonObject();
+            if (root.get("format").getAsInt() != 1) {
+                throw new IllegalStateException("Unsupported bundled Slang runtime index");
+            }
+            return root.get("slangVersion").getAsString();
+        } catch (IOException | RuntimeException e) {
+            throw new IllegalStateException("Could not read bundled Slang runtime index", e);
+        }
+    }
+
+    private static void extractResource(String resource, Path destination,
+                                        SlangRuntimeManifest.FileEntry expected) throws IOException {
+        Files.createDirectories(destination.getParent());
+        Path temporary = Files.createTempFile(destination.getParent(), destination.getFileName().toString(), ".tmp");
+        boolean published = false;
+        try (InputStream input = SlangRuntime.class.getResourceAsStream(resource)) {
+            if (input == null) {
+                throw new IOException("Bundled Slang file is missing: " + resource);
+            }
+            Files.copy(input, temporary, StandardCopyOption.REPLACE_EXISTING);
+            if (!matches(temporary, expected)) {
+                throw new IOException("Bundled Slang file failed size/hash verification: " + resource);
+            }
+            try {
+                Files.move(temporary, destination, StandardCopyOption.ATOMIC_MOVE,
+                        StandardCopyOption.REPLACE_EXISTING);
+            } catch (AtomicMoveNotSupportedException e) {
+                Files.move(temporary, destination, StandardCopyOption.REPLACE_EXISTING);
+            }
+            published = true;
+        } finally {
+            if (!published) {
+                Files.deleteIfExists(temporary);
+            }
+        }
+    }
+
+    private static boolean matches(Path path, SlangRuntimeManifest.FileEntry expected) throws IOException {
+        return Files.isRegularFile(path) && Files.size(path) == expected.size()
+                && sha256(path).equals(expected.sha256());
+    }
+
+    private static String sha256(Path path) throws IOException {
+        MessageDigest digest;
+        try {
+            digest = MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException e) {
+            throw new AssertionError("SHA-256 is unavailable", e);
+        }
+        try (InputStream input = Files.newInputStream(path)) {
+            byte[] buffer = new byte[64 * 1024];
+            for (int read = input.read(buffer); read >= 0; read = input.read(buffer)) {
+                if (read > 0) {
+                    digest.update(buffer, 0, read);
+                }
+            }
+        }
+        return HexFormat.of().formatHex(digest.digest());
+    }
+}

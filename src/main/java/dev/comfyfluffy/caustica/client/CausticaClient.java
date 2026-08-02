@@ -110,6 +110,7 @@ public final class CausticaClient implements ClientModInitializer {
 		}
 		// Shut NGX down once, after every feature (RR + FG) has been released above.
 		dev.comfyfluffy.caustica.ngx.NgxRuntime.INSTANCE.shutdown();
+		dev.comfyfluffy.caustica.slang.SlangRuntime.INSTANCE.shutdown();
 		if (ctx != null) {
 			ctx.destroy();
 		}

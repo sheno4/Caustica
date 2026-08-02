@@ -76,7 +76,8 @@ GNU Lesser General Public License v3.0 or later. See [LICENSE.md](LICENSE.md),
 [COPYING](COPYING), and [COPYING.LESSER](COPYING.LESSER).
 
 Release artifacts may bundle NVIDIA DLSS/NGX SDK components under NVIDIA's own
-license terms. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+license terms and the Slang compiler under Apache 2.0 with LLVM Exception. See
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## TODO List
 

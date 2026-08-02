@@ -30,3 +30,27 @@ Bundled NVIDIA SDK runtime libraries may include files matching:
 
 Caustica's `ngxshim` native library is project-owned glue code and follows
 Caustica's project license unless otherwise noted.
+
+## Slang
+
+Caustica bundles the Slang compiler shared libraries and standard module from
+Vulkan SDK 1.4.350.0 for in-game shader compilation. Slang is licensed under
+`Apache-2.0 WITH LLVM-exception`:
+
+<https://github.com/shader-slang/slang/blob/master/LICENSE>
+
+The Slang distribution incorporates or can depend on components under their
+own permissive licenses, including glslang, LZ4, miniz, SPIR-V Headers, and
+SPIR-V Tools. The upstream dependency and license list is maintained at:
+
+<https://github.com/shader-slang/slang#license>
+
+Caustica's `causticaslang` native library is project-owned glue code and follows
+Caustica's project license unless otherwise noted.
+
+## dev.harrel JSON Schema
+
+Caustica bundles `dev.harrel:json-schema` for ray-pack manifest validation. It is
+licensed under the MIT License:
+
+<https://github.com/harrel56/json-schema/blob/master/LICENSE>
