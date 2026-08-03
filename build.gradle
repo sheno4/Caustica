@@ -118,6 +118,9 @@ abstract class CompileShaders extends DefaultTask {
 		def outDirFile = outDir.get().asFile
 		// Slang stages are named <name>.<stage>.slang (any_hit.rahit.slang -> any_hit.rahit.spv); module files
 		// like world_common.slang match no stage glob and are picked up only via `import`.
+		// Entry points that are generic over a ray-pack type (e.g. pack_sky_miss.slang) cannot be
+		// compiled here — their type argument is not known until an epoch is activated — so they
+		// deliberately carry no stage infix and are reached only through the runtime compiler.
 		def stageIncludes = ["rgen", "rchit", "rahit", "rmiss", "rcall", "comp", "vert", "frag"]
 				.collect { stage -> "**/*.${stage}.slang" }
 		def validate = { File spv ->
@@ -274,6 +277,22 @@ sourceSets.main.java.srcDir(files(rtBindingsGenRoot).builtBy(generateRtBindings)
 // Emit the .spv into the main resources so they land in the jar / on the runClient classpath at the
 // same /caustica/shaders/ path the pipeline loaders read. builtBy wires the dependency.
 sourceSets.main.resources.srcDir(files(shaderGenRoot).builtBy(compileShaders))
+
+// Engine shader SOURCES, shipped alongside the build-time .spv. A ray pack's appearance code is
+// specialized into engine entry points at runtime (see RayPackShaderCompiler), which means the engine
+// modules those entry points import have to be loadable by the bundled Slang compiler in the shipped
+// game — the .spv alone is not enough. Kept at a distinct /caustica/shadersrc/ root so nothing confuses
+// a compilable source tree with the precompiled binaries.
+def shaderSourceGenRoot = layout.buildDirectory.dir("generated/shader-sources")
+def bundleShaderSources = tasks.register("bundleShaderSources", Copy) {
+	group = "build"
+	description = "Bundles engine Slang sources so ray packs can be specialized into them at runtime."
+	from(file("shaders")) {
+		include "**/*.slang"
+	}
+	into(shaderSourceGenRoot.map { it.dir("caustica/shadersrc") })
+}
+sourceSets.main.resources.srcDir(files(shaderSourceGenRoot).builtBy(bundleShaderSources))
 
 def slangRuntimeVersion = project.property("slang_runtime_version").toString()
 def slangRuntimeGenRoot = layout.buildDirectory.dir("generated/slang-runtime")
@@ -447,8 +466,14 @@ tasks.named("test", Test) {
 	dependsOn(bundleSlangRuntime)
 	jvmArgs "--enable-native-access=ALL-UNNAMED"
 	doFirst {
-		systemProperty "caustica.test.slangRuntimeDir", new File(slangRuntimeGenRoot.get().asFile,
+		def slangRuntimeDir = new File(slangRuntimeGenRoot.get().asFile,
 				"caustica/natives/slang/${slangRuntimeVersion}/${currentSlangPlatform}").absolutePath
+		systemProperty "caustica.test.slangRuntimeDir", slangRuntimeDir
+		// SlangRuntime normally locates its extracted natives through FabricLoader's game directory,
+		// which does not exist under plain JUnit. The same override players can use to point at a local
+		// Slang build lets tests exercise the real runtime path (session creation, module search paths)
+		// instead of only the lower-level SlangLibrary calls.
+		systemProperty "caustica.slang.path", slangRuntimeDir
 	}
 }
 
