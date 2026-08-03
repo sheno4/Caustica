@@ -8,21 +8,35 @@ Scope: the boundary between the Caustica runtime and installable ray-tracing pac
 
 What actually exists right now, so this stays a design doc and not a claim about the renderer:
 
-- **Pack API 0.1 Slang contract** (section 4): implemented and matches every ownership decision below —
-  materials engine-decoded, dielectric interfaces engine-owned in full, the BSDF/estimator kept separate from
-  `evaluateResponse`'s look policy, and `showsCelestial`/emitter-gating derived by the engine from
-  `PackBsdfSample.eventFlags` rather than settable by the pack. The default pack implements it. All of this
-  compiles and links through the real, pinned Slang compiler (not just reviewed by hand) via the
-  `causticaslang` shim and `SlangSession.compileSpecialized`.
-- **M2 epoch lifecycle** (section 9): `RayPackEpoch`/`RayPackDiscovery`/`RayPackEpochManager` exist as a
-  Java-only, unit-tested slice — validate-then-swap activation, deterministic duplicate-pack discovery,
-  bundled-default fallback. Manifest schema validation (section 7) predates this doc revision and is unchanged.
-- **Not yet done**: M1's frame graph (section 10) — `RtComposite` still owns the pass sequence and its barriers
-  directly. The epoch manager is not wired into `RtComposite`/`RtLookPackage`, so pack selection has no effect
-  on rendering yet. The production shaders (`shaders/pipelines/world/*`) still contain their own independent,
-  hand-tuned implementation of surface shading, dielectric interfaces, and RIS lighting — they do not call
-  through the Pack API. Swapping the renderer onto that boundary is the largest remaining piece of M3 and needs
-  a real Vulkan-capable environment to verify; it was deliberately not attempted blind.
+- **Pack API 0.1 Slang contract** (section 4): `caustica_ray_pack_api.slang` matches every ownership
+  decision below — materials engine-decoded, the BSDF/estimator kept separate from `evaluateResponse`'s
+  look policy, `PACK_EVENT_*` lobe flags in place of a double-count gate the pack could set directly. The
+  bundled default pack implements it.
+- **Runtime compilation is real, not aspirational.** `RayPackShaderCompiler` extracts the production world
+  shaders and the pack sources to disk and drives the pinned Slang compiler (`causticaslang` shim,
+  `SlangSession.compileSpecialized`/`compile`) at runtime — not a synthetic stand-in. `pack_sky_miss.slang`
+  is a real, engine-owned entry point in `shaders/pipelines/world/` that imports the production
+  `world_common`/`bindings`/`sky` modules, gets specialized with the active pack's concrete type, and is
+  bound into the actual world pipeline behind `caustica.rt.packSky` — confirmed rendering in a real frame.
+  A second toggle, `caustica.rt.dynamicWorldShaders`, additionally moves every other world-pipeline stage
+  (primary/indirect/guide/closest-hit/any-hit) to the same runtime path with its content unchanged, so the
+  compile pipeline is proven independent of whether any pack code actually runs yet. Each stage falls back
+  to its build-time SPIR-V independently if runtime compilation fails.
+- **M2 epoch lifecycle** (section 9): `RayPackEpoch`/`RayPackDiscovery`/`RayPackEpochManager` exist and are
+  wired into `RtComposite` for the sky-miss path — validate-then-swap activation, deterministic
+  duplicate-pack discovery, bundled-default fallback with a log-and-revert on compile failure.
+- **The former "engine/0.1" reference-implementation sketch is gone.** It was a synthetic ~230-line
+  stand-in for the integrator/light-service split (one surface vertex, streaming RIS over caller-supplied
+  candidates, one homogeneous medium segment) that nothing in the renderer ever called. Keeping it invited
+  confusion with the actual production shaders it was meant to preview. The real path forward is Phase B
+  below: make the production `closest_hit`/`indirect.rgen` generic over `TPack` directly, rather than
+  evolving a second copy.
+- **Not yet done**: M1's frame graph (section 10) — `RtComposite` still owns the pass sequence and its
+  barriers directly. The production shaders still contain their own independent, hand-tuned implementation
+  of surface shading, dielectric interfaces, and RIS lighting for every stage but the sky — they do not yet
+  call through the Pack API for materials or lighting. That is Phase B: making `closest_hit.rchit.slang` and
+  `indirect.rgen.slang` themselves generic over `TPack`, which needs real perf measurement (register
+  pressure from an inlined pack closure) that a real Vulkan-capable environment has to verify.
 
 ## 1. Thesis
 
@@ -188,13 +202,14 @@ are correctness, and the pack must not set them directly:
 | Continuation direction and weight | Pack | Appearance |
 | Lobe classification (`eventFlags`) | Pack | Input to the two gates above |
 
-Shipped as `engineShowsCelestial(eventFlags)` and `engineGatesEmitterDirectHit(emitterSampledByRis,
-showsCelestial)` in `caustica_ray_engine_integrator.slang`, and wired into `engineShadeSurfaceVertex`'s output
-so a raygen loop reads the derived value rather than recomputing it. These are engine invariants: a pack that
-could set them directly could silently double-count or lose light, and the symptom is "this pack is
-brighter," not a visible failure. `engineGatesEmitterDirectHit` is not yet called by anything — the RIS
-service in this slice only samples celestial lights, not the block-emitter light buffer the production
-renderer's `lighting.slang` already has, so there is no emitter-in-list bit to gate on yet.
+These are engine invariants, not yet implemented: the production `indirect.rgen.slang` already computes
+both correctly today (`showCelestial`/the emitter-in-list bit), but as hand-tuned local logic that assumes
+its own BSDF branches, not as functions derived from a pack's `eventFlags` the way this section describes.
+Making that derivation explicit and pack-type-generic is part of Phase B, alongside making the surface/BSDF
+call sites themselves generic over `TPack`. A pack that could set either gate directly could silently
+double-count or lose light, and the symptom is "this pack is brighter," not a visible failure — which is
+why the derivation belongs on the engine side of the boundary once that refactor happens, not left as an
+invariant the pack is merely asked to respect.
 
 ### 4.3 Environment
 
@@ -212,8 +227,9 @@ primary-hit processing, and it writes radiance only — never a guide.
 
 **Dielectric interface behaviour is engine-owned in full**: Fresnel, reflection/refraction choice, total
 internal reflection, medium push/pop, and the surface-bias regimes. The medium stack stays engine-side and
-out of the pack closure's live register set. Shipped as `engineSampleDielectricInterface` in
-`caustica_ray_engine_integrator.slang`, called instead of `sampleBsdf` whenever `surface.transmission > 0`.
+out of the pack closure's live register set. `indirect.rgen.slang`'s existing dielectric branch already
+implements exactly this policy — it is the reference for what a pack-generic `engineSampleDielectricInterface`
+should factor out of it in Phase B, not a gap to invent from scratch.
 
 The pack supplies two narrow things: medium coefficients plus a full phase-function estimator (not just a
 phase parameter — volume NEE needs eval/sample/pdf under the same contract as the BSDF), and a normal

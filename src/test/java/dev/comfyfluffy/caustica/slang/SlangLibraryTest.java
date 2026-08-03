@@ -123,25 +123,9 @@ final class SlangLibraryTest {
         }
     }
 
-    @Test
-    void dynamicallyCompilesTheEngineBoundaryWithTheBundledDefaultPack() throws Exception {
-        List<Path> searchPaths = List.of(
-                resourceDirectory("/caustica/raypacks/api/0.1/caustica_ray_pack_api.slang"),
-                resourceDirectory("/caustica/raypacks/engine/0.1/caustica_ray_engine_integrator.slang"),
-                resourceDirectory("/caustica/raypacks/default/shaders/default_pack.slang"),
-                resourceDirectory("/caustica/raypacks/tests/engine_pipeline_probe.slang"));
-        MemorySegment session = library.createSession(runtime, searchPaths,
-                SlangLibrary.SESSION_WARNINGS_AS_ERRORS);
-        try {
-            SlangCompileResult result = library.compileSpecialized(session,
-                    "engine_pipeline_probe", "main", "default_pack", "DefaultRayPack");
-            assertEquals(0x07230203,
-                    ByteBuffer.wrap(result.spirv()).order(ByteOrder.LITTLE_ENDIAN).getInt());
-            assertFalse(result.reflectionJson().isBlank());
-        } finally {
-            library.destroySession(session);
-        }
-    }
+    // The former engine-boundary probe against a synthetic "engine/0.1" sketch is superseded by
+    // dev.comfyfluffy.caustica.rt.pack.RayPackShaderCompilerTest, which specializes the real production
+    // world pipeline (not a stand-in module) with the real bundled pack.
 
     @Test
     void rejectsAPackAuthoredShaderEntryPoint(@TempDir Path sourceDirectory) throws Exception {
