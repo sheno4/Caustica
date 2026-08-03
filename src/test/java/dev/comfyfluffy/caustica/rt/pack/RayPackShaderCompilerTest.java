@@ -2,6 +2,8 @@ package dev.comfyfluffy.caustica.rt.pack;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -42,6 +44,37 @@ final class RayPackShaderCompilerTest {
         try (RayPackShaderCompiler compiler = RayPackShaderCompiler.create(cacheDirectory)) {
             byte[] first = compiler.compileSkyMiss(epoch);
             byte[] second = compiler.compileSkyMiss(epoch);
+
+            assertArrayEquals(first, second);
+            assertTrue(first == second, "second compile should return the cached array instance");
+        }
+    }
+
+    /**
+     * Every world-pipeline stage {@code caustica.rt.dynamicWorldShaders} moves to runtime compilation
+     * (see RtComposite), compiled with no pack specialization at all — the same content the build-time
+     * slangc invocation would compile, just through this path instead.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "primary.rgen.slang", "indirect.rgen.slang", "guide.rmiss.slang",
+            "closest_hit.rchit.slang", "any_hit.rahit.slang", "sky.rmiss.slang"})
+    void compilesEveryPlainWorldStageWithNoPackSpecialization(String moduleFileName,
+            @TempDir Path cacheDirectory) throws Exception {
+        try (RayPackShaderCompiler compiler = RayPackShaderCompiler.create(cacheDirectory)) {
+            byte[] spirv = compiler.compilePlain(moduleFileName, RayPackShaderCompiler.ENTRY_POINT);
+
+            assertEquals(0x07230203, ByteBuffer.wrap(spirv).order(ByteOrder.LITTLE_ENDIAN).getInt());
+            assertTrue(spirv.length > 256,
+                    moduleFileName + ": expected substantial SPIR-V, got " + spirv.length + " bytes");
+        }
+    }
+
+    @Test
+    void repeatedPlainCompilationIsServedFromCache(@TempDir Path cacheDirectory) throws Exception {
+        try (RayPackShaderCompiler compiler = RayPackShaderCompiler.create(cacheDirectory)) {
+            byte[] first = compiler.compilePlain("primary.rgen.slang", RayPackShaderCompiler.ENTRY_POINT);
+            byte[] second = compiler.compilePlain("primary.rgen.slang", RayPackShaderCompiler.ENTRY_POINT);
 
             assertArrayEquals(first, second);
             assertTrue(first == second, "second compile should return the cached array instance");
