@@ -543,6 +543,14 @@ public final class CausticaConfig {
             // the visible sky deliberately disagree while this is on.
             public static final BooleanSetting PACK_SKY =
                     bool("caustica.rt.packSky", "composite.pack-sky", false);
+            // Compile primary/indirect(plain)/guide/closest-hit/any-hit/sky.rmiss through the runtime
+            // pack compiler instead of loading their build-time .spv, with content otherwise unchanged.
+            // Proves the runtime-compilation path (source extraction, import resolution, SPIR-V
+            // validation) independently of whether any pack code actually runs — orthogonal to
+            // PACK_SKY, which is what routes appearance through a pack. Each stage falls back to its
+            // build-time SPIR-V independently on compile failure. Experimental and off by default.
+            public static final BooleanSetting DYNAMIC_WORLD_SHADERS =
+                    bool("caustica.rt.dynamicWorldShaders", "composite.dynamic-world-shaders", false);
             // Sun/moon angular radii and the noon south tilt moved into the versioned look package
             // (look.json "sky"): they shape the sky alongside the exposure curve, the LMT and the
             // photometric anchors that were already authored there, and splitting them across two

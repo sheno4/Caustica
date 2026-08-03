@@ -76,6 +76,7 @@ import dev.comfyfluffy.caustica.rt.pipeline.RtShaderCode;
 import dev.comfyfluffy.caustica.rt.pipeline.RtToneLut;
 import dev.comfyfluffy.caustica.rt.terrain.RtTerrain;
 
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.LongBuffer;
 import java.nio.file.Path;
@@ -130,6 +131,10 @@ public final class RtComposite {
         return CausticaConfig.Rt.Composite.PACK_SKY.value();
     }
 
+    private static boolean dynamicWorldShaders() {
+        return CausticaConfig.Rt.Composite.DYNAMIC_WORLD_SHADERS.value();
+    }
+
     private static final int WATER_ANCHOR_MASK = 4095;
     // The versioned look package owns every photometric anchor and the sky geometry. Its sun illuminance is the
     // photometric solar constant at the top of the atmosphere; the shader's transmittance LUT brings that
@@ -165,9 +170,11 @@ public final class RtComposite {
     // so a run with pack rendering disabled never loads the Slang compiler at all.
     private RayPackEpochManager packEpochs;
     private RayPackShaderCompiler packShaderCompiler;
-    // What packSky() was when worldPipeline was built, so toggling it at runtime rebuilds the pipeline
-    // (the miss shader is baked into the SBT) rather than silently keeping the old sky.
+    // What packSky()/dynamicWorldShaders() were when worldPipeline was built, so toggling either at
+    // runtime rebuilds the pipeline (every stage is baked into the SBT) rather than silently keeping
+    // the old one.
     private boolean pipelinePackSky;
+    private boolean pipelineDynamicWorldShaders;
 
     private RtPipeline worldPipeline;
     // Set at the HEAD of Minecraft.reloadResourcePacks() (mixin): a resource reload recreates the block
@@ -735,12 +742,13 @@ public final class RtComposite {
             }
             bindlessTextureCapacity = RtEntityTextures.maxTextures();
             pipelinePackSky = packSky();
+            pipelineDynamicWorldShaders = dynamicWorldShaders();
             worldPipeline = RtPipeline.create(ctx, new RtShaderCode[]{
-                            RtShaderCode.resource(RtDeviceBringup.worldPrimaryRaygenShader()),
-                            RtShaderCode.resource(RtDeviceBringup.worldRaygenShader())},
-                    new RtShaderCode[]{skyMissShader(), RtShaderCode.resource("guide.rmiss.spv")},
-                    RtShaderCode.resource("closest_hit.rchit.spv"),
-                    RtShaderCode.resource("any_hit.rahit.spv"),
+                            primaryRaygenShader(),
+                            indirectRaygenShader()},
+                    new RtShaderCode[]{skyMissShader(), guideMissShader()},
+                    closestHitShader(),
+                    anyHitShader(),
                     WorldPushConstantsData.BYTE_SIZE, bindlessTextureCapacity);
             // Per-frame world data lives in this BDA ring; the pipeline pushes its address and hot fields.
             if (pushRing == null) {
@@ -765,25 +773,21 @@ public final class RtComposite {
     /**
      * SPIR-V for miss record 0. With pack rendering enabled this is the engine's {@code pack_sky_miss}
      * wrapper specialized with the active pack's appearance type, compiled here rather than at build time
-     * because the pack type is not known until an epoch is published.
+     * because the pack type is not known until an epoch is published. Otherwise, when
+     * {@link #dynamicWorldShaders()} is on, it is the same built-in atmosphere shader compiled through the
+     * runtime path with no pack involved — see {@link #plainOrResource}.
      *
-     * <p>A compilation or discovery failure falls back to the built-in atmosphere miss shader rather than
-     * failing pipeline creation: an experimental pack path must not be able to take the renderer down.
+     * <p>A compilation or discovery failure falls back to the built-in atmosphere miss shader's build-time
+     * SPIR-V rather than failing pipeline creation: an experimental path must not be able to take the
+     * renderer down.
      */
     private RtShaderCode skyMissShader() {
         RtShaderCode builtIn = RtShaderCode.resource("sky.rmiss.spv");
         if (!pipelinePackSky) {
-            return builtIn;
+            return plainOrResource("sky.rmiss.slang", builtIn);
         }
         try {
-            if (packEpochs == null) {
-                packEpochs = RayPackEpochManager.withBundledDefault();
-            }
-            if (packShaderCompiler == null) {
-                Path cache = FabricLoader.getInstance().getGameDir()
-                        .resolve("caustica-raypacks").resolve("sources");
-                packShaderCompiler = RayPackShaderCompiler.create(cache);
-            }
+            ensureShaderCompiler();
             RayPackEpoch epoch = packEpochs.current();
             RtShaderCode compiled = RtShaderCode.of("pack_sky_miss(" + epoch.id() + ")",
                     packShaderCompiler.compileSkyMiss(epoch));
@@ -797,12 +801,79 @@ public final class RtComposite {
         }
     }
 
+    /**
+     * SPIR-V for the primary/guide raygen. Behind {@link #dynamicWorldShaders()}, compiled at runtime with
+     * content unchanged from the build-time source — see the class doc on {@code RayPackShaderCompiler}.
+     */
+    private RtShaderCode primaryRaygenShader() {
+        return plainOrResource("primary.rgen.slang",
+                RtShaderCode.resource(RtDeviceBringup.worldPrimaryRaygenShader()));
+    }
+
+    /**
+     * SPIR-V for the indirect raygen. The EXT_SER-reordered variant stays build-time only: its
+     * {@code #ifdef CAUSTICA_ENABLE_EXT_SER} branch has no runtime-compile equivalent yet, since the
+     * shim's compile entry points accept neither preprocessor defines nor capability flags (see
+     * {@code SlangSerCapabilityTest}). Only the plain (non-reordering) variant moves to the dynamic path.
+     */
+    private RtShaderCode indirectRaygenShader() {
+        String resourceName = RtDeviceBringup.worldRaygenShader();
+        if (RtDeviceBringup.serExtEnabled()) {
+            return RtShaderCode.resource(resourceName);
+        }
+        return plainOrResource("indirect.rgen.slang", RtShaderCode.resource(resourceName));
+    }
+
+    private RtShaderCode guideMissShader() {
+        return plainOrResource("guide.rmiss.slang", RtShaderCode.resource("guide.rmiss.spv"));
+    }
+
+    private RtShaderCode closestHitShader() {
+        return plainOrResource("closest_hit.rchit.slang", RtShaderCode.resource("closest_hit.rchit.spv"));
+    }
+
+    private RtShaderCode anyHitShader() {
+        return plainOrResource("any_hit.rahit.slang", RtShaderCode.resource("any_hit.rahit.spv"));
+    }
+
+    /**
+     * {@code builtIn} compiled through the runtime path instead, with no pack involved, when
+     * {@link #dynamicWorldShaders()} is on — the content is identical to the build-time SPIR-V, only when
+     * it compiles differs. Falls back to {@code builtIn} on any failure, independently per stage, so one
+     * bad dynamic compile cannot take down the rest of the pipeline.
+     */
+    private RtShaderCode plainOrResource(String moduleFileName, RtShaderCode builtIn) {
+        if (!pipelineDynamicWorldShaders) {
+            return builtIn;
+        }
+        try {
+            ensureShaderCompiler();
+            byte[] spirv = packShaderCompiler.compilePlain(moduleFileName, RayPackShaderCompiler.ENTRY_POINT);
+            return RtShaderCode.of(moduleFileName + " (dynamic)", spirv);
+        } catch (Throwable t) {
+            CausticaMod.LOGGER.error("Dynamic compilation of {} failed; using the build-time SPIR-V",
+                    moduleFileName, t);
+            return builtIn;
+        }
+    }
+
+    private void ensureShaderCompiler() throws IOException {
+        if (packEpochs == null) {
+            packEpochs = RayPackEpochManager.withBundledDefault();
+        }
+        if (packShaderCompiler == null) {
+            Path cache = FabricLoader.getInstance().getGameDir()
+                    .resolve("caustica-raypacks").resolve("sources");
+            packShaderCompiler = RayPackShaderCompiler.create(cache);
+        }
+    }
+
     private void refreshPipelineShapeIfNeeded(RtContext ctx) {
         if (worldPipeline == null || reloadRebindRequested) {
             return;
         }
-        // The sky miss shader is baked into this pipeline's SBT, so a runtime toggle needs a rebuild.
-        if (pipelinePackSky != packSky()) {
+        // Every stage is baked into this pipeline's SBT, so toggling either flag at runtime needs a rebuild.
+        if (pipelinePackSky != packSky() || pipelineDynamicWorldShaders != dynamicWorldShaders()) {
             ctx.waitIdle();
             worldPipeline.destroy();
             worldPipeline = null;
