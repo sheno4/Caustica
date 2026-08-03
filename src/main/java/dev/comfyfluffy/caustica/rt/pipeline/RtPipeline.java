@@ -23,8 +23,6 @@ import org.lwjgl.vulkan.VkStridedDeviceAddressRegionKHR;
 import org.lwjgl.vulkan.VkWriteDescriptorSet;
 import org.lwjgl.vulkan.VkWriteDescriptorSetAccelerationStructureKHR;
 
-import java.io.IOException;
-import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.LongBuffer;
 
@@ -62,7 +60,6 @@ import static org.lwjgl.vulkan.KHRRayTracingPipeline.vkGetRayTracingShaderGroupH
  * supported by passing an array; {@code traceRayEXT}'s {@code missIndex} selects among them.
  */
 public final class RtPipeline {
-    private static final String SHADER_DIR = "/caustica/shaders/pipelines/world/";
     // A ring of descriptor sets: setTlas waits for the selected slot's exact prior graphics use before
     // rewriting it. Ring depth is only a performance choice that avoids routine host waits.
     private static final int RING = 6;
@@ -127,8 +124,9 @@ public final class RtPipeline {
      * table and hit table; {@link #trace(VkCommandBuffer, int, int, ByteBuffer, int)} picks one per
      * dispatch by index.
      */
-    public static RtPipeline create(RtContext ctx, String[] rgen, String[] rmiss, String rchit,
-                                    String rahit, int pushConstantSize, int bindlessTextures) {
+    public static RtPipeline create(RtContext ctx, RtShaderCode[] rgen, RtShaderCode[] rmiss,
+                                    RtShaderCode rchit, RtShaderCode rahit, int pushConstantSize,
+                                    int bindlessTextures) {
         VkDevice vk = ctx.vk();
         boolean hasAhit = rahit != null;
         String label = "world RT pipeline";
@@ -271,18 +269,22 @@ public final class RtPipeline {
             long[] mGen = new long[raygenCount];
             for (int g = 0; g < raygenCount; g++) {
                 mGen[g] = loadModule(vk, stack, rgen[g]);
-                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_SHADER_MODULE, mGen[g], label + " " + rgen[g]);
+                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_SHADER_MODULE, mGen[g],
+                        label + " " + rgen[g].debugName());
             }
             long[] mMiss = new long[missCount];
             for (int m = 0; m < missCount; m++) {
                 mMiss[m] = loadModule(vk, stack, rmiss[m]);
-                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_SHADER_MODULE, mMiss[m], label + " " + rmiss[m]);
+                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_SHADER_MODULE, mMiss[m],
+                        label + " " + rmiss[m].debugName());
             }
             long mHit = loadModule(vk, stack, rchit);
-            RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_SHADER_MODULE, mHit, label + " " + rchit);
+            RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_SHADER_MODULE, mHit,
+                    label + " " + rchit.debugName());
             long mAhit = hasAhit ? loadModule(vk, stack, rahit) : 0L;
             if (hasAhit) {
-                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_SHADER_MODULE, mAhit, label + " " + rahit);
+                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_SHADER_MODULE, mAhit,
+                        label + " " + rahit.debugName());
             }
             ByteBuffer entry = stack.UTF8("main");
             VkPipelineShaderStageCreateInfo.Buffer stages = VkPipelineShaderStageCreateInfo.calloc(stageCount, stack);
@@ -556,22 +558,15 @@ public final class RtPipeline {
         return (v + a - 1) & ~(a - 1);
     }
 
-    private static long loadModule(VkDevice vk, MemoryStack stack, String name) {
-        byte[] bytes;
-        try (InputStream in = RtPipeline.class.getResourceAsStream(SHADER_DIR + name)) {
-            if (in == null) {
-                throw new IllegalStateException("missing SPIR-V resource: " + SHADER_DIR + name);
-            }
-            bytes = in.readAllBytes();
-        } catch (IOException e) {
-            throw new IllegalStateException("failed to read SPIR-V resource: " + SHADER_DIR + name, e);
-        }
+    private static long loadModule(VkDevice vk, MemoryStack stack, RtShaderCode shader) {
+        byte[] bytes = shader.spirv();
         ByteBuffer code = MemoryUtil.memAlloc(bytes.length).put(bytes);
         code.flip();
         try {
             VkShaderModuleCreateInfo smci = VkShaderModuleCreateInfo.calloc(stack).sType$Default().pCode(code);
             LongBuffer pModule = stack.mallocLong(1);
-            check(VK10.vkCreateShaderModule(vk, smci, null, pModule), "vkCreateShaderModule(" + name + ")");
+            check(VK10.vkCreateShaderModule(vk, smci, null, pModule),
+                    "vkCreateShaderModule(" + shader.debugName() + ")");
             return pModule.get(0);
         } finally {
             MemoryUtil.memFree(code);

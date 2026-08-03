@@ -18,6 +18,7 @@ import dev.comfyfluffy.caustica.rt.gen.WorldPushData.Float2;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushData.Float3;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushData.Float4;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushData.Int4;
+import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.BiomeColors;
 import net.minecraft.client.renderer.texture.TextureAtlas;
@@ -67,7 +68,11 @@ import dev.comfyfluffy.caustica.rt.overlay.RtWorldOverlay;
 import dev.comfyfluffy.caustica.rt.pipeline.RtHdrCompositePipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtSdrPresentPipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtExposure;
+import dev.comfyfluffy.caustica.rt.pack.RayPackEpoch;
+import dev.comfyfluffy.caustica.rt.pack.RayPackEpochManager;
+import dev.comfyfluffy.caustica.rt.pack.RayPackShaderCompiler;
 import dev.comfyfluffy.caustica.rt.pipeline.RtPipeline;
+import dev.comfyfluffy.caustica.rt.pipeline.RtShaderCode;
 import dev.comfyfluffy.caustica.rt.pipeline.RtToneLut;
 import dev.comfyfluffy.caustica.rt.terrain.RtTerrain;
 
@@ -121,6 +126,10 @@ public final class RtComposite {
         return CausticaConfig.Rt.Composite.WATER_WAVES.value();
     }
 
+    private static boolean packSky() {
+        return CausticaConfig.Rt.Composite.PACK_SKY.value();
+    }
+
     private static final int WATER_ANCHOR_MASK = 4095;
     // The versioned look package owns every photometric anchor and the sky geometry. Its sun illuminance is the
     // photometric solar constant at the top of the atmosphere; the shader's transmittance LUT brings that
@@ -150,6 +159,15 @@ public final class RtComposite {
     public static long frameCounter() {
         return frameCounter;
     }
+
+    // Selected ray pack. The epoch is the immutable published unit; the compiler specializes engine
+    // entry points with its type. Both are created lazily on the first pipeline build that needs them,
+    // so a run with pack rendering disabled never loads the Slang compiler at all.
+    private RayPackEpochManager packEpochs;
+    private RayPackShaderCompiler packShaderCompiler;
+    // What packSky() was when worldPipeline was built, so toggling it at runtime rebuilds the pipeline
+    // (the miss shader is baked into the SBT) rather than silently keeping the old sky.
+    private boolean pipelinePackSky;
 
     private RtPipeline worldPipeline;
     // Set at the HEAD of Minecraft.reloadResourcePacks() (mixin): a resource reload recreates the block
@@ -716,11 +734,13 @@ public final class RtComposite {
                 skyLut = RtSkyLut.create(ctx);
             }
             bindlessTextureCapacity = RtEntityTextures.maxTextures();
-            worldPipeline = RtPipeline.create(ctx, new String[]{
-                            RtDeviceBringup.worldPrimaryRaygenShader(),
-                            RtDeviceBringup.worldRaygenShader()},
-                    new String[]{"sky.rmiss.spv", "guide.rmiss.spv"},
-                    "closest_hit.rchit.spv", "any_hit.rahit.spv",
+            pipelinePackSky = packSky();
+            worldPipeline = RtPipeline.create(ctx, new RtShaderCode[]{
+                            RtShaderCode.resource(RtDeviceBringup.worldPrimaryRaygenShader()),
+                            RtShaderCode.resource(RtDeviceBringup.worldRaygenShader())},
+                    new RtShaderCode[]{skyMissShader(), RtShaderCode.resource("guide.rmiss.spv")},
+                    RtShaderCode.resource("closest_hit.rchit.spv"),
+                    RtShaderCode.resource("any_hit.rahit.spv"),
                     WorldPushConstantsData.BYTE_SIZE, bindlessTextureCapacity);
             // Per-frame world data lives in this BDA ring; the pipeline pushes its address and hot fields.
             if (pushRing == null) {
@@ -742,8 +762,52 @@ public final class RtComposite {
         return worldPipeline;
     }
 
+    /**
+     * SPIR-V for miss record 0. With pack rendering enabled this is the engine's {@code pack_sky_miss}
+     * wrapper specialized with the active pack's appearance type, compiled here rather than at build time
+     * because the pack type is not known until an epoch is published.
+     *
+     * <p>A compilation or discovery failure falls back to the built-in atmosphere miss shader rather than
+     * failing pipeline creation: an experimental pack path must not be able to take the renderer down.
+     */
+    private RtShaderCode skyMissShader() {
+        RtShaderCode builtIn = RtShaderCode.resource("sky.rmiss.spv");
+        if (!pipelinePackSky) {
+            return builtIn;
+        }
+        try {
+            if (packEpochs == null) {
+                packEpochs = RayPackEpochManager.withBundledDefault();
+            }
+            if (packShaderCompiler == null) {
+                Path cache = FabricLoader.getInstance().getGameDir()
+                        .resolve("caustica-raypacks").resolve("sources");
+                packShaderCompiler = RayPackShaderCompiler.create(cache);
+            }
+            RayPackEpoch epoch = packEpochs.current();
+            RtShaderCode compiled = RtShaderCode.of("pack_sky_miss(" + epoch.id() + ")",
+                    packShaderCompiler.compileSkyMiss(epoch));
+            CausticaMod.LOGGER.info("Ray-pack sky active: {} ({})", epoch.id(),
+                    epoch.manifest().slang().type());
+            return compiled;
+        } catch (Throwable t) {
+            CausticaMod.LOGGER.error("Ray-pack sky compilation failed; using the built-in sky", t);
+            pipelinePackSky = false;
+            return builtIn;
+        }
+    }
+
     private void refreshPipelineShapeIfNeeded(RtContext ctx) {
         if (worldPipeline == null || reloadRebindRequested) {
+            return;
+        }
+        // The sky miss shader is baked into this pipeline's SBT, so a runtime toggle needs a rebuild.
+        if (pipelinePackSky != packSky()) {
+            ctx.waitIdle();
+            worldPipeline.destroy();
+            worldPipeline = null;
+            bindlessTextureCapacity = 0;
+            materialBindingsReady = false;
             return;
         }
         int desiredBindlessCapacity = RtEntityTextures.maxTextures();
@@ -1555,6 +1619,12 @@ public final class RtComposite {
         if (worldPipeline != null) {
             worldPipeline.destroy();
             worldPipeline = null;
+        }
+        // Releases the Slang session and its loaded modules. The epoch itself is plain immutable data
+        // and needs no teardown.
+        if (packShaderCompiler != null) {
+            packShaderCompiler.close();
+            packShaderCompiler = null;
         }
         bindlessTextureCapacity = 0;
         materialBindingsReady = false;

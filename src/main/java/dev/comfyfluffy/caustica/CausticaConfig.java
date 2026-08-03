@@ -535,6 +535,14 @@ public final class CausticaConfig {
                     clampedInt("caustica.rt.maxBounces", "composite.max-bounces", 4, 2, 8);
             public static final BooleanSetting WATER_WAVES =
                     bool("caustica.rt.waterWaves", "composite.water-waves", true);
+            // Route the sky miss shader through the selected ray pack's evaluateEnvironment instead of
+            // the built-in atmosphere. Experimental and off by default: it proves the pack compilation
+            // and specialization path end to end in a real frame, but the bundled pack's sky is a simple
+            // gradient, so enabling it drops the LUT atmosphere, stars and celestial sprites. Direct
+            // sun/moon LIGHTING still comes from the transmittance LUT in indirect.rgen, so lighting and
+            // the visible sky deliberately disagree while this is on.
+            public static final BooleanSetting PACK_SKY =
+                    bool("caustica.rt.packSky", "composite.pack-sky", false);
             // Sun/moon angular radii and the noon south tilt moved into the versioned look package
             // (look.json "sky"): they shape the sky alongside the exposure curve, the LMT and the
             // photometric anchors that were already authored there, and splitting them across two
