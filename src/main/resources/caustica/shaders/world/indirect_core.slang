@@ -1,4 +1,4 @@
-// Composition-generic indirect raygen. The engine owns path bookkeeping, termination, medium state,
+// Shared composition-generic indirect integrator. The engine owns path bookkeeping, termination, medium state,
 // dielectric transitions, ray cones, particle shading, and direct-light gating. Opaque vertices call the
 // selected surface slot for BSDF evaluation, sampling, and the post-estimator response.
 //
@@ -6,8 +6,7 @@
 // re-evaluated here. Celestial visibility is derived from BsdfSample.eventFlags. The built-in model uses
 // a tight continuous GGX lobe at zero roughness because the slot contract has no delta-lobe event.
 //
-// The missing `.rgen.` stage infix keeps this generic entry point out of build-time shader compilation.
-// This path uses ordinary TraceRay because no EXT_SER-specialized generic variant exists.
+// Thin entry modules select ordinary tracing or EXT_SER while this integrator stays shared.
 import world_common;
 import world_core;
 import math;
@@ -22,6 +21,7 @@ import caustica_types;
 import caustica_surface;
 import caustica_api;
 import frame;
+import trace_policy;
 
 // Rebuilds the closure closest_hit.slang's createSurface already computed for this hit. Its
 // fields are exactly what the payload carries (diffuseAlbedo/specularF0/alphaRoughness/subsurface/
@@ -40,7 +40,8 @@ SurfaceClosure payloadSurfaceClosure(float3 n) {
     return closure;
 }
 
-public float3 tracePath<TC : IComposition>(TC.Surface surfaceModel, FrameContext frameCtx, PathSegment seg,
+public float3 tracePath<TC : IComposition, TTrace : IRadianceTrace>(TC.Surface surfaceModel,
+        FrameContext frameCtx, PathSegment seg,
         uint2 pix, uint sampleIndex) {
     float3 L = float3(0.0, 0.0, 0.0);
     float3 ro = seg.ro;
@@ -60,9 +61,11 @@ public float3 tracePath<TC : IComposition>(TC.Surface surfaceModel, FrameContext
     bool waterWaves = (worldPush.flags & 16u) != 0u;
     bool showCelestial = seg.showCelestial;
     int indirectDepth = 0;
+    TTrace tracer;
     for (int bounce = seg.bounce; bounce <= maxBounces; bounce++) {
-        traceRadiance(bounce == 0 ? CULL_PRIMARY : CULL_SECONDARY, ro, 0.0, rd, 10000.0,
-                      showCelestial, rayConeWidth, rayConeSpread);
+        uint pathPhaseHint = bounce >= maxBounces ? 2u : (bounce >= rrStart ? 1u : 0u);
+        tracer.trace(bounce == 0 ? CULL_PRIMARY : CULL_SECONDARY, ro, 0.0, rd, 10000.0,
+                showCelestial, rayConeWidth, rayConeSpread, pathPhaseHint);
 
         if (payload.hitT < 0.0) {
             if (medium.current.water) {
@@ -83,7 +86,7 @@ public float3 tracePath<TC : IComposition>(TC.Surface surfaceModel, FrameContext
         uint material = payloadMaterial();
         int hitDepth = indirectDepth++;
 
-        // ---- Dielectric interface: engine-owned in full, unchanged from indirect.rgen.slang.
+        // ---- Dielectric interface: engine-owned in full.
         if (material == MATERIAL_WATER || material == MATERIAL_DIELECTRIC) {
             if (bounce >= maxBounces) {
                 break;
@@ -253,8 +256,7 @@ public float3 tracePath<TC : IComposition>(TC.Surface surfaceModel, FrameContext
 
         // Indirect continuation: the slot samples its BSDF. throughputWeight already carries
         // value*|N.L|/pdf (the estimator contract), so no separate lobe-selection division is needed
-        // here — unlike indirect.rgen.slang's hand-rolled mixture, which divided by its own local
-        // selection probability `ps`.
+        // here; no separate lobe-selection division is applied.
         BsdfSampleQuery sampleQuery;
         sampleQuery.surface = closure;
         sampleQuery.outgoingDirection = v;
@@ -283,8 +285,7 @@ public float3 tracePath<TC : IComposition>(TC.Surface surfaceModel, FrameContext
     return L;
 }
 
-[shader("raygeneration")]
-void main<TC : IComposition>() {
+public void runIndirect<TC : IComposition, TTrace : IRadianceTrace>() {
     worldPush = ConstPtr<WorldPush>(pc.worldPushAddr)[0];
     celestialLight = dominantCelestialLight(skyState(worldPush), transmittanceLut);
     celestialLight.illuminance = bt709ToAcesCg(celestialLight.illuminance);
@@ -302,7 +303,8 @@ void main<TC : IComposition>() {
         PackedPathSegment packed = queue[recordIndex];
         PathSegment segment = unpackPathSegment(packed);
         for (uint s = 0u; s < spp; ++s) {
-            frameRadiance += tracePath<TC>(surfaceModel, frameCtx, segment, uint2(pix), s + leaf * spp);
+            frameRadiance += tracePath<TC, TTrace>(surfaceModel, frameCtx, segment,
+                    uint2(pix), s + leaf * spp);
         }
         if (packed.nextRecord == PATH_NO_NEXT) {
             break;

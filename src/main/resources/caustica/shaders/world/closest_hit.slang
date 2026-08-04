@@ -2,7 +2,7 @@
 // LOD, and the block-breaking overlay stay engine-owned; opaque terrain and entity materials are routed
 // through the selected surface slot's createSurface implementation.
 //
-// The missing `.rchit.` stage infix keeps this generic entry point out of build-time shader compilation.
+// WorldShaderCompiler specializes this generic entry point with the active composition.
 // Water, stained glass, ice, and particles stay on engine-owned paths because dielectric transitions and
 // fixed billboard receivers are not surface-slot policy.
 import world_common;
@@ -188,7 +188,7 @@ float3 applyBreaking(float3 albedo709, uint rayCone, float3 rayOrigin, float3 ra
 // is ACEScg, post block-breaking overlay, but deliberately NOT ao- or metal-multiplied: those two splits
 // are the surface slot's job.
 // `diffuseAlbedo = baseColor * (1 - metalness) * ao`. Multiplication commutes, so folding ao/breaking in
-// either order reproduces the same result the build-time closest_hit.rchit.slang path computes today.
+// either order reproduces the built-in surface result.
 MaterialInput buildMaterialInput(Surface surface, float3 finalAlbedo, float interiorIor) {
     MaterialInput material;
     material.baseColor = finalAlbedo;
@@ -197,7 +197,7 @@ MaterialInput buildMaterialInput(Surface surface, float3 finalAlbedo, float inte
     material.metalness = surface.metalness;
     material.specularF0 = surface.f0;
     // The payload's emission channel is still a scalar multiplied against the final albedo at the read
-    // site (indirect.rgen), not an independent colour — see the Payload struct doc. A slot's
+    // site (indirect_core), not an independent colour — see the Payload struct doc. A slot's
     // emissionRadiance is accepted here for API completeness and future use, but is not yet threaded back
     // out; the engine's own LabPBR/heuristic emission stays authoritative until the payload ABI carries a
     // real emission colour. This is the same representational gap as demodulationAlbedo.
@@ -248,8 +248,7 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
     uint rayCone = payload.rayCone;
     TC.Surface surfaceModel;
 
-    // Particle billboard: not routed through the surface slot; identical to
-    // closest_hit.rchit.slang.
+    // Particle billboards remain engine-owned and do not route through the surface slot.
     if ((InstanceID() & PARTICLE_BIT) != 0u) {
         uint idx = InstanceID() & IDX_MASK;
         EntityGeom g = ConstPtr<EntityGeom>(pc.entityTableAddr)[idx];
@@ -458,7 +457,7 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
             tp0, tp1, tp2, uv0, uv1, uv2, vdir,
             materialHeader.params.x, materialHeader.params.y, emission, nonSolid);
 
-    // Block-breaking overlay, exactly as closest_hit.rchit.slang: a rendering trick, not a material fact,
+    // Block-breaking overlay is a rendering trick, not a material fact,
     // so it stays engine-side and composites into baseColor before the slot sees it.
     float3 brokenAlbedo709 = applyBreaking(albedo709, rayCone, WorldRayOrigin(),
             WorldRayDirection(), RayTCurrent(), surface.normal);

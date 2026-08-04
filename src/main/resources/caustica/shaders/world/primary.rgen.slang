@@ -96,7 +96,7 @@ public PathSegment tracePrimary(PathSegment seg,
             return terminal;
         }
 
-        // This hit is consumed in pass A, so carry its travelled-medium absorption and cone growth into
+        // This hit is consumed in the primary traversal, so carry its travelled-medium absorption and cone growth into
         // the record for the next trace. The terminal hit above is deliberately not consumed here.
         if (any(medium.current.extinction > 0.0)) {
             throughput *= exp(-medium.current.extinction * payload.hitT);

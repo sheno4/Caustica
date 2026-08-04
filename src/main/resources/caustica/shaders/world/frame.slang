@@ -1,6 +1,4 @@
-// Shared FrameContext builder for every runtime-compiled, composition-generic world stage. This module
-// deliberately carries no stage infix, so build-time shader compilation skips it and only the runtime
-// world compiler resolves it through import.
+// Shared FrameContext builder for every composition-generic world stage.
 //
 // One implementation keeps frame, sun, and moon state identical for every slot call site.
 import world_common;

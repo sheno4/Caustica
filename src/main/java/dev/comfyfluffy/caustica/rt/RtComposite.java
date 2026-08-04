@@ -129,10 +129,6 @@ public final class RtComposite {
         return CausticaConfig.Rt.Composite.WATER_WAVES.value();
     }
 
-    private static boolean dynamicWorldShaders() {
-        return CausticaConfig.Rt.Composite.DYNAMIC_WORLD_SHADERS.value();
-    }
-
     private static final int WATER_ANCHOR_MASK = 4095;
     // The versioned look package owns every photometric anchor and the sky geometry. Its sun illuminance is the
     // photometric solar constant at the top of the atmosphere; the shader's transmittance LUT brings that
@@ -166,8 +162,6 @@ public final class RtComposite {
     // The immutable slot composition specialized into the current world pipeline.
     private CompositionManager compositions;
     private WorldShaderCompiler worldShaderCompiler;
-    private boolean pipelineDynamicWorldShaders;
-    private boolean pipelineCompositionSurface;
 
     private RtPipeline worldPipeline;
     // Set at the HEAD of Minecraft.reloadResourcePacks() (mixin): a resource reload recreates the block
@@ -722,7 +716,7 @@ public final class RtComposite {
         }
     }
 
-    private RtPipeline ensureWorld(RtContext ctx) {
+    private RtPipeline ensureWorld(RtContext ctx) throws IOException {
         if (worldPipeline == null) {
             // Must exist before bindWorldTextures below writes the sky-LUT descriptors. This is the
             // earliest possible bind: ensureResourcesReady drives this from the client tick, ahead of the
@@ -734,24 +728,13 @@ public final class RtComposite {
                 skyLut = RtSkyLut.create(ctx);
             }
             bindlessTextureCapacity = RtEntityTextures.maxTextures();
-            pipelineDynamicWorldShaders = dynamicWorldShaders();
-            // closest-hit's closure and indirect's BSDF read of it are one contract (Phase B): validate
-            // both compile against the active epoch BEFORE either shader-resolution method below runs, so
-            // a failure in either stage falls the WHOLE pair back to the built-in shading rather than
-            // pairing a slot-specialized closest-hit with the plain indirect raygen (or vice versa), which
-            // would desync the payload fields one writes against what the other reads.
-            //
-            // The composition path wins over EXT_SER: indirect.slang has no reordered variant (see
-            // indirectRaygenShader's doc), so opting into it forgoes the SER perf optimization for this
-            // stage rather than silently doing nothing on hardware that supports SER — which is most
-            // current NVIDIA RT hardware, so gating on "SER off" would make the toggle a no-op there.
-            pipelineCompositionSurface = precompileCompositionSurfaceStages();
+            WorldShaders shaders = compileWorldShaders();
             worldPipeline = RtPipeline.create(ctx, new RtShaderCode[]{
-                            primaryRaygenShader(),
-                            indirectRaygenShader()},
-                    new RtShaderCode[]{skyMissShader(), guideMissShader()},
-                    closestHitShader(),
-                    anyHitShader(),
+                            shaders.primary(),
+                            shaders.indirect()},
+                    new RtShaderCode[]{shaders.skyMiss(), shaders.guideMiss()},
+                    shaders.closestHit(),
+                    shaders.anyHit(),
                     WorldPushConstantsData.BYTE_SIZE, bindlessTextureCapacity);
             // Per-frame world data lives in this BDA ring; the pipeline pushes its address and hot fields.
             if (pushRing == null) {
@@ -773,147 +756,33 @@ public final class RtComposite {
         return worldPipeline;
     }
 
-    /**
-     * SPIR-V for miss record 0. The composition-generic wrapper is specialized with the selected sky
-     * slot. The build-time atmosphere shader remains the failure fallback.
-     *
-     * <p>A compilation or discovery failure falls back to the built-in atmosphere miss shader's build-time
-     * SPIR-V rather than failing pipeline creation: an experimental path must not be able to take the
-     * renderer down.
-     */
-    private RtShaderCode skyMissShader() {
-        RtShaderCode builtIn = RtShaderCode.resource("sky.rmiss.spv");
-        try {
-            ensureShaderCompiler();
-            Composition composition = compositions.current();
-            var selected = composition.selection().binding(Slots.SKY);
-            RtShaderCode compiled = RtShaderCode.of("sky_miss(" + selected.feature().id() + ")",
-                    worldShaderCompiler.compileSkyMiss());
-            CausticaMod.LOGGER.info("Composition sky active: {} ({})", selected.feature().id(),
-                    selected.binding().type());
-            return compiled;
-        } catch (Throwable t) {
-            CausticaMod.LOGGER.error("Composition sky compilation failed; using the build-time sky", t);
-            return builtIn;
-        }
+    private WorldShaders compileWorldShaders() throws IOException {
+        ensureShaderCompiler();
+        Composition composition = compositions.current();
+        var sky = composition.selection().binding(Slots.SKY);
+        var surface = composition.selection().binding(Slots.SURFACE);
+        boolean reordered = RtDeviceBringup.serExtEnabled();
+        WorldShaders shaders = new WorldShaders(
+                RtShaderCode.of("primary", worldShaderCompiler.compilePlain(
+                        "primary.rgen.slang", WorldShaderCompiler.ENTRY_POINT)),
+                RtShaderCode.of("indirect(" + surface.feature().id() + (reordered ? ", EXT_SER)" : ")"),
+                        worldShaderCompiler.compileIndirect(reordered)),
+                RtShaderCode.of("sky_miss(" + sky.feature().id() + ")",
+                        worldShaderCompiler.compileSkyMiss()),
+                RtShaderCode.of("guide_miss", worldShaderCompiler.compilePlain(
+                        "guide.rmiss.slang", WorldShaderCompiler.ENTRY_POINT)),
+                RtShaderCode.of("closest_hit(" + surface.feature().id() + ")",
+                        worldShaderCompiler.compileClosestHit()),
+                RtShaderCode.of("any_hit", worldShaderCompiler.compilePlain(
+                        "any_hit.rahit.slang", WorldShaderCompiler.ENTRY_POINT)));
+        CausticaMod.LOGGER.info("World shader composition active: sky={} ({}), surface={} ({}), SER={}",
+                sky.feature().id(), sky.binding().type(), surface.feature().id(), surface.binding().type(),
+                reordered ? "EXT" : "none");
+        return shaders;
     }
 
-    /**
-     * SPIR-V for the primary/guide raygen. Behind {@link #dynamicWorldShaders()}, compiled at runtime with
-     * content unchanged from the build-time source.
-     */
-    private RtShaderCode primaryRaygenShader() {
-        return plainOrResource("primary.rgen.slang",
-                RtShaderCode.resource(RtDeviceBringup.worldPrimaryRaygenShader()));
-    }
-
-    /**
-     * SPIR-V for the indirect raygen. The composition path is checked ahead of EXT_SER because
-     * {@code indirect.slang} has no reordered variant: opting into slot-defined appearance means this stage
-     * always uses ordinary TraceRay, trading the SER optimization for slot-defined appearance on this stage
-     * only. The EXT_SER-reordered fallback stays build-time only: its
-     * {@code #ifdef CAUSTICA_ENABLE_EXT_SER} branch has no runtime-compile equivalent, since the shim's
-     * compile entry points accept neither preprocessor defines nor capability flags (see {@code
-     * SlangSerCapabilityTest}). Only the plain non-reordering variant moves to the dynamic path.
-     */
-    private RtShaderCode indirectRaygenShader() {
-        String resourceName = RtDeviceBringup.worldRaygenShader();
-        RtShaderCode builtIn = RtShaderCode.resource(resourceName);
-        if (pipelineCompositionSurface) {
-            try {
-                ensureShaderCompiler();
-                Composition composition = compositions.current();
-                var selected = composition.selection().binding(Slots.SURFACE);
-                return RtShaderCode.of("indirect(" + selected.feature().id() + ")",
-                        worldShaderCompiler.compileIndirect());
-            } catch (Throwable t) {
-                // precompileCompositionSurfaceStages already validated this composition, so
-                // reaching here means something changed underneath us; fall back for this stage only —
-                // see that method's doc for why the pair is validated together up front.
-                CausticaMod.LOGGER.error("Composition indirect compilation failed; using build-time shading", t);
-                return RtDeviceBringup.serExtEnabled() ? builtIn
-                        : plainOrResource("indirect.rgen.slang", builtIn);
-            }
-        }
-        if (RtDeviceBringup.serExtEnabled()) {
-            return builtIn;
-        }
-        return plainOrResource("indirect.rgen.slang", builtIn);
-    }
-
-    private RtShaderCode guideMissShader() {
-        return plainOrResource("guide.rmiss.slang", RtShaderCode.resource("guide.rmiss.spv"));
-    }
-
-    /**
-     * SPIR-V for closest-hit specialized with the selected surface slot. Opaque terrain/entity materials
-     * route through its {@code createSurface}; water, glass/ice and particles remain engine-owned. Falls
-     * back to the plain path — build-time SPIR-V, or
-     * {@link #dynamicWorldShaders()}'s unspecialized runtime compile — on any failure, independently of
-     * {@link #indirectRaygenShader()}'s own fallback, since either stage can fail on its own.
-     */
-    private RtShaderCode closestHitShader() {
-        RtShaderCode builtIn = RtShaderCode.resource("closest_hit.rchit.spv");
-        if (pipelineCompositionSurface) {
-            try {
-                ensureShaderCompiler();
-                Composition composition = compositions.current();
-                var selected = composition.selection().binding(Slots.SURFACE);
-                return RtShaderCode.of("closest_hit(" + selected.feature().id() + ")",
-                        worldShaderCompiler.compileClosestHit());
-            } catch (Throwable t) {
-                CausticaMod.LOGGER.error("Composition closest-hit compilation failed; using build-time shading", t);
-                return plainOrResource("closest_hit.rchit.slang", builtIn);
-            }
-        }
-        return plainOrResource("closest_hit.rchit.slang", builtIn);
-    }
-
-    private RtShaderCode anyHitShader() {
-        return plainOrResource("any_hit.rahit.slang", RtShaderCode.resource("any_hit.rahit.spv"));
-    }
-
-    /**
-     * {@code builtIn} compiled through the runtime path with no composition specialization when
-     * {@link #dynamicWorldShaders()} is on — the content is identical to the build-time SPIR-V, only when
-     * it compiles differs. Falls back to {@code builtIn} on any failure, independently per stage, so one
-     * bad dynamic compile cannot take down the rest of the pipeline.
-     */
-    private RtShaderCode plainOrResource(String moduleFileName, RtShaderCode builtIn) {
-        if (!pipelineDynamicWorldShaders) {
-            return builtIn;
-        }
-        try {
-            ensureShaderCompiler();
-            byte[] spirv = worldShaderCompiler.compilePlain(moduleFileName, WorldShaderCompiler.ENTRY_POINT);
-            return RtShaderCode.of(moduleFileName + " (dynamic)", spirv);
-        } catch (Throwable t) {
-            CausticaMod.LOGGER.error("Dynamic compilation of {} failed; using the build-time SPIR-V",
-                    moduleFileName, t);
-            return builtIn;
-        }
-    }
-
-    /**
-     * Attempts both composition-generic surface stages, so {@link #closestHitShader()} and
-     * {@link #indirectRaygenShader()} either both use the selected slot or both fall back. Results land in
-     * {@link WorldShaderCompiler}'s cache,
-     * so the shader-resolution methods' own compile calls are cache hits, not repeat work.
-     */
-    private boolean precompileCompositionSurfaceStages() {
-        try {
-            ensureShaderCompiler();
-            Composition composition = compositions.current();
-            worldShaderCompiler.compileClosestHit();
-            worldShaderCompiler.compileIndirect();
-            var selected = composition.selection().binding(Slots.SURFACE);
-            CausticaMod.LOGGER.info("Composition surface active: {} ({})", selected.feature().id(),
-                    selected.binding().type());
-            return true;
-        } catch (Throwable t) {
-            CausticaMod.LOGGER.error("Composition surface compilation failed; using build-time shading", t);
-            return false;
-        }
+    private record WorldShaders(RtShaderCode primary, RtShaderCode indirect, RtShaderCode skyMiss,
+                                RtShaderCode guideMiss, RtShaderCode closestHit, RtShaderCode anyHit) {
     }
 
     private void ensureShaderCompiler() throws IOException {
@@ -929,11 +798,11 @@ public final class RtComposite {
         if (worldPipeline == null || reloadRebindRequested) {
             return;
         }
-        // Every stage is baked into this pipeline's SBT, so a compiler mode or slot selection change
-        // needs a complete pipeline rebuild.
+        // Every stage is baked into this pipeline's SBT, so a slot selection change needs a complete
+        // pipeline rebuild.
         boolean selectionChanged = worldShaderCompiler != null
                 && !worldShaderCompiler.composition().selection().equals(CausticaApi.registry().selection());
-        if (pipelineDynamicWorldShaders != dynamicWorldShaders() || selectionChanged) {
+        if (selectionChanged) {
             ctx.waitIdle();
             worldPipeline.destroy();
             worldPipeline = null;
@@ -1405,7 +1274,7 @@ public final class RtComposite {
                  RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.tracePrimary")) {
                 active.trace(cmd, renderW, renderH, pushConstants, 0);
             }
-            VulkanCommandEncoder.memoryBarrier(cmd, stack); // continuation/guide writes visible to pass B
+            VulkanCommandEncoder.memoryBarrier(cmd, stack); // continuation/guide writes visible to the indirect trace
             try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "world indirect trace");
                  RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.traceIndirect")) {
                 active.trace(cmd, renderW, renderH, pushConstants, 1);

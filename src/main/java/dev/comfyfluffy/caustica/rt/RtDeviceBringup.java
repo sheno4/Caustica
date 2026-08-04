@@ -198,21 +198,15 @@ public final class RtDeviceBringup {
             RAY_QUERY_FEATURE);
 
     private enum SerBackend {
-        NONE("none", null, "primary.rgen.spv", "indirect.rgen.spv"),
-        EXT("EXT", VK_EXT_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME,
-                "primary.rgen.spv", "indirect_ser.rgen.spv");
+        NONE("none", null),
+        EXT("EXT", VK_EXT_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME);
 
         final String label;
         final String extensionName;
-        final String worldPrimaryRaygenShader;
-        final String worldRaygenShader;
 
-        SerBackend(String label, String extensionName, String worldPrimaryRaygenShader,
-                   String worldRaygenShader) {
+        SerBackend(String label, String extensionName) {
             this.label = label;
             this.extensionName = extensionName;
-            this.worldPrimaryRaygenShader = worldPrimaryRaygenShader;
-            this.worldRaygenShader = worldRaygenShader;
         }
     }
 
@@ -229,14 +223,6 @@ public final class RtDeviceBringup {
     /** True once we have augmented a device creation to request RT (extensions + features). */
     public static boolean rtRequested() {
         return rtRequested;
-    }
-
-    public static String worldRaygenShader() {
-        return serBackend.worldRaygenShader;
-    }
-
-    public static String worldPrimaryRaygenShader() {
-        return serBackend.worldPrimaryRaygenShader;
     }
 
     public static boolean serExtEnabled() {

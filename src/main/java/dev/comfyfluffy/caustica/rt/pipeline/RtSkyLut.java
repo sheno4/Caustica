@@ -34,7 +34,7 @@ import static dev.comfyfluffy.caustica.rt.pipeline.RtBindings.*;
 
 /**
  * The sky's three LUTs (Hillaire 2020) and the compute passes that bake them. See
- * {@code shaders/pipelines/world/sky.slang} for the physics.
+ * {@code /caustica/shaders/world/sky.slang} for the physics.
  *
  * <ul>
  *   <li><b>Transmittance</b> 256x64 — point-to-space extinction by (altitude, cos zenith). Static.</li>
@@ -56,7 +56,7 @@ import static dev.comfyfluffy.caustica.rt.pipeline.RtBindings.*;
  */
 public final class RtSkyLut {
     private static final String SHADER_DIR = "/caustica/shaders/pipelines/sky_lut/";
-    // Keep in lock-step with the same-named constants in shaders/pipelines/world/sky.slang.
+    // Keep in lock-step with the same-named constants in /caustica/shaders/world/sky.slang.
     public static final int TRANSMITTANCE_WIDTH = 256;
     public static final int TRANSMITTANCE_HEIGHT = 64;
     public static final int MULTISCATTER_WIDTH = 32;

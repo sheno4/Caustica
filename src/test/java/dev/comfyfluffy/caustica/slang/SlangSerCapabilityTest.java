@@ -14,17 +14,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-/**
- * The build-time shader task compiles indirect.rgen twice: once plainly, and once with
- * {@code -DCAUSTICA_ENABLE_EXT_SER -capability spvShaderInvocationReorderEXT}. The runtime shim ABI
- * accepts neither preprocessor defines nor capability flags, so moving that entry point to runtime
- * compilation depends on Slang inferring the reorder capability from the intrinsics a module actually
- * uses — which would let the SER variant be a separate module over a shared core instead of a
- * define-driven second compile of the same file.
- *
- * <p>This pins that inference. If it fails, the shim ABI has to grow a capability parameter before the
- * world raygen can be compiled at runtime.
- */
+/** Pins the capability inference used by the runtime-compiled EXT_SER world entry module. */
 final class SlangSerCapabilityTest {
     private static SlangLibrary library;
     private static MemorySegment runtime;
@@ -59,8 +49,8 @@ final class SlangSerCapabilityTest {
                     public float3 shade(float3 direction) { return direction * 0.5 + 0.5; }
                 };
                 """);
-        // Mirrors trace_ser.slang: HitObject::TraceRay + ReorderThread + HitObject::Invoke, with no
-        // -capability on any command line, because the shim has no way to pass one.
+        // Mirrors trace_ser.slang: HitObject::TraceRay + ReorderThread + HitObject::Invoke. The shim
+        // supplies no explicit capability because Slang derives it from these operations.
         Files.writeString(sourceDirectory.resolve("ser_engine.slang"), """
                 module ser_engine;
                 import ser_api;

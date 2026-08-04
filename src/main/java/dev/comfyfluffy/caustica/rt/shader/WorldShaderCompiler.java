@@ -33,9 +33,10 @@ public final class WorldShaderCompiler implements AutoCloseable {
     public static final String SKY_MISS_MODULE = "sky_miss";
     public static final String CLOSEST_HIT_MODULE = "closest_hit";
     public static final String INDIRECT_MODULE = "indirect";
+    public static final String INDIRECT_SER_MODULE = "indirect_ser";
     public static final String ENTRY_POINT = "main";
 
-    private static final String WORLD_SHADER_ROOT = "/caustica/shadersrc/pipelines/world/";
+    private static final String WORLD_SHADER_ROOT = "/caustica/shaders/world/";
     private static final String API_ROOT = "/caustica/shaders/api/";
     private static final String COMPOSITION_MODULE = "caustica_composition";
     private static final String COMPOSITION_TYPE = "Composition";
@@ -43,11 +44,12 @@ public final class WorldShaderCompiler implements AutoCloseable {
             "(?m)^\\s*import\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*;");
 
     private static final List<String> WORLD_MODULES = List.of(
-            "any_hit.rahit.slang", "bindings.slang", "closest_hit.rchit.slang", "closest_hit.slang",
-            "frame.slang", "guide.rmiss.slang", "guides.slang", "indirect.rgen.slang",
-            "indirect.slang", "lighting.slang", "math.slang", "medium.slang", "primary.rgen.slang",
-            "segment.slang", "sky.rmiss.slang", "sky.slang", "sky_miss.slang", "trace.slang",
-            "water.slang", "world_common.slang", "world_core.slang");
+            "any_hit.rahit.slang", "bindings.slang", "closest_hit.slang", "frame.slang",
+            "guide.rmiss.slang", "guides.slang", "indirect.slang", "indirect_core.slang",
+            "indirect_ser.slang", "lighting.slang", "math.slang", "medium.slang",
+            "primary.rgen.slang", "segment.slang", "sky.slang", "sky_miss.slang",
+            "trace.slang", "trace_ordinary.slang", "trace_policy.slang", "trace_reordered.slang",
+            "trace_ser.slang", "water.slang", "world_common.slang", "world_core.slang");
     private static final List<String> API_MODULES = List.of(
             "caustica_api.slang", "caustica_medium.slang", "caustica_sky.slang",
             "caustica_surface.slang", "caustica_types.slang");
@@ -129,8 +131,8 @@ public final class WorldShaderCompiler implements AutoCloseable {
         return compileSpecialized(CLOSEST_HIT_MODULE, ENTRY_POINT);
     }
 
-    public byte[] compileIndirect() {
-        return compileSpecialized(INDIRECT_MODULE, ENTRY_POINT);
+    public byte[] compileIndirect(boolean reordered) {
+        return compileSpecialized(reordered ? INDIRECT_SER_MODULE : INDIRECT_MODULE, ENTRY_POINT);
     }
 
     public synchronized byte[] compilePlain(String moduleFileName, String entryPoint) {

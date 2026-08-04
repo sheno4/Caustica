@@ -83,6 +83,7 @@ processResources {
 // Compile Slang sources to SPIR-V at build time instead of tracking binaries. Requires slangc and
 // spirv-val from the Vulkan SDK or PATH.
 def shaderGenRoot = layout.buildDirectory.dir("generated/shaders") // classpath root -> /caustica/shaders/*.spv
+def runtimeWorldSourceDir = file("src/main/resources/caustica/shaders/world")
 
 def resolveVulkanTool = { String name ->
 	def exe = org.gradle.internal.os.OperatingSystem.current().windows ? ".exe" : ""
@@ -98,6 +99,7 @@ def resolveVulkanTool = { String name ->
 
 abstract class CompileShaders extends DefaultTask {
 	@InputDirectory abstract DirectoryProperty getSrcDir()
+	@InputDirectory abstract DirectoryProperty getRuntimeWorldDir()
 	@OutputDirectory abstract DirectoryProperty getOutDir()
 	@Input abstract Property<String> getSpirvVal()
 	@Input abstract Property<String> getSlangc()
@@ -115,9 +117,6 @@ abstract class CompileShaders extends DefaultTask {
 		def outDirFile = outDir.get().asFile
 		// Slang stages are named <name>.<stage>.slang (any_hit.rahit.slang -> any_hit.rahit.spv); module files
 		// like world_common.slang match no stage glob and are picked up only via `import`.
-		// Entry points that are generic over a composition type (e.g. sky_miss.slang) cannot be
-		// compiled here — their type argument is not known until an epoch is activated — so they
-		// deliberately carry no stage infix and are reached only through the runtime compiler.
 		def stageIncludes = ["rgen", "rchit", "rahit", "rmiss", "rcall", "comp", "vert", "frag"]
 				.collect { stage -> "**/*.${stage}.slang" }
 		def validate = { File spv ->
@@ -125,8 +124,9 @@ abstract class CompileShaders extends DefaultTask {
 				commandLine spirvVal.get(), "--target-env", "vulkan1.2", spv.absolutePath
 			}
 		}
-		def includeDirs = srcDir.get().asFileTree.matching { include "**/*.slang" }.files
-				.collect { it.parentFile }.unique().sort { it.absolutePath }
+		def includeDirs = ([runtimeWorldDir.get().asFile]
+				+ srcDir.get().asFileTree.matching { include "**/*.slang" }.files.collect { it.parentFile })
+				.unique().sort { it.absolutePath }
 		def compileOneSlang = { File src, File spv, List<String> extra ->
 			spv.parentFile.mkdirs()
 			def includes = [src.parentFile] + includeDirs.findAll { it != src.parentFile }
@@ -159,18 +159,7 @@ abstract class CompileShaders extends DefaultTask {
 		scratchDir.mkdirs()
 		shaderFiles.each { src ->
 			def base = outBase(srcDir.get().asFile, src)
-			def spv = new File(scratchDir, "${base}.spv")
-			def worldIndirectRaygen = base == "pipelines/world/indirect.rgen"
-			if (worldIndirectRaygen) {
-				// Keep a capability-free TraceRay fallback for devices without EXT SER, and
-				// publish the reordered variant separately when the extension is available.
-				compileOneSlang(src, spv, [])
-				compileOneSlang(src, new File(scratchDir, "pipelines/world/indirect_ser.rgen.spv"),
-						["-DCAUSTICA_ENABLE_EXT_SER", "-capability", "spvShaderInvocationReorderEXT"])
-			} else {
-				// Pass A intentionally uses ordinary TraceRay.
-				compileOneSlang(src, spv, [])
-			}
+			compileOneSlang(src, new File(scratchDir, "${base}.spv"), [])
 		}
 		if (outDirFile.exists() && !outDirFile.deleteDir()) {
 			throw new GradleException("failed to clear generated shaders under ${outDirFile}")
@@ -190,16 +179,27 @@ def compileShaders = tasks.register("compileShaders", CompileShaders) {
 	group = "build"
 	description = "Compiles shaders/** shader sources to SPIR-V and validates them."
 	srcDir = file("shaders")
+	runtimeWorldDir = runtimeWorldSourceDir
 	outDir = layout.buildDirectory.dir("generated/shaders/caustica/shaders")
 	spirvVal = resolveVulkanTool("spirv-val")
 	slangc = resolveVulkanTool("slangc")
 }
 
+def shaderReflectionRoot = layout.buildDirectory.dir("generated/shader-reflection-sources")
+def prepareShaderReflectionSources = tasks.register("prepareShaderReflectionSources", Sync) {
+	from(file("shaders"))
+	from(runtimeWorldSourceDir) {
+		into "pipelines/world"
+	}
+	into(shaderReflectionRoot)
+}
+
 def generateShaderRecords = tasks.register("generateShaderRecords", GenerateShaderRecords) {
 	group = "build"
 	description = "Generates typed Java shader records and serializers from Slang reflection."
-	shaderRoot = file("shaders")
-	probeSource = file("shaders/layout/layout_probe.slang")
+	dependsOn(prepareShaderReflectionSources)
+	shaderRoot = shaderReflectionRoot
+	probeSource = shaderReflectionRoot.map { it.file("layout/layout_probe.slang") }
 	slangc = resolveVulkanTool("slangc")
 	spirvVal = resolveVulkanTool("spirv-val")
 	outDir = layout.buildDirectory.dir("generated/sources/shaderRecords")
@@ -209,7 +209,8 @@ def rtBindingsGenRoot = layout.buildDirectory.dir("generated/sources/rtBindings"
 def generateRtBindings = tasks.register("generateRtBindings", GenerateRtBindings) {
 	group = "build"
 	description = "Generates Java descriptor bindings from Slang reflection."
-	shaderRoot = file("shaders")
+	dependsOn(prepareShaderReflectionSources)
+	shaderRoot = shaderReflectionRoot
 	slangc = resolveVulkanTool("slangc")
 	outDir = rtBindingsGenRoot
 }
@@ -224,22 +225,6 @@ sourceSets.main.java.srcDir(files(rtBindingsGenRoot).builtBy(generateRtBindings)
 // Emit the .spv into the main resources so they land in the jar / on the runClient classpath at the
 // same /caustica/shaders/ path the pipeline loaders read. builtBy wires the dependency.
 sourceSets.main.resources.srcDir(files(shaderGenRoot).builtBy(compileShaders))
-
-// Engine shader SOURCES, shipped alongside the build-time .spv. Slot implementations are specialized
-// into engine entry points at runtime, which means the engine
-// modules those entry points import have to be loadable by the bundled Slang compiler in the shipped
-// game — the .spv alone is not enough. Kept at a distinct /caustica/shadersrc/ root so nothing confuses
-// a compilable source tree with the precompiled binaries.
-def shaderSourceGenRoot = layout.buildDirectory.dir("generated/shader-sources")
-def bundleShaderSources = tasks.register("bundleShaderSources", Sync) {
-	group = "build"
-	description = "Bundles engine Slang sources for runtime composition specialization."
-	from(file("shaders")) {
-		include "**/*.slang"
-	}
-	into(shaderSourceGenRoot.map { it.dir("caustica/shadersrc") })
-}
-sourceSets.main.resources.srcDir(files(shaderSourceGenRoot).builtBy(bundleShaderSources))
 
 def slangRuntimeVersion = project.property("slang_runtime_version").toString()
 def slangRuntimeGenRoot = layout.buildDirectory.dir("generated/slang-runtime")
