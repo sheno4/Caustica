@@ -135,6 +135,10 @@ public final class RtComposite {
         return CausticaConfig.Rt.Composite.DYNAMIC_WORLD_SHADERS.value();
     }
 
+    private static boolean packSurface() {
+        return CausticaConfig.Rt.Composite.PACK_SURFACE.value();
+    }
+
     private static final int WATER_ANCHOR_MASK = 4095;
     // The versioned look package owns every photometric anchor and the sky geometry. Its sun illuminance is the
     // photometric solar constant at the top of the atmosphere; the shader's transmittance LUT brings that
@@ -170,11 +174,12 @@ public final class RtComposite {
     // so a run with pack rendering disabled never loads the Slang compiler at all.
     private RayPackEpochManager packEpochs;
     private RayPackShaderCompiler packShaderCompiler;
-    // What packSky()/dynamicWorldShaders() were when worldPipeline was built, so toggling either at
-    // runtime rebuilds the pipeline (every stage is baked into the SBT) rather than silently keeping
-    // the old one.
+    // What packSky()/dynamicWorldShaders()/packSurface() were when worldPipeline was built, so toggling
+    // any of them at runtime rebuilds the pipeline (every stage is baked into the SBT) rather than
+    // silently keeping the old one.
     private boolean pipelinePackSky;
     private boolean pipelineDynamicWorldShaders;
+    private boolean pipelinePackSurface;
 
     private RtPipeline worldPipeline;
     // Set at the HEAD of Minecraft.reloadResourcePacks() (mixin): a resource reload recreates the block
@@ -743,6 +748,17 @@ public final class RtComposite {
             bindlessTextureCapacity = RtEntityTextures.maxTextures();
             pipelinePackSky = packSky();
             pipelineDynamicWorldShaders = dynamicWorldShaders();
+            // closest-hit's closure and indirect's BSDF read of it are one contract (Phase B): validate
+            // both compile against the active epoch BEFORE either shader-resolution method below runs, so
+            // a failure in either stage falls the WHOLE pair back to the built-in shading rather than
+            // pairing a pack-specialized closest-hit with the plain indirect raygen (or vice versa), which
+            // would desync the payload fields one writes against what the other reads.
+            //
+            // packSurface wins over EXT_SER: pack_indirect.slang has no reordered variant (see
+            // indirectRaygenShader's doc), so opting into it forgoes the SER perf optimization for this
+            // stage rather than silently doing nothing on hardware that supports SER — which is most
+            // current NVIDIA RT hardware, so gating on "SER off" would make the toggle a no-op there.
+            pipelinePackSurface = packSurface() && precompilePackSurfaceStages();
             worldPipeline = RtPipeline.create(ctx, new RtShaderCode[]{
                             primaryRaygenShader(),
                             indirectRaygenShader()},
@@ -811,25 +827,65 @@ public final class RtComposite {
     }
 
     /**
-     * SPIR-V for the indirect raygen. The EXT_SER-reordered variant stays build-time only: its
-     * {@code #ifdef CAUSTICA_ENABLE_EXT_SER} branch has no runtime-compile equivalent yet, since the
-     * shim's compile entry points accept neither preprocessor defines nor capability flags (see
-     * {@code SlangSerCapabilityTest}). Only the plain (non-reordering) variant moves to the dynamic path.
+     * SPIR-V for the indirect raygen. With {@link #packSurface()} on, this is {@code pack_indirect.slang}
+     * specialized with the active pack's BSDF/look (Phase B) — checked FIRST, ahead of EXT_SER, because
+     * {@code pack_indirect.slang} has no reordered variant: opting into the pack path means this one stage
+     * always uses ordinary TraceRay, trading the SER perf optimization for pack appearance on this stage
+     * only. With packSurface off, the EXT_SER-reordered variant stays build-time only as before: its
+     * {@code #ifdef CAUSTICA_ENABLE_EXT_SER} branch has no runtime-compile equivalent, since the shim's
+     * compile entry points accept neither preprocessor defines nor capability flags (see {@code
+     * SlangSerCapabilityTest}). Only the plain (non-reordering, non-pack) variant moves to the dynamic path.
      */
     private RtShaderCode indirectRaygenShader() {
         String resourceName = RtDeviceBringup.worldRaygenShader();
-        if (RtDeviceBringup.serExtEnabled()) {
-            return RtShaderCode.resource(resourceName);
+        RtShaderCode builtIn = RtShaderCode.resource(resourceName);
+        if (pipelinePackSurface) {
+            try {
+                ensureShaderCompiler();
+                RayPackEpoch epoch = packEpochs.current();
+                return RtShaderCode.of("pack_indirect(" + epoch.id() + ")",
+                        packShaderCompiler.compileIndirect(epoch));
+            } catch (Throwable t) {
+                // precompilePackSurfaceStages already validated this compile for the current epoch, so
+                // reaching here means something changed underneath us; fall back for this stage only —
+                // see that method's doc for why the pair is validated together up front.
+                CausticaMod.LOGGER.error("Ray-pack indirect compilation failed; using the built-in shading", t);
+                return RtDeviceBringup.serExtEnabled() ? builtIn
+                        : plainOrResource("indirect.rgen.slang", builtIn);
+            }
         }
-        return plainOrResource("indirect.rgen.slang", RtShaderCode.resource(resourceName));
+        if (RtDeviceBringup.serExtEnabled()) {
+            return builtIn;
+        }
+        return plainOrResource("indirect.rgen.slang", builtIn);
     }
 
     private RtShaderCode guideMissShader() {
         return plainOrResource("guide.rmiss.slang", RtShaderCode.resource("guide.rmiss.spv"));
     }
 
+    /**
+     * SPIR-V for closest-hit. With {@link #packSurface()} on, this is {@code pack_closest_hit.slang}
+     * specialized with the active pack's surface model (Phase B): opaque terrain/entity materials route
+     * through {@code TPack.createSurface}; water, glass/ice and particles are unchanged (section 4.4 keeps
+     * dielectric interfaces engine-owned). Falls back to the plain path — build-time SPIR-V, or
+     * {@link #dynamicWorldShaders()}'s unspecialized runtime compile — on any failure, independently of
+     * {@link #indirectRaygenShader()}'s own fallback, since either stage can fail on its own.
+     */
     private RtShaderCode closestHitShader() {
-        return plainOrResource("closest_hit.rchit.slang", RtShaderCode.resource("closest_hit.rchit.spv"));
+        RtShaderCode builtIn = RtShaderCode.resource("closest_hit.rchit.spv");
+        if (pipelinePackSurface) {
+            try {
+                ensureShaderCompiler();
+                RayPackEpoch epoch = packEpochs.current();
+                return RtShaderCode.of("pack_closest_hit(" + epoch.id() + ")",
+                        packShaderCompiler.compileClosestHit(epoch));
+            } catch (Throwable t) {
+                CausticaMod.LOGGER.error("Ray-pack closest-hit compilation failed; using the built-in surface", t);
+                return plainOrResource("closest_hit.rchit.slang", builtIn);
+            }
+        }
+        return plainOrResource("closest_hit.rchit.slang", builtIn);
     }
 
     private RtShaderCode anyHitShader() {
@@ -857,6 +913,27 @@ public final class RtComposite {
         }
     }
 
+    /**
+     * Attempts both pack-generic Phase B stages against the current epoch, so {@link #closestHitShader()}
+     * and {@link #indirectRaygenShader()} either both use the pack path or both fall back — see the call
+     * site's doc on why the pair cannot split. Results land in {@link RayPackShaderCompiler}'s own cache,
+     * so the shader-resolution methods' own compile calls are cache hits, not repeat work.
+     */
+    private boolean precompilePackSurfaceStages() {
+        try {
+            ensureShaderCompiler();
+            RayPackEpoch epoch = packEpochs.current();
+            packShaderCompiler.compileClosestHit(epoch);
+            packShaderCompiler.compileIndirect(epoch);
+            CausticaMod.LOGGER.info("Ray-pack surface active: {} ({})", epoch.id(),
+                    epoch.manifest().slang().type());
+            return true;
+        } catch (Throwable t) {
+            CausticaMod.LOGGER.error("Ray-pack surface compilation failed; using the built-in shading", t);
+            return false;
+        }
+    }
+
     private void ensureShaderCompiler() throws IOException {
         if (packEpochs == null) {
             packEpochs = RayPackEpochManager.withBundledDefault();
@@ -872,8 +949,9 @@ public final class RtComposite {
         if (worldPipeline == null || reloadRebindRequested) {
             return;
         }
-        // Every stage is baked into this pipeline's SBT, so toggling either flag at runtime needs a rebuild.
-        if (pipelinePackSky != packSky() || pipelineDynamicWorldShaders != dynamicWorldShaders()) {
+        // Every stage is baked into this pipeline's SBT, so toggling any flag at runtime needs a rebuild.
+        if (pipelinePackSky != packSky() || pipelineDynamicWorldShaders != dynamicWorldShaders()
+                || pipelinePackSurface != packSurface()) {
             ctx.waitIdle();
             worldPipeline.destroy();
             worldPipeline = null;

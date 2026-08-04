@@ -21,13 +21,16 @@ import java.util.function.Supplier;
 
 /**
  * Compiles world-pipeline ray-tracing entry points at runtime instead of at build time
- * (docs/RAY_PACK_ARCHITECTURE.md section 8). This is the single place Slang is invoked for the world
+ * (docs/EXTENSION_API.md section 7). This is the single place Slang is invoked for the world
  * pipeline — pipeline creation asks for SPIR-V and never talks to the compiler itself.
  *
  * <p>Two distinct things share this compiler:
  * <ul>
  *   <li>{@link #compileSpecialized}: an engine entry point generic over {@code TPack}, specialized with
- *       the active epoch's concrete pack type. {@code pack_sky_miss.slang} is the only one of these today.
+ *       the active epoch's concrete pack type. {@code pack_sky_miss.slang} routes the sky; {@code
+ *       pack_closest_hit.slang}/{@code pack_indirect.slang} (docs/EXTENSION_API.md, the surface slice) route
+ *       the opaque terrain/entity surface model and BSDF. None of the three share a filename with a
+ *       build-time stage — see pack_sky_miss.slang's "no stage infix" convention.
  *   <li>{@link #compilePlain}: an ordinary world-pipeline stage (primary/indirect/guide/closest-hit/
  *       any-hit/sky.rmiss) compiled exactly as build time would, just through this runtime path instead —
  *       no pack type involved. This proves the runtime-compilation machinery itself (source extraction,
@@ -48,6 +51,10 @@ import java.util.function.Supplier;
 public final class RayPackShaderCompiler implements AutoCloseable {
     /** Engine-owned entry point: the sky miss shader, generic over the pack's IRayPack implementation. */
     public static final String SKY_MISS_MODULE = "pack_sky_miss";
+    /** Engine-owned entry point: closest-hit, generic over the pack's surface model (Phase B). */
+    public static final String CLOSEST_HIT_MODULE = "pack_closest_hit";
+    /** Engine-owned entry point: indirect raygen, generic over the pack's BSDF/look (Phase B). */
+    public static final String INDIRECT_MODULE = "pack_indirect";
     /** Every world-pipeline stage uses this entry point name (see RtPipeline.create's fixed "main"). */
     public static final String ENTRY_POINT = "main";
 
@@ -67,7 +74,8 @@ public final class RayPackShaderCompiler implements AutoCloseable {
     private static final List<String> WORLD_MODULES = List.of(
             "any_hit.rahit.slang", "bindings.slang", "closest_hit.rchit.slang", "guide.rmiss.slang",
             "guides.slang", "indirect.rgen.slang", "lighting.slang", "math.slang", "medium.slang",
-            "pack_sky_miss.slang", "primary.rgen.slang", "segment.slang", "sky.rmiss.slang", "sky.slang",
+            "pack_closest_hit.slang", "pack_frame.slang", "pack_indirect.slang", "pack_sky_miss.slang",
+            "primary.rgen.slang", "segment.slang", "sky.rmiss.slang", "sky.slang",
             "trace.slang", "water.slang", "world_common.slang", "world_core.slang");
     private static final List<String> PACK_API_MODULES = List.of("caustica_ray_pack_api.slang");
     private static final List<String> BUNDLED_PACK_MODULES = List.of(
@@ -120,6 +128,16 @@ public final class RayPackShaderCompiler implements AutoCloseable {
     /** SPIR-V for the engine sky miss shader specialized with this epoch's pack. */
     public byte[] compileSkyMiss(RayPackEpoch epoch) {
         return compileSpecialized(epoch, SKY_MISS_MODULE, ENTRY_POINT);
+    }
+
+    /** SPIR-V for the engine closest-hit shader specialized with this epoch's pack surface model. */
+    public byte[] compileClosestHit(RayPackEpoch epoch) {
+        return compileSpecialized(epoch, CLOSEST_HIT_MODULE, ENTRY_POINT);
+    }
+
+    /** SPIR-V for the engine indirect raygen specialized with this epoch's pack BSDF/look. */
+    public byte[] compileIndirect(RayPackEpoch epoch) {
+        return compileSpecialized(epoch, INDIRECT_MODULE, ENTRY_POINT);
     }
 
     /**

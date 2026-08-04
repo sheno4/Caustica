@@ -8,7 +8,7 @@ import java.util.Objects;
 
 /**
  * One immutable loaded ray-pack version: a validated manifest plus the content hash it was published
- * with (docs/RAY_PACK_ARCHITECTURE.md section 9). Switching or reloading the selected pack creates a
+ * with (docs/EXTENSION_API.md section 9). Switching or reloading the selected pack creates a
  * new epoch rather than mutating this one.
  *
  * <p>{@code contentHash} covers only the manifest bytes for now. A future compilation coordinator must

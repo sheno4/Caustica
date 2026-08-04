@@ -35,6 +35,39 @@ final class RayPackShaderCompilerTest {
         }
     }
 
+    /**
+     * Phase B (docs/EXTENSION_API.md section 11): the production
+     * closest-hit and indirect-raygen entry points, generic over TPack, specialized against the real
+     * bundled pack — same end-to-end shape as the sky-miss cover above.
+     */
+    @Test
+    void compilesTheEngineClosestHitAgainstTheBundledPack(@TempDir Path cacheDirectory) throws Exception {
+        RayPackEpoch epoch = RayPackEpoch.of(RayPackDiscovery.discoverBundled(),
+                RayPackDiscovery.bundledManifestJson());
+
+        try (RayPackShaderCompiler compiler = RayPackShaderCompiler.create(cacheDirectory)) {
+            byte[] spirv = compiler.compileClosestHit(epoch);
+
+            assertEquals(0x07230203, ByteBuffer.wrap(spirv).order(ByteOrder.LITTLE_ENDIAN).getInt());
+            assertTrue(spirv.length > 1024,
+                    "expected a substantial closest-hit shader, got " + spirv.length + " bytes");
+        }
+    }
+
+    @Test
+    void compilesTheEngineIndirectRaygenAgainstTheBundledPack(@TempDir Path cacheDirectory) throws Exception {
+        RayPackEpoch epoch = RayPackEpoch.of(RayPackDiscovery.discoverBundled(),
+                RayPackDiscovery.bundledManifestJson());
+
+        try (RayPackShaderCompiler compiler = RayPackShaderCompiler.create(cacheDirectory)) {
+            byte[] spirv = compiler.compileIndirect(epoch);
+
+            assertEquals(0x07230203, ByteBuffer.wrap(spirv).order(ByteOrder.LITTLE_ENDIAN).getInt());
+            assertTrue(spirv.length > 1024,
+                    "expected a substantial indirect raygen shader, got " + spirv.length + " bytes");
+        }
+    }
+
     @Test
     void repeatedCompilationOfTheSameEpochIsServedFromCache(@TempDir Path cacheDirectory)
             throws Exception {

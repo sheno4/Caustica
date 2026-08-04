@@ -1,7 +1,8 @@
 # Caustica Architecture
 
-Status: design. Supersedes the framing in `RAY_PACK_ARCHITECTURE.md`, which is now scoped down to one
-client of this architecture (the look/shader-pack layer) rather than the whole extension story.
+Status: design. Supersedes the framing in the former `RAY_PACK_ARCHITECTURE.md`, now rewritten as
+`EXTENSION_API.md`: this document owns the layering, the three mechanisms, and the sequencing; that one
+owns the concrete API they are made of.
 Scope: how the mod is layered, and how other code extends it.
 
 ## 1. Thesis
@@ -62,7 +63,7 @@ Knows nothing about Minecraft. Owns:
 ### 2.2 `core_minecraft` — Minecraft as a client of core
 
 Everything that knows what a block, chunk, entity, or resource pack is. Feeds core through the same
-interfaces a third-party module would use:
+interfaces a third-party extension would use:
 
 - Chunk section extraction and meshing into BLAS input (`RtTerrain`, `RtTerrainMesher`, `RtFluidMesher`,
   `RtSectionTable`)
@@ -78,27 +79,30 @@ Note two existing seams that already sit exactly on this line, currently on the 
 and `RtBlockMaterials` vs `RtMaterialRegistry` splits MC sprite knowledge from canonical GPU pages. Those
 are the first two boundaries to make explicit.
 
-### 2.3 Modules — everything else
+### 2.3 Extensions — everything else
 
 Ordinary Fabric mods (or, initially, internal packages) that depend on core and register into it.
 Examples, and which mechanism each uses:
 
-| Module | Mechanism |
+| Extension | Mechanism |
 |---|---|
 | Spotlight / handheld light item | register a light provider + game-state hook |
 | Distant Horizons bridge | register a scene provider |
 | Bloom | register render passes |
-| Water waves | substitute an appearance function |
-| Look / LUT pack | substitute resources (tone LUT, LMT) |
-| Shader-pack loader | all three, on behalf of a zip (§5) |
+| Nether / End sky | bind the `caustica:sky` slot |
+| Water waves | bind an appearance slot |
 
-Built-in features ship as modules using only public API. That makes "no privileged built-ins" structural
-rather than a rule to police — the same property that kept the bundled default pack honest.
+Built-in features ship as extensions using only public API. That makes "no privileged built-ins"
+structural rather than a rule to police — the same property that kept the bundled default pack honest.
+
+Terminology: `EXTENSION_API.md` §1 settles the words. An **extension** is the mod; a **feature** is the
+user-visible toggleable unit it contributes; a **slot** is an engine-declared substitution point; a
+**provider** is an additive registration. "Module" is reserved for Slang modules throughout.
 
 ### 2.4 Interfaces now, jars later
 
 Define the interfaces and make `core_minecraft` implement them **now**; keep everything in one jar. Do
-the physical module split when a second real client exists — Distant Horizons is that client.
+the physical jar split when a second real client exists — Distant Horizons is that client.
 
 An abstraction with exactly one implementation tends to be shaped like that implementation regardless of
 intent. The interface discipline gets most of the design benefit immediately; the jar boundary gets
@@ -114,16 +118,22 @@ behaviour.
 |---|---|---|---|
 | **Register** (additive) | scene providers, light providers, render passes | many coexist | strong — engine calls a narrow interface |
 | **Substitute a resource** | tone LUT, LMT, noise textures | one wins per slot | strong — engine declares the slot |
-| **Substitute code** | sky, BSDF, water waves | one wins | varies — see §3.2 |
+| **Substitute code** (bind a slot) | sky, BSDF, water waves | one wins per slot | varies — see §3.2 |
 
 Register composes; substitute does not. That is not a coincidence: you can add two lights, you cannot
-have two water models. Where a mechanism does not compose, the engine needs an explicit owner and a
-conflict report — never silent last-wins.
+have two water models. Where a mechanism does not compose, the engine needs an explicit owner —
+resolved by the user picking one candidate per slot in the settings UI, never by silent last-wins
+(`EXTENSION_API.md` §8).
+
+Substitution is **per slot, not per extension**. One mod can win `caustica:sky` while another wins
+`caustica:medium`; the engine composes the selection into a generated root type at compile time. That
+granularity is what makes "Nether sky from one mod, clouds from another" expressible at all, and it is
+the main structural correction over the ray-pack revision.
 
 ### 3.1 Register
 
-The engine calls the module. Provider interfaces are the extension points that need Java, because they
-touch structures no shader can reach:
+The engine calls the extension. Provider interfaces are the extension points that need Java, because
+they touch structures no shader can reach:
 
 - `SceneProvider` — contribute geometry and instances to the TLAS (clouds, DH, custom entities)
 - `LightProvider` — contribute records to the light database, so they participate in NEE/RIS with real
@@ -139,21 +149,22 @@ never kills the frame loop. Same discipline as the existing per-stage shader fal
 
 These look alike and are not:
 
-- **Interface implementation.** The engine declares `IPackMediumModel.perturbNormal(...)`; a module
-  implements it. Checked, narrow, versioned. Engine changes produce a compile error naming the method.
-- **Module substitution.** The engine imports `water`; a module's `water.slang` wins on the search path.
-  Broad and powerful, but ABI-by-convention: every function the engine calls in that module becomes an
-  implicit contract, and *adding* a call the engine makes can break overrides silently.
+- **Slot binding.** The engine declares `IMediumModel.perturbNormal(...)`; a feature implements it and
+  binds the slot. Checked, narrow, versioned. Engine changes produce a compile error naming the method.
+- **Slang module substitution.** The engine imports `water`; a feature's `water.slang` wins on the search
+  path. Broad and powerful, but ABI-by-convention: every function the engine calls in that module becomes
+  an implicit contract, and *adding* a call the engine makes can break overrides silently.
 
-Module substitution is how the fork problem gets recreated inside the extension system. **Prefer
-interface implementation wherever the call surface is known** — for water waves it is exactly one
-function. Keep substitution as an escape hatch, unadvertised and unversioned.
+Slang module substitution is how the fork problem gets recreated inside the extension system. **Prefer
+slot binding wherever the call surface is known** — for water waves it is exactly one function. Keep
+substitution as an escape hatch, unadvertised and unversioned.
 
 ### 3.3 Substitute a resource
 
-The engine declares a named slot with a format and semantic contract; a module fills it, or the built-in
+The engine declares a named slot with a format and semantic contract; a feature fills it, or the built-in
 default does. Tone LUT, LMT, and the sky LUTs are already shaped this way (`RtToneLut.load`,
-`RtPipeline.setSkyLuts`).
+`RtPipeline.setSkyLuts`). No extension binds these yet — the look/LUT extension point is deliberately
+deferred so that one API lands correctly before a second one exists.
 
 ## 4. Render passes and the fixed-slot constraint
 
@@ -165,15 +176,15 @@ abstract design would have missed:
    schema; in Java it is a `for` loop. This single case is why the JSON graph was the wrong shape.
 2. **"Runs once" is a first-class lifecycle.** The transmittance and multiscatter LUTs bake on the first
    frame and never again. The engine should own that bookkeeping — and therefore own invalidation on
-   resize, dimension change, and epoch switch — instead of every module carrying a `baked` flag.
+   resize, dimension change, and epoch switch — instead of every extension carrying a `baked` flag.
 3. **Engine-consumed resources must be fixed slots.** `bindings.slang` declares
-   `[[vk::binding(10,0)]] Sampler2D skyViewLut`. For a module to *supply* the sky LUT it has to land in
-   that exact binding. There is no mechanism for a module to invent a new engine-visible resource,
+   `[[vk::binding(10,0)]] Sampler2D skyViewLut`. For an extension to *supply* the sky LUT it has to land
+   in that exact binding. There is no mechanism for an extension to invent a new engine-visible resource,
    because the engine's shaders have no binding for it.
 
 The resulting rule for v1:
 
-> A module may create resources freely for its **own** passes to read and write; it may **fill** an
+> An extension may create resources freely for its **own** passes to read and write; it may **fill** an
 > engine-declared named slot; it may **not** invent new engine-visible bindings.
 
 This directly bounds what is possible today. Clouds as *geometry* work — that is a scene provider
@@ -193,45 +204,46 @@ public interface CausticaRenderPass {
 
 Two decisions taken now rather than left open:
 
-- **Barriers between dispatches are automatic.** Bloom already inserts one after every step, and a module
-  that can *omit* a barrier can corrupt the frame. Cheap correctness; add an opt-out only if profiling
-  demands it.
-- **Modules name a size *policy*, never pixels.** `Size.displayRelative(2)`, `Size.fixed(256, 64)`. The
+- **Barriers between dispatches are automatic.** Bloom already inserts one after every step, and an
+  extension that can *omit* a barrier can corrupt the frame. Cheap correctness; add an opt-out only if
+  profiling demands it.
+- **Extensions name a size *policy*, never pixels.** `Size.displayRelative(2)`, `Size.fixed(256, 64)`. The
   engine owns allocation, resize, aliasing, and retirement.
 
-## 5. Look packs as a service
+## 5. No archive format in v1
 
-The shader-pack layer becomes **a client of this API, not a peer of it**: a module that reads an archive
-and registers appearance code, resources, and settings on its behalf.
+There is no installable shader-pack zip, and no separate look/LUT pack. An extension is an ordinary
+Fabric mod that ships Java and Slang and registers through the API above; the engine compiles its Slang
+at runtime and calls its Java through the interfaces in §3.
 
 What that removes from v1:
 
 - One public API to version and document, not two.
-- Manifest schema, discovery, duplicate resolution, and epoch lifecycle become loader internals — freely
-  changeable, rather than an engine compatibility promise fixed by `additionalProperties: false`.
-- The shim's "pack modules must not declare entry points or global resources" check becomes *loader
-  policy* rather than an ABI constraint. More honest: the engine does not care; the loader is being
-  careful on behalf of an untrusted zip.
-- The archive format question is deferred until there is a reason to answer it.
+- Manifest schema, discovery, duplicate resolution, and API-version negotiation disappear rather than
+  moving — a Java registration is compile-checked, and there is nothing to discover.
+- `additionalProperties: false` and its whole validation tier stop being an engine compatibility promise.
+- The archive format question is deferred until a third-party ecosystem exists to answer it.
 
-It also dogfoods: if the pack loader can be written against the public API, the API is expressive enough
-for the interesting cases.
+What survives from the pack work: the Slang interface contract, the ownership analysis, static
+specialization, and validate-then-swap activation. The one rule that stays fully intact is that an
+extension ships Slang *source* — never SPIR-V, a descriptor layout, or pipeline metadata.
 
-The cost is deferral, not elimination — a third-party shader-pack ecosystem still eventually needs its
-own format, docs, and tests. Deferring is right while the format is unknown.
+The cost is deferral, not elimination. If an archive format is wanted later, the honest way to add it is
+as a loader feature written against this same public API — which also dogfoods it: if the loader can be
+written that way, the API is expressive enough for the interesting cases.
 
-`RAY_PACK_ARCHITECTURE.md` remains the spec for that layer's Slang interfaces (`IRayPack`, surface,
-environment, medium) and its ownership analysis. It should be renamed and rescoped to match.
+`EXTENSION_API.md` is the spec for the Slang interfaces (surface, sky, medium), the slot composition
+model, and the compilation and lifecycle contract.
 
 ## 6. What the engine never delegates
 
 These stay engine-owned regardless of layer or mechanism, because they are correctness, not policy. Most
 were established by the ray-pack work and survive the reframing unchanged.
 
-- **Command recording, barriers, queues, submission, resource lifetime.** Modules never see a
+- **Command recording, barriers, queues, submission, resource lifetime.** Extensions never see a
   `VkCommandBuffer`, `VkDescriptorSet`, or allocation.
 - **Double-count invariants.** Celestial-disc visibility and emitter direct-hit gating are derived by the
-  engine from lobe classification, never set by a module. A module that could set them directly could
+  engine from lobe classification, never set by an extension. Anything that could set them directly could
   silently double-count or lose light, and the symptom is "this looks brighter," not a visible failure.
 - **Dielectric interfaces and the medium stack.** Fresnel, reflect/refract, TIR, push/pop.
 - **The estimator contract.** A BSDF's value and pdf must agree, stay finite, stay non-negative, or every
@@ -247,17 +259,20 @@ were established by the ray-pack work and survive the reframing unchanged.
 Honest status, so this reads as a target and not a claim:
 
 - **Runtime Slang compilation is real and load-bearing.** `RayPackShaderCompiler` extracts world-pipeline
-  and pack sources and drives the pinned compiler via the `causticaslang` shim. It compiles engine entry
-  points specialized with a pack type (`compileSpecialized`) and ordinary stages (`compilePlain`). Under
-  this architecture it is promoted from pack infrastructure to *the* mechanism by which any module ships
-  Slang.
-- **Pack appearance code runs in real frames.** `pack_sky_miss.slang` renders behind
+  and appearance sources and drives the pinned compiler via the `causticaslang` shim. It compiles engine
+  entry points specialized with an appearance type (`compileSpecialized`) and ordinary stages
+  (`compilePlain`). Under this architecture it is promoted from pack infrastructure to *the* mechanism by
+  which any extension ships Slang.
+- **Substituted appearance code runs in real frames.** `pack_sky_miss.slang` renders behind
   `caustica.rt.packSky` — confirmed on GPU. `pack_closest_hit`/`pack_indirect` compile and link against
-  the bundled pack but have not been traced in a frame.
+  the built-in implementation but have not been traced in a frame.
 - **The whole world pipeline can compile at runtime** behind `caustica.rt.dynamicWorldShaders`, content
   unchanged, with per-stage fallback to build-time SPIR-V.
-- **Nothing has been layered yet.** `core` / `core_minecraft` / modules is a target; the package tree is
-  still flat. No provider interface exists. No pass API exists.
+- **Nothing has been layered yet.** `core` / `core_minecraft` / extensions is a target; the package tree
+  is still flat. No provider interface exists. No pass API exists. No registry exists — slot selection is
+  still two booleans in `CausticaConfig`.
+- **The pack vocabulary is still in the tree.** `rt/pack/`, `RayPack*`, `IRayPack`, `pack_*.slang`, and
+  `resources/caustica/raypacks/` all predate this framing; `EXTENSION_API.md` §10 maps the rename.
 - **The former "engine/0.1" sketch is deleted** — a parallel implementation that nothing called.
 
 ## 8. Sequencing
@@ -266,9 +281,9 @@ Ordered by what is unproven, cheapest verification first.
 
 1. **Render pass API, extracted from bloom.** The only one of the three mechanisms that is entirely
    unproven. Bloom is a leaf — nothing downstream but display mapping — and has a pixel-parity target.
-   Success criterion: the module touches no `VkDescriptorSet`, `VkImage`, or barrier.
+   Success criterion: the extension touches no `VkDescriptorSet`, `VkImage`, or barrier.
 2. **Sky LUT against the same API.** Proves the fixed-slot mechanism and the engine-consumed case, where
-   a module's output feeds `indirect.rgen`'s `celestialLight`. Needs the validation and fallback story
+   an extension's output feeds `indirect.rgen`'s `celestialLight`. Needs the validation and fallback story
    that bloom does not.
 3. **Provider interfaces, extracted from `core_minecraft`.** Make Minecraft's terrain, entity, light, and
    material paths go through `SceneProvider` / `LightProvider` / `MaterialSource` without moving files.
@@ -280,14 +295,21 @@ Ordered by what is unproven, cheapest verification first.
 Do not design any of these ahead of its extraction. The JSON pass graph was invented ahead of a consumer
 and never met one; that failure mode is the reason for this ordering.
 
+This ordering covers the **register** mechanism. The **substitute** mechanism has its own ordering in
+`EXTENSION_API.md` §10, and the two are independent — the slot rename and the composition-root spike do
+not wait on the pass API, and the pass API does not wait on the registry. They meet at step 4 there, when
+`caustica:builtin` and a bloom pass both become features on the same builder.
+
 ## 9. Open questions
 
-1. Bindless or descriptor indirection for module-declared, engine-visible resources — the constraint in
+1. Bindless or descriptor indirection for extension-declared, engine-visible resources — the constraint in
    §4 that currently blocks volumetric clouds. What does it cost?
-2. Module substitution: version it, restrict it to declared-leaf modules, or leave it undocumented?
-3. Conflict policy for non-composing mechanisms — explicit priority, first-wins with a report, or hard
-   error?
-4. Do look packs stay Slang-source-only once modules can ship Java, or does the distinction collapse?
+2. Slang module substitution: version it, restrict it to declared-leaf modules, or leave it undocumented?
+3. ~~Conflict policy for non-composing mechanisms.~~ Answered: slots are user-selected radio groups
+   defaulting to the built-in binding (`EXTENSION_API.md` §8), so two candidates are a choice, not a
+   conflict.
+4. ~~Do look packs stay Slang-source-only once extensions can ship Java?~~ Answered by removing the
+   question: there is no look pack in v1, and extensions ship Java plus Slang source.
 5. Persistent on-disk shader cache. In-memory and per-run today; ~1.8 s of cold compilation for the world
    pipeline makes this an iteration-speed problem before a viability one.
 6. Where does the frame graph land relative to this? `RtComposite` still owns the pass sequence directly,

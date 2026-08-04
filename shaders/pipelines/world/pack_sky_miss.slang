@@ -6,7 +6,7 @@
 // import" convention keeps it out of that task without needing a special-case exclusion.
 //
 // This is the first entry point where pack code actually executes inside the world pipeline. It is the
-// engine wrapper described in docs/RAY_PACK_ARCHITECTURE.md section 4.3: the engine owns the entry
+// engine wrapper described in docs/EXTENSION_API.md section 4.3: the engine owns the entry
 // point, the descriptor bindings, the payload ABI, and the celestial-disc gate; the pack owns only
 // `evaluateEnvironment`, which returns scene-linear ACEScg radiance for a direction.
 //
@@ -24,29 +24,7 @@ import world_common;
 import bindings;
 import sky;
 import caustica_ray_pack_api;
-
-// WorldPush carries Minecraft's eased celestial angles and the look package's constants; the Pack API
-// exposes only the semantic subset an appearance implementation is allowed to see. Anything not in
-// PackFrameContext is deliberately withheld, not accidentally missing.
-PackFrameContext packFrameContext(WorldPush push, SkyState state) {
-    PackFrameContext frame;
-    frame.timeSeconds = push.waterParams.w;
-    frame.frameIndex = push.frameIndex;
-    frame.cameraPosition = push.camOffset;
-    // No weather field reaches the world push yet (that is the environment service, section 3), so a
-    // pack sees a clear sky rather than a fabricated value.
-    frame.rain = 0.0;
-    frame.thunder = 0.0;
-    frame.sunDirection = state.sunDir;
-    frame.moonDirection = state.moonDir;
-    // Night fraction drives a pack's day/night blend. The sun's elevation is the honest source: it is
-    // continuous through dawn/dusk and already carries the look package's noon tilt.
-    float sunElevation = state.sunDir.y;
-    frame.nightFraction = clamp(1.0 - smoothstep(-0.10, 0.10, sunElevation), 0.0, 1.0);
-    frame.dayFraction = 1.0 - frame.nightFraction;
-    frame.dimensionFlags = PACK_DIMENSION_HAS_SKY | PACK_DIMENSION_HAS_WEATHER;
-    return frame;
-}
+import pack_frame;
 
 [shader("miss")]
 void main<TPack : IRayPack>(inout Payload payload) {

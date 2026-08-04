@@ -5,7 +5,7 @@ import java.util.Objects;
 
 /**
  * Owns the currently active {@link RayPackEpoch} and its transactional replacement
- * (docs/RAY_PACK_ARCHITECTURE.md section 9). This is the Java-only publication seam: it validates a
+ * (docs/EXTENSION_API.md section 9). This is the Java-only publication seam: it validates a
  * candidate and swaps the active reference atomically, exactly as the full lifecycle will, but it does
  * not yet compile anything, allocate a GPU resource, or track a graphics-use lifetime for the retiring
  * epoch — those steps belong to whoever wires this into the renderer (the compilation coordinator and

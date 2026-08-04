@@ -551,6 +551,18 @@ public final class CausticaConfig {
             // build-time SPIR-V independently on compile failure. Experimental and off by default.
             public static final BooleanSetting DYNAMIC_WORLD_SHADERS =
                     bool("caustica.rt.dynamicWorldShaders", "composite.dynamic-world-shaders", false);
+            // Route the opaque terrain/entity surface (closest-hit) and its BSDF/look (indirect raygen)
+            // through the selected ray pack instead of the engine's inlined LabPBR interpretation and
+            // Lambert+Cook-Torrance shading (docs/EXTENSION_API.md, the surface slice). Orthogonal to
+            // PACK_SKY (appearance) and DYNAMIC_WORLD_SHADERS (compile timing only, no pack type
+            // involved): this is the one that actually specializes closest-hit/indirect with TPack. The
+            // bundled default pack reproduces today's shading model, so this should render the same scene
+            // as it is off; a different pack changes materials and lighting response. Water, glass/ice
+            // and particles are unaffected — dielectric interfaces stay engine-owned in full. Falls back
+            // to the build-time SPIR-V independently per stage on compile failure. Experimental and off
+            // by default.
+            public static final BooleanSetting PACK_SURFACE =
+                    bool("caustica.rt.packSurface", "composite.pack-surface", false);
             // Sun/moon angular radii and the noon south tilt moved into the versioned look package
             // (look.json "sky"): they shape the sky alongside the exposure curve, the LMT and the
             // photometric anchors that were already authored there, and splitting them across two

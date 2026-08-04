@@ -3,7 +3,7 @@ module caustica_ray_pack_api;
 // Ray-pack colours and radiance are scene-linear ACEScg. Distances are Minecraft blocks, treated as
 // metres by the default pack. Directions are normalized and point away from the shaded position.
 //
-// Ownership invariants for anyone extending this module (see docs/RAY_PACK_ARCHITECTURE.md):
+// Ownership invariants for anyone extending this module (see docs/EXTENSION_API.md):
 //   - Materials are content, not pack data. PackMaterialInput is engine-decoded from resource-pack
 //     JSON/LabPBR; a ray pack never defines material facts, only interprets them in createSurface.
 //   - A pack produces no canonical render product but scene radiance. The engine may query exactly

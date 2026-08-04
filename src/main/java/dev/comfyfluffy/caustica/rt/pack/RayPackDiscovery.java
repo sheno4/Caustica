@@ -17,8 +17,13 @@ import java.util.stream.Stream;
 
 /**
  * Locates ray-pack manifests: the bundled default on the classpath, and installed packs under a
- * directory of the form {@code <root>/<pack-dir>/pack.json} (docs/RAY_PACK_ARCHITECTURE.md section
- * 16.4). This is discovery only — schema and API-compatibility validation happen in
+ * directory of the form {@code <root>/<pack-dir>/pack.json}.
+ *
+ * <p>Superseded: docs/EXTENSION_API.md drops the installable-archive model, so there is nothing to
+ * discover — features register at mod init. This class is slated for deletion in step 1 of that
+ * document's refactor map, along with {@link RayPackManifest} and its schema.
+ *
+ * <p>This is discovery only — schema and API-compatibility validation happen in
  * {@link RayPackManifest#parse} and {@link RayPackEpochManager#activate}.
  */
 public final class RayPackDiscovery {
