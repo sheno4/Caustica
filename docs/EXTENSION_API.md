@@ -468,9 +468,15 @@ look right.
 
 **7. Settings UI derived from the registry** (§8).
 
-Deliberately *not* in this list, and tracked in `ARCHITECTURE.md` §8 instead: the render-pass API, the
-provider interfaces, and the frame graph. They are separate mechanisms with their own extraction targets,
-and interleaving them here is how the previous revision grew a second roadmap.
+Deliberately *not* in this list: the render-pass API, the provider interfaces, and the frame graph
+(tracked in `ARCHITECTURE.md` §8), and the light system (tracked in `LIGHT_SYSTEM_PLAN.md` §7). They are
+separate mechanisms with their own extraction targets, and interleaving them here is how the previous
+revision grew a second roadmap. `ARCHITECTURE.md` §8.1 records where the three tracks actually couple.
+
+One coupling reaches back into this list: `LIGHT_SYSTEM_PLAN.md` L1c rewrites `risInitial`, which is the
+cheap moment to route RIS's target function through `evaluateBsdf` and retire the debt in §11. That makes
+step 3 here (splitting the API module per slot) worth landing before L1c if the two are close in time —
+opportunistic, not blocking.
 
 ### 10.1 The `Rt` prefix
 
@@ -508,7 +514,10 @@ the build-time path can go.
 
 Known accepted divergences until then: the built-in surface has no delta/mirror lobe (`EVENT_*` has no
 flag for one), so a roughness-0 material renders as a very tight glossy lobe rather than an exact mirror;
-and RIS emitter lighting keeps its own target function rather than calling `evaluateBsdf`.
+and RIS emitter lighting keeps its own target function rather than calling `evaluateBsdf`. The RIS one
+has a scheduled payoff point rather than an open-ended one — `LIGHT_SYSTEM_PLAN.md` L1c rewrites
+`risInitial` for presampled light tiles, and routing it through the slot there is far cheaper than a
+dedicated pass over the same code.
 
 ## 12. Open questions
 

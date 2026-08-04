@@ -79,6 +79,10 @@ Note two existing seams that already sit exactly on this line, currently on the 
 and `RtBlockMaterials` vs `RtMaterialRegistry` splits MC sprite knowledge from canonical GPU pages. Those
 are the first two boundaries to make explicit.
 
+For the light seam the problem is the *unit*, not the package: Minecraft's 16³ chunk section is the light
+system's spatial primitive and is baked into the GPU light record, so a provider-supplied light has no
+representable position. `LIGHT_SYSTEM_PLAN.md` §3.1 has the file-by-file breakdown.
+
 ### 2.3 Extensions — everything else
 
 Ordinary Fabric mods (or, initially, internal packages) that depend on core and register into it.
@@ -290,15 +294,35 @@ Ordered by what is unproven, cheapest verification first.
 4. **A second scene provider (Distant Horizons).** The first genuine test that the abstraction is not
    just Minecraft in a trench coat — and the trigger for the physical jar split.
 5. **Light provider proof: a handheld spotlight.** The case Iris structurally cannot do; the clearest
-   demonstration of why this architecture exists.
+   demonstration of why this architecture exists. **Blocked on light-system work** — see below.
 
 Do not design any of these ahead of its extraction. The JSON pass graph was invented ahead of a consumer
 and never met one; that failure mode is the reason for this ordering.
 
-This ordering covers the **register** mechanism. The **substitute** mechanism has its own ordering in
-`EXTENSION_API.md` §10, and the two are independent — the slot rename and the composition-root spike do
-not wait on the pass API, and the pass API does not wait on the registry. They meet at step 4 there, when
-`caustica:builtin` and a bloom pass both become features on the same builder.
+### 8.1 Three tracks, and where they meet
+
+This ordering covers the **register** mechanism only. Two other orderings run alongside it:
+`EXTENSION_API.md` §10 for the **substitute** mechanism, and `LIGHT_SYSTEM_PLAN.md` §7 for the light
+system. All three are largely parallel; the couplings that are easy to miss:
+
+- **Step 5 is not a provider-interface exercise.** A handheld light is a *dynamic* light, and the light
+  system structurally cannot accept one: the generation is a 50 ms-throttled immutable snapshot, and
+  every light record carries a Minecraft section coordinate that a spotlight does not have. Step 5's real
+  prerequisites are `LIGHT_SYSTEM_PLAN.md` L1 and L2 plus step 3 here. L2 and step 5 are the same work
+  approached from two directions and should be planned as one.
+- **The presample pass is a design input to step 1, though it lands after it.** Its shape — every frame,
+  fixed dispatch, engine-consumed output feeding RIS, needs validation and fallback — is squarely what
+  the pass API must support, and it is a better third consumer than anything else listed. Bloom is a leaf
+  with no engine consumer; the sky LUT proves the engine-consumed case at small scale; the presample pass
+  proves it at frame-critical scale.
+- **The substitute track meets this one at `EXTENSION_API.md` §10 step 4**, when `caustica:builtin` and a
+  bloom pass both become features on the same builder. The slot rename and the composition-root spike do
+  not wait on the pass API, and the pass API does not wait on the registry.
+- **The light track waits on neither.** L1 touches no slot interface and no registry. Its one overlap is
+  opportunistic: L1c rewrites `risInitial` anyway, which is the cheap moment to route RIS's target
+  function through the surface slot's `evaluateBsdf` and retire the convergence debt in
+  `EXTENSION_API.md` §11 — but if the slot split has not landed, L1c keeps the inline target function and
+  the debt stays put.
 
 ## 9. Open questions
 
