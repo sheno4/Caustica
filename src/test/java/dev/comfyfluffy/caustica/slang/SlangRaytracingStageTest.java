@@ -16,8 +16,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * The appearance-composition path has to emit ray-tracing stages, not just compute, before any pack code
- * can run inside the real world pipeline: the first engine entry point to be specialized with a pack type
+ * The appearance-composition path has to emit ray-tracing stages, not just compute, before slot code
+ * can run inside the real world pipeline: the first engine entry point specialized with an implementation
  * is the sky miss shader. This pins that the pinned compiler/profile actually produces a miss stage with
  * the ray-tracing capability, so a regression shows up here rather than at vkCreateRayTracingPipelinesKHR.
  */
@@ -41,7 +41,7 @@ final class SlangRaytracingStageTest {
     }
 
     @Test
-    void specializesAMissShaderEntryPointWithAPackType(@TempDir Path sourceDirectory) throws Exception {
+    void specializesAMissShaderEntryPointWithAnImplementation(@TempDir Path sourceDirectory) throws Exception {
         Files.writeString(sourceDirectory.resolve("miss_api.slang"), """
                 module miss_api;
                 public struct MissEnvironmentQuery {
@@ -61,7 +61,7 @@ final class SlangRaytracingStageTest {
                 };
                 """);
         // Mirrors the shape the real sky miss shader would take: an engine-owned [shader("miss")] entry
-        // point, generic over the pack type, writing an engine-owned payload the pack never sees.
+        // point, generic over the implementation type, writing an engine-owned payload it never sees.
         Files.writeString(sourceDirectory.resolve("miss_engine.slang"), """
                 module miss_engine;
                 import miss_api;
@@ -72,11 +72,11 @@ final class SlangRaytracingStageTest {
                 };
 
                 [shader("miss")]
-                void main<TPack : IMissPack>(inout EnginePayload payload) {
+                    void main<TEnvironment : IMissPack>(inout EnginePayload payload) {
                     MissEnvironmentQuery query;
                     query.direction = normalize(WorldRayDirection());
-                    TPack pack;
-                    payload.radiance = pack.evaluateEnvironment(query);
+                    TEnvironment environment;
+                    payload.radiance = environment.evaluateEnvironment(query);
                     payload.hitT = -1.0;
                 }
                 """);

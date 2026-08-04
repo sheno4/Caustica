@@ -186,17 +186,18 @@ final class SlangLibrary {
     }
 
     SlangCompileResult compileSpecialized(MemorySegment session, String engineModule, String entryPoint,
-                                          String packModule, String packType) {
+                                          String implementationModule, String implementationType) {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment spirvOut = arena.allocate(ValueLayout.ADDRESS);
             MemorySegment reflectionOut = arena.allocate(ValueLayout.ADDRESS);
             MemorySegment diagnosticsOut = arena.allocate(ValueLayout.ADDRESS);
             int result = (int) compileSpecializedEntryPoint.invokeExact(session,
                     arena.allocateFrom(engineModule), arena.allocateFrom(entryPoint),
-                    arena.allocateFrom(packModule), arena.allocateFrom(packType),
+                    arena.allocateFrom(implementationModule), arena.allocateFrom(implementationType),
                     spirvOut, reflectionOut, diagnosticsOut);
             return collectCompileResult(result,
-                    "Compiling " + engineModule + ":" + entryPoint + " with " + packModule + "::" + packType,
+                    "Compiling " + engineModule + ":" + entryPoint + " with "
+                            + implementationModule + "::" + implementationType,
                     spirvOut, reflectionOut, diagnosticsOut);
         } catch (SlangCompilationException e) {
             throw e;

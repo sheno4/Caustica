@@ -83,7 +83,8 @@ final class SlangLibraryTest {
     }
 
     @Test
-    void dynamicallySpecializesAnEngineEntryPointWithAPackType(@TempDir Path sourceDirectory) throws Exception {
+    void dynamicallySpecializesAnEngineEntryPointWithAnImplementation(@TempDir Path sourceDirectory)
+            throws Exception {
         Files.writeString(sourceDirectory.resolve("test_api.slang"), """
                 module test_api;
                 public interface ITestPack {
@@ -104,9 +105,9 @@ final class SlangLibraryTest {
 
                 [shader("compute")]
                 [numthreads(1, 1, 1)]
-                void main<TPack : ITestPack>(uint3 id : SV_DispatchThreadID) {
-                    TPack pack;
-                    output[id.x] = pack.value();
+                void main<TImplementation : ITestPack>(uint3 id : SV_DispatchThreadID) {
+                    TImplementation implementation;
+                    output[id.x] = implementation.value();
                 }
                 """);
 
@@ -123,12 +124,61 @@ final class SlangLibraryTest {
         }
     }
 
-    // The former engine-boundary probe against a synthetic "engine/0.1" sketch is superseded by
-    // dev.comfyfluffy.caustica.rt.pack.RayPackShaderCompilerTest, which specializes the real production
-    // world pipeline (not a stand-in module) with the real bundled pack.
+    @Test
+    void specializesAnEngineEntryPointWithAssociatedCompositionTypes(@TempDir Path sourceDirectory)
+            throws Exception {
+        Files.writeString(sourceDirectory.resolve("composition_api.slang"), """
+                module composition_api;
+                public interface ISkyModel { public uint skyValue(); }
+                public interface ISurfaceModel { public uint surfaceValue(); }
+                public interface IComposition {
+                    associatedtype Sky : ISkyModel;
+                    associatedtype Surface : ISurfaceModel;
+                }
+                """);
+        Files.writeString(sourceDirectory.resolve("composition_models.slang"), """
+                module composition_models;
+                import composition_api;
+                public struct TestSky : ISkyModel { public uint skyValue() { return 19u; } }
+                public struct TestSurface : ISurfaceModel { public uint surfaceValue() { return 23u; } }
+                """);
+        Files.writeString(sourceDirectory.resolve("test_composition.slang"), """
+                module test_composition;
+                import composition_api;
+                import composition_models;
+                public struct TestComposition : IComposition {
+                    public typealias Sky = TestSky;
+                    public typealias Surface = TestSurface;
+                }
+                """);
+        Files.writeString(sourceDirectory.resolve("composition_engine.slang"), """
+                module composition_engine;
+                import composition_api;
+                RWStructuredBuffer<uint> output;
+                [shader("compute")]
+                [numthreads(1, 1, 1)]
+                void main<TC : IComposition>(uint3 id : SV_DispatchThreadID) {
+                    TC.Sky sky;
+                    TC.Surface surface;
+                    output[id.x] = sky.skyValue() + surface.surfaceValue();
+                }
+                """);
+
+        MemorySegment session = library.createSession(runtime, List.of(sourceDirectory),
+                SlangLibrary.SESSION_WARNINGS_AS_ERRORS);
+        try {
+            SlangCompileResult result = library.compileSpecialized(session,
+                    "composition_engine", "main", "test_composition", "TestComposition");
+            assertEquals(0x07230203,
+                    ByteBuffer.wrap(result.spirv()).order(ByteOrder.LITTLE_ENDIAN).getInt());
+            assertTrue(result.reflectionJson().contains("output"));
+        } finally {
+            library.destroySession(session);
+        }
+    }
 
     @Test
-    void rejectsAPackAuthoredShaderEntryPoint(@TempDir Path sourceDirectory) throws Exception {
+    void rejectsAnImplementationAuthoredShaderEntryPoint(@TempDir Path sourceDirectory) throws Exception {
         Files.writeString(sourceDirectory.resolve("entry_api.slang"), """
                 module entry_api;
                 public interface IEntryPack {
@@ -143,16 +193,16 @@ final class SlangLibraryTest {
                 };
                 [shader("compute")]
                 [numthreads(1, 1, 1)]
-                void packMain() {}
+                void implementationMain() {}
                 """);
         Files.writeString(sourceDirectory.resolve("entry_engine.slang"), """
                 module entry_engine;
                 import entry_api;
                 [shader("compute")]
                 [numthreads(1, 1, 1)]
-                void main<TPack : IEntryPack>() {
-                    TPack pack;
-                    pack.value();
+                void main<TImplementation : IEntryPack>() {
+                    TImplementation implementation;
+                    implementation.value();
                 }
                 """);
 

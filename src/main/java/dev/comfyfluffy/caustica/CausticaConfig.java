@@ -535,34 +535,13 @@ public final class CausticaConfig {
                     clampedInt("caustica.rt.maxBounces", "composite.max-bounces", 4, 2, 8);
             public static final BooleanSetting WATER_WAVES =
                     bool("caustica.rt.waterWaves", "composite.water-waves", true);
-            // Route the sky miss shader through the selected ray pack's evaluateEnvironment instead of
-            // the built-in atmosphere. Experimental and off by default: it proves the pack compilation
-            // and specialization path end to end in a real frame, but the bundled pack's sky is a simple
-            // gradient, so enabling it drops the LUT atmosphere, stars and celestial sprites. Direct
-            // sun/moon LIGHTING still comes from the transmittance LUT in indirect.rgen, so lighting and
-            // the visible sky deliberately disagree while this is on.
-            public static final BooleanSetting PACK_SKY =
-                    bool("caustica.rt.packSky", "composite.pack-sky", false);
             // Compile primary/indirect(plain)/guide/closest-hit/any-hit/sky.rmiss through the runtime
-            // pack compiler instead of loading their build-time .spv, with content otherwise unchanged.
+            // world compiler instead of loading their build-time .spv, with content otherwise unchanged.
             // Proves the runtime-compilation path (source extraction, import resolution, SPIR-V
-            // validation) independently of whether any pack code actually runs — orthogonal to
-            // PACK_SKY, which is what routes appearance through a pack. Each stage falls back to its
+            // validation) independently of composition specialization. Each stage falls back to its
             // build-time SPIR-V independently on compile failure. Experimental and off by default.
             public static final BooleanSetting DYNAMIC_WORLD_SHADERS =
                     bool("caustica.rt.dynamicWorldShaders", "composite.dynamic-world-shaders", false);
-            // Route the opaque terrain/entity surface (closest-hit) and its BSDF/look (indirect raygen)
-            // through the selected ray pack instead of the engine's inlined LabPBR interpretation and
-            // Lambert+Cook-Torrance shading (docs/EXTENSION_API.md, the surface slice). Orthogonal to
-            // PACK_SKY (appearance) and DYNAMIC_WORLD_SHADERS (compile timing only, no pack type
-            // involved): this is the one that actually specializes closest-hit/indirect with TPack. The
-            // bundled default pack reproduces today's shading model, so this should render the same scene
-            // as it is off; a different pack changes materials and lighting response. Water, glass/ice
-            // and particles are unaffected — dielectric interfaces stay engine-owned in full. Falls back
-            // to the build-time SPIR-V independently per stage on compile failure. Experimental and off
-            // by default.
-            public static final BooleanSetting PACK_SURFACE =
-                    bool("caustica.rt.packSurface", "composite.pack-surface", false);
             // Sun/moon angular radii and the noon south tilt moved into the versioned look package
             // (look.json "sky"): they shape the sky alongside the exposure curve, the LMT and the
             // photometric anchors that were already authored there, and splitting them across two

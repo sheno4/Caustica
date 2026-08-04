@@ -27,15 +27,16 @@ public final class SlangSession implements AutoCloseable {
     }
 
     public synchronized SlangCompileResult compileSpecialized(String engineModule, String entryPoint,
-                                                               String packModule, String packType) {
+                                                               String implementationModule,
+                                                               String implementationType) {
         if (handle.equals(MemorySegment.NULL)) {
             throw new IllegalStateException("Slang session is closed");
         }
         return library.compileSpecialized(handle,
                 Objects.requireNonNull(engineModule, "engineModule"),
                 Objects.requireNonNull(entryPoint, "entryPoint"),
-                Objects.requireNonNull(packModule, "packModule"),
-                Objects.requireNonNull(packType, "packType"));
+                Objects.requireNonNull(implementationModule, "implementationModule"),
+                Objects.requireNonNull(implementationType, "implementationType"));
     }
 
     synchronized boolean isClosed() {

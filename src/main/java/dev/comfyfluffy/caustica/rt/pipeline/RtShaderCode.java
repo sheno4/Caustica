@@ -9,7 +9,7 @@ import java.util.Objects;
  *
  * <p>Stages come from two places now: shaders compiled at build time and shipped as {@code .spv}
  * resources, and engine entry points compiled at runtime because they are specialized with the selected
- * ray pack's type (see {@code RayPackShaderCompiler}). Pipeline creation should not care which, so both
+ * selected composition. Pipeline creation should not care which, so both
  * arrive here as bytes.
  */
 public record RtShaderCode(String debugName, byte[] spirv) {
@@ -37,7 +37,7 @@ public record RtShaderCode(String debugName, byte[] spirv) {
         }
     }
 
-    /** Already-compiled SPIR-V, such as a ray-pack-specialized engine entry point. */
+    /** Already-compiled SPIR-V, such as a composition-specialized engine entry point. */
     public static RtShaderCode of(String debugName, byte[] spirv) {
         return new RtShaderCode(debugName, spirv);
     }

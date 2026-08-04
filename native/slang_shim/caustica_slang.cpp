@@ -369,14 +369,15 @@ int32_t caustica_slang_compile_specialized_entry_point(
     CausticaSlangSession* session,
     const char* engine_module,
     const char* entry_point,
-    const char* pack_module,
-    const char* pack_type,
+    const char* implementation_module,
+    const char* implementation_type,
     CausticaSlangBlob** out_spirv,
     CausticaSlangBlob** out_reflection_json,
     CausticaSlangBlob** out_diagnostics)
 {
     clear_outputs(out_spirv, out_reflection_json, out_diagnostics);
-    if (!session || !engine_module || !entry_point || !pack_module || !pack_type || !out_spirv)
+    if (!session || !engine_module || !entry_point || !implementation_module
+        || !implementation_type || !out_spirv)
         return SLANG_E_INVALID_ARG;
 
     try
@@ -394,29 +395,31 @@ int32_t caustica_slang_compile_specialized_entry_point(
             return SLANG_FAIL;
         }
 
-        const SlangInt first_pack_module = session->session->getLoadedModuleCount();
+        const SlangInt first_implementation_module = session->session->getLoadedModuleCount();
         diagnostics.setNull();
-        Slang::ComPtr<slang::IModule> pack;
-        pack.attach(session->session->loadModule(pack_module, diagnostics.writeRef()));
+        Slang::ComPtr<slang::IModule> implementation;
+        implementation.attach(session->session->loadModule(implementation_module, diagnostics.writeRef()));
         append_diagnostics(diagnostics_text, diagnostics);
-        if (!pack)
+        if (!implementation)
         {
             publish_diagnostics(diagnostics_text, out_diagnostics);
             return SLANG_FAIL;
         }
         const SlangInt loaded_module_count = session->session->getLoadedModuleCount();
-        for (SlangInt index = first_pack_module; index < loaded_module_count; ++index)
+        for (SlangInt index = first_implementation_module; index < loaded_module_count; ++index)
         {
-            slang::IModule* pack_dependency = session->session->getLoadedModule(index);
-            if (pack_dependency->getDefinedEntryPointCount() != 0)
+            slang::IModule* implementation_dependency = session->session->getLoadedModule(index);
+            if (implementation_dependency->getDefinedEntryPointCount() != 0)
             {
-                diagnostics_text = std::string("Pack module ") + pack_dependency->getName()
+                diagnostics_text = std::string("Implementation module ")
+                    + implementation_dependency->getName()
                     + " must not define shader entry points";
                 publish_diagnostics(diagnostics_text, out_diagnostics);
                 return SLANG_FAIL;
             }
             diagnostics.setNull();
-            slang::ProgramLayout* dependency_layout = pack_dependency->getLayout(0, diagnostics.writeRef());
+            slang::ProgramLayout* dependency_layout = implementation_dependency->getLayout(
+                0, diagnostics.writeRef());
             append_diagnostics(diagnostics_text, diagnostics);
             if (!dependency_layout)
             {
@@ -425,7 +428,8 @@ int32_t caustica_slang_compile_specialized_entry_point(
             }
             if (dependency_layout->getParameterCount() != 0)
             {
-                diagnostics_text = std::string("Pack module ") + pack_dependency->getName()
+                diagnostics_text = std::string("Implementation module ")
+                    + implementation_dependency->getName()
                     + " must not declare global shader parameters";
                 publish_diagnostics(diagnostics_text, out_diagnostics);
                 return SLANG_FAIL;
@@ -443,19 +447,20 @@ int32_t caustica_slang_compile_specialized_entry_point(
         }
 
         diagnostics.setNull();
-        slang::ProgramLayout* pack_layout = pack->getLayout(0, diagnostics.writeRef());
+        slang::ProgramLayout* implementation_layout = implementation->getLayout(0, diagnostics.writeRef());
         append_diagnostics(diagnostics_text, diagnostics);
-        if (!pack_layout)
+        if (!implementation_layout)
         {
             if (diagnostics_text.empty())
-                diagnostics_text = std::string("Could not reflect pack module: ") + pack_module;
+                diagnostics_text = std::string("Could not reflect implementation module: ")
+                    + implementation_module;
             publish_diagnostics(diagnostics_text, out_diagnostics);
             return SLANG_FAIL;
         }
-        slang::TypeReflection* type = pack_layout->findTypeByName(pack_type);
+        slang::TypeReflection* type = implementation_layout->findTypeByName(implementation_type);
         if (!type)
         {
-            diagnostics_text = std::string("Pack type not found: ") + pack_type;
+            diagnostics_text = std::string("Implementation type not found: ") + implementation_type;
             publish_diagnostics(diagnostics_text, out_diagnostics);
             return SLANG_FAIL;
         }
@@ -471,7 +476,7 @@ int32_t caustica_slang_compile_specialized_entry_point(
             return result;
         }
 
-        slang::IComponentType* components[] = {engine.get(), pack.get(), specialized_entry.get()};
+        slang::IComponentType* components[] = {engine.get(), implementation.get(), specialized_entry.get()};
         Slang::ComPtr<slang::IComponentType> composite;
         diagnostics.setNull();
         result = session->session->createCompositeComponentType(

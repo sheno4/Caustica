@@ -71,7 +71,7 @@ final class SlangSerCapabilityTest {
                 RWTexture2D<float4> output;
 
                 [shader("raygeneration")]
-                void main<TPack : ISerPack>() {
+                void main<TAppearance : ISerPack>() {
                     uint2 pixel = DispatchRaysIndex().xy;
                     RayDesc ray;
                     ray.Origin = float3(0.0);
@@ -86,8 +86,8 @@ final class SlangSerCapabilityTest {
                     ReorderThread(hit, 0u, 4u);
                     HitObject::Invoke(topLevelAS, hit, payload);
 
-                    TPack pack;
-                    output[pixel] = float4(payload.radiance + pack.shade(ray.Direction), 1.0);
+                    TAppearance appearance;
+                    output[pixel] = float4(payload.radiance + appearance.shade(ray.Direction), 1.0);
                 }
                 """);
 

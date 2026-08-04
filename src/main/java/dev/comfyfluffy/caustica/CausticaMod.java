@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica;
 
+import dev.comfyfluffy.caustica.api.CausticaApi;
 import net.fabricmc.api.ModInitializer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -13,6 +14,7 @@ public final class CausticaMod implements ModInitializer {
 		// Register every setting (applying TOML file values) and write a default config on first run.
 		CausticaConfig.ensureRegistered();
 		CausticaConfig.saveIfMissing();
+		CausticaApi.initialize();
 		LOGGER.info("Caustica initialized (common); config: {}", CausticaConfig.configPath());
 	}
 }

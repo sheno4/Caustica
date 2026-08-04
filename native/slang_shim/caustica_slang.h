@@ -59,8 +59,8 @@ CAUSTICA_SLANG_API int32_t caustica_slang_compile_specialized_entry_point(
     CausticaSlangSession* session,
     const char* engine_module,
     const char* entry_point,
-    const char* pack_module,
-    const char* pack_type,
+    const char* implementation_module,
+    const char* implementation_type,
     CausticaSlangBlob** out_spirv,
     CausticaSlangBlob** out_reflection_json,
     CausticaSlangBlob** out_diagnostics);
