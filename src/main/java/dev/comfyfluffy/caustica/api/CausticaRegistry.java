@@ -1,6 +1,9 @@
 package dev.comfyfluffy.caustica.api;
 
 import dev.comfyfluffy.caustica.api.pass.CausticaRenderPass;
+import dev.comfyfluffy.caustica.api.provider.LightProvider;
+import dev.comfyfluffy.caustica.api.provider.MaterialSource;
+import dev.comfyfluffy.caustica.api.provider.SceneProvider;
 import net.minecraft.resources.Identifier;
 
 import java.util.LinkedHashMap;
@@ -11,6 +14,9 @@ import java.util.Objects;
 public final class CausticaRegistry {
     private final Map<Identifier, Feature> features = new LinkedHashMap<>();
     private final Map<Identifier, CausticaRenderPass> renderPasses = new LinkedHashMap<>();
+    private final Map<Identifier, SceneProvider> sceneProviders = new LinkedHashMap<>();
+    private final Map<Identifier, LightProvider> lightProviders = new LinkedHashMap<>();
+    private final Map<Identifier, MaterialSource> materialSources = new LinkedHashMap<>();
     private final Map<Slot, Identifier> defaults = new LinkedHashMap<>();
     private final Map<Slot, Identifier> selected = new LinkedHashMap<>();
 
@@ -34,10 +40,16 @@ public final class CausticaRegistry {
                 throw new IllegalStateException("duplicate render pass id " + renderPass.id());
             }
         }
+        requireUnique(sceneProviders, feature.sceneProviders(), SceneProvider::id, "scene provider");
+        requireUnique(lightProviders, feature.lightProviders(), LightProvider::id, "light provider");
+        requireUnique(materialSources, feature.materialSources(), MaterialSource::id, "material source");
         features.put(feature.id(), feature);
         for (CausticaRenderPass renderPass : feature.renderPasses()) {
             renderPasses.put(renderPass.id(), renderPass);
         }
+        feature.sceneProviders().forEach(provider -> sceneProviders.put(provider.id(), provider));
+        feature.lightProviders().forEach(provider -> lightProviders.put(provider.id(), provider));
+        feature.materialSources().forEach(source -> materialSources.put(source.id(), source));
     }
 
     synchronized void setDefault(Slot slot, Identifier featureId) {
@@ -65,6 +77,28 @@ public final class CausticaRegistry {
 
     public synchronized Map<Identifier, CausticaRenderPass> renderPasses() {
         return Collections.unmodifiableMap(new LinkedHashMap<>(renderPasses));
+    }
+
+    public synchronized Map<Identifier, SceneProvider> sceneProviders() {
+        return Collections.unmodifiableMap(new LinkedHashMap<>(sceneProviders));
+    }
+
+    public synchronized Map<Identifier, LightProvider> lightProviders() {
+        return Collections.unmodifiableMap(new LinkedHashMap<>(lightProviders));
+    }
+
+    public synchronized Map<Identifier, MaterialSource> materialSources() {
+        return Collections.unmodifiableMap(new LinkedHashMap<>(materialSources));
+    }
+
+    private static <T> void requireUnique(Map<Identifier, T> registered, Iterable<T> candidates,
+                                          java.util.function.Function<T, Identifier> id, String kind) {
+        for (T candidate : candidates) {
+            Identifier candidateId = id.apply(candidate);
+            if (registered.containsKey(candidateId)) {
+                throw new IllegalStateException("duplicate " + kind + " id " + candidateId);
+            }
+        }
     }
 
     public synchronized Selection selection() {

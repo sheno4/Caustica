@@ -6,9 +6,8 @@ import dev.comfyfluffy.caustica.rt.RtDeviceBringup;
 import dev.comfyfluffy.caustica.rt.RtComposite;
 import dev.comfyfluffy.caustica.rt.RtFrameStats;
 import dev.comfyfluffy.caustica.rt.RtUiOverlay;
-import dev.comfyfluffy.caustica.rt.entity.RtEntities;
 import dev.comfyfluffy.caustica.rt.entity.RtEntityTextures;
-import dev.comfyfluffy.caustica.rt.material.RtBlockMaterials;
+import dev.comfyfluffy.caustica.rt.provider.ProviderManager;
 import dev.comfyfluffy.caustica.rt.terrain.RtTerrain;
 import dev.comfyfluffy.caustica.rt.terrain.RtWorkerPool;
 import net.fabricmc.api.ClientModInitializer;
@@ -57,7 +56,7 @@ public final class CausticaClient implements ClientModInitializer {
 					// material flags resolve from the first section (PBR on join, no re-extract). No-op
 					// until we're in a world with the block atlas loaded, or once already created.
 					RtComposite.INSTANCE.ensureResourcesReady(ctx);
-					RtTerrain.update(ctx);
+					ProviderManager.INSTANCE.updateScenes();
 					// Log DLSS-FG availability once when frame generation is enabled (capability query only;
 					// the present-loop integration that consumes it is built separately).
 					if (dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg.enabled()) {
@@ -72,7 +71,7 @@ public final class CausticaClient implements ClientModInitializer {
 		// world. Fixes stale geometry persisting across an End→Overworld switch (coords alone aren't
 		// world-unique). Resource reloads do NOT fire this; that path is handled separately.
 		InvalidateRenderStateCallback.EVENT.register(() -> {
-			RtTerrain.requestFullClear();
+			ProviderManager.INSTANCE.invalidateScenes();
 			RtComposite.INSTANCE.resetExposureHistory();
 			RtComposite.INSTANCE.resetFailureLatch(); // F3+A doubles as manual RT recovery after a latched failure
 		});
@@ -91,18 +90,10 @@ public final class CausticaClient implements ClientModInitializer {
 		}
 
 		RtContext ctx = RtContext.currentOrNull();
-		if (ctx != null) {
-			// Let the terrain epoch cancel queued work and release every active-task token before
-			// shutdownNow(): discarded worker Runnables cannot deliver their terminal callbacks.
-			RtTerrain.shutdown(ctx);
-		}
+		ProviderManager.INSTANCE.shutdown();
 		RtWorkerPool.INSTANCE.shutdown();
-		if (ctx != null) {
-			RtEntities.INSTANCE.shutdown();
-		}
 		RtComposite.INSTANCE.destroy();
 		RtEntityTextures.INSTANCE.reset();
-		RtBlockMaterials.INSTANCE.destroy();
 		dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg.INSTANCE.destroy();
 		if (ctx != null) {
 			dev.comfyfluffy.caustica.rt.RtFramePresenter.INSTANCE.destroy(ctx.device());

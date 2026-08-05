@@ -1,0 +1,51 @@
+package dev.comfyfluffy.caustica.rt.provider;
+
+import dev.comfyfluffy.caustica.api.provider.SceneProvider;
+import dev.comfyfluffy.caustica.rt.RtContext;
+import dev.comfyfluffy.caustica.rt.entity.RtEntities;
+import dev.comfyfluffy.caustica.rt.terrain.RtTerrain;
+import net.minecraft.resources.Identifier;
+
+public final class MinecraftSceneProvider implements SceneProvider {
+    public static final Identifier ID = Identifier.fromNamespaceAndPath("caustica", "minecraft_scene");
+
+    @Override
+    public Identifier id() {
+        return ID;
+    }
+
+    @Override
+    public void update() {
+        RtContext ctx = RtContext.currentOrNull();
+        if (ctx != null) {
+            RtTerrain.update(ctx);
+        }
+    }
+
+    @Override
+    public void prepareFrame() {
+        RtContext ctx = RtContext.currentOrNull();
+        if (ctx != null) {
+            RtTerrain.frame(ctx);
+        }
+    }
+
+    @Override
+    public void invalidate() {
+        RtTerrain.requestFullClear();
+    }
+
+    @Override
+    public void onResourceReload() {
+        RtEntities.INSTANCE.onResourceReload();
+    }
+
+    @Override
+    public void shutdown() {
+        RtContext ctx = RtContext.currentOrNull();
+        if (ctx != null) {
+            RtTerrain.shutdown(ctx);
+            RtEntities.INSTANCE.shutdown();
+        }
+    }
+}

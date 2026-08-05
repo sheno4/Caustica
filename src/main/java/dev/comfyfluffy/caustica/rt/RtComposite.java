@@ -76,6 +76,7 @@ import dev.comfyfluffy.caustica.rt.shader.Composition;
 import dev.comfyfluffy.caustica.rt.shader.CompositionManager;
 import dev.comfyfluffy.caustica.rt.shader.WorldShaderCompiler;
 import dev.comfyfluffy.caustica.rt.pass.RenderPassManager;
+import dev.comfyfluffy.caustica.rt.provider.ProviderManager;
 import dev.comfyfluffy.caustica.rt.pipeline.RtPipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtShaderCode;
 import dev.comfyfluffy.caustica.rt.pipeline.RtToneLut;
@@ -582,16 +583,9 @@ public final class RtComposite {
             return false;
         }
         ctx.gpuExecutor().throwIfFailed();
-        // Count-bounded terrain streaming (dispatch/drain/build kick) runs here once per render frame — before
-        // the ready gate below, because it is what MAKES terrain ready during the initial fill.
-        try {
-            RtTerrain.frame(ctx);
-        } catch (Throwable t) {
-            ctx.gpuExecutor().throwIfFailed();
-            failed = true;
-            CausticaMod.LOGGER.error("RT terrain streaming failed; reverting to vanilla path", t);
-            return false;
-        }
+        // Providers prepare their frame contributions before the ready gate below. A failing provider is
+        // disabled and cleaned up independently, so another provider can continue serving the frame.
+        ProviderManager.INSTANCE.prepareFrame();
         if (RtTerrain.currentOrNull() == null || !frameCaptured || Minecraft.getInstance().level == null) {
             // No world this frame (incl. after quitting to the title — terrain residency + frameCaptured can
             // linger until an explicit invalidate, which would otherwise present a stale/empty HDR image as a
@@ -898,7 +892,7 @@ public final class RtComposite {
         reloadRebindRequested = true;
         materialBindingsReady = false;
         setCelestialUvAtlas(0L);
-        RtEntities.INSTANCE.onResourceReload();
+        ProviderManager.INSTANCE.onResourceReload();
         RtContext ctx = RtContext.currentOrNull();
         if (ctx != null) {
             ctx.waitIdle();

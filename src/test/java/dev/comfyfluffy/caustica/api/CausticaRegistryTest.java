@@ -2,6 +2,10 @@ package dev.comfyfluffy.caustica.api;
 
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
+import dev.comfyfluffy.caustica.api.provider.SceneProvider;
+import dev.comfyfluffy.caustica.rt.provider.MinecraftLightProvider;
+import dev.comfyfluffy.caustica.rt.provider.MinecraftMaterialSource;
+import dev.comfyfluffy.caustica.rt.provider.MinecraftSceneProvider;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -22,6 +26,9 @@ final class CausticaRegistryTest {
                 Identifier.fromNamespaceAndPath("caustica", "bloom")));
         assertTrue(registry.renderPasses().containsKey(
                 Identifier.fromNamespaceAndPath("caustica", "sky_lut")));
+        assertTrue(registry.sceneProviders().containsKey(MinecraftSceneProvider.ID));
+        assertTrue(registry.lightProviders().containsKey(MinecraftLightProvider.ID));
+        assertTrue(registry.materialSources().containsKey(MinecraftMaterialSource.ID));
     }
 
     @Test
@@ -64,5 +71,10 @@ final class CausticaRegistryTest {
         assertThrows(IllegalStateException.class, () -> registry.feature(
                         Identifier.fromNamespaceAndPath("test", "duplicate_pass"))
                 .renderPass(bloom).register());
+
+        SceneProvider duplicateScene = () -> MinecraftSceneProvider.ID;
+        assertThrows(IllegalStateException.class, () -> registry.feature(
+                        Identifier.fromNamespaceAndPath("test", "duplicate_scene"))
+                .sceneProvider(duplicateScene).register());
     }
 }

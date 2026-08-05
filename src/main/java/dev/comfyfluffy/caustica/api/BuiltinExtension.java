@@ -3,6 +3,9 @@ package dev.comfyfluffy.caustica.api;
 import dev.comfyfluffy.caustica.rt.RtLookPackage;
 import dev.comfyfluffy.caustica.rt.pass.BuiltinBloomPass;
 import dev.comfyfluffy.caustica.rt.pass.BuiltinSkyLutPass;
+import dev.comfyfluffy.caustica.rt.provider.MinecraftLightProvider;
+import dev.comfyfluffy.caustica.rt.provider.MinecraftMaterialSource;
+import dev.comfyfluffy.caustica.rt.provider.MinecraftSceneProvider;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 
@@ -20,6 +23,9 @@ final class BuiltinExtension implements CausticaExtension {
                 .bind(Slots.MEDIUM, "caustica_builtin_medium", "BuiltinMedium")
                 .renderPass(new BuiltinBloomPass(RtLookPackage.current().bloom()))
                 .renderPass(new BuiltinSkyLutPass())
+                .sceneProvider(new MinecraftSceneProvider())
+                .lightProvider(new MinecraftLightProvider())
+                .materialSource(new MinecraftMaterialSource())
                 .register();
         registry.setDefault(Slots.SKY, ID);
         registry.setDefault(Slots.SURFACE, ID);

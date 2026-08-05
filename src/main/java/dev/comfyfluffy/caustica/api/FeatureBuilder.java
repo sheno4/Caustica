@@ -1,6 +1,9 @@
 package dev.comfyfluffy.caustica.api;
 
 import dev.comfyfluffy.caustica.api.pass.CausticaRenderPass;
+import dev.comfyfluffy.caustica.api.provider.LightProvider;
+import dev.comfyfluffy.caustica.api.provider.MaterialSource;
+import dev.comfyfluffy.caustica.api.provider.SceneProvider;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 
@@ -19,6 +22,9 @@ public final class FeatureBuilder {
     private final Map<Slot, Feature.Binding> bindings = new LinkedHashMap<>();
     private final List<Option<?>> options = new ArrayList<>();
     private final List<CausticaRenderPass> renderPasses = new ArrayList<>();
+    private final List<SceneProvider> sceneProviders = new ArrayList<>();
+    private final List<LightProvider> lightProviders = new ArrayList<>();
+    private final List<MaterialSource> materialSources = new ArrayList<>();
     private boolean registered;
 
     FeatureBuilder(CausticaRegistry registry, Identifier id) {
@@ -67,6 +73,36 @@ public final class FeatureBuilder {
         return this;
     }
 
+    public FeatureBuilder sceneProvider(SceneProvider provider) {
+        Objects.requireNonNull(provider, "provider");
+        Objects.requireNonNull(provider.id(), "provider.id()");
+        if (sceneProviders.stream().anyMatch(existing -> existing.id().equals(provider.id()))) {
+            throw new IllegalStateException(id + " declares duplicate scene provider " + provider.id());
+        }
+        sceneProviders.add(provider);
+        return this;
+    }
+
+    public FeatureBuilder lightProvider(LightProvider provider) {
+        Objects.requireNonNull(provider, "provider");
+        Objects.requireNonNull(provider.id(), "provider.id()");
+        if (lightProviders.stream().anyMatch(existing -> existing.id().equals(provider.id()))) {
+            throw new IllegalStateException(id + " declares duplicate light provider " + provider.id());
+        }
+        lightProviders.add(provider);
+        return this;
+    }
+
+    public FeatureBuilder materialSource(MaterialSource source) {
+        Objects.requireNonNull(source, "source");
+        Objects.requireNonNull(source.id(), "source.id()");
+        if (materialSources.stream().anyMatch(existing -> existing.id().equals(source.id()))) {
+            throw new IllegalStateException(id + " declares duplicate material source " + source.id());
+        }
+        materialSources.add(source);
+        return this;
+    }
+
     public Feature register() {
         if (registered) {
             throw new IllegalStateException(id + " is already registered");
@@ -74,8 +110,10 @@ public final class FeatureBuilder {
         registered = true;
         Component resolvedTitle = title != null ? title
                 : Component.literal(id.getNamespace() + ':' + id.getPath());
-        Feature feature = new Feature(id, resolvedTitle, category, shaderSource, bindings, options, renderPasses);
+        Feature feature = new Feature(id, resolvedTitle, category, shaderSource, bindings, options, renderPasses,
+                sceneProviders, lightProviders, materialSources);
         registry.register(feature);
         return feature;
     }
+
 }
