@@ -79,13 +79,6 @@ public struct DisplayPush {
     public float bloomStrength;
 };
 
-public struct BloomPush {
-    public int mode;            // 0 prefilter+downsample, 1 downsample, 2 tent upsample (accumulate)
-    public float threshold;     // exposed scene-linear ACEScg luminance
-    public float softKnee;      // absolute exposed scene-linear knee width
-    public float radius;        // upsample tent radius in SOURCE texels; resolution-independent
-};
-
 public struct DebugPresentPush {
     public uint debugView;     // 1..9; this pass is only dispatched for debugView != 0
     public float centerWeightSigma;

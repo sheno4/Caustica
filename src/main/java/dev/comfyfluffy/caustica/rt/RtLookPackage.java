@@ -27,7 +27,7 @@ public record RtLookPackage(
         Lighting lighting,
         Sky sky) {
     public static final int SCHEMA_VERSION = 4;
-    /** Mirrors RtBloomPipeline.MAX_LEVELS; validated here so a bad package fails at load, not at resize. */
+    /** Maximum useful bloom-pyramid depth at 4K. */
     private static final int MAX_BLOOM_LEVELS = 8;
     public static final String DEFAULT_ID = "default";
     public static final String DEFAULT_JSON = "/caustica/color/looks/default/look.json";
@@ -264,7 +264,7 @@ public record RtLookPackage(
     }
 
     /**
-     * Bloom pyramid (see {@code RtBloomPipeline}). {@code radius} is the upsample tent radius in SOURCE
+     * Bloom pyramid. {@code radius} is the upsample tent radius in SOURCE
      * texels, so it needs no resolution scaling; {@code levels} is how many octaves of skirt the effect
      * reaches over, which is what sets its width.
      */

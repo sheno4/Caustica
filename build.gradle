@@ -84,6 +84,7 @@ processResources {
 // spirv-val from the Vulkan SDK or PATH.
 def shaderGenRoot = layout.buildDirectory.dir("generated/shaders") // classpath root -> /caustica/shaders/*.spv
 def runtimeWorldSourceDir = file("src/main/resources/caustica/shaders/world")
+def runtimePassSourceDir = file("src/main/resources/caustica/shaders/passes")
 
 def resolveVulkanTool = { String name ->
 	def exe = org.gradle.internal.os.OperatingSystem.current().windows ? ".exe" : ""
@@ -190,6 +191,9 @@ def prepareShaderReflectionSources = tasks.register("prepareShaderReflectionSour
 	from(file("shaders"))
 	from(runtimeWorldSourceDir) {
 		into "pipelines/world"
+	}
+	from(runtimePassSourceDir) {
+		into "passes"
 	}
 	into(shaderReflectionRoot)
 }

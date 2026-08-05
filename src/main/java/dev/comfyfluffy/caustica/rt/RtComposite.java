@@ -11,6 +11,8 @@ import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.api.CausticaApi;
 import dev.comfyfluffy.caustica.api.Slots;
+import dev.comfyfluffy.caustica.api.pass.EngineImage;
+import dev.comfyfluffy.caustica.api.pass.RenderStage;
 import dev.comfyfluffy.caustica.client.CausticaJitter;
 import dev.comfyfluffy.caustica.mixin.CommandEncoderAccessor;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushConstantsData;
@@ -61,7 +63,6 @@ import dev.comfyfluffy.caustica.rt.material.RtEmissionSemantics;
 import dev.comfyfluffy.caustica.rt.material.RtMaterialOverrides;
 import dev.comfyfluffy.caustica.rt.material.RtMaterialRegistry;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDebugPresentPipeline;
-import dev.comfyfluffy.caustica.rt.pipeline.RtBloomPipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtSkyLut;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDisplayPipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg;
@@ -73,6 +74,7 @@ import dev.comfyfluffy.caustica.rt.pipeline.RtExposure;
 import dev.comfyfluffy.caustica.rt.shader.Composition;
 import dev.comfyfluffy.caustica.rt.shader.CompositionManager;
 import dev.comfyfluffy.caustica.rt.shader.WorldShaderCompiler;
+import dev.comfyfluffy.caustica.rt.pass.RenderPassManager;
 import dev.comfyfluffy.caustica.rt.pipeline.RtPipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtShaderCode;
 import dev.comfyfluffy.caustica.rt.pipeline.RtToneLut;
@@ -185,7 +187,7 @@ public final class RtComposite {
     private PushSlot[] pushRing;
     private int pushSlot;
     private RtDisplayPipeline displayPipeline;
-    private RtBloomPipeline bloomPipeline;
+    private RenderPassManager renderPassManager;
     // Atmosphere LUTs (transmittance + multiple scattering + this frame's sky view). Device-lifetime; the
     // two static tables are baked on the first frame that records the pass.
     private RtSkyLut skyLut;
@@ -201,7 +203,6 @@ public final class RtComposite {
     private RtImage displayImage;
     // Bloom pyramid, finest first: level 0 is half display resolution and each level halves again. The
     // display mapper reads level 0, which the upsample sweep leaves holding the sum of every band.
-    private RtImage[] bloomLevels = new RtImage[0];
     // Parallel PQ-encoded ([0,1], ST.2084) HDR display image. Written alongside displayImage when HDR is
     // enabled. When the PQ swapchain is active, the combined UI overlay is composited over this image, then
     // this image is blitted straight to the swapchain.
@@ -603,8 +604,8 @@ public final class RtComposite {
             if (displayPipeline == null) {
                 displayPipeline = RtDisplayPipeline.create(ctx);
             }
-            if (bloomPipeline == null) {
-                bloomPipeline = RtBloomPipeline.create(ctx);
+            if (renderPassManager == null) {
+                renderPassManager = RenderPassManager.create(ctx, CausticaApi.registry().renderPasses());
             }
             if (skyLut == null) {
                 // Normally already created by ensureWorld before the pipeline exists at all; this only
@@ -662,8 +663,8 @@ public final class RtComposite {
             RtToneLut boundLookLut = lookLut;
             displayPipeline.setImages(displayImage.view, rrOutput.view, exposure.image().view, hdrDisplayImage.view,
                     sdrToneLut.view(), sdrToneLut.sampler(), hdrToneLut.view(), hdrToneLut.sampler(),
-                    boundLookLut.view(), boundLookLut.sampler(), bloomLevels[0].view, bloomPipeline.sampler());
-            bloomPipeline.setImages(rrOutput.view, exposure.image().view, bloomLevels);
+                    boundLookLut.view(), boundLookLut.sampler(),
+                    renderPassManager.image(EngineImage.BLOOM).view, renderPassManager.sampler());
             debugPresentPipeline.setImages(displayImage.view, gNormal.view, gAlbedo.view, gDepth.view,
                     gMotion.view, gSpecAlbedo.view, gSpecMotion.view, rrOutput.view, exposure.image().view,
                     exposure.stateBuffer());
@@ -967,7 +968,8 @@ public final class RtComposite {
         int rrQuality = rrEnabled ? RtDlssRr.quality() : Integer.MIN_VALUE;
         if (output != null && continuationQueue != null
                 && displayImage != null && hdrDisplayImage != null && rrOutput != null
-                && bloomLevels.length > 0 && exposure.ready()
+                && renderPassManager != null && renderPassManager.hasImage(EngineImage.BLOOM)
+                && exposure.ready()
                 && displayW == width && displayH == height
                 && renderSizeRrEnabled == rrEnabled && renderSizeRrQuality == rrQuality) {
             return;
@@ -979,7 +981,6 @@ public final class RtComposite {
         if (hdrDisplayImage != null) {
             hdrDisplayImage.destroy();
         }
-        destroyBloomLevels();
         if (output != null) {
             output.destroy();
         }
@@ -1016,20 +1017,6 @@ public final class RtComposite {
         displayImage = ctx.createStorageImage(width, height, VK10.VK_FORMAT_R8G8B8A8_UNORM, "RT display image " + width + "x" + height);
         // PQ-encoded ([0,1], ST.2084) HDR display image, written in parallel by display.comp when HDR mode is active.
         hdrDisplayImage = ctx.createStorageImage(width, height, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "RT HDR display image " + width + "x" + height);
-        // Bloom pyramid. Level 0 is half display resolution (the prefilter's 13-tap already covers a 5x5
-        // display-pixel footprint, so nothing is lost by starting there); each further level halves again
-        // until the look package's level count or the smallest useful size is reached.
-        int bloomWidth = Math.max(1, (width + 1) / 2);
-        int bloomHeight = Math.max(1, (height + 1) / 2);
-        int bloomLevelCount = RtBloomPipeline.levelsFor(bloomWidth, bloomHeight, LOOK.bloom().levels());
-        bloomLevels = new RtImage[bloomLevelCount];
-        for (int level = 0; level < bloomLevelCount; level++) {
-            bloomLevels[level] = ctx.createStorageImage(bloomWidth, bloomHeight,
-                    VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
-                    "RT bloom level " + level + " " + bloomWidth + "x" + bloomHeight);
-            bloomWidth = Math.max(1, bloomWidth / 2);
-            bloomHeight = Math.max(1, bloomHeight / 2);
-        }
         // Guide buffers match the trace (render) resolution; DLSS-RR consumes them at render res.
         gNormal = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "guide normal roughness " + renderW + "x" + renderH);
         gAlbedo = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "guide diffuse albedo " + renderW + "x" + renderH);
@@ -1040,6 +1027,9 @@ public final class RtComposite {
         // Display-res RT image the display mapper reads. Always present (DLSS-RR target, or blit-upscale fallback).
         rrOutput = ctx.createStorageImage(width, height, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "DLSS-RR output " + width + "x" + height);
         exposure.ensureResources(ctx);
+        renderPassManager.resize(width, height);
+        renderPassManager.setExternalImage(EngineImage.RECONSTRUCTED_COLOR, rrOutput);
+        renderPassManager.setExternalImage(EngineImage.EXPOSURE, exposure.image());
 
         mvHasPrev = false; // recreated images -> first MV frame is zero
         waterWaveTimeValid = false;
@@ -1050,20 +1040,11 @@ public final class RtComposite {
         RtToneLut boundLookLut = lookLut;
         displayPipeline.setImages(displayImage.view, rrOutput.view, exposure.image().view, hdrDisplayImage.view,
                 sdrToneLut.view(), sdrToneLut.sampler(), hdrToneLut.view(), hdrToneLut.sampler(),
-                boundLookLut.view(), boundLookLut.sampler(), bloomLevels[0].view, bloomPipeline.sampler());
-        bloomPipeline.setImages(rrOutput.view, exposure.image().view, bloomLevels);
+                boundLookLut.view(), boundLookLut.sampler(),
+                renderPassManager.image(EngineImage.BLOOM).view, renderPassManager.sampler());
         debugPresentPipeline.setImages(displayImage.view, gNormal.view, gAlbedo.view, gDepth.view,
                 gMotion.view, gSpecAlbedo.view, gSpecMotion.view, rrOutput.view, exposure.image().view,
                 exposure.stateBuffer());
-    }
-
-    private void destroyBloomLevels() {
-        for (RtImage level : bloomLevels) {
-            if (level != null) {
-                level.destroy();
-            }
-        }
-        bloomLevels = new RtImage[0];
     }
 
     /**
@@ -1262,6 +1243,7 @@ public final class RtComposite {
                     terrain.lightLocalAliasBufferAddress(), terrain.lightGridCellBufferAddress(),
                     terrain.lightGridSpanBufferAddress(), continuationQueue.deviceAddress,
                     (int) frameCounter).write(pushConstants);
+            renderPassManager.record(RenderStage.ENVIRONMENT_PREPARE, cmd);
             // Sky LUTs, from the same WorldPush slot the trace is about to read: the sky the LUT holds and
             // the sky the frame shades are built from one set of angles, not two. Recorded here (after the
             // push flush, before the trace) so the miss shader's very first fetch sees this frame's dome.
@@ -1269,6 +1251,7 @@ public final class RtComposite {
                 skyLut.record(cmd, pushBuf.deviceAddress);
             }
             VulkanCommandEncoder.memoryBarrier(cmd, stack); // sky LUT writes visible to raygen/miss
+            renderPassManager.record(RenderStage.BEFORE_TRACE, cmd);
 
             try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "world primary trace");
                  RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.tracePrimary")) {
@@ -1316,22 +1299,20 @@ public final class RtComposite {
                 exposure.record(ctx, cmd, stack, rrOutput, gDepth, gAlbedo);
                 exposure.recordStateReadback(cmd, stack);
             }
-            VulkanCommandEncoder.memoryBarrier(cmd, stack); // exposure image visible to the display mapper
+            VulkanCommandEncoder.memoryBarrier(cmd, stack); // exposure image visible to downstream passes
 
             try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "bloom");
                  RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.bloom")) {
-                RtLookPackage.Bloom bloom = LOOK.bloom();
-                // The tent radius is in source texels, so it needs no resolution scaling: the pyramid's
-                // reach is set by its level count, and each level's texel already scales with the frame.
-                bloomPipeline.dispatch(cmd, bloomLevels,
-                        bloom.thresholdSceneLinear(), bloom.softKneeFraction(), bloom.radius());
+                renderPassManager.record(RenderStage.AFTER_RECONSTRUCTION, cmd);
             }
+            renderPassManager.record(RenderStage.LOOK, cmd);
 
             try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "map RT to display");
                  RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.displayMap")) {
                 displayPipeline.dispatch(cmd, displayW, displayH, CausticaConfig.Rt.Hdr.enabled(),
                         sdrToneLut.size, CausticaConfig.Rt.Tonemap.GAMMA.value(), loadedHdrLutNits,
-                        true, lookLut.size, LOOK.bloom().strength() / bloomLevels.length);
+                        true, lookLut.size, LOOK.bloom().strength()
+                                / renderPassManager.levelCount(EngineImage.BLOOM));
             }
             hdrWrittenThisFrame = CausticaConfig.Rt.Hdr.enabled();
             VulkanCommandEncoder.memoryBarrier(cmd, stack); // display output visible to debug composite
@@ -1544,7 +1525,6 @@ public final class RtComposite {
             hdrDisplayImage.destroy();
             hdrDisplayImage = null;
         }
-        destroyBloomLevels();
         if (fgHudlessImage != null) {
             fgHudlessImage.destroy();
             fgHudlessImage = null;
@@ -1568,9 +1548,9 @@ public final class RtComposite {
             displayPipeline.destroy();
             displayPipeline = null;
         }
-        if (bloomPipeline != null) {
-            bloomPipeline.destroy();
-            bloomPipeline = null;
+        if (renderPassManager != null) {
+            renderPassManager.destroy();
+            renderPassManager = null;
         }
         if (skyLut != null) {
             skyLut.destroy();

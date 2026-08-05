@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class CausticaRegistryTest {
     @Test
@@ -17,6 +18,8 @@ final class CausticaRegistryTest {
         assertEquals(BuiltinExtension.ID, selection.binding(Slots.SKY).feature().id());
         assertEquals("BuiltinSurface", selection.binding(Slots.SURFACE).binding().type());
         assertEquals("BuiltinMedium", selection.binding(Slots.MEDIUM).binding().type());
+        assertTrue(registry.renderPasses().containsKey(
+                Identifier.fromNamespaceAndPath("caustica", "bloom")));
     }
 
     @Test
@@ -53,5 +56,11 @@ final class CausticaRegistryTest {
                 .option(Option.bool("enabled", true));
         assertThrows(IllegalStateException.class,
                 () -> optionBuilder.option(Option.bool("enabled", false)));
+
+        var bloom = registry.renderPasses().get(
+                Identifier.fromNamespaceAndPath("caustica", "bloom"));
+        assertThrows(IllegalStateException.class, () -> registry.feature(
+                        Identifier.fromNamespaceAndPath("test", "duplicate_pass"))
+                .renderPass(bloom).register());
     }
 }

@@ -1,23 +1,18 @@
 // Scene-referred bloom: a downsample/upsample mip pyramid (Jimenez, "Next Generation Post Processing in
 // Call of Duty: Advanced Warfare", SIGGRAPH 2014). One dispatch per pyramid step; the step's source and
-// destination are bound as a dedicated descriptor set by RtBloomPipeline, so nothing here indexes a
+// destination are bound as a dedicated descriptor set by the render-pass engine, so nothing here indexes a
 // descriptor array.
 //
-// Why a pyramid and not the previous single wide Gaussian. That pass took nine taps per axis at a spacing
-// of `radius` HALF-RES pixels (2.0 at 1080p, and it scaled with resolution, so ~2.7 at 1440p). Nine
-// bilinear taps spaced two or more texels apart is a comb, not a filter: for a small bright source the
-// output is nine shifted copies per axis, i.e. a visible 9x9 lattice of replicas — the reported "grid".
-// A pyramid only ever samples one level below itself, so every tap is within a texel or two of its
-// neighbours at that level and the kernel is dense at every scale it covers.
-//
-// The same structure fixes the "solid block" at high intensity. One Gaussian has one width and a hard
-// support: a source far above the threshold saturates its entire footprint uniformly and clips to a flat
-// slab with a visible boundary. The pyramid's response is the sum of levels, each twice as wide and
-// (after the threshold) carrying comparable energy, which gives the wide, monotonically decaying skirt a
-// real lens produces instead of a plateau with an edge. The Karis average on the first downsample
-// (below) keeps a single blown-out pixel from dominating that skirt.
-import display_common;
-import bindings;
+// Each level samples only its immediate neighbour, keeping the kernel dense at every scale. Summing
+// progressively wider levels produces a monotonic highlight skirt without a hard support edge. The
+// Karis average on the first downsample keeps one extreme pixel from dominating the full pyramid.
+module caustica_bloom;
+
+import caustica_bloom_types;
+
+[[vk::binding(0, 0)]] [format("rgba16f")] RWTexture2D<float4> dstImage;
+[[vk::binding(1, 0)]] Sampler2D srcImage;
+[[vk::binding(2, 0)]] [format("r32f")] RWTexture2D<float> exposureImage;
 
 [[vk::push_constant]] BloomPush pc;
 

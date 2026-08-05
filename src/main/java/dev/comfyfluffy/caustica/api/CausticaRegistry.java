@@ -1,13 +1,16 @@
 package dev.comfyfluffy.caustica.api;
 
+import dev.comfyfluffy.caustica.api.pass.CausticaRenderPass;
 import net.minecraft.resources.Identifier;
 
 import java.util.LinkedHashMap;
+import java.util.Collections;
 import java.util.Map;
 import java.util.Objects;
 
 public final class CausticaRegistry {
     private final Map<Identifier, Feature> features = new LinkedHashMap<>();
+    private final Map<Identifier, CausticaRenderPass> renderPasses = new LinkedHashMap<>();
     private final Map<Slot, Identifier> defaults = new LinkedHashMap<>();
     private final Map<Slot, Identifier> selected = new LinkedHashMap<>();
 
@@ -23,8 +26,17 @@ public final class CausticaRegistry {
     }
 
     synchronized void register(Feature feature) {
-        if (features.putIfAbsent(feature.id(), feature) != null) {
+        if (features.containsKey(feature.id())) {
             throw new IllegalStateException("duplicate feature id " + feature.id());
+        }
+        for (CausticaRenderPass renderPass : feature.renderPasses()) {
+            if (renderPasses.containsKey(renderPass.id())) {
+                throw new IllegalStateException("duplicate render pass id " + renderPass.id());
+            }
+        }
+        features.put(feature.id(), feature);
+        for (CausticaRenderPass renderPass : feature.renderPasses()) {
+            renderPasses.put(renderPass.id(), renderPass);
         }
     }
 
@@ -49,6 +61,10 @@ public final class CausticaRegistry {
 
     public synchronized Map<Identifier, Feature> features() {
         return Map.copyOf(features);
+    }
+
+    public synchronized Map<Identifier, CausticaRenderPass> renderPasses() {
+        return Collections.unmodifiableMap(new LinkedHashMap<>(renderPasses));
     }
 
     public synchronized Selection selection() {

@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.api;
 
+import dev.comfyfluffy.caustica.api.pass.CausticaRenderPass;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 
@@ -17,6 +18,7 @@ public final class FeatureBuilder {
     private ShaderSource shaderSource;
     private final Map<Slot, Feature.Binding> bindings = new LinkedHashMap<>();
     private final List<Option<?>> options = new ArrayList<>();
+    private final List<CausticaRenderPass> renderPasses = new ArrayList<>();
     private boolean registered;
 
     FeatureBuilder(CausticaRegistry registry, Identifier id) {
@@ -56,6 +58,15 @@ public final class FeatureBuilder {
         return this;
     }
 
+    public FeatureBuilder renderPass(CausticaRenderPass renderPass) {
+        Objects.requireNonNull(renderPass, "renderPass");
+        if (renderPasses.stream().anyMatch(existing -> existing.id().equals(renderPass.id()))) {
+            throw new IllegalStateException(id + " declares duplicate render pass " + renderPass.id());
+        }
+        renderPasses.add(renderPass);
+        return this;
+    }
+
     public Feature register() {
         if (registered) {
             throw new IllegalStateException(id + " is already registered");
@@ -63,7 +74,7 @@ public final class FeatureBuilder {
         registered = true;
         Component resolvedTitle = title != null ? title
                 : Component.literal(id.getNamespace() + ':' + id.getPath());
-        Feature feature = new Feature(id, resolvedTitle, category, shaderSource, bindings, options);
+        Feature feature = new Feature(id, resolvedTitle, category, shaderSource, bindings, options, renderPasses);
         registry.register(feature);
         return feature;
     }
