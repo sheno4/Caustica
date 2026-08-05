@@ -39,8 +39,8 @@ public static const float3 OZONE_ABSORPTION = float3(0.000650, 0.001881, 0.00008
 public static const float  OZONE_CENTER_KM  = 25.0;
 public static const float  OZONE_WIDTH_KM   = 15.0;
 
-// ---- LUT dimensions. Mirrored in RtSkyLut.java; the two must agree exactly (each pass hard-codes its
-// own extent for the bounds check, and the parameterisations below apply the half-texel correction).
+// ---- LUT dimensions. Mirrored by BuiltinSkyLutPass; the dispatch extents and the parameterisations
+// below must agree exactly.
 public static const int TRANSMITTANCE_LUT_W = 256;
 public static const int TRANSMITTANCE_LUT_H = 64;
 public static const int MULTISCATTER_LUT_W  = 32;

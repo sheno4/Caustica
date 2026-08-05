@@ -6,10 +6,8 @@ import dev.comfyfluffy.caustica.api.pass.ComputeBinding;
 import dev.comfyfluffy.caustica.api.pass.ComputeProgram;
 import dev.comfyfluffy.caustica.api.pass.DispatchImage;
 import dev.comfyfluffy.caustica.api.pass.EngineImage;
-import dev.comfyfluffy.caustica.api.pass.ImageFormat;
 import dev.comfyfluffy.caustica.api.pass.ImagePyramid;
 import dev.comfyfluffy.caustica.api.pass.ImageRef;
-import dev.comfyfluffy.caustica.api.pass.ImageSize;
 import dev.comfyfluffy.caustica.api.pass.PassContext;
 import dev.comfyfluffy.caustica.api.pass.RenderStage;
 import dev.comfyfluffy.caustica.api.pass.ResourceRegistry;
@@ -57,8 +55,8 @@ public final class BuiltinBloomPass implements CausticaRenderPass {
     public void declareResources(ResourceRegistry resources) {
         reconstructedColor = resources.engineImage(EngineImage.RECONSTRUCTED_COLOR);
         exposure = resources.engineImage(EngineImage.EXPOSURE);
-        pyramid = resources.imagePyramid(PYRAMID_ID, ImageFormat.RGBA16_FLOAT,
-                ImageSize.displayRelative(2), Math.min(settings.levels(), MAX_LEVELS), 8);
+        pyramid = resources.imagePyramid(PYRAMID_ID, EngineImage.BLOOM.format(),
+                EngineImage.BLOOM.size(), Math.min(settings.levels(), MAX_LEVELS), 8);
         resources.publish(EngineImage.BLOOM, pyramid.level(0));
         program = resources.compute(new ComputeProgram(PROGRAM_ID,
                 ShaderSource.classpath("/caustica/shaders/passes/bloom"),

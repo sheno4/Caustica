@@ -30,13 +30,6 @@ public struct WorldPushConstants {
     public uint frameIndex;
 };
 
-// Minimal push block for the compute passes that only need to dereference the frame's WorldPush: the sky
-// LUT bakes read sun/moon/look state from the same BDA slot the trace does, so there is exactly one
-// per-frame source of sky state and no way for the LUT and the frame it shades to disagree.
-public struct PushAddr {
-    public uint64_t worldPushAddr;
-};
-
 // Block-breaking overlay entry: xyz = breaking block position (rebased, same space as gl_WorldRay*),
 // w = bindless entityAlbedoTex slot of the destroy-stage texture.
 public struct BreakEntry {

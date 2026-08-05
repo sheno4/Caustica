@@ -4,6 +4,7 @@
 import world_common;
 import display_common;
 import caustica_bloom_types;
+import sky_lut_types;
 
 struct WorldPushLayoutProbe {
     WorldPush values[2]; // array stride is the complete, tail-padded WorldPush byte size
@@ -76,13 +77,12 @@ void probeDebugPresentPush(uint3 id : SV_DispatchThreadID) {
     }
 }
 
-// The sky LUT compute passes push only the frame's WorldPush device address (see world_common.PushAddr).
-[[vk::push_constant]] PushAddr pushAddrLayoutProbe;
+[[vk::push_constant]] SkyLutPush skyLutPushProbe;
 [shader("compute")]
 [numthreads(1, 1, 1)]
-void probePushAddr(uint3 id : SV_DispatchThreadID) {
+void probeSkyLutPush(uint3 id : SV_DispatchThreadID) {
     if (id.x == 0xFFFFFFFFu) {
-        float sink = float(pushAddrLayoutProbe.worldPushAddr);
+        float sink = skyLutPushProbe.celestial.x + skyLutPushProbe.skyLook3.x;
     }
 }
 

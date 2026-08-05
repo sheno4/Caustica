@@ -9,5 +9,8 @@ public interface CausticaRenderPass {
 
     void declareResources(ResourceRegistry resources);
 
+    default void initialize(PassContext context) {
+    }
+
     void record(PassContext context);
 }

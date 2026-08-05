@@ -10,6 +10,7 @@ import dev.comfyfluffy.caustica.api.pass.ImageRef;
 import dev.comfyfluffy.caustica.api.pass.ImageSize;
 import dev.comfyfluffy.caustica.api.pass.PassContext;
 import dev.comfyfluffy.caustica.api.pass.ResourceRegistry;
+import dev.comfyfluffy.caustica.api.pass.SkyFrame;
 import dev.comfyfluffy.caustica.rt.RtLookPackage;
 import net.minecraft.resources.Identifier;
 import org.junit.jupiter.api.Test;
@@ -97,6 +98,11 @@ final class BuiltinBloomPassTest {
         }
 
         @Override
+        public ImageRef image(Identifier id, ImageFormat format, ImageSize size) {
+            return new ImageRef(id, 0);
+        }
+
+        @Override
         public ImagePyramid imagePyramid(Identifier id, ImageFormat format, ImageSize baseSize,
                                          int maxLevels, int minimumDimension) {
             pyramid = new ImagePyramid(id);
@@ -127,6 +133,11 @@ final class BuiltinBloomPassTest {
             this.levels = levels;
             this.baseWidth = baseWidth;
             this.baseHeight = baseHeight;
+        }
+
+        @Override
+        public SkyFrame skyFrame() {
+            throw new UnsupportedOperationException();
         }
 
         @Override

@@ -448,7 +448,7 @@ public final class RtPipeline {
         return true;
     }
 
-    /** Bind this frame's atmosphere LUTs (see {@link RtSkyLut}); both share the LUT's own sampler. */
+    /** Bind the pass-owned atmosphere LUT slots; both share the render-pass linear sampler. */
     public void setSkyLuts(long skyViewImageView, long transmittanceImageView, long sampler) {
         writeAtlasBinding(WORLD_SKY_VIEW, skyViewImageView, sampler);
         writeAtlasBinding(WORLD_TRANSMITTANCE, transmittanceImageView, sampler);

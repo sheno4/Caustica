@@ -5,11 +5,12 @@
 // WITHOUT a ground test — a direction pointing below the horizon then accumulates the optical depth of a
 // full chord through sea-level air, which comes out as transmittance zero. That is exactly the answer
 // wanted for "the sun has set", so downstream passes need no separate planet-occlusion branch.
+module sky_lut_transmittance;
+
 import world_common;
 import sky;
-import bindings;
 
-[[vk::push_constant]] PushAddr pcAddr;
+[[vk::binding(0, 0)]] [format("rgba16f")] RWTexture2D<float4> transmittanceImage;
 
 [shader("compute")]
 [numthreads(8, 8, 1)]

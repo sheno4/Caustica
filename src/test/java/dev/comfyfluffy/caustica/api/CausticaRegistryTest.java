@@ -20,6 +20,8 @@ final class CausticaRegistryTest {
         assertEquals("BuiltinMedium", selection.binding(Slots.MEDIUM).binding().type());
         assertTrue(registry.renderPasses().containsKey(
                 Identifier.fromNamespaceAndPath("caustica", "bloom")));
+        assertTrue(registry.renderPasses().containsKey(
+                Identifier.fromNamespaceAndPath("caustica", "sky_lut")));
     }
 
     @Test

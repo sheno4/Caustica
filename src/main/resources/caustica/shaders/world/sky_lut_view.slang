@@ -6,13 +6,18 @@
 // One slice per body (sun rows first, then moon), each marched with its own direction and illuminance.
 // Sampling adds the two physical lighting solutions without crossfading between them.
 //
-// Reads the same WorldPush BDA slot the trace does, so the LUT and the frame it shades can never disagree
-// about where the sun is.
+// Reads the same semantic sky values the engine writes into WorldPush, so the LUT and the frame it shades
+// use identical celestial and look inputs without exposing the world buffer to the pass API.
+module sky_lut_view;
+
 import world_common;
 import sky;
-import bindings;
+import sky_lut_types;
 
-[[vk::push_constant]] PushAddr pcAddr;
+[[vk::binding(0, 0)]] [format("rgba16f")] RWTexture2D<float4> skyViewImage;
+[[vk::binding(1, 0)]] Sampler2D transmittanceLut;
+[[vk::binding(2, 0)]] Sampler2D multiScatterLut;
+[[vk::push_constant]] SkyLutPush pc;
 
 [shader("compute")]
 [numthreads(8, 8, 1)]
@@ -20,7 +25,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
     if (tid.x >= uint(SKY_VIEW_LUT_W) || tid.y >= uint(SKY_VIEW_LUT_TOTAL_H)) {
         return;
     }
-    WorldPush push = ConstPtr<WorldPush>(pcAddr.worldPushAddr)[0];
+    WorldPush push = skyLutWorldPush(pc);
     SkyState sky = skyState(push);
 
     int body = int(tid.y) / SKY_VIEW_LUT_H;

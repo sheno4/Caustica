@@ -45,10 +45,6 @@ abstract class GenerateRtBindings extends DefaultTask {
                     COLOR: "colorImage", BINS: "histBins", DEPTH: "depthImage", ALBEDO: "albedoImage"]],
             [prefix: "EXPOSURE_RESOLVE", source: "pipelines/exposure_resolve/main.comp.slang", resources: [
                     HIST_BINS: "histBins", IMAGE: "exposureImage", STATE: "stateBuf"]],
-            [prefix: "SKY_LUT", source: "pipelines/sky_lut/view.comp.slang", resources: [
-                    TRANSMITTANCE_IMAGE: "transmittanceImage", MULTISCATTER_IMAGE: "multiScatterImage",
-                    SKY_VIEW_IMAGE: "skyViewImage", TRANSMITTANCE_SAMPLER: "transmittanceLut",
-                    MULTISCATTER_SAMPLER: "multiScatterLut"]],
             [prefix: "PRESENT", source: "pipelines/hdr_composite/main.comp.slang", resources: [
                     OUTPUT: "outputImage", SOURCE: "sourceImage"]],
             [prefix: "OVERLAY_IMAGE", source: "pipelines/overlay_composite/glow.frag.slang", resources: [VALUE: "sourceImage"]],

@@ -13,6 +13,7 @@ import dev.comfyfluffy.caustica.api.CausticaApi;
 import dev.comfyfluffy.caustica.api.Slots;
 import dev.comfyfluffy.caustica.api.pass.EngineImage;
 import dev.comfyfluffy.caustica.api.pass.RenderStage;
+import dev.comfyfluffy.caustica.api.pass.SkyFrame;
 import dev.comfyfluffy.caustica.client.CausticaJitter;
 import dev.comfyfluffy.caustica.mixin.CommandEncoderAccessor;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushConstantsData;
@@ -24,6 +25,7 @@ import dev.comfyfluffy.caustica.rt.gen.WorldPushData.Float4;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushData.Int4;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.renderer.BiomeColors;
 import net.minecraft.client.renderer.texture.TextureAtlas;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
@@ -63,7 +65,6 @@ import dev.comfyfluffy.caustica.rt.material.RtEmissionSemantics;
 import dev.comfyfluffy.caustica.rt.material.RtMaterialOverrides;
 import dev.comfyfluffy.caustica.rt.material.RtMaterialRegistry;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDebugPresentPipeline;
-import dev.comfyfluffy.caustica.rt.pipeline.RtSkyLut;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDisplayPipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDlssRr;
@@ -188,9 +189,7 @@ public final class RtComposite {
     private int pushSlot;
     private RtDisplayPipeline displayPipeline;
     private RenderPassManager renderPassManager;
-    // Atmosphere LUTs (transmittance + multiple scattering + this frame's sky view). Device-lifetime; the
-    // two static tables are baked on the first frame that records the pass.
-    private RtSkyLut skyLut;
+    private ClientLevel renderPassLevel;
     private RtDebugPresentPipeline debugPresentPipeline;
     private RtToneLut sdrToneLut;
     private RtToneLut hdrToneLut;
@@ -600,19 +599,18 @@ public final class RtComposite {
             // convert path, which shows the menu + panorama correctly.
             return false;
         }
+        ClientLevel level = Minecraft.getInstance().level;
+        if (renderPassLevel != level) {
+            renderPassLevel = level;
+            if (renderPassManager != null) {
+                renderPassManager.invalidatePersistentState();
+            }
+        }
         try {
             if (displayPipeline == null) {
                 displayPipeline = RtDisplayPipeline.create(ctx);
             }
-            if (renderPassManager == null) {
-                renderPassManager = RenderPassManager.create(ctx, CausticaApi.registry().renderPasses());
-            }
-            if (skyLut == null) {
-                // Normally already created by ensureWorld before the pipeline exists at all; this only
-                // fires if render() somehow runs before the tick-driven ensureResourcesReady has, which
-                // ensureWorld's own binding order otherwise guarantees never happens.
-                skyLut = RtSkyLut.create(ctx);
-            }
+            ensureRenderPassManager(ctx);
             if (debugPresentPipeline == null) {
                 debugPresentPipeline = RtDebugPresentPipeline.create(ctx);
             }
@@ -719,15 +717,7 @@ public final class RtComposite {
 
     private RtPipeline ensureWorld(RtContext ctx) throws IOException {
         if (worldPipeline == null) {
-            // Must exist before bindWorldTextures below writes the sky-LUT descriptors. This is the
-            // earliest possible bind: ensureResourcesReady drives this from the client tick, ahead of the
-            // render()/composite path. bindWorldTextures only ever runs again on a
-            // resource reload, so a skyLut that is still null on this first call stays permanently unbound
-            // and every miss/raygen sky sample reads the pre-vkUpdateDescriptorSets undefined descriptor
-            // (VUID-vkCmdTraceRaysKHR-None-08114).
-            if (skyLut == null) {
-                skyLut = RtSkyLut.create(ctx);
-            }
+            ensureRenderPassManager(ctx);
             bindlessTextureCapacity = RtEntityTextures.maxTextures();
             WorldShaders shaders = compileWorldShaders();
             worldPipeline = RtPipeline.create(ctx, new RtShaderCode[]{
@@ -755,6 +745,12 @@ public final class RtComposite {
         // The TLAS is rebuilt and bound per frame in recordFrame since dynamic entity content animates
         // the instance set every frame.
         return worldPipeline;
+    }
+
+    private void ensureRenderPassManager(RtContext ctx) throws IOException {
+        if (renderPassManager == null) {
+            renderPassManager = RenderPassManager.create(ctx, CausticaApi.registry().renderPasses());
+        }
     }
 
     private WorldShaders compileWorldShaders() throws IOException {
@@ -855,12 +851,11 @@ public final class RtComposite {
         long celView = celestialsAtlasView();
         if (worldPipeline.hasSkyAtlas()) {
             worldPipeline.setSkyAtlas(celView != 0L ? celView : atlasView, sampler);
-            // Atmosphere LUTs live for the device's lifetime, but the world pipeline's descriptor sets do
-            // not (a resource reload rebuilds it), so rebind them alongside the atlas.
-            if (skyLut != null) {
-                worldPipeline.setSkyLuts(skyLut.skyViewView(), skyLut.transmittanceView(),
-                        skyLut.sampler());
-            }
+            // Pass-owned atmosphere LUTs live for the device's lifetime, but the world pipeline's
+            // descriptor sets do not, so rebind the fixed engine slots alongside the atlas.
+            worldPipeline.setSkyLuts(renderPassManager.image(EngineImage.SKY_VIEW_LUT).view,
+                    renderPassManager.image(EngineImage.SKY_TRANSMITTANCE_LUT).view,
+                    renderPassManager.sampler());
         }
         setCelestialUvAtlas(celView);
         // Atlas UVs and material IDs are one resource epoch. Drop old terrain as a unit rather than
@@ -907,6 +902,9 @@ public final class RtComposite {
         RtContext ctx = RtContext.currentOrNull();
         if (ctx != null) {
             ctx.waitIdle();
+            if (renderPassManager != null) {
+                renderPassManager.invalidatePersistentState();
+            }
             if (worldPipeline != null) {
                 worldPipeline.destroy();
                 worldPipeline = null;
@@ -1243,14 +1241,10 @@ public final class RtComposite {
                     terrain.lightLocalAliasBufferAddress(), terrain.lightGridCellBufferAddress(),
                     terrain.lightGridSpanBufferAddress(), continuationQueue.deviceAddress,
                     (int) frameCounter).write(pushConstants);
-            renderPassManager.record(RenderStage.ENVIRONMENT_PREPARE, cmd);
-            // Sky LUTs, from the same WorldPush slot the trace is about to read: the sky the LUT holds and
-            // the sky the frame shades are built from one set of angles, not two. Recorded here (after the
-            // push flush, before the trace) so the miss shader's very first fetch sees this frame's dome.
+            renderPassManager.setSkyFrame(sky.frame());
             try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("frame.skyLut")) {
-                skyLut.record(cmd, pushBuf.deviceAddress);
+                renderPassManager.record(RenderStage.ENVIRONMENT_PREPARE, cmd);
             }
-            VulkanCommandEncoder.memoryBarrier(cmd, stack); // sky LUT writes visible to raygen/miss
             renderPassManager.record(RenderStage.BEFORE_TRACE, cmd);
 
             try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "world primary trace");
@@ -1385,7 +1379,7 @@ public final class RtComposite {
     }
 
     private record SkyPush(Float4 celestial, Float4 look0, Float4 look1, Float4 look2, Float4 look3,
-                           Float4 sunUv, Float4 moonUv) {}
+                           Float4 sunUv, Float4 moonUv, SkyFrame frame) {}
 
     private record CelestialUv(Float4 sun, Float4 moon) {}
 
@@ -1430,20 +1424,31 @@ public final class RtComposite {
         RtLookPackage.Sky sky = LOOK.sky();
         RtLookPackage.Lighting lighting = LOOK.lighting();
         CelestialUv uv = celestialUv(moonPhase);
+        SkyFrame frame = new SkyFrame(
+                sunAngle, moonAngle, starAngle, starBrightness,
+                lighting.sunIlluminanceLux(), lighting.moonIlluminanceLux(),
+                lighting.nightAirglowLuminanceCdM2(), lighting.starLuminanceCdM2(),
+                sky.sunNoonSouthTiltDegrees() * toRadians,
+                sky.sunAngularRadiusDegrees() * toRadians,
+                sky.moonAngularRadiusDegrees() * toRadians,
+                lighting.moonPhaseFixedFraction(),
+                sky.sunDiscHalfAngleDegrees() * toRadians,
+                sky.moonDiscHalfAngleDegrees() * toRadians,
+                viewerAltitudeKm, moonPhase, sky.groundAlbedo(),
+                sky.horizonSoftenDegrees() * toRadians);
         return new SkyPush(
-                new Float4(sunAngle, moonAngle, starAngle, starBrightness),
-                new Float4(lighting.sunIlluminanceLux(), lighting.moonIlluminanceLux(),
-                        lighting.nightAirglowLuminanceCdM2(), lighting.starLuminanceCdM2()),
-                new Float4(sky.sunNoonSouthTiltDegrees() * toRadians,
-                        sky.sunAngularRadiusDegrees() * toRadians,
-                        sky.moonAngularRadiusDegrees() * toRadians,
-                        lighting.moonPhaseFixedFraction()),
-                new Float4(sky.sunDiscHalfAngleDegrees() * toRadians,
-                        sky.moonDiscHalfAngleDegrees() * toRadians,
-                        viewerAltitudeKm, moonPhase),
-                new Float4(sky.groundAlbedo(), sky.horizonSoftenDegrees() * toRadians, 0f, 0f),
+                new Float4(frame.sunAngleRadians(), frame.moonAngleRadians(),
+                        frame.starAngleRadians(), frame.starBrightness()),
+                new Float4(frame.sunIlluminanceLux(), frame.moonIlluminanceLux(),
+                        frame.nightAirglowLuminance(), frame.starLuminance()),
+                new Float4(frame.noonTiltRadians(), frame.sunAngularRadiusRadians(),
+                        frame.moonAngularRadiusRadians(), frame.moonPhaseFixedFraction()),
+                new Float4(frame.sunDiscHalfAngleRadians(), frame.moonDiscHalfAngleRadians(),
+                        frame.viewerAltitudeKm(), frame.moonPhaseIndex()),
+                new Float4(frame.groundAlbedo(), frame.horizonSoftenRadians(), 0f, 0f),
                 uv.sun(),
-                uv.moon());
+                uv.moon(),
+                frame);
     }
 
     /**
@@ -1552,10 +1557,7 @@ public final class RtComposite {
             renderPassManager.destroy();
             renderPassManager = null;
         }
-        if (skyLut != null) {
-            skyLut.destroy();
-            skyLut = null;
-        }
+        renderPassLevel = null;
         if (debugPresentPipeline != null) {
             debugPresentPipeline.destroy();
             debugPresentPipeline = null;

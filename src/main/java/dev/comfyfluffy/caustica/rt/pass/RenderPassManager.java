@@ -13,6 +13,7 @@ import dev.comfyfluffy.caustica.api.pass.ImageSize;
 import dev.comfyfluffy.caustica.api.pass.PassContext;
 import dev.comfyfluffy.caustica.api.pass.RenderStage;
 import dev.comfyfluffy.caustica.api.pass.ResourceRegistry;
+import dev.comfyfluffy.caustica.api.pass.SkyFrame;
 import dev.comfyfluffy.caustica.rt.RtContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.accel.RtImage;
@@ -30,8 +31,10 @@ import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static dev.comfyfluffy.caustica.rt.RtContext.check;
 
@@ -44,9 +47,11 @@ public final class RenderPassManager {
     private final Map<Identifier, RtImage[]> images = new LinkedHashMap<>();
     private final Map<EngineImage, RtImage> externalImages = new EnumMap<>(EngineImage.class);
     private final Map<EngineImage, ImageRef> engineRefs = new EnumMap<>(EngineImage.class);
+    private final Set<Identifier> initializedPasses = new LinkedHashSet<>();
     private final long sampler;
     private int displayWidth;
     private int displayHeight;
+    private SkyFrame skyFrame;
 
     private RenderPassManager(RtContext ctx, List<CausticaRenderPass> passes, long sampler) {
         this.ctx = ctx;
@@ -68,6 +73,7 @@ public final class RenderPassManager {
             for (CausticaRenderPass pass : passes) {
                 pass.declareResources(manager.declaration);
             }
+            manager.allocateFixedImages();
             Path cache = FabricLoader.getInstance().getGameDir()
                     .resolve("caustica-shaders").resolve("passes");
             for (ComputeProgram program : manager.declaration.programs.values()) {
@@ -83,32 +89,33 @@ public final class RenderPassManager {
     }
 
     public void resize(int width, int height) {
-        if (displayWidth == width && displayHeight == height && !images.isEmpty()) {
+        if (displayWidth == width && displayHeight == height) {
             return;
         }
-        destroyImages();
         displayWidth = width;
         displayHeight = height;
         for (PyramidSpec spec : declaration.pyramids.values()) {
+            if (spec.size() instanceof ImageSize.Fixed) {
+                continue;
+            }
             int baseWidth = resolveWidth(spec.size(), width);
             int baseHeight = resolveHeight(spec.size(), height);
-            int levels = levelCount(baseWidth, baseHeight, spec.maxLevels(), spec.minimumDimension());
-            RtImage[] allocated = new RtImage[levels];
-            int levelWidth = baseWidth;
-            int levelHeight = baseHeight;
-            for (int level = 0; level < levels; level++) {
-                allocated[level] = ctx.createStorageImage(levelWidth, levelHeight,
-                        vkFormat(spec.format()), spec.id() + " level " + level + " "
-                                + levelWidth + "x" + levelHeight);
-                levelWidth = Math.max(1, levelWidth / 2);
-                levelHeight = Math.max(1, levelHeight / 2);
-            }
-            images.put(spec.id(), allocated);
+            destroyImages(spec.id());
+            allocate(spec, baseWidth, baseHeight);
         }
+        invalidatePersistentState();
     }
 
     public void setExternalImage(EngineImage slot, RtImage image) {
         externalImages.put(slot, image);
+    }
+
+    public void setSkyFrame(SkyFrame frame) {
+        skyFrame = frame;
+    }
+
+    public void invalidatePersistentState() {
+        initializedPasses.clear();
     }
 
     public RtImage image(EngineImage slot) {
@@ -139,9 +146,18 @@ public final class RenderPassManager {
                 continue;
             }
             try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, commandBuffer, pass.id().toString())) {
-                pass.record(context);
+                recordPass(pass, context, initializedPasses);
             }
         }
+    }
+
+    static void recordPass(CausticaRenderPass pass, PassContext context,
+                           Set<Identifier> initializedPasses) {
+        if (!initializedPasses.contains(pass.id())) {
+            pass.initialize(context);
+            initializedPasses.add(pass.id());
+        }
+        pass.record(context);
     }
 
     public void destroy() {
@@ -171,6 +187,38 @@ public final class RenderPassManager {
             }
         }
         images.clear();
+    }
+
+    private void destroyImages(Identifier id) {
+        RtImage[] pyramid = images.remove(id);
+        if (pyramid != null) {
+            for (RtImage image : pyramid) {
+                image.destroy();
+            }
+        }
+    }
+
+    private void allocateFixedImages() {
+        for (PyramidSpec spec : declaration.pyramids.values()) {
+            if (spec.size() instanceof ImageSize.Fixed fixed) {
+                allocate(spec, fixed.width(), fixed.height());
+            }
+        }
+    }
+
+    private void allocate(PyramidSpec spec, int baseWidth, int baseHeight) {
+        int levels = levelCount(baseWidth, baseHeight, spec.maxLevels(), spec.minimumDimension());
+        RtImage[] allocated = new RtImage[levels];
+        int levelWidth = baseWidth;
+        int levelHeight = baseHeight;
+        for (int level = 0; level < levels; level++) {
+            allocated[level] = ctx.createStorageImage(levelWidth, levelHeight,
+                    vkFormat(spec.format()), spec.id() + " level " + level + " "
+                            + levelWidth + "x" + levelHeight);
+            levelWidth = Math.max(1, levelWidth / 2);
+            levelHeight = Math.max(1, levelHeight / 2);
+        }
+        images.put(spec.id(), allocated);
     }
 
     static int levelCount(int width, int height, int maximum, int minimumDimension) {
@@ -237,6 +285,12 @@ public final class RenderPassManager {
         }
 
         @Override
+        public ImageRef image(Identifier id, ImageFormat format, ImageSize size) {
+            imagePyramid(id, format, size, 1, 1);
+            return new ImageRef(id, 0);
+        }
+
+        @Override
         public ImagePyramid imagePyramid(Identifier id, ImageFormat format, ImageSize baseSize,
                                          int maxLevels, int minimumDimension) {
             PyramidSpec spec = new PyramidSpec(id, format, baseSize, maxLevels, minimumDimension);
@@ -250,6 +304,14 @@ public final class RenderPassManager {
         public void publish(EngineImage slot, ImageRef image) {
             if (!slot.passOutput()) {
                 throw new IllegalArgumentException(slot + " is engine-produced and cannot be published by a pass");
+            }
+            PyramidSpec spec = pyramids.get(image.id());
+            if (spec == null || image.level() >= spec.maxLevels()) {
+                throw new IllegalArgumentException(slot + " publication is not a declared pass image: " + image);
+            }
+            if (spec.format() != slot.format() || !spec.size().equals(slot.size())) {
+                throw new IllegalArgumentException(slot + " requires " + slot.format() + " " + slot.size()
+                        + ", got " + spec.format() + " " + spec.size());
             }
             if (publications.putIfAbsent(slot, image) != null) {
                 throw new IllegalStateException("multiple render passes publish " + slot);
@@ -270,6 +332,11 @@ public final class RenderPassManager {
 
         private RecordingContext(VkCommandBuffer commandBuffer) {
             this.commandBuffer = commandBuffer;
+        }
+
+        @Override
+        public SkyFrame skyFrame() {
+            return skyFrame;
         }
 
         @Override

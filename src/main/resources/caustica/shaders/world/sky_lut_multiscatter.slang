@@ -12,11 +12,16 @@
 // Static (per look package: only the ground albedo enters from outside), so this runs once behind the
 // transmittance LUT and is never rebuilt per frame. The 64x20 inner work is why: ~1.3M medium samples for
 // the whole 32x32 table, trivial once and far too much per frame.
+module sky_lut_multiscatter;
+
 import world_common;
 import sky;
-import bindings;
+import sky_lut_types;
 
-[[vk::push_constant]] PushAddr pcAddr;
+[[vk::binding(0, 0)]] [format("rgba16f")] RWTexture2D<float4> multiScatterImage;
+[[vk::binding(1, 0)]] Sampler2D transmittanceLut;
+[[vk::binding(2, 0)]] Sampler2D multiScatterLut;
+[[vk::push_constant]] SkyLutPush pc;
 
 static const int SQRT_DIRS = 8; // SQRT_DIRS^2 == MULTISCATTER_DIRS
 
@@ -26,8 +31,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
     if (tid.x >= uint(MULTISCATTER_LUT_W) || tid.y >= uint(MULTISCATTER_LUT_H)) {
         return;
     }
-    WorldPush push = ConstPtr<WorldPush>(pcAddr.worldPushAddr)[0];
-    float groundAlbedo = push.skyLook3.x;
+    float groundAlbedo = pc.skyLook3.x;
 
     float2 uv = float2(float(tid.x), float(tid.y))
               / float2(float(MULTISCATTER_LUT_W - 1), float(MULTISCATTER_LUT_H - 1));

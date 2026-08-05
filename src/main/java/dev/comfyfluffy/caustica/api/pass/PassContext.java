@@ -3,6 +3,8 @@ package dev.comfyfluffy.caustica.api.pass;
 import java.util.List;
 
 public interface PassContext {
+    SkyFrame skyFrame();
+
     int levelCount(ImagePyramid pyramid);
 
     ImageExtent extent(ImageRef image);
