@@ -30,8 +30,8 @@ import dev.comfyfluffy.caustica.rt.RtContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.RtDeviceBringup;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
-import dev.comfyfluffy.caustica.rt.accel.RtBuffer;
-import dev.comfyfluffy.caustica.rt.accel.RtImage;
+import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
+import dev.comfyfluffy.caustica.rt.accel.GpuImage;
 import dev.comfyfluffy.caustica.rt.entity.RtEntities;
 import dev.comfyfluffy.caustica.rt.terrain.RtTerrain;
 
@@ -77,11 +77,11 @@ final class RtBlockOutlineFeature implements RtOverlayFeature {
     private RtOverlayPipelines.AccelStructureSet accelSet;
     private RtOverlayPipelines.Pipeline compositePipeline;
     private RtOverlayPipelines.ReadOnlyImageSet compositeSet;
-    private RtImage msaaImage;
-    private RtImage resolvedMask;
+    private GpuImage msaaImage;
+    private GpuImage resolvedMask;
 
     private final Matrix4f viewProj = new Matrix4f();
-    private RtBuffer vbo;
+    private GpuBuffer vbo;
     private int vertexCount;
     private long boundSet;
 

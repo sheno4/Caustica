@@ -1,6 +1,10 @@
-package dev.comfyfluffy.caustica.api.pass;
+package dev.comfyfluffy.caustica.rt;
 
-/** Semantic sky inputs shared by the world shader and environment preparation passes. */
+/**
+ * Semantic sky inputs for one frame, computed once from Minecraft's celestial state and read by both the
+ * world push-constant fill and {@code SkyLutPass} — kept as a single snapshot ({@link SkyFrameState}) so
+ * the two can't drift within a frame.
+ */
 public record SkyFrame(
         float sunAngleRadians,
         float moonAngleRadians,

@@ -4,7 +4,7 @@ import com.mojang.blaze3d.vulkan.VulkanCommandEncoder;
 import com.mojang.blaze3d.vulkan.VulkanDevice;
 
 import dev.comfyfluffy.caustica.CausticaMod;
-import dev.comfyfluffy.caustica.rt.accel.RtImage;
+import dev.comfyfluffy.caustica.rt.accel.GpuImage;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg;
 
 import it.unimi.dsi.fastutil.longs.LongList;
@@ -106,7 +106,7 @@ public final class RtFramePresenter {
                 // null = no captured RT frame this tick (menu/loading/transition — routine, not a bug): fall
                 // back to duplicating the real frame for just this one frame. A genuine FG failure instead
                 // throws, caught below, which disables FG for the session.
-                RtImage interp = RtComposite.INSTANCE.fgInterpolate(enc, backbufferView, srcImage,
+                GpuImage interp = RtComposite.INSTANCE.fgInterpolate(enc, backbufferView, srcImage,
                         swapW, swapH, i + 1, generatedCount, hdrBackbuffer);
                 if (interp != null) {
                     interpOkInWindow++;

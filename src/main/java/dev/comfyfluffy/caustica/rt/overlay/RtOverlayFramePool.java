@@ -7,7 +7,7 @@ import java.util.List;
 
 import dev.comfyfluffy.caustica.rt.RtContext;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
-import dev.comfyfluffy.caustica.rt.accel.RtBuffer;
+import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
 
 /**
  * Per-frame host-visible vertex/index scratch for overlay passes, shared by every {@link RtOverlayFeature}.
@@ -19,20 +19,20 @@ public final class RtOverlayFramePool {
     // bytes == 0.
     private static final long MIN_SIZE = 256;
 
-    private final List<RtBuffer> acquiredThisFrame = new ArrayList<>();
+    private final List<GpuBuffer> acquiredThisFrame = new ArrayList<>();
 
     /** A host-visible vertex buffer of at least {@code bytes}, valid for this frame only. */
-    public RtBuffer acquireVertex(RtContext ctx, long bytes, String label) {
+    public GpuBuffer acquireVertex(RtContext ctx, long bytes, String label) {
         return acquire(ctx, bytes, VK10.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, label);
     }
 
     /** A host-visible index buffer of at least {@code bytes}, valid for this frame only. */
-    public RtBuffer acquireIndex(RtContext ctx, long bytes, String label) {
+    public GpuBuffer acquireIndex(RtContext ctx, long bytes, String label) {
         return acquire(ctx, bytes, VK10.VK_BUFFER_USAGE_INDEX_BUFFER_BIT, label);
     }
 
-    private RtBuffer acquire(RtContext ctx, long bytes, int usage, String label) {
-        RtBuffer b = ctx.createBuffer(Math.max(bytes, MIN_SIZE), usage, true, label);
+    private GpuBuffer acquire(RtContext ctx, long bytes, int usage, String label) {
+        GpuBuffer b = ctx.createBuffer(Math.max(bytes, MIN_SIZE), usage, true, label);
         acquiredThisFrame.add(b);
         return b;
     }
@@ -42,14 +42,14 @@ public final class RtOverlayFramePool {
         if (acquiredThisFrame.isEmpty()) {
             return;
         }
-        List<RtBuffer> retired = List.copyOf(acquiredThisFrame);
-        ctx.gpuExecutor().retireAfterGraphics(graphicsUse, () -> retired.forEach(RtBuffer::destroy));
+        List<GpuBuffer> retired = List.copyOf(acquiredThisFrame);
+        ctx.gpuExecutor().retireAfterGraphics(graphicsUse, () -> retired.forEach(GpuBuffer::destroy));
         acquiredThisFrame.clear();
     }
 
     /** Immediate teardown of unpublished buffers; queued buffers are owned by the GPU executor. */
     public void destroy() {
-        for (RtBuffer b : acquiredThisFrame) {
+        for (GpuBuffer b : acquiredThisFrame) {
             b.destroy();
         }
         acquiredThisFrame.clear();

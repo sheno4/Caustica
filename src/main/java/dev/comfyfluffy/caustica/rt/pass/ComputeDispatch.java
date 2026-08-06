@@ -1,12 +1,8 @@
 package dev.comfyfluffy.caustica.rt.pass;
 
-import com.mojang.blaze3d.vulkan.VulkanCommandEncoder;
-import dev.comfyfluffy.caustica.api.pass.ComputeBinding;
-import dev.comfyfluffy.caustica.api.pass.ComputeImageKind;
-import dev.comfyfluffy.caustica.api.pass.ComputeProgram;
 import dev.comfyfluffy.caustica.rt.RtContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
-import dev.comfyfluffy.caustica.rt.accel.RtImage;
+import dev.comfyfluffy.caustica.rt.accel.GpuImage;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.VK10;
@@ -22,6 +18,7 @@ import org.lwjgl.vulkan.VkDevice;
 import org.lwjgl.vulkan.VkPipelineLayoutCreateInfo;
 import org.lwjgl.vulkan.VkPipelineShaderStageCreateInfo;
 import org.lwjgl.vulkan.VkPushConstantRange;
+import org.lwjgl.vulkan.VkSamplerCreateInfo;
 import org.lwjgl.vulkan.VkShaderModuleCreateInfo;
 import org.lwjgl.vulkan.VkWriteDescriptorSet;
 
@@ -31,10 +28,24 @@ import java.util.List;
 
 import static dev.comfyfluffy.caustica.rt.RtContext.check;
 
-/** Vulkan backend for one declared compute program. Descriptor allocation and barriers stay engine-owned. */
-final class ComputePassPipeline {
+/**
+ * Descriptor set / pipeline layout / compute pipeline for one shader, round-robined over
+ * {@code maxDispatches} pre-allocated descriptor sets so a pass that dispatches the same program many
+ * times per frame (e.g. one per bloom pyramid level) doesn't need a fresh set per call. A set is only
+ * rewritten when its bound image views actually change from last time, so a pass whose bindings are
+ * stable frame-to-frame (the sky LUTs) pays the {@code vkUpdateDescriptorSets} cost once.
+ *
+ * <p>Package-private: this is implementation-sharing between the engine's own passes ({@code BloomPass},
+ * {@code SkyLutPass}), not public API. A third-party pass is free to write its own descriptor/pipeline
+ * setup directly against {@link dev.comfyfluffy.caustica.rt.RtContext} instead.
+ */
+final class ComputeDispatch {
+    enum Binding {
+        STORAGE, SAMPLED
+    }
+
     private final RtContext ctx;
-    private final ComputeProgram program;
+    private final List<Binding> bindings;
     private final long descriptorSetLayout;
     private final long descriptorPool;
     private final long[] descriptorSets;
@@ -43,37 +54,55 @@ final class ComputePassPipeline {
     private final long pipeline;
     private final long sampler;
     private int dispatchIndex;
+    private boolean destroyed;
 
-    private ComputePassPipeline(RtContext ctx, ComputeProgram program, long descriptorSetLayout,
-                                long descriptorPool, long[] descriptorSets, long pipelineLayout,
-                                long pipeline, long sampler) {
+    private ComputeDispatch(RtContext ctx, List<Binding> bindings, long descriptorSetLayout,
+                            long descriptorPool, long[] descriptorSets, long pipelineLayout, long pipeline,
+                            long sampler) {
         this.ctx = ctx;
-        this.program = program;
+        this.bindings = bindings;
         this.descriptorSetLayout = descriptorSetLayout;
         this.descriptorPool = descriptorPool;
         this.descriptorSets = descriptorSets;
-        this.boundViews = new long[descriptorSets.length][program.bindings().size()];
+        this.boundViews = new long[descriptorSets.length][bindings.size()];
         this.pipelineLayout = pipelineLayout;
         this.pipeline = pipeline;
         this.sampler = sampler;
     }
 
-    static ComputePassPipeline create(RtContext ctx, ComputeProgram program, byte[] spirv, long sampler) {
+    static long createLinearClampSampler(RtContext ctx, String label) {
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            VkSamplerCreateInfo info = VkSamplerCreateInfo.calloc(stack).sType$Default()
+                    .magFilter(VK10.VK_FILTER_LINEAR).minFilter(VK10.VK_FILTER_LINEAR)
+                    .mipmapMode(VK10.VK_SAMPLER_MIPMAP_MODE_NEAREST)
+                    .addressModeU(VK10.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE)
+                    .addressModeV(VK10.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE)
+                    .addressModeW(VK10.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE)
+                    .minLod(0.0f).maxLod(0.0f);
+            LongBuffer handle = stack.mallocLong(1);
+            check(VK10.vkCreateSampler(ctx.vk(), info, null, handle), "vkCreateSampler(" + label + ")");
+            RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_SAMPLER, handle.get(0), label);
+            return handle.get(0);
+        }
+    }
+
+    static ComputeDispatch create(RtContext ctx, String label, byte[] spirv, String entryPoint,
+                                  List<Binding> bindings, int pushConstantBytes, int maxDispatches,
+                                  long sampler) {
         VkDevice vk = ctx.vk();
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            List<ComputeBinding> declared = program.bindings();
-            VkDescriptorSetLayoutBinding.Buffer bindings =
-                    VkDescriptorSetLayoutBinding.calloc(declared.size(), stack);
+            VkDescriptorSetLayoutBinding.Buffer layoutBindings =
+                    VkDescriptorSetLayoutBinding.calloc(bindings.size(), stack);
             int storageCount = 0;
             int sampledCount = 0;
-            for (int index = 0; index < declared.size(); index++) {
-                ComputeImageKind kind = declared.get(index).kind();
-                int descriptorType = kind == ComputeImageKind.STORAGE
+            for (int index = 0; index < bindings.size(); index++) {
+                Binding kind = bindings.get(index);
+                int descriptorType = kind == Binding.STORAGE
                         ? VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
                         : VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                bindings.get(index).binding(index).descriptorType(descriptorType)
+                layoutBindings.get(index).binding(index).descriptorType(descriptorType)
                         .descriptorCount(1).stageFlags(VK10.VK_SHADER_STAGE_COMPUTE_BIT);
-                if (kind == ComputeImageKind.STORAGE) {
+                if (kind == Binding.STORAGE) {
                     storageCount++;
                 } else {
                     sampledCount++;
@@ -82,80 +111,84 @@ final class ComputePassPipeline {
 
             LongBuffer handle = stack.mallocLong(1);
             VkDescriptorSetLayoutCreateInfo layoutInfo = VkDescriptorSetLayoutCreateInfo.calloc(stack)
-                    .sType$Default().pBindings(bindings);
+                    .sType$Default().pBindings(layoutBindings);
             check(VK10.vkCreateDescriptorSetLayout(vk, layoutInfo, null, handle),
-                    "vkCreateDescriptorSetLayout(" + program.id() + ")");
+                    "vkCreateDescriptorSetLayout(" + label + ")");
             long descriptorSetLayout = handle.get(0);
             RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT,
-                    descriptorSetLayout, program.id() + " descriptor set layout");
+                    descriptorSetLayout, label + " descriptor set layout");
 
             int poolTypeCount = (storageCount > 0 ? 1 : 0) + (sampledCount > 0 ? 1 : 0);
             VkDescriptorPoolSize.Buffer poolSizes = VkDescriptorPoolSize.calloc(poolTypeCount, stack);
             int poolIndex = 0;
             if (storageCount > 0) {
                 poolSizes.get(poolIndex++).type(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)
-                        .descriptorCount(storageCount * program.maxDispatches());
+                        .descriptorCount(storageCount * maxDispatches);
             }
             if (sampledCount > 0) {
                 poolSizes.get(poolIndex).type(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
-                        .descriptorCount(sampledCount * program.maxDispatches());
+                        .descriptorCount(sampledCount * maxDispatches);
             }
             VkDescriptorPoolCreateInfo poolInfo = VkDescriptorPoolCreateInfo.calloc(stack)
-                    .sType$Default().maxSets(program.maxDispatches()).pPoolSizes(poolSizes);
+                    .sType$Default().maxSets(maxDispatches).pPoolSizes(poolSizes);
             check(VK10.vkCreateDescriptorPool(vk, poolInfo, null, handle),
-                    "vkCreateDescriptorPool(" + program.id() + ")");
+                    "vkCreateDescriptorPool(" + label + ")");
             long descriptorPool = handle.get(0);
 
-            LongBuffer setLayouts = stack.mallocLong(program.maxDispatches());
-            for (int index = 0; index < program.maxDispatches(); index++) {
+            LongBuffer setLayouts = stack.mallocLong(maxDispatches);
+            for (int index = 0; index < maxDispatches; index++) {
                 setLayouts.put(index, descriptorSetLayout);
             }
             VkDescriptorSetAllocateInfo allocateInfo = VkDescriptorSetAllocateInfo.calloc(stack)
                     .sType$Default().descriptorPool(descriptorPool).pSetLayouts(setLayouts);
-            LongBuffer setHandles = stack.mallocLong(program.maxDispatches());
+            LongBuffer setHandles = stack.mallocLong(maxDispatches);
             check(VK10.vkAllocateDescriptorSets(vk, allocateInfo, setHandles),
-                    "vkAllocateDescriptorSets(" + program.id() + ")");
-            long[] descriptorSets = new long[program.maxDispatches()];
+                    "vkAllocateDescriptorSets(" + label + ")");
+            long[] descriptorSets = new long[maxDispatches];
             for (int index = 0; index < descriptorSets.length; index++) {
                 descriptorSets[index] = setHandles.get(index);
             }
 
             VkPipelineLayoutCreateInfo pipelineLayoutInfo = VkPipelineLayoutCreateInfo.calloc(stack)
                     .sType$Default().pSetLayouts(stack.longs(descriptorSetLayout));
-            if (program.pushConstantBytes() > 0) {
+            if (pushConstantBytes > 0) {
                 VkPushConstantRange.Buffer pushRange = VkPushConstantRange.calloc(1, stack);
                 pushRange.get(0).stageFlags(VK10.VK_SHADER_STAGE_COMPUTE_BIT)
-                        .offset(0).size(program.pushConstantBytes());
+                        .offset(0).size(pushConstantBytes);
                 pipelineLayoutInfo.pPushConstantRanges(pushRange);
             }
             check(VK10.vkCreatePipelineLayout(vk, pipelineLayoutInfo, null, handle),
-                    "vkCreatePipelineLayout(" + program.id() + ")");
+                    "vkCreatePipelineLayout(" + label + ")");
             long pipelineLayout = handle.get(0);
 
-            long module = createModule(vk, stack, spirv, program);
+            long module = createModule(vk, stack, spirv, label);
             VkPipelineShaderStageCreateInfo stage = VkPipelineShaderStageCreateInfo.calloc(stack)
                     .sType$Default().stage(VK10.VK_SHADER_STAGE_COMPUTE_BIT)
-                    .module(module).pName(stack.UTF8(program.entryPoint()));
+                    .module(module).pName(stack.UTF8(entryPoint));
             VkComputePipelineCreateInfo.Buffer pipelineInfo = VkComputePipelineCreateInfo.calloc(1, stack);
             pipelineInfo.get(0).sType$Default().stage(stage).layout(pipelineLayout);
             LongBuffer pipelineHandle = stack.mallocLong(1);
             check(VK10.vkCreateComputePipelines(vk, VK10.VK_NULL_HANDLE, pipelineInfo, null,
-                    pipelineHandle), "vkCreateComputePipelines(" + program.id() + ")");
+                    pipelineHandle), "vkCreateComputePipelines(" + label + ")");
             VK10.vkDestroyShaderModule(vk, module, null);
-            RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_PIPELINE,
-                    pipelineHandle.get(0), program.id().toString());
+            RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_PIPELINE, pipelineHandle.get(0), label);
 
-            return new ComputePassPipeline(ctx, program, descriptorSetLayout, descriptorPool,
+            return new ComputeDispatch(ctx, bindings, descriptorSetLayout, descriptorPool,
                     descriptorSets, pipelineLayout, pipelineHandle.get(0), sampler);
         }
     }
 
+    /** Reset the round-robin cursor; call once at the start of each frame before any {@link #dispatch}. */
     void beginFrame() {
         dispatchIndex = 0;
     }
 
-    void dispatch(VkCommandBuffer commandBuffer, RtImage[] images, byte[] pushConstants,
-                  int groupCountX, int groupCountY, int groupCountZ) {
+    /**
+     * Bind and dispatch. Does not insert a barrier before or after — a pass that chains multiple
+     * dispatches over the same images must insert its own via {@code PassFrame.memoryBarrier}.
+     */
+    void dispatch(VkCommandBuffer commandBuffer, GpuImage[] images, byte[] pushConstants,
+                 int groupCountX, int groupCountY, int groupCountZ) {
         int setIndex = dispatchIndex++;
         updateDescriptorSet(setIndex, images);
         try (MemoryStack stack = MemoryStack.stackPush()) {
@@ -168,11 +201,10 @@ final class ComputePassPipeline {
                         VK10.VK_SHADER_STAGE_COMPUTE_BIT, 0, push);
             }
             VK10.vkCmdDispatch(commandBuffer, groupCountX, groupCountY, groupCountZ);
-            VulkanCommandEncoder.memoryBarrier(commandBuffer, stack);
         }
     }
 
-    private void updateDescriptorSet(int setIndex, RtImage[] images) {
+    private void updateDescriptorSet(int setIndex, GpuImage[] images) {
         boolean changed = false;
         for (int index = 0; index < images.length; index++) {
             if (boundViews[setIndex][index] != images[index].view) {
@@ -187,10 +219,10 @@ final class ComputePassPipeline {
             VkDescriptorImageInfo.Buffer infos = VkDescriptorImageInfo.calloc(images.length, stack);
             VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(images.length, stack);
             for (int index = 0; index < images.length; index++) {
-                ComputeImageKind kind = program.bindings().get(index).kind();
+                Binding kind = bindings.get(index);
                 infos.get(index).imageView(images[index].view).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
                 int descriptorType;
-                if (kind == ComputeImageKind.SAMPLED_LINEAR) {
+                if (kind == Binding.SAMPLED) {
                     infos.get(index).sampler(sampler);
                     descriptorType = VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                 } else {
@@ -206,22 +238,24 @@ final class ComputePassPipeline {
     }
 
     void destroy() {
+        if (destroyed) {
+            return;
+        }
         VkDevice vk = ctx.vk();
         VK10.vkDestroyPipeline(vk, pipeline, null);
         VK10.vkDestroyPipelineLayout(vk, pipelineLayout, null);
         VK10.vkDestroyDescriptorPool(vk, descriptorPool, null);
         VK10.vkDestroyDescriptorSetLayout(vk, descriptorSetLayout, null);
+        destroyed = true;
     }
 
-    private static long createModule(VkDevice vk, MemoryStack stack, byte[] spirv,
-                                     ComputeProgram program) {
+    private static long createModule(VkDevice vk, MemoryStack stack, byte[] spirv, String label) {
         ByteBuffer code = MemoryUtil.memAlloc(spirv.length).put(spirv).flip();
         try {
             VkShaderModuleCreateInfo info = VkShaderModuleCreateInfo.calloc(stack)
                     .sType$Default().pCode(code);
             LongBuffer handle = stack.mallocLong(1);
-            check(VK10.vkCreateShaderModule(vk, info, null, handle),
-                    "vkCreateShaderModule(" + program.id() + ")");
+            check(VK10.vkCreateShaderModule(vk, info, null, handle), "vkCreateShaderModule(" + label + ")");
             return handle.get(0);
         } finally {
             MemoryUtil.memFree(code);

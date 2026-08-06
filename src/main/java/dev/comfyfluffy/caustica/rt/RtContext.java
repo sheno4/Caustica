@@ -35,8 +35,8 @@ import org.lwjgl.vulkan.VkPhysicalDeviceProperties2;
 import org.lwjgl.vulkan.VkPhysicalDeviceRayTracingPipelinePropertiesKHR;
 import org.lwjgl.vulkan.VkSubmitInfo;
 
-import dev.comfyfluffy.caustica.rt.accel.RtBuffer;
-import dev.comfyfluffy.caustica.rt.accel.RtImage;
+import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
+import dev.comfyfluffy.caustica.rt.accel.GpuImage;
 
 import java.nio.LongBuffer;
 import java.util.function.Consumer;
@@ -226,48 +226,48 @@ public final class RtContext {
     }
 
     /** Create a VMA buffer; {@code SHADER_DEVICE_ADDRESS} is always added so it has a device address. */
-    public RtBuffer createBuffer(long size, int usage, boolean hostVisible) {
+    public GpuBuffer createBuffer(long size, int usage, boolean hostVisible) {
         return createBuffer(size, usage, hostVisible, "buffer " + size + "B");
     }
 
     /** Create a VMA buffer; {@code SHADER_DEVICE_ADDRESS} is always added so it has a device address. */
-    public RtBuffer createBuffer(long size, int usage, boolean hostVisible, String label) {
+    public GpuBuffer createBuffer(long size, int usage, boolean hostVisible, String label) {
         return createBuffer(size, usage, hostVisible, label, false,
                 hostVisible ? Vma.VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT : 0, 0L);
     }
 
     /** Create a buffer whose returned device address is explicitly aligned for its consumer. */
-    public RtBuffer createAlignedBuffer(long size, int usage, boolean hostVisible, String label, long addressAlignment) {
+    public GpuBuffer createAlignedBuffer(long size, int usage, boolean hostVisible, String label, long addressAlignment) {
         return createBuffer(size, usage, hostVisible, label, false,
                 hostVisible ? Vma.VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT : 0, addressAlignment);
     }
 
     /** Create an explicitly aligned buffer shared by graphics and async compute when their families differ. */
-    public RtBuffer createAsyncAlignedBuffer(long size, int usage, boolean hostVisible, String label,
+    public GpuBuffer createAsyncAlignedBuffer(long size, int usage, boolean hostVisible, String label,
                                              long addressAlignment) {
         return createBuffer(size, usage, hostVisible, label, true,
                 hostVisible ? Vma.VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT : 0, addressAlignment);
     }
 
     /** Create a buffer shared by the graphics and async-compute families when those families differ. */
-    public RtBuffer createAsyncBuffer(long size, int usage, boolean hostVisible, String label) {
+    public GpuBuffer createAsyncBuffer(long size, int usage, boolean hostVisible, String label) {
         return createBuffer(size, usage, hostVisible, label, true,
                 hostVisible ? Vma.VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT : 0, 0L);
     }
 
     /** Create a transient, persistently mapped upload buffer optimized for sequential host writes. */
-    public RtBuffer createUploadBuffer(long size, String label) {
+    public GpuBuffer createUploadBuffer(long size, String label) {
         return createBuffer(size, VK10.VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true, label, false,
                 Vma.VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT, 0L);
     }
 
     /** Create a transient, persistently mapped buffer for synchronous GPU-to-CPU transfers. */
-    public RtBuffer createReadbackBuffer(long size, String label) {
+    public GpuBuffer createReadbackBuffer(long size, String label) {
         return createBuffer(size, VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT, true, label, false,
                 Vma.VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT, 0L);
     }
 
-    private RtBuffer createBuffer(long size, int usage, boolean hostVisible, String label, boolean asyncShared,
+    private GpuBuffer createBuffer(long size, int usage, boolean hostVisible, String label, boolean asyncShared,
                                   int hostAccessFlags, long addressAlignment) {
         if (addressAlignment < 0L
                 || (addressAlignment != 0L && (addressAlignment & (addressAlignment - 1L)) != 0L)) {
@@ -309,7 +309,7 @@ public final class RtContext {
                 throw new IllegalStateException(label + " device address 0x"
                         + Long.toUnsignedString(address, 16) + " is not aligned to " + addressAlignment);
             }
-            return new RtBuffer(vma, handle, allocation, address, hostVisible ? info.pMappedData() : 0L,
+            return new GpuBuffer(vma, handle, allocation, address, hostVisible ? info.pMappedData() : 0L,
                     size, usage, hostVisible, label);
         } catch (Throwable t) {
             if (handle != 0L) {
@@ -320,7 +320,7 @@ public final class RtContext {
     }
 
     /** Create an R8G8B8A8_UNORM storage image (STORAGE + TRANSFER_SRC/DST) already transitioned to GENERAL. */
-    public RtImage createStorageImage(int width, int height) {
+    public GpuImage createStorageImage(int width, int height) {
         return createStorageImage(width, height, VK10.VK_FORMAT_R8G8B8A8_UNORM);
     }
 
@@ -330,11 +330,11 @@ public final class RtContext {
      * preserved for the tonemap seam; the world-target copy stays R8G8B8A8 to match vanilla's LDR target
      * for the vkCmdCopyImage round-trip (copy requires texel-size-compatible formats).
      */
-    public RtImage createStorageImage(int width, int height, int format) {
+    public GpuImage createStorageImage(int width, int height, int format) {
         return createStorageImage(width, height, format, "storage image " + width + "x" + height);
     }
 
-    public RtImage createStorageImage(int width, int height, int format, String label) {
+    public GpuImage createStorageImage(int width, int height, int format, String label) {
         return createStorageImage(width, height, format, label, 0);
     }
 
@@ -344,7 +344,7 @@ public final class RtContext {
      * dynamic rendering (a plain storage image is invalid as a {@code VkRenderingInfo} colour attachment;
      * see {@code VUID-VkRenderingInfo-colorAttachmentCount-06087}).
      */
-    public RtImage createStorageImage(int width, int height, int format, String label, int extraUsage) {
+    public GpuImage createStorageImage(int width, int height, int format, String label, int extraUsage) {
         int usage = VK10.VK_IMAGE_USAGE_STORAGE_BIT | VK10.VK_IMAGE_USAGE_SAMPLED_BIT
                 | VK10.VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK10.VK_IMAGE_USAGE_TRANSFER_DST_BIT | extraUsage;
         requireStorageImageSupport(width, height, format, usage, label);
@@ -390,7 +390,7 @@ public final class RtContext {
                         0, null, null, b);
             }
         });
-        return new RtImage(vma, vk, image, allocation, view, width, height);
+        return new GpuImage(vma, vk, image, allocation, view, width, height, format, 1, usage, label);
     }
 
     private void requireStorageImageSupport(int width, int height, int format, int usage, String label) {
@@ -437,7 +437,8 @@ public final class RtContext {
      * generally can't carry {@code STORAGE_BIT} anyway ({@code storageImageSampleCounts} is a separate,
      * often-unsupported device limit). Kept in {@code GENERAL} layout like every other image here.
      */
-    public RtImage createTransientMsaaColorImage(int width, int height, int format, int samples, String label) {
+    public GpuImage createTransientMsaaColorImage(int width, int height, int format, int samples, String label) {
+        int usage = VK10.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK10.VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
         long image;
         long allocation;
         long view;
@@ -445,7 +446,7 @@ public final class RtContext {
             VkImageCreateInfo ici = VkImageCreateInfo.calloc(stack).sType$Default()
                     .imageType(VK10.VK_IMAGE_TYPE_2D).format(format)
                     .mipLevels(1).arrayLayers(1).samples(samples).tiling(VK10.VK_IMAGE_TILING_OPTIMAL)
-                    .usage(VK10.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK10.VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT)
+                    .usage(usage)
                     .sharingMode(VK10.VK_SHARING_MODE_EXCLUSIVE).initialLayout(VK10.VK_IMAGE_LAYOUT_UNDEFINED);
             ici.extent().set(width, height, 1);
             VmaAllocationCreateInfo iaci = VmaAllocationCreateInfo.calloc(stack).usage(Vma.VMA_MEMORY_USAGE_AUTO);
@@ -477,7 +478,7 @@ public final class RtContext {
                         0, null, null, b);
             }
         });
-        return new RtImage(vma, vk, image, allocation, view, width, height);
+        return new GpuImage(vma, vk, image, allocation, view, width, height, format, 1, usage, label);
     }
 
     /**

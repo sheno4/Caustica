@@ -31,7 +31,7 @@ import dev.comfyfluffy.caustica.rt.RtComposite;
 import dev.comfyfluffy.caustica.rt.RtContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
-import dev.comfyfluffy.caustica.rt.accel.RtBuffer;
+import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
 import dev.comfyfluffy.caustica.rt.entity.RtEntities;
 
 /**
@@ -82,7 +82,7 @@ final class RtNameTagFeature implements RtOverlayFeature {
     private float camOffX, camOffY, camOffZ;
     private final List<DrawPage> drawPages = new ArrayList<>();
 
-    private record DrawPage(GpuTextureView view, RtBuffer vbo, int vertexCount) {
+    private record DrawPage(GpuTextureView view, GpuBuffer vbo, int vertexCount) {
     }
 
     /** One font-atlas page's accumulated glyph quads this frame: x,y,z,u,v per vertex + a packed colour. */
@@ -129,7 +129,7 @@ final class RtNameTagFeature implements RtOverlayFeature {
             if (vertexCount == 0) {
                 continue;
             }
-            RtBuffer vbo = pool.acquireVertex(ctx, (long) vertexCount * VERTEX_STRIDE, "name tag vbo");
+            GpuBuffer vbo = pool.acquireVertex(ctx, (long) vertexCount * VERTEX_STRIDE, "name tag vbo");
             ByteBuffer buf = MemoryUtil.memByteBuffer(vbo.mapped, vertexCount * VERTEX_STRIDE).order(ByteOrder.LITTLE_ENDIAN);
             float[] posUv = b.posUv.elements();
             for (int v = 0; v < vertexCount; v++) {

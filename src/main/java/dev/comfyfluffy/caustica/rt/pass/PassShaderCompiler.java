@@ -5,12 +5,11 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.api.ShaderSource;
-import dev.comfyfluffy.caustica.api.pass.ComputeBinding;
-import dev.comfyfluffy.caustica.api.pass.ComputeImageKind;
-import dev.comfyfluffy.caustica.api.pass.ComputeProgram;
 import dev.comfyfluffy.caustica.slang.SlangCompileResult;
 import dev.comfyfluffy.caustica.slang.SlangRuntime;
 import dev.comfyfluffy.caustica.slang.SlangSession;
+import net.fabricmc.loader.api.FabricLoader;
+import net.minecraft.resources.Identifier;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -26,7 +25,12 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/** Extracts and compiles one extension-owned compute program, then validates its named resource ABI. */
+/**
+ * Extracts and compiles one pass-owned compute shader from a {@link ShaderSource}. A pass calls this
+ * itself (it is not driven by any declarative program description) and optionally calls
+ * {@link #validateBindings} against the pipeline layout it built, to catch descriptor-layout drift
+ * between the .slang source and the hand-written Vulkan side.
+ */
 final class PassShaderCompiler {
     private static final Pattern IMPORT = Pattern.compile(
             "(?m)^\\s*import\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*;");
@@ -34,23 +38,28 @@ final class PassShaderCompiler {
     private PassShaderCompiler() {
     }
 
-    static CompiledProgram compile(Path cacheRoot, ComputeProgram program) throws IOException {
-        Path directory = cacheRoot.resolve(program.id().getNamespace()).resolve(program.id().getPath());
+    /** Shared source-extraction cache root every built-in pass compiles under. */
+    static Path defaultCacheRoot() {
+        return FabricLoader.getInstance().getGameDir().resolve("caustica-shaders").resolve("passes");
+    }
+
+    static CompiledProgram compile(Path cacheRoot, Identifier id, ShaderSource source, String module,
+                                   String entryPoint) throws IOException {
+        Path directory = cacheRoot.resolve(id.getNamespace()).resolve(id.getPath());
         Files.createDirectories(directory);
         Map<String, String> modules = new LinkedHashMap<>();
-        extract(program.shaderSource(), program.module(), directory, modules, new LinkedHashSet<>());
-        String source = modules.get(program.module());
-        Path sourcePath = directory.resolve(program.module() + ".slang");
+        extract(source, module, directory, modules, new LinkedHashSet<>());
+        String moduleSource = modules.get(module);
+        Path sourcePath = directory.resolve(module + ".slang");
         long startNanos = System.nanoTime();
         SlangCompileResult result;
         try (SlangSession session = SlangRuntime.INSTANCE.openSession(List.of(directory), true, true)) {
-            result = session.compile(program.module(), sourcePath.toString(), source, program.entryPoint());
+            result = session.compile(module, sourcePath.toString(), moduleSource, entryPoint);
         }
-        validateBindings(program, result.reflectionJson());
         CausticaMod.LOGGER.info("Compiled render-pass program {} in {} ms ({} bytes SPIR-V)",
-                program.id(), String.format(java.util.Locale.ROOT, "%.1f",
+                id, String.format(java.util.Locale.ROOT, "%.1f",
                         (System.nanoTime() - startNanos) / 1.0e6), result.spirv().length);
-        return new CompiledProgram(result.spirv());
+        return new CompiledProgram(result.spirv(), result.reflectionJson());
     }
 
     private static void extract(ShaderSource source, String module, Path directory,
@@ -77,10 +86,17 @@ final class PassShaderCompiler {
         visiting.remove(module);
     }
 
-    private static void validateBindings(ComputeProgram program, String reflectionJson) throws IOException {
+    /**
+     * Position-based check: binding {@code i} at set 0 must reflect as {@code expected.get(i)}'s kind, no
+     * bindings may be undeclared or missing, push-constant size must match, and the entry point must
+     * exist as a compute stage with the given thread group size.
+     */
+    static void validateBindings(Identifier id, String reflectionJson, List<ComputeDispatch.Binding> expected,
+                                 int pushConstantBytes, String entryPoint, int localSizeX, int localSizeY,
+                                 int localSizeZ) throws IOException {
         JsonObject reflection = JsonParser.parseString(reflectionJson).getAsJsonObject();
         JsonArray parameters = reflection.getAsJsonArray("parameters");
-        Map<String, BindingLocation> reflected = new LinkedHashMap<>();
+        Map<Integer, ReflectedBinding> reflected = new LinkedHashMap<>();
         int reflectedPushConstantBytes = 0;
         for (var element : parameters) {
             JsonObject parameter = element.getAsJsonObject();
@@ -99,60 +115,57 @@ final class PassShaderCompiler {
                 continue;
             }
             int space = binding.has("space") ? binding.get("space").getAsInt() : 0;
+            if (space != 0) {
+                continue;
+            }
             JsonObject type = parameter.getAsJsonObject("type");
-            ComputeImageKind imageKind = type.has("combined") && type.get("combined").getAsBoolean()
-                    ? ComputeImageKind.SAMPLED_LINEAR : ComputeImageKind.STORAGE;
-            reflected.put(parameter.get("name").getAsString(),
-                    new BindingLocation(binding.get("index").getAsInt(), space, imageKind));
+            ComputeDispatch.Binding kind = type.has("combined") && type.get("combined").getAsBoolean()
+                    ? ComputeDispatch.Binding.SAMPLED : ComputeDispatch.Binding.STORAGE;
+            reflected.put(binding.get("index").getAsInt(),
+                    new ReflectedBinding(parameter.get("name").getAsString(), kind));
         }
         List<String> problems = new ArrayList<>();
-        List<ComputeBinding> declared = program.bindings();
-        for (int index = 0; index < declared.size(); index++) {
-            ComputeBinding binding = declared.get(index);
-            BindingLocation location = reflected.remove(binding.name());
+        for (int index = 0; index < expected.size(); index++) {
+            ReflectedBinding location = reflected.remove(index);
             if (location == null) {
-                problems.add("missing " + binding.name());
-            } else if (location.index() != index || location.space() != 0) {
-                problems.add(binding.name() + " reflected at set " + location.space()
-                        + " binding " + location.index() + ", expected set 0 binding " + index);
-            } else if (location.kind() != binding.kind()) {
-                problems.add(binding.name() + " reflected as " + location.kind()
-                        + ", declared as " + binding.kind());
+                problems.add("missing binding " + index);
+            } else if (location.kind() != expected.get(index)) {
+                problems.add("binding " + index + " (" + location.name() + ") reflected as "
+                        + location.kind() + ", expected " + expected.get(index));
             }
         }
         if (!reflected.isEmpty()) {
-            problems.add("undeclared " + reflected.keySet());
+            problems.add("undeclared bindings " + reflected);
         }
-        if (reflectedPushConstantBytes != program.pushConstantBytes()) {
+        if (reflectedPushConstantBytes != pushConstantBytes) {
             problems.add("push constants reflected as " + reflectedPushConstantBytes
-                    + " bytes, declared as " + program.pushConstantBytes());
+                    + " bytes, expected " + pushConstantBytes);
         }
-        JsonObject entryPoint = null;
+        JsonObject foundEntryPoint = null;
         for (var element : reflection.getAsJsonArray("entryPoints")) {
             JsonObject candidate = element.getAsJsonObject();
-            if (program.entryPoint().equals(candidate.get("name").getAsString())) {
-                entryPoint = candidate;
+            if (entryPoint.equals(candidate.get("name").getAsString())) {
+                foundEntryPoint = candidate;
                 break;
             }
         }
-        if (entryPoint == null || !"compute".equals(entryPoint.get("stage").getAsString())) {
-            problems.add("missing compute entry point " + program.entryPoint());
+        if (foundEntryPoint == null || !"compute".equals(foundEntryPoint.get("stage").getAsString())) {
+            problems.add("missing compute entry point " + entryPoint);
         } else {
-            JsonArray group = entryPoint.getAsJsonArray("threadGroupSize");
-            if (group.get(0).getAsInt() != program.localSizeX()
-                    || group.get(1).getAsInt() != program.localSizeY()
-                    || group.get(2).getAsInt() != program.localSizeZ()) {
+            JsonArray group = foundEntryPoint.getAsJsonArray("threadGroupSize");
+            if (group.get(0).getAsInt() != localSizeX || group.get(1).getAsInt() != localSizeY
+                    || group.get(2).getAsInt() != localSizeZ) {
                 problems.add("thread group size does not match declaration");
             }
         }
         if (!problems.isEmpty()) {
-            throw new IOException(program.id() + " resource layout mismatch: " + String.join("; ", problems));
+            throw new IOException(id + " resource layout mismatch: " + String.join("; ", problems));
         }
     }
 
-    record CompiledProgram(byte[] spirv) {
+    record CompiledProgram(byte[] spirv, String reflectionJson) {
     }
 
-    private record BindingLocation(int index, int space, ComputeImageKind kind) {
+    private record ReflectedBinding(String name, ComputeDispatch.Binding kind) {
     }
 }

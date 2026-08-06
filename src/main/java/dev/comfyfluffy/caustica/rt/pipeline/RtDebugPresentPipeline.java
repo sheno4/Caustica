@@ -26,7 +26,7 @@ import java.nio.LongBuffer;
 
 import dev.comfyfluffy.caustica.rt.RtContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
-import dev.comfyfluffy.caustica.rt.accel.RtBuffer;
+import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
 import dev.comfyfluffy.caustica.rt.gen.DebugPresentPushData;
 
 import static dev.comfyfluffy.caustica.rt.RtContext.check;
@@ -131,7 +131,7 @@ public final class RtDebugPresentPipeline {
 
     public void setImages(long outputImageView, long normalView, long albedoView, long depthView,
                            long motionView, long specAlbedoView, long specMotionView,
-                           long sceneView, long exposureView, RtBuffer exposureState) {
+                           long sceneView, long exposureView, GpuBuffer exposureState) {
         if (boundOutputView == outputImageView && boundNormalView == normalView && boundAlbedoView == albedoView
                 && boundDepthView == depthView && boundMotionView == motionView
                 && boundSpecAlbedoView == specAlbedoView && boundSpecMotionView == specMotionView

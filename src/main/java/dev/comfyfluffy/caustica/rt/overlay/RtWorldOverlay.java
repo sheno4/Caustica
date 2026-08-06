@@ -27,7 +27,7 @@ import dev.comfyfluffy.caustica.rt.RtContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
 import dev.comfyfluffy.caustica.rt.RtUiOverlay;
-import dev.comfyfluffy.caustica.rt.accel.RtImage;
+import dev.comfyfluffy.caustica.rt.accel.GpuImage;
 
 /**
  * The world-space overlay seam: full-res raster content prepared after the RT world has been upscaled
@@ -62,7 +62,7 @@ public final class RtWorldOverlay {
     // lazy-resize convention as e.g. RtGlowOutlineFeature's own private mask image). uiComposite* blends it
     // into RtUiOverlay's transparent target; RtUiOverlay owns the one final SDR/HDR blend to the real target.
     private RtContext ctxRef;
-    private RtImage overlayImage;
+    private GpuImage overlayImage;
     private RtOverlayPipelines.Pipeline uiCompositePipeline;
     private RtOverlayPipelines.ReadOnlyImageSet uiCompositeSet;
 

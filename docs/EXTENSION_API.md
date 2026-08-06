@@ -486,10 +486,11 @@ layer plus domain, class = the thing: `caustica.engine.material.MaterialRegistry
 `caustica.mc.terrain.TerrainMesher`, `caustica.api.Feature`.
 
 About a dozen names need more than prefix removal, because the bare noun collides or is too vague:
-`RtBuffer`/`RtImage` → `GpuBuffer`/`GpuImage` (`java.nio.Buffer`, `java.awt.Image`), `RtComposite` →
-`FrameRenderer`, `RtPipeline` → `WorldPipeline`, `RtAccel` → `AccelerationStructures`, `RtEntities` →
-`EntityScene`, `RtLookPackage` → `Look`. `RtMaterials` versus `RtMaterialRegistry` needs disambiguating on
-the merits regardless of prefix.
+~~`RtBuffer`/`RtImage` → `GpuBuffer`/`GpuImage`~~ (done — both became genuine pass-facing public API with
+the render-pass rewrite in `ARCHITECTURE.md` §4, which forced the rename ahead of the rest of this sweep),
+`RtComposite` → `FrameRenderer`, `RtPipeline` → `WorldPipeline`, `RtAccel` → `AccelerationStructures`,
+`RtEntities` → `EntityScene`, `RtLookPackage` → `Look`. `RtMaterials` versus `RtMaterialRegistry` needs
+disambiguating on the merits regardless of prefix.
 
 **Recommendation: do not sweep this now.** It touches ~90 files for zero behavioural gain and would
 conflict with every in-flight branch (`pack`, plus the atmosphere, BLAS-slab, and visibility-island

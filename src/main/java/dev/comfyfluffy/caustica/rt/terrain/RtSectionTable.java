@@ -3,7 +3,7 @@ package dev.comfyfluffy.caustica.rt.terrain;
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.rt.RtContext;
 import dev.comfyfluffy.caustica.rt.accel.RtAccel;
-import dev.comfyfluffy.caustica.rt.accel.RtBuffer;
+import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
 import dev.comfyfluffy.caustica.rt.terrain.RtSectionBuilder.PreparedSection;
 import it.unimi.dsi.fastutil.longs.LongArrayList;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
@@ -20,7 +20,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  */
 final class RtSectionTable {
     private static final int SECTION_ENTRY_BYTES = 32;
-    RtBuffer buffer;
+    GpuBuffer buffer;
     int capacity;
     int nextSlot;
     final LongArrayList freeSlots = new LongArrayList();
@@ -60,7 +60,7 @@ final class RtSectionTable {
             newCapacity <<= 1;
         }
         Generation writable = acquireGeneration(ctx, newCapacity);
-        RtBuffer newTable = writable.buffer;
+        GpuBuffer newTable = writable.buffer;
         newCapacity = writable.capacity;
         Generation oldGeneration = buffer == null ? null : new Generation(buffer, capacity);
         int oldCapacity = capacity;
@@ -117,12 +117,12 @@ final class RtSectionTable {
             ctx.gpuExecutor().retireUnpublished(generation.buffer::destroy);
         }
         int storage = org.lwjgl.vulkan.VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-        RtBuffer buffer = ctx.createBuffer((long) minCapacity * SECTION_ENTRY_BYTES, storage, true,
+        GpuBuffer buffer = ctx.createBuffer((long) minCapacity * SECTION_ENTRY_BYTES, storage, true,
                 "terrain section table " + minCapacity + " slots");
         return new Generation(buffer, minCapacity);
     }
 
-    record Generation(RtBuffer buffer, int capacity) {
+    record Generation(GpuBuffer buffer, int capacity) {
     }
 
     int allocateSlot() {
@@ -196,8 +196,8 @@ final class RtSectionTable {
     /** GPU residency for one section: shader attributes + compacted BLAS + world section origin. */
     static final class SectionGeom {
         final long key;
-        final RtBuffer uvs;
-        final RtBuffer material;
+        final GpuBuffer uvs;
+        final GpuBuffer material;
         final RtAccel blas;
         final int[] triBase;
         final int sx;
@@ -208,7 +208,7 @@ final class RtSectionTable {
         int slot = -1;
         int instanceIndex = -1;
 
-        SectionGeom(long key, RtBuffer uvs, RtBuffer material,
+        SectionGeom(long key, GpuBuffer uvs, GpuBuffer material,
                     RtAccel blas, int[] triBase, int sx, int sy, int sz, float[] lights) {
             this.key = key;
             this.uvs = uvs;

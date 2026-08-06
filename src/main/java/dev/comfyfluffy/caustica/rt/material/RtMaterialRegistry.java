@@ -5,7 +5,7 @@ import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.mixin.SpriteContentsAccessor;
 import dev.comfyfluffy.caustica.rt.RtContext;
 import dev.comfyfluffy.caustica.rt.RtLookPackage;
-import dev.comfyfluffy.caustica.rt.accel.RtBuffer;
+import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
 import dev.comfyfluffy.caustica.rt.gen.MaterialHeaderData;
 import dev.comfyfluffy.caustica.rt.gen.MaterialHeaderData.Float4;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
@@ -94,7 +94,7 @@ public final class RtMaterialRegistry {
     }
 
     private volatile Snapshot snapshot;
-    private RtBuffer table;
+    private GpuBuffer table;
     private long nextEpoch;
     private Map<Identifier, Integer> entityTextureIds = Map.of();
     private Map<Identifier, EntityTemplate> entityTemplates = Map.of();
@@ -262,7 +262,7 @@ public final class RtMaterialRegistry {
         if (byteSize > Integer.MAX_VALUE) {
             throw new IllegalStateException("RT material table exceeds mapped-buffer limit: " + byteSize);
         }
-        RtBuffer nextTable = ctx.createBuffer(byteSize, VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        GpuBuffer nextTable = ctx.createBuffer(byteSize, VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                 true, "material table");
         try {
             ByteBuffer mapped = MemoryUtil.memByteBuffer(nextTable.mapped, (int) byteSize)
@@ -278,7 +278,7 @@ public final class RtMaterialRegistry {
             throw t;
         }
 
-        RtBuffer oldTable = table;
+        GpuBuffer oldTable = table;
         long epoch = ++nextEpoch;
         List<CompiledOverride> frozenOverrides = compiledOverrides.stream()
                 .filter(value -> !value.ids.isEmpty())
@@ -338,7 +338,7 @@ public final class RtMaterialRegistry {
     }
 
     public long tableAddress() {
-        RtBuffer current = table;
+        GpuBuffer current = table;
         if (current == null) throw new IllegalStateException("RT material table is not uploaded");
         return current.deviceAddress;
     }

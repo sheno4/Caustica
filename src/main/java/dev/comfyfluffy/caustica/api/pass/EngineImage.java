@@ -1,31 +1,34 @@
 package dev.comfyfluffy.caustica.api.pass;
 
+/**
+ * A fixed, engine-declared image slot. Some slots are engine-produced inputs a pass may read
+ * ({@link #passOutput()} false); others are pass-produced outputs the engine's own shaders read back
+ * through a fixed binding, filled by calling {@code PassSetup.publish} ({@link #passOutput()} true).
+ *
+ * <p>Format and sizing are no longer declared here: a pass that produces a slot owns creating the image
+ * itself (via {@code RtContext.createStorageImage}), so there is nothing left for the engine to allocate
+ * on its behalf. Engine-produced slots are sized and formatted by the engine internals that create them.
+ */
 public enum EngineImage {
-    RECONSTRUCTED_COLOR(false, ImageFormat.RGBA16_FLOAT, ImageSize.displayRelative(1)),
-    EXPOSURE(false, ImageFormat.R32_FLOAT, ImageSize.fixed(1, 1)),
-    BLOOM(true, ImageFormat.RGBA16_FLOAT, ImageSize.displayRelative(2)),
-    SKY_VIEW_LUT(true, ImageFormat.RGBA16_FLOAT, ImageSize.fixed(192, 216)),
-    SKY_TRANSMITTANCE_LUT(true, ImageFormat.RGBA16_FLOAT, ImageSize.fixed(256, 64));
+    /** Engine-produced: the reconstructed HDR colour target, after DLSS-RR (or the no-RR blit). */
+    RECONSTRUCTED_COLOR(false),
+    /** Engine-produced: the current frame's scalar exposure value. */
+    EXPOSURE(false),
+    /** Pass-produced: the bloom pyramid's base level, read back by the look stage. */
+    BLOOM(true),
+    /** Pass-produced: the per-frame sky-view LUT, read back by {@code sky.slang}'s miss shaders. */
+    SKY_VIEW_LUT(true),
+    /** Pass-produced: the static atmospheric transmittance LUT. */
+    SKY_TRANSMITTANCE_LUT(true);
 
     private final boolean passOutput;
-    private final ImageFormat format;
-    private final ImageSize size;
 
-    EngineImage(boolean passOutput, ImageFormat format, ImageSize size) {
+    EngineImage(boolean passOutput) {
         this.passOutput = passOutput;
-        this.format = format;
-        this.size = size;
     }
 
+    /** True if a pass fills this slot via {@code PassSetup.publish}; false if the engine fills it. */
     public boolean passOutput() {
         return passOutput;
-    }
-
-    public ImageFormat format() {
-        return format;
-    }
-
-    public ImageSize size() {
-        return size;
     }
 }

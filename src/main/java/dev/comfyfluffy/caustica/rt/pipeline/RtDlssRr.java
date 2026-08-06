@@ -5,7 +5,7 @@ import com.mojang.blaze3d.vulkan.VulkanDevice;
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.rt.RtContext;
-import dev.comfyfluffy.caustica.rt.accel.RtImage;
+import dev.comfyfluffy.caustica.rt.accel.GpuImage;
 import dev.comfyfluffy.caustica.mixin.GpuDeviceAccessor;
 import dev.comfyfluffy.caustica.ngx.NgxLibrary;
 import dev.comfyfluffy.caustica.ngx.NgxRuntime;
@@ -77,9 +77,9 @@ public final class RtDlssRr {
      * sub-pixel camera jitter applied to the primary ray this frame, in render pixels. Returns false
      * (disabling RR) on failure. MVs are already in render-pixel space (scale 1).
      */
-    public boolean evaluate(long cmd, RtImage color, RtImage depth, RtImage motion,
-                            RtImage diffuseAlbedo, RtImage specularAlbedo, RtImage normals,
-                            RtImage specularMotion, RtImage out,
+    public boolean evaluate(long cmd, GpuImage color, GpuImage depth, GpuImage motion,
+                            GpuImage diffuseAlbedo, GpuImage specularAlbedo, GpuImage normals,
+                            GpuImage specularMotion, GpuImage out,
                             int renderWidth, int renderHeight, int displayWidth, int displayHeight,
                             float jitterX, float jitterY, Matrix4fc worldToView, Matrix4fc viewToClip) {
         if (!isReady()) {

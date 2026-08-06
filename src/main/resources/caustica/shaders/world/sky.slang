@@ -39,7 +39,7 @@ public static const float3 OZONE_ABSORPTION = float3(0.000650, 0.001881, 0.00008
 public static const float  OZONE_CENTER_KM  = 25.0;
 public static const float  OZONE_WIDTH_KM   = 15.0;
 
-// ---- LUT dimensions. Mirrored by BuiltinSkyLutPass; the dispatch extents and the parameterisations
+// ---- LUT dimensions. Mirrored by SkyLutPass; the dispatch extents and the parameterisations
 // below must agree exactly.
 public static const int TRANSMITTANCE_LUT_W = 256;
 public static const int TRANSMITTANCE_LUT_H = 64;

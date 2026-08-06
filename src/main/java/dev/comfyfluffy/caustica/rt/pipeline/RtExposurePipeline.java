@@ -25,7 +25,7 @@ import java.nio.LongBuffer;
 
 import dev.comfyfluffy.caustica.rt.RtContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
-import dev.comfyfluffy.caustica.rt.accel.RtBuffer;
+import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
 import dev.comfyfluffy.caustica.rt.gen.ExposureHistPushData;
 import dev.comfyfluffy.caustica.rt.gen.ExposureResolvePushData;
 
@@ -136,7 +136,7 @@ final class RtExposurePipeline {
     }
 
     void setResources(long colorView, long depthView, long albedoView,
-                      RtBuffer histogram, long exposureView, RtBuffer state) {
+                      GpuBuffer histogram, long exposureView, GpuBuffer state) {
         if (boundColorView != colorView || boundDepthView != depthView || boundAlbedoView != albedoView
                 || boundHistogramBufferForHist != histogram.handle) {
             try (MemoryStack stack = MemoryStack.stackPush()) {

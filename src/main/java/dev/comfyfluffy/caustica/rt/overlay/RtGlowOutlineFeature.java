@@ -15,8 +15,8 @@ import dev.comfyfluffy.caustica.rt.RtComposite;
 import dev.comfyfluffy.caustica.rt.RtContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
-import dev.comfyfluffy.caustica.rt.accel.RtBuffer;
-import dev.comfyfluffy.caustica.rt.accel.RtImage;
+import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
+import dev.comfyfluffy.caustica.rt.accel.GpuImage;
 import dev.comfyfluffy.caustica.rt.entity.RtEntities;
 
 /**
@@ -42,13 +42,13 @@ final class RtGlowOutlineFeature implements RtOverlayFeature {
     private RtOverlayPipelines.Pipeline maskPipeline;
     private RtOverlayPipelines.Pipeline compositePipeline;
     private RtOverlayPipelines.ReadOnlyImageSet compositeSet;
-    private RtImage maskImage;
+    private GpuImage maskImage;
 
     // This frame's prepared draw data (valid between prepare() returning true and record()).
     private final Matrix4f viewProj = new Matrix4f();
     private float camOffX, camOffY, camOffZ;
-    private RtBuffer vbo;
-    private RtBuffer ibo;
+    private GpuBuffer vbo;
+    private GpuBuffer ibo;
     private int[] firstIndex;
     private int[] indexCount;
     private float[] colorRgba;

@@ -31,7 +31,7 @@ import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.RtDeviceBringup;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
 import dev.comfyfluffy.caustica.rt.accel.RtAccel;
-import dev.comfyfluffy.caustica.rt.accel.RtBuffer;
+import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
 
 import static dev.comfyfluffy.caustica.rt.RtContext.check;
 import static dev.comfyfluffy.caustica.rt.pipeline.RtBindings.*;
@@ -72,7 +72,7 @@ public final class RtPipeline {
     private int currentSet;
     private final long pipelineLayout;
     private final long pipeline;
-    private final RtBuffer sbt;
+    private final GpuBuffer sbt;
     private final long sbtStride;
     private final int raygenCount;
     private final int missCount;
@@ -88,7 +88,7 @@ public final class RtPipeline {
     private boolean destroyed;
 
     private RtPipeline(RtContext ctx, long dsl, long pool, long[] sets, long layout, long pipeline,
-                       RtBuffer sbt, long stride, int raygenCount, int missCount, int hitGroupCount,
+                       GpuBuffer sbt, long stride, int raygenCount, int missCount, int hitGroupCount,
                        int pushConstantSize, int pushConstantStages, long bindlessLayout,
                        long bindlessPool, long bindlessSet) {
         this.ctx = ctx;
@@ -350,7 +350,7 @@ public final class RtPipeline {
                 throw new UnsupportedOperationException("SBT stride " + stride + " exceeds maxShaderGroupStride "
                         + Integer.toUnsignedLong(ctx.maxShaderGroupStride()));
             }
-            RtBuffer sbt = ctx.createAlignedBuffer(stride * groupCount,
+            GpuBuffer sbt = ctx.createAlignedBuffer(stride * groupCount,
                     VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR, true,
                     label + " shader binding table", ctx.shaderGroupBaseAlignment());
             for (int g = 0; g < groupCount; g++) {

@@ -8,8 +8,8 @@ import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
 import dev.comfyfluffy.caustica.rt.RtSceneUnits;
 import dev.comfyfluffy.caustica.rt.RtLookPackage;
-import dev.comfyfluffy.caustica.rt.accel.RtBuffer;
-import dev.comfyfluffy.caustica.rt.accel.RtImage;
+import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
+import dev.comfyfluffy.caustica.rt.accel.GpuImage;
 import dev.comfyfluffy.caustica.rt.gen.ExposureStateData;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
@@ -26,9 +26,9 @@ import java.util.Objects;
 
 /** Owns the display exposure value shared by the RT compositor's display-mapping passes. */
 public final class RtExposure {
-    private RtImage image;
-    private RtBuffer histogram;
-    private RtBuffer state;
+    private GpuImage image;
+    private GpuBuffer histogram;
+    private GpuBuffer state;
     private ReadbackSlot[] stateReadbacks;
     private int stateReadbackIndex = -1;
     private ReadbackSlot pendingStateReadback;
@@ -48,17 +48,17 @@ public final class RtExposure {
     private static final int STATE_READBACK_RING = 6;
 
     private static final class ReadbackSlot {
-        final RtBuffer buffer;
+        final GpuBuffer buffer;
         final RtGpuExecutor.TrackedGraphicsUse graphicsUse = new RtGpuExecutor.TrackedGraphicsUse();
         boolean valid;
         int resetSequence;
 
-        ReadbackSlot(RtBuffer buffer) {
+        ReadbackSlot(GpuBuffer buffer) {
             this.buffer = buffer;
         }
     }
 
-    public RtImage image() {
+    public GpuImage image() {
         return image;
     }
 
@@ -66,7 +66,7 @@ public final class RtExposure {
         return image != null;
     }
 
-    public RtBuffer stateBuffer() {
+    public GpuBuffer stateBuffer() {
         return state;
     }
 
@@ -152,7 +152,7 @@ public final class RtExposure {
     }
 
     public void record(RtContext ctx, VkCommandBuffer cmd, MemoryStack stack,
-                       RtImage traceColor, RtImage guideDepth, RtImage guideAlbedo) {
+                       GpuImage traceColor, GpuImage guideDepth, GpuImage guideAlbedo) {
         if (image == null) {
             throw new IllegalStateException("RT exposure image not created");
         }
@@ -210,7 +210,7 @@ public final class RtExposure {
     }
 
     private void recordAuto(RtContext ctx, VkCommandBuffer cmd, MemoryStack stack,
-                            RtImage traceColor, RtImage guideDepth, RtImage guideAlbedo) {
+                            GpuImage traceColor, GpuImage guideDepth, GpuImage guideAlbedo) {
         if (pipeline == null || histogram == null || state == null) {
             throw new IllegalStateException("RT auto exposure resources not created");
         }

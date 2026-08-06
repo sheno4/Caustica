@@ -40,7 +40,7 @@ import dev.comfyfluffy.caustica.rt.RtGpuExecutor.GraphicsUse;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor.GraphicsUseWaiter;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor.TrackedGraphicsUse;
 import dev.comfyfluffy.caustica.rt.accel.RtAccel;
-import dev.comfyfluffy.caustica.rt.accel.RtBuffer;
+import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
 import dev.comfyfluffy.caustica.rt.pipeline.RtPipeline;
 
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
@@ -297,8 +297,8 @@ public final class RtEntities {
      */
     private static final class BeEntry {
         RtAccel accel;
-        RtBuffer backing;                        // this entry's own AS backing
-        RtBuffer geometry;                       // packed positions / indices / UVs / primitive data
+        GpuBuffer backing;                        // this entry's own AS backing
+        GpuBuffer geometry;                       // packed positions / indices / UVs / primitive data
         long indexAddr, uvAddr, primAddr;
         int[] bucketTris;
         int bx, by, bz;                          // block position (drives the per-frame instance transform)
@@ -313,9 +313,9 @@ public final class RtEntities {
     private static final class EntitySlot {
         EntityAccel owner;
         RtAccel accel;
-        RtBuffer backing;
-        RtBuffer geometry;
-        RtBuffer refitScratch;
+        GpuBuffer backing;
+        GpuBuffer geometry;
+        GpuBuffer refitScratch;
         boolean updatable;
         int vertCount = -1;
         int triCount = -1;
@@ -359,10 +359,10 @@ public final class RtEntities {
     }
 
     private static final class TableSlot {
-        final RtBuffer buffer;
+        final GpuBuffer buffer;
         final TrackedGraphicsUse graphicsUse = new TrackedGraphicsUse();
 
-        TableSlot(RtBuffer buffer) {
+        TableSlot(GpuBuffer buffer) {
             this.buffer = buffer;
         }
     }
@@ -386,7 +386,7 @@ public final class RtEntities {
         long mapped;
         long deviceAddress;
 
-        MotionSlice set(RtBuffer buffer, long offset) {
+        MotionSlice set(GpuBuffer buffer, long offset) {
             this.mapped = buffer.mapped + offset;
             this.deviceAddress = buffer.deviceAddress + offset;
             return this;
@@ -395,7 +395,7 @@ public final class RtEntities {
 
     /** Host-visible storage pages owned by one frame-list slot and reused after its graphics token completes. */
     private static final class MotionArena {
-        private final ArrayList<RtBuffer> pages = new ArrayList<>();
+        private final ArrayList<GpuBuffer> pages = new ArrayList<>();
         private final IntArrayList lastUsedCycles = new IntArrayList();
         private final LongArrayList dirtyEnds = new LongArrayList();
         private final MotionSlice slice = new MotionSlice();
@@ -432,7 +432,7 @@ public final class RtEntities {
                     RtFrameStats.FRAME.count("vmaBufferCreates", 1);
                     RtFrameStats.FRAME.count("entityVmaBufferCreates", 1);
                 }
-                RtBuffer page = pages.get(pageIndex);
+                GpuBuffer page = pages.get(pageIndex);
                 long aligned = alignUp(offset, MOTION_ALIGNMENT);
                 if (size <= page.size - aligned) {
                     lastUsedCycles.set(pageIndex, cycle);
@@ -458,7 +458,7 @@ public final class RtEntities {
         }
 
         void destroy() {
-            for (RtBuffer page : pages) {
+            for (GpuBuffer page : pages) {
                 page.destroy();
             }
             pages.clear();
@@ -528,8 +528,8 @@ public final class RtEntities {
         final ArrayList<RtAccel.Instance> instances = new ArrayList<>(entityListCapacity());
         final ArrayList<RtAccel.PreparedBlas> blas = new ArrayList<>(entityListCapacity());
         final ArrayList<RtAccel.PreparedBlas> pooledBlas = new ArrayList<>(entityListCapacity());
-        final ArrayList<RtBuffer> refitScratch = new ArrayList<>(entityListCapacity());
-        final ArrayList<RtBuffer> buffers = new ArrayList<>(TRANSIENT_BUFFER_LIST_CAPACITY);
+        final ArrayList<GpuBuffer> refitScratch = new ArrayList<>(entityListCapacity());
+        final ArrayList<GpuBuffer> buffers = new ArrayList<>(TRANSIENT_BUFFER_LIST_CAPACITY);
         final MotionArena motion = new MotionArena();
         final ArrayList<EntitySlot> usedEntitySlots = new ArrayList<>(entityListCapacity());
         final ArrayList<BeEntry> usedBlockEntities = new ArrayList<>();
@@ -550,10 +550,10 @@ public final class RtEntities {
             for (RtAccel.PreparedBlas b : pooledBlas) {
                 RtAccel.releaseEntityBlas(b);
             }
-            for (RtBuffer s : refitScratch) {
+            for (GpuBuffer s : refitScratch) {
                 s.destroy();
             }
-            for (RtBuffer buf : buffers) {
+            for (GpuBuffer buf : buffers) {
                 buf.destroy();
             }
             instances.clear();
@@ -577,8 +577,8 @@ public final class RtEntities {
         List<RtAccel.Instance> instances;
         List<RtAccel.PreparedBlas> blas;        // all BLAS ops to record this frame (BUILD + refit UPDATE)
         List<RtAccel.PreparedBlas> pooledBlas;  // transient one-shot entity BLAS ops → releaseEntityBlas
-        List<RtBuffer> refitScratch;            // per-frame scratch from refit ops → destroy() (AS persists)
-        List<RtBuffer> buffers;                 // transient motion/particle buffers → destroy()
+        List<GpuBuffer> refitScratch;            // per-frame scratch from refit ops → destroy() (AS persists)
+        List<GpuBuffer> buffers;                 // transient motion/particle buffers → destroy()
         MotionArena motion;                     // suballocated entity/BE/particle displacement uploads
         long tableBase;
         long geomTableAddr;
@@ -1190,7 +1190,7 @@ public final class RtEntities {
         BlockPos p = be.getBlockPos();
         String label = "block entity " + p.getX() + "," + p.getY() + "," + p.getZ();
         long required = Math.addExact(layout.totalBytes, EntityGeometryLayout.REGION_ALIGNMENT - 1L);
-        RtBuffer geometry = allocBuffer(ctx, required, asInput | storage, true, label + " geometry");
+        GpuBuffer geometry = allocBuffer(ctx, required, asInput | storage, true, label + " geometry");
         layout = layout.shifted((-geometry.deviceAddress) & (EntityGeometryLayout.REGION_ALIGNMENT - 1L));
         MemoryUtil.memFloatBuffer(geometry.mapped + layout.positionOffset, capture.verts.size())
                 .put(capture.verts.elements(), 0, capture.verts.size());
@@ -1279,8 +1279,8 @@ public final class RtEntities {
     /** Retire a cached block entity's persistent AS + mesh buffers once its exact last graphics use completes. */
     private static void retireBe(RtContext ctx, BeEntry e) {
         RtAccel accel = e.accel;
-        RtBuffer backing = e.backing;
-        RtBuffer geometry = e.geometry;
+        GpuBuffer backing = e.backing;
+        GpuBuffer geometry = e.geometry;
         ctx.gpuExecutor().retireAfterGraphics(e.graphicsUse, () -> {
             RtAccel.destroyEntityAccel(accel, backing);
             geometry.destroy();
@@ -1310,12 +1310,12 @@ public final class RtEntities {
     private static final long MIN_BUFFER_SIZE = 256;
 
     /** Allocate one of this frame's ~6-per-entity VMA buffers (mesh/BLAS scratch), counted for RtFrameStats. */
-    private RtBuffer allocBuffer(RtContext ctx, long minSize, int usage, boolean hostVisible, String label) {
+    private GpuBuffer allocBuffer(RtContext ctx, long minSize, int usage, boolean hostVisible, String label) {
         RtFrameStats.FRAME.count("vmaBufferCreates", 1);
         return ctx.createBuffer(Math.max(minSize, MIN_BUFFER_SIZE), usage, hostVisible, label);
     }
 
-    private RtBuffer allocAlignedBuffer(RtContext ctx, long minSize, int usage, boolean hostVisible,
+    private GpuBuffer allocAlignedBuffer(RtContext ctx, long minSize, int usage, boolean hostVisible,
                                         String label, long addressAlignment) {
         RtFrameStats.FRAME.count("vmaBufferCreates", 1);
         return ctx.createAlignedBuffer(Math.max(minSize, MIN_BUFFER_SIZE), usage, hostVisible, label,
@@ -1548,7 +1548,7 @@ public final class RtEntities {
         EntityGeometryLayout layout = EntityGeometryLayout.create(capture.verts.size(), idxCount,
                 capture.uvList.size(), packed.primitives().size());
         long required = Math.addExact(layout.totalBytes, EntityGeometryLayout.REGION_ALIGNMENT - 1L);
-        RtBuffer geometry = allocBuffer(ctx, required, asInput | storage, true, "particle geometry");
+        GpuBuffer geometry = allocBuffer(ctx, required, asInput | storage, true, "particle geometry");
         layout = layout.shifted((-geometry.deviceAddress) & (EntityGeometryLayout.REGION_ALIGNMENT - 1L));
         MemoryUtil.memFloatBuffer(geometry.mapped + layout.positionOffset, capture.verts.size())
                 .put(capture.verts.elements(), 0, capture.verts.size());
@@ -1591,7 +1591,7 @@ public final class RtEntities {
                 capture.uvList.size(), packed.primitives().size());
 
         EntitySlot slot;
-        RtBuffer geometry;
+        GpuBuffer geometry;
         long allocStart = RtFrameStats.FRAME.startStage();
         try {
             slot = selectEntityBuildSlot(ctx, build, entityId);
@@ -1599,7 +1599,7 @@ public final class RtEntities {
             long required = Math.addExact(layout.totalBytes, EntityGeometryLayout.REGION_ALIGNMENT - 1L);
             geometry = slot.geometry;
             if (geometry == null || geometry.size < required) {
-                RtBuffer old = geometry;
+                GpuBuffer old = geometry;
                 long capacity = old == null ? required : growCapacity(old.size, required);
                 geometry = allocBuffer(ctx, capacity, asInput | storage, true, "entity geometry");
                 slot.geometry = geometry;
@@ -1896,9 +1896,9 @@ public final class RtEntities {
     /** Detach a stale slot immediately and destroy its GPU owners after their exact last use completes. */
     private void retireEntitySlot(RtContext ctx, EntitySlot slot) {
         RtAccel accel = slot.accel;
-        RtBuffer backing = slot.backing;
-        RtBuffer geometry = slot.geometry;
-        RtBuffer scratch = slot.refitScratch;
+        GpuBuffer backing = slot.backing;
+        GpuBuffer geometry = slot.geometry;
+        GpuBuffer scratch = slot.refitScratch;
         long geometryBytes = geometry == null ? 0L : geometry.size;
         retainedGeometryBytes = Math.subtractExact(retainedGeometryBytes, geometryBytes);
         slot.accel = null;

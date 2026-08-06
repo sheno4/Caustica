@@ -5,7 +5,7 @@ import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.rt.RtContext;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor.GraphicsUse;
-import dev.comfyfluffy.caustica.rt.accel.RtBuffer;
+import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
 import net.minecraft.client.Minecraft;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
@@ -165,8 +165,8 @@ final class RtLightGridManager {
     private void submitUpload(RtContext ctx, long requestId, RtLightHierarchy.Data data) {
         Layout layout = Layout.of(data, data.grid() != null);
 
-        RtBuffer arena = null;
-        RtBuffer upload = null;
+        GpuBuffer arena = null;
+        GpuBuffer upload = null;
         try {
             int usage = VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT;
             arena = ctx.createAsyncBuffer(layout.totalBytes, usage, false,
@@ -201,8 +201,8 @@ final class RtLightGridManager {
             }
             upload.flush();
 
-            RtBuffer submittedUpload = upload;
-            RtBuffer submittedArena = arena;
+            GpuBuffer submittedUpload = upload;
+            GpuBuffer submittedArena = arena;
             Layout submittedLayout = layout;
             beginTask();
             boolean accepted = false;
@@ -234,8 +234,8 @@ final class RtLightGridManager {
         }
     }
 
-    private void finishUpload(long requestId, RtLightHierarchy.Data data, RtBuffer upload,
-                              RtBuffer arena, Layout layout,
+    private void finishUpload(long requestId, RtLightHierarchy.Data data, GpuBuffer upload,
+                              GpuBuffer arena, Layout layout,
                               RtGpuExecutor.Build build, Throwable failure) {
         try {
             upload.destroy();
@@ -353,7 +353,7 @@ final class RtLightGridManager {
         }
     }
 
-    private static void recordUpload(VkCommandBuffer cmd, RtBuffer upload, RtBuffer arena,
+    private static void recordUpload(VkCommandBuffer cmd, GpuBuffer upload, GpuBuffer arena,
                                      long totalBytes) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkBufferCopy.Buffer region = VkBufferCopy.calloc(1, stack);
@@ -365,7 +365,7 @@ final class RtLightGridManager {
     private record Input(List<RtLightHierarchy.SectionInput> sections,
                          int rebaseX, int rebaseY, int rebaseZ) { }
 
-    record PublishedState(RtBuffer arena, Layout layout, int lightCount,
+    record PublishedState(GpuBuffer arena, Layout layout, int lightCount,
                           float invGlobalPowerSum,
                           int originX, int originY, int originZ, int dimX, int dimY, int dimZ,
                           int rebaseX, int rebaseY, int rebaseZ, long generation) {
@@ -428,7 +428,7 @@ final class RtLightGridManager {
     private sealed interface Completion permits Failed, Empty, Uploaded { }
     private record Failed(long requestId, Throwable failure) implements Completion { }
     private record Empty(long requestId) implements Completion { }
-    private record Uploaded(long requestId, RtLightHierarchy.Data data, RtBuffer arena, Layout layout,
+    private record Uploaded(long requestId, RtLightHierarchy.Data data, GpuBuffer arena, Layout layout,
                             RtGpuExecutor.Build build, Throwable failure) implements Completion {
         void destroy() { arena.destroy(); }
     }

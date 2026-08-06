@@ -13,7 +13,6 @@ import dev.comfyfluffy.caustica.api.CausticaApi;
 import dev.comfyfluffy.caustica.api.Slots;
 import dev.comfyfluffy.caustica.api.pass.EngineImage;
 import dev.comfyfluffy.caustica.api.pass.RenderStage;
-import dev.comfyfluffy.caustica.api.pass.SkyFrame;
 import dev.comfyfluffy.caustica.client.CausticaJitter;
 import dev.comfyfluffy.caustica.mixin.CommandEncoderAccessor;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushConstantsData;
@@ -56,8 +55,8 @@ import org.lwjgl.vulkan.VkMemoryBarrier2;
 import org.lwjgl.vulkan.VkSamplerCreateInfo;
 
 import dev.comfyfluffy.caustica.rt.accel.RtAccel;
-import dev.comfyfluffy.caustica.rt.accel.RtBuffer;
-import dev.comfyfluffy.caustica.rt.accel.RtImage;
+import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
+import dev.comfyfluffy.caustica.rt.accel.GpuImage;
 import dev.comfyfluffy.caustica.rt.entity.RtEntities;
 import dev.comfyfluffy.caustica.rt.entity.RtEntityTextures;
 import dev.comfyfluffy.caustica.rt.material.RtBlockMaterials;
@@ -196,39 +195,39 @@ public final class RtComposite {
     private RtToneLut hdrToneLut;
     private RtToneLut lookLut;
     private int loadedHdrLutNits = -1;
-    private RtImage output;
+    private GpuImage output;
     // Packed primary -> indirect continuations. Pass A is fixed at one sample and owns two records per
     // render pixel (base + optional transmission); Pass B resamples them at the configured SPP.
-    private RtBuffer continuationQueue;
-    private RtImage displayImage;
+    private GpuBuffer continuationQueue;
+    private GpuImage displayImage;
     // Bloom pyramid, finest first: level 0 is half display resolution and each level halves again. The
     // display mapper reads level 0, which the upsample sweep leaves holding the sum of every band.
     // Parallel PQ-encoded ([0,1], ST.2084) HDR display image. Written alongside displayImage when HDR is
     // enabled. When the PQ swapchain is active, the combined UI overlay is composited over this image, then
     // this image is blitted straight to the swapchain.
-    private RtImage hdrDisplayImage;
+    private GpuImage hdrDisplayImage;
     // Set true after this frame's display dispatch wrote hdrDisplayImage (HDR enabled + RT ran); gates the
     // HDR present blit so a frame where RT did not run falls back to the vanilla SDR present.
     private boolean hdrWrittenThisFrame;
     // DLSS-FG "hudless" resource: a copy of the main render target before the combined UI overlay
     // composites back on top. Lazily allocated (only meaningful once FG + the UI overlay redirect are both
     // active), resized on demand.
-    private RtImage fgHudlessImage;
+    private GpuImage fgHudlessImage;
     // Same idea as fgHudlessImage but for the HDR present path: a copy of hdrDisplayImage taken in
     // presentHdr right before its own combined-UI composite dispatch overwrites it in place (see
     // captureFgHdrHudless). Already PQ-encoded (same as hdrDisplayImage), so this is a plain image copy, not
     // a format conversion — DLSS-FG requires a display-ready EOTF-encoded [0,1] signal (its programming
     // guide explicitly disallows scRGB), and PQ is exactly that.
-    private RtImage fgHdrHudlessImage;
+    private GpuImage fgHdrHudlessImage;
     // Step C.2: composites the combined UI overlay over hdrDisplayImage at paper white, just before present.
     private RtHdrCompositePipeline hdrCompositePipeline;
     private long hdrUiSampler;
 
     private static final class PushSlot {
-        final RtBuffer buffer;
+        final GpuBuffer buffer;
         final RtGpuExecutor.TrackedGraphicsUse graphicsUse = new RtGpuExecutor.TrackedGraphicsUse();
 
-        PushSlot(RtBuffer buffer) {
+        PushSlot(GpuBuffer buffer) {
             this.buffer = buffer;
         }
     }
@@ -236,12 +235,12 @@ public final class RtComposite {
     // the title panorama and the loading screen present correctly to the PQ swapchain instead of being
     // raw-copied (misdisplayed). Lazily created; the image is sized to the swapchain.
     private RtSdrPresentPipeline sdrPresentPipeline;
-    private RtImage sdrPresentImage;
+    private GpuImage sdrPresentImage;
     // DLSS Frame Generation: per-generated-frame interpolated output images (backbuffer size/format), and
     // the jitter-free reprojection matrices derived from the MV view-projections each frame. In HDR mode
     // these hold DLSSG's raw PQ-encoded output, which is blitted straight to the (PQ) swapchain — no decode
     // needed since the swapchain itself is PQ-native.
-    private RtImage[] fgInterp = new RtImage[0];
+    private GpuImage[] fgInterp = new GpuImage[0];
     private int fgInterpW = -1;
     private int fgInterpH = -1;
     private int fgInterpFormat = Integer.MIN_VALUE;
@@ -251,15 +250,15 @@ public final class RtComposite {
     private final Matrix4f fgMatTmp = new Matrix4f();
     // Guide buffers (first-hit attributes for DLSS-RR): normal+roughness, albedo, depth, motion,
     // specular albedo, and reflection motion.
-    private RtImage gNormal;
-    private RtImage gAlbedo;
-    private RtImage gDepth;
-    private RtImage gMotion;
-    private RtImage gSpecAlbedo;
-    private RtImage gSpecMotion;
+    private GpuImage gNormal;
+    private GpuImage gAlbedo;
+    private GpuImage gDepth;
+    private GpuImage gMotion;
+    private GpuImage gSpecAlbedo;
+    private GpuImage gSpecMotion;
     // Display-res RT image the display mapper reads: DLSS-RR writes it (render -> display denoise+upscale), or a
     // linear blit of `output` fills it when RR is off/unavailable (the no-RR reference / fallback).
-    private RtImage rrOutput;
+    private GpuImage rrOutput;
     private final RtExposure exposure = new RtExposure();
 
     // Trace + guide buffers run at render res; composite (display-mapping) runs at display res.
@@ -378,7 +377,7 @@ public final class RtComposite {
         // All ordinary frame commands have been submitted before the F2 key is handled. Drain them before
         // a private one-shot copy so rrOutput and the exposure image describe the same completed frame.
         ctx.waitIdle();
-        RtBuffer readback = ctx.createReadbackBuffer(totalBytes, "residual-exposure EXR readback");
+        GpuBuffer readback = ctx.createReadbackBuffer(totalBytes, "residual-exposure EXR readback");
         try {
             ctx.submitSync(cmd -> recordExrReadback(ctx, cmd, readback, rgbaBytes));
             readback.invalidate();
@@ -415,7 +414,7 @@ public final class RtComposite {
         }
     }
 
-    private void recordExrReadback(RtContext ctx, VkCommandBuffer cmd, RtBuffer readback, long exposureOffset) {
+    private void recordExrReadback(RtContext ctx, VkCommandBuffer cmd, GpuBuffer readback, long exposureOffset) {
         try (MemoryStack stack = MemoryStack.stackPush();
              RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd,
                      "residual-exposure EXR readback")) {
@@ -597,7 +596,7 @@ public final class RtComposite {
         if (renderPassLevel != level) {
             renderPassLevel = level;
             if (renderPassManager != null) {
-                renderPassManager.invalidatePersistentState();
+                renderPassManager.invalidate();
             }
         }
         try {
@@ -897,7 +896,7 @@ public final class RtComposite {
         if (ctx != null) {
             ctx.waitIdle();
             if (renderPassManager != null) {
-                renderPassManager.invalidatePersistentState();
+                renderPassManager.invalidate();
             }
             if (worldPipeline != null) {
                 worldPipeline.destroy();
@@ -1099,7 +1098,7 @@ public final class RtComposite {
             PushSlot selectedPushSlot = pushRing[pushSlot];
             graphicsUseWaiter.await(selectedPushSlot.graphicsUse);
             selectedPushSlot.graphicsUse.mark(graphicsUse);
-            RtBuffer pushBuf = selectedPushSlot.buffer;
+            GpuBuffer pushBuf = selectedPushSlot.buffer;
             ByteBuffer push = MemoryUtil.memByteBuffer(pushBuf.mapped, WORLD_PUSH_SIZE);
             frameInvViewProj.set(frameProjection).mul(frameViewRotation).invert();
             // flags: camera-in-water (so the path tracer starts in the water medium when the eye is
@@ -1235,7 +1234,8 @@ public final class RtComposite {
                     terrain.lightLocalAliasBufferAddress(), terrain.lightGridCellBufferAddress(),
                     terrain.lightGridSpanBufferAddress(), continuationQueue.deviceAddress,
                     (int) frameCounter).write(pushConstants);
-            renderPassManager.setSkyFrame(sky.frame());
+            SkyFrameState.set(sky.frame());
+            renderPassManager.beginFrame();
             try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("frame.skyLut")) {
                 renderPassManager.record(RenderStage.ENVIRONMENT_PREPARE, cmd);
             }
@@ -1588,12 +1588,12 @@ public final class RtComposite {
             sdrPresentImage.destroy();
             sdrPresentImage = null;
         }
-        for (RtImage img : fgInterp) {
+        for (GpuImage img : fgInterp) {
             if (img != null) {
                 img.destroy();
             }
         }
-        fgInterp = new RtImage[0];
+        fgInterp = new GpuImage[0];
         fgInterpW = -1;
         fgInterpH = -1;
         fgInterpFormat = Integer.MIN_VALUE;
@@ -1703,13 +1703,13 @@ public final class RtComposite {
     /**
      * Blit this frame's PQ-encoded HDR image straight into the swapchain image, replacing Minecraft's SDR
      * blit. Replicates {@code VulkanGpuSurface.blitFromTexture}'s barrier + acquire-wait/present-signal
-     * sequence with the HDR {@link RtImage} as the (GENERAL-layout) source; an added memory barrier makes the
+     * sequence with the HDR {@link GpuImage} as the (GENERAL-layout) source; an added memory barrier makes the
      * display-compute writes visible to the blit read. The SDR main target is bypassed; the combined UI image
      * is blended over the HDR image here at paper white before the swapchain blit. The magic stage/access
      * values mirror vanilla {@code blitFromTexture} exactly. Y is flipped to match the vanilla swapchain blit.
      */
     public void presentHdr(VulkanCommandEncoder enc, long swapchainImage, int swapW, int swapH, long acquireSem, long presentSem) {
-        RtImage src = hdrDisplayImage;
+        GpuImage src = hdrDisplayImage;
         int copyW = Math.min(swapW, src.width);
         int copyH = Math.min(swapH, src.height);
         try (MemoryStack stack = MemoryStack.stackPush()) {
@@ -1854,7 +1854,7 @@ public final class RtComposite {
             sdrPresentImage = ctx.createStorageImage(swapW, swapH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
                     "RT SDR->PQ present image " + swapW + "x" + swapH);
         }
-        RtImage dst = sdrPresentImage;
+        GpuImage dst = sdrPresentImage;
         int copyW = Math.min(swapW, dst.width);
         int copyH = Math.min(swapH, dst.height);
         try (MemoryStack stack = MemoryStack.stackPush()) {
@@ -1916,7 +1916,7 @@ public final class RtComposite {
      * non-RR / fallback upscale so display mapping always sees a display-res RT image; a no-op stretch when
      * the two are the same size (RR disabled -> render == display).
      */
-    private static void blitUpscale(VkCommandBuffer cmd, MemoryStack stack, RtImage src, RtImage dst) {
+    private static void blitUpscale(VkCommandBuffer cmd, MemoryStack stack, GpuImage src, GpuImage dst) {
         VkImageBlit.Buffer region = VkImageBlit.calloc(1, stack);
         region.get(0).srcSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(0).baseArrayLayer(0).layerCount(1);
         region.get(0).dstSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(0).baseArrayLayer(0).layerCount(1);
@@ -1984,7 +1984,7 @@ public final class RtComposite {
      * {@code hdrDisplayImage} in place — same "capture before the UI gets baked back in" timing as the SDR
      * version, just within a single method instead of split across a mixin hook.
      */
-    private void captureFgHdrHudless(VkCommandBuffer cmd, MemoryStack stack, RtImage src) {
+    private void captureFgHdrHudless(VkCommandBuffer cmd, MemoryStack stack, GpuImage src) {
         RtContext ctx = RtContext.currentOrNull();
         if (ctx == null) {
             return;
@@ -2034,7 +2034,7 @@ public final class RtComposite {
      * same combined {@link RtUiOverlay} texture used by both present paths (only the *compositing* math that
      * consumes it differs, done separately by {@code presentHdr}/{@code RtUiOverlay}, not here).
      */
-    public RtImage fgInterpolate(VulkanCommandEncoder enc, long backbufferView, long backbufferImage,
+    public GpuImage fgInterpolate(VulkanCommandEncoder enc, long backbufferView, long backbufferImage,
             int swapW, int swapH, int index, int count, boolean hdrBackbuffer) {
         if (failed || gDepth == null || gMotion == null || !frameCaptured) {
             return null;
@@ -2060,10 +2060,10 @@ public final class RtComposite {
             throw new IllegalStateException(
                     "fgInterpolate index " + index + " out of range for fgInterp[" + fgInterp.length + "]");
         }
-        RtImage out = fgInterp[index - 1];
+        GpuImage out = fgInterp[index - 1];
         // Only feed hudless/ui when they exist AND match this frame's backbuffer size — a stale or mismatched
         // size (e.g. mid-resize) is worse than skipping, so fall back to 0/0/0 (DLSSG just does without).
-        RtImage hudlessSrc = hdrBackbuffer ? fgHdrHudlessImage : fgHudlessImage;
+        GpuImage hudlessSrc = hdrBackbuffer ? fgHdrHudlessImage : fgHudlessImage;
         boolean hudlessReady = hudlessSrc != null && hudlessSrc.width == swapW && hudlessSrc.height == swapH;
         long hudlessView = hudlessReady ? hudlessSrc.view : 0L;
         long hudlessImg = hudlessReady ? hudlessSrc.image : 0L;
@@ -2111,12 +2111,12 @@ public final class RtComposite {
                 && (count == 0 || fgInterp[0] != null)) {
             return;
         }
-        for (RtImage img : fgInterp) {
+        for (GpuImage img : fgInterp) {
             if (img != null) {
                 img.destroy();
             }
         }
-        fgInterp = new RtImage[count];
+        fgInterp = new GpuImage[count];
         for (int i = 0; i < count; i++) {
             fgInterp[i] = ctx.createStorageImage(w, h, fmt, "FG interp " + i + " " + w + "x" + h);
         }

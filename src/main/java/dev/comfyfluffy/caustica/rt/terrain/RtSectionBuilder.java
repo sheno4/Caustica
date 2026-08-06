@@ -2,7 +2,7 @@ package dev.comfyfluffy.caustica.rt.terrain;
 
 import dev.comfyfluffy.caustica.rt.RtContext;
 import dev.comfyfluffy.caustica.rt.accel.RtAccel;
-import dev.comfyfluffy.caustica.rt.accel.RtBuffer;
+import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
 import dev.comfyfluffy.caustica.rt.material.RtMaterialAbi;
 import dev.comfyfluffy.caustica.rt.terrain.RtTerrainMesher.PackedSection;
 import org.lwjgl.system.MemoryStack;
@@ -37,11 +37,11 @@ final class RtSectionBuilder {
         String label = "terrain section " + sox + "," + soy + "," + soz;
         // Resident geometry is device-local. A single mapped staging allocation exists only until
         // the async copy/build completes, avoiding a render-distance-sized host-visible working set.
-        RtBuffer positions = null;
-        RtBuffer indices = null;
-        RtBuffer uvs = null;
-        RtBuffer material = null;
-        RtBuffer upload = null;
+        GpuBuffer positions = null;
+        GpuBuffer indices = null;
+        GpuBuffer uvs = null;
+        GpuBuffer material = null;
+        GpuBuffer upload = null;
         RtAccel.PreparedBlas blas = null;
         try {
             long positionsBytes = (long) packed.positions().length * Float.BYTES;
@@ -114,7 +114,7 @@ final class RtSectionBuilder {
         }
     }
 
-    private static void copy(VkCommandBuffer cmd, RtBuffer upload, RtBuffer destination,
+    private static void copy(VkCommandBuffer cmd, GpuBuffer upload, GpuBuffer destination,
                              long srcOffset, VkBufferCopy.Buffer region) {
         region.get(0).srcOffset(srcOffset).dstOffset(0L).size(destination.size);
         VK10.vkCmdCopyBuffer(cmd, upload.handle, destination.handle, region);
@@ -132,8 +132,8 @@ final class RtSectionBuilder {
 
     /** Worker-owned native section state paired with its prepared BLAS. {@code lights} = packed
      *  section-local RIS light records (CPU-side, flattened into the global buffer at publish). */
-    record PreparedSection(long key, RtBuffer positions, RtBuffer indices, RtBuffer uvs,
-                           RtBuffer material, RtBuffer upload, RtAccel.PreparedBlas blas, int[] triBase,
+    record PreparedSection(long key, GpuBuffer positions, GpuBuffer indices, GpuBuffer uvs,
+                           GpuBuffer material, GpuBuffer upload, RtAccel.PreparedBlas blas, int[] triBase,
                            int sx, int sy, int sz, float[] lights) {
         void releaseUpload() {
             upload.destroy();

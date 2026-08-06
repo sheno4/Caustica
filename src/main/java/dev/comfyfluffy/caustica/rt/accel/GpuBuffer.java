@@ -7,7 +7,7 @@ import org.lwjgl.util.vma.Vma;
  * A VMA-backed Vulkan buffer with a device address (for RT geometry, scratch, SBT, etc.).
  * Created via {@link dev.comfyfluffy.caustica.rt.RtContext#createBuffer}; freed with {@link #destroy()}.
  */
-public final class RtBuffer {
+public final class GpuBuffer {
     public final long handle;
     public final long allocation;
     public final long deviceAddress;
@@ -23,7 +23,7 @@ public final class RtBuffer {
     private final long vma;
     private boolean destroyed;
 
-    public RtBuffer(long vma, long handle, long allocation, long deviceAddress, long mapped, long size, int usage,
+    public GpuBuffer(long vma, long handle, long allocation, long deviceAddress, long mapped, long size, int usage,
                     boolean hostVisible, String label) {
         this.vma = vma;
         this.handle = handle;
