@@ -3,6 +3,7 @@ package dev.comfyfluffy.caustica.rt.provider;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.api.CausticaApi;
 import dev.comfyfluffy.caustica.api.provider.LightProvider;
+import dev.comfyfluffy.caustica.api.provider.LightSink;
 import dev.comfyfluffy.caustica.api.provider.MaterialSource;
 import dev.comfyfluffy.caustica.api.provider.SceneProvider;
 import net.minecraft.resources.Identifier;
@@ -14,6 +15,12 @@ import java.util.function.Consumer;
 
 public final class ProviderManager {
     public static final ProviderManager INSTANCE = new ProviderManager(null, null, null);
+
+    // Placeholder: nothing reads a submitted light yet — see LightSink's own javadoc. Kept as a real
+    // sink (not a null check at the call site) so a provider can be written and tested against the
+    // eventual shape now.
+    private static final LightSink FAKE_LIGHT_SINK = (id, dirX, dirY, dirZ, illuminanceLux) -> {
+    };
 
     private final Set<ProviderKey> disabled = new HashSet<>();
     private final Map<Identifier, SceneProvider> scenes;
@@ -34,6 +41,7 @@ public final class ProviderManager {
     public void prepareFrame() {
         invoke("scene", scenes(), SceneProvider::prepareFrame, SceneProvider::shutdown);
         invoke("light", lights(), LightProvider::prepareFrame, LightProvider::shutdown);
+        invoke("light", lights(), provider -> provider.submitLights(FAKE_LIGHT_SINK), LightProvider::shutdown);
     }
 
     public void invalidateScenes() {

@@ -17,8 +17,6 @@ import world_common;
 
 [[vk::binding(2, 0)]] public Sampler2D blockAlbedoAtlas;
 [[vk::binding(9, 0)]] public Sampler2D celestialsAtlas;
-[[vk::binding(10, 0)]] public Sampler2D skyViewLut;
-[[vk::binding(11, 0)]] public Sampler2D transmittanceLut;
 
 [[vk::binding(0, 1)]] public Sampler2D entityAlbedoTex[];
 [[vk::binding(1, 1)]] public Sampler2D materialSurface0Tex[];

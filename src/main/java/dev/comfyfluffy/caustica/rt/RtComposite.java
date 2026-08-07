@@ -11,7 +11,6 @@ import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.api.CausticaApi;
 import dev.comfyfluffy.caustica.api.Slots;
-import dev.comfyfluffy.caustica.api.pass.EngineImage;
 import dev.comfyfluffy.caustica.api.pass.RenderStage;
 import dev.comfyfluffy.caustica.client.CausticaJitter;
 import dev.comfyfluffy.caustica.mixin.CommandEncoderAccessor;
@@ -85,6 +84,7 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.LongBuffer;
 import java.nio.file.Path;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -655,7 +655,7 @@ public final class RtComposite {
             displayPipeline.setImages(displayImage.view, rrOutput.view, exposure.image().view, hdrDisplayImage.view,
                     sdrToneLut.view(), sdrToneLut.sampler(), hdrToneLut.view(), hdrToneLut.sampler(),
                     boundLookLut.view(), boundLookLut.sampler(),
-                    renderPassManager.image(EngineImage.BLOOM).view, renderPassManager.sampler());
+                    renderPassManager.output("bloom").view, renderPassManager.sampler());
             debugPresentPipeline.setImages(displayImage.view, gNormal.view, gAlbedo.view, gDepth.view,
                     gMotion.view, gSpecAlbedo.view, gSpecMotion.view, rrOutput.view, exposure.image().view,
                     exposure.stateBuffer());
@@ -719,7 +719,8 @@ public final class RtComposite {
                     new RtShaderCode[]{shaders.skyMiss(), shaders.guideMiss()},
                     shaders.closestHit(),
                     shaders.anyHit(),
-                    WorldPushConstantsData.BYTE_SIZE, bindlessTextureCapacity);
+                    WorldPushConstantsData.BYTE_SIZE, bindlessTextureCapacity,
+                    worldShaderCompiler.passResourceBindings());
             // Per-frame world data lives in this BDA ring; the pipeline pushes its address and hot fields.
             if (pushRing == null) {
                 pushRing = new PushSlot[PUSH_RING];
@@ -844,11 +845,28 @@ public final class RtComposite {
         long celView = celestialsAtlasView();
         if (worldPipeline.hasSkyAtlas()) {
             worldPipeline.setSkyAtlas(celView != 0L ? celView : atlasView, sampler);
-            // Pass-owned atmosphere LUTs live for the device's lifetime, but the world pipeline's
-            // descriptor sets do not, so rebind the fixed engine slots alongside the atlas.
-            worldPipeline.setSkyLuts(renderPassManager.image(EngineImage.SKY_VIEW_LUT).view,
-                    renderPassManager.image(EngineImage.SKY_TRANSMITTANCE_LUT).view,
-                    renderPassManager.sampler());
+        }
+        // Pass-owned world resources (e.g. the sky LUTs) live for the device's lifetime, but the world
+        // pipeline's descriptor sets do not, so rebind whatever the active composition's own Slang
+        // declared alongside the atlas. A published resource the current composition doesn't reference
+        // (a different sky slot's Slang didn't import it) has no reflected index and is skipped — there
+        // is nothing in the pipeline layout to write it into.
+        if (worldShaderCompiler != null) {
+            Map<String, WorldShaderCompiler.PassResourceBinding> resourceBindings =
+                    worldShaderCompiler.passResourceBindings();
+            for (var entry : renderPassManager.worldResources().entrySet()) {
+                WorldShaderCompiler.PassResourceBinding binding = resourceBindings.get(entry.getKey());
+                if (binding == null) {
+                    continue;
+                }
+                RenderPassManager.WorldResource resource = entry.getValue();
+                if (resource.buffer() != null) {
+                    worldPipeline.setPassResourceBuffer(binding.index(), resource.buffer().handle,
+                            resource.buffer().size);
+                } else {
+                    worldPipeline.setPassResource(binding.index(), resource.image().view, resource.sampler());
+                }
+            }
         }
         setCelestialUvAtlas(celView);
         // Atlas UVs and material IDs are one resource epoch. Drop old terrain as a unit rather than
@@ -959,7 +977,7 @@ public final class RtComposite {
         int rrQuality = rrEnabled ? RtDlssRr.quality() : Integer.MIN_VALUE;
         if (output != null && continuationQueue != null
                 && displayImage != null && hdrDisplayImage != null && rrOutput != null
-                && renderPassManager != null && renderPassManager.hasImage(EngineImage.BLOOM)
+                && renderPassManager != null && renderPassManager.hasOutput("bloom")
                 && exposure.ready()
                 && displayW == width && displayH == height
                 && renderSizeRrEnabled == rrEnabled && renderSizeRrQuality == rrQuality) {
@@ -1019,8 +1037,8 @@ public final class RtComposite {
         rrOutput = ctx.createStorageImage(width, height, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "DLSS-RR output " + width + "x" + height);
         exposure.ensureResources(ctx);
         renderPassManager.resize(width, height);
-        renderPassManager.setExternalImage(EngineImage.RECONSTRUCTED_COLOR, rrOutput);
-        renderPassManager.setExternalImage(EngineImage.EXPOSURE, exposure.image());
+        renderPassManager.setReconstructedColor(rrOutput);
+        renderPassManager.setExposureImage(exposure.image());
 
         mvHasPrev = false; // recreated images -> first MV frame is zero
         waterWaveTimeValid = false;
@@ -1032,7 +1050,7 @@ public final class RtComposite {
         displayPipeline.setImages(displayImage.view, rrOutput.view, exposure.image().view, hdrDisplayImage.view,
                 sdrToneLut.view(), sdrToneLut.sampler(), hdrToneLut.view(), hdrToneLut.sampler(),
                 boundLookLut.view(), boundLookLut.sampler(),
-                renderPassManager.image(EngineImage.BLOOM).view, renderPassManager.sampler());
+                renderPassManager.output("bloom").view, renderPassManager.sampler());
         debugPresentPipeline.setImages(displayImage.view, gNormal.view, gAlbedo.view, gDepth.view,
                 gMotion.view, gSpecAlbedo.view, gSpecMotion.view, rrOutput.view, exposure.image().view,
                 exposure.stateBuffer());
@@ -1234,7 +1252,6 @@ public final class RtComposite {
                     terrain.lightLocalAliasBufferAddress(), terrain.lightGridCellBufferAddress(),
                     terrain.lightGridSpanBufferAddress(), continuationQueue.deviceAddress,
                     (int) frameCounter).write(pushConstants);
-            SkyFrameState.set(sky.frame());
             renderPassManager.beginFrame();
             try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("frame.skyLut")) {
                 renderPassManager.record(RenderStage.ENVIRONMENT_PREPARE, cmd);
@@ -1300,7 +1317,7 @@ public final class RtComposite {
                 displayPipeline.dispatch(cmd, displayW, displayH, CausticaConfig.Rt.Hdr.enabled(),
                         sdrToneLut.size, CausticaConfig.Rt.Tonemap.GAMMA.value(), loadedHdrLutNits,
                         true, lookLut.size, LOOK.bloom().strength()
-                                / renderPassManager.levelCount(EngineImage.BLOOM));
+                                / renderPassManager.outputLevelCount("bloom"));
             }
             hdrWrittenThisFrame = CausticaConfig.Rt.Hdr.enabled();
             VulkanCommandEncoder.memoryBarrier(cmd, stack); // display output visible to debug composite
@@ -1373,7 +1390,7 @@ public final class RtComposite {
     }
 
     private record SkyPush(Float4 celestial, Float4 look0, Float4 look1, Float4 look2, Float4 look3,
-                           Float4 sunUv, Float4 moonUv, SkyFrame frame) {}
+                           Float4 sunUv, Float4 moonUv) {}
 
     private record CelestialUv(Float4 sun, Float4 moon) {}
 
@@ -1441,8 +1458,7 @@ public final class RtComposite {
                         frame.viewerAltitudeKm(), frame.moonPhaseIndex()),
                 new Float4(frame.groundAlbedo(), frame.horizonSoftenRadians(), 0f, 0f),
                 uv.sun(),
-                uv.moon(),
-                frame);
+                uv.moon());
     }
 
     /**

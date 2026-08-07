@@ -1,8 +1,9 @@
-package dev.comfyfluffy.caustica.rt.pass;
+package dev.comfyfluffy.caustica.builtin;
 
 import dev.comfyfluffy.caustica.api.ShaderSource;
-import dev.comfyfluffy.caustica.rt.SkyFrame;
 import dev.comfyfluffy.caustica.rt.gen.SkyLutPushData;
+import dev.comfyfluffy.caustica.api.pass.ComputeDispatch;
+import dev.comfyfluffy.caustica.api.pass.PassShaderCompiler;
 import net.minecraft.resources.Identifier;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -16,14 +17,14 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
 final class SkyLutPassTest {
-    private static final SkyFrame SKY = new SkyFrame(
+    private static final SkyLutPass.SkyState SKY = new SkyLutPass.SkyState(
             0.1f, 0.2f, 0.3f, 0.4f,
             100_000.0f, 0.2f, 0.003f, 1.5f,
             0.5f, 0.01f, 0.02f, 0.1f,
             0.03f, 0.04f, 1.25f, 2.0f, 0.3f, 0.05f);
 
     @Test
-    void pushConstantsMapSkyFrameFieldsInDeclaredOrder() {
+    void pushConstantsMapSkyStateFieldsInDeclaredOrder() {
         ByteBuffer push = ByteBuffer.wrap(SkyLutPass.pushConstants(SKY)).order(ByteOrder.nativeOrder());
 
         assertEquals(SkyLutPushData.BYTE_SIZE, push.capacity());
@@ -49,7 +50,7 @@ final class SkyLutPassTest {
 
     @Test
     void runtimeShadersCompileAndNoSkyLutSpirvIsPackaged(@TempDir Path cache) throws Exception {
-        ShaderSource source = ShaderSource.classpath("/caustica/shaders/world");
+        ShaderSource source = ShaderSource.classpath("/caustica/shaders/world", "sky");
 
         compileAndValidate(cache, source, "sky_lut_transmittance", SkyLutPass.TRANSMITTANCE_BINDINGS, 0);
         compileAndValidate(cache, source, "sky_lut_multiscatter", SkyLutPass.SCATTER_BINDINGS,
@@ -57,7 +58,7 @@ final class SkyLutPassTest {
         compileAndValidate(cache, source, "sky_lut_view", SkyLutPass.SCATTER_BINDINGS,
                 SkyLutPushData.BYTE_SIZE);
 
-        assertNotNull(getClass().getResource("/caustica/shaders/world/sky_lut_view.slang"));
+        assertNotNull(getClass().getResource("/caustica/shaders/world/sky/sky_lut_view.slang"));
         assertNull(getClass().getResource("/caustica/shaders/pipelines/sky_lut/view.comp.spv"));
         assertNull(getClass().getResource("/caustica/shaders/pipelines/sky_lut/transmittance.comp.spv"));
         assertNull(getClass().getResource("/caustica/shaders/pipelines/sky_lut/multiscatter.comp.spv"));

@@ -22,11 +22,14 @@ public interface PassFrame {
     int displayHeight();
 
     /**
-     * Resolve an engine image slot's current handle. Resolved fresh every frame — never cache the
-     * returned {@link GpuImage} across frames, since engine-owned slots (see
-     * {@link EngineImage#passOutput()}) can be recreated on resize.
+     * The reconstructed HDR colour target, after DLSS-RR (or the no-RR blit). Engine-produced and
+     * resolved fresh every frame — never cache the returned {@link GpuImage} across frames, since it can
+     * be recreated on resize.
      */
-    GpuImage engineImage(EngineImage slot);
+    GpuImage reconstructedColor();
+
+    /** The current frame's scalar exposure value. Engine-produced; resolved fresh every frame, see above. */
+    GpuImage exposureImage();
 
     /** This feature's option snapshot for the current frame. */
     PassOptions options();

@@ -188,15 +188,48 @@ Three requirements survive from the first slice and still shape the current one:
 2. **"Runs once" is a first-class lifecycle.** `CausticaRenderPass.create` runs once; `resize` runs on
    dimension change; a pass with its own persistent bake (the sky LUTs) tracks that itself and clears it
    in `invalidate()`, called by the engine on a world/resource-reload boundary.
-3. **Engine-consumed resources are fixed slots.** `bindings.slang` declares
-   `[[vk::binding(10,0)]] Sampler2D skyViewLut`; a pass that wants to supply it has to land in that exact
-   binding. `EngineImage` still enumerates these slots — `PassSetup.publish(EngineImage, GpuImage)` hands
-   over a pass-owned image rather than the engine allocating one on the pass's behalf.
+3. **Engine-consumed resources are pass-declared, not engine-declared.** `EngineImage` (a fixed Java enum
+   mapping names to hand-maintained `bindings.slang` binding indices, one `RtPipeline.setXxx` method per
+   entry) is gone. In its place, two mechanisms split by which pipeline actually reads the resource:
+   - `PassSetup.publishWorldResource(name, ...)` — for a resource the *world ray-tracing pipeline's own
+     shaders* read (the sky LUTs feeding `sky_miss.slang`). The pass declares its own `[[vk::binding(N,
+     2)]]` in a module it owns (e.g. `caustica_lut_sky_bindings.slang`); the engine reserves descriptor
+     set 2 generically and discovers every binding in it — name, index, *and kind* — from that
+     composition's own Slang reflection (`WorldShaderCompiler.passResourceBindings()`). Kind isn't
+     limited to sampled images: the reflected type shape (`kind`/`baseShape`/`access`/`combined`, matched
+     against `WorldShaderCompiler.PassResourceKind`) also covers storage images
+     (`RWTexture2D`→`STORAGE_IMAGE`) and buffers (`StructuredBuffer`/`RWStructuredBuffer`→
+     `STORAGE_BUFFER`, `ConstantBuffer`→`UNIFORM_BUFFER`) — `PassSetup` has both a `(name, GpuImage,
+     sampler)` and a `(name, GpuBuffer)` overload, and `RtPipeline` picks the matching `VkDescriptorType`
+     and write shape per binding. A pass needing more than one buffer's worth of data doesn't need a
+     second mechanism either: it can stash further addresses inside its own buffer and chase them with
+     `ConstPtr<T>` from there, entirely within its own Slang — this is why buffer device addresses
+     (`WorldPush`'s own delivery mechanism) never needed extending for this.
+
+     One real Slang constraint shapes all of this: a generic entry point's type-parameter implementation
+     (here, whatever `TC.Sky` resolves to) is not allowed to declare global shader parameters itself — the
+     binding must be reachable through an ordinary, non-generic import. `FeatureBuilder.passResourceModule`
+     is how a feature says "anchor this"; the engine imports every selected feature's declared modules
+     into one generated, always-valid module (`caustica_pass_resources`, built alongside the composition
+     root) that `sky_miss.slang` imports unconditionally — so the engine still never needs to know a
+     specific pass's resource *names*, only that this fixed anchor module exists.
+   - `PassSetup.publishOutput(name, image, levelCount)` — for a pass's output a *different* pipeline reads
+     directly as a plain image view (bloom's base level, read by the display-mapping compute pipeline).
+     No Slang involved; just a named `RenderPassManager` registry, single-publisher-validated the same way.
+
+   The engine's own two inputs (`RECONSTRUCTED_COLOR`, `EXPOSURE`) went the other way, since those are
+   genuinely engine-owned per §6: `PassFrame.reconstructedColor()`/`exposureImage()`, plain read accessors,
+   no registry.
 
 The v1 rule is unchanged: an extension may create resources freely for its own passes; it may fill an
-engine-declared slot; it may not invent a new engine-visible binding. Clouds as *geometry* work today
-(a scene provider feeding the TLAS); clouds as a *volume the engine's integrator samples* still don't,
-until a new engine binding exists or the descriptor model goes bindless.
+engine-declared slot; it may not invent a new engine-visible binding *in set 0* (the truly fixed slots —
+TLAS, gBuffers, block/celestial atlases). Set 2 is the escape hatch this section describes — one
+reflection-discovered binding per declared name, any of the four kinds above; still not an unbounded
+bindless array the way set 1's entity/material textures are, and still nothing secondary rays see beyond
+what's already reachable by BDA. Clouds as *geometry* work today (a scene provider feeding the TLAS);
+clouds as a *volume the engine's integrator samples* still don't — that needs either an unbounded array
+(closer to set 1's shape than set 2's) or the descriptor model going fully bindless, neither of which set
+2 was built for.
 
 The landed shape:
 
@@ -214,8 +247,9 @@ public interface CausticaRenderPass {
 ```
 
 `PassSetup` exposes `RtContext` (device, allocator, `createStorageImage`/`createBuffer`, debug labelling)
-plus `publish` for fixed slots. `PassFrame` exposes the command buffer, the display extent, engine-slot
-resolution, a `PassOptions` snapshot (declared now, unread until the config-storage work lands — see §7),
+plus `publishWorldResource`/`publishOutput` (see above). `PassFrame` exposes the command buffer, the
+display extent, `reconstructedColor()`/`exposureImage()`, a `PassOptions` snapshot (declared now, unread
+until the config-storage work lands — see §7),
 and one `memoryBarrier()` helper matching the broad full-pipeline-barrier idiom used everywhere else in
 `rt/RtComposite.java`. There is no `ComputeProgram`, `ImageRef`, or `DispatchImage` — a pass builds its own
 descriptor sets and pipeline against `RtContext` directly, the same way `RtExposurePipeline` and
@@ -273,8 +307,9 @@ were established by the ray-pack work and survive the reframing unchanged.
   pass *does* see the raw `VkCommandBuffer` mid-recording and *does* build its own descriptor sets and
   pipelines (§4) — that reversal from the original framing is the point of the current pass API. What
   stays engine-owned regardless: which queue a frame submits to, the order stages record in, the lifetime
-  and layout contract of `EngineImage` slots, and the barrier crossing between one stage and the next.
-  Everything a pass allocates for itself, it manages itself; the engine does not track or validate it.
+  and layout contract of engine-declared descriptor sets (set 0, and reserving set 2's *index* — never
+  what's inside it), and the barrier crossing between one stage and the next. Everything a pass allocates
+  for itself, it manages itself; the engine does not track or validate it.
 - **Double-count invariants.** Celestial-disc visibility and emitter direct-hit gating are derived by the
   engine from lobe classification, never set by an extension. Anything that could set them directly could
   silently double-count or lose light, and the symptom is "this looks brighter," not a visible failure.
@@ -304,17 +339,36 @@ Honest status, so this reads as a target and not a claim:
   asked for landing later — it landed with the registry instead. Slot selection compiles a generated
   composition root (`rt/shader/Composition`, `CompositionManager`) rather than reading two config
   booleans. What's still thin: `registry.select()` has no caller — one feature binds each slot and nothing
-  lets a user choose another yet — and `SceneProvider`/`LightProvider`/`MaterialSource` are lifecycle
-  callbacks only (`update`/`prepareFrame`/`onResourceReload`), with no method through which a provider
-  actually contributes geometry, a light, or a material; Minecraft's terrain/entity/light paths still run
-  through direct calls in `RtComposite` alongside the provider shim rather than through it.
+  lets a user choose another yet — and `SceneProvider`/`MaterialSource` are lifecycle callbacks only
+  (`update`/`prepareFrame`/`onResourceReload`), with no method through which a provider actually
+  contributes geometry or a material; Minecraft's terrain/entity paths still run through direct calls in
+  `RtComposite` alongside the provider shim rather than through it. `LightProvider` now also has
+  `submitLights(LightSink)`, exercised by `SkyLutPass` (below) — but it is a placeholder shape with no
+  consumer, not a working contribution path; see `LightSink`'s javadoc.
 - **The render pass API is real, raw-Vulkan, and two built-in passes run through it.** `CausticaRenderPass`
   gives a pass a `VkCommandBuffer` and lets it build its own descriptor sets and pipelines directly against
-  `RtContext` — see §4. `BloomPass` and `SkyLutPass` (`rt/pass/`) are ordinary passes registered by
-  `caustica:builtin`, not privileged engine code; `RtBloomPipeline` and `RtSkyLut` (the pre-pass-API
-  built-ins) are deleted. `RenderPassManager` sequences passes by stage plus a same-stage `after()`
-  topological order, and isolates a failing pass (disables it, logs, keeps the frame loop running) the
-  same way `ProviderManager` isolates a failing provider.
+  `RtContext` — see §4. `BloomPass` (`rt/pass/`) and `SkyLutPass` (`builtin/`) are ordinary passes
+  registered by `caustica:builtin`, not privileged engine code; `RtBloomPipeline` and `RtSkyLut` (the
+  pre-pass-API built-ins) are deleted. `RenderPassManager` sequences passes by stage plus a same-stage
+  `after()` topological order, and isolates a failing pass (disables it, logs, keeps the frame loop
+  running) the same way `ProviderManager` isolates a failing provider. `SkyLutPass` moved out of `rt/`
+  deliberately, as a test of the register mechanism: it now lives beside a hypothetical third-party pass
+  (`builtin/`, sibling to `api/`/`rt/`/`client/`), reaches the engine only through `RtContext`,
+  `GpuImage`, the now-public `ComputeDispatch`/`PassShaderCompiler` pass-authoring helpers, and
+  `RtLookPackage.current()` for config — and gathers its own per-frame sky state directly from Minecraft
+  instead of reading a shared snapshot the engine publishes (`rt/SkyFrame`'s NEE-facing copy and this
+  pass's copy are now allowed to drift). It also registers as a `LightProvider` and submits the sun/moon
+  through the new (fake) `submitLights`/`LightSink` path — see above and `docs/LIGHT_SYSTEM_PLAN.md` §7.2
+  for why it can't be a real one yet. `ComputeDispatch`/`PassShaderCompiler` had to be promoted from
+  package-private to public for this move to compile at all — real friction the exercise was meant to
+  surface, not a decision made ahead of a consumer; they now live in `api/pass/` alongside
+  `CausticaRenderPass`/`PassSetup`/`PassFrame` rather than `rt/pass/`, since that friction was really "this
+  is public API in an engine-internal package," not just a visibility modifier. The follow-up round finished the job: `SkyLutPass`
+  now declares and binds its own sky-view/transmittance samplers entirely (§4 point 3), and
+  `indirect_core.slang`'s NEE no longer reads them at all — `dominantCelestialLight` and its
+  `transmittanceLut` import are gone, `celestialLight` sits at its zero-illuminance default, and direct
+  sun/moon lighting is genuinely absent (a deliberate, accepted regression) until `LIGHT_SYSTEM_PLAN.md`
+  L2 gives `submitLights`/`LightSink` a real consumer.
 - **Physical layering hasn't happened.** `core` / `core_minecraft` / extensions is still a target; the
   package tree is flat (`rt/...`, not `engine/...` + `mc/...`). §2.4's plan — interfaces now, jars later —
   is why this is expected at this stage rather than a gap.
@@ -328,8 +382,10 @@ Ordered by what is unproven, cheapest verification first.
    declarative one this step originally proposed — see §4's opening for why that changed. Bloom was still
    the right first case: a leaf with nothing downstream but display mapping, so the extraction cost was
    isolated to one pass.
-2. **Sky LUT against the same API.** Done — proved the fixed-slot mechanism and the engine-consumed case,
-   where a pass's output feeds `indirect.rgen`'s `celestialLight` through `EngineImage.SKY_VIEW_LUT`.
+2. **Sky LUT against the same API.** Done, and later revisited: proved the engine-consumed case first via
+   a fixed `EngineImage` slot, then — once `SkyLutPass` moved out of `rt/` into `builtin/` to exercise the
+   API as a genuine third-party pass would — that slot was replaced by the reflection-driven
+   `publishWorldResource`/set-2 mechanism §4 describes now. `EngineImage` is deleted.
 3. **Provider interfaces, extracted from `core_minecraft`.** Partly done — the registry, the three provider
    interfaces, and failure-isolated dispatch (`ProviderManager`) all exist and `caustica:builtin` registers
    through them. Not done: the interfaces are lifecycle callbacks only, with no method through which a

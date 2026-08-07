@@ -522,38 +522,16 @@ public SkyState skyState(WorldPush push) {
     return s;
 }
 
+/**
+ * Still the type of {@code world_core.slang}'s {@code celestialLight} global, which every NEE call site
+ * reads from — but nothing computes one anymore. {@code dominantCelestialLight}, which used to populate
+ * it from {@code transmittanceLut} each dispatch, was removed when that LUT became a pass-owned resource
+ * outside `bindings.slang`'s reach (see `docs/ARCHITECTURE.md` §4 point 3); the global now sits at its
+ * zero-illuminance default permanently. Restoring a real producer is `docs/LIGHT_SYSTEM_PLAN.md` L2's job
+ * (a generic light table `indirect_core.slang` samples, not a sky-specific function), not this struct's.
+ */
 public struct CelestialLight {
     public float3 dir;
     public float3 illuminance;  // linear BT.709, lux at the viewer
     public float  halfAngle;
 };
-
-/**
- * The single directional light NEE samples: whichever of the two bodies actually delivers more light
- * after atmospheric extinction.
- *
- * <p>There is deliberately no crossfade between them. The extinction along a horizon-grazing path is
- * enormous (roughly 70 air masses), so both bodies are already within a rounding error of zero at the
- * moment the choice flips, making the handoff invisible without an authored smoothstep.
- */
-public CelestialLight dominantCelestialLight(SkyState s, Sampler2D transmittanceLut) {
-    float3 sunLux = s.sunIlluminance
-            * transmittanceToSpace(transmittanceLut, s.viewerRadiusKm, s.sunDir, s.sunAngularRadius);
-    // Moonlight is sunlight reflected off a grey body: its colour is the sun's, not a cool tint. The blue
-    // cast of a moonlit night is the viewer's own scotopic response, which belongs in the look transform,
-    // not in the light's spectrum.
-    float3 moonLux = s.moonIlluminance
-            * transmittanceToSpace(transmittanceLut, s.viewerRadiusKm, s.moonDir, s.moonAngularRadius);
-
-    CelestialLight light;
-    if (dot(sunLux, float3(0.2126, 0.7152, 0.0722)) >= dot(moonLux, float3(0.2126, 0.7152, 0.0722))) {
-        light.dir = s.sunDir;
-        light.illuminance = sunLux;
-        light.halfAngle = s.sunAngularRadius;
-    } else {
-        light.dir = s.moonDir;
-        light.illuminance = moonLux;
-        light.halfAngle = s.moonAngularRadius;
-    }
-    return light;
-}

@@ -5,6 +5,7 @@ import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VK12;
 import org.lwjgl.vulkan.VkCommandBuffer;
+import org.lwjgl.vulkan.VkDescriptorBufferInfo;
 import org.lwjgl.vulkan.VkDescriptorImageInfo;
 import org.lwjgl.vulkan.VkDescriptorPoolCreateInfo;
 import org.lwjgl.vulkan.VkDescriptorPoolSize;
@@ -25,6 +26,7 @@ import org.lwjgl.vulkan.VkWriteDescriptorSetAccelerationStructureKHR;
 
 import java.nio.ByteBuffer;
 import java.nio.LongBuffer;
+import java.util.Map;
 
 import dev.comfyfluffy.caustica.rt.RtContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
@@ -32,6 +34,7 @@ import dev.comfyfluffy.caustica.rt.RtDeviceBringup;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
 import dev.comfyfluffy.caustica.rt.accel.RtAccel;
 import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
+import dev.comfyfluffy.caustica.rt.shader.WorldShaderCompiler;
 
 import static dev.comfyfluffy.caustica.rt.RtContext.check;
 import static dev.comfyfluffy.caustica.rt.pipeline.RtBindings.*;
@@ -85,12 +88,24 @@ public final class RtPipeline {
     private final long bindlessLayout;
     private final long bindlessPool;
     private final long bindlessSet;
+    // Optional third descriptor set (set 2): pass-declared resources (e.g. SkyLutPass's own sky-view/
+    // transmittance samplers), one COMBINED_IMAGE_SAMPLER per binding index the active composition's own
+    // Slang reflected at WorldShaderCompiler.PASS_RESOURCE_SET — the engine never names these itself. Not
+    // ring-buffered: a pass rewrites its own binding only when its image actually changes (create/resize),
+    // not every frame. 0 when the composition declares no pass resources.
+    private final long passResourceLayout;
+    private final long passResourcePool;
+    private final long passResourceSet;
+    /** Binding index → VkDescriptorType, so setPassResource/setPassResourceBuffer know which write shape to use. */
+    private final Map<Integer, Integer> passResourceDescriptorTypes;
     private boolean destroyed;
 
     private RtPipeline(RtContext ctx, long dsl, long pool, long[] sets, long layout, long pipeline,
                        GpuBuffer sbt, long stride, int raygenCount, int missCount, int hitGroupCount,
                        int pushConstantSize, int pushConstantStages, long bindlessLayout,
-                       long bindlessPool, long bindlessSet) {
+                       long bindlessPool, long bindlessSet, long passResourceLayout,
+                       long passResourcePool, long passResourceSet,
+                       Map<Integer, Integer> passResourceDescriptorTypes) {
         this.ctx = ctx;
         this.descriptorSetLayout = dsl;
         this.descriptorPool = pool;
@@ -112,6 +127,10 @@ public final class RtPipeline {
         this.bindlessLayout = bindlessLayout;
         this.bindlessPool = bindlessPool;
         this.bindlessSet = bindlessSet;
+        this.passResourceLayout = passResourceLayout;
+        this.passResourcePool = passResourcePool;
+        this.passResourceSet = passResourceSet;
+        this.passResourceDescriptorTypes = passResourceDescriptorTypes;
     }
 
     /**
@@ -126,10 +145,20 @@ public final class RtPipeline {
      */
     public static RtPipeline create(RtContext ctx, RtShaderCode[] rgen, RtShaderCode[] rmiss,
                                     RtShaderCode rchit, RtShaderCode rahit, int pushConstantSize,
-                                    int bindlessTextures) {
+                                    int bindlessTextures,
+                                    Map<String, WorldShaderCompiler.PassResourceBinding> passResourceBindings) {
         VkDevice vk = ctx.vk();
         boolean hasAhit = rahit != null;
         String label = "world RT pipeline";
+        if (!passResourceBindings.isEmpty() && bindlessTextures <= 0) {
+            // Set indices in the pipeline layout are positional (pSetLayouts[i] == set i in the shader),
+            // so set 2 (pass resources) can only be added once set 1 (bindless) is also present — in
+            // practice bindless textures are always configured, so this only guards a degenerate case
+            // rather than something the running game hits.
+            throw new UnsupportedOperationException(
+                    "world pass resources (" + passResourceBindings.keySet()
+                            + ") require the bindless descriptor set to also be present");
+        }
         if (bindlessTextures > 0) {
             long requiredCombinedSamplers = Math.addExact(
                     Math.multiplyExact((long) bindlessTextures, WORLD_BINDLESS_COUNT), 1L);
@@ -159,13 +188,6 @@ public final class RtPipeline {
             binds.get(WORLD_CELESTIALS).binding(WORLD_CELESTIALS)
                     .descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
                     .descriptorCount(1).stageFlags(VK_SHADER_STAGE_MISS_BIT_KHR);
-            binds.get(WORLD_SKY_VIEW).binding(WORLD_SKY_VIEW)
-                    .descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
-                    .descriptorCount(1).stageFlags(VK_SHADER_STAGE_MISS_BIT_KHR);
-            binds.get(WORLD_TRANSMITTANCE).binding(WORLD_TRANSMITTANCE)
-                    .descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
-                    .descriptorCount(1)
-                    .stageFlags(VK_SHADER_STAGE_MISS_BIT_KHR | VK_SHADER_STAGE_RAYGEN_BIT_KHR);
             VkDescriptorSetLayoutCreateInfo dslci = VkDescriptorSetLayoutCreateInfo.calloc(stack).sType$Default().pBindings(binds);
             LongBuffer p = stack.mallocLong(1);
             check(VK10.vkCreateDescriptorSetLayout(vk, dslci, null, p), "vkCreateDescriptorSetLayout");
@@ -235,8 +257,54 @@ public final class RtPipeline {
                 RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_DESCRIPTOR_SET, bindlessSet, label + " bindless descriptor set");
             }
 
+            // Optional third descriptor set (set 2): pass-declared resources. One COMBINED_IMAGE_SAMPLER
+            // per binding index the composition's own Slang reflected — not a fixed engine layout, and
+            // not update-after-bind: a pass rewrites its own binding only when its image changes.
+            long passResourceLayout = 0L, passResourcePool = 0L, passResourceSet = 0L;
+            Map<Integer, Integer> passResourceDescriptorTypes = new java.util.LinkedHashMap<>();
+            if (!passResourceBindings.isEmpty()) {
+                int prCount = passResourceBindings.size();
+                VkDescriptorSetLayoutBinding.Buffer prBinds = VkDescriptorSetLayoutBinding.calloc(prCount, stack);
+                int prStages = VK_SHADER_STAGE_MISS_BIT_KHR | VK_SHADER_STAGE_RAYGEN_BIT_KHR
+                        | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | (hasAhit ? VK_SHADER_STAGE_ANY_HIT_BIT_KHR : 0);
+                Map<Integer, Integer> countsByType = new java.util.LinkedHashMap<>();
+                for (WorldShaderCompiler.PassResourceBinding binding : passResourceBindings.values()) {
+                    int index = binding.index();
+                    int descriptorType = vkDescriptorType(binding.kind());
+                    passResourceDescriptorTypes.put(index, descriptorType);
+                    prBinds.get(index).binding(index).descriptorType(descriptorType)
+                            .descriptorCount(1).stageFlags(prStages);
+                    countsByType.merge(descriptorType, 1, Integer::sum);
+                }
+                VkDescriptorSetLayoutCreateInfo prdslci = VkDescriptorSetLayoutCreateInfo.calloc(stack)
+                        .sType$Default().pBindings(prBinds);
+                check(VK10.vkCreateDescriptorSetLayout(vk, prdslci, null, p), "vkCreateDescriptorSetLayout(pass resources)");
+                passResourceLayout = p.get(0);
+                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT, passResourceLayout,
+                        label + " pass resource descriptor set layout");
+                VkDescriptorPoolSize.Buffer prps = VkDescriptorPoolSize.calloc(countsByType.size(), stack);
+                int poolIndex = 0;
+                for (Map.Entry<Integer, Integer> entry : countsByType.entrySet()) {
+                    prps.get(poolIndex++).type(entry.getKey()).descriptorCount(entry.getValue());
+                }
+                VkDescriptorPoolCreateInfo prdpci = VkDescriptorPoolCreateInfo.calloc(stack).sType$Default()
+                        .maxSets(1).pPoolSizes(prps);
+                check(VK10.vkCreateDescriptorPool(vk, prdpci, null, p), "vkCreateDescriptorPool(pass resources)");
+                passResourcePool = p.get(0);
+                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_DESCRIPTOR_POOL, passResourcePool,
+                        label + " pass resource descriptor pool");
+                VkDescriptorSetAllocateInfo prdsai = VkDescriptorSetAllocateInfo.calloc(stack).sType$Default()
+                        .descriptorPool(passResourcePool).pSetLayouts(stack.longs(passResourceLayout));
+                LongBuffer prSet = stack.mallocLong(1);
+                check(VK10.vkAllocateDescriptorSets(vk, prdsai, prSet), "vkAllocateDescriptorSets(pass resources)");
+                passResourceSet = prSet.get(0);
+                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_DESCRIPTOR_SET, passResourceSet,
+                        label + " pass resource descriptor set");
+            }
+
             VkPipelineLayoutCreateInfo plci = VkPipelineLayoutCreateInfo.calloc(stack).sType$Default()
-                    .pSetLayouts(bindlessTextures > 0 ? stack.longs(dsl, bindlessLayout) : stack.longs(dsl));
+                    .pSetLayouts(passResourceLayout != 0L ? stack.longs(dsl, bindlessLayout, passResourceLayout)
+                            : bindlessTextures > 0 ? stack.longs(dsl, bindlessLayout) : stack.longs(dsl));
             // Push constants are visible to raygen + closest-hit + miss (+ any-hit when present).
             // vkCmdPushConstants must be called with exactly these stages, so store them for trace().
             // Miss reads pc for the dynamic sky; widening the stage mask is the whole cost — no gotcha #3.
@@ -359,8 +427,19 @@ public final class RtPipeline {
             sbt.flush();
             return new RtPipeline(ctx, dsl, pool, sets, layout, pipeline, sbt, stride,
                     raygenCount, missCount, hitGroupCount, pushConstantSize, pcStages,
-                    bindlessLayout, bindlessPool, bindlessSet);
+                    bindlessLayout, bindlessPool, bindlessSet,
+                    passResourceLayout, passResourcePool, passResourceSet,
+                    Map.copyOf(passResourceDescriptorTypes));
         }
+    }
+
+    private static int vkDescriptorType(WorldShaderCompiler.PassResourceKind kind) {
+        return switch (kind) {
+            case SAMPLED_IMAGE -> VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            case STORAGE_IMAGE -> VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            case STORAGE_BUFFER -> VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            case UNIFORM_BUFFER -> VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        };
     }
 
     private static boolean hitGroupUsesAnyHit(int relativeHitGroup) {
@@ -448,10 +527,53 @@ public final class RtPipeline {
         return true;
     }
 
-    /** Bind the pass-owned atmosphere LUT slots; both share the render-pass linear sampler. */
-    public void setSkyLuts(long skyViewImageView, long transmittanceImageView, long sampler) {
-        writeAtlasBinding(WORLD_SKY_VIEW, skyViewImageView, sampler);
-        writeAtlasBinding(WORLD_TRANSMITTANCE, transmittanceImageView, sampler);
+    /**
+     * Write one pass-declared image resource (sampled or storage — whichever the reflected Slang
+     * declared) into the pass-resource set (set 2) at {@code bindingIndex} — resolved by the caller from
+     * {@link dev.comfyfluffy.caustica.rt.shader.WorldShaderCompiler#passResourceBindings()} by the name
+     * the owning pass's own Slang declared. {@code sampler} is ignored (and may be 0) for a storage
+     * image. See the class-level note on {@code passResourceSet}, and {@link #setPassResourceBuffer} for
+     * the buffer case.
+     */
+    public void setPassResource(int bindingIndex, long imageView, long sampler) {
+        int descriptorType = passResourceDescriptorType(bindingIndex);
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            VkDescriptorImageInfo.Buffer info = VkDescriptorImageInfo.calloc(1, stack);
+            info.get(0).sampler(descriptorType == VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER ? sampler : 0L)
+                    .imageView(imageView).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
+            VkWriteDescriptorSet.Buffer write = VkWriteDescriptorSet.calloc(1, stack);
+            write.get(0).sType$Default().dstSet(passResourceSet).dstBinding(bindingIndex)
+                    .descriptorCount(1).descriptorType(descriptorType).pImageInfo(info);
+            VK10.vkUpdateDescriptorSets(ctx.vk(), write, null);
+        }
+    }
+
+    /**
+     * Write one pass-declared buffer resource ({@code StructuredBuffer}/{@code RWStructuredBuffer} as
+     * {@code STORAGE_BUFFER}, {@code ConstantBuffer} as {@code UNIFORM_BUFFER}) into the pass-resource set
+     * at {@code bindingIndex}. See {@link #setPassResource} for the image case.
+     */
+    public void setPassResourceBuffer(int bindingIndex, long bufferHandle, long size) {
+        int descriptorType = passResourceDescriptorType(bindingIndex);
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            VkDescriptorBufferInfo.Buffer info = VkDescriptorBufferInfo.calloc(1, stack);
+            info.get(0).buffer(bufferHandle).offset(0).range(size);
+            VkWriteDescriptorSet.Buffer write = VkWriteDescriptorSet.calloc(1, stack);
+            write.get(0).sType$Default().dstSet(passResourceSet).dstBinding(bindingIndex)
+                    .descriptorCount(1).descriptorType(descriptorType).pBufferInfo(info);
+            VK10.vkUpdateDescriptorSets(ctx.vk(), write, null);
+        }
+    }
+
+    private int passResourceDescriptorType(int bindingIndex) {
+        if (passResourceSet == 0L) {
+            throw new IllegalStateException("this pipeline was created with no pass resource descriptor set");
+        }
+        Integer descriptorType = passResourceDescriptorTypes.get(bindingIndex);
+        if (descriptorType == null) {
+            throw new IllegalArgumentException("no pass resource binding at index " + bindingIndex);
+        }
+        return descriptorType;
     }
 
     private void writeAtlasBinding(int binding, long imageView, long sampler) {
@@ -515,9 +637,11 @@ public final class RtPipeline {
         }
         try (MemoryStack stack = MemoryStack.stackPush(); RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "trace rays")) {
             VK10.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, pipeline);
-            java.nio.LongBuffer boundSets = bindlessSet != 0L
-                    ? stack.longs(descriptorSets[currentSet], bindlessSet)
-                    : stack.longs(descriptorSets[currentSet]);
+            java.nio.LongBuffer boundSets = passResourceSet != 0L
+                    ? stack.longs(descriptorSets[currentSet], bindlessSet, passResourceSet)
+                    : bindlessSet != 0L
+                            ? stack.longs(descriptorSets[currentSet], bindlessSet)
+                            : stack.longs(descriptorSets[currentSet]);
             VK10.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, pipelineLayout, 0, boundSets, null);
             if (pushConstants != null && pushConstantSize > 0) {
                 VK10.vkCmdPushConstants(cmd, pipelineLayout, pushConstantStages, 0, pushConstants);
@@ -550,6 +674,12 @@ public final class RtPipeline {
         }
         if (bindlessLayout != 0L) {
             VK10.vkDestroyDescriptorSetLayout(vk, bindlessLayout, null);
+        }
+        if (passResourcePool != 0L) {
+            VK10.vkDestroyDescriptorPool(vk, passResourcePool, null);
+        }
+        if (passResourceLayout != 0L) {
+            VK10.vkDestroyDescriptorSetLayout(vk, passResourceLayout, null);
         }
         destroyed = true;
     }

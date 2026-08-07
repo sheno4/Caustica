@@ -3,13 +3,13 @@ package dev.comfyfluffy.caustica.rt.pass;
 import com.mojang.blaze3d.vulkan.VulkanCommandEncoder;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.api.pass.CausticaRenderPass;
-import dev.comfyfluffy.caustica.api.pass.EngineImage;
 import dev.comfyfluffy.caustica.api.pass.PassFrame;
 import dev.comfyfluffy.caustica.api.pass.PassOptions;
 import dev.comfyfluffy.caustica.api.pass.PassSetup;
 import dev.comfyfluffy.caustica.api.pass.RenderStage;
 import dev.comfyfluffy.caustica.rt.RtContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
+import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
 import dev.comfyfluffy.caustica.rt.accel.GpuImage;
 import net.minecraft.resources.Identifier;
 import org.lwjgl.system.MemoryStack;
@@ -20,11 +20,11 @@ import org.lwjgl.vulkan.VkSamplerCreateInfo;
 import java.nio.LongBuffer;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.EnumMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.TreeSet;
 
@@ -33,22 +33,53 @@ import static dev.comfyfluffy.caustica.rt.RtContext.check;
 /**
  * Sequences registered {@link CausticaRenderPass}es by stage and drives their lifecycle. Each pass owns
  * its own Vulkan resources outright — this class does not allocate, track, or barrier anything on a
- * pass's behalf beyond the fixed {@link EngineImage} slots. A pass that throws from any lifecycle method
- * is disabled with a logged error and any slot it had published is unpublished in the same step, so a
- * later reader never resolves an image the pass's own cleanup is about to free; the frame loop continues
- * without it, matching {@code ProviderManager}'s isolation discipline.
+ * pass's behalf beyond the two engine-produced inputs ({@link #setReconstructedColor}/
+ * {@link #setExposureImage}) and the named world-resource registry passes publish into via
+ * {@link PassSetup#publishWorldResource}. A pass that throws from any lifecycle method is disabled with a
+ * logged error and any world resource it had published is unpublished in the same step, so a later reader
+ * never resolves an image the pass's own cleanup is about to free; the frame loop continues without it,
+ * matching {@code ProviderManager}'s isolation discipline.
  */
 public final class RenderPassManager {
     private final RtContext ctx;
     private final List<CausticaRenderPass> ordered;
     private final Set<CausticaRenderPass> disabled = new HashSet<>();
-    private final Map<EngineImage, GpuImage> engineImages = new EnumMap<>(EngineImage.class);
-    private final Map<EngineImage, Integer> engineImageLevels = new EnumMap<>(EngineImage.class);
-    private final Map<EngineImage, CausticaRenderPass> publishers = new EnumMap<>(EngineImage.class);
+    private final Map<String, WorldResource> worldResources = new LinkedHashMap<>();
+    private final Map<String, CausticaRenderPass> worldResourcePublishers = new LinkedHashMap<>();
+    private final Map<String, NamedOutput> outputs = new LinkedHashMap<>();
+    private final Map<String, CausticaRenderPass> outputPublishers = new LinkedHashMap<>();
+    private GpuImage reconstructedColor;
+    private GpuImage exposureImage;
     private final long sampler;
     private int displayWidth;
     private int displayHeight;
     private long frameIndex = -1;
+
+    /**
+     * A pass-published world resource: exactly one of an image (with the sampler it should be read with)
+     * or a buffer, matching whichever {@code publishWorldResource} overload a pass called — driven by
+     * whichever descriptor kind that pass's own Slang declared (see
+     * {@code WorldShaderCompiler.PassResourceKind}).
+     */
+    public record WorldResource(GpuImage image, long sampler, GpuBuffer buffer) {
+        public WorldResource {
+            if ((image == null) == (buffer == null)) {
+                throw new IllegalArgumentException("a world resource is exactly one of an image or a buffer");
+            }
+        }
+
+        static WorldResource ofImage(GpuImage image, long sampler) {
+            return new WorldResource(image, sampler, null);
+        }
+
+        static WorldResource ofBuffer(GpuBuffer buffer) {
+            return new WorldResource(null, 0L, buffer);
+        }
+    }
+
+    /** A pass-published output another pipeline reads directly: see {@link PassSetup#publishOutput}. */
+    public record NamedOutput(GpuImage image, int levelCount) {
+    }
 
     RenderPassManager(RtContext ctx, List<CausticaRenderPass> ordered, long sampler) {
         this.ctx = ctx;
@@ -82,9 +113,14 @@ public final class RenderPassManager {
         }
     }
 
-    public void setExternalImage(EngineImage slot, GpuImage image) {
-        engineImages.put(slot, image);
-        engineImageLevels.put(slot, 1);
+    /** Engine-produced input: the reconstructed HDR colour target, set once per frame before recording. */
+    public void setReconstructedColor(GpuImage image) {
+        reconstructedColor = image;
+    }
+
+    /** Engine-produced input: this frame's scalar exposure value, set once per frame before recording. */
+    public void setExposureImage(GpuImage image) {
+        exposureImage = image;
     }
 
     /** Reset per-frame bookkeeping (currently just {@link #frameIndex}); call once before any recording. */
@@ -92,24 +128,29 @@ public final class RenderPassManager {
         frameIndex++;
     }
 
-    public GpuImage image(EngineImage slot) {
-        GpuImage image = engineImages.get(slot);
-        if (image == null) {
-            throw new IllegalStateException(slot + " has no bound image");
-        }
-        return image;
+    /** Every world resource a pass has published, by the name its own Slang declared. */
+    public Map<String, WorldResource> worldResources() {
+        return Map.copyOf(worldResources);
     }
 
-    public boolean hasImage(EngineImage slot) {
-        return engineImages.containsKey(slot);
+    public GpuImage output(String name) {
+        NamedOutput output = outputs.get(name);
+        if (output == null) {
+            throw new IllegalStateException("no render pass has published output '" + name + "'");
+        }
+        return output.image();
     }
 
-    public int levelCount(EngineImage slot) {
-        Integer levels = engineImageLevels.get(slot);
-        if (levels == null) {
-            throw new IllegalStateException(slot + " has no bound image");
+    public boolean hasOutput(String name) {
+        return outputs.containsKey(name);
+    }
+
+    public int outputLevelCount(String name) {
+        NamedOutput output = outputs.get(name);
+        if (output == null) {
+            throw new IllegalStateException("no render pass has published output '" + name + "'");
         }
-        return levels;
+        return output.levelCount();
     }
 
     public long sampler() {
@@ -180,12 +221,18 @@ public final class RenderPassManager {
     }
 
     private void unpublish(CausticaRenderPass pass) {
-        publishers.entrySet().removeIf(entry -> {
+        worldResourcePublishers.entrySet().removeIf(entry -> {
             if (entry.getValue() != pass) {
                 return false;
             }
-            engineImages.remove(entry.getKey());
-            engineImageLevels.remove(entry.getKey());
+            worldResources.remove(entry.getKey());
+            return true;
+        });
+        outputPublishers.entrySet().removeIf(entry -> {
+            if (entry.getValue() != pass) {
+                return false;
+            }
+            outputs.remove(entry.getKey());
             return true;
         });
     }
@@ -287,17 +334,37 @@ public final class RenderPassManager {
         }
 
         @Override
-        public void publish(EngineImage slot, GpuImage image, int levelCount) {
-            if (!slot.passOutput()) {
-                throw new IllegalArgumentException(slot + " is engine-produced and cannot be published by a pass");
-            }
-            CausticaRenderPass existing = publishers.putIfAbsent(slot, owner);
+        public void publishWorldResource(String name, GpuImage image, long resourceSampler) {
+            Objects.requireNonNull(image, "image");
+            publishWorldResourceInternal(name, WorldResource.ofImage(image, resourceSampler));
+        }
+
+        @Override
+        public void publishWorldResource(String name, GpuBuffer buffer) {
+            Objects.requireNonNull(buffer, "buffer");
+            publishWorldResourceInternal(name, WorldResource.ofBuffer(buffer));
+        }
+
+        private void publishWorldResourceInternal(String name, WorldResource resource) {
+            Objects.requireNonNull(name, "name");
+            CausticaRenderPass existing = worldResourcePublishers.putIfAbsent(name, owner);
             if (existing != null && existing != owner) {
-                throw new IllegalStateException("multiple render passes publish " + slot + ": "
+                throw new IllegalStateException("multiple render passes publish world resource '" + name
+                        + "': " + existing.id() + " and " + owner.id());
+            }
+            worldResources.put(name, resource);
+        }
+
+        @Override
+        public void publishOutput(String name, GpuImage image, int levelCount) {
+            Objects.requireNonNull(name, "name");
+            Objects.requireNonNull(image, "image");
+            CausticaRenderPass existing = outputPublishers.putIfAbsent(name, owner);
+            if (existing != null && existing != owner) {
+                throw new IllegalStateException("multiple render passes publish output '" + name + "': "
                         + existing.id() + " and " + owner.id());
             }
-            engineImages.put(slot, image);
-            engineImageLevels.put(slot, levelCount);
+            outputs.put(name, new NamedOutput(image, levelCount));
         }
     }
 
@@ -331,8 +398,19 @@ public final class RenderPassManager {
         }
 
         @Override
-        public GpuImage engineImage(EngineImage slot) {
-            return image(slot);
+        public GpuImage reconstructedColor() {
+            if (RenderPassManager.this.reconstructedColor == null) {
+                throw new IllegalStateException("reconstructedColor not set yet this frame");
+            }
+            return RenderPassManager.this.reconstructedColor;
+        }
+
+        @Override
+        public GpuImage exposureImage() {
+            if (RenderPassManager.this.exposureImage == null) {
+                throw new IllegalStateException("exposureImage not set yet this frame");
+            }
+            return RenderPassManager.this.exposureImage;
         }
 
         @Override

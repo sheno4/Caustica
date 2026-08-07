@@ -25,6 +25,7 @@ public final class FeatureBuilder {
     private final List<SceneProvider> sceneProviders = new ArrayList<>();
     private final List<LightProvider> lightProviders = new ArrayList<>();
     private final List<MaterialSource> materialSources = new ArrayList<>();
+    private final List<String> passResourceModules = new ArrayList<>();
     private boolean registered;
 
     FeatureBuilder(CausticaRegistry registry, Identifier id) {
@@ -103,6 +104,23 @@ public final class FeatureBuilder {
         return this;
     }
 
+    /**
+     * Declare a Slang module (by module name, not slot) this feature wants anchored outside the generic
+     * composition mechanism — needed by any module a pass's own binding declarations live in (e.g.
+     * {@code caustica_lut_sky_bindings.slang}), since Slang forbids a generic entry point's type-parameter
+     * implementation from declaring global shader parameters itself. The engine imports every registered
+     * feature's declared modules into one generated anchor module every composition-generic engine stage
+     * (e.g. {@code sky_miss.slang}) imports unconditionally, so the pass never needs the engine to know
+     * its resource names — only that this module exists.
+     */
+    public FeatureBuilder passResourceModule(String moduleName) {
+        Slot.requireSlangIdentifier(moduleName, "moduleName");
+        if (!passResourceModules.contains(moduleName)) {
+            passResourceModules.add(moduleName);
+        }
+        return this;
+    }
+
     public Feature register() {
         if (registered) {
             throw new IllegalStateException(id + " is already registered");
@@ -111,7 +129,7 @@ public final class FeatureBuilder {
         Component resolvedTitle = title != null ? title
                 : Component.literal(id.getNamespace() + ':' + id.getPath());
         Feature feature = new Feature(id, resolvedTitle, category, shaderSource, bindings, options, renderPasses,
-                sceneProviders, lightProviders, materialSources);
+                sceneProviders, lightProviders, materialSources, passResourceModules);
         registry.register(feature);
         return feature;
     }

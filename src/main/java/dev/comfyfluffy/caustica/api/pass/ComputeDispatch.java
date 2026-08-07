@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.rt.pass;
+package dev.comfyfluffy.caustica.api.pass;
 
 import dev.comfyfluffy.caustica.rt.RtContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
@@ -35,12 +35,13 @@ import static dev.comfyfluffy.caustica.rt.RtContext.check;
  * rewritten when its bound image views actually change from last time, so a pass whose bindings are
  * stable frame-to-frame (the sky LUTs) pays the {@code vkUpdateDescriptorSets} cost once.
  *
- * <p>Package-private: this is implementation-sharing between the engine's own passes ({@code BloomPass},
- * {@code SkyLutPass}), not public API. A third-party pass is free to write its own descriptor/pipeline
- * setup directly against {@link dev.comfyfluffy.caustica.rt.RtContext} instead.
+ * <p>Public pass-authoring helper: a compute-only pass (engine-bundled or extension-owned) is free to
+ * build against this instead of rolling its own descriptor/pipeline setup, though it never has to — a
+ * pass doing graphics work, or wanting something this doesn't offer, is free to write its own directly
+ * against {@link dev.comfyfluffy.caustica.rt.RtContext}.
  */
-final class ComputeDispatch {
-    enum Binding {
+public final class ComputeDispatch {
+    public enum Binding {
         STORAGE, SAMPLED
     }
 
@@ -70,7 +71,7 @@ final class ComputeDispatch {
         this.sampler = sampler;
     }
 
-    static long createLinearClampSampler(RtContext ctx, String label) {
+    public static long createLinearClampSampler(RtContext ctx, String label) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkSamplerCreateInfo info = VkSamplerCreateInfo.calloc(stack).sType$Default()
                     .magFilter(VK10.VK_FILTER_LINEAR).minFilter(VK10.VK_FILTER_LINEAR)
@@ -86,7 +87,7 @@ final class ComputeDispatch {
         }
     }
 
-    static ComputeDispatch create(RtContext ctx, String label, byte[] spirv, String entryPoint,
+    public static ComputeDispatch create(RtContext ctx, String label, byte[] spirv, String entryPoint,
                                   List<Binding> bindings, int pushConstantBytes, int maxDispatches,
                                   long sampler) {
         VkDevice vk = ctx.vk();
@@ -179,7 +180,7 @@ final class ComputeDispatch {
     }
 
     /** Reset the round-robin cursor; call once at the start of each frame before any {@link #dispatch}. */
-    void beginFrame() {
+    public void beginFrame() {
         dispatchIndex = 0;
     }
 
@@ -187,7 +188,7 @@ final class ComputeDispatch {
      * Bind and dispatch. Does not insert a barrier before or after — a pass that chains multiple
      * dispatches over the same images must insert its own via {@code PassFrame.memoryBarrier}.
      */
-    void dispatch(VkCommandBuffer commandBuffer, GpuImage[] images, byte[] pushConstants,
+    public void dispatch(VkCommandBuffer commandBuffer, GpuImage[] images, byte[] pushConstants,
                  int groupCountX, int groupCountY, int groupCountZ) {
         int setIndex = dispatchIndex++;
         updateDescriptorSet(setIndex, images);
@@ -237,7 +238,7 @@ final class ComputeDispatch {
         }
     }
 
-    void destroy() {
+    public void destroy() {
         if (destroyed) {
             return;
         }

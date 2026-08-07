@@ -14,11 +14,13 @@ import org.junit.jupiter.params.provider.ValueSource;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.Path;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class WorldShaderCompilerTest {
@@ -37,7 +39,7 @@ final class WorldShaderCompilerTest {
             assertSpirv(compiler.compileSkyMiss(), 1024);
             assertSpirv(compiler.compileClosestHit(), 1024);
             assertSpirv(compiler.compileIndirect(false), 1024);
-            assertTrue(compiler.composition().rootSource().contains("typealias Sky = BuiltinSky"));
+            assertTrue(compiler.composition().rootSource().contains("typealias Sky = LutSky"));
             assertTrue(compiler.composition().rootSource().contains("typealias Surface = BuiltinSurface"));
             assertTrue(compiler.composition().rootSource().contains("typealias Medium = BuiltinMedium"));
         }
@@ -76,6 +78,71 @@ final class WorldShaderCompilerTest {
             assertTrue(compiler.composition().rootSource().contains("typealias Sky = TestSky"));
             assertTrue(java.nio.file.Files.isRegularFile(cacheDirectory.resolve(
                     "features/test/sky/test_sky_helper.slang")));
+        }
+    }
+
+    @Test
+    void passResourceBindingsAreDiscoveredFromCompositionReflection(@TempDir Path cacheDirectory)
+            throws Exception {
+        try (WorldShaderCompiler compiler = compiler(cacheDirectory)) {
+            compiler.compileSkyMiss();
+            // caustica_lut_sky_bindings.slang, imported by the built-in LutSky, declares exactly these two
+            // Sampler2Ds.
+            assertEquals(Map.of(
+                    "skyView", new WorldShaderCompiler.PassResourceBinding(0,
+                            WorldShaderCompiler.PassResourceKind.SAMPLED_IMAGE),
+                    "transmittance", new WorldShaderCompiler.PassResourceBinding(1,
+                            WorldShaderCompiler.PassResourceKind.SAMPLED_IMAGE)),
+                    compiler.passResourceBindings());
+        }
+    }
+
+    @Test
+    void passResourceKindIsReadFromReflectedTypeShape(@TempDir Path cacheDirectory) throws Exception {
+        // Shapes confirmed empirically against slangc -reflection-json (undocumented elsewhere): a plain
+        // resource has type.kind == "resource", split by baseShape ("texture2D" vs "structuredBuffer")
+        // and, for images only, combined (sampled) vs access == "readWrite" (storage) — StructuredBuffer
+        // and RWStructuredBuffer both reflect as "structuredBuffer" and both lower to
+        // VK_DESCRIPTOR_TYPE_STORAGE_BUFFER regardless of access. ConstantBuffer<T> is its own top-level
+        // type.kind == "constantBuffer".
+        try (WorldShaderCompiler compiler = compiler(cacheDirectory)) {
+            String json = "{\"parameters\":["
+                    + param("storageImage", 0, "{\"kind\":\"resource\",\"baseShape\":\"texture2D\",\"access\":\"readWrite\"}")
+                    + ","
+                    + param("readBuf", 1, "{\"kind\":\"resource\",\"baseShape\":\"structuredBuffer\"}")
+                    + ","
+                    + param("rwBuf", 2, "{\"kind\":\"resource\",\"baseShape\":\"structuredBuffer\",\"access\":\"readWrite\"}")
+                    + ","
+                    + param("constBuf", 3, "{\"kind\":\"constantBuffer\"}")
+                    + "]}";
+
+            compiler.collectPassResourceBindings("fake_stage", json);
+
+            Map<String, WorldShaderCompiler.PassResourceBinding> bindings = compiler.passResourceBindings();
+            assertEquals(WorldShaderCompiler.PassResourceKind.STORAGE_IMAGE, bindings.get("storageImage").kind());
+            assertEquals(WorldShaderCompiler.PassResourceKind.STORAGE_BUFFER, bindings.get("readBuf").kind());
+            assertEquals(WorldShaderCompiler.PassResourceKind.STORAGE_BUFFER, bindings.get("rwBuf").kind());
+            assertEquals(WorldShaderCompiler.PassResourceKind.UNIFORM_BUFFER, bindings.get("constBuf").kind());
+        }
+    }
+
+    private static String param(String name, int index, String type) {
+        return "{\"name\":\"" + name + "\",\"binding\":{\"kind\":\"descriptorTableSlot\",\"index\":" + index
+                + ",\"space\":2},\"type\":" + type + "}";
+    }
+
+    @Test
+    void aSecondBindingClaimingAnAlreadyTakenIndexFails(@TempDir Path cacheDirectory) throws Exception {
+        try (WorldShaderCompiler compiler = compiler(cacheDirectory)) {
+            compiler.compileSkyMiss(); // registers skyView@0, transmittance@1 for real
+            String colliding = "{\"parameters\":[{\"name\":\"bogus\","
+                    + "\"binding\":{\"kind\":\"descriptorTableSlot\",\"index\":0,\"space\":2},"
+                    + "\"type\":{\"kind\":\"resource\",\"baseShape\":\"texture2D\",\"combined\":true}}]}";
+
+            IllegalStateException e = assertThrows(IllegalStateException.class,
+                    () -> compiler.collectPassResourceBindings("fake_stage", colliding));
+            assertTrue(e.getMessage().contains("bogus"));
+            assertTrue(e.getMessage().contains("skyView"));
         }
     }
 

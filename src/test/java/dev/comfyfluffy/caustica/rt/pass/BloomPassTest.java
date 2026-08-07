@@ -1,6 +1,8 @@
 package dev.comfyfluffy.caustica.rt.pass;
 
 import dev.comfyfluffy.caustica.api.ShaderSource;
+import dev.comfyfluffy.caustica.api.pass.ComputeDispatch;
+import dev.comfyfluffy.caustica.api.pass.PassShaderCompiler;
 import dev.comfyfluffy.caustica.rt.gen.BloomPushData;
 import net.minecraft.resources.Identifier;
 import org.junit.jupiter.api.Test;

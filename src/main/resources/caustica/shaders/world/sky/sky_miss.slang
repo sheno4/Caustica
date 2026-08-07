@@ -20,6 +20,13 @@ import sky;
 import caustica_types;
 import caustica_api;
 import frame;
+// Slang forbids a generic-specialized entry point's type-parameter implementation (whatever TC.Sky
+// resolves to) from declaring its own global shader parameters — the binding has to be reachable through
+// an ordinary, non-generic import. This fixed, engine-generated module is that anchor: its content is
+// whichever selected feature's own binding module(s) it imports (see FeatureBuilder.passResourceModule),
+// generated fresh per composition, empty and trivially valid when none declare any. The engine never
+// needs to know a specific pass's resource names for this to work.
+import caustica_pass_resources;
 
 [shader("miss")]
 void main<TC : IComposition>(inout Payload payload) {

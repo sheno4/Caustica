@@ -14,7 +14,8 @@ import java.util.Objects;
 public record Feature(Identifier id, Component title, FeatureCategory category, ShaderSource shaderSource,
                       Map<Slot, Binding> bindings, List<Option<?>> options,
                       List<CausticaRenderPass> renderPasses, List<SceneProvider> sceneProviders,
-                      List<LightProvider> lightProviders, List<MaterialSource> materialSources) {
+                      List<LightProvider> lightProviders, List<MaterialSource> materialSources,
+                      List<String> passResourceModules) {
     public Feature {
         Objects.requireNonNull(id, "id");
         Objects.requireNonNull(title, "title");
@@ -25,8 +26,12 @@ public record Feature(Identifier id, Component title, FeatureCategory category, 
         sceneProviders = List.copyOf(sceneProviders);
         lightProviders = List.copyOf(lightProviders);
         materialSources = List.copyOf(materialSources);
+        passResourceModules = List.copyOf(passResourceModules);
         if (!bindings.isEmpty() && shaderSource == null) {
             throw new IllegalArgumentException(id + ": a feature with slot bindings needs a shader source");
+        }
+        if (!passResourceModules.isEmpty() && shaderSource == null) {
+            throw new IllegalArgumentException(id + ": a feature with pass resource modules needs a shader source");
         }
         for (Binding binding : bindings.values()) {
             if (!binding.featureId().equals(id)) {

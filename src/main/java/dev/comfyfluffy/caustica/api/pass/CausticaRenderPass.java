@@ -10,9 +10,11 @@ import java.util.List;
  * {@link #record}, freed in {@link #destroy} — and collects whatever state it needs itself (game state,
  * option values) rather than receiving it pushed in through the frame context.
  *
- * <p>What the engine still owns regardless: command-buffer submission, queue policy, stage ordering, the
- * lifetime of engine-declared {@link EngineImage} slots, and the layout contract on those slots at stage
- * entry/exit. Everything a pass allocates for itself, it manages itself — the engine does not track or
+ * <p>What the engine still owns regardless: command-buffer submission, queue policy, stage ordering, and
+ * the two engine-produced inputs a pass may read ({@link PassFrame#reconstructedColor()}/
+ * {@link PassFrame#exposureImage()}). Everything else — including the world-pipeline descriptor bindings
+ * a pass publishes via {@link PassSetup#publishWorldResource}, discovered from that pass's own Slang
+ * rather than declared by the engine — a pass allocates and manages itself; the engine does not track or
  * validate it.
  *
  * <p>A pass that throws from any of these methods is disabled with a logged error; the frame loop

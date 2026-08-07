@@ -51,12 +51,12 @@ public static const float INV_PI = 0.31830988618;
 // The sky (atmosphere LUT + sun/moon discs + stars) is evaluated in world.rmiss. On a miss, raygen reads
 // payloadSky() and accumulates that radiance.
 //
-// The single directional NEE light — whichever of the sun and moon actually delivers more light through
-// the atmosphere — is DERIVED, not pushed: world.rgen fills this in from sky.dominantCelestialLight() once
-// per dispatch, using the same transmittance LUT world.rmiss tints the visible discs with. That shared
-// source is what guarantees the light on terrain and the sky's own sunset can never disagree; the previous
-// arrangement kept a hand-maintained Java port of the atmosphere march for exactly this value.
-// Illuminance here is ACEScg (the transport basis), converted once where it is assigned.
+// celestialLight is the single directional light NEE samples — currently always zero. Nothing populates
+// it: the transmittance-LUT-driven computation that used to (sky.dominantCelestialLight, called once per
+// dispatch from world.rgen) was removed once that LUT became a pass-owned resource no core module can
+// reach unconditionally (see docs/ARCHITECTURE.md §4 point 3). Direct sun/moon NEE is accepted-absent
+// until docs/LIGHT_SYSTEM_PLAN.md L2 gives this a real, generic producer. Illuminance here is ACEScg (the
+// transport basis), converted once where it is assigned — relevant again once something assigns it.
 public static CelestialLight celestialLight = {};
 public static const float SURF_BIAS = 0.005;  // offset secondary-ray origins along the normal (anti-acne)
 public static const float RAY_TMIN = 0.001;   // tiny tmin: the normal offset already clears the surface

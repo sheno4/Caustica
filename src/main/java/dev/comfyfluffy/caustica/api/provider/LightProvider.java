@@ -8,6 +8,13 @@ public interface LightProvider {
     default void prepareFrame() {
     }
 
+    /**
+     * Contribute this frame's lights to {@code sink}. No-op by default. See {@link LightSink} for what
+     * this does and does not do today.
+     */
+    default void submitLights(LightSink sink) {
+    }
+
     default void onResourceReload() {
     }
 

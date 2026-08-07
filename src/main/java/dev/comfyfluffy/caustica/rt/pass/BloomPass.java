@@ -2,9 +2,10 @@ package dev.comfyfluffy.caustica.rt.pass;
 
 import dev.comfyfluffy.caustica.api.ShaderSource;
 import dev.comfyfluffy.caustica.api.pass.CausticaRenderPass;
-import dev.comfyfluffy.caustica.api.pass.EngineImage;
+import dev.comfyfluffy.caustica.api.pass.ComputeDispatch;
 import dev.comfyfluffy.caustica.api.pass.PassFrame;
 import dev.comfyfluffy.caustica.api.pass.PassSetup;
+import dev.comfyfluffy.caustica.api.pass.PassShaderCompiler;
 import dev.comfyfluffy.caustica.api.pass.RenderStage;
 import dev.comfyfluffy.caustica.rt.RtContext;
 import dev.comfyfluffy.caustica.rt.RtLookPackage;
@@ -23,7 +24,7 @@ import java.util.List;
 /**
  * Scene-referred bloom: a downsample/upsample mip pyramid recorded directly onto the frame's command
  * buffer. Owns its own pyramid images, sampler, descriptor sets, and pipeline outright — the engine only
- * sees the published {@link EngineImage#BLOOM} slot.
+ * sees the published {@code "bloom"} output (see {@link dev.comfyfluffy.caustica.api.pass.PassSetup#publishOutput}).
  */
 public final class BloomPass implements CausticaRenderPass {
     public static final Identifier ID = Identifier.fromNamespaceAndPath("caustica", "bloom");
@@ -70,14 +71,14 @@ public final class BloomPass implements CausticaRenderPass {
             throw new UncheckedIOException(e);
         }
         allocate(setup.displayWidth(), setup.displayHeight());
-        setup.publish(EngineImage.BLOOM, levels[0], levels.length);
+        setup.publishOutput("bloom", levels[0], levels.length);
     }
 
     @Override
     public void resize(PassSetup setup, int displayWidth, int displayHeight) {
         destroyLevels();
         allocate(displayWidth, displayHeight);
-        setup.publish(EngineImage.BLOOM, levels[0], levels.length);
+        setup.publishOutput("bloom", levels[0], levels.length);
     }
 
     private void allocate(int displayWidth, int displayHeight) {
@@ -109,8 +110,8 @@ public final class BloomPass implements CausticaRenderPass {
     @Override
     public void record(PassFrame frame) {
         dispatch.beginFrame();
-        GpuImage reconstructedColor = frame.engineImage(EngineImage.RECONSTRUCTED_COLOR);
-        GpuImage exposure = frame.engineImage(EngineImage.EXPOSURE);
+        GpuImage reconstructedColor = frame.reconstructedColor();
+        GpuImage exposure = frame.exposureImage();
         float softKnee = settings.thresholdSceneLinear() * settings.softKneeFraction();
 
         for (Step step : plan(levels.length)) {

@@ -67,7 +67,7 @@ binding. v1:
 
 | Slot | Slang interface | Built-in default |
 |---|---|---|
-| `caustica:sky` | `ISkyModel` | `BuiltinSky` |
+| `caustica:sky` | `ISkyModel` | `LutSky` |
 | `caustica:surface` | `ISurfaceModel` | `BuiltinSurface` |
 | `caustica:medium` | `IMediumModel` | `BuiltinMedium` |
 

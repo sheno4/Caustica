@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.rt.pass;
+package dev.comfyfluffy.caustica.api.pass;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
@@ -30,8 +30,13 @@ import java.util.regex.Pattern;
  * itself (it is not driven by any declarative program description) and optionally calls
  * {@link #validateBindings} against the pipeline layout it built, to catch descriptor-layout drift
  * between the .slang source and the hand-written Vulkan side.
+ *
+ * <p>Public pass-authoring helper, usable by any {@code CausticaRenderPass} (engine-bundled or
+ * extension-owned) — lives alongside {@link CausticaRenderPass}/{@link PassSetup}/{@link PassFrame} in the
+ * public API package rather than an engine-internal one, since third-party passes are exactly who this is
+ * for.
  */
-final class PassShaderCompiler {
+public final class PassShaderCompiler {
     private static final Pattern IMPORT = Pattern.compile(
             "(?m)^\\s*import\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*;");
 
@@ -39,11 +44,11 @@ final class PassShaderCompiler {
     }
 
     /** Shared source-extraction cache root every built-in pass compiles under. */
-    static Path defaultCacheRoot() {
+    public static Path defaultCacheRoot() {
         return FabricLoader.getInstance().getGameDir().resolve("caustica-shaders").resolve("passes");
     }
 
-    static CompiledProgram compile(Path cacheRoot, Identifier id, ShaderSource source, String module,
+    public static CompiledProgram compile(Path cacheRoot, Identifier id, ShaderSource source, String module,
                                    String entryPoint) throws IOException {
         Path directory = cacheRoot.resolve(id.getNamespace()).resolve(id.getPath());
         Files.createDirectories(directory);
@@ -91,7 +96,7 @@ final class PassShaderCompiler {
      * bindings may be undeclared or missing, push-constant size must match, and the entry point must
      * exist as a compute stage with the given thread group size.
      */
-    static void validateBindings(Identifier id, String reflectionJson, List<ComputeDispatch.Binding> expected,
+    public static void validateBindings(Identifier id, String reflectionJson, List<ComputeDispatch.Binding> expected,
                                  int pushConstantBytes, String entryPoint, int localSizeX, int localSizeY,
                                  int localSizeZ) throws IOException {
         JsonObject reflection = JsonParser.parseString(reflectionJson).getAsJsonObject();
@@ -163,7 +168,7 @@ final class PassShaderCompiler {
         }
     }
 
-    record CompiledProgram(byte[] spirv, String reflectionJson) {
+    public record CompiledProgram(byte[] spirv, String reflectionJson) {
     }
 
     private record ReflectedBinding(String name, ComputeDispatch.Binding kind) {

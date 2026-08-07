@@ -1,8 +1,8 @@
 package dev.comfyfluffy.caustica.api;
 
+import dev.comfyfluffy.caustica.builtin.SkyLutPass;
 import dev.comfyfluffy.caustica.rt.RtLookPackage;
 import dev.comfyfluffy.caustica.rt.pass.BloomPass;
-import dev.comfyfluffy.caustica.rt.pass.SkyLutPass;
 import dev.comfyfluffy.caustica.rt.provider.MinecraftLightProvider;
 import dev.comfyfluffy.caustica.rt.provider.MinecraftMaterialSource;
 import dev.comfyfluffy.caustica.rt.provider.MinecraftSceneProvider;
@@ -14,17 +14,25 @@ final class BuiltinExtension implements CausticaExtension {
 
     @Override
     public void register(CausticaRegistry registry) {
+        // One instance registered under both mechanisms: it is a render pass (bakes the sky LUTs) and,
+        // separately, a light provider (submits the sun/moon it just computed) — see SkyLutPass's javadoc.
+        SkyLutPass skyLut = new SkyLutPass();
         registry.feature(ID)
                 .title(Component.translatable("feature.caustica.builtin"))
                 .category(FeatureCategory.GENERAL)
-                .shaderSource(ShaderSource.classpath("/caustica/shaders/builtin"))
-                .bind(Slots.SKY, "caustica_builtin_sky", "BuiltinSky")
+                .shaderSource(ShaderSource.classpath("/caustica/shaders/builtin", "sky", "common"))
+                .bind(Slots.SKY, "caustica_lut_sky", "LutSky")
                 .bind(Slots.SURFACE, "caustica_builtin_surface", "BuiltinSurface")
                 .bind(Slots.MEDIUM, "caustica_builtin_medium", "BuiltinMedium")
+                // Anchors SkyLutPass's own binding declarations outside the generic Sky-slot mechanism —
+                // Slang forbids a slot IMPLEMENTATION from declaring global shader parameters itself. See
+                // FeatureBuilder.passResourceModule's javadoc.
+                .passResourceModule("caustica_lut_sky_bindings")
                 .renderPass(new BloomPass(RtLookPackage.current().bloom()))
-                .renderPass(new SkyLutPass())
+                .renderPass(skyLut)
                 .sceneProvider(new MinecraftSceneProvider())
                 .lightProvider(new MinecraftLightProvider())
+                .lightProvider(skyLut)
                 .materialSource(new MinecraftMaterialSource())
                 .register();
         registry.setDefault(Slots.SKY, ID);

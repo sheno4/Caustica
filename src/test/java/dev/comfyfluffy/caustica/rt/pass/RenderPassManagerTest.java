@@ -1,7 +1,6 @@
 package dev.comfyfluffy.caustica.rt.pass;
 
 import dev.comfyfluffy.caustica.api.pass.CausticaRenderPass;
-import dev.comfyfluffy.caustica.api.pass.EngineImage;
 import dev.comfyfluffy.caustica.api.pass.PassFrame;
 import dev.comfyfluffy.caustica.api.pass.PassSetup;
 import dev.comfyfluffy.caustica.api.pass.RenderStage;
@@ -61,11 +60,11 @@ final class RenderPassManagerTest {
     }
 
     @Test
-    void aPassThatThrowsAfterPublishingHasThatSlotRolledBack() {
+    void aPassThatThrowsAfterPublishingHasThatOutputRolledBack() {
         FakePass publishesThenThrows = new FakePass("throws", RenderStage.AFTER_RECONSTRUCTION) {
             @Override
             public void resize(PassSetup setup, int width, int height) {
-                setup.publish(EngineImage.BLOOM, FAKE_IMAGE);
+                setup.publishOutput("bloom", FAKE_IMAGE, 1);
                 throw new RuntimeException("boom");
             }
         };
@@ -73,24 +72,24 @@ final class RenderPassManagerTest {
 
         manager.resize(100, 100);
 
-        assertFalse(manager.hasImage(EngineImage.BLOOM),
-                "a slot published just before a throw must not be left dangling");
+        assertFalse(manager.hasOutput("bloom"),
+                "an output published just before a throw must not be left dangling");
     }
 
     @Test
-    void aPassThatPublishesSuccessfullyKeepsItsSlotBound() {
+    void aPassThatPublishesSuccessfullyKeepsItsOutputBound() {
         FakePass publishes = new FakePass("publishes", RenderStage.AFTER_RECONSTRUCTION) {
             @Override
             public void resize(PassSetup setup, int width, int height) {
-                setup.publish(EngineImage.BLOOM, FAKE_IMAGE);
+                setup.publishOutput("bloom", FAKE_IMAGE, 1);
             }
         };
         RenderPassManager manager = new RenderPassManager(null, List.of(publishes), 0L);
 
         manager.resize(100, 100);
 
-        assertTrue(manager.hasImage(EngineImage.BLOOM));
-        assertEquals(FAKE_IMAGE, manager.image(EngineImage.BLOOM));
+        assertTrue(manager.hasOutput("bloom"));
+        assertEquals(FAKE_IMAGE, manager.output("bloom"));
     }
 
     private static Identifier identifierOf(String path) {
