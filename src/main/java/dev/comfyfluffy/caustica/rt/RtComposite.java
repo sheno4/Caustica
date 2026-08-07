@@ -11,6 +11,7 @@ import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.api.CausticaApi;
 import dev.comfyfluffy.caustica.api.Slots;
+import dev.comfyfluffy.caustica.api.pass.PassOptions;
 import dev.comfyfluffy.caustica.api.pass.RenderStage;
 import dev.comfyfluffy.caustica.client.CausticaJitter;
 import dev.comfyfluffy.caustica.mixin.CommandEncoderAccessor;
@@ -142,6 +143,10 @@ public final class RtComposite {
     // 31,800 cd/m² white / 5,730 cd/m² 18%-grey noon surface. It is therefore independent of the sky
     // package's angular radii, which only jitter the shadow ray and so only set penumbra softness.
     private static final RtLookPackage LOOK = RtLookPackage.current();
+    // The feature id BuiltinExtension registers under (api.BuiltinExtension.ID, package-private there):
+    // bloom.strength is an extension-owned option read outside any pass's own lifecycle methods, via
+    // RenderPassManager#optionsForFeature, so it needs the owning feature's id rather than a pass id.
+    private static final Identifier BUILTIN_FEATURE_ID = Identifier.fromNamespaceAndPath("caustica", "builtin");
     private static final Identifier SUN_ID = Identifier.withDefaultNamespace("sun");
     private static final Identifier[] MOON_IDS = createMoonIds();
     // Sign of the sub-pixel jitter as reported to DLSS-RR + applied to the primary ray, mirroring the
@@ -770,7 +775,7 @@ public final class RtComposite {
 
     private void ensureRenderPassManager(GpuContext ctx) throws IOException {
         if (renderPassManager == null) {
-            renderPassManager = RenderPassManager.create(ctx, CausticaApi.registry().renderPasses());
+            renderPassManager = RenderPassManager.create(ctx, CausticaApi.registry().features());
         }
     }
 
@@ -1341,9 +1346,11 @@ public final class RtComposite {
 
             try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "map RT to display");
                  RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.displayMap")) {
+                float bloomStrength = renderPassManager.optionsForFeature(BUILTIN_FEATURE_ID)
+                        .get("bloom.strength", 0.02f);
                 displayPipeline.dispatch(cmd, displayW, displayH, CausticaConfig.Rt.Hdr.enabled(),
                         sdrToneLut.size, CausticaConfig.Rt.Tonemap.GAMMA.value(), loadedHdrLutNits,
-                        true, lookLut.size, LOOK.bloom().strength()
+                        true, lookLut.size, bloomStrength
                                 / renderPassManager.outputLevelCount("bloom"));
             }
             hdrWrittenThisFrame = CausticaConfig.Rt.Hdr.enabled();
@@ -1459,21 +1466,24 @@ public final class RtComposite {
         float starBrightness = probe.getValue(EnvironmentAttributes.STAR_BRIGHTNESS, partial);
         float moonPhase = probe.getValue(EnvironmentAttributes.MOON_PHASE, partial).index(); // 0 full .. 4 new
 
-        RtLookPackage.Sky sky = LOOK.sky();
+        // sky.* used to come from LOOK.sky(); now an extension-owned option (see BUILTIN_FEATURE_ID), read
+        // through the same RenderPassManager#optionsForFeature escape hatch as bloom.strength — this
+        // method is engine composition code, not a pass, so it has no PassFrame/PassSetup of its own.
+        PassOptions sky = renderPassManager.optionsForFeature(BUILTIN_FEATURE_ID);
         RtLookPackage.Lighting lighting = LOOK.lighting();
         CelestialUv uv = celestialUv(moonPhase);
         SkyFrame frame = new SkyFrame(
                 sunAngle, moonAngle, starAngle, starBrightness,
                 lighting.sunIlluminanceLux(), lighting.moonIlluminanceLux(),
                 lighting.nightAirglowLuminanceCdM2(), lighting.starLuminanceCdM2(),
-                sky.sunNoonSouthTiltDegrees() * toRadians,
-                sky.sunAngularRadiusDegrees() * toRadians,
-                sky.moonAngularRadiusDegrees() * toRadians,
+                sky.get("sky.sun-noon-south-tilt-degrees", 30.0f) * toRadians,
+                sky.get("sky.sun-angular-radius-degrees", 0.6f) * toRadians,
+                sky.get("sky.moon-angular-radius-degrees", 1.5f) * toRadians,
                 lighting.moonPhaseFixedFraction(),
-                sky.sunDiscHalfAngleDegrees() * toRadians,
-                sky.moonDiscHalfAngleDegrees() * toRadians,
-                viewerAltitudeKm, moonPhase, sky.groundAlbedo(),
-                sky.horizonSoftenDegrees() * toRadians);
+                sky.get("sky.sun-disc-half-angle-degrees", 16.7f) * toRadians,
+                sky.get("sky.moon-disc-half-angle-degrees", 11.31f) * toRadians,
+                viewerAltitudeKm, moonPhase, sky.get("sky.ground-albedo", 0.1f),
+                sky.get("sky.horizon-soften-degrees", 15.0f) * toRadians);
         return new SkyPush(
                 new Float4(frame.sunAngleRadians(), frame.moonAngleRadians(),
                         frame.starAngleRadians(), frame.starBrightness()),

@@ -3,6 +3,7 @@ package dev.comfyfluffy.caustica.builtin;
 import dev.comfyfluffy.caustica.api.ShaderSource;
 import dev.comfyfluffy.caustica.api.pass.CausticaRenderPass;
 import dev.comfyfluffy.caustica.api.pass.PassFrame;
+import dev.comfyfluffy.caustica.api.pass.PassOptions;
 import dev.comfyfluffy.caustica.api.pass.PassSetup;
 import dev.comfyfluffy.caustica.api.pass.RenderStage;
 import dev.comfyfluffy.caustica.api.provider.LightProvider;
@@ -35,8 +36,10 @@ import java.util.List;
  * registration API a third-party extension would use ({@code api.BuiltinExtension} registers it, it does
  * not get called directly), so it only reaches engine internals through public surface —
  * {@link GpuContext}, {@link GpuImage}, the now-public {@link ComputeDispatch}/{@link PassShaderCompiler}
- * pass-authoring helpers, and {@link RtLookPackage#current()} for its config, the same way
- * {@code BuiltinExtension} already reads it for bloom.
+ * pass-authoring helpers, {@link RtLookPackage#current()} for the photometric lighting anchors that still
+ * live in the versioned look package, and {@link PassFrame#options()} for the {@code sky.*} geometry
+ * options {@code BuiltinExtension} declares (moved out of look.json — sky shape isn't a colour-science
+ * calibration that has to move in lock step with the LMT the way exposure/lighting are).
  *
  * <p>It also no longer reads a shared, engine-published sky snapshot: it samples Minecraft's celestial
  * state itself, once per frame, independently of whatever {@code RtComposite} computes for the world
@@ -69,6 +72,12 @@ public final class SkyLutPass implements CausticaRenderPass, LightProvider {
     private ComputeDispatch multiScatterDispatch;
     private ComputeDispatch skyViewDispatch;
     private boolean baked;
+    // submitLights() has no PassFrame/PassOptions of its own (LightProvider is a separate registration
+    // mechanism from CausticaRenderPass, invoked by ProviderManager, not RenderPassManager) — it reuses
+    // whichever state record() last gathered rather than reading options itself. Null until the first
+    // record(); submitLights() has zero consumers today (see its javadoc), so skipping in that window is
+    // harmless.
+    private volatile SkyState lastSkyState;
 
     @Override
     public Identifier id() {
@@ -117,7 +126,8 @@ public final class SkyLutPass implements CausticaRenderPass, LightProvider {
 
     @Override
     public void record(PassFrame frame) {
-        SkyState state = gatherSkyState();
+        SkyState state = gatherSkyState(frame.options());
+        lastSkyState = state;
         if (!baked) {
             transmittanceDispatch.beginFrame();
             transmittanceDispatch.dispatch(frame.commandBuffer(), new GpuImage[]{transmittance},
@@ -145,7 +155,10 @@ public final class SkyLutPass implements CausticaRenderPass, LightProvider {
      */
     @Override
     public void submitLights(LightSink sink) {
-        SkyState state = gatherSkyState();
+        SkyState state = lastSkyState;
+        if (state == null) {
+            return;
+        }
         float peakSun = (float) Math.cos(state.sunAngleRadians());
         sink.directionalLight(SUN_LIGHT_ID,
                 (float) -Math.sin(state.sunAngleRadians()),
@@ -170,12 +183,12 @@ public final class SkyLutPass implements CausticaRenderPass, LightProvider {
     }
 
     /**
-     * This pass's own snapshot of Minecraft's celestial state and the look package's sky constants,
-     * gathered fresh every time it's called rather than shared with anything else. Mirrors what
-     * {@code RtComposite.skyPush()} computes for the world push's sky fields — deliberately a second,
-     * independent read rather than a shared one; see the class javadoc.
+     * This pass's own snapshot of Minecraft's celestial state, the look package's photometric lighting
+     * anchors, and the {@code sky.*} geometry options, gathered fresh every time it's called rather than
+     * shared with anything else. Mirrors what {@code RtComposite.skyPush()} computes for the world push's
+     * sky fields — deliberately a second, independent read rather than a shared one; see the class javadoc.
      */
-    private static SkyState gatherSkyState() {
+    private static SkyState gatherSkyState(PassOptions options) {
         Minecraft mc = Minecraft.getInstance();
         float partial = mc.getDeltaTracker().getGameTimeDeltaPartialTick(false);
         var probe = mc.gameRenderer.mainCamera().attributeProbe();
@@ -194,20 +207,26 @@ public final class SkyLutPass implements CausticaRenderPass, LightProvider {
         float starBrightness = probe.getValue(EnvironmentAttributes.STAR_BRIGHTNESS, partial);
         float moonPhase = probe.getValue(EnvironmentAttributes.MOON_PHASE, partial).index(); // 0 full .. 4 new
 
-        RtLookPackage.Sky sky = RtLookPackage.current().sky();
         RtLookPackage.Lighting lighting = RtLookPackage.current().lighting();
+        float sunNoonSouthTiltDegrees = options.get("sky.sun-noon-south-tilt-degrees", 30.0f);
+        float sunAngularRadiusDegrees = options.get("sky.sun-angular-radius-degrees", 0.6f);
+        float moonAngularRadiusDegrees = options.get("sky.moon-angular-radius-degrees", 1.5f);
+        float sunDiscHalfAngleDegrees = options.get("sky.sun-disc-half-angle-degrees", 16.7f);
+        float moonDiscHalfAngleDegrees = options.get("sky.moon-disc-half-angle-degrees", 11.31f);
+        float groundAlbedo = options.get("sky.ground-albedo", 0.1f);
+        float horizonSoftenDegrees = options.get("sky.horizon-soften-degrees", 15.0f);
         return new SkyState(
                 sunAngle, moonAngle, starAngle, starBrightness,
                 lighting.sunIlluminanceLux(), lighting.moonIlluminanceLux(),
                 lighting.nightAirglowLuminanceCdM2(), lighting.starLuminanceCdM2(),
-                sky.sunNoonSouthTiltDegrees() * toRadians,
-                sky.sunAngularRadiusDegrees() * toRadians,
-                sky.moonAngularRadiusDegrees() * toRadians,
+                sunNoonSouthTiltDegrees * toRadians,
+                sunAngularRadiusDegrees * toRadians,
+                moonAngularRadiusDegrees * toRadians,
                 lighting.moonPhaseFixedFraction(),
-                sky.sunDiscHalfAngleDegrees() * toRadians,
-                sky.moonDiscHalfAngleDegrees() * toRadians,
-                viewerAltitudeKm, moonPhase, sky.groundAlbedo(),
-                sky.horizonSoftenDegrees() * toRadians);
+                sunDiscHalfAngleDegrees * toRadians,
+                moonDiscHalfAngleDegrees * toRadians,
+                viewerAltitudeKm, moonPhase, groundAlbedo,
+                horizonSoftenDegrees * toRadians);
     }
 
     static byte[] pushConstants(SkyState state) {

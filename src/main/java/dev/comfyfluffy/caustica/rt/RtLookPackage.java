@@ -23,12 +23,11 @@ public record RtLookPackage(
         int packageVersion,
         Exposure exposure,
         String lmtResource,
-        Bloom bloom,
-        Lighting lighting,
-        Sky sky) {
-    public static final int SCHEMA_VERSION = 4;
-    /** Maximum useful bloom-pyramid depth at 4K. */
-    private static final int MAX_BLOOM_LEVELS = 8;
+        Lighting lighting) {
+    // Bumped 4 -> 5: bloom and sky moved out to extension-owned Option values (see BuiltinExtension) —
+    // neither is a colour-science calibration that has to move in lock step with the LMT the way
+    // exposure/lighting are, so they no longer belong in this versioned package.
+    public static final int SCHEMA_VERSION = 5;
     public static final String DEFAULT_ID = "default";
     public static final String DEFAULT_JSON = "/caustica/color/looks/default/look.json";
     private static final RtLookPackage DEFAULT = load(DEFAULT_JSON);
@@ -77,24 +76,6 @@ public record RtLookPackage(
         }
         String lmtResource = jsonResource.substring(0, slash + 1) + lmtFile;
 
-        JsonObject bloomJson = requiredObject(root, "bloom");
-        Bloom bloom = new Bloom(
-                requiredFinite(bloomJson, "strength"),
-                requiredFinite(bloomJson, "thresholdSceneLinear"),
-                requiredFinite(bloomJson, "softKneeFraction"),
-                requiredFinite(bloomJson, "radius"),
-                requiredInt(bloomJson, "levels"));
-        requireRange(bloom.strength(), 0.0f, 2.0f, jsonResource, "bloom.strength");
-        requireRange(bloom.thresholdSceneLinear(), 0.0f, 65504.0f,
-                jsonResource, "bloom.thresholdSceneLinear");
-        requireRange(bloom.softKneeFraction(), 0.0f, 1.0f,
-                jsonResource, "bloom.softKneeFraction");
-        requireRange(bloom.radius(), 0.25f, 4.0f, jsonResource, "bloom.radius");
-        if (bloom.levels() < 1 || bloom.levels() > MAX_BLOOM_LEVELS) {
-            throw new IllegalArgumentException(jsonResource + ": bloom.levels must be in [1,"
-                    + MAX_BLOOM_LEVELS + "]");
-        }
-
         JsonObject lightingJson = requiredObject(root, "lighting");
         Lighting lighting = new Lighting(
                 positive(lightingJson, "sunIlluminanceLux", jsonResource),
@@ -108,36 +89,7 @@ public record RtLookPackage(
                     + ": lighting.moonPhaseFixedFraction must be in [0,1]");
         }
 
-        JsonObject skyJson = requiredObject(root, "sky");
-        Sky sky = new Sky(
-                requiredFinite(skyJson, "sunNoonSouthTiltDegrees"),
-                nonNegative(skyJson, "sunAngularRadiusDegrees", jsonResource, "sky"),
-                nonNegative(skyJson, "moonAngularRadiusDegrees", jsonResource, "sky"),
-                positive(skyJson, "sunDiscHalfAngleDegrees", jsonResource, "sky"),
-                positive(skyJson, "moonDiscHalfAngleDegrees", jsonResource, "sky"),
-                nonNegative(skyJson, "groundAlbedo", jsonResource, "sky"),
-                nonNegative(skyJson, "horizonSoftenDegrees", jsonResource, "sky"));
-        requireRange(sky.sunNoonSouthTiltDegrees(), -89.0f, 89.0f,
-                jsonResource, "sky.sunNoonSouthTiltDegrees");
-        // The NEE radius only jitters the shadow ray, so it sets penumbra softness; the disc half-angle is
-        // how large the body is DRAWN, matching vanilla's quads (which are ~60x the real sun). Both are
-        // angles on the sky, so both stay well inside a quarter turn.
-        requireRange(sky.sunAngularRadiusDegrees(), 0.0f, 20.0f,
-                jsonResource, "sky.sunAngularRadiusDegrees");
-        requireRange(sky.moonAngularRadiusDegrees(), 0.0f, 20.0f,
-                jsonResource, "sky.moonAngularRadiusDegrees");
-        requireRange(sky.sunDiscHalfAngleDegrees(), 0.0f, 45.0f,
-                jsonResource, "sky.sunDiscHalfAngleDegrees");
-        requireRange(sky.moonDiscHalfAngleDegrees(), 0.0f, 45.0f,
-                jsonResource, "sky.moonDiscHalfAngleDegrees");
-        requireRange(sky.groundAlbedo(), 0.0f, 1.0f, jsonResource, "sky.groundAlbedo");
-        // Beyond a quarter turn the fade would still be running at the nadir, leaving the lower hemisphere
-        // with no settled colour at all.
-        requireRange(sky.horizonSoftenDegrees(), 0.0f, 90.0f,
-                jsonResource, "sky.horizonSoftenDegrees");
-
-        return new RtLookPackage(schemaVersion, id, packageVersion, exposure, lmtResource, bloom,
-                lighting, sky);
+        return new RtLookPackage(schemaVersion, id, packageVersion, exposure, lmtResource, lighting);
     }
 
     private static RtLookPackage load(String resource) {
@@ -219,13 +171,6 @@ public record RtLookPackage(
         return value;
     }
 
-    private static void requireRange(float value, float min, float max, String resource, String name) {
-        if (value < min || value > max) {
-            throw new IllegalArgumentException(resource + ": " + name + " must be in ["
-                    + min + "," + max + "]");
-        }
-    }
-
     private static void validateCurve(String spec, String resource) {
         String[] points = spec.split(",");
         if (points.length != 4) {
@@ -264,15 +209,6 @@ public record RtLookPackage(
     }
 
     /**
-     * Bloom pyramid. {@code radius} is the upsample tent radius in SOURCE
-     * texels, so it needs no resolution scaling; {@code levels} is how many octaves of skirt the effect
-     * reaches over, which is what sets its width.
-     */
-    public record Bloom(float strength, float thresholdSceneLinear, float softKneeFraction, float radius,
-                        int levels) {
-    }
-
-    /**
      * Photometric anchors. {@code nightAirglowLuminanceCdM2} is airglow plus unresolved starlight—the
      * physical floor of a moonless night, approximately 1e-3 cd/m². Atmospheric multiple scattering is
      * evaluated separately.
@@ -287,28 +223,5 @@ public record RtLookPackage(
         public float moonPhaseFraction() {
             return 1.0f - moonPhaseFixedFraction;
         }
-    }
-
-    /**
-     * Sky geometry. These were {@code caustica.rt.*} system properties, which left the shape of the sky
-     * outside the versioned package that owns every other photometric decision; they belong with the
-     * exposure curve, the LMT and the light anchors already authored here.
-     */
-    public record Sky(
-            float sunNoonSouthTiltDegrees,
-            /** Half-angle the NEE shadow ray samples about the body: sets penumbra softness only. */
-            float sunAngularRadiusDegrees,
-            float moonAngularRadiusDegrees,
-            /** Half-angle the body is DRAWN at, matching vanilla's quads: atan(0.30) and atan(0.20). */
-            float sunDiscHalfAngleDegrees,
-            float moonDiscHalfAngleDegrees,
-            float groundAlbedo,
-            /**
-             * Dip over which the atmosphere's ground fades in below the horizon. The surface is a real
-             * discontinuity in the model — ~20 EV per degree of elevation at sea level under a high sun,
-             * and up to ~50 at a low one — and Minecraft never shows the terrain that would justify it, so
-             * without this the horizon reads as a hard grey line. Zero restores the hard ground.
-             */
-            float horizonSoftenDegrees) {
     }
 }

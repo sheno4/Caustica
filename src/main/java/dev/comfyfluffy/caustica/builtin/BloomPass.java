@@ -4,11 +4,11 @@ import dev.comfyfluffy.caustica.api.ShaderSource;
 import dev.comfyfluffy.caustica.api.pass.CausticaRenderPass;
 import dev.comfyfluffy.caustica.api.pass.ComputeDispatch;
 import dev.comfyfluffy.caustica.api.pass.PassFrame;
+import dev.comfyfluffy.caustica.api.pass.PassOptions;
 import dev.comfyfluffy.caustica.api.pass.PassSetup;
 import dev.comfyfluffy.caustica.api.pass.PassShaderCompiler;
 import dev.comfyfluffy.caustica.api.pass.RenderStage;
 import dev.comfyfluffy.caustica.rt.GpuContext;
-import dev.comfyfluffy.caustica.rt.RtLookPackage;
 import dev.comfyfluffy.caustica.rt.accel.GpuImage;
 import dev.comfyfluffy.caustica.rt.gen.BloomPushData;
 import net.minecraft.resources.Identifier;
@@ -39,16 +39,17 @@ public final class BloomPass implements CausticaRenderPass {
     private static final int MODE_PREFILTER = 0;
     private static final int MODE_DOWNSAMPLE = 1;
     private static final int MODE_UPSAMPLE = 2;
+    // Matches the Option defaults BuiltinExtension declares; used only if a pass ever reads before
+    // PassOptionsStore has resolved a value (never happens in practice — see PassOptionsStore).
+    private static final float DEFAULT_THRESHOLD_SCENE_LINEAR = 2.0f;
+    private static final float DEFAULT_SOFT_KNEE_FRACTION = 0.25f;
+    private static final float DEFAULT_RADIUS = 1.0f;
+    private static final float DEFAULT_LEVELS = 6.0f;
 
-    private final RtLookPackage.Bloom settings;
     private GpuContext ctx;
     private long sampler;
     private ComputeDispatch dispatch;
     private GpuImage[] levels = new GpuImage[0];
-
-    public BloomPass(RtLookPackage.Bloom settings) {
-        this.settings = settings;
-    }
 
     @Override
     public Identifier id() {
@@ -74,21 +75,26 @@ public final class BloomPass implements CausticaRenderPass {
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
-        allocate(setup.displayWidth(), setup.displayHeight());
+        allocate(setup, setup.displayWidth(), setup.displayHeight());
         setup.publishOutput("bloom", levels[0], levels.length);
     }
 
     @Override
     public void resize(PassSetup setup, int displayWidth, int displayHeight) {
         destroyLevels();
-        allocate(displayWidth, displayHeight);
+        allocate(setup, displayWidth, displayHeight);
         setup.publishOutput("bloom", levels[0], levels.length);
     }
 
-    private void allocate(int displayWidth, int displayHeight) {
+    private void allocate(PassSetup setup, int displayWidth, int displayHeight) {
         int baseWidth = Math.max(1, displayWidth / 2);
         int baseHeight = Math.max(1, displayHeight / 2);
-        int levelCount = levelCount(baseWidth, baseHeight, Math.min(settings.levels(), MAX_LEVELS), 8);
+        // Read at allocate time, not per frame: pyramid depth is a resource-sizing decision, not a
+        // push-constant one, and PassSetup#options() is the seam for exactly that (see its javadoc). A
+        // change to this option only takes effect on the next resize, since nothing currently invalidates
+        // a pass on an option write — Reload's per-tier invalidation isn't wired up yet either.
+        int configuredLevels = Math.round(setup.options().get("bloom.levels", DEFAULT_LEVELS));
+        int levelCount = levelCount(baseWidth, baseHeight, Math.min(configuredLevels, MAX_LEVELS), 8);
         levels = new GpuImage[levelCount];
         int width = baseWidth;
         int height = baseHeight;
@@ -116,12 +122,15 @@ public final class BloomPass implements CausticaRenderPass {
         dispatch.beginFrame();
         GpuImage reconstructedColor = frame.reconstructedColor();
         GpuImage exposure = frame.exposureImage();
-        float softKnee = settings.thresholdSceneLinear() * settings.softKneeFraction();
+        PassOptions options = frame.options();
+        float threshold = options.get("bloom.threshold-scene-linear", DEFAULT_THRESHOLD_SCENE_LINEAR);
+        float softKnee = threshold * options.get("bloom.soft-knee-fraction", DEFAULT_SOFT_KNEE_FRACTION);
+        float radius = options.get("bloom.radius", DEFAULT_RADIUS);
 
         for (Step step : plan(levels.length)) {
             GpuImage destination = levels[step.destinationLevel()];
             GpuImage source = step.sourceLevel() < 0 ? reconstructedColor : levels[step.sourceLevel()];
-            recordStep(frame, destination, source, exposure, step.mode(), softKnee);
+            recordStep(frame, destination, source, exposure, step.mode(), threshold, softKnee, radius);
             frame.memoryBarrier();
         }
     }
@@ -146,9 +155,9 @@ public final class BloomPass implements CausticaRenderPass {
     }
 
     private void recordStep(PassFrame frame, GpuImage destination, GpuImage source, GpuImage exposure,
-                            int mode, float softKnee) {
+                            int mode, float threshold, float softKnee, float radius) {
         byte[] pushConstants = new byte[BloomPushData.BYTE_SIZE];
-        new BloomPushData(mode, settings.thresholdSceneLinear(), softKnee, settings.radius())
+        new BloomPushData(mode, threshold, softKnee, radius)
                 .write(ByteBuffer.wrap(pushConstants).order(ByteOrder.nativeOrder()));
         int groupsX = groups(destination.width);
         int groupsY = groups(destination.height);

@@ -2,6 +2,7 @@ package dev.comfyfluffy.caustica.rt.pass;
 
 import com.mojang.blaze3d.vulkan.VulkanCommandEncoder;
 import dev.comfyfluffy.caustica.CausticaMod;
+import dev.comfyfluffy.caustica.api.Feature;
 import dev.comfyfluffy.caustica.api.pass.CausticaRenderPass;
 import dev.comfyfluffy.caustica.api.pass.PassFrame;
 import dev.comfyfluffy.caustica.api.pass.PassOptions;
@@ -48,12 +49,15 @@ public final class RenderPassManager {
     private final Map<String, CausticaRenderPass> worldResourcePublishers = new LinkedHashMap<>();
     private final Map<String, NamedOutput> outputs = new LinkedHashMap<>();
     private final Map<String, CausticaRenderPass> outputPublishers = new LinkedHashMap<>();
+    private final Map<Identifier, Feature> passFeature;
+    private final PassOptionsStore optionsStore;
     private GpuImage reconstructedColor;
     private GpuImage exposureImage;
     private final long sampler;
     private int displayWidth;
     private int displayHeight;
     private long frameIndex = -1;
+    private Map<String, Object> frameOptionsSnapshot = Map.of();
 
     /**
      * A pass-published world resource: exactly one of an image (with the sampler it should be read with)
@@ -82,20 +86,54 @@ public final class RenderPassManager {
     }
 
     RenderPassManager(GpuContext ctx, List<CausticaRenderPass> ordered, long sampler) {
+        this(ctx, ordered, sampler, Map.of(), null);
+    }
+
+    private RenderPassManager(GpuContext ctx, List<CausticaRenderPass> ordered, long sampler,
+                              Map<Identifier, Feature> passFeature, PassOptionsStore optionsStore) {
         this.ctx = ctx;
         this.ordered = ordered;
         this.sampler = sampler;
+        this.passFeature = passFeature;
+        this.optionsStore = optionsStore;
     }
 
-    public static RenderPassManager create(GpuContext ctx, Map<Identifier, CausticaRenderPass> registered) {
+    /**
+     * {@code features} is every registered {@link Feature}, not just the ones with render passes: each
+     * pass's owning feature is recovered from it (so {@link PassSetup#options()}/{@link PassFrame#options()}
+     * know which feature's option namespace to read) and it seeds {@link PassOptionsStore} with every
+     * declared {@link dev.comfyfluffy.caustica.api.Option}, including ones with no render pass to read
+     * them at all — e.g. a scene-provider-only extension. See {@link #optionsForFeature} for reading a
+     * feature's options from engine code that is not itself a pass.
+     */
+    public static RenderPassManager create(GpuContext ctx, Map<Identifier, Feature> features) {
+        Map<Identifier, CausticaRenderPass> registered = new LinkedHashMap<>();
+        Map<Identifier, Feature> passFeature = new LinkedHashMap<>();
+        for (Feature feature : features.values()) {
+            for (CausticaRenderPass pass : feature.renderPasses()) {
+                registered.put(pass.id(), pass);
+                passFeature.put(pass.id(), feature);
+            }
+        }
         List<CausticaRenderPass> ordered = orderPasses(registered.values());
         long sampler = createSampler(ctx);
-        RenderPassManager manager = new RenderPassManager(ctx, ordered, sampler);
+        PassOptionsStore optionsStore = PassOptionsStore.load(features);
+        RenderPassManager manager = new RenderPassManager(ctx, ordered, sampler, passFeature, optionsStore);
         for (CausticaRenderPass pass : ordered) {
             PassSetup setup = manager.new Setup(pass);
             manager.invoke(pass, "create", () -> pass.create(setup));
         }
         return manager;
+    }
+
+    /**
+     * Read a registered feature's options from engine code that runs outside any pass's own lifecycle
+     * methods — e.g. {@code RtComposite}'s display-mapping step, which applies {@code bloom.strength} to
+     * an image the bloom pass itself only produces, not consumes. Live, like {@link PassSetup#options()},
+     * not frozen to a frame like {@link PassFrame#options()}.
+     */
+    public PassOptions optionsForFeature(Identifier featureId) {
+        return optionsStore != null ? optionsStore.options(featureId) : NOOP_OPTIONS;
     }
 
     public void resize(int width, int height) {
@@ -123,9 +161,16 @@ public final class RenderPassManager {
         exposureImage = image;
     }
 
-    /** Reset per-frame bookkeeping (currently just {@link #frameIndex}); call once before any recording. */
+    /**
+     * Reset per-frame bookkeeping; call once before any recording. Also takes this frame's option
+     * snapshot — {@link PassOptions} promises a value read mid-frame stays fixed for the rest of it, so
+     * every pass across every stage this frame shares the one snapshot taken here, not a live read.
+     */
     public void beginFrame() {
         frameIndex++;
+        if (optionsStore != null) {
+            frameOptionsSnapshot = optionsStore.snapshotValues();
+        }
     }
 
     /** Every world resource a pass has published, by the name its own Slang declared. */
@@ -163,13 +208,14 @@ public final class RenderPassManager {
      * has no way to know what follows its own stage.
      */
     public void record(RenderStage stage, VkCommandBuffer commandBuffer) {
-        PassFrame frame = new Frame(commandBuffer);
+        Frame frame = new Frame(commandBuffer);
         boolean any = false;
         for (CausticaRenderPass pass : ordered) {
             if (pass.stage() != stage || disabled.contains(pass)) {
                 continue;
             }
             any = true;
+            frame.currentPass = pass;
             try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, commandBuffer, pass.id().toString())) {
                 invoke(pass, "record", () -> pass.record(frame));
             }
@@ -366,12 +412,22 @@ public final class RenderPassManager {
             }
             outputs.put(name, new NamedOutput(image, levelCount));
         }
+
+        @Override
+        public PassOptions options() {
+            if (optionsStore == null) {
+                return NOOP_OPTIONS;
+            }
+            Feature feature = passFeature.get(owner.id());
+            return feature != null ? optionsStore.options(feature.id()) : NOOP_OPTIONS;
+        }
     }
 
     private static final NoopOptions NOOP_OPTIONS = new NoopOptions();
 
     private final class Frame implements PassFrame {
         private final VkCommandBuffer commandBuffer;
+        private CausticaRenderPass currentPass;
 
         private Frame(VkCommandBuffer commandBuffer) {
             this.commandBuffer = commandBuffer;
@@ -415,7 +471,11 @@ public final class RenderPassManager {
 
         @Override
         public PassOptions options() {
-            return NOOP_OPTIONS;
+            if (currentPass == null) {
+                return NOOP_OPTIONS;
+            }
+            Feature feature = passFeature.get(currentPass.id());
+            return feature != null ? PassOptionsStore.viewOf(feature, frameOptionsSnapshot) : NOOP_OPTIONS;
         }
 
         @Override

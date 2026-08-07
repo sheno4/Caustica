@@ -45,4 +45,12 @@ public interface PassSetup {
      * for a single image.
      */
     void publishOutput(String name, GpuImage image, int levelCount);
+
+    /**
+     * This feature's current option values, for a decision {@link CausticaRenderPass#create}/
+     * {@link CausticaRenderPass#resize} has to make once rather than every frame (e.g. sizing an image
+     * pyramid) — unlike {@link PassFrame#options()}, this is not frozen for a frame, since create/resize
+     * are not per-frame calls; it reads whatever is current when called.
+     */
+    PassOptions options();
 }

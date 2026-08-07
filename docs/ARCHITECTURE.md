@@ -246,10 +246,12 @@ public interface CausticaRenderPass {
 }
 ```
 
-`PassSetup` exposes `GpuContext` (device, allocator, `createStorageImage`/`createBuffer`, debug labelling)
-plus `publishWorldResource`/`publishOutput` (see above). `PassFrame` exposes the command buffer, the
-display extent, `reconstructedColor()`/`exposureImage()`, a `PassOptions` snapshot (declared now, unread
-until the config-storage work lands — see §7),
+`PassSetup` exposes `GpuContext` (device, allocator, `createStorageImage`/`createBuffer`, debug labelling),
+`publishWorldResource`/`publishOutput` (see above), and now `options()` — a live (not frame-frozen) read of
+this pass's owning feature's `Option` values, for a create/resize-time decision like sizing an image
+pyramid (see §7's `PassOptionsStore` entry). `PassFrame` exposes the command buffer, the
+display extent, `reconstructedColor()`/`exposureImage()`, an `options()` snapshot frozen for the whole
+frame (unlike `PassSetup`'s live read — see §7),
 and one `memoryBarrier()` helper matching the broad full-pipeline-barrier idiom used everywhere else in
 `rt/RtComposite.java`. There is no `ComputeProgram`, `ImageRef`, or `DispatchImage` — a pass builds its own
 descriptor sets and pipeline against `GpuContext` directly, the same way `RtExposurePipeline` and
@@ -393,6 +395,27 @@ Honest status, so this reads as a target and not a claim:
   `RtDebugPresentPipeline` are shape-compatible with `ComputeDispatch` but are fixed built-ins wired to
   non-extensible inputs (raw guide buffers `PassFrame` never exposes) — porting them would add API surface
   with no real third-party consumer to justify it. None of this is being ported.
+- **`PassOptions` has a real backing store, and bloom/sky are its first tenants.** `PassOptionsStore`
+  (`rt/pass/`) is TOML-backed (`config/caustica-options.toml`, separate from `CausticaConfig`'s
+  `caustica.toml` — a fixed hand-curated schema vs. whatever extensions happen to have declared), keyed
+  `<featureId>.<optionId>` so one extension's options can't collide with another's, with the same
+  system-property-then-file-then-default precedence `CausticaConfig` uses. `caustica:builtin` moved its
+  `bloom.*`/`sky.*` numbers out of `look.json` (schema 4 → 5) into declared `Option.range(...)` values —
+  neither is a colour-science calibration that has to move in lock step with the LMT the way
+  exposure/lighting still do, so they no longer belong in that versioned package. `BloomPass` reads
+  `bloom.levels` through `PassSetup#options()` at allocate time and `bloom.threshold-scene-linear`/
+  `soft-knee-fraction`/`radius` through `PassFrame#options()` per frame; `SkyLutPass` reads all seven
+  `sky.*` fields through `PassFrame#options()`. Two places fell outside that seam and needed
+  `RenderPassManager#optionsForFeature(featureId)`, a live (not frame-frozen) escape hatch for engine code
+  that isn't itself a pass: `RtComposite.skyPush()` (the world push's independent sky-geometry read) and
+  its bloom-strength read feeding `RtDisplayPipeline` — both consume a `caustica:builtin` option from
+  outside any `CausticaRenderPass` lifecycle method, which the "per-pass" framing `PassOptions`/`PassFrame`
+  imply doesn't actually cover. `Option` only backs `BOOL`/`RANGE` today — `ENUM`/`COLOR` have a consumer
+  nowhere yet and no runtime `Class<T>` token to deserialize generically — and there is no integer/count
+  kind, so `bloom.levels` is a `RANGE` rounded at the call site. Nothing yet triggers `Reload`'s per-tier
+  invalidation on a write (`PassOptionsStore#set` exists for a future settings UI to call, but a changed
+  `bloom.levels` only takes effect on the next window resize, not immediately) — still open, same as before
+  this round.
 - **Physical layering hasn't happened.** `core` / `core_minecraft` / extensions is still a target; the
   package tree is flat (`rt/...`, not `engine/...` + `mc/...`). §2.4's plan — interfaces now, jars later —
   is why this is expected at this stage rather than a gap.
