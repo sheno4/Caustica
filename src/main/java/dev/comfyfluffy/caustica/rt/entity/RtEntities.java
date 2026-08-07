@@ -33,7 +33,7 @@ import org.joml.Quaternionf;
 import org.lwjgl.system.MemoryUtil;
 
 import dev.comfyfluffy.caustica.rt.RtComposite;
-import dev.comfyfluffy.caustica.rt.RtContext;
+import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtFrameStats;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor.GraphicsUse;
@@ -419,7 +419,7 @@ public final class RtEntities {
             }
         }
 
-        MotionSlice allocate(RtContext ctx, long bytes) {
+        MotionSlice allocate(GpuContext ctx, long bytes) {
             long size = Math.max(bytes, MOTION_ALIGNMENT);
             while (true) {
                 if (pageIndex == pages.size()) {
@@ -605,7 +605,7 @@ public final class RtEntities {
      * when disabled or nothing captured. Dynamic entity coordinates are local and placed by TLAS instances;
      * particles remain captured rebase-relative with an identity instance.
      */
-    public FrameEntities beginFrame(RtContext ctx, List<RtAccel.Instance> base, int rbx, int rby, int rbz,
+    public FrameEntities beginFrame(GpuContext ctx, List<RtAccel.Instance> base, int rbx, int rby, int rbz,
                                     double camX, double camY, double camZ, Matrix4f projection, Matrix4f viewRotation) {
         if (!enabled()) {
             return new FrameEntities(base, List.of(), List.of(), 0L, null);
@@ -671,7 +671,7 @@ public final class RtEntities {
     }
 
     /** Capture animated entities (mobs, items, falling blocks) with per-object motion-vector displacement. */
-    private void captureEntities(RtContext ctx, FrameBuild build, Minecraft mc, ClientLevel level, float partial, int rbx, int rby, int rbz) {
+    private void captureEntities(GpuContext ctx, FrameBuild build, Minecraft mc, ClientLevel level, float partial, int rbx, int rby, int rbz) {
         EntityRenderDispatcher dispatcher = mc.getEntityRenderDispatcher();
         Entity cameraEntity = mc.getCameraEntity();
         // In first person the camera owner's own body must not block the primary camera ray, but it should
@@ -848,7 +848,7 @@ public final class RtEntities {
      * store it as a rigid vector in the geometry-table entry; otherwise write a per-vertex {@code vec4}
      * buffer directly.
      */
-    private Motion uploadVertexMotion(RtContext ctx, FrameBuild build, FloatArrayList cur,
+    private Motion uploadVertexMotion(GpuContext ctx, FrameBuild build, FloatArrayList cur,
                                       EntityPrev prev, float anchorX, float anchorY, float anchorZ) {
         if (prev == null || prev.size != cur.size()) {
             return NO_MOTION;
@@ -935,7 +935,7 @@ public final class RtEntities {
      * texture slot comes from the layer's atlas (block/item/particle) via the bindless registry. One
      * {@code PARTICLE_BIT} instance with mask {@link #PARTICLE_MASK} (primary-ray only).
      */
-    private void captureParticles(RtContext ctx, FrameBuild build, Minecraft mc, float partial,
+    private void captureParticles(GpuContext ctx, FrameBuild build, Minecraft mc, float partial,
                                   int rbx, int rby, int rbz, Matrix4f projection, Matrix4f viewRotation) {
         int particleLimit = maxParticles();
         if (!particlesEnabled() || particleLimit == 0 || build.full()) {
@@ -1077,7 +1077,7 @@ public final class RtEntities {
      * their last geometry / pop in over later frames. Captured block-local → placed by a translate-only
      * instance transform; static, so the MV is 0.
      */
-    private void captureBlockEntities(RtContext ctx, FrameBuild build, Minecraft mc, ClientLevel level, float partial, int rbx, int rby, int rbz) {
+    private void captureBlockEntities(GpuContext ctx, FrameBuild build, Minecraft mc, ClientLevel level, float partial, int rbx, int rby, int rbz) {
         beBuildsThisFrame = 0;
         BlockEntityRenderDispatcher beDispatcher = mc.getBlockEntityRenderDispatcher();
         beDispatcher.prepare(cameraState.pos); // sets the camera for shouldRender / extract
@@ -1124,7 +1124,7 @@ public final class RtEntities {
     }
 
     /** Re-mesh one block entity; rebuild its cached BLAS only if the mesh changed (budgeted); then emit it. */
-    private void updateBlockEntity(RtContext ctx, FrameBuild build, BlockEntityRenderDispatcher beDispatcher,
+    private void updateBlockEntity(GpuContext ctx, FrameBuild build, BlockEntityRenderDispatcher beDispatcher,
                                    BlockEntity be, float partial, long now, int rbx, int rby, int rbz) {
         capture.reset();
         try {
@@ -1178,7 +1178,7 @@ public final class RtEntities {
     }
 
     /** Upload the already-captured BE mesh to fresh buffers and build its BLAS (block-local). */
-    private BeEntry buildBe(RtContext ctx, FrameBuild build, BlockEntity be, long hash) {
+    private BeEntry buildBe(GpuContext ctx, FrameBuild build, BlockEntity be, long hash) {
         beginBuildIfNeeded(ctx, build);
         int asInput = org.lwjgl.vulkan.KHRAccelerationStructure.VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
         int storage = org.lwjgl.vulkan.VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
@@ -1256,7 +1256,7 @@ public final class RtEntities {
     }
 
     /** Emit a cached block entity into this frame: its geometry-table entry + a TLAS instance (no GPU build). */
-    private void emitBe(RtContext ctx, FrameBuild build, BeEntry e, float[] disp, int rbx, int rby, int rbz) {
+    private void emitBe(GpuContext ctx, FrameBuild build, BeEntry e, float[] disp, int rbx, int rby, int rbz) {
         if (build.full()) {
             return;
         }
@@ -1277,7 +1277,7 @@ public final class RtEntities {
     }
 
     /** Retire a cached block entity's persistent AS + mesh buffers once its exact last graphics use completes. */
-    private static void retireBe(RtContext ctx, BeEntry e) {
+    private static void retireBe(GpuContext ctx, BeEntry e) {
         RtAccel accel = e.accel;
         GpuBuffer backing = e.backing;
         GpuBuffer geometry = e.geometry;
@@ -1289,7 +1289,7 @@ public final class RtEntities {
     }
 
     /** Drop cached block entities not seen (in window) within the last KEEP_FRAMES frames — unloaded/out of view. */
-    private void evictStaleBes(RtContext ctx) {
+    private void evictStaleBes(GpuContext ctx) {
         if (beCache.isEmpty()) {
             return;
         }
@@ -1310,12 +1310,12 @@ public final class RtEntities {
     private static final long MIN_BUFFER_SIZE = 256;
 
     /** Allocate one of this frame's ~6-per-entity VMA buffers (mesh/BLAS scratch), counted for RtFrameStats. */
-    private GpuBuffer allocBuffer(RtContext ctx, long minSize, int usage, boolean hostVisible, String label) {
+    private GpuBuffer allocBuffer(GpuContext ctx, long minSize, int usage, boolean hostVisible, String label) {
         RtFrameStats.FRAME.count("vmaBufferCreates", 1);
         return ctx.createBuffer(Math.max(minSize, MIN_BUFFER_SIZE), usage, hostVisible, label);
     }
 
-    private GpuBuffer allocAlignedBuffer(RtContext ctx, long minSize, int usage, boolean hostVisible,
+    private GpuBuffer allocAlignedBuffer(GpuContext ctx, long minSize, int usage, boolean hostVisible,
                                         String label, long addressAlignment) {
         RtFrameStats.FRAME.count("vmaBufferCreates", 1);
         return ctx.createAlignedBuffer(Math.max(minSize, MIN_BUFFER_SIZE), usage, hostVisible, label,
@@ -1323,7 +1323,7 @@ public final class RtEntities {
     }
 
     /** Lazily initialise this frame's build (instance list seeded with terrain, fresh free-lists, table ring slot). */
-    private void beginBuildIfNeeded(RtContext ctx, FrameBuild build) {
+    private void beginBuildIfNeeded(GpuContext ctx, FrameBuild build) {
         if (build.instances != null) {
             return;
         }
@@ -1366,7 +1366,7 @@ public final class RtEntities {
      * Returns false (caller takes the full path) when there is no reusable AS, the topology changed, the
      * pose is non-rigid (animation), or the shading data changed under identical topology.
      */
-    private boolean appendRigidReuse(RtContext ctx, FrameBuild build, Motion motion, int entityId, int mask,
+    private boolean appendRigidReuse(GpuContext ctx, FrameBuild build, Motion motion, int entityId, int mask,
                                      float placeX, float placeY, float placeZ) {
         EntityAccel ea = entityAccels.get(entityId);
         if (ea == null || ea.refAccel == null
@@ -1527,13 +1527,13 @@ public final class RtEntities {
      * {@code entityId} ≥ 0 → refit path (persistent updatable AS keyed by id); {@code < 0} (refit disabled)
      * → transient one-shot full BUILD. Used by the animated-entity pass; block entities use {@link #buildBe}.
      */
-    private void appendCapture(RtContext ctx, FrameBuild build, float[] disp, int entityId, int instanceBit, int mask) {
+    private void appendCapture(GpuContext ctx, FrameBuild build, float[] disp, int entityId, int instanceBit, int mask) {
         beginBuildIfNeeded(ctx, build);
         appendCapture(ctx, build, new Motion(uploadDisp(ctx, build, disp), 0f, 0f, 0f),
                 entityId, instanceBit, mask, IDENTITY);
     }
 
-    private void appendCapture(RtContext ctx, FrameBuild build, Motion motion, int entityId, int instanceBit, int mask,
+    private void appendCapture(GpuContext ctx, FrameBuild build, Motion motion, int entityId, int instanceBit, int mask,
                                float[] instanceTransform) {
         beginBuildIfNeeded(ctx, build);
         if (entityId >= 0) {
@@ -1580,7 +1580,7 @@ public final class RtEntities {
     }
 
     /** Pack one changed entity's four logical geometry regions into its retired ring slot's backing. */
-    private void appendPackedEntity(RtContext ctx, FrameBuild build, Motion motion, int entityId,
+    private void appendPackedEntity(GpuContext ctx, FrameBuild build, Motion motion, int entityId,
                                     int instanceBit, int mask, float[] instanceTransform) {
         int asInput = org.lwjgl.vulkan.KHRAccelerationStructure.VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
         int storage = org.lwjgl.vulkan.VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
@@ -1688,7 +1688,7 @@ public final class RtEntities {
     }
 
     /** Upload a per-vertex displacement array into this frame slot's motion arena; returns 0 if null. */
-    private long uploadDisp(RtContext ctx, FrameBuild build, float[] disp) {
+    private long uploadDisp(GpuContext ctx, FrameBuild build, float[] disp) {
         if (disp == null) {
             return 0L;
         }
@@ -1699,7 +1699,7 @@ public final class RtEntities {
     }
 
     /** Upload a reusable primitive list without first copying its backing into a right-sized array. */
-    private long uploadDisp(RtContext ctx, FrameBuild build, FloatArrayList disp) {
+    private long uploadDisp(GpuContext ctx, FrameBuild build, FloatArrayList disp) {
         int size = disp.size();
         if (size == 0) {
             return 0L;
@@ -1732,7 +1732,7 @@ public final class RtEntities {
     }
 
     /** Select the next per-entity slot, waiting on its exact last graphics use before mutable reuse. */
-    private EntitySlot selectEntityBuildSlot(RtContext ctx, FrameBuild build, int entityId) {
+    private EntitySlot selectEntityBuildSlot(GpuContext ctx, FrameBuild build, int entityId) {
         EntityAccel ea = entityAccels.get(entityId);
         if (ea == null) {
             ea = new EntityAccel();
@@ -1758,7 +1758,7 @@ public final class RtEntities {
      * AS of the same topology when refit is enabled. Otherwise it records a full BUILD; BLAS built while
      * refit is disabled omit ALLOW_UPDATE. Refit scratch and packed geometry persist per ring slot.
      */
-    private RtAccel refitOrBuild(RtContext ctx, FrameBuild build, EntitySlot slot,
+    private RtAccel refitOrBuild(GpuContext ctx, FrameBuild build, EntitySlot slot,
                                  long positionAddr, long indexAddr,
                                  int vertCount, IntArrayList indices, int[] bucketTris) {
         int triCount = 0;
@@ -1853,7 +1853,7 @@ public final class RtEntities {
     }
 
     /** Retire persistent AS for entities not captured within the last KEEP_FRAMES frames. */
-    private void evictStaleAccels(RtContext ctx) {
+    private void evictStaleAccels(GpuContext ctx) {
         if (entityAccels.isEmpty()) {
             return;
         }
@@ -1894,7 +1894,7 @@ public final class RtEntities {
     }
 
     /** Detach a stale slot immediately and destroy its GPU owners after their exact last use completes. */
-    private void retireEntitySlot(RtContext ctx, EntitySlot slot) {
+    private void retireEntitySlot(GpuContext ctx, EntitySlot slot) {
         RtAccel accel = slot.accel;
         GpuBuffer backing = slot.backing;
         GpuBuffer geometry = slot.geometry;
@@ -1932,7 +1932,7 @@ public final class RtEntities {
         cameraState.initialized = true;
     }
 
-    private void ensureResources(RtContext ctx) {
+    private void ensureResources(GpuContext ctx) {
         int requiredCapacity = maxEntities();
         if (tableRing != null && tableCapacity >= requiredCapacity) {
             return;

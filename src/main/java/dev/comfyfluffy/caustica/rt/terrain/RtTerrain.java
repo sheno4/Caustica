@@ -7,7 +7,7 @@ import com.mojang.blaze3d.vertex.VertexConsumer;
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.rt.RtComposite;
-import dev.comfyfluffy.caustica.rt.RtContext;
+import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.RtDeviceBringup;
 import dev.comfyfluffy.caustica.rt.RtFrameStats;
@@ -306,7 +306,7 @@ public final class RtTerrain {
     }
 
     /** Per-tick residency update: window sync + dirty drain (plus the streaming fallback, see {@link #frame}). */
-    public static void update(RtContext ctx) {
+    public static void update(GpuContext ctx) {
         INSTANCE.tick(ctx);
     }
 
@@ -314,11 +314,11 @@ public final class RtTerrain {
      * Per-render-frame streaming pass, driven by {@link RtComposite#composite}: publish completed builds
      * and dispatch immutable snapshots to workers, bounded by configured per-pass counts.
      */
-    public static void frame(RtContext ctx) {
+    public static void frame(GpuContext ctx) {
         if (RtMaterialRegistry.INSTANCE.isReady()) INSTANCE.frameStream(ctx);
     }
 
-    public static void shutdown(RtContext ctx) {
+    public static void shutdown(GpuContext ctx) {
         INSTANCE.clear(ctx, true);
     }
 
@@ -368,7 +368,7 @@ public final class RtTerrain {
         INSTANCE.fullClearRequested = true;
     }
 
-    private void tick(RtContext ctx) {
+    private void tick(GpuContext ctx) {
 
         Minecraft mc = Minecraft.getInstance();
         ClientLevel level = mc.level;
@@ -434,7 +434,7 @@ public final class RtTerrain {
     }
 
     /** The per-render-frame entry point: run one count-bounded streaming pass. */
-    private void frameStream(RtContext ctx) {
+    private void frameStream(GpuContext ctx) {
         Minecraft mc = Minecraft.getInstance();
         if (mc.level == null || mc.player == null) {
             return;
@@ -448,7 +448,7 @@ public final class RtTerrain {
      * new section snapshots to the worker pool. Per-pass result and dispatch caps bound render-thread
      * work. Skips silently when there is nothing to do (no stats row).
      */
-    private void stream(RtContext ctx) {
+    private void stream(GpuContext ctx) {
         Minecraft mc = Minecraft.getInstance();
         ClientLevel level = mc.level;
         if (level == null || mc.player == null) {
@@ -882,7 +882,7 @@ public final class RtTerrain {
      * nothing mutable is shared across threads; the captured {@code region}, model sets and block
      * colors are read-only. Capped by the configured dispatch count.
      */
-    private static DispatchContext dispatchContext(RtContext ctx, ClientLevel level) {
+    private static DispatchContext dispatchContext(GpuContext ctx, ClientLevel level) {
         Minecraft mc = Minecraft.getInstance();
         return new DispatchContext(ctx, level,
                 mc.getModelManager().getBlockStateModelSet(), mc.getModelManager().getFluidStateModelSet(),
@@ -1134,7 +1134,7 @@ public final class RtTerrain {
     }
 
     /** Build a terrain BLAS and optionally compact-copy it before publication. */
-    private void submitTerrainBuild(RtContext ctx, SectionTask task, PreparedSection prepared) {
+    private void submitTerrainBuild(GpuContext ctx, SectionTask task, PreparedSection prepared) {
         ctx.gpuExecutor().submit(
                 () -> !isTaskCurrent(task),
                 cmd -> {
@@ -1163,7 +1163,7 @@ public final class RtTerrain {
                 });
     }
 
-    private void submitTerrainCompaction(RtContext ctx, SectionTask task, PreparedSection prepared,
+    private void submitTerrainCompaction(GpuContext ctx, SectionTask task, PreparedSection prepared,
                                          RtGpuExecutor.Build build) {
         RtAccel.PreparedTerrainCompaction compaction;
         try {
@@ -1258,7 +1258,7 @@ public final class RtTerrain {
      * whose token no longer matches {@link #inFlight} is stale and its unpublished native result is
      * destroyed instead of entering the table.
      */
-    private void drainCompletedBuilds(RtContext ctx, List<PreparedSection> prepared, List<SectionGeom> removed,
+    private void drainCompletedBuilds(GpuContext ctx, List<PreparedSection> prepared, List<SectionGeom> removed,
                                       int resultCap) {
         int remaining = resultCap;
         while (remaining > 0) {
@@ -1344,7 +1344,7 @@ public final class RtTerrain {
         }
     }
 
-    private void destroyCompletedResult(RtContext ctx, SectionResult result) {
+    private void destroyCompletedResult(GpuContext ctx, SectionResult result) {
         if (result.prepared() == null) {
             return;
         }
@@ -1403,7 +1403,7 @@ public final class RtTerrain {
     }
 
     private void destroyPreparedSection(PreparedSection ps) {
-        RtContext ctx = RtContext.currentOrNull();
+        GpuContext ctx = GpuContext.currentOrNull();
         if (ctx == null) {
             RtSectionBuilder.destroy(ps);
         } else {
@@ -1412,7 +1412,7 @@ public final class RtTerrain {
     }
 
     /** Per-tick render-thread snapshot dependencies shared by reextract + missing dispatch. */
-    private record DispatchContext(RtContext ctx, ClientLevel level, BlockStateModelSet modelSet,
+    private record DispatchContext(GpuContext ctx, ClientLevel level, BlockStateModelSet modelSet,
                                    FluidStateModelSet fluidModelSet, BlockColors blockColors,
                                    SpriteFinder blockSpriteFinder) {
     }
@@ -1470,7 +1470,7 @@ public final class RtTerrain {
                 || Math.abs(rbz - blockZ) > rebaseDistanceBlocks();
     }
 
-    private void applyBuildChanges(RtContext ctx, List<PreparedSection> prepared, List<SectionGeom> removed,
+    private void applyBuildChanges(GpuContext ctx, List<PreparedSection> prepared, List<SectionGeom> removed,
                                    boolean rebase, int rbx, int rby, int rbz) {
         GraphicsUse lastGraphicsUse = ctx.gpuExecutor().latestGraphicsUse();
         int baseX = rebase ? rbx : blockX;
@@ -1611,7 +1611,7 @@ public final class RtTerrain {
     }
 
     /** Snapshot only lit sections once the previous complete generation has published. */
-    private void flushLightHierarchyUpdate(RtContext ctx) {
+    private void flushLightHierarchyUpdate(GpuContext ctx) {
         if (!lightHierarchyDirty || !lightGrid.isIdle()) return;
         long now = System.nanoTime();
         if (lastLightHierarchyRequestNanos != 0L
@@ -1626,25 +1626,25 @@ public final class RtTerrain {
     }
 
     /** Keep a valid zero-instance table through transient empty-residency windows. */
-    private void ensureEmptyTableReady(RtContext ctx) {
+    private void ensureEmptyTableReady(GpuContext ctx) {
         table.ensureEmpty(ctx);
         ready = true;
     }
 
     /** Queue old GPU resources until the last graphics submission that could reference them completes. */
-    private void retire(RtContext ctx, GraphicsUse lastGraphicsUse, List<SectionGeom> removed) {
+    private void retire(GpuContext ctx, GraphicsUse lastGraphicsUse, List<SectionGeom> removed) {
         for (SectionGeom g : removed) {
             ctx.gpuExecutor().retireAfterGraphics(lastGraphicsUse, g::destroy);
         }
     }
 
-    private void retireGeneration(RtContext ctx, GraphicsUse lastGraphicsUse, Generation generation) {
+    private void retireGeneration(GpuContext ctx, GraphicsUse lastGraphicsUse, Generation generation) {
         ctx.gpuExecutor().retireAfterGraphics(lastGraphicsUse,
                 () -> table.recycleGeneration(generation));
     }
 
     /** Join outstanding worker/GPU tasks and destroy every unpublished terminal result. */
-    private void drainTasksForClear(RtContext ctx) {
+    private void drainTasksForClear(GpuContext ctx) {
         // A dead executor cannot make further task progress. Throw on the render thread before waiting;
         // its failure path has already terminally failed every accepted queued build.
         ctx.gpuExecutor().throwIfFailed();
@@ -1668,7 +1668,7 @@ public final class RtTerrain {
     }
 
     /** Full teardown (world exit / shutdown): drain the GPU, then free everything incl. an in-flight build. */
-    private void clear(RtContext ctx, boolean shutdown) {
+    private void clear(GpuContext ctx, boolean shutdown) {
         if (!shutdown) {
             clearAsync(ctx);
             return;
@@ -1754,7 +1754,7 @@ public final class RtTerrain {
      * graphics submission that could still reference them. Results arriving from the old epoch self-retire
      * as unpublished resources in {@link #completeTask(SectionResult)}.
      */
-    private void clearAsync(RtContext ctx) {
+    private void clearAsync(GpuContext ctx) {
         ctx.gpuExecutor().throwIfFailed();
         terrainEpoch++;
 

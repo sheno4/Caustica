@@ -359,7 +359,7 @@ public final class RtComposite {
      */
     public boolean exportLatestResidualExposureExr(Path outputPath) throws java.io.IOException {
         RenderSystem.assertOnRenderThread();
-        RtContext ctx = RtContext.currentOrNull();
+        GpuContext ctx = GpuContext.currentOrNull();
         if (!enabled() || failed || ctx == null || rrOutput == null || exposure.image() == null
                 || displayW <= 0 || displayH <= 0 || pendingGraphicsUse != null) {
             return false;
@@ -413,7 +413,7 @@ public final class RtComposite {
         }
     }
 
-    private void recordExrReadback(RtContext ctx, VkCommandBuffer cmd, GpuBuffer readback, long exposureOffset) {
+    private void recordExrReadback(GpuContext ctx, VkCommandBuffer cmd, GpuBuffer readback, long exposureOffset) {
         try (MemoryStack stack = MemoryStack.stackPush();
              RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd,
                      "residual-exposure EXR readback")) {
@@ -583,7 +583,7 @@ public final class RtComposite {
         if (graphicsUse == null) {
             return;
         }
-        RtContext ctx = RtContext.currentOrNull();
+        GpuContext ctx = GpuContext.currentOrNull();
         if (ctx == null) {
             throw new IllegalStateException("RT context disappeared before graphics use completed");
         }
@@ -604,7 +604,7 @@ public final class RtComposite {
         if (failed) {
             return false;
         }
-        RtContext ctx = RtContext.get();
+        GpuContext ctx = GpuContext.get();
         if (ctx == null) {
             return false;
         }
@@ -720,7 +720,7 @@ public final class RtComposite {
      * atlas), or until we're in a world with the atlas ready. The heavy {@code _s}/{@code _n} atlases are
      * deliberately not built at the menu — only once a world is entered.
      */
-    public void ensureResourcesReady(RtContext ctx) {
+    public void ensureResourcesReady(GpuContext ctx) {
         if (failed || worldPipeline != null || reloadRebindRequested) {
             return;
         }
@@ -735,7 +735,7 @@ public final class RtComposite {
         }
     }
 
-    private RtPipeline ensureWorld(RtContext ctx) throws IOException {
+    private RtPipeline ensureWorld(GpuContext ctx) throws IOException {
         if (worldPipeline == null) {
             ensureRenderPassManager(ctx);
             bindlessTextureCapacity = RtEntityTextures.maxTextures();
@@ -768,7 +768,7 @@ public final class RtComposite {
         return worldPipeline;
     }
 
-    private void ensureRenderPassManager(RtContext ctx) throws IOException {
+    private void ensureRenderPassManager(GpuContext ctx) throws IOException {
         if (renderPassManager == null) {
             renderPassManager = RenderPassManager.create(ctx, CausticaApi.registry().renderPasses());
         }
@@ -812,7 +812,7 @@ public final class RtComposite {
         }
     }
 
-    private void refreshPipelineShapeIfNeeded(RtContext ctx) {
+    private void refreshPipelineShapeIfNeeded(GpuContext ctx) {
         if (worldPipeline == null || reloadRebindRequested) {
             return;
         }
@@ -850,7 +850,7 @@ public final class RtComposite {
      * the post-reload rebind. Resets the entity bindless registry, recreates material pages, builds
      * the shared material registry, and invalidates old-epoch geometry before tracing resumes.
      */
-    private void bindWorldTextures(RtContext ctx) {
+    private void bindWorldTextures(GpuContext ctx) {
         long sampler = atlasSampler(ctx);
         long atlasView = blockAlbedoAtlasView();
         boundBlockAlbedoAtlasHandle = atlasView; // remember what we bound so a reload can detect the new atlas
@@ -902,7 +902,7 @@ public final class RtComposite {
         materialEpochTraceGate = true;
     }
 
-    private void refreshMaterialBindingsIfNeeded(RtContext ctx) {
+    private void refreshMaterialBindingsIfNeeded(GpuContext ctx) {
         if (worldPipeline == null || reloadRebindRequested) {
             return;
         }
@@ -937,7 +937,7 @@ public final class RtComposite {
         materialBindingsReady = false;
         setCelestialUvAtlas(0L);
         ProviderManager.INSTANCE.onResourceReload();
-        RtContext ctx = RtContext.currentOrNull();
+        GpuContext ctx = GpuContext.currentOrNull();
         if (ctx != null) {
             ctx.waitIdle();
             if (renderPassManager != null) {
@@ -996,7 +996,7 @@ public final class RtComposite {
         }
     }
 
-    private void ensureOutput(RtContext ctx, int width, int height) {
+    private void ensureOutput(GpuContext ctx, int width, int height) {
         // Debug presentation is downstream of the ordinary frame graph and must not change the image
         // being inspected. In particular, toggling it must not rebuild at native resolution or disable
         // the RR path whose render-resolution guide inputs the debug pass visualizes.
@@ -1108,7 +1108,7 @@ public final class RtComposite {
         mvHasPrev = true;
     }
 
-    private void recordFrame(RtContext ctx, RtPipeline active, GpuTexture nativeColor) {
+    private void recordFrame(GpuContext ctx, RtPipeline active, GpuTexture nativeColor) {
         long dstImage = vkImage(nativeColor);
         var encoder = (VulkanCommandEncoder) ((CommandEncoderAccessor) RenderSystem.getDevice().createCommandEncoder()).caustica$getBackend();
         RtGpuExecutor gpuExecutor = ctx.gpuExecutor();
@@ -1618,7 +1618,7 @@ public final class RtComposite {
             hdrCompositePipeline = null;
         }
         if (hdrUiSampler != 0L) {
-            RtContext hdrCtx = RtContext.currentOrNull();
+            GpuContext hdrCtx = GpuContext.currentOrNull();
             if (hdrCtx != null) {
                 VK10.vkDestroySampler(hdrCtx.vk(), hdrUiSampler, null);
             }
@@ -1665,7 +1665,7 @@ public final class RtComposite {
             pushRing = null;
         }
         if (atlasSampler != 0L) {
-            RtContext ctx = RtContext.currentOrNull();
+            GpuContext ctx = GpuContext.currentOrNull();
             if (ctx != null) {
                 VK10.vkDestroySampler(ctx.vk(), atlasSampler, null);
             }
@@ -1673,7 +1673,7 @@ public final class RtComposite {
         }
     }
 
-    private long atlasSampler(RtContext ctx) {
+    private long atlasSampler(GpuContext ctx) {
         if (atlasSampler == 0L) {
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 VkSamplerCreateInfo sci = VkSamplerCreateInfo.calloc(stack).sType$Default()
@@ -1831,7 +1831,7 @@ public final class RtComposite {
         if (hdrCompositePipeline != null) {
             return;
         }
-        RtContext ctx = RtContext.get();
+        GpuContext ctx = GpuContext.get();
         if (ctx == null || !ensureUiSampler(ctx)) {
             return;
         }
@@ -1839,7 +1839,7 @@ public final class RtComposite {
     }
 
     /** Ensure the shared nearest/clamp sampler used to sample SDR/overlay targets in the present compute. */
-    private boolean ensureUiSampler(RtContext ctx) {
+    private boolean ensureUiSampler(GpuContext ctx) {
         if (hdrUiSampler != 0L) {
             return true;
         }
@@ -1884,7 +1884,7 @@ public final class RtComposite {
         if (sdrMainView == 0L || failed) {
             return false;
         }
-        RtContext ctx = RtContext.get();
+        GpuContext ctx = GpuContext.get();
         if (ctx == null || !ensureUiSampler(ctx)) {
             return false;
         }
@@ -1984,7 +1984,7 @@ public final class RtComposite {
         if (!RtDlssFg.enabled() || !RtUiOverlay.enabled() || main == null || main.getColorTexture() == null) {
             return;
         }
-        RtContext ctx = RtContext.currentOrNull();
+        GpuContext ctx = GpuContext.currentOrNull();
         if (ctx == null) {
             return;
         }
@@ -2029,7 +2029,7 @@ public final class RtComposite {
      * version, just within a single method instead of split across a mixin hook.
      */
     private void captureFgHdrHudless(VkCommandBuffer cmd, MemoryStack stack, GpuImage src) {
-        RtContext ctx = RtContext.currentOrNull();
+        GpuContext ctx = GpuContext.currentOrNull();
         if (ctx == null) {
             return;
         }
@@ -2083,7 +2083,7 @@ public final class RtComposite {
         if (failed || gDepth == null || gMotion == null || !frameCaptured) {
             return null;
         }
-        RtContext ctx = RtContext.currentOrNull();
+        GpuContext ctx = GpuContext.currentOrNull();
         if (ctx == null) {
             return null;
         }
@@ -2140,7 +2140,7 @@ public final class RtComposite {
         return out;
     }
 
-    private boolean ensureFgFeature(RtContext ctx, int w, int h, int rw, int rh, int fmt) {
+    private boolean ensureFgFeature(GpuContext ctx, int w, int h, int rw, int rh, int fmt) {
         if (RtDlssFg.INSTANCE.featureReadyFor(w, h, rw, rh, fmt)) {
             return true;
         }
@@ -2150,7 +2150,7 @@ public final class RtComposite {
         return RtDlssFg.INSTANCE.featureReadyFor(w, h, rw, rh, fmt);
     }
 
-    private void ensureFgInterp(RtContext ctx, int count, int w, int h, int fmt) {
+    private void ensureFgInterp(GpuContext ctx, int count, int w, int h, int fmt) {
         if (fgInterp.length == count && fgInterpW == w && fgInterpH == h && fgInterpFormat == fmt
                 && (count == 0 || fgInterp[0] != null)) {
             return;

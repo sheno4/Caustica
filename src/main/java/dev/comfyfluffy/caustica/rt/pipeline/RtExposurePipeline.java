@@ -23,20 +23,20 @@ import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.LongBuffer;
 
-import dev.comfyfluffy.caustica.rt.RtContext;
+import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
 import dev.comfyfluffy.caustica.rt.gen.ExposureHistPushData;
 import dev.comfyfluffy.caustica.rt.gen.ExposureResolvePushData;
 
-import static dev.comfyfluffy.caustica.rt.RtContext.check;
+import static dev.comfyfluffy.caustica.rt.GpuContext.check;
 import static dev.comfyfluffy.caustica.rt.pipeline.RtBindings.*;
 
 /** Compute pipelines for histogram auto-exposure over the RT HDR trace output. */
 final class RtExposurePipeline {
     private static final String SHADER_DIR = "/caustica/shaders/pipelines/";
 
-    private final RtContext ctx;
+    private final GpuContext ctx;
     private final long histDescriptorSetLayout;
     private final long histDescriptorPool;
     private final long histDescriptorSet;
@@ -57,7 +57,7 @@ final class RtExposurePipeline {
     private long boundStateBuffer;
     private boolean destroyed;
 
-    private RtExposurePipeline(RtContext ctx,
+    private RtExposurePipeline(GpuContext ctx,
                                long histDescriptorSetLayout, long histDescriptorPool, long histDescriptorSet,
                                long histPipelineLayout, long histPipeline,
                                long resolveDescriptorSetLayout, long resolveDescriptorPool, long resolveDescriptorSet,
@@ -75,7 +75,7 @@ final class RtExposurePipeline {
         this.resolvePipeline = resolvePipeline;
     }
 
-    static RtExposurePipeline create(RtContext ctx) {
+    static RtExposurePipeline create(GpuContext ctx) {
         VkDevice vk = ctx.vk();
         try (MemoryStack stack = MemoryStack.stackPush()) {
             LongBuffer p = stack.mallocLong(1);

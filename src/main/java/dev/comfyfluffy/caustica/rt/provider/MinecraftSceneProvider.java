@@ -1,7 +1,7 @@
 package dev.comfyfluffy.caustica.rt.provider;
 
 import dev.comfyfluffy.caustica.api.provider.SceneProvider;
-import dev.comfyfluffy.caustica.rt.RtContext;
+import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.entity.RtEntities;
 import dev.comfyfluffy.caustica.rt.terrain.RtTerrain;
 import net.minecraft.resources.Identifier;
@@ -16,7 +16,7 @@ public final class MinecraftSceneProvider implements SceneProvider {
 
     @Override
     public void update() {
-        RtContext ctx = RtContext.currentOrNull();
+        GpuContext ctx = GpuContext.currentOrNull();
         if (ctx != null) {
             RtTerrain.update(ctx);
         }
@@ -24,7 +24,7 @@ public final class MinecraftSceneProvider implements SceneProvider {
 
     @Override
     public void prepareFrame() {
-        RtContext ctx = RtContext.currentOrNull();
+        GpuContext ctx = GpuContext.currentOrNull();
         if (ctx != null) {
             RtTerrain.frame(ctx);
         }
@@ -42,7 +42,7 @@ public final class MinecraftSceneProvider implements SceneProvider {
 
     @Override
     public void shutdown() {
-        RtContext ctx = RtContext.currentOrNull();
+        GpuContext ctx = GpuContext.currentOrNull();
         if (ctx != null) {
             RtTerrain.shutdown(ctx);
             RtEntities.INSTANCE.shutdown();

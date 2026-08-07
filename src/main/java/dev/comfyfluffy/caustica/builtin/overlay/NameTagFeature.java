@@ -28,7 +28,7 @@ import net.minecraft.client.renderer.entity.EntityRenderer;
 import net.minecraft.util.ARGB;
 
 import dev.comfyfluffy.caustica.rt.RtComposite;
-import dev.comfyfluffy.caustica.rt.RtContext;
+import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
 import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
@@ -67,7 +67,7 @@ final class NameTagFeature implements OverlayFeature {
     // one shared set rewritten per page.
     private static final int MAX_ATLAS_PAGES = 16;
 
-    private RtContext ctx;
+    private GpuContext ctx;
     private OverlayPipelines.Pipeline pipeline;
     private OverlayPipelines.SampledImageSetPool imageSetPool;
     private long sampler;
@@ -96,7 +96,7 @@ final class NameTagFeature implements OverlayFeature {
     }
 
     @Override
-    public boolean prepare(RtContext ctx, OverlayFramePool pool, RtGpuExecutor.GraphicsUse graphicsUse,
+    public boolean prepare(GpuContext ctx, OverlayFramePool pool, RtGpuExecutor.GraphicsUse graphicsUse,
                            int width, int height) {
         if (!RtEntities.nameTagsEnabled()) {
             return false;
@@ -152,7 +152,7 @@ final class NameTagFeature implements OverlayFeature {
         return true;
     }
 
-    private void ensureResources(RtContext ctx) {
+    private void ensureResources(GpuContext ctx) {
         this.ctx = ctx;
         if (pipeline != null) {
             return;

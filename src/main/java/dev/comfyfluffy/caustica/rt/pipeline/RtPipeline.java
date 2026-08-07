@@ -28,7 +28,7 @@ import java.nio.ByteBuffer;
 import java.nio.LongBuffer;
 import java.util.Map;
 
-import dev.comfyfluffy.caustica.rt.RtContext;
+import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.RtDeviceBringup;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
@@ -36,7 +36,7 @@ import dev.comfyfluffy.caustica.rt.accel.RtAccel;
 import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
 import dev.comfyfluffy.caustica.rt.shader.WorldShaderCompiler;
 
-import static dev.comfyfluffy.caustica.rt.RtContext.check;
+import static dev.comfyfluffy.caustica.rt.GpuContext.check;
 import static dev.comfyfluffy.caustica.rt.pipeline.RtBindings.*;
 import static org.lwjgl.vulkan.EXTOpacityMicromap.VK_PIPELINE_CREATE_RAY_TRACING_OPACITY_MICROMAP_BIT_EXT;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
@@ -67,7 +67,7 @@ public final class RtPipeline {
     // rewriting it. Ring depth is only a performance choice that avoids routine host waits.
     private static final int RING = 6;
 
-    private final RtContext ctx;
+    private final GpuContext ctx;
     private final long descriptorSetLayout;
     private final long descriptorPool;
     private final long[] descriptorSets;
@@ -100,7 +100,7 @@ public final class RtPipeline {
     private final Map<Integer, Integer> passResourceDescriptorTypes;
     private boolean destroyed;
 
-    private RtPipeline(RtContext ctx, long dsl, long pool, long[] sets, long layout, long pipeline,
+    private RtPipeline(GpuContext ctx, long dsl, long pool, long[] sets, long layout, long pipeline,
                        GpuBuffer sbt, long stride, int raygenCount, int missCount, int hitGroupCount,
                        int pushConstantSize, int pushConstantStages, long bindlessLayout,
                        long bindlessPool, long bindlessSet, long passResourceLayout,
@@ -143,7 +143,7 @@ public final class RtPipeline {
      * table and hit table; {@link #trace(VkCommandBuffer, int, int, ByteBuffer, int)} picks one per
      * dispatch by index.
      */
-    public static RtPipeline create(RtContext ctx, RtShaderCode[] rgen, RtShaderCode[] rmiss,
+    public static RtPipeline create(GpuContext ctx, RtShaderCode[] rgen, RtShaderCode[] rmiss,
                                     RtShaderCode rchit, RtShaderCode rahit, int pushConstantSize,
                                     int bindlessTextures,
                                     Map<String, WorldShaderCompiler.PassResourceBinding> passResourceBindings) {

@@ -4,7 +4,7 @@ import com.mojang.blaze3d.platform.NativeImage;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.mixin.SpriteContentsAccessor;
 import dev.comfyfluffy.caustica.mixin.TextureAtlasAccessor;
-import dev.comfyfluffy.caustica.rt.RtContext;
+import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.pipeline.RtPipeline;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.texture.TextureAtlas;
@@ -137,7 +137,7 @@ public final class RtBlockMaterials {
     }
 
     /** Compile, pack, mip, upload, and publish block-atlas plus authored entity material pages. */
-    public void prepareAll(RtContext ctx, int materialPageCapacity, RtEmissionSemantics emissionSemantics,
+    public void prepareAll(GpuContext ctx, int materialPageCapacity, RtEmissionSemantics emissionSemantics,
                            RtMaterialOverrides overrides) {
         List<TextureAtlasSprite> sprites = blockSprites();
         List<Candidate> authored = new ArrayList<>();

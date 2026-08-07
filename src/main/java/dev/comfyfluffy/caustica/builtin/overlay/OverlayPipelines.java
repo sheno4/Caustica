@@ -36,11 +36,11 @@ import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.LongBuffer;
 
-import dev.comfyfluffy.caustica.rt.RtContext;
+import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
 
-import static dev.comfyfluffy.caustica.rt.RtContext.check;
+import static dev.comfyfluffy.caustica.rt.GpuContext.check;
 import static dev.comfyfluffy.caustica.rt.pipeline.RtBindings.OVERLAY_IMAGE;
 import static dev.comfyfluffy.caustica.rt.pipeline.RtBindings.OVERLAY_SAMPLER;
 import static dev.comfyfluffy.caustica.rt.pipeline.RtBindings.OVERLAY_TLAS;
@@ -183,7 +183,7 @@ public final class OverlayPipelines {
             return this;
         }
 
-        public Pipeline build(RtContext ctx, String label) {
+        public Pipeline build(GpuContext ctx, String label) {
             if (attachmentFormat == 0) {
                 throw new IllegalStateException("overlay pipeline '" + label + "' has no attachment format");
             }
@@ -191,7 +191,7 @@ public final class OverlayPipelines {
         }
     }
 
-    private static Pipeline createGraphics(RtContext ctx, Spec spec, String label) {
+    private static Pipeline createGraphics(GpuContext ctx, Spec spec, String label) {
         VkDevice vk = ctx.vk();
         try (MemoryStack stack = MemoryStack.stackPush()) {
             LongBuffer p = stack.mallocLong(1);
@@ -344,7 +344,7 @@ public final class OverlayPipelines {
         }
 
         /** Point the overlay image binding at {@code view} (GENERAL layout); no-op when already bound. */
-        public void bind(RtContext ctx, long view) {
+        public void bind(GpuContext ctx, long view) {
             if (boundView == view) {
                 return;
             }
@@ -365,7 +365,7 @@ public final class OverlayPipelines {
         }
     }
 
-    public static ReadOnlyImageSet readOnlyImageSet(RtContext ctx, int stageFlags, String label) {
+    public static ReadOnlyImageSet readOnlyImageSet(GpuContext ctx, int stageFlags, String label) {
         VkDevice vk = ctx.vk();
         try (MemoryStack stack = MemoryStack.stackPush()) {
             LongBuffer p = stack.mallocLong(1);
@@ -414,7 +414,7 @@ public final class OverlayPipelines {
         }
 
         /** Point binding 0 at {@code view}, sampled with {@code sampler}; no-op when already bound. */
-        public void bind(RtContext ctx, long view, long sampler) {
+        public void bind(GpuContext ctx, long view, long sampler) {
             if (boundView == view) {
                 return;
             }
@@ -435,7 +435,7 @@ public final class OverlayPipelines {
         }
     }
 
-    public static SampledImageSet sampledImageSet(RtContext ctx, int stageFlags, String label) {
+    public static SampledImageSet sampledImageSet(GpuContext ctx, int stageFlags, String label) {
         VkDevice vk = ctx.vk();
         try (MemoryStack stack = MemoryStack.stackPush()) {
             LongBuffer p = stack.mallocLong(1);
@@ -488,7 +488,7 @@ public final class OverlayPipelines {
         }
 
         /** Allocate a fresh descriptor set from this pool and write {@code view}/{@code sampler} into it once. */
-        public long allocateAndBind(RtContext ctx, long view, long sampler) {
+        public long allocateAndBind(GpuContext ctx, long view, long sampler) {
             VkDevice vk = ctx.vk();
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 VkDescriptorSetAllocateInfo dsai = VkDescriptorSetAllocateInfo.calloc(stack).sType$Default()
@@ -514,7 +514,7 @@ public final class OverlayPipelines {
         }
     }
 
-    public static SampledImageSetPool sampledImageSetPool(RtContext ctx, int stageFlags, int maxSets, String label) {
+    public static SampledImageSetPool sampledImageSetPool(GpuContext ctx, int stageFlags, int maxSets, String label) {
         VkDevice vk = ctx.vk();
         try (MemoryStack stack = MemoryStack.stackPush()) {
             LongBuffer p = stack.mallocLong(1);
@@ -566,7 +566,7 @@ public final class OverlayPipelines {
         }
 
         /** Wait for the next ring slot's prior use, write {@code tlas}, and return the set for this frame. */
-        public long bind(RtContext ctx, long tlas, RtGpuExecutor.GraphicsUse graphicsUse) {
+        public long bind(GpuContext ctx, long tlas, RtGpuExecutor.GraphicsUse graphicsUse) {
             current = (current + 1) % RING;
             RtGpuExecutor.TrackedGraphicsUse slotUse = uses[current];
             ctx.gpuExecutor().graphicsUseWaiter().await(slotUse);
@@ -590,7 +590,7 @@ public final class OverlayPipelines {
         }
     }
 
-    public static AccelStructureSet accelStructureSet(RtContext ctx, int stageFlags, String label) {
+    public static AccelStructureSet accelStructureSet(GpuContext ctx, int stageFlags, String label) {
         VkDevice vk = ctx.vk();
         try (MemoryStack stack = MemoryStack.stackPush()) {
             LongBuffer p = stack.mallocLong(1);
@@ -628,7 +628,7 @@ public final class OverlayPipelines {
     }
 
     /** A shared nearest/clamp sampler, for overlay passes sampling a real texture (e.g. a font atlas). */
-    public static long createNearestClampSampler(RtContext ctx, String label) {
+    public static long createNearestClampSampler(GpuContext ctx, String label) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkSamplerCreateInfo sci = VkSamplerCreateInfo.calloc(stack).sType$Default()
                     .magFilter(VK10.VK_FILTER_NEAREST).minFilter(VK10.VK_FILTER_NEAREST)

@@ -24,12 +24,12 @@ import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.LongBuffer;
 
-import dev.comfyfluffy.caustica.rt.RtContext;
+import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
 import dev.comfyfluffy.caustica.rt.gen.DebugPresentPushData;
 
-import static dev.comfyfluffy.caustica.rt.RtContext.check;
+import static dev.comfyfluffy.caustica.rt.GpuContext.check;
 import static dev.comfyfluffy.caustica.rt.pipeline.RtBindings.*;
 
 /**
@@ -43,7 +43,7 @@ public final class RtDebugPresentPipeline {
     private static final String SHADER_DIR = "/caustica/shaders/pipelines/debug_present/";
     private static final int PUSH_BYTES = DebugPresentPushData.BYTE_SIZE;
 
-    private final RtContext ctx;
+    private final GpuContext ctx;
     private final long descriptorSetLayout;
     private final long descriptorPool;
     private final long descriptorSet;
@@ -61,7 +61,7 @@ public final class RtDebugPresentPipeline {
     private long boundExposureStateBuffer;
     private boolean destroyed;
 
-    private RtDebugPresentPipeline(RtContext ctx, long dsl, long pool, long set, long layout, long pipeline) {
+    private RtDebugPresentPipeline(GpuContext ctx, long dsl, long pool, long set, long layout, long pipeline) {
         this.ctx = ctx;
         this.descriptorSetLayout = dsl;
         this.descriptorPool = pool;
@@ -70,7 +70,7 @@ public final class RtDebugPresentPipeline {
         this.pipeline = pipeline;
     }
 
-    public static RtDebugPresentPipeline create(RtContext ctx) {
+    public static RtDebugPresentPipeline create(GpuContext ctx) {
         VkDevice vk = ctx.vk();
         try (MemoryStack stack = MemoryStack.stackPush()) {
             // 0: output (SDR display target). 1..6: guide buffers. 7: post-RR scene image.

@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.rt.material;
 
-import dev.comfyfluffy.caustica.rt.RtContext;
+import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
 import org.lwjgl.PointerBuffer;
@@ -28,7 +28,7 @@ final class RtMaterialPageTexture {
     private final long view;
     private boolean destroyed;
 
-    RtMaterialPageTexture(RtContext ctx, int width, int height, List<byte[]> levels, String label) {
+    RtMaterialPageTexture(GpuContext ctx, int width, int height, List<byte[]> levels, String label) {
         if (levels.isEmpty()) throw new IllegalArgumentException("Material page has no mip levels");
         this.vma = ctx.vma();
         this.vk = ctx.vk();

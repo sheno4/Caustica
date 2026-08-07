@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.api.pass;
 
-import dev.comfyfluffy.caustica.rt.RtContext;
+import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.accel.GpuImage;
 import org.lwjgl.system.MemoryStack;
@@ -26,7 +26,7 @@ import java.nio.ByteBuffer;
 import java.nio.LongBuffer;
 import java.util.List;
 
-import static dev.comfyfluffy.caustica.rt.RtContext.check;
+import static dev.comfyfluffy.caustica.rt.GpuContext.check;
 
 /**
  * Descriptor set / pipeline layout / compute pipeline for one shader, round-robined over
@@ -38,14 +38,14 @@ import static dev.comfyfluffy.caustica.rt.RtContext.check;
  * <p>Public pass-authoring helper: a compute-only pass (engine-bundled or extension-owned) is free to
  * build against this instead of rolling its own descriptor/pipeline setup, though it never has to — a
  * pass doing graphics work, or wanting something this doesn't offer, is free to write its own directly
- * against {@link dev.comfyfluffy.caustica.rt.RtContext}.
+ * against {@link dev.comfyfluffy.caustica.rt.GpuContext}.
  */
 public final class ComputeDispatch {
     public enum Binding {
         STORAGE, SAMPLED
     }
 
-    private final RtContext ctx;
+    private final GpuContext ctx;
     private final List<Binding> bindings;
     private final long descriptorSetLayout;
     private final long descriptorPool;
@@ -57,7 +57,7 @@ public final class ComputeDispatch {
     private int dispatchIndex;
     private boolean destroyed;
 
-    private ComputeDispatch(RtContext ctx, List<Binding> bindings, long descriptorSetLayout,
+    private ComputeDispatch(GpuContext ctx, List<Binding> bindings, long descriptorSetLayout,
                             long descriptorPool, long[] descriptorSets, long pipelineLayout, long pipeline,
                             long sampler) {
         this.ctx = ctx;
@@ -71,7 +71,7 @@ public final class ComputeDispatch {
         this.sampler = sampler;
     }
 
-    public static long createLinearClampSampler(RtContext ctx, String label) {
+    public static long createLinearClampSampler(GpuContext ctx, String label) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkSamplerCreateInfo info = VkSamplerCreateInfo.calloc(stack).sType$Default()
                     .magFilter(VK10.VK_FILTER_LINEAR).minFilter(VK10.VK_FILTER_LINEAR)
@@ -87,7 +87,7 @@ public final class ComputeDispatch {
         }
     }
 
-    public static ComputeDispatch create(RtContext ctx, String label, byte[] spirv, String entryPoint,
+    public static ComputeDispatch create(GpuContext ctx, String label, byte[] spirv, String entryPoint,
                                   List<Binding> bindings, int pushConstantBytes, int maxDispatches,
                                   long sampler) {
         VkDevice vk = ctx.vk();

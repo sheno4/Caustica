@@ -45,7 +45,7 @@ to adopt before the physical split.
 
 Knows nothing about Minecraft. Owns:
 
-- Vulkan context, device bring-up, GPU executor, queue and submission policy (`RtContext`,
+- Vulkan context, device bring-up, GPU executor, queue and submission policy (`GpuContext`,
   `RtGpuExecutor`, `RtDeviceBringup`)
 - Acceleration structures: BLAS/TLAS lifetime, compaction, OMM, instance assembly (`RtAccel`)
 - The **light system**: GPU light records, grid/hierarchy, sampling structures, NEE and RIS
@@ -177,7 +177,7 @@ A first pass API (bloom, then the sky LUT) was declarative: `ResourceRegistry.im
 described a compute call for the engine to record. It worked, but it was a bespoke, compute-only
 reimplementation of a slice of Vulkan — no graphics or ray-tracing passes, no buffers, one dispatch shape —
 bought for isolation it could not actually enforce, since an extension runs in-process and can reach
-`RtContext.get()` regardless of what the declared API offers. It was replaced with the shape below, which
+`GpuContext.get()` regardless of what the declared API offers. It was replaced with the shape below, which
 gives extensions Vulkan directly plus hardened helper types, on the reasoning that the honest version of
 "give extensions the engine's own tools" is the engine's own tools, not a parallel abstraction over them.
 
@@ -246,13 +246,13 @@ public interface CausticaRenderPass {
 }
 ```
 
-`PassSetup` exposes `RtContext` (device, allocator, `createStorageImage`/`createBuffer`, debug labelling)
+`PassSetup` exposes `GpuContext` (device, allocator, `createStorageImage`/`createBuffer`, debug labelling)
 plus `publishWorldResource`/`publishOutput` (see above). `PassFrame` exposes the command buffer, the
 display extent, `reconstructedColor()`/`exposureImage()`, a `PassOptions` snapshot (declared now, unread
 until the config-storage work lands — see §7),
 and one `memoryBarrier()` helper matching the broad full-pipeline-barrier idiom used everywhere else in
 `rt/RtComposite.java`. There is no `ComputeProgram`, `ImageRef`, or `DispatchImage` — a pass builds its own
-descriptor sets and pipeline against `RtContext` directly, the same way `RtExposurePipeline` and
+descriptor sets and pipeline against `GpuContext` directly, the same way `RtExposurePipeline` and
 `OverlayPipelines` (then `RtOverlayPipelines`) already did before any pass API existed. `GpuImage`/`GpuBuffer` (renamed from
 `RtImage`/`RtBuffer` — §10.1's rename, done early because these two are now genuinely public API surface)
 are the only non-raw types a pass touches, and both are thin RAII wrappers around a handle, not an
@@ -268,8 +268,8 @@ Two decisions from the first slice are reversed here, deliberately:
   before the next stage's read.
 - **Extensions size their own resources in pixels.** The `Size.displayRelative(2)` / `Size.fixed(256, 64)`
   policy type is gone; a pass reads `PassSetup.displayWidth()/displayHeight()` in `create`/`resize` and
-  calls `RtContext.createStorageImage` with whatever dimensions it wants. There was no real allocation,
-  resize, or retirement policy for the engine to own here beyond what `RtContext` already provides to
+  calls `GpuContext.createStorageImage` with whatever dimensions it wants. There was no real allocation,
+  resize, or retirement policy for the engine to own here beyond what `GpuContext` already provides to
   every other engine-internal caller — the size-policy type was solving a problem the declarative
   resource layer created for itself.
 
@@ -347,14 +347,14 @@ Honest status, so this reads as a target and not a claim:
   consumer, not a working contribution path; see `LightSink`'s javadoc.
 - **The render pass API is real, raw-Vulkan, and three built-in passes run through it, including a
   graphics one.** `CausticaRenderPass` gives a pass a `VkCommandBuffer` and lets it build its own
-  descriptor sets and pipelines directly against `RtContext` — see §4. `BloomPass`, `SkyLutPass`, and
+  descriptor sets and pipelines directly against `GpuContext` — see §4. `BloomPass`, `SkyLutPass`, and
   `WorldOverlayPass` (all `builtin/`) are ordinary passes registered by `caustica:builtin`, not privileged
   engine code; `RtBloomPipeline` and `RtSkyLut` (the
   pre-pass-API built-ins) are deleted. `RenderPassManager` sequences passes by stage plus a same-stage
   `after()` topological order, and isolates a failing pass (disables it, logs, keeps the frame loop
   running) the same way `ProviderManager` isolates a failing provider. `SkyLutPass` moved out of `rt/`
   deliberately, as a test of the register mechanism: it now lives beside a hypothetical third-party pass
-  (`builtin/`, sibling to `api/`/`rt/`/`client/`), reaches the engine only through `RtContext`,
+  (`builtin/`, sibling to `api/`/`rt/`/`client/`), reaches the engine only through `GpuContext`,
   `GpuImage`, the now-public `ComputeDispatch`/`PassShaderCompiler` pass-authoring helpers, and
   `RtLookPackage.current()` for config — and gathers its own per-frame sky state directly from Minecraft
   instead of reading a shared snapshot the engine publishes (`rt/SkyFrame`'s NEE-facing copy and this

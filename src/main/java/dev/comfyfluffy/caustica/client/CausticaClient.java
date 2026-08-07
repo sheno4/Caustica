@@ -1,7 +1,7 @@
 package dev.comfyfluffy.caustica.client;
 
 import dev.comfyfluffy.caustica.CausticaMod;
-import dev.comfyfluffy.caustica.rt.RtContext;
+import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtDeviceBringup;
 import dev.comfyfluffy.caustica.rt.RtComposite;
 import dev.comfyfluffy.caustica.rt.RtFrameStats;
@@ -40,7 +40,7 @@ public final class CausticaClient implements ClientModInitializer {
 
 			// Bring up the RT device/context once; terrain residency + the composite follow below.
 			if (!rtInitDone && RtDeviceBringup.rtRequested()) {
-				RtContext ctx = RtContext.get();
+				GpuContext ctx = GpuContext.get();
 				if (ctx != null) {
 					rtInitDone = true;
 				}
@@ -49,7 +49,7 @@ public final class CausticaClient implements ClientModInitializer {
 			// Once RT is up, keep section residency synced to vanilla's loaded chunks around
 			// the player — builds newly-in-range sections, frees out-of-range ones, per tick.
 			if (rtInitDone) {
-				RtContext ctx = RtContext.currentOrNull();
+				GpuContext ctx = GpuContext.currentOrNull();
 				if (ctx != null) {
 					RtFrameStats.FRAME.beginIfInactive();
 					// Bring the world pipeline + LabPBR atlases up before terrain tessellates, so per-prim
@@ -89,7 +89,7 @@ public final class CausticaClient implements ClientModInitializer {
 			return;
 		}
 
-		RtContext ctx = RtContext.currentOrNull();
+		GpuContext ctx = GpuContext.currentOrNull();
 		ProviderManager.INSTANCE.shutdown();
 		RtWorkerPool.INSTANCE.shutdown();
 		RtComposite.INSTANCE.destroy();

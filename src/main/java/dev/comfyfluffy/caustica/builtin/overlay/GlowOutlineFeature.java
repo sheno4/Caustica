@@ -12,7 +12,7 @@ import java.util.List;
 import com.mojang.blaze3d.vulkan.VulkanCommandEncoder;
 
 import dev.comfyfluffy.caustica.rt.RtComposite;
-import dev.comfyfluffy.caustica.rt.RtContext;
+import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
 import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
@@ -38,7 +38,7 @@ final class GlowOutlineFeature implements OverlayFeature {
     private static final int MASK_PUSH_BYTES = 96;
     private static final int MASK_FORMAT = VK10.VK_FORMAT_R8G8B8A8_UNORM;
 
-    private RtContext ctx;
+    private GpuContext ctx;
     private OverlayPipelines.Pipeline maskPipeline;
     private OverlayPipelines.Pipeline compositePipeline;
     private OverlayPipelines.ReadOnlyImageSet compositeSet;
@@ -55,7 +55,7 @@ final class GlowOutlineFeature implements OverlayFeature {
     private int drawCount;
 
     @Override
-    public boolean prepare(RtContext ctx, OverlayFramePool pool, RtGpuExecutor.GraphicsUse graphicsUse,
+    public boolean prepare(GpuContext ctx, OverlayFramePool pool, RtGpuExecutor.GraphicsUse graphicsUse,
                            int width, int height) {
         if (!RtEntities.glowEnabled()) {
             return false;
@@ -117,7 +117,7 @@ final class GlowOutlineFeature implements OverlayFeature {
         return true;
     }
 
-    private void ensureResources(RtContext ctx, int width, int height) {
+    private void ensureResources(GpuContext ctx, int width, int height) {
         this.ctx = ctx;
         if (maskPipeline == null) {
             maskPipeline = new OverlayPipelines.Spec("entity_glow/vertex.vert.spv", "entity_glow/fragment.frag.spv")

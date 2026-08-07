@@ -2,7 +2,7 @@ package dev.comfyfluffy.caustica.builtin.overlay;
 
 import org.lwjgl.vulkan.VkCommandBuffer;
 
-import dev.comfyfluffy.caustica.rt.RtContext;
+import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
 
 /**
@@ -18,7 +18,7 @@ public interface OverlayFeature {
      * {@code graphicsUse} is the exact completion token for resources referenced by the recorded commands.
      * {@code width}/{@code height} are the composite target's (display-res) extent.
      */
-    boolean prepare(RtContext ctx, OverlayFramePool pool, RtGpuExecutor.GraphicsUse graphicsUse,
+    boolean prepare(GpuContext ctx, OverlayFramePool pool, RtGpuExecutor.GraphicsUse graphicsUse,
                     int width, int height);
 
     /**

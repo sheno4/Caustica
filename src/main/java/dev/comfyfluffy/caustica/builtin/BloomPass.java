@@ -7,7 +7,7 @@ import dev.comfyfluffy.caustica.api.pass.PassFrame;
 import dev.comfyfluffy.caustica.api.pass.PassSetup;
 import dev.comfyfluffy.caustica.api.pass.PassShaderCompiler;
 import dev.comfyfluffy.caustica.api.pass.RenderStage;
-import dev.comfyfluffy.caustica.rt.RtContext;
+import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtLookPackage;
 import dev.comfyfluffy.caustica.rt.accel.GpuImage;
 import dev.comfyfluffy.caustica.rt.gen.BloomPushData;
@@ -41,7 +41,7 @@ public final class BloomPass implements CausticaRenderPass {
     private static final int MODE_UPSAMPLE = 2;
 
     private final RtLookPackage.Bloom settings;
-    private RtContext ctx;
+    private GpuContext ctx;
     private long sampler;
     private ComputeDispatch dispatch;
     private GpuImage[] levels = new GpuImage[0];

@@ -1,7 +1,7 @@
 package dev.comfyfluffy.caustica.rt.terrain;
 
 import dev.comfyfluffy.caustica.CausticaConfig;
-import dev.comfyfluffy.caustica.rt.RtContext;
+import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.accel.RtAccel;
 import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
 import dev.comfyfluffy.caustica.rt.terrain.RtSectionBuilder.PreparedSection;
@@ -53,7 +53,7 @@ final class RtSectionTable {
     }
 
     /** Acquire a writable copy-on-write generation and return the previous graphics-owned generation. */
-    Generation beginWriteGeneration(RtContext ctx, int minCapacity) {
+    Generation beginWriteGeneration(GpuContext ctx, int minCapacity) {
         int newCapacity = CausticaConfig.Rt.Terrain.SECTION_TABLE_INITIAL_CAPACITY.value();
         newCapacity = Math.max(newCapacity, capacity);
         while (newCapacity < minCapacity) {
@@ -74,7 +74,7 @@ final class RtSectionTable {
         return oldGeneration;
     }
 
-    void ensureEmpty(RtContext ctx) {
+    void ensureEmpty(GpuContext ctx) {
         if (buffer == null) {
             int initialCapacity = CausticaConfig.Rt.Terrain.SECTION_TABLE_INITIAL_CAPACITY.value();
             Generation generation = acquireGeneration(ctx, initialCapacity);
@@ -108,7 +108,7 @@ final class RtSectionTable {
         }
     }
 
-    private Generation acquireGeneration(RtContext ctx, int minCapacity) {
+    private Generation acquireGeneration(GpuContext ctx, int minCapacity) {
         Generation generation;
         while ((generation = recycledGenerations.poll()) != null) {
             if (generation.capacity >= minCapacity) {

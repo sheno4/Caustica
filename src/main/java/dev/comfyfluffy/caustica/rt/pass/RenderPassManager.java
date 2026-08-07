@@ -7,7 +7,7 @@ import dev.comfyfluffy.caustica.api.pass.PassFrame;
 import dev.comfyfluffy.caustica.api.pass.PassOptions;
 import dev.comfyfluffy.caustica.api.pass.PassSetup;
 import dev.comfyfluffy.caustica.api.pass.RenderStage;
-import dev.comfyfluffy.caustica.rt.RtContext;
+import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
 import dev.comfyfluffy.caustica.rt.accel.GpuImage;
@@ -28,7 +28,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.TreeSet;
 
-import static dev.comfyfluffy.caustica.rt.RtContext.check;
+import static dev.comfyfluffy.caustica.rt.GpuContext.check;
 
 /**
  * Sequences registered {@link CausticaRenderPass}es by stage and drives their lifecycle. Each pass owns
@@ -41,7 +41,7 @@ import static dev.comfyfluffy.caustica.rt.RtContext.check;
  * matching {@code ProviderManager}'s isolation discipline.
  */
 public final class RenderPassManager {
-    private final RtContext ctx;
+    private final GpuContext ctx;
     private final List<CausticaRenderPass> ordered;
     private final Set<CausticaRenderPass> disabled = new HashSet<>();
     private final Map<String, WorldResource> worldResources = new LinkedHashMap<>();
@@ -81,13 +81,13 @@ public final class RenderPassManager {
     public record NamedOutput(GpuImage image, int levelCount) {
     }
 
-    RenderPassManager(RtContext ctx, List<CausticaRenderPass> ordered, long sampler) {
+    RenderPassManager(GpuContext ctx, List<CausticaRenderPass> ordered, long sampler) {
         this.ctx = ctx;
         this.ordered = ordered;
         this.sampler = sampler;
     }
 
-    public static RenderPassManager create(RtContext ctx, Map<Identifier, CausticaRenderPass> registered) {
+    public static RenderPassManager create(GpuContext ctx, Map<Identifier, CausticaRenderPass> registered) {
         List<CausticaRenderPass> ordered = orderPasses(registered.values());
         long sampler = createSampler(ctx);
         RenderPassManager manager = new RenderPassManager(ctx, ordered, sampler);
@@ -294,7 +294,7 @@ public final class RenderPassManager {
         return result;
     }
 
-    private static long createSampler(RtContext ctx) {
+    private static long createSampler(GpuContext ctx) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkSamplerCreateInfo info = VkSamplerCreateInfo.calloc(stack).sType$Default()
                     .magFilter(VK10.VK_FILTER_LINEAR).minFilter(VK10.VK_FILTER_LINEAR)
@@ -319,7 +319,7 @@ public final class RenderPassManager {
         }
 
         @Override
-        public RtContext context() {
+        public GpuContext context() {
             return ctx;
         }
 

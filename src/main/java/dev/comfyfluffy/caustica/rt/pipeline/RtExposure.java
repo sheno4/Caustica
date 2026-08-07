@@ -3,7 +3,7 @@ package dev.comfyfluffy.caustica.rt.pipeline;
 import com.mojang.blaze3d.vulkan.VulkanCommandEncoder;
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
-import dev.comfyfluffy.caustica.rt.RtContext;
+import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
 import dev.comfyfluffy.caustica.rt.RtSceneUnits;
@@ -107,7 +107,7 @@ public final class RtExposure {
                 snapshot.evScene(), snapshot.evTarget(), snapshot.evApplied());
     }
 
-    public void ensureResources(RtContext ctx) {
+    public void ensureResources(GpuContext ctx) {
         if (image == null) {
             image = ctx.createStorageImage(1, 1, VK10.VK_FORMAT_R32_SFLOAT, "display exposure");
         }
@@ -151,7 +151,7 @@ public final class RtExposure {
         logOnce();
     }
 
-    public void record(RtContext ctx, VkCommandBuffer cmd, MemoryStack stack,
+    public void record(GpuContext ctx, VkCommandBuffer cmd, MemoryStack stack,
                        GpuImage traceColor, GpuImage guideDepth, GpuImage guideAlbedo) {
         if (image == null) {
             throw new IllegalStateException("RT exposure image not created");
@@ -209,7 +209,7 @@ public final class RtExposure {
         return CausticaConfig.Rt.Exposure.clampScale((float) Math.pow(2.0, manualEv()));
     }
 
-    private void recordAuto(RtContext ctx, VkCommandBuffer cmd, MemoryStack stack,
+    private void recordAuto(GpuContext ctx, VkCommandBuffer cmd, MemoryStack stack,
                             GpuImage traceColor, GpuImage guideDepth, GpuImage guideAlbedo) {
         if (pipeline == null || histogram == null || state == null) {
             throw new IllegalStateException("RT auto exposure resources not created");

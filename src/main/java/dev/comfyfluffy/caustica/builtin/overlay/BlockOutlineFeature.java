@@ -26,7 +26,7 @@ import net.minecraft.world.phys.shapes.VoxelShape;
 
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.rt.RtComposite;
-import dev.comfyfluffy.caustica.rt.RtContext;
+import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.RtDeviceBringup;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
@@ -72,7 +72,7 @@ final class BlockOutlineFeature implements OverlayFeature {
     private static final float LINE_WIDTH_PX_AT_REFERENCE = 2.0f;
     private static final float REFERENCE_HEIGHT = 1080f;
 
-    private RtContext ctxRef;
+    private GpuContext ctxRef;
     private OverlayPipelines.Pipeline pipeline;
     private OverlayPipelines.AccelStructureSet accelSet;
     private OverlayPipelines.Pipeline compositePipeline;
@@ -86,7 +86,7 @@ final class BlockOutlineFeature implements OverlayFeature {
     private long boundSet;
 
     @Override
-    public boolean prepare(RtContext ctx, OverlayFramePool pool, RtGpuExecutor.GraphicsUse graphicsUse,
+    public boolean prepare(GpuContext ctx, OverlayFramePool pool, RtGpuExecutor.GraphicsUse graphicsUse,
                            int width, int height) {
         if (!CausticaConfig.Rt.Overlay.BLOCK_OUTLINE_ENABLED.value()) {
             return false;
@@ -178,7 +178,7 @@ final class BlockOutlineFeature implements OverlayFeature {
                 && (itemStack.canBreakBlockInAdventureMode(blockInWorld) || itemStack.canPlaceOnBlockInAdventureMode(blockInWorld));
     }
 
-    private void ensureResources(RtContext ctx, int width, int height) {
+    private void ensureResources(GpuContext ctx, int width, int height) {
         this.ctxRef = ctx;
         if (pipeline == null) {
             accelSet = OverlayPipelines.accelStructureSet(ctx, VK10.VK_SHADER_STAGE_FRAGMENT_BIT, "block outline");

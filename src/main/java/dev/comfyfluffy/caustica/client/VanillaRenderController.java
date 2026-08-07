@@ -3,7 +3,7 @@ package dev.comfyfluffy.caustica.client;
 import com.mojang.blaze3d.pipeline.RenderTarget;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.rt.RtComposite;
-import dev.comfyfluffy.caustica.rt.RtContext;
+import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.terrain.RtTerrain;
 
 public final class VanillaRenderController {
@@ -127,7 +127,7 @@ public final class VanillaRenderController {
 		if (!RtComposite.enabled()) {
 			return "caustica.rt is false";
 		}
-		if (RtContext.currentOrNull() == null) {
+		if (GpuContext.currentOrNull() == null) {
 			return "RT context is not ready";
 		}
 		if (RtTerrain.currentOrNull() == null) {

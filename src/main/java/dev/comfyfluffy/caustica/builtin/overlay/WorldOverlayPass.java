@@ -10,7 +10,7 @@ import dev.comfyfluffy.caustica.api.pass.PassFrame;
 import dev.comfyfluffy.caustica.api.pass.PassSetup;
 import dev.comfyfluffy.caustica.api.pass.RenderStage;
 import dev.comfyfluffy.caustica.rt.RtComposite;
-import dev.comfyfluffy.caustica.rt.RtContext;
+import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
 import dev.comfyfluffy.caustica.rt.RtUiOverlay;
@@ -72,7 +72,7 @@ public final class WorldOverlayPass implements CausticaRenderPass {
 
     // Shared world-overlay buffer every feature composites into. uiComposite* blends it into RtUiOverlay's
     // transparent target; RtUiOverlay owns the one final SDR/HDR blend to the real target.
-    private RtContext ctx;
+    private GpuContext ctx;
     private GpuImage overlayImage;
     private OverlayPipelines.Pipeline uiCompositePipeline;
     private OverlayPipelines.ReadOnlyImageSet uiCompositeSet;

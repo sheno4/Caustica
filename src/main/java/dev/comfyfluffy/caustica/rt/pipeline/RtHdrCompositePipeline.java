@@ -23,10 +23,10 @@ import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.LongBuffer;
 
-import dev.comfyfluffy.caustica.rt.RtContext;
+import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 
-import static dev.comfyfluffy.caustica.rt.RtContext.check;
+import static dev.comfyfluffy.caustica.rt.GpuContext.check;
 import static dev.comfyfluffy.caustica.rt.pipeline.RtBindings.*;
 
 /**
@@ -39,7 +39,7 @@ public final class RtHdrCompositePipeline {
     private static final String SHADER_DIR = "/caustica/shaders/pipelines/hdr_composite/";
     private static final int PUSH_BYTES = Float.BYTES; // float uiNits
 
-    private final RtContext ctx;
+    private final GpuContext ctx;
     private final long descriptorSetLayout;
     private final long descriptorPool;
     private final long descriptorSet;
@@ -50,7 +50,7 @@ public final class RtHdrCompositePipeline {
     private long boundSampler;
     private boolean destroyed;
 
-    private RtHdrCompositePipeline(RtContext ctx, long dsl, long pool, long set, long layout, long pipeline) {
+    private RtHdrCompositePipeline(GpuContext ctx, long dsl, long pool, long set, long layout, long pipeline) {
         this.ctx = ctx;
         this.descriptorSetLayout = dsl;
         this.descriptorPool = pool;
@@ -59,7 +59,7 @@ public final class RtHdrCompositePipeline {
         this.pipeline = pipeline;
     }
 
-    public static RtHdrCompositePipeline create(RtContext ctx) {
+    public static RtHdrCompositePipeline create(GpuContext ctx) {
         VkDevice vk = ctx.vk();
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkDescriptorSetLayoutBinding.Buffer binds = VkDescriptorSetLayoutBinding.calloc(PRESENT_BINDING_COUNT, stack);

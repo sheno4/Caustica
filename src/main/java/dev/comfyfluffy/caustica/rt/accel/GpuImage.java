@@ -9,7 +9,7 @@ import java.util.Objects;
 /**
  * A VMA-backed image + view, created in {@code VK_IMAGE_LAYOUT_GENERAL}. Used for RT output
  * storage images and render-pass resources. Created via
- * {@link dev.comfyfluffy.caustica.rt.RtContext#createStorageImage}; freed with {@link #destroy()}.
+ * {@link dev.comfyfluffy.caustica.rt.GpuContext#createStorageImage}; freed with {@link #destroy()}.
  */
 public final class GpuImage {
     public final long image;

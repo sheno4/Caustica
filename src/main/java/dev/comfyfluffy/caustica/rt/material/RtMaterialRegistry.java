@@ -3,7 +3,7 @@ package dev.comfyfluffy.caustica.rt.material;
 import com.mojang.blaze3d.platform.NativeImage;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.mixin.SpriteContentsAccessor;
-import dev.comfyfluffy.caustica.rt.RtContext;
+import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtLookPackage;
 import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
 import dev.comfyfluffy.caustica.rt.gen.MaterialHeaderData;
@@ -118,7 +118,7 @@ public final class RtMaterialRegistry {
     }
 
     /** Build and atomically publish the block and entity registry for the current resource epoch. */
-    public void rebuild(RtContext ctx, RtBlockMaterials blockMaterials, RtMaterialOverrides overrides) {
+    public void rebuild(GpuContext ctx, RtBlockMaterials blockMaterials, RtMaterialOverrides overrides) {
         Map<TextureAtlasSprite, RtBlockMaterials.Entry> entriesBySprite = blockMaterials.preparedEntries();
         List<TextureAtlasSprite> sprites = new ArrayList<>(entriesBySprite.keySet());
         sprites.sort(Comparator.comparing(sprite -> sprite.contents().name().toString()));

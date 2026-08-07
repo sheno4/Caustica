@@ -7,7 +7,7 @@ import dev.comfyfluffy.caustica.api.pass.PassSetup;
 import dev.comfyfluffy.caustica.api.pass.RenderStage;
 import dev.comfyfluffy.caustica.api.provider.LightProvider;
 import dev.comfyfluffy.caustica.api.provider.LightSink;
-import dev.comfyfluffy.caustica.rt.RtContext;
+import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtLookPackage;
 import dev.comfyfluffy.caustica.rt.accel.GpuImage;
 import dev.comfyfluffy.caustica.rt.gen.SkyLutPushData;
@@ -34,7 +34,7 @@ import java.util.List;
  * deliberately: this pass ships through the same {@code CausticaRenderPass}/{@code LightProvider}
  * registration API a third-party extension would use ({@code api.BuiltinExtension} registers it, it does
  * not get called directly), so it only reaches engine internals through public surface —
- * {@link RtContext}, {@link GpuImage}, the now-public {@link ComputeDispatch}/{@link PassShaderCompiler}
+ * {@link GpuContext}, {@link GpuImage}, the now-public {@link ComputeDispatch}/{@link PassShaderCompiler}
  * pass-authoring helpers, and {@link RtLookPackage#current()} for its config, the same way
  * {@code BuiltinExtension} already reads it for bloom.
  *
@@ -60,7 +60,7 @@ public final class SkyLutPass implements CausticaRenderPass, LightProvider {
     static final List<ComputeDispatch.Binding> SCATTER_BINDINGS = List.of(
             ComputeDispatch.Binding.STORAGE, ComputeDispatch.Binding.SAMPLED, ComputeDispatch.Binding.SAMPLED);
 
-    private RtContext ctx;
+    private GpuContext ctx;
     private long sampler;
     private GpuImage transmittance;
     private GpuImage multiScatter;

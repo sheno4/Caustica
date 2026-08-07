@@ -44,13 +44,16 @@ import java.util.function.Consumer;
 import static org.lwjgl.vulkan.KHRRayTracingPipeline.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR;
 
 /**
- * Shared per-device RT resources: a buffer-device-address-enabled VMA allocator (vanilla's
+ * Shared per-device GPU resources: a buffer-device-address-enabled VMA allocator (vanilla's
  * lacks the flag), the graphics queue + a transient command pool for synchronous one-shot
  * submits, and the RT pipeline limits (SBT handle size / alignment). Single owner for the
- * plumbing every RT module needs; obtained lazily via {@link #get}.
+ * plumbing every RT module needs — and, since {@link dev.comfyfluffy.caustica.api.pass.CausticaRenderPass}
+ * hands one to every registered pass via {@code PassSetup.context()}, every raster pass too
+ * ({@code BloomPass}/{@code SkyLutPass} are compute-only, but {@code WorldOverlayPass} isn't).
+ * Obtained lazily via {@link #get}.
  */
-public final class RtContext {
-    private static RtContext instance;
+public final class GpuContext {
+    private static GpuContext instance;
     private static boolean unavailable;
 
     private final VulkanDevice device;
@@ -69,7 +72,7 @@ public final class RtContext {
     private final long updateAfterBindCombinedImageSamplerLimit;
     private long commandPool;
 
-    private RtContext(VulkanDevice device, long vma, int handleSize, int baseAlign, int handleAlign,
+    private GpuContext(VulkanDevice device, long vma, int handleSize, int baseAlign, int handleAlign,
                       int maxSbtStride, int scratchAlign, long updateAfterBindCombinedImageSamplerLimit) {
         this.device = device;
         this.vk = device.vkDevice();
@@ -87,17 +90,17 @@ public final class RtContext {
     }
 
     /** The RT context for the current Vulkan device, or null if RT/Vulkan isn't available. */
-    public static RtContext get() {
+    public static GpuContext get() {
         if (instance != null) {
             return instance;
         }
         if (!(((GpuDeviceAccessor) RenderSystem.getDevice()).caustica$getBackend() instanceof VulkanDevice device)) {
             return null;
         }
-        return get(device);
+        return getOrCreate(device);
     }
 
-    public static synchronized RtContext get(VulkanDevice device) {
+    private static synchronized GpuContext getOrCreate(VulkanDevice device) {
         if (instance != null || unavailable) {
             return instance;
         }
@@ -110,11 +113,11 @@ public final class RtContext {
         return instance;
     }
 
-    public static RtContext currentOrNull() {
+    public static GpuContext currentOrNull() {
         return instance;
     }
 
-    private static RtContext create(VulkanDevice device) {
+    private static GpuContext create(VulkanDevice device) {
         VkDevice vk = device.vkDevice();
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkPhysicalDevice phys = vk.getPhysicalDevice();
@@ -162,7 +165,7 @@ public final class RtContext {
                     Integer.toUnsignedLong(rtProps.maxShaderGroupStride()),
                     asProps.minAccelerationStructureScratchOffsetAlignment(), combinedImageSamplerLimit);
 
-            return new RtContext(device, pVma.get(0), rtProps.shaderGroupHandleSize(), rtProps.shaderGroupBaseAlignment(),
+            return new GpuContext(device, pVma.get(0), rtProps.shaderGroupHandleSize(), rtProps.shaderGroupBaseAlignment(),
                     rtProps.shaderGroupHandleAlignment(), rtProps.maxShaderGroupStride(),
                     asProps.minAccelerationStructureScratchOffsetAlignment(), combinedImageSamplerLimit);
         }
@@ -223,11 +226,6 @@ public final class RtContext {
 
     public int accelerationStructureScratchAlignment() {
         return accelerationStructureScratchAlignment;
-    }
-
-    /** Create a VMA buffer; {@code SHADER_DEVICE_ADDRESS} is always added so it has a device address. */
-    public GpuBuffer createBuffer(long size, int usage, boolean hostVisible) {
-        return createBuffer(size, usage, hostVisible, "buffer " + size + "B");
     }
 
     /** Create a VMA buffer; {@code SHADER_DEVICE_ADDRESS} is always added so it has a device address. */
@@ -319,21 +317,12 @@ public final class RtContext {
         }
     }
 
-    /** Create an R8G8B8A8_UNORM storage image (STORAGE + TRANSFER_SRC/DST) already transitioned to GENERAL. */
-    public GpuImage createStorageImage(int width, int height) {
-        return createStorageImage(width, height, VK10.VK_FORMAT_R8G8B8A8_UNORM);
-    }
-
     /**
      * Create a storage image of the given format (STORAGE + TRANSFER_SRC/DST), transitioned to GENERAL.
      * The RT trace target uses an HDR float format (R16G16B16A16_SFLOAT) so radiance values above 1 are
      * preserved for the tonemap seam; the world-target copy stays R8G8B8A8 to match vanilla's LDR target
      * for the vkCmdCopyImage round-trip (copy requires texel-size-compatible formats).
      */
-    public GpuImage createStorageImage(int width, int height, int format) {
-        return createStorageImage(width, height, format, "storage image " + width + "x" + height);
-    }
-
     public GpuImage createStorageImage(int width, int height, int format, String label) {
         return createStorageImage(width, height, format, label, 0);
     }

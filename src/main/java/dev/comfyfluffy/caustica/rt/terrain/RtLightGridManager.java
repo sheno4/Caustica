@@ -2,7 +2,7 @@ package dev.comfyfluffy.caustica.rt.terrain;
 
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
-import dev.comfyfluffy.caustica.rt.RtContext;
+import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor.GraphicsUse;
 import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
@@ -53,7 +53,7 @@ final class RtLightGridManager {
      * Start building one hierarchy snapshot. The caller owns coalescing: this manager processes one
      * generation at a time, so callers must only invoke this while {@link #isIdle()}.
      */
-    void request(RtContext ctx, Collection<RtLightHierarchy.SectionInput> sections,
+    void request(GpuContext ctx, Collection<RtLightHierarchy.SectionInput> sections,
                  int rebaseX, int rebaseY, int rebaseZ) {
         if (!isIdle()) {
             throw new IllegalStateException(
@@ -75,7 +75,7 @@ final class RtLightGridManager {
     }
 
     /** Publish only fully uploaded, internally coherent worker generations. */
-    void publishReady(RtContext ctx) {
+    void publishReady(GpuContext ctx) {
         Completion completion;
         while ((completion = completions.poll()) != null) {
             if (completion instanceof Failed failed) {
@@ -104,7 +104,7 @@ final class RtLightGridManager {
     }
 
     /** World-reset path only. Normal light changes intentionally retain the published generation. */
-    void invalidate(RtContext ctx, GraphicsUse lastGraphicsUse) {
+    void invalidate(GpuContext ctx, GraphicsUse lastGraphicsUse) {
         cancelPending();
         PublishedState old = published;
         published = PublishedState.EMPTY;
@@ -162,7 +162,7 @@ final class RtLightGridManager {
         }
     }
 
-    private void submitUpload(RtContext ctx, long requestId, RtLightHierarchy.Data data) {
+    private void submitUpload(GpuContext ctx, long requestId, RtLightHierarchy.Data data) {
         Layout layout = Layout.of(data, data.grid() != null);
 
         GpuBuffer arena = null;
@@ -251,7 +251,7 @@ final class RtLightGridManager {
         }
     }
 
-    private void publish(RtContext ctx, Uploaded uploaded) {
+    private void publish(GpuContext ctx, Uploaded uploaded) {
         RtLightGrid.Data grid = uploaded.layout.hasGrid ? uploaded.data.grid() : null;
         PublishedState next = new PublishedState(uploaded.arena, uploaded.layout,
                 uploaded.data.lightCount(), uploaded.data.invGlobalPowerSum(),
@@ -322,7 +322,7 @@ final class RtLightGridManager {
         CausticaMod.LOGGER.info("RT light dump: {} lights within {} blocks", dumped, (int) radius);
     }
 
-    private void publishEmpty(RtContext ctx, long requestId) {
+    private void publishEmpty(GpuContext ctx, long requestId) {
         if (!isLatest(requestId)) return;
         PublishedState old = published;
         published = PublishedState.empty(requestId);
@@ -387,7 +387,7 @@ final class RtLightGridManager {
             return arena != null ? arena.deviceAddress + offset : 0L;
         }
 
-        private void retire(RtContext ctx, GraphicsUse lastGraphicsUse) {
+        private void retire(GpuContext ctx, GraphicsUse lastGraphicsUse) {
             if (arena != null) {
                 ctx.gpuExecutor().retireAfterGraphics(lastGraphicsUse, arena::destroy);
             }
@@ -432,5 +432,5 @@ final class RtLightGridManager {
                             RtGpuExecutor.Build build, Throwable failure) implements Completion {
         void destroy() { arena.destroy(); }
     }
-    private record Request(long requestId, RtContext ctx, Input input) { }
+    private record Request(long requestId, GpuContext ctx, Input input) { }
 }

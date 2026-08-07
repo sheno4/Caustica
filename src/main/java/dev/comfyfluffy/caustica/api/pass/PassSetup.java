@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.api.pass;
 
-import dev.comfyfluffy.caustica.rt.RtContext;
+import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
 import dev.comfyfluffy.caustica.rt.accel.GpuImage;
 
@@ -11,7 +11,7 @@ import dev.comfyfluffy.caustica.rt.accel.GpuImage;
  */
 public interface PassSetup {
     /** Raw engine context: device, allocator, image/buffer creation, debug labelling. */
-    RtContext context();
+    GpuContext context();
 
     int displayWidth();
 

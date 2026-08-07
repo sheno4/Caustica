@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.rt.terrain;
 
-import dev.comfyfluffy.caustica.rt.RtContext;
+import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.accel.RtAccel;
 import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
 import dev.comfyfluffy.caustica.rt.material.RtMaterialAbi;
@@ -25,7 +25,7 @@ final class RtSectionBuilder {
     }
 
     /** Upload a non-empty packed section and prepare, but do not record, its BLAS build. */
-    static PreparedSection prepare(RtContext ctx, PackedSection packed,
+    static PreparedSection prepare(GpuContext ctx, PackedSection packed,
                                    RtAccel.OpacityMicromapInput ommInput,
                                    boolean compactBlas,
                                    long key, int sox, int soy, int soz) {

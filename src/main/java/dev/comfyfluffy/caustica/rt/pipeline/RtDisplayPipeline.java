@@ -23,11 +23,11 @@ import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.LongBuffer;
 
-import dev.comfyfluffy.caustica.rt.RtContext;
+import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.gen.DisplayPushData;
 
-import static dev.comfyfluffy.caustica.rt.RtContext.check;
+import static dev.comfyfluffy.caustica.rt.GpuContext.check;
 import static dev.comfyfluffy.caustica.rt.pipeline.RtBindings.*;
 
 /** Maps the display-res scene-linear ACEScg RT image to sRGB SDR and, when enabled, PQ/BT.2020 HDR. */
@@ -36,7 +36,7 @@ public final class RtDisplayPipeline {
     /** Push constants: output/look LUT state plus gamma and HDR peak nits. */
     private static final int PUSH_BYTES = DisplayPushData.BYTE_SIZE;
 
-    private final RtContext ctx;
+    private final GpuContext ctx;
     private final long descriptorSetLayout;
     private final long descriptorPool;
     private final long descriptorSet;
@@ -56,7 +56,7 @@ public final class RtDisplayPipeline {
     private long boundBloomSampler;
     private boolean destroyed;
 
-    private RtDisplayPipeline(RtContext ctx, long dsl, long pool, long set, long layout, long pipeline) {
+    private RtDisplayPipeline(GpuContext ctx, long dsl, long pool, long set, long layout, long pipeline) {
         this.ctx = ctx;
         this.descriptorSetLayout = dsl;
         this.descriptorPool = pool;
@@ -65,7 +65,7 @@ public final class RtDisplayPipeline {
         this.pipeline = pipeline;
     }
 
-    public static RtDisplayPipeline create(RtContext ctx) {
+    public static RtDisplayPipeline create(GpuContext ctx) {
         VkDevice vk = ctx.vk();
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkDescriptorSetLayoutBinding.Buffer binds = VkDescriptorSetLayoutBinding.calloc(DISPLAY_BINDING_COUNT, stack);

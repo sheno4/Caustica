@@ -46,7 +46,7 @@ public final class RtGpuExecutor {
             VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR
                     | VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
 
-    private final RtContext ctx;
+    private final GpuContext ctx;
     private final VulkanQueue computeQueue;
     private final long buildTimeline;
     private final long graphicsTimeline;
@@ -63,7 +63,7 @@ public final class RtGpuExecutor {
     private volatile boolean closed;
     private volatile Throwable executorFailure;
 
-    RtGpuExecutor(RtContext ctx) {
+    RtGpuExecutor(GpuContext ctx) {
         this.ctx = ctx;
         this.computeQueue = ctx.computeQueue();
         this.buildTimeline = createTimeline("RT terrain build timeline");
@@ -395,15 +395,15 @@ public final class RtGpuExecutor {
             VkCommandBufferAllocateInfo ai = VkCommandBufferAllocateInfo.calloc(stack).sType$Default()
                     .commandPool(commandPool).level(VK10.VK_COMMAND_BUFFER_LEVEL_PRIMARY).commandBufferCount(1);
             PointerBuffer pCmd = stack.mallocPointer(1);
-            RtContext.check(VK10.vkAllocateCommandBuffers(ctx.vk(), ai, pCmd), "vkAllocateCommandBuffers(RT GPU executor)");
+            GpuContext.check(VK10.vkAllocateCommandBuffers(ctx.vk(), ai, pCmd), "vkAllocateCommandBuffers(RT GPU executor)");
             cmd = new VkCommandBuffer(pCmd.get(0), ctx.vk());
             VkCommandBufferBeginInfo bi = VkCommandBufferBeginInfo.calloc(stack).sType$Default()
                     .flags(VK10.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
-            RtContext.check(VK10.vkBeginCommandBuffer(cmd, bi), "vkBeginCommandBuffer(RT GPU executor)");
+            GpuContext.check(VK10.vkBeginCommandBuffer(cmd, bi), "vkBeginCommandBuffer(RT GPU executor)");
             for (Job job : batch) {
                 job.record.accept(cmd);
             }
-            RtContext.check(VK10.vkEndCommandBuffer(cmd), "vkEndCommandBuffer(RT GPU executor)");
+            GpuContext.check(VK10.vkEndCommandBuffer(cmd), "vkEndCommandBuffer(RT GPU executor)");
             VkCommandBufferSubmitInfo.Buffer command = VkCommandBufferSubmitInfo.calloc(1, stack)
                     .sType$Default().commandBuffer(cmd);
             VkSemaphoreSubmitInfo.Buffer signal = VkSemaphoreSubmitInfo.calloc(1, stack)
@@ -416,7 +416,7 @@ public final class RtGpuExecutor {
                     .pCommandBufferInfos(command).pSignalSemaphoreInfos(signal);
             VulkanDiagnostics.noteQueueSubmission(computeQueue.vkQueue(), "Caustica compute queue");
             synchronized (ctx.deviceQueueHostLock()) {
-                RtContext.check(org.lwjgl.vulkan.KHRSynchronization2.vkQueueSubmit2KHR(
+                GpuContext.check(org.lwjgl.vulkan.KHRSynchronization2.vkQueueSubmit2KHR(
                         computeQueue.vkQueue(), submit, 0L), "vkQueueSubmit2KHR(RT GPU executor)");
             }
             submitted = true;
@@ -450,7 +450,7 @@ public final class RtGpuExecutor {
                     .semaphoreType(VK12.VK_SEMAPHORE_TYPE_TIMELINE).initialValue(0L);
             VkSemaphoreCreateInfo ci = VkSemaphoreCreateInfo.calloc(stack).sType$Default().pNext(type);
             LongBuffer out = stack.mallocLong(1);
-            RtContext.check(VK10.vkCreateSemaphore(ctx.vk(), ci, null, out), "vkCreateSemaphore(" + label + ")");
+            GpuContext.check(VK10.vkCreateSemaphore(ctx.vk(), ci, null, out), "vkCreateSemaphore(" + label + ")");
             long semaphore = out.get(0);
             RtDebugLabels.name(this.ctx, VK10.VK_OBJECT_TYPE_SEMAPHORE, semaphore, label);
             return semaphore;
@@ -463,7 +463,7 @@ public final class RtGpuExecutor {
                     .flags(VK10.VK_COMMAND_POOL_CREATE_TRANSIENT_BIT)
                     .queueFamilyIndex(computeQueue.queueFamilyIndex());
             LongBuffer out = stack.mallocLong(1);
-            RtContext.check(VK10.vkCreateCommandPool(ctx.vk(), ci, null, out), "vkCreateCommandPool(RT GPU executor)");
+            GpuContext.check(VK10.vkCreateCommandPool(ctx.vk(), ci, null, out), "vkCreateCommandPool(RT GPU executor)");
             commandPool = out.get(0);
             RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_COMMAND_POOL, commandPool, "RT GPU executor command pool");
         }
@@ -472,7 +472,7 @@ public final class RtGpuExecutor {
     private long queryTimeline(long semaphore) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             LongBuffer out = stack.mallocLong(1);
-            RtContext.check(VK12.vkGetSemaphoreCounterValue(ctx.vk(), semaphore, out), "vkGetSemaphoreCounterValue");
+            GpuContext.check(VK12.vkGetSemaphoreCounterValue(ctx.vk(), semaphore, out), "vkGetSemaphoreCounterValue");
             return out.get(0);
         }
     }
@@ -483,7 +483,7 @@ public final class RtGpuExecutor {
                     .semaphoreCount(1)
                     .pSemaphores(stack.longs(semaphore))
                     .pValues(stack.longs(value));
-            RtContext.check(VK12.vkWaitSemaphores(ctx.vk(), wi, Long.MAX_VALUE), "vkWaitSemaphores(RT GPU executor)");
+            GpuContext.check(VK12.vkWaitSemaphores(ctx.vk(), wi, Long.MAX_VALUE), "vkWaitSemaphores(RT GPU executor)");
         }
     }
 
