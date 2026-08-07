@@ -5,7 +5,7 @@ import dev.comfyfluffy.caustica.api.ShaderSource;
 import dev.comfyfluffy.caustica.api.pass.CausticaRenderPass;
 import dev.comfyfluffy.caustica.api.pass.ComputeDispatch;
 import dev.comfyfluffy.caustica.api.pass.PassFrame;
-import dev.comfyfluffy.caustica.api.pass.PassOptions;
+import dev.comfyfluffy.caustica.api.OptionValues;
 import dev.comfyfluffy.caustica.api.pass.PassSetup;
 import dev.comfyfluffy.caustica.api.pass.PassShaderCompiler;
 import dev.comfyfluffy.caustica.api.pass.RenderStage;
@@ -47,7 +47,7 @@ public final class BloomPass implements CausticaRenderPass {
     private static final int MODE_COMPOSITE = 3;
 
     // The options this pass owns. Declared here rather than inline in BuiltinExtension so the token a
-    // reader passes to PassOptions#get and the declaration BuiltinExtension registers are the same object:
+    // reader passes to OptionValues#get and the declaration BuiltinExtension registers are the same object:
     // one source of truth for each id, kind, range and default.
     public static final Option<Float> STRENGTH = Option.range("bloom.strength", 0.0f, 2.0f, 0.02f);
     public static final Option<Float> THRESHOLD_SCENE_LINEAR =
@@ -134,7 +134,7 @@ public final class BloomPass implements CausticaRenderPass {
         GpuImage scene = frame.sceneColor();
         GpuImage target = frame.sceneColorTarget();
         GpuImage exposure = frame.exposureImage();
-        PassOptions options = frame.options();
+        OptionValues options = frame.options();
         float threshold = options.get(THRESHOLD_SCENE_LINEAR);
         float softKnee = threshold * options.get(SOFT_KNEE_FRACTION);
         float radius = options.get(RADIUS);

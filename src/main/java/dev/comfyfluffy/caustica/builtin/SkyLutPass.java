@@ -4,7 +4,7 @@ import dev.comfyfluffy.caustica.api.Option;
 import dev.comfyfluffy.caustica.api.ShaderSource;
 import dev.comfyfluffy.caustica.api.pass.CausticaRenderPass;
 import dev.comfyfluffy.caustica.api.pass.PassFrame;
-import dev.comfyfluffy.caustica.api.pass.PassOptions;
+import dev.comfyfluffy.caustica.api.OptionValues;
 import dev.comfyfluffy.caustica.api.pass.PassSetup;
 import dev.comfyfluffy.caustica.api.pass.RenderStage;
 import dev.comfyfluffy.caustica.api.provider.LightProvider;
@@ -70,7 +70,7 @@ public final class SkyLutPass implements CausticaRenderPass, LightProvider {
     private static final ShaderSource SHADERS = ShaderSource.classpath("/caustica/shaders/builtin", "sky", "common");
 
     // The sky-geometry options this pass owns, declared here rather than inline in BuiltinExtension so the
-    // token a reader passes to PassOptions#get and the declaration BuiltinExtension registers are the same
+    // token a reader passes to OptionValues#get and the declaration BuiltinExtension registers are the same
     // object. This pass is their only reader.
     public static final Option<Float> SUN_NOON_SOUTH_TILT_DEGREES =
             Option.range("sky.sun-noon-south-tilt-degrees", -89.0f, 89.0f, 30.0f);
@@ -130,7 +130,7 @@ public final class SkyLutPass implements CausticaRenderPass, LightProvider {
     private float moonV0;
     private float moonU1 = 1f;
     private float moonV1 = 1f;
-    // submitLights() has no PassFrame/PassOptions of its own (LightProvider is a separate registration
+    // submitLights() has no PassFrame/OptionValues of its own (LightProvider is a separate registration
     // mechanism from CausticaRenderPass, invoked by ProviderManager, not RenderPassManager) — it reuses
     // whichever state record() last gathered rather than reading options itself. Null until the first
     // record(); submitLights() has zero consumers today (see its javadoc), so skipping in that window is
@@ -260,7 +260,7 @@ public final class SkyLutPass implements CausticaRenderPass, LightProvider {
      * shared with anything else. Mirrors what {@code RtComposite.skyPush()} computes for the world push's
      * sky fields — deliberately a second, independent read rather than a shared one; see the class javadoc.
      */
-    private static SkyState gatherSkyState(PassOptions options) {
+    private static SkyState gatherSkyState(OptionValues options) {
         Minecraft mc = Minecraft.getInstance();
         float partial = mc.getDeltaTracker().getGameTimeDeltaPartialTick(false);
         var probe = mc.gameRenderer.mainCamera().attributeProbe();

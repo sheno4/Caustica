@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.api.pass;
 
+import dev.comfyfluffy.caustica.api.OptionValues;
 import dev.comfyfluffy.caustica.rt.accel.GpuImage;
 import org.lwjgl.vulkan.VkCommandBuffer;
 
@@ -51,7 +52,7 @@ public interface PassFrame {
     GpuImage exposureImage();
 
     /** This feature's option snapshot for the current frame. */
-    PassOptions options();
+    OptionValues options();
 
     /**
      * Re-publish a world resource whose handle the host application can change between frames — a

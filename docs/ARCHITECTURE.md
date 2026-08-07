@@ -424,7 +424,7 @@ Honest status, so this reads as a target and not a claim:
   `RtDebugPresentPipeline` are shape-compatible with `ComputeDispatch` but are fixed built-ins wired to
   non-extensible inputs (raw guide buffers `PassFrame` never exposes) — porting them would add API surface
   with no real third-party consumer to justify it. None of this is being ported.
-- **`PassOptions` has a real backing store, and bloom/sky are its first tenants.** `CausticaOptions`
+- **`OptionValues` has a real backing store, and bloom/sky are its first tenants.** `CausticaOptions`
   (top-level package, next to `CausticaConfig`) is TOML-backed (`config/caustica-options.toml`, separate
   from `CausticaConfig`'s `caustica.toml` — a fixed hand-curated schema vs. whatever extensions happen to
   have declared), keyed `<featureId>.<optionId>` so one extension's options can't collide with another's,
@@ -438,7 +438,7 @@ Honest status, so this reads as a target and not a claim:
   `caustica:builtin` moved its `bloom.*`/`sky.*` numbers out of `look.json` (schema 4 → 5) into declared
   `Option.range(...)` values — neither is a colour-science calibration that has to move in lock step with
   the LMT the way exposure/lighting still do, so they no longer belong in that versioned package.
-- **Options are read through the declared `Option<T>` token, not a string id.** `PassOptions.get` takes
+- **Options are read through the declared `Option<T>` token, not a string id.** `OptionValues.get` takes
   the very constant the feature registered (`BloomPass.LEVELS`, `SkyLutPass.GROUND_ALBEDO`, …), declared
   as a `public static final` on the pass that owns it and registered via `FeatureBuilder#options(List)`.
   That makes each id, kind, range and default exist exactly once: there is no `fallback` parameter to

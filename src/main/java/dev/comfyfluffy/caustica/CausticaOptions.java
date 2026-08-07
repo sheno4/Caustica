@@ -5,7 +5,7 @@ import com.electronwill.nightconfig.core.file.FileNotFoundAction;
 import com.electronwill.nightconfig.toml.TomlFormat;
 import dev.comfyfluffy.caustica.api.Feature;
 import dev.comfyfluffy.caustica.api.Option;
-import dev.comfyfluffy.caustica.api.pass.PassOptions;
+import dev.comfyfluffy.caustica.api.OptionValues;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.resources.Identifier;
 
@@ -16,7 +16,7 @@ import java.util.Objects;
 
 /**
  * TOML-backed storage for extension-declared {@link Option} values ({@code config/caustica-options.toml}),
- * the concrete store behind every {@link PassOptions} view.
+ * the concrete store behind every {@link OptionValues} view.
  *
  * <p>Lives next to {@link CausticaConfig} rather than under {@code rt/pass/} because it is not a render
  * pass concern: it holds every registered {@link Feature}'s options, including features that declare no
@@ -52,7 +52,7 @@ public final class CausticaOptions {
     /**
      * Immutable and swapped wholesale under {@code synchronized} by {@link #set}, rather than a mutable
      * concurrent map. A frame can then hold the reference it read at {@code beginFrame} and get
-     * {@link PassOptions}'s "fixed for the whole frame" guarantee for free — no per-frame defensive copy.
+     * {@link OptionValues}'s "fixed for the whole frame" guarantee for free — no per-frame defensive copy.
      */
     private volatile Map<String, Object> values;
 
@@ -94,7 +94,7 @@ public final class CausticaOptions {
     }
 
     /** A live view scoped to one feature's declared options; reads whatever is current at each call. */
-    public PassOptions options(Identifier featureId) {
+    public OptionValues options(Identifier featureId) {
         return view(featureId, values);
     }
 
@@ -103,7 +103,7 @@ public final class CausticaOptions {
      * {@code RenderPassManager} serves every pass in a frame from the one map it took at
      * {@code beginFrame}.
      */
-    public PassOptions view(Identifier featureId, Map<String, Object> snapshot) {
+    public OptionValues view(Identifier featureId, Map<String, Object> snapshot) {
         Map<String, Option<?>> featureOptions = declared.get(featureId);
         Objects.requireNonNull(featureOptions, () -> "unknown feature " + featureId);
         return new View(featureId, featureOptions, snapshot);
@@ -147,7 +147,7 @@ public final class CausticaOptions {
     }
 
     private record View(Identifier featureId, Map<String, Option<?>> declared, Map<String, Object> values)
-            implements PassOptions {
+            implements OptionValues {
         @Override
         @SuppressWarnings("unchecked")
         public <T> T get(Option<T> option) {

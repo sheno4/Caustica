@@ -5,9 +5,9 @@ import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.CausticaOptions;
 import dev.comfyfluffy.caustica.api.Feature;
 import dev.comfyfluffy.caustica.api.Option;
+import dev.comfyfluffy.caustica.api.OptionValues;
 import dev.comfyfluffy.caustica.api.pass.CausticaRenderPass;
 import dev.comfyfluffy.caustica.api.pass.PassFrame;
-import dev.comfyfluffy.caustica.api.pass.PassOptions;
 import dev.comfyfluffy.caustica.api.pass.PassSetup;
 import dev.comfyfluffy.caustica.api.pass.RenderStage;
 import dev.comfyfluffy.caustica.rt.GpuContext;
@@ -169,7 +169,7 @@ public final class RenderPassManager {
 
     /**
      * Reset per-frame bookkeeping; call once before any recording. Also takes this frame's option
-     * snapshot — {@link PassOptions} promises a value read mid-frame stays fixed for the rest of it, so
+     * snapshot — {@link OptionValues} promises a value read mid-frame stays fixed for the rest of it, so
      * every pass across every stage this frame shares the one snapshot taken here, not a live read. The
      * store's values are immutable and replaced wholesale on a write, so this is a reference read, not a
      * copy.
@@ -400,7 +400,7 @@ public final class RenderPassManager {
         }
 
         @Override
-        public PassOptions options() {
+        public OptionValues options() {
             if (optionsStore == null) {
                 return DECLARED_DEFAULTS;
             }
@@ -414,7 +414,7 @@ public final class RenderPassManager {
      * answers with each {@link Option}'s own declared default rather than a caller-supplied fallback, so
      * there is no second copy of a default anywhere for the declaration to drift from.
      */
-    private static final PassOptions DECLARED_DEFAULTS = new PassOptions() {
+    private static final OptionValues DECLARED_DEFAULTS = new OptionValues() {
         @Override
         public <T> T get(Option<T> option) {
             return option.defaultValue();
@@ -481,7 +481,7 @@ public final class RenderPassManager {
         }
 
         @Override
-        public PassOptions options() {
+        public OptionValues options() {
             if (currentPass == null || optionsStore == null) {
                 return DECLARED_DEFAULTS;
             }

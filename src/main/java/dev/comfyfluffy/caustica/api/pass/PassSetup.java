@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.api.pass;
 
+import dev.comfyfluffy.caustica.api.OptionValues;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
 import dev.comfyfluffy.caustica.rt.accel.GpuImage;
@@ -42,5 +43,5 @@ public interface PassSetup {
      * pyramid) — unlike {@link PassFrame#options()}, this is not frozen for a frame, since create/resize
      * are not per-frame calls; it reads whatever is current when called.
      */
-    PassOptions options();
+    OptionValues options();
 }

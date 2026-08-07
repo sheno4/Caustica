@@ -29,7 +29,7 @@ final class BuiltinExtension implements CausticaExtension {
                 // FeatureBuilder.passResourceModule's javadoc.
                 .passResourceModule("caustica_sky_bindings")
                 // Registered from the Option constants each pass declares rather than restated here: a
-                // reader passes the same constant to PassOptions#get, so an id, range or default exists
+                // reader passes the same constant to OptionValues#get, so an id, range or default exists
                 // exactly once and a typo cannot compile.
                 .options(BloomPass.OPTIONS)
                 .options(SkyLutPass.OPTIONS)

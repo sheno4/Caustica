@@ -3,7 +3,7 @@ package dev.comfyfluffy.caustica;
 import dev.comfyfluffy.caustica.api.CausticaRegistry;
 import dev.comfyfluffy.caustica.api.Feature;
 import dev.comfyfluffy.caustica.api.Option;
-import dev.comfyfluffy.caustica.api.pass.PassOptions;
+import dev.comfyfluffy.caustica.api.OptionValues;
 import net.minecraft.resources.Identifier;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -52,7 +52,7 @@ final class CausticaOptionsTest {
 
     @Test
     void anAbsentFileLeavesEveryOptionAtItsDeclaredDefault() {
-        PassOptions options = load().options(FEATURE);
+        OptionValues options = load().options(FEATURE);
 
         assertEquals(0.25f, options.get(ALPHA));
         assertEquals(true, options.get(FLAG));
@@ -61,7 +61,7 @@ final class CausticaOptionsTest {
 
     @Test
     void aFileValueOverridesTheDefaultAndIsClampedToTheOptionsRange() throws IOException {
-        PassOptions options = loadWithFile("""
+        OptionValues options = loadWithFile("""
                 ["test:options"]
                 alpha = 0.5
                 flag = false
@@ -153,7 +153,7 @@ final class CausticaOptionsTest {
 
     @Test
     void readingAnOptionTheFeatureNeverDeclaredThrows() {
-        PassOptions options = load().options(FEATURE);
+        OptionValues options = load().options(FEATURE);
 
         IllegalArgumentException e =
                 assertThrows(IllegalArgumentException.class, () -> options.get(UNDECLARED));
@@ -162,7 +162,7 @@ final class CausticaOptionsTest {
 
     @Test
     void readingALookalikeOptionWithADifferentDeclarationThrows() {
-        PassOptions options = load().options(FEATURE);
+        OptionValues options = load().options(FEATURE);
 
         assertThrows(IllegalArgumentException.class, () -> options.get(ALPHA_LOOKALIKE),
                 "a token sharing an id but not the declaration must not silently resolve");
