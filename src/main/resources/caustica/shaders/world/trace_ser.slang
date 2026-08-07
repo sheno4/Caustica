@@ -1,6 +1,8 @@
 // EXT Shader Execution Reordering radiance dispatch. Kept in a separate module so the ordinary
 // indirect shader never imports hit-object operations or their SPIR-V capability.
 
+module trace_ser;
+
 import world_common;
 import world_core;
 import bindings;

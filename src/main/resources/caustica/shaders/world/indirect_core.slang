@@ -7,6 +7,8 @@
 // a tight continuous GGX lobe at zero roughness because the slot contract has no delta-lobe event.
 //
 // Thin entry modules select ordinary tracing or EXT_SER while this integrator stays shared.
+module indirect_core;
+
 import world_common;
 import world_core;
 import math;
@@ -15,7 +17,6 @@ import segment;
 import water;
 import trace;
 import lighting;
-import sky;
 import bindings;
 import caustica_types;
 import caustica_surface;
@@ -288,13 +289,11 @@ public float3 tracePath<TC : IComposition, TTrace : IRadianceTrace>(TC.Surface s
 public void runIndirect<TC : IComposition, TTrace : IRadianceTrace>() {
     worldPush = ConstPtr<WorldPush>(pc.worldPushAddr)[0];
     // celestialLight (world_core.slang) stays at its zero-illuminance default: the sky's atmosphere LUT
-    // moved to a pass-owned descriptor set this NEE call used to reach through the engine's fixed
-    // bindings, and core code reaching into a slot's own resource is exactly the coupling that move
-    // removed. All three consumers below (particle lighting, main NEE, SSS backscatter) already gate on
-    // ndl/illuminance, so a zero light means no shadow ray fires — a real, deliberate regression tracked
-    // against docs/LIGHT_SYSTEM_PLAN.md L2 (dynamic-tier/provider lights), which is what
-    // LightProvider.submitLights(LightSink) — SkyLutPass already calls it — becomes the real path for.
-    FrameContext frameCtx = frameContext(worldPush, skyState(worldPush));
+    // The engine has no sun or moon as a light: celestialLight sits at its zero-illuminance default.
+    // All three consumers below (particle lighting, main NEE, SSS backscatter) gate on
+    // ndl/illuminance, so a zero light fires no shadow ray. A sky extension submitting sun and moon
+    // through LightProvider.submitLights, consumed by the engine, is what makes these real.
+    FrameContext frameCtx = frameContext(worldPush);
     TC.Surface surfaceModel;
     uint2 dispatchIndex = DispatchRaysIndex().xy;
     uint2 dimensions = DispatchRaysDimensions().xy;

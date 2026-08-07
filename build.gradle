@@ -84,7 +84,8 @@ processResources {
 // spirv-val from the Vulkan SDK or PATH.
 def shaderGenRoot = layout.buildDirectory.dir("generated/shaders") // classpath root -> /caustica/shaders/*.spv
 def runtimeWorldSourceDir = file("src/main/resources/caustica/shaders/world")
-def runtimePassSourceDir = file("src/main/resources/caustica/shaders/passes")
+def runtimeBuiltinSourceDir = file("src/main/resources/caustica/shaders/builtin")
+def runtimeApiSourceDir = file("src/main/resources/caustica/shaders/api")
 
 def resolveVulkanTool = { String name ->
 	def exe = org.gradle.internal.os.OperatingSystem.current().windows ? ".exe" : ""
@@ -101,6 +102,7 @@ def resolveVulkanTool = { String name ->
 abstract class CompileShaders extends DefaultTask {
 	@InputDirectory abstract DirectoryProperty getSrcDir()
 	@InputDirectory abstract DirectoryProperty getRuntimeWorldDir()
+	@InputDirectory abstract DirectoryProperty getRuntimeApiDir()
 	@OutputDirectory abstract DirectoryProperty getOutDir()
 	@Input abstract Property<String> getSpirvVal()
 	@Input abstract Property<String> getSlangc()
@@ -125,7 +127,7 @@ abstract class CompileShaders extends DefaultTask {
 				commandLine spirvVal.get(), "--target-env", "vulkan1.2", spv.absolutePath
 			}
 		}
-		def includeDirs = ([runtimeWorldDir.get().asFile]
+		def includeDirs = ([runtimeWorldDir.get().asFile, runtimeApiDir.get().asFile]
 				+ srcDir.get().asFileTree.matching { include "**/*.slang" }.files.collect { it.parentFile })
 				.unique().sort { it.absolutePath }
 		def compileOneSlang = { File src, File spv, List<String> extra ->
@@ -181,6 +183,7 @@ def compileShaders = tasks.register("compileShaders", CompileShaders) {
 	description = "Compiles shaders/** shader sources to SPIR-V and validates them."
 	srcDir = file("shaders")
 	runtimeWorldDir = runtimeWorldSourceDir
+	runtimeApiDir = runtimeApiSourceDir
 	outDir = layout.buildDirectory.dir("generated/shaders/caustica/shaders")
 	spirvVal = resolveVulkanTool("spirv-val")
 	slangc = resolveVulkanTool("slangc")
@@ -192,8 +195,11 @@ def prepareShaderReflectionSources = tasks.register("prepareShaderReflectionSour
 	from(runtimeWorldSourceDir) {
 		into "pipelines/world"
 	}
-	from(runtimePassSourceDir) {
-		into "passes"
+	from(runtimeBuiltinSourceDir) {
+		into "builtin"
+	}
+	from(runtimeApiSourceDir) {
+		into "api"
 	}
 	into(shaderReflectionRoot)
 }

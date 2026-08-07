@@ -20,32 +20,19 @@ final class BuiltinExtension implements CausticaExtension {
         registry.feature(ID)
                 .title(Component.translatable("feature.caustica.builtin"))
                 .category(FeatureCategory.GENERAL)
-                .shaderSource(ShaderSource.classpath("/caustica/shaders/builtin", "sky", "common"))
-                .bind(Slots.SKY, "caustica_lut_sky", "LutSky")
+                .shaderSource(ShaderSource.classpath("/caustica/shaders/builtin", "sky", "surface", "medium", "bloom", "common"))
+                .bind(Slots.SKY, "caustica_sky_slot", "LutSky")
                 .bind(Slots.SURFACE, "caustica_builtin_surface", "BuiltinSurface")
                 .bind(Slots.MEDIUM, "caustica_builtin_medium", "BuiltinMedium")
                 // Anchors SkyLutPass's own binding declarations outside the generic Sky-slot mechanism —
                 // Slang forbids a slot IMPLEMENTATION from declaring global shader parameters itself. See
                 // FeatureBuilder.passResourceModule's javadoc.
-                .passResourceModule("caustica_lut_sky_bindings")
-                // Bloom and sky used to live in look.json (the versioned exposure/LMT/photometric-anchor
-                // package): unlike those, neither is a color-science calibration that has to move in lock
-                // step with the LMT, so they belong here instead — extension-owned options a pass reads
-                // through PassSetup/PassFrame, exercising the seam PassOptions was built for. Defaults and
-                // ranges are unchanged from the old look.json schema 4 "bloom"/"sky" sections.
-                .option(Option.range("bloom.strength", 0.0f, 2.0f, 0.02f))
-                .option(Option.range("bloom.threshold-scene-linear", 0.0f, 65504.0f, 2.0f))
-                .option(Option.range("bloom.soft-knee-fraction", 0.0f, 1.0f, 0.25f))
-                .option(Option.range("bloom.radius", 0.25f, 4.0f, 1.0f))
-                // No integer/count Option.Kind exists yet; modeled as a float and rounded where consumed.
-                .option(Option.range("bloom.levels", 1.0f, 8.0f, 6.0f))
-                .option(Option.range("sky.sun-noon-south-tilt-degrees", -89.0f, 89.0f, 30.0f))
-                .option(Option.range("sky.sun-angular-radius-degrees", 0.0f, 20.0f, 0.6f))
-                .option(Option.range("sky.moon-angular-radius-degrees", 0.0f, 20.0f, 1.5f))
-                .option(Option.range("sky.sun-disc-half-angle-degrees", 0.0f, 45.0f, 16.7f))
-                .option(Option.range("sky.moon-disc-half-angle-degrees", 0.0f, 45.0f, 11.31f))
-                .option(Option.range("sky.ground-albedo", 0.0f, 1.0f, 0.1f))
-                .option(Option.range("sky.horizon-soften-degrees", 0.0f, 90.0f, 15.0f))
+                .passResourceModule("caustica_sky_bindings")
+                // Registered from the Option constants each pass declares rather than restated here: a
+                // reader passes the same constant to PassOptions#get, so an id, range or default exists
+                // exactly once and a typo cannot compile.
+                .options(BloomPass.OPTIONS)
+                .options(SkyLutPass.OPTIONS)
                 .renderPass(new BloomPass())
                 .renderPass(skyLut)
                 .renderPass(new WorldOverlayPass())

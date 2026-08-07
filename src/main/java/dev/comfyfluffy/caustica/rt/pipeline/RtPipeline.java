@@ -185,9 +185,6 @@ public final class RtPipeline {
                 binds.get(binding).binding(binding).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)
                         .descriptorCount(1).stageFlags(VK_SHADER_STAGE_RAYGEN_BIT_KHR);
             }
-            binds.get(WORLD_CELESTIALS).binding(WORLD_CELESTIALS)
-                    .descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
-                    .descriptorCount(1).stageFlags(VK_SHADER_STAGE_MISS_BIT_KHR);
             VkDescriptorSetLayoutCreateInfo dslci = VkDescriptorSetLayoutCreateInfo.calloc(stack).sType$Default().pBindings(binds);
             LongBuffer p = stack.mallocLong(1);
             check(VK10.vkCreateDescriptorSetLayout(vk, dslci, null, p), "vkCreateDescriptorSetLayout");
@@ -516,15 +513,6 @@ public final class RtPipeline {
             }
             VK10.vkUpdateDescriptorSets(ctx.vk(), write, null);
         }
-    }
-
-    /** Bind the vanilla celestials atlas (sun + moon phases), sampled by world.rmiss for the discs. */
-    public void setSkyAtlas(long imageView, long sampler) {
-        writeAtlasBinding(WORLD_CELESTIALS, imageView, sampler);
-    }
-
-    public boolean hasSkyAtlas() {
-        return true;
     }
 
     /**

@@ -31,10 +31,10 @@ abstract class GenerateRtBindings extends DefaultTask {
                     TLAS: "topLevelAS", OUTPUT: "outImage", BLOCK_ALBEDO: "blockAlbedoAtlas",
                     G_NORMAL: "gNormal", G_ALBEDO: "gAlbedo", G_DEPTH: "gDepth", G_MOTION: "gMotion",
                     G_SPEC_ALBEDO: "gSpecAlbedo", G_SPEC_MOTION: "gSpecMotion",
-                    CELESTIALS: "celestialsAtlas",
-                    // Sky-view/transmittance LUTs are no longer an engine-fixed set-0 binding: SkyLutPass
-                    // declares them itself at set 2 (caustica_lut_sky_bindings.slang), discovered from
-                    // per-composition runtime reflection instead of this build-time one.
+                    // The sky-view/transmittance LUTs, the celestials atlas, and the sky's per-frame
+                    // inputs are none of them engine-fixed set-0 bindings: SkyLutPass declares them all
+                    // itself at set 2 (caustica_sky_bindings.slang), discovered from per-composition
+                    // runtime reflection instead of this build-time one.
                     ENTITY_ALBEDO: "entityAlbedoTex", MATERIAL_SURFACE0: "materialSurface0Tex",
                     MATERIAL_NORMAL_AO: "materialNormalAoTex", MATERIAL_SURFACE1: "materialSurface1Tex"]],
             [prefix: "DISPLAY", source: "pipelines/display/main.comp.slang", resources: [

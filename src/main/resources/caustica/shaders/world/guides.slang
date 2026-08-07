@@ -5,6 +5,8 @@
 // Primary-visibility guide attributes. Pass A traces exactly one sample per pixel; a split reflection
 // leaf supplies the spec endpoint and its transmission leaf may replace the ordinary tuple.
 
+module guides;
+
 import world_common;
 import world_core;
 import bindings;

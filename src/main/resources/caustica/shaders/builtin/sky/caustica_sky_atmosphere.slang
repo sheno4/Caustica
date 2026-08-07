@@ -18,9 +18,8 @@
 // Lengths are KILOMETRES and coefficients 1/km throughout. The LUT parameterisations take square roots of
 // differences of radii around 6360 vs 6460; in metres those differences lose most of their fp32
 // significand and the horizon row of the sky-view LUT visibly quantises.
-module sky;
+module caustica_sky_atmosphere;
 
-import world_common;
 
 public static const float SKY_PI = 3.14159265359;
 
@@ -463,11 +462,43 @@ public bool celestialSquareLocal(float3 dir, float3 bodyDir, float halfAngle, ou
     return all(abs(local) < float2(1.0, 1.0));
 }
 
+// The Overworld sky's own per-frame inputs: only what the CPU alone can know — Minecraft's four eased
+// celestial angles (the 26.2 timeline drives them through a cubic-bezier ease and a datapack may replace
+// the track, so they are read from the attribute probe rather than re-derived from the tick), its star
+// brightness and moon phase, the photometric anchors, and SkyLutPass's own sky.* geometry options. Every
+// direction, colour, level and transmittance is derived from these below, so no atmosphere maths runs on
+// the CPU.
+//
+// SkyLutPass fills one of these per frame and publishes it two ways: as the push constant for its own
+// LUT bakes, and as a set-2 uniform buffer the sky slot reads (caustica_sky_bindings). Both consumers read
+// the same bytes, so the baked LUTs and the frame they shade cannot disagree. None of it is engine state
+// — a sky for another dimension needs none of these fields — so it lives with the pass that owns it.
+//
+// SkyInputsData.java is generated from this reflected type, including its serializer and byte size.
+public struct SkyInputs {
+    // x sun angle (rad), y moon angle (rad), z star angle (rad), w MC star brightness 0..1
+    public float4 celestial;
+    // x sun illuminance (lux, top of atmosphere), y full-moon illuminance (lux), z night airglow
+    // (cd/m²), w star luminance anchor (cd/m²).
+    public float4 skyLook0;
+    // x noon south tilt (rad), y sun NEE half-angle (rad), z moon NEE half-angle (rad),
+    // w moon-phase fixed light fraction.
+    public float4 skyLook1;
+    // x drawn sun half-angle (rad), y drawn moon half-angle (rad), z viewer altitude (km),
+    // w moon phase index (0 full .. 4 new).
+    public float4 skyLook2;
+    public float4 skyLook3;         // x ground albedo, y horizon soften (rad), zw reserved
+    public float4 sunUv;            // vanilla sun sprite atlas rect (u0,v0,u1,v1)
+    public float4 moonUv;           // vanilla current-moon-phase sprite atlas rect
+};
+
 // ---- Per-frame sky state ------------------------------------------------------------------------
 //
-// WorldPush carries only what the CPU alone can know: Minecraft's four eased celestial angles, its star
-// brightness, the moon phase, and the immutable look-package constants. Every direction, colour, level,
-// and transmittance is derived here so atmospheric physics has one implementation.
+// SkyInputs carries only what the CPU alone can know: Minecraft's four eased celestial
+// angles, its star brightness, the moon phase, the photometric anchors, and SkyLutPass's sky.* options.
+// Every direction, colour, level, and transmittance is derived here so atmospheric physics has one
+// implementation — shared by the LUT bakes (which read SkyInputs as a push constant) and the sky slot
+// (which reads the same struct as a pass-published uniform buffer).
 
 public struct SkyState {
     public float3 sunDir;
@@ -495,7 +526,7 @@ public float moonLitFraction(float moonPhaseIndex) {
     return abs(moonPhaseIndex - 4.0) / 4.0;
 }
 
-public SkyState skyState(WorldPush push) {
+public SkyState skyState(SkyInputs push) {
     SkyState s;
     s.noonTilt = push.skyLook1.x;
     s.sunDir = celestialDirection(push.celestial.x, s.noonTilt);
@@ -522,16 +553,3 @@ public SkyState skyState(WorldPush push) {
     return s;
 }
 
-/**
- * Still the type of {@code world_core.slang}'s {@code celestialLight} global, which every NEE call site
- * reads from — but nothing computes one anymore. {@code dominantCelestialLight}, which used to populate
- * it from {@code transmittanceLut} each dispatch, was removed when that LUT became a pass-owned resource
- * outside `bindings.slang`'s reach (see `docs/ARCHITECTURE.md` §4 point 3); the global now sits at its
- * zero-illuminance default permanently. Restoring a real producer is `docs/LIGHT_SYSTEM_PLAN.md` L2's job
- * (a generic light table `indirect_core.slang` samples, not a sky-specific function), not this struct's.
- */
-public struct CelestialLight {
-    public float3 dir;
-    public float3 illuminance;  // linear BT.709, lux at the viewer
-    public float  halfAngle;
-};

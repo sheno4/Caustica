@@ -35,6 +35,24 @@ public interface PassFrame {
     PassOptions options();
 
     /**
+     * Re-publish a world resource whose handle the host application can change between frames — a
+     * Minecraft atlas is the case this exists for: its {@code GpuTextureView} is replaced by a resource
+     * reload, and the pass wrapping it has no create/resize call to publish the new one from. Same
+     * contract as {@link PassSetup#publishWorldResource(String, GpuImage, long)} otherwise; the engine
+     * picks the new handle up at its next descriptor rebind, not mid-frame.
+     */
+    void publishWorldResource(String name, long imageView, long sampler);
+
+    /**
+     * Publish a scalar another pipeline reads back by name this frame — bloom's composite weight is the
+     * case this exists for: the display-mapping pipeline needs one float that is bloom's business to
+     * compute, and the pass is the only thing that should know how its own option maps to it. Unlike
+     * {@link PassSetup#publishOutput}, this is per-frame, so an option change lands immediately instead
+     * of at the next resize.
+     */
+    void publishScalar(String name, float value);
+
+    /**
      * A full pipeline barrier (all commands, all memory read/write) between two of this pass's own
      * dispatches — the same broad, safe idiom the engine itself uses between frame stages.
      */

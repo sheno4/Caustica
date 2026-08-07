@@ -24,9 +24,6 @@ public record RtLookPackage(
         Exposure exposure,
         String lmtResource,
         Lighting lighting) {
-    // Bumped 4 -> 5: bloom and sky moved out to extension-owned Option values (see BuiltinExtension) —
-    // neither is a colour-science calibration that has to move in lock step with the LMT the way
-    // exposure/lighting are, so they no longer belong in this versioned package.
     public static final int SCHEMA_VERSION = 5;
     public static final String DEFAULT_ID = "default";
     public static final String DEFAULT_JSON = "/caustica/color/looks/default/look.json";

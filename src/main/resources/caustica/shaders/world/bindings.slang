@@ -1,6 +1,8 @@
 // Complete descriptor and push-constant interface for the world ray-tracing pipeline.
 // Every world stage imports this module instead of redeclaring its own subset.
 
+module bindings;
+
 import world_common;
 
 [[vk::push_constant]] public WorldPushConstants pc;
@@ -16,7 +18,8 @@ import world_common;
 [[vk::binding(8, 0)]] [format("rg16f")] public RWTexture2D<float2> gSpecMotion;
 
 [[vk::binding(2, 0)]] public Sampler2D blockAlbedoAtlas;
-[[vk::binding(9, 0)]] public Sampler2D celestialsAtlas;
+// Index 9 is deliberately unused. Set 0 is the engine's stable ABI, so a retired binding stays a
+// hole rather than being renumbered.
 
 [[vk::binding(0, 1)]] public Sampler2D entityAlbedoTex[];
 [[vk::binding(1, 1)]] public Sampler2D materialSurface0Tex[];

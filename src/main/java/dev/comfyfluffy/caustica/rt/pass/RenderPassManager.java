@@ -2,7 +2,9 @@ package dev.comfyfluffy.caustica.rt.pass;
 
 import com.mojang.blaze3d.vulkan.VulkanCommandEncoder;
 import dev.comfyfluffy.caustica.CausticaMod;
+import dev.comfyfluffy.caustica.CausticaOptions;
 import dev.comfyfluffy.caustica.api.Feature;
+import dev.comfyfluffy.caustica.api.Option;
 import dev.comfyfluffy.caustica.api.pass.CausticaRenderPass;
 import dev.comfyfluffy.caustica.api.pass.PassFrame;
 import dev.comfyfluffy.caustica.api.pass.PassOptions;
@@ -48,9 +50,10 @@ public final class RenderPassManager {
     private final Map<String, WorldResource> worldResources = new LinkedHashMap<>();
     private final Map<String, CausticaRenderPass> worldResourcePublishers = new LinkedHashMap<>();
     private final Map<String, NamedOutput> outputs = new LinkedHashMap<>();
+    private final Map<String, Float> scalars = new LinkedHashMap<>();
     private final Map<String, CausticaRenderPass> outputPublishers = new LinkedHashMap<>();
     private final Map<Identifier, Feature> passFeature;
-    private final PassOptionsStore optionsStore;
+    private final CausticaOptions optionsStore;
     private GpuImage reconstructedColor;
     private GpuImage exposureImage;
     private final long sampler;
@@ -60,24 +63,35 @@ public final class RenderPassManager {
     private Map<String, Object> frameOptionsSnapshot = Map.of();
 
     /**
-     * A pass-published world resource: exactly one of an image (with the sampler it should be read with)
-     * or a buffer, matching whichever {@code publishWorldResource} overload a pass called — driven by
-     * whichever descriptor kind that pass's own Slang declared (see
+     * A pass-published world resource: exactly one of an owned image, a buffer, or a raw view of an image
+     * the host application owns, matching whichever {@code publishWorldResource} overload the pass called
+     * — driven by whichever descriptor kind that pass's own Slang declared (see
      * {@code WorldShaderCompiler.PassResourceKind}).
      */
-    public record WorldResource(GpuImage image, long sampler, GpuBuffer buffer) {
+    public record WorldResource(GpuImage image, long sampler, GpuBuffer buffer, long rawImageView) {
         public WorldResource {
-            if ((image == null) == (buffer == null)) {
-                throw new IllegalArgumentException("a world resource is exactly one of an image or a buffer");
+            int kinds = (image != null ? 1 : 0) + (buffer != null ? 1 : 0) + (rawImageView != 0L ? 1 : 0);
+            if (kinds != 1) {
+                throw new IllegalArgumentException(
+                        "a world resource is exactly one of an image, a buffer, or a raw image view");
             }
         }
 
+        /** The Vulkan image view to bind, whichever image form this resource took. */
+        public long view() {
+            return image != null ? image.view : rawImageView;
+        }
+
         static WorldResource ofImage(GpuImage image, long sampler) {
-            return new WorldResource(image, sampler, null);
+            return new WorldResource(image, sampler, null, 0L);
         }
 
         static WorldResource ofBuffer(GpuBuffer buffer) {
-            return new WorldResource(null, 0L, buffer);
+            return new WorldResource(null, 0L, buffer, 0L);
+        }
+
+        static WorldResource ofRawView(long imageView, long sampler) {
+            return new WorldResource(null, sampler, null, imageView);
         }
     }
 
@@ -90,7 +104,7 @@ public final class RenderPassManager {
     }
 
     private RenderPassManager(GpuContext ctx, List<CausticaRenderPass> ordered, long sampler,
-                              Map<Identifier, Feature> passFeature, PassOptionsStore optionsStore) {
+                              Map<Identifier, Feature> passFeature, CausticaOptions optionsStore) {
         this.ctx = ctx;
         this.ordered = ordered;
         this.sampler = sampler;
@@ -100,13 +114,14 @@ public final class RenderPassManager {
 
     /**
      * {@code features} is every registered {@link Feature}, not just the ones with render passes: each
-     * pass's owning feature is recovered from it (so {@link PassSetup#options()}/{@link PassFrame#options()}
-     * know which feature's option namespace to read) and it seeds {@link PassOptionsStore} with every
-     * declared {@link dev.comfyfluffy.caustica.api.Option}, including ones with no render pass to read
-     * them at all — e.g. a scene-provider-only extension. See {@link #optionsForFeature} for reading a
-     * feature's options from engine code that is not itself a pass.
+     * pass's owning feature is recovered from it so {@link PassSetup#options()}/{@link PassFrame#options()}
+     * know which feature's option namespace to read. {@code options} is the process-scoped store loaded at
+     * mod init ({@code CausticaApi.options()}) — this manager reads it, it does not own it, since option
+     * values outlive the Vulkan device and have to be readable before one exists. Every reader is a pass
+     * reading its own feature's options; engine code outside a pass has no path to them.
      */
-    public static RenderPassManager create(GpuContext ctx, Map<Identifier, Feature> features) {
+    public static RenderPassManager create(GpuContext ctx, Map<Identifier, Feature> features,
+                                           CausticaOptions options) {
         Map<Identifier, CausticaRenderPass> registered = new LinkedHashMap<>();
         Map<Identifier, Feature> passFeature = new LinkedHashMap<>();
         for (Feature feature : features.values()) {
@@ -117,23 +132,12 @@ public final class RenderPassManager {
         }
         List<CausticaRenderPass> ordered = orderPasses(registered.values());
         long sampler = createSampler(ctx);
-        PassOptionsStore optionsStore = PassOptionsStore.load(features);
-        RenderPassManager manager = new RenderPassManager(ctx, ordered, sampler, passFeature, optionsStore);
+        RenderPassManager manager = new RenderPassManager(ctx, ordered, sampler, passFeature, options);
         for (CausticaRenderPass pass : ordered) {
             PassSetup setup = manager.new Setup(pass);
             manager.invoke(pass, "create", () -> pass.create(setup));
         }
         return manager;
-    }
-
-    /**
-     * Read a registered feature's options from engine code that runs outside any pass's own lifecycle
-     * methods — e.g. {@code RtComposite}'s display-mapping step, which applies {@code bloom.strength} to
-     * an image the bloom pass itself only produces, not consumes. Live, like {@link PassSetup#options()},
-     * not frozen to a frame like {@link PassFrame#options()}.
-     */
-    public PassOptions optionsForFeature(Identifier featureId) {
-        return optionsStore != null ? optionsStore.options(featureId) : NOOP_OPTIONS;
     }
 
     public void resize(int width, int height) {
@@ -164,12 +168,14 @@ public final class RenderPassManager {
     /**
      * Reset per-frame bookkeeping; call once before any recording. Also takes this frame's option
      * snapshot — {@link PassOptions} promises a value read mid-frame stays fixed for the rest of it, so
-     * every pass across every stage this frame shares the one snapshot taken here, not a live read.
+     * every pass across every stage this frame shares the one snapshot taken here, not a live read. The
+     * store's values are immutable and replaced wholesale on a write, so this is a reference read, not a
+     * copy.
      */
     public void beginFrame() {
         frameIndex++;
         if (optionsStore != null) {
-            frameOptionsSnapshot = optionsStore.snapshotValues();
+            frameOptionsSnapshot = optionsStore.snapshot();
         }
     }
 
@@ -200,6 +206,12 @@ public final class RenderPassManager {
 
     public long sampler() {
         return sampler;
+    }
+
+    /** A scalar a pass published this frame via {@link PassFrame#publishScalar}, or {@code fallback}. */
+    public float scalar(String name, float fallback) {
+        Float value = scalars.get(name);
+        return value != null ? value : fallback;
     }
 
     /**
@@ -264,6 +276,16 @@ public final class RenderPassManager {
                         pass.id(), cleanupFailure);
             }
         }
+    }
+
+    private void publishWorldResourceInternal(CausticaRenderPass owner, String name, WorldResource resource) {
+        Objects.requireNonNull(name, "name");
+        CausticaRenderPass existing = worldResourcePublishers.putIfAbsent(name, owner);
+        if (existing != null && existing != owner) {
+            throw new IllegalStateException("multiple render passes publish world resource '" + name
+                    + "': " + existing.id() + " and " + owner.id());
+        }
+        worldResources.put(name, resource);
     }
 
     private void unpublish(CausticaRenderPass pass) {
@@ -392,13 +414,7 @@ public final class RenderPassManager {
         }
 
         private void publishWorldResourceInternal(String name, WorldResource resource) {
-            Objects.requireNonNull(name, "name");
-            CausticaRenderPass existing = worldResourcePublishers.putIfAbsent(name, owner);
-            if (existing != null && existing != owner) {
-                throw new IllegalStateException("multiple render passes publish world resource '" + name
-                        + "': " + existing.id() + " and " + owner.id());
-            }
-            worldResources.put(name, resource);
+            RenderPassManager.this.publishWorldResourceInternal(owner, name, resource);
         }
 
         @Override
@@ -416,14 +432,24 @@ public final class RenderPassManager {
         @Override
         public PassOptions options() {
             if (optionsStore == null) {
-                return NOOP_OPTIONS;
+                return DECLARED_DEFAULTS;
             }
             Feature feature = passFeature.get(owner.id());
-            return feature != null ? optionsStore.options(feature.id()) : NOOP_OPTIONS;
+            return feature != null ? optionsStore.options(feature.id()) : DECLARED_DEFAULTS;
         }
     }
 
-    private static final NoopOptions NOOP_OPTIONS = new NoopOptions();
+    /**
+     * The degenerate view used only by the package-private test constructor, which has no store. It
+     * answers with each {@link Option}'s own declared default rather than a caller-supplied fallback, so
+     * there is no second copy of a default anywhere for the declaration to drift from.
+     */
+    private static final PassOptions DECLARED_DEFAULTS = new PassOptions() {
+        @Override
+        public <T> T get(Option<T> option) {
+            return option.defaultValue();
+        }
+    };
 
     private final class Frame implements PassFrame {
         private final VkCommandBuffer commandBuffer;
@@ -471,11 +497,26 @@ public final class RenderPassManager {
 
         @Override
         public PassOptions options() {
-            if (currentPass == null) {
-                return NOOP_OPTIONS;
+            if (currentPass == null || optionsStore == null) {
+                return DECLARED_DEFAULTS;
             }
             Feature feature = passFeature.get(currentPass.id());
-            return feature != null ? PassOptionsStore.viewOf(feature, frameOptionsSnapshot) : NOOP_OPTIONS;
+            return feature != null
+                    ? optionsStore.view(feature.id(), frameOptionsSnapshot) : DECLARED_DEFAULTS;
+        }
+
+        @Override
+        public void publishScalar(String name, float value) {
+            Objects.requireNonNull(name, "name");
+            scalars.put(name, value);
+        }
+
+        @Override
+        public void publishWorldResource(String name, long imageView, long sampler) {
+            if (currentPass == null) {
+                throw new IllegalStateException("publishWorldResource called outside a pass's record()");
+            }
+            publishWorldResourceInternal(currentPass, name, WorldResource.ofRawView(imageView, sampler));
         }
 
         @Override
@@ -486,10 +527,4 @@ public final class RenderPassManager {
         }
     }
 
-    private static final class NoopOptions implements PassOptions {
-        @Override
-        public <T> T get(String optionId, T fallback) {
-            return fallback;
-        }
-    }
 }

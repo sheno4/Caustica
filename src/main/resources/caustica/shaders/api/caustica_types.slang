@@ -12,26 +12,21 @@ public static const uint EVENT_SPECULAR = 0x4u;
 public static const uint EVENT_REFLECTION = 0x8u;
 public static const uint EVENT_TRANSMISSION = 0x10u;
 
-public static const uint DIMENSION_HAS_SKY = 0x1u;
-public static const uint DIMENSION_HAS_WEATHER = 0x2u;
 public static const uint DIMENSION_ULTRAWARM = 0x4u;
 
 public static const uint MEDIUM_AIR = 0u;
 public static const uint MEDIUM_WATER = 1u;
 
+/**
+ * Per-frame world state an appearance slot is allowed to see. Weather is all of it: everything else the
+ * engine knows is either reachable another way or belongs to whichever slot owns it. Both fields are
+ * currently always zero — no weather state reaches the world push yet, so slots see a clear sky rather
+ * than fabricated values.
+ */
 public struct FrameContext {
-    public float timeSeconds;
-    public uint frameIndex;
-    public float3 cameraPosition;
     public float rain;
     public float thunder;
-    public float dayFraction;
-    public float nightFraction;
-    public float3 sunDirection;
-    public float3 moonDirection;
-    public uint dimensionFlags;
 };
-
 public struct MaterialInput {
     public float3 baseColor;
     public float opacity;

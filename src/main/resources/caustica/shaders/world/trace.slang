@@ -3,6 +3,8 @@
 
 // receiver billboards only. The first-person camera owner uses 0x01 (secondary only).
 
+module trace;
+
 import world_common;
 import world_core;
 import bindings;

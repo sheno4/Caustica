@@ -4,7 +4,7 @@
 import world_common;
 import display_common;
 import caustica_bloom_types;
-import sky_lut_types;
+import caustica_sky_atmosphere;
 
 struct WorldPushLayoutProbe {
     WorldPush values[2]; // array stride is the complete, tail-padded WorldPush byte size
@@ -77,12 +77,12 @@ void probeDebugPresentPush(uint3 id : SV_DispatchThreadID) {
     }
 }
 
-[[vk::push_constant]] SkyLutPush skyLutPushProbe;
+[[vk::push_constant]] SkyInputs skyLutPushProbe;
 [shader("compute")]
 [numthreads(1, 1, 1)]
 void probeSkyLutPush(uint3 id : SV_DispatchThreadID) {
     if (id.x == 0xFFFFFFFFu) {
-        float sink = skyLutPushProbe.celestial.x + skyLutPushProbe.skyLook3.x;
+        float sink = skyLutPushProbe.celestial.x + skyLutPushProbe.sunUv.x;
     }
 }
 

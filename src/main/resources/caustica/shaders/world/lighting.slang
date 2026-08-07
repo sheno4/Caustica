@@ -3,6 +3,8 @@
 
 // contribution weight, M the effective sample count. wSum/phat are streaming scratch (not persisted).
 
+module lighting;
+
 import world_common;
 import world_core;
 import bindings;

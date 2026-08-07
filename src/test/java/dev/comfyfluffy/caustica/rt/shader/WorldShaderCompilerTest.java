@@ -86,12 +86,17 @@ final class WorldShaderCompilerTest {
             throws Exception {
         try (WorldShaderCompiler compiler = compiler(cacheDirectory)) {
             compiler.compileSkyMiss();
-            // caustica_lut_sky_bindings.slang, imported by the built-in LutSky, declares exactly these two
-            // Sampler2Ds.
+            // caustica_sky_bindings.slang, imported by the built-in LutSky, declares exactly these four:
+            // its two LUTs, its per-frame sky inputs, and the celestials atlas. The uniform-buffer kind is
+            // the point: reflection distinguishes the descriptor kinds a pass declares, not just images.
             assertEquals(Map.of(
                     "skyView", new WorldShaderCompiler.PassResourceBinding(0,
                             WorldShaderCompiler.PassResourceKind.SAMPLED_IMAGE),
                     "transmittance", new WorldShaderCompiler.PassResourceBinding(1,
+                            WorldShaderCompiler.PassResourceKind.SAMPLED_IMAGE),
+                    "skyInputs", new WorldShaderCompiler.PassResourceBinding(2,
+                            WorldShaderCompiler.PassResourceKind.UNIFORM_BUFFER),
+                    "celestialsAtlas", new WorldShaderCompiler.PassResourceBinding(3,
                             WorldShaderCompiler.PassResourceKind.SAMPLED_IMAGE)),
                     compiler.passResourceBindings());
         }

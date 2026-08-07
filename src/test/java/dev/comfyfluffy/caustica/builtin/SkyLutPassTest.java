@@ -1,7 +1,7 @@
 package dev.comfyfluffy.caustica.builtin;
 
 import dev.comfyfluffy.caustica.api.ShaderSource;
-import dev.comfyfluffy.caustica.rt.gen.SkyLutPushData;
+import dev.comfyfluffy.caustica.rt.gen.SkyInputsData;
 import dev.comfyfluffy.caustica.api.pass.ComputeDispatch;
 import dev.comfyfluffy.caustica.api.pass.PassShaderCompiler;
 import net.minecraft.resources.Identifier;
@@ -24,10 +24,13 @@ final class SkyLutPassTest {
             0.03f, 0.04f, 1.25f, 2.0f, 0.3f, 0.05f);
 
     @Test
-    void pushConstantsMapSkyStateFieldsInDeclaredOrder() {
-        ByteBuffer push = ByteBuffer.wrap(SkyLutPass.pushConstants(SKY)).order(ByteOrder.nativeOrder());
+    void skyInputsMapSkyStateFieldsInDeclaredOrder() {
+        // The same bytes go two places — the LUT bakes' push constant and the set-2 uniform buffer the
+        // sky slot reads — so this pins the layout both consumers agree on.
+        ByteBuffer push = ByteBuffer.wrap(SkyLutPass.pushConstants(new SkyLutPass().skyInputs(SKY)))
+                .order(ByteOrder.nativeOrder());
 
-        assertEquals(SkyLutPushData.BYTE_SIZE, push.capacity());
+        assertEquals(SkyInputsData.BYTE_SIZE, push.capacity());
         assertEquals(SKY.sunAngleRadians(), push.getFloat(0));
         assertEquals(SKY.moonAngleRadians(), push.getFloat(4));
         assertEquals(SKY.starAngleRadians(), push.getFloat(8));
@@ -37,6 +40,21 @@ final class SkyLutPassTest {
         assertEquals(SKY.sunDiscHalfAngleRadians(), push.getFloat(48));
         assertEquals(SKY.groundAlbedo(), push.getFloat(64));
         assertEquals(SKY.horizonSoftenRadians(), push.getFloat(68));
+    }
+
+    @Test
+    void celestialSpriteRectsDefaultToTheFullAtlasBeforeItIsStitched() {
+        // Until the celestials atlas is stitched the rects stay full-range, so the discs sample a
+        // defined texel rather than reading an unbound descriptor.
+        ByteBuffer push = ByteBuffer.wrap(SkyLutPass.pushConstants(new SkyLutPass().skyInputs(SKY)))
+                .order(ByteOrder.nativeOrder());
+
+        assertEquals(0.0f, push.getFloat(80));
+        assertEquals(0.0f, push.getFloat(84));
+        assertEquals(1.0f, push.getFloat(88));
+        assertEquals(1.0f, push.getFloat(92));
+        assertEquals(0.0f, push.getFloat(96));
+        assertEquals(1.0f, push.getFloat(104));
     }
 
     @Test
@@ -50,15 +68,15 @@ final class SkyLutPassTest {
 
     @Test
     void runtimeShadersCompileAndNoSkyLutSpirvIsPackaged(@TempDir Path cache) throws Exception {
-        ShaderSource source = ShaderSource.classpath("/caustica/shaders/world", "sky");
+        ShaderSource source = ShaderSource.classpath("/caustica/shaders/builtin", "sky", "common");
 
-        compileAndValidate(cache, source, "sky_lut_transmittance", SkyLutPass.TRANSMITTANCE_BINDINGS, 0);
-        compileAndValidate(cache, source, "sky_lut_multiscatter", SkyLutPass.SCATTER_BINDINGS,
-                SkyLutPushData.BYTE_SIZE);
-        compileAndValidate(cache, source, "sky_lut_view", SkyLutPass.SCATTER_BINDINGS,
-                SkyLutPushData.BYTE_SIZE);
+        compileAndValidate(cache, source, "caustica_sky_lut_transmittance", SkyLutPass.TRANSMITTANCE_BINDINGS, 0);
+        compileAndValidate(cache, source, "caustica_sky_lut_multiscatter", SkyLutPass.SCATTER_BINDINGS,
+                SkyInputsData.BYTE_SIZE);
+        compileAndValidate(cache, source, "caustica_sky_lut_view", SkyLutPass.SCATTER_BINDINGS,
+                SkyInputsData.BYTE_SIZE);
 
-        assertNotNull(getClass().getResource("/caustica/shaders/world/sky/sky_lut_view.slang"));
+        assertNotNull(getClass().getResource("/caustica/shaders/builtin/sky/caustica_sky_lut_view.slang"));
         assertNull(getClass().getResource("/caustica/shaders/pipelines/sky_lut/view.comp.spv"));
         assertNull(getClass().getResource("/caustica/shaders/pipelines/sky_lut/transmittance.comp.spv"));
         assertNull(getClass().getResource("/caustica/shaders/pipelines/sky_lut/multiscatter.comp.spv"));

@@ -63,13 +63,13 @@ final class BloomPassTest {
     void runtimeShaderCompilesAndBuildDoesNotPackageABloomSpirv(@TempDir Path cache) throws Exception {
         Identifier id = Identifier.fromNamespaceAndPath("caustica", "bloom");
         PassShaderCompiler.CompiledProgram compiled = PassShaderCompiler.compile(cache, id,
-                ShaderSource.classpath("/caustica/shaders/passes/bloom"), "caustica_bloom", "main");
+                ShaderSource.classpath("/caustica/shaders/builtin", "bloom"), "caustica_bloom", "main");
 
         assertEquals(0x07230203, ByteBuffer.wrap(compiled.spirv())
                 .order(ByteOrder.LITTLE_ENDIAN).getInt());
         assertTrue(Files.isRegularFile(cache.resolve("caustica/bloom/caustica_bloom.slang")));
         assertNotNull(getClass().getResource(
-                "/caustica/shaders/passes/bloom/caustica_bloom.slang"));
+                "/caustica/shaders/builtin/bloom/caustica_bloom.slang"));
         assertNull(getClass().getResource(
                 "/caustica/shaders/pipelines/bloom/main.comp.spv"));
 

@@ -5,18 +5,12 @@
 // The engine owns the entry point, descriptor bindings, payload ABI, and celestial-disc gate; the slot owns
 // `evaluateEnvironment`, which returns scene-linear ACEScg radiance for a direction.
 //
-// It is compiled at runtime because the concrete composition is selected at activation. It deliberately
-// does not import `sky`'s LUT sampling for the dome, but it does import `sky` for skyState so the sun and
-// moon directions handed to the slot are bit-identical to
-// the ones the engine's own NEE uses in indirect_core. Deriving them separately here would let the
-// visible sun drift away from the light that actually casts shadows.
-//
-// The indirect integrator derives celestialLight's illuminance
-// from the transmittance LUT, so direct sun/moon lighting remains atmospheric even when a slot paints
-// a flat sky. Reconciling those is the reconstruction/lighting-service work, not this wrapper's job.
+// It is compiled at runtime because the concrete composition is selected at activation. It no longer
+// imports `sky` at all: celestial state left WorldPush for the selected sky slot's own buffer, so this
+// wrapper has nothing to derive. The slot reads its own inputs through its own bindings; the engine's
+// job here is the entry point, payload ABI, and the celestial-disc gate.
 import world_common;
 import bindings;
-import sky;
 import caustica_types;
 import caustica_api;
 import frame;
@@ -31,10 +25,9 @@ import caustica_pass_resources;
 [shader("miss")]
 void main<TC : IComposition>(inout Payload payload) {
     WorldPush worldPush = ConstPtr<WorldPush>(pc.worldPushAddr)[0];
-    SkyState state = skyState(worldPush);
 
     EnvironmentQuery query;
-    query.frame = frameContext(worldPush, state);
+    query.frame = frameContext(worldPush);
     query.direction = normalize(WorldRayDirection());
     // Engine-owned double-count gate, set per-ray by raygen from the path state: a diffuse vertex that
     // already sampled the sun through NEE must not also see the disc. The surface slot classifies lobes;

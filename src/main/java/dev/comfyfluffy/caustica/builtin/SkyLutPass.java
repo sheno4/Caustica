@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.builtin;
 
+import dev.comfyfluffy.caustica.api.Option;
 import dev.comfyfluffy.caustica.api.ShaderSource;
 import dev.comfyfluffy.caustica.api.pass.CausticaRenderPass;
 import dev.comfyfluffy.caustica.api.pass.PassFrame;
@@ -8,16 +9,24 @@ import dev.comfyfluffy.caustica.api.pass.PassSetup;
 import dev.comfyfluffy.caustica.api.pass.RenderStage;
 import dev.comfyfluffy.caustica.api.provider.LightProvider;
 import dev.comfyfluffy.caustica.api.provider.LightSink;
+import com.mojang.blaze3d.textures.GpuTextureView;
+import com.mojang.blaze3d.vulkan.VulkanGpuTextureView;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtLookPackage;
+import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
 import dev.comfyfluffy.caustica.rt.accel.GpuImage;
-import dev.comfyfluffy.caustica.rt.gen.SkyLutPushData;
+import dev.comfyfluffy.caustica.rt.gen.SkyInputsData;
 import dev.comfyfluffy.caustica.api.pass.ComputeDispatch;
 import dev.comfyfluffy.caustica.api.pass.PassShaderCompiler;
 import net.minecraft.client.Minecraft;
+import net.minecraft.data.AtlasIds;
+import net.minecraft.client.renderer.texture.TextureAtlas;
+import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.attribute.EnvironmentAttributes;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.level.MoonPhase;
+import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.VK10;
 
 import java.io.IOException;
@@ -27,37 +36,61 @@ import java.nio.ByteOrder;
 import java.util.List;
 
 /**
- * Atmospheric transmittance, multiple-scattering, and per-frame sky-view LUT generation. The two
- * scattering LUTs are static and bake once (redone on {@link #invalidate()}); the sky-view LUT re-renders
- * every frame from this pass's own {@link #gatherSkyState()} sample.
+ * Atmospheric transmittance, multiple-scattering, and per-frame sky-view LUT generation for the Overworld
+ * sky. The two scattering LUTs are static and bake once (redone on {@link #invalidate()}); the sky-view
+ * LUT re-renders every frame.
  *
  * <p>Lives under {@code dev.comfyfluffy.caustica.builtin} rather than the engine's {@code rt} tree
  * deliberately: this pass ships through the same {@code CausticaRenderPass}/{@code LightProvider}
- * registration API a third-party extension would use ({@code api.BuiltinExtension} registers it, it does
- * not get called directly), so it only reaches engine internals through public surface —
- * {@link GpuContext}, {@link GpuImage}, the now-public {@link ComputeDispatch}/{@link PassShaderCompiler}
- * pass-authoring helpers, {@link RtLookPackage#current()} for the photometric lighting anchors that still
- * live in the versioned look package, and {@link PassFrame#options()} for the {@code sky.*} geometry
- * options {@code BuiltinExtension} declares (moved out of look.json — sky shape isn't a colour-science
- * calibration that has to move in lock step with the LMT the way exposure/lighting are).
+ * registration API a third-party extension would use, so it only reaches engine internals through public
+ * surface — {@link GpuContext}, {@link GpuImage}, the {@link ComputeDispatch}/{@link PassShaderCompiler}
+ * pass-authoring helpers, {@link RtLookPackage#current()} for the photometric lighting anchors, and
+ * {@link PassFrame#options()} for the {@code sky.*} geometry options declared as constants below.
  *
- * <p>It also no longer reads a shared, engine-published sky snapshot: it samples Minecraft's celestial
- * state itself, once per frame, independently of whatever {@code RtComposite} computes for the world
- * push's NEE sun/moon. The two are allowed to drift by up to a frame's worth of partial-tick sampling
- * order — deliberately, since unifying them would require the world push's own sun/moon state to route
- * through the (currently nonexistent) light-provider path first. See {@link #submitLights}.
+ * <p>Sole owner of the sky's per-frame state. It samples Minecraft's celestial state once, derives
+ * everything from it, and publishes the result as the push constant for its own LUT bakes and as a set-2
+ * uniform buffer ({@code skyInputs}) the sky slot reads, so the baked LUTs and the frame they shade cannot
+ * disagree.
+ *
+ * <p>{@link #submitLights} has no consumer, so the engine has no sun or moon as a light: celestial NEE
+ * does not fire. The engine consuming that submission is what makes it real.
  */
 public final class SkyLutPass implements CausticaRenderPass, LightProvider {
     public static final Identifier ID = Identifier.fromNamespaceAndPath("caustica", "sky_lut");
     private static final Identifier SUN_LIGHT_ID = Identifier.fromNamespaceAndPath("caustica", "sky_sun");
     private static final Identifier MOON_LIGHT_ID = Identifier.fromNamespaceAndPath("caustica", "sky_moon");
+    private static final Identifier SUN_SPRITE_ID = Identifier.withDefaultNamespace("sun");
+    private static final Identifier[] MOON_SPRITE_IDS = createMoonSpriteIds();
     static final int TRANSMITTANCE_WIDTH = 256;
     static final int TRANSMITTANCE_HEIGHT = 64;
     static final int MULTISCATTER_WIDTH = 32;
     static final int MULTISCATTER_HEIGHT = 32;
     static final int SKY_VIEW_WIDTH = 192;
     static final int SKY_VIEW_HEIGHT = 216;
-    private static final ShaderSource SHADERS = ShaderSource.classpath("/caustica/shaders/world", "sky");
+    private static final ShaderSource SHADERS = ShaderSource.classpath("/caustica/shaders/builtin", "sky", "common");
+
+    // The sky-geometry options this pass owns, declared here rather than inline in BuiltinExtension so the
+    // token a reader passes to PassOptions#get and the declaration BuiltinExtension registers are the same
+    // object. This pass is their only reader.
+    public static final Option<Float> SUN_NOON_SOUTH_TILT_DEGREES =
+            Option.range("sky.sun-noon-south-tilt-degrees", -89.0f, 89.0f, 30.0f);
+    public static final Option<Float> SUN_ANGULAR_RADIUS_DEGREES =
+            Option.range("sky.sun-angular-radius-degrees", 0.0f, 20.0f, 0.6f);
+    public static final Option<Float> MOON_ANGULAR_RADIUS_DEGREES =
+            Option.range("sky.moon-angular-radius-degrees", 0.0f, 20.0f, 1.5f);
+    public static final Option<Float> SUN_DISC_HALF_ANGLE_DEGREES =
+            Option.range("sky.sun-disc-half-angle-degrees", 0.0f, 45.0f, 16.7f);
+    public static final Option<Float> MOON_DISC_HALF_ANGLE_DEGREES =
+            Option.range("sky.moon-disc-half-angle-degrees", 0.0f, 45.0f, 11.31f);
+    public static final Option<Float> GROUND_ALBEDO =
+            Option.range("sky.ground-albedo", 0.0f, 1.0f, 0.1f);
+    public static final Option<Float> HORIZON_SOFTEN_DEGREES =
+            Option.range("sky.horizon-soften-degrees", 0.0f, 90.0f, 15.0f);
+    public static final List<Option<?>> OPTIONS = List.of(
+            SUN_NOON_SOUTH_TILT_DEGREES, SUN_ANGULAR_RADIUS_DEGREES, MOON_ANGULAR_RADIUS_DEGREES,
+            SUN_DISC_HALF_ANGLE_DEGREES, MOON_DISC_HALF_ANGLE_DEGREES, GROUND_ALBEDO,
+            HORIZON_SOFTEN_DEGREES);
+
     static final List<ComputeDispatch.Binding> TRANSMITTANCE_BINDINGS =
             List.of(ComputeDispatch.Binding.STORAGE);
     static final List<ComputeDispatch.Binding> SCATTER_BINDINGS = List.of(
@@ -72,6 +105,24 @@ public final class SkyLutPass implements CausticaRenderPass, LightProvider {
     private ComputeDispatch multiScatterDispatch;
     private ComputeDispatch skyViewDispatch;
     private boolean baked;
+    /**
+     * This frame's {@link SkyInputsData}, published as a set-2 uniform buffer the sky slot reads. Host
+     * visible and rewritten in place each frame: it is 112 bytes read by the miss shader only, so a
+     * staging copy would cost more than the uncached read it avoids.
+     */
+    private GpuBuffer skyInputsBuffer;
+    // Vanilla's celestials atlas view and the sprite rects within it, cached because getSprite() is a
+    // registry lookup and the rects only change when the atlas is restitched or the moon phase ticks.
+    private long celestialAtlasView;
+    private int celestialUvMoonPhase = -1;
+    private float sunU0;
+    private float sunV0;
+    private float sunU1 = 1f;
+    private float sunV1 = 1f;
+    private float moonU0;
+    private float moonV0;
+    private float moonU1 = 1f;
+    private float moonV1 = 1f;
     // submitLights() has no PassFrame/PassOptions of its own (LightProvider is a separate registration
     // mechanism from CausticaRenderPass, invoked by ProviderManager, not RenderPassManager) — it reuses
     // whichever state record() last gathered rather than reading options itself. Null until the first
@@ -99,15 +150,18 @@ public final class SkyLutPass implements CausticaRenderPass, LightProvider {
                 VK10.VK_FORMAT_R16G16B16A16_SFLOAT, ID + " multiscatter");
         skyView = ctx.createStorageImage(SKY_VIEW_WIDTH, SKY_VIEW_HEIGHT,
                 VK10.VK_FORMAT_R16G16B16A16_SFLOAT, ID + " sky view");
-        // Names match caustica_lut_sky_bindings.slang's own [[vk::binding(N, 2)]] declarations exactly —
+        skyInputsBuffer = ctx.createBuffer(SkyInputsData.BYTE_SIZE,
+                VK10.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true, ID + " sky inputs");
+        // Names match caustica_sky_bindings.slang's own [[vk::binding(N, 2)]] declarations exactly —
         // that module, not this Java class, is what defines the resource's identity.
         setup.publishWorldResource("transmittance", transmittance, sampler);
         setup.publishWorldResource("skyView", skyView, sampler);
+        setup.publishWorldResource("skyInputs", skyInputsBuffer);
 
         try {
-            transmittanceDispatch = compile("sky_lut_transmittance", TRANSMITTANCE_BINDINGS, 0);
-            multiScatterDispatch = compile("sky_lut_multiscatter", SCATTER_BINDINGS, SkyLutPushData.BYTE_SIZE);
-            skyViewDispatch = compile("sky_lut_view", SCATTER_BINDINGS, SkyLutPushData.BYTE_SIZE);
+            transmittanceDispatch = compile("caustica_sky_lut_transmittance", TRANSMITTANCE_BINDINGS, 0);
+            multiScatterDispatch = compile("caustica_sky_lut_multiscatter", SCATTER_BINDINGS, SkyInputsData.BYTE_SIZE);
+            skyViewDispatch = compile("caustica_sky_lut_view", SCATTER_BINDINGS, SkyInputsData.BYTE_SIZE);
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
@@ -128,6 +182,14 @@ public final class SkyLutPass implements CausticaRenderPass, LightProvider {
     public void record(PassFrame frame) {
         SkyState state = gatherSkyState(frame.options());
         lastSkyState = state;
+        // The sky slot reads every one of these values from this buffer; the bakes below read the same
+        // bytes as a push constant. One derivation, two consumers.
+        SkyInputsData inputs = skyInputs(state);
+        inputs.write(MemoryUtil.memByteBuffer(skyInputsBuffer.mapped, SkyInputsData.BYTE_SIZE)
+                .order(ByteOrder.nativeOrder()));
+        skyInputsBuffer.flush();
+        refreshCelestialAtlas(frame, state);
+        byte[] push = pushConstants(inputs);
         if (!baked) {
             transmittanceDispatch.beginFrame();
             transmittanceDispatch.dispatch(frame.commandBuffer(), new GpuImage[]{transmittance},
@@ -137,21 +199,19 @@ public final class SkyLutPass implements CausticaRenderPass, LightProvider {
             multiScatterDispatch.beginFrame();
             multiScatterDispatch.dispatch(frame.commandBuffer(),
                     new GpuImage[]{multiScatter, transmittance, multiScatter},
-                    pushConstants(state), groups(MULTISCATTER_WIDTH), groups(MULTISCATTER_HEIGHT), 1);
+                    push, groups(MULTISCATTER_WIDTH), groups(MULTISCATTER_HEIGHT), 1);
             frame.memoryBarrier();
             baked = true;
         }
 
         skyViewDispatch.beginFrame();
         skyViewDispatch.dispatch(frame.commandBuffer(), new GpuImage[]{skyView, transmittance, multiScatter},
-                pushConstants(state), groups(SKY_VIEW_WIDTH), groups(SKY_VIEW_HEIGHT), 1);
+                push, groups(SKY_VIEW_WIDTH), groups(SKY_VIEW_HEIGHT), 1);
     }
 
     /**
-     * Placeholder exercise of the light-provider API from a real render pass: submits the sun and moon as
-     * distant directional lights using the same state this frame's LUT bake used, so a reviewer can judge
-     * the shape a "sky as a light provider" registration would take. See {@link LightSink}'s javadoc for
-     * why nothing reads these yet.
+     * Submits the sun and moon as distant directional lights from the same state this frame's LUT bake
+     * used. See {@link LightSink}'s javadoc for why nothing reads these.
      */
     @Override
     public void submitLights(LightSink sink) {
@@ -208,13 +268,13 @@ public final class SkyLutPass implements CausticaRenderPass, LightProvider {
         float moonPhase = probe.getValue(EnvironmentAttributes.MOON_PHASE, partial).index(); // 0 full .. 4 new
 
         RtLookPackage.Lighting lighting = RtLookPackage.current().lighting();
-        float sunNoonSouthTiltDegrees = options.get("sky.sun-noon-south-tilt-degrees", 30.0f);
-        float sunAngularRadiusDegrees = options.get("sky.sun-angular-radius-degrees", 0.6f);
-        float moonAngularRadiusDegrees = options.get("sky.moon-angular-radius-degrees", 1.5f);
-        float sunDiscHalfAngleDegrees = options.get("sky.sun-disc-half-angle-degrees", 16.7f);
-        float moonDiscHalfAngleDegrees = options.get("sky.moon-disc-half-angle-degrees", 11.31f);
-        float groundAlbedo = options.get("sky.ground-albedo", 0.1f);
-        float horizonSoftenDegrees = options.get("sky.horizon-soften-degrees", 15.0f);
+        float sunNoonSouthTiltDegrees = options.get(SUN_NOON_SOUTH_TILT_DEGREES);
+        float sunAngularRadiusDegrees = options.get(SUN_ANGULAR_RADIUS_DEGREES);
+        float moonAngularRadiusDegrees = options.get(MOON_ANGULAR_RADIUS_DEGREES);
+        float sunDiscHalfAngleDegrees = options.get(SUN_DISC_HALF_ANGLE_DEGREES);
+        float moonDiscHalfAngleDegrees = options.get(MOON_DISC_HALF_ANGLE_DEGREES);
+        float groundAlbedo = options.get(GROUND_ALBEDO);
+        float horizonSoftenDegrees = options.get(HORIZON_SOFTEN_DEGREES);
         return new SkyState(
                 sunAngle, moonAngle, starAngle, starBrightness,
                 lighting.sunIlluminanceLux(), lighting.moonIlluminanceLux(),
@@ -229,20 +289,82 @@ public final class SkyLutPass implements CausticaRenderPass, LightProvider {
                 horizonSoftenDegrees * toRadians);
     }
 
-    static byte[] pushConstants(SkyState state) {
-        byte[] bytes = new byte[SkyLutPushData.BYTE_SIZE];
-        new SkyLutPushData(
-                new SkyLutPushData.Float4(state.sunAngleRadians(), state.moonAngleRadians(),
+    /**
+     * The one packing of this frame's sky state, shared by the LUT bakes (as a push constant) and the sky
+     * slot (as the published uniform buffer), so the two cannot disagree about what frame they render.
+     */
+    SkyInputsData skyInputs(SkyState state) {
+        return new SkyInputsData(
+                new SkyInputsData.Float4(state.sunAngleRadians(), state.moonAngleRadians(),
                         state.starAngleRadians(), state.starBrightness()),
-                new SkyLutPushData.Float4(state.sunIlluminanceLux(), state.moonIlluminanceLux(),
+                new SkyInputsData.Float4(state.sunIlluminanceLux(), state.moonIlluminanceLux(),
                         state.nightAirglowLuminance(), state.starLuminance()),
-                new SkyLutPushData.Float4(state.noonTiltRadians(), state.sunAngularRadiusRadians(),
+                new SkyInputsData.Float4(state.noonTiltRadians(), state.sunAngularRadiusRadians(),
                         state.moonAngularRadiusRadians(), state.moonPhaseFixedFraction()),
-                new SkyLutPushData.Float4(state.sunDiscHalfAngleRadians(),
+                new SkyInputsData.Float4(state.sunDiscHalfAngleRadians(),
                         state.moonDiscHalfAngleRadians(), state.viewerAltitudeKm(), state.moonPhaseIndex()),
-                new SkyLutPushData.Float4(state.groundAlbedo(), state.horizonSoftenRadians(), 0.0f, 0.0f))
-                .write(ByteBuffer.wrap(bytes).order(ByteOrder.nativeOrder()));
+                new SkyInputsData.Float4(state.groundAlbedo(), state.horizonSoftenRadians(), 0.0f, 0.0f),
+                new SkyInputsData.Float4(sunU0, sunV0, sunU1, sunV1),
+                new SkyInputsData.Float4(moonU0, moonV0, moonU1, moonV1));
+    }
+
+    static byte[] pushConstants(SkyInputsData inputs) {
+        byte[] bytes = new byte[SkyInputsData.BYTE_SIZE];
+        inputs.write(ByteBuffer.wrap(bytes).order(ByteOrder.nativeOrder()));
         return bytes;
+    }
+
+    /**
+     * Binds vanilla's celestials atlas (sun + moon-phase sprites) as this pass's own world resource and
+     * refreshes the sprite rects when the atlas or the moon phase changes. A sky for another dimension
+     * binds no such texture, so this belongs to the slot that draws celestial sprites.
+     */
+    private void refreshCelestialAtlas(PassFrame frame, SkyState state) {
+        long view = celestialsAtlasView();
+        int moonPhase = Math.clamp((int) state.moonPhaseIndex(), 0, MOON_SPRITE_IDS.length - 1);
+        if (view != celestialAtlasView) {
+            celestialAtlasView = view;
+            celestialUvMoonPhase = -1;
+            if (view != 0L) {
+                frame.publishWorldResource("celestialsAtlas", view, sampler);
+            }
+        }
+        if (view == 0L || moonPhase == celestialUvMoonPhase) {
+            return;
+        }
+        sunU0 = 0f; sunV0 = 0f; sunU1 = 1f; sunV1 = 1f;
+        moonU0 = 0f; moonV0 = 0f; moonU1 = 1f; moonV1 = 1f;
+        try {
+            TextureAtlas atlas = Minecraft.getInstance().getAtlasManager().getAtlasOrThrow(AtlasIds.CELESTIALS);
+            TextureAtlasSprite sun = atlas.getSprite(SUN_SPRITE_ID);
+            sunU0 = sun.getU0(); sunV0 = sun.getV0(); sunU1 = sun.getU1(); sunV1 = sun.getV1();
+            TextureAtlasSprite moon = atlas.getSprite(MOON_SPRITE_IDS[moonPhase]);
+            moonU0 = moon.getU0(); moonV0 = moon.getV0(); moonU1 = moon.getU1(); moonV1 = moon.getV1();
+        } catch (Exception ignored) {
+            // Atlas not stitched yet — full-range UVs until it is; the discs sample a defined texel either
+            // way, and this runs again next frame.
+        }
+        celestialUvMoonPhase = moonPhase;
+    }
+
+    /** Vulkan image view of the vanilla celestials atlas, or 0 while it is unavailable. */
+    private static long celestialsAtlasView() {
+        try {
+            GpuTextureView view = Minecraft.getInstance().getAtlasManager()
+                    .getAtlasOrThrow(AtlasIds.CELESTIALS).getTextureView();
+            return view instanceof VulkanGpuTextureView vulkanView ? vulkanView.vkImageView() : 0L;
+        } catch (Exception e) {
+            return 0L;
+        }
+    }
+
+    private static Identifier[] createMoonSpriteIds() {
+        MoonPhase[] phases = MoonPhase.values();
+        Identifier[] ids = new Identifier[phases.length];
+        for (int i = 0; i < phases.length; i++) {
+            ids[i] = Identifier.withDefaultNamespace("moon/" + phases[i].getSerializedName());
+        }
+        return ids;
     }
 
     @Override
@@ -271,6 +393,10 @@ public final class SkyLutPass implements CausticaRenderPass, LightProvider {
             skyView.destroy();
             skyView = null;
         }
+        if (skyInputsBuffer != null) {
+            skyInputsBuffer.destroy();
+            skyInputsBuffer = null;
+        }
         if (ctx != null && sampler != 0L) {
             VK10.vkDestroySampler(ctx.vk(), sampler, null);
             sampler = 0L;
@@ -278,8 +404,7 @@ public final class SkyLutPass implements CausticaRenderPass, LightProvider {
     }
 
     /**
-     * This pass's own copy of the semantic sky inputs it needs for one frame — no longer the engine's
-     * shared {@code rt.SkyFrame} snapshot. See the class javadoc for why the duplication is deliberate.
+     * The semantic sky inputs this pass needs for one frame, before packing into {@link SkyInputsData}.
      */
     record SkyState(
             float sunAngleRadians, float moonAngleRadians, float starAngleRadians, float starBrightness,

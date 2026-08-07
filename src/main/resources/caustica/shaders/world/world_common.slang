@@ -2,6 +2,10 @@
 // records and serializers from Slang reflection.
 module world_common;
 
+// Re-exported: engine code has used these names since before the API existed, and the colour space a
+// slot must return is part of the slot contract, so one definition serves both sides.
+__exported import caustica_color;
+
 // Read-only device pointer with explicit std430 layout. The layout parameter is LOAD-BEARING: a bare
 // Ptr<T> gets Slang's "natural" layout (no vec4 16-byte alignment → e.g. WorldPush.sunDir lands at 200
 // instead of the Java writer's 208, silently reading garbage) and additionally requires the
@@ -48,24 +52,8 @@ public struct WorldPush {
     public float2   jitter;
     public uint     flags;            // bit0 submerged, bit4 waves
     public uint     maxBounces;
-    // ---- Sky state. Only what the CPU alone can know: Minecraft's four eased celestial angles (the
-    // 26.2 timeline drives them through a cubic-bezier ease and a datapack may replace the track, so
-    // they are read from the attribute probe rather than re-derived from the tick), its star brightness,
-    // the moon phase, and the look package's immutable constants. Every direction, colour, level and
-    // transmittance is derived in sky.slang from these — no atmosphere maths runs on the CPU any more.
-    public float4   celestial;        // x sun angle (rad), y moon angle, z star angle, w MC star brightness 0..1
-    // x sun illuminance (lux, top of atmosphere), y full-moon illuminance (lux), z night airglow
-    // (cd/m²), w star luminance anchor (cd/m²).
-    public float4   skyLook0;
-    // x noon south tilt (rad), y sun NEE half-angle (rad), z moon NEE half-angle (rad),
-    // w moon-phase fixed light fraction.
-    public float4   skyLook1;
-    // x drawn sun half-angle (rad), y drawn moon half-angle (rad), z viewer altitude (km),
-    // w moon phase index (0 full .. 4 new).
-    public float4   skyLook2;
-    public float4   skyLook3;         // x ground albedo, yzw reserved
-    public float4   sunUv;            // vanilla sun sprite atlas rect (u0,v0,u1,v1)
-    public float4   moonUv;           // vanilla current-moon-phase sprite atlas rect
+    // Sky state is deliberately absent: it belongs to the selected sky slot and lives in that pass's
+    // own buffer (SkyInputs, caustica_sky_atmosphere), which engine-generic code cannot reach.
     public float4   waterParams;      // xyz linear ACEScg camera-biome water tint, w wave time (s)
     public float4   waterAnchor;      // xy world-stable wave-domain anchor, z previous wave time
     public float4x4 curViewProj;      // forward camera-relative view-projection
@@ -324,24 +312,3 @@ public void packSky(inout Payload p, float3 sky) {
     p.surface2 = asuint(sky.z);
 }
 
-// The ray tracer's transport contract is scene-linear ACEScg (AP1/D60). Minecraft assets and
-// captured vertex colours are authored as sRGB/BT.709 (D65), so colour inputs cross this OCIO-derived
-// chromatic-adaptation + primary-conversion seam exactly once before they enter any BRDF, throughput,
-// medium, light, guide, or radiance calculation.
-public static const float3 ACESCG_LUMA = float3(0.27222872, 0.67408177, 0.05368952);
-public static const float3 BT709_TO_ACESCG_R = float3(0.61309743, 0.33952314, 0.04737945);
-public static const float3 BT709_TO_ACESCG_G = float3(0.07019372, 0.91635388, 0.01345240);
-public static const float3 BT709_TO_ACESCG_B = float3(0.02061559, 0.10956977, 0.86981463);
-
-public float3 bt709ToAcesCg(float3 color) {
-    return float3(
-            dot(color, BT709_TO_ACESCG_R),
-            dot(color, BT709_TO_ACESCG_G),
-            dot(color, BT709_TO_ACESCG_B));
-}
-
-public float3 srgbToLinear(float3 color) {
-    float3 lo = color / 12.92;
-    float3 hi = pow((color + 0.055) / 1.055, float3(2.4));
-    return lerp(lo, hi, step(float3(0.04045), color));
-}

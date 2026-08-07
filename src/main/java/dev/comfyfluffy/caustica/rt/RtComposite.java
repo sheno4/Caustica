@@ -11,7 +11,6 @@ import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.api.CausticaApi;
 import dev.comfyfluffy.caustica.api.Slots;
-import dev.comfyfluffy.caustica.api.pass.PassOptions;
 import dev.comfyfluffy.caustica.api.pass.RenderStage;
 import dev.comfyfluffy.caustica.client.CausticaJitter;
 import dev.comfyfluffy.caustica.mixin.CommandEncoderAccessor;
@@ -27,15 +26,12 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.renderer.BiomeColors;
 import net.minecraft.client.renderer.texture.TextureAtlas;
-import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.client.resources.model.ModelBakery;
 import net.minecraft.core.BlockPos;
-import net.minecraft.data.AtlasIds;
 import net.minecraft.resources.Identifier;
 import net.minecraft.tags.FluidTags;
 import net.minecraft.util.Mth;
 import net.minecraft.world.attribute.EnvironmentAttributes;
-import net.minecraft.world.level.MoonPhase;
 import net.minecraft.world.level.material.FluidState;
 import org.joml.Matrix4f;
 import org.joml.Matrix4fc;
@@ -143,12 +139,6 @@ public final class RtComposite {
     // 31,800 cd/m² white / 5,730 cd/m² 18%-grey noon surface. It is therefore independent of the sky
     // package's angular radii, which only jitter the shadow ray and so only set penumbra softness.
     private static final RtLookPackage LOOK = RtLookPackage.current();
-    // The feature id BuiltinExtension registers under (api.BuiltinExtension.ID, package-private there):
-    // bloom.strength is an extension-owned option read outside any pass's own lifecycle methods, via
-    // RenderPassManager#optionsForFeature, so it needs the owning feature's id rather than a pass id.
-    private static final Identifier BUILTIN_FEATURE_ID = Identifier.fromNamespaceAndPath("caustica", "builtin");
-    private static final Identifier SUN_ID = Identifier.withDefaultNamespace("sun");
-    private static final Identifier[] MOON_IDS = createMoonIds();
     // Sign of the sub-pixel jitter as reported to DLSS-RR + applied to the primary ray, mirroring the
     // validated DLSS-SR convention (Vulkan flipped clip space wants Y negated).
     private static float jitterSignX() {
@@ -302,16 +292,6 @@ public final class RtComposite {
     private double camY;
     private double camZ;
     private boolean frameCaptured;
-    private long celestialUvAtlasHandle;
-    private int celestialUvMoonPhase = -1;
-    private float sunU0;
-    private float sunV0;
-    private float sunU1 = 1f;
-    private float sunV1 = 1f;
-    private float moonU0;
-    private float moonV0;
-    private float moonU1 = 1f;
-    private float moonV1 = 1f;
 
     // Per-frame TLAS resources, rebuilt in place from a small ring of persistent slots (see
     // RtAccel.TlasRing — replaces the old create-and-defer-destroy-per-frame churn whose VMA slow path
@@ -332,15 +312,6 @@ public final class RtComposite {
     /** This frame's TLAS handle (0 if none built yet), for {@code dev.comfyfluffy.caustica.builtin.overlay} occlusion queries. */
     public long currentTlasHandle() {
         return currentTlasHandle;
-    }
-
-    private static Identifier[] createMoonIds() {
-        MoonPhase[] phases = MoonPhase.values();
-        Identifier[] ids = new Identifier[phases.length];
-        for (int i = 0; i < phases.length; i++) {
-            ids[i] = Identifier.withDefaultNamespace("moon/" + phases[i].getSerializedName());
-        }
-        return ids;
     }
 
     public boolean hasFailed() {
@@ -775,7 +746,8 @@ public final class RtComposite {
 
     private void ensureRenderPassManager(GpuContext ctx) throws IOException {
         if (renderPassManager == null) {
-            renderPassManager = RenderPassManager.create(ctx, CausticaApi.registry().features());
+            renderPassManager = RenderPassManager.create(ctx, CausticaApi.registry().features(),
+                    CausticaApi.options());
         }
     }
 
@@ -871,13 +843,6 @@ public final class RtComposite {
         RtBlockMaterials.INSTANCE.bindPages(worldPipeline, sampler);
         RtMaterialRegistry.INSTANCE.rebuild(ctx, RtBlockMaterials.INSTANCE, materialOverrides);
         materialBindingsReady = true;
-        // Sky rewrite: bind the vanilla celestials atlas (sun + moon phases) for world.rmiss. The view
-        // handle is stable across frames; the shader only samples it inside the sun/moon discs (sky
-        // directions), so the block-atlas fallback is never read if the celestials atlas isn't ready.
-        long celView = celestialsAtlasView();
-        if (worldPipeline.hasSkyAtlas()) {
-            worldPipeline.setSkyAtlas(celView != 0L ? celView : atlasView, sampler);
-        }
         // Pass-owned world resources (e.g. the sky LUTs) live for the device's lifetime, but the world
         // pipeline's descriptor sets do not, so rebind whatever the active composition's own Slang
         // declared alongside the atlas. A published resource the current composition doesn't reference
@@ -896,11 +861,10 @@ public final class RtComposite {
                     worldPipeline.setPassResourceBuffer(binding.index(), resource.buffer().handle,
                             resource.buffer().size);
                 } else {
-                    worldPipeline.setPassResource(binding.index(), resource.image().view, resource.sampler());
+                    worldPipeline.setPassResource(binding.index(), resource.view(), resource.sampler());
                 }
             }
         }
-        setCelestialUvAtlas(celView);
         // Atlas UVs and material IDs are one resource epoch. Drop old terrain as a unit rather than
         // incrementally displaying old UVs/IDs against the new atlas/table.
         RtTerrain.requestFullClear();
@@ -913,17 +877,6 @@ public final class RtComposite {
         }
         if (!materialBindingsReady) {
             bindWorldTextures(ctx);
-        }
-    }
-
-    /** Vulkan image-view of the vanilla celestials atlas (sun + moon-phase sprites), or 0 if unavailable. */
-    private static long celestialsAtlasView() {
-        try {
-            GpuTextureView view = Minecraft.getInstance().getAtlasManager()
-                    .getAtlasOrThrow(AtlasIds.CELESTIALS).getTextureView();
-            return vkImageView(view);
-        } catch (Exception e) {
-            return 0L;
         }
     }
 
@@ -940,7 +893,6 @@ public final class RtComposite {
     public void onResourceReloadStart() {
         reloadRebindRequested = true;
         materialBindingsReady = false;
-        setCelestialUvAtlas(0L);
         ProviderManager.INSTANCE.onResourceReload();
         GpuContext ctx = GpuContext.currentOrNull();
         if (ctx != null) {
@@ -1211,7 +1163,6 @@ public final class RtComposite {
             // not a block-atlas sprite — see ModelBakery.BREAKING_LOCATIONS/DESTROY_TYPES), so any newly
             // resolved slot rides along with the uploadPending() call right below.
             BreakEntry[] breaking = breakingEntries(terrain);
-            SkyPush sky = skyPush();
             new WorldPushData(
                     frameInvViewProj,
                     new Float3((float) (camX - terrain.blockX), (float) (camY - terrain.blockY),
@@ -1223,13 +1174,6 @@ public final class RtComposite {
                     new Float2(jitterX, jitterY),
                     flags,
                     maxBounces(),
-                    sky.celestial(),
-                    sky.look0(),
-                    sky.look1(),
-                    sky.look2(),
-                    sky.look3(),
-                    sky.sunUv(),
-                    sky.moonUv(),
                     waterParams,
                     waterAnchor,
                     mvCurProjView,
@@ -1346,12 +1290,9 @@ public final class RtComposite {
 
             try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "map RT to display");
                  RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.displayMap")) {
-                float bloomStrength = renderPassManager.optionsForFeature(BUILTIN_FEATURE_ID)
-                        .get("bloom.strength", 0.02f);
                 displayPipeline.dispatch(cmd, displayW, displayH, CausticaConfig.Rt.Hdr.enabled(),
                         sdrToneLut.size, CausticaConfig.Rt.Tonemap.GAMMA.value(), loadedHdrLutNits,
-                        true, lookLut.size, bloomStrength
-                                / renderPassManager.outputLevelCount("bloom"));
+                        true, lookLut.size, renderPassManager.scalar("bloom.strength", 0.0f));
             }
             hdrWrittenThisFrame = CausticaConfig.Rt.Hdr.enabled();
             VulkanCommandEncoder.memoryBarrier(cmd, stack); // display output visible to debug composite
@@ -1423,125 +1364,6 @@ public final class RtComposite {
         return count == result.length ? result : java.util.Arrays.copyOf(result, count);
     }
 
-    private record SkyPush(Float4 celestial, Float4 look0, Float4 look1, Float4 look2, Float4 look3,
-                           Float4 sunUv, Float4 moonUv) {}
-
-    private record CelestialUv(Float4 sun, Float4 moon) {}
-
-    /**
-     * This frame's sky state: Minecraft's four eased celestial angles, its star brightness, the moon
-     * phase, and the look package's sky constants. Nothing else.
-     *
-     * <p>Every direction, colour, level and atmospheric transmittance is derived in {@code sky.slang}
-     * from these values, keeping atmospheric evaluation in one implementation.
-     *
-     * <p>The angles come from the camera's {@link EnvironmentAttributeProbe} rather than from the tick:
-     * in 26.2 they are timeline tracks driven through a cubic-bezier ease, and a datapack can replace the
-     * track outright, so the probe is the only source that stays correct for a custom dimension.
-     *
-     * <p>The sky-view LUT's viewer altitude tracks the camera's real world height above sea level, not
-     * the look package's fixed reference altitude: a build-limit mod or a rocket/space mod climbing
-     * toward the 100 km shell should see the atmosphere actually thin out. The block-to-km scale is
-     * exaggerated 10x (100 blocks = 1 km, not the literal 1000) — vanilla's build range is under half a
-     * real km, which would put the whole playable height range within a rounding error of one LUT texel
-     * row; at 100:1 the same climb is a few km, enough to see the horizon and zenith actually shift.
-     * Clamped to [0, 99] km so an absurd Y (or one beyond the modelled 100 km shell) degrades to the
-     * shell edge instead of an LUT sample outside its baked domain. The shader applies its own lower
-     * floor — see {@code sky.MIN_VIEWER_ALTITUDE_KM}, which is set by what fp32 can resolve at planet
-     * radius, not by anything visual — so zero here is safe and means "at or below sea level".
-     */
-    private SkyPush skyPush() {
-        Minecraft mc = Minecraft.getInstance();
-        float partial = mc.getDeltaTracker().getGameTimeDeltaPartialTick(false);
-        var probe = mc.gameRenderer.mainCamera().attributeProbe();
-        int seaLevel = mc.level != null ? mc.level.getSeaLevel() : 0;
-        float viewerAltitudeKm = Math.clamp((float) ((camY - seaLevel) / 100.0), 0.0f, 99.0f);
-        float toRadians = (float) (Math.PI / 180.0);
-        float sunAngle = probe.getValue(EnvironmentAttributes.SUN_ANGLE, partial) * toRadians;
-        float moonAngle = probe.getValue(EnvironmentAttributes.MOON_ANGLE, partial) * toRadians;
-        // Stars use Minecraft's own celestial rotation and brightness (the values vanilla's SkyRenderer
-        // uses), so the field wheels about the celestial pole tied to world time and fades in and out at
-        // dusk/dawn exactly like vanilla's.
-        float starAngle = probe.getValue(EnvironmentAttributes.STAR_ANGLE, partial) * toRadians;
-        float starBrightness = probe.getValue(EnvironmentAttributes.STAR_BRIGHTNESS, partial);
-        float moonPhase = probe.getValue(EnvironmentAttributes.MOON_PHASE, partial).index(); // 0 full .. 4 new
-
-        // sky.* used to come from LOOK.sky(); now an extension-owned option (see BUILTIN_FEATURE_ID), read
-        // through the same RenderPassManager#optionsForFeature escape hatch as bloom.strength — this
-        // method is engine composition code, not a pass, so it has no PassFrame/PassSetup of its own.
-        PassOptions sky = renderPassManager.optionsForFeature(BUILTIN_FEATURE_ID);
-        RtLookPackage.Lighting lighting = LOOK.lighting();
-        CelestialUv uv = celestialUv(moonPhase);
-        SkyFrame frame = new SkyFrame(
-                sunAngle, moonAngle, starAngle, starBrightness,
-                lighting.sunIlluminanceLux(), lighting.moonIlluminanceLux(),
-                lighting.nightAirglowLuminanceCdM2(), lighting.starLuminanceCdM2(),
-                sky.get("sky.sun-noon-south-tilt-degrees", 30.0f) * toRadians,
-                sky.get("sky.sun-angular-radius-degrees", 0.6f) * toRadians,
-                sky.get("sky.moon-angular-radius-degrees", 1.5f) * toRadians,
-                lighting.moonPhaseFixedFraction(),
-                sky.get("sky.sun-disc-half-angle-degrees", 16.7f) * toRadians,
-                sky.get("sky.moon-disc-half-angle-degrees", 11.31f) * toRadians,
-                viewerAltitudeKm, moonPhase, sky.get("sky.ground-albedo", 0.1f),
-                sky.get("sky.horizon-soften-degrees", 15.0f) * toRadians);
-        return new SkyPush(
-                new Float4(frame.sunAngleRadians(), frame.moonAngleRadians(),
-                        frame.starAngleRadians(), frame.starBrightness()),
-                new Float4(frame.sunIlluminanceLux(), frame.moonIlluminanceLux(),
-                        frame.nightAirglowLuminance(), frame.starLuminance()),
-                new Float4(frame.noonTiltRadians(), frame.sunAngularRadiusRadians(),
-                        frame.moonAngularRadiusRadians(), frame.moonPhaseFixedFraction()),
-                new Float4(frame.sunDiscHalfAngleRadians(), frame.moonDiscHalfAngleRadians(),
-                        frame.viewerAltitudeKm(), frame.moonPhaseIndex()),
-                new Float4(frame.groundAlbedo(), frame.horizonSoftenRadians(), 0f, 0f),
-                uv.sun(),
-                uv.moon());
-    }
-
-    /**
-     * Push the celestials-atlas UV rects (u0,v0,u1,v1) for the sun sprite and the current moon-phase
-     * sprite, so world.rmiss can sample the real vanilla textures on the discs. Atlas-not-ready (early
-     * boot / no resources) leaves full-range UVs and the shader's block-atlas fallback covers it.
-     */
-    private CelestialUv celestialUv(float moonPhaseIndex) {
-        if (celestialUvAtlasHandle == 0L) {
-            setCelestialUvAtlas(celestialsAtlasView());
-        }
-        int phase = Math.clamp((int) moonPhaseIndex, 0, MOON_IDS.length - 1);
-        if (phase != celestialUvMoonPhase) {
-            refreshCelestialUvCache(phase);
-        }
-        return new CelestialUv(
-                new Float4(sunU0, sunV0, sunU1, sunV1),
-                new Float4(moonU0, moonV0, moonU1, moonV1));
-    }
-
-    private void setCelestialUvAtlas(long atlasHandle) {
-        if (celestialUvAtlasHandle == atlasHandle) {
-            return;
-        }
-        celestialUvAtlasHandle = atlasHandle;
-        celestialUvMoonPhase = -1;
-        sunU0 = 0f; sunV0 = 0f; sunU1 = 1f; sunV1 = 1f;
-        moonU0 = 0f; moonV0 = 0f; moonU1 = 1f; moonV1 = 1f;
-    }
-
-    private void refreshCelestialUvCache(int moonPhase) {
-        sunU0 = 0f; sunV0 = 0f; sunU1 = 1f; sunV1 = 1f;
-        moonU0 = 0f; moonV0 = 0f; moonU1 = 1f; moonV1 = 1f;
-        try {
-            if (celestialUvAtlasHandle != 0L) {
-                TextureAtlas atlas = Minecraft.getInstance().getAtlasManager().getAtlasOrThrow(AtlasIds.CELESTIALS);
-                TextureAtlasSprite sun = atlas.getSprite(SUN_ID);
-                sunU0 = sun.getU0(); sunV0 = sun.getV0(); sunU1 = sun.getU1(); sunV1 = sun.getV1();
-                TextureAtlasSprite moon = atlas.getSprite(MOON_IDS[moonPhase]);
-                moonU0 = moon.getU0(); moonV0 = moon.getV0(); moonU1 = moon.getU1(); moonV1 = moon.getV1();
-            }
-        } catch (Exception ignored) {
-            // celestials atlas not yet loaded — keep full-range UVs (fallback texture is the block atlas)
-        }
-        celestialUvMoonPhase = moonPhase;
-    }
 
     private static Float4 linearAcesCgFromSrgb(double r, double g, double b, float w) {
         return linearAcesCgFromBt709(

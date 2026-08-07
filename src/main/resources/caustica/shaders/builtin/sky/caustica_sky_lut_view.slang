@@ -8,16 +8,14 @@
 //
 // Reads the same semantic sky values the engine writes into WorldPush, so the LUT and the frame it shades
 // use identical celestial and look inputs without exposing the world buffer to the pass API.
-module sky_lut_view;
+module caustica_sky_lut_view;
 
-import world_common;
-import sky;
-import sky_lut_types;
+import caustica_sky_atmosphere;
 
 [[vk::binding(0, 0)]] [format("rgba16f")] RWTexture2D<float4> skyViewImage;
 [[vk::binding(1, 0)]] Sampler2D transmittanceLut;
 [[vk::binding(2, 0)]] Sampler2D multiScatterLut;
-[[vk::push_constant]] SkyLutPush pc;
+[[vk::push_constant]] SkyInputs pc;
 
 [shader("compute")]
 [numthreads(8, 8, 1)]
@@ -25,8 +23,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
     if (tid.x >= uint(SKY_VIEW_LUT_W) || tid.y >= uint(SKY_VIEW_LUT_TOTAL_H)) {
         return;
     }
-    WorldPush push = skyLutWorldPush(pc);
-    SkyState sky = skyState(push);
+    SkyState sky = skyState(pc);
 
     int body = int(tid.y) / SKY_VIEW_LUT_H;
     int row = int(tid.y) - body * SKY_VIEW_LUT_H;

@@ -6,6 +6,8 @@
 // ocean tint (low red) absorbs red fastest → bluer with depth; swamp green-brown shifts the hue. The floor
 // keeps even a white-tinted body very slightly absorbing so deep water never reads as clear vacuum.
 
+module medium;
+
 import world_common;
 import world_core;
 

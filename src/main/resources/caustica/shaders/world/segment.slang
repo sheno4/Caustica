@@ -11,6 +11,8 @@
 // planned split into a primary/guide pass and an indirect pass hands continuations between dispatches,
 // and this is the payload it would write.
 
+module segment;
+
 import world_common;
 import world_core;
 import medium;

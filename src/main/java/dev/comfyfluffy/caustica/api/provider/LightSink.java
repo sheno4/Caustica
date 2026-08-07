@@ -6,12 +6,11 @@ import net.minecraft.resources.Identifier;
  * Where a {@link LightProvider} hands off the lights it wants in the scene, once per frame, via
  * {@link LightProvider#submitLights(LightSink)}.
  *
- * <p>Placeholder surface: nothing downstream consumes a submission yet. The light system has no dynamic
- * tier a provider-supplied light could join — every record in today's light database still carries a
- * Minecraft chunk-section coordinate a provider light has no equivalent for (see
- * {@code LIGHT_SYSTEM_PLAN.md} L2). Calling this today records intent for design/API feedback, not
- * shadows; it is wired up so an extension can be written and reviewed against the real shape before the
- * light system side exists to honour it.
+ * <p>Nothing downstream consumes a submission: the light system has no dynamic tier a
+ * provider-supplied light could join, since every record in the light database carries a Minecraft
+ * chunk-section coordinate a provider light has no equivalent for. Calling this records intent for
+ * design and API feedback, not shadows; it is wired up so an extension can be written and reviewed
+ * against the real shape.
  */
 public interface LightSink {
     /**

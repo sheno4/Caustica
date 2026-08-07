@@ -1,11 +1,12 @@
 module caustica_celestial_dressing;
 
-// Small helpers for "what a sky with a visible sun/moon/starfield draws on top of its atmosphere in-scatter",
-// factored out of caustica_lut_sky.slang so a future dimension sky (Nether/End — docs/ATMOSPHERE_PLAN.md
-// §2.2/§2.3) can reuse the star machinery with its own density/colour instead of copy-pasting it; §2.3
-// explicitly plans on this ("reuses the star machinery ... with a different cell density, colour ramp").
-// Deliberately independent of `sky`/`SkyState`: every value here is a plain scalar/vector the caller
-// derives however its own atmosphere model works, not a dependency on the Hillaire LUT machinery.
+// Small helpers for what a sky with a visible sun, moon, and starfield draws on top of its atmosphere
+// in-scatter. Shared by the Overworld sky slot and any other dimension sky, so a second sky can reuse
+// the star machinery with its own cell density and colour ramp instead of copy-pasting it.
+//
+// Deliberately independent of caustica_sky_atmosphere and its SkyState: every value here is a plain
+// scalar or vector the caller derives however its own atmosphere model works, not a dependency on the
+// Hillaire LUT machinery.
 
 /**
  * Drawn disc radiance derived from illuminance and the solid angle a body is actually DRAWN at

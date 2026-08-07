@@ -1,22 +1,21 @@
-module caustica_lut_sky;
+module caustica_sky_slot;
 
 import caustica_types;
+import caustica_color;
 import caustica_sky;
-import world_common;
-import bindings;
-import sky;
+import caustica_sky_atmosphere;
 import caustica_celestial_dressing;
-import caustica_lut_sky_bindings;
+import caustica_sky_bindings;
 
 // Textured celestial discs, procedural stars, and night airglow, ported from main's (pre-extension-API)
 // sky.rmiss.slang — the extension-API refactor carried sky.slang's math primitives for all three
 // (celestialSquareLocal, SkyState.sunUv/moonUv, airglowLuminance) but never ported the code that actually
 // used them, leaving the sun/moon as an untextured analytic circle with no stars or airglow. Restored here
 // rather than in the engine's sky_miss.slang: a different sky slot (Nether, End — see
-// docs/ATMOSPHERE_PLAN.md §2.2/§2.3) wants none of this — no stars, no discs, no airglow — so it belongs
+// wants none of this — no stars, no discs, no airglow — so it belongs
 // with the Overworld atmosphere model, not the engine-generic miss shader. `discRadiance`/`hash13`/
 // `rotateAxis`/`stars` live in caustica_celestial_dressing (builtin/common/) since the End sky
-// (§2.3) is already planned to reuse the star machinery with its own density/colour.
+// is planned to reuse the star machinery with its own density/colour.
 
 // This sky's own choice of star look, passed into the shared, parameterized stars() below.
 static const float STAR_CELLS      = 21.0;  // cube-face grid resolution; with the threshold gives ~1500 stars
@@ -34,10 +33,9 @@ float3 skyDome(float3 dir, SkyState state) {
 }
 
 float3 lutSkyEvaluateEnvironment(EnvironmentQuery query) {
-    // Reads WorldPush and derives SkyState itself, the same way the engine's sky_miss.slang does, rather
-    // than through EnvironmentQuery/FrameContext — see the module header on why.
-    WorldPush worldPush = ConstPtr<WorldPush>(pc.worldPushAddr)[0];
-    SkyState state = skyState(worldPush);
+    // Derives SkyState from this pass's OWN uniform buffer rather than through EnvironmentQuery/
+    // FrameContext — see the module header on why.
+    SkyState state = skyState(skyInputs);
     float3 dir = query.direction;
 
     float3 color = skyDome(dir, state);

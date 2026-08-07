@@ -65,6 +65,12 @@ public final class FeatureBuilder {
         return this;
     }
 
+    /** Convenience for a component that publishes its own options as one list — see {@code BloomPass}. */
+    public FeatureBuilder options(List<Option<?>> declared) {
+        declared.forEach(this::option);
+        return this;
+    }
+
     public FeatureBuilder renderPass(CausticaRenderPass renderPass) {
         Objects.requireNonNull(renderPass, "renderPass");
         if (renderPasses.stream().anyMatch(existing -> existing.id().equals(renderPass.id()))) {
@@ -107,7 +113,7 @@ public final class FeatureBuilder {
     /**
      * Declare a Slang module (by module name, not slot) this feature wants anchored outside the generic
      * composition mechanism — needed by any module a pass's own binding declarations live in (e.g.
-     * {@code caustica_lut_sky_bindings.slang}), since Slang forbids a generic entry point's type-parameter
+     * {@code caustica_sky_bindings.slang}), since Slang forbids a generic entry point's type-parameter
      * implementation from declaring global shader parameters itself. The engine imports every registered
      * feature's declared modules into one generated anchor module every composition-generic engine stage
      * (e.g. {@code sky_miss.slang}) imports unconditionally, so the pass never needs the engine to know

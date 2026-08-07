@@ -1,9 +1,10 @@
 // Stateless math: luminance, GGX (D/G/VNDF), Fresnel, Henyey-Greenstein, the RR specular-albedo
 // fit, the PCG stream, and direction sampling. No bindings, no globals, no rays.
 
+module math;
+
 import world_common;
 import world_core;
-import sky;
 
 public float luminance(float3 c) { return dot(c, ACESCG_LUMA); }
 
@@ -136,9 +137,23 @@ public float3 cosineDir(float3 n, inout uint s) {
     return normalize(local.x * t + local.y * b + local.z * n);
 }
 
+/**
+ * Tangent frame for a celestial body's square, kept level with the horizon: {@code right} is horizontal
+ * and {@code up} lies in the vertical plane through the body, so a body never rolls about its own centre
+ * as it crosses the sky. A sky slot that draws a body must build its square in this same frame, or the
+ * sampled light and the drawn body will not line up.
+ */
+void celestialSquareFrame(float3 bodyDir, out float3 right, out float3 up) {
+    // Near the zenith the horizontal reference degenerates; the arc's tilt keeps the sun/moon well away
+    // from it in practice, so any stable fallback will do.
+    float3 reference = abs(bodyDir.y) > 0.9995 ? float3(0.0, 0.0, 1.0) : float3(0.0, 1.0, 0.0);
+    right = normalize(cross(reference, bodyDir));
+    up = cross(bodyDir, right);
+}
+
 // Soft shadows: sample a direction within the light's SQUARE angular extent about `axis`. MC's sun/moon
 // are square quads, so the NEE shadow ray samples a square (not a cone) — the same square, in the same
-// horizon-levelled tangent frame (sky.celestialSquareFrame), that world.rmiss draws the visible body in.
+// horizon-levelled tangent frame (celestialSquareFrame above) a sky slot draws the visible body in.
 // Averaged over frames by DLSS-RR this yields soft penumbrae that widen with occluder distance
 // (contact-hardening) for free. halfAngle <= 0 ⇒ exact direction (hard).
 public float3 sampleSquare(float3 axis, float halfAngle, inout uint s) {

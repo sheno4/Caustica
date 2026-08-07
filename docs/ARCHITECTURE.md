@@ -249,7 +249,7 @@ public interface CausticaRenderPass {
 `PassSetup` exposes `GpuContext` (device, allocator, `createStorageImage`/`createBuffer`, debug labelling),
 `publishWorldResource`/`publishOutput` (see above), and now `options()` — a live (not frame-frozen) read of
 this pass's owning feature's `Option` values, for a create/resize-time decision like sizing an image
-pyramid (see §7's `PassOptionsStore` entry). `PassFrame` exposes the command buffer, the
+pyramid (see §7's `CausticaOptions` entry). `PassFrame` exposes the command buffer, the
 display extent, `reconstructedColor()`/`exposureImage()`, an `options()` snapshot frozen for the whole
 frame (unlike `PassSetup`'s live read — see §7),
 and one `memoryBarrier()` helper matching the broad full-pipeline-barrier idiom used everywhere else in
@@ -395,27 +395,73 @@ Honest status, so this reads as a target and not a claim:
   `RtDebugPresentPipeline` are shape-compatible with `ComputeDispatch` but are fixed built-ins wired to
   non-extensible inputs (raw guide buffers `PassFrame` never exposes) — porting them would add API surface
   with no real third-party consumer to justify it. None of this is being ported.
-- **`PassOptions` has a real backing store, and bloom/sky are its first tenants.** `PassOptionsStore`
-  (`rt/pass/`) is TOML-backed (`config/caustica-options.toml`, separate from `CausticaConfig`'s
-  `caustica.toml` — a fixed hand-curated schema vs. whatever extensions happen to have declared), keyed
-  `<featureId>.<optionId>` so one extension's options can't collide with another's, with the same
-  system-property-then-file-then-default precedence `CausticaConfig` uses. `caustica:builtin` moved its
-  `bloom.*`/`sky.*` numbers out of `look.json` (schema 4 → 5) into declared `Option.range(...)` values —
-  neither is a colour-science calibration that has to move in lock step with the LMT the way
-  exposure/lighting still do, so they no longer belong in that versioned package. `BloomPass` reads
-  `bloom.levels` through `PassSetup#options()` at allocate time and `bloom.threshold-scene-linear`/
-  `soft-knee-fraction`/`radius` through `PassFrame#options()` per frame; `SkyLutPass` reads all seven
-  `sky.*` fields through `PassFrame#options()`. Two places fell outside that seam and needed
-  `RenderPassManager#optionsForFeature(featureId)`, a live (not frame-frozen) escape hatch for engine code
-  that isn't itself a pass: `RtComposite.skyPush()` (the world push's independent sky-geometry read) and
-  its bloom-strength read feeding `RtDisplayPipeline` — both consume a `caustica:builtin` option from
-  outside any `CausticaRenderPass` lifecycle method, which the "per-pass" framing `PassOptions`/`PassFrame`
-  imply doesn't actually cover. `Option` only backs `BOOL`/`RANGE` today — `ENUM`/`COLOR` have a consumer
-  nowhere yet and no runtime `Class<T>` token to deserialize generically — and there is no integer/count
-  kind, so `bloom.levels` is a `RANGE` rounded at the call site. Nothing yet triggers `Reload`'s per-tier
-  invalidation on a write (`PassOptionsStore#set` exists for a future settings UI to call, but a changed
-  `bloom.levels` only takes effect on the next window resize, not immediately) — still open, same as before
-  this round.
+- **`PassOptions` has a real backing store, and bloom/sky are its first tenants.** `CausticaOptions`
+  (top-level package, next to `CausticaConfig`) is TOML-backed (`config/caustica-options.toml`, separate
+  from `CausticaConfig`'s `caustica.toml` — a fixed hand-curated schema vs. whatever extensions happen to
+  have declared), keyed `<featureId>.<optionId>` so one extension's options can't collide with another's,
+  with the same system-property-then-file-then-default precedence `CausticaConfig` uses. It is **not** a
+  render-pass concern and does not live under `rt/pass/`: it holds every registered `Feature`'s options
+  including features with no render pass at all, and it is what a feature enable/disable toggle will have
+  to consult *before* the engine decides which passes, providers and Slang modules to instantiate. So it
+  is loaded once from `CausticaApi.initialize()` at mod init and handed to `RenderPassManager.create`,
+  rather than being constructed by it — its lifetime is the process's, not the Vulkan device's, which is
+  also what lets a settings screen opened from the title menu read the same values the renderer will.
+  `caustica:builtin` moved its `bloom.*`/`sky.*` numbers out of `look.json` (schema 4 → 5) into declared
+  `Option.range(...)` values — neither is a colour-science calibration that has to move in lock step with
+  the LMT the way exposure/lighting still do, so they no longer belong in that versioned package.
+- **Options are read through the declared `Option<T>` token, not a string id.** `PassOptions.get` takes
+  the very constant the feature registered (`BloomPass.LEVELS`, `SkyLutPass.GROUND_ALBEDO`, …), declared
+  as a `public static final` on the pass that owns it and registered via `FeatureBuilder#options(List)`.
+  That makes each id, kind, range and default exist exactly once: there is no `fallback` parameter to
+  restate a default that could drift from the declaration, the `T` is checked at compile time rather than
+  cast blind, a typo can't compile, and the lookup is a map hit instead of the per-read scan over the
+  feature's option list the string API needed. Reading a token the owning feature never declared — or a
+  lookalike sharing an id but not the declaration — throws. The store's value map is immutable and swapped
+  wholesale on write, so `PassFrame`'s "frozen for the whole frame" guarantee is a reference read at
+  `beginFrame` rather than a per-frame defensive copy of every option.
+- **The sky is entirely the sky pass's now, and `WorldPush` lost 112 bytes of it.** `WorldPush` used to
+  carry seven `float4`s of sky state (`celestial`, `skyLook0`–`3`, `sunUv`, `moonUv`) that `RtComposite`
+  filled from its own celestial derivation — a second, independent copy of what `SkyLutPass` already
+  computed for its LUT bake, which the two were explicitly allowed to disagree about by a frame. All of
+  it moved into `SkyInputs` (`sky.slang`), which `SkyLutPass` fills once and publishes two ways: as the
+  push constant for its own bakes and as a set-2 uniform buffer (`skyInputs`) the sky slot reads. That
+  makes `publishWorldResource(String, GpuBuffer)` — previously API with no consumer — load-bearing, and
+  it deleted `rt/SkyFrame`, `RtComposite.skyPush()`/`SkyPush`/`CelestialUv`/`celestialUv()`/the UV cache,
+  and `RenderPassManager#optionsForFeature` with both its callers. Bloom strength went the same way, via
+  a new per-frame `PassFrame#publishScalar`: the pass divides by its own pyramid depth and hands the
+  display pipeline one number. `RtComposite` no longer imports anything from `builtin`, and
+  `BuiltinExtension.ID` is package-private again.
+- **The celestials atlas stopped being an engine descriptor.** `bindings.slang`'s fixed `celestialsAtlas`
+  (set 0, binding 9) and `RtPipeline`'s `setSkyAtlas`/`hasSkyAtlas` existed only so the Overworld sky could
+  draw vanilla's sun and moon sprites; a sky for another dimension binds no such thing. It is now one of
+  `SkyLutPass`'s own set-2 bindings, republished through a `PassFrame#publishWorldResource` overload — a
+  pass wrapping a host resource whose handle a resource reload replaces has no create/resize call to
+  publish the new one from. Set 0's binding 9 stays a hole rather than being renumbered: it is the
+  engine's stable ABI.
+- **Shader tree: `api/` + `world/` are the engine, `builtin/` is the extension, and nothing crosses
+  backwards.** `world/*` imports only `world/*` and `api/*`; `builtin/*` imports only `caustica_*` — its
+  own modules plus the public API. The Overworld atmosphere model, its three LUT bakes, the sky slot, and
+  its bindings all live under `builtin/sky/` (they were in the engine's `world/sky/`, which made the
+  engine tree own an extension's physics); bloom moved from `passes/` to `builtin/bloom/`; the builtin
+  surface and medium slots got their own subdirectories. Three symbols had to move to make the boundary
+  real: `celestialSquareFrame` (pure geometry `math.slang`'s NEE square sampling needs), `CelestialLight`
+  (engine NEE state), and the `bt709ToAcesCg`/`srgbToLinear` colour primitives — the last into a new
+  `api/caustica_color.slang`, since the colour space a slot must return is part of the slot contract.
+- **Every module name equals its file name.** Modules that relied on Slang's implicit file-name module now
+  declare `module x;` explicitly, and `.slangdconfig` plus `.vscode/settings.json` give the language
+  server the same search paths the compiler uses, so `import foo` resolves in the editor. Those search
+  paths duplicate what `WorldShaderCompiler`'s `WORLD_MODULES`/`API_MODULES` and each feature's
+  `ShaderSource` roots express at runtime; they have to be kept in sync by hand.
+- **`FrameContext` is down to `rain` and `thunder`.** `timeSeconds`, `frameIndex`, `cameraPosition`,
+  `dayFraction`, `nightFraction`, `sunDirection`, `moonDirection` and `dimensionFlags` were written every
+  frame and read by nothing, so they are gone along with the `DIMENSION_*` flags. The two that remain have
+  a real consumer (`caustica_builtin_medium`) but no producer — no weather state reaches the world push —
+  so slots see a clear sky.
+- **Known gap: the engine has no sun or moon as a *light*.** Celestial NEE does not fire and
+  `celestialLight` sits at its zero-illuminance default. Nothing read the removed `FrameContext` celestial
+  fields, so nothing renders differently — but a third-party surface or medium slot cannot do a day/night
+  blend. The fix is one thing: `SkyLutPass` already calls `LightProvider.submitLights(LightSink)`, and the
+  engine has to start consuming it.
 - **Physical layering hasn't happened.** `core` / `core_minecraft` / extensions is still a target; the
   package tree is flat (`rt/...`, not `engine/...` + `mc/...`). §2.4's plan — interfaces now, jars later —
   is why this is expected at this stage rather than a gap.

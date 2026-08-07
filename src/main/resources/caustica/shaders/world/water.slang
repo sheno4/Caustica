@@ -14,6 +14,8 @@
 // The domain is world-anchored (see applyWaterWaves) so the pattern is pinned in world space, and the
 // caustics (waterCaustic) differentiate this same field, so they stay in sync with the visible ripples.
 
+module water;
+
 import world_common;
 import world_core;
 

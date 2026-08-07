@@ -66,11 +66,11 @@ public final class WorldShaderCompiler implements AutoCloseable {
             "any_hit.rahit.slang", "bindings.slang", "closest_hit.slang", "frame.slang",
             "guide.rmiss.slang", "guides.slang", "indirect.slang", "indirect_core.slang",
             "indirect_ser.slang", "lighting.slang", "math.slang", "medium.slang",
-            "primary.rgen.slang", "segment.slang", "sky/sky.slang", "sky/sky_miss.slang",
+            "primary.rgen.slang", "segment.slang", "sky_miss.slang",
             "trace.slang", "trace_ordinary.slang", "trace_policy.slang", "trace_reordered.slang",
             "trace_ser.slang", "water.slang", "world_common.slang", "world_core.slang");
     private static final List<String> API_MODULES = List.of(
-            "caustica_api.slang", "caustica_medium.slang", "caustica_sky.slang",
+            "caustica_api.slang", "caustica_color.slang", "caustica_medium.slang", "caustica_sky.slang",
             "caustica_surface.slang", "caustica_types.slang");
     private static final Set<String> ENGINE_MODULE_NAMES = moduleNames(WORLD_MODULES, API_MODULES);
 
@@ -384,7 +384,7 @@ public final class WorldShaderCompiler implements AutoCloseable {
 
     /**
      * Extracts each classpath resource under {@code root} (which may carry a source-side subdirectory,
-     * e.g. {@code "sky/sky.slang"}, for on-disk organization) flat into {@code destination} by its bare
+     * for on-disk organization) flat into {@code destination} by its bare
      * filename — Slang's own search path stays a single flat directory regardless of how the source tree
      * is organized, so only the classpath lookup needs the subdirectory, never the extracted layout.
      */

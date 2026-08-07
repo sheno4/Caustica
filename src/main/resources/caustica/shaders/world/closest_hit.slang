@@ -8,7 +8,6 @@
 import world_common;
 import math;
 import bindings;
-import sky;
 import caustica_types;
 import caustica_surface;
 import caustica_api;
@@ -239,7 +238,7 @@ SurfaceInput buildSurfaceInput(FrameContext frame, MaterialInput material, float
 // need it, and this is the hottest chain in the frame (see file doc), so it stays off their path.
 FrameContext currentFrameContext() {
     WorldPush worldPush = ConstPtr<WorldPush>(pc.worldPushAddr)[0];
-    return frameContext(worldPush, skyState(worldPush));
+    return frameContext(worldPush);
 }
 
 [shader("closesthit")]

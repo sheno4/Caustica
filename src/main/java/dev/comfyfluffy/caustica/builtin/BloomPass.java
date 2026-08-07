@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.builtin;
 
+import dev.comfyfluffy.caustica.api.Option;
 import dev.comfyfluffy.caustica.api.ShaderSource;
 import dev.comfyfluffy.caustica.api.pass.CausticaRenderPass;
 import dev.comfyfluffy.caustica.api.pass.ComputeDispatch;
@@ -32,19 +33,27 @@ import java.util.List;
  */
 public final class BloomPass implements CausticaRenderPass {
     public static final Identifier ID = Identifier.fromNamespaceAndPath("caustica", "bloom");
-    private static final ShaderSource SHADERS = ShaderSource.classpath("/caustica/shaders/passes/bloom");
+    private static final ShaderSource SHADERS = ShaderSource.classpath("/caustica/shaders/builtin", "bloom");
     private static final List<ComputeDispatch.Binding> BINDINGS = List.of(
             ComputeDispatch.Binding.STORAGE, ComputeDispatch.Binding.SAMPLED, ComputeDispatch.Binding.STORAGE);
     private static final int MAX_LEVELS = 8;
     private static final int MODE_PREFILTER = 0;
     private static final int MODE_DOWNSAMPLE = 1;
     private static final int MODE_UPSAMPLE = 2;
-    // Matches the Option defaults BuiltinExtension declares; used only if a pass ever reads before
-    // PassOptionsStore has resolved a value (never happens in practice — see PassOptionsStore).
-    private static final float DEFAULT_THRESHOLD_SCENE_LINEAR = 2.0f;
-    private static final float DEFAULT_SOFT_KNEE_FRACTION = 0.25f;
-    private static final float DEFAULT_RADIUS = 1.0f;
-    private static final float DEFAULT_LEVELS = 6.0f;
+
+    // The options this pass owns. Declared here rather than inline in BuiltinExtension so the token a
+    // reader passes to PassOptions#get and the declaration BuiltinExtension registers are the same object:
+    // one source of truth for each id, kind, range and default.
+    public static final Option<Float> STRENGTH = Option.range("bloom.strength", 0.0f, 2.0f, 0.02f);
+    public static final Option<Float> THRESHOLD_SCENE_LINEAR =
+            Option.range("bloom.threshold-scene-linear", 0.0f, 65504.0f, 2.0f);
+    public static final Option<Float> SOFT_KNEE_FRACTION =
+            Option.range("bloom.soft-knee-fraction", 0.0f, 1.0f, 0.25f);
+    public static final Option<Float> RADIUS = Option.range("bloom.radius", 0.25f, 4.0f, 1.0f);
+    // No integer/count Option.Kind exists yet; modeled as a float and rounded where consumed.
+    public static final Option<Float> LEVELS = Option.range("bloom.levels", 1.0f, 8.0f, 6.0f);
+    public static final List<Option<?>> OPTIONS =
+            List.of(STRENGTH, THRESHOLD_SCENE_LINEAR, SOFT_KNEE_FRACTION, RADIUS, LEVELS);
 
     private GpuContext ctx;
     private long sampler;
@@ -90,10 +99,9 @@ public final class BloomPass implements CausticaRenderPass {
         int baseWidth = Math.max(1, displayWidth / 2);
         int baseHeight = Math.max(1, displayHeight / 2);
         // Read at allocate time, not per frame: pyramid depth is a resource-sizing decision, not a
-        // push-constant one, and PassSetup#options() is the seam for exactly that (see its javadoc). A
-        // change to this option only takes effect on the next resize, since nothing currently invalidates
-        // a pass on an option write — Reload's per-tier invalidation isn't wired up yet either.
-        int configuredLevels = Math.round(setup.options().get("bloom.levels", DEFAULT_LEVELS));
+        // push-constant one, and PassSetup#options() is the seam for exactly that. Nothing invalidates a
+        // pass on an option write, so a change here takes effect at the next resize.
+        int configuredLevels = Math.round(setup.options().get(LEVELS));
         int levelCount = levelCount(baseWidth, baseHeight, Math.min(configuredLevels, MAX_LEVELS), 8);
         levels = new GpuImage[levelCount];
         int width = baseWidth;
@@ -123,9 +131,14 @@ public final class BloomPass implements CausticaRenderPass {
         GpuImage reconstructedColor = frame.reconstructedColor();
         GpuImage exposure = frame.exposureImage();
         PassOptions options = frame.options();
-        float threshold = options.get("bloom.threshold-scene-linear", DEFAULT_THRESHOLD_SCENE_LINEAR);
-        float softKnee = threshold * options.get("bloom.soft-knee-fraction", DEFAULT_SOFT_KNEE_FRACTION);
-        float radius = options.get("bloom.radius", DEFAULT_RADIUS);
+        float threshold = options.get(THRESHOLD_SCENE_LINEAR);
+        float softKnee = threshold * options.get(SOFT_KNEE_FRACTION);
+        float radius = options.get(RADIUS);
+        // The weight the display-mapping pipeline composites this pyramid with. Divided by the level
+        // count here rather than there: the pyramid's depth is this pass's own sizing decision, so how
+        // strength relates to it is this pass's arithmetic, not the engine's.
+        frame.publishScalar("bloom.strength", levels.length == 0
+                ? 0.0f : options.get(STRENGTH) / levels.length);
 
         for (Step step : plan(levels.length)) {
             GpuImage destination = levels[step.destinationLevel()];

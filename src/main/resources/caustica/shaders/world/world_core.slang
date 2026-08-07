@@ -1,8 +1,9 @@
 // Bindings, per-frame push state, the ray payload, and the constants every pass shares.
 // Import first: everything below depends on pc, worldPush and payload.
 
+module world_core;
+
 import world_common;
-import sky;
 import bindings;
 
 // Per-frame push data loaded once from the BDA buffer at the top of main() (same pattern as the GLSL
@@ -52,10 +53,9 @@ public static const float INV_PI = 0.31830988618;
 // payloadSky() and accumulates that radiance.
 //
 // celestialLight is the single directional light NEE samples — currently always zero. Nothing populates
-// it: the transmittance-LUT-driven computation that used to (sky.dominantCelestialLight, called once per
-// dispatch from world.rgen) was removed once that LUT became a pass-owned resource no core module can
-// reach unconditionally (see docs/ARCHITECTURE.md §4 point 3). Direct sun/moon NEE is accepted-absent
-// until docs/LIGHT_SYSTEM_PLAN.md L2 gives this a real, generic producer. Illuminance here is ACEScg (the
+// it. A sky extension submits sun and moon through LightProvider.submitLights; the engine consuming
+// that submission is what fills this in. Every consumer gates on illuminance, so a zero light fires
+// no shadow ray. Illuminance here is ACEScg (the
 // transport basis), converted once where it is assigned — relevant again once something assigns it.
 public static CelestialLight celestialLight = {};
 public static const float SURF_BIAS = 0.005;  // offset secondary-ray origins along the normal (anti-acne)
@@ -63,6 +63,18 @@ public static const float RAY_TMIN = 0.001;   // tiny tmin: the normal offset al
 
 // Water is a smooth dielectric. IOR 1.333; absorption is per-block Beer-Lambert extinction.
 public static const float WATER_IOR = 1.333;
+/**
+ * The distant celestial light every NEE call site reads from. Nothing produces one: the engine has no
+ * sun or moon as a light, so this global stays at its zero-illuminance default and every consumer gates
+ * on illuminance, meaning no shadow ray fires for it. A sky extension submits sun and moon through
+ * LightProvider.submitLights; the engine consuming that submission is what fills this in.
+ */
+public struct CelestialLight {
+    public float3 dir;
+    public float3 illuminance;  // linear BT.709, lux at the viewer
+    public float  halfAngle;
+};
+
 public static const float3 SKY_SPEC_ALBEDO = float3(0.5, 0.5, 0.5); // RR guide default for sky pixels.
 public static const float3 SKY_DIFF_ALBEDO = float3(0.5, 0.5, 0.5);
 
