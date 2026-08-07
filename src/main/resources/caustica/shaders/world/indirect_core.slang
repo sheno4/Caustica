@@ -23,6 +23,10 @@ import caustica_surface;
 import caustica_api;
 import frame;
 import trace_policy;
+// Anchors pass-declared resource modules as plain imports for indirect.slang and indirect_ser.slang, the
+// two entry points built on this integrator. Required even though nothing here reads one: see the same
+// import in closest_hit.slang, and sky_miss.slang for the compiler rule behind it.
+import caustica_pass_resources;
 
 // Rebuilds the closure closest_hit.slang's createSurface already computed for this hit. Its
 // fields are exactly what the payload carries (diffuseAlbedo/specularF0/alphaRoughness/subsurface/

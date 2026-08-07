@@ -12,6 +12,12 @@ import caustica_types;
 import caustica_surface;
 import caustica_api;
 import frame;
+// Required in EVERY composition-specialized entry point, not just the ones that read a pass resource:
+// Slang rejects a module that declares global shader parameters if it is reachable only through the
+// generic type parameter, and TC exposes every slot the composition names, whether this stage calls it or
+// not. See sky_miss.slang for the full rule and WorldShaderCompiler.passResourceAnchorModule for how this
+// fixed name is generated.
+import caustica_pass_resources;
 
 void payloadSetPacked(inout Payload payload, uint material, float roughness, float metalness,
         float emission, float sss, float ior, float transmission, uint emissionSource) {
