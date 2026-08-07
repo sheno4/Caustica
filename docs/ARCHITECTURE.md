@@ -253,7 +253,7 @@ until the config-storage work lands — see §7),
 and one `memoryBarrier()` helper matching the broad full-pipeline-barrier idiom used everywhere else in
 `rt/RtComposite.java`. There is no `ComputeProgram`, `ImageRef`, or `DispatchImage` — a pass builds its own
 descriptor sets and pipeline against `RtContext` directly, the same way `RtExposurePipeline` and
-`RtOverlayPipelines` already did before any pass API existed. `GpuImage`/`GpuBuffer` (renamed from
+`OverlayPipelines` (then `RtOverlayPipelines`) already did before any pass API existed. `GpuImage`/`GpuBuffer` (renamed from
 `RtImage`/`RtBuffer` — §10.1's rename, done early because these two are now genuinely public API surface)
 are the only non-raw types a pass touches, and both are thin RAII wrappers around a handle, not an
 abstraction over Vulkan's semantics.
@@ -345,10 +345,11 @@ Honest status, so this reads as a target and not a claim:
   `RtComposite` alongside the provider shim rather than through it. `LightProvider` now also has
   `submitLights(LightSink)`, exercised by `SkyLutPass` (below) — but it is a placeholder shape with no
   consumer, not a working contribution path; see `LightSink`'s javadoc.
-- **The render pass API is real, raw-Vulkan, and two built-in passes run through it.** `CausticaRenderPass`
-  gives a pass a `VkCommandBuffer` and lets it build its own descriptor sets and pipelines directly against
-  `RtContext` — see §4. `BloomPass` (`rt/pass/`) and `SkyLutPass` (`builtin/`) are ordinary passes
-  registered by `caustica:builtin`, not privileged engine code; `RtBloomPipeline` and `RtSkyLut` (the
+- **The render pass API is real, raw-Vulkan, and three built-in passes run through it, including a
+  graphics one.** `CausticaRenderPass` gives a pass a `VkCommandBuffer` and lets it build its own
+  descriptor sets and pipelines directly against `RtContext` — see §4. `BloomPass`, `SkyLutPass`, and
+  `WorldOverlayPass` (all `builtin/`) are ordinary passes registered by `caustica:builtin`, not privileged
+  engine code; `RtBloomPipeline` and `RtSkyLut` (the
   pre-pass-API built-ins) are deleted. `RenderPassManager` sequences passes by stage plus a same-stage
   `after()` topological order, and isolates a failing pass (disables it, logs, keeps the frame loop
   running) the same way `ProviderManager` isolates a failing provider. `SkyLutPass` moved out of `rt/`
@@ -369,6 +370,29 @@ Honest status, so this reads as a target and not a claim:
   `transmittanceLut` import are gone, `celestialLight` sits at its zero-illuminance default, and direct
   sun/moon lighting is genuinely absent (a deliberate, accepted regression) until `LIGHT_SYSTEM_PLAN.md`
   L2 gives `submitLights`/`LightSink` a real consumer.
+- **`WorldOverlayPass` proved the pass API is graphics-capable, not just compute.** The block-outline/
+  glow-outline/name-tag world-space overlays (`rt/overlay/`, three raster features drawing into one
+  shared, mod-owned buffer that's then composited into the UI target) moved to `builtin/overlay/` and
+  became one `CausticaRenderPass` under `RenderStage.OVERLAY` — the first pass to use `vkCmdDraw`/dynamic
+  rendering rather than `ComputeDispatch`. `RenderStage.OVERLAY` existed in the enum from the start but was
+  dead code (nothing ever called `RenderPassManager.record(OVERLAY, ...)`) until this pass registered.
+  It stays a single coordinating pass wrapping the three feature objects rather than three separately
+  registered passes — the shared buffer's clear-once/composite-once choreography (and the
+  premultiplied-alpha trick that depends on more than one feature drawing into it) has no equivalent in the
+  pass API's per-pass model, and inventing one would be design-ahead-of-a-second-consumer, the exact
+  mistake §8's closing line warns against. It records on its own late transient command buffer from
+  `GameRendererMixin`'s post-upscale seam (`RtComposite.recordOverlayPasses()`), not inside the main
+  `RtComposite.composite()` recording — overlays must render after the world is upscaled, which happens
+  after that method has already returned.
+- **`rt/pipeline`'s compute pipelines were evaluated and left alone — not a gap, a finding.** `RtPipeline`
+  is the engine-owned ray-tracing pipeline the pass stages themselves bracket, not a pass. `RtDlssRr`
+  defines `PassFrame.reconstructedColor()`; `RtDlssFg` drives extra swapchain presents outside any single
+  command buffer. `RtHdrCompositePipeline`/`RtSdrPresentPipeline` record on present-time transient command
+  buffers with their own acquire/present semaphores. `RtExposure` is a cross-frame state machine whose
+  `beginFrame()` must run before the trace, which no pass stage precedes. `RtDisplayPipeline`/
+  `RtDebugPresentPipeline` are shape-compatible with `ComputeDispatch` but are fixed built-ins wired to
+  non-extensible inputs (raw guide buffers `PassFrame` never exposes) — porting them would add API surface
+  with no real third-party consumer to justify it. None of this is being ported.
 - **Physical layering hasn't happened.** `core` / `core_minecraft` / extensions is still a target; the
   package tree is flat (`rt/...`, not `engine/...` + `mc/...`). §2.4's plan — interfaces now, jars later —
   is why this is expected at this stage rather than a gap.

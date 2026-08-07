@@ -66,7 +66,6 @@ import dev.comfyfluffy.caustica.rt.pipeline.RtDebugPresentPipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDisplayPipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDlssRr;
-import dev.comfyfluffy.caustica.rt.overlay.RtWorldOverlay;
 import dev.comfyfluffy.caustica.rt.pipeline.RtHdrCompositePipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtSdrPresentPipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtExposure;
@@ -316,7 +315,7 @@ public final class RtComposite {
 
     // This frame's TLAS handle, published after prepareTlas so the world-overlay pass (block outline's
     // rayQueryEXT occlusion test) can bind the exact same acceleration structure the primary trace used —
-    // same-queue submission order (RtWorldOverlay's transient buffer runs later, same graphics queue)
+    // same-queue submission order (WorldOverlayPass's transient buffer runs later, same graphics queue)
     // makes the TLAS build's writes visible without an extra semaphore, matching every other overlay
     // feature's reliance on in-order queue execution for this frame's world content.
     private volatile long currentTlasHandle;
@@ -325,7 +324,7 @@ public final class RtComposite {
     private RtComposite() {
     }
 
-    /** This frame's TLAS handle (0 if none built yet), for {@code dev.comfyfluffy.caustica.rt.overlay} occlusion queries. */
+    /** This frame's TLAS handle (0 if none built yet), for {@code dev.comfyfluffy.caustica.builtin.overlay} occlusion queries. */
     public long currentTlasHandle() {
         return currentTlasHandle;
     }
@@ -520,7 +519,7 @@ public final class RtComposite {
 
     /**
      * The frame's forward camera-relative view-projection (jitter-free), exactly what {@code world.rgen}
-     * traced with — overlay raster passes ({@code dev.comfyfluffy.caustica.rt.overlay}) reuse it so their content lands
+     * traced with — overlay raster passes ({@code dev.comfyfluffy.caustica.builtin.overlay}) reuse it so their content lands
      * pixel-exact on the RT image. Valid after {@code updateMotion} ran this frame; do not mutate.
      */
     public Matrix4fc currentViewProjection() {
@@ -548,6 +547,34 @@ public final class RtComposite {
     public RtGpuExecutor.GraphicsUse currentGraphicsUse() {
         RenderSystem.assertOnRenderThread();
         return pendingGraphicsUse;
+    }
+
+    /**
+     * Record every registered {@link RenderStage#OVERLAY} pass (currently just {@code WorldOverlayPass}) on
+     * its own transient command buffer and submit it. Called once per frame from {@code GameRendererMixin}
+     * at the post-upscale seam — this can't run inside the main {@link #composite} recording because the
+     * world hasn't been upscaled yet at that point. No-op if RT hasn't run this frame ({@link #composite}
+     * never reached {@link #ensureRenderPassManager}).
+     */
+    public void recordOverlayPasses() {
+        if (renderPassManager == null) {
+            return;
+        }
+        // A pass throwing is already isolated by RenderPassManager (disables that pass, logs, moves on);
+        // this only guards the alloc/submit plumbing around it, so a transient device-lost-adjacent failure
+        // here can't interrupt the rest of the frame either.
+        try {
+            var encoder = (VulkanCommandEncoder) ((CommandEncoderAccessor) RenderSystem.getDevice()
+                    .createCommandEncoder()).caustica$getBackend();
+            VkCommandBuffer cmd = encoder.allocateAndBeginTransientCommandBuffer();
+            renderPassManager.record(RenderStage.OVERLAY, cmd);
+            if (VK10.vkEndCommandBuffer(cmd) != VK10.VK_SUCCESS) {
+                throw new IllegalStateException("vkEndCommandBuffer(overlay passes) failed");
+            }
+            encoder.execute(cmd);
+        } catch (Throwable t) {
+            CausticaMod.LOGGER.error("Recording overlay render passes failed", t);
+        }
     }
 
     /** Signal this RT frame's shared completion token after its final TLAS consumer (world overlay). */
@@ -1548,7 +1575,8 @@ public final class RtComposite {
             fgHdrHudlessImage.destroy();
             fgHdrHudlessImage = null;
         }
-        RtWorldOverlay.INSTANCE.destroy(); // overlay features/pipelines/scratch live on the same device lifetime
+        // WorldOverlayPass's features/pipelines/scratch are torn down by renderPassManager.destroy() below,
+        // as a registered RenderStage.OVERLAY pass.
         if (output != null) {
             output.destroy();
             output = null;

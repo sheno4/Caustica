@@ -431,7 +431,7 @@ public final class RtContext {
 
     /**
      * A multisampled colour attachment for a raster mask pass that gets dynamic-rendering-resolved into a
-     * single-sample target immediately afterwards (see {@code RtWorldOverlay.beginMsaaColorRendering}) —
+     * single-sample target immediately afterwards (see {@code WorldOverlayPass.beginMsaaColorRendering}) —
      * e.g. the block outline's 4x MSAA edge-AA pass. {@code COLOR_ATTACHMENT_BIT | TRANSIENT_ATTACHMENT_BIT}
      * only: unlike {@link #createStorageImage}, this is never sampled/stored/copied, and multisample images
      * generally can't carry {@code STORAGE_BIT} anyway ({@code storageImageSampleCounts} is a separate,

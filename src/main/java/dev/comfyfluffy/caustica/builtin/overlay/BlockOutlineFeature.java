@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.rt.overlay;
+package dev.comfyfluffy.caustica.builtin.overlay;
 
 import org.joml.Matrix4f;
 import org.lwjgl.system.MemoryStack;
@@ -53,7 +53,7 @@ import dev.comfyfluffy.caustica.rt.terrain.RtTerrain;
  * RtDeviceBringup#maxLineWidth()}) — clamped to whatever the device actually supports (Vulkan mandates
  * exactly 1.0 without the feature, so this degrades gracefully rather than failing).
  *
- * <p>Edge AA follows {@link RtGlowOutlineFeature}'s mask/composite split rather than drawing straight onto
+ * <p>Edge AA follows {@link GlowOutlineFeature}'s mask/composite split rather than drawing straight onto
  * {@code main}: the line list rasterizes at {@link RtDeviceBringup#overlayMsaaSamples()} into a transient
  * MSAA scratch attachment that dynamic rendering resolve-averages into a single-sample mask, then a tiny
  * composite pass alpha-blends that mask onto {@code main}. Since every line pixel is the same flat colour
@@ -61,7 +61,7 @@ import dev.comfyfluffy.caustica.rt.terrain.RtTerrain;
  * the occlusion {@code discard} in {@code block_outline/fragment.frag.slang} still runs once per fragment (not per sample,
  * no {@code sampleShading}), so occlusion itself stays pixel-rate; only the silhouette edges get antialiased.
  */
-final class RtBlockOutlineFeature implements RtOverlayFeature {
+final class BlockOutlineFeature implements OverlayFeature {
     // mat4 curViewProj (0, 64B) + vec3 camOffset (64, padded to 16B) + vec4 color (80, 16B) = 96B.
     private static final int PUSH_BYTES = 96;
     // Vanilla's default (non-high-contrast) outline colour: ARGB.black(102) ~= rgba(0,0,0,0.4).
@@ -73,10 +73,10 @@ final class RtBlockOutlineFeature implements RtOverlayFeature {
     private static final float REFERENCE_HEIGHT = 1080f;
 
     private RtContext ctxRef;
-    private RtOverlayPipelines.Pipeline pipeline;
-    private RtOverlayPipelines.AccelStructureSet accelSet;
-    private RtOverlayPipelines.Pipeline compositePipeline;
-    private RtOverlayPipelines.ReadOnlyImageSet compositeSet;
+    private OverlayPipelines.Pipeline pipeline;
+    private OverlayPipelines.AccelStructureSet accelSet;
+    private OverlayPipelines.Pipeline compositePipeline;
+    private OverlayPipelines.ReadOnlyImageSet compositeSet;
     private GpuImage msaaImage;
     private GpuImage resolvedMask;
 
@@ -86,7 +86,7 @@ final class RtBlockOutlineFeature implements RtOverlayFeature {
     private long boundSet;
 
     @Override
-    public boolean prepare(RtContext ctx, RtOverlayFramePool pool, RtGpuExecutor.GraphicsUse graphicsUse,
+    public boolean prepare(RtContext ctx, OverlayFramePool pool, RtGpuExecutor.GraphicsUse graphicsUse,
                            int width, int height) {
         if (!CausticaConfig.Rt.Overlay.BLOCK_OUTLINE_ENABLED.value()) {
             return false;
@@ -181,25 +181,25 @@ final class RtBlockOutlineFeature implements RtOverlayFeature {
     private void ensureResources(RtContext ctx, int width, int height) {
         this.ctxRef = ctx;
         if (pipeline == null) {
-            accelSet = RtOverlayPipelines.accelStructureSet(ctx, VK10.VK_SHADER_STAGE_FRAGMENT_BIT, "block outline");
-            pipeline = new RtOverlayPipelines.Spec("block_outline/vertex.vert.spv", "block_outline/fragment.frag.spv")
-                    .vertex(RtOverlayPipelines.VertexFormat.POSITION)
+            accelSet = OverlayPipelines.accelStructureSet(ctx, VK10.VK_SHADER_STAGE_FRAGMENT_BIT, "block outline");
+            pipeline = new OverlayPipelines.Spec("block_outline/vertex.vert.spv", "block_outline/fragment.frag.spv")
+                    .vertex(OverlayPipelines.VertexFormat.POSITION)
                     .topology(VK10.VK_PRIMITIVE_TOPOLOGY_LINE_LIST)
                     // NONE (straight write), not ALPHA: ALPHA's blend factors (srcAlpha=ZERO, dstAlpha=ONE)
                     // preserve the DESTINATION's alpha, which was fine composited straight onto opaque `main`
                     // (only RGB mattered) but is wrong now that this pass writes into a transparent scratch
                     // mask whose alpha IS the coverage signal the composite pass reads — ALPHA here would
                     // leave every resolved pixel's alpha stuck at the clear value (0), invisible outline.
-                    .blend(RtOverlayPipelines.Blend.NONE)
-                    .attachment(RtWorldOverlay.TARGET_FORMAT)
+                    .blend(OverlayPipelines.Blend.NONE)
+                    .attachment(WorldOverlayPass.TARGET_FORMAT)
                     .samples(RtDeviceBringup.overlayMsaaSamples())
                     .push(PUSH_BYTES, VK10.VK_SHADER_STAGE_VERTEX_BIT | VK10.VK_SHADER_STAGE_FRAGMENT_BIT)
                     .descriptorSetLayout(accelSet.layout)
                     .build(ctx, "block outline");
-            compositeSet = RtOverlayPipelines.readOnlyImageSet(ctx, VK10.VK_SHADER_STAGE_FRAGMENT_BIT, "block outline composite");
-            compositePipeline = new RtOverlayPipelines.Spec("overlay_composite/vertex.vert.spv", "overlay_composite/passthrough.frag.spv")
-                    .blend(RtOverlayPipelines.Blend.ALPHA)
-                    .attachment(RtWorldOverlay.TARGET_FORMAT)
+            compositeSet = OverlayPipelines.readOnlyImageSet(ctx, VK10.VK_SHADER_STAGE_FRAGMENT_BIT, "block outline composite");
+            compositePipeline = new OverlayPipelines.Spec("overlay_composite/vertex.vert.spv", "overlay_composite/passthrough.frag.spv")
+                    .blend(OverlayPipelines.Blend.ALPHA)
+                    .attachment(WorldOverlayPass.TARGET_FORMAT)
                     .descriptorSetLayout(compositeSet.layout)
                     .build(ctx, "block outline composite");
         }
@@ -207,14 +207,14 @@ final class RtBlockOutlineFeature implements RtOverlayFeature {
             if (msaaImage != null) {
                 msaaImage.destroy();
             }
-            msaaImage = ctx.createTransientMsaaColorImage(width, height, RtWorldOverlay.TARGET_FORMAT,
+            msaaImage = ctx.createTransientMsaaColorImage(width, height, WorldOverlayPass.TARGET_FORMAT,
                     RtDeviceBringup.overlayMsaaSamples(), "block outline msaa " + width + "x" + height);
         }
         if (resolvedMask == null || resolvedMask.width != width || resolvedMask.height != height) {
             if (resolvedMask != null) {
                 resolvedMask.destroy();
             }
-            resolvedMask = ctx.createStorageImage(width, height, RtWorldOverlay.TARGET_FORMAT,
+            resolvedMask = ctx.createStorageImage(width, height, WorldOverlayPass.TARGET_FORMAT,
                     "block outline resolved mask " + width + "x" + height, VK10.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
         }
         compositeSet.bind(ctx, resolvedMask.view);
@@ -224,7 +224,7 @@ final class RtBlockOutlineFeature implements RtOverlayFeature {
     public void record(VkCommandBuffer cmd, long targetView, int width, int height) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctxRef, cmd, "block outline mask")) {
-                RtWorldOverlay.beginMsaaColorRendering(cmd, stack, msaaImage.view, resolvedMask.view, width, height);
+                WorldOverlayPass.beginMsaaColorRendering(cmd, stack, msaaImage.view, resolvedMask.view, width, height);
                 VK10.vkCmdBindPipeline(cmd, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle);
                 VK10.vkCmdBindDescriptorSets(cmd, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout, 0,
                         stack.longs(boundSet), null);
@@ -242,18 +242,18 @@ final class RtBlockOutlineFeature implements RtOverlayFeature {
                 VK10.vkCmdPushConstants(cmd, pipeline.layout,
                         VK10.VK_SHADER_STAGE_VERTEX_BIT | VK10.VK_SHADER_STAGE_FRAGMENT_BIT, 0, push);
                 VK10.vkCmdDraw(cmd, vertexCount, 1, 0, 0);
-                RtWorldOverlay.endRendering(cmd);
+                WorldOverlayPass.endRendering(cmd);
             }
 
             VulkanCommandEncoder.memoryBarrier(cmd, stack); // resolved mask writes visible to the composite's reads
 
             try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctxRef, cmd, "block outline composite")) {
-                RtWorldOverlay.beginColorRendering(cmd, stack, targetView, width, height, false);
+                WorldOverlayPass.beginColorRendering(cmd, stack, targetView, width, height, false);
                 VK10.vkCmdBindPipeline(cmd, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, compositePipeline.handle);
                 VK10.vkCmdBindDescriptorSets(cmd, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, compositePipeline.layout, 0,
                         stack.longs(compositeSet.set), null);
                 VK10.vkCmdDraw(cmd, 3, 1, 0, 0);
-                RtWorldOverlay.endRendering(cmd);
+                WorldOverlayPass.endRendering(cmd);
             }
         }
     }

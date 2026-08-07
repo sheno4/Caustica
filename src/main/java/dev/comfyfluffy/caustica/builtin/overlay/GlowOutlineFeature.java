@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.rt.overlay;
+package dev.comfyfluffy.caustica.builtin.overlay;
 
 import org.joml.Matrix4f;
 import org.lwjgl.system.MemoryStack;
@@ -33,15 +33,15 @@ import dev.comfyfluffy.caustica.rt.entity.RtEntities;
  * Matches vanilla's silhouette-through-walls look without ever touching a depth buffer. Never makes the
  * entity itself emissive.
  */
-final class RtGlowOutlineFeature implements RtOverlayFeature {
+final class GlowOutlineFeature implements OverlayFeature {
     // mat4 curViewProj (0, 64B) + vec3 camOffset (64, padded to 16B) + vec4 color (80, 16B) = 96B.
     private static final int MASK_PUSH_BYTES = 96;
     private static final int MASK_FORMAT = VK10.VK_FORMAT_R8G8B8A8_UNORM;
 
     private RtContext ctx;
-    private RtOverlayPipelines.Pipeline maskPipeline;
-    private RtOverlayPipelines.Pipeline compositePipeline;
-    private RtOverlayPipelines.ReadOnlyImageSet compositeSet;
+    private OverlayPipelines.Pipeline maskPipeline;
+    private OverlayPipelines.Pipeline compositePipeline;
+    private OverlayPipelines.ReadOnlyImageSet compositeSet;
     private GpuImage maskImage;
 
     // This frame's prepared draw data (valid between prepare() returning true and record()).
@@ -55,7 +55,7 @@ final class RtGlowOutlineFeature implements RtOverlayFeature {
     private int drawCount;
 
     @Override
-    public boolean prepare(RtContext ctx, RtOverlayFramePool pool, RtGpuExecutor.GraphicsUse graphicsUse,
+    public boolean prepare(RtContext ctx, OverlayFramePool pool, RtGpuExecutor.GraphicsUse graphicsUse,
                            int width, int height) {
         if (!RtEntities.glowEnabled()) {
             return false;
@@ -120,15 +120,15 @@ final class RtGlowOutlineFeature implements RtOverlayFeature {
     private void ensureResources(RtContext ctx, int width, int height) {
         this.ctx = ctx;
         if (maskPipeline == null) {
-            maskPipeline = new RtOverlayPipelines.Spec("entity_glow/vertex.vert.spv", "entity_glow/fragment.frag.spv")
-                    .vertex(RtOverlayPipelines.VertexFormat.POSITION)
+            maskPipeline = new OverlayPipelines.Spec("entity_glow/vertex.vert.spv", "entity_glow/fragment.frag.spv")
+                    .vertex(OverlayPipelines.VertexFormat.POSITION)
                     .attachment(MASK_FORMAT)
                     .push(MASK_PUSH_BYTES, VK10.VK_SHADER_STAGE_VERTEX_BIT | VK10.VK_SHADER_STAGE_FRAGMENT_BIT)
                     .build(ctx, "glow mask");
-            compositeSet = RtOverlayPipelines.readOnlyImageSet(ctx, VK10.VK_SHADER_STAGE_FRAGMENT_BIT, "glow composite");
-            compositePipeline = new RtOverlayPipelines.Spec("overlay_composite/vertex.vert.spv", "overlay_composite/glow.frag.spv")
-                    .blend(RtOverlayPipelines.Blend.ALPHA)
-                    .attachment(RtWorldOverlay.TARGET_FORMAT)
+            compositeSet = OverlayPipelines.readOnlyImageSet(ctx, VK10.VK_SHADER_STAGE_FRAGMENT_BIT, "glow composite");
+            compositePipeline = new OverlayPipelines.Spec("overlay_composite/vertex.vert.spv", "overlay_composite/glow.frag.spv")
+                    .blend(OverlayPipelines.Blend.ALPHA)
+                    .attachment(WorldOverlayPass.TARGET_FORMAT)
                     .descriptorSetLayout(compositeSet.layout)
                     .build(ctx, "glow composite");
         }
@@ -146,7 +146,7 @@ final class RtGlowOutlineFeature implements RtOverlayFeature {
     public void record(VkCommandBuffer cmd, long targetView, int width, int height) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "glow entity mask")) {
-                RtWorldOverlay.beginColorRendering(cmd, stack, maskImage.view, width, height, true);
+                WorldOverlayPass.beginColorRendering(cmd, stack, maskImage.view, width, height, true);
                 VK10.vkCmdBindPipeline(cmd, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, maskPipeline.handle);
                 VK10.vkCmdBindVertexBuffers(cmd, 0, stack.longs(vbo.handle), stack.longs(0L));
                 VK10.vkCmdBindIndexBuffer(cmd, ibo.handle, 0, VK10.VK_INDEX_TYPE_UINT32);
@@ -160,18 +160,18 @@ final class RtGlowOutlineFeature implements RtOverlayFeature {
                             VK10.VK_SHADER_STAGE_VERTEX_BIT | VK10.VK_SHADER_STAGE_FRAGMENT_BIT, 0, push);
                     VK10.vkCmdDrawIndexed(cmd, indexCount[i], 1, firstIndex[i], 0, 0);
                 }
-                RtWorldOverlay.endRendering(cmd);
+                WorldOverlayPass.endRendering(cmd);
             }
 
             VulkanCommandEncoder.memoryBarrier(cmd, stack); // mask attachment writes visible to the composite's reads
 
             try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "glow entity composite")) {
-                RtWorldOverlay.beginColorRendering(cmd, stack, targetView, width, height, false);
+                WorldOverlayPass.beginColorRendering(cmd, stack, targetView, width, height, false);
                 VK10.vkCmdBindPipeline(cmd, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, compositePipeline.handle);
                 VK10.vkCmdBindDescriptorSets(cmd, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, compositePipeline.layout, 0,
                         stack.longs(compositeSet.set), null);
                 VK10.vkCmdDraw(cmd, 3, 1, 0, 0);
-                RtWorldOverlay.endRendering(cmd);
+                WorldOverlayPass.endRendering(cmd);
             }
         }
     }

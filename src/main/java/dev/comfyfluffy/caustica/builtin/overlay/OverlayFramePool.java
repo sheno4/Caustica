@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.rt.overlay;
+package dev.comfyfluffy.caustica.builtin.overlay;
 
 import org.lwjgl.vulkan.VK10;
 
@@ -10,11 +10,11 @@ import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
 import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
 
 /**
- * Per-frame host-visible vertex/index scratch for overlay passes, shared by every {@link RtOverlayFeature}.
+ * Per-frame host-visible vertex/index scratch for overlay passes, shared by every {@link OverlayFeature}.
  * Buffers acquired during a frame retire against that frame's exact graphics completion token, so a buffer
  * is never destroyed while the GPU can still read it.
  */
-public final class RtOverlayFramePool {
+public final class OverlayFramePool {
     // Vulkan requires buffer size > 0; a few zero-length overlay draws could otherwise reach acquire() with
     // bytes == 0.
     private static final long MIN_SIZE = 256;

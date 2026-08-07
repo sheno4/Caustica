@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.rt.pass;
+package dev.comfyfluffy.caustica.builtin;
 
 import dev.comfyfluffy.caustica.api.ShaderSource;
 import dev.comfyfluffy.caustica.api.pass.ComputeDispatch;

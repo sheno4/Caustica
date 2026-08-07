@@ -224,7 +224,7 @@ public final class RtEntities {
     private Int2ObjectOpenHashMap<EntityPrev> curVerts = new Int2ObjectOpenHashMap<>(entityMapCapacity());
 
     // This frame's glowing entities (see GlowEntity) + the camera-relative offset (camera pos - rebase
-    // origin) their positions are captured against, for RtGlowOutlineFeature's raster pass. Rebuilt every frame.
+    // origin) their positions are captured against, for GlowOutlineFeature's raster pass. Rebuilt every frame.
     private final List<GlowEntity> glowBatches = new ArrayList<>();
     private float glowCamOffsetX, glowCamOffsetY, glowCamOffsetZ;
 
@@ -249,7 +249,7 @@ public final class RtEntities {
     // own EntityRenderer.extractNameTags already populates (shouldShowName/crosshair-look/distance rules,
     // computed as a side effect of the dispatcher.extractEntity call captureEntities already makes) — no
     // reimplementation of that logic. Positions are rebase-space (same convention as glowBatches); consumed
-    // by RtNameTagFeature's raster pass, which reuses glowCamOffset{X,Y,Z} (same camera, same frame).
+    // by NameTagFeature's raster pass, which reuses glowCamOffset{X,Y,Z} (same camera, same frame).
     private final List<NameTagEntity> nameTagBatches = new ArrayList<>();
 
     /** This frame's visible name tags, or an empty list if none (or name tags are disabled). */
@@ -368,7 +368,7 @@ public final class RtEntities {
     }
 
     /** One glowing entity's body mesh (rebased-space positions, copied out of {@link #capture} before the
-     *  next entity resets it) plus its vanilla outline colour, for {@code RtGlowOutlineFeature}'s full-res raster
+     *  next entity resets it) plus its vanilla outline colour, for {@code GlowOutlineFeature}'s full-res raster
      *  mask pass. Captured as a side effect of the normal RT capture — no extra posing/animation work. */
     public record GlowEntity(float[] verts, int[] idx, int color) {
     }
@@ -719,11 +719,11 @@ public final class RtEntities {
                 // extractEntity already ran EntityRenderer.extractNameTags (shouldShowName, crosshair-look,
                 // distance cutoff, the attachment point) as a normal part of building the render state — no
                 // need to reimplement any of that here, just read the result. Name tags billboard to face
-                // the camera every frame (see RtNameTagFeature), so — unlike glow, whose mesh is captured
+                // the camera every frame (see NameTagFeature), so — unlike glow, whose mesh is captured
                 // straight into the SAME rigid entity mesh used for the BLAS — they are never mixed into
                 // `capture`: doing so would make every frame's mesh a non-rigid transform of the last
                 // whenever the camera turns, defeating rigid-reuse/motion-vector fitting for every
-                // name-tagged entity. RtWorldOverlay renders them in a completely separate raster pass.
+                // name-tagged entity. WorldOverlayPass renders them in a completely separate raster pass.
                 if (nameTags && !firstPersonSelf && state.nameTag != null) {
                     captureNameTag(level, state, ix, iy, iz, rbx, rby, rbz);
                 }
@@ -1927,7 +1927,7 @@ public final class RtEntities {
         // "cameraState.orientation.set(this.rotation())") is the INVERSE of that — view->world, i.e. the
         // camera's own facing direction, used to billboard world-space quads (name tags) to face the
         // camera. A pure rotation's inverse is its conjugate. Nothing consumed this field before
-        // RtNameTagFeature; a plain setFromUnnormalized(viewRotation) here would billboard backwards.
+        // NameTagFeature; a plain setFromUnnormalized(viewRotation) here would billboard backwards.
         cameraState.orientation.setFromUnnormalized(viewRotation).conjugate();
         cameraState.initialized = true;
     }

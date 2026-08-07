@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.rt.overlay;
+package dev.comfyfluffy.caustica.builtin.overlay;
 
 import com.mojang.blaze3d.textures.GpuTextureView;
 import com.mojang.blaze3d.vertex.VertexConsumer;
@@ -46,15 +46,15 @@ import dev.comfyfluffy.caustica.rt.entity.RtEntities;
  * <p>Glyphs are grouped by font-atlas page ({@link GpuTextureView} identity: the default ASCII page vs.
  * the unicode-fallback page, say) into one merged vertex buffer per page, each drawn with its page bound
  * as a real combined-image-sampler (not bindless — this is a plain forward raster pass, not in-RT
- * shading) — one descriptor set PER page (see {@link RtOverlayPipelines.SampledImageSetPool}), since a
+ * shading) — one descriptor set PER page (see {@link OverlayPipelines.SampledImageSetPool}), since a
  * single set rewritten between pages would leave every draw in the command buffer sampling whichever page
  * was bound last. Non-indexed (2 triangles/quad, 6 vertices) — text volume is small enough that doubling
  * two shared corners per quad isn't worth an index buffer.
  */
-final class RtNameTagFeature implements RtOverlayFeature {
+final class NameTagFeature implements OverlayFeature {
     // mat4 curViewProj (0, 64B) + vec3 camOffset (64, padded to 16B) = 80B.
     private static final int PUSH_BYTES = 80;
-    private static final int VERTEX_STRIDE = RtOverlayPipelines.VertexFormat.POSITION_TEX_COLOR.stride; // 24B
+    private static final int VERTEX_STRIDE = OverlayPipelines.VertexFormat.POSITION_TEX_COLOR.stride; // 24B
     // Vanilla's unoccluded name tag is actually two overlaid copies (opaque depth-tested + translucent
     // see-through-with-background) — see SubmitNodeCollection.submitNameTag. We draw a single pass
     // matching the see-through copy's look (translucent white text + dark background box), since we
@@ -68,8 +68,8 @@ final class RtNameTagFeature implements RtOverlayFeature {
     private static final int MAX_ATLAS_PAGES = 16;
 
     private RtContext ctx;
-    private RtOverlayPipelines.Pipeline pipeline;
-    private RtOverlayPipelines.SampledImageSetPool imageSetPool;
+    private OverlayPipelines.Pipeline pipeline;
+    private OverlayPipelines.SampledImageSetPool imageSetPool;
     private long sampler;
 
     // One descriptor set per distinct font-atlas page, allocated once and reused across frames (a page's
@@ -96,7 +96,7 @@ final class RtNameTagFeature implements RtOverlayFeature {
     }
 
     @Override
-    public boolean prepare(RtContext ctx, RtOverlayFramePool pool, RtGpuExecutor.GraphicsUse graphicsUse,
+    public boolean prepare(RtContext ctx, OverlayFramePool pool, RtGpuExecutor.GraphicsUse graphicsUse,
                            int width, int height) {
         if (!RtEntities.nameTagsEnabled()) {
             return false;
@@ -157,12 +157,12 @@ final class RtNameTagFeature implements RtOverlayFeature {
         if (pipeline != null) {
             return;
         }
-        imageSetPool = RtOverlayPipelines.sampledImageSetPool(ctx, VK10.VK_SHADER_STAGE_FRAGMENT_BIT, MAX_ATLAS_PAGES, "name tag");
-        sampler = RtOverlayPipelines.createNearestClampSampler(ctx, "name tag font atlas");
-        pipeline = new RtOverlayPipelines.Spec("name_tag/vertex.vert.spv", "name_tag/fragment.frag.spv")
-                .vertex(RtOverlayPipelines.VertexFormat.POSITION_TEX_COLOR)
-                .blend(RtOverlayPipelines.Blend.ALPHA)
-                .attachment(RtWorldOverlay.TARGET_FORMAT)
+        imageSetPool = OverlayPipelines.sampledImageSetPool(ctx, VK10.VK_SHADER_STAGE_FRAGMENT_BIT, MAX_ATLAS_PAGES, "name tag");
+        sampler = OverlayPipelines.createNearestClampSampler(ctx, "name tag font atlas");
+        pipeline = new OverlayPipelines.Spec("name_tag/vertex.vert.spv", "name_tag/fragment.frag.spv")
+                .vertex(OverlayPipelines.VertexFormat.POSITION_TEX_COLOR)
+                .blend(OverlayPipelines.Blend.ALPHA)
+                .attachment(WorldOverlayPass.TARGET_FORMAT)
                 .push(PUSH_BYTES, VK10.VK_SHADER_STAGE_VERTEX_BIT)
                 .descriptorSetLayout(imageSetPool.layout)
                 .build(ctx, "name tag");
@@ -172,7 +172,7 @@ final class RtNameTagFeature implements RtOverlayFeature {
     public void record(VkCommandBuffer cmd, long targetView, int width, int height) {
         try (MemoryStack stack = MemoryStack.stackPush();
              RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "name tags")) {
-            RtWorldOverlay.beginColorRendering(cmd, stack, targetView, width, height, false);
+            WorldOverlayPass.beginColorRendering(cmd, stack, targetView, width, height, false);
             VK10.vkCmdBindPipeline(cmd, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle);
             ByteBuffer push = stack.malloc(PUSH_BYTES);
             viewProj.get(0, push);
@@ -186,7 +186,7 @@ final class RtNameTagFeature implements RtOverlayFeature {
                 VK10.vkCmdBindVertexBuffers(cmd, 0, stack.longs(page.vbo.handle), stack.longs(0L));
                 VK10.vkCmdDraw(cmd, page.vertexCount, 1, 0, 0);
             }
-            RtWorldOverlay.endRendering(cmd);
+            WorldOverlayPass.endRendering(cmd);
         }
     }
 

@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.rt.pass;
+package dev.comfyfluffy.caustica.builtin;
 
 import dev.comfyfluffy.caustica.api.ShaderSource;
 import dev.comfyfluffy.caustica.api.pass.CausticaRenderPass;
@@ -25,6 +25,10 @@ import java.util.List;
  * Scene-referred bloom: a downsample/upsample mip pyramid recorded directly onto the frame's command
  * buffer. Owns its own pyramid images, sampler, descriptor sets, and pipeline outright — the engine only
  * sees the published {@code "bloom"} output (see {@link dev.comfyfluffy.caustica.api.pass.PassSetup#publishOutput}).
+ *
+ * <p>Lives under {@code dev.comfyfluffy.caustica.builtin} alongside {@link SkyLutPass}, for the same
+ * reason: it ships through the public {@code CausticaRenderPass} registration API a third-party extension
+ * would use, so it only reaches engine internals through public surface.
  */
 public final class BloomPass implements CausticaRenderPass {
     public static final Identifier ID = Identifier.fromNamespaceAndPath("caustica", "bloom");

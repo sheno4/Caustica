@@ -10,7 +10,6 @@ import dev.comfyfluffy.caustica.client.WorldRenderScaler;
 import dev.comfyfluffy.caustica.rt.RtComposite;
 import dev.comfyfluffy.caustica.rt.RtReflex;
 import dev.comfyfluffy.caustica.rt.RtUiOverlay;
-import dev.comfyfluffy.caustica.rt.overlay.RtWorldOverlay;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.renderer.GameRenderer;
 import net.minecraft.client.renderer.SubmitNodeStorage;
@@ -161,8 +160,7 @@ public abstract class GameRendererMixin {
 		// Fold RT world overlays into the shared transparent UI image before hand/screen effects and the GUI
 		// add their own layers. RtUiOverlay then performs the single final blend to SDR/HDR.
 		try {
-			RtWorldOverlay.INSTANCE.compositeIntoUiOverlay(
-					this.mainRenderTarget, RtComposite.INSTANCE.currentGraphicsUse());
+			RtComposite.INSTANCE.recordOverlayPasses();
 		} finally {
 			// The block-outline ray query consumes this frame's TLAS. Signal the shared RT frame token only
 			// after its transient command buffer has been placed later in the same graphics submission.

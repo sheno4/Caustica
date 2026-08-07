@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.rt.overlay;
+package dev.comfyfluffy.caustica.builtin.overlay;
 
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
@@ -46,7 +46,7 @@ import static dev.comfyfluffy.caustica.rt.pipeline.RtBindings.OVERLAY_SAMPLER;
 import static dev.comfyfluffy.caustica.rt.pipeline.RtBindings.OVERLAY_TLAS;
 
 /**
- * Shared creation-time boilerplate for the world-overlay raster passes ({@link RtWorldOverlay}). Overlay
+ * Shared creation-time boilerplate for the world-overlay raster passes ({@link WorldOverlayPass}). Overlay
  * features describe a pass as a {@link Spec} (shaders + vertex format + blend + attachment format) instead
  * of hand-rolling {@code VkGraphicsPipelineCreateInfo}. Pipelines are keyed by GPU state, not by feature —
  * a new feature should reuse an existing vertex-format/blend combination where one fits, so the pipeline
@@ -55,10 +55,10 @@ import static dev.comfyfluffy.caustica.rt.pipeline.RtBindings.OVERLAY_TLAS;
  * <p>All pipelines target {@code VK_KHR_dynamic_rendering} (already required + enabled by vanilla's own
  * Blaze3D device bring-up) with one colour attachment, no depth, dynamic viewport/scissor.
  */
-public final class RtOverlayPipelines {
+public final class OverlayPipelines {
     private static final String SHADER_DIR = "/caustica/shaders/pipelines/";
 
-    private RtOverlayPipelines() {
+    private OverlayPipelines() {
     }
 
     /** Vertex layouts available to overlay passes (one interleaved binding at binding 0). */
@@ -87,7 +87,7 @@ public final class RtOverlayPipelines {
          * Standard "over" operator for a STRAIGHT-alpha (non-premultiplied) fragment shader output —
          * {@code SRC_ALPHA / ONE_MINUS_SRC_ALPHA} on colour, correctly-accumulating alpha on the alpha
          * channel. Every current feature (glow, name tags, block outline's own mask bridge) outputs
-         * straight colour, so this is what they use to draw onto {@link RtWorldOverlay}'s shared buffer.
+         * straight colour, so this is what they use to draw onto {@link WorldOverlayPass}'s shared buffer.
          * <p><b>Important:</b> applying this blend repeatedly across MULTIPLE layers drawn onto an
          * initially-transparent destination does NOT leave that destination holding straight-alpha values —
          * {@code dstRGB*(1-srcA)} decaying an already-scaled destination is exactly the premultiplied "over"
@@ -101,7 +101,7 @@ public final class RtOverlayPipelines {
         /**
          * Standard premultiplied "over" operator — {@code ONE / ONE_MINUS_SRC_ALPHA} on colour (the
          * fragment shader's own rgb is used as-is, NOT re-multiplied by its alpha) — for compositing a
-         * SOURCE that already holds premultiplied content, e.g. {@link RtWorldOverlay}'s shared overlay
+         * SOURCE that already holds premultiplied content, e.g. {@link WorldOverlayPass}'s shared overlay
          * buffer (see {@link #ALPHA}'s doc) blended onto the real presented image. Using {@link #ALPHA}
          * here instead would double-multiply by alpha (dimmed/incorrect colour on anything semi-
          * transparent) since the source is already scaled.
@@ -158,7 +158,7 @@ public final class RtOverlayPipelines {
             return this;
         }
 
-        /** The colour attachment's VkFormat — {@link RtWorldOverlay#TARGET_FORMAT} for composite passes. */
+        /** The colour attachment's VkFormat — {@link WorldOverlayPass#TARGET_FORMAT} for composite passes. */
         public Spec attachment(int vkFormat) {
             this.attachmentFormat = vkFormat;
             return this;
@@ -646,7 +646,7 @@ public final class RtOverlayPipelines {
 
     static long loadModule(VkDevice vk, MemoryStack stack, String name) {
         byte[] bytes;
-        try (InputStream in = RtOverlayPipelines.class.getResourceAsStream(SHADER_DIR + name)) {
+        try (InputStream in = OverlayPipelines.class.getResourceAsStream(SHADER_DIR + name)) {
             if (in == null) {
                 throw new IllegalStateException("missing SPIR-V resource: " + SHADER_DIR + name);
             }

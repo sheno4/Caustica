@@ -1,8 +1,9 @@
 package dev.comfyfluffy.caustica.api;
 
+import dev.comfyfluffy.caustica.builtin.BloomPass;
 import dev.comfyfluffy.caustica.builtin.SkyLutPass;
+import dev.comfyfluffy.caustica.builtin.overlay.WorldOverlayPass;
 import dev.comfyfluffy.caustica.rt.RtLookPackage;
-import dev.comfyfluffy.caustica.rt.pass.BloomPass;
 import dev.comfyfluffy.caustica.rt.provider.MinecraftLightProvider;
 import dev.comfyfluffy.caustica.rt.provider.MinecraftMaterialSource;
 import dev.comfyfluffy.caustica.rt.provider.MinecraftSceneProvider;
@@ -30,6 +31,7 @@ final class BuiltinExtension implements CausticaExtension {
                 .passResourceModule("caustica_lut_sky_bindings")
                 .renderPass(new BloomPass(RtLookPackage.current().bloom()))
                 .renderPass(skyLut)
+                .renderPass(new WorldOverlayPass())
                 .sceneProvider(new MinecraftSceneProvider())
                 .lightProvider(new MinecraftLightProvider())
                 .lightProvider(skyLut)
