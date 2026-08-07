@@ -37,16 +37,6 @@ public interface PassSetup {
     void publishWorldResource(String name, GpuBuffer buffer);
 
     /**
-     * Hand the engine a pass-produced image other Java code reads back by name — e.g. bloom's base
-     * level, read by the display-mapping pipeline. Unlike {@link #publishWorldResource}, this never
-     * crosses into a Slang-visible descriptor: it is a plain handoff for a pass whose output a
-     * different *pipeline* (not the world ray-tracing pipeline) consumes directly. {@code levelCount} is
-     * the total mip/pyramid depth for a pass that publishes a pyramid's base level (e.g. bloom); pass 1
-     * for a single image.
-     */
-    void publishOutput(String name, GpuImage image, int levelCount);
-
-    /**
      * This feature's current option values, for a decision {@link CausticaRenderPass#create}/
      * {@link CausticaRenderPass#resize} has to make once rather than every frame (e.g. sizing an image
      * pyramid) — unlike {@link PassFrame#options()}, this is not frozen for a frame, since create/resize

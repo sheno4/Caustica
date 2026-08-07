@@ -1,7 +1,7 @@
 // Scene-referred bloom: a downsample/upsample mip pyramid (Jimenez, "Next Generation Post Processing in
 // Call of Duty: Advanced Warfare", SIGGRAPH 2014). One dispatch per pyramid step; the step's source and
 // destination are bound as a dedicated descriptor set by the render-pass engine, so nothing here indexes a
-// descriptor array.
+// descriptor array. A final MODE_COMPOSITE dispatch adds the finished pyramid onto the post chain.
 //
 // Each level samples only its immediate neighbour, keeping the kernel dense at every scale. Summing
 // progressively wider levels produces a monotonic highlight skirt without a hard support edge. The
@@ -13,6 +13,10 @@ import caustica_bloom_types;
 [[vk::binding(0, 0)]] [format("rgba16f")] RWTexture2D<float4> dstImage;
 [[vk::binding(1, 0)]] Sampler2D srcImage;
 [[vk::binding(2, 0)]] [format("r32f")] RWTexture2D<float> exposureImage;
+// The incoming link of the post chain, read 1:1 by MODE_COMPOSITE and ignored by the pyramid steps. Bound
+// on every dispatch regardless: one descriptor layout serves all four modes, which is cheaper than a
+// second pipeline for one extra step.
+[[vk::binding(3, 0)]] [format("rgba16f")] RWTexture2D<float4> sceneImage;
 
 [[vk::push_constant]] BloomPush pc;
 
@@ -24,6 +28,7 @@ static const float BLOOM_CONTRIBUTION_CEILING = 50.0;
 static const int MODE_PREFILTER = 0;
 static const int MODE_DOWNSAMPLE = 1;
 static const int MODE_UPSAMPLE = 2;
+static const int MODE_COMPOSITE = 3;
 
 float3 tap(float2 uv, float2 offset) {
     return srcImage.SampleLevel(uv + offset, 0.0).rgb;
@@ -121,19 +126,29 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
     float2 srcTexel = 1.0 / float2(float(srcWidth), float(srcHeight));
     float2 uv = (float2(pixel) + 0.5) / float2(float(width), float(height));
 
+    if (pc.mode == MODE_COMPOSITE) {
+        // Full-res chain link: the pyramid's base added onto whatever the previous pass left, at the
+        // strength this pass alone decides. Bilinear because the pyramid is half-res; 1:1 for the scene,
+        // which is why sceneImage can be a storage read rather than another sampler.
+        float3 bloom = srcImage.SampleLevel(uv, 0.0).rgb * pc.compositeStrength;
+        dstImage[pixel] = float4(sceneImage[pixel].rgb + bloom, 1.0);
+        return;
+    }
+
+    float3 result;
     if (pc.mode == MODE_PREFILTER) {
         // The pyramid works on EXPOSED values so the threshold is a display-referred decision (how far
         // above mid-grey a highlight has to be), not one that drifts with the scene's absolute level.
         float exposure = max(exposureImage[int2(0, 0)], 0.0);
-        float3 color = downsample(uv, srcTexel, true) * exposure;
-        dstImage[pixel] = float4(prefilter(color), 1.0);
+        result = prefilter(downsample(uv, srcTexel, true) * exposure);
     } else if (pc.mode == MODE_DOWNSAMPLE) {
-        dstImage[pixel] = float4(downsample(uv, srcTexel, false), 1.0);
+        result = downsample(uv, srcTexel, false);
     } else {
         // In-place accumulate: this level already holds its own downsampled band, and the coarser level
         // tented up onto it adds the next-wider band. Summing on the way down the pyramid is what turns
         // the per-level bands into one continuous falloff.
         float3 coarse = upsample(uv, srcTexel, max(pc.radius, 0.0));
-        dstImage[pixel] = float4(dstImage[pixel].rgb + coarse, 1.0);
+        result = dstImage[pixel].rgb + coarse;
     }
+    dstImage[pixel] = float4(result, 1.0);
 }

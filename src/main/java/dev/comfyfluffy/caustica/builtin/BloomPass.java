@@ -24,8 +24,9 @@ import java.util.List;
 
 /**
  * Scene-referred bloom: a downsample/upsample mip pyramid recorded directly onto the frame's command
- * buffer. Owns its own pyramid images, sampler, descriptor sets, and pipeline outright — the engine only
- * sees the published {@code "bloom"} output (see {@link dev.comfyfluffy.caustica.api.pass.PassSetup#publishOutput}).
+ * buffer. Owns its own pyramid images, sampler, descriptor sets, and pipeline outright, and touches the
+ * engine only through the post chain: it reads {@link PassFrame#sceneColor()} and adds the finished
+ * pyramid onto it in {@link PassFrame#sceneColorTarget()}, like any other post effect.
  *
  * <p>Lives under {@code dev.comfyfluffy.caustica.builtin} alongside {@link SkyLutPass}, for the same
  * reason: it ships through the public {@code CausticaRenderPass} registration API a third-party extension
@@ -34,12 +35,16 @@ import java.util.List;
 public final class BloomPass implements CausticaRenderPass {
     public static final Identifier ID = Identifier.fromNamespaceAndPath("caustica", "bloom");
     private static final ShaderSource SHADERS = ShaderSource.classpath("/caustica/shaders/builtin", "bloom");
+    // destination, source (sampled), exposure, incoming chain image. The last two are each read by only
+    // some modes but bound on every dispatch, so one pipeline covers the pyramid and the composite.
     private static final List<ComputeDispatch.Binding> BINDINGS = List.of(
-            ComputeDispatch.Binding.STORAGE, ComputeDispatch.Binding.SAMPLED, ComputeDispatch.Binding.STORAGE);
+            ComputeDispatch.Binding.STORAGE, ComputeDispatch.Binding.SAMPLED,
+            ComputeDispatch.Binding.STORAGE, ComputeDispatch.Binding.STORAGE);
     private static final int MAX_LEVELS = 8;
     private static final int MODE_PREFILTER = 0;
     private static final int MODE_DOWNSAMPLE = 1;
     private static final int MODE_UPSAMPLE = 2;
+    private static final int MODE_COMPOSITE = 3;
 
     // The options this pass owns. Declared here rather than inline in BuiltinExtension so the token a
     // reader passes to PassOptions#get and the declaration BuiltinExtension registers are the same object:
@@ -80,19 +85,17 @@ public final class BloomPass implements CausticaRenderPass {
             PassShaderCompiler.validateBindings(ID, compiled.reflectionJson(), BINDINGS,
                     BloomPushData.BYTE_SIZE, "main", 8, 8, 1);
             dispatch = ComputeDispatch.create(ctx, ID.toString(), compiled.spirv(), "main",
-                    BINDINGS, BloomPushData.BYTE_SIZE, MAX_LEVELS * 2 - 1, sampler);
+                    BINDINGS, BloomPushData.BYTE_SIZE, MAX_LEVELS * 2, sampler);
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
         allocate(setup, setup.displayWidth(), setup.displayHeight());
-        setup.publishOutput("bloom", levels[0], levels.length);
     }
 
     @Override
     public void resize(PassSetup setup, int displayWidth, int displayHeight) {
         destroyLevels();
         allocate(setup, displayWidth, displayHeight);
-        setup.publishOutput("bloom", levels[0], levels.length);
     }
 
     private void allocate(PassSetup setup, int displayWidth, int displayHeight) {
@@ -128,29 +131,36 @@ public final class BloomPass implements CausticaRenderPass {
     @Override
     public void record(PassFrame frame) {
         dispatch.beginFrame();
-        GpuImage reconstructedColor = frame.reconstructedColor();
+        GpuImage scene = frame.sceneColor();
+        GpuImage target = frame.sceneColorTarget();
         GpuImage exposure = frame.exposureImage();
         PassOptions options = frame.options();
         float threshold = options.get(THRESHOLD_SCENE_LINEAR);
         float softKnee = threshold * options.get(SOFT_KNEE_FRACTION);
         float radius = options.get(RADIUS);
-        // The weight the display-mapping pipeline composites this pyramid with. Divided by the level
-        // count here rather than there: the pyramid's depth is this pass's own sizing decision, so how
-        // strength relates to it is this pass's arithmetic, not the engine's.
-        frame.publishScalar("bloom.strength", levels.length == 0
-                ? 0.0f : options.get(STRENGTH) / levels.length);
+        // Level 0 ends up holding the SUM of every band, so dividing by the depth is what makes an
+        // authored strength mean the same thing at every resolution. The pyramid's depth is this pass's
+        // own sizing decision, so that arithmetic is this pass's too, not the engine's.
+        float compositeStrength = options.get(STRENGTH) / levels.length;
 
         for (Step step : plan(levels.length)) {
             GpuImage destination = levels[step.destinationLevel()];
-            GpuImage source = step.sourceLevel() < 0 ? reconstructedColor : levels[step.sourceLevel()];
-            recordStep(frame, destination, source, exposure, step.mode(), threshold, softKnee, radius);
+            GpuImage source = step.sourceLevel() < 0 ? scene : levels[step.sourceLevel()];
+            recordStep(frame, destination, source, exposure, scene, step.mode(), threshold, softKnee,
+                    radius, 0.0f);
             frame.memoryBarrier();
         }
+        // The chain link itself: everything above only built the pyramid off the incoming image.
+        recordStep(frame, target, levels[0], exposure, scene, MODE_COMPOSITE, threshold, softKnee, radius,
+                compositeStrength);
     }
 
     /**
      * One prefilter step reading the reconstructed colour (source level -1), then downsample bottom-up,
      * then upsample top-down. Pure level-index arithmetic so pyramid ordering is testable without a GPU.
+     *
+     * <p>The last step always writes level 0 whatever the depth, which is what lets the composite step
+     * that follows read the finished pyramid from that one level.
      */
     static List<Step> plan(int levelCount) {
         List<Step> steps = new ArrayList<>();
@@ -168,13 +178,14 @@ public final class BloomPass implements CausticaRenderPass {
     }
 
     private void recordStep(PassFrame frame, GpuImage destination, GpuImage source, GpuImage exposure,
-                            int mode, float threshold, float softKnee, float radius) {
+                            GpuImage scene, int mode, float threshold, float softKnee, float radius,
+                            float compositeStrength) {
         byte[] pushConstants = new byte[BloomPushData.BYTE_SIZE];
-        new BloomPushData(mode, threshold, softKnee, radius)
+        new BloomPushData(mode, threshold, softKnee, radius, compositeStrength)
                 .write(ByteBuffer.wrap(pushConstants).order(ByteOrder.nativeOrder()));
         int groupsX = groups(destination.width);
         int groupsY = groups(destination.height);
-        dispatch.dispatch(frame.commandBuffer(), new GpuImage[]{destination, source, exposure},
+        dispatch.dispatch(frame.commandBuffer(), new GpuImage[]{destination, source, exposure, scene},
                 pushConstants, groupsX, groupsY, 1);
     }
 

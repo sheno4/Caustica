@@ -71,7 +71,7 @@ public final class RtFrameStats {
                     "frame.exposure",
                     "frame.dlssRr",
                     "frame.upscale",
-                    "frame.bloom",
+                    "frame.postChain",
                     "frame.displayMap",
                     "frame.debugPresent",
                     "frame.copyOutput"

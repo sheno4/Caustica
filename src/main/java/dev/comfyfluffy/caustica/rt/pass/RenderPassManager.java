@@ -16,11 +16,8 @@ import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
 import dev.comfyfluffy.caustica.rt.accel.GpuImage;
 import net.minecraft.resources.Identifier;
 import org.lwjgl.system.MemoryStack;
-import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkCommandBuffer;
-import org.lwjgl.vulkan.VkSamplerCreateInfo;
 
-import java.nio.LongBuffer;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
@@ -31,17 +28,16 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.TreeSet;
 
-import static dev.comfyfluffy.caustica.rt.GpuContext.check;
-
 /**
  * Sequences registered {@link CausticaRenderPass}es by stage and drives their lifecycle. Each pass owns
  * its own Vulkan resources outright — this class does not allocate, track, or barrier anything on a
  * pass's behalf beyond the two engine-produced inputs ({@link #setReconstructedColor}/
- * {@link #setExposureImage}) and the named world-resource registry passes publish into via
- * {@link PassSetup#publishWorldResource}. A pass that throws from any lifecycle method is disabled with a
- * logged error and any world resource it had published is unpublished in the same step, so a later reader
- * never resolves an image the pass's own cleanup is about to free; the frame loop continues without it,
- * matching {@code ProviderManager}'s isolation discipline.
+ * {@link #setExposureImage}), the post chain it rotates between {@link PassFrame#sceneColorTarget}s, and
+ * the named world-resource registry passes publish into via {@link PassSetup#publishWorldResource}.
+ * A pass that throws from any lifecycle method is disabled with a logged error and everything it had
+ * published is unpublished in the same step, so a later reader never resolves an image the pass's own
+ * cleanup is about to free; the frame loop continues without it, matching {@code ProviderManager}'s
+ * isolation discipline.
  */
 public final class RenderPassManager {
     private final GpuContext ctx;
@@ -49,14 +45,15 @@ public final class RenderPassManager {
     private final Set<CausticaRenderPass> disabled = new HashSet<>();
     private final Map<String, WorldResource> worldResources = new LinkedHashMap<>();
     private final Map<String, CausticaRenderPass> worldResourcePublishers = new LinkedHashMap<>();
-    private final Map<String, NamedOutput> outputs = new LinkedHashMap<>();
-    private final Map<String, Float> scalars = new LinkedHashMap<>();
-    private final Map<String, CausticaRenderPass> outputPublishers = new LinkedHashMap<>();
     private final Map<Identifier, Feature> passFeature;
     private final CausticaOptions optionsStore;
     private GpuImage reconstructedColor;
     private GpuImage exposureImage;
-    private final long sampler;
+    /** The two images the post chain rotates between; {@code null} until the engine sizes them. */
+    private final GpuImage[] sceneColorTargets = new GpuImage[2];
+    private GpuImage sceneColor;
+    private int nextSceneColorTarget;
+    private int worldResourceGeneration;
     private int displayWidth;
     private int displayHeight;
     private long frameIndex = -1;
@@ -95,19 +92,14 @@ public final class RenderPassManager {
         }
     }
 
-    /** A pass-published output another pipeline reads directly: see {@link PassSetup#publishOutput}. */
-    public record NamedOutput(GpuImage image, int levelCount) {
+    RenderPassManager(GpuContext ctx, List<CausticaRenderPass> ordered) {
+        this(ctx, ordered, Map.of(), null);
     }
 
-    RenderPassManager(GpuContext ctx, List<CausticaRenderPass> ordered, long sampler) {
-        this(ctx, ordered, sampler, Map.of(), null);
-    }
-
-    private RenderPassManager(GpuContext ctx, List<CausticaRenderPass> ordered, long sampler,
+    private RenderPassManager(GpuContext ctx, List<CausticaRenderPass> ordered,
                               Map<Identifier, Feature> passFeature, CausticaOptions optionsStore) {
         this.ctx = ctx;
         this.ordered = ordered;
-        this.sampler = sampler;
         this.passFeature = passFeature;
         this.optionsStore = optionsStore;
     }
@@ -131,8 +123,7 @@ public final class RenderPassManager {
             }
         }
         List<CausticaRenderPass> ordered = orderPasses(registered.values());
-        long sampler = createSampler(ctx);
-        RenderPassManager manager = new RenderPassManager(ctx, ordered, sampler, passFeature, options);
+        RenderPassManager manager = new RenderPassManager(ctx, ordered, passFeature, options);
         for (CausticaRenderPass pass : ordered) {
             PassSetup setup = manager.new Setup(pass);
             manager.invoke(pass, "create", () -> pass.create(setup));
@@ -160,6 +151,17 @@ public final class RenderPassManager {
         reconstructedColor = image;
     }
 
+    /**
+     * The pair of display-res images the post chain rotates between. The reconstructed colour is never
+     * one of them: it seeds the chain read-only, so a pass writing the first link cannot be reading and
+     * writing the same image, and the engine's own consumers of the raw reconstruction (auto-exposure
+     * metering, the debug scene view) still see it unmodified.
+     */
+    public void setSceneColorTargets(GpuImage first, GpuImage second) {
+        sceneColorTargets[0] = first;
+        sceneColorTargets[1] = second;
+    }
+
     /** Engine-produced input: this frame's scalar exposure value, set once per frame before recording. */
     public void setExposureImage(GpuImage image) {
         exposureImage = image;
@@ -174,9 +176,21 @@ public final class RenderPassManager {
      */
     public void beginFrame() {
         frameIndex++;
+        // Restart the post chain at the reconstruction: participation is decided per frame, inside each
+        // pass's record(), so last frame's end state says nothing about this one's.
+        sceneColor = reconstructedColor;
+        nextSceneColorTarget = 0;
         if (optionsStore != null) {
             frameOptionsSnapshot = optionsStore.snapshot();
         }
+    }
+
+    /**
+     * The scene image the display map should read: the last thing the post chain wrote, or the
+     * reconstructed colour itself when no pass joined the chain this frame.
+     */
+    public GpuImage sceneColor() {
+        return sceneColor;
     }
 
     /** Every world resource a pass has published, by the name its own Slang declared. */
@@ -184,40 +198,20 @@ public final class RenderPassManager {
         return Map.copyOf(worldResources);
     }
 
-    public GpuImage output(String name) {
-        NamedOutput output = outputs.get(name);
-        if (output == null) {
-            throw new IllegalStateException("no render pass has published output '" + name + "'");
-        }
-        return output.image();
-    }
-
-    public boolean hasOutput(String name) {
-        return outputs.containsKey(name);
-    }
-
-    public int outputLevelCount(String name) {
-        NamedOutput output = outputs.get(name);
-        if (output == null) {
-            throw new IllegalStateException("no render pass has published output '" + name + "'");
-        }
-        return output.levelCount();
-    }
-
-    public long sampler() {
-        return sampler;
-    }
-
-    /** A scalar a pass published this frame via {@link PassFrame#publishScalar}, or {@code fallback}. */
-    public float scalar(String name, float fallback) {
-        Float value = scalars.get(name);
-        return value != null ? value : fallback;
+    /**
+     * Changes whenever the published world-resource set does. A pass may publish from {@code record()}
+     * — {@link PassFrame#publishWorldResource} exists for exactly that — which lands after the frame's
+     * descriptor binding has already run, so the consumer has no other way to notice it must rebind.
+     */
+    public int worldResourceGeneration() {
+        return worldResourceGeneration;
     }
 
     /**
      * Records every active pass in {@code stage}, then a full pipeline barrier so their writes are visible
-     * to whatever stage runs next — the one barrier the engine inserts on a pass's behalf, since a pass
-     * has no way to know what follows its own stage.
+     * to whatever stage runs next. That barrier and the one after each pass that joined the post chain are
+     * the only two the engine inserts on a pass's behalf — both cross a boundary the pass cannot see, since
+     * it knows neither what follows its own stage nor that the next pass is about to read what it wrote.
      */
     public void record(RenderStage stage, VkCommandBuffer commandBuffer) {
         Frame frame = new Frame(commandBuffer);
@@ -228,8 +222,19 @@ public final class RenderPassManager {
             }
             any = true;
             frame.currentPass = pass;
+            frame.takenTarget = null;
             try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, commandBuffer, pass.id().toString())) {
                 invoke(pass, "record", () -> pass.record(frame));
+            }
+            // Advance the chain only for a pass that both took a target and survived: a pass disabled
+            // mid-record may have written nothing, and handing its target on as scene colour would show
+            // whatever the last frame left there.
+            if (frame.takenTarget != null && !disabled.contains(pass)) {
+                sceneColor = frame.takenTarget;
+                nextSceneColorTarget ^= 1;
+                try (MemoryStack stack = MemoryStack.stackPush()) {
+                    VulkanCommandEncoder.memoryBarrier(commandBuffer, stack);
+                }
             }
         }
         if (any) {
@@ -257,7 +262,6 @@ public final class RenderPassManager {
                 CausticaMod.LOGGER.error("Caustica render pass {} failed during shutdown", pass.id(), t);
             }
         }
-        VK10.vkDestroySampler(ctx.vk(), sampler, null);
     }
 
     private void invoke(CausticaRenderPass pass, String phase, Runnable action) {
@@ -286,6 +290,7 @@ public final class RenderPassManager {
                     + "': " + existing.id() + " and " + owner.id());
         }
         worldResources.put(name, resource);
+        worldResourceGeneration++;
     }
 
     private void unpublish(CausticaRenderPass pass) {
@@ -294,13 +299,7 @@ public final class RenderPassManager {
                 return false;
             }
             worldResources.remove(entry.getKey());
-            return true;
-        });
-        outputPublishers.entrySet().removeIf(entry -> {
-            if (entry.getValue() != pass) {
-                return false;
-            }
-            outputs.remove(entry.getKey());
+            worldResourceGeneration++;
             return true;
         });
     }
@@ -362,23 +361,6 @@ public final class RenderPassManager {
         return result;
     }
 
-    private static long createSampler(GpuContext ctx) {
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkSamplerCreateInfo info = VkSamplerCreateInfo.calloc(stack).sType$Default()
-                    .magFilter(VK10.VK_FILTER_LINEAR).minFilter(VK10.VK_FILTER_LINEAR)
-                    .mipmapMode(VK10.VK_SAMPLER_MIPMAP_MODE_NEAREST)
-                    .addressModeU(VK10.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE)
-                    .addressModeV(VK10.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE)
-                    .addressModeW(VK10.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE)
-                    .minLod(0.0f).maxLod(0.0f);
-            LongBuffer handle = stack.mallocLong(1);
-            check(VK10.vkCreateSampler(ctx.vk(), info, null, handle), "vkCreateSampler(render passes)");
-            RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_SAMPLER, handle.get(0),
-                    "render-pass consumer linear clamp sampler");
-            return handle.get(0);
-        }
-    }
-
     private final class Setup implements PassSetup {
         private final CausticaRenderPass owner;
 
@@ -418,18 +400,6 @@ public final class RenderPassManager {
         }
 
         @Override
-        public void publishOutput(String name, GpuImage image, int levelCount) {
-            Objects.requireNonNull(name, "name");
-            Objects.requireNonNull(image, "image");
-            CausticaRenderPass existing = outputPublishers.putIfAbsent(name, owner);
-            if (existing != null && existing != owner) {
-                throw new IllegalStateException("multiple render passes publish output '" + name + "': "
-                        + existing.id() + " and " + owner.id());
-            }
-            outputs.put(name, new NamedOutput(image, levelCount));
-        }
-
-        @Override
         public PassOptions options() {
             if (optionsStore == null) {
                 return DECLARED_DEFAULTS;
@@ -454,6 +424,8 @@ public final class RenderPassManager {
     private final class Frame implements PassFrame {
         private final VkCommandBuffer commandBuffer;
         private CausticaRenderPass currentPass;
+        /** The chain target the pass being recorded took, or null if it did not join the chain. */
+        private GpuImage takenTarget;
 
         private Frame(VkCommandBuffer commandBuffer) {
             this.commandBuffer = commandBuffer;
@@ -480,11 +452,24 @@ public final class RenderPassManager {
         }
 
         @Override
-        public GpuImage reconstructedColor() {
-            if (RenderPassManager.this.reconstructedColor == null) {
-                throw new IllegalStateException("reconstructedColor not set yet this frame");
+        public GpuImage sceneColor() {
+            if (RenderPassManager.this.sceneColor == null) {
+                throw new IllegalStateException("scene colour not set yet this frame");
             }
-            return RenderPassManager.this.reconstructedColor;
+            return RenderPassManager.this.sceneColor;
+        }
+
+        @Override
+        public GpuImage sceneColorTarget() {
+            if (takenTarget != null) {
+                return takenTarget;
+            }
+            GpuImage target = sceneColorTargets[nextSceneColorTarget];
+            if (target == null) {
+                throw new IllegalStateException("post chain targets not set yet this frame");
+            }
+            takenTarget = target;
+            return target;
         }
 
         @Override
@@ -503,12 +488,6 @@ public final class RenderPassManager {
             Feature feature = passFeature.get(currentPass.id());
             return feature != null
                     ? optionsStore.view(feature.id(), frameOptionsSnapshot) : DECLARED_DEFAULTS;
-        }
-
-        @Override
-        public void publishScalar(String name, float value) {
-            Objects.requireNonNull(name, "name");
-            scalars.put(name, value);
         }
 
         @Override

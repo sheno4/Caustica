@@ -39,7 +39,7 @@ abstract class GenerateRtBindings extends DefaultTask {
                     MATERIAL_NORMAL_AO: "materialNormalAoTex", MATERIAL_SURFACE1: "materialSurface1Tex"]],
             [prefix: "DISPLAY", source: "pipelines/display/main.comp.slang", resources: [
                     OUTPUT: "outputImage", RT_IMAGE: "rtImage", EXPOSURE: "exposureImage", HDR_OUTPUT: "hdrImage",
-                    SDR_TONE_LUT: "toneLut", HDR_TONE_LUT: "hdrToneLut", LOOK_LUT: "lookLut", BLOOM: "bloomImage"]],
+                    SDR_TONE_LUT: "toneLut", HDR_TONE_LUT: "hdrToneLut", LOOK_LUT: "lookLut"]],
             [prefix: "DEBUG_PRESENT", source: "pipelines/debug_present/main.comp.slang", resources: [
                     OUTPUT: "outputImage", G_NORMAL: "gNormal", G_ALBEDO: "gAlbedo", G_DEPTH: "gDepth",
                     G_MOTION: "gMotion", G_SPEC_ALBEDO: "gSpecAlbedo", G_SPEC_MOTION: "gSpecMotion",
@@ -81,7 +81,7 @@ abstract class GenerateRtBindings extends DefaultTask {
         PIPELINES.each { spec ->
             def reflection = reflect(new File(shaderRoot.get().asFile, spec.source as String), scratchDir)
             def reflected = reflection.parameters.findAll { it.binding?.kind == "descriptorTableSlot" }
-                    .collectEntries { [(it.name): it.binding] }
+                    .collectEntries { [(it.name): it] }
             def missing = spec.resources.values().findAll { !reflected.containsKey(it) }
             def unexpected = reflected.keySet().findAll { !spec.resources.containsValue(it) }
             if (!missing.isEmpty() || !unexpected.isEmpty()) {
@@ -89,7 +89,8 @@ abstract class GenerateRtBindings extends DefaultTask {
             }
 
             def locations = spec.resources.collectEntries { suffix, resource ->
-                [(suffix): [index: reflected[resource].index as int, set: (reflected[resource].space ?: 0) as int]]
+                def binding = reflected[resource].binding
+                [(suffix): [index: binding.index as int, set: (binding.space ?: 0) as int]]
             }
             if (spec.prefix != "WORLD" && (locations.values()*.set as Set).size() != 1) {
                 throw new GradleException("${spec.source} resources span unexpected descriptor sets: ${locations}")

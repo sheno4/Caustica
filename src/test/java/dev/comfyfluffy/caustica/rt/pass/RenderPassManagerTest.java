@@ -9,9 +9,10 @@ import net.minecraft.resources.Identifier;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -59,37 +60,60 @@ final class RenderPassManagerTest {
         assertTrue(e.getMessage().contains("cycle"));
     }
 
+    // The chain rotation itself needs a real command buffer (each link ends in a barrier), so what is
+    // checkable here is the state it starts from: with nothing chained, the display map has to read the
+    // reconstruction rather than a post target holding last frame's contents.
     @Test
-    void aPassThatThrowsAfterPublishingHasThatOutputRolledBack() {
-        FakePass publishesThenThrows = new FakePass("throws", RenderStage.AFTER_RECONSTRUCTION) {
-            @Override
-            public void resize(PassSetup setup, int width, int height) {
-                setup.publishOutput("bloom", FAKE_IMAGE, 1);
-                throw new RuntimeException("boom");
-            }
-        };
-        RenderPassManager manager = new RenderPassManager(null, List.of(publishesThenThrows), 0L);
+    void anEmptyPostChainLeavesTheSceneAtTheReconstruction() {
+        GpuImage reconstruction = new GpuImage(1L, null, 0L, 0L, 0L, 1, 1, 0, 1, 0, "reconstruction");
+        RenderPassManager manager = new RenderPassManager(null, List.of());
+        manager.setReconstructedColor(reconstruction);
+        manager.setSceneColorTargets(FAKE_IMAGE, FAKE_IMAGE);
 
-        manager.resize(100, 100);
+        manager.beginFrame();
 
-        assertFalse(manager.hasOutput("bloom"),
-                "an output published just before a throw must not be left dangling");
+        assertEquals(reconstruction, manager.sceneColor());
     }
 
     @Test
-    void aPassThatPublishesSuccessfullyKeepsItsOutputBound() {
-        FakePass publishes = new FakePass("publishes", RenderStage.AFTER_RECONSTRUCTION) {
+    void theWorldResourceGenerationTracksPublishesAndRollbacks() {
+        FakePass publishes = new FakePass("publishes", RenderStage.ENVIRONMENT_PREPARE) {
             @Override
             public void resize(PassSetup setup, int width, int height) {
-                setup.publishOutput("bloom", FAKE_IMAGE, 1);
+                setup.publishWorldResource("skyView", FAKE_IMAGE, 1L);
             }
         };
-        RenderPassManager manager = new RenderPassManager(null, List.of(publishes), 0L);
+        RenderPassManager manager = new RenderPassManager(null, List.of(publishes));
+        int initial = manager.worldResourceGeneration();
+
+        manager.resize(100, 100);
+        int afterPublish = manager.worldResourceGeneration();
+        assertNotEquals(initial, afterPublish, "a publish must be visible to a rebinding consumer");
+
+        manager.resize(100, 100); // same extent: resize() short-circuits, nothing republishes
+        assertEquals(afterPublish, manager.worldResourceGeneration());
+
+        manager.resize(200, 200);
+        assertNotEquals(afterPublish, manager.worldResourceGeneration());
+    }
+
+    @Test
+    void rollingBackAFailedPassAlsoMovesTheWorldResourceGeneration() {
+        FakePass publishesThenThrows = new FakePass("throws", RenderStage.ENVIRONMENT_PREPARE) {
+            @Override
+            public void resize(PassSetup setup, int width, int height) {
+                setup.publishWorldResource("skyView", FAKE_IMAGE, 1L);
+                throw new RuntimeException("boom");
+            }
+        };
+        RenderPassManager manager = new RenderPassManager(null, List.of(publishesThenThrows));
 
         manager.resize(100, 100);
 
-        assertTrue(manager.hasOutput("bloom"));
-        assertEquals(FAKE_IMAGE, manager.output("bloom"));
+        // Publish then unpublish: the consumer must see a change, not the value it started from, or it
+        // would keep a descriptor pointing at an image the failed pass's cleanup already freed.
+        assertEquals(Map.of(), manager.worldResources());
+        assertNotEquals(0, manager.worldResourceGeneration());
     }
 
     private static Identifier identifierOf(String path) {

@@ -98,6 +98,13 @@ public final class SkyLutPass implements CausticaRenderPass, LightProvider {
 
     private GpuContext ctx;
     private long sampler;
+    /**
+     * Point sampling for the celestials atlas only. The LUT sampler above is linear because a baked sky
+     * LUT is a smooth function; vanilla's sun and moon sprites are 32x32 pixel art drawn across a quad
+     * spanning tens of degrees, where linear magnification interpolates a handful of texels over hundreds
+     * of screen pixels and smears the disc.
+     */
+    private long celestialSampler;
     private GpuImage transmittance;
     private GpuImage multiScatter;
     private GpuImage skyView;
@@ -144,6 +151,7 @@ public final class SkyLutPass implements CausticaRenderPass, LightProvider {
     public void create(PassSetup setup) {
         ctx = setup.context();
         sampler = ComputeDispatch.createLinearClampSampler(ctx, ID + " sampler");
+        celestialSampler = ComputeDispatch.createNearestClampSampler(ctx, ID + " celestials sampler");
         transmittance = ctx.createStorageImage(TRANSMITTANCE_WIDTH, TRANSMITTANCE_HEIGHT,
                 VK10.VK_FORMAT_R16G16B16A16_SFLOAT, ID + " transmittance");
         multiScatter = ctx.createStorageImage(MULTISCATTER_WIDTH, MULTISCATTER_HEIGHT,
@@ -182,13 +190,17 @@ public final class SkyLutPass implements CausticaRenderPass, LightProvider {
     public void record(PassFrame frame) {
         SkyState state = gatherSkyState(frame.options());
         lastSkyState = state;
+        // Before skyInputs(): this is what resolves the sprite rects skyInputs() then reads. Called the
+        // other way round, the buffer carries the previous frame's UVs — and on the first frame the
+        // untouched full-range defaults, which stretch the whole atlas (sun plus every moon phase) across
+        // the sun's quad.
+        refreshCelestialAtlas(frame, state);
         // The sky slot reads every one of these values from this buffer; the bakes below read the same
         // bytes as a push constant. One derivation, two consumers.
         SkyInputsData inputs = skyInputs(state);
         inputs.write(MemoryUtil.memByteBuffer(skyInputsBuffer.mapped, SkyInputsData.BYTE_SIZE)
                 .order(ByteOrder.nativeOrder()));
         skyInputsBuffer.flush();
-        refreshCelestialAtlas(frame, state);
         byte[] push = pushConstants(inputs);
         if (!baked) {
             transmittanceDispatch.beginFrame();
@@ -326,7 +338,7 @@ public final class SkyLutPass implements CausticaRenderPass, LightProvider {
             celestialAtlasView = view;
             celestialUvMoonPhase = -1;
             if (view != 0L) {
-                frame.publishWorldResource("celestialsAtlas", view, sampler);
+                frame.publishWorldResource("celestialsAtlas", view, celestialSampler);
             }
         }
         if (view == 0L || moonPhase == celestialUvMoonPhase) {
@@ -400,6 +412,10 @@ public final class SkyLutPass implements CausticaRenderPass, LightProvider {
         if (ctx != null && sampler != 0L) {
             VK10.vkDestroySampler(ctx.vk(), sampler, null);
             sampler = 0L;
+        }
+        if (ctx != null && celestialSampler != 0L) {
+            VK10.vkDestroySampler(ctx.vk(), celestialSampler, null);
+            celestialSampler = 0L;
         }
     }
 

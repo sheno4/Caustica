@@ -43,6 +43,17 @@ final class BloomPassTest {
         assertEquals(0, steps.get(0).destinationLevel());
     }
 
+    // The composite step reads the finished pyramid from level 0, so level 0 is what the pyramid has to
+    // finish on -- at every depth, including the single-level pyramid that never upsamples.
+    @Test
+    void theLastPyramidStepAlwaysWritesTheLevelTheCompositeReads() {
+        for (int levelCount = 1; levelCount <= 8; levelCount++) {
+            List<BloomPass.Step> steps = BloomPass.plan(levelCount);
+            assertEquals(0, steps.get(steps.size() - 1).destinationLevel(),
+                    "level count " + levelCount);
+        }
+    }
+
     @Test
     void dispatchGroupCountRoundsUpToWholeGroups() {
         assertEquals(120, BloomPass.groups(960));
@@ -75,7 +86,7 @@ final class BloomPassTest {
 
         PassShaderCompiler.validateBindings(id, compiled.reflectionJson(),
                 List.of(ComputeDispatch.Binding.STORAGE, ComputeDispatch.Binding.SAMPLED,
-                        ComputeDispatch.Binding.STORAGE),
+                        ComputeDispatch.Binding.STORAGE, ComputeDispatch.Binding.STORAGE),
                 BloomPushData.BYTE_SIZE, "main", 8, 8, 1);
     }
 }

@@ -52,8 +52,6 @@ public final class RtDisplayPipeline {
     private long boundHdrLutSampler;
     private long boundLookLutView;
     private long boundLookLutSampler;
-    private long boundBloomView;
-    private long boundBloomSampler;
     private boolean destroyed;
 
     private RtDisplayPipeline(GpuContext ctx, long dsl, long pool, long set, long layout, long pipeline) {
@@ -84,10 +82,9 @@ public final class RtDisplayPipeline {
                     .descriptorCount(1).stageFlags(VK10.VK_SHADER_STAGE_COMPUTE_BIT);
             binds.get(DISPLAY_LOOK_LUT).binding(DISPLAY_LOOK_LUT).descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
                     .descriptorCount(1).stageFlags(VK10.VK_SHADER_STAGE_COMPUTE_BIT);
-            binds.get(DISPLAY_BLOOM).binding(DISPLAY_BLOOM).descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
-                    .descriptorCount(1).stageFlags(VK10.VK_SHADER_STAGE_COMPUTE_BIT);
 
-            VkDescriptorSetLayoutCreateInfo dslci = VkDescriptorSetLayoutCreateInfo.calloc(stack).sType$Default().pBindings(binds);
+            VkDescriptorSetLayoutCreateInfo dslci = VkDescriptorSetLayoutCreateInfo.calloc(stack)
+                    .sType$Default().pBindings(binds);
             LongBuffer p = stack.mallocLong(1);
             check(VK10.vkCreateDescriptorSetLayout(vk, dslci, null, p), "vkCreateDescriptorSetLayout(rt display)");
             long dsl = p.get(0);
@@ -95,7 +92,7 @@ public final class RtDisplayPipeline {
 
             VkDescriptorPoolSize.Buffer poolSizes = VkDescriptorPoolSize.calloc(2, stack);
             poolSizes.get(0).type(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).descriptorCount(4);
-            poolSizes.get(1).type(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(4);
+            poolSizes.get(1).type(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(3);
             VkDescriptorPoolCreateInfo dpci = VkDescriptorPoolCreateInfo.calloc(stack).sType$Default().maxSets(1).pPoolSizes(poolSizes);
             check(VK10.vkCreateDescriptorPool(vk, dpci, null, p), "vkCreateDescriptorPool(rt display)");
             long pool = p.get(0);
@@ -134,13 +131,12 @@ public final class RtDisplayPipeline {
 
     public void setImages(long outputImageView, long rtImageView, long exposureImageView, long hdrImageView,
                            long lutView, long lutSampler, long hdrLutView, long hdrLutSampler,
-                           long lookLutView, long lookLutSampler, long bloomView, long bloomSampler) {
+                           long lookLutView, long lookLutSampler) {
         if (boundOutputView == outputImageView && boundRtView == rtImageView
                 && boundExposureView == exposureImageView && boundHdrView == hdrImageView
                 && boundLutView == lutView && boundLutSampler == lutSampler
                 && boundHdrLutView == hdrLutView && boundHdrLutSampler == hdrLutSampler
-                && boundLookLutView == lookLutView && boundLookLutSampler == lookLutSampler
-                && boundBloomView == bloomView && boundBloomSampler == bloomSampler) {
+                && boundLookLutView == lookLutView && boundLookLutSampler == lookLutSampler) {
             return;
         }
         try (MemoryStack stack = MemoryStack.stackPush()) {
@@ -158,10 +154,6 @@ public final class RtDisplayPipeline {
             hdrLutInfo.get(0).imageView(hdrLutView).sampler(hdrLutSampler).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
             VkDescriptorImageInfo.Buffer lookLutInfo = VkDescriptorImageInfo.calloc(1, stack);
             lookLutInfo.get(0).imageView(lookLutView).sampler(lookLutSampler).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
-            VkDescriptorImageInfo.Buffer bloomInfo = VkDescriptorImageInfo.calloc(1, stack);
-            bloomInfo.get(0).imageView(bloomView).sampler(bloomSampler)
-                    .imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
-
             VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(DISPLAY_BINDING_COUNT, stack);
             writes.get(DISPLAY_OUTPUT).sType$Default().dstSet(descriptorSet).dstBinding(DISPLAY_OUTPUT)
                     .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).pImageInfo(outputInfo);
@@ -177,9 +169,6 @@ public final class RtDisplayPipeline {
                     .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).pImageInfo(hdrLutInfo);
             writes.get(DISPLAY_LOOK_LUT).sType$Default().dstSet(descriptorSet).dstBinding(DISPLAY_LOOK_LUT)
                     .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).pImageInfo(lookLutInfo);
-            writes.get(DISPLAY_BLOOM).sType$Default().dstSet(descriptorSet).dstBinding(DISPLAY_BLOOM)
-                    .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
-                    .pImageInfo(bloomInfo);
             VK10.vkUpdateDescriptorSets(ctx.vk(), writes, null);
         }
         boundOutputView = outputImageView;
@@ -192,8 +181,6 @@ public final class RtDisplayPipeline {
         boundHdrLutSampler = hdrLutSampler;
         boundLookLutView = lookLutView;
         boundLookLutSampler = lookLutSampler;
-        boundBloomView = bloomView;
-        boundBloomSampler = bloomSampler;
     }
 
     /**
@@ -203,14 +190,13 @@ public final class RtDisplayPipeline {
      * {@code CausticaConfig.Rt.Hdr.PEAK_NITS_STEPS}), selected host-side by which LUT resource is bound.
      */
     public void dispatch(VkCommandBuffer cmd, int width, int height, boolean hdrEnabled, int lutSize,
-                         float gamma, float hdrPeakNits, boolean lookEnabled, int lookLutSize,
-                         float bloomStrength) {
+                         float gamma, float hdrPeakNits, boolean lookEnabled, int lookLutSize) {
         try (MemoryStack stack = MemoryStack.stackPush(); RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "display compute")) {
             VK10.vkCmdBindPipeline(cmd, VK10.VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
             VK10.vkCmdBindDescriptorSets(cmd, VK10.VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, stack.longs(descriptorSet), null);
             ByteBuffer push = stack.malloc(DisplayPushData.BYTE_SIZE);
             new DisplayPushData(hdrEnabled ? 1 : 0, (float) lutSize, gamma, hdrPeakNits,
-                    lookEnabled ? 1 : 0, (float) lookLutSize, bloomStrength).write(push);
+                    lookEnabled ? 1 : 0, (float) lookLutSize).write(push);
             VK10.vkCmdPushConstants(cmd, pipelineLayout, VK10.VK_SHADER_STAGE_COMPUTE_BIT, 0, push);
             VK10.vkCmdDispatch(cmd, (width + 15) / 16, (height + 15) / 16, 1);
         }

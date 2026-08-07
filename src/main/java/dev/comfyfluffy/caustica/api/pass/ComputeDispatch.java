@@ -72,9 +72,23 @@ public final class ComputeDispatch {
     }
 
     public static long createLinearClampSampler(GpuContext ctx, String label) {
+        return createClampSampler(ctx, label, VK10.VK_FILTER_LINEAR);
+    }
+
+    /**
+     * Clamped point sampling, for a pass reading Minecraft's own pixel art rather than a smooth function.
+     * Filtering a sprite that is magnified many times over — vanilla's 32x32 sun across a quad spanning
+     * tens of degrees — blurs it into a smudge; the texture was authored at the resolution it is meant to
+     * be seen at. Use {@link #createLinearClampSampler} for anything continuous, such as a baked LUT.
+     */
+    public static long createNearestClampSampler(GpuContext ctx, String label) {
+        return createClampSampler(ctx, label, VK10.VK_FILTER_NEAREST);
+    }
+
+    private static long createClampSampler(GpuContext ctx, String label, int filter) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkSamplerCreateInfo info = VkSamplerCreateInfo.calloc(stack).sType$Default()
-                    .magFilter(VK10.VK_FILTER_LINEAR).minFilter(VK10.VK_FILTER_LINEAR)
+                    .magFilter(filter).minFilter(filter)
                     .mipmapMode(VK10.VK_SAMPLER_MIPMAP_MODE_NEAREST)
                     .addressModeU(VK10.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE)
                     .addressModeV(VK10.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE)

@@ -73,10 +73,6 @@ public struct DisplayPush {
     public float hdrPeakNits;   // mastering peak baked into the currently bound HDR ACES LUT
     public int lookEnabled;     // 0 = identity, 1 = apply the scene-referred ACES look LUT
     public float lookLutSize;   // lookLut texels per axis (independent of the output-transform LUT size)
-    // Scene-referred blurred highlight signal added before the LMT. The bloom pyramid's level 0 holds the
-    // SUM of every band, so RtComposite folds the 1/levelCount normalisation into this value: the authored
-    // look-package strength then means the same thing whichever level count the resolution supports.
-    public float bloomStrength;
 };
 
 public struct DebugPresentPush {

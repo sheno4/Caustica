@@ -172,6 +172,8 @@ public final class RtComposite {
     private int bindlessTextureCapacity;
     // True after the LabPBR atlases have been resolved/bound for the currently alive world pipeline.
     private boolean materialBindingsReady;
+    // The RenderPassManager world-resource generation currently written into the world pipeline's set 2.
+    private int boundWorldResourceGeneration = -1;
     // Set when a new material epoch is published. The first composite returns to vanilla so the next
     // client tick can apply RtTerrain's full-clear before any old-epoch primitive IDs are traced.
     private boolean materialEpochTraceGate;
@@ -253,6 +255,13 @@ public final class RtComposite {
     // Display-res RT image the display mapper reads: DLSS-RR writes it (render -> display denoise+upscale), or a
     // linear blit of `output` fills it when RR is off/unavailable (the no-RR reference / fallback).
     private GpuImage rrOutput;
+    /**
+     * The two display-res images render passes rotate between as they chain post effects over the scene
+     * (see {@code PassFrame.sceneColorTarget}). Separate from {@code rrOutput} so the reconstruction the
+     * chain starts from stays readable and unmodified for auto-exposure metering and the debug scene view.
+     */
+    private GpuImage postColorA;
+    private GpuImage postColorB;
     private final RtExposure exposure = new RtExposure();
 
     // Trace + guide buffers run at render res; composite (display-mapping) runs at display res.
@@ -657,8 +666,7 @@ public final class RtComposite {
             RtToneLut boundLookLut = lookLut;
             displayPipeline.setImages(displayImage.view, rrOutput.view, exposure.image().view, hdrDisplayImage.view,
                     sdrToneLut.view(), sdrToneLut.sampler(), hdrToneLut.view(), hdrToneLut.sampler(),
-                    boundLookLut.view(), boundLookLut.sampler(),
-                    renderPassManager.output("bloom").view, renderPassManager.sampler());
+                    boundLookLut.view(), boundLookLut.sampler());
             debugPresentPipeline.setImages(displayImage.view, gNormal.view, gAlbedo.view, gDepth.view,
                     gMotion.view, gSpecAlbedo.view, gSpecMotion.view, rrOutput.view, exposure.image().view,
                     exposure.stateBuffer());
@@ -673,6 +681,7 @@ public final class RtComposite {
                 return false;
             }
             refreshMaterialBindingsIfNeeded(ctx);
+            refreshPassResourcesIfNeeded(ctx);
             updateMotion();
             recordFrame(ctx, active, nativeColor);
             if (!loggedActive) {
@@ -843,32 +852,58 @@ public final class RtComposite {
         RtBlockMaterials.INSTANCE.bindPages(worldPipeline, sampler);
         RtMaterialRegistry.INSTANCE.rebuild(ctx, RtBlockMaterials.INSTANCE, materialOverrides);
         materialBindingsReady = true;
-        // Pass-owned world resources (e.g. the sky LUTs) live for the device's lifetime, but the world
-        // pipeline's descriptor sets do not, so rebind whatever the active composition's own Slang
-        // declared alongside the atlas. A published resource the current composition doesn't reference
-        // (a different sky slot's Slang didn't import it) has no reflected index and is skipped — there
-        // is nothing in the pipeline layout to write it into.
-        if (worldShaderCompiler != null) {
-            Map<String, WorldShaderCompiler.PassResourceBinding> resourceBindings =
-                    worldShaderCompiler.passResourceBindings();
-            for (var entry : renderPassManager.worldResources().entrySet()) {
-                WorldShaderCompiler.PassResourceBinding binding = resourceBindings.get(entry.getKey());
-                if (binding == null) {
-                    continue;
-                }
-                RenderPassManager.WorldResource resource = entry.getValue();
-                if (resource.buffer() != null) {
-                    worldPipeline.setPassResourceBuffer(binding.index(), resource.buffer().handle,
-                            resource.buffer().size);
-                } else {
-                    worldPipeline.setPassResource(binding.index(), resource.view(), resource.sampler());
-                }
-            }
-        }
+        bindPassResources();
         // Atlas UVs and material IDs are one resource epoch. Drop old terrain as a unit rather than
         // incrementally displaying old UVs/IDs against the new atlas/table.
         RtTerrain.requestFullClear();
         materialEpochTraceGate = true;
+    }
+
+    /**
+     * Write every pass-published world resource the active composition's own Slang declared into the
+     * world pipeline's set 2. These resources live for the device's lifetime but the pipeline's
+     * descriptor sets do not, so this runs on every pipeline (re)creation as well as whenever the
+     * published set changes. A published resource the current composition doesn't reference (a different
+     * sky slot's Slang didn't import it) has no reflected index and is skipped — there is nothing in the
+     * pipeline layout to write it into.
+     */
+    private void bindPassResources() {
+        if (worldShaderCompiler == null) {
+            return;
+        }
+        Map<String, WorldShaderCompiler.PassResourceBinding> resourceBindings =
+                worldShaderCompiler.passResourceBindings();
+        for (var entry : renderPassManager.worldResources().entrySet()) {
+            WorldShaderCompiler.PassResourceBinding binding = resourceBindings.get(entry.getKey());
+            if (binding == null) {
+                continue;
+            }
+            RenderPassManager.WorldResource resource = entry.getValue();
+            if (resource.buffer() != null) {
+                worldPipeline.setPassResourceBuffer(binding.index(), resource.buffer().handle,
+                        resource.buffer().size);
+            } else {
+                worldPipeline.setPassResource(binding.index(), resource.view(), resource.sampler());
+            }
+        }
+        boundWorldResourceGeneration = renderPassManager.worldResourceGeneration();
+    }
+
+    /**
+     * A pass may publish a world resource from {@code record()} — the celestials atlas does, because a
+     * resource reload replaces its host handle and the pass has no create/resize call to republish from.
+     * That publish lands after the frame's descriptor binding has already run, so without this the
+     * resource would stay unwritten until something else happened to rebuild the pipeline. Handle changes
+     * are rare, so draining the device is the cheap correct answer: set 2 is a single descriptor set and
+     * an in-flight frame may still be sampling it.
+     */
+    private void refreshPassResourcesIfNeeded(GpuContext ctx) {
+        if (worldPipeline == null
+                || renderPassManager.worldResourceGeneration() == boundWorldResourceGeneration) {
+            return;
+        }
+        ctx.waitIdle();
+        bindPassResources();
     }
 
     private void refreshMaterialBindingsIfNeeded(GpuContext ctx) {
@@ -951,6 +986,14 @@ public final class RtComposite {
             rrOutput.destroy();
             rrOutput = null;
         }
+        if (postColorA != null) {
+            postColorA.destroy();
+            postColorA = null;
+        }
+        if (postColorB != null) {
+            postColorB.destroy();
+            postColorB = null;
+        }
     }
 
     private void ensureOutput(GpuContext ctx, int width, int height) {
@@ -961,7 +1004,8 @@ public final class RtComposite {
         int rrQuality = rrEnabled ? RtDlssRr.quality() : Integer.MIN_VALUE;
         if (output != null && continuationQueue != null
                 && displayImage != null && hdrDisplayImage != null && rrOutput != null
-                && renderPassManager != null && renderPassManager.hasOutput("bloom")
+                && postColorA != null && postColorB != null
+                && renderPassManager != null
                 && exposure.ready()
                 && displayW == width && displayH == height
                 && renderSizeRrEnabled == rrEnabled && renderSizeRrQuality == rrQuality) {
@@ -1019,9 +1063,16 @@ public final class RtComposite {
         gSpecMotion = ctx.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16_SFLOAT, "guide specular motion " + renderW + "x" + renderH);
         // Display-res RT image the display mapper reads. Always present (DLSS-RR target, or blit-upscale fallback).
         rrOutput = ctx.createStorageImage(width, height, VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "DLSS-RR output " + width + "x" + height);
+        // Two links are enough for a chain of any length: the reconstruction seeds it read-only, so the
+        // passes alternate between these regardless of how many join.
+        postColorA = ctx.createStorageImage(width, height, VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
+                "post chain A " + width + "x" + height);
+        postColorB = ctx.createStorageImage(width, height, VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
+                "post chain B " + width + "x" + height);
         exposure.ensureResources(ctx);
         renderPassManager.resize(width, height);
         renderPassManager.setReconstructedColor(rrOutput);
+        renderPassManager.setSceneColorTargets(postColorA, postColorB);
         renderPassManager.setExposureImage(exposure.image());
 
         mvHasPrev = false; // recreated images -> first MV frame is zero
@@ -1033,8 +1084,7 @@ public final class RtComposite {
         RtToneLut boundLookLut = lookLut;
         displayPipeline.setImages(displayImage.view, rrOutput.view, exposure.image().view, hdrDisplayImage.view,
                 sdrToneLut.view(), sdrToneLut.sampler(), hdrToneLut.view(), hdrToneLut.sampler(),
-                boundLookLut.view(), boundLookLut.sampler(),
-                renderPassManager.output("bloom").view, renderPassManager.sampler());
+                boundLookLut.view(), boundLookLut.sampler());
         debugPresentPipeline.setImages(displayImage.view, gNormal.view, gAlbedo.view, gDepth.view,
                 gMotion.view, gSpecAlbedo.view, gSpecMotion.view, rrOutput.view, exposure.image().view,
                 exposure.stateBuffer());
@@ -1282,17 +1332,25 @@ public final class RtComposite {
             }
             VulkanCommandEncoder.memoryBarrier(cmd, stack); // exposure image visible to downstream passes
 
-            try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "bloom");
-                 RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.bloom")) {
+            try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "post chain");
+                 RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.postChain")) {
                 renderPassManager.record(RenderStage.AFTER_RECONSTRUCTION, cmd);
             }
             renderPassManager.record(RenderStage.LOOK, cmd);
 
+            // Only now is it known which image the post chain left the scene in: participation is decided
+            // inside each pass's record(). Rebinding here is a no-op unless the set of chained passes
+            // changed, and it precedes the descriptor's own bind inside dispatch().
+            RtToneLut displayLookLut = lookLut;
+            displayPipeline.setImages(displayImage.view, renderPassManager.sceneColor().view,
+                    exposure.image().view, hdrDisplayImage.view,
+                    sdrToneLut.view(), sdrToneLut.sampler(), hdrToneLut.view(), hdrToneLut.sampler(),
+                    displayLookLut.view(), displayLookLut.sampler());
             try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "map RT to display");
                  RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.displayMap")) {
                 displayPipeline.dispatch(cmd, displayW, displayH, CausticaConfig.Rt.Hdr.enabled(),
                         sdrToneLut.size, CausticaConfig.Rt.Tonemap.GAMMA.value(), loadedHdrLutNits,
-                        true, lookLut.size, renderPassManager.scalar("bloom.strength", 0.0f));
+                        true, lookLut.size);
             }
             hdrWrittenThisFrame = CausticaConfig.Rt.Hdr.enabled();
             VulkanCommandEncoder.memoryBarrier(cmd, stack); // display output visible to debug composite

@@ -213,13 +213,42 @@ Three requirements survive from the first slice and still shape the current one:
      into one generated, always-valid module (`caustica_pass_resources`, built alongside the composition
      root) that `sky_miss.slang` imports unconditionally — so the engine still never needs to know a
      specific pass's resource *names*, only that this fixed anchor module exists.
-   - `PassSetup.publishOutput(name, image, levelCount)` — for a pass's output a *different* pipeline reads
-     directly as a plain image view (bloom's base level, read by the display-mapping compute pipeline).
-     No Slang involved; just a named `RenderPassManager` registry, single-publisher-validated the same way.
+   Nothing analogous is needed for a resource the *display-mapping* pipeline reads, because no pass hands
+     it one: post effects chain over the scene image instead (see below).
 
    The engine's own two inputs (`RECONSTRUCTED_COLOR`, `EXPOSURE`) went the other way, since those are
-   genuinely engine-owned per §6: `PassFrame.reconstructedColor()`/`exposureImage()`, plain read accessors,
-   no registry.
+   genuinely engine-owned per §6: `PassFrame.sceneColor()`/`exposureImage()`, plain read accessors, no
+   registry.
+
+4. **Post effects chain; they do not hand the display map layers to combine.** `PassFrame` exposes
+   `sceneColor()` (the display-res scene image as it stands right here — scene-linear ACEScg, unexposed)
+   and `sceneColorTarget()` (where this pass writes its version of it). Taking a target is what joins the
+   chain: the engine then barriers after the pass and hands what it wrote to the next pass's
+   `sceneColor()`, and the display map reads whatever the last one produced. A pass that never asks for a
+   target — a sky bake, a light upload — leaves the chain untouched and costs it nothing, and with no pass
+   chained at all the display map reads the reconstruction directly.
+
+   Two display-res `R16G16B16A16` images rotate, which is enough for a chain of any length because the
+   reconstruction seeds it read-only; that also keeps the raw reconstruction intact for the two engine
+   consumers that want it unmodified (auto-exposure metering, the debug scene view). Read and write are
+   always distinct images, so an effect may gather from neighbouring pixels — which is exactly what the
+   discarded alternative could not do.
+
+   *This replaced a registry of additive layers the display shader summed.* That version worked for bloom
+   and could not have worked for anything else: additive layers hide ordering because addition commutes,
+   and layers were composited last, inside the display map, so a chained effect would have run against the
+   pre-bloom image and had bloom added on top of its result afterwards. It also made "blend mode" an
+   engine concept that would have had to grow an enum, while still not expressing an effect that needs the
+   composite as a *spatial* input (depth of field, motion blur, lens distortion). Chaining is both more
+   general and less engine machinery: the pass reads the previous image and writes any function of it, so
+   the engine has no notion of blending at all. The cost is one full-res read+write per chained pass
+   (~59 MB, well under 0.1 ms at 1440p) plus the second rotation image, against bloom's former free ride
+   inside a read/write the display pass was doing anyway.
+
+   Deliberately scene-referred only. The display map writes two encodings from one `lookedAcesCg` — sRGB
+   SDR and PQ/BT.2020 HDR — so a *display*-referred chain would have to run twice over two encodings with
+   every effect encoding-aware. Grain, vignette and chromatic aberration stay inside the display shader
+   until there is a second consumer that justifies a separate, explicitly display-referred stage.
 
 The v1 rule is unchanged: an extension may create resources freely for its own passes; it may fill an
 engine-declared slot; it may not invent a new engine-visible binding *in set 0* (the truly fixed slots —
@@ -247,10 +276,10 @@ public interface CausticaRenderPass {
 ```
 
 `PassSetup` exposes `GpuContext` (device, allocator, `createStorageImage`/`createBuffer`, debug labelling),
-`publishWorldResource`/`publishOutput` (see above), and now `options()` — a live (not frame-frozen) read of
+`publishWorldResource` (see above), and now `options()` — a live (not frame-frozen) read of
 this pass's owning feature's `Option` values, for a create/resize-time decision like sizing an image
 pyramid (see §7's `CausticaOptions` entry). `PassFrame` exposes the command buffer, the
-display extent, `reconstructedColor()`/`exposureImage()`, an `options()` snapshot frozen for the whole
+display extent, `sceneColor()`/`sceneColorTarget()`/`exposureImage()`, an `options()` snapshot frozen for the whole
 frame (unlike `PassSetup`'s live read — see §7),
 and one `memoryBarrier()` helper matching the broad full-pipeline-barrier idiom used everywhere else in
 `rt/RtComposite.java`. There is no `ComputeProgram`, `ImageRef`, or `DispatchImage` — a pass builds its own
@@ -388,7 +417,7 @@ Honest status, so this reads as a target and not a claim:
   after that method has already returned.
 - **`rt/pipeline`'s compute pipelines were evaluated and left alone — not a gap, a finding.** `RtPipeline`
   is the engine-owned ray-tracing pipeline the pass stages themselves bracket, not a pass. `RtDlssRr`
-  defines `PassFrame.reconstructedColor()`; `RtDlssFg` drives extra swapchain presents outside any single
+  produces the image `PassFrame.sceneColor()` starts from; `RtDlssFg` drives extra swapchain presents outside any single
   command buffer. `RtHdrCompositePipeline`/`RtSdrPresentPipeline` record on present-time transient command
   buffers with their own acquire/present semaphores. `RtExposure` is a cross-frame state machine whose
   `beginFrame()` must run before the trace, which no pass stage precedes. `RtDisplayPipeline`/
@@ -427,10 +456,12 @@ Honest status, so this reads as a target and not a claim:
   push constant for its own bakes and as a set-2 uniform buffer (`skyInputs`) the sky slot reads. That
   makes `publishWorldResource(String, GpuBuffer)` — previously API with no consumer — load-bearing, and
   it deleted `rt/SkyFrame`, `RtComposite.skyPush()`/`SkyPush`/`CelestialUv`/`celestialUv()`/the UV cache,
-  and `RenderPassManager#optionsForFeature` with both its callers. Bloom strength went the same way, via
-  a new per-frame `PassFrame#publishScalar`: the pass divides by its own pyramid depth and hands the
-  display pipeline one number. `RtComposite` no longer imports anything from `builtin`, and
-  `BuiltinExtension.ID` is package-private again.
+  and `RenderPassManager#optionsForFeature` with both its callers. Bloom strength stopped reaching the
+  display pipeline as a number at all: bloom composites itself onto the post chain (§4) with its own
+  `BloomPush.compositeStrength`, carrying the `1/levelCount` normalisation the summed bands need, so
+  `DisplayPush.bloomStrength` and `PassFrame#publishScalar` — an API whose only caller was bloom — were
+  both deleted. `RtComposite` no longer imports anything from `builtin`, and `BuiltinExtension.ID` is
+  package-private again.
 - **The celestials atlas stopped being an engine descriptor.** `bindings.slang`'s fixed `celestialsAtlas`
   (set 0, binding 9) and `RtPipeline`'s `setSkyAtlas`/`hasSkyAtlas` existed only so the Overworld sky could
   draw vanilla's sun and moon sprites; a sky for another dimension binds no such thing. It is now one of
