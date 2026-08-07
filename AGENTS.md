@@ -1,6 +1,6 @@
 # Repository guidance
 
-- Keep planning documents and `todos.md` local-only. Do not add them to Git.
+- Keep planning documents and `todos.md` local-only. Do not add them to Git if they are untracked.
 - Comments and Javadocs must describe the current implementation and its active invariants only.
 - Do not preserve implementation history, migration notes, completed phases, or superseded behavior in source comments. Git history owns that context.
 - Do not reference internal plan steps, phase labels, milestone IDs, or numbered design-document sections from source comments.
