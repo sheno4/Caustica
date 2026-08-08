@@ -30,7 +30,12 @@ public final class CausticaScrollPane extends AbstractContainerWidget {
         }
     }
 
+    /** A visible row and its Y in content space, before the scroll offset is applied. */
+    private record Placed(AbstractWidget widget, int contentY) {
+    }
+
     private final List<Entry> entries = new ArrayList<>();
+    private final List<Placed> placed = new ArrayList<>();
     private int contentHeight;
 
     public CausticaScrollPane() {
@@ -49,28 +54,40 @@ public final class CausticaScrollPane extends AbstractContainerWidget {
     }
 
     /**
-     * Positions every visible row top to bottom, offset by the scroll. Called after any change that can
-     * alter the stack: a collapse, a section switch, or a resize.
+     * Measures the stack: assigns each visible row its width and its Y in content space. Called after any
+     * change that can alter the stack — a collapse, a section switch, or a resize — but <em>not</em> on
+     * scroll, which only shifts where those rows land.
      */
     public void reflow() {
-        int y = getY() - (int) scrollAmount();
+        placed.clear();
         int rowWidth = getWidth() - CausticaTheme.SCROLLBAR_WIDTH;
-        int total = 0;
+        int y = 0;
         for (Entry entry : entries) {
             AbstractWidget widget = entry.widget();
             if (!widget.visible) {
                 continue;
             }
             y += entry.gapBefore();
-            total += entry.gapBefore();
             widget.setX(getX());
-            widget.setY(y);
             widget.setWidth(rowWidth);
+            placed.add(new Placed(widget, y));
             y += widget.getHeight();
-            total += widget.getHeight();
         }
-        contentHeight = total;
+        contentHeight = y;
         refreshScrollAmount();
+        applyScroll();
+    }
+
+    /**
+     * Moves the measured rows to where the current scroll puts them. Separate from {@link #reflow()} because
+     * scrolling changes only this: folding the two together meant a scroll updated the amount while the rows
+     * stayed where they were, until something unrelated forced a re-measure.
+     */
+    private void applyScroll() {
+        int top = getY() - (int) scrollAmount();
+        for (Placed row : placed) {
+            row.widget().setY(top + row.contentY());
+        }
     }
 
     @Override
@@ -95,18 +112,32 @@ public final class CausticaScrollPane extends AbstractContainerWidget {
 
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
-        return isMouseOver(mouseX, mouseY) && super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+        if (!isMouseOver(mouseX, mouseY) || !super.mouseScrolled(mouseX, mouseY, scrollX, scrollY)) {
+            return false;
+        }
+        applyScroll();
+        return true;
+    }
+
+    /** Dragging the scrollbar moves the rows in the same step, not at the next unrelated re-measure. */
+    @Override
+    public boolean mouseDragged(MouseButtonEvent event, double dragX, double dragY) {
+        boolean handled = super.mouseDragged(event, dragX, dragY);
+        applyScroll();
+        return handled;
     }
 
     @Override
     protected void extractWidgetRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY,
                                             float partialTick) {
         int bottom = getY() + getHeight();
+        // Placement is re-applied here so a scroll from any source lands before the rows are drawn.
+        applyScroll();
         graphics.enableScissor(getX(), getY(), getX() + getWidth(), bottom);
-        for (Entry entry : entries) {
-            AbstractWidget widget = entry.widget();
+        for (Placed row : placed) {
+            AbstractWidget widget = row.widget();
             // Skipping off-screen rows keeps a long section's cost proportional to what is visible.
-            if (widget.visible && widget.getY() + widget.getHeight() >= getY() && widget.getY() <= bottom) {
+            if (widget.getY() + widget.getHeight() >= getY() && widget.getY() <= bottom) {
                 widget.extractRenderState(graphics, mouseX, mouseY, partialTick);
             }
         }

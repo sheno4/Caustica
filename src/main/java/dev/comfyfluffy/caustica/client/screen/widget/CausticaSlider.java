@@ -71,6 +71,41 @@ public final class CausticaSlider extends AbstractSliderButton {
         return super.keyPressed(event);
     }
 
+    /** Left edge of the track. The row is much wider, and only this part is the control. */
+    private int trackLeft() {
+        return getX() + getWidth() - CausticaTheme.VALUE_WIDTH - CausticaTheme.SLIDER_WIDTH
+                - CausticaTheme.GROUP_GAP;
+    }
+
+    /**
+     * The base class maps the pointer across the whole widget, which here is the entire row: clicking the
+     * label would set a value, and the knob would never sit under the cursor. Both the hit test and the
+     * mapping use the track instead.
+     */
+    @Override
+    public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
+        if (event.x() < trackLeft()) {
+            return false;
+        }
+        return super.mouseClicked(event, doubleClick);
+    }
+
+    @Override
+    public void onClick(MouseButtonEvent event, boolean doubleClick) {
+        setValueFromMouse(event.x());
+    }
+
+    @Override
+    protected void onDrag(MouseButtonEvent event, double dragX, double dragY) {
+        setValueFromMouse(event.x());
+    }
+
+    /** Denominator matches the knob travel the paint uses, so the knob tracks the cursor exactly. */
+    private void setValueFromMouse(double mouseX) {
+        double travel = CausticaTheme.SLIDER_WIDTH - CausticaTheme.KNOB_WIDTH;
+        setValue((mouseX - trackLeft() - CausticaTheme.KNOB_WIDTH / 2.0) / travel);
+    }
+
     @Override
     public void onRelease(MouseButtonEvent event) {
         super.onRelease(event);

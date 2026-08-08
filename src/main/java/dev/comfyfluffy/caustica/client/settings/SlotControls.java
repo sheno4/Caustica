@@ -90,9 +90,15 @@ public final class SlotControls {
             return registry.defaultFeature(slot);
         }
 
+        /** The default is marked in the label, since a dropdown shows one entry at a time. */
         @Override
         public Component labelOf(Identifier value) {
-            return registry.features().get(value).title();
+            Component title = registry.features().get(value).title();
+            if (!value.equals(registry.defaultFeature(slot))) {
+                return title;
+            }
+            return Component.empty().append(title).append(" (")
+                    .append(Component.translatable("caustica.slot.default_suffix")).append(")");
         }
 
         @Override

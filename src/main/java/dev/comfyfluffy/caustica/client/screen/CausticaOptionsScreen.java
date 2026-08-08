@@ -2,9 +2,9 @@ package dev.comfyfluffy.caustica.client.screen;
 
 import dev.comfyfluffy.caustica.api.CausticaApi;
 import dev.comfyfluffy.caustica.client.screen.widget.CausticaGroupHeader;
+import dev.comfyfluffy.caustica.client.screen.widget.CausticaDropdown;
 import dev.comfyfluffy.caustica.client.screen.widget.CausticaNavItem;
 import dev.comfyfluffy.caustica.client.screen.widget.CausticaPaint;
-import dev.comfyfluffy.caustica.client.screen.widget.CausticaRadio;
 import dev.comfyfluffy.caustica.client.screen.widget.CausticaScrollPane;
 import dev.comfyfluffy.caustica.client.screen.widget.CausticaSlider;
 import dev.comfyfluffy.caustica.client.screen.widget.CausticaTextButton;
@@ -19,6 +19,7 @@ import dev.comfyfluffy.caustica.client.settings.SettingsSection;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.network.chat.Component;
 
 import java.util.ArrayList;
@@ -39,6 +40,8 @@ public final class CausticaOptionsScreen extends Screen {
     private final List<SettingsSection> sections;
     private final CausticaScrollPane content = new CausticaScrollPane();
     private int selectedSection;
+    /** The one open dropdown, held here because its list is drawn and hit-tested outside the pane. */
+    private CausticaDropdown<?> openDropdown;
 
     public CausticaOptionsScreen(Screen parent) {
         super(Component.translatable("caustica.screen.title"));
@@ -53,6 +56,11 @@ public final class CausticaOptionsScreen extends Screen {
 
     private int sidebarWidth() {
         return CausticaTheme.sidebarWidth(width);
+    }
+
+    /** The panel occupies this much of the left edge; everything right of it is left untouched. */
+    private int panelWidth() {
+        return CausticaTheme.panelWidth(width);
     }
 
     private int contentTop() {
@@ -85,12 +93,12 @@ public final class CausticaOptionsScreen extends Screen {
 
         content.setX(sidebar);
         content.setY(contentTop());
-        content.setWidth(width - sidebar);
+        content.setWidth(panelWidth() - sidebar);
         content.setHeight(contentBottom() - contentTop());
         addRenderableWidget(content);
 
         CausticaTextButton close = CausticaTextButton.close(font, section().accent(), this::onClose);
-        close.setX(width - 24);
+        close.setX(panelWidth() - 24);
         close.setY(8);
         addRenderableWidget(close);
 
@@ -103,7 +111,7 @@ public final class CausticaOptionsScreen extends Screen {
 
         CausticaTextButton done = CausticaTextButton.text(
                 Component.translatable("caustica.screen.done"), font, section().accent(), this::onClose);
-        done.setX(width - done.getWidth() - CausticaTheme.CONTENT_PAD);
+        done.setX(panelWidth() - done.getWidth() - CausticaTheme.CONTENT_PAD);
         done.setY(contentBottom() + 8);
         addRenderableWidget(done);
 
@@ -122,6 +130,7 @@ public final class CausticaOptionsScreen extends Screen {
 
     /** Rebuilds the content pane's rows for the current section. */
     private void rebuildContent() {
+        closeDropdown();
         List<CausticaScrollPane.Entry> entries = new ArrayList<>();
         if (section().id().equals(CausticaSections.COMPOSITION_ID)) {
             entries.add(new CausticaScrollPane.Entry(new CausticaSummaryWidget(
@@ -158,9 +167,8 @@ public final class CausticaOptionsScreen extends Screen {
     }
 
     /**
-     * The widgets one control contributes. A choice becomes one radio row per candidate rather than a cycle
-     * button: with the candidates listed, which extension owns a slot and what else could is readable
-     * without clicking through, and the default is visibly labelled as such.
+     * The widgets one control contributes. A choice is one dropdown row: a ten-entry debug view or a
+     * five-step quality mode is a list to pick from, not a column of radio rows to scroll past.
      */
     private List<AbstractWidget> widgetsFor(SettingControl control) {
         return switch (control) {
@@ -168,16 +176,47 @@ public final class CausticaOptionsScreen extends Screen {
                     List.of(new CausticaToggle(bool, font, section().accent(), this::refreshVisibility));
             case SettingControl.RangeControl range ->
                     List.of(new CausticaSlider(range, font, section().accent()));
-            case SettingControl.ChoiceControl<?> choice -> radioRows(choice);
+            case SettingControl.ChoiceControl<?> choice ->
+                    List.of(new CausticaDropdown<>(choice, font, section().accent(), this::toggleDropdown));
         };
     }
 
-    private <T> List<AbstractWidget> radioRows(SettingControl.ChoiceControl<T> choice) {
-        List<AbstractWidget> rows = new ArrayList<>();
-        for (T candidate : choice.choices()) {
-            rows.add(new CausticaRadio<>(choice, candidate, font, section().accent(), this::refreshVisibility));
+    private void toggleDropdown(CausticaDropdown<?> dropdown) {
+        closeDropdown();
+        if (openDropdown != dropdown) {
+            openDropdown = dropdown;
+            dropdown.setExpanded(true);
         }
-        return rows;
+    }
+
+    private void closeDropdown() {
+        if (openDropdown != null) {
+            openDropdown.setExpanded(false);
+            openDropdown = null;
+        }
+    }
+
+    /**
+     * An open list is drawn outside the content pane, so it has to be offered the click before the pane gets
+     * it — otherwise the row underneath would take a click aimed at the list floating above it.
+     */
+    @Override
+    public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
+        if (openDropdown != null) {
+            boolean insideList = openDropdown.clickPopup(event.x(), event.y());
+            closeDropdown();
+            if (insideList) {
+                return true;
+            }
+        }
+        return super.mouseClicked(event, doubleClick);
+    }
+
+    /** The list is anchored to a row that scrolls, so it closes rather than detaching from it. */
+    @Override
+    public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+        closeDropdown();
+        return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
     }
 
     @Override
@@ -185,26 +224,42 @@ public final class CausticaOptionsScreen extends Screen {
         rebuildWidgets();
     }
 
-    /** No blur and no panorama: the screen is full-bleed, so nothing behind it is ever visible. */
+    /**
+     * All three background paths are suppressed. Vanilla picks between them on {@link #isInGameUi()}, and the
+     * in-game one washes the entire window — which is what hid the scene this screen exists to let you watch.
+     * No blur either: it is a full-window effect, and there is no full-window surface here to justify it.
+     */
     @Override
     protected void extractBlurredBackground(GuiGraphicsExtractor graphics) {
     }
 
     @Override
+    protected void extractPanorama(GuiGraphicsExtractor graphics, float partialTick) {
+    }
+
+    @Override
+    public void extractTransparentBackground(GuiGraphicsExtractor graphics) {
+    }
+
+    @Override
     protected void extractMenuBackground(GuiGraphicsExtractor graphics) {
-        graphics.fillGradient(0, 0, width, height, CausticaTheme.BACKDROP_TOP, CausticaTheme.BACKDROP_BOTTOM);
     }
 
     @Override
     public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
         int sidebar = sidebarWidth();
-        CausticaPaint.panel(graphics, 0, 0, width, CausticaTheme.HEADER_HEIGHT, CausticaTheme.HEADER_BODY);
+        int panel = panelWidth();
+        // Every fill stops at the panel edge. Nothing is drawn to the right of it at all, so the scene there
+        // is exactly as the renderer left it.
+        graphics.fillGradient(0, 0, panel, height, CausticaTheme.BACKDROP_TOP, CausticaTheme.BACKDROP_BOTTOM);
+        CausticaPaint.panel(graphics, 0, 0, panel, CausticaTheme.HEADER_HEIGHT, CausticaTheme.HEADER_BODY);
         CausticaPaint.panel(graphics, 0, contentTop(), sidebar, contentBottom() - contentTop(),
                 CausticaTheme.SIDEBAR_BODY);
-        graphics.fill(sidebar, contentTop(), width, contentBottom(), CausticaTheme.CONTENT_BODY);
-        CausticaPaint.panel(graphics, 0, contentBottom(), width, CausticaTheme.FOOTER_HEIGHT,
+        graphics.fill(sidebar, contentTop(), panel, contentBottom(), CausticaTheme.CONTENT_BODY);
+        CausticaPaint.panel(graphics, 0, contentBottom(), panel, CausticaTheme.FOOTER_HEIGHT,
                 CausticaTheme.FOOTER_BODY);
         graphics.fill(sidebar, contentTop(), sidebar + 1, contentBottom(), CausticaTheme.DIVIDER);
+        graphics.fill(panel - 1, 0, panel, height, CausticaTheme.DIVIDER);
 
         wordmark(graphics);
         graphics.text(font, Component.translatable("caustica.nav.engine"), 6,
@@ -216,6 +271,10 @@ public final class CausticaOptionsScreen extends Screen {
         }
 
         super.extractRenderState(graphics, mouseX, mouseY, partialTick);
+        // After the pane, so an open list is not clipped by its scissor.
+        if (openDropdown != null) {
+            openDropdown.extractPopup(graphics, mouseX, mouseY);
+        }
     }
 
     /** Drawn per character with extra advance — letterspacing is the cheapest cue that this is bespoke. */
