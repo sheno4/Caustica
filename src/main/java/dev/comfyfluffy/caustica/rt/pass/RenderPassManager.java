@@ -200,8 +200,8 @@ public final class RenderPassManager {
 
     /**
      * Changes whenever the published world-resource set does. A pass may publish from {@code record()}
-     * — {@link PassFrame#publishWorldResource} exists for exactly that — which lands after the frame's
-     * descriptor binding has already run, so the consumer has no other way to notice it must rebind.
+     * — {@link PassFrame#publishWorldResource} exists for exactly that — so the world trace checks this
+     * generation after the pre-trace stages and resolves the new descriptor before consuming it.
      */
     public int worldResourceGeneration() {
         return worldResourceGeneration;

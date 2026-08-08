@@ -155,6 +155,10 @@ public final class SkyLutPass implements CausticaRenderPass, LightProvider {
     @Override
     public void create(PassSetup setup) {
         ctx = setup.context();
+        // The pass object outlives a RenderPassManager/GPU-context instance. Force the new manager to
+        // observe and publish the host atlas even when Vulkan recycles the same numeric view handle.
+        celestialAtlasView = 0L;
+        celestialUvMoonPhase = -1;
         sampler = ComputeDispatch.createLinearClampSampler(ctx, ID + " sampler");
         celestialSampler = ComputeDispatch.createNearestClampSampler(ctx, ID + " celestials sampler");
         transmittance = ctx.createStorageImage(TRANSMITTANCE_WIDTH, TRANSMITTANCE_HEIGHT,

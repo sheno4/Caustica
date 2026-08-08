@@ -648,7 +648,6 @@ public final class RtComposite {
                 return false;
             }
             refreshMaterialBindingsIfNeeded(ctx);
-            refreshPassResourcesIfNeeded(ctx);
             updateMotion();
             recordFrame(ctx, active, nativeColor);
             if (!loggedActive) {
@@ -721,10 +720,6 @@ public final class RtComposite {
             }
         }
         ensureOutput(ctx, width, height);
-        RtToneLut boundLookLut = lookLut;
-        displayPipeline.setImages(displayImage.view, rrOutput.view, exposure.image().view, hdrDisplayImage.view,
-                sdrToneLut.view(), sdrToneLut.sampler(), hdrToneLut.view(), hdrToneLut.sampler(),
-                boundLookLut.view(), boundLookLut.sampler());
         debugPresentPipeline.setImages(displayImage.view, gNormal.view, gAlbedo.view, gDepth.view,
                 gMotion.view, gSpecAlbedo.view, gSpecMotion.view, rrOutput.view, exposure.image().view,
                 exposure.stateBuffer());
@@ -1028,10 +1023,9 @@ public final class RtComposite {
     /**
      * A pass may publish a world resource from {@code record()} — the celestials atlas does, because a
      * resource reload replaces its host handle and the pass has no create/resize call to republish from.
-     * That publish lands after the frame's descriptor binding has already run, so without this the
-     * resource would stay unwritten until something else happened to rebuild the pipeline. Handle changes
-     * are rare, so draining the device is the cheap correct answer: set 2 is a single descriptor set and
-     * an in-flight frame may still be sampling it.
+     * The final check runs after every pre-trace pass and before the first trace binds set 2. Handle
+     * changes are rare, so draining the device is the cheap correct answer: set 2 is a single descriptor
+     * set and an earlier frame may still be sampling it.
      */
     private void refreshPassResourcesIfNeeded(GpuContext ctx) {
         if (worldPipeline == null
@@ -1210,6 +1204,7 @@ public final class RtComposite {
         renderPassManager.setReconstructedColor(rrOutput);
         renderPassManager.setSceneColorTargets(postColorA, postColorB);
         renderPassManager.setExposureImage(exposure.image());
+        displayPipeline.invalidateImages();
 
         mvHasPrev = false; // recreated images -> first MV frame is zero
         waterWaveTimeValid = false;
@@ -1217,10 +1212,6 @@ public final class RtComposite {
             worldPipeline.setStorageImage(output.view);
             bindGuideImages();
         }
-        RtToneLut boundLookLut = lookLut;
-        displayPipeline.setImages(displayImage.view, rrOutput.view, exposure.image().view, hdrDisplayImage.view,
-                sdrToneLut.view(), sdrToneLut.sampler(), hdrToneLut.view(), hdrToneLut.sampler(),
-                boundLookLut.view(), boundLookLut.sampler());
         debugPresentPipeline.setImages(displayImage.view, gNormal.view, gAlbedo.view, gDepth.view,
                 gMotion.view, gSpecAlbedo.view, gSpecMotion.view, rrOutput.view, exposure.image().view,
                 exposure.stateBuffer());
@@ -1419,6 +1410,10 @@ public final class RtComposite {
                 renderPassManager.record(RenderStage.ENVIRONMENT_PREPARE, cmd);
             }
             renderPassManager.record(RenderStage.BEFORE_TRACE, cmd);
+            // PassFrame may publish a host-owned resource while recording either pre-trace stage. Resolve
+            // those publications before this command buffer first binds set 2, including on the first
+            // frame where a host atlas becomes available.
+            refreshPassResourcesIfNeeded(ctx);
 
             try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "world primary trace");
                  RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.tracePrimary")) {
@@ -1481,7 +1476,7 @@ public final class RtComposite {
             displayPipeline.setImages(displayImage.view, renderPassManager.sceneColor().view,
                     exposure.image().view, hdrDisplayImage.view,
                     sdrToneLut.view(), sdrToneLut.sampler(), hdrToneLut.view(), hdrToneLut.sampler(),
-                    displayLookLut.view(), displayLookLut.sampler());
+                    displayLookLut.view(), displayLookLut.sampler(), graphicsUse, graphicsUseWaiter);
             try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "map RT to display");
                  RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.displayMap")) {
                 displayPipeline.dispatch(cmd, displayW, displayH, CausticaConfig.Rt.Hdr.enabled(),

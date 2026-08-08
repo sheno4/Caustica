@@ -25,6 +25,7 @@ import java.nio.LongBuffer;
 
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
+import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
 import dev.comfyfluffy.caustica.rt.gen.DisplayPushData;
 
 import static dev.comfyfluffy.caustica.rt.GpuContext.check;
@@ -33,32 +34,36 @@ import static dev.comfyfluffy.caustica.rt.pipeline.RtBindings.*;
 /** Maps the display-res scene-linear ACEScg RT image to sRGB SDR and, when enabled, PQ/BT.2020 HDR. */
 public final class RtDisplayPipeline {
     private static final String SHADER_DIR = "/caustica/shaders/pipelines/display/";
+    private static final int RING = 6;
     /** Push constants: output/look LUT state plus gamma and HDR peak nits. */
     private static final int PUSH_BYTES = DisplayPushData.BYTE_SIZE;
 
     private final GpuContext ctx;
     private final long descriptorSetLayout;
     private final long descriptorPool;
-    private final long descriptorSet;
+    private final long[] descriptorSets;
+    private final RtGpuExecutor.TrackedGraphicsUse[] descriptorSetUses;
+    private final ImageBindings[] descriptorSetBindings;
+    private int currentSet = -1;
     private final long pipelineLayout;
     private final long pipeline;
-    private long boundOutputView;
-    private long boundRtView;
-    private long boundExposureView;
-    private long boundHdrView;
-    private long boundLutView;
-    private long boundLutSampler;
-    private long boundHdrLutView;
-    private long boundHdrLutSampler;
-    private long boundLookLutView;
-    private long boundLookLutSampler;
     private boolean destroyed;
 
-    private RtDisplayPipeline(GpuContext ctx, long dsl, long pool, long set, long layout, long pipeline) {
+    private record ImageBindings(long outputView, long rtView, long exposureView, long hdrView,
+                                 long lutView, long lutSampler, long hdrLutView, long hdrLutSampler,
+                                 long lookLutView, long lookLutSampler) {
+    }
+
+    private RtDisplayPipeline(GpuContext ctx, long dsl, long pool, long[] sets, long layout, long pipeline) {
         this.ctx = ctx;
         this.descriptorSetLayout = dsl;
         this.descriptorPool = pool;
-        this.descriptorSet = set;
+        this.descriptorSets = sets;
+        this.descriptorSetUses = new RtGpuExecutor.TrackedGraphicsUse[sets.length];
+        this.descriptorSetBindings = new ImageBindings[sets.length];
+        for (int i = 0; i < sets.length; i++) {
+            descriptorSetUses[i] = new RtGpuExecutor.TrackedGraphicsUse();
+        }
         this.pipelineLayout = layout;
         this.pipeline = pipeline;
     }
@@ -91,19 +96,29 @@ public final class RtDisplayPipeline {
             RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT, dsl, "display descriptor set layout");
 
             VkDescriptorPoolSize.Buffer poolSizes = VkDescriptorPoolSize.calloc(2, stack);
-            poolSizes.get(0).type(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).descriptorCount(4);
-            poolSizes.get(1).type(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(3);
-            VkDescriptorPoolCreateInfo dpci = VkDescriptorPoolCreateInfo.calloc(stack).sType$Default().maxSets(1).pPoolSizes(poolSizes);
+            poolSizes.get(0).type(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).descriptorCount(4 * RING);
+            poolSizes.get(1).type(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(3 * RING);
+            VkDescriptorPoolCreateInfo dpci = VkDescriptorPoolCreateInfo.calloc(stack).sType$Default()
+                    .maxSets(RING).pPoolSizes(poolSizes);
             check(VK10.vkCreateDescriptorPool(vk, dpci, null, p), "vkCreateDescriptorPool(rt display)");
             long pool = p.get(0);
             RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_DESCRIPTOR_POOL, pool, "display descriptor pool");
 
+            LongBuffer setLayouts = stack.mallocLong(RING);
+            for (int i = 0; i < RING; i++) {
+                setLayouts.put(dsl);
+            }
+            setLayouts.flip();
             VkDescriptorSetAllocateInfo dsai = VkDescriptorSetAllocateInfo.calloc(stack).sType$Default()
-                    .descriptorPool(pool).pSetLayouts(stack.longs(dsl));
-            LongBuffer pSet = stack.mallocLong(1);
-            check(VK10.vkAllocateDescriptorSets(vk, dsai, pSet), "vkAllocateDescriptorSets(rt display)");
-            long set = pSet.get(0);
-            RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_DESCRIPTOR_SET, set, "display descriptor set");
+                    .descriptorPool(pool).pSetLayouts(setLayouts);
+            LongBuffer pSets = stack.mallocLong(RING);
+            check(VK10.vkAllocateDescriptorSets(vk, dsai, pSets), "vkAllocateDescriptorSets(rt display)");
+            long[] sets = new long[RING];
+            pSets.get(sets);
+            for (int i = 0; i < RING; i++) {
+                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_DESCRIPTOR_SET, sets[i],
+                        "display descriptor set " + i);
+            }
 
             VkPushConstantRange.Buffer pushRange = VkPushConstantRange.calloc(1, stack);
             pushRange.get(0).stageFlags(VK10.VK_SHADER_STAGE_COMPUTE_BIT).offset(0).size(PUSH_BYTES);
@@ -125,20 +140,30 @@ public final class RtDisplayPipeline {
             RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_PIPELINE, pPipeline.get(0), "display compute pipeline");
             VK10.vkDestroyShaderModule(vk, module, null);
 
-            return new RtDisplayPipeline(ctx, dsl, pool, set, layout, pPipeline.get(0));
+            return new RtDisplayPipeline(ctx, dsl, pool, sets, layout, pPipeline.get(0));
         }
     }
 
     public void setImages(long outputImageView, long rtImageView, long exposureImageView, long hdrImageView,
                            long lutView, long lutSampler, long hdrLutView, long hdrLutSampler,
-                           long lookLutView, long lookLutSampler) {
-        if (boundOutputView == outputImageView && boundRtView == rtImageView
-                && boundExposureView == exposureImageView && boundHdrView == hdrImageView
-                && boundLutView == lutView && boundLutSampler == lutSampler
-                && boundHdrLutView == hdrLutView && boundHdrLutSampler == hdrLutSampler
-                && boundLookLutView == lookLutView && boundLookLutSampler == lookLutSampler) {
+                           long lookLutView, long lookLutSampler,
+                           RtGpuExecutor.GraphicsUse graphicsUse,
+                           RtGpuExecutor.GraphicsUseWaiter graphicsUseWaiter) {
+        ImageBindings wanted = new ImageBindings(outputImageView, rtImageView, exposureImageView, hdrImageView,
+                lutView, lutSampler, hdrLutView, hdrLutSampler, lookLutView, lookLutSampler);
+        if (currentSet >= 0 && wanted.equals(descriptorSetBindings[currentSet])) {
+            descriptorSetUses[currentSet].mark(graphicsUse);
             return;
         }
+        for (int i = 0; i < descriptorSets.length; i++) {
+            if (wanted.equals(descriptorSetBindings[i])) {
+                currentSet = i;
+                descriptorSetUses[i].mark(graphicsUse);
+                return;
+            }
+        }
+        int nextSet = (currentSet + 1) % descriptorSets.length;
+        graphicsUseWaiter.await(descriptorSetUses[nextSet]);
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkDescriptorImageInfo.Buffer outputInfo = VkDescriptorImageInfo.calloc(1, stack);
             outputInfo.get(0).imageView(outputImageView).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
@@ -155,32 +180,31 @@ public final class RtDisplayPipeline {
             VkDescriptorImageInfo.Buffer lookLutInfo = VkDescriptorImageInfo.calloc(1, stack);
             lookLutInfo.get(0).imageView(lookLutView).sampler(lookLutSampler).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
             VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(DISPLAY_BINDING_COUNT, stack);
-            writes.get(DISPLAY_OUTPUT).sType$Default().dstSet(descriptorSet).dstBinding(DISPLAY_OUTPUT)
+            writes.get(DISPLAY_OUTPUT).sType$Default().dstSet(descriptorSets[nextSet]).dstBinding(DISPLAY_OUTPUT)
                     .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).pImageInfo(outputInfo);
-            writes.get(DISPLAY_RT_IMAGE).sType$Default().dstSet(descriptorSet).dstBinding(DISPLAY_RT_IMAGE)
+            writes.get(DISPLAY_RT_IMAGE).sType$Default().dstSet(descriptorSets[nextSet]).dstBinding(DISPLAY_RT_IMAGE)
                     .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).pImageInfo(rtInfo);
-            writes.get(DISPLAY_EXPOSURE).sType$Default().dstSet(descriptorSet).dstBinding(DISPLAY_EXPOSURE)
+            writes.get(DISPLAY_EXPOSURE).sType$Default().dstSet(descriptorSets[nextSet]).dstBinding(DISPLAY_EXPOSURE)
                     .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).pImageInfo(exposureInfo);
-            writes.get(DISPLAY_HDR_OUTPUT).sType$Default().dstSet(descriptorSet).dstBinding(DISPLAY_HDR_OUTPUT)
+            writes.get(DISPLAY_HDR_OUTPUT).sType$Default().dstSet(descriptorSets[nextSet]).dstBinding(DISPLAY_HDR_OUTPUT)
                     .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).pImageInfo(hdrInfo);
-            writes.get(DISPLAY_SDR_TONE_LUT).sType$Default().dstSet(descriptorSet).dstBinding(DISPLAY_SDR_TONE_LUT)
+            writes.get(DISPLAY_SDR_TONE_LUT).sType$Default().dstSet(descriptorSets[nextSet]).dstBinding(DISPLAY_SDR_TONE_LUT)
                     .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).pImageInfo(lutInfo);
-            writes.get(DISPLAY_HDR_TONE_LUT).sType$Default().dstSet(descriptorSet).dstBinding(DISPLAY_HDR_TONE_LUT)
+            writes.get(DISPLAY_HDR_TONE_LUT).sType$Default().dstSet(descriptorSets[nextSet]).dstBinding(DISPLAY_HDR_TONE_LUT)
                     .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).pImageInfo(hdrLutInfo);
-            writes.get(DISPLAY_LOOK_LUT).sType$Default().dstSet(descriptorSet).dstBinding(DISPLAY_LOOK_LUT)
+            writes.get(DISPLAY_LOOK_LUT).sType$Default().dstSet(descriptorSets[nextSet]).dstBinding(DISPLAY_LOOK_LUT)
                     .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).pImageInfo(lookLutInfo);
             VK10.vkUpdateDescriptorSets(ctx.vk(), writes, null);
         }
-        boundOutputView = outputImageView;
-        boundRtView = rtImageView;
-        boundExposureView = exposureImageView;
-        boundHdrView = hdrImageView;
-        boundLutView = lutView;
-        boundLutSampler = lutSampler;
-        boundHdrLutView = hdrLutView;
-        boundHdrLutSampler = hdrLutSampler;
-        boundLookLutView = lookLutView;
-        boundLookLutSampler = lookLutSampler;
+        descriptorSetBindings[nextSet] = wanted;
+        currentSet = nextSet;
+        descriptorSetUses[nextSet].mark(graphicsUse);
+    }
+
+    /** Forget cached bindings after their image views are destroyed while the device is idle. */
+    public void invalidateImages() {
+        java.util.Arrays.fill(descriptorSetBindings, null);
+        currentSet = -1;
     }
 
     /**
@@ -191,9 +215,13 @@ public final class RtDisplayPipeline {
      */
     public void dispatch(VkCommandBuffer cmd, int width, int height, boolean hdrEnabled, int lutSize,
                          float gamma, float hdrPeakNits, boolean lookEnabled, int lookLutSize) {
+        if (currentSet < 0) {
+            throw new IllegalStateException("display images were not bound before dispatch");
+        }
         try (MemoryStack stack = MemoryStack.stackPush(); RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "display compute")) {
             VK10.vkCmdBindPipeline(cmd, VK10.VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
-            VK10.vkCmdBindDescriptorSets(cmd, VK10.VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, stack.longs(descriptorSet), null);
+            VK10.vkCmdBindDescriptorSets(cmd, VK10.VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0,
+                    stack.longs(descriptorSets[currentSet]), null);
             ByteBuffer push = stack.malloc(DisplayPushData.BYTE_SIZE);
             new DisplayPushData(hdrEnabled ? 1 : 0, (float) lutSize, gamma, hdrPeakNits,
                     lookEnabled ? 1 : 0, (float) lookLutSize).write(push);

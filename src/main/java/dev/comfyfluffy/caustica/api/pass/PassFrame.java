@@ -59,7 +59,7 @@ public interface PassFrame {
      * Minecraft atlas is the case this exists for: its {@code GpuTextureView} is replaced by a resource
      * reload, and the pass wrapping it has no create/resize call to publish the new one from. Same
      * contract as {@link PassSetup#publishWorldResource(String, GpuImage, long)} otherwise; the engine
-     * picks the new handle up at its next descriptor rebind, not mid-frame.
+     * picks the new handle up after the pre-trace pass stages and before their world shader is traced.
      */
     void publishWorldResource(String name, long imageView, long sampler);
 

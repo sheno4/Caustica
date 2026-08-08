@@ -91,8 +91,8 @@ public final class RtPipeline {
     // Optional third descriptor set (set 2): pass-declared resources (e.g. SkyLutPass's own sky-view/
     // transmittance samplers), one COMBINED_IMAGE_SAMPLER per binding index the active composition's own
     // Slang reflected at WorldShaderCompiler.PASS_RESOURCE_SET — the engine never names these itself. Not
-    // ring-buffered: a pass rewrites its own binding only when its image actually changes (create/resize),
-    // not every frame. 0 when the composition declares no pass resources.
+    // ring-buffered: a pass rewrites its own binding only when its resource changes (create, resize, or a
+    // replaced host handle), after prior device use completes. 0 when the composition declares none.
     private final long passResourceLayout;
     private final long passResourcePool;
     private final long passResourceSet;
