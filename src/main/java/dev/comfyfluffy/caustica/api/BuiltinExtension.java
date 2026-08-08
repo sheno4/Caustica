@@ -29,7 +29,9 @@ final class BuiltinExtension implements CausticaExtension {
                 .passResourceModule("caustica_sky_bindings")
                 // Registered from the Option constants each pass declares rather than restated here: a
                 // reader passes the same constant to OptionValues#get, so an id, range or default exists
-                // exactly once and a typo cannot compile.
+                // exactly once and a typo cannot compile. The groups are declared in display order.
+                .group(BloomPass.GROUP)
+                .group(SkyLutPass.GROUP)
                 .options(BloomPass.OPTIONS)
                 .options(SkyLutPass.OPTIONS)
                 .renderPass(new BloomPass())

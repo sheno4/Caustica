@@ -72,20 +72,23 @@ public final class SkyLutPass implements CausticaRenderPass, LightProvider {
     // The sky-geometry options this pass owns, declared here rather than inline in BuiltinExtension so the
     // token a reader passes to OptionValues#get and the declaration BuiltinExtension registers are the same
     // object. This pass is their only reader.
+    // No enabled option: the sky slot fills every ray that escapes the world, so there is no state in which
+    // this pass does nothing. Its group collapses by the caret alone.
+    public static final String GROUP = "sky";
     public static final Option<Float> SUN_NOON_SOUTH_TILT_DEGREES =
-            Option.range("sky.sun-noon-south-tilt-degrees", -89.0f, 89.0f, 30.0f);
+            Option.range("sky.sun-noon-south-tilt-degrees", -89.0f, 89.0f, 30.0f).inGroup(GROUP);
     public static final Option<Float> SUN_ANGULAR_RADIUS_DEGREES =
-            Option.range("sky.sun-angular-radius-degrees", 0.0f, 20.0f, 0.6f);
+            Option.range("sky.sun-angular-radius-degrees", 0.0f, 20.0f, 0.6f).inGroup(GROUP);
     public static final Option<Float> MOON_ANGULAR_RADIUS_DEGREES =
-            Option.range("sky.moon-angular-radius-degrees", 0.0f, 20.0f, 1.5f);
+            Option.range("sky.moon-angular-radius-degrees", 0.0f, 20.0f, 1.5f).inGroup(GROUP);
     public static final Option<Float> SUN_DISC_HALF_ANGLE_DEGREES =
-            Option.range("sky.sun-disc-half-angle-degrees", 0.0f, 45.0f, 16.7f);
+            Option.range("sky.sun-disc-half-angle-degrees", 0.0f, 45.0f, 16.7f).inGroup(GROUP);
     public static final Option<Float> MOON_DISC_HALF_ANGLE_DEGREES =
-            Option.range("sky.moon-disc-half-angle-degrees", 0.0f, 45.0f, 11.31f);
+            Option.range("sky.moon-disc-half-angle-degrees", 0.0f, 45.0f, 11.31f).inGroup(GROUP);
     public static final Option<Float> GROUND_ALBEDO =
-            Option.range("sky.ground-albedo", 0.0f, 1.0f, 0.1f);
+            Option.range("sky.ground-albedo", 0.0f, 1.0f, 0.1f).inGroup(GROUP);
     public static final Option<Float> HORIZON_SOFTEN_DEGREES =
-            Option.range("sky.horizon-soften-degrees", 0.0f, 90.0f, 15.0f);
+            Option.range("sky.horizon-soften-degrees", 0.0f, 90.0f, 15.0f).inGroup(GROUP);
     public static final List<Option<?>> OPTIONS = List.of(
             SUN_NOON_SOUTH_TILT_DEGREES, SUN_ANGULAR_RADIUS_DEGREES, MOON_ANGULAR_RADIUS_DEGREES,
             SUN_DISC_HALF_ANGLE_DEGREES, MOON_DISC_HALF_ANGLE_DEGREES, GROUND_ALBEDO,
@@ -112,6 +115,8 @@ public final class SkyLutPass implements CausticaRenderPass, LightProvider {
     private ComputeDispatch multiScatterDispatch;
     private ComputeDispatch skyViewDispatch;
     private boolean baked;
+    /** The {@code sky.ground-albedo} the current bake used, so an edit to it can invalidate that bake. */
+    private float bakedGroundAlbedo;
     /**
      * This frame's {@link SkyInputsData}, published as a set-2 uniform buffer the sky slot reads. Host
      * visible and rewritten in place each frame: it is 112 bytes read by the miss shader only, so a
@@ -202,7 +207,13 @@ public final class SkyLutPass implements CausticaRenderPass, LightProvider {
                 .order(ByteOrder.nativeOrder()));
         skyInputsBuffer.flush();
         byte[] push = pushConstants(inputs);
+        // The multi-scatter bake integrates bounces off the ground, so it is the one baked-LUT input a
+        // player can edit. Re-bake when it moves, or the option would only apply after a dimension change.
+        if (baked && bakedGroundAlbedo != state.groundAlbedo()) {
+            baked = false;
+        }
         if (!baked) {
+            bakedGroundAlbedo = state.groundAlbedo();
             transmittanceDispatch.beginFrame();
             transmittanceDispatch.dispatch(frame.commandBuffer(), new GpuImage[]{transmittance},
                     new byte[0], groups(TRANSMITTANCE_WIDTH), groups(TRANSMITTANCE_HEIGHT), 1);

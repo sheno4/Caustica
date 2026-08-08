@@ -4,12 +4,10 @@ import com.electronwill.nightconfig.core.CommentedConfig;
 import com.electronwill.nightconfig.core.file.CommentedFileConfig;
 import com.electronwill.nightconfig.core.file.FileNotFoundAction;
 import com.electronwill.nightconfig.toml.TomlFormat;
+import java.lang.invoke.MethodHandles;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.function.DoubleUnaryOperator;
-import java.util.function.IntUnaryOperator;
-import java.util.function.UnaryOperator;
 import net.fabricmc.loader.api.FabricLoader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -49,18 +47,32 @@ public final class CausticaConfig {
     }
 
     /**
+     * Every class holding settings, in the order their keys should appear in the file and their rows in the
+     * settings screen. Listed explicitly rather than discovered by reflection because
+     * {@code getDeclaredClasses()} has no specified order, and this order is observable in both places.
+     * {@code CausticaConfigTest} fails the build if a holder is missing.
+     */
+    static final List<Class<?>> HOLDERS = List.of(
+            Rt.class, Rt.Composite.class, Rt.Terrain.class, Rt.Lights.class, Rt.Omm.class,
+            Rt.Entities.class, Rt.EntityTextures.class, Rt.Overlay.class, Rt.DlssRr.class,
+            Rt.Fg.class, Rt.Reflex.class, Rt.Exposure.class, Rt.Tonemap.class, Rt.FrameStats.class,
+            Rt.Screenshots.class, Rt.Diagnostics.class, Rt.Hdr.class, Rt.Composition.class,
+            Ngx.class, Slang.class);
+
+    /**
      * Forces every settings holder to class-initialize so all settings are registered (and have applied
      * their file values). Call before {@link #save()} to write a complete file, and once at startup so the
      * file round-trips the full surface even for settings the renderer has not touched yet.
      */
     public static void ensureRegistered() {
-        @SuppressWarnings("unused")
-        Object[] touch = {
-            Rt.ENABLED, Rt.Composite.SPP, Rt.Composite.MAX_BOUNCES, Rt.Terrain.ASYNC_DISPATCH_PER_PASS, Rt.Omm.ENABLED,
-            Rt.Entities.ENABLED, Rt.Entities.GLOW_ENABLED, Rt.EntityTextures.MAX_TEXTURES, Rt.DlssRr.ENABLED, Rt.Fg.ENABLED,
-            Rt.Reflex.ENABLED, Rt.Exposure.MODE, Rt.Tonemap.GAMMA, Rt.FrameStats.ENABLED,
-            Rt.Screenshots.EXR_ENABLED, Rt.Hdr.ENABLED, Ngx.PATH, Slang.PATH,
-        };
+        MethodHandles.Lookup lookup = MethodHandles.lookup();
+        for (Class<?> holder : HOLDERS) {
+            try {
+                lookup.ensureInitialized(holder);
+            } catch (IllegalAccessException e) {
+                throw new AssertionError("holder is not a nest mate of CausticaConfig: " + holder, e);
+            }
+        }
     }
 
     /** Writes the default config file if it does not exist yet. */
@@ -159,6 +171,17 @@ public final class CausticaConfig {
 
         /** Writes this setting's current value into the given config at {@link #tomlPath()}. */
         void writeToFile(CommentedConfig config);
+
+        /**
+         * The settings-screen group this setting appears in, or null when it has no row. Most settings are
+         * startup or diagnostic knobs with no business in a screen, so a row is opt-in via {@code inGroup}.
+         */
+        String group();
+
+        /** Label key for the settings screen; {@code ".tooltip"} is appended for the description. */
+        default String translationKey() {
+            return "caustica.setting." + tomlPath();
+        }
     }
 
     public static final class BooleanSetting implements RuntimeSetting<Boolean> {
@@ -166,6 +189,7 @@ public final class CausticaConfig {
         private final String tomlPath;
         private final boolean defaultValue;
         private volatile boolean value;
+        private String group;
 
         private BooleanSetting(String key, String tomlPath, boolean defaultValue) {
             this.key = key;
@@ -214,6 +238,17 @@ public final class CausticaConfig {
             config.set(tomlPath, value);
         }
 
+        @Override
+        public String group() {
+            return group;
+        }
+
+        /** Gives this setting a row in the named settings-screen group. */
+        public BooleanSetting inGroup(String group) {
+            this.group = group;
+            return this;
+        }
+
         private boolean resolveInitial() {
             String prop = System.getProperty(key);
             if (prop != null) {
@@ -228,16 +263,67 @@ public final class CausticaConfig {
         private final String key;
         private final String tomlPath;
         private final int defaultValue;
-        private final IntUnaryOperator sanitize;
+        private final int minimum;
+        private final int maximum;
+        /** Non-empty for a setting whose legal values are an unevenly spaced set rather than a span. */
+        private final List<Integer> choices;
         private volatile int value;
+        private String group;
+        private int sliderMinimum;
+        private int sliderMaximum;
 
-        private IntSetting(String key, String tomlPath, int defaultValue, IntUnaryOperator sanitize) {
+        private IntSetting(String key, String tomlPath, int defaultValue, int minimum, int maximum,
+                           List<Integer> choices) {
             this.key = key;
             this.tomlPath = tomlPath;
-            this.defaultValue = sanitize.applyAsInt(defaultValue);
-            this.sanitize = sanitize;
+            this.minimum = minimum;
+            this.maximum = maximum;
+            this.sliderMinimum = minimum;
+            this.sliderMaximum = maximum;
+            this.choices = List.copyOf(choices);
+            // A choice setting's declared default is authoritative — it is what an unrecognised value falls
+            // back to — so only a span default is clamped.
+            this.defaultValue = this.choices.isEmpty() ? Math.clamp(defaultValue, minimum, maximum) : defaultValue;
             this.value = resolveInitial();
             SETTINGS.add(this);
+        }
+
+        public int minimum() {
+            return minimum;
+        }
+
+        public int maximum() {
+            return maximum;
+        }
+
+        /**
+         * The span a slider covers, which may sit inside {@link #minimum()}/{@link #maximum()}: a setting
+         * whose useful values occupy a small part of its legal range is unusable as a linear slider
+         * otherwise, and narrowing the clamp instead would truncate a value someone set deliberately.
+         */
+        public int sliderMinimum() {
+            return sliderMinimum;
+        }
+
+        public int sliderMaximum() {
+            return sliderMaximum;
+        }
+
+        public IntSetting sliderRange(int sliderMinimum, int sliderMaximum) {
+            this.sliderMinimum = sliderMinimum;
+            this.sliderMaximum = sliderMaximum;
+            return this;
+        }
+
+        public List<Integer> choices() {
+            return choices;
+        }
+
+        private int sanitize(int candidate) {
+            if (!choices.isEmpty()) {
+                return choices.contains(candidate) ? candidate : defaultValue;
+            }
+            return Math.clamp(candidate, minimum, maximum);
         }
 
         @Override
@@ -266,7 +352,7 @@ public final class CausticaConfig {
 
         @Override
         public void set(Integer value) {
-            this.value = sanitize.applyAsInt(value != null ? value : defaultValue);
+            this.value = sanitize(value != null ? value : defaultValue);
         }
 
         @Override
@@ -277,7 +363,7 @@ public final class CausticaConfig {
                 return;
             }
             try {
-                this.value = sanitize.applyAsInt(Integer.parseInt(prop.trim()));
+                this.value = sanitize(Integer.parseInt(prop.trim()));
             } catch (NumberFormatException e) {
                 this.value = defaultValue;
             }
@@ -288,17 +374,28 @@ public final class CausticaConfig {
             config.set(tomlPath, value);
         }
 
+        @Override
+        public String group() {
+            return group;
+        }
+
+        /** Gives this setting a row in the named settings-screen group. */
+        public IntSetting inGroup(String group) {
+            this.group = group;
+            return this;
+        }
+
         private int resolveInitial() {
             String prop = System.getProperty(key);
             if (prop != null) {
                 try {
-                    return sanitize.applyAsInt(Integer.parseInt(prop.trim()));
+                    return sanitize(Integer.parseInt(prop.trim()));
                 } catch (NumberFormatException e) {
                     return defaultValue;
                 }
             }
             Number fromFile = fileNumber(tomlPath);
-            return fromFile != null ? sanitize.applyAsInt(fromFile.intValue()) : defaultValue;
+            return fromFile != null ? sanitize(fromFile.intValue()) : defaultValue;
         }
     }
 
@@ -306,27 +403,55 @@ public final class CausticaConfig {
         private final String key;
         private final String tomlPath;
         private final float defaultValue;
-        // Maps a raw external number (system property, file, or the constructor's raw default) into the
-        // stored value domain, e.g. degrees -> radians.
-        private final DoubleUnaryOperator inputTransform;
-        // Inverse of inputTransform: maps the stored value domain back to the raw external domain (e.g.
-        // radians -> degrees) for writeToFile, so a value round-trips through the file unchanged instead
-        // of having inputTransform re-applied to an already-transformed number on the next load.
-        private final DoubleUnaryOperator outputTransform;
-        // Idempotent guard on a value-domain number (clamp / finite check); safe to apply to any source.
-        private final DoubleUnaryOperator valueClamp;
+        private final float minimum;
+        private final float maximum;
         private volatile float value;
+        private String group;
+        private float sliderMinimum;
+        private float sliderMaximum;
 
-        private FloatSetting(String key, String tomlPath, float rawDefault, DoubleUnaryOperator inputTransform,
-                             DoubleUnaryOperator outputTransform, DoubleUnaryOperator valueClamp) {
+        private FloatSetting(String key, String tomlPath, float rawDefault, float minimum, float maximum) {
             this.key = key;
             this.tomlPath = tomlPath;
-            this.inputTransform = inputTransform;
-            this.outputTransform = outputTransform;
-            this.valueClamp = valueClamp;
-            this.defaultValue = (float) valueClamp.applyAsDouble(inputTransform.applyAsDouble(rawDefault));
+            this.minimum = minimum;
+            this.maximum = maximum;
+            this.sliderMinimum = minimum;
+            this.sliderMaximum = maximum;
+            this.defaultValue = (float) Math.clamp(rawDefault, minimum, maximum);
             this.value = resolveInitial();
             SETTINGS.add(this);
+        }
+
+        public float minimum() {
+            return minimum;
+        }
+
+        public float maximum() {
+            return maximum;
+        }
+
+        /**
+         * The span a slider covers, which may sit inside {@link #minimum()}/{@link #maximum()}: a setting
+         * whose useful values occupy a small part of its legal range is unusable as a linear slider
+         * otherwise, and narrowing the clamp instead would truncate a value someone set deliberately.
+         */
+        public float sliderMinimum() {
+            return sliderMinimum;
+        }
+
+        public float sliderMaximum() {
+            return sliderMaximum;
+        }
+
+        public FloatSetting sliderRange(float sliderMinimum, float sliderMaximum) {
+            this.sliderMinimum = sliderMinimum;
+            this.sliderMaximum = sliderMaximum;
+            return this;
+        }
+
+        /** A non-finite candidate falls back to the default rather than clamping to a bound. */
+        private float sanitize(double candidate) {
+            return Double.isFinite(candidate) ? (float) Math.clamp(candidate, minimum, maximum) : defaultValue;
         }
 
         @Override
@@ -355,11 +480,7 @@ public final class CausticaConfig {
 
         @Override
         public void set(Float value) {
-            if (value == null) {
-                this.value = defaultValue;
-            } else {
-                this.value = (float) valueClamp.applyAsDouble(inputTransform.applyAsDouble(value));
-            }
+            this.value = value != null ? sanitize(value) : defaultValue;
         }
 
         @Override
@@ -370,7 +491,7 @@ public final class CausticaConfig {
                 return;
             }
             try {
-                this.value = (float) valueClamp.applyAsDouble(inputTransform.applyAsDouble(Double.parseDouble(prop.trim())));
+                this.value = sanitize(Double.parseDouble(prop.trim()));
             } catch (NumberFormatException e) {
                 this.value = defaultValue;
             }
@@ -378,27 +499,34 @@ public final class CausticaConfig {
 
         @Override
         public void writeToFile(CommentedConfig config) {
-            // Round-trip through Float.toString() so the file gets the shortest decimal that reproduces
-            // this float (e.g. "0.6"), not outputTransform's raw double with float's binary noise spelled
-            // out to 17 digits (e.g. 0.6000000487130328).
-            float raw = (float) outputTransform.applyAsDouble(value);
-            config.set(tomlPath, Double.parseDouble(Float.toString(raw)));
+            // Round-trip through Float.toString() so the file gets the shortest decimal that reproduces this
+            // float (e.g. "0.6"), not the widened double with float's binary noise spelled out to 17 digits
+            // (e.g. 0.6000000487130328).
+            config.set(tomlPath, Double.parseDouble(Float.toString(value)));
+        }
+
+        @Override
+        public String group() {
+            return group;
+        }
+
+        /** Gives this setting a row in the named settings-screen group. */
+        public FloatSetting inGroup(String group) {
+            this.group = group;
+            return this;
         }
 
         private float resolveInitial() {
             String prop = System.getProperty(key);
             if (prop != null) {
                 try {
-                    return (float) valueClamp.applyAsDouble(inputTransform.applyAsDouble(Double.parseDouble(prop.trim())));
+                    return sanitize(Double.parseDouble(prop.trim()));
                 } catch (NumberFormatException e) {
                     return defaultValue;
                 }
             }
             Number fromFile = fileNumber(tomlPath);
-            if (fromFile == null) {
-                return defaultValue;
-            }
-            return (float) valueClamp.applyAsDouble(inputTransform.applyAsDouble(fromFile.doubleValue()));
+            return fromFile != null ? sanitize(fromFile.doubleValue()) : defaultValue;
         }
     }
 
@@ -406,16 +534,34 @@ public final class CausticaConfig {
         private final String key;
         private final String tomlPath;
         private final String defaultValue;
-        private final UnaryOperator<String> sanitize;
+        private final List<String> choices;
         private volatile String value;
+        private String group;
 
-        private StringSetting(String key, String tomlPath, String defaultValue, UnaryOperator<String> sanitize) {
+        private StringSetting(String key, String tomlPath, String defaultValue, List<String> choices) {
             this.key = key;
             this.tomlPath = tomlPath;
-            this.defaultValue = sanitize.apply(defaultValue);
-            this.sanitize = sanitize;
+            this.defaultValue = defaultValue;
+            this.choices = List.copyOf(choices);
             this.value = resolveInitial();
             SETTINGS.add(this);
+        }
+
+        public List<String> choices() {
+            return choices;
+        }
+
+        /** Matching is case-insensitive so a hand-edited file reads naturally; the stored form is canonical. */
+        private String sanitize(String candidate) {
+            if (candidate == null) {
+                return defaultValue;
+            }
+            for (String choice : choices) {
+                if (choice.equalsIgnoreCase(candidate)) {
+                    return choice;
+                }
+            }
+            return choices.isEmpty() ? candidate : defaultValue;
         }
 
         @Override
@@ -440,7 +586,7 @@ public final class CausticaConfig {
 
         @Override
         public void set(String value) {
-            this.value = sanitize.apply(value != null ? value : defaultValue);
+            this.value = sanitize(value);
         }
 
         @Override
@@ -453,13 +599,20 @@ public final class CausticaConfig {
             config.set(tomlPath, value);
         }
 
+        @Override
+        public String group() {
+            return group;
+        }
+
+        /** Gives this setting a row in the named settings-screen group. */
+        public StringSetting inGroup(String group) {
+            this.group = group;
+            return this;
+        }
+
         private String resolveInitial() {
             String prop = System.getProperty(key);
-            if (prop != null) {
-                return sanitize.apply(prop);
-            }
-            String fromFile = fileString(tomlPath);
-            return sanitize.apply(fromFile != null ? fromFile : defaultValue);
+            return sanitize(prop != null ? prop : fileString(tomlPath));
         }
     }
 
@@ -514,6 +667,12 @@ public final class CausticaConfig {
             }
         }
 
+        /** Never a settings-screen row: these hold filesystem paths and slot bindings, which get their own. */
+        @Override
+        public String group() {
+            return null;
+        }
+
         private String resolveInitial() {
             String prop = System.getProperty(key);
             return prop != null ? prop : fileString(tomlPath);
@@ -521,7 +680,7 @@ public final class CausticaConfig {
     }
 
     public static final class Rt {
-        public static final BooleanSetting ENABLED = bool("caustica.rt", "enabled", true);
+        public static final BooleanSetting ENABLED = bool("caustica.rt", "enabled", true).inGroup("general");
         public static final IntSetting WORKER_THREADS =
                 intAtLeast("caustica.rt.workerThreads", "worker-threads", defaultWorkerThreads(), 1);
 
@@ -529,12 +688,14 @@ public final class CausticaConfig {
         }
 
         public static final class Composite {
-            public static final IntSetting DEBUG_VIEW = intValue("caustica.rt.debugView", "composite.debug-view", 0);
-            public static final IntSetting SPP = intAtLeast("caustica.rt.spp", "composite.spp", 1, 1);
+            public static final IntSetting DEBUG_VIEW =
+                    clampedInt("caustica.rt.debugView", "composite.debug-view", 0, 0, 9).inGroup("debug");
+            public static final IntSetting SPP =
+                    intAtLeast("caustica.rt.spp", "composite.spp", 1, 1).inGroup("quality").sliderRange(1, 8);
             public static final IntSetting MAX_BOUNCES =
-                    clampedInt("caustica.rt.maxBounces", "composite.max-bounces", 4, 2, 8);
+                    clampedInt("caustica.rt.maxBounces", "composite.max-bounces", 4, 2, 8).inGroup("quality");
             public static final BooleanSetting WATER_WAVES =
-                    bool("caustica.rt.waterWaves", "composite.water-waves", true);
+                    bool("caustica.rt.waterWaves", "composite.water-waves", true).inGroup("look");
             // Sun/moon angular radii and the noon south tilt are not here: sky shape belongs to the
             // extension that owns the sky, as options SkyLutPass declares and CausticaOptions stores.
             public static final FloatSetting JITTER_SIGN_X =
@@ -569,7 +730,8 @@ public final class CausticaConfig {
         /** RIS block-emitter lights. {@code ris-candidates = 0} disables everything. */
         public static final class Lights {
             public static final IntSetting RIS_CANDIDATES =
-                    intAtLeast("caustica.rt.risCandidates", "lights.ris-candidates", 8, 0);
+                    intAtLeast("caustica.rt.risCandidates", "lights.ris-candidates", 8, 0)
+                            .inGroup("quality").sliderRange(0, 32);
             public static final FloatSetting MIN_FILL_RATIO =
                     finiteFloat("caustica.rt.lightMinFillRatio", "lights.min-fill-ratio", 0.25f);
             public static final BooleanSetting STATS = bool("caustica.rt.lightStats", "lights.stats", false);
@@ -592,11 +754,12 @@ public final class CausticaConfig {
         }
 
         public static final class Entities {
-            public static final BooleanSetting ENABLED = bool("caustica.rt.entities", "entities.enabled", true);
+            public static final BooleanSetting ENABLED =
+                    bool("caustica.rt.entities", "entities.enabled", true).inGroup("entities");
             public static final BooleanSetting PARTICLES_ENABLED =
-                    bool("caustica.rt.particles", "particles.enabled", true);
+                    bool("caustica.rt.particles", "particles.enabled", true).inGroup("entities");
             public static final BooleanSetting GLOW_ENABLED =
-                    bool("caustica.rt.glow", "entities.glow.enabled", true);
+                    bool("caustica.rt.glow", "entities.glow.enabled", true).inGroup("entities");
             public static final BooleanSetting NAME_TAGS_ENABLED =
                     bool("caustica.rt.nameTags", "entities.name-tags.enabled", true);
             /** Debug-only: render each model submission twice and require bitwise-identical CPU captures. */
@@ -644,14 +807,15 @@ public final class CausticaConfig {
 
         public static final class Overlay {
             public static final BooleanSetting BLOCK_OUTLINE_ENABLED =
-                    bool("caustica.rt.blockOutline", "overlay.block-outline.enabled", true);
+                    bool("caustica.rt.blockOutline", "overlay.block-outline.enabled", true).inGroup("entities");
 
             private Overlay() {
             }
         }
 
         public static final class DlssRr {
-            public static final BooleanSetting ENABLED = bool("caustica.rt.dlssRr", "dlss-rr.enabled", true);
+            public static final BooleanSetting ENABLED =
+                    bool("caustica.rt.dlssRr", "dlss-rr.enabled", true).inGroup("upscaling");
             public static final IntSetting PRESET = intValue("caustica.rt.dlssRr.preset", "dlss-rr.preset", 0);
 
             // NVSDK_NGX_PerfQuality_Value. Per NVIDIA's DLSS-RR programming guide, Ray Reconstruction only
@@ -660,7 +824,7 @@ public final class CausticaConfig {
             // zeroed render size for it) and is deliberately excluded here.
             public static final List<Integer> QUALITY_STEPS = List.of(3, 0, 1, 2, 5);
             public static final IntSetting QUALITY =
-                    intChoice("caustica.rt.dlssRr.quality", "dlss-rr.quality", 0, QUALITY_STEPS);
+                    intChoice("caustica.rt.dlssRr.quality", "dlss-rr.quality", 0, QUALITY_STEPS).inGroup("upscaling");
 
             private DlssRr() {
             }
@@ -668,9 +832,11 @@ public final class CausticaConfig {
 
         /** DLSS Frame Generation. Default off; gated additionally by hardware/driver availability. */
         public static final class Fg {
-            public static final BooleanSetting ENABLED = bool("caustica.rt.fg", "frame-generation.enabled", false);
+            public static final BooleanSetting ENABLED =
+                    bool("caustica.rt.fg", "frame-generation.enabled", false).inGroup("upscaling");
             public static final IntSetting MULTI_FRAME_COUNT =
-                    intAtLeast("caustica.rt.fg.multiFrameCount", "frame-generation.multi-frame-count", 1, 1);
+                    intAtLeast("caustica.rt.fg.multiFrameCount", "frame-generation.multi-frame-count", 1, 1)
+                            .inGroup("upscaling").sliderRange(1, 3);
 
             private Fg() {
             }
@@ -682,7 +848,8 @@ public final class CausticaConfig {
          * and emits simulation, render-submit, and present latency markers.
          */
         public static final class Reflex {
-            public static final BooleanSetting ENABLED = bool("caustica.rt.reflex", "reflex.enabled", false);
+            public static final BooleanSetting ENABLED =
+                    bool("caustica.rt.reflex", "reflex.enabled", false).inGroup("upscaling");
             public static final BooleanSetting LOW_LATENCY_BOOST =
                     bool("caustica.rt.reflex.boost", "reflex.low-latency-boost", false);
             public static final IntSetting MINIMUM_INTERVAL_US =
@@ -711,11 +878,12 @@ public final class CausticaConfig {
             // curve can separate them -- what does is the asymmetric temporal adaptation above, which
             // holds a low exposure when you step from noon sun into shade. That is a real limit of this
             // controller, not a tuning miss.
+            public static final List<String> MODES = List.of("auto", "manual");
             public static final StringSetting MODE =
-                    string("caustica.rt.exposure.mode", "exposure.mode", "auto", Exposure::sanitizeMode);
+                    stringChoice("caustica.rt.exposure.mode", "exposure.mode", "auto", MODES).inGroup("exposure");
             public static final FloatSetting MANUAL_EV =
                     clampedFloat("caustica.rt.exposure.manualEv", "exposure.manual-ev",
-                            0.0f, -15.0f, 15.0f);
+                            0.0f, -15.0f, 15.0f).inGroup("exposure");
             public static final FloatSetting KEY = exposureScale("caustica.rt.exposure.key", "exposure.key", 0.18f);
             // Bounds on the ABSOLUTE exposure multiplier. Sized from what the curve above actually asks
             // for at the measured scene extremes: -16.9 EV at noon sand, +3.5 EV at the starlit-sky
@@ -795,22 +963,14 @@ public final class CausticaConfig {
                 return Math.clamp(value, 1.0e-8f, 1.0e8f);
             }
 
-            private static String sanitizeMode(String value) {
-                if ("auto".equalsIgnoreCase(value)) {
-                    return "auto";
-                }
-                if ("manual".equalsIgnoreCase(value)) {
-                    return "manual";
-                }
-                return "auto";
-            }
 
         }
 
         /** Scene-referred look transform and baked SDR/HDR ACES display transforms. */
         public static final class Tonemap {
             public static final FloatSetting GAMMA =
-                    clampedFloat("caustica.rt.tonemap.gamma", "tonemap.gamma", 1.0f, 0.1f, 5.0f);
+                    clampedFloat("caustica.rt.tonemap.gamma", "tonemap.gamma", 1.0f, 0.1f, 5.0f)
+                            .inGroup("look").sliderRange(0.5f, 1.5f);
 
             private Tonemap() {
             }
@@ -818,7 +978,8 @@ public final class CausticaConfig {
 
         /** Render-frame timing + hitch logging. See {@code RtFrameStats}. */
         public static final class FrameStats {
-            public static final BooleanSetting ENABLED = bool("caustica.rt.frameStats", "frame-stats.enabled", false);
+            public static final BooleanSetting ENABLED =
+                    bool("caustica.rt.frameStats", "frame-stats.enabled", false).inGroup("debug");
 
             private FrameStats() {
             }
@@ -827,7 +988,7 @@ public final class CausticaConfig {
         /** Optional high-dynamic-range screenshot output paired with vanilla's F2 PNG. */
         public static final class Screenshots {
             public static final BooleanSetting EXR_ENABLED =
-                    bool("caustica.rt.screenshots.exr", "screenshots.exr-enabled", false);
+                    bool("caustica.rt.screenshots.exr", "screenshots.exr-enabled", false).inGroup("debug");
 
             private Screenshots() {
             }
@@ -856,14 +1017,15 @@ public final class CausticaConfig {
          * in that PQ output, while {@code peakNits} selects the LUT's mastering target.
          */
         public static final class Hdr {
-            public static final BooleanSetting ENABLED = bool("caustica.rt.hdr", "hdr.enabled", false);
+            public static final BooleanSetting ENABLED =
+                    bool("caustica.rt.hdr", "hdr.enabled", false).inGroup("output");
             public static final FloatSetting UI_NITS =
-                    clampedFloat("caustica.rt.hdr.uiNits", "hdr.ui-nits", 200.0f, 80.0f, 500.0f);
+                    clampedFloat("caustica.rt.hdr.uiNits", "hdr.ui-nits", 200.0f, 80.0f, 500.0f).inGroup("output");
 
             // ACES HDR LUTs are available only for these mastering targets.
             public static final List<Integer> PEAK_NITS_STEPS = List.of(500, 1000, 2000, 4000);
             public static final IntSetting PEAK_NITS =
-                    intChoice("caustica.rt.hdr.peakNits", "hdr.peak-nits", 1000, PEAK_NITS_STEPS);
+                    intChoice("caustica.rt.hdr.peakNits", "hdr.peak-nits", 1000, PEAK_NITS_STEPS).inGroup("output");
 
             // Surface capability and current swapchain state are separate: HDR controls remain available
             // while the swapchain is native SDR, so enabling HDR can recreate it in PQ.
@@ -909,6 +1071,24 @@ public final class CausticaConfig {
             }
 
         }
+
+        /**
+         * Which feature is bound to each engine slot, as a {@code namespace:path} feature id. Null means the
+         * registry's own default binding, so an untouched install has no keys here at all.
+         *
+         * <p>Lives in this file rather than {@code caustica-options.toml} because a slot binding is engine
+         * state, not a value an extension declared: that file's key space is derived entirely from
+         * registered {@code Option}s and has to stay that way.
+         */
+        public static final class Composition {
+            public static final OptionalStringSetting SKY =
+                    optionalString("caustica.composition.sky", "composition.slots.sky");
+            public static final OptionalStringSetting SURFACE =
+                    optionalString("caustica.composition.surface", "composition.slots.surface");
+
+            private Composition() {
+            }
+        }
     }
 
     public static final class Ngx {
@@ -929,8 +1109,8 @@ public final class CausticaConfig {
         return new BooleanSetting(key, tomlPath, fallback);
     }
 
-    private static StringSetting string(String key, String tomlPath, String fallback, UnaryOperator<String> sanitize) {
-        return new StringSetting(key, tomlPath, fallback, sanitize);
+    private static StringSetting stringChoice(String key, String tomlPath, String fallback, List<String> choices) {
+        return new StringSetting(key, tomlPath, fallback, choices);
     }
 
     private static OptionalStringSetting optionalString(String key, String tomlPath) {
@@ -938,35 +1118,31 @@ public final class CausticaConfig {
     }
 
     private static IntSetting intValue(String key, String tomlPath, int fallback) {
-        return new IntSetting(key, tomlPath, fallback, v -> v);
+        return new IntSetting(key, tomlPath, fallback, Integer.MIN_VALUE, Integer.MAX_VALUE, List.of());
     }
 
     private static IntSetting intAtLeast(String key, String tomlPath, int fallback, int min) {
-        return new IntSetting(key, tomlPath, fallback, v -> Math.max(min, v));
+        return new IntSetting(key, tomlPath, fallback, min, Integer.MAX_VALUE, List.of());
     }
 
     private static IntSetting intChoice(String key, String tomlPath, int fallback, List<Integer> choices) {
-        return new IntSetting(key, tomlPath, fallback, v -> choices.contains(v) ? v : fallback);
+        return new IntSetting(key, tomlPath, fallback, Integer.MIN_VALUE, Integer.MAX_VALUE, choices);
     }
 
     private static IntSetting clampedInt(String key, String tomlPath, int fallback, int min, int max) {
-        return new IntSetting(key, tomlPath, fallback, v -> Math.clamp(v, min, max));
+        return new IntSetting(key, tomlPath, fallback, min, max, List.of());
     }
 
     private static FloatSetting finiteFloat(String key, String tomlPath, float fallback) {
-        return new FloatSetting(key, tomlPath, fallback, v -> v, v -> v, v -> Double.isFinite(v) ? v : fallback);
+        return new FloatSetting(key, tomlPath, fallback, -Float.MAX_VALUE, Float.MAX_VALUE);
     }
 
     private static FloatSetting exposureScale(String key, String tomlPath, float fallback) {
-        return new FloatSetting(key, tomlPath, fallback, v -> v, v -> v, v -> Math.clamp(v, 1.0e-4, 1.0e4));
+        return new FloatSetting(key, tomlPath, fallback, 1.0e-4f, 1.0e4f);
     }
 
     private static FloatSetting clampedFloat(String key, String tomlPath, float fallback, float min, float max) {
-        return new FloatSetting(key, tomlPath, fallback, v -> v, v -> v, v -> Math.clamp(v, min, max));
-    }
-
-    private static FloatSetting radians(String key, String tomlPath, float fallbackDegrees) {
-        return new FloatSetting(key, tomlPath, fallbackDegrees, Math::toRadians, Math::toDegrees, v -> Double.isFinite(v) ? v : 0.0);
+        return new FloatSetting(key, tomlPath, fallback, min, max);
     }
 
     private static int defaultWorkerThreads() {

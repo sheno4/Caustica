@@ -169,6 +169,50 @@ final class CausticaOptionsTest {
     }
 
     @Test
+    void applyIsVisibleImmediatelyButWritesNothingUntilSave() throws IOException {
+        Path path = configDir.resolve("caustica-options.toml");
+        CausticaOptions options = CausticaOptions.load(path, features());
+
+        options.apply(FEATURE, ALPHA, 0.75);
+
+        assertEquals(0.75f, options.options(FEATURE).get(ALPHA), "the live view sees it at once");
+        assertEquals(0.25f, CausticaOptions.load(path, features()).options(FEATURE).get(ALPHA),
+                "a dragged slider must not reach disk on every tick");
+
+        options.save();
+
+        assertEquals(0.75f, CausticaOptions.load(path, features()).options(FEATURE).get(ALPHA));
+        assertTrue(Files.readString(path).contains("0.75"));
+    }
+
+    @Test
+    void saveWithNothingAppliedLeavesTheFileAlone() throws IOException {
+        Path path = configDir.resolve("caustica-options.toml");
+        Files.writeString(path, """
+                ["test:options"]
+                alpha = 0.5
+                """);
+        CausticaOptions options = CausticaOptions.load(path, features());
+        String before = Files.readString(path);
+
+        options.save();
+
+        assertEquals(before, Files.readString(path));
+    }
+
+    @Test
+    void aSecondApplyToTheSameOptionPersistsOnlyTheLastValue() throws IOException {
+        Path path = configDir.resolve("caustica-options.toml");
+        CausticaOptions options = CausticaOptions.load(path, features());
+
+        options.apply(FEATURE, ALPHA, 0.4);
+        options.apply(FEATURE, ALPHA, 0.6);
+        options.save();
+
+        assertEquals(0.6f, CausticaOptions.load(path, features()).options(FEATURE).get(ALPHA));
+    }
+
+    @Test
     void anUnknownFeatureThrows() {
         CausticaOptions options = load();
         Identifier unknown = Identifier.fromNamespaceAndPath("test", "missing");

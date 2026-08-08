@@ -17,10 +17,12 @@ public final class FeatureBuilder {
     private final CausticaRegistry registry;
     private final Identifier id;
     private Component title;
+    private Component description = Component.empty();
     private FeatureCategory category = FeatureCategory.GENERAL;
     private ShaderSource shaderSource;
     private final Map<Slot, Feature.Binding> bindings = new LinkedHashMap<>();
     private final List<Option<?>> options = new ArrayList<>();
+    private final List<String> optionGroups = new ArrayList<>();
     private final List<CausticaRenderPass> renderPasses = new ArrayList<>();
     private final List<SceneProvider> sceneProviders = new ArrayList<>();
     private final List<LightProvider> lightProviders = new ArrayList<>();
@@ -35,6 +37,12 @@ public final class FeatureBuilder {
 
     public FeatureBuilder title(Component title) {
         this.title = Objects.requireNonNull(title, "title");
+        return this;
+    }
+
+    /** One line describing what this feature does, shown beside its title where a slot offers a choice. */
+    public FeatureBuilder description(Component description) {
+        this.description = Objects.requireNonNull(description, "description");
         return this;
     }
 
@@ -68,6 +76,20 @@ public final class FeatureBuilder {
     /** Convenience for a component that publishes its own options as one list — see {@code BloomPass}. */
     public FeatureBuilder options(List<Option<?>> declared) {
         declared.forEach(this::option);
+        return this;
+    }
+
+    /**
+     * Declares a collapsible option group, in the order a settings screen should show them. An option joins
+     * one with {@link Option#in}; the group's own title comes from its translation key, so the id is all the
+     * engine needs.
+     */
+    public FeatureBuilder group(String id) {
+        Option.requireGroupId(id);
+        if (optionGroups.contains(id)) {
+            throw new IllegalStateException(this.id + " declares duplicate option group " + id);
+        }
+        optionGroups.add(id);
         return this;
     }
 
@@ -134,8 +156,8 @@ public final class FeatureBuilder {
         registered = true;
         Component resolvedTitle = title != null ? title
                 : Component.literal(id.getNamespace() + ':' + id.getPath());
-        Feature feature = new Feature(id, resolvedTitle, category, shaderSource, bindings, options, renderPasses,
-                sceneProviders, lightProviders, materialSources, passResourceModules);
+        Feature feature = new Feature(id, resolvedTitle, description, category, shaderSource, bindings, options,
+                optionGroups, renderPasses, sceneProviders, lightProviders, materialSources, passResourceModules);
         registry.register(feature);
         return feature;
     }

@@ -50,11 +50,13 @@ public final class CausticaOptions {
     private final Map<Identifier, Map<String, Option<?>>> declared;
     private final CommentedFileConfig file;
     /**
-     * Immutable and swapped wholesale under {@code synchronized} by {@link #set}, rather than a mutable
+     * Immutable and swapped wholesale under {@code synchronized} by {@link #apply}, rather than a mutable
      * concurrent map. A frame can then hold the reference it read at {@code beginFrame} and get
      * {@link OptionValues}'s "fixed for the whole frame" guarantee for free — no per-frame defensive copy.
      */
     private volatile Map<String, Object> values;
+    /** TOML path to value for everything {@link #apply} has changed since the last {@link #save}. */
+    private final Map<String, Object> pending = new LinkedHashMap<>();
 
     private CausticaOptions(Map<Identifier, Map<String, Option<?>>> declared, CommentedFileConfig file,
                             Map<String, Object> values) {
@@ -115,14 +117,14 @@ public final class CausticaOptions {
     }
 
     /**
-     * Runtime write path a settings UI calls; persists to disk immediately. {@code rawValue} is whatever
-     * the widget produced (a slider's double, a checkbox's boolean) and is coerced and range-clamped
-     * against {@code option} before it is stored.
+     * Applies a value in memory without touching disk. {@code rawValue} is whatever the widget produced (a
+     * slider's double, a checkbox's boolean) and is coerced and range-clamped against {@code option} before
+     * it is stored; the next frame's snapshot sees it.
      *
-     * <p>Nothing invalidates a pass on a write, so an option a pass only reads at create/resize time
-     * (e.g. bloom's level count) takes effect at the next resize rather than immediately.
+     * <p>Separate from {@link #save()} because a dragged slider writes once per tick: persisting each one
+     * would put a synchronous file write on the caller's thread at frame rate.
      */
-    public synchronized void set(Identifier featureId, Option<?> option, Object rawValue) {
+    public synchronized void apply(Identifier featureId, Option<?> option, Object rawValue) {
         Option<?> declaredOption = declaredOption(featureId, option.id());
         if (!declaredOption.equals(option)) {
             throw new IllegalArgumentException(featureId + " declared a different option than the '"
@@ -132,8 +134,26 @@ public final class CausticaOptions {
         Map<String, Object> updated = new LinkedHashMap<>(values);
         updated.put(key(featureId, option.id()), value);
         values = Map.copyOf(updated);
-        file.set(tomlPath(featureId, option.id()), value);
+        pending.put(tomlPath(featureId, option.id()), value);
+    }
+
+    /** Writes everything applied since the last save. */
+    public synchronized void save() {
+        if (pending.isEmpty()) {
+            return;
+        }
+        pending.forEach(file::set);
+        pending.clear();
         file.save();
+    }
+
+    /**
+     * Applies a value and persists it. Nothing invalidates a pass on a write, so an option a pass reads only
+     * at create/resize time takes effect when that next runs rather than immediately.
+     */
+    public synchronized void set(Identifier featureId, Option<?> option, Object rawValue) {
+        apply(featureId, option, rawValue);
+        save();
     }
 
     private Option<?> declaredOption(Identifier featureId, String optionId) {

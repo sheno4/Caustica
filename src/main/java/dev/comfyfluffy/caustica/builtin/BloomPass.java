@@ -49,16 +49,22 @@ public final class BloomPass implements CausticaRenderPass {
     // The options this pass owns. Declared here rather than inline in BuiltinExtension so the token a
     // reader passes to OptionValues#get and the declaration BuiltinExtension registers are the same object:
     // one source of truth for each id, kind, range and default.
-    public static final Option<Float> STRENGTH = Option.range("bloom.strength", 0.0f, 2.0f, 0.02f);
+    public static final String GROUP = "bloom";
+    public static final Option<Boolean> ENABLED = Option.bool("bloom.enabled", true).inGroupAsHeader(GROUP);
+    public static final Option<Float> STRENGTH = Option.range("bloom.strength", 0.0f, 2.0f, 0.02f).inGroup(GROUP);
+    // The declared maximum is the storage clamp, so it stays at half-float range for a hand-edited config;
+    // the slider covers the few stops around scene-linear mid-grey where thresholding is actually set.
     public static final Option<Float> THRESHOLD_SCENE_LINEAR =
-            Option.range("bloom.threshold-scene-linear", 0.0f, 65504.0f, 2.0f);
+            Option.range("bloom.threshold-scene-linear", 0.0f, 65504.0f, 2.0f)
+                    .inGroup(GROUP).sliderRange(0.0, 16.0);
     public static final Option<Float> SOFT_KNEE_FRACTION =
-            Option.range("bloom.soft-knee-fraction", 0.0f, 1.0f, 0.25f);
-    public static final Option<Float> RADIUS = Option.range("bloom.radius", 0.25f, 4.0f, 1.0f);
-    // No integer/count Option.Kind exists yet; modeled as a float and rounded where consumed.
-    public static final Option<Float> LEVELS = Option.range("bloom.levels", 1.0f, 8.0f, 6.0f);
+            Option.range("bloom.soft-knee-fraction", 0.0f, 1.0f, 0.25f).inGroup(GROUP);
+    public static final Option<Float> RADIUS = Option.range("bloom.radius", 0.25f, 4.0f, 1.0f).inGroup(GROUP);
+    // No integer/count Option.Kind exists yet; modeled as a float with a unit step and rounded where consumed.
+    public static final Option<Float> LEVELS =
+            Option.range("bloom.levels", 1.0f, 8.0f, 6.0f).inGroup(GROUP).step(1.0);
     public static final List<Option<?>> OPTIONS =
-            List.of(STRENGTH, THRESHOLD_SCENE_LINEAR, SOFT_KNEE_FRACTION, RADIUS, LEVELS);
+            List.of(ENABLED, STRENGTH, THRESHOLD_SCENE_LINEAR, SOFT_KNEE_FRACTION, RADIUS, LEVELS);
 
     private GpuContext ctx;
     private long sampler;
@@ -89,23 +95,22 @@ public final class BloomPass implements CausticaRenderPass {
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
-        allocate(setup, setup.displayWidth(), setup.displayHeight());
+        allocate(setup.displayWidth(), setup.displayHeight());
     }
 
     @Override
     public void resize(PassSetup setup, int displayWidth, int displayHeight) {
         destroyLevels();
-        allocate(setup, displayWidth, displayHeight);
+        allocate(displayWidth, displayHeight);
     }
 
-    private void allocate(PassSetup setup, int displayWidth, int displayHeight) {
+    private void allocate(int displayWidth, int displayHeight) {
         int baseWidth = Math.max(1, displayWidth / 2);
         int baseHeight = Math.max(1, displayHeight / 2);
-        // Read at allocate time, not per frame: pyramid depth is a resource-sizing decision, not a
-        // push-constant one, and PassSetup#options() is the seam for exactly that. Nothing invalidates a
-        // pass on an option write, so a change here takes effect at the next resize.
-        int configuredLevels = Math.round(setup.options().get(LEVELS));
-        int levelCount = levelCount(baseWidth, baseHeight, Math.min(configuredLevels, MAX_LEVELS), 8);
+        // Sized from the display alone, ignoring the configured depth: allocating every level the geometry
+        // allows costs about 1.5% of the base mip and lets record() vary the depth per frame, so editing it
+        // applies on the next frame instead of waiting for a resize to reallocate the pyramid.
+        int levelCount = levelCount(baseWidth, baseHeight, MAX_LEVELS, 8);
         levels = new GpuImage[levelCount];
         int width = baseWidth;
         int height = baseHeight;
@@ -130,20 +135,28 @@ public final class BloomPass implements CausticaRenderPass {
 
     @Override
     public void record(PassFrame frame) {
+        OptionValues options = frame.options();
+        // Before sceneColorTarget(): taking a chain target and then writing nothing would hand the engine
+        // an image holding whatever the last frame left in it.
+        if (!options.get(ENABLED)) {
+            return;
+        }
         dispatch.beginFrame();
         GpuImage scene = frame.sceneColor();
         GpuImage target = frame.sceneColorTarget();
         GpuImage exposure = frame.exposureImage();
-        OptionValues options = frame.options();
         float threshold = options.get(THRESHOLD_SCENE_LINEAR);
         float softKnee = threshold * options.get(SOFT_KNEE_FRACTION);
         float radius = options.get(RADIUS);
+        // The pyramid is allocated as deep as the display allows; this frame uses only the configured
+        // prefix of it.
+        int activeLevels = Math.clamp(Math.round(options.get(LEVELS)), 1, levels.length);
         // Level 0 ends up holding the SUM of every band, so dividing by the depth is what makes an
         // authored strength mean the same thing at every resolution. The pyramid's depth is this pass's
         // own sizing decision, so that arithmetic is this pass's too, not the engine's.
-        float compositeStrength = options.get(STRENGTH) / levels.length;
+        float compositeStrength = options.get(STRENGTH) / activeLevels;
 
-        for (Step step : plan(levels.length)) {
+        for (Step step : plan(activeLevels)) {
             GpuImage destination = levels[step.destinationLevel()];
             GpuImage source = step.sourceLevel() < 0 ? scene : levels[step.sourceLevel()];
             recordStep(frame, destination, source, exposure, scene, step.mode(), threshold, softKnee,
