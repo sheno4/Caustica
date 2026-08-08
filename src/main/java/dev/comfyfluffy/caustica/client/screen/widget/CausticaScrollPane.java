@@ -37,6 +37,10 @@ public final class CausticaScrollPane extends AbstractContainerWidget {
         super(0, 0, 0, 0, Component.empty());
     }
 
+    public List<Entry> entries() {
+        return List.copyOf(entries);
+    }
+
     public void setEntries(List<Entry> updated) {
         entries.clear();
         entries.addAll(updated);

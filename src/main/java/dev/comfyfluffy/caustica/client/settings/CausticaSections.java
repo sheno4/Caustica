@@ -81,15 +81,18 @@ public final class CausticaSections {
                 ACCENT_ENGINE, groups);
     }
 
+    /**
+     * One group per slot rather than one group of slots: the group title is what names the slot its
+     * candidates belong to, so a page of radio rows stays readable once more than one slot has a choice.
+     */
     static SettingsSection composition(CausticaRegistry registry) {
-        List<SettingControl> rows = new ArrayList<>();
+        List<SettingGroup> groups = new ArrayList<>();
         for (Slot slot : Slots.ALL) {
-            rows.add(SlotControls.of(registry, slot));
+            groups.add(new SettingGroup(slot.id().getPath(), LangKeys.slotLabel(slot), null,
+                    List.of(SlotControls.of(registry, slot))));
         }
-        SettingGroup slots = new SettingGroup("slots",
-                Component.translatable("caustica.group.engine.slots"), null, rows);
         return new SettingsSection("composition", Component.translatable("caustica.section.composition"),
-                ACCENT_COMPOSITION, List.of(slots));
+                ACCENT_COMPOSITION, groups);
     }
 
     /** Null for a feature that declares no options — a provider-only extension has nothing to show. */

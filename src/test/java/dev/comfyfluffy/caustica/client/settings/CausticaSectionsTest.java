@@ -123,17 +123,19 @@ final class CausticaSectionsTest {
     }
 
     @Test
-    void everySlotBecomesAChoiceRowOnTheCompositionSection() {
+    void everySlotBecomesItsOwnGroupOnTheCompositionSection() {
         CausticaRegistry registry = CausticaRegistry.withBuiltins();
 
         SettingsSection composition = CausticaSections.composition(registry);
-        SettingGroup slots = groupOf(composition, "slots");
 
-        assertEquals(List.of("caustica:sky", "caustica:surface"),
-                slots.rows().stream().map(SettingControl::id).toList());
-        SettingControl.ChoiceControl<?> sky = (SettingControl.ChoiceControl<?>) slots.rows().get(0);
-        assertEquals(List.of(BUILTIN), sky.choices());
-        assertFalse(sky.enabled(), "a slot with one candidate offers no choice to make");
+        assertEquals(List.of("sky", "surface"),
+                composition.groups().stream().map(SettingGroup::id).toList());
+        SettingGroup sky = groupOf(composition, "sky");
+        assertEquals(List.of("caustica:sky"), sky.rows().stream().map(SettingControl::id).toList());
+
+        SettingControl.ChoiceControl<?> control = (SettingControl.ChoiceControl<?>) sky.rows().get(0);
+        assertEquals(List.of(BUILTIN), control.choices());
+        assertFalse(control.enabled(), "a slot with one candidate offers no choice to make");
     }
 
     @Test
