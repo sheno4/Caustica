@@ -6,8 +6,10 @@ import dev.comfyfluffy.caustica.api.provider.MaterialSource;
 import dev.comfyfluffy.caustica.api.provider.SceneProvider;
 import net.minecraft.resources.Identifier;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
@@ -69,6 +71,43 @@ public final class CausticaRegistry {
             throw new IllegalStateException("slot " + slot.id() + " has no default binding");
         }
         selected.remove(slot);
+    }
+
+    /**
+     * Every feature that binds {@code slot}, the default first and the rest in registration order — the
+     * choice a settings screen offers for that slot. A slot always has at least its default.
+     */
+    public synchronized List<Identifier> candidates(Slot slot) {
+        Identifier defaultFeature = defaults.get(slot);
+        List<Identifier> candidates = new ArrayList<>();
+        if (defaultFeature != null) {
+            candidates.add(defaultFeature);
+        }
+        for (Feature feature : features.values()) {
+            if (feature.bindings().containsKey(slot) && !feature.id().equals(defaultFeature)) {
+                candidates.add(feature.id());
+            }
+        }
+        return List.copyOf(candidates);
+    }
+
+    /** The binding used when nothing is selected — always a built-in, so a new extension changes nothing. */
+    public synchronized Identifier defaultFeature(Slot slot) {
+        return defaults.get(slot);
+    }
+
+    /** What {@link #selection()} will resolve this slot to, whether that came from a choice or the default. */
+    public synchronized Identifier selectedFeature(Slot slot) {
+        return selected.getOrDefault(slot, defaults.get(slot));
+    }
+
+    /**
+     * Whether this slot is on its default rather than an explicit choice. {@link #selectedFeature} collapses
+     * the two, but they differ to a screen: only an explicit choice is worth persisting, and only a default
+     * is worth labelling as one.
+     */
+    public synchronized boolean isDefaultSelected(Slot slot) {
+        return !selected.containsKey(slot);
     }
 
     public synchronized Map<Identifier, Feature> features() {

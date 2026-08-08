@@ -8,7 +8,10 @@ import dev.comfyfluffy.caustica.rt.provider.MinecraftMaterialSource;
 import dev.comfyfluffy.caustica.rt.provider.MinecraftSceneProvider;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -46,6 +49,70 @@ final class CausticaRegistryTest {
 
         registry.selectDefault(Slots.SKY);
         assertEquals(BuiltinExtension.ID, registry.selection().binding(Slots.SKY).feature().id());
+    }
+
+    @Test
+    void candidatesListTheDefaultFirstSoARadioGroupCanMarkIt() {
+        CausticaRegistry registry = CausticaRegistry.withBuiltins();
+        Identifier featureId = registerTestSky(registry);
+
+        assertEquals(List.of(BuiltinExtension.ID, featureId), registry.candidates(Slots.SKY));
+        assertEquals(List.of(BuiltinExtension.ID), registry.candidates(Slots.SURFACE),
+                "a slot only the built-in binds offers exactly one candidate");
+    }
+
+    @Test
+    void defaultAndExplicitSelectionAreDistinguishable() {
+        CausticaRegistry registry = CausticaRegistry.withBuiltins();
+        Identifier featureId = registerTestSky(registry);
+
+        assertTrue(registry.isDefaultSelected(Slots.SKY));
+        assertEquals(BuiltinExtension.ID, registry.selectedFeature(Slots.SKY));
+
+        registry.select(Slots.SKY, featureId);
+        assertFalse(registry.isDefaultSelected(Slots.SKY));
+        assertEquals(featureId, registry.selectedFeature(Slots.SKY));
+        assertEquals(BuiltinExtension.ID, registry.defaultFeature(Slots.SKY),
+                "the default is what the slot falls back to, not what is chosen");
+
+        // Selecting the default explicitly still counts as a choice; only selectDefault clears it.
+        registry.selectDefault(Slots.SKY);
+        assertTrue(registry.isDefaultSelected(Slots.SKY));
+    }
+
+    @Test
+    void aPersistedSelectionAppliesOnlyWhenTheFeatureIsInstalledAndBindsTheSlot() {
+        CausticaRegistry registry = CausticaRegistry.withBuiltins();
+        Identifier featureId = registerTestSky(registry);
+
+        CausticaApi.applyPersistedSelection(registry, Slots.SKY, featureId.toString());
+        assertEquals(featureId, registry.selectedFeature(Slots.SKY));
+
+        // An uninstalled feature, a malformed id, and one that binds a different slot all fall back rather
+        // than throwing: an extension the player removed must not stop the game from starting.
+        registry.selectDefault(Slots.SKY);
+        CausticaApi.applyPersistedSelection(registry, Slots.SKY, "test:not_installed");
+        assertTrue(registry.isDefaultSelected(Slots.SKY));
+
+        CausticaApi.applyPersistedSelection(registry, Slots.SKY, "NOT AN ID");
+        assertTrue(registry.isDefaultSelected(Slots.SKY));
+
+        CausticaApi.applyPersistedSelection(registry, Slots.SURFACE, featureId.toString());
+        assertTrue(registry.isDefaultSelected(Slots.SURFACE));
+
+        CausticaApi.applyPersistedSelection(registry, Slots.SKY, null);
+        assertTrue(registry.isDefaultSelected(Slots.SKY));
+    }
+
+    private static Identifier registerTestSky(CausticaRegistry registry) {
+        Identifier featureId = Identifier.fromNamespaceAndPath("test", "sky");
+        registry.feature(featureId)
+                .title(Component.literal("Test sky"))
+                .category(FeatureCategory.SKY)
+                .shaderSource(ShaderSource.classpath("/test/shaders"))
+                .bind(Slots.SKY, "test_sky", "TestSky")
+                .register();
+        return featureId;
     }
 
     @Test
