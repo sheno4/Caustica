@@ -54,6 +54,7 @@ public abstract class LevelRendererMixin {
 		}
 
 		caustica$maintainVanillaSections(cameraState);
+		caustica$drainVanillaGizmos();
 		VanillaRenderController.INSTANCE.markWorldSkipped();
 		ci.cancel();
 	}
@@ -79,5 +80,18 @@ public abstract class LevelRendererMixin {
 		((LevelRendererAccessor) renderer).caustica$repositionCamera(cameraState);
 		renderer.sectionOcclusionGraph().update(
 				cameraState, this.optionsRenderState.fov, this.levelRenderState.chunkLoadingRenderState);
+	}
+
+	/**
+	 * Consume the frame's gizmos and drop them, because RT draws none.
+	 *
+	 * <p>{@code LevelExtractor.extractGizmos} pushes into {@code renderThreadGizmos} every frame and
+	 * {@code submitFeatures}' {@code finalizeGizmoCollection} is its only consumer, so cancelling
+	 * {@code render} lets the collector grow without bound — and expired gizmos are pruned by the same
+	 * drain, so nothing ages out either. The first vanilla-rendered frame after a long RT session then
+	 * flushes the whole backlog into one buffer and trips {@code BufferBuilder}'s 16M vertex limit.</p>
+	 */
+	private void caustica$drainVanillaGizmos() {
+		((LevelRendererAccessor) (Object) this).caustica$getRenderThreadGizmos().drainGizmos();
 	}
 }

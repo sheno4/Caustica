@@ -99,6 +99,19 @@ public final class VanillaRenderController {
 		return this.worldSkipped;
 	}
 
+	/**
+	 * Whether RT replaced vanilla's world in the most recently rendered frame.
+	 *
+	 * <p>{@code LevelExtractor.extract} runs before {@link #beginFrame} clears the latch, so callers there
+	 * read the previous frame's outcome. That lag is deliberate: extraction work is dropped only once a
+	 * frame has actually proven the vanilla world was cancelled, so a fallback to vanilla (failure latch,
+	 * resource epoch boundary) costs one frame of missing entities rather than losing them for as long as
+	 * the fallback lasts.</p>
+	 */
+	public boolean replacedVanillaWorldLastFrame() {
+		return this.worldSkipped;
+	}
+
 	public boolean shouldCompositeRt() {
 		return this.rtActive;
 	}
