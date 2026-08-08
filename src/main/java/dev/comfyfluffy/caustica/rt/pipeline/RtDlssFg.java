@@ -6,6 +6,7 @@ import com.mojang.blaze3d.vulkan.VulkanDevice;
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.rt.GpuContext;
+import dev.comfyfluffy.caustica.rt.RtRuntime;
 import dev.comfyfluffy.caustica.mixin.GpuDeviceAccessor;
 import dev.comfyfluffy.caustica.ngx.NgxLibrary;
 import dev.comfyfluffy.caustica.ngx.NgxRuntime;
@@ -21,13 +22,14 @@ import java.lang.foreign.ValueLayout;
  * DLSS Frame Generation (DLSSG) backend. Shares the NGX instance with DLSS-RR via {@link NgxRuntime};
  * owns only the DLSSG feature handle. This turn provides availability detection and the feature
  * create/destroy lifecycle — the per-frame {@code evaluate} + the multi-present loop that consumes it land
- * with the present-path refactor. Gated by {@code caustica.rt.fg} (default off) and hardware/driver support.
+ * with the present-path refactor. Gated by the active RT session, {@code caustica.rt.fg} (default off), and
+ * hardware/driver support.
  */
 public final class RtDlssFg {
     public static final RtDlssFg INSTANCE = new RtDlssFg();
 
     public static boolean enabled() {
-        return CausticaConfig.Rt.Fg.ENABLED.value();
+        return RtRuntime.frameActive() && CausticaConfig.Rt.Fg.ENABLED.value();
     }
 
     private NgxLibrary lib;
@@ -231,6 +233,10 @@ public final class RtDlssFg {
             releaseFeature(device);
         }
         initialized = false;
+        failed = false;
+        probed = false;
+        available = false;
+        multiFrameCountMax = 0;
         lib = null;
     }
 

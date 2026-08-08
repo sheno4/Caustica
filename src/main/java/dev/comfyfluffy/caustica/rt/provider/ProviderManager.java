@@ -38,6 +38,11 @@ public final class ProviderManager {
         invoke("scene", scenes(), SceneProvider::update, SceneProvider::shutdown);
     }
 
+    /** Begin a new RT session with every registered provider eligible to run. */
+    public void startSession() {
+        disabled.clear();
+    }
+
     public void prepareFrame() {
         invoke("scene", scenes(), SceneProvider::prepareFrame, SceneProvider::shutdown);
         invoke("light", lights(), LightProvider::prepareFrame, LightProvider::shutdown);

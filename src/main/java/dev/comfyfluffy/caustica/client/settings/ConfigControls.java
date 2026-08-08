@@ -44,7 +44,7 @@ public final class ConfigControls {
      * never recreated in the other encoding; the ordinary resize path then brings it up in SDR or PQ.
      */
     private static void afterSet(CausticaConfig.RuntimeSetting<?> setting) {
-        if (setting == CausticaConfig.Rt.Hdr.ENABLED) {
+        if (setting == CausticaConfig.Rt.ENABLED || setting == CausticaConfig.Rt.Hdr.ENABLED) {
             net.minecraft.client.Minecraft.getInstance().invalidateSurfaceConfiguration();
         }
     }

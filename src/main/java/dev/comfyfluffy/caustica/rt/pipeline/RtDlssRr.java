@@ -5,6 +5,7 @@ import com.mojang.blaze3d.vulkan.VulkanDevice;
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.rt.GpuContext;
+import dev.comfyfluffy.caustica.rt.RtRuntime;
 import dev.comfyfluffy.caustica.rt.accel.GpuImage;
 import dev.comfyfluffy.caustica.mixin.GpuDeviceAccessor;
 import dev.comfyfluffy.caustica.ngx.NgxLibrary;
@@ -23,8 +24,14 @@ import java.lang.foreign.ValueLayout;
  */
 public final class RtDlssRr {
     public static final RtDlssRr INSTANCE = new RtDlssRr();
-    public static boolean enabled() {
+
+    /** Desired RR mode for session resource sizing, including RT startup frames rendered by vanilla. */
+    public static boolean configured() {
         return CausticaConfig.Rt.DlssRr.ENABLED.value();
+    }
+
+    public static boolean enabled() {
+        return RtRuntime.frameActive() && configured();
     }
 
     // DLSS feature flags. IsHDR (bit 0): color is scene-linear ACEScg HDR (rgba16f) — RR requires it ("HDR Color
@@ -236,7 +243,10 @@ public final class RtDlssRr {
             releaseFeature(device);
         }
         initialized = false;
+        failed = false;
         lib = null;
+        resetHistory = true;
+        lastFrameNanos = 0L;
     }
 
     private void releaseFeature(VulkanDevice device) {

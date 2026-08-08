@@ -3,6 +3,7 @@ package dev.comfyfluffy.caustica.mixin;
 import com.mojang.blaze3d.pipeline.RenderTarget;
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.client.RtScreenshotExporter;
+import dev.comfyfluffy.caustica.rt.RtRuntime;
 import net.minecraft.client.Screenshot;
 import net.minecraft.network.chat.Component;
 import org.jspecify.annotations.Nullable;
@@ -31,6 +32,7 @@ public abstract class ScreenshotMixin {
             CallbackInfo ci
     ) {
         if (forceName == null && downscaleFactor == 1
+                && RtRuntime.frameActive()
                 && CausticaConfig.Rt.Screenshots.EXR_ENABLED.value()) {
             String pairedPngName = RtScreenshotExporter.exportPaired(workDir, callback);
             if (pairedPngName != null) {

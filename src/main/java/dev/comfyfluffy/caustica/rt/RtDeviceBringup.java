@@ -65,16 +65,11 @@ import static org.lwjgl.vulkan.EXTRayTracingInvocationReorder.VK_STRUCTURE_TYPE_
  * 1.4 device, so only three extension <i>names</i> are needed; the rest are feature enables.
  *
  * <p>Extension names are added to the device extension list separately; feature structs are added here.
- * Both are gated on the selected device actually supporting RT; if not, nothing is added
- * and the device comes up exactly as vanilla. {@code caustica.rt} is read once here, at
- * {@code vkCreateDevice} time, before the device exists — flipping it later at runtime cannot add
- * device features to an already-created device, so a config change only takes effect on restart.
+ * Both are gated on the selected device actually supporting RT; if not, nothing is added and the device
+ * comes up exactly as vanilla. A supported device is always provisioned because Vulkan device features
+ * cannot be added after creation; {@code caustica.rt} controls runtime work and presentation instead.
  */
 public final class RtDeviceBringup {
-    public static boolean enabledByProperty() {
-        return CausticaConfig.Rt.ENABLED.value();
-    }
-
     /**
      * The device extensions RT needs (BDA/descriptor-indexing/SPIR-V 1.4 are core on 1.4).
      * {@code ray_tracing_position_fetch} lets the closest-hit read hit triangle vertex positions
@@ -472,7 +467,7 @@ public final class RtDeviceBringup {
 
     /** Standalone path: add RT extension names to the (mutable) arg0 list. */
     public static void addExtensions(List<String> augmentedExtensions, VulkanPhysicalDevice physicalDevice) {
-        if (!enabledByProperty() || firstUnsupportedExtension(physicalDevice) != null) {
+        if (firstUnsupportedExtension(physicalDevice) != null) {
             return;
         }
         FeatureSupport support = queryFeatureSupport(physicalDevice);
@@ -498,9 +493,6 @@ public final class RtDeviceBringup {
     /** Add the RT VulkanFeatures to arg2 after the matching extension names have been requested. */
     @SuppressWarnings("unchecked")
     public static void addFeatures(Args args, VulkanPhysicalDevice physicalDevice) {
-        if (!enabledByProperty()) {
-            return;
-        }
         rtRequested = false;
         serBackend = SerBackend.NONE;
         ommEnabled = false;

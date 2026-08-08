@@ -67,7 +67,9 @@ public final class RtReflex {
     }
 
     public static boolean enabled() {
-        return CausticaConfig.Rt.Reflex.ENABLED.value() && RtDeviceBringup.reflexEnabled();
+        return RtRuntime.active()
+                && CausticaConfig.Rt.Reflex.ENABLED.value()
+                && RtDeviceBringup.reflexEnabled();
     }
 
     /** Current sim frame's marker id (set by the last {@link #sleep} call) — tags SIMULATION/RENDERSUBMIT markers. */

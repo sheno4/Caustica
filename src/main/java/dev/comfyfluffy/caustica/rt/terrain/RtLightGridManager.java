@@ -67,7 +67,7 @@ final class RtLightGridManager {
         Request request = new Request(requestId, ctx, input);
         beginTask();
         try {
-            RtWorkerPool.INSTANCE.submit(() -> runWorker(request));
+            RtWorkerPool.INSTANCE.submit(() -> runWorker(request), this::finishTask);
         } catch (Throwable t) {
             finishTask();
             throw t;

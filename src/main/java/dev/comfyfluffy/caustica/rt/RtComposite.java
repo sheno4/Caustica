@@ -101,7 +101,7 @@ public final class RtComposite {
     public static final RtComposite INSTANCE = new RtComposite();
 
     public static boolean enabled() {
-        return CausticaConfig.Rt.ENABLED.value();
+        return RtRuntime.frameActive();
     }
 
     // WorldPushData and its serializer are generated from Slang's reflected Std430DataLayout. Java never
@@ -476,6 +476,16 @@ public final class RtComposite {
     }
 
     /**
+     * Complete the material epoch while startup is retaining vanilla presentation. The runtime calls this
+     * only after the terrain update has applied the pending full clear, so activation depends on resource
+     * readiness rather than an additional tick or rendered frame.
+     */
+    public boolean completeStartupBoundary() {
+        materialEpochTraceGate = false;
+        return !requiresVanillaWorldFallback();
+    }
+
+    /**
      * Clear the failure latch on an explicit render-state invalidation (F3+A, dimension change) so RT
      * re-arms after a transient error instead of staying on vanilla until restart. A deterministic
      * failure just latches again on the next frame (bounded log spam: one error line per invalidation).
@@ -605,76 +615,10 @@ public final class RtComposite {
             return false;
         }
         ClientLevel level = Minecraft.getInstance().level;
-        if (renderPassLevel != level) {
-            renderPassLevel = level;
-            if (renderPassManager != null) {
-                renderPassManager.invalidate();
-            }
-        }
         try {
-            if (displayPipeline == null) {
-                displayPipeline = RtDisplayPipeline.create(ctx);
+            if (!ensurePresentationResources(ctx, level, width, height)) {
+                return false;
             }
-            ensureRenderPassManager(ctx);
-            if (debugPresentPipeline == null) {
-                debugPresentPipeline = RtDebugPresentPipeline.create(ctx);
-            }
-            if (sdrToneLut == null) {
-                sdrToneLut = RtToneLut.load(ctx, "sdr_aces2_rec709.bin");
-            }
-            // The mastering target is live, so track it each frame.
-            int wantedHdrNits = CausticaConfig.Rt.Hdr.PEAK_NITS.value();
-            if (hdrToneLut == null || loadedHdrLutNits != wantedHdrNits) {
-                RtToneLut newHdrLut = RtToneLut.load(ctx, "hdr_aces2_rec2020_" + wantedHdrNits + "nit.bin");
-                if (newHdrLut.size != sdrToneLut.size) {
-                    // display.comp's lutSize push constant is shared by both LUT samples (see
-                    // lutTexCoord()); bake_display_lut.py currently always sizes both the same, but
-                    // this would silently misalign one LUT's edge texels if that ever changed.
-                    newHdrLut.destroy();
-                    throw new IllegalStateException("SDR/HDR tone LUT size mismatch: "
-                            + sdrToneLut.size + " vs " + newHdrLut.size);
-                }
-                if (hdrToneLut != null) {
-                    ctx.waitIdle(); // nits-step change is rare; no in-flight frame may sample the old LUT
-                    hdrToneLut.destroy();
-                }
-                hdrToneLut = newHdrLut;
-                loadedHdrLutNits = wantedHdrNits;
-            }
-            // The scene-referred LMT is part of the immutable versioned look package and shared by
-            // both SDR and HDR output transforms. It cannot be switched independently from the
-            // package's exposure and photometric anchors.
-            if (lookLut == null) {
-                lookLut = RtToneLut.loadResource(ctx, LOOK.lmtResource());
-            }
-            // A resource reload re-stitches the block atlas. We've already torn down the world pipeline
-            // (onResourceReloadStart) so nothing references the old atlas, but MC's deferred free keeps the
-            // old view handle live for a few frames, then swaps in the new atlas (whose GPU upload may lag,
-            // leaving the handle 0 transiently). Skip RT — vanilla renders — until the handle becomes a
-            // fresh, non-zero value different from what we last bound; only then rebuild against it.
-            if (reloadRebindRequested) {
-                long atlas = blockAlbedoAtlasView();
-                if (atlas == 0L || atlas == boundBlockAlbedoAtlasHandle) {
-                    return false;
-                }
-            }
-            ensureOutput(ctx, width, height);
-            // ensureOutput's rebuild path (only taken on resize/RR-setting change) already rebinds
-            // displayPipeline's descriptor set; this covers the case ensureOutput early-returned but
-            // hdrToneLut/lookLut may have been hot-swapped just above; setImages is a no-op if the bound
-            // views already match, so this is cheap on every other frame.
-            RtToneLut boundLookLut = lookLut;
-            displayPipeline.setImages(displayImage.view, rrOutput.view, exposure.image().view, hdrDisplayImage.view,
-                    sdrToneLut.view(), sdrToneLut.sampler(), hdrToneLut.view(), hdrToneLut.sampler(),
-                    boundLookLut.view(), boundLookLut.sampler());
-            debugPresentPipeline.setImages(displayImage.view, gNormal.view, gAlbedo.view, gDepth.view,
-                    gMotion.view, gSpecAlbedo.view, gSpecMotion.view, rrOutput.view, exposure.image().view,
-                    exposure.stateBuffer());
-            // Cheap idempotent check every frame (not just on resize): if the exposure mode is switched
-            // manual -> auto at runtime (video settings), the auto-mode histogram/state/pipeline must be
-            // allocated before recordFrame's exposure.record() below needs them, or it throws.
-            exposure.ensureResources(ctx);
-            refreshPipelineShapeIfNeeded(ctx);
             RtPipeline active = ensureWorld(ctx);
             if (materialEpochTraceGate) {
                 materialEpochTraceGate = false;
@@ -695,6 +639,75 @@ public final class RtComposite {
             CausticaMod.LOGGER.error("RT composite failed; reverting to vanilla path", t);
             return false;
         }
+    }
+
+    /** Build every display-sized resource while startup is still presenting vanilla. */
+    public boolean ensurePresentationResourcesReady(GpuContext ctx, int width, int height) {
+        if (failed || Minecraft.getInstance().level == null) {
+            return false;
+        }
+        try {
+            return ensurePresentationResources(ctx, Minecraft.getInstance().level, width, height);
+        } catch (Throwable t) {
+            failed = true;
+            CausticaMod.LOGGER.error("RT presentation resource bring-up failed; reverting to vanilla path", t);
+            return false;
+        }
+    }
+
+    private boolean ensurePresentationResources(GpuContext ctx, ClientLevel level, int width, int height)
+            throws IOException {
+        if (renderPassLevel != level) {
+            renderPassLevel = level;
+            if (renderPassManager != null) {
+                renderPassManager.invalidate();
+            }
+        }
+        if (displayPipeline == null) {
+            displayPipeline = RtDisplayPipeline.create(ctx);
+        }
+        ensureRenderPassManager(ctx);
+        if (debugPresentPipeline == null) {
+            debugPresentPipeline = RtDebugPresentPipeline.create(ctx);
+        }
+        if (sdrToneLut == null) {
+            sdrToneLut = RtToneLut.load(ctx, "sdr_aces2_rec709.bin");
+        }
+        int wantedHdrNits = CausticaConfig.Rt.Hdr.PEAK_NITS.value();
+        if (hdrToneLut == null || loadedHdrLutNits != wantedHdrNits) {
+            RtToneLut newHdrLut = RtToneLut.load(ctx, "hdr_aces2_rec2020_" + wantedHdrNits + "nit.bin");
+            if (newHdrLut.size != sdrToneLut.size) {
+                newHdrLut.destroy();
+                throw new IllegalStateException("SDR/HDR tone LUT size mismatch: "
+                        + sdrToneLut.size + " vs " + newHdrLut.size);
+            }
+            if (hdrToneLut != null) {
+                ctx.waitIdle();
+                hdrToneLut.destroy();
+            }
+            hdrToneLut = newHdrLut;
+            loadedHdrLutNits = wantedHdrNits;
+        }
+        if (lookLut == null) {
+            lookLut = RtToneLut.loadResource(ctx, LOOK.lmtResource());
+        }
+        if (reloadRebindRequested) {
+            long atlas = blockAlbedoAtlasView();
+            if (atlas == 0L || atlas == boundBlockAlbedoAtlasHandle) {
+                return false;
+            }
+        }
+        ensureOutput(ctx, width, height);
+        RtToneLut boundLookLut = lookLut;
+        displayPipeline.setImages(displayImage.view, rrOutput.view, exposure.image().view, hdrDisplayImage.view,
+                sdrToneLut.view(), sdrToneLut.sampler(), hdrToneLut.view(), hdrToneLut.sampler(),
+                boundLookLut.view(), boundLookLut.sampler());
+        debugPresentPipeline.setImages(displayImage.view, gNormal.view, gAlbedo.view, gDepth.view,
+                gMotion.view, gSpecAlbedo.view, gSpecMotion.view, rrOutput.view, exposure.image().view,
+                exposure.stateBuffer());
+        exposure.ensureResources(ctx);
+        refreshPipelineShapeIfNeeded(ctx);
+        return true;
     }
 
     /**
@@ -1000,7 +1013,7 @@ public final class RtComposite {
         // Debug presentation is downstream of the ordinary frame graph and must not change the image
         // being inspected. In particular, toggling it must not rebuild at native resolution or disable
         // the RR path whose render-resolution guide inputs the debug pass visualizes.
-        boolean rrEnabled = RtDlssRr.enabled();
+        boolean rrEnabled = RtDlssRr.configured();
         int rrQuality = rrEnabled ? RtDlssRr.quality() : Integer.MIN_VALUE;
         if (output != null && continuationQueue != null
                 && displayImage != null && hdrDisplayImage != null && rrOutput != null
@@ -1446,9 +1459,7 @@ public final class RtComposite {
         // Teardown runs after the device is idle (CLIENT_STOPPING waits), so the TLAS ring's slots are no
         // longer in flight and can be freed immediately.
         tlasRing.destroy();
-        if (RtDlssRr.enabled()) {
-            RtDlssRr.INSTANCE.destroy();
-        }
+        RtDlssRr.INSTANCE.destroy();
         if (displayImage != null) {
             displayImage.destroy();
             displayImage = null;
@@ -1561,6 +1572,24 @@ public final class RtComposite {
             }
             atlasSampler = 0L;
         }
+        reloadRebindRequested = false;
+        boundBlockAlbedoAtlasHandle = 0L;
+        boundWorldResourceGeneration = -1;
+        displayW = -1;
+        displayH = -1;
+        renderW = -1;
+        renderH = -1;
+        renderSizeRrEnabled = false;
+        renderSizeRrQuality = Integer.MIN_VALUE;
+        fgReset = true;
+        mvHasPrev = false;
+        waterWaveTimeValid = false;
+        failed = false;
+        loggedActive = false;
+        frameCaptured = false;
+        currentTlasHandle = 0L;
+        pendingGraphicsUse = null;
+        hdrWrittenThisFrame = false;
     }
 
     private long atlasSampler(GpuContext ctx) {
@@ -1759,6 +1788,7 @@ public final class RtComposite {
         // image (menus/loading, or the short interval after the toggle changed but before configure()).
         // Once configure recreates a native-SDR swapchain, vanilla's ordinary blit is correct.
         return CausticaConfig.Rt.Hdr.swapchainPqActive()
+                && RtRuntime.hasSession()
                 && !isHdrPresentActive();
     }
 
@@ -1771,7 +1801,7 @@ public final class RtComposite {
      */
     public boolean presentSdrToPq(VulkanCommandEncoder enc, long swapchainImage, int swapW, int swapH,
             long sdrMainView, long acquireSem, long presentSem) {
-        if (sdrMainView == 0L || failed) {
+        if (!RtRuntime.hasSession() || sdrMainView == 0L || failed) {
             return false;
         }
         GpuContext ctx = GpuContext.get();

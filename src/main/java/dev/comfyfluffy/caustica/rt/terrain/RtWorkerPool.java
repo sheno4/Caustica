@@ -58,11 +58,31 @@ public final class RtWorkerPool {
         executor().execute(job);
     }
 
-    /** Stop all workers and drop queued jobs. Safe to call when never started. */
+    /** Submit work whose owner must close its lifecycle if shutdown removes it before execution. */
+    public void submit(Runnable job, Runnable cancelled) {
+        executor().execute(new CancellableJob(job, cancelled));
+    }
+
+    /** Stop all workers and close the lifecycle of jobs removed from the queue. */
     public synchronized void shutdown() {
         if (exec != null) {
-            exec.shutdownNow();
+            for (Runnable queued : exec.shutdownNow()) {
+                if (queued instanceof CancellableJob job) {
+                    job.cancel();
+                }
+            }
             exec = null;
+        }
+    }
+
+    private record CancellableJob(Runnable work, Runnable cancelled) implements Runnable {
+        @Override
+        public void run() {
+            work.run();
+        }
+
+        void cancel() {
+            cancelled.run();
         }
     }
 }

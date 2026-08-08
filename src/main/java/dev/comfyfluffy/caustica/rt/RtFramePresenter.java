@@ -290,5 +290,11 @@ public final class RtFramePresenter {
         acquireSemaphores = new long[0];
         acquireCursor = 0;
         pendingCount = 0;
+        failed = false;
+        logWindowStartNs = 0L;
+        realFramesInWindow = 0;
+        generatedFramesInWindow = 0;
+        interpOkInWindow = 0;
+        interpFallbackInWindow = 0;
     }
 }

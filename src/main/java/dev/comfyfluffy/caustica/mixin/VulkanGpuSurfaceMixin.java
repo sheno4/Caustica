@@ -13,6 +13,7 @@ import dev.comfyfluffy.caustica.rt.RtDeviceBringup;
 import dev.comfyfluffy.caustica.rt.RtFramePresenter;
 import dev.comfyfluffy.caustica.rt.RtHdr;
 import dev.comfyfluffy.caustica.rt.RtReflex;
+import dev.comfyfluffy.caustica.rt.RtRuntime;
 import it.unimi.dsi.fastutil.longs.LongList;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.KHRSurface;
@@ -124,7 +125,7 @@ public abstract class VulkanGpuSurfaceMixin {
 		CausticaConfig.Rt.Hdr.setSwapchainPqAvailable(pq != null);
 		this.caustica$colorSpace = 0;
 		CausticaConfig.Rt.Hdr.setSwapchainPqActive(false);
-		if (CausticaConfig.Rt.Hdr.ENABLED.value() && pq != null) {
+		if (RtRuntime.wantsPqSwapchain() && pq != null) {
 			this.caustica$colorSpace = VK_COLOR_SPACE_HDR10_ST2084_EXT;
 			CausticaConfig.Rt.Hdr.setSwapchainPqActive(true);
 			CausticaMod.LOGGER.info("HDR: surface supports PQ (format={}, colorSpace=HDR10_ST2084); "
@@ -163,7 +164,7 @@ public abstract class VulkanGpuSurfaceMixin {
 			VkSurfaceFormatKHR pq = caustica$findPq(formats);
 			VkSurfaceFormatKHR sdr = caustica$findSdr(formats);
 			CausticaConfig.Rt.Hdr.setSwapchainPqAvailable(pq != null);
-			boolean usePq = CausticaConfig.Rt.Hdr.ENABLED.value() && pq != null;
+			boolean usePq = RtRuntime.wantsPqSwapchain() && pq != null;
 			if (!usePq && sdr == null && pq != null) {
 				// Extremely unusual, but safer than destroying the only viable presentation path.
 				CausticaMod.LOGGER.warn("HDR: surface exposes PQ but no compatible native-SDR format; "

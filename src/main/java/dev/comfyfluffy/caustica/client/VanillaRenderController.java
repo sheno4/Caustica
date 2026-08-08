@@ -120,6 +120,14 @@ public final class VanillaRenderController {
 		}
 	}
 
+	/** Re-arm vanilla cancellation after an explicit renderer invalidation or runtime mode transition. */
+	public void resetFailureLatch() {
+		this.failureLatched = false;
+		this.baseReady = false;
+		this.inactiveReason = null;
+		this.lastLoggedInactiveReason = null;
+	}
+
 	private String findInactiveReason(RenderTarget mainTarget) {
 		if (this.failureLatched || RtComposite.INSTANCE.hasFailed()) {
 			return "RT composite failure latch is set";

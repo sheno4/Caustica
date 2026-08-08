@@ -1120,7 +1120,7 @@ public final class RtTerrain {
                     completeTask(task, null, null, t);
                     throw t;
                 }
-            });
+            }, () -> completeTask(task, null, null, null));
         } catch (Throwable t) {
             finishActiveTask();
             throw t;
@@ -1678,6 +1678,9 @@ public final class RtTerrain {
         // its resources before the executor, allocator, and VkDevice disappear.
         terrainEpoch++;
         lightGrid.cancelPending();
+        // Running jobs observe the new epoch/cancellation token; queued jobs are removed and complete their
+        // lifecycle through their cancellation callbacks instead of continuing to mesh during teardown.
+        RtWorkerPool.INSTANCE.shutdown();
         drainTasksForClear(ctx);
         cancelAllDirtyGroups();
         ctx.waitIdle();

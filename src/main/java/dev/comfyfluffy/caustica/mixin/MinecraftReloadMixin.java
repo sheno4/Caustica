@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.mixin;
 
 import dev.comfyfluffy.caustica.rt.RtComposite;
+import dev.comfyfluffy.caustica.rt.RtRuntime;
 import net.minecraft.client.Minecraft;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -24,6 +25,8 @@ import java.util.concurrent.CompletableFuture;
 public class MinecraftReloadMixin {
     @Inject(method = "reloadResourcePacks()Ljava/util/concurrent/CompletableFuture;", at = @At("HEAD"))
     private void caustica$rtReloadStart(CallbackInfoReturnable<CompletableFuture<Void>> cir) {
-        RtComposite.INSTANCE.onResourceReloadStart();
+        if (RtRuntime.hasSession()) {
+            RtComposite.INSTANCE.onResourceReloadStart();
+        }
     }
 }
