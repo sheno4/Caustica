@@ -1,4 +1,5 @@
-// Composites the sRGB-authored, premultiplied UI over the PQ/BT.2020 HDR world in linear nits.
+// Composites the sRGB-authored, premultiplied UI over the PQ/BT.2020 HDR world while preserving
+// Minecraft's sRGB-domain UI blend.
 import bindings;
 
 struct PresentPush {
@@ -32,10 +33,26 @@ float3 srgbToLinear(float3 c) {
     return float3(srgbChannelToLinear(c.x), srgbChannelToLinear(c.y), srgbChannelToLinear(c.z));
 }
 
+float linearChannelToSrgb(float c) {
+    return c <= 0.0031308 ? c * 12.92 : 1.055 * pow(c, 1.0 / 2.4) - 0.055;
+}
+
+float3 linearToSrgb(float3 c) {
+    return float3(linearChannelToSrgb(c.x), linearChannelToSrgb(c.y), linearChannelToSrgb(c.z));
+}
+
+// Row-major mathematical notation; the build targets column-major storage, while mul(M, v) preserves
+// the intended transforms.
 static const float3x3 BT709_TO_BT2020 = float3x3(
     0.6274039, 0.3292830, 0.0433131,
     0.0690973, 0.9195406, 0.0113612,
     0.0163916, 0.0880132, 0.8955953
+);
+
+static const float3x3 BT2020_TO_BT709 = float3x3(
+     1.6604910, -0.5876411, -0.0728499,
+    -0.1245505,  1.1328999, -0.0083494,
+    -0.0181508, -0.1005789,  1.1187297
 );
 
 [shader("compute")]
@@ -51,11 +68,16 @@ void main(uint3 tid : SV_DispatchThreadID) {
     float3 worldPq = outputImage[pix].rgb;
     if (alpha > 0.0) {
         float3 worldNits2020 = float3(pqDecode(worldPq.x), pqDecode(worldPq.y), pqDecode(worldPq.z));
-        float3 straight = clamp(ui.rgb / alpha, 0.0, 1.0);
-        float3 uiNits709 = srgbToLinear(straight) * pc.uiNits;
-        float3 uiNits2020 = mul(BT709_TO_BT2020, uiNits709);
-        float3 blended = worldNits2020 * (1.0 - alpha) + uiNits2020 * alpha;
-        worldPq = float3(pqEncode(blended.x), pqEncode(blended.y), pqEncode(blended.z));
+        float3 worldNits709 = mul(BT2020_TO_BT709, worldNits2020);
+        float3 worldSrgb709 = linearToSrgb(worldNits709 / pc.uiNits);
+
+        // The rgba8 overlay already contains the result of Minecraft's code-value-space blending, with
+        // premultiplied RGB. Repeating that same over operation here makes a translucent surface retain the
+        // same visual opacity in SDR and HDR. Linear-nit blending would make dark panels look washed out.
+        float3 compositedSrgb709 = ui.rgb + worldSrgb709 * (1.0 - alpha);
+        float3 compositedNits709 = srgbToLinear(compositedSrgb709) * pc.uiNits;
+        float3 compositedNits2020 = mul(BT709_TO_BT2020, compositedNits709);
+        worldPq = float3(pqEncode(compositedNits2020.x), pqEncode(compositedNits2020.y), pqEncode(compositedNits2020.z));
     }
     outputImage[pix] = float4(worldPq, 1.0);
 }

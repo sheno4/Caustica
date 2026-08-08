@@ -96,6 +96,12 @@ public final class CausticaScrollPane extends AbstractContainerWidget {
     }
 
     @Override
+    protected double scrollRate() {
+        // AbstractContainerWidget's convenience constructor installs a zero wheel rate.
+        return CausticaTheme.ROW_HEIGHT;
+    }
+
+    @Override
     public List<? extends GuiEventListener> children() {
         return entries.stream().map(Entry::widget).filter(widget -> widget.visible).toList();
     }
