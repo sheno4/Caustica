@@ -8,6 +8,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.lang.foreign.MemorySegment;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -88,6 +89,15 @@ final class SlangSerCapabilityTest {
                     "ser_engine", "main", "ser_pack", "SerPack");
             assertEquals(0x07230203,
                     ByteBuffer.wrap(result.spirv()).order(ByteOrder.LITTLE_ENDIAN).getInt());
+            Path spirv = sourceDirectory.resolve("ser.spv");
+            Files.write(spirv, result.spirv());
+            Process validator = new ProcessBuilder(System.getProperty("caustica.test.spirvVal"),
+                    "--target-env", "vulkan1.2", spirv.toString())
+                    .redirectErrorStream(true)
+                    .start();
+            byte[] diagnostics = validator.getInputStream().readAllBytes();
+            assertEquals(0, validator.waitFor(),
+                    () -> new String(diagnostics, StandardCharsets.UTF_8));
         } finally {
             library.destroySession(session);
         }

@@ -1,7 +1,7 @@
 #include "caustica_slang.h"
 
-#include <slang/slang-com-ptr.h>
-#include <slang/slang.h>
+#include <slang-com-ptr.h>
+#include <slang.h>
 
 #include <cstring>
 #include <memory>

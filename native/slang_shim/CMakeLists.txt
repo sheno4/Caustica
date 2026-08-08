@@ -10,21 +10,21 @@ if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
   set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS Debug Release RelWithDebInfo MinSizeRel)
 endif()
 
-if(NOT DEFINED ENV{VULKAN_SDK})
-  message(FATAL_ERROR "VULKAN_SDK environment variable is not set")
+if(NOT DEFINED ENV{SLANG_SDK})
+  message(FATAL_ERROR "SLANG_SDK environment variable is not set")
 endif()
 
 get_filename_component(CAUSTICA_SLANG_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
 set(CAUSTICA_SLANG_OUTPUT_ROOT "${CAUSTICA_SLANG_REPO_ROOT}/build/native/slang_shim"
     CACHE PATH "Directory for built Slang shim artifacts")
 set(CAUSTICA_SLANG_OUTPUT_DIR "${CAUSTICA_SLANG_OUTPUT_ROOT}/$<LOWER_CASE:$<CONFIG>>")
-set(SLANG_SDK_ROOT "$ENV{VULKAN_SDK}")
+set(SLANG_SDK_ROOT "$ENV{SLANG_SDK}")
 
 add_library(causticaslang SHARED caustica_slang.cpp)
 target_include_directories(causticaslang PRIVATE "${SLANG_SDK_ROOT}/include")
 
 if(WIN32)
-  target_link_libraries(causticaslang PRIVATE "${SLANG_SDK_ROOT}/Lib/slang.lib")
+  target_link_libraries(causticaslang PRIVATE "${SLANG_SDK_ROOT}/lib/slang.lib")
   set_property(TARGET causticaslang PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
 else()
   find_library(SLANG_LIBRARY NAMES slang PATHS "${SLANG_SDK_ROOT}/lib" NO_DEFAULT_PATH REQUIRED)

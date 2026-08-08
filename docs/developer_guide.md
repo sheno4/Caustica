@@ -4,7 +4,9 @@
 
 1. Install the Vulkan SDK from <https://vulkan.lunarg.com/sdk/home>.
    The installer sets `VULKAN_SDK` automatically.
-2. Download the DLSS SDK from <https://github.com/NVIDIA/DLSS/releases>.
+2. Download Slang 2026.14.1 from <https://github.com/shader-slang/slang/releases/tag/v2026.14.1>,
+   extract it, and set `SLANG_SDK` to the extracted directory.
+3. Download the DLSS SDK from <https://github.com/NVIDIA/DLSS/releases>.
    Extract it, then set `DLSS_SDK` to the folder you extracted.
 
    To set it permanently for your Windows user account, run PowerShell with:
@@ -20,7 +22,7 @@
    $env:DLSS_SDK = "C:\path\to\dlss-sdk"
    ```
 
-3. Configure and build the native shims:
+4. Configure and build the native shims:
 
 ```powershell
 cmake -S native/ngx_shim -B build/cmake/ngx_shim/release -DCMAKE_BUILD_TYPE=Release
@@ -38,10 +40,11 @@ $env:JAVA_TOOL_OPTIONS = "-Xmx8G -XX:+UseCompactObjectHeaders -XX:+AlwaysPreTouc
 
 ## Linux
 
-Set `DLSS_SDK` and `VULKAN_SDK` before configuring CMake:
+Set `DLSS_SDK`, `SLANG_SDK`, and `VULKAN_SDK` before configuring CMake:
 
 ```bash
 export DLSS_SDK=/path/to/dlss-sdk
+export SLANG_SDK=/path/to/slang-2026.14.1
 export VULKAN_SDK=/path/to/vulkan-sdk
 ```
 

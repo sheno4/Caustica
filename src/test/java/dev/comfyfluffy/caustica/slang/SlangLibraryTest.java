@@ -27,7 +27,7 @@ final class SlangLibraryTest {
         Path directory = Path.of(System.getProperty("caustica.test.slangRuntimeDir"));
         library = SlangLibrary.load(directory, SlangPlatform.current());
         assertEquals(SlangLibrary.ABI_VERSION, library.abiVersion());
-        assertTrue(library.compilerVersion().startsWith("2026.8"));
+        assertTrue(library.compilerVersion().startsWith(System.getProperty("caustica.test.slangVersion")));
         runtime = library.createRuntime();
     }
 

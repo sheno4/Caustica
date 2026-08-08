@@ -47,7 +47,8 @@ public final class SlangSession implements AutoCloseable {
 
     /**
      * Make the session unusable while leaving its native compiler graph for the operating system to reclaim.
-     * Specialized world-pipeline sessions use this lifetime because Slang 2026.8 cannot safely destroy them.
+     * Specialized world-pipeline sessions use this lifetime because their native compiler graph remains
+     * referenced for the duration of the process.
      */
     public synchronized void retainUntilProcessExit() {
         if (!handle.equals(MemorySegment.NULL)) {

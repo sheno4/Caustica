@@ -99,6 +99,18 @@ def resolveVulkanTool = { String name ->
 	return "${name}${exe}" // fall back to PATH; exec fails with a clear message if absent
 }
 
+def resolveSlangTool = { String name ->
+	def exe = org.gradle.internal.os.OperatingSystem.current().windows ? ".exe" : ""
+	def sdk = System.getenv("SLANG_SDK")
+	if (sdk) {
+		def fromSdk = file("${sdk}/bin/${name}${exe}")
+		if (fromSdk.exists()) {
+			return fromSdk.absolutePath
+		}
+	}
+	return "${name}${exe}"
+}
+
 abstract class CompileShaders extends DefaultTask {
 	@InputDirectory abstract DirectoryProperty getSrcDir()
 	@InputDirectory abstract DirectoryProperty getRuntimeWorldDir()
@@ -186,7 +198,7 @@ def compileShaders = tasks.register("compileShaders", CompileShaders) {
 	runtimeApiDir = runtimeApiSourceDir
 	outDir = layout.buildDirectory.dir("generated/shaders/caustica/shaders")
 	spirvVal = resolveVulkanTool("spirv-val")
-	slangc = resolveVulkanTool("slangc")
+	slangc = resolveSlangTool("slangc")
 }
 
 def shaderReflectionRoot = layout.buildDirectory.dir("generated/shader-reflection-sources")
@@ -210,7 +222,7 @@ def generateShaderRecords = tasks.register("generateShaderRecords", GenerateShad
 	dependsOn(prepareShaderReflectionSources)
 	shaderRoot = shaderReflectionRoot
 	probeSource = shaderReflectionRoot.map { it.file("layout/layout_probe.slang") }
-	slangc = resolveVulkanTool("slangc")
+	slangc = resolveSlangTool("slangc")
 	spirvVal = resolveVulkanTool("spirv-val")
 	outDir = layout.buildDirectory.dir("generated/sources/shaderRecords")
 }
@@ -221,7 +233,7 @@ def generateRtBindings = tasks.register("generateRtBindings", GenerateRtBindings
 	description = "Generates Java descriptor bindings from Slang reflection."
 	dependsOn(prepareShaderReflectionSources)
 	shaderRoot = shaderReflectionRoot
-	slangc = resolveVulkanTool("slangc")
+	slangc = resolveSlangTool("slangc")
 	outDir = rtBindingsGenRoot
 }
 
@@ -273,9 +285,9 @@ def bundleSlangRuntime = tasks.register("bundleSlangRuntime") {
 		inputs.dir(slangRuntimeInputRoot)
 	} else {
 		inputs.dir(slangShimOutDir)
-		def sdk = System.getenv("VULKAN_SDK")
+		def sdk = System.getenv("SLANG_SDK")
 		if (sdk) {
-			inputs.files(fileTree(new File(sdk, "Bin")) {
+			inputs.files(fileTree(new File(sdk, "bin")) {
 				include "slang*.dll"
 				include "slang-standard-module-*/**"
 			})
@@ -316,9 +328,9 @@ def bundleSlangRuntime = tasks.register("bundleSlangRuntime") {
 				if (platform != currentSlangPlatform) {
 					throw new GradleException("Platform ${platform} requires -PslangRuntimeInputRoot")
 				}
-				def sdkPath = System.getenv("VULKAN_SDK")
+				def sdkPath = System.getenv("SLANG_SDK")
 				if (!sdkPath) {
-					throw new GradleException("VULKAN_SDK environment variable is not set")
+					throw new GradleException("SLANG_SDK environment variable is not set")
 				}
 				def sdk = file(sdkPath)
 				copy {
@@ -326,7 +338,7 @@ def bundleSlangRuntime = tasks.register("bundleSlangRuntime") {
 						include platform == "windows-x64" ? "causticaslang.dll" : "libcausticaslang.so"
 					}
 					if (platform == "windows-x64") {
-						from(new File(sdk, "Bin")) {
+						from(new File(sdk, "bin")) {
 							include "slang*.dll"
 							include "slang-standard-module-*/**"
 						}
@@ -411,6 +423,8 @@ tasks.named("test", Test) {
 		def slangRuntimeDir = new File(slangRuntimeGenRoot.get().asFile,
 				"caustica/natives/slang/${slangRuntimeVersion}/${currentSlangPlatform}").absolutePath
 		systemProperty "caustica.test.slangRuntimeDir", slangRuntimeDir
+		systemProperty "caustica.test.slangVersion", slangRuntimeVersion
+		systemProperty "caustica.test.spirvVal", resolveVulkanTool("spirv-val")
 		// SlangRuntime normally locates its extracted natives through FabricLoader's game directory,
 		// which does not exist under plain JUnit. The same override players can use to point at a local
 		// Slang build lets tests exercise the real runtime path (session creation, module search paths)

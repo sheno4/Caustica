@@ -35,6 +35,9 @@ env:
   NGX_VENDOR_CONFIG: rel
   VULKAN_SDK_VERSION: 1.4.350.0
   VULKAN_SDK_SHA256: b65f068ab36263559da49d7cacd7e7b9df23824ca8b68ccc522a2b06f5725df2
+  SLANG_VERSION: 2026.14.1
+  SLANG_WINDOWS_SHA256: 5ed0a59d650a0af0aca45d5db4e083b3d8fb5cea05748747dd95dfbe9c580658
+  SLANG_LINUX_SHA256: d7c02e044b5f2f4ceb8e220a2cf8f7d053418db1877da2656fb59e1ce545f8dd
 
 jobs:
   native-windows:
@@ -57,6 +60,21 @@ jobs:
         with:
           version: ${{ env.VULKAN_SDK_VERSION }}
           cache: true
+
+      - name: Install Slang SDK
+        shell: pwsh
+        run: |
+          $archive = "$env:RUNNER_TEMP/slang.zip"
+          $destination = "$env:RUNNER_TEMP/slang-sdk"
+          Invoke-WebRequest `
+            -Uri "https://github.com/shader-slang/slang/releases/download/v$env:SLANG_VERSION/slang-$env:SLANG_VERSION-windows-x86_64.zip" `
+            -OutFile $archive
+          $actual = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
+          if ($actual -ne $env:SLANG_WINDOWS_SHA256) {
+            throw "Slang archive hash mismatch: $actual"
+          }
+          Expand-Archive -LiteralPath $archive -DestinationPath $destination
+          "SLANG_SDK=$destination" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Configure NGX shim
         shell: pwsh
@@ -90,8 +108,8 @@ jobs:
           $destination = "build/slang-runtime-input/windows-x64"
           New-Item -ItemType Directory -Force -Path $destination | Out-Null
           Copy-Item "build/native/slang_shim/release/causticaslang.dll" $destination
-          Get-ChildItem "$env:VULKAN_SDK/Bin" -Filter "slang*.dll" | Copy-Item -Destination $destination
-          Get-ChildItem "$env:VULKAN_SDK/Bin" -Directory -Filter "slang-standard-module-*" |
+          Get-ChildItem "$env:SLANG_SDK/bin" -Filter "slang*.dll" | Copy-Item -Destination $destination
+          Get-ChildItem "$env:SLANG_SDK/bin" -Directory -Filter "slang-standard-module-*" |
             Copy-Item -Destination $destination -Recurse
 
       - name: Upload Windows NGX shim
@@ -134,6 +152,16 @@ jobs:
           version: ${{ env.VULKAN_SDK_VERSION }}
           cache: true
 
+      - name: Install Slang SDK
+        run: |
+          archive="${RUNNER_TEMP}/slang.zip"
+          destination="${RUNNER_TEMP}/slang-sdk"
+          curl --fail --location --output "${archive}" \
+            "https://github.com/shader-slang/slang/releases/download/v${SLANG_VERSION}/slang-${SLANG_VERSION}-linux-x86_64.zip"
+          echo "${SLANG_LINUX_SHA256}  ${archive}" | sha256sum --check
+          unzip -q "${archive}" -d "${destination}"
+          echo "SLANG_SDK=${destination}" >> "${GITHUB_ENV}"
+
       - name: Configure NGX shim
         env:
           DLSS_SDK: ${{ github.workspace }}/${{ env.DLSS_SDK_PATH }}
@@ -161,10 +189,10 @@ jobs:
           destination="build/slang-runtime-input/linux-x64"
           mkdir -p "${destination}"
           cp "build/native/slang_shim/release/libcausticaslang.so" "${destination}/"
-          find "${VULKAN_SDK}/lib" -maxdepth 1 -type f -name 'libslang*.so*' -exec cp -L '{}' "${destination}/" \;
-          find "${VULKAN_SDK}/lib" -maxdepth 1 -type l -name 'libslang*.so*' -exec cp -L '{}' "${destination}/" \;
-          find "${VULKAN_SDK}/bin" -maxdepth 1 -type f -name 'libslang*.so*' -exec cp -L '{}' "${destination}/" \;
-          find "${VULKAN_SDK}" -maxdepth 3 -type d -name 'slang-standard-module-*' -exec cp -R '{}' "${destination}/" \;
+          find "${SLANG_SDK}/lib" -maxdepth 1 -type f -name 'libslang*.so*' -exec cp -L '{}' "${destination}/" \;
+          find "${SLANG_SDK}/lib" -maxdepth 1 -type l -name 'libslang*.so*' -exec cp -L '{}' "${destination}/" \;
+          find "${SLANG_SDK}/bin" -maxdepth 1 -type f -name 'libslang*.so*' -exec cp -L '{}' "${destination}/" \;
+          find "${SLANG_SDK}" -maxdepth 3 -type d -name 'slang-standard-module-*' -exec cp -R '{}' "${destination}/" \;
 
       - name: Upload Linux NGX shim
         uses: actions/upload-artifact@v4
@@ -221,8 +249,19 @@ jobs:
           echo "VULKAN_SDK=${sdk_root}" >> "${GITHUB_ENV}"
           echo "${sdk_root}/bin" >> "${GITHUB_PATH}"
           "${sdk_root}/bin/glslangValidator" --version
-          "${sdk_root}/bin/slangc" -version
           "${sdk_root}/bin/spirv-val" --version
+
+      - name: Install Slang SDK
+        run: |
+          archive="${RUNNER_TEMP}/slang.zip"
+          destination="${RUNNER_TEMP}/slang-sdk"
+          curl --fail --location --output "${archive}" \
+            "https://github.com/shader-slang/slang/releases/download/v${SLANG_VERSION}/slang-${SLANG_VERSION}-linux-x86_64.zip"
+          echo "${SLANG_LINUX_SHA256}  ${archive}" | sha256sum --check
+          unzip -q "${archive}" -d "${destination}"
+          echo "SLANG_SDK=${destination}" >> "${GITHUB_ENV}"
+          echo "${destination}/bin" >> "${GITHUB_PATH}"
+          "${destination}/bin/slangc" -version
 
       - name: Download NGX shims
         uses: actions/download-artifact@v4
