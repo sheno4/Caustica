@@ -21,7 +21,6 @@ import bindings;
 import caustica_types;
 import caustica_surface;
 import caustica_api;
-import frame;
 import trace_policy;
 // Anchors pass-declared resource modules as plain imports for indirect.slang and indirect_ser.slang, the
 // two entry points built on this integrator. Required even though nothing here reads one: see the same
@@ -46,8 +45,7 @@ SurfaceClosure payloadSurfaceClosure(float3 n) {
 }
 
 public float3 tracePath<TC : IComposition, TTrace : IRadianceTrace>(TC.Surface surfaceModel,
-        FrameContext frameCtx, PathSegment seg,
-        uint2 pix, uint sampleIndex) {
+        PathSegment seg, uint2 pix, uint sampleIndex) {
     float3 L = float3(0.0, 0.0, 0.0);
     float3 ro = seg.ro;
     float3 rd = seg.rd;
@@ -297,7 +295,6 @@ public void runIndirect<TC : IComposition, TTrace : IRadianceTrace>() {
     // All three consumers below (particle lighting, main NEE, SSS backscatter) gate on
     // ndl/illuminance, so a zero light fires no shadow ray. A sky extension submitting sun and moon
     // through LightProvider.submitLights, consumed by the engine, is what makes these real.
-    FrameContext frameCtx = frameContext(worldPush);
     TC.Surface surfaceModel;
     uint2 dispatchIndex = DispatchRaysIndex().xy;
     uint2 dimensions = DispatchRaysDimensions().xy;
@@ -311,7 +308,7 @@ public void runIndirect<TC : IComposition, TTrace : IRadianceTrace>() {
         PackedPathSegment packed = queue[recordIndex];
         PathSegment segment = unpackPathSegment(packed);
         for (uint s = 0u; s < spp; ++s) {
-            frameRadiance += tracePath<TC, TTrace>(surfaceModel, frameCtx, segment,
+            frameRadiance += tracePath<TC, TTrace>(surfaceModel, segment,
                     uint2(pix), s + leaf * spp);
         }
         if (packed.nextRecord == PATH_NO_NEXT) {

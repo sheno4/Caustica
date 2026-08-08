@@ -11,7 +11,6 @@ import bindings;
 import caustica_types;
 import caustica_surface;
 import caustica_api;
-import frame;
 // Required in EVERY composition-specialized entry point, not just the ones that read a pass resource:
 // Slang rejects a module that declares global shader parameters if it is reachable only through the
 // generic type parameter, and TC exposes every slot the composition names, whether this stage calls it or
@@ -221,10 +220,9 @@ MaterialInput buildMaterialInput(Surface surface, float3 finalAlbedo, float inte
 static const float PLACEHOLDER_BIOME_TEMPERATURE = 0.5;
 static const float PLACEHOLDER_BIOME_HUMIDITY = 0.5;
 
-SurfaceInput buildSurfaceInput(FrameContext frame, MaterialInput material, float3 position,
+SurfaceInput buildSurfaceInput(MaterialInput material, float3 position,
         float3 geometricNormal, float3 shadingNormal, float3 outgoingDirection, float2 uv, float lod) {
     SurfaceInput input;
-    input.frame = frame;
     input.material = material;
     input.position = position;
     input.geometricNormal = geometricNormal;
@@ -238,13 +236,6 @@ SurfaceInput buildSurfaceInput(FrameContext frame, MaterialInput material, float
     input.biomeHumidity = PLACEHOLDER_BIOME_HUMIDITY;
     input.surfaceFlags = 0u;
     return input;
-}
-
-// Loaded lazily, only by the two surface-slot branches below — particles, water, and glass never
-// need it, and this is the hottest chain in the frame (see file doc), so it stays off their path.
-FrameContext currentFrameContext() {
-    WorldPush worldPush = ConstPtr<WorldPush>(pc.worldPushAddr)[0];
-    return frameContext(worldPush);
 }
 
 [shader("closesthit")]
@@ -355,7 +346,7 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
 
         MaterialInput material0 = buildMaterialInput(surface, albedo, header.params.z);
         float3 hitPos = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
-        SurfaceInput input = buildSurfaceInput(currentFrameContext(), material0, hitPos,
+        SurfaceInput input = buildSurfaceInput(material0, hitPos,
                 geometricNormal, surface.normal, vdir, euvCoord, entityLod);
         SurfaceClosure closure = surfaceModel.createSurface(input);
 
@@ -470,7 +461,7 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
 
     MaterialInput material0 = buildMaterialInput(surface, finalAlbedo, materialHeader.params.z);
     float3 hitPos = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
-    SurfaceInput input = buildSurfaceInput(currentFrameContext(), material0, hitPos,
+    SurfaceInput input = buildSurfaceInput(material0, hitPos,
             geometricNormal, surface.normal, vdir, uv, blockLod);
     SurfaceClosure closure = surfaceModel.createSurface(input);
 

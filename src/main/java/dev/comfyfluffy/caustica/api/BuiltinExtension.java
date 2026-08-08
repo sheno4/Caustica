@@ -20,10 +20,9 @@ final class BuiltinExtension implements CausticaExtension {
         registry.feature(ID)
                 .title(Component.translatable("feature.caustica.builtin"))
                 .category(FeatureCategory.GENERAL)
-                .shaderSource(ShaderSource.classpath("/caustica/shaders/builtin", "sky", "surface", "medium", "bloom", "common"))
+                .shaderSource(ShaderSource.classpath("/caustica/shaders/builtin", "sky", "surface", "bloom", "common"))
                 .bind(Slots.SKY, "caustica_sky_slot", "LutSky")
                 .bind(Slots.SURFACE, "caustica_builtin_surface", "BuiltinSurface")
-                .bind(Slots.MEDIUM, "caustica_builtin_medium", "BuiltinMedium")
                 // Anchors SkyLutPass's own binding declarations outside the generic Sky-slot mechanism —
                 // Slang forbids a slot IMPLEMENTATION from declaring global shader parameters itself. See
                 // FeatureBuilder.passResourceModule's javadoc.
@@ -43,6 +42,5 @@ final class BuiltinExtension implements CausticaExtension {
                 .register();
         registry.setDefault(Slots.SKY, ID);
         registry.setDefault(Slots.SURFACE, ID);
-        registry.setDefault(Slots.MEDIUM, ID);
     }
 }

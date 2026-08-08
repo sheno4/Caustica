@@ -4,7 +4,6 @@
     "src/main/resources/caustica/shaders/world",
     "src/main/resources/caustica/shaders/builtin/sky",
     "src/main/resources/caustica/shaders/builtin/surface",
-    "src/main/resources/caustica/shaders/builtin/medium",
     "src/main/resources/caustica/shaders/builtin/bloom",
     "src/main/resources/caustica/shaders/builtin/common",
     "shaders/common",

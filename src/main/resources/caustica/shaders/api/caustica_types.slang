@@ -14,19 +14,6 @@ public static const uint EVENT_TRANSMISSION = 0x10u;
 
 public static const uint DIMENSION_ULTRAWARM = 0x4u;
 
-public static const uint MEDIUM_AIR = 0u;
-public static const uint MEDIUM_WATER = 1u;
-
-/**
- * Per-frame world state an appearance slot is allowed to see. Weather is all of it: everything else the
- * engine knows is either reachable another way or belongs to whichever slot owns it. Both fields are
- * currently always zero — no weather state reaches the world push yet, so slots see a clear sky rather
- * than fabricated values.
- */
-public struct FrameContext {
-    public float rain;
-    public float thunder;
-};
 public struct MaterialInput {
     public float3 baseColor;
     public float opacity;
@@ -42,7 +29,6 @@ public struct MaterialInput {
 };
 
 public struct SurfaceInput {
-    public FrameContext frame;
     public MaterialInput material;
     public float3 position;
     public float3 geometricNormal;
@@ -93,48 +79,6 @@ public struct BsdfSample {
 };
 
 public struct EnvironmentQuery {
-    public FrameContext frame;
     public float3 direction;
     public bool showCelestialBodies;
-};
-
-public struct MediumInput {
-    public FrameContext frame;
-    public float3 position;
-    public float3 tint;
-    public float density;
-    public float biomeTemperature;
-    public float biomeHumidity;
-    public uint mediumTag;
-};
-
-public struct MediumProperties {
-    public float3 scattering;
-    public float3 absorption;
-    public float3 emissionRadiance;
-    public float anisotropy;
-    public float ior;
-};
-
-public struct PhaseQuery {
-    public MediumProperties medium;
-    public float3 incomingDirection;
-    public float3 outgoingDirection;
-};
-
-public struct PhaseEvaluation {
-    public float value;
-    public float pdf;
-};
-
-public struct PhaseSampleQuery {
-    public MediumProperties medium;
-    public float3 incomingDirection;
-    public float2 random;
-};
-
-public struct PhaseSample {
-    public float3 outgoingDirection;
-    public float throughputWeight;
-    public float pdf;
 };

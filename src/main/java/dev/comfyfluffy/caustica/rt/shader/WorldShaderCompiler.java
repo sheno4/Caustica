@@ -63,14 +63,14 @@ public final class WorldShaderCompiler implements AutoCloseable {
             "(?m)^\\s*import\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*;");
 
     private static final List<String> WORLD_MODULES = List.of(
-            "any_hit.rahit.slang", "bindings.slang", "closest_hit.slang", "frame.slang",
+            "any_hit.rahit.slang", "bindings.slang", "closest_hit.slang",
             "guide.rmiss.slang", "guides.slang", "indirect.slang", "indirect_core.slang",
             "indirect_ser.slang", "lighting.slang", "math.slang", "medium.slang",
             "primary.rgen.slang", "segment.slang", "sky_miss.slang",
             "trace.slang", "trace_ordinary.slang", "trace_policy.slang", "trace_reordered.slang",
             "trace_ser.slang", "water.slang", "world_common.slang", "world_core.slang");
     private static final List<String> API_MODULES = List.of(
-            "caustica_api.slang", "caustica_color.slang", "caustica_medium.slang", "caustica_sky.slang",
+            "caustica_api.slang", "caustica_color.slang", "caustica_sky.slang",
             "caustica_surface.slang", "caustica_types.slang");
     private static final Set<String> ENGINE_MODULE_NAMES = moduleNames(WORLD_MODULES, API_MODULES);
 
@@ -306,7 +306,7 @@ public final class WorldShaderCompiler implements AutoCloseable {
             resolveFeatureModule(selected.binding().module(), selectedFeatures, resolved, visiting);
         }
         // A feature's passResourceModule may not be reachable from any slot-bound module's own imports
-        // (e.g. caustica:builtin is still selected via SURFACE/MEDIUM even when a different feature wins
+        // (e.g. caustica:builtin is still selected via SURFACE even when a different feature wins
         // SKY) — resolve these as additional roots so passResourceAnchorModule's imports always resolve.
         for (Feature feature : selectedFeatures) {
             for (String module : feature.passResourceModules()) {
@@ -359,7 +359,6 @@ public final class WorldShaderCompiler implements AutoCloseable {
         source.append("\npublic struct ").append(COMPOSITION_TYPE).append(" : IComposition {\n");
         appendAlias(source, "Sky", selection.binding(Slots.SKY));
         appendAlias(source, "Surface", selection.binding(Slots.SURFACE));
-        appendAlias(source, "Medium", selection.binding(Slots.MEDIUM));
         return source.append("};\n").toString();
     }
 

@@ -153,7 +153,7 @@ never kills the frame loop. Same discipline as the existing per-stage shader fal
 
 These look alike and are not:
 
-- **Slot binding.** The engine declares `IMediumModel.perturbNormal(...)`; a feature implements it and
+- **Slot binding.** The engine declares `ISurfaceModel.createSurface(...)`; a feature implements it and
   binds the slot. Checked, narrow, versioned. Engine changes produce a compile error naming the method.
 - **Slang module substitution.** The engine imports `water`; a feature's `water.slang` wins on the search
   path. Broad and powerful, but ABI-by-convention: every function the engine calls in that module becomes
@@ -474,7 +474,7 @@ Honest status, so this reads as a target and not a claim:
   own modules plus the public API. The Overworld atmosphere model, its three LUT bakes, the sky slot, and
   its bindings all live under `builtin/sky/` (they were in the engine's `world/sky/`, which made the
   engine tree own an extension's physics); bloom moved from `passes/` to `builtin/bloom/`; the builtin
-  surface and medium slots got their own subdirectories. Three symbols had to move to make the boundary
+  surface slot got its own subdirectory. Three symbols had to move to make the boundary
   real: `celestialSquareFrame` (pure geometry `math.slang`'s NEE square sampling needs), `CelestialLight`
   (engine NEE state), and the `bt709ToAcesCg`/`srgbToLinear` colour primitives — the last into a new
   `api/caustica_color.slang`, since the colour space a slot must return is part of the slot contract.
@@ -483,14 +483,23 @@ Honest status, so this reads as a target and not a claim:
   server the same search paths the compiler uses, so `import foo` resolves in the editor. Those search
   paths duplicate what `WorldShaderCompiler`'s `WORLD_MODULES`/`API_MODULES` and each feature's
   `ShaderSource` roots express at runtime; they have to be kept in sync by hand.
-- **`FrameContext` is down to `rain` and `thunder`.** `timeSeconds`, `frameIndex`, `cameraPosition`,
-  `dayFraction`, `nightFraction`, `sunDirection`, `moonDirection` and `dimensionFlags` were written every
-  frame and read by nothing, so they are gone along with the `DIMENSION_*` flags. The two that remain have
-  a real consumer (`caustica_builtin_medium`) but no producer — no weather state reaches the world push —
-  so slots see a clear sky.
+- **The `caustica:medium` slot is gone; two slots remain.** `IMediumModel`, `BuiltinMedium`,
+  `MediumInput`/`MediumProperties`/`Phase*`, the `MEDIUM_*` tags, `Slots.MEDIUM` and
+  `IComposition.Medium` are deleted. No engine stage ever called `createMedium` — what actually runs is
+  `world/medium.slang`'s engine-owned `MediumStack` and Beer-Lambert extinction, which shares nothing
+  with the slot but the word "medium". It was reachable only by a third party implementing it and
+  watching it do nothing. Volume scattering through a slot returns when there is a volumetric integrator
+  to call it; see `EXTENSION_API.md` §4.4.
+- **`FrameContext` is gone.** It had already shrunk to `rain`/`thunder` once the celestial fields turned
+  out to have no readers; those two never had a producer either — no weather state reaches the world push
+  — so it was a struct of two always-zero floats threaded through `SurfaceInput`, `EnvironmentQuery`,
+  `MediumInput`, a `world/frame.slang` module, and a parameter on `tracePath`, the hottest function in the
+  renderer. `caustica_builtin_medium`'s `(1.0 + 4.0 * weather)` scattering term was the only read, and it
+  always evaluated to `1.0`. When weather does get a producer, the honest shape is a field on whichever
+  input struct needs it, added then.
 - **Known gap: the engine has no sun or moon as a *light*.** Celestial NEE does not fire and
-  `celestialLight` sits at its zero-illuminance default. Nothing read the removed `FrameContext` celestial
-  fields, so nothing renders differently — but a third-party surface or medium slot cannot do a day/night
+  `celestialLight` sits at its zero-illuminance default. Nothing read the celestial state that used to sit
+  on `FrameContext`, so nothing renders differently — but a third-party surface slot cannot do a day/night
   blend. The fix is one thing: `SkyLutPass` already calls `LightProvider.submitLights(LightSink)`, and the
   engine has to start consuming it.
 - **Physical layering hasn't happened.** `core` / `core_minecraft` / extensions is still a target; the

@@ -41,7 +41,6 @@ final class WorldShaderCompilerTest {
             assertSpirv(compiler.compileIndirect(false), 1024);
             assertTrue(compiler.composition().rootSource().contains("typealias Sky = LutSky"));
             assertTrue(compiler.composition().rootSource().contains("typealias Surface = BuiltinSurface"));
-            assertTrue(compiler.composition().rootSource().contains("typealias Medium = BuiltinMedium"));
         }
         try (WorldShaderCompiler compiler = compiler(cacheDirectory.resolve("ser"))) {
             assertSpirv(compiler.compileSkyMiss(), 1024);

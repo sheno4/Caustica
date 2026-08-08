@@ -21,7 +21,6 @@ final class CausticaRegistryTest {
 
         assertEquals(BuiltinExtension.ID, selection.binding(Slots.SKY).feature().id());
         assertEquals("BuiltinSurface", selection.binding(Slots.SURFACE).binding().type());
-        assertEquals("BuiltinMedium", selection.binding(Slots.MEDIUM).binding().type());
         assertTrue(registry.renderPasses().containsKey(
                 Identifier.fromNamespaceAndPath("caustica", "bloom")));
         assertTrue(registry.renderPasses().containsKey(

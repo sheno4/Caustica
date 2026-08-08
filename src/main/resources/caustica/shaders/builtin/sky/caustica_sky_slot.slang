@@ -33,8 +33,8 @@ float3 skyDome(float3 dir, SkyState state) {
 }
 
 float3 lutSkyEvaluateEnvironment(EnvironmentQuery query) {
-    // Derives SkyState from this pass's OWN uniform buffer rather than through EnvironmentQuery/
-    // FrameContext — see the module header on why.
+    // Derives SkyState from this pass's OWN uniform buffer rather than through EnvironmentQuery — see
+    // the module header on why.
     SkyState state = skyState(skyInputs);
     float3 dir = query.direction;
 

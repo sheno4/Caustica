@@ -69,12 +69,11 @@ binding. v1:
 |---|---|---|
 | `caustica:sky` | `ISkyModel` | `LutSky` |
 | `caustica:surface` | `ISurfaceModel` | `BuiltinSurface` |
-| `caustica:medium` | `IMediumModel` | `BuiltinMedium` |
 
 Adding a slot is an API change, not something a feature can invent — same rule as render-pass hooks in
-`ARCHITECTURE.md` §4. Three is the honest starting set: it is exactly what has been compiled and linked
-against a real implementation. Water waves want a fourth (`caustica:interface`, a `perturbNormal` hook);
-that slot lands with its first consumer, not before.
+`ARCHITECTURE.md` §4. Two is the honest set: it is exactly what an engine stage actually calls. A
+`caustica:medium` slot shipped alongside these and was removed — see §4.4. Water waves want a third
+(`caustica:interface`, a `perturbNormal` hook); that slot lands with its first consumer, not before.
 
 ### 2.2 The generated composition root
 
@@ -101,7 +100,6 @@ against
 public interface IComposition {
     associatedtype Sky     : ISkyModel;
     associatedtype Surface : ISurfaceModel;
-    associatedtype Medium  : IMediumModel;
 };
 ```
 
@@ -126,7 +124,7 @@ Two things to verify before committing to it, in this order:
 
 ### 2.3 Why not one type parameter per slot
 
-`main<TSurface : ISurfaceModel, TSky : ISkyModel, TMedium : IMediumModel>` also expresses the model and
+`main<TSurface : ISurfaceModel, TSky : ISkyModel>` also expresses the model and
 needs no generated file — but it needs the shim to accept N type arguments, it puts the slot list into
 every entry point signature so adding a slot edits every stage, and it gives the cache nothing to key on
 but an ordered tuple. The composition root gives the cache one hash and the diagnostics one name.
@@ -183,15 +181,15 @@ imports only the interface it binds.
 
 | Was | Is |
 |---|---|
-| `caustica_ray_pack_api` (one module) | `caustica_api` (shared types, `IComposition`) + `caustica_surface` / `caustica_sky` / `caustica_medium` |
+| `caustica_ray_pack_api` (one module) | `caustica_api` (shared types, `IComposition`) + `caustica_surface` / `caustica_sky` |
 | `IRayPack` | *deleted* — see §2.2 |
 | `IPackSurfaceModel` | `ISurfaceModel` |
 | `IPackEnvironmentModel` | `ISkyModel` |
-| `IPackMediumModel` | `IMediumModel` |
+| `IPackMediumModel` | *deleted* — see §4.4 |
 | `PackSurfaceInput`, `PackSurfaceClosure`, `PackBsdfQuery`, … | `SurfaceInput`, `SurfaceClosure`, `BsdfQuery`, … |
-| `PACK_EVENT_*`, `PACK_SURFACE_*`, `PACK_DIMENSION_*`, `PACK_MEDIUM_*` | `EVENT_*`, `SURFACE_*`, `DIMENSION_*`, `MEDIUM_*` |
-| `PackFrameContext` / `packFrameContext` | `FrameContext` / `frameContext` |
-| `pack_sky_miss.slang`, `pack_closest_hit.slang`, `pack_indirect.slang`, `pack_frame.slang` | `sky_miss.slang`, `closest_hit.slang`, `indirect.slang`, `frame.slang` |
+| `PACK_EVENT_*`, `PACK_SURFACE_*`, `PACK_DIMENSION_*`, `PACK_MEDIUM_*` | `EVENT_*`, `SURFACE_*`, `DIMENSION_*`; `MEDIUM_*` deleted with the slot |
+| `PackFrameContext` / `packFrameContext` | *deleted* — every field was always zero and unread |
+| `pack_sky_miss.slang`, `pack_closest_hit.slang`, `pack_indirect.slang` | `sky_miss.slang`, `closest_hit.slang`, `indirect.slang` |
 | `default_pack.slang`, `caustica_default_*.slang` | `caustica_builtin.slang`, `caustica_builtin_*.slang` |
 
 Dropping the `pack_` prefix on the entry points is safe: they carry no stage infix, so `closest_hit.slang`
@@ -274,22 +272,20 @@ Under §1 that is a `LightProvider`, which is also the only shape that lets a se
 through NEE rather than being a shader-side fake. Removing them makes `ISkyModel` a single function, which
 is the right size for the slot that the Nether-sky work will be the first real consumer of.
 
-### 4.4 Medium and dielectric interfaces
+### 4.4 Media and dielectric interfaces
 
 **Dielectric interface behaviour is engine-owned in full**: Fresnel, reflection/refraction choice, total
 internal reflection, medium push/pop, and the surface-bias regimes. The medium stack stays engine-side and
 out of the closure's live register set.
 
-```slang
-public interface IMediumModel {
-    public Medium createMedium(MediumInput input);          // scattering, absorption, ior, anisotropy
-    public PhaseEvaluation evaluatePhase(PhaseQuery query);  // value, pdf — must agree, like the BSDF
-    public PhaseSample samplePhase(PhaseSampleQuery query);
-};
-```
-
-A full phase-function estimator, not just an anisotropy parameter: volume NEE needs eval/sample/pdf under
-the same contract as the BSDF.
+**There is no medium slot.** A `caustica:medium` slot with an `IMediumModel` — `createMedium` plus a full
+`evaluatePhase`/`samplePhase` estimator — was specified and implemented, and no engine stage ever called
+it: what runs is `world/medium.slang`'s engine-owned `MediumStack` with Beer-Lambert extinction, which
+shares nothing with the slot but the word. It is gone rather than kept as an unreachable interface a
+third party could implement and watch do nothing. Volume scattering through a slot is a real design, and
+its shape was right — a full eval/sample/pdf phase estimator under the same agreement contract as the
+BSDF, since volume NEE needs all three. What it lacked was a volumetric integrator to be called from.
+The slot returns with one.
 
 Consequence, accepted: refraction is not stylizable. The engine's transmission-chain walk selects the
 guide branch and uses material IOR, so exaggerated or absent refraction would produce guides describing

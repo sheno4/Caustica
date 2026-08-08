@@ -13,7 +13,6 @@ import world_common;
 import bindings;
 import caustica_types;
 import caustica_api;
-import frame;
 // Slang forbids a generic-specialized entry point's type-parameter implementation (whatever TC.Sky
 // resolves to) from declaring its own global shader parameters — the binding has to be reachable through
 // an ordinary, non-generic import. This fixed, engine-generated module is that anchor: its content is
@@ -24,10 +23,7 @@ import caustica_pass_resources;
 
 [shader("miss")]
 void main<TC : IComposition>(inout Payload payload) {
-    WorldPush worldPush = ConstPtr<WorldPush>(pc.worldPushAddr)[0];
-
     EnvironmentQuery query;
-    query.frame = frameContext(worldPush);
     query.direction = normalize(WorldRayDirection());
     // Engine-owned double-count gate, set per-ray by raygen from the path state: a diffuse vertex that
     // already sampled the sun through NEE must not also see the disc. The surface slot classifies lobes;
