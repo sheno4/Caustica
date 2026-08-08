@@ -1,7 +1,10 @@
 package dev.comfyfluffy.caustica.mixin;
 
+import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
+import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import dev.comfyfluffy.caustica.rt.terrain.RtTerrain;
 import dev.comfyfluffy.caustica.rt.RtRuntime;
+import net.minecraft.client.SectionUpdateTracker;
 import net.minecraft.client.renderer.extract.LevelExtractor;
 import net.minecraft.core.BlockPos;
 import org.spongepowered.asm.mixin.Mixin;
@@ -38,5 +41,26 @@ public class LevelExtractorMixin {
         if (RtRuntime.hasSession()) {
             RtTerrain.markBlocksDirty(minX, minY, minZ, maxX, maxY, maxZ);
         }
+    }
+
+    /**
+     * Hide vanilla's dirty sections from {@code extract} while RT owns world rendering.
+     *
+     * <p>Reporting a section dirty here is destructive: {@code extract} immediately calls
+     * {@code setNotDirty()} and hands the rebuild request to {@code LevelRenderer.compileSections}, which
+     * {@link LevelRendererMixin} cancels. Left alone, that loses the dirty bit for every section touched
+     * while RT is on, so those sections would still be showing pre-RT geometry when vanilla comes back.
+     * Reporting nothing keeps {@link SectionUpdateTracker} accumulating dirtiness instead, so switching RT
+     * off recompiles exactly the sections that changed — and vanilla does zero meshing work in the
+     * meantime. The tracker's own camera repositioning still runs, and view-area rotation resets the
+     * sections it recycles, so vanilla's terrain memory drains as the player moves.
+     */
+    @WrapOperation(method = "extract",
+            at = @At(value = "INVOKE",
+                    target = "Lnet/minecraft/client/SectionUpdateTracker;getDirtyState(J)"
+                            + "Lnet/minecraft/client/SectionUpdateTracker$SectionDirtyState;"))
+    private SectionUpdateTracker.SectionDirtyState caustica$hideDirtySectionsFromVanilla(
+            SectionUpdateTracker tracker, long sectionNode, Operation<SectionUpdateTracker.SectionDirtyState> original) {
+        return RtRuntime.active() ? null : original.call(tracker, sectionNode);
     }
 }

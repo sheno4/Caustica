@@ -103,7 +103,13 @@ public final class RtRuntime {
         return state;
     }
 
-    /** True after startup has completed, including setup work immediately before the next render frame. */
+    /**
+     * True after startup has completed, including setup work immediately before the next render frame.
+     *
+     * <p>Stable across a whole frame: the state only advances on the client tick, which runs before both
+     * {@code GameRenderer.extract} and {@code GameRenderer.render}. The extract-side and render-side hooks
+     * that must agree on who owns terrain therefore never disagree within one frame.</p>
+     */
     public static boolean active() {
         return INSTANCE.state == State.ACTIVE;
     }
@@ -120,9 +126,7 @@ public final class RtRuntime {
 
     /** PQ belongs to an active RT session; Off and Starting use Minecraft's native SDR swapchain. */
     public static boolean wantsPqSwapchain() {
-        return CausticaConfig.Rt.ENABLED.value()
-                && active()
-                && CausticaConfig.Rt.Hdr.ENABLED.value();
+        return active() && CausticaConfig.Rt.Hdr.ENABLED.value();
     }
 
     private void start() {
@@ -138,6 +142,12 @@ public final class RtRuntime {
         CausticaMod.LOGGER.info("RT runtime starting; vanilla presentation remains active");
     }
 
+    /**
+     * Hand world rendering back to vanilla. Nothing has to be rebuilt or waited on: vanilla's chunk
+     * visibility graph stayed in sync throughout the session (see {@code LevelRendererMixin}) and its
+     * sections stayed marked dirty (see {@code LevelExtractorMixin}), so the very next frame compiles
+     * whatever it needs.
+     */
     private void stop(Minecraft client) {
         state = State.STOPPING;
         frameActive = false;
@@ -145,9 +155,6 @@ public final class RtRuntime {
         session.close();
         session = null;
         state = State.OFF;
-        if (client.level != null) {
-            client.levelExtractor.allChanged();
-        }
         CausticaMod.LOGGER.info("RT runtime off; vanilla presentation restored");
     }
 
@@ -158,9 +165,6 @@ public final class RtRuntime {
         session.close();
         session = null;
         state = State.FAILED;
-        if (client.level != null) {
-            client.levelExtractor.allChanged();
-        }
         CausticaMod.LOGGER.warn("RT runtime startup failed; vanilla presentation remains active");
     }
 

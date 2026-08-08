@@ -6,6 +6,7 @@ import dev.comfyfluffy.caustica.client.VanillaRenderController;
 import dev.comfyfluffy.caustica.rt.terrain.RtTerrain;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.renderer.LevelRenderer;
+import net.minecraft.client.renderer.state.OptionsRenderState;
 import net.minecraft.client.renderer.state.level.CameraRenderState;
 import net.minecraft.client.renderer.state.level.LevelRenderState;
 import org.joml.Matrix4fc;
@@ -22,6 +23,10 @@ public abstract class LevelRendererMixin {
 	@Shadow
 	@Final
 	private LevelRenderState levelRenderState;
+	@Shadow
+	@Final
+	private OptionsRenderState optionsRenderState;
+
 	@Inject(method = "render", at = @At("HEAD"), cancellable = true)
 	private void caustica$cancelVanillaWorld(
 			GraphicsResourceAllocator resourceAllocator,
@@ -48,7 +53,31 @@ public abstract class LevelRendererMixin {
 			return;
 		}
 
+		caustica$maintainVanillaSections(cameraState);
 		VanillaRenderController.INSTANCE.markWorldSkipped();
 		ci.cancel();
+	}
+
+	/**
+	 * Keep vanilla's chunk-visibility bookkeeping running while RT owns the world.
+	 *
+	 * <p>{@code LevelExtractor.extract} feeds {@link net.minecraft.client.renderer.SectionOcclusionGraph}
+	 * from {@code ClientChunkCache}'s loaded-chunk and empty-section <em>deltas</em>, and clears those sets
+	 * (via {@code flipUpdateTrackingSets}) whether or not anyone consumed them. {@code render} is the only
+	 * consumer, so cancelling it without this call silently drops every chunk load that happens while RT is
+	 * on. The graph's {@code loadedChunks} set then no longer matches the world and every section parks in
+	 * {@code sectionsWaitingForChunkLoads} — vanilla renders sky and particles but no terrain or entities,
+	 * with no recovery short of a dimension change. Repositioning is part of the same contract: the view
+	 * area must follow the camera or the graph rebuilds around a stale section grid.
+	 *
+	 * <p>Section meshing ({@code compileSections} and the GPU upload) is deliberately <em>not</em> run: RT
+	 * renders the world, so vanilla meshes would be pure cost. {@link LevelExtractorMixin} holds the
+	 * matching half of that decision by keeping sections marked dirty, so they compile when RT stops.
+	 */
+	private void caustica$maintainVanillaSections(CameraRenderState cameraState) {
+		LevelRenderer renderer = (LevelRenderer) (Object) this;
+		((LevelRendererAccessor) renderer).caustica$repositionCamera(cameraState);
+		renderer.sectionOcclusionGraph().update(
+				cameraState, this.optionsRenderState.fov, this.levelRenderState.chunkLoadingRenderState);
 	}
 }
