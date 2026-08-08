@@ -8,8 +8,10 @@ import dev.comfyfluffy.caustica.client.screen.widget.CausticaRadio;
 import dev.comfyfluffy.caustica.client.screen.widget.CausticaScrollPane;
 import dev.comfyfluffy.caustica.client.screen.widget.CausticaSlider;
 import dev.comfyfluffy.caustica.client.screen.widget.CausticaTextButton;
+import dev.comfyfluffy.caustica.client.screen.widget.CausticaSummaryWidget;
 import dev.comfyfluffy.caustica.client.screen.widget.CausticaToggle;
 import dev.comfyfluffy.caustica.client.settings.CausticaSections;
+import dev.comfyfluffy.caustica.client.settings.CompositionSummary;
 import dev.comfyfluffy.caustica.client.settings.SettingControl;
 import dev.comfyfluffy.caustica.client.settings.SettingGroup;
 import dev.comfyfluffy.caustica.client.settings.SettingsCommit;
@@ -121,6 +123,10 @@ public final class CausticaOptionsScreen extends Screen {
     /** Rebuilds the content pane's rows for the current section. */
     private void rebuildContent() {
         List<CausticaScrollPane.Entry> entries = new ArrayList<>();
+        if (section().id().equals(CausticaSections.COMPOSITION_ID)) {
+            entries.add(new CausticaScrollPane.Entry(new CausticaSummaryWidget(
+                    CompositionSummary.of(CausticaApi.registry()), font, section().accent())));
+        }
         boolean first = true;
         for (SettingGroup group : section().groups()) {
             CausticaGroupHeader header =

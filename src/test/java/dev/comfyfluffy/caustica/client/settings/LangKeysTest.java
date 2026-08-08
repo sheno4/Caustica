@@ -116,6 +116,27 @@ final class LangKeysTest {
         assertTrue(missing.isEmpty(), "missing en_us.json entries: " + missing);
     }
 
+    /** Stage and anchor titles are derived from the RenderStage enum, so adding a stage needs a key. */
+    @Test
+    void everyFrameSummaryRowHasATitle() throws IOException {
+        JsonObject lang = lang();
+        List<String> missing = new ArrayList<>();
+        CompositionSummary summary = CompositionSummary.of(CausticaRegistry.withBuiltins());
+
+        summary.lanes().forEach(lane -> require(lang, missing, lane.title()));
+        summary.providers().forEach(row -> require(lang, missing, row.title()));
+        for (String key : List.of("caustica.summary.title", "caustica.summary.providers",
+                "caustica.summary.none")) {
+            if (!lang.has(key)) {
+                missing.add(key);
+            }
+        }
+
+        assertTrue(missing.isEmpty(), "missing en_us.json entries: " + missing);
+        assertTrue(checked.size() >= dev.comfyfluffy.caustica.api.pass.RenderStage.values().length,
+                "every stage should contribute a lane");
+    }
+
     /** Engine group titles come from a list in CausticaSections, not from any setting's own declaration. */
     @Test
     void everyEngineGroupThatHasRowsHasATitle() throws IOException {

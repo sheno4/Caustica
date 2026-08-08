@@ -20,6 +20,9 @@ import java.util.Map;
  * whole model is exercised in tests without a GUI stack.
  */
 public final class CausticaSections {
+    /** The screen prepends the frame diagram to this section; nothing else distinguishes it. */
+    public static final String COMPOSITION_ID = "composition";
+
     /**
      * Engine groups in the order they appear. Explicit because {@code RuntimeSetting.group()} carries the
      * membership but not the ordering, and a screen that reorders itself between launches is worse than a
@@ -91,7 +94,7 @@ public final class CausticaSections {
             groups.add(new SettingGroup(slot.id().getPath(), LangKeys.slotLabel(slot), null,
                     List.of(SlotControls.of(registry, slot))));
         }
-        return new SettingsSection("composition", Component.translatable("caustica.section.composition"),
+        return new SettingsSection(COMPOSITION_ID, Component.translatable("caustica.section.composition"),
                 ACCENT_COMPOSITION, groups);
     }
 
