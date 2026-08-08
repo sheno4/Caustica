@@ -17,6 +17,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class BloomPassTest {
@@ -75,9 +76,12 @@ final class BloomPassTest {
         Identifier id = Identifier.fromNamespaceAndPath("caustica", "bloom");
         PassShaderCompiler.CompiledProgram compiled = PassShaderCompiler.compile(cache, id,
                 ShaderSource.classpath("/caustica/shaders/builtin", "bloom"), "caustica_bloom", "main");
+        PassShaderCompiler.CompiledProgram cached = PassShaderCompiler.compile(cache.resolve("second"), id,
+                ShaderSource.classpath("/caustica/shaders/builtin", "bloom"), "caustica_bloom", "main");
 
         assertEquals(0x07230203, ByteBuffer.wrap(compiled.spirv())
                 .order(ByteOrder.LITTLE_ENDIAN).getInt());
+        assertSame(compiled, cached);
         assertTrue(Files.isRegularFile(cache.resolve("caustica/bloom/caustica_bloom.slang")));
         assertNotNull(getClass().getResource(
                 "/caustica/shaders/builtin/bloom/caustica_bloom.slang"));

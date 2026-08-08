@@ -530,6 +530,12 @@ public final class RtGpuExecutor {
             assertRenderThread();
             value = Math.max(value, graphicsUse.value);
         }
+
+        /** Forget timeline ownership after the owning resources and Vulkan context have been destroyed. */
+        public void clear() {
+            assertRenderThread();
+            value = 0L;
+        }
     }
 
     /**

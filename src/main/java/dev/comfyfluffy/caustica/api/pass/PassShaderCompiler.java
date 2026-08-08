@@ -22,6 +22,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -39,6 +40,7 @@ import java.util.regex.Pattern;
 public final class PassShaderCompiler {
     private static final Pattern IMPORT = Pattern.compile(
             "(?m)^\\s*import\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*;");
+    private static final Map<ProgramCacheKey, CompiledProgram> PROGRAM_CACHE = new ConcurrentHashMap<>();
 
     private PassShaderCompiler() {
     }
@@ -54,6 +56,12 @@ public final class PassShaderCompiler {
         Files.createDirectories(directory);
         Map<String, String> modules = new LinkedHashMap<>();
         extract(source, module, directory, modules, new LinkedHashSet<>());
+        ProgramCacheKey cacheKey = new ProgramCacheKey(id, Map.copyOf(modules), module, entryPoint);
+        CompiledProgram cached = PROGRAM_CACHE.get(cacheKey);
+        if (cached != null) {
+            CausticaMod.LOGGER.info("Reusing cached render-pass program {}", id);
+            return cached;
+        }
         String moduleSource = modules.get(module);
         Path sourcePath = directory.resolve(module + ".slang");
         long startNanos = System.nanoTime();
@@ -64,7 +72,9 @@ public final class PassShaderCompiler {
         CausticaMod.LOGGER.info("Compiled render-pass program {} in {} ms ({} bytes SPIR-V)",
                 id, String.format(java.util.Locale.ROOT, "%.1f",
                         (System.nanoTime() - startNanos) / 1.0e6), result.spirv().length);
-        return new CompiledProgram(result.spirv(), result.reflectionJson());
+        CompiledProgram compiled = new CompiledProgram(result.spirv(), result.reflectionJson());
+        CompiledProgram existing = PROGRAM_CACHE.putIfAbsent(cacheKey, compiled);
+        return existing != null ? existing : compiled;
     }
 
     private static void extract(ShaderSource source, String module, Path directory,
@@ -169,6 +179,10 @@ public final class PassShaderCompiler {
     }
 
     public record CompiledProgram(byte[] spirv, String reflectionJson) {
+    }
+
+    private record ProgramCacheKey(Identifier id, Map<String, String> modules,
+                                   String module, String entryPoint) {
     }
 
     private record ReflectedBinding(String name, ComputeDispatch.Binding kind) {

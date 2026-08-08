@@ -20,7 +20,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -28,6 +28,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -76,19 +77,40 @@ public final class WorldShaderCompiler implements AutoCloseable {
 
     private final SlangSession session;
     private final Path worldDirectory;
+    private final Path cleanupDirectory;
     private final Composition composition;
-    private final Map<String, byte[]> spirvByKey = new HashMap<>();
+    private final Map<String, byte[]> spirvByKey = new ConcurrentHashMap<>();
     /** Name → binding, accumulated from every compiled stage's reflection. See {@link #PASS_RESOURCE_SET}. */
     private final Map<String, PassResourceBinding> passResourceBindings = new LinkedHashMap<>();
 
-    private WorldShaderCompiler(SlangSession session, Path worldDirectory, Composition composition) {
+    private WorldShaderCompiler(SlangSession session, Path worldDirectory, Path cleanupDirectory,
+                                Composition composition) {
         this.session = session;
         this.worldDirectory = worldDirectory;
+        this.cleanupDirectory = cleanupDirectory;
         this.composition = composition;
     }
 
     public static WorldShaderCompiler create(Path cacheDirectory, CausticaRegistry.Selection selection)
             throws IOException {
+        return create(cacheDirectory, selection, null);
+    }
+
+    /** Create an isolated source tree so abandoned and replacement runtime builds cannot overwrite each other. */
+    public static WorldShaderCompiler createIsolated(Path cacheRoot, CausticaRegistry.Selection selection)
+            throws IOException {
+        Files.createDirectories(cacheRoot);
+        Path directory = Files.createTempDirectory(cacheRoot, "runtime-");
+        try {
+            return create(directory, selection, directory);
+        } catch (IOException | RuntimeException | Error e) {
+            deleteDirectory(directory);
+            throw e;
+        }
+    }
+
+    private static WorldShaderCompiler create(Path cacheDirectory, CausticaRegistry.Selection selection,
+                                              Path cleanupDirectory) throws IOException {
         Objects.requireNonNull(cacheDirectory, "cacheDirectory");
         Objects.requireNonNull(selection, "selection");
         Path worldDirectory = cacheDirectory.resolve("world");
@@ -137,18 +159,18 @@ public final class WorldShaderCompiler implements AutoCloseable {
         searchPaths.add(compositionDirectory);
         searchPaths.addAll(directories.values());
         SlangSession session = SlangRuntime.INSTANCE.openSession(searchPaths, false, true);
-        return new WorldShaderCompiler(session, worldDirectory, composition);
+        return new WorldShaderCompiler(session, worldDirectory, cleanupDirectory, composition);
     }
 
     public Composition composition() {
         return composition;
     }
 
-    public synchronized byte[] compileSpecialized(String engineModule, String entryPoint) {
+    public byte[] compileSpecialized(String engineModule, String entryPoint) {
         String key = "composition:" + composition.contentHash() + '/' + engineModule + '/' + entryPoint;
         return cached(key, () -> {
-            SlangCompileResult result = session.compileSpecialized(engineModule, entryPoint,
-                    composition.rootModule(), composition.rootType());
+            SlangCompileResult result = session.compileSpecialized(
+                    engineModule, entryPoint, composition.rootModule(), composition.rootType());
             collectPassResourceBindings(engineModule, result.reflectionJson());
             return result.spirv();
         }, engineModule + ':' + entryPoint + " for " + composition.contentHash().substring(0, 12));
@@ -161,6 +183,14 @@ public final class WorldShaderCompiler implements AutoCloseable {
      * currently selected feature declares any.
      */
     public synchronized Map<String, PassResourceBinding> passResourceBindings() {
+        Set<Integer> indices = new java.util.TreeSet<>();
+        passResourceBindings.values().forEach(binding -> indices.add(binding.index()));
+        for (int expected = 0; expected < indices.size(); expected++) {
+            if (!indices.contains(expected)) {
+                throw new IllegalStateException("world pass resource set " + PASS_RESOURCE_SET
+                        + " is not contiguous: " + passResourceBindings);
+            }
+        }
         return Map.copyOf(passResourceBindings);
     }
 
@@ -209,14 +239,6 @@ public final class WorldShaderCompiler implements AutoCloseable {
             }
             passResourceBindings.put(name, new PassResourceBinding(index, kind));
         }
-        Set<Integer> indices = new java.util.TreeSet<>();
-        passResourceBindings.values().forEach(b -> indices.add(b.index()));
-        for (int expected = 0; expected < indices.size(); expected++) {
-            if (!indices.contains(expected)) {
-                throw new IllegalStateException("world pass resource set " + PASS_RESOURCE_SET
-                        + " is not contiguous: " + passResourceBindings);
-            }
-        }
     }
 
     /**
@@ -261,7 +283,7 @@ public final class WorldShaderCompiler implements AutoCloseable {
         return compileSpecialized(reordered ? INDIRECT_SER_MODULE : INDIRECT_MODULE, ENTRY_POINT);
     }
 
-    public synchronized byte[] compilePlain(String moduleFileName, String entryPoint) {
+    public byte[] compilePlain(String moduleFileName, String entryPoint) {
         Objects.requireNonNull(moduleFileName, "moduleFileName");
         Objects.requireNonNull(entryPoint, "entryPoint");
         String key = "plain:" + moduleFileName + '/' + entryPoint;
@@ -280,22 +302,32 @@ public final class WorldShaderCompiler implements AutoCloseable {
     }
 
     private byte[] cached(String key, Supplier<byte[]> compile, String label) {
-        byte[] existing = spirvByKey.get(key);
-        if (existing != null) {
-            return existing;
-        }
-        long startNanos = System.nanoTime();
-        byte[] spirv = compile.get();
-        spirvByKey.put(key, spirv);
-        CausticaMod.LOGGER.info(String.format(Locale.ROOT,
-                "Compiled world shader %s in %.1f ms (%d bytes SPIR-V)", label,
-                (System.nanoTime() - startNanos) / 1.0e6, spirv.length));
-        return spirv;
+        return spirvByKey.computeIfAbsent(key, ignored -> {
+            long startNanos = System.nanoTime();
+            byte[] spirv = compile.get();
+            CausticaMod.LOGGER.info(String.format(Locale.ROOT,
+                    "Compiled world shader %s in %.1f ms (%d bytes SPIR-V)", label,
+                    (System.nanoTime() - startNanos) / 1.0e6, spirv.length));
+            return spirv;
+        });
     }
 
     @Override
     public void close() {
-        session.close();
+        session.retainUntilProcessExit();
+        if (cleanupDirectory != null) {
+            deleteDirectory(cleanupDirectory);
+        }
+    }
+
+    private static void deleteDirectory(Path directory) {
+        try (var paths = Files.walk(directory)) {
+            for (Path path : paths.sorted(Comparator.reverseOrder()).toList()) {
+                Files.deleteIfExists(path);
+            }
+        } catch (IOException e) {
+            CausticaMod.LOGGER.warn("Could not delete temporary shader sources at {}", directory, e);
+        }
     }
 
     private static Map<String, ResolvedFeatureModule> resolveFeatureModules(

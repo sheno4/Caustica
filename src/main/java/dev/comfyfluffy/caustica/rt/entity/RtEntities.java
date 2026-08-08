@@ -1964,6 +1964,7 @@ public final class RtEntities {
         for (FrameLists lists : frameLists) {
             lists.releaseDeferred();
             lists.destroyPersistent();
+            lists.graphicsUse.clear();
         }
         for (EntityAccel ea : entityAccels.values()) {
             for (EntitySlot slot : ea.ring) {

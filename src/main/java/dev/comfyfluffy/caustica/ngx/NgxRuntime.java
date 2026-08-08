@@ -20,12 +20,19 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HexFormat;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.stream.Stream;
 
 /**
@@ -160,40 +167,83 @@ public final class NgxRuntime {
     }
 
     private static Path extractBundledNatives() {
+        List<BundledNative> natives;
+        try {
+            natives = bundledNatives();
+        } catch (IOException e) {
+            CausticaMod.LOGGER.warn("Could not read bundled NGX natives", e);
+            return null;
+        }
+        if (natives.stream().noneMatch(nativeFile -> nativeFile.name().equals(PLATFORM_NATIVES.shimName()))) {
+            return null;
+        }
         Path dir = FabricLoader.getInstance().getGameDir().resolve("caustica-ngx")
-                .resolve("natives").resolve(PLATFORM_NATIVES.platformDir());
+                .resolve("natives").resolve(PLATFORM_NATIVES.platformDir()).resolve(bundleHash(natives));
         try {
             Files.createDirectories(dir);
-            boolean hasShim = extractBundledNative(PLATFORM_NATIVES.shimName(), dir.resolve(PLATFORM_NATIVES.shimName()));
-            extractBundledFeatureLibraries(dir);
-            return hasShim && Files.isRegularFile(dir.resolve(PLATFORM_NATIVES.shimName()))
-                    ? dir.resolve(PLATFORM_NATIVES.shimName()) : null;
+            for (BundledNative nativeFile : natives) {
+                Path destination = dir.resolve(nativeFile.name());
+                publishBundledNative(destination, nativeFile.bytes());
+            }
+            return dir.resolve(PLATFORM_NATIVES.shimName());
         } catch (IOException e) {
             CausticaMod.LOGGER.warn("Could not extract bundled NGX natives to {}", dir, e);
             return null;
         }
     }
 
-    private static boolean extractBundledNative(String name, Path dst) throws IOException {
-        String resource = PLATFORM_NATIVES.resourceDir() + name;
-        try (InputStream in = NgxRuntime.class.getResourceAsStream(resource)) {
-            if (in == null) {
-                return false;
+    private static List<BundledNative> bundledNatives() throws IOException {
+        Set<String> names = new LinkedHashSet<>();
+        names.add(PLATFORM_NATIVES.shimName());
+        names.addAll(PLATFORM_NATIVES.exactFeatureNames());
+        names.addAll(bundledFeatureLibraryNames());
+        List<BundledNative> natives = new ArrayList<>();
+        for (String name : names.stream().sorted().toList()) {
+            try (InputStream input = NgxRuntime.class.getResourceAsStream(PLATFORM_NATIVES.resourceDir() + name)) {
+                if (input != null) {
+                    natives.add(new BundledNative(name, input.readAllBytes()));
+                }
             }
-            byte[] bytes = in.readAllBytes();
-            if (!sameBytes(dst, bytes)) {
-                Files.write(dst, bytes);
-            }
-            return true;
         }
+        return List.copyOf(natives);
     }
 
-    private static void extractBundledFeatureLibraries(Path dir) throws IOException {
-        for (String name : PLATFORM_NATIVES.exactFeatureNames()) {
-            extractBundledNative(name, dir.resolve(name));
+    private static String bundleHash(List<BundledNative> natives) {
+        MessageDigest digest;
+        try {
+            digest = MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException e) {
+            throw new AssertionError("SHA-256 is unavailable", e);
         }
-        for (String name : bundledFeatureLibraryNames()) {
-            extractBundledNative(name, dir.resolve(name));
+        for (BundledNative nativeFile : natives) {
+            digest.update(nativeFile.name().getBytes(StandardCharsets.UTF_8));
+            digest.update((byte) 0);
+            digest.update(nativeFile.bytes());
+        }
+        return HexFormat.of().formatHex(digest.digest());
+    }
+
+    private static void publishBundledNative(Path destination, byte[] bytes) throws IOException {
+        if (sameBytes(destination, bytes)) {
+            return;
+        }
+        Path temporary = Files.createTempFile(destination.getParent(), destination.getFileName().toString(), ".tmp");
+        try {
+            Files.write(temporary, bytes);
+            try {
+                try {
+                    Files.move(temporary, destination, StandardCopyOption.ATOMIC_MOVE,
+                            StandardCopyOption.REPLACE_EXISTING);
+                } catch (AtomicMoveNotSupportedException e) {
+                    Files.move(temporary, destination, StandardCopyOption.REPLACE_EXISTING);
+                }
+            } catch (IOException e) {
+                if (!sameBytes(destination, bytes)) {
+                    throw e;
+                }
+            }
+        } finally {
+            Files.deleteIfExists(temporary);
         }
     }
 
@@ -263,6 +313,9 @@ public final class NgxRuntime {
             seg.set(ValueLayout.JAVA_BYTE, data.length + i, (byte) 0);
         }
         return seg;
+    }
+
+    private record BundledNative(String name, byte[] bytes) {
     }
 
     private record PlatformNatives(String platformDir, String shimName, List<String> exactFeatureNames,

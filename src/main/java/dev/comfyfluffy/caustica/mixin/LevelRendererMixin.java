@@ -6,8 +6,6 @@ import dev.comfyfluffy.caustica.client.VanillaRenderController;
 import dev.comfyfluffy.caustica.rt.terrain.RtTerrain;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.renderer.LevelRenderer;
-import net.minecraft.client.renderer.chunk.SectionRenderDispatcher;
-import net.minecraft.client.renderer.state.OptionsRenderState;
 import net.minecraft.client.renderer.state.level.CameraRenderState;
 import net.minecraft.client.renderer.state.level.LevelRenderState;
 import org.joml.Matrix4fc;
@@ -24,10 +22,6 @@ public abstract class LevelRendererMixin {
 	@Shadow
 	@Final
 	private LevelRenderState levelRenderState;
-	@Shadow
-	@Final
-	private OptionsRenderState optionsRenderState;
-
 	@Inject(method = "render", at = @At("HEAD"), cancellable = true)
 	private void caustica$cancelVanillaWorld(
 			GraphicsResourceAllocator resourceAllocator,
@@ -54,28 +48,7 @@ public abstract class LevelRendererMixin {
 			return;
 		}
 
-		caustica$maintainVanillaSections(cameraState);
 		VanillaRenderController.INSTANCE.markWorldSkipped();
 		ci.cancel();
-	}
-
-	/** Run the non-raster tail that a HEAD cancellation would otherwise skip. */
-	private void caustica$maintainVanillaSections(CameraRenderState cameraState) {
-		LevelRenderer renderer = (LevelRenderer) (Object) this;
-		LevelRendererAccessor accessor = (LevelRendererAccessor) renderer;
-		accessor.caustica$repositionCamera(cameraState);
-		accessor.caustica$compileSections(cameraState);
-
-		SectionRenderDispatcher dispatcher = renderer.sectionRenderDispatcher();
-		if (dispatcher != null) {
-			dispatcher.lock();
-			try {
-				dispatcher.uploadTerrainBuffersToGpu();
-			} finally {
-				dispatcher.unlock();
-			}
-		}
-		renderer.sectionOcclusionGraph().update(
-				cameraState, this.optionsRenderState.fov, this.levelRenderState.chunkLoadingRenderState);
 	}
 }

@@ -14,6 +14,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -46,6 +47,24 @@ final class WorldShaderCompilerTest {
             assertSpirv(compiler.compileSkyMiss(), 1024);
             assertSpirv(compiler.compileClosestHit(), 1024);
             assertSpirv(compiler.compileIndirect(true), 1024);
+        }
+    }
+
+    @Test
+    void isolatedCompilerCompilesEveryWorldStage(@TempDir Path cacheDirectory) throws Exception {
+        try (WorldShaderCompiler compiler = WorldShaderCompiler.createIsolated(
+                cacheDirectory, CausticaRegistry.withBuiltins().selection())) {
+            List<byte[]> stages = List.of(
+                    compiler.compilePlain("primary.rgen.slang", WorldShaderCompiler.ENTRY_POINT),
+                    compiler.compileIndirect(false),
+                    compiler.compileSkyMiss(),
+                    compiler.compilePlain("guide.rmiss.slang", WorldShaderCompiler.ENTRY_POINT),
+                    compiler.compileClosestHit(),
+                    compiler.compilePlain("any_hit.rahit.slang", WorldShaderCompiler.ENTRY_POINT));
+            for (byte[] stage : stages) {
+                assertSpirv(stage, 256);
+            }
+            assertEquals(4, compiler.passResourceBindings().size());
         }
     }
 

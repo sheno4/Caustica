@@ -140,7 +140,7 @@ public final class RtDlssRr {
      * silently falling back, so a broken render/display sync is never masked.
      */
     public int[] queryOptimalRenderSize(int displayWidth, int displayHeight) {
-        if (!enabled() || failed) {
+        if (!configured() || failed) {
             return null;
         }
         if (!(((GpuDeviceAccessor) RenderSystem.getDevice()).caustica$getBackend() instanceof VulkanDevice device)) {

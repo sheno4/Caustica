@@ -94,6 +94,8 @@ public final class RtRuntime {
             session.close();
             session = null;
         }
+        NgxRuntime.INSTANCE.shutdown();
+        SlangRuntime.INSTANCE.shutdown();
         state = State.OFF;
     }
 
@@ -129,6 +131,7 @@ public final class RtRuntime {
             CausticaMod.LOGGER.warn("RT runtime unavailable: the Vulkan device was not provisioned for ray tracing");
             return;
         }
+        SlangRuntime.INSTANCE.resume();
         ProviderManager.INSTANCE.startSession();
         session = new Session();
         state = State.STARTING;
@@ -142,6 +145,9 @@ public final class RtRuntime {
         session.close();
         session = null;
         state = State.OFF;
+        if (client.level != null) {
+            client.levelExtractor.allChanged();
+        }
         CausticaMod.LOGGER.info("RT runtime off; vanilla presentation restored");
     }
 
@@ -152,6 +158,9 @@ public final class RtRuntime {
         session.close();
         session = null;
         state = State.FAILED;
+        if (client.level != null) {
+            client.levelExtractor.allChanged();
+        }
         CausticaMod.LOGGER.warn("RT runtime startup failed; vanilla presentation remains active");
     }
 
@@ -166,13 +175,15 @@ public final class RtRuntime {
                 }
             }
 
-            RtFrameStats.FRAME.beginIfInactive();
-            RtComposite.INSTANCE.ensureResourcesReady(context);
-            ProviderManager.INSTANCE.updateScenes();
+            boolean resourcesReady = RtComposite.INSTANCE.ensureResourcesReady(context);
+            if (resourcesReady) {
+                RtFrameStats.FRAME.beginIfInactive();
+                ProviderManager.INSTANCE.updateScenes();
+            }
             if (client.level == null) {
                 return false;
             }
-            if (starting) {
+            if (starting && resourcesReady) {
                 RtTerrain.frame(context);
             }
             var mainTarget = client.gameRenderer.mainRenderTarget();
@@ -183,7 +194,7 @@ public final class RtRuntime {
             if (CausticaConfig.Rt.Fg.ENABLED.value()) {
                 RtDlssFg.INSTANCE.probeAvailabilityOnce();
             }
-            return true;
+            return resourcesReady;
         }
 
         void close() {
@@ -203,8 +214,7 @@ public final class RtRuntime {
                 RtFramePresenter.INSTANCE.destroy(device);
                 RtReflex.INSTANCE.destroy(device.vkDevice());
             }
-            NgxRuntime.INSTANCE.shutdown();
-            SlangRuntime.INSTANCE.shutdown();
+            SlangRuntime.INSTANCE.requestShutdownWhenIdle();
             context.destroy();
             context = null;
         }

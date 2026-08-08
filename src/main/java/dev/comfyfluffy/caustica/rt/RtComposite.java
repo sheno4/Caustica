@@ -10,6 +10,7 @@ import com.mojang.blaze3d.vulkan.VulkanGpuTextureView;
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.api.CausticaApi;
+import dev.comfyfluffy.caustica.api.CausticaRegistry;
 import dev.comfyfluffy.caustica.api.Slots;
 import dev.comfyfluffy.caustica.api.pass.RenderStage;
 import dev.comfyfluffy.caustica.client.CausticaJitter;
@@ -67,7 +68,6 @@ import dev.comfyfluffy.caustica.rt.pipeline.RtHdrCompositePipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtSdrPresentPipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtExposure;
 import dev.comfyfluffy.caustica.rt.shader.Composition;
-import dev.comfyfluffy.caustica.rt.shader.CompositionManager;
 import dev.comfyfluffy.caustica.rt.shader.WorldShaderCompiler;
 import dev.comfyfluffy.caustica.rt.pass.RenderPassManager;
 import dev.comfyfluffy.caustica.rt.provider.ProviderManager;
@@ -77,11 +77,19 @@ import dev.comfyfluffy.caustica.rt.pipeline.RtToneLut;
 import dev.comfyfluffy.caustica.rt.terrain.RtTerrain;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
 import java.nio.LongBuffer;
 import java.nio.file.Path;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * On-screen composite. Each frame, ray-trace into a render-res storage image (+ guide buffers), use
@@ -107,6 +115,18 @@ public final class RtComposite {
     // WorldPushData and its serializer are generated from Slang's reflected Std430DataLayout. Java never
     // owns or calculates a shader byte offset, struct size, array stride, or fixed-array capacity.
     private static final int WORLD_PUSH_SIZE = WorldPushData.BYTE_SIZE;
+    private static final AtomicInteger SHADER_THREAD_ID = new AtomicInteger();
+    private static final ExecutorService SHADER_BUILD_EXECUTOR = Executors.newSingleThreadExecutor(
+            runnable -> shaderThread(runnable, "build"));
+    private static final Map<WorldShaderCacheKey, WorldShaderBuild> WORLD_SHADER_CACHE =
+            new ConcurrentHashMap<>();
+
+    private static Thread shaderThread(Runnable runnable, String role) {
+        Thread thread = new Thread(runnable,
+                "Caustica shader " + role + '-' + SHADER_THREAD_ID.incrementAndGet());
+        thread.setDaemon(true);
+        return thread;
+    }
     // Real inline push constants (fast constant-bank reads), separate from the WorldPush BDA ring above.
     // Hot addresses/frameIndex avoid unnecessary global-memory dereferences; WorldPushConstantsData is
     // generated from the same Slang module and owns this second ABI as well. debugView is no longer
@@ -156,9 +176,9 @@ public final class RtComposite {
         return frameCounter;
     }
 
-    // The immutable slot composition specialized into the current world pipeline.
-    private CompositionManager compositions;
-    private WorldShaderCompiler worldShaderCompiler;
+    // CPU compilation can outlive an RT session; only completed shader sets cross onto the render thread.
+    private PendingWorldShaderBuild pendingWorldShaderBuild;
+    private WorldShaderBuild worldShaderBuild;
 
     private RtPipeline worldPipeline;
     // Set at the HEAD of Minecraft.reloadResourcePacks() (mixin): a resource reload recreates the block
@@ -620,6 +640,9 @@ public final class RtComposite {
                 return false;
             }
             RtPipeline active = ensureWorld(ctx);
+            if (active == null) {
+                return false;
+            }
             if (materialEpochTraceGate) {
                 materialEpochTraceGate = false;
                 return false;
@@ -718,26 +741,33 @@ public final class RtComposite {
      * atlas), or until we're in a world with the atlas ready. The heavy {@code _s}/{@code _n} atlases are
      * deliberately not built at the menu — only once a world is entered.
      */
-    public void ensureResourcesReady(GpuContext ctx) {
-        if (failed || worldPipeline != null || reloadRebindRequested) {
-            return;
+    public boolean ensureResourcesReady(GpuContext ctx) {
+        if (failed || reloadRebindRequested) {
+            return false;
+        }
+        if (worldPipeline != null) {
+            return true;
         }
         if (Minecraft.getInstance().level == null || blockAlbedoAtlasView() == 0L) {
-            return;
+            return false;
         }
         try {
-            ensureWorld(ctx);
+            return ensureWorld(ctx) != null;
         } catch (Throwable t) {
             failed = true;
             CausticaMod.LOGGER.error("RT resource bring-up failed; reverting to vanilla path", t);
+            return false;
         }
     }
 
     private RtPipeline ensureWorld(GpuContext ctx) throws IOException {
         if (worldPipeline == null) {
+            if (!ensureWorldShadersReady()) {
+                return null;
+            }
             ensureRenderPassManager(ctx);
             bindlessTextureCapacity = RtEntityTextures.maxTextures();
-            WorldShaders shaders = compileWorldShaders();
+            WorldShaders shaders = worldShaderBuild.shaders();
             worldPipeline = RtPipeline.create(ctx, new RtShaderCode[]{
                             shaders.primary(),
                             shaders.indirect()},
@@ -745,7 +775,7 @@ public final class RtComposite {
                     shaders.closestHit(),
                     shaders.anyHit(),
                     WorldPushConstantsData.BYTE_SIZE, bindlessTextureCapacity,
-                    worldShaderCompiler.passResourceBindings());
+                    worldShaderBuild.passResourceBindings());
             // Per-frame world data lives in this BDA ring; the pipeline pushes its address and hot fields.
             if (pushRing == null) {
                 pushRing = new PushSlot[PUSH_RING];
@@ -773,25 +803,24 @@ public final class RtComposite {
         }
     }
 
-    private WorldShaders compileWorldShaders() throws IOException {
-        ensureShaderCompiler();
-        Composition composition = compositions.current();
+    private static WorldShaders compileWorldShaders(WorldShaderCompiler compiler, boolean reordered) {
+        Composition composition = compiler.composition();
         var sky = composition.selection().binding(Slots.SKY);
         var surface = composition.selection().binding(Slots.SURFACE);
-        boolean reordered = RtDeviceBringup.serExtEnabled();
-        WorldShaders shaders = new WorldShaders(
-                RtShaderCode.of("primary", worldShaderCompiler.compilePlain(
-                        "primary.rgen.slang", WorldShaderCompiler.ENTRY_POINT)),
-                RtShaderCode.of("indirect(" + surface.feature().id() + (reordered ? ", EXT_SER)" : ")"),
-                        worldShaderCompiler.compileIndirect(reordered)),
-                RtShaderCode.of("sky_miss(" + sky.feature().id() + ")",
-                        worldShaderCompiler.compileSkyMiss()),
-                RtShaderCode.of("guide_miss", worldShaderCompiler.compilePlain(
-                        "guide.rmiss.slang", WorldShaderCompiler.ENTRY_POINT)),
-                RtShaderCode.of("closest_hit(" + surface.feature().id() + ")",
-                        worldShaderCompiler.compileClosestHit()),
-                RtShaderCode.of("any_hit", worldShaderCompiler.compilePlain(
-                        "any_hit.rahit.slang", WorldShaderCompiler.ENTRY_POINT)));
+        RtShaderCode primary = RtShaderCode.of("primary",
+                compiler.compilePlain("primary.rgen.slang", WorldShaderCompiler.ENTRY_POINT));
+        RtShaderCode indirect = RtShaderCode.of(
+                "indirect(" + surface.feature().id() + (reordered ? ", EXT_SER)" : ")"),
+                compiler.compileIndirect(reordered));
+        RtShaderCode skyMiss = RtShaderCode.of(
+                "sky_miss(" + sky.feature().id() + ")", compiler.compileSkyMiss());
+        RtShaderCode guideMiss = RtShaderCode.of("guide_miss",
+                compiler.compilePlain("guide.rmiss.slang", WorldShaderCompiler.ENTRY_POINT));
+        RtShaderCode closestHit = RtShaderCode.of(
+                "closest_hit(" + surface.feature().id() + ")", compiler.compileClosestHit());
+        RtShaderCode anyHit = RtShaderCode.of("any_hit",
+                compiler.compilePlain("any_hit.rahit.slang", WorldShaderCompiler.ENTRY_POINT));
+        WorldShaders shaders = new WorldShaders(primary, indirect, skyMiss, guideMiss, closestHit, anyHit);
         CausticaMod.LOGGER.info("World shader composition active: sky={} ({}), surface={} ({}), SER={}",
                 sky.feature().id(), sky.binding().type(), surface.feature().id(), surface.binding().type(),
                 reordered ? "EXT" : "none");
@@ -802,13 +831,111 @@ public final class RtComposite {
                                 RtShaderCode guideMiss, RtShaderCode closestHit, RtShaderCode anyHit) {
     }
 
-    private void ensureShaderCompiler() throws IOException {
-        if (worldShaderCompiler == null) {
+    private record WorldShaderCacheKey(CausticaRegistry.Selection selection, boolean reordered) {
+    }
+
+    private record WorldShaderBuild(WorldShaderCacheKey key, WorldShaders shaders,
+                                    Map<String, WorldShaderCompiler.PassResourceBinding> passResourceBindings) {
+    }
+
+    private record PendingWorldShaderBuild(WorldShaderCacheKey key,
+                                           AtomicBoolean abandoned,
+                                           CompletableFuture<WorldShaderBuild> future) {
+    }
+
+    private boolean ensureWorldShadersReady() {
+        CausticaRegistry.Selection selection = CausticaApi.registry().selection();
+        WorldShaderCacheKey key = new WorldShaderCacheKey(selection, RtDeviceBringup.serExtEnabled());
+        if (worldShaderBuild != null) {
+            if (worldShaderBuild.key().equals(key)) {
+                return true;
+            }
+            releaseWorldShaders();
+        }
+        WorldShaderBuild cached = WORLD_SHADER_CACHE.get(key);
+        if (cached != null) {
+            abandonPendingWorldShaderBuild();
+            worldShaderBuild = cached;
+            CausticaMod.LOGGER.info("Reusing cached world shader composition");
+            return true;
+        }
+        if (pendingWorldShaderBuild == null) {
             Path cache = FabricLoader.getInstance().getGameDir()
                     .resolve("caustica-shaders").resolve("sources");
-            worldShaderCompiler = WorldShaderCompiler.create(cache, CausticaApi.registry().selection());
-            compositions = new CompositionManager(worldShaderCompiler.composition());
+            CausticaMod.LOGGER.info("Preparing world shaders off thread");
+            AtomicBoolean abandoned = new AtomicBoolean();
+            pendingWorldShaderBuild = new PendingWorldShaderBuild(key, abandoned,
+                    CompletableFuture.supplyAsync(
+                            () -> buildWorldShaders(cache, key, abandoned),
+                            SHADER_BUILD_EXECUTOR));
+            return false;
         }
+        if (!pendingWorldShaderBuild.key().equals(key)) {
+            abandonPendingWorldShaderBuild();
+            return false;
+        }
+        if (!pendingWorldShaderBuild.future().isDone()) {
+            return false;
+        }
+        WorldShaderBuild build;
+        try {
+            build = pendingWorldShaderBuild.future().join();
+        } catch (CompletionException e) {
+            pendingWorldShaderBuild = null;
+            Throwable cause = e.getCause();
+            if (cause instanceof RuntimeException runtimeException) {
+                throw runtimeException;
+            }
+            if (cause instanceof Error error) {
+                throw error;
+            }
+            throw new IllegalStateException("World shader compilation failed", cause);
+        }
+        pendingWorldShaderBuild = null;
+        if (!build.key().equals(key)) {
+            return false;
+        }
+        worldShaderBuild = build;
+        return true;
+    }
+
+    private static WorldShaderBuild buildWorldShaders(Path cache, WorldShaderCacheKey key,
+                                                       AtomicBoolean abandoned) {
+        WorldShaderBuild cached = WORLD_SHADER_CACHE.get(key);
+        if (cached != null) {
+            return cached;
+        }
+        if (abandoned.get()) {
+            return null;
+        }
+        WorldShaderCompiler compiler = null;
+        try {
+            compiler = WorldShaderCompiler.createIsolated(cache, key.selection());
+            if (abandoned.get()) {
+                return null;
+            }
+            WorldShaders shaders = compileWorldShaders(compiler, key.reordered());
+            WorldShaderBuild build = new WorldShaderBuild(key, shaders, compiler.passResourceBindings());
+            WorldShaderBuild existing = WORLD_SHADER_CACHE.putIfAbsent(key, build);
+            return existing != null ? existing : build;
+        } catch (IOException e) {
+            throw new UncheckedIOException("Could not prepare world shader sources", e);
+        } finally {
+            if (compiler != null) {
+                compiler.close();
+            }
+        }
+    }
+
+    private void abandonPendingWorldShaderBuild() {
+        if (pendingWorldShaderBuild != null) {
+            pendingWorldShaderBuild.abandoned().set(true);
+        }
+        pendingWorldShaderBuild = null;
+    }
+
+    private void releaseWorldShaders() {
+        worldShaderBuild = null;
     }
 
     private void refreshPipelineShapeIfNeeded(GpuContext ctx) {
@@ -817,17 +944,13 @@ public final class RtComposite {
         }
         // Every stage is baked into this pipeline's SBT, so a slot selection change needs a complete
         // pipeline rebuild.
-        boolean selectionChanged = worldShaderCompiler != null
-                && !worldShaderCompiler.composition().selection().equals(CausticaApi.registry().selection());
+        boolean selectionChanged = worldShaderBuild != null
+                && !worldShaderBuild.key().selection().equals(CausticaApi.registry().selection());
         if (selectionChanged) {
             ctx.waitIdle();
             worldPipeline.destroy();
             worldPipeline = null;
-            if (selectionChanged) {
-                worldShaderCompiler.close();
-                worldShaderCompiler = null;
-                compositions = null;
-            }
+            releaseWorldShaders();
             bindlessTextureCapacity = 0;
             materialBindingsReady = false;
             return;
@@ -881,11 +1004,11 @@ public final class RtComposite {
      * pipeline layout to write it into.
      */
     private void bindPassResources() {
-        if (worldShaderCompiler == null) {
+        if (worldShaderBuild == null) {
             return;
         }
         Map<String, WorldShaderCompiler.PassResourceBinding> resourceBindings =
-                worldShaderCompiler.passResourceBindings();
+                worldShaderBuild.passResourceBindings();
         for (var entry : renderPassManager.worldResources().entrySet()) {
             WorldShaderCompiler.PassResourceBinding binding = resourceBindings.get(entry.getKey());
             if (binding == null) {
@@ -1546,13 +1669,8 @@ public final class RtComposite {
             worldPipeline.destroy();
             worldPipeline = null;
         }
-        // Releases the Slang session and its loaded modules. The epoch itself is plain immutable data
-        // and needs no teardown.
-        if (worldShaderCompiler != null) {
-            worldShaderCompiler.close();
-            worldShaderCompiler = null;
-            compositions = null;
-        }
+        abandonPendingWorldShaderBuild();
+        releaseWorldShaders();
         bindlessTextureCapacity = 0;
         materialBindingsReady = false;
         materialEpochTraceGate = false;

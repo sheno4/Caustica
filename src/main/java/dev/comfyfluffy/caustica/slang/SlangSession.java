@@ -2,13 +2,15 @@ package dev.comfyfluffy.caustica.slang;
 
 import java.lang.foreign.MemorySegment;
 import java.util.Objects;
+import java.util.function.Consumer;
 
 public final class SlangSession implements AutoCloseable {
     private final SlangLibrary library;
-    private final Runnable onClose;
+    private final Consumer<SlangSession> onClose;
     private MemorySegment handle;
+    private boolean retainedUntilProcessExit;
 
-    SlangSession(SlangLibrary library, MemorySegment handle, Runnable onClose) {
+    SlangSession(SlangLibrary library, MemorySegment handle, Consumer<SlangSession> onClose) {
         this.library = Objects.requireNonNull(library, "library");
         this.handle = Objects.requireNonNull(handle, "handle");
         this.onClose = Objects.requireNonNull(onClose, "onClose");
@@ -16,7 +18,7 @@ public final class SlangSession implements AutoCloseable {
 
     public synchronized SlangCompileResult compile(String moduleName, String sourcePath,
                                                    String source, String entryPoint) {
-        if (handle.equals(MemorySegment.NULL)) {
+        if (isClosed()) {
             throw new IllegalStateException("Slang session is closed");
         }
         return library.compile(handle,
@@ -29,7 +31,7 @@ public final class SlangSession implements AutoCloseable {
     public synchronized SlangCompileResult compileSpecialized(String engineModule, String entryPoint,
                                                                String implementationModule,
                                                                String implementationType) {
-        if (handle.equals(MemorySegment.NULL)) {
+        if (isClosed()) {
             throw new IllegalStateException("Slang session is closed");
         }
         return library.compileSpecialized(handle,
@@ -40,14 +42,24 @@ public final class SlangSession implements AutoCloseable {
     }
 
     synchronized boolean isClosed() {
-        return handle.equals(MemorySegment.NULL);
+        return retainedUntilProcessExit || handle.equals(MemorySegment.NULL);
+    }
+
+    /**
+     * Make the session unusable while leaving its native compiler graph for the operating system to reclaim.
+     * Specialized world-pipeline sessions use this lifetime because Slang 2026.8 cannot safely destroy them.
+     */
+    public synchronized void retainUntilProcessExit() {
+        if (!handle.equals(MemorySegment.NULL)) {
+            retainedUntilProcessExit = true;
+        }
     }
 
     @Override
     public void close() {
         boolean closed = false;
         synchronized (this) {
-            if (!handle.equals(MemorySegment.NULL)) {
+            if (!retainedUntilProcessExit && !handle.equals(MemorySegment.NULL)) {
                 try {
                     library.destroySession(handle);
                 } finally {
@@ -57,7 +69,7 @@ public final class SlangSession implements AutoCloseable {
             }
         }
         if (closed) {
-            onClose.run();
+            onClose.accept(this);
         }
     }
 }

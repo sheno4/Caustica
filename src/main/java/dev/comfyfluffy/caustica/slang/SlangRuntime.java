@@ -34,6 +34,8 @@ public final class SlangRuntime {
     private MemorySegment runtime = MemorySegment.NULL;
     private Path runtimeDirectory;
     private final Set<SlangSession> sessions = new HashSet<>();
+    private boolean acceptingSessions = true;
+    private boolean shutdownWhenIdle;
 
     private SlangRuntime() {
     }
@@ -41,13 +43,30 @@ public final class SlangRuntime {
     public synchronized SlangSession openSession(List<Path> searchPaths, boolean debugInformation,
                                                  boolean warningsAsErrors) {
         Objects.requireNonNull(searchPaths, "searchPaths");
+        if (!acceptingSessions) {
+            throw new IllegalStateException("Slang runtime is shut down");
+        }
         initialize();
         int flags = (debugInformation ? SlangLibrary.SESSION_DEBUG_INFO : 0)
                 | (warningsAsErrors ? SlangLibrary.SESSION_WARNINGS_AS_ERRORS : 0);
         MemorySegment sessionHandle = library.createSession(runtime, List.copyOf(searchPaths), flags);
-        SlangSession session = new SlangSession(library, sessionHandle, () -> removeSession(sessionHandle));
+        SlangSession session = new SlangSession(library, sessionHandle, this::removeSession);
         sessions.add(session);
         return session;
+    }
+
+    /** Allow a new RT session to submit compiler work after a previous runtime toggle. */
+    public synchronized void resume() {
+        acceptingSessions = true;
+        shutdownWhenIdle = false;
+    }
+
+    /** Keep in-flight native compiles alive, then release Slang when their sessions close. */
+    public synchronized void requestShutdownWhenIdle() {
+        shutdownWhenIdle = true;
+        if (sessions.isEmpty()) {
+            destroyRuntime();
+        }
     }
 
     public synchronized String compilerVersion() {
@@ -65,10 +84,14 @@ public final class SlangRuntime {
     }
 
     public synchronized void shutdown() {
+        acceptingSessions = false;
+        shutdownWhenIdle = false;
         for (SlangSession session : List.copyOf(sessions)) {
-            session.close();
+            session.retainUntilProcessExit();
         }
-        sessions.clear();
+    }
+
+    private void destroyRuntime() {
         if (!runtime.equals(MemorySegment.NULL)) {
             library.destroyRuntime(runtime);
         }
@@ -77,8 +100,11 @@ public final class SlangRuntime {
         runtimeDirectory = null;
     }
 
-    private synchronized void removeSession(MemorySegment ignoredHandle) {
-        sessions.removeIf(session -> session.isClosed());
+    private synchronized void removeSession(SlangSession session) {
+        sessions.remove(session);
+        if (sessions.isEmpty() && shutdownWhenIdle) {
+            destroyRuntime();
+        }
     }
 
     private void initialize() {
