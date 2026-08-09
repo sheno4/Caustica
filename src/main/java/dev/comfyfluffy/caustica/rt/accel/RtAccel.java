@@ -264,9 +264,8 @@ public final class RtAccel {
         private final int triangleCount;
         private final boolean opaque;
         private final String label;
-        // Refit support. {@code updatable} = built with ALLOW_UPDATE (so it can be refit later);
-        // {@code update} = this recorded op is an in-place UPDATE (refit) rather than a full BUILD.
-        // Set for the entity refit path; false for terrain + transient block entities.
+        // Refit support. {@code updatable} = built with ALLOW_UPDATE;
+        // {@code update} = this recorded op is an in-place UPDATE rather than a full BUILD.
         private final boolean updatable;
         private final boolean update;
         // Terrain multi-geometry split (any-hit opt): one geometry per material bucket, in the fixed packed
@@ -605,6 +604,25 @@ public final class RtAccel {
         return new PersistentBuild(op, op.accel, op.externalBacking, op.scratch);
     }
 
+    public static UpdatableBuild prepareUpdatableEntityBlasBuild(GpuContext ctx, long vertexAddr, int vertexCount,
+                                                                 long indexAddr, int[] bucketTris, String label) {
+        requireEntityBuckets(bucketTris);
+        VkDevice vk = ctx.vk();
+        String debugLabel = labelOr(label, "updatable entity BLAS");
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            VkAccelerationStructureBuildSizesInfoKHR sizes = queryEntityBlasSizes(vk, stack, vertexAddr,
+                    indexAddr, vertexCount, bucketTris, true);
+            long accelSize = sizes.accelerationStructureSize();
+            GpuBuffer backing = ctx.createBuffer(accelSize,
+                    VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, false, debugLabel + " backing");
+            GpuBuffer scratch = createScratchBuffer(ctx, sizes.buildScratchSize(), debugLabel + " build scratch");
+            RtAccel accel = createBlasOn(ctx, stack, backing, accelSize, false, debugLabel);
+            PreparedBlas op = PreparedBlas.entity(accel, scratch, backing, vertexAddr, indexAddr,
+                    vertexCount - 1, bucketTris.clone(), debugLabel, true, false);
+            return new UpdatableBuild(op, accel, backing, scratch, sizes.updateScratchSize());
+        }
+    }
+
     /**
      * Create a new <em>updatable</em> (ALLOW_UPDATE) BLAS sized for this mesh, and prepare its initial full
      * BUILD. The {@code accel} + {@code backing} persist in the caller's per-entity ring (NOT released per
@@ -634,25 +652,6 @@ public final class RtAccel {
             PreparedBlas op = new PreparedBlas(accel, scratch, backing, vertexAddr, indexAddr,
                     vertexCount - 1, indexCount / 3, opaque, debugLabel, true, false);
             return new UpdatableBuild(op, accel, backing, scratch, updateScratch);
-        }
-    }
-
-    public static UpdatableBuild prepareUpdatableEntityBlasBuild(GpuContext ctx, long vertexAddr, int vertexCount,
-                                                                 long indexAddr, int[] bucketTris, String label) {
-        requireEntityBuckets(bucketTris);
-        VkDevice vk = ctx.vk();
-        String debugLabel = labelOr(label, "updatable entity BLAS");
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkAccelerationStructureBuildSizesInfoKHR sizes = queryEntityBlasSizes(vk, stack, vertexAddr,
-                    indexAddr, vertexCount, bucketTris, true);
-            long accelSize = sizes.accelerationStructureSize();
-            GpuBuffer backing = ctx.createBuffer(accelSize,
-                    VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, false, debugLabel + " backing");
-            GpuBuffer scratch = createScratchBuffer(ctx, sizes.buildScratchSize(), debugLabel + " build scratch");
-            RtAccel accel = createBlasOn(ctx, stack, backing, accelSize, false, debugLabel);
-            PreparedBlas op = PreparedBlas.entity(accel, scratch, backing, vertexAddr, indexAddr,
-                    vertexCount - 1, bucketTris.clone(), debugLabel, true, false);
-            return new UpdatableBuild(op, accel, backing, scratch, sizes.updateScratchSize());
         }
     }
 

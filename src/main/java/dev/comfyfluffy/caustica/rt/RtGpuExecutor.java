@@ -58,6 +58,7 @@ public final class RtGpuExecutor {
     private final ArrayList<DestroyJob> destroyJobs = new ArrayList<>();
     private final Object submissionLock = new Object();
     private long submittedBuildValue;
+    private long completedBuildValue;
     private final Thread thread;
     private long commandPool;
     private volatile boolean closed;
@@ -200,6 +201,28 @@ public final class RtGpuExecutor {
         }
     }
 
+    /**
+     * Drain every job accepted before this call, then wait all device queues idle without closing this
+     * per-device executor. Session producers must already be stopped, so no later job can race the idle
+     * boundary before session-owned resources are destroyed.
+     */
+    public void drainAndWaitIdle() {
+        long target = nextBuildValue.get();
+        synchronized (submissionLock) {
+            while (completedBuildValue < target && executorFailure == null) {
+                try {
+                    submissionLock.wait();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("Interrupted while draining RT GPU executor", e);
+                }
+            }
+        }
+        checkExecutorFailure();
+        ctx.waitIdle();
+        flushDestroysAfterDeviceIdle();
+    }
+
     public synchronized void shutdown() {
         if (closed) {
             return;
@@ -318,6 +341,11 @@ public final class RtGpuExecutor {
                 failure.addSuppressed(t);
             }
             latchFailure(t);
+        } finally {
+            synchronized (submissionLock) {
+                completedBuildValue = Math.max(completedBuildValue, job.build.value);
+                submissionLock.notifyAll();
+            }
         }
     }
 

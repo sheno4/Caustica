@@ -151,8 +151,8 @@ public final class RtEntities {
     // Graphics timeline completion guards GPU reuse and destruction.
     private static final int KEEP_FRAMES = 4;
     private static final int FRAME_LIST_RING = KEEP_FRAMES;
-    // Refit (UPDATE-mode) BLAS: persistent per-entity AS, refit in place each frame (cheap) while
-    // topology is stable, instead of a full BUILD. Block entities always use the pooled-BUILD path.
+    // Refit entity BLAS: persistent per-entity AS, updated in place while its indexed topology is stable.
+    // Block entities always use the pooled-BUILD path.
     //
     // Rigid reuse: when this frame's capture is a rigid transform (translation and/or yaw) of the mesh the
     // entity's AS was last built from, reference that AS with the fitted TLAS instance transform and skip
@@ -165,9 +165,8 @@ public final class RtEntities {
 
     // Each per-entity ring slot owns one persistent AS. Timeline completion guards cursor reuse,
     // mapped writes, refits, rebuilds, and destruction.
-    private static final int REFIT_RING = KEEP_FRAMES;
-    // Force a periodic full rebuild of a slot's AS to bound BVH-quality degradation from repeated refits
-    // (an entity that deforms a lot would otherwise refit the same BVH topology forever). Per-slot count.
+    private static final int ENTITY_SLOT_RING = KEEP_FRAMES;
+    // Periodic rebuild bounds BVH-quality degradation from repeated refits of a deforming entity.
     private static final int REFIT_REBUILD_INTERVAL = 120;
 
     // Treat per-vertex displacements as rigid when every vertex agrees within this tolerance, avoiding a
@@ -311,14 +310,13 @@ public final class RtEntities {
         final TrackedGraphicsUse graphicsUse = new TrackedGraphicsUse();
     }
 
-    /** One persistent updatable AS in an entity's ring: its own backing buffer + the topology it
-     *  was built for (refit requires identical indices as well as counts) + refit bookkeeping. */
+    /** One persistent updatable AS in an entity's ring, including its indexed-topology snapshot. */
     private static final class EntitySlot {
         EntityAccel owner;
         RtAccel accel;
         GpuBuffer backing;
         GpuBuffer geometry;
-        GpuBuffer refitScratch;
+        GpuBuffer updateScratch;
         boolean updatable;
         int vertCount = -1;
         int triCount = -1;
@@ -335,7 +333,7 @@ public final class RtEntities {
      *  reference: the entity-local mesh contents of the most recently written AS and the
      *  cache-owned shading buffers the geometry table points at on reuse frames. */
     private static final class EntityAccel {
-        final EntitySlot[] ring = new EntitySlot[REFIT_RING];
+        final EntitySlot[] ring = new EntitySlot[ENTITY_SLOT_RING];
         int cursor;
         long lastSeen;
         // Rigid-reuse reference (refAccel == null → no reusable build yet). refVerts are the exact
@@ -531,7 +529,7 @@ public final class RtEntities {
         final ArrayList<RtAccel.Instance> instances = new ArrayList<>(entityListCapacity());
         final ArrayList<RtAccel.PreparedBlas> blas = new ArrayList<>(entityListCapacity());
         final ArrayList<RtAccel.PreparedBlas> pooledBlas = new ArrayList<>(entityListCapacity());
-        final ArrayList<GpuBuffer> refitScratch = new ArrayList<>(entityListCapacity());
+        final ArrayList<GpuBuffer> blasScratch = new ArrayList<>(entityListCapacity());
         final ArrayList<GpuBuffer> buffers = new ArrayList<>(TRANSIENT_BUFFER_LIST_CAPACITY);
         final MotionArena motion = new MotionArena();
         final ArrayList<EntitySlot> usedEntitySlots = new ArrayList<>(entityListCapacity());
@@ -542,7 +540,7 @@ public final class RtEntities {
             instances.clear();
             blas.clear();
             pooledBlas.clear();
-            refitScratch.clear();
+            blasScratch.clear();
             buffers.clear();
             usedEntitySlots.clear();
             usedBlockEntities.clear();
@@ -553,7 +551,7 @@ public final class RtEntities {
             for (RtAccel.PreparedBlas b : pooledBlas) {
                 RtAccel.releaseEntityBlas(b);
             }
-            for (GpuBuffer s : refitScratch) {
+            for (GpuBuffer s : blasScratch) {
                 s.destroy();
             }
             for (GpuBuffer buf : buffers) {
@@ -562,7 +560,7 @@ public final class RtEntities {
             instances.clear();
             blas.clear();
             pooledBlas.clear();
-            refitScratch.clear();
+            blasScratch.clear();
             buffers.clear();
             usedEntitySlots.clear();
             usedBlockEntities.clear();
@@ -578,9 +576,9 @@ public final class RtEntities {
         final List<RtAccel.Instance> base;
         FrameLists lists;
         List<RtAccel.Instance> instances;
-        List<RtAccel.PreparedBlas> blas;        // all BLAS ops to record this frame (BUILD + refit UPDATE)
+        List<RtAccel.PreparedBlas> blas;        // all BLAS BUILD and UPDATE operations recorded this frame
         List<RtAccel.PreparedBlas> pooledBlas;  // transient one-shot entity BLAS ops → releaseEntityBlas
-        List<GpuBuffer> refitScratch;            // per-frame scratch from refit ops → destroy() (AS persists)
+        List<GpuBuffer> blasScratch;             // transient full-BUILD scratch → destroy() (AS persists)
         List<GpuBuffer> buffers;                 // transient motion/particle buffers → destroy()
         MotionArena motion;                     // suballocated entity/BE/particle displacement uploads
         long tableBase;
@@ -1216,7 +1214,7 @@ public final class RtEntities {
         RtAccel.PersistentBuild pb = RtAccel.preparePersistentEntityBlasBuild(ctx, positionAddr, vertCount,
                 indexAddr, packed.bucketTris(), label + " BLAS");
         build.blas.add(pb.op());
-        build.refitScratch.add(pb.scratch());
+        build.blasScratch.add(pb.scratch());
         beBuildsThisFrame++;
 
         BeEntry e = new BeEntry();
@@ -1341,7 +1339,7 @@ public final class RtEntities {
         build.instances = lists.instances;
         build.blas = lists.blas;
         build.pooledBlas = lists.pooledBlas;
-        build.refitScratch = lists.refitScratch;
+        build.blasScratch = lists.blasScratch;
         build.buffers = lists.buffers;
         build.motion = lists.motion;
         ensureResources(ctx);
@@ -1746,7 +1744,7 @@ public final class RtEntities {
         }
         ea.lastSeen = RtComposite.frameCounter();
         int s = ea.cursor;
-        ea.cursor = (ea.cursor + 1) % REFIT_RING;
+        ea.cursor = (ea.cursor + 1) % ENTITY_SLOT_RING;
         EntitySlot slot = ea.ring[s];
         if (slot == null) {
             slot = new EntitySlot();
@@ -1759,10 +1757,9 @@ public final class RtEntities {
     }
 
     /**
-     * Refit-or-build this entity's persistent acceleration structure in an already-selected retired slot.
-     * Records an in-place UPDATE (cheap refit) when the slot already holds an
-     * AS of the same topology when refit is enabled. Otherwise it records a full BUILD; BLAS built while
-     * refit is disabled omit ALLOW_UPDATE. Refit scratch and packed geometry persist per ring slot.
+     * Update or rebuild this entity's persistent acceleration structure in an already-retired ring slot.
+     * UPDATE is legal only when every indexed-topology value matches the slot's original BUILD. A topology
+     * change or the periodic quality interval replaces the AS with a full BUILD.
      */
     private RtAccel refitOrBuild(GpuContext ctx, FrameBuild build, EntitySlot slot,
                                  long positionAddr, long indexAddr,
@@ -1776,23 +1773,22 @@ public final class RtEntities {
         boolean canUpdate = refitEnabled && slot.accel != null && slot.updatable
                 && slot.vertCount == vertCount && slot.triCount == triCount
                 && java.util.Arrays.equals(slot.bucketTris, bucketTris)
-                // VUID-03768: indexed BLAS UPDATE requires every referenced index to match the BUILD.
                 && sameIndexTopology(slot, indices)
                 && slot.updatesSinceBuild < REFIT_REBUILD_INTERVAL;
         if (canUpdate) {
             RtFrameStats.FRAME.count("refits", 1);
             long required = slot.updateScratchSize;
-            if (slot.refitScratch == null || slot.refitScratch.size < required) {
-                if (slot.refitScratch != null) {
-                    slot.refitScratch.destroy();
+            if (slot.updateScratch == null || slot.updateScratch.size < required) {
+                if (slot.updateScratch != null) {
+                    slot.updateScratch.destroy();
                 }
-                slot.refitScratch = allocAlignedBuffer(ctx, required, storage, false, "entity refit scratch",
+                slot.updateScratch = allocAlignedBuffer(ctx, required, storage, false, "entity refit scratch",
                         ctx.accelerationStructureScratchAlignment());
                 RtFrameStats.FRAME.count("entityVmaBufferCreates", 1);
             } else {
                 RtFrameStats.FRAME.count("entityScratchBufferReuses", 1);
             }
-            build.blas.add(RtAccel.refitEntityUpdate(slot.accel, slot.refitScratch,
+            build.blas.add(RtAccel.refitEntityUpdate(slot.accel, slot.updateScratch,
                     positionAddr, indexAddr, vertCount, bucketTris,
                     "entity BLAS refit"));
             slot.updatesSinceBuild++;
@@ -1804,9 +1800,9 @@ public final class RtEntities {
             slot.accel = null;
             slot.backing = null;
         }
-        if (!refitEnabled && slot.refitScratch != null) {
-            slot.refitScratch.destroy();
-            slot.refitScratch = null;
+        if (!refitEnabled && slot.updateScratch != null) {
+            slot.updateScratch.destroy();
+            slot.updateScratch = null;
         }
         RtFrameStats.FRAME.count("entityVmaBufferCreates", 2); // persistent AS backing + transient build scratch
         if (refitEnabled) {
@@ -1816,7 +1812,7 @@ public final class RtEntities {
             slot.backing = ub.backing();
             slot.updateScratchSize = ub.updateScratchSize();
             build.blas.add(ub.op());
-            build.refitScratch.add(ub.scratch());
+            build.blasScratch.add(ub.scratch());
         } else {
             RtAccel.PersistentBuild pb = RtAccel.preparePersistentEntityBlasBuild(ctx, positionAddr, vertCount,
                     indexAddr, bucketTris, "entity BLAS");
@@ -1824,7 +1820,7 @@ public final class RtEntities {
             slot.backing = pb.backing();
             slot.updateScratchSize = 0L;
             build.blas.add(pb.op());
-            build.refitScratch.add(pb.scratch());
+            build.blasScratch.add(pb.scratch());
         }
         slot.updatable = refitEnabled;
         slot.vertCount = vertCount;
@@ -1891,9 +1887,9 @@ public final class RtEntities {
             slot.geometry.destroy();
             slot.geometry = null;
         }
-        if (slot.refitScratch != null) {
-            slot.refitScratch.destroy();
-            slot.refitScratch = null;
+        if (slot.updateScratch != null) {
+            slot.updateScratch.destroy();
+            slot.updateScratch = null;
         }
         slot.indices = null;
         slot.indexCount = 0;
@@ -1904,13 +1900,13 @@ public final class RtEntities {
         RtAccel accel = slot.accel;
         GpuBuffer backing = slot.backing;
         GpuBuffer geometry = slot.geometry;
-        GpuBuffer scratch = slot.refitScratch;
+        GpuBuffer scratch = slot.updateScratch;
         long geometryBytes = geometry == null ? 0L : geometry.size;
         retainedGeometryBytes = Math.subtractExact(retainedGeometryBytes, geometryBytes);
         slot.accel = null;
         slot.backing = null;
         slot.geometry = null;
-        slot.refitScratch = null;
+        slot.updateScratch = null;
         slot.indices = null;
         slot.indexCount = 0;
         ctx.gpuExecutor().retireAfterGraphics(slot.graphicsUse, () -> {

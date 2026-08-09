@@ -63,13 +63,22 @@ public final class RtWorkerPool {
         executor().execute(new CancellableJob(job, cancelled));
     }
 
-    /** Stop all workers and close the lifecycle of jobs removed from the queue. */
+    /**
+     * Stop all workers, close queued-job lifecycles, and join running jobs. Once this returns no worker
+     * can enqueue additional GPU work, so the session may take a stable GPU-drain snapshot.
+     */
     public synchronized void shutdown() {
         if (exec != null) {
             for (Runnable queued : exec.shutdownNow()) {
                 if (queued instanceof CancellableJob job) {
                     job.cancel();
                 }
+            }
+            try {
+                exec.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("Interrupted while stopping RT workers", e);
             }
             exec = null;
         }

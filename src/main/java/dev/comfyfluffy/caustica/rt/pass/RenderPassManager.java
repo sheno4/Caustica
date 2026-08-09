@@ -43,6 +43,7 @@ public final class RenderPassManager {
     private final GpuContext ctx;
     private final List<CausticaRenderPass> ordered;
     private final Set<CausticaRenderPass> disabled = new HashSet<>();
+    private final Set<CausticaRenderPass> destroyed = new HashSet<>();
     private final Map<String, WorldResource> worldResources = new LinkedHashMap<>();
     private final Map<String, CausticaRenderPass> worldResourcePublishers = new LinkedHashMap<>();
     private final Map<Identifier, Feature> passFeature;
@@ -256,11 +257,7 @@ public final class RenderPassManager {
 
     public void destroy() {
         for (CausticaRenderPass pass : ordered) {
-            try {
-                pass.destroy();
-            } catch (Throwable t) {
-                CausticaMod.LOGGER.error("Caustica render pass {} failed during shutdown", pass.id(), t);
-            }
+            destroyPass(pass, "shutdown");
         }
     }
 
@@ -273,12 +270,18 @@ public final class RenderPassManager {
             // A partial create()/resize() may have already published a slot before throwing; drop it so a
             // later reader can't resolve an image that destroy() is about to free out from under it.
             unpublish(pass);
-            try {
-                pass.destroy();
-            } catch (Throwable cleanupFailure) {
-                CausticaMod.LOGGER.error("Caustica render pass {} cleanup after failure also failed",
-                        pass.id(), cleanupFailure);
-            }
+            destroyPass(pass, "cleanup after " + phase + " failure");
+        }
+    }
+
+    private void destroyPass(CausticaRenderPass pass, String phase) {
+        if (!destroyed.add(pass)) {
+            return;
+        }
+        try {
+            pass.destroy();
+        } catch (Throwable t) {
+            CausticaMod.LOGGER.error("Caustica render pass {} failed during {}", pass.id(), phase, t);
         }
     }
 

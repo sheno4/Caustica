@@ -89,14 +89,27 @@ public final class RtRuntime {
 
     public void shutdown() {
         frameActive = false;
-        if (session != null) {
-            state = State.STOPPING;
-            session.close();
+        try {
+            if (session != null) {
+                state = State.STOPPING;
+                session.close();
+            }
+        } finally {
             session = null;
+            try {
+                GpuContext context = GpuContext.currentOrNull();
+                if (context != null) {
+                    context.destroy();
+                }
+            } finally {
+                try {
+                    NgxRuntime.INSTANCE.shutdown();
+                } finally {
+                    SlangRuntime.INSTANCE.shutdown();
+                    state = State.OFF;
+                }
+            }
         }
-        NgxRuntime.INSTANCE.shutdown();
-        SlangRuntime.INSTANCE.shutdown();
-        state = State.OFF;
     }
 
     public State state() {
@@ -136,6 +149,7 @@ public final class RtRuntime {
             return;
         }
         SlangRuntime.INSTANCE.resume();
+        ProviderManager.INSTANCE.beginSession();
         session = new Session();
         state = State.STARTING;
         CausticaMod.LOGGER.info("RT runtime starting; vanilla presentation remains active");
@@ -148,23 +162,25 @@ public final class RtRuntime {
      * whatever it needs.
      */
     private void stop(Minecraft client) {
-        state = State.STOPPING;
-        frameActive = false;
-        client.invalidateSurfaceConfiguration();
-        session.close();
-        session = null;
-        state = State.OFF;
+        closeSession(client, State.OFF);
         CausticaMod.LOGGER.info("RT runtime off; vanilla presentation restored");
     }
 
     private void fail(Minecraft client) {
+        closeSession(client, State.FAILED);
+        CausticaMod.LOGGER.warn("RT runtime startup failed; vanilla presentation remains active");
+    }
+
+    private void closeSession(Minecraft client, State terminalState) {
         state = State.STOPPING;
         frameActive = false;
-        client.invalidateSurfaceConfiguration();
-        session.close();
-        session = null;
-        state = State.FAILED;
-        CausticaMod.LOGGER.warn("RT runtime startup failed; vanilla presentation remains active");
+        try {
+            client.invalidateSurfaceConfiguration();
+            session.close();
+        } finally {
+            session = null;
+            state = terminalState;
+        }
     }
 
     private static final class Session {
@@ -202,14 +218,20 @@ public final class RtRuntime {
 
         void close() {
             WorldRenderScaler.INSTANCE.destroy();
-            RtUiOverlay.destroy();
+            ProviderManager.INSTANCE.stopProviders();
+            RtWorkerPool.INSTANCE.shutdown();
+            SlangRuntime.INSTANCE.requestShutdownWhenIdle();
             if (context == null) {
-                RtWorkerPool.INSTANCE.shutdown();
+                ProviderManager.INSTANCE.shutdownResources();
+                RtUiOverlay.destroy();
                 return;
             }
 
-            ProviderManager.INSTANCE.shutdown();
-            RtWorkerPool.INSTANCE.shutdown();
+            // Scene producers and CPU workers are stopped. Drain the shared per-device submitter and wait
+            // every queue before the remaining providers or runtime owners free session GPU resources.
+            context.gpuExecutor().drainAndWaitIdle();
+            ProviderManager.INSTANCE.shutdownResources();
+            RtUiOverlay.destroy();
             RtComposite.INSTANCE.destroy();
             RtEntityTextures.INSTANCE.reset();
             RtDlssFg.INSTANCE.destroy();
@@ -217,8 +239,7 @@ public final class RtRuntime {
                 RtFramePresenter.INSTANCE.destroy(device);
                 RtReflex.INSTANCE.destroy(device.vkDevice());
             }
-            SlangRuntime.INSTANCE.requestShutdownWhenIdle();
-            context.destroy();
+            // GpuContext owns per-device infrastructure and survives RT sessions. Client shutdown destroys it.
             context = null;
         }
     }

@@ -22,12 +22,11 @@ public final class ProviderManager {
     private static final LightSink FAKE_LIGHT_SINK = (id, dirX, dirY, dirZ, illuminanceLux) -> {
     };
 
-    // Providers that are no longer eligible for callbacks. A key enters this set at exactly the moment
-    // the provider's shutdown() runs, so membership means "already torn down" — it both skips further
-    // callbacks and suppresses a second shutdown at session close. Failure is terminal for the process:
-    // SceneProvider has no initialization hook, so a provider that has been torn down cannot be resumed
-    // on a later session.
-    private final Set<ProviderKey> disabled = new HashSet<>();
+    // Provider failures disable it for the process. Normal session shutdown is tracked separately:
+    // providers are lazy/restartable and receive callbacks again after beginSession().
+    private final Set<ProviderKey> failed = new HashSet<>();
+    private final Set<ProviderKey> stoppedThisSession = new HashSet<>();
+    private final Set<ProviderKey> shutDownThisSession = new HashSet<>();
     private final Map<Identifier, SceneProvider> scenes;
     private final Map<Identifier, LightProvider> lights;
     private final Map<Identifier, MaterialSource> materials;
@@ -39,30 +38,44 @@ public final class ProviderManager {
         this.materials = materials;
     }
 
+    /** Begin a new RT session; normally stopped providers become eligible for callbacks again. */
+    public void beginSession() {
+        stoppedThisSession.clear();
+        shutDownThisSession.clear();
+    }
+
     public void updateScenes() {
-        invoke("scene", scenes(), SceneProvider::update, SceneProvider::shutdown);
+        invoke("scene", scenes(), SceneProvider::update, SceneProvider::stop);
     }
 
     public void prepareFrame() {
-        invoke("scene", scenes(), SceneProvider::prepareFrame, SceneProvider::shutdown);
-        invoke("light", lights(), LightProvider::prepareFrame, LightProvider::shutdown);
-        invoke("light", lights(), provider -> provider.submitLights(FAKE_LIGHT_SINK), LightProvider::shutdown);
+        invoke("scene", scenes(), SceneProvider::prepareFrame, SceneProvider::stop);
+        invoke("light", lights(), LightProvider::prepareFrame, LightProvider::stop);
+        invoke("light", lights(), provider -> provider.submitLights(FAKE_LIGHT_SINK), LightProvider::stop);
     }
 
     public void invalidateScenes() {
-        invoke("scene", scenes(), SceneProvider::invalidate, SceneProvider::shutdown);
+        invoke("scene", scenes(), SceneProvider::invalidate, SceneProvider::stop);
     }
 
     public void onResourceReload() {
-        invoke("scene", scenes(), SceneProvider::onResourceReload, SceneProvider::shutdown);
-        invoke("light", lights(), LightProvider::onResourceReload, LightProvider::shutdown);
-        invoke("material", materials(), MaterialSource::onResourceReload, MaterialSource::shutdown);
+        invoke("scene", scenes(), SceneProvider::onResourceReload, SceneProvider::stop);
+        invoke("light", lights(), LightProvider::onResourceReload, LightProvider::stop);
+        invoke("material", materials(), MaterialSource::onResourceReload, MaterialSource::stop);
     }
 
-    public void shutdown() {
-        shutdownRemaining("scene", scenes(), SceneProvider::shutdown);
-        shutdownRemaining("light", lights(), LightProvider::shutdown);
-        shutdownRemaining("material", materials(), MaterialSource::shutdown);
+    /** Stop every provider before session GPU work is drained. No GPU owner is released in this phase. */
+    public void stopProviders() {
+        stopRemaining("scene", scenes(), SceneProvider::stop);
+        stopRemaining("light", lights(), LightProvider::stop);
+        stopRemaining("material", materials(), MaterialSource::stop);
+    }
+
+    /** Release every stopped provider after session GPU work is idle. */
+    public void shutdownResources() {
+        shutdownStopped("scene", scenes(), SceneProvider::shutdown);
+        shutdownStopped("light", lights(), LightProvider::shutdown);
+        shutdownStopped("material", materials(), MaterialSource::shutdown);
     }
 
     private Map<Identifier, SceneProvider> scenes() {
@@ -77,36 +90,54 @@ public final class ProviderManager {
         return materials != null ? materials : CausticaApi.registry().materialSources();
     }
 
-    private <T> void invoke(String kind, Map<Identifier, T> providers, Consumer<T> action, Consumer<T> cleanup) {
+    private <T> void invoke(String kind, Map<Identifier, T> providers, Consumer<T> action, Consumer<T> stop) {
         for (Map.Entry<Identifier, T> entry : providers.entrySet()) {
             ProviderKey key = new ProviderKey(kind, entry.getKey());
-            if (disabled.contains(key)) {
+            if (failed.contains(key) || stoppedThisSession.contains(key)) {
                 continue;
             }
             try {
                 action.accept(entry.getValue());
             } catch (Throwable t) {
-                disabled.add(key);
+                failed.add(key);
                 CausticaMod.LOGGER.error("Caustica {} provider {} failed and was disabled", kind, entry.getKey(), t);
-                try {
-                    cleanup.accept(entry.getValue());
-                } catch (Throwable cleanupFailure) {
-                    CausticaMod.LOGGER.error("Caustica {} provider {} cleanup failed", kind, entry.getKey(),
-                            cleanupFailure);
-                }
+                stopOne(kind, entry, key, stop);
             }
         }
     }
 
-    /** Shut down every provider whose teardown has not already run, marking each so it runs exactly once. */
-    private <T> void shutdownRemaining(String kind, Map<Identifier, T> providers, Consumer<T> action) {
+    private <T> void stopRemaining(String kind, Map<Identifier, T> providers, Consumer<T> action) {
         for (Map.Entry<Identifier, T> entry : providers.entrySet()) {
-            if (!disabled.add(new ProviderKey(kind, entry.getKey()))) {
+            ProviderKey key = new ProviderKey(kind, entry.getKey());
+            if (failed.contains(key) && !stoppedThisSession.contains(key)) {
+                continue;
+            }
+            stopOne(kind, entry, key, action);
+        }
+    }
+
+    private <T> void stopOne(String kind, Map.Entry<Identifier, T> entry, ProviderKey key, Consumer<T> action) {
+        if (!stoppedThisSession.add(key)) {
+            return;
+        }
+        try {
+            action.accept(entry.getValue());
+        } catch (Throwable t) {
+            failed.add(key);
+            CausticaMod.LOGGER.error("Caustica {} provider {} failed while stopping", kind, entry.getKey(), t);
+        }
+    }
+
+    private <T> void shutdownStopped(String kind, Map<Identifier, T> providers, Consumer<T> action) {
+        for (Map.Entry<Identifier, T> entry : providers.entrySet()) {
+            ProviderKey key = new ProviderKey(kind, entry.getKey());
+            if (!stoppedThisSession.contains(key) || !shutDownThisSession.add(key)) {
                 continue;
             }
             try {
                 action.accept(entry.getValue());
             } catch (Throwable t) {
+                failed.add(key);
                 CausticaMod.LOGGER.error("Caustica {} provider {} failed during shutdown", kind, entry.getKey(), t);
             }
         }

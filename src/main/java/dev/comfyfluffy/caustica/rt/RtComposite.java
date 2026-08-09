@@ -1579,8 +1579,8 @@ public final class RtComposite {
     }
 
     public void destroy() {
-        // Teardown runs after the device is idle (CLIENT_STOPPING waits), so the TLAS ring's slots are no
-        // longer in flight and can be freed immediately.
+        // Session teardown stops the GPU executor and waits the device idle before entering here, so the
+        // TLAS ring's slots are no longer in flight and can be freed immediately.
         tlasRing.destroy();
         RtDlssRr.INSTANCE.destroy();
         if (displayImage != null) {
@@ -1669,6 +1669,7 @@ public final class RtComposite {
             worldPipeline.destroy();
             worldPipeline = null;
         }
+        RtBlockMaterials.INSTANCE.reset();
         abandonPendingWorldShaderBuild();
         releaseWorldShaders();
         bindlessTextureCapacity = 0;

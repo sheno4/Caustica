@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -114,6 +115,29 @@ final class RenderPassManagerTest {
         // would keep a descriptor pointing at an image the failed pass's cleanup already freed.
         assertEquals(Map.of(), manager.worldResources());
         assertNotEquals(0, manager.worldResourceGeneration());
+    }
+
+    @Test
+    void aFailedPassIsDestroyedOnlyOnce() {
+        AtomicInteger destroys = new AtomicInteger();
+        FakePass failing = new FakePass("throws", RenderStage.ENVIRONMENT_PREPARE) {
+            @Override
+            public void resize(PassSetup setup, int width, int height) {
+                throw new RuntimeException("boom");
+            }
+
+            @Override
+            public void destroy() {
+                destroys.incrementAndGet();
+            }
+        };
+        RenderPassManager manager = new RenderPassManager(null, List.of(failing));
+
+        manager.resize(100, 100);
+        manager.destroy();
+        manager.destroy();
+
+        assertEquals(1, destroys.get());
     }
 
     private static Identifier identifierOf(String path) {
