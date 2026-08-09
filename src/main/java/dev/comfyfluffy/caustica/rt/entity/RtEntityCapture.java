@@ -43,13 +43,13 @@ public final class RtEntityCapture implements VertexConsumer {
     // Bindless texture slot for the geometry currently being submitted (set by the collector per
     // submitModel, so body + feature layers get their own texture).
     int currentTexSlot;
-    // Canonical MaterialHeader ID for this submission, before the albedo slot is folded in.
+    // Canonical material binding for this submission, before the albedo slot is folded in.
     int currentMaterialId;
-    // Folds this submission's bindless albedo slot into its material record. Defaults to the live
+    // Pairs this submission's bindless albedo slot with its material's surface. Defaults to the live
     // registry; capture itself stays a pure CPU accumulator, so unit tests substitute a resolver that
     // needs no GPU material table.
     IntBinaryOperator albedoMaterialResolver = RtMaterialRegistry.INSTANCE::withAlbedoSlot;
-    // Collectors set the base material and the texture slot independently, so the resolved variant is
+    // Collectors set the base material and the texture slot independently, so the resolved binding is
     // memoised per (base, slot) pair: the lookup is paid once per submission, not once per triangle.
     private int albedoMemoBase = -1;
     private int albedoMemoSlot = -1;
@@ -74,7 +74,7 @@ public final class RtEntityCapture implements VertexConsumer {
     private final int[] qcol = new int[4];
     private final Vector3f scratch = new Vector3f(); // baked-quad position transform scratch
 
-    /** This submission's material with its bindless albedo slot applied. */
+    /** This submission's binding paired with its bindless albedo slot. */
     private int albedoMaterialId() {
         if (currentMaterialId != albedoMemoBase || currentTexSlot != albedoMemoSlot) {
             albedoMemoBase = currentMaterialId;

@@ -30,7 +30,7 @@ import java.util.Set;
 public final class RtBlockMaterials {
     public static final RtBlockMaterials INSTANCE = new RtBlockMaterials();
 
-    // Entry.features uses the shared MaterialHeader feature bits (RtMaterialRegistry.FEATURE_*).
+    // Entry.features uses the shared SurfaceMaterial feature bits (RtMaterialRegistry.FEATURE_*).
 
     private static final int DEFAULT_PAGE_SIZE = 2048;
     private static final int MAX_PAGE_SIZE = 8192;

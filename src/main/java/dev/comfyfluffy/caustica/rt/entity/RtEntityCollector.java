@@ -329,7 +329,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
             int materialId = RtMaterialRegistry.INSTANCE.requireSnapshot()
                     .resolve(sprite, profile, transmissive, false);
             capture.currentMaterialId = stochasticAlpha
-                    ? RtMaterialRegistry.INSTANCE.withStochasticAlpha(materialId) : materialId;
+                    ? RtMaterialRegistry.INSTANCE.withStochasticCoverage(materialId) : materialId;
         } else if (sprite != null && RtEntityTextures.entityPbr()) {
             capture.currentMaterialId = RtMaterialRegistry.INSTANCE.resolveEntitySprite(sprite, stochasticAlpha);
         } else {
@@ -689,7 +689,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         if (sprite != null && TextureAtlas.LOCATION_BLOCKS.equals(sprite.atlasLocation())) {
             int materialId = RtMaterialRegistry.INSTANCE.requireSnapshot().resolve(sprite, state, transmissive);
             capture.currentMaterialId = stochasticAlpha
-                    ? RtMaterialRegistry.INSTANCE.withStochasticAlpha(materialId) : materialId;
+                    ? RtMaterialRegistry.INSTANCE.withStochasticCoverage(materialId) : materialId;
         } else {
             setSpriteMaterial(sprite, RtMaterials.profile(state), transmissive, stochasticAlpha);
         }

@@ -99,10 +99,10 @@ public final class RtEntityTextures {
         return slotForView(resolveView(renderType));
     }
 
-    /** Canonical material ID for a full entity texture, or the neutral runtime-texture fallback. */
-    public int materialIdFor(RenderType renderType, boolean stochasticAlpha) {
-        if (!entityPbr()) return RtMaterialRegistry.INSTANCE.entityFallbackId(stochasticAlpha);
-        return RtMaterialRegistry.INSTANCE.resolveEntityTexture(textureLocation(renderType), stochasticAlpha);
+    /** Canonical binding ID for a full entity texture, or the neutral runtime-texture fallback. */
+    public int materialIdFor(RenderType renderType, boolean stochasticCoverage) {
+        if (!entityPbr()) return RtMaterialRegistry.INSTANCE.entityFallbackId(stochasticCoverage);
+        return RtMaterialRegistry.INSTANCE.resolveEntityTexture(textureLocation(renderType), stochasticCoverage);
     }
 
     /**

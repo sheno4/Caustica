@@ -10,8 +10,12 @@ struct WorldPushLayoutProbe {
     WorldPush values[2]; // array stride is the complete, tail-padded WorldPush byte size
 };
 
-struct MaterialHeaderLayoutProbe {
-    MaterialHeader values[2]; // array stride is the complete, tail-padded MaterialHeader byte size
+struct MaterialBindingLayoutProbe {
+    MaterialBinding values[2]; // array stride is the complete, tail-padded MaterialBinding byte size
+};
+
+struct SurfaceMaterialLayoutProbe {
+    SurfaceMaterial values[2]; // array stride is the complete, tail-padded SurfaceMaterial byte size
 };
 
 struct ExposureStateLayoutProbe {
@@ -19,8 +23,9 @@ struct ExposureStateLayoutProbe {
 };
 
 [[vk::binding(0, 0)]] StructuredBuffer<WorldPushLayoutProbe, Std430DataLayout> worldPushLayoutProbe;
-[[vk::binding(1, 0)]] StructuredBuffer<MaterialHeaderLayoutProbe, Std430DataLayout> materialHeaderLayoutProbe;
-[[vk::binding(2, 0)]] StructuredBuffer<ExposureStateLayoutProbe, Std430DataLayout> exposureStateLayoutProbe;
+[[vk::binding(1, 0)]] StructuredBuffer<MaterialBindingLayoutProbe, Std430DataLayout> materialBindingLayoutProbe;
+[[vk::binding(2, 0)]] StructuredBuffer<SurfaceMaterialLayoutProbe, Std430DataLayout> surfaceMaterialLayoutProbe;
+[[vk::binding(3, 0)]] StructuredBuffer<ExposureStateLayoutProbe, Std430DataLayout> exposureStateLayoutProbe;
 [[vk::push_constant]] WorldPushConstants pushConstantsLayoutProbe;
 
 [shader("compute")]
@@ -29,7 +34,8 @@ void main(uint3 id : SV_DispatchThreadID) {
     // Keep the parameter reachable without requiring a writable output resource.
     if (id.x == 0xFFFFFFFFu) {
         float sink = worldPushLayoutProbe[0].values[0].invViewProj[0][0]
-                + materialHeaderLayoutProbe[0].values[0].params.x
+                + float(materialBindingLayoutProbe[0].values[0].packed0)
+                + surfaceMaterialLayoutProbe[0].values[0].params.x
                 + exposureStateLayoutProbe[0].values[0].previous
                 + float(pushConstantsLayoutProbe.frameIndex);
     }

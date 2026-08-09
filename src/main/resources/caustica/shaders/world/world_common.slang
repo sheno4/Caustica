@@ -24,7 +24,8 @@ public struct WorldPushConstants {
     public uint64_t worldPushAddr;
     public uint64_t tableAddr;
     public uint64_t entityTableAddr;
-    public uint64_t materialTableAddr;
+    public uint64_t materialTableAddr;   // MaterialBinding[], indexed by Prim.materialId
+    public uint64_t materialSurfaceAddr; // SurfaceMaterial[], indexed by MaterialBinding.surface
     public uint64_t lightBufAddr;        // RIS emitter-NEE global light buffer (0 = none published)
     public uint64_t lightAliasAddr;      // power-weighted O(1) alias table (0 = uniform fallback)
     public uint64_t lightLocalAliasAddr; // power aliases relative to each section's range
@@ -203,7 +204,7 @@ public struct Prim {
 };
 
 // Terrain per-triangle record (48 B). The final 16-byte lane contains integer geometry-local metadata;
-// shared surface parameters live once in MaterialHeader instead of being copied into every triangle.
+// shared surface parameters live once in SurfaceMaterial instead of being copied into every triangle.
 public struct TerrainPrim {
     public float4 normal;
     public float4 tint;
@@ -213,27 +214,68 @@ public struct TerrainPrim {
     public uint aux1;
 };
 
-// Compiled material record. Source-format data has already been decoded into canonical pages;
-// texturePage indexes the dedicated canonical page arrays. materialUv maps sprite-local UV into the packed
-// page, while albedoUv maps the vanilla atlas rectangle back to sprite-local UV.
-public struct MaterialHeader {
+// The compiled material record is split by which stage reads it.
+//
+// MaterialBinding is the only material record either any-hit loads: sixteen aligned bytes answering the
+// two questions traversal asks. Coverage — is the surface present along this ray — and transmittance —
+// how much light passes where it is present. The two are independent (a stained-glass-textured entity has
+// both) and compose sequentially: test coverage, then apply interface behaviour.
+//
+// A binding is the cheap object. Pairing one SurfaceMaterial with a different bindless albedo slot or a
+// different coverage mode costs sixteen bytes rather than a cloned material, so entity render types and
+// stochastic submissions are bindings instead of record variants.
+public struct MaterialBinding {
+    // albedoSlot:16 | coverageMode:2 | flags:6. Slot 0 is the vanilla block atlas, so a zero-initialised
+    // binding samples terrain albedo correctly; entity render types resolve their own slot through
+    // RtEntityTextures.
+    public uint packed0;
+    public uint surface;    // index into the SurfaceMaterial table; closest-hit only
+    // 8:8:8 ACEScg transmittance through this surface, used when coverage is OPAQUE and no texel is
+    // sampled. A compile-time reduction of the surface's transmission colour, not an authored parameter.
+    public uint shadowTint;
+    public uint packed1;    // coverageCutoff:8, unorm
+};
+
+// Coverage: whether the surface is present along this ray. Varies per texel, and it is the only axis
+// whose estimator varies by ray type — radiance rays resolve STOCHASTIC with white noise, guide and
+// shadow rays need a single-valued answer and take the deterministic cutoff instead.
+public static const uint COVERAGE_OPAQUE = 0u;
+public static const uint COVERAGE_CUTOUT = 1u;
+public static const uint COVERAGE_STOCHASTIC = 2u;
+
+// Transmittance: the surface is there and passes light through, so a shadow ray filters and continues
+// rather than being blocked.
+public static const uint BINDING_TRANSMISSIVE = 1u;
+// Report the nearest crossing distance in Payload.hitT. For an underwater shading point that is where its
+// sun shadow ray leaves the medium, which is where world.rgen evaluates the refraction caustic.
+public static const uint BINDING_RECORD_CROSSING = 2u;
+
+public uint bindingAlbedoSlot(MaterialBinding binding) { return binding.packed0 & 0xFFFFu; }
+public uint bindingCoverage(MaterialBinding binding) { return (binding.packed0 >> 16) & 3u; }
+public uint bindingFlags(MaterialBinding binding) { return (binding.packed0 >> 18) & 63u; }
+public float bindingCutoff(MaterialBinding binding) { return float(binding.packed1 & 255u) * (1.0 / 255.0); }
+
+public float3 bindingShadowTint(MaterialBinding binding) {
+    return float3(uint3(binding.shadowTint, binding.shadowTint >> 8u, binding.shadowTint >> 16u) & 255u)
+            * (1.0 / 255.0);
+}
+
+// Closest-hit-only surface parameters, shared by every binding that names them. Source-format data has
+// already been decoded into canonical pages; texturePage indexes the dedicated canonical page arrays.
+// materialUv maps sprite-local UV into the packed page, while albedoUv maps the vanilla atlas rectangle
+// back to sprite-local UV.
+public struct SurfaceMaterial {
     public uint model;
-    public uint features;        // low feature bits; bits 24..31 = maximum valid material-page LOD
+    public uint features;     // low feature bits; bits 24..31 = maximum valid material-page LOD
     public uint texturePage;
-    public uint extensionOffset; // zero when no optional extension record is present
-    // Bindless albedoTex index. Slot 0 is the vanilla block atlas, so a zero-initialised header samples
-    // terrain albedo correctly; entity render types resolve their own slot through RtEntityTextures.
-    public uint albedoSlot;
     public float4 materialUv; // packed-page uvMin.xy + uvExtent.xy
     public float4 albedoUv;   // vanilla atlas uvMin.xy + inverse uvExtent.xy
-    public float4 params;  // roughness, metalness, IOR, transmission
-    public float4 average; // whole-sprite linear-input average RGBA for translucent shadow filtering
+    public float4 params;     // roughness, metalness, IOR, transmission
 };
 
 public static const uint MATERIAL_FEATURE_SPEC = 1u;
 public static const uint MATERIAL_FEATURE_NORMAL = 2u;
 public static const uint MATERIAL_FEATURE_HEURISTIC_EMISSION = 4u;
-public static const uint MATERIAL_FEATURE_STOCHASTIC_ALPHA = 16u;
 // Final HDR emitting-surface luminance (look-package baseline or absolute JSON cd/m² override), baked in Java
 // at material-compile time (RtMaterialRegistry) and packed here as a 16-bit fraction of the max — every
 // emissive material carries a value (0 for non-emissive), not just resource-pack-overridden ones, so the
@@ -270,9 +312,6 @@ public struct EntityGeom {
 public static const uint ENTITY_BIT = 0x800000u;
 public static const uint PARTICLE_BIT = 0x400000u; // particles share the entity cutout path
 public static const uint IDX_MASK = 0x3FFFFFu;     // low 22 bits = geom-table index
-public static const uint BUCKET_CUTOUT = 1u;
-public static const uint BUCKET_TRANSLUCENT = 2u;
-public static const uint BUCKET_WATER = 3u;
 
 // packHalf2x16 equivalent (Slang core module has no GLSL pack builtin; f32tof16 returns the half
 // bit-pattern in the low 16 bits).

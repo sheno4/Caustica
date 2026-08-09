@@ -31,11 +31,20 @@ void payloadSetDielectric(inout Payload payload, uint material, bool entering) {
     if (entering) payload.flags |= PAYLOAD_DIELECTRIC_ENTERING;
 }
 
-uint materialEmissionSource(MaterialHeader header, float emission) {
+uint materialEmissionSource(SurfaceMaterial mat, float emission) {
     if (emission <= 0.0) return EMISSION_SOURCE_NONE;
-    if ((header.features & MATERIAL_FEATURE_SPEC) != 0u) return EMISSION_SOURCE_LAB_PBR;
-    if ((header.features & MATERIAL_FEATURE_HEURISTIC_EMISSION) != 0u) return EMISSION_SOURCE_HEURISTIC;
+    if ((mat.features & MATERIAL_FEATURE_SPEC) != 0u) return EMISSION_SOURCE_LAB_PBR;
+    if ((mat.features & MATERIAL_FEATURE_HEURISTIC_EMISSION) != 0u) return EMISSION_SOURCE_HEURISTIC;
     return EMISSION_SOURCE_UNIFORM;
+}
+
+/** The surface parameters a binding names. Loaded only here: no any-hit reads them. */
+SurfaceMaterial loadSurfaceMaterial(MaterialBinding binding) {
+    return ConstPtr<SurfaceMaterial>(pc.materialSurfaceAddr)[binding.surface];
+}
+
+MaterialBinding loadBinding(uint materialId) {
+    return ConstPtr<MaterialBinding>(pc.materialTableAddr)[materialId];
 }
 
 static const float NORMAL_AO_STRENGTH = 0.5;
@@ -119,7 +128,7 @@ float4 samplePageNormalAo(uint page, float2 uv, float lod) {
     return materialNormalAoTex[NonUniformResourceIndex(page)].SampleLevel(uv, lod);
 }
 
-Surface evaluateMaterial(MaterialHeader header, float2 atlasUv, float lod, float3 albedo,
+Surface evaluateMaterial(SurfaceMaterial mat, float2 atlasUv, float lod, float3 albedo,
         float3 geometricNormal, float3 p0, float3 p1, float3 p2,
         float2 uv0, float2 uv1, float2 uv2, float3 vdir,
         float fallbackRoughness, float fallbackMetalness, float fallbackEmission, bool allowSss) {
@@ -132,15 +141,15 @@ Surface evaluateMaterial(MaterialHeader header, float2 atlasUv, float lod, float
     surface.sss = 0.0;
     surface.ao = 1.0;
 
-    float2 localUv = clamp((atlasUv - header.albedoUv.xy) * header.albedoUv.zw,
+    float2 localUv = clamp((atlasUv - mat.albedoUv.xy) * mat.albedoUv.zw,
             float2(0.0, 0.0), float2(1.0, 1.0));
-    float2 pageUv = header.materialUv.xy + localUv * header.materialUv.zw;
-    float maxMaterialLod = float((header.features >> MATERIAL_MAX_LOD_SHIFT) & MATERIAL_MAX_LOD_MASK);
+    float2 pageUv = mat.materialUv.xy + localUv * mat.materialUv.zw;
+    float maxMaterialLod = float((mat.features >> MATERIAL_MAX_LOD_SHIFT) & MATERIAL_MAX_LOD_MASK);
     float materialLod = min(lod, maxMaterialLod);
-    uint page = header.texturePage;
-    if ((header.features & (MATERIAL_FEATURE_SPEC | MATERIAL_FEATURE_HEURISTIC_EMISSION)) != 0u) {
+    uint page = mat.texturePage;
+    if ((mat.features & (MATERIAL_FEATURE_SPEC | MATERIAL_FEATURE_HEURISTIC_EMISSION)) != 0u) {
         float4 surface0 = samplePageSurface0(page, pageUv, materialLod);
-        if ((header.features & MATERIAL_FEATURE_SPEC) != 0u) {
+        if ((mat.features & MATERIAL_FEATURE_SPEC) != 0u) {
             float4 surface1 = samplePageSurface1(page, pageUv, materialLod);
             surface.roughness = surface0.r;
             surface.metalness = surface0.g;
@@ -151,11 +160,11 @@ Surface evaluateMaterial(MaterialHeader header, float2 atlasUv, float lod, float
             surface.emission = surface0.b * fallbackEmission;
         }
     }
-    float strength = float((header.features >> MATERIAL_EMISSION_STRENGTH_SHIFT)
+    float strength = float((mat.features >> MATERIAL_EMISSION_STRENGTH_SHIFT)
             & MATERIAL_EMISSION_STRENGTH_MASK)
             * (MATERIAL_MAX_EMISSION_STRENGTH / float(MATERIAL_EMISSION_STRENGTH_MASK));
     surface.emission *= strength;
-    if ((header.features & MATERIAL_FEATURE_NORMAL) != 0u) {
+    if ((mat.features & MATERIAL_FEATURE_NORMAL) != 0u) {
         float4 normalAo = samplePageNormalAo(page, pageUv, materialLod);
         surface.normal = perturbNormal(geometricNormal, p0, p1, p2, uv0, uv1, uv2,
                 vdir, normalAo, surface.ao);
@@ -210,7 +219,7 @@ MaterialInput buildMaterialInput(Surface surface, float3 finalAlbedo, float inte
     material.interiorIor = interiorIor;
     material.subsurface = surface.sss;
     material.ambientOcclusion = surface.ao;
-    // No semantic material tags (foliage/water/portal/...) are compiled into MaterialHeader yet.
+    // No semantic material tags (foliage/water/portal/...) are compiled into SurfaceMaterial yet.
     material.materialTags = 0u;
     return material;
 }
@@ -257,7 +266,7 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
         uint p2 = ib[3u * pid + 2u];
         float3 pbary = float3(1.0 - attribs.x - attribs.y, attribs.x, attribs.y);
         float2 puv = pbary.x * uvb[p0] + pbary.y * uvb[p1] + pbary.z * uvb[p2];
-        uint pslot = ConstPtr<MaterialHeader>(pc.materialTableAddr)[pr.materialId].albedoSlot;
+        uint pslot = bindingAlbedoSlot(loadBinding(pr.materialId));
         float3x3 o2w = (float3x3)ObjectToWorld3x4();
         float3 pp0 = mul(o2w, HitTriangleVertexPosition(0));
         float3 pp1 = mul(o2w, HitTriangleVertexPosition(1));
@@ -305,15 +314,16 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
         uint e2 = eidxBuf[3u * pid + 2u];
         float3 ebary = float3(1.0 - attribs.x - attribs.y, attribs.x, attribs.y);
         float2 euvCoord = ebary.x * euv[e0] + ebary.y * euv[e1] + ebary.z * euv[e2];
-        MaterialHeader header = ConstPtr<MaterialHeader>(pc.materialTableAddr)[pr.materialId];
-        uint texSlot = header.albedoSlot;
+        MaterialBinding binding = loadBinding(pr.materialId);
+        SurfaceMaterial mat = loadSurfaceMaterial(binding);
+        uint texSlot = bindingAlbedoSlot(binding);
         float3 ep0 = mul(entityO2w, HitTriangleVertexPosition(0));
         float3 ep1 = mul(entityO2w, HitTriangleVertexPosition(1));
         float3 ep2 = mul(entityO2w, HitTriangleVertexPosition(2));
         float entityLod = rayConeTextureLod(rayCone, texSizePx(entityAlbedoTex[NonUniformResourceIndex(texSlot)]),
                 ep0, ep1, ep2, euv[e0], euv[e1], euv[e2]);
         float4 entityTexel = entityAlbedoTex[NonUniformResourceIndex(texSlot)].SampleLevel(euvCoord, entityLod);
-        uint material = header.model;
+        uint material = mat.model;
         float3 baseAlbedo709 = srgbToLinear(entityTexel.rgb) * srgbToLinear(pr.tint.rgb);
         float3 opticalColor709 = material == MATERIAL_DIELECTRIC
                 ? lerp(float3(1.0), baseAlbedo709, entityTexel.a) : baseAlbedo709;
@@ -321,9 +331,9 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
 
         if (material != MATERIAL_OPAQUE) {
             // Dielectric/transmissive entities stay on the engine material path.
-            Surface surface = evaluateMaterial(header, euvCoord, entityLod, albedo, geometricNormal,
+            Surface surface = evaluateMaterial(mat, euvCoord, entityLod, albedo, geometricNormal,
                     ep0, ep1, ep2, euv[e0], euv[e1], euv[e2], vdir,
-                    header.params.x, header.params.y, pr.normal.w, false);
+                    mat.params.x, mat.params.y, pr.normal.w, false);
             packAlbedo(payload, albedo * surface.ao);
             packNormal(payload, surface.normal);
             payload.hitT = RayTCurrent();
@@ -335,16 +345,16 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
             }
             payload.f0 = half3(surface.f0);
             payloadSetPacked(payload, material, surface.roughness, surface.metalness,
-                    0.0, 0.0, header.params.z, header.params.w, EMISSION_SOURCE_NONE);
+                    0.0, 0.0, mat.params.z, mat.params.w, EMISSION_SOURCE_NONE);
             payloadSetDielectric(payload, material, entering);
             return;
         }
 
-        Surface surface = evaluateMaterial(header, euvCoord, entityLod, albedo, geometricNormal,
+        Surface surface = evaluateMaterial(mat, euvCoord, entityLod, albedo, geometricNormal,
                 ep0, ep1, ep2, euv[e0], euv[e1], euv[e2], vdir,
-                header.params.x, header.params.y, pr.normal.w, true);
+                mat.params.x, mat.params.y, pr.normal.w, true);
 
-        MaterialInput material0 = buildMaterialInput(surface, albedo, header.params.z);
+        MaterialInput material0 = buildMaterialInput(surface, albedo, mat.params.z);
         float3 hitPos = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
         SurfaceInput input = buildSurfaceInput(material0, hitPos,
                 geometricNormal, surface.normal, vdir, euvCoord, entityLod);
@@ -362,15 +372,16 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
         payload.f0 = half3(closure.specularF0);
         float emission = surface.emission;
         payloadSetPacked(payload, material, closure.alphaRoughness, 0.0,
-                emission, closure.subsurface, header.params.z, closure.transmission,
-                materialEmissionSource(header, emission));
+                emission, closure.subsurface, mat.params.z, closure.transmission,
+                materialEmissionSource(mat, emission));
         return;
     }
 
     Section sec = ConstPtr<Section>(pc.tableAddr)[InstanceID()];
     uint pid = PrimitiveIndex() + sec.triBase[GeometryIndex()];
     TerrainPrim pr = ConstPtr<TerrainPrim>(sec.primAddr)[pid];
-    MaterialHeader materialHeader = ConstPtr<MaterialHeader>(pc.materialTableAddr)[pr.materialId];
+    MaterialBinding terrainBinding = loadBinding(pr.materialId);
+    SurfaceMaterial terrainMat = loadSurfaceMaterial(terrainBinding);
     float3 geometricNormal = normalize(pr.normal.xyz);
     float3 tint = pr.tint.rgb;
 
@@ -387,7 +398,7 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
     float3 tp2 = HitTriangleVertexPosition(2);
     // Terrain albedo is the block atlas, reached through the shared bindless array like every other
     // producer; the material record names the slot, so no geometry path carries a texture index.
-    uint blockSlot = materialHeader.albedoSlot;
+    uint blockSlot = bindingAlbedoSlot(terrainBinding);
     float blockLod = rayConeTextureLod(rayCone,
             texSizePx(entityAlbedoTex[NonUniformResourceIndex(blockSlot)]), tp0, tp1, tp2, uv0, uv1, uv2);
 
@@ -397,15 +408,15 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
     }
 
     // Stained glass and ice stay on the engine dielectric path.
-    if (materialHeader.model == MATERIAL_DIELECTRIC) {
+    if (terrainMat.model == MATERIAL_DIELECTRIC) {
         float4 gtex = entityAlbedoTex[NonUniformResourceIndex(blockSlot)].SampleLevel(uv, blockLod);
         float3 gtex709 = srgbToLinear(gtex.rgb);
         float3 tint709 = srgbToLinear(tint);
         float3 opticalColor709 = lerp(float3(1.0), gtex709 * tint709, gtex.a);
         float3 glassAlbedo = bt709ToAcesCg(opticalColor709);
-        Surface glassSurface = evaluateMaterial(materialHeader, uv, blockLod, glassAlbedo, geometricNormal,
+        Surface glassSurface = evaluateMaterial(terrainMat, uv, blockLod, glassAlbedo, geometricNormal,
                 tp0, tp1, tp2, uv0, uv1, uv2, vdir,
-                materialHeader.params.x, materialHeader.params.y, 0.0, false);
+                terrainMat.params.x, terrainMat.params.y, 0.0, false);
         float3 n = glassSurface.normal;
         packAlbedo(payload, bt709ToAcesCg(applyBreaking(
                 opticalColor709 * glassSurface.ao, rayCone, WorldRayOrigin(),
@@ -415,8 +426,8 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
         payload.motionPrev = half3(0.0h, 0.0h, 0.0h);
         payload.f0 = half3(glassSurface.f0);
         payloadSetPacked(payload, MATERIAL_DIELECTRIC, glassSurface.roughness,
-                glassSurface.metalness, 0.0, 0.0, materialHeader.params.z,
-                materialHeader.params.w, EMISSION_SOURCE_NONE);
+                glassSurface.metalness, 0.0, 0.0, terrainMat.params.z,
+                terrainMat.params.w, EMISSION_SOURCE_NONE);
         payloadSetDielectric(payload, MATERIAL_DIELECTRIC, entering);
         return;
     }
@@ -424,7 +435,7 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
     float3 tint709 = srgbToLinear(tint);
     float3 albedo709 = srgbToLinear(entityAlbedoTex[NonUniformResourceIndex(blockSlot)].SampleLevel(uv, blockLod).rgb) * tint709;
 
-    if (materialHeader.model == MATERIAL_WATER) {
+    if (terrainMat.model == MATERIAL_WATER) {
         // Water stays on the engine dielectric path.
         packAlbedo(payload, bt709ToAcesCg(tint709));
         payload.hitT = RayTCurrent();
@@ -432,15 +443,15 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
         float ew = pr.normal.w;
         bool nonSolid = ew >= 1.5;
         float emission = nonSolid ? ew - 2.0 : ew;
-        Surface surface = evaluateMaterial(materialHeader, uv, blockLod, unpackAlbedo(payload), geometricNormal,
+        Surface surface = evaluateMaterial(terrainMat, uv, blockLod, unpackAlbedo(payload), geometricNormal,
                 tp0, tp1, tp2, uv0, uv1, uv2, vdir,
-                materialHeader.params.x, materialHeader.params.y, emission, false);
+                terrainMat.params.x, terrainMat.params.y, emission, false);
         packAlbedo(payload, unpackAlbedo(payload) * surface.ao);
         packNormal(payload, surface.normal);
         payload.f0 = half3(surface.f0);
         payloadSetPacked(payload, MATERIAL_WATER, surface.roughness, surface.metalness,
-                surface.emission, surface.sss, materialHeader.params.z, materialHeader.params.w,
-                materialEmissionSource(materialHeader, surface.emission));
+                surface.emission, surface.sss, terrainMat.params.z, terrainMat.params.w,
+                materialEmissionSource(terrainMat, surface.emission));
         payloadSetDielectric(payload, MATERIAL_WATER, entering);
         return;
     }
@@ -453,9 +464,9 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
     float ew = pr.normal.w;
     bool nonSolid = ew >= 1.5;
     float emission = nonSolid ? ew - 2.0 : ew;
-    Surface surface = evaluateMaterial(materialHeader, uv, blockLod, unpackAlbedo(payload), geometricNormal,
+    Surface surface = evaluateMaterial(terrainMat, uv, blockLod, unpackAlbedo(payload), geometricNormal,
             tp0, tp1, tp2, uv0, uv1, uv2, vdir,
-            materialHeader.params.x, materialHeader.params.y, emission, nonSolid);
+            terrainMat.params.x, terrainMat.params.y, emission, nonSolid);
 
     // Block-breaking overlay is a rendering trick, not a material fact,
     // so it stays engine-side and composites into baseColor before the slot sees it.
@@ -463,7 +474,7 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
             WorldRayDirection(), RayTCurrent(), surface.normal);
     float3 finalAlbedo = bt709ToAcesCg(brokenAlbedo709);
 
-    MaterialInput material0 = buildMaterialInput(surface, finalAlbedo, materialHeader.params.z);
+    MaterialInput material0 = buildMaterialInput(surface, finalAlbedo, terrainMat.params.z);
     float3 hitPos = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
     SurfaceInput input = buildSurfaceInput(material0, hitPos,
             geometricNormal, surface.normal, vdir, uv, blockLod);
@@ -473,8 +484,8 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
     packNormal(payload, closure.shadingNormal);
     payload.f0 = half3(closure.specularF0);
     payloadSetPacked(payload, MATERIAL_OPAQUE, closure.alphaRoughness, 0.0,
-            surface.emission, closure.subsurface, materialHeader.params.z, closure.transmission,
-            materialEmissionSource(materialHeader, surface.emission));
+            surface.emission, closure.subsurface, terrainMat.params.z, closure.transmission,
+            materialEmissionSource(terrainMat, surface.emission));
     // RIS emitter-NEE membership: raygen gates this emitter's direct-hit emission term (RIS covers it).
     if ((pr.flags & TERRAIN_PRIM_IN_LIGHT_BUFFER) != 0u) {
         payload.flags |= PAYLOAD_EMITTER_IN_LIST;

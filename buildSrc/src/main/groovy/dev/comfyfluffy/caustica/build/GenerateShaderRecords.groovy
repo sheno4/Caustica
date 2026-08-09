@@ -225,9 +225,19 @@ abstract class GenerateShaderRecords extends DefaultTask {
         sb.toString()
     }
 
+    // (reflection parameter name, expected Slang struct name, generated Java class name, emit a reader)
+    // for every device-buffer struct, which the probe file wraps in a two-element array so the reflected
+    // array stride reports the complete, tail-padded byte size.
+    private static final List<List<Object>> BUFFER_PROBES = [
+            ["worldPushLayoutProbe", "WorldPush", "WorldPushData", false],
+            ["materialBindingLayoutProbe", "MaterialBinding", "MaterialBindingData", false],
+            ["surfaceMaterialLayoutProbe", "SurfaceMaterial", "SurfaceMaterialData", false],
+            ["exposureStateLayoutProbe", "ExposureState", "ExposureStateData", true],
+    ]
+
     // (reflection parameter name, expected Slang struct name, generated Java class name) for every
-    // plain push-constant struct probed directly (no structured-buffer array wrapper needed, unlike
-    // WorldPush/MaterialHeader -- see the two probeXxx blocks below main() in the probe file).
+    // plain push-constant struct probed directly (no structured-buffer array wrapper needed -- see the
+    // probeXxx blocks below main() in the probe file).
     private static final List<List<String>> PUSH_CONSTANT_PROBES = [
             ["pushConstantsLayoutProbe", "WorldPushConstants", "WorldPushConstantsData"],
             ["exposureHistPushProbe", "ExposureHistPush", "ExposureHistPushData"],
@@ -254,6 +264,16 @@ abstract class GenerateShaderRecords extends DefaultTask {
         pushParameter.type.elementVarLayout.binding.size as int
     }
 
+    // NOT private: see the comment on extractPushConstantType -- same closure-dispatch issue.
+    static Map extractBufferProbeArray(Object reflection, String probeName, String structName) {
+        def parameter = reflection.parameters.find { it.name == probeName }
+        def probeArray = parameter?.type?.resultType?.fields?.find { it.name == "values" }
+        if (probeArray?.type?.kind != "array" || probeArray.type.elementType?.name != structName) {
+            throw new GradleException("Slang reflection omitted or misshaped ${probeName} (expected ${structName})")
+        }
+        probeArray.type as Map
+    }
+
     @TaskAction
     void generate() {
         def reflectionFile = new File(temporaryDir, "shader-records-reflection.json")
@@ -273,29 +293,6 @@ abstract class GenerateShaderRecords extends DefaultTask {
         }
 
         def reflection = new JsonSlurper().parse(reflectionFile)
-        def parameter = reflection.parameters.find { it.name == "worldPushLayoutProbe" }
-        def probeArray = parameter?.type?.resultType?.fields?.find { it.name == "values" }
-        if (probeArray?.type?.kind != "array" || probeArray.type.elementType?.name != "WorldPush") {
-            throw new GradleException("unexpected WorldPush reflection probe shape")
-        }
-        Map worldType = probeArray.type.elementType as Map
-        int worldByteSize = probeArray.type.uniformStride as int
-
-        def materialParameter = reflection.parameters.find { it.name == "materialHeaderLayoutProbe" }
-        def materialProbeArray = materialParameter?.type?.resultType?.fields?.find { it.name == "values" }
-        if (materialProbeArray?.type?.kind != "array" || materialProbeArray.type.elementType?.name != "MaterialHeader") {
-            throw new GradleException("unexpected MaterialHeader reflection probe shape")
-        }
-        Map materialHeaderType = materialProbeArray.type.elementType as Map
-        int materialHeaderByteSize = materialProbeArray.type.uniformStride as int
-
-        def exposureStateParameter = reflection.parameters.find { it.name == "exposureStateLayoutProbe" }
-        def exposureStateProbeArray = exposureStateParameter?.type?.resultType?.fields?.find { it.name == "values" }
-        if (exposureStateProbeArray?.type?.kind != "array" || exposureStateProbeArray.type.elementType?.name != "ExposureState") {
-            throw new GradleException("unexpected ExposureState reflection probe shape")
-        }
-        Map exposureStateType = exposureStateProbeArray.type.elementType as Map
-        int exposureStateByteSize = exposureStateProbeArray.type.uniformStride as int
 
         def generatedRoot = outDir.get().asFile
         if (generatedRoot.exists() && !generatedRoot.deleteDir()) {
@@ -303,12 +300,13 @@ abstract class GenerateShaderRecords extends DefaultTask {
         }
         def packageDir = new File(generatedRoot, "dev/comfyfluffy/caustica/rt/gen")
         packageDir.mkdirs()
-        new File(packageDir, "WorldPushData.java").setText(
-                generateJava(worldType, worldByteSize, "WorldPushData"), "UTF-8")
-        new File(packageDir, "MaterialHeaderData.java").setText(
-                generateJava(materialHeaderType, materialHeaderByteSize, "MaterialHeaderData"), "UTF-8")
-        new File(packageDir, "ExposureStateData.java").setText(
-                generateJava(exposureStateType, exposureStateByteSize, "ExposureStateData", true), "UTF-8")
+
+        BUFFER_PROBES.each { probeName, structName, className, emitReader ->
+            Map probeArray = extractBufferProbeArray(reflection, probeName as String, structName as String)
+            new File(packageDir, "${className}.java").setText(
+                    generateJava(probeArray.elementType as Map, probeArray.uniformStride as int,
+                            className as String, emitReader as boolean), "UTF-8")
+        }
 
         PUSH_CONSTANT_PROBES.each { probeName, structName, className ->
             Map type = extractPushConstantType(reflection, probeName, structName)

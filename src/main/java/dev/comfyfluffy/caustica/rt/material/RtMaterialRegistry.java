@@ -4,11 +4,13 @@ import com.mojang.blaze3d.platform.NativeImage;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.mixin.SpriteContentsAccessor;
 import dev.comfyfluffy.caustica.rt.GpuContext;
+import dev.comfyfluffy.caustica.rt.RtColor;
 import dev.comfyfluffy.caustica.rt.RtLookPackage;
 import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
 import dev.comfyfluffy.caustica.rt.entity.RtEntityTextures;
-import dev.comfyfluffy.caustica.rt.gen.MaterialHeaderData;
-import dev.comfyfluffy.caustica.rt.gen.MaterialHeaderData.Float4;
+import dev.comfyfluffy.caustica.rt.gen.MaterialBindingData;
+import dev.comfyfluffy.caustica.rt.gen.SurfaceMaterialData;
+import dev.comfyfluffy.caustica.rt.gen.SurfaceMaterialData.Float4;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.resources.Identifier;
 import net.minecraft.util.ARGB;
@@ -30,15 +32,24 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Resource-epoch material registry shared by terrain, entities, block entities and item geometry. Terrain
- * workers read an immutable {@link Snapshot}; entity atlas headers may append into pre-reserved table slots
- * because their stitched UV rectangles only become available during capture. Published records never mutate.
+ * Resource-epoch material registry shared by terrain, entities, block entities and item geometry.
+ *
+ * <p>The compiled record is two tables. {@link SurfaceMaterialData} carries the closest-hit surface
+ * parameters; {@link MaterialBindingData} carries the sixteen bytes traversal reads — coverage mode,
+ * bindless albedo slot, and the uniform shadow transmittance — and names a surface. Geometry stores
+ * binding IDs, so pairing one surface with another albedo slot or coverage mode is a sixteen-byte append
+ * rather than a cloned material, and bindings are interned on content: the same triple is one ID however
+ * it was reached.
+ *
+ * <p>Terrain workers read an immutable {@link Snapshot}; entity atlas surfaces may append into
+ * pre-reserved table slots because their stitched UV rectangles only become available during capture.
+ * Published records never mutate.
  */
 public final class RtMaterialRegistry {
     public static final RtMaterialRegistry INSTANCE = new RtMaterialRegistry();
 
-    // Canonical MaterialHeader model/feature bits, mirrored by world_common.slang's MATERIAL_* constants.
-    // RtBlockMaterials.Entry.features uses the same bit values, so entry features flow into headers
+    // Canonical SurfaceMaterial model/feature bits, mirrored by world_common.slang's MATERIAL_* constants.
+    // RtBlockMaterials.Entry.features uses the same bit values, so entry features flow into surfaces
     // with a plain mask.
     public static final int MODEL_OPAQUE = 0;
     public static final int MODEL_WATER = 1;
@@ -46,12 +57,35 @@ public final class RtMaterialRegistry {
     public static final int FEATURE_SPEC = 1;
     public static final int FEATURE_NORMAL = 2;
     public static final int FEATURE_HEURISTIC_EMISSION = 4;
-    public static final int FEATURE_STOCHASTIC_ALPHA = 16;
     /** Bindless albedo slot reserved for the vanilla block atlas, seeded by {@code RtEntityTextures}. */
     public static final int BLOCK_ATLAS_ALBEDO_SLOT = 0;
-    // Byte offset of MaterialHeader.albedoSlot, for in-place variant patching. Pinned by
-    // RtMaterialLayoutTest against the reflected MaterialHeaderData layout.
-    private static final int ALBEDO_SLOT_OFFSET = 16;
+
+    // Coverage — is the surface present along this ray — mirrored by world_common.slang's COVERAGE_*.
+    private static final int COVERAGE_OPAQUE = 0;
+    private static final int COVERAGE_CUTOUT = 1;
+    private static final int COVERAGE_STOCHASTIC = 2;
+    // Transmittance — how much light passes where the surface is present. Mirrors BINDING_* in Slang.
+    private static final int BINDING_TRANSMISSIVE = 1;
+    private static final int BINDING_RECORD_CROSSING = 2;
+    // MaterialBinding.packed0 = albedoSlot:16 | coverageMode:2 | flags:6; packed1 = coverageCutoff:8.
+    // Mirrored by the bindingAlbedoSlot/bindingCoverage/bindingFlags/bindingCutoff accessors in
+    // world_common.slang — the any-hit reads these fields out of one aligned load, so the shifts are ABI.
+    private static final int ALBEDO_SLOT_MASK = 0xFFFF;
+    private static final int COVERAGE_SHIFT = 16;
+    private static final int COVERAGE_MASK = 3;
+    private static final int FLAGS_SHIFT = 18;
+    private static final int FLAGS_MASK = 63;
+    private static final int CUTOFF_MASK = 255;
+
+    // Coverage cutoffs, packed into MaterialBinding.packed1 so no any-hit branches on the producer.
+    private static final float TERRAIN_COVERAGE_CUTOFF = 0.5f; // matches the cutout block models
+    private static final float ENTITY_COVERAGE_CUTOFF = 0.1f;  // discard only near-fully-transparent texels
+    // Faint baseline extinction added to every translucent surface regardless of its colour, so perfectly
+    // clear glass/ice still dims a shadow ray a little instead of being invisible to it (real glass isn't
+    // a perfect transmitter either). Additive with the colour-derived extinction, not a floor — a tinted
+    // pane still absorbs its own colour on top of this.
+    private static final float TRANSLUCENT_NEUTRAL_EXTINCTION = 0.15f;
+    private static final int WHITE_SHADOW_TINT = 0x00FFFFFF;
     // HDR radiance of a full (level-15-equivalent) emitter, modulated by albedo. Baked into every
     // emissive RtMaterialDesc.emissionStrength at compile time (compileDesc/compileEntityDesc), times
     // any resource-pack absolute emission.strength_cd_m2 override; see header() and RtMaterialOverrides.
@@ -100,18 +134,20 @@ public final class RtMaterialRegistry {
     }
 
     private volatile Snapshot snapshot;
-    private GpuBuffer table;
+    private GpuBuffer bindingTable;
+    private GpuBuffer surfaceTable;
     private long nextEpoch;
     private Map<Identifier, Integer> entityTextureIds = Map.of();
     private Map<Identifier, EntityTemplate> entityTemplates = Map.of();
     private final Map<EntitySpriteKey, Integer> entitySpriteIds = new HashMap<>();
-    private final Map<Integer, Integer> stochasticAlphaIds = new HashMap<>();
-    // (base material, bindless albedo slot) -> variant material. Entity render types share a handful of
-    // canonical materials but each resolve their own texture, so the slot cannot live on the base record.
-    private final Map<Long, Integer> albedoSlotIds = new HashMap<>();
+    // Host mirror of the uploaded binding table, and its content index. Every binding — compiled or
+    // appended — is interned here, so deriving a variant twice by different routes yields one ID.
+    private final List<MaterialBindingData> bindingRecords = new ArrayList<>();
+    private final Map<MaterialBindingData, Integer> bindingIds = new HashMap<>();
     private int entityFallbackId;
-    private int nextDynamicId;
-    private int tableCapacity;
+    private int bindingCapacity;
+    private int nextSurfaceId;
+    private int surfaceCapacity;
 
     private record EntityTemplate(RtMaterialDesc desc, RtBlockMaterials.Entry entry) {
     }
@@ -136,18 +172,16 @@ public final class RtMaterialRegistry {
         entityResources.sort(Comparator.comparing(Identifier::toString));
         RtBlockMaterials.Entry fallbackEntry = blockMaterials.entry(null);
 
-        // One pass per sprite computes both the raw average (translucent shadow filtering) and the
+        // One pass per sprite computes both the raw average (the compiled shadow transmittance) and the
         // premultiplied-linear uniform emission summary; sprites are independent, so scan in parallel.
         Map<TextureAtlasSprite, SpriteStats> spriteStats = new ConcurrentHashMap<>();
         sprites.parallelStream().forEach(sprite -> spriteStats.put(sprite, computeSpriteStats(sprite)));
 
         int profileVariants = SPRITE_PROFILES.length * MODEL_VARIANTS * EMISSION_VARIANTS;
-        List<MaterialHeaderData> headers = new ArrayList<>(3 + profileVariants
-                + sprites.size() * profileVariants);
-        List<RtMaterialDesc> descriptions = new ArrayList<>(headers.size());
-        List<RtEmissionGrid> grids = new ArrayList<>(headers.size());
-        add(headers, descriptions, grids, compileDesc(MODEL_OPAQUE, 0, RtMaterials.Profile.DEFAULT,
-                false, true, RtMaterialDesc.EmissionSummary.NONE), transparentWhiteAverage(), fallbackEntry, null);
+        CompiledTables tables = new CompiledTables(3 + profileVariants + sprites.size() * profileVariants);
+        tables.add(compileDesc(MODEL_OPAQUE, 0, RtMaterials.Profile.DEFAULT, false, true,
+                RtMaterialDesc.EmissionSummary.NONE), transparentWhiteAverage(), fallbackEntry, null,
+                TERRAIN_COVERAGE_CUTOFF);
         int[] fallbackVariants = new int[profileVariants];
         for (RtMaterials.Profile profile : SPRITE_PROFILES) {
             for (boolean glass : new boolean[]{false, true}) {
@@ -157,25 +191,24 @@ public final class RtMaterialRegistry {
                         fallbackVariants[variant] = 0;
                         continue;
                     }
-                    fallbackVariants[variant] = headers.size();
-                    add(headers, descriptions, grids, compileDesc(glass ? MODEL_DIELECTRIC : MODEL_OPAQUE, 0,
-                                    profile, emitting, true, RtMaterialDesc.EmissionSummary.NONE),
-                            transparentWhiteAverage(), fallbackEntry, null);
+                    fallbackVariants[variant] = tables.add(
+                            compileDesc(glass ? MODEL_DIELECTRIC : MODEL_OPAQUE, 0, profile, emitting, true,
+                                    RtMaterialDesc.EmissionSummary.NONE),
+                            transparentWhiteAverage(), fallbackEntry, null, TERRAIN_COVERAGE_CUTOFF);
                 }
             }
         }
-        int waterId = headers.size();
-        add(headers, descriptions, grids, compileDesc(MODEL_WATER, 0, RtMaterials.Profile.WATER,
-                false, true, RtMaterialDesc.EmissionSummary.NONE), whiteAverage(), fallbackEntry, null);
-        int lavaId = headers.size();
+        int waterId = tables.add(compileDesc(MODEL_WATER, 0, RtMaterials.Profile.WATER, false, true,
+                RtMaterialDesc.EmissionSummary.NONE), whiteAverage(), fallbackEntry, null,
+                TERRAIN_COVERAGE_CUTOFF);
         // Lava's fluid mesher assigns this singleton id (no sprite resolve), so its light color comes from
         // the lava_still albedo grid, producing a mean-color area light.
-        add(headers, descriptions, grids, compileDesc(MODEL_OPAQUE, 0, RtMaterials.Profile.LAVA,
-                true, true, uniformWhiteSummary()), whiteAverage(), fallbackEntry,
-                albedoGridFor(sprites, spriteStats, "block/lava_still"));
-        int nextEntityFallbackId = headers.size();
-        add(headers, descriptions, grids, compileEntityDesc(0, true, RtMaterialDesc.EmissionSummary.NONE),
-                transparentWhiteAverage(), fallbackEntry, null);
+        int lavaId = tables.add(compileDesc(MODEL_OPAQUE, 0, RtMaterials.Profile.LAVA, true, true,
+                uniformWhiteSummary()), whiteAverage(), fallbackEntry,
+                albedoGridFor(sprites, spriteStats, "block/lava_still"), TERRAIN_COVERAGE_CUTOFF);
+        int nextEntityFallbackId = tables.add(
+                compileEntityDesc(0, true, RtMaterialDesc.EmissionSummary.NONE),
+                transparentWhiteAverage(), fallbackEntry, null, ENTITY_COVERAGE_CUTOFF);
 
         IdentityHashMap<TextureAtlasSprite, int[]> ids = new IdentityHashMap<>();
         List<MutableCompiledOverride> compiledOverrides = new ArrayList<>();
@@ -214,8 +247,8 @@ public final class RtMaterialRegistry {
                         if (spriteWide != null) {
                             desc = spriteWide.rule.apply(desc);
                         }
-                        variants[index(profile, glass, emitting)] = headers.size();
-                        add(headers, descriptions, grids, desc, stats.average(), entry, stats.albedoGrid());
+                        variants[index(profile, glass, emitting)] = tables.add(desc, stats.average(),
+                                entry, stats.albedoGrid(), TERRAIN_COVERAGE_CUTOFF);
                     }
                 }
             }
@@ -233,8 +266,8 @@ public final class RtMaterialRegistry {
                                     variantSummary(features, emitting, entry, stats.uniformSummary()),
                                     dielectricIor);
                             RtMaterialDesc desc = compiled.rule.apply(base);
-                            overrideVariants[index(profile, glass, emitting)] = headers.size();
-                            add(headers, descriptions, grids, desc, stats.average(), entry, stats.albedoGrid());
+                            overrideVariants[index(profile, glass, emitting)] = tables.add(desc,
+                                    stats.average(), entry, stats.albedoGrid(), TERRAIN_COVERAGE_CUTOFF);
                         }
                     }
                 }
@@ -255,42 +288,44 @@ public final class RtMaterialRegistry {
                 entityMatchedOverrides.add(rule);
                 break;
             }
-            int id = headers.size();
-            add(headers, descriptions, grids, desc, transparentWhiteAverage(), entry, null);
+            int id = tables.add(desc, transparentWhiteAverage(), entry, null, ENTITY_COVERAGE_CUTOFF);
             nextEntityTextureIds.put(name, id);
             nextEntityTemplates.put(name, new EntityTemplate(desc, entry));
         }
 
         // Full entity textures have fixed [0,1] UVs and receive IDs above. Atlas sprites need a second,
-        // append-only header with the actual stitched atlas rectangle, which is only known when the sprite
-        // first appears in capture. Reserve room for atlas, alpha-mode and albedo-slot variants — the last
-        // is bounded by the bindless entity-texture array, since a variant exists per (base, live slot).
-        int dynamicReserve = Math.max(64, Math.addExact(sprites.size(),
-                Math.addExact(Math.multiplyExact(entityResources.size(), 3),
-                        RtEntityTextures.maxTextures())));
-        int recordCapacity = Math.addExact(headers.size(), dynamicReserve);
-        long byteSize = Math.multiplyExact((long) recordCapacity, MaterialHeaderData.BYTE_SIZE);
-        if (byteSize > Integer.MAX_VALUE) {
-            throw new IllegalStateException("RT material table exceeds mapped-buffer limit: " + byteSize);
-        }
-        GpuBuffer nextTable = ctx.createBuffer(byteSize, VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                true, "material table");
+        // append-only surface with the actual stitched atlas rectangle, which is only known when the
+        // sprite first appears in capture — one per block-entity atlas sprite.
+        int surfaceCount = tables.surfaces.size();
+        int nextSurfaceCapacity = Math.addExact(surfaceCount, Math.max(64, sprites.size()));
+        // Bindings are appended per (surface, albedo slot, coverage mode) actually submitted: an atlas
+        // sprite variant, an entity surface reached through a live bindless slot, and the stochastic
+        // coverage variant of either. Sixteen bytes each, so the reserve is generous rather than tight.
+        int bindingCount = tables.bindings.size();
+        int nextBindingCapacity = Math.addExact(bindingCount, Math.max(1024,
+                Math.addExact(Math.addExact(sprites.size(), Math.multiplyExact(entityResources.size(), 3)),
+                        Math.multiplyExact(RtEntityTextures.maxTextures(), 2))));
+        GpuBuffer nextSurfaceTable = createTable(ctx, nextSurfaceCapacity, SurfaceMaterialData.BYTE_SIZE,
+                "surface material table");
+        GpuBuffer nextBindingTable = null;
         try {
-            ByteBuffer mapped = MemoryUtil.memByteBuffer(nextTable.mapped, (int) byteSize)
-                    .order(ByteOrder.nativeOrder());
-            for (int i = 0; i < headers.size(); i++) {
-                ByteBuffer entry = mapped.slice(i * MaterialHeaderData.BYTE_SIZE,
-                        MaterialHeaderData.BYTE_SIZE).order(ByteOrder.nativeOrder());
-                headers.get(i).write(entry);
-            }
-            nextTable.flush();
+            writeRecords(nextSurfaceTable, tables.surfaces, SurfaceMaterialData.BYTE_SIZE,
+                    SurfaceMaterialData::write);
+            nextBindingTable = createTable(ctx, nextBindingCapacity, MaterialBindingData.BYTE_SIZE,
+                    "material binding table");
+            writeRecords(nextBindingTable, tables.bindings, MaterialBindingData.BYTE_SIZE,
+                    MaterialBindingData::write);
         } catch (Throwable t) {
-            nextTable.destroy();
+            if (nextBindingTable != null) nextBindingTable.destroy();
+            nextSurfaceTable.destroy();
             throw t;
         }
 
-        GpuBuffer oldTable = table;
+        GpuBuffer oldBindingTable = bindingTable;
+        GpuBuffer oldSurfaceTable = surfaceTable;
         long epoch = ++nextEpoch;
+        List<RtMaterialDesc> descriptions = tables.descriptions;
+        List<RtEmissionGrid> grids = tables.grids;
         List<CompiledOverride> frozenOverrides = compiledOverrides.stream()
                 .filter(value -> !value.ids.isEmpty())
                 .map(MutableCompiledOverride::freeze).toList();
@@ -309,14 +344,21 @@ public final class RtMaterialRegistry {
         entityTextureIds = Collections.unmodifiableMap(nextEntityTextureIds);
         entityTemplates = Collections.unmodifiableMap(nextEntityTemplates);
         entitySpriteIds.clear();
-        stochasticAlphaIds.clear();
-        albedoSlotIds.clear();
+        bindingRecords.clear();
+        bindingRecords.addAll(tables.bindings);
+        bindingIds.clear();
+        for (int i = 0; i < bindingRecords.size(); i++) {
+            bindingIds.put(bindingRecords.get(i), i);
+        }
         entityFallbackId = nextEntityFallbackId;
-        nextDynamicId = headers.size();
-        tableCapacity = recordCapacity;
-        table = nextTable;
+        bindingCapacity = nextBindingCapacity;
+        nextSurfaceId = surfaceCount;
+        surfaceCapacity = nextSurfaceCapacity;
+        bindingTable = nextBindingTable;
+        surfaceTable = nextSurfaceTable;
         snapshot = next; // volatile publication: map and arrays are never mutated afterward
-        if (oldTable != null) oldTable.destroy();
+        if (oldBindingTable != null) oldBindingTable.destroy();
+        if (oldSurfaceTable != null) oldSurfaceTable.destroy();
         long emissive = descriptions.stream().filter(desc -> desc.emissionSource() != RtMaterialDesc.EmissionSource.NONE)
                 .count();
         long inferred = descriptions.stream().filter(desc -> desc.emissionSource()
@@ -327,11 +369,32 @@ public final class RtMaterialRegistry {
                 == RtMaterialDesc.EmissionSource.STATE_UNIFORM).count();
         double averageCoverage = descriptions.stream().filter(desc -> desc.emissionSummary().emissive())
                 .mapToDouble(desc -> desc.emissionSummary().coverage()).average().orElse(0.0);
-        CausticaMod.LOGGER.info("RT materials: epoch={}, records={}, capacity={}, blockSprites={}, entityResources={}, overrideRules={}, matchedOverrides={}, emissive={}, labPbrEmission={}, heuristicMasks={}, uniformEmission={}, avgEmissionCoverage={}, tableKiB={}",
-                epoch, headers.size(), recordCapacity, sprites.size(), entityResources.size(), overrides.rules().size(),
+        CausticaMod.LOGGER.info("RT materials: epoch={}, surfaces={}/{}, bindings={}/{}, blockSprites={}, entityResources={}, overrideRules={}, matchedOverrides={}, emissive={}, labPbrEmission={}, heuristicMasks={}, uniformEmission={}, avgEmissionCoverage={}, tableKiB={}",
+                epoch, surfaceCount, nextSurfaceCapacity, bindingCount, nextBindingCapacity,
+                sprites.size(), entityResources.size(), overrides.rules().size(),
                 matchedOverrideRules, emissive,
                 authoredEmission, inferred, uniformEmission,
-                String.format(java.util.Locale.ROOT, "%.3f", averageCoverage), byteSize / 1024);
+                String.format(java.util.Locale.ROOT, "%.3f", averageCoverage),
+                ((long) nextSurfaceCapacity * SurfaceMaterialData.BYTE_SIZE
+                        + (long) nextBindingCapacity * MaterialBindingData.BYTE_SIZE) / 1024);
+    }
+
+    private static GpuBuffer createTable(GpuContext ctx, int capacity, int stride, String label) {
+        long byteSize = Math.multiplyExact((long) capacity, stride);
+        if (byteSize > Integer.MAX_VALUE) {
+            throw new IllegalStateException("RT " + label + " exceeds mapped-buffer limit: " + byteSize);
+        }
+        return ctx.createBuffer(byteSize, VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true, label);
+    }
+
+    private static <T> void writeRecords(GpuBuffer table, List<T> records, int stride,
+                                         java.util.function.BiConsumer<T, ByteBuffer> writer) {
+        ByteBuffer mapped = MemoryUtil.memByteBuffer(table.mapped, records.size() * stride)
+                .order(ByteOrder.nativeOrder());
+        for (int i = 0; i < records.size(); i++) {
+            writer.accept(records.get(i), mapped.slice(i * stride, stride).order(ByteOrder.nativeOrder()));
+        }
+        table.flush();
     }
 
     public Snapshot requireSnapshot() {
@@ -346,12 +409,20 @@ public final class RtMaterialRegistry {
     }
 
     public boolean isReady() {
-        return snapshot != null && table != null;
+        return snapshot != null && bindingTable != null;
     }
 
-    public long tableAddress() {
-        GpuBuffer current = table;
-        if (current == null) throw new IllegalStateException("RT material table is not uploaded");
+    /** Address of the {@code MaterialBinding} table, indexed by the material ID geometry records carry. */
+    public long bindingTableAddress() {
+        GpuBuffer current = bindingTable;
+        if (current == null) throw new IllegalStateException("RT material binding table is not uploaded");
+        return current.deviceAddress;
+    }
+
+    /** Address of the {@code SurfaceMaterial} table, indexed by {@code MaterialBinding.surface}. */
+    public long surfaceTableAddress() {
+        GpuBuffer current = surfaceTable;
+        if (current == null) throw new IllegalStateException("RT surface material table is not uploaded");
         return current.deviceAddress;
     }
 
@@ -360,101 +431,92 @@ public final class RtMaterialRegistry {
         return entityFallbackId;
     }
 
-    public int entityFallbackId(boolean stochasticAlpha) {
-        return stochasticAlpha ? withStochasticAlpha(entityFallbackId) : entityFallbackId;
-    }
-
-    /** Return an append-only material-instance variant with stochastic coverage enabled. */
-    public synchronized int withStochasticAlpha(int materialId) {
-        if (table == null || materialId < 0 || materialId >= nextDynamicId) {
-            throw new IllegalStateException("RT material is not available for alpha specialization: " + materialId);
-        }
-        long sourceOffset = Math.multiplyExact((long) materialId, MaterialHeaderData.BYTE_SIZE);
-        ByteBuffer source = MemoryUtil.memByteBuffer(table.mapped + sourceOffset, MaterialHeaderData.BYTE_SIZE)
-                .order(ByteOrder.nativeOrder());
-        if ((source.getInt(4) & FEATURE_STOCHASTIC_ALPHA) != 0) return materialId;
-        Integer current = stochasticAlphaIds.get(materialId);
-        if (current != null) return current;
-        if (nextDynamicId >= tableCapacity) {
-            throw new IllegalStateException("RT material header reserve exhausted");
-        }
-        int id = nextDynamicId++;
-        long targetOffset = Math.multiplyExact((long) id, MaterialHeaderData.BYTE_SIZE);
-        MemoryUtil.memCopy(table.mapped + sourceOffset, table.mapped + targetOffset,
-                MaterialHeaderData.BYTE_SIZE);
-        ByteBuffer target = MemoryUtil.memByteBuffer(table.mapped + targetOffset, MaterialHeaderData.BYTE_SIZE)
-                .order(ByteOrder.nativeOrder());
-        target.putInt(4, target.getInt(4) | FEATURE_STOCHASTIC_ALPHA);
-        table.flush(targetOffset, MaterialHeaderData.BYTE_SIZE);
-        stochasticAlphaIds.put(materialId, id);
-        return id;
+    public int entityFallbackId(boolean stochasticCoverage) {
+        return stochasticCoverage ? withStochasticCoverage(entityFallbackId) : entityFallbackId;
     }
 
     /**
-     * Return an append-only material variant whose albedo samples bindless slot {@code albedoSlot}.
-     * Interned per (base, slot): the same base material paired with a different entity texture is a
-     * different record, but repeated submissions of the same pair reuse one ID.
+     * The binding resolving {@code bindingId}'s surface with stochastic coverage. A blended submission
+     * decides presence with white noise whatever cutoff the material compiled, so this overrides the
+     * coverage axis and leaves everything else — surface, albedo slot, transmittance — alone.
      */
-    public synchronized int withAlbedoSlot(int materialId, int albedoSlot) {
-        if (table == null || materialId < 0 || materialId >= nextDynamicId) {
-            throw new IllegalStateException("RT material is not available for albedo specialization: " + materialId);
-        }
-        long sourceOffset = Math.multiplyExact((long) materialId, MaterialHeaderData.BYTE_SIZE);
-        ByteBuffer source = MemoryUtil.memByteBuffer(table.mapped + sourceOffset, MaterialHeaderData.BYTE_SIZE)
-                .order(ByteOrder.nativeOrder());
-        if (source.getInt(ALBEDO_SLOT_OFFSET) == albedoSlot) return materialId;
-        long key = ((long) materialId << 32) | Integer.toUnsignedLong(albedoSlot);
-        Integer current = albedoSlotIds.get(key);
-        if (current != null) return current;
-        if (nextDynamicId >= tableCapacity) {
-            throw new IllegalStateException("RT material header reserve exhausted");
-        }
-        int id = nextDynamicId++;
-        long targetOffset = Math.multiplyExact((long) id, MaterialHeaderData.BYTE_SIZE);
-        MemoryUtil.memCopy(table.mapped + sourceOffset, table.mapped + targetOffset,
-                MaterialHeaderData.BYTE_SIZE);
-        ByteBuffer target = MemoryUtil.memByteBuffer(table.mapped + targetOffset, MaterialHeaderData.BYTE_SIZE)
-                .order(ByteOrder.nativeOrder());
-        target.putInt(ALBEDO_SLOT_OFFSET, albedoSlot);
-        table.flush(targetOffset, MaterialHeaderData.BYTE_SIZE);
-        albedoSlotIds.put(key, id);
-        return id;
+    public synchronized int withStochasticCoverage(int bindingId) {
+        MaterialBindingData base = bindingRecords.get(bindingId);
+        return intern(new MaterialBindingData(
+                packBinding0(bindingAlbedoSlot(base.packed0()), COVERAGE_STOCHASTIC,
+                        bindingFlags(base.packed0())),
+                base.surface(), base.shadowTint(), base.packed1()));
     }
 
-    /** Resolve a full entity texture resource to its pack-compiled material ID. */
-    public int resolveEntityTexture(Identifier textureLocation, boolean stochasticAlpha) {
+    /**
+     * The binding pairing {@code bindingId}'s surface with bindless albedo slot {@code albedoSlot}. Entity
+     * render types share a handful of canonical surfaces but each resolve their own texture, so the slot
+     * cannot live on the surface record.
+     */
+    public synchronized int withAlbedoSlot(int bindingId, int albedoSlot) {
+        MaterialBindingData base = bindingRecords.get(bindingId);
+        return intern(new MaterialBindingData(
+                packBinding0(albedoSlot, bindingCoverage(base.packed0()), bindingFlags(base.packed0())),
+                base.surface(), base.shadowTint(), base.packed1()));
+    }
+
+    /** Resolve a full entity texture resource to its pack-compiled binding ID. */
+    public int resolveEntityTexture(Identifier textureLocation, boolean stochasticCoverage) {
         int id = textureLocation != null
                 ? entityTextureIds.getOrDefault(RtBlockMaterials.logicalTextureName(textureLocation), entityFallbackId)
                 : entityFallbackId;
-        return stochasticAlpha ? withStochasticAlpha(id) : id;
+        return stochasticCoverage ? withStochasticCoverage(id) : id;
     }
 
     /**
-     * Resolve a block-entity atlas sprite. Canonical texels were compiled at pack load; only this header's
+     * Resolve a block-entity atlas sprite. Canonical texels were compiled at pack load; only this surface's
      * atlas-to-local UV transform is appended now. Existing IDs and page contents are never modified.
      */
-    public synchronized int resolveEntitySprite(TextureAtlasSprite sprite, boolean stochasticAlpha) {
-        if (sprite == null) return entityFallbackId(stochasticAlpha);
+    public synchronized int resolveEntitySprite(TextureAtlasSprite sprite, boolean stochasticCoverage) {
+        if (sprite == null) return entityFallbackId(stochasticCoverage);
         EntitySpriteKey key = EntitySpriteKey.of(sprite);
         Integer current = entitySpriteIds.get(key);
-        if (current != null) return stochasticAlpha ? withStochasticAlpha(current) : current;
+        if (current != null) return stochasticCoverage ? withStochasticCoverage(current) : current;
         EntityTemplate template = entityTemplates.get(key.name());
-        if (template == null) return entityFallbackId(stochasticAlpha);
-        if (nextDynamicId >= tableCapacity || table == null) {
-            throw new IllegalStateException("RT entity material header reserve exhausted");
+        if (template == null) return entityFallbackId(stochasticCoverage);
+        if (nextSurfaceId >= surfaceCapacity) {
+            throw new IllegalStateException("RT surface material reserve exhausted");
         }
-        int id = nextDynamicId++;
-        MaterialHeaderData header = header(template.desc(), transparentWhiteAverage(), template.entry(),
+        int surfaceId = nextSurfaceId++;
+        SurfaceMaterialData surface = surface(template.desc(), template.entry(),
                 sprite.getU0(), sprite.getV0(),
                 RtBlockMaterials.inverseExtent(sprite.getU1() - sprite.getU0()),
                 RtBlockMaterials.inverseExtent(sprite.getV1() - sprite.getV0()));
-        long offset = Math.multiplyExact((long) id, MaterialHeaderData.BYTE_SIZE);
-        ByteBuffer target = MemoryUtil.memByteBuffer(table.mapped + offset, MaterialHeaderData.BYTE_SIZE)
-                .order(ByteOrder.nativeOrder());
-        header.write(target);
-        table.flush(offset, MaterialHeaderData.BYTE_SIZE);
+        long offset = Math.multiplyExact((long) surfaceId, SurfaceMaterialData.BYTE_SIZE);
+        surface.write(MemoryUtil.memByteBuffer(surfaceTable.mapped + offset, SurfaceMaterialData.BYTE_SIZE)
+                .order(ByteOrder.nativeOrder()));
+        surfaceTable.flush(offset, SurfaceMaterialData.BYTE_SIZE);
+        int id = intern(binding(surfaceId, template.desc(), transparentWhiteAverage(),
+                BLOCK_ATLAS_ALBEDO_SLOT, ENTITY_COVERAGE_CUTOFF));
         entitySpriteIds.put(key, id);
-        return stochasticAlpha ? withStochasticAlpha(id) : id;
+        return stochasticCoverage ? withStochasticCoverage(id) : id;
+    }
+
+    /**
+     * The ID of a binding with this exact content, appending it to the uploaded table on first use.
+     * Content keying is what makes bindings cheap: a surface reached through a different albedo slot and
+     * then a different coverage mode lands on the same ID as the reverse order, so the variant product
+     * never multiplies.
+     */
+    private int intern(MaterialBindingData binding) {
+        Integer current = bindingIds.get(binding);
+        if (current != null) return current;
+        if (bindingRecords.size() >= bindingCapacity) {
+            throw new IllegalStateException("RT material binding reserve exhausted");
+        }
+        int id = bindingRecords.size();
+        long offset = Math.multiplyExact((long) id, MaterialBindingData.BYTE_SIZE);
+        binding.write(MemoryUtil.memByteBuffer(bindingTable.mapped + offset, MaterialBindingData.BYTE_SIZE)
+                .order(ByteOrder.nativeOrder()));
+        bindingTable.flush(offset, MaterialBindingData.BYTE_SIZE);
+        bindingRecords.add(binding);
+        bindingIds.put(binding, id);
+        return id;
     }
 
     /** Caller must ensure no in-flight trace references the current table. */
@@ -463,14 +525,19 @@ public final class RtMaterialRegistry {
         entityTextureIds = Map.of();
         entityTemplates = Map.of();
         entitySpriteIds.clear();
-        stochasticAlphaIds.clear();
-        albedoSlotIds.clear();
+        bindingRecords.clear();
+        bindingIds.clear();
         entityFallbackId = 0;
-        nextDynamicId = 0;
-        tableCapacity = 0;
-        if (table != null) {
-            table.destroy();
-            table = null;
+        bindingCapacity = 0;
+        nextSurfaceId = 0;
+        surfaceCapacity = 0;
+        if (bindingTable != null) {
+            bindingTable.destroy();
+            bindingTable = null;
+        }
+        if (surfaceTable != null) {
+            surfaceTable.destroy();
+            surfaceTable = null;
         }
     }
 
@@ -542,13 +609,35 @@ public final class RtMaterialRegistry {
                 1.0f, 0.0f, emissionSource, emissionStrength, emissionSummary);
     }
 
-    private static void add(List<MaterialHeaderData> headers, List<RtMaterialDesc> descriptions,
-                            List<RtEmissionGrid> grids, RtMaterialDesc desc, float[] average,
-                            RtBlockMaterials.Entry entry, RtEmissionGrid uniformGrid) {
-        headers.add(header(desc, average, entry, entry.albedoU(), entry.albedoV(),
-                entry.albedoInvDu(), entry.albedoInvDv()));
-        descriptions.add(desc);
-        grids.add(gridFor(desc, entry, uniformGrid));
+    /**
+     * The compiled tables under construction during a rebuild. Every compiled surface gets exactly one
+     * binding, so the returned binding ID is what geometry stores and what {@link Snapshot} indexes its
+     * descriptions and emission grids by.
+     */
+    private static final class CompiledTables {
+        final List<SurfaceMaterialData> surfaces;
+        final List<MaterialBindingData> bindings;
+        final List<RtMaterialDesc> descriptions;
+        final List<RtEmissionGrid> grids;
+
+        CompiledTables(int expected) {
+            surfaces = new ArrayList<>(expected);
+            bindings = new ArrayList<>(expected);
+            descriptions = new ArrayList<>(expected);
+            grids = new ArrayList<>(expected);
+        }
+
+        int add(RtMaterialDesc desc, float[] average, RtBlockMaterials.Entry entry,
+                RtEmissionGrid uniformGrid, float coverageCutoff) {
+            int surfaceId = surfaces.size();
+            surfaces.add(surface(desc, entry, entry.albedoU(), entry.albedoV(),
+                    entry.albedoInvDu(), entry.albedoInvDv()));
+            int id = bindings.size();
+            bindings.add(binding(surfaceId, desc, average, BLOCK_ATLAS_ALBEDO_SLOT, coverageCutoff));
+            descriptions.add(desc);
+            grids.add(gridFor(desc, entry, uniformGrid));
+            return id;
+        }
     }
 
     /**
@@ -578,21 +667,97 @@ public final class RtMaterialRegistry {
         return null;
     }
 
-    private static MaterialHeaderData header(RtMaterialDesc desc, float[] average,
-                                             RtBlockMaterials.Entry entry, float albedoU, float albedoV,
-                                             float albedoInvDu, float albedoInvDv) {
+    private static SurfaceMaterialData surface(RtMaterialDesc desc, RtBlockMaterials.Entry entry,
+                                               float albedoU, float albedoV,
+                                               float albedoInvDu, float albedoInvDv) {
         int packedFeatures = desc.features() | (entry.maxLod() << MAX_LOD_SHIFT);
         // Packed unconditionally (0 for non-emissive materials): the shader multiplies surface.emission
         // by this every time, regardless of source, so the package baseline needs no shader copy.
         int strength = Math.round(Math.min(MAX_EMISSION_STRENGTH, desc.emissionStrength())
                 * (EMISSION_STRENGTH_MASK / MAX_EMISSION_STRENGTH));
         packedFeatures |= strength << EMISSION_STRENGTH_SHIFT;
-        // albedoSlot 0 is the block atlas; entity render types swap in their own slot via withAlbedoSlot.
-        return new MaterialHeaderData(desc.model(), packedFeatures, entry.pageIndex(), 0, BLOCK_ATLAS_ALBEDO_SLOT,
+        return new SurfaceMaterialData(desc.model(), packedFeatures, entry.pageIndex(),
                 new Float4(entry.materialU(), entry.materialV(), entry.materialDu(), entry.materialDv()),
                 new Float4(albedoU, albedoV, albedoInvDu, albedoInvDv),
-                new Float4(desc.roughness(), desc.metalness(), desc.ior(), desc.transmission()),
-                new Float4(average[0], average[1], average[2], average[3]));
+                new Float4(desc.roughness(), desc.metalness(), desc.ior(), desc.transmission()));
+    }
+
+    /**
+     * The traversal binding a compiled surface gets. Coverage comes from how the surface occupies its
+     * footprint and transmittance from whether light crosses it; the two are independent, so neither is
+     * derived from the other. Slot 0 is the block atlas — entity render types pair the same surface with
+     * their own slot through {@link #withAlbedoSlot}.
+     */
+    private static MaterialBindingData binding(int surfaceId, RtMaterialDesc desc, float[] average,
+                                               int albedoSlot, float coverageCutoff) {
+        int coverage = COVERAGE_CUTOUT;
+        int flags = 0;
+        int shadowTint = WHITE_SHADOW_TINT;
+        switch (desc.model()) {
+            case MODEL_DIELECTRIC -> {
+                // Glass covers its whole footprint — the see-through part of the sprite is clear glass,
+                // not absence — so a shadow ray samples no texel and takes the compiled colour.
+                coverage = COVERAGE_OPAQUE;
+                flags = BINDING_TRANSMISSIVE;
+                shadowTint = translucentShadowTint(average);
+            }
+            // A water surface passes light through uniformly; its colour is the per-primitive biome tint,
+            // which multiplies base colour and so flows through transmittance without a second meaning.
+            case MODEL_WATER -> {
+                coverage = COVERAGE_OPAQUE;
+                flags = BINDING_TRANSMISSIVE | BINDING_RECORD_CROSSING;
+            }
+            default -> {
+            }
+        }
+        return new MaterialBindingData(packBinding0(albedoSlot, coverage, flags), surfaceId, shadowTint,
+                packCoverageCutoff(coverageCutoff));
+    }
+
+    static int packBinding0(int albedoSlot, int coverageMode, int flags) {
+        return (albedoSlot & ALBEDO_SLOT_MASK) | ((coverageMode & COVERAGE_MASK) << COVERAGE_SHIFT)
+                | ((flags & FLAGS_MASK) << FLAGS_SHIFT);
+    }
+
+    static int bindingAlbedoSlot(int packed0) {
+        return packed0 & ALBEDO_SLOT_MASK;
+    }
+
+    static int bindingCoverage(int packed0) {
+        return (packed0 >>> COVERAGE_SHIFT) & COVERAGE_MASK;
+    }
+
+    static int bindingFlags(int packed0) {
+        return (packed0 >>> FLAGS_SHIFT) & FLAGS_MASK;
+    }
+
+    /** The alpha test threshold as the shader reads it back: an 8-bit unorm of the authored cutoff. */
+    static int packCoverageCutoff(float cutoff) {
+        return Math.round(cutoff * CUTOFF_MASK) & CUTOFF_MASK;
+    }
+
+    static float unpackCoverageCutoff(int packed1) {
+        return (packed1 & CUTOFF_MASK) / (float) CUTOFF_MASK;
+    }
+
+    /**
+     * Compile-time transmittance through a translucent surface, in ACEScg, as 8:8:8.
+     *
+     * <p>Beer-Lambert absorption matching the water medium in {@code world.rgen}: a per-channel extinction
+     * derived from how dark the whole-sprite average is, scaled by its average alpha (how much of the
+     * sprite is colorant versus see-through frame), so saturated panes darken transmitted light
+     * non-linearly. The neutral term is NOT alpha-scaled — vanilla clear glass has a low natural alpha,
+     * and folding it into the alpha-scaled term would crush exactly the clear-glass case it covers.
+     */
+    static int translucentShadowTint(float[] average) {
+        float[] acesCg = RtColor.linearBt709ToAcesCg(average[0], average[1], average[2]);
+        int packed = 0;
+        for (int channel = 0; channel < 3; channel++) {
+            float extinction = Math.max(-(float) Math.log(Math.max(acesCg[channel], 1.0e-3f)), 0.0f);
+            float transmittance = (float) Math.exp(-extinction * average[3] - TRANSLUCENT_NEUTRAL_EXTINCTION);
+            packed |= Math.round(Math.clamp(transmittance, 0.0f, 1.0f) * 255.0f) << (channel * 8);
+        }
+        return packed;
     }
 
     private static float[] whiteAverage() {

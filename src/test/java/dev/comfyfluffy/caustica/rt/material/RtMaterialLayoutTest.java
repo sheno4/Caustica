@@ -1,7 +1,8 @@
 package dev.comfyfluffy.caustica.rt.material;
 
-import dev.comfyfluffy.caustica.rt.gen.MaterialHeaderData;
-import dev.comfyfluffy.caustica.rt.gen.MaterialHeaderData.Float4;
+import dev.comfyfluffy.caustica.rt.gen.MaterialBindingData;
+import dev.comfyfluffy.caustica.rt.gen.SurfaceMaterialData;
+import dev.comfyfluffy.caustica.rt.gen.SurfaceMaterialData.Float4;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushConstantsData;
 import org.junit.jupiter.api.Test;
 
@@ -12,41 +13,52 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 final class RtMaterialLayoutTest {
     @Test
-    void reflectedMaterialHeaderMatchesHotAbi() {
-        assertEquals(96, MaterialHeaderData.BYTE_SIZE);
-        ByteBuffer data = ByteBuffer.allocateDirect(MaterialHeaderData.BYTE_SIZE)
+    void reflectedMaterialBindingIsOneAlignedLoad() {
+        // Sixteen bytes is the point of the record: it is what both any-hit entry points load, and one
+        // aligned 128-bit fetch is what keeps that load off the critical path.
+        assertEquals(16, MaterialBindingData.BYTE_SIZE);
+        ByteBuffer data = ByteBuffer.allocateDirect(MaterialBindingData.BYTE_SIZE)
                 .order(ByteOrder.nativeOrder());
-        new MaterialHeaderData(3, 5, 7, 11, 13,
+        new MaterialBindingData(0x12345678, 9, 0x00C0FFEE, 128).write(data);
+        assertEquals(0x12345678, data.getInt(0));
+        assertEquals(9, data.getInt(4));
+        assertEquals(0x00C0FFEE, data.getInt(8));
+        assertEquals(128, data.getInt(12));
+    }
+
+    @Test
+    void reflectedSurfaceMaterialMatchesClosestHitAbi() {
+        assertEquals(64, SurfaceMaterialData.BYTE_SIZE);
+        ByteBuffer data = ByteBuffer.allocateDirect(SurfaceMaterialData.BYTE_SIZE)
+                .order(ByteOrder.nativeOrder());
+        new SurfaceMaterialData(3, 5, 7,
                 new Float4(0.01f, 0.02f, 0.03f, 0.04f),
                 new Float4(0.05f, 0.06f, 7.0f, 8.0f),
-                new Float4(0.1f, 0.2f, 1.52f, 1.0f),
-                new Float4(0.3f, 0.4f, 0.5f, 0.6f)).write(data);
+                new Float4(0.1f, 0.2f, 1.52f, 1.0f)).write(data);
         assertEquals(3, data.getInt(0));
         assertEquals(5, data.getInt(4));
         assertEquals(7, data.getInt(8));
-        assertEquals(11, data.getInt(12));
-        // RtMaterialRegistry.ALBEDO_SLOT_OFFSET patches this lane in place for albedo variants.
-        assertEquals(13, data.getInt(16));
-        assertEquals(0.01f, data.getFloat(32));
-        assertEquals(7.0f, data.getFloat(56));
-        assertEquals(0.1f, data.getFloat(64));
-        assertEquals(1.52f, data.getFloat(72));
-        assertEquals(0.6f, data.getFloat(92));
+        assertEquals(0.01f, data.getFloat(16));
+        assertEquals(7.0f, data.getFloat(40));
+        assertEquals(0.1f, data.getFloat(48));
+        assertEquals(1.52f, data.getFloat(56));
+        assertEquals(1.0f, data.getFloat(60));
     }
 
     @Test
     void reflectedWorldPushConstantsIncludeLightBuffersAndFrameIndex() {
-        // 10 uint64_t addresses (world/table/material, 5 light buffers, path queue) + frameIndex
-        // plus four bytes of reflected trailing struct padding.
-        assertEquals(88, WorldPushConstantsData.BYTE_SIZE);
+        // 11 uint64_t addresses (world/section/entity/binding/surface, 5 light buffers, path queue)
+        // + frameIndex plus four bytes of reflected trailing struct padding.
+        assertEquals(96, WorldPushConstantsData.BYTE_SIZE);
         ByteBuffer data = ByteBuffer.allocateDirect(WorldPushConstantsData.BYTE_SIZE)
                 .order(ByteOrder.nativeOrder());
-        new WorldPushConstantsData(1L, 2L, 3L, 4L, 5L, 6L, 7L, 8L, 9L, 10L, 11).write(data);
+        new WorldPushConstantsData(1L, 2L, 3L, 4L, 5L, 6L, 7L, 8L, 9L, 10L, 11L, 12).write(data);
         assertEquals(4L, data.getLong(24));  // materialTableAddr
-        assertEquals(5L, data.getLong(32));  // lightBufAddr
-        assertEquals(9L, data.getLong(64));  // lightGridSpanAddr (last of the light-buffer addresses)
-        assertEquals(10L, data.getLong(72)); // pathQueueAddr
-        assertEquals(11, data.getInt(80));   // frameIndex
-        assertEquals(0, data.getInt(84));    // reflected trailing padding is deterministically zeroed
+        assertEquals(5L, data.getLong(32));  // materialSurfaceAddr
+        assertEquals(6L, data.getLong(40));  // lightBufAddr
+        assertEquals(10L, data.getLong(72)); // lightGridSpanAddr (last of the light-buffer addresses)
+        assertEquals(11L, data.getLong(80)); // pathQueueAddr
+        assertEquals(12, data.getInt(88));   // frameIndex
+        assertEquals(0, data.getInt(92));    // reflected trailing padding is deterministically zeroed
     }
 }

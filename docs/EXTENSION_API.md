@@ -75,6 +75,26 @@ Adding a slot is an API change, not something a feature can invent — same rule
 `caustica:medium` slot shipped alongside these and was removed — see §4.4. Water waves want a third
 (`caustica:interface`, a `perturbNormal` hook); that slot lands with its first consumer, not before.
 
+**That consumer arrived, and then dissolved the slot.** `MATERIAL_MODEL_PLAN.md` turns water into an
+ordinary zero-roughness transmissive surface whose wave normal is its only residue. That normal is
+consumed by *transport* rather than shading — `applyWaterWaves` runs in `primary.rgen` and `guides.slang`
+to build the refraction direction — which is what made a separate slot look necessary. But closest-hit
+runs first, so a surface implementation can publish the perturbed normal into the payload and transport
+reads it from there, which also removes today's double derivation across those two files. No
+`caustica:interface` slot, and the "must match guide and shading" invariant of §4.4 holds by
+construction. Procedural *emission* likewise needs nothing new — with per-material dispatch below, an end
+portal is an `ISurfaceModel` writing `emission_luminance`.
+
+**One binding per slot is the current limit, and it is the wrong one.** `IComposition` declares
+`associatedtype Surface : ISurfaceModel` — exactly one surface type per composition, resolved by generic
+specialization — so a feature that contributes geometry cannot contribute its appearance without seizing
+the surface slot for the entire scene. The fix is to change what the generated composition root emits:
+an ordered list of implementations plus a generated `switch`, selected per material. Every
+implementation still inlines; register pressure becomes the max over implementations; compile time grows
+with the count. It also composes with SER — the implementation id can enter the reorder hint so
+same-surface hits execute coherently. Existential dynamic dispatch is the alternative and is worse in a
+hit shader.
+
 ### 2.2 The generated composition root
 
 A binding names a Slang module and a concrete type. At activation the engine emits one small Slang source
@@ -215,6 +235,14 @@ public interface ISurfaceModel {
 };
 ```
 
+**This interface narrows once the canonical description becomes OpenPBR** — see `MATERIAL_MODEL_PLAN.md`
+§6.3. `evaluateBsdf`/`sampleBsdf` leave the slot and the engine implements the OpenPBR BSDF once,
+validated against the spec's own white furnace test; the slot keeps `evaluateSurface` (filling canonical
+parameters) and `evaluateResponse` (the look hook). The invariant below stops being a contract a
+third party can break and becomes one it cannot express. Animated water and procedural portal emission —
+the two consumers driving this — need only parameters, and publishing a perturbed `geometry_normal` from
+closest-hit also removes the need for the `caustica:interface` slot in §2.1 before it is ever built.
+
 Two things are deliberately separated, and this is the single most important invariant in the API:
 
 - **The BSDF is the estimator's target function.** RIS candidate weighting, ReSTIR reuse, and MIS all
@@ -293,6 +321,11 @@ different geometry than what was shaded. The escape is a `caustica:interface` sl
 hook — added with its first consumer, with the "must match guide and shading" invariant enforced from day
 one rather than retrofitted.
 
+Water is that consumer (§2.1). One question to settle when the slot lands: the wave normal is currently
+derived twice, in `primary.rgen` and in `guides.slang`, from the same inputs. Either closest-hit
+publishes the perturbed normal into the payload and both stop re-deriving it, or transport calls the slot
+at each use site — the invariant above is easier to hold in the first shape.
+
 ## 5. Materials
 
 **Materials are content; slots are interpretation.** Definition belongs to Minecraft resource packs plus
@@ -307,6 +340,18 @@ linear roughness, metalness, IOR and transmission, emission, AO and subsurface h
 (water, particle, foliage, portal). Policy like "foliage gets more SSS" is expressed in `createSurface`
 keyed on those tags, not in a data file — more expressive, and it removes the ambiguity of two systems
 both describing a complete surface.
+
+**That canonical description becomes a subset of OpenPBR Surface** — see `MATERIAL_MODEL_PLAN.md` for
+the field mapping and what is deliberately omitted. Adopted as a *description* vocabulary only: the
+engine keeps transport in full per §4.4, so OpenPBR's layered evaluation is not adopted with it. Nearly
+every field already exists under a homegrown name, and emission is already anchored in cd/m² where
+OpenPBR wants nits. The two genuine additions are `geometry_opacity` — coverage, distinct from
+transmission, which is the distinction the current alpha channel conflates — and `geometry_thin_walled`,
+which belongs to SSS foliage rather than to glass: a glass block has two interfaces and an interior,
+while a leaf is a single surface with none.
+
+This makes the paragraph above literally true rather than aspirational. LabPBR becomes an adapter that
+decodes into the canonical description, instead of leaking its own concepts into it.
 
 Per-block data the canonical attributes do not carry (a stylization group, a palette index) is an opaque
 extension namespace in the *resource pack*: the engine defines the format and the merge, the feature

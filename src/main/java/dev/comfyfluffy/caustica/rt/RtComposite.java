@@ -1405,7 +1405,8 @@ public final class RtComposite {
             // none of them should cost an extra BDA dereference to find.
             ByteBuffer pushConstants = stack.malloc(WorldPushConstantsData.BYTE_SIZE);
             new WorldPushConstantsData(pushBuf.deviceAddress, terrain.tableAddress(), fe.geomTableAddr(),
-                    RtMaterialRegistry.INSTANCE.tableAddress(),
+                    RtMaterialRegistry.INSTANCE.bindingTableAddress(),
+                    RtMaterialRegistry.INSTANCE.surfaceTableAddress(),
                     terrain.lightBufferAddress(), terrain.lightAliasBufferAddress(),
                     terrain.lightLocalAliasBufferAddress(), terrain.lightGridCellBufferAddress(),
                     terrain.lightGridSpanBufferAddress(), continuationQueue.deviceAddress,
@@ -1560,22 +1561,9 @@ public final class RtComposite {
 
 
     private static Float4 linearAcesCgFromSrgb(double r, double g, double b, float w) {
-        return linearAcesCgFromBt709(
-                srgbToLinear(r), srgbToLinear(g), srgbToLinear(b), w);
-    }
-
-    /** OCIO cg-config-v4.0.0 ACES 2.0: Linear Rec.709 (sRGB)/D65 to ACEScg/AP1/D60. */
-    private static Float4 linearAcesCgFromBt709(double r, double g, double b, float w) {
-        return new Float4(
-                (float) (0.61309743 * r + 0.33952314 * g + 0.04737945 * b),
-                (float) (0.07019372 * r + 0.91635388 * g + 0.01345240 * b),
-                (float) (0.02061559 * r + 0.10956977 * g + 0.86981463 * b),
-                w);
-    }
-
-    private static double srgbToLinear(double value) {
-        return value <= 0.04045 ? value / 12.92
-                : Math.pow((value + 0.055) / 1.055, 2.4);
+        float[] acesCg = RtColor.linearBt709ToAcesCg(RtColor.srgbToLinear(r), RtColor.srgbToLinear(g),
+                RtColor.srgbToLinear(b));
+        return new Float4(acesCg[0], acesCg[1], acesCg[2], w);
     }
 
     public void destroy() {
