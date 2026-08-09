@@ -60,7 +60,8 @@ final class WorldShaderCompilerTest {
                     compiler.compileSkyMiss(),
                     compiler.compilePlain("guide.rmiss.slang", WorldShaderCompiler.ENTRY_POINT),
                     compiler.compileClosestHit(),
-                    compiler.compilePlain("any_hit.rahit.slang", WorldShaderCompiler.ENTRY_POINT));
+                    compiler.compilePlain("radiance_any_hit.rahit.slang", WorldShaderCompiler.ENTRY_POINT),
+                    compiler.compilePlain("shadow_any_hit.rahit.slang", WorldShaderCompiler.ENTRY_POINT));
             for (byte[] stage : stages) {
                 assertSpirv(stage, 256);
             }
@@ -189,7 +190,8 @@ final class WorldShaderCompilerTest {
 
     @ParameterizedTest
     @ValueSource(strings = {
-            "primary.rgen.slang", "guide.rmiss.slang", "any_hit.rahit.slang"})
+            "primary.rgen.slang", "guide.rmiss.slang",
+            "radiance_any_hit.rahit.slang", "shadow_any_hit.rahit.slang"})
     void compilesEveryPlainWorldStage(String moduleFileName, @TempDir Path cacheDirectory)
             throws Exception {
         try (WorldShaderCompiler compiler = compiler(cacheDirectory)) {

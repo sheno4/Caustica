@@ -174,6 +174,13 @@ public static const uint EMISSION_SOURCE_UNIFORM = 1u;
 public static const uint EMISSION_SOURCE_HEURISTIC = 2u;
 public static const uint EMISSION_SOURCE_LAB_PBR = 3u;
 
+// Set by traceGuide so the radiance any-hit can suppress stochastic alpha. A guide probe answers which
+// surface a reflection/refraction points at, so a coin-flip there is a flickering control signal rather
+// than a sample that averages out; a deterministic accept lets a translucent entity reach closest-hit as
+// a dielectric, which is the crossing the guide loop already walks. world.rchit overwrites flags, but the
+// any-hit has already run by then, so the bit never needs to survive the hit.
+public static const uint PAYLOAD_GUIDE_RAY = 256u;
+
 public static const uint PAYLOAD_MATERIAL_MASK = 3u;
 public static const uint MATERIAL_OPAQUE = 0u;
 // Both dielectrics are volumes: they refract and push a participating medium. They stay distinct ids
@@ -206,7 +213,7 @@ public struct TerrainPrim {
     public uint aux1;
 };
 
-// Compiled material record (80 B). Source-format data has already been decoded into canonical pages;
+// Compiled material record. Source-format data has already been decoded into canonical pages;
 // texturePage indexes the dedicated canonical page arrays. materialUv maps sprite-local UV into the packed
 // page, while albedoUv maps the vanilla atlas rectangle back to sprite-local UV.
 public struct MaterialHeader {
@@ -214,6 +221,9 @@ public struct MaterialHeader {
     public uint features;        // low feature bits; bits 24..31 = maximum valid material-page LOD
     public uint texturePage;
     public uint extensionOffset; // zero when no optional extension record is present
+    // Bindless albedoTex index. Slot 0 is the vanilla block atlas, so a zero-initialised header samples
+    // terrain albedo correctly; entity render types resolve their own slot through RtEntityTextures.
+    public uint albedoSlot;
     public float4 materialUv; // packed-page uvMin.xy + uvExtent.xy
     public float4 albedoUv;   // vanilla atlas uvMin.xy + inverse uvExtent.xy
     public float4 params;  // roughness, metalness, IOR, transmission

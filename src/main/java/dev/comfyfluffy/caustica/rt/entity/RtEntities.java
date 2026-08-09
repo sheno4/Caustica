@@ -40,6 +40,7 @@ import dev.comfyfluffy.caustica.rt.RtGpuExecutor.GraphicsUse;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor.GraphicsUseWaiter;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor.TrackedGraphicsUse;
 import dev.comfyfluffy.caustica.rt.accel.RtAccel;
+import dev.comfyfluffy.caustica.rt.material.RtMaterialRegistry;
 import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
 import dev.comfyfluffy.caustica.rt.pipeline.RtPipeline;
 
@@ -84,6 +85,8 @@ public final class RtEntities {
     public static final int ENTITY_BIT = 0x800000;
     /** Custom-index flag (bit 22) marking a particle billboard instance (shares the entity geom table). */
     public static final int PARTICLE_BIT = 0x400000;
+    /** Geometry-table index occupies the 22 bits below the two flags; matches {@code IDX_MASK} in Slang. */
+    public static final int IDX_MASK = 0x3FFFFF;
     // TLAS visibility-mask bits, ANDed against the per-ray cull mask in world.rgen. Bit 0 = secondary rays
     // (shadows / GI / reflections, CULL_SECONDARY); bit 1 = the primary camera ray (CULL_PRIMARY).
     private static final int MASK_SECONDARY = 0x01;
@@ -988,6 +991,9 @@ public final class RtEntities {
                     particleScratch.clear();
                     sq.extract(particleScratch, cam, partial);
                     for (SingleQuadParticle.Layer layer : particleScratch.layers()) {
+                        // Billboards carry no authored material, but the record now names their albedo
+                        // slot, so each layer needs the neutral entity material for its atlas.
+                        capture.currentMaterialId = RtMaterialRegistry.INSTANCE.entityFallbackId(false);
                         capture.currentTexSlot = RtEntityTextures.INSTANCE.slotForAtlas(layer.textureAtlasLocation());
                         particleScratch.buildLayer(layer, particleCapture);
                         particleCapture.flush();
@@ -1269,7 +1275,7 @@ public final class RtEntities {
         // Block-local mesh placed by a translate-only instance transform (blockPos − rebase), like terrain.
         float[] xform = {1, 0, 0, e.bx - rbx, 0, 1, 0, e.by - rby, 0, 0, 1, e.bz - rbz};
         build.instances.add(new RtAccel.Instance(xform, e.accel.deviceAddress,
-                ENTITY_BIT | (build.count & 0x7FFFFF), 0xFF, RtAccel.SBT_ENTITY_OFFSET));
+                ENTITY_BIT | (build.count & IDX_MASK), 0xFF, RtAccel.SBT_ENTITY_OFFSET));
         build.count++;
         build.lists.usedBlockEntities.add(e);
         build.logicalCount++;
@@ -1420,7 +1426,7 @@ public final class RtEntities {
                 motion.dispAddr, motion.rigidX, motion.rigidY, motion.rigidZ, ea.refBucketTris);
         build.instances.add(new RtAccel.Instance(placeTransform(localTransform, placeX, placeY, placeZ),
                 ea.refAccel.deviceAddress,
-                ENTITY_BIT | (build.count & 0x3FFFFF), mask, RtAccel.SBT_ENTITY_OFFSET));
+                ENTITY_BIT | (build.count & IDX_MASK), mask, RtAccel.SBT_ENTITY_OFFSET));
         build.count++;
         RtFrameStats.FRAME.count("entityReuse", 1);
         return true;
@@ -1574,7 +1580,7 @@ public final class RtEntities {
                 motion.rigidX, motion.rigidY, motion.rigidZ, packed.bucketTris());
 
         build.instances.add(new RtAccel.Instance(instanceTransform, blas.accel.deviceAddress,
-                instanceBit | (build.count & 0x3FFFFF), mask, RtAccel.SBT_ENTITY_OFFSET));
+                instanceBit | (build.count & IDX_MASK), mask, RtAccel.SBT_ENTITY_OFFSET));
         build.buffers.add(geometry);
         build.count++;
     }
@@ -1651,7 +1657,7 @@ public final class RtEntities {
         writeTableEntry(build, primAddr, indexAddr, uvAddr, motion.dispAddr,
                 motion.rigidX, motion.rigidY, motion.rigidZ, packed.bucketTris());
         build.instances.add(new RtAccel.Instance(instanceTransform, accel.deviceAddress,
-                instanceBit | (build.count & 0x3FFFFF), mask, RtAccel.SBT_ENTITY_OFFSET));
+                instanceBit | (build.count & IDX_MASK), mask, RtAccel.SBT_ENTITY_OFFSET));
 
         EntityAccel ea = slot.owner;
         clearRefGeometry(ea);

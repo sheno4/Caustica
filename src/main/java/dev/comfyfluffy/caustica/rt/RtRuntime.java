@@ -136,7 +136,6 @@ public final class RtRuntime {
             return;
         }
         SlangRuntime.INSTANCE.resume();
-        ProviderManager.INSTANCE.startSession();
         session = new Session();
         state = State.STARTING;
         CausticaMod.LOGGER.info("RT runtime starting; vanilla presentation remains active");

@@ -73,7 +73,7 @@ public void traceRadiance(uint cullMask, float3 ro, float tmin, float3 rd, float
 // not sky radiance.
 public void traceGuide(uint cullMask, float3 ro, float tmin, float3 rd, float tmax,
                 float rayConeWidth, float rayConeSpread) {
-    payload = makeRadiancePayload(0u, packHalf2(float2(rayConeWidth, rayConeSpread)));
+    payload = makeRadiancePayload(PAYLOAD_GUIDE_RAY, packHalf2(float2(rayConeWidth, rayConeSpread)));
     TraceRay(topLevelAS, RAY_FLAG_NONE, cullMask, SBT_RADIANCE, SBT_STRIDE_BUCKET,
             MISS_GUIDE, makeRay(ro, tmin, rd, tmax), payload);
 }

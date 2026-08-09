@@ -144,11 +144,12 @@ public final class RtPipeline {
      * dispatch by index.
      */
     public static RtPipeline create(GpuContext ctx, RtShaderCode[] rgen, RtShaderCode[] rmiss,
-                                    RtShaderCode rchit, RtShaderCode rahit, int pushConstantSize,
+                                    RtShaderCode rchit, RtShaderCode radianceAhit, RtShaderCode shadowAhit,
+                                    int pushConstantSize,
                                     int bindlessTextures,
                                     Map<String, WorldShaderCompiler.PassResourceBinding> passResourceBindings) {
         VkDevice vk = ctx.vk();
-        boolean hasAhit = rahit != null;
+        boolean hasAhit = radianceAhit != null;
         String label = "world RT pipeline";
         if (!passResourceBindings.isEmpty() && bindlessTextures <= 0) {
             // Set indices in the pipeline layout are positional (pSetLayouts[i] == set i in the shader),
@@ -329,8 +330,11 @@ public final class RtPipeline {
             int groupCount = raygenCount + missCount + hitGroupCount;
             int hitGroupIdx = raygenCount + missCount;
             int chitStage = raygenCount + missCount;
-            int ahitStage = chitStage + 1;
-            int stageCount = raygenCount + missCount + 1 + (hasAhit ? 1 : 0);
+            // Radiance and shadow any-hit are separate stages so neither carries the other's register
+            // allocation; RtAccel.anyHitRayType picks which one each hit record uses.
+            int radianceAhitStage = chitStage + 1;
+            int shadowAhitStage = chitStage + 2;
+            int stageCount = raygenCount + missCount + 1 + (hasAhit ? 2 : 0);
             long[] mGen = new long[raygenCount];
             for (int g = 0; g < raygenCount; g++) {
                 mGen[g] = loadModule(vk, stack, rgen[g]);
@@ -346,10 +350,13 @@ public final class RtPipeline {
             long mHit = loadModule(vk, stack, rchit);
             RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_SHADER_MODULE, mHit,
                     label + " " + rchit.debugName());
-            long mAhit = hasAhit ? loadModule(vk, stack, rahit) : 0L;
+            long mRadianceAhit = hasAhit ? loadModule(vk, stack, radianceAhit) : 0L;
+            long mShadowAhit = hasAhit ? loadModule(vk, stack, shadowAhit) : 0L;
             if (hasAhit) {
-                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_SHADER_MODULE, mAhit,
-                        label + " " + rahit.debugName());
+                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_SHADER_MODULE, mRadianceAhit,
+                        label + " " + radianceAhit.debugName());
+                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_SHADER_MODULE, mShadowAhit,
+                        label + " " + shadowAhit.debugName());
             }
             ByteBuffer entry = stack.UTF8("main");
             VkPipelineShaderStageCreateInfo.Buffer stages = VkPipelineShaderStageCreateInfo.calloc(stageCount, stack);
@@ -361,7 +368,10 @@ public final class RtPipeline {
             }
             stages.get(chitStage).sType$Default().stage(VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR).module(mHit).pName(entry);
             if (hasAhit) {
-                stages.get(ahitStage).sType$Default().stage(VK_SHADER_STAGE_ANY_HIT_BIT_KHR).module(mAhit).pName(entry);
+                stages.get(radianceAhitStage).sType$Default().stage(VK_SHADER_STAGE_ANY_HIT_BIT_KHR)
+                        .module(mRadianceAhit).pName(entry);
+                stages.get(shadowAhitStage).sType$Default().stage(VK_SHADER_STAGE_ANY_HIT_BIT_KHR)
+                        .module(mShadowAhit).pName(entry);
             }
 
             VkRayTracingShaderGroupCreateInfoKHR.Buffer groups = VkRayTracingShaderGroupCreateInfoKHR.calloc(groupCount, stack);
@@ -376,7 +386,7 @@ public final class RtPipeline {
             for (int h = 0; h < hitGroupCount; h++) {
                 groups.get(hitGroupIdx + h).sType$Default().type(VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR)
                         .generalShader(VK_SHADER_UNUSED_KHR).closestHitShader(chitStage)
-                        .anyHitShader(hasAhit && hitGroupUsesAnyHit(h) ? ahitStage : VK_SHADER_UNUSED_KHR)
+                        .anyHitShader(anyHitStage(hasAhit, h, radianceAhitStage, shadowAhitStage))
                         .intersectionShader(VK_SHADER_UNUSED_KHR);
             }
 
@@ -401,7 +411,8 @@ public final class RtPipeline {
             }
             VK10.vkDestroyShaderModule(vk, mHit, null);
             if (hasAhit) {
-                VK10.vkDestroyShaderModule(vk, mAhit, null);
+                VK10.vkDestroyShaderModule(vk, mRadianceAhit, null);
+                VK10.vkDestroyShaderModule(vk, mShadowAhit, null);
             }
 
             // SBT: one record per group. Over-align the stride so every region start is base-aligned and
@@ -439,17 +450,33 @@ public final class RtPipeline {
         };
     }
 
-    private static boolean hitGroupUsesAnyHit(int relativeHitGroup) {
-        if (relativeHitGroup < RtAccel.SBT_ENTITY_OFFSET) {
-            int rayType = relativeHitGroup / RtAccel.TERRAIN_BUCKETS;
-            int bucket = relativeHitGroup % RtAccel.TERRAIN_BUCKETS;
-            if (rayType == RtAccel.SBT_RAY_RADIANCE) {
-                return bucket == RtAccel.BUCKET_CUTOUT;
-            }
-            return bucket != RtAccel.BUCKET_SOLID;
+    /**
+     * Which any-hit stage a hit record uses, or {@code VK_SHADER_UNUSED_KHR}. Masked geometry alpha-tests
+     * on both ray types; transmissive geometry runs any-hit only on shadow rays, where it tints and lets
+     * traversal continue, and uses a closest-hit-only record for radiance.
+     */
+    private static int anyHitStage(boolean hasAhit, int relativeHitGroup,
+                                   int radianceAhitStage, int shadowAhitStage) {
+        if (!hasAhit) {
+            return VK_SHADER_UNUSED_KHR;
         }
-        int entityBucket = (relativeHitGroup - RtAccel.SBT_ENTITY_OFFSET) % RtAccel.TERRAIN_BUCKETS;
-        return entityBucket == RtAccel.ENTITY_BUCKET_ANY_HIT;
+        int rayType;
+        boolean usesAnyHit;
+        if (relativeHitGroup < RtAccel.SBT_ENTITY_OFFSET) {
+            rayType = relativeHitGroup / RtAccel.TERRAIN_BUCKETS;
+            int bucket = relativeHitGroup % RtAccel.TERRAIN_BUCKETS;
+            usesAnyHit = rayType == RtAccel.SBT_RAY_RADIANCE
+                    ? bucket == RtAccel.BUCKET_CUTOUT
+                    : bucket != RtAccel.BUCKET_SOLID;
+        } else {
+            int entityRelative = relativeHitGroup - RtAccel.SBT_ENTITY_OFFSET;
+            rayType = entityRelative / RtAccel.TERRAIN_BUCKETS;
+            usesAnyHit = entityRelative % RtAccel.TERRAIN_BUCKETS == RtAccel.ENTITY_BUCKET_ANY_HIT;
+        }
+        if (!usesAnyHit) {
+            return VK_SHADER_UNUSED_KHR;
+        }
+        return rayType == RtAccel.SBT_RAY_RADIANCE ? radianceAhitStage : shadowAhitStage;
     }
 
     /** Bind a new TLAS after the selected descriptor slot's exact prior graphics use completes. */

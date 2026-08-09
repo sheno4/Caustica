@@ -768,7 +768,8 @@ public final class RtComposite {
                             shaders.indirect()},
                     new RtShaderCode[]{shaders.skyMiss(), shaders.guideMiss()},
                     shaders.closestHit(),
-                    shaders.anyHit(),
+                    shaders.radianceAnyHit(),
+                    shaders.shadowAnyHit(),
                     WorldPushConstantsData.BYTE_SIZE, bindlessTextureCapacity,
                     worldShaderBuild.passResourceBindings());
             // Per-frame world data lives in this BDA ring; the pipeline pushes its address and hot fields.
@@ -813,9 +814,12 @@ public final class RtComposite {
                 compiler.compilePlain("guide.rmiss.slang", WorldShaderCompiler.ENTRY_POINT));
         RtShaderCode closestHit = RtShaderCode.of(
                 "closest_hit(" + surface.feature().id() + ")", compiler.compileClosestHit());
-        RtShaderCode anyHit = RtShaderCode.of("any_hit",
-                compiler.compilePlain("any_hit.rahit.slang", WorldShaderCompiler.ENTRY_POINT));
-        WorldShaders shaders = new WorldShaders(primary, indirect, skyMiss, guideMiss, closestHit, anyHit);
+        RtShaderCode radianceAnyHit = RtShaderCode.of("radiance_any_hit",
+                compiler.compilePlain("radiance_any_hit.rahit.slang", WorldShaderCompiler.ENTRY_POINT));
+        RtShaderCode shadowAnyHit = RtShaderCode.of("shadow_any_hit",
+                compiler.compilePlain("shadow_any_hit.rahit.slang", WorldShaderCompiler.ENTRY_POINT));
+        WorldShaders shaders = new WorldShaders(primary, indirect, skyMiss, guideMiss, closestHit,
+                radianceAnyHit, shadowAnyHit);
         CausticaMod.LOGGER.info("World shader composition active: sky={} ({}), surface={} ({}), SER={}",
                 sky.feature().id(), sky.binding().type(), surface.feature().id(), surface.binding().type(),
                 reordered ? "EXT" : "none");
@@ -823,7 +827,8 @@ public final class RtComposite {
     }
 
     private record WorldShaders(RtShaderCode primary, RtShaderCode indirect, RtShaderCode skyMiss,
-                                RtShaderCode guideMiss, RtShaderCode closestHit, RtShaderCode anyHit) {
+                                RtShaderCode guideMiss, RtShaderCode closestHit,
+                                RtShaderCode radianceAnyHit, RtShaderCode shadowAnyHit) {
     }
 
     private record WorldShaderCacheKey(CausticaRegistry.Selection selection, boolean reordered) {

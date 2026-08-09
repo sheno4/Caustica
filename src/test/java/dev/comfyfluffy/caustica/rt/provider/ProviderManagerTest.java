@@ -56,4 +56,75 @@ final class ProviderManagerTest {
         assertEquals(1, cleanupCalls.get());
         assertEquals(2, healthyCalls.get());
     }
+
+    @Test
+    void aProviderTornDownByFailureIsNotShutDownAgainAtSessionClose() {
+        AtomicInteger shutdowns = new AtomicInteger();
+        SceneProvider failing = counting(shutdowns, () -> {
+            throw new IllegalStateException("expected");
+        });
+        ProviderManager manager = new ProviderManager(Map.of(failing.id(), failing), Map.of(), Map.of());
+
+        manager.updateScenes();
+        manager.shutdown();
+
+        assertEquals(1, shutdowns.get());
+    }
+
+    @Test
+    void shutdownRunsOncePerProviderEvenIfCalledRepeatedly() {
+        AtomicInteger shutdowns = new AtomicInteger();
+        SceneProvider healthy = counting(shutdowns, () -> {
+        });
+        ProviderManager manager = new ProviderManager(Map.of(healthy.id(), healthy), Map.of(), Map.of());
+
+        manager.shutdown();
+        manager.shutdown();
+
+        assertEquals(1, shutdowns.get());
+    }
+
+    @Test
+    void aTornDownProviderNeverReceivesAnotherCallback() {
+        AtomicInteger updates = new AtomicInteger();
+        SceneProvider failing = new SceneProvider() {
+            @Override
+            public Identifier id() {
+                return Identifier.fromNamespaceAndPath("test", "failing");
+            }
+
+            @Override
+            public void update() {
+                updates.incrementAndGet();
+                throw new IllegalStateException("expected");
+            }
+        };
+        ProviderManager manager = new ProviderManager(Map.of(failing.id(), failing), Map.of(), Map.of());
+
+        manager.updateScenes();
+        manager.prepareFrame();
+        manager.invalidateScenes();
+        manager.updateScenes();
+
+        assertEquals(1, updates.get());
+    }
+
+    private static SceneProvider counting(AtomicInteger shutdowns, Runnable update) {
+        return new SceneProvider() {
+            @Override
+            public Identifier id() {
+                return Identifier.fromNamespaceAndPath("test", "counting");
+            }
+
+            @Override
+            public void update() {
+                update.run();
+            }
+
+            @Override
+            public void shutdown() {
+                shutdowns.incrementAndGet();
+            }
+        };
+    }
 }

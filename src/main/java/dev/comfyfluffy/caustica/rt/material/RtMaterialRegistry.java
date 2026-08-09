@@ -6,6 +6,7 @@ import dev.comfyfluffy.caustica.mixin.SpriteContentsAccessor;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtLookPackage;
 import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
+import dev.comfyfluffy.caustica.rt.entity.RtEntityTextures;
 import dev.comfyfluffy.caustica.rt.gen.MaterialHeaderData;
 import dev.comfyfluffy.caustica.rt.gen.MaterialHeaderData.Float4;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
@@ -46,6 +47,11 @@ public final class RtMaterialRegistry {
     public static final int FEATURE_NORMAL = 2;
     public static final int FEATURE_HEURISTIC_EMISSION = 4;
     public static final int FEATURE_STOCHASTIC_ALPHA = 16;
+    /** Bindless albedo slot reserved for the vanilla block atlas, seeded by {@code RtEntityTextures}. */
+    public static final int BLOCK_ATLAS_ALBEDO_SLOT = 0;
+    // Byte offset of MaterialHeader.albedoSlot, for in-place variant patching. Pinned by
+    // RtMaterialLayoutTest against the reflected MaterialHeaderData layout.
+    private static final int ALBEDO_SLOT_OFFSET = 16;
     // HDR radiance of a full (level-15-equivalent) emitter, modulated by albedo. Baked into every
     // emissive RtMaterialDesc.emissionStrength at compile time (compileDesc/compileEntityDesc), times
     // any resource-pack absolute emission.strength_cd_m2 override; see header() and RtMaterialOverrides.
@@ -100,6 +106,9 @@ public final class RtMaterialRegistry {
     private Map<Identifier, EntityTemplate> entityTemplates = Map.of();
     private final Map<EntitySpriteKey, Integer> entitySpriteIds = new HashMap<>();
     private final Map<Integer, Integer> stochasticAlphaIds = new HashMap<>();
+    // (base material, bindless albedo slot) -> variant material. Entity render types share a handful of
+    // canonical materials but each resolve their own texture, so the slot cannot live on the base record.
+    private final Map<Long, Integer> albedoSlotIds = new HashMap<>();
     private int entityFallbackId;
     private int nextDynamicId;
     private int tableCapacity;
@@ -254,9 +263,11 @@ public final class RtMaterialRegistry {
 
         // Full entity textures have fixed [0,1] UVs and receive IDs above. Atlas sprites need a second,
         // append-only header with the actual stitched atlas rectangle, which is only known when the sprite
-        // first appears in capture. Reserve room for atlas and alpha-mode variants.
+        // first appears in capture. Reserve room for atlas, alpha-mode and albedo-slot variants — the last
+        // is bounded by the bindless entity-texture array, since a variant exists per (base, live slot).
         int dynamicReserve = Math.max(64, Math.addExact(sprites.size(),
-                Math.multiplyExact(entityResources.size(), 3)));
+                Math.addExact(Math.multiplyExact(entityResources.size(), 3),
+                        RtEntityTextures.maxTextures())));
         int recordCapacity = Math.addExact(headers.size(), dynamicReserve);
         long byteSize = Math.multiplyExact((long) recordCapacity, MaterialHeaderData.BYTE_SIZE);
         if (byteSize > Integer.MAX_VALUE) {
@@ -299,6 +310,7 @@ public final class RtMaterialRegistry {
         entityTemplates = Collections.unmodifiableMap(nextEntityTemplates);
         entitySpriteIds.clear();
         stochasticAlphaIds.clear();
+        albedoSlotIds.clear();
         entityFallbackId = nextEntityFallbackId;
         nextDynamicId = headers.size();
         tableCapacity = recordCapacity;
@@ -378,6 +390,37 @@ public final class RtMaterialRegistry {
         return id;
     }
 
+    /**
+     * Return an append-only material variant whose albedo samples bindless slot {@code albedoSlot}.
+     * Interned per (base, slot): the same base material paired with a different entity texture is a
+     * different record, but repeated submissions of the same pair reuse one ID.
+     */
+    public synchronized int withAlbedoSlot(int materialId, int albedoSlot) {
+        if (table == null || materialId < 0 || materialId >= nextDynamicId) {
+            throw new IllegalStateException("RT material is not available for albedo specialization: " + materialId);
+        }
+        long sourceOffset = Math.multiplyExact((long) materialId, MaterialHeaderData.BYTE_SIZE);
+        ByteBuffer source = MemoryUtil.memByteBuffer(table.mapped + sourceOffset, MaterialHeaderData.BYTE_SIZE)
+                .order(ByteOrder.nativeOrder());
+        if (source.getInt(ALBEDO_SLOT_OFFSET) == albedoSlot) return materialId;
+        long key = ((long) materialId << 32) | Integer.toUnsignedLong(albedoSlot);
+        Integer current = albedoSlotIds.get(key);
+        if (current != null) return current;
+        if (nextDynamicId >= tableCapacity) {
+            throw new IllegalStateException("RT material header reserve exhausted");
+        }
+        int id = nextDynamicId++;
+        long targetOffset = Math.multiplyExact((long) id, MaterialHeaderData.BYTE_SIZE);
+        MemoryUtil.memCopy(table.mapped + sourceOffset, table.mapped + targetOffset,
+                MaterialHeaderData.BYTE_SIZE);
+        ByteBuffer target = MemoryUtil.memByteBuffer(table.mapped + targetOffset, MaterialHeaderData.BYTE_SIZE)
+                .order(ByteOrder.nativeOrder());
+        target.putInt(ALBEDO_SLOT_OFFSET, albedoSlot);
+        table.flush(targetOffset, MaterialHeaderData.BYTE_SIZE);
+        albedoSlotIds.put(key, id);
+        return id;
+    }
+
     /** Resolve a full entity texture resource to its pack-compiled material ID. */
     public int resolveEntityTexture(Identifier textureLocation, boolean stochasticAlpha) {
         int id = textureLocation != null
@@ -421,6 +464,7 @@ public final class RtMaterialRegistry {
         entityTemplates = Map.of();
         entitySpriteIds.clear();
         stochasticAlphaIds.clear();
+        albedoSlotIds.clear();
         entityFallbackId = 0;
         nextDynamicId = 0;
         tableCapacity = 0;
@@ -543,7 +587,8 @@ public final class RtMaterialRegistry {
         int strength = Math.round(Math.min(MAX_EMISSION_STRENGTH, desc.emissionStrength())
                 * (EMISSION_STRENGTH_MASK / MAX_EMISSION_STRENGTH));
         packedFeatures |= strength << EMISSION_STRENGTH_SHIFT;
-        return new MaterialHeaderData(desc.model(), packedFeatures, entry.pageIndex(), 0,
+        // albedoSlot 0 is the block atlas; entity render types swap in their own slot via withAlbedoSlot.
+        return new MaterialHeaderData(desc.model(), packedFeatures, entry.pageIndex(), 0, BLOCK_ATLAS_ALBEDO_SLOT,
                 new Float4(entry.materialU(), entry.materialV(), entry.materialDu(), entry.materialDv()),
                 new Float4(albedoU, albedoV, albedoInvDu, albedoInvDv),
                 new Float4(desc.roughness(), desc.metalness(), desc.ior(), desc.transmission()),

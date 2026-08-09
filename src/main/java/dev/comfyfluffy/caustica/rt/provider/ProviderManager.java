@@ -22,6 +22,11 @@ public final class ProviderManager {
     private static final LightSink FAKE_LIGHT_SINK = (id, dirX, dirY, dirZ, illuminanceLux) -> {
     };
 
+    // Providers that are no longer eligible for callbacks. A key enters this set at exactly the moment
+    // the provider's shutdown() runs, so membership means "already torn down" — it both skips further
+    // callbacks and suppresses a second shutdown at session close. Failure is terminal for the process:
+    // SceneProvider has no initialization hook, so a provider that has been torn down cannot be resumed
+    // on a later session.
     private final Set<ProviderKey> disabled = new HashSet<>();
     private final Map<Identifier, SceneProvider> scenes;
     private final Map<Identifier, LightProvider> lights;
@@ -36,11 +41,6 @@ public final class ProviderManager {
 
     public void updateScenes() {
         invoke("scene", scenes(), SceneProvider::update, SceneProvider::shutdown);
-    }
-
-    /** Begin a new RT session with every registered provider eligible to run. */
-    public void startSession() {
-        disabled.clear();
     }
 
     public void prepareFrame() {
@@ -60,9 +60,9 @@ public final class ProviderManager {
     }
 
     public void shutdown() {
-        invokeAll("scene", scenes(), SceneProvider::shutdown);
-        invokeAll("light", lights(), LightProvider::shutdown);
-        invokeAll("material", materials(), MaterialSource::shutdown);
+        shutdownRemaining("scene", scenes(), SceneProvider::shutdown);
+        shutdownRemaining("light", lights(), LightProvider::shutdown);
+        shutdownRemaining("material", materials(), MaterialSource::shutdown);
     }
 
     private Map<Identifier, SceneProvider> scenes() {
@@ -98,8 +98,12 @@ public final class ProviderManager {
         }
     }
 
-    private <T> void invokeAll(String kind, Map<Identifier, T> providers, Consumer<T> action) {
+    /** Shut down every provider whose teardown has not already run, marking each so it runs exactly once. */
+    private <T> void shutdownRemaining(String kind, Map<Identifier, T> providers, Consumer<T> action) {
         for (Map.Entry<Identifier, T> entry : providers.entrySet()) {
+            if (!disabled.add(new ProviderKey(kind, entry.getKey()))) {
+                continue;
+            }
             try {
                 action.accept(entry.getValue());
             } catch (Throwable t) {

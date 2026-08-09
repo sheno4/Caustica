@@ -257,7 +257,7 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
         uint p2 = ib[3u * pid + 2u];
         float3 pbary = float3(1.0 - attribs.x - attribs.y, attribs.x, attribs.y);
         float2 puv = pbary.x * uvb[p0] + pbary.y * uvb[p1] + pbary.z * uvb[p2];
-        int pslot = int(pr.tint.w + 0.5);
+        uint pslot = ConstPtr<MaterialHeader>(pc.materialTableAddr)[pr.materialId].albedoSlot;
         float3x3 o2w = (float3x3)ObjectToWorld3x4();
         float3 pp0 = mul(o2w, HitTriangleVertexPosition(0));
         float3 pp1 = mul(o2w, HitTriangleVertexPosition(1));
@@ -305,14 +305,14 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
         uint e2 = eidxBuf[3u * pid + 2u];
         float3 ebary = float3(1.0 - attribs.x - attribs.y, attribs.x, attribs.y);
         float2 euvCoord = ebary.x * euv[e0] + ebary.y * euv[e1] + ebary.z * euv[e2];
-        int texSlot = int(pr.tint.w + 0.5);
+        MaterialHeader header = ConstPtr<MaterialHeader>(pc.materialTableAddr)[pr.materialId];
+        uint texSlot = header.albedoSlot;
         float3 ep0 = mul(entityO2w, HitTriangleVertexPosition(0));
         float3 ep1 = mul(entityO2w, HitTriangleVertexPosition(1));
         float3 ep2 = mul(entityO2w, HitTriangleVertexPosition(2));
         float entityLod = rayConeTextureLod(rayCone, texSizePx(entityAlbedoTex[NonUniformResourceIndex(texSlot)]),
                 ep0, ep1, ep2, euv[e0], euv[e1], euv[e2]);
         float4 entityTexel = entityAlbedoTex[NonUniformResourceIndex(texSlot)].SampleLevel(euvCoord, entityLod);
-        MaterialHeader header = ConstPtr<MaterialHeader>(pc.materialTableAddr)[pr.materialId];
         uint material = header.model;
         float3 baseAlbedo709 = srgbToLinear(entityTexel.rgb) * srgbToLinear(pr.tint.rgb);
         float3 opticalColor709 = material == MATERIAL_DIELECTRIC
@@ -385,7 +385,11 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
     float3 tp0 = HitTriangleVertexPosition(0);
     float3 tp1 = HitTriangleVertexPosition(1);
     float3 tp2 = HitTriangleVertexPosition(2);
-    float blockLod = rayConeTextureLod(rayCone, texSizePx(blockAlbedoAtlas), tp0, tp1, tp2, uv0, uv1, uv2);
+    // Terrain albedo is the block atlas, reached through the shared bindless array like every other
+    // producer; the material record names the slot, so no geometry path carries a texture index.
+    uint blockSlot = materialHeader.albedoSlot;
+    float blockLod = rayConeTextureLod(rayCone,
+            texSizePx(entityAlbedoTex[NonUniformResourceIndex(blockSlot)]), tp0, tp1, tp2, uv0, uv1, uv2);
 
     float3 vdir = -WorldRayDirection();
     if (dot(geometricNormal, vdir) < 0.0) {
@@ -394,7 +398,7 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
 
     // Stained glass and ice stay on the engine dielectric path.
     if (materialHeader.model == MATERIAL_DIELECTRIC) {
-        float4 gtex = blockAlbedoAtlas.SampleLevel(uv, blockLod);
+        float4 gtex = entityAlbedoTex[NonUniformResourceIndex(blockSlot)].SampleLevel(uv, blockLod);
         float3 gtex709 = srgbToLinear(gtex.rgb);
         float3 tint709 = srgbToLinear(tint);
         float3 opticalColor709 = lerp(float3(1.0), gtex709 * tint709, gtex.a);
@@ -418,7 +422,7 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
     }
 
     float3 tint709 = srgbToLinear(tint);
-    float3 albedo709 = srgbToLinear(blockAlbedoAtlas.SampleLevel(uv, blockLod).rgb) * tint709;
+    float3 albedo709 = srgbToLinear(entityAlbedoTex[NonUniformResourceIndex(blockSlot)].SampleLevel(uv, blockLod).rgb) * tint709;
 
     if (materialHeader.model == MATERIAL_WATER) {
         // Water stays on the engine dielectric path.

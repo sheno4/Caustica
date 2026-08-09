@@ -2,12 +2,15 @@ package dev.comfyfluffy.caustica.rt.entity;
 
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import dev.comfyfluffy.caustica.rt.accel.RtAccel;
+import dev.comfyfluffy.caustica.rt.material.RtMaterialRegistry;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 import net.minecraft.client.resources.model.geometry.BakedQuad;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
 import org.joml.Vector3fc;
+
+import java.util.function.IntBinaryOperator;
 
 /**
  * A {@link VertexConsumer} that records the posed entity geometry vanilla emits — exactly the same bulk
@@ -38,12 +41,19 @@ public final class RtEntityCapture implements VertexConsumer {
     private final int[] packedBucketTris = new int[RtAccel.ENTITY_BUCKETS];
 
     // Bindless texture slot for the geometry currently being submitted (set by the collector per
-    // submitModel, so body + feature layers get their own texture). Stored per-prim in tint.w;
-    // the hit shader samples entityAlbedoTex[texSlot].
+    // submitModel, so body + feature layers get their own texture).
     int currentTexSlot;
-    // Canonical MaterialHeader ID for this submission. Entity, block-entity and block-atlas geometry all
-    // use the same table; albedo remains a separate bindless slot in tint.w.
+    // Canonical MaterialHeader ID for this submission, before the albedo slot is folded in.
     int currentMaterialId;
+    // Folds this submission's bindless albedo slot into its material record. Defaults to the live
+    // registry; capture itself stays a pure CPU accumulator, so unit tests substitute a resolver that
+    // needs no GPU material table.
+    IntBinaryOperator albedoMaterialResolver = RtMaterialRegistry.INSTANCE::withAlbedoSlot;
+    // Collectors set the base material and the texture slot independently, so the resolved variant is
+    // memoised per (base, slot) pair: the lookup is paid once per submission, not once per triangle.
+    private int albedoMemoBase = -1;
+    private int albedoMemoSlot = -1;
+    private int albedoMemoMaterial;
     // Conservative default: unknown submissions retain alpha testing instead of incorrectly becoming
     // opaque. RtEntityCollector assigns this from the RenderPipeline before every known submission.
     int currentAlphaBucket = RtAccel.ENTITY_BUCKET_ANY_HIT;
@@ -63,6 +73,16 @@ public final class RtEntityCapture implements VertexConsumer {
     private final float[] qnx = new float[4], qny = new float[4], qnz = new float[4];
     private final int[] qcol = new int[4];
     private final Vector3f scratch = new Vector3f(); // baked-quad position transform scratch
+
+    /** This submission's material with its bindless albedo slot applied. */
+    private int albedoMaterialId() {
+        if (currentMaterialId != albedoMemoBase || currentTexSlot != albedoMemoSlot) {
+            albedoMemoBase = currentMaterialId;
+            albedoMemoSlot = currentTexSlot;
+            albedoMemoMaterial = albedoMaterialResolver.applyAsInt(currentMaterialId, currentTexSlot);
+        }
+        return albedoMemoMaterial;
+    }
 
     /** Clear all accumulators for a fresh entity capture. */
     public void reset() {
@@ -398,8 +418,8 @@ public final class RtEntityCapture implements VertexConsumer {
             prim.add(tr);
             prim.add(tg);
             prim.add(tb);
-            prim.add((float) currentTexSlot); // tint.w = bindless texture slot
-            prim.add(Float.intBitsToFloat(currentMaterialId));
+            prim.add(0f); // tint.w unused; albedo selection lives on the material record
+            prim.add(Float.intBitsToFloat(albedoMaterialId()));
             prim.add(0f); // flags
             prim.add(0f); // aux0
             prim.add(0f); // aux1

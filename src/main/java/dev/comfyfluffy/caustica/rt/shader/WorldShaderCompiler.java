@@ -64,7 +64,8 @@ public final class WorldShaderCompiler implements AutoCloseable {
             "(?m)^\\s*import\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*;");
 
     private static final List<String> WORLD_MODULES = List.of(
-            "any_hit.rahit.slang", "bindings.slang", "closest_hit.slang",
+            "any_hit_common.slang", "radiance_any_hit.rahit.slang", "shadow_any_hit.rahit.slang",
+            "bindings.slang", "closest_hit.slang",
             "guide.rmiss.slang", "guides.slang", "indirect.slang", "indirect_core.slang",
             "indirect_ser.slang", "lighting.slang", "math.slang", "medium.slang",
             "primary.rgen.slang", "segment.slang", "sky_miss.slang",

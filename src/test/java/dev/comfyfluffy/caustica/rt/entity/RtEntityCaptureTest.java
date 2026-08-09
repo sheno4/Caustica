@@ -15,7 +15,7 @@ final class RtEntityCaptureTest {
 
     @Test
     void packsTrianglesIntoFixedAlphaBucketOrder() {
-        RtEntityCapture capture = new RtEntityCapture();
+        RtEntityCapture capture = capture();
         addQuad(capture, RtAccel.ENTITY_BUCKET_ANY_HIT, 22);
         addQuad(capture, RtAccel.ENTITY_BUCKET_OPAQUE, 11);
         addQuad(capture, RtAccel.ENTITY_BUCKET_ANY_HIT, 33);
@@ -33,12 +33,19 @@ final class RtEntityCaptureTest {
 
     @Test
     void resetClearsBucketMetadata() {
-        RtEntityCapture capture = new RtEntityCapture();
+        RtEntityCapture capture = capture();
         addQuad(capture, RtAccel.ENTITY_BUCKET_OPAQUE, 11);
 
         capture.reset();
 
         assertArrayEquals(new int[] {0, 0}, capture.packGeometry().bucketTris());
+    }
+
+    /** Capture with no GPU material table: keep the base material as-is instead of resolving a variant. */
+    private static RtEntityCapture capture() {
+        RtEntityCapture capture = new RtEntityCapture();
+        capture.albedoMaterialResolver = (materialId, albedoSlot) -> materialId;
+        return capture;
     }
 
     private static void addQuad(RtEntityCapture capture, int bucket, int materialId) {
