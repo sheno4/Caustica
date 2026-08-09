@@ -20,7 +20,10 @@ import caustica_pass_resources;
 
 void payloadSetPacked(inout Payload payload, uint material, float roughness, float metalness,
         float emission, float sss, float ior, float transmission, uint emissionSource) {
-    payload.flags = material | (emissionSource << PAYLOAD_EMISSION_SOURCE_SHIFT);
+    // PAYLOAD_GUIDE_RAY describes the ray, not the hit, so it is carried across rather than overwritten
+    // with the rest of the word. Everything else in flags is this hit's own output.
+    payload.flags = material | (emissionSource << PAYLOAD_EMISSION_SOURCE_SHIFT)
+            | (payload.flags & PAYLOAD_GUIDE_RAY);
     payload.roughMetal = packHalf2(float2(roughness, metalness));
     payload.emissionSss = packHalf2(float2(emission, sss));
     payload.iorTransmission = packHalf2(float2(ior, transmission));
@@ -29,6 +32,36 @@ void payloadSetPacked(inout Payload payload, uint material, float roughness, flo
 void payloadSetDielectric(inout Payload payload, uint material, bool entering) {
     if (material != MATERIAL_WATER && material != MATERIAL_DIELECTRIC) return;
     if (entering) payload.flags |= PAYLOAD_DIELECTRIC_ENTERING;
+}
+
+// A guide is a control signal, not a sample that averages out, so it needs one answer about which surface
+// it is looking at. A surface covering too little of its footprint is not that answer: report it as a
+// crossing and let the walk take the content behind it instead.
+//
+// The two axes compose here as they do everywhere else — coverage says how much of the footprint the
+// surface occupies, transmittance how much light passes where it does — so what terminates a guide is the
+// product being opaque enough. One global threshold; per-material tuning would need a consumer first.
+static const float GUIDE_COVERAGE_THRESHOLD = 0.5;
+
+bool guideCoverageCrossing(Payload payload, float coverage, float transmission) {
+    return (payload.flags & PAYLOAD_GUIDE_RAY) != 0u
+            && clamp(coverage, 0.0, 1.0) * (1.0 - clamp(transmission, 0.0, 1.0))
+                    <= GUIDE_COVERAGE_THRESHOLD;
+}
+
+/**
+ * Report this hit as a crossing rather than an endpoint: a dielectric with IOR 1. With no index contrast
+ * it neither bends the ray nor bounds a medium, which is what a hole in a surface is — so no
+ * entering/exiting bit is written, because there is no interior for it to be about. `opticalColor`
+ * filters what the walk finds behind it: neutral where the surface is absent, its own colour where it
+ * covers.
+ */
+void payloadSetCoverageCrossing(inout Payload payload, float3 opticalColor, float3 normal) {
+    packAlbedo(payload, opticalColor);
+    packNormal(payload, normal);
+    payload.f0 = half3(0.0h, 0.0h, 0.0h);
+    payloadSetPacked(payload, MATERIAL_DIELECTRIC, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0,
+            EMISSION_SOURCE_NONE);
 }
 
 uint materialEmissionSource(SurfaceMaterial mat, float emission) {
@@ -350,6 +383,21 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
             return;
         }
 
+        // Checked before the material pages are sampled and the surface slot runs: a guide walking
+        // through foliage or a blended entity pays for neither.
+        if (guideCoverageCrossing(payload, entityTexel.a, mat.params.w)) {
+            payload.hitT = RayTCurrent();
+            if (g.dispAddr != 0) {
+                ConstPtr<float4> dd = ConstPtr<float4>(g.dispAddr);
+                payload.motionPrev = half3(ebary.x * dd[e0].xyz + ebary.y * dd[e1].xyz + ebary.z * dd[e2].xyz);
+            } else {
+                payload.motionPrev = half3(g.rigidDisp.xyz);
+            }
+            payloadSetCoverageCrossing(payload,
+                    bt709ToAcesCg(lerp(float3(1.0), baseAlbedo709, entityTexel.a)), geometricNormal);
+            return;
+        }
+
         Surface surface = evaluateMaterial(mat, euvCoord, entityLod, albedo, geometricNormal,
                 ep0, ep1, ep2, euv[e0], euv[e1], euv[e2], vdir,
                 mat.params.x, mat.params.y, pr.normal.w, true);
@@ -433,7 +481,8 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
     }
 
     float3 tint709 = srgbToLinear(tint);
-    float3 albedo709 = srgbToLinear(entityAlbedoTex[NonUniformResourceIndex(blockSlot)].SampleLevel(uv, blockLod).rgb) * tint709;
+    float4 blockTexel = entityAlbedoTex[NonUniformResourceIndex(blockSlot)].SampleLevel(uv, blockLod);
+    float3 albedo709 = srgbToLinear(blockTexel.rgb) * tint709;
 
     if (terrainMat.model == MATERIAL_WATER) {
         // Water stays on the engine dielectric path.
@@ -453,6 +502,16 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
                 surface.emission, surface.sss, terrainMat.params.z, terrainMat.params.w,
                 materialEmissionSource(terrainMat, surface.emission));
         payloadSetDielectric(payload, MATERIAL_WATER, entering);
+        return;
+    }
+
+    // Checked before the material pages are sampled and the surface slot runs: a guide walking through
+    // foliage pays for neither.
+    if (guideCoverageCrossing(payload, blockTexel.a, terrainMat.params.w)) {
+        payload.hitT = RayTCurrent();
+        payload.motionPrev = half3(0.0h, 0.0h, 0.0h);
+        payloadSetCoverageCrossing(payload,
+                bt709ToAcesCg(lerp(float3(1.0), albedo709, blockTexel.a)), geometricNormal);
         return;
     }
 

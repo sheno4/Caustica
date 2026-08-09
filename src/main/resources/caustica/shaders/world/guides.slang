@@ -196,6 +196,18 @@ public void resolveTransmissionGuide(float3 surfacePos, float3 transmittedDir,
         }
         if (material != MATERIAL_WATER && material != MATERIAL_DIELECTRIC) return;
 
+        // A coverage crossing: closest-hit reports a surface too sparse to be this walk's endpoint as a
+        // dielectric with IOR 1. There is no index contrast, so it neither bends the ray nor bounds a
+        // medium — it is a hole in the surface, not an interface. Both faces filter, because there is no
+        // interior for an entering/exiting distinction to be about. Any dielectric authored at IOR 1
+        // would correctly behave the same way.
+        if (payloadIor() <= 1.0) {
+            guideFilter *= payloadAlbedo();
+            ro = offsetSurfaceOrigin(interfacePos, normalize(payloadNormal()), direction,
+                    INSET_TRANSMIT_BIAS);
+            continue;
+        }
+
         bool isWater = material == MATERIAL_WATER;
         bool entering = payloadDielectricEntering();
         float3 geometricNormal = normalize(payloadNormal());
