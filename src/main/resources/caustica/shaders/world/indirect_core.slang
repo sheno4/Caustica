@@ -290,11 +290,9 @@ public float3 tracePath<TC : IComposition, TTrace : IRadianceTrace>(TC.Surface s
 
 public void runIndirect<TC : IComposition, TTrace : IRadianceTrace>() {
     worldPush = ConstPtr<WorldPush>(pc.worldPushAddr)[0];
-    // celestialLight (world_core.slang) stays at its zero-illuminance default: the sky's atmosphere LUT
-    // The engine has no sun or moon as a light: celestialLight sits at its zero-illuminance default.
-    // All three consumers below (particle lighting, main NEE, SSS backscatter) gate on
-    // ndl/illuminance, so a zero light fires no shadow ray. A sky extension submitting sun and moon
-    // through LightProvider.submitLights, consumed by the engine, is what makes these real.
+    // celestialLight (world_core.slang) is a fixed hand-authored sun, so the three consumers below
+    // (particle lighting, main NEE, SSS backscatter) all fire against the same constant direction and
+    // illuminance every frame, regardless of the time of day the sky slot is drawing.
     TC.Surface surfaceModel;
     uint2 dispatchIndex = DispatchRaysIndex().xy;
     uint2 dimensions = DispatchRaysDimensions().xy;
