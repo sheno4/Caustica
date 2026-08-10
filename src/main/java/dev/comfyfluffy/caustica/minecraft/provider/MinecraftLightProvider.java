@@ -5,8 +5,8 @@ import dev.comfyfluffy.caustica.api.provider.LightSink;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.api.CausticaApi;
 import dev.comfyfluffy.caustica.api.OptionValues;
-import dev.comfyfluffy.caustica.builtin.BuiltinExtension;
-import dev.comfyfluffy.caustica.builtin.SkyLutPass;
+import dev.comfyfluffy.caustica.minecraft.MinecraftProvidersExtension;
+import dev.comfyfluffy.caustica.minecraft.sky.SkyLutPass;
 import dev.comfyfluffy.caustica.engine.light.LightDescriptor;
 import dev.comfyfluffy.caustica.minecraft.CausticaItems;
 import dev.comfyfluffy.caustica.rt.RtLookPackage;
@@ -37,7 +37,7 @@ public final class MinecraftLightProvider implements LightProvider {
         if (minecraft.level != null && Level.OVERWORLD.equals(minecraft.level.dimension())) {
             float partial = minecraft.getDeltaTracker().getGameTimeDeltaPartialTick(false);
             var probe = minecraft.gameRenderer.mainCamera().attributeProbe();
-            OptionValues options = CausticaApi.options().options(BuiltinExtension.ID);
+            OptionValues options = CausticaApi.options().options(MinecraftProvidersExtension.ID);
             RtLookPackage.Lighting lighting = RtLookPackage.current().lighting();
             CelestialFrame frame = new CelestialFrame(
                     probe.getValue(EnvironmentAttributes.SUN_ANGLE, partial) * TO_RADIANS,

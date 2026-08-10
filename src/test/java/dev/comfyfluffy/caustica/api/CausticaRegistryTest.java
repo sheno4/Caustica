@@ -29,8 +29,6 @@ final class CausticaRegistryTest {
         assertEquals(-1, registry.surfaceIndex(ResourceId.of("nope", "nope")));
         assertTrue(registry.renderPasses().containsKey(
                 ResourceId.of("caustica", "bloom")));
-        assertTrue(registry.renderPasses().containsKey(
-                ResourceId.of("caustica", "sky_lut")));
     }
 
     @Test

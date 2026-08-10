@@ -28,8 +28,8 @@ import java.util.List;
  * engine only through the post chain: it reads {@link PassFrame#sceneColor()} and adds the finished
  * pyramid onto it in {@link PassFrame#sceneColorTarget()}, like any other post effect.
  *
- * <p>Lives under {@code dev.comfyfluffy.caustica.builtin} alongside {@link SkyLutPass}, for the same
- * reason: it ships through the public {@code CausticaRenderPass} registration API a third-party extension
+ * <p>Lives under {@code dev.comfyfluffy.caustica.builtin} as a renderer-owned reference pass. It ships
+ * through the public {@code CausticaRenderPass} registration API a third-party extension
  * would use, so it only reaches engine internals through public surface.
  */
 public final class BloomPass implements CausticaRenderPass {

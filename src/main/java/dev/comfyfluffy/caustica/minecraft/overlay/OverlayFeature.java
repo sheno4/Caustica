@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.builtin.overlay;
+package dev.comfyfluffy.caustica.minecraft.overlay;
 
 import org.lwjgl.vulkan.VkCommandBuffer;
 

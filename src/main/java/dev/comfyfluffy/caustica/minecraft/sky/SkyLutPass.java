@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.builtin;
+package dev.comfyfluffy.caustica.minecraft.sky;
 
 import dev.comfyfluffy.caustica.api.Option;
 import dev.comfyfluffy.caustica.api.ShaderSource;
@@ -39,14 +39,7 @@ import java.util.List;
  * sky. The two scattering LUTs are static and bake once (redone on {@link #invalidate()}); the sky-view
  * LUT re-renders every frame.
  *
- * <p>Lives under {@code dev.comfyfluffy.caustica.builtin} rather than the engine's {@code rt} tree
- * deliberately: this pass ships through the {@code CausticaRenderPass}
- * registration API a third-party extension would use, so it only reaches engine internals through public
- * surface — {@link GpuContext}, {@link GpuImage}, the {@link ComputeDispatch}/{@link PassShaderCompiler}
- * pass-authoring helpers, {@link RtLookPackage#current()} for the photometric lighting anchors, and
- * {@link PassFrame#options()} for the {@code sky.*} geometry options declared as constants below.
- *
- * <p>Owns the sky rendering state. It samples Minecraft's celestial state and publishes the same packed
+ * <p>This Minecraft adapter samples celestial state and publishes the same packed
  * inputs to its LUT bakes and sky slot. The Minecraft light adapter samples those host attributes
  * independently to submit the corresponding distant lights through the light-provider API.
  */
@@ -62,8 +55,8 @@ public final class SkyLutPass implements CausticaRenderPass {
     static final int SKY_VIEW_HEIGHT = 216;
     private static final ShaderSource SHADERS = ShaderSource.classpath("/caustica/shaders/builtin", "sky", "common");
 
-    // The sky-geometry options this pass owns, declared here rather than inline in BuiltinExtension so the
-    // token a reader passes to OptionValues#get and the declaration BuiltinExtension registers are the same
+    // The sky-geometry options this pass owns are declared here so the token passed to OptionValues#get
+    // and the declaration registered by the Minecraft extension are the same
     // object. This pass is their only reader.
     // No enabled option: the sky slot fills every ray that escapes the world, so there is no state in which
     // this pass does nothing. Its group collapses by the caret alone.

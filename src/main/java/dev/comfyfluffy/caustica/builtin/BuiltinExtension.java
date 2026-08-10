@@ -17,7 +17,6 @@ public final class BuiltinExtension implements CausticaExtension {
 
     @Override
     public void register(CausticaRegistry registry) {
-        SkyLutPass skyLut = new SkyLutPass();
         registry.feature(ID)
                 .title(DisplayText.translatable("feature.caustica.builtin"))
                 .category(FeatureCategory.GENERAL)
@@ -27,11 +26,8 @@ public final class BuiltinExtension implements CausticaExtension {
                 .surface(BUILTIN_SURFACE, "caustica_builtin_surface", "BuiltinSurface")
                 .passResourceModule("caustica_sky_bindings")
                 .group(BloomPass.GROUP)
-                .group(SkyLutPass.GROUP)
                 .options(BloomPass.OPTIONS)
-                .options(SkyLutPass.OPTIONS)
                 .renderPass(new BloomPass())
-                .renderPass(skyLut)
                 .register();
         registry.setDefault(Slots.SKY, ID);
     }

@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.builtin.overlay;
+package dev.comfyfluffy.caustica.minecraft.overlay;
 
 import com.mojang.blaze3d.pipeline.RenderTarget;
 import com.mojang.blaze3d.textures.GpuTextureView;

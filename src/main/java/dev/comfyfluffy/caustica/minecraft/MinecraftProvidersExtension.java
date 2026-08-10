@@ -5,11 +5,12 @@ import dev.comfyfluffy.caustica.api.CausticaRegistry;
 import dev.comfyfluffy.caustica.api.DisplayText;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.api.ShaderSource;
-import dev.comfyfluffy.caustica.builtin.overlay.WorldOverlayPass;
+import dev.comfyfluffy.caustica.minecraft.overlay.WorldOverlayPass;
 import dev.comfyfluffy.caustica.minecraft.cloud.MinecraftCloudSceneProvider;
 import dev.comfyfluffy.caustica.minecraft.provider.MinecraftLightProvider;
 import dev.comfyfluffy.caustica.minecraft.provider.MinecraftMaterialSource;
 import dev.comfyfluffy.caustica.minecraft.provider.MinecraftSceneProvider;
+import dev.comfyfluffy.caustica.minecraft.sky.SkyLutPass;
 
 /** Installs Minecraft as scene, light, and material input to the host-neutral renderer API. */
 public final class MinecraftProvidersExtension implements CausticaExtension {
@@ -22,6 +23,9 @@ public final class MinecraftProvidersExtension implements CausticaExtension {
                 .title(DisplayText.literal("Minecraft"))
                 .shaderSource(ShaderSource.classpath("/caustica/shaders/minecraft", "surface"))
                 .surface(END_PORTAL_SURFACE, "caustica_portal_surface", "PortalSurface")
+                .group(SkyLutPass.GROUP)
+                .options(SkyLutPass.OPTIONS)
+                .renderPass(new SkyLutPass())
                 .renderPass(new WorldOverlayPass())
                 .sceneProvider(MinecraftSceneProvider.ID, new MinecraftSceneProvider())
                 .sceneProvider(MinecraftCloudSceneProvider.ID, new MinecraftCloudSceneProvider())

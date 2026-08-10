@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.builtin;
+package dev.comfyfluffy.caustica.minecraft.sky;
 
 import dev.comfyfluffy.caustica.api.ShaderSource;
 import dev.comfyfluffy.caustica.rt.gen.SkyInputsData;

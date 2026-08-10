@@ -386,18 +386,17 @@ Honest status, so this reads as a target and not a claim:
   `MaterialSource.submitMaterials` is likewise load-bearing: Minecraft defines the textureless
   `caustica:cloud` material and adapts resource-pack rules, including the end portal's registered
   procedural surface.
-- **The render pass API is real, raw-Vulkan, and three built-in passes run through it, including a
+- **The render pass API is real, raw-Vulkan, and three bundled passes run through it, including a
   graphics one.** `CausticaRenderPass` gives a pass a `VkCommandBuffer` and lets it build its own
-  descriptor sets and pipelines directly against `GpuContext` — see §4. `BloomPass`, `SkyLutPass`, and
-  `WorldOverlayPass` (all `builtin/`) are ordinary passes registered by `caustica:builtin`, not privileged
-  engine code; `RtBloomPipeline` and `RtSkyLut` (the
+  descriptor sets and pipelines directly against `GpuContext` — see §4. Renderer-owned `BloomPass` is
+  registered by `caustica:builtin`; Minecraft-owned `SkyLutPass` and `WorldOverlayPass` are registered by
+  `caustica:minecraft`. None is privileged engine code; `RtBloomPipeline` and `RtSkyLut` (the
   pre-pass-API built-ins) are deleted. `RenderPassManager` sequences passes by stage plus a same-stage
   `after()` topological order, and isolates a failing pass (disables it, logs, keeps the frame loop
-  running) the same way `ProviderManager` isolates a failing provider. `SkyLutPass` moved out of `rt/`
-  deliberately, as a test of the register mechanism: it now lives beside a hypothetical third-party pass
-  (`builtin/`, sibling to `api/`/`rt/`/`client/`), reaches the engine only through `GpuContext`,
+  running) the same way `ProviderManager` isolates a failing provider. `SkyLutPass` lives under
+  `minecraft/sky/` because it samples Minecraft celestial and atlas state. It reaches the engine through `GpuContext`,
   `GpuImage`, the now-public `ComputeDispatch`/`PassShaderCompiler` pass-authoring helpers, and
-  `RtLookPackage.current()` for config — and gathers its own per-frame sky state directly from Minecraft
+  `RtLookPackage.current()` for config, and gathers its per-frame sky state directly from Minecraft
   instead of reading a shared snapshot the engine publishes. Minecraft's separate light adapter derives
   sun and moon from the same host state and submits them as ordinary distant lights; the engine contains
   no fixed celestial-light record. `ComputeDispatch`/`PassShaderCompiler` had to be promoted from
@@ -411,7 +410,7 @@ Honest status, so this reads as a target and not a claim:
   provider path any extension uses rather than through a fixed celestial special case.
 - **`WorldOverlayPass` proved the pass API is graphics-capable, not just compute.** The block-outline/
   glow-outline/name-tag world-space overlays (`rt/overlay/`, three raster features drawing into one
-  shared, mod-owned buffer that's then composited into the UI target) moved to `builtin/overlay/` and
+  shared, mod-owned buffer that's then composited into the UI target) lives under `minecraft/overlay/` and
   became one `CausticaRenderPass` under `RenderStage.OVERLAY` — the first pass to use `vkCmdDraw`/dynamic
   rendering rather than `ComputeDispatch`. `RenderStage.OVERLAY` existed in the enum from the start but was
   dead code (nothing ever called `RenderPassManager.record(OVERLAY, ...)`) until this pass registered.
@@ -443,8 +442,8 @@ Honest status, so this reads as a target and not a claim:
   is loaded once from `CausticaApi.initialize()` at mod init and handed to `RenderPassManager.create`,
   rather than being constructed by it — its lifetime is the process's, not the Vulkan device's, which is
   also what lets a settings screen opened from the title menu read the same values the renderer will.
-  `caustica:builtin` moved its `bloom.*`/`sky.*` numbers out of `look.json` (schema 4 → 5) into declared
-  `Option.range(...)` values — neither is a colour-science calibration that has to move in lock step with
+  `caustica:builtin` owns the declared `bloom.*` options and `caustica:minecraft` owns `sky.*`; both are
+  `Option.range(...)` values rather than look-package fields. Neither is a colour-science calibration that has to move in lock step with
   the LMT the way exposure/lighting still do, so they no longer belong in that versioned package.
 - **Options are read through the declared `Option<T>` token, not a string id.** `OptionValues.get` takes
   the very constant the feature registered (`BloomPass.LEVELS`, `SkyLutPass.GROUND_ALBEDO`, …), declared
@@ -527,7 +526,7 @@ Ordered by what is unproven, cheapest verification first.
    the right first case: a leaf with nothing downstream but display mapping, so the extraction cost was
    isolated to one pass.
 2. **Sky LUT against the same API.** Done, and later revisited: proved the engine-consumed case first via
-   a fixed `EngineImage` slot, then — once `SkyLutPass` moved out of `rt/` into `builtin/` to exercise the
+   a fixed `EngineImage` slot, then — once `SkyLutPass` moved out of `rt/` into `minecraft/sky/` to exercise the
    API as a genuine third-party pass would — that slot was replaced by the reflection-driven
    `publishWorldResource`/set-2 mechanism §4 describes now. `EngineImage` is deleted.
 3. **Provider interfaces, extracted from `core_minecraft`.** Done for the public contribution paths:
