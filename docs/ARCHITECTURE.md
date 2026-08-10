@@ -1,8 +1,7 @@
 # Caustica Architecture
 
-Status: design. Supersedes the framing in the former `RAY_PACK_ARCHITECTURE.md`, now rewritten as
-`EXTENSION_API.md`: this document owns the layering, the three mechanisms, and the sequencing; that one
-owns the concrete API they are made of.
+Status: current architecture and remaining extraction seam. `EXTENSION_API.md` owns the concrete Java
+and Slang contracts.
 Scope: how the mod is layered, and how other code extends it.
 
 ## 1. Thesis
@@ -48,7 +47,7 @@ Knows nothing about Minecraft. Owns:
 - Vulkan context, device bring-up, GPU executor, queue and submission policy (`GpuContext`,
   `RtGpuExecutor`, `RtDeviceBringup`)
 - Acceleration structures: BLAS/TLAS lifetime, compaction, OMM, instance assembly (`RtAccel`)
-- The **light system**: GPU light records, grid/hierarchy, sampling structures, NEE and RIS
+- The **light system**: host-neutral finite and distant light records, GPU upload, sampling, NEE and RIS
 - The **material system**: canonical texture pages, material IDs, surface attribute decode
   (`RtMaterialRegistry`)
 - Participating media and the medium stack
@@ -57,7 +56,7 @@ Knows nothing about Minecraft. Owns:
 - Screen transform: working space, exposure, tone LUTs, ACES SDR/HDR output, presentation
   (`RtExposure`, `RtToneLut`, `RtDisplayPipeline`, `RtHdr`)
 - Pipeline and descriptor management, SBT layout (`RtPipeline`)
-- Runtime Slang compilation and the shader cache (`SlangRuntime`, `RayPackShaderCompiler`)
+- Runtime Slang compilation and the shader cache (`SlangRuntime`, `WorldShaderCompiler`)
 - Frame orchestration, and eventually the frame graph (today: `RtComposite`)
 
 ### 2.2 `core_minecraft` — Minecraft as a client of core
@@ -74,14 +73,13 @@ interfaces a third-party extension would use:
   (`RtBlockMaterials`, `RtMaterialOverrides`, `RtEmissionSemantics`)
 - Mixins, world/overlay integration, HUD and name tags
 
-Note two existing seams that already sit exactly on this line, currently on the wrong side of it:
-`rt/terrain/RtLight*` mixes *collecting lights from Minecraft blocks* with *the GPU light structures*,
-and `RtBlockMaterials` vs `RtMaterialRegistry` splits MC sprite knowledge from canonical GPU pages. Those
-are the first two boundaries to make explicit.
-
-For the light seam the problem is the *unit*, not the package: Minecraft's 16³ chunk section is the light
-system's spatial primitive and is baked into the GPU light record, so a provider-supplied light has no
-representable position. `LIGHT_SYSTEM_PLAN.md` §3.1 has the file-by-file breakdown.
+The public API and the new `engine/*` packages are protected by import-firewall tests: their IDs, frame
+state, geometry, materials and lights contain no Minecraft types. The honest remaining seam is the
+optimized Minecraft adapter. Chunk terrain and animated entity capture still feed specialized retained
+prefix/per-frame paths because they preserve asynchronous meshing, compaction, refit and atlas behavior
+the generic retained-mesh path does not yet match. They merge into the same canonical geometry table and
+TLAS; they are not a second public engine API. Minecraft's section light grid similarly remains an
+optimized adapter beside the generic finite/distant provider-light path.
 
 ### 2.3 Extensions — everything else
 
@@ -90,7 +88,8 @@ Examples, and which mechanism each uses:
 
 | Extension | Mechanism |
 |---|---|
-| Spotlight / handheld light item | register a light provider + game-state hook |
+| Spotlight helmet item | register a light provider + game-state hook (landed proof) |
+| Rounded block clouds | register a scene provider + named material definition (landed proof) |
 | Distant Horizons bridge | register a scene provider |
 | Bloom | register render passes |
 | Nether / End sky | bind the `caustica:sky` slot |
@@ -139,12 +138,15 @@ the main structural correction over the ray-pack revision.
 The engine calls the extension. Provider interfaces are the extension points that need Java, because
 they touch structures no shader can reach:
 
-- `SceneProvider` — contribute geometry and instances to the TLAS (clouds, DH, custom entities)
-- `LightProvider` — contribute records to the light database, so they participate in NEE/RIS with real
-  shadows rather than being a shader-side fake
-- `RenderPass` — contribute compute work at a defined frame stage (§4)
-- `MaterialSource` — contribute material data
-- `EnvironmentField` — contribute world-derived data for shaders to sample
+- `SceneProvider` — retain indexed CPU triangle meshes under provider-local stable keys and submit
+  double-precision world-space instances. The engine owns upload, BLAS, canonical geometry records,
+  rebasing, TLAS assembly, and exact graphics-timeline retirement.
+- `LightProvider` — submit a complete per-frame snapshot of rectangle, point, spot and distant lights in
+  scene coordinates and physical units; omitted lights disappear immediately and submitted lights
+  participate in path-traced visibility/lighting
+- `CausticaRenderPass` — contribute Vulkan work at a defined frame stage (§4)
+- `MaterialSource` — define stable, textureless OpenPBR materials for provider geometry and submit ordered
+  host-material override rules; material-table indices and texture bindings remain epoch-private
 
 Every provider call must be failure-isolated: an exception disables that provider with a clear log, and
 never kills the frame loop. Same discipline as the existing per-stage shader fallback.
@@ -266,9 +268,9 @@ The landed shape:
 
 ```java
 public interface CausticaRenderPass {
-    Identifier id();
+    ResourceId id();
     RenderStage stage();
-    default List<Identifier> after() { return List.of(); }   // ordering within a stage
+    default List<ResourceId> after() { return List.of(); }   // ordering within a stage
     default void create(PassSetup setup) {}                  // pass allocates its own GPU resources
     default void resize(PassSetup setup, int w, int h) {}
     void record(PassFrame frame);                             // raw VkCommandBuffer, mid-recording
@@ -368,16 +370,22 @@ Honest status, so this reads as a target and not a claim:
   fallback if it fails.
 - **The registry, slots, and providers exist and are load-bearing.** `CausticaApi` / `CausticaRegistry` /
   `Feature` / `Slot` / `Slots` are real; `caustica:builtin` registers through the same API a third-party
-  extension would use (`api/BuiltinExtension.java`), which is the dogfooding check §8 step 3 originally
+  extension would use (`builtin/BuiltinExtension.java`), which is the dogfooding check §8 step 3 originally
   asked for landing later — it landed with the registry instead. Slot selection compiles a generated
   composition root (`rt/shader/Composition`, `CompositionManager`) rather than reading two config
-  booleans. What's still thin: `registry.select()` has no caller — one feature binds each slot and nothing
-  lets a user choose another yet — and `SceneProvider`/`MaterialSource` are lifecycle callbacks only
-  (`update`/`prepareFrame`/`onResourceReload`), with no method through which a provider actually
-  contributes geometry or a material; Minecraft's terrain/entity paths still run through direct calls in
-  `RtComposite` alongside the provider shim rather than through it. `LightProvider` now also has
-  `submitLights(LightSink)`, exercised by `SkyLutPass` (below) — but it is a placeholder shape with no
-  consumer, not a working contribution path; see `LightSink`'s javadoc.
+  booleans. Persisted selection and the settings controls call `registry.select()`; installing a second
+  sky binding therefore becomes a user choice rather than last-wins behavior.
+  `SceneProvider.submitGeometry` is a working retained-geometry path,
+  exercised by Minecraft's generated rounded clouds: public records contain CPU arrays, resource-named
+  material handles, and world transforms only, while `RtSceneGeometryManager` owns their Vulkan lifetime
+  and merges them into the same 24-bit geometry-record index space as terrain and entities. Minecraft's
+  optimized terrain prefix and per-frame entity capture remain an explicit adapter input to that generic
+  composition step; they are not represented as a second public scene API. `LightProvider` now also has
+  a working `submitLights(LightSink)` snapshot path. Minecraft exercises it with sun/moon
+  `LightDescriptor.Distant` records and the equipped spotlight helmet's `LightDescriptor.Spot`.
+  `MaterialSource.submitMaterials` is likewise load-bearing: Minecraft defines the textureless
+  `caustica:cloud` material and adapts resource-pack rules, including the end portal's registered
+  procedural surface.
 - **The render pass API is real, raw-Vulkan, and three built-in passes run through it, including a
   graphics one.** `CausticaRenderPass` gives a pass a `VkCommandBuffer` and lets it build its own
   descriptor sets and pipelines directly against `GpuContext` — see §4. `BloomPass`, `SkyLutPass`, and
@@ -390,19 +398,17 @@ Honest status, so this reads as a target and not a claim:
   (`builtin/`, sibling to `api/`/`rt/`/`client/`), reaches the engine only through `GpuContext`,
   `GpuImage`, the now-public `ComputeDispatch`/`PassShaderCompiler` pass-authoring helpers, and
   `RtLookPackage.current()` for config — and gathers its own per-frame sky state directly from Minecraft
-  instead of reading a shared snapshot the engine publishes (`rt/SkyFrame`'s NEE-facing copy and this
-  pass's copy are now allowed to drift). It also registers as a `LightProvider` and submits the sun/moon
-  through the new (fake) `submitLights`/`LightSink` path — see above and `docs/LIGHT_SYSTEM_PLAN.md` §7.2
-  for why it can't be a real one yet. `ComputeDispatch`/`PassShaderCompiler` had to be promoted from
+  instead of reading a shared snapshot the engine publishes. Minecraft's separate light adapter derives
+  sun and moon from the same host state and submits them as ordinary distant lights; the engine contains
+  no fixed celestial-light record. `ComputeDispatch`/`PassShaderCompiler` had to be promoted from
   package-private to public for this move to compile at all — real friction the exercise was meant to
   surface, not a decision made ahead of a consumer; they now live in `api/pass/` alongside
   `CausticaRenderPass`/`PassSetup`/`PassFrame` rather than `rt/pass/`, since that friction was really "this
   is public API in an engine-internal package," not just a visibility modifier. The follow-up round finished the job: `SkyLutPass`
   now declares and binds its own sky-view/transmittance samplers entirely (§4 point 3), and
   `indirect_core.slang`'s NEE no longer reads them at all — `dominantCelestialLight` and its
-  `transmittanceLut` import are gone, `celestialLight` sits at its zero-illuminance default, and direct
-  sun/moon lighting is genuinely absent (a deliberate, accepted regression) until `LIGHT_SYSTEM_PLAN.md`
-  L2 gives `submitLights`/`LightSink` a real consumer.
+  `transmittanceLut` import are gone. Direct sun/moon lighting now arrives through the same distant-light
+  provider path any extension uses rather than through a fixed celestial special case.
 - **`WorldOverlayPass` proved the pass API is graphics-capable, not just compute.** The block-outline/
   glow-outline/name-tag world-space overlays (`rt/overlay/`, three raster features drawing into one
   shared, mod-owned buffer that's then composited into the UI target) moved to `builtin/overlay/` and
@@ -456,7 +462,7 @@ Honest status, so this reads as a target and not a claim:
   computed for its LUT bake, which the two were explicitly allowed to disagree about by a frame. All of
   it moved into `SkyInputs` (`sky.slang`), which `SkyLutPass` fills once and publishes two ways: as the
   push constant for its own bakes and as a set-2 uniform buffer (`skyInputs`) the sky slot reads. That
-  makes `publishWorldResource(String, GpuBuffer)` — previously API with no consumer — load-bearing, and
+  makes `publishWorldResource(String, GpuBuffer)` load-bearing, and
   it deleted `rt/SkyFrame`, `RtComposite.skyPush()`/`SkyPush`/`CelestialUv`/`celestialUv()`/the UV cache,
   and `RenderPassManager#optionsForFeature` with both its callers. Bloom strength stopped reaching the
   display pipeline as a number at all: bloom composites itself onto the post chain (§4) with its own
@@ -499,14 +505,17 @@ Honest status, so this reads as a target and not a claim:
   renderer. `caustica_builtin_medium`'s `(1.0 + 4.0 * weather)` scattering term was the only read, and it
   always evaluated to `1.0`. When weather does get a producer, the honest shape is a field on whichever
   input struct needs it, added then.
-- **Known gap: the engine has no sun or moon as a *light*.** Celestial NEE does not fire and
-  `celestialLight` sits at its zero-illuminance default. Nothing read the celestial state that used to sit
-  on `FrameContext`, so nothing renders differently — but a third-party surface implementation cannot do a
-  day/night blend. The fix is one thing: `SkyLutPass` already calls `LightProvider.submitLights(LightSink)`, and the
-  engine has to start consuming it.
-- **Physical layering hasn't happened.** `core` / `core_minecraft` / extensions is still a target; the
-  package tree is flat (`rt/...`, not `engine/...` + `mc/...`). §2.4's plan — interfaces now, jars later —
-  is why this is expected at this stage rather than a gap.
+- **Provider proofs are real consumers.** Generated rounded-corner block clouds exercise ordinary
+  retained triangle geometry, stable
+  `MaterialHandle` resolution and textureless OpenPBR definitions; the end portal exercises registered
+  procedural surface selection and independent emission color; the spotlight helmet exercises a dynamic
+  spot descriptor that appears and disappears with equipment state; sun and moon exercise distant lights.
+  All four enter through Minecraft adapters, while the renderer sees only host-neutral submissions.
+- **Layering is enforced incrementally, not by separate jars.** Public contracts live under `api`, new
+  renderer-owned frame/scene/light code under `engine`, and host adapters under `minecraft`; import
+  firewalls protect those boundaries. Historical `rt/*` still contains both generic renderer machinery
+  and optimized Minecraft terrain/entity/material code. That remaining package extraction is honest debt,
+  while a physical artifact split remains deferred until a second host client justifies it.
 - **The former "engine/0.1" sketch is deleted** — a parallel implementation that nothing called.
 
 ## 8. Sequencing
@@ -521,15 +530,14 @@ Ordered by what is unproven, cheapest verification first.
    a fixed `EngineImage` slot, then — once `SkyLutPass` moved out of `rt/` into `builtin/` to exercise the
    API as a genuine third-party pass would — that slot was replaced by the reflection-driven
    `publishWorldResource`/set-2 mechanism §4 describes now. `EngineImage` is deleted.
-3. **Provider interfaces, extracted from `core_minecraft`.** Partly done — the registry, the three provider
-   interfaces, and failure-isolated dispatch (`ProviderManager`) all exist and `caustica:builtin` registers
-   through them. Not done: the interfaces are lifecycle callbacks only, with no method through which a
-   provider contributes geometry, a light, or a material, so Minecraft's terrain/entity/light paths still
-   run beside the provider shim rather than through it. That's the remaining work in this step.
+3. **Provider interfaces, extracted from `core_minecraft`.** Done for the public contribution paths:
+   retained geometry, physical lights, named material definitions and ordered material rules are consumed
+   transactionally with per-provider failure isolation. The remaining work is performance convergence of
+   Minecraft's optimized terrain/entity/section-light adapters, not missing API semantics.
 4. **A second scene provider (Distant Horizons).** The first genuine test that the abstraction is not
    just Minecraft in a trench coat — and the trigger for the physical jar split.
-5. **Light provider proof: a handheld spotlight.** The case Iris structurally cannot do; the clearest
-   demonstration of why this architecture exists. **Blocked on light-system work** — see below.
+5. **Light provider proof: a handheld spotlight.** Done as the `caustica:spotlight_helmet` item. Minecraft
+   submits a generic spot descriptor; neither the engine nor the light API knows about players or items.
 
 Do not design any of these ahead of its extraction. The JSON pass graph was invented ahead of a consumer
 and never met one; that failure mode is the reason for this ordering.
@@ -540,11 +548,10 @@ This ordering covers the **register** mechanism only. Two other orderings run al
 `EXTENSION_API.md` §10 for the **substitute** mechanism, and `LIGHT_SYSTEM_PLAN.md` §7 for the light
 system. All three are largely parallel; the couplings that are easy to miss:
 
-- **Step 5 is not a provider-interface exercise.** A handheld light is a *dynamic* light, and the light
-  system structurally cannot accept one: the generation is a 50 ms-throttled immutable snapshot, and
-  every light record carries a Minecraft section coordinate that a spotlight does not have. Step 5's real
-  prerequisites are `LIGHT_SYSTEM_PLAN.md` L1 and L2 plus step 3 here. L2 and step 5 are the same work
-  approached from two directions and should be planned as one.
+- **Finite and distant provider lights are independent of Minecraft sections.** The optimized section
+  light grid remains an adapter, while rectangle/point/spot descriptors use generic finite-light records
+  and distant descriptors use direction, RGB illuminance and angular radius. This is why the helmet and
+  celestials no longer need a Minecraft-shaped coordinate.
 - **The presample pass is a design input to step 1, though it lands after it.** Its shape — every frame,
   fixed dispatch, engine-consumed output feeding RIS, needs validation and fallback — is squarely what
   the pass API must support, and it is a better third consumer than anything else listed. Bloom is a leaf

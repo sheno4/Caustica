@@ -47,7 +47,7 @@ The word "pack" is retired. Four terms, each mapping to exactly one mechanism:
 | **Extension** | A Fabric mod (or built-in package) that calls the API. One entry point. | — | — |
 | **Feature** | One named, user-visible, individually toggleable unit an extension contributes. `caustica:nether_sky`. The unit the settings UI lists. | — | many |
 | **Slot** | An engine-declared substitution point with exactly one winner and a Slang interface. `caustica:sky`. | substitute | one wins |
-| **Provider** | An additive registration the engine calls back into. `LightProvider`, `SceneProvider`, `RenderPass`. | register | many |
+| **Provider** | An additive registration the engine calls back into. `SceneProvider`, `LightProvider`, `MaterialSource`, `CausticaRenderPass`. | register | many |
 
 A feature is the container; slots and providers are what it binds. One feature may bind a slot, add a
 provider, and declare settings — and the user toggles all of it with one switch. That grouping is why
@@ -139,24 +139,15 @@ public interface IComposition {
 };
 ```
 
-with entry points reading `void main<TC : IComposition>(...)` and instantiating `TC.Sky sky;` where they
-today instantiate `TPack pack;`.
+with entry points reading `void main<TC : IComposition>(...)` and instantiating `TC.Sky sky;`.
 
 This is the whole mechanism, and its main virtue is what it does *not* require. The shim's
 `SlangSession.compileSpecialized(engineModule, entryPoint, implModule, implType)` takes exactly one type
 argument and stays unchanged. The compiler still specializes one entry point with one concrete type; that
 type is now generated rather than authored. Mix-and-match costs one generated file.
 
-Two things to verify before committing to it, in this order:
-
-1. **Associated types through the shim.** Slang supports `associatedtype` with interface constraints, but
-   this path has not been exercised through `causticaslang`. A one-file spike — an entry point generic
-   over a two-slot `IComposition`, specialized with a generated root — settles it in an afternoon and
-   should run before any of §10.
-2. **Fallback if it does not hold:** generate a root that *implements* one flat interface by forwarding
-   each method to the selected type (`float3 evaluateEnvironment(q) { NetherSky s; return
-   s.evaluateEnvironment(q); }`). Purely mechanical codegen, no language feature beyond what already
-   compiles today, and it inlines to the same code. Uglier to read in a capture; identical at runtime.
+Associated types through the pinned compiler shim are covered by composition tests. The generated root
+and surface switch are the only runtime world-shader path; there is no build-time or pack fallback.
 
 ### 2.3 Why not one type parameter per slot
 
@@ -183,12 +174,14 @@ public interface CausticaExtension {
 
 ```java
 public final class NetherSkyExtension implements CausticaExtension {
+    private static final ResourceId FEATURE_ID = ResourceId.of("nethersky", "nether_sky");
+
     @Override
     public void register(CausticaRegistry registry) {
-        registry.feature(id("nethersky", "nether_sky"))
-                .title(Component.translatable("feature.nethersky.nether_sky"))
+        registry.feature(FEATURE_ID)
+                .title(DisplayText.translatable("feature.nethersky.nether_sky"))
                 .category(FeatureCategory.SKY)
-                .shaderSource(ShaderSource.classpath("/nethersky/shaders"))
+                .shaderSource(ShaderSource.classpath("/nethersky/shaders", "sky"))
                 .bind(Slots.SKY, "nethersky_sky", "NetherSky")
                 .option(Option.bool("ambient_glow", true).reload(Reload.LOOK))
                 .option(Option.range("fog_density", 0.0f, 4.0f, 1.0f).reload(Reload.LOOK))
@@ -201,14 +194,31 @@ Everything the old `pack.json` carried appears here — id, version (the mod's),
 source root, settings schema — with three differences that matter: it is compile-checked, it can also
 register Java providers, and it is per-feature rather than per-artifact.
 
-`ShaderSource.classpath(...)` names a resource root inside the extension's own jar. The engine extracts it
-alongside the engine sources into the compiler's search path, exactly as `RayPackShaderCompiler` already
-extracts the bundled sources. An extension ships Slang source; it never ships SPIR-V, a descriptor layout,
-or pipeline metadata. That rule is unchanged and is the one place the archive-era validation discipline
-stays fully intact.
+`ShaderSource.classpath(...)` names a resource root and explicit subdirectories inside the extension's
+own jar. An extension ships Slang source; it never ships SPIR-V, a descriptor layout, or pipeline
+metadata.
 
-Provider registration (`SceneProvider`, `LightProvider`, `RenderPass`, `MaterialSource`) hangs off the
-same feature builder and is specified in `ARCHITECTURE.md` §3.1; it is not restated here.
+Provider registration (`SceneProvider`, `LightProvider`, `CausticaRenderPass`, `MaterialSource`) hangs
+off the same feature builder. Registration owns provider identity; provider implementations do not expose an id.
+The public API uses `ResourceId`, `DisplayText`, CPU arrays, scene coordinates and physical units only.
+Import-firewall tests reject Minecraft/Fabric/Mojang types from `api/*` and Minecraft imports from the
+host-neutral `engine/*` packages.
+
+### 3.1 Provider contribution contracts
+
+| Provider | Submission | Lifetime/ownership |
+|---|---|---|
+| `SceneProvider` | Each frame, retain indexed `TriangleMesh` values under provider-local keys and submit `GeometryTransform` instances with stable `MaterialHandle`s. | Engine uploads, builds BLAS/TLAS, rebases, resolves material/SBT ids per epoch and retires GPU resources. Omission releases an object after its last graphics use. |
+| `LightProvider` | Each frame, submit a complete snapshot of `Rectangle`, `Point`, `Spot` and `Distant` descriptors. | Descriptors are copied transactionally. Finite positions are scene coordinates; rectangle radiance is cd/m², point/spot intensity is candela, distant illuminance is lux. |
+| `MaterialSource` | Per resource epoch, `define` textureless `MaterialDefinition`s and `submit` ordered `MaterialRule`s. | Geometry keeps stable handles; integer bindings, textures and surface indices stay private to the active material epoch. Duplicate/failing sources are isolated. |
+
+Minecraft is the first consumer, not a privileged implementation: generated rounded-corner block cloud
+meshes exercise ordinary indexed retained geometry plus a textureless `caustica:cloud` definition; the
+spotlight helmet submits a generic spot; sun and moon submit distant lights; and the end portal selects
+`caustica:end_portal` through a material rule. The optimized Minecraft chunk-terrain and animated-entity
+paths remain an adapter seam because they
+preserve asynchronous meshing, compaction, atlas capture and refit behavior the generic path does not yet
+match. They still merge into the engine's canonical geometry table and TLAS.
 
 ## 4. The Slang API surface
 
@@ -333,11 +343,12 @@ public interface ISkyModel {
 The sky is evaluated in the primary pass for background pixels. That is the one place slot code runs
 during primary-hit processing, and it writes radiance only — never a guide.
 
-**`getDirectionalLightCount` / `getDirectionalLight` move out of this interface.** They are additive —
-"here are N celestial lights" — crammed into a substitution point where exactly one implementation wins.
-Under §1 that is a `LightProvider`, which is also the only shape that lets a second sun cast real shadows
-through NEE rather than being a shader-side fake. Removing them makes `ISkyModel` a single function, which
-is the right size for the slot that the Nether-sky work will be the first real consumer of.
+Directional lighting is not part of this interface. Additive sources belong to `LightProvider`:
+`LightDescriptor.Distant` carries a direction toward the source, RGB normal illuminance integrated over
+the source in lux, and an angular radius in radians. The renderer samples that cone and applies the
+radiance/pdf normalization; it contains no fixed sun or celestial-light special case. Minecraft supplies
+sun and moon as ordinary distant descriptors, so another provider can add a second sun with the same
+visibility and shadow behavior. `ISkyModel` remains a single environment-radiance function.
 
 ### 4.4 Media and dielectric interfaces
 
@@ -374,20 +385,35 @@ already the general mechanism.
 
 ## 5. Materials
 
-**Materials are content; slots are interpretation.** Definition belongs to Minecraft resource packs plus
-the engine material compiler. An extension contributes no material defaults and no material file.
+**Materials are content; registered surfaces are interpretation.** `MaterialSource` can define a named,
+textureless OpenPBR material for provider geometry and contribute ordered override rules for host
+materials. Minecraft's source adapts resource-pack JSON, sprite/block matching and LabPBR into that
+host-neutral contract; resource-pack priority and specificity remain Minecraft adapter policy.
 
-The engine owns sprite and texture discovery, LabPBR and other source-format decoding, resource-pack
-priority and JSON merging, canonical texture pages and mips, stable material IDs within a resource epoch,
-core surface attributes and sampling, alpha coverage for geometry and OMM, and material lifetime.
+The engine owns canonical texture pages and mips, epoch-local material and surface indices, alpha
+coverage, GPU records, SBT classification and retirement. Geometry sees only `MaterialHandle(ResourceId)`.
 
-**That canonical description is a subset of OpenPBR Surface**, so `evaluateSurface` receives OpenPBR
-parameters under OpenPBR names: `base_color`/`base_metalness`, `specular_roughness`/`specular_ior`/
-`specular_color`, `transmission_weight`, `emission_color`/`emission_luminance`, `geometry_normal`,
-`geometry_opacity` and `geometry_thin_walled`, alongside the semantic tags (water, particle, foliage,
-portal). Policy like "foliage scatters more" is expressed in `evaluateSurface` keyed on those tags, not in
-a data file — more expressive, and it removes the ambiguity of two systems both describing a complete
-surface.
+The authored vocabulary is explicitly **OpenPBR Surface 1.1.1**, not an assertion that every OpenPBR
+lobe is implemented. The writable subset is `base_color`, `base_metalness`, `specular_roughness`,
+`specular_ior`, `specular_color`, `transmission_weight`, `emission_color`, `emission_luminance`,
+`geometry_normal`, `geometry_opacity` and `geometry_thin_walled`. The source adapter supplies these from
+textures, rules or a `MaterialDefinition`; the built-in reference surface leaves them unchanged.
+
+Parameters outside that subset are fixed at the OpenPBR 1.1.1 defaults: `base_weight=1`,
+`base_diffuse_roughness=0`, `specular_weight=1`, `specular_roughness_anisotropy=0`,
+`transmission_color=(1,1,1)`, `transmission_depth=0`, `transmission_scatter=(0,0,0)`,
+`transmission_scatter_anisotropy=0`, `transmission_dispersion_scale=0`, and the subsurface, coat, fuzz and
+thin-film weights are zero. Their subordinate parameters therefore cannot affect transport. Geometry
+tangents/coat normals remain the unmodified geometry values. Fields in the writable subset have no
+second extension-API default: a `MaterialDefinition` supplies its required uniform values, a host adapter
+supplies the complete current material, and a null `MaterialRule` field means inherit that value.
+Unsupported anisotropy, diffuse roughness, coat, fuzz, full subsurface volume, dispersion, thin film and
+displacement are not silently approximated as extension features.
+
+There is deliberately no `materialTags` field and no water/particle/foliage/portal semantic tag in the
+public Slang API. The end portal is ordinary material data selecting a registered procedural surface;
+that surface writes independent `emission_color` and `emission_luminance` using generic `SurfaceInput`
+position/time/environment fields.
 
 Which implementation runs is itself material data: a resource-pack material override may carry
 `"surface": "namespace:id"`, resolved once at load to the registered index the compiled binding packs.
@@ -413,10 +439,6 @@ renames:
 LabPBR is an adapter that decodes into this description rather than leaking its own concepts into it:
 its perceptual smoothness becomes `specular_roughness`, and its authored reflectance inverts into
 `specular_ior` for a dielectric or `base_color` for a metal.
-
-Per-block data the canonical attributes do not carry (a stylization group, a palette index) is an opaque
-extension namespace in the *resource pack*: the engine defines the format and the merge, the feature
-assigns meaning.
 
 ## 6. Render products
 
@@ -518,20 +540,16 @@ retire the previous composition after its last graphics use. No partially initia
 visible to rendering. A failed candidate leaves the current composition active. Startup failure activates
 the all-built-in composition; if that fails, Caustica returns to the vanilla renderer.
 
-This is `RayPackEpochManager`'s existing validate-then-swap logic essentially verbatim — the part of the
-pack work that carries over untouched. What goes away is everything upstream of it: discovery, duplicate
-resolution, manifest parsing, and API-version negotiation. There is nothing to discover; features register
-at mod init, and the selection is a user setting.
+`CompositionManager` owns this validate-then-swap lifecycle. Features register at host bootstrap; there
+is no archive discovery, manifest parsing or API-version negotiation path.
 
 A frame reads one composition reference for its whole lifetime. Histories rotate only after successful
 frame submission; a failed or skipped frame never advances history.
 
-## 10. Refactor map
+## 10. Current implementation map
 
-Ordered so each step is independently revertible. Steps 1–3 are renames and can land before any design
-question is settled.
-
-**1. Retire the `pack` vocabulary.** Mechanical, one commit, no behaviour change.
+The pack vocabulary, archive loader and build-time world-shader fallback are retired. The resulting
+current names are:
 
 | Path | Action |
 |---|---|
@@ -539,45 +557,28 @@ question is settled.
 | `rt/pack/RayPackEpoch.java` | → `rt/shader/Composition.java` |
 | `rt/pack/RayPackEpochManager.java` | → `rt/shader/CompositionManager.java` |
 | `rt/pack/RayPackManifest.java`, `RayPackManifestSchema.java`, `RayPackDiscovery.java` | delete (+ their tests) |
-| `rt/pack/RayPackId.java` | delete — use `ResourceLocation` |
+| `rt/pack/RayPackId.java` | deleted — public registries use host-neutral `ResourceId` |
 | `rt/pack/RayPackContract.java` | delete — a Java API is compile-checked; keep one `CausticaApi.VERSION` string for diagnostics |
 | `shaders/pipelines/world/pack_*.slang` | drop the `pack_` prefix (§4) |
 | `resources/caustica/raypacks/api/0.1/caustica_ray_pack_api.slang` | → `resources/caustica/shaders/api/`, split per slot |
 | `resources/caustica/raypacks/default/shaders/` | → `resources/caustica/shaders/builtin/`, `default_pack` → `caustica_builtin` |
-| `caustica.rt.packSky`, `caustica.rt.packSurface` | keep as-is until step 4, then delete in favour of slot selection |
-| `caustica.rt.dynamicWorldShaders` | keep; converges to always-on when the build-time fallbacks retire |
+| `caustica.rt.packSky`, `caustica.rt.packSurface` | deleted in favour of registry selection |
+| `caustica.rt.dynamicWorldShaders` | deleted; runtime composition is the only world-shader path |
 
-`RayPackEpoch.contentHash` currently covers manifest bytes. With the manifest gone it becomes a hash of
-the composition root plus every transitively imported source — which is what §7.1 needs anyway, so this
-rename is the natural moment to fix it.
+Associated-type composition, the split API modules, `CausticaExtension`/`CausticaRegistry`, and the
+ordinary `caustica:builtin` registration are all active and test-covered.
 
-**2. Spike associated types** (§2.2). One throwaway file, two slots, one generated root. This gates the
-shape of everything after it; do it before writing the registry.
-
-**3. Split the API module per slot and delete `IRayPack`.** With three slots and one implementation each,
-this is still mechanical. The entry points change from `TPack pack;` to `TC.Sky sky;`.
-
-**4. Introduce the registry**: `CausticaExtension`, `CausticaRegistry`, `Feature`, `Slot`, `Option`,
-`ShaderSource`. Port the built-in bindings to it as `caustica:builtin`, which is the dogfooding check — if
-the built-in default needs a private path, the API is wrong.
-
-**5. Nether sky as the first real feature.** Already on the roadmap independently, and it exercises the
+**Remaining substitution proof: Nether sky.** It exercises the
 whole chain: a second sky binding, a slot the user selects between, a classpath shader source, and options
 with a reload class. A better forcing function than a synthetic test feature because it has to actually
 look right.
 
-**6. Persistent shader cache** (§7.1), once the key is well-defined.
+**Remaining infrastructure: persistent shader cache** (§7.1), once the key is well-defined.
 
-**7. Settings UI derived from the registry** (§8).
+**Remaining UI: settings derived from the registry** (§8).
 
-Deliberately *not* in this list: the render-pass API, the provider interfaces, and the frame graph
-(tracked in `ARCHITECTURE.md` §8), and the light system (tracked in `LIGHT_SYSTEM_PLAN.md` §7). They are
-separate mechanisms with their own extraction targets, and interleaving them here is how the previous
-revision grew a second roadmap. `ARCHITECTURE.md` §8.1 records where the three tracks actually couple.
-
-One coupling reaches back into this list: `LIGHT_SYSTEM_PLAN.md` L1c rewrites `risInitial`, which is the
-cheap moment to route RIS's target function through the engine's own `evaluateBsdf` and retire the debt in
-§11.
+Render passes and the load-bearing scene/light/material provider contracts are described in
+`ARCHITECTURE.md`; they share the registry but not the substitution mechanism.
 
 ### 10.1 The `Rt` prefix
 
@@ -593,26 +594,15 @@ the render-pass rewrite in `ARCHITECTURE.md` §4, which forced the rename ahead 
 `RtEntities` → `EntityScene`, `RtLookPackage` → `Look`. `RtMaterials` versus `RtMaterialRegistry` needs
 disambiguating on the merits regardless of prefix.
 
-**Recommendation: do not sweep this now.** It touches ~90 files for zero behavioural gain and would
-conflict with every in-flight branch (`pack`, plus the atmosphere, BLAS-slab, and visibility-island
-plans). It is also the same edit as the `core` / `core_minecraft` package split in `ARCHITECTURE.md` §2 —
-files move exactly once, and doing it twice is the expensive outcome. Adopt the rule now (new code gets no
-prefix and lives in a layer package), rename the `pack` vocabulary now because that concept is genuinely
-being deleted, and let the `Rt` names die when the split moves the files.
+**Do not perform a standalone prefix sweep.** It is the same edit as the remaining engine/Minecraft
+package extraction in `ARCHITECTURE.md` §2; files should move and be renamed once. New host-neutral code
+already lives under `api` or `engine` without an `Rt` prefix.
 
 ## 11. Convergence debt
 
-`closest_hit.slang` / `indirect.slang` duplicate the non-slot logic of `closest_hit.rchit.slang` /
-`indirect.rgen.slang` — ray-cone LOD, LabPBR decode, the dielectric branch, RIS — because the slice was
-built without risking the proven build-time path. That was right for the slice and is wrong as an end
-state: two copies of the dielectric interface will diverge.
-
-Convergence: once the generic path has traced real frames and its register usage is measured, the
-build-time files are deleted and the generic ones become the only world pipeline, with
-`dynamicWorldShaders` retired. Two things block that today — no Vulkan-capable environment has traced a
-frame through the surface slice, and `indirect.slang` has no EXT_SER-reordered variant, so opting into it
-trades the SER optimization for slot appearance. The SER branch needs splitting into its own module before
-the build-time path can go.
+Runtime-composed `closest_hit.slang` and `indirect.slang` are the only world path; the former build-time
+fallback stages and `dynamicWorldShaders` toggle are gone. Remaining convergence is within the engine's
+estimators, not between two shader pipelines.
 
 Known accepted divergences until then: the engine BSDF has no delta/mirror lobe (`EVENT_*` has no flag for
 one), so a roughness-0 material renders as a very tight glossy lobe rather than an exact mirror; and RIS
@@ -623,18 +613,14 @@ far cheaper than a dedicated pass over the same code.
 
 ## 12. Open questions
 
-1. Do associated types survive the shim (§2.2), and if not, is the forwarding-struct root acceptable in
-   captures and diagnostics?
-2. ~~Does `caustica:surface` want to be one slot or two?~~ Answered by narrowing it to parameters: the
+1. ~~Does `caustica:surface` want to be one slot or two?~~ Answered by narrowing it to parameters: the
    BSDF left the interface entirely, so "foliage gets more SSS" is a `transmission_weight` write and
    nobody reimplements Cook-Torrance. What remains open is whether a closure-level API returns later for
    genuinely different lobes, and `SurfaceGuide` is public so that it can (§4.1.1).
-3. What does a feature that needs *both* a slot binding and a render pass look like when the pass API
-   lands — one toggle, or does the pass need its own?
-4. Should options that reach specialization be distinguished at the declaration from those that reach a
+2. Should options that reach specialization be distinguished at the declaration from those that reach a
    uniform? Today the difference is invisible and shows up as an unexpected recompile.
-5. How much material opacity policy must be engine-owned for OMM and conservative geometry correctness?
-6. What resource ceilings suit the minimum supported GPU, and what is the register-usage warning
+3. How much material opacity policy must be engine-owned for OMM and conservative geometry correctness?
+4. What resource ceilings suit the minimum supported GPU, and what is the register-usage warning
    threshold?
-7. When a third-party ecosystem does appear, does an archive format come back as a *loader feature*
+5. When a third-party ecosystem does appear, does an archive format come back as a *loader feature*
    written against this API — the dogfooding test — or stay out of scope permanently?
