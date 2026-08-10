@@ -136,8 +136,19 @@ final class CausticaSectionsTest {
         assertEquals(List.of("caustica:sky"), sky.rows().stream().map(SettingControl::id).toList());
 
         SettingControl.ChoiceControl<?> control = (SettingControl.ChoiceControl<?>) sky.rows().get(0);
+        assertEquals(List.of(BUILTIN, MINECRAFT), control.choices());
+        assertTrue(control.enabled(), "two registered skies are a choice the user makes");
+    }
+
+    @Test
+    void aSlotWithOneCandidateOffersNoChoiceToMake() {
+        CausticaRegistry registry = dev.comfyfluffy.caustica.TestRegistries.rendererOnly();
+
+        SettingGroup sky = groupOf(CausticaSections.composition(registry), "sky");
+
+        SettingControl.ChoiceControl<?> control = (SettingControl.ChoiceControl<?>) sky.rows().get(0);
         assertEquals(List.of(BUILTIN), control.choices());
-        assertFalse(control.enabled(), "a slot with one candidate offers no choice to make");
+        assertFalse(control.enabled());
     }
 
     @Test

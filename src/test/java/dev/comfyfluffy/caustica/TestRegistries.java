@@ -9,9 +9,15 @@ public final class TestRegistries {
     }
 
     public static CausticaRegistry withBuiltins() {
+        CausticaRegistry registry = rendererOnly();
+        new MinecraftProvidersExtension().register(registry);
+        return registry;
+    }
+
+    /** Only the renderer's own extension, for asserting what a host contributes on top of it. */
+    public static CausticaRegistry rendererOnly() {
         CausticaRegistry registry = new CausticaRegistry();
         new BuiltinExtension().register(registry);
-        new MinecraftProvidersExtension().register(registry);
         return registry;
     }
 }
