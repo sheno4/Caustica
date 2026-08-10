@@ -1,5 +1,7 @@
 package dev.comfyfluffy.caustica.rt.material;
 
+import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialDefaults;
+
 /**
  * Adapter from the LabPBR 1.3 specular texture into the engine's OpenPBR vocabulary. LabPBR is a source
  * format, not a material model: it authors normal-incidence reflectance and perceptual smoothness, where
@@ -76,7 +78,7 @@ public final class RtLabPbr {
             // metal/dielectric border then blends toward the ordinary dielectric reflectance rather than
             // toward none at all.
             metalness = 1.0f;
-            specularIor = RtDielectrics.DEFAULT_IOR;
+            specularIor = OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR;
             if (g < 237.5f) {
                 int metal = Math.round(g) - 230;
                 colorR = metalF0(metal, 0);

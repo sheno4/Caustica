@@ -1,5 +1,7 @@
 package dev.comfyfluffy.caustica.rt.material;
 
+import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialDefaults;
+
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -83,7 +85,8 @@ final class RtLabPbrTest {
 
     @Test
     void theDefaultIndexIsTheOneThatGivesTheFamiliarFourPercent() {
-        float amplitude = (RtDielectrics.DEFAULT_IOR - 1.0f) / (RtDielectrics.DEFAULT_IOR + 1.0f);
+        float amplitude = (OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR - 1.0f)
+                / (OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR + 1.0f);
         assertEquals(0.04f, amplitude * amplitude, EPS);
     }
 }

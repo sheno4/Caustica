@@ -16,7 +16,10 @@ import dev.comfyfluffy.caustica.engine.frame.DamageOverlay;
 import dev.comfyfluffy.caustica.engine.frame.FrameSnapshot;
 import dev.comfyfluffy.caustica.engine.frame.SceneResources;
 import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
+import dev.comfyfluffy.caustica.engine.material.MaterialEmissionIndex;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftEmissionSemantics;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialClassifier;
 import dev.comfyfluffy.caustica.mixin.CommandEncoderAccessor;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushConstantsData;
 import dev.comfyfluffy.caustica.rt.light.RtProviderLights;
@@ -51,7 +54,6 @@ import dev.comfyfluffy.caustica.rt.entity.RtEntityTextures;
 import dev.comfyfluffy.caustica.rt.geometry.RtGeometryMaterialResolver;
 import dev.comfyfluffy.caustica.rt.geometry.RtSceneGeometryManager;
 import dev.comfyfluffy.caustica.rt.material.RtBlockMaterials;
-import dev.comfyfluffy.caustica.rt.material.RtEmissionSemantics;
 import dev.comfyfluffy.caustica.rt.material.RtMaterialOverrides;
 import dev.comfyfluffy.caustica.rt.material.RtMaterialRegistry;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDebugPresentPipeline;
@@ -337,7 +339,7 @@ public final class RtComposite {
     private RtComposite() {
     }
 
-    /** This frame's TLAS handle (0 if none built yet), for {@code dev.comfyfluffy.caustica.builtin.overlay} occlusion queries. */
+    /** This frame's TLAS handle (0 if none built yet), for host overlay occlusion queries. */
     public long currentTlasHandle() {
         return currentTlasHandle;
     }
@@ -528,7 +530,7 @@ public final class RtComposite {
 
     /**
      * The frame's forward camera-relative view-projection (jitter-free), exactly what {@code world.rgen}
-     * traced with — overlay raster passes ({@code dev.comfyfluffy.caustica.builtin.overlay}) reuse it so their content lands
+     * traced with — host overlay raster passes reuse it so their content lands
      * pixel-exact on the RT image. Valid after {@code updateMotion} ran this frame; do not mutate.
      */
     public Matrix4fc currentViewProjection() {
@@ -980,12 +982,13 @@ public final class RtComposite {
         ProviderManager.MaterialContributions materials = ProviderManager.INSTANCE.collectMaterials();
         RtMaterialOverrides materialOverrides = RtMaterialOverrides.from(
                 materials.rules(), CausticaApi.registry()::surfaceIndex);
-        RtEmissionSemantics emissionSemantics = RtEmissionSemantics.analyze();
+        MaterialEmissionIndex emissionSemantics = MinecraftEmissionSemantics.analyze();
         RtBlockMaterials.INSTANCE.prepareAll(ctx, bindlessTextureCapacity, emissionSemantics, materialOverrides);
         RtEntityTextures.INSTANCE.reset(bindlessTextureCapacity);
         worldPipeline.setEntityAlbedoTexture(0, atlasView, sampler);
         RtBlockMaterials.INSTANCE.bindPages(worldPipeline, sampler);
         RtMaterialRegistry.INSTANCE.rebuild(ctx, RtBlockMaterials.INSTANCE, materialOverrides,
+                MinecraftMaterialClassifier::dielectricIor,
                 materials.definitions(), CausticaApi.registry()::surfaceIndex);
         sceneGeometry.invalidateMaterials();
         materialBindingsReady = true;

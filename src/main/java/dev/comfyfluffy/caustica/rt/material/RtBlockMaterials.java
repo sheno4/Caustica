@@ -3,6 +3,8 @@ package dev.comfyfluffy.caustica.rt.material;
 import com.mojang.blaze3d.platform.NativeImage;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.engine.material.MaterialEmissionIndex;
+import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialDefaults;
 import dev.comfyfluffy.caustica.mixin.SpriteContentsAccessor;
 import dev.comfyfluffy.caustica.mixin.TextureAtlasAccessor;
 import dev.comfyfluffy.caustica.rt.GpuContext;
@@ -142,7 +144,7 @@ public final class RtBlockMaterials {
     }
 
     /** Compile, pack, mip, upload, and publish block-atlas plus authored entity material pages. */
-    public void prepareAll(GpuContext ctx, int materialPageCapacity, RtEmissionSemantics emissionSemantics,
+    public void prepareAll(GpuContext ctx, int materialPageCapacity, MaterialEmissionIndex emissionSemantics,
                            RtMaterialOverrides overrides) {
         List<TextureAtlasSprite> sprites = blockSprites();
         List<Candidate> authored = new ArrayList<>();
@@ -168,7 +170,8 @@ public final class RtBlockMaterials {
             // sprites proven to occur on an emitting block state. A resource-pack
             // emission.luminance_cd_m2 override replaces the level once resolved — it never
             // changes which sprites get a mask compiled here.
-            if ((features & RtMaterialRegistry.FEATURE_SPEC) == 0 && emissionSemantics.permits(sprite)) {
+            ResourceId material = ResourceId.of(name.getNamespace(), name.getPath());
+            if ((features & RtMaterialRegistry.FEATURE_SPEC) == 0 && emissionSemantics.permits(material)) {
                 features |= RtMaterialRegistry.FEATURE_EMISSION_MASK;
                 heuristicCount++;
             }
@@ -395,7 +398,7 @@ public final class RtBlockMaterials {
                     } else {
                         surface0[i] = 1.0f;
                         surface1[i] = surface1[i + 1] = surface1[i + 2] = 1.0f;
-                        surface1[i + 3] = RtLabPbr.encodeIor(RtDielectrics.DEFAULT_IOR);
+                        surface1[i + 3] = RtLabPbr.encodeIor(OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR);
                     }
                     // LabPBR's ambient-occlusion channel is deliberately dropped: it approximates
                     // occlusion for rasterisers that cannot trace it, and multiplying it into base colour
@@ -455,7 +458,8 @@ public final class RtBlockMaterials {
             surface0 = allocate(pageSize, mipCount, 255, 0, 0, 0);
             normal = allocate(pageSize, mipCount, 128, 128, 0, 0);
             surface1 = allocate(pageSize, mipCount, 255, 255, 255,
-                    RtMaterialTextureData.unorm8(RtLabPbr.encodeIor(RtDielectrics.DEFAULT_IOR)));
+                    RtMaterialTextureData.unorm8(RtLabPbr.encodeIor(
+                            OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR)));
         }
 
         void writeFallback() {

@@ -6,6 +6,8 @@ import com.mojang.blaze3d.pipeline.RenderPipeline;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import dev.comfyfluffy.caustica.CausticaConfig;
+import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialProfile;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialClassifier;
 import dev.comfyfluffy.caustica.mixin.ModelPartAccessor;
 import dev.comfyfluffy.caustica.mixin.RenderSetupAccessor;
 import dev.comfyfluffy.caustica.mixin.RenderTypeAccessor;
@@ -59,7 +61,6 @@ import org.joml.Matrix4fc;
 import org.joml.Quaternionf;
 import org.joml.Vector3f;
 
-import dev.comfyfluffy.caustica.rt.material.RtMaterials;
 import dev.comfyfluffy.caustica.rt.material.RtMaterialRegistry;
 
 import java.util.List;
@@ -316,7 +317,8 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         ChunkSectionLayer layer = q.materialInfo().layer();
         boolean transmissive = layer == ChunkSectionLayer.TRANSLUCENT;
         boolean cutout = !transmissive && layer != ChunkSectionLayer.SOLID;
-        setSpriteMaterial(sprite, transmissive ? RtMaterials.Profile.GLASS : RtMaterials.Profile.DEFAULT,
+        setSpriteMaterial(sprite, transmissive ? OpenPbrMaterialProfile.SMOOTH_DIELECTRIC
+                        : OpenPbrMaterialProfile.ROUGH_DIELECTRIC,
                 transmissive, false);
         if (cutout) {
             capture.currentMaterialId = RtMaterialRegistry.INSTANCE.withCutoutCoverage(capture.currentMaterialId);
@@ -328,10 +330,10 @@ public final class RtEntityCollector implements SubmitNodeCollector {
 
     /** Resolve block-atlas geometry through the same immutable material snapshot as terrain. */
     private void setSpriteMaterial(TextureAtlasSprite sprite, boolean stochasticAlpha) {
-        setSpriteMaterial(sprite, RtMaterials.Profile.DEFAULT, false, stochasticAlpha);
+        setSpriteMaterial(sprite, OpenPbrMaterialProfile.ROUGH_DIELECTRIC, false, stochasticAlpha);
     }
 
-    private void setSpriteMaterial(TextureAtlasSprite sprite, RtMaterials.Profile profile,
+    private void setSpriteMaterial(TextureAtlasSprite sprite, OpenPbrMaterialProfile profile,
                                    boolean transmissive, boolean stochasticAlpha) {
         if (sprite != null && TextureAtlas.LOCATION_BLOCKS.equals(sprite.atlasLocation())) {
             int materialId = RtMaterialRegistry.INSTANCE.requireSnapshot()
@@ -693,11 +695,13 @@ public final class RtEntityCollector implements SubmitNodeCollector {
     private void setBlockSpriteMaterial(TextureAtlasSprite sprite, BlockState state,
                                         boolean transmissive, boolean stochasticAlpha) {
         if (sprite != null && TextureAtlas.LOCATION_BLOCKS.equals(sprite.atlasLocation())) {
-            int materialId = RtMaterialRegistry.INSTANCE.requireSnapshot().resolve(sprite, state, transmissive);
+            int materialId = RtMaterialRegistry.INSTANCE.requireSnapshot()
+                    .resolve(sprite, MinecraftMaterialClassifier.classify(state), transmissive);
             capture.currentMaterialId = stochasticAlpha
                     ? RtMaterialRegistry.INSTANCE.withStochasticCoverage(materialId) : materialId;
         } else {
-            setSpriteMaterial(sprite, RtMaterials.profile(state), transmissive, stochasticAlpha);
+            setSpriteMaterial(sprite, MinecraftMaterialClassifier.profile(state),
+                    transmissive, stochasticAlpha);
         }
     }
 
@@ -791,7 +795,8 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         if (state != null) {
             setBlockSpriteMaterial(sprite, state, transmissive, stochasticAlpha);
         } else {
-            setSpriteMaterial(sprite, transmissive ? RtMaterials.Profile.GLASS : RtMaterials.Profile.DEFAULT,
+            setSpriteMaterial(sprite, transmissive ? OpenPbrMaterialProfile.SMOOTH_DIELECTRIC
+                            : OpenPbrMaterialProfile.ROUGH_DIELECTRIC,
                     transmissive, stochasticAlpha);
         }
         if (cutout) {

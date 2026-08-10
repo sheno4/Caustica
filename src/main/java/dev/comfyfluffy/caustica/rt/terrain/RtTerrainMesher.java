@@ -2,6 +2,7 @@ package dev.comfyfluffy.caustica.rt.terrain;
 
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import dev.comfyfluffy.caustica.CausticaConfig;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialClassifier;
 import dev.comfyfluffy.caustica.rt.RtComposite;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
@@ -10,7 +11,6 @@ import dev.comfyfluffy.caustica.rt.RtFrameStats;
 import dev.comfyfluffy.caustica.rt.accel.RtAccel;
 import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
 import dev.comfyfluffy.caustica.rt.material.RtMaterialAbi;
-import dev.comfyfluffy.caustica.rt.material.RtMaterials;
 import dev.comfyfluffy.caustica.rt.material.RtMaterialRegistry;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
@@ -463,7 +463,7 @@ final class RtTerrainMesher {
             q.emission = quad.emissive() ? 1f : (state != null ? state.getLightEmission() / 15f : 0f);
             TextureAtlasSprite sprite = spriteFinder.find(quad);
             q.sprite = sprite;
-            int materialId = materials.resolve(sprite, state, q.translucent);
+            int materialId = materials.resolve(sprite, MinecraftMaterialClassifier.classify(state), q.translucent);
             // Genuinely masked: alpha-tested, not merely "non-SOLID" (q.cutout also covers TRANSLUCENT,
             // whose coverage stays OPAQUE — see RtMaterialRegistry.binding). Only this needs the coverage
             // override; solid and translucent quads keep the resolved id's default OPAQUE coverage. The

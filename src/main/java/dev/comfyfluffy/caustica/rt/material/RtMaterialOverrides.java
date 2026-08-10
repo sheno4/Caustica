@@ -3,6 +3,7 @@ package dev.comfyfluffy.caustica.rt.material;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.api.provider.MaterialRule;
+import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialDefaults;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -107,9 +108,10 @@ public final class RtMaterialOverrides {
         }
 
         private static float defaultIor(int model) {
-            return model == RtMaterialRegistry.MODEL_WATER ? RtDielectrics.WATER_IOR
-                    : model == RtMaterialRegistry.MODEL_DIELECTRIC ? RtDielectrics.GLASS_IOR
-                    : RtDielectrics.DEFAULT_IOR;
+            return model == RtMaterialRegistry.MODEL_WATER ? OpenPbrMaterialDefaults.REFERENCE_LIQUID_IOR
+                    : model == RtMaterialRegistry.MODEL_DIELECTRIC
+                    ? OpenPbrMaterialDefaults.TRANSMISSIVE_SPECULAR_IOR
+                    : OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR;
         }
 
         private static float defaultTransmission(int model) {

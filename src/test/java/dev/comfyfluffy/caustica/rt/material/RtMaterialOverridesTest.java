@@ -2,6 +2,7 @@ package dev.comfyfluffy.caustica.rt.material;
 
 import com.google.gson.JsonParser;
 import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialDefaults;
 import dev.comfyfluffy.caustica.minecraft.provider.MinecraftMaterialSource;
 import net.minecraft.resources.Identifier;
 import org.junit.jupiter.api.Test;
@@ -73,7 +74,8 @@ final class RtMaterialOverridesTest {
     @Test
     void specularIorOverridesTheBuiltInIndex() {
         RtMaterialDesc glassBase = new RtMaterialDesc(RtMaterialRegistry.MODEL_DIELECTRIC,
-                RtMaterialDesc.Source.HEURISTIC, 0, 0.05f, 0.0f, RtDielectrics.GLASS_IOR, 1.0f,
+                RtMaterialDesc.Source.HEURISTIC, 0, 0.05f, 0.0f,
+                OpenPbrMaterialDefaults.TRANSMISSIVE_SPECULAR_IOR, 1.0f,
                 RtMaterialDesc.EmissionSource.NONE, 0.0f, RtMaterialDesc.EmissionSummary.NONE, 0);
         var rule = parse(JsonParser.parseString("""
                 {"format":4,"match":{"sprite":"somemod:block/crystal"},
@@ -87,7 +89,8 @@ final class RtMaterialOverridesTest {
         var silent = parse(JsonParser.parseString("""
                 {"format":4,"match":{"sprite":"somemod:block/crystal"},"specular":{"roughness":0.5}}
                 """).getAsJsonObject(), Identifier.parse("test:materials/crystal.json"));
-        assertEquals(RtDielectrics.GLASS_IOR, silent.apply(glassBase).specularIor());
+        assertEquals(OpenPbrMaterialDefaults.TRANSMISSIVE_SPECULAR_IOR,
+                silent.apply(glassBase).specularIor());
     }
 
     @Test
@@ -100,7 +103,7 @@ final class RtMaterialOverridesTest {
                 RtMaterialDesc.EmissionSource.NONE, 0.0f, RtMaterialDesc.EmissionSummary.NONE, 0);
         RtMaterialDesc applied = rule.apply(base);
         assertEquals(RtMaterialRegistry.MODEL_DIELECTRIC, applied.model());
-        assertEquals(RtDielectrics.WATER_IOR, applied.specularIor());
+        assertEquals(OpenPbrMaterialDefaults.REFERENCE_LIQUID_IOR, applied.specularIor());
         assertEquals(1.0f, applied.transmissionWeight());
     }
 

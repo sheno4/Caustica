@@ -4,6 +4,10 @@ import com.mojang.blaze3d.platform.NativeImage;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.api.provider.MaterialDefinition;
+import dev.comfyfluffy.caustica.engine.material.MaterialClassification;
+import dev.comfyfluffy.caustica.engine.material.MaterialIorLookup;
+import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialDefaults;
+import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialProfile;
 import dev.comfyfluffy.caustica.mixin.SpriteContentsAccessor;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtColor;
@@ -16,10 +20,8 @@ import dev.comfyfluffy.caustica.rt.gen.SurfaceMaterialData;
 import dev.comfyfluffy.caustica.rt.gen.SurfaceMaterialData.Float4;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
-import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.Identifier;
 import net.minecraft.util.ARGB;
-import net.minecraft.world.level.block.state.BlockState;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.VK10;
 
@@ -136,20 +138,11 @@ public final class RtMaterialRegistry {
     private static final int EMISSION_VARIANTS = 2; // state-gated emission disabled/enabled
     private static final int VARIANT_OPAQUE = 0;
     private static final int VARIANT_GLASS = 1;
-    // Profiles a sprite variant can actually be resolved with: RtMaterials.profile() never returns
-    // WATER/LAVA (fluids use the dedicated singleton headers), so compiling those variants per sprite
-    // would only bloat the table. The variant index math assumes these are the first enum ordinals.
-    private static final RtMaterials.Profile[] SPRITE_PROFILES = {
-            RtMaterials.Profile.DEFAULT, RtMaterials.Profile.METAL,
-            RtMaterials.Profile.GLASS, RtMaterials.Profile.SMOOTH};
-
-    static {
-        for (int i = 0; i < SPRITE_PROFILES.length; i++) {
-            if (SPRITE_PROFILES[i].ordinal() != i) {
-                throw new IllegalStateException("Sprite profile ordinals must be contiguous from 0");
-            }
-        }
-    }
+    // The Minecraft adapter maps source geometry onto this finite set before calling the registry. The
+    // renderer only sees OpenPBR scalar profiles and precompiles their variant product for worker lookup.
+    private static final OpenPbrMaterialProfile[] SPRITE_PROFILES = {
+            OpenPbrMaterialProfile.ROUGH_DIELECTRIC, OpenPbrMaterialProfile.CONDUCTOR,
+            OpenPbrMaterialProfile.SMOOTH_DIELECTRIC, OpenPbrMaterialProfile.POLISHED_DIELECTRIC};
 
     private volatile Snapshot snapshot;
     private GpuBuffer bindingTable;
@@ -184,6 +177,7 @@ public final class RtMaterialRegistry {
 
     /** Build and atomically publish the block and entity registry for the current resource epoch. */
     public void rebuild(GpuContext ctx, RtBlockMaterials blockMaterials, RtMaterialOverrides overrides,
+                        MaterialIorLookup dielectricIors,
                         List<MaterialDefinition> definitions,
                         RtMaterialOverrides.SurfaceResolver surfaces) {
         Map<TextureAtlasSprite, RtBlockMaterials.Entry> entriesBySprite = blockMaterials.preparedEntries();
@@ -201,15 +195,15 @@ public final class RtMaterialRegistry {
 
         int profileVariants = SPRITE_PROFILES.length * MODEL_VARIANTS * EMISSION_VARIANTS;
         CompiledTables tables = new CompiledTables(3 + profileVariants + sprites.size() * profileVariants);
-        tables.add(compileDesc(MODEL_OPAQUE, 0, RtMaterials.Profile.DEFAULT, false, true,
+        tables.add(compileDesc(MODEL_OPAQUE, 0, OpenPbrMaterialProfile.ROUGH_DIELECTRIC, false, true,
                 RtMaterialDesc.EmissionSummary.NONE), transparentWhiteAverage(), fallbackEntry, null,
                 TERRAIN_COVERAGE_CUTOFF, true);
         int[] fallbackVariants = new int[profileVariants];
-        for (RtMaterials.Profile profile : SPRITE_PROFILES) {
+        for (OpenPbrMaterialProfile profile : SPRITE_PROFILES) {
             for (boolean glass : new boolean[]{false, true}) {
                 for (boolean emitting : new boolean[]{false, true}) {
                     int variant = index(profile, glass, emitting);
-                    if (profile == RtMaterials.Profile.DEFAULT && !glass && !emitting) {
+                    if (profile.equals(OpenPbrMaterialProfile.ROUGH_DIELECTRIC) && !glass && !emitting) {
                         fallbackVariants[variant] = 0;
                         continue;
                     }
@@ -220,12 +214,14 @@ public final class RtMaterialRegistry {
                 }
             }
         }
-        int waterId = tables.add(compileDesc(MODEL_WATER, 0, RtMaterials.Profile.WATER, false, true,
+        int waterId = tables.add(compileDesc(MODEL_WATER, 0, OpenPbrMaterialProfile.VERY_SMOOTH_DIELECTRIC,
+                false, true,
                 RtMaterialDesc.EmissionSummary.NONE), whiteAverage(), fallbackEntry, null,
                 TERRAIN_COVERAGE_CUTOFF);
         // Lava's fluid mesher assigns this singleton id (no sprite resolve), so its light color comes from
         // the lava_still albedo grid, producing a mean-color area light.
-        int lavaId = tables.add(compileDesc(MODEL_OPAQUE, 0, RtMaterials.Profile.LAVA, true, true,
+        int lavaId = tables.add(compileDesc(MODEL_OPAQUE, 0, OpenPbrMaterialProfile.MEDIUM_ROUGH_DIELECTRIC,
+                true, true,
                 uniformWhiteSummary()), whiteAverage(), fallbackEntry,
                 albedoGridFor(sprites, spriteStats, "block/lava_still"), TERRAIN_COVERAGE_CUTOFF);
         int nextEntityFallbackId = tables.add(
@@ -263,9 +259,9 @@ public final class RtMaterialRegistry {
             }
             // Resolved once per sprite: IOR is a property of the material, so it costs no extra variants
             // — it varies with the sprite, not with the profile/glass/emitting cross product.
-            float dielectricIor = RtDielectrics.iorForSprite(sprite.contents().name());
+            float dielectricIor = dielectricIors.ior(material);
             int[] variants = new int[profileVariants];
-            for (RtMaterials.Profile profile : SPRITE_PROFILES) {
+            for (OpenPbrMaterialProfile profile : SPRITE_PROFILES) {
                 for (boolean glass : new boolean[]{false, true}) {
                     for (boolean emitting : new boolean[]{false, true}) {
                         int features = emitting ? baseFeatures : baseFeatures & ~FEATURE_EMISSION_MASK;
@@ -286,7 +282,7 @@ public final class RtMaterialRegistry {
             for (MutableCompiledOverride compiled : compiledOverrides) {
                 if (compiled.rule.geometry() == null || !compiled.rule.matchesMaterial(material)) continue;
                 int[] overrideVariants = new int[profileVariants];
-                for (RtMaterials.Profile profile : SPRITE_PROFILES) {
+                for (OpenPbrMaterialProfile profile : SPRITE_PROFILES) {
                     for (boolean glass : new boolean[]{false, true}) {
                         for (boolean emitting : new boolean[]{false, true}) {
                             int features = emitting ? baseFeatures : baseFeatures & ~FEATURE_EMISSION_MASK;
@@ -666,9 +662,15 @@ public final class RtMaterialRegistry {
         return ResourceId.of(id.getNamespace(), id.getPath());
     }
 
-    private static int index(RtMaterials.Profile profile, boolean glass, boolean emitting) {
-        // WATER/LAVA cannot classify a sprite; map them defensively to DEFAULT instead of overrunning.
-        int p = profile.ordinal() < SPRITE_PROFILES.length ? profile.ordinal() : 0;
+    private static int index(OpenPbrMaterialProfile profile, boolean glass, boolean emitting) {
+        int p = -1;
+        for (int i = 0; i < SPRITE_PROFILES.length; i++) {
+            if (SPRITE_PROFILES[i].equals(profile)) {
+                p = i;
+                break;
+            }
+        }
+        if (p < 0) throw new IllegalArgumentException("Unsupported sprite material profile " + profile);
         return (p * MODEL_VARIANTS + (glass ? VARIANT_GLASS : VARIANT_OPAQUE))
                 * EMISSION_VARIANTS + (emitting ? 1 : 0);
     }
@@ -681,25 +683,27 @@ public final class RtMaterialRegistry {
         return emitting ? uniformSummary : RtMaterialDesc.EmissionSummary.NONE;
     }
 
-    private static RtMaterialDesc compileDesc(int model, int features, RtMaterials.Profile profile,
+    private static RtMaterialDesc compileDesc(int model, int features, OpenPbrMaterialProfile profile,
                                               boolean emitting, boolean neutral,
                                               RtMaterialDesc.EmissionSummary emissionSummary) {
         return compileDesc(model, features, profile, emitting, neutral, emissionSummary,
-                RtDielectrics.GLASS_IOR);
+                OpenPbrMaterialDefaults.TRANSMISSIVE_SPECULAR_IOR);
     }
 
-    private static RtMaterialDesc compileDesc(int model, int features, RtMaterials.Profile profile,
+    private static RtMaterialDesc compileDesc(int model, int features, OpenPbrMaterialProfile profile,
                                               boolean emitting, boolean neutral,
                                               RtMaterialDesc.EmissionSummary emissionSummary,
                                               float dielectricIor) {
-        float roughness = model == MODEL_DIELECTRIC ? 0.05f : profile.roughness(); // perceptual; s = 0.95
-        float metalness = model == MODEL_DIELECTRIC ? 0.0f : profile.metalness();
+        float roughness = model == MODEL_DIELECTRIC
+                ? OpenPbrMaterialDefaults.TRANSMISSIVE_SPECULAR_ROUGHNESS
+                : profile.specularRoughness();
+        float metalness = model == MODEL_DIELECTRIC ? 0.0f : profile.baseMetalness();
         // Refractive index is per material, not per model: ice and window glass are both
         // MODEL_DIELECTRIC but bend light by measurably different amounts.
         float ior = switch (model) {
-            case MODEL_WATER -> RtDielectrics.WATER_IOR;
+            case MODEL_WATER -> OpenPbrMaterialDefaults.REFERENCE_LIQUID_IOR;
             case MODEL_DIELECTRIC -> dielectricIor;
-            default -> RtDielectrics.DEFAULT_IOR;
+            default -> OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR;
         };
         float transmission = model == MODEL_WATER || model == MODEL_DIELECTRIC ? 1.0f : 0.0f;
         boolean labPbr = (features & (FEATURE_SPEC | FEATURE_NORMAL)) != 0;
@@ -742,8 +746,10 @@ public final class RtMaterialRegistry {
                 ? RtMaterialDesc.EmissionSource.LAB_PBR : RtMaterialDesc.EmissionSource.NONE;
         float emissionLuminance = emissionSource == RtMaterialDesc.EmissionSource.NONE
                 ? 0.0f : defaultEmissionLuminanceCdM2();
-        return new RtMaterialDesc(MODEL_OPAQUE, source, features, RtMaterials.ENTITY_ROUGH, 0.0f,
-                RtDielectrics.DEFAULT_IOR, 0.0f, emissionSource, emissionLuminance, emissionSummary,
+        return new RtMaterialDesc(MODEL_OPAQUE, source, features,
+                OpenPbrMaterialDefaults.ENTITY_SPECULAR_ROUGHNESS, 0.0f,
+                OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR, 0.0f,
+                emissionSource, emissionLuminance, emissionSummary,
                 BUILTIN_SURFACE_IMPLEMENTATION);
     }
 
@@ -1108,16 +1114,12 @@ public final class RtMaterialRegistry {
             return sbtClasses[materialId];
         }
 
-        public int resolve(TextureAtlasSprite sprite, BlockState state, boolean glass) {
-            RtMaterials.Profile profile = RtMaterials.profile(state);
-            boolean emitting = state != null && state.getLightEmission() > 0;
-            int variant = index(profile, glass, emitting);
+        public int resolve(TextureAtlasSprite sprite, MaterialClassification classification, boolean glass) {
+            int variant = index(classification.profile(), glass, classification.emitting());
             ResourceId material = sprite != null ? resourceId(sprite.contents().name()) : null;
-            ResourceId geometry = state != null
-                    ? resourceId(BuiltInRegistries.BLOCK.getKey(state.getBlock())) : null;
             // Only block-conditional rules remain here; sprite-wide overrides were compiled into `ids`.
             for (CompiledOverride override : overrides) {
-                if (!override.rule.matches(material, geometry)) continue;
+                if (!override.rule.matches(material, classification.geometry())) continue;
                 int[] variants = override.ids.get(sprite);
                 if (variants != null) return variants[variant];
             }
@@ -1126,7 +1128,8 @@ public final class RtMaterialRegistry {
         }
 
         /** Stateless resolve (entity/block-atlas geometry). Sprite-wide overrides are already folded in. */
-        public int resolve(TextureAtlasSprite sprite, RtMaterials.Profile profile, boolean glass, boolean emitting) {
+        public int resolve(TextureAtlasSprite sprite, OpenPbrMaterialProfile profile,
+                           boolean glass, boolean emitting) {
             int[] variants = ids.get(sprite);
             int variant = index(profile, glass, emitting);
             return variants != null ? variants[variant] : fallbackVariants[variant];
