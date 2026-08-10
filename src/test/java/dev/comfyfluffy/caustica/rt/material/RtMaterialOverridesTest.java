@@ -18,7 +18,8 @@ final class RtMaterialOverridesTest {
     /** Two registered implementations: the built-in at 0 and one third-party surface at 1. */
     private static final RtMaterialOverrides.SurfaceResolver SURFACES = id ->
             ResourceId.parse("caustica:surface").equals(id) ? 0
-                    : ResourceId.parse("somemod:crystal").equals(id) ? 1 : -1;
+                    : ResourceId.parse("somemod:crystal").equals(id) ? 1
+                    : ResourceId.parse("caustica:end_portal").equals(id) ? 2 : -1;
 
     private static RtMaterialOverrides.Rule parse(com.google.gson.JsonObject root, Identifier source) {
         return RtMaterialOverrides.parse(root, source, SURFACES);
@@ -26,7 +27,7 @@ final class RtMaterialOverridesTest {
 
     @Test
     void bundledOverridesUseTheCurrentFormat() throws Exception {
-        for (String name : List.of("torch", "soul_torch", "copper_torch")) {
+        for (String name : List.of("torch", "soul_torch", "copper_torch", "end_portal")) {
             String path = "/assets/caustica/materials/" + name + ".json";
             try (var stream = RtMaterialOverridesTest.class.getResourceAsStream(path)) {
                 if (stream == null) {

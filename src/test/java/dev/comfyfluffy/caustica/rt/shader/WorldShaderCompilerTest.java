@@ -72,6 +72,16 @@ final class WorldShaderCompilerTest {
         }
     }
 
+    @Test
+    void compilesMinecraftEndPortalSurface(@TempDir Path cacheDirectory) throws Exception {
+        CausticaRegistry registry = dev.comfyfluffy.caustica.TestRegistries.withBuiltins();
+        try (WorldShaderCompiler compiler = WorldShaderCompiler.createIsolated(
+                cacheDirectory, registry.selection())) {
+            assertSpirv(compiler.compileSpecialized(
+                    WorldShaderCompiler.CLOSEST_HIT_MODULE, WorldShaderCompiler.ENTRY_POINT), 1024);
+        }
+    }
+
     // Slang treats a module as safe to declare globals only if some entry point compiled in this session
     // plain-imported it, so whether a specialized stage compiles must not depend on which stage ran first.
     // RtComposite compiles indirect BEFORE sky_miss; a session that only ever saw sky_miss first would
@@ -132,9 +142,9 @@ final class WorldShaderCompilerTest {
 
         try (WorldShaderCompiler compiler = WorldShaderCompiler.create(cacheDirectory, registry.selection())) {
             String root = compiler.composition().rootSource();
-            assertTrue(root.contains("case 1u: { TestSurface s; s.evaluateSurface(input, material); return; }"),
+            assertTrue(root.contains("case 2u: { TestSurface s; s.evaluateSurface(input, material); return; }"),
                     root);
-            assertTrue(root.contains("case 1u: { TestSurface s; return s.evaluateResponse(radiance, surface); }"),
+            assertTrue(root.contains("case 2u: { TestSurface s; return s.evaluateResponse(radiance, surface); }"),
                     root);
             assertSpirv(compiler.compileClosestHit(), 1024);
             assertSpirv(compiler.compileIndirect(false), 1024);
@@ -154,7 +164,7 @@ final class WorldShaderCompilerTest {
         try (WorldShaderCompiler compiler = WorldShaderCompiler.create(cacheDirectory, registry.selection())) {
             String root = compiler.composition().rootSource();
             assertFalse(root.contains("BrokenSurface"), root);
-            assertFalse(root.contains("case 1u"), root);
+            assertFalse(root.contains("case 2u"), root);
             assertSpirv(compiler.compileClosestHit(), 1024);
         }
     }

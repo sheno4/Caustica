@@ -1,0 +1,7 @@
+{
+  "format": 4,
+  "match": {
+    "sprite": "minecraft:entity/end_portal/end_portal"
+  },
+  "surface": "caustica:end_portal"
+}

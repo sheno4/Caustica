@@ -12,6 +12,7 @@ import com.mojang.blaze3d.platform.NativeImage;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.rendertype.PreparedRenderType;
 import net.minecraft.client.renderer.rendertype.RenderType;
+import net.minecraft.client.renderer.rendertype.RenderTypes;
 import net.minecraft.client.renderer.texture.DynamicTexture;
 import net.minecraft.client.renderer.texture.TextureAtlas;
 import net.minecraft.resources.Identifier;
@@ -207,7 +208,7 @@ public final class RtEntityTextures {
         return Math.min(capacity, maxTextures());
     }
 
-    /** Recover the resource Identifier of {@code renderType}'s primary texture (Sampler0), or null. The
+    /** Recover the resource identifier used to select {@code renderType}'s material, or null. The
      *  {@code RenderSetup.TextureBinding} class is package-private, so {@code location()} is reflective. */
     private Identifier textureLocation(RenderType renderType) {
         if (renderType == null) return null;
@@ -219,6 +220,11 @@ public final class RtEntityTextures {
             Object setup = ((RenderTypeAccessor) renderType).caustica$state();
             Map<String, ?> textures = ((RenderSetupAccessor) setup).caustica$textures();
             Object binding = textures.get("Sampler0");
+            // The portal pipeline uses Sampler1 as its authored material texture and has no Sampler0.
+            // This mapping stays in the Minecraft adapter; the material registry sees only its resource id.
+            if (binding == null && renderType == RenderTypes.endPortal()) {
+                binding = textures.get("Sampler1");
+            }
             if (binding == null) {
                 locationCache.put(renderType, null);
                 return null;
