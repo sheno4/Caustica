@@ -21,6 +21,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 final class CausticaSectionsTest {
     // BuiltinExtension is package-private, and widening it for a test would be the wrong trade.
     private static final ResourceId BUILTIN = ResourceId.of("caustica", "builtin");
+    private static final ResourceId MINECRAFT = ResourceId.of("caustica", "minecraft");
     private static final ResourceId PROVIDER_ONLY = ResourceId.of("test", "provider_only");
 
     @TempDir
@@ -47,6 +48,7 @@ final class CausticaSectionsTest {
         assertEquals("engine", sections.get(0).id());
         assertEquals("composition", sections.get(1).id());
         assertNotNull(sectionOf(sections, BUILTIN.toString()));
+        assertNotNull(sectionOf(sections, MINECRAFT.toString()));
     }
 
     /** A scene-provider-only extension has nothing to render, so it must not leave an empty page behind. */
@@ -78,9 +80,9 @@ final class CausticaSectionsTest {
     @Test
     void aGroupWithNoHeaderCollapsesOnlyByCaret() {
         CausticaRegistry registry = dev.comfyfluffy.caustica.TestRegistries.withBuiltins();
-        Feature builtin = registry.features().get(BUILTIN);
+        Feature minecraft = registry.features().get(MINECRAFT);
 
-        SettingGroup sky = groupOf(CausticaSections.feature(builtin, options(registry)), "sky");
+        SettingGroup sky = groupOf(CausticaSections.feature(minecraft, options(registry)), "sky");
 
         assertNull(sky.header());
         assertTrue(sky.rowsVisible(true));
