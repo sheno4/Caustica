@@ -4,9 +4,8 @@ import dev.comfyfluffy.caustica.engine.light.FiniteLight;
 import dev.comfyfluffy.caustica.engine.light.LightDescriptor;
 import org.junit.jupiter.api.Test;
 
-import java.util.List;
-
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class MinecraftTerrainLightAdapterTest {
     @Test
@@ -21,14 +20,16 @@ final class MinecraftTerrainLightAdapterTest {
         record[17] = 11.0f;
         record[18] = 12.0f;
 
-        LightDescriptor.Rectangle light = (LightDescriptor.Rectangle)
-                MinecraftTerrainLightAdapter.describe(List.of(
-                        new RtLightHierarchy.SectionInput(4, 0, 0, 0, record)),
-                        0, 0, 0, () -> false).getFirst();
+        var batch = MinecraftTerrainLightAdapter.describe(4, 2, 3, 5, record);
+        LightDescriptor.Rectangle light = (LightDescriptor.Rectangle) batch.lights().getFirst();
 
+        assertEquals(32.0, light.positionX());
+        assertEquals(48.0, light.positionY());
+        assertEquals(80.0, light.positionZ());
         assertEquals(0.0, light.normalX(), 0.0);
         assertEquals(0.0, light.normalY(), 0.0);
         assertEquals(-6.0, light.normalZ());
         FiniteLight.from(light, MinecraftTerrainLightAdapter.METERS_PER_WORLD_UNIT);
+        assertThrows(UnsupportedOperationException.class, () -> batch.lights().add(light));
     }
 }

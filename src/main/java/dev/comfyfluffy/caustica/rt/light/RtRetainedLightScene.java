@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.rt.terrain;
+package dev.comfyfluffy.caustica.rt.light;
 
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
@@ -18,14 +18,15 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
  * Asynchronous lifecycle for one light-hierarchy generation at a time. CPU packing, global and
- * section-local alias construction, and light grid construction all run on a worker. The render thread
+ * batch-local alias construction, and light grid construction all run on a worker. The render thread
  * only atomically publishes GPU-complete buffers; the worker also allocates/fills staging and device
  * buffers and enqueues the copy on {@link RtGpuExecutor}. The previous complete generation remains
  * shader-visible until that point. This class does not coalesce concurrent requests itself — {@link
- * #request} requires the caller to already be idle (see {@link #isIdle()}); {@link RtTerrain} is the
- * single caller and owns the dirty/throttle coalescing in front of it.
+ * #request} requires the caller to already be idle (see {@link #isIdle()}); callers own dirty/throttle
+ * coalescing in front of it.
  */
-final class RtLightGridManager {
+public final class RtRetainedLightScene {
+    private final TaskScheduler taskScheduler;
     private final Object buildLock = new Object();
     private final Object taskLock = new Object();
     private final ConcurrentLinkedQueue<Completion> completions = new ConcurrentLinkedQueue<>();
@@ -33,16 +34,20 @@ final class RtLightGridManager {
     private volatile long latestRequest;
     private PublishedState published = PublishedState.EMPTY;
 
-    PublishedState published() {
+    public RtRetainedLightScene(TaskScheduler taskScheduler) {
+        this.taskScheduler = taskScheduler;
+    }
+
+    public PublishedState published() {
         return published;
     }
 
-    boolean hasCompletions() {
+    public boolean hasCompletions() {
         return !completions.isEmpty();
     }
 
     /** True only when no worker/upload owns a generation and no completion is waiting to be published. */
-    boolean isIdle() {
+    public boolean isIdle() {
         synchronized (taskLock) {
             return activeTasks == 0 && completions.isEmpty();
         }
@@ -52,13 +57,15 @@ final class RtLightGridManager {
      * Start building one hierarchy snapshot. The caller owns coalescing: this manager processes one
      * generation at a time, so callers must only invoke this while {@link #isIdle()}.
      */
-    void request(GpuContext ctx, Collection<RtLightHierarchy.SectionInput> sections,
-                 int rebaseX, int rebaseY, int rebaseZ, DebugFocus debugFocus) {
+    public void request(GpuContext ctx, Collection<RetainedLightBatch> batches,
+                        int rebaseX, int rebaseY, int rebaseZ, double metersPerWorldUnit,
+                        DebugFocus debugFocus) {
         if (!isIdle()) {
             throw new IllegalStateException(
-                    "RtLightGridManager.request() called while a generation is still in flight");
+                    "RtRetainedLightScene.request() called while a generation is still in flight");
         }
-        Input input = new Input(List.copyOf(sections), rebaseX, rebaseY, rebaseZ, debugFocus);
+        Input input = new Input(List.copyOf(batches), rebaseX, rebaseY, rebaseZ,
+                metersPerWorldUnit, debugFocus);
         long requestId;
         synchronized (buildLock) {
             requestId = ++latestRequest;
@@ -66,7 +73,7 @@ final class RtLightGridManager {
         Request request = new Request(requestId, ctx, input);
         beginTask();
         try {
-            RtWorkerPool.INSTANCE.submit(() -> runWorker(request), this::finishTask);
+            taskScheduler.submit(() -> runWorker(request), this::finishTask);
         } catch (Throwable t) {
             finishTask();
             throw t;
@@ -74,7 +81,7 @@ final class RtLightGridManager {
     }
 
     /** Publish only fully uploaded, internally coherent worker generations. */
-    void publishReady(GpuContext ctx) {
+    public void publishReady(GpuContext ctx) {
         Completion completion;
         while ((completion = completions.poll()) != null) {
             if (completion instanceof Failed failed) {
@@ -103,7 +110,7 @@ final class RtLightGridManager {
     }
 
     /** World-reset path only. Normal light changes intentionally retain the published generation. */
-    void invalidate(GpuContext ctx, GraphicsUse lastGraphicsUse) {
+    public void invalidate(GpuContext ctx, GraphicsUse lastGraphicsUse) {
         cancelPending();
         PublishedState old = published;
         published = PublishedState.EMPTY;
@@ -111,14 +118,14 @@ final class RtLightGridManager {
     }
 
     /** Invalidate the current generation (in-flight build/upload self-discards) and drop any completion. */
-    void cancelPending() {
+    public void cancelPending() {
         synchronized (buildLock) {
             latestRequest++;
         }
         discardCompletions();
     }
 
-    void awaitIdle() {
+    public void awaitIdle() {
         synchronized (taskLock) {
             while (activeTasks != 0) {
                 try {
@@ -131,7 +138,7 @@ final class RtLightGridManager {
         }
     }
 
-    void destroyAfterDeviceIdle() {
+    public void destroyAfterDeviceIdle() {
         discardCompletions();
         PublishedState old = published;
         published = PublishedState.EMPTY;
@@ -140,8 +147,9 @@ final class RtLightGridManager {
 
     private void runWorker(Request request) {
         try {
-            RtLightHierarchy.Data data = RtLightHierarchy.build(request.input.sections,
+            RtRetainedLightSceneBuilder.Data data = RtRetainedLightSceneBuilder.build(request.input.batches,
                     request.input.rebaseX, request.input.rebaseY, request.input.rebaseZ,
+                    request.input.metersPerWorldUnit,
                     () -> !isLatest(request.requestId));
             if (isLatest(request.requestId)) {
                 if (data.lightCount() == 0) {
@@ -161,7 +169,7 @@ final class RtLightGridManager {
         }
     }
 
-    private void submitUpload(GpuContext ctx, long requestId, RtLightHierarchy.Data data,
+    private void submitUpload(GpuContext ctx, long requestId, RtRetainedLightSceneBuilder.Data data,
                               DebugFocus debugFocus) {
         Layout layout = Layout.of(data, data.grid() != null);
 
@@ -170,15 +178,15 @@ final class RtLightGridManager {
         try {
             int usage = VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT;
             arena = ctx.createAsyncBuffer(layout.totalBytes, usage, false,
-                    "terrain light hierarchy arena " + requestId);
+                    "retained light scene arena " + requestId);
             upload = ctx.createUploadBuffer(layout.totalBytes,
-                    "terrain light hierarchy upload " + requestId);
+                    "retained light scene upload " + requestId);
 
             long cursor = upload.mapped + layout.lightOffset;
             MemoryUtil.memFloatBuffer(cursor, data.packedLights().length).put(data.packedLights());
             cursor = upload.mapped + layout.globalAliasOffset;
             writeAliases(cursor, data.globalAliases());
-            RtLightGrid.Data grid = layout.hasGrid ? data.grid() : null;
+            RtRetainedLightGrid.Data grid = layout.hasGrid ? data.grid() : null;
             if (grid != null) {
                 cursor = upload.mapped + layout.localAliasOffset;
                 writeAliases(cursor, data.localAliases());
@@ -226,7 +234,7 @@ final class RtLightGridManager {
         }
     }
 
-    private static void writeAliases(long cursor, RtLightHierarchy.AliasData aliases) {
+    private static void writeAliases(long cursor, RtRetainedLightSceneBuilder.AliasData aliases) {
         for (int i = 0; i < aliases.aliasIndices().length; i++) {
             MemoryUtil.memPutInt(cursor, aliases.aliasIndices()[i]);
             MemoryUtil.memPutFloat(cursor + 4, aliases.accept()[i]);
@@ -234,7 +242,7 @@ final class RtLightGridManager {
         }
     }
 
-    private void finishUpload(long requestId, RtLightHierarchy.Data data, DebugFocus debugFocus,
+    private void finishUpload(long requestId, RtRetainedLightSceneBuilder.Data data, DebugFocus debugFocus,
                               GpuBuffer upload,
                               GpuBuffer arena, Layout layout,
                               RtGpuExecutor.Build build, Throwable failure) {
@@ -254,7 +262,7 @@ final class RtLightGridManager {
     }
 
     private void publish(GpuContext ctx, Uploaded uploaded) {
-        RtLightGrid.Data grid = uploaded.layout.hasGrid ? uploaded.data.grid() : null;
+        RtRetainedLightGrid.Data grid = uploaded.layout.hasGrid ? uploaded.data.grid() : null;
         PublishedState next = new PublishedState(uploaded.arena, uploaded.layout,
                 uploaded.data.lightCount(), uploaded.data.invGlobalPowerSum(),
                 grid != null ? grid.originX() : 0, grid != null ? grid.originY() : 0,
@@ -278,18 +286,18 @@ final class RtLightGridManager {
         if (CausticaConfig.Rt.Lights.STATS.value()) {
             double legacyPower = uploaded.data.invGlobalPowerSum() > 0.0f
                     ? 1.0 / uploaded.data.invGlobalPowerSum() : 0.0;
-            CausticaMod.LOGGER.info("RT light hierarchy {}: {} lights / {} section slots / {} light grid spans / {} KiB; shadow BVH {} nodes / depth {} / {} lm (legacy power {}, expected lm {})",
-                    uploaded.requestId, uploaded.data.lightCount(), uploaded.data.sectionFirstLights().length,
+            CausticaMod.LOGGER.info("RT light hierarchy {}: {} lights / {} batch slots / {} light grid spans / {} KiB; shadow BVH {} nodes / depth {} / {} lm (legacy power {}, expected lm {})",
+                    uploaded.requestId, uploaded.data.lightCount(), uploaded.data.batchFirstLights().length,
                     grid != null ? grid.spanFirstLights().length : 0,
                     (uploaded.layout.totalBytes + 1023L) >> 10,
                     uploaded.data.lightBvh().nodes().size(), uploaded.data.lightBvh().maxDepth(),
                     uploaded.data.lightBvh().totalLuminousPowerLumens(), legacyPower,
-                    legacyPower * Math.PI * MinecraftTerrainLightAdapter.METERS_PER_WORLD_UNIT
-                            * MinecraftTerrainLightAdapter.METERS_PER_WORLD_UNIT);
+                    legacyPower * Math.PI * uploaded.data.metersPerWorldUnit()
+                            * uploaded.data.metersPerWorldUnit());
         }
     }
 
-    private static void dumpNearbyLights(RtLightHierarchy.Data data, DebugFocus focus) {
+    private static void dumpNearbyLights(RtRetainedLightSceneBuilder.Data data, DebugFocus focus) {
         double px = focus.relativeX(data.rebaseX());
         double py = focus.relativeY(data.rebaseY());
         double pz = focus.relativeZ(data.rebaseZ());
@@ -298,13 +306,13 @@ final class RtLightGridManager {
         float[] lights = data.packedLights();
         int dumped = 0;
         for (int light = 0; light < data.lightCount(); light++) {
-            int record = light * RtLightHierarchy.GPU_FLOATS_PER_LIGHT;
+            int record = light * RtRetainedLightSceneBuilder.GPU_FLOATS_PER_LIGHT;
             float x = lights[record];
             float y = lights[record + 1];
             float z = lights[record + 2];
             double dx = x - px, dy = y - py, dz = z - pz;
             if (dx * dx + dy * dy + dz * dz > radiusSq) continue;
-            // Area is derived, not stored — 4*|halfU x halfV| (see RtLightHierarchy.GPU_FLOATS_PER_LIGHT).
+            // Area is derived, not stored — 4*|halfU x halfV|.
             int packedU = Float.floatToRawIntBits(lights[record + 4]);
             int packedUzVx = Float.floatToRawIntBits(lights[record + 5]);
             int packedV = Float.floatToRawIntBits(lights[record + 6]);
@@ -319,9 +327,9 @@ final class RtLightGridManager {
             float crossZ = hux * hvy - huy * hvx;
             float area = 4f * (float) Math.sqrt(crossX * crossX + crossY * crossY + crossZ * crossZ);
             int packedLe = Float.floatToRawIntBits(lights[record + 3]);
-            float leR = RtLightHierarchy.unpackUnsignedFloat(packedLe & 0x7ff, 6);
-            float leG = RtLightHierarchy.unpackUnsignedFloat((packedLe >>> 11) & 0x7ff, 6);
-            float leB = RtLightHierarchy.unpackUnsignedFloat((packedLe >>> 22) & 0x3ff, 5);
+            float leR = RtRetainedLightSceneBuilder.unpackUnsignedFloat(packedLe & 0x7ff, 6);
+            float leG = RtRetainedLightSceneBuilder.unpackUnsignedFloat((packedLe >>> 11) & 0x7ff, 6);
+            float leB = RtRetainedLightSceneBuilder.unpackUnsignedFloat((packedLe >>> 22) & 0x3ff, 5);
             CausticaMod.LOGGER.info("RT light[{}] world=({}, {}, {}) area={} Le=({}, {}, {})",
                     light, x + data.rebaseX(), y + data.rebaseY(), z + data.rebaseZ(),
                     area, leR, leG, leB);
@@ -370,16 +378,23 @@ final class RtLightGridManager {
         }
     }
 
-    record DebugFocus(double worldX, double worldY, double worldZ) {
-        double relativeX(int rebaseX) { return worldX - rebaseX; }
-        double relativeY(int rebaseY) { return worldY - rebaseY; }
-        double relativeZ(int rebaseZ) { return worldZ - rebaseZ; }
+    public record DebugFocus(double worldX, double worldY, double worldZ) {
+        public double relativeX(int rebaseX) { return worldX - rebaseX; }
+        public double relativeY(int rebaseY) { return worldY - rebaseY; }
+        public double relativeZ(int rebaseZ) { return worldZ - rebaseZ; }
     }
 
-    private record Input(List<RtLightHierarchy.SectionInput> sections,
-                         int rebaseX, int rebaseY, int rebaseZ, DebugFocus debugFocus) { }
+    @FunctionalInterface
+    public interface TaskScheduler {
+        /** The cancellation callback must run only when an accepted task will never execute. */
+        void submit(Runnable task, Runnable cancelled);
+    }
 
-    record PublishedState(GpuBuffer arena, Layout layout, int lightCount,
+    private record Input(List<RetainedLightBatch> batches,
+                         int rebaseX, int rebaseY, int rebaseZ,
+                         double metersPerWorldUnit, DebugFocus debugFocus) { }
+
+    public record PublishedState(GpuBuffer arena, Layout layout, int lightCount,
                           float invGlobalPowerSum,
                           int originX, int originY, int originZ, int dimX, int dimY, int dimZ,
                           int rebaseX, int rebaseY, int rebaseZ, long generation) {
@@ -391,11 +406,11 @@ final class RtLightGridManager {
                     0, 0, 0, 0, 0, 0, 0, 0, 0, generation);
         }
 
-        long lightAddress() { return address(layout.lightOffset); }
-        long globalAliasAddress() { return address(layout.globalAliasOffset); }
-        long localAliasAddress() { return layout.hasGrid ? address(layout.localAliasOffset) : 0L; }
-        long cellAddress() { return layout.hasGrid ? address(layout.cellOffset) : 0L; }
-        long spanAddress() { return layout.hasGrid ? address(layout.spanOffset) : 0L; }
+        public long lightAddress() { return address(layout.lightOffset); }
+        public long globalAliasAddress() { return address(layout.globalAliasOffset); }
+        public long localAliasAddress() { return layout.hasGrid ? address(layout.localAliasOffset) : 0L; }
+        public long cellAddress() { return layout.hasGrid ? address(layout.cellOffset) : 0L; }
+        public long spanAddress() { return layout.hasGrid ? address(layout.spanOffset) : 0L; }
 
         private long address(long offset) {
             return arena != null ? arena.deviceAddress + offset : 0L;
@@ -412,11 +427,11 @@ final class RtLightGridManager {
         }
     }
 
-    record Layout(long lightOffset, long globalAliasOffset, long localAliasOffset,
+    public record Layout(long lightOffset, long globalAliasOffset, long localAliasOffset,
                   long cellOffset, long spanOffset, long totalBytes, boolean hasGrid) {
         private static final Layout EMPTY = new Layout(0, 0, 0, 0, 0, 0, false);
 
-        static Layout of(RtLightHierarchy.Data data, boolean includeGrid) {
+        static Layout of(RtRetainedLightSceneBuilder.Data data, boolean includeGrid) {
             long cursor = 0L;
             long lights = cursor;
             cursor = align16(Math.addExact(cursor, data.lightBytes()));
@@ -442,7 +457,7 @@ final class RtLightGridManager {
     private sealed interface Completion permits Failed, Empty, Uploaded { }
     private record Failed(long requestId, Throwable failure) implements Completion { }
     private record Empty(long requestId) implements Completion { }
-    private record Uploaded(long requestId, RtLightHierarchy.Data data, DebugFocus debugFocus,
+    private record Uploaded(long requestId, RtRetainedLightSceneBuilder.Data data, DebugFocus debugFocus,
                             GpuBuffer arena, Layout layout,
                             RtGpuExecutor.Build build, Throwable failure) implements Completion {
         void destroy() { arena.destroy(); }

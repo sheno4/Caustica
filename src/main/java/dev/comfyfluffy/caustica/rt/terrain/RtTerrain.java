@@ -15,6 +15,8 @@ import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor.GraphicsUse;
 import dev.comfyfluffy.caustica.rt.accel.RtAccel;
 import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
+import dev.comfyfluffy.caustica.rt.light.RetainedLightBatch;
+import dev.comfyfluffy.caustica.rt.light.RtRetainedLightScene;
 import dev.comfyfluffy.caustica.rt.material.RtMaterialRegistry;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
 import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
@@ -180,9 +182,9 @@ public final class RtTerrain {
     public int blockY;
     public int blockZ;
     /** Coalesced asynchronous, atomically published light hierarchy and section-sized proposal grid. */
-    private final RtLightGridManager lightGrid = new RtLightGridManager();
+    private final RtRetainedLightScene lightGrid = new RtRetainedLightScene(RtWorkerPool.INSTANCE::submit);
     /** Sorted light-only snapshot, updated with section publication instead of rescanning all geometry. */
-    private final TreeMap<Integer, RtLightHierarchy.SectionInput> lightSections = new TreeMap<>();
+    private final TreeMap<Integer, RetainedLightBatch> lightSections = new TreeMap<>();
     private boolean lightHierarchyDirty;
     private long lastLightHierarchyRequestNanos;
     private boolean windowValid;
@@ -262,17 +264,17 @@ public final class RtTerrain {
     }
 
     public int lightGridOriginX() {
-        RtLightGridManager.PublishedState hierarchy = lightGrid.published();
+        RtRetainedLightScene.PublishedState hierarchy = lightGrid.published();
         return hierarchy.originX() + hierarchy.rebaseX() - blockX;
     }
 
     public int lightGridOriginY() {
-        RtLightGridManager.PublishedState hierarchy = lightGrid.published();
+        RtRetainedLightScene.PublishedState hierarchy = lightGrid.published();
         return hierarchy.originY() + hierarchy.rebaseY() - blockY;
     }
 
     public int lightGridOriginZ() {
-        RtLightGridManager.PublishedState hierarchy = lightGrid.published();
+        RtRetainedLightScene.PublishedState hierarchy = lightGrid.published();
         return hierarchy.originZ() + hierarchy.rebaseZ() - blockZ;
     }
 
@@ -1602,7 +1604,7 @@ public final class RtTerrain {
             lightSections.remove(g.slot);
             return;
         }
-        lightSections.put(g.slot, new RtLightHierarchy.SectionInput(g.slot,
+        lightSections.put(g.slot, MinecraftTerrainLightAdapter.describe(g.slot,
                 g.sx >> 4, g.sy >> 4, g.sz >> 4, g.lights));
     }
 
@@ -1621,10 +1623,11 @@ public final class RtTerrain {
         // The manager creates one immutable worker snapshot directly from the sorted values view,
         // avoiding the previous ArrayList + defensive-copy pair on the render thread.
         var player = Minecraft.getInstance().player;
-        RtLightGridManager.DebugFocus debugFocus = player != null
-                ? new RtLightGridManager.DebugFocus(player.getX(), player.getY(), player.getZ())
+        RtRetainedLightScene.DebugFocus debugFocus = player != null
+                ? new RtRetainedLightScene.DebugFocus(player.getX(), player.getY(), player.getZ())
                 : null;
-        lightGrid.request(ctx, lightSections.values(), blockX, blockY, blockZ, debugFocus);
+        lightGrid.request(ctx, lightSections.values(), blockX, blockY, blockZ,
+                MinecraftTerrainLightAdapter.METERS_PER_WORLD_UNIT, debugFocus);
         lightHierarchyDirty = false;
         lastLightHierarchyRequestNanos = now;
     }

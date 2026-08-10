@@ -1,6 +1,7 @@
-package dev.comfyfluffy.caustica.rt.terrain;
+package dev.comfyfluffy.caustica.rt.light;
 
 import dev.comfyfluffy.caustica.engine.light.LightBvh;
+import dev.comfyfluffy.caustica.engine.light.LightDescriptor;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -9,26 +10,25 @@ import java.util.concurrent.CancellationException;
 import java.util.function.BooleanSupplier;
 
 /**
- * Worker-side immutable light hierarchy builder. Lights are Morton ordered by section; section-local
- * aliases share those ranges. Proposal PDFs are reconstructed from the selected light's power, so the
+ * Worker-side immutable retained-light hierarchy builder. Lights are Morton ordered by spatial cell;
+ * batch-local aliases share those ranges. Proposal PDFs are reconstructed from the selected light's power, so the
  * GPU records contain only selection data.
  */
-final class RtLightHierarchy {
-    static final int SOURCE_FLOATS_PER_LIGHT = RtLightCollector.FLOATS_PER_LIGHT;
+public final class RtRetainedLightSceneBuilder {
     /**
      * 8 floats / 32 B per GPU record: {@code {pos.xyz, packedLe} {halfU.xy, halfU.z|halfV.x, halfV.yz,
-     * section}}, half axes packed two per lane. 32 divides the 64 B cache line, so a record never
+     * cell}}, half axes packed two per lane. 32 divides the 64 B cache line, so a record never
      * straddles one — at the previous 48 B roughly half of them did, costing two transactions each. RIS
      * fetches these at random indices, so that halving of transactions is the point of the layout.
      * <p>The rectangle area is NOT stored: it is exactly {@code 4*|halfU x halfV|}, since the collector
-     * builds {@code halfU = 0.5*(aHi-aLo)*e01} and {@code rectArea = |e01 x e03|*(aHi-aLo)*(bHi-bLo)}.
-     * world.rgen derives it from the cross product it already computes for the emitter normal.
+     * follows directly from the descriptor axes. The shader derives it from the cross product it
+     * already computes for the emitter normal.
      */
     static final int GPU_FLOATS_PER_LIGHT = 8;
     private static final int MAX_PACKED_GRID_DIM = 1024;
     private static final int NORMAL_FLIP_BIT = 1 << 30;
 
-    private RtLightHierarchy() {
+    private RtRetainedLightSceneBuilder() {
     }
 
     /** Two halves into one float lane, low half = x — mirrors world_common.slang's unpackHalf2. */
@@ -37,59 +37,59 @@ final class RtLightHierarchy {
         return Float.intBitsToFloat(bits);
     }
 
-    static Data build(List<SectionInput> sections, int rebaseX, int rebaseY, int rebaseZ,
-                      BooleanSupplier cancelled) {
-        List<SectionInput> orderedSections = orderedSections(sections, cancelled);
-        int sectionCapacity = 0;
+    public static Data build(List<RetainedLightBatch> batches, int rebaseX, int rebaseY, int rebaseZ,
+                             double metersPerWorldUnit, BooleanSupplier cancelled) {
+        List<RetainedLightBatch> orderedBatches = orderedBatches(batches, cancelled);
+        int batchCapacity = 0;
         int totalLights = 0;
-        int maxSectionLights = 0;
-        for (int i = 0; i < orderedSections.size(); i++) {
+        int maxBatchLights = 0;
+        for (int i = 0; i < orderedBatches.size(); i++) {
             if ((i & 255) == 0) checkCancelled(cancelled);
-            SectionInput section = orderedSections.get(i);
-            int count = lightCount(section.lights);
-            sectionCapacity = Math.max(sectionCapacity, section.sectionSlot + 1);
+            RetainedLightBatch batch = orderedBatches.get(i);
+            int count = batch.lights().size();
+            batchCapacity = Math.max(batchCapacity, batch.slot() + 1);
             totalLights = Math.addExact(totalLights, count);
-            maxSectionLights = Math.max(maxSectionLights, count);
+            maxBatchLights = Math.max(maxBatchLights, count);
         }
 
-        int[] sectionFirstLights = new int[sectionCapacity];
-        int[] sectionLightCounts = new int[sectionCapacity];
+        int[] batchFirstLights = new int[batchCapacity];
+        int[] batchLightCounts = new int[batchCapacity];
         float[] packedLights = new float[Math.multiplyExact(totalLights, GPU_FLOATS_PER_LIGHT)];
-        int[] lightSectionCoords = new int[Math.multiplyExact(totalLights, 3)];
+        int[] lightCellCoords = new int[Math.multiplyExact(totalLights, 3)];
         double[] powers = new double[totalLights];
-        ArrayList<RtLightGrid.SectionLights> gridSections = new ArrayList<>(orderedSections.size());
+        ArrayList<RtRetainedLightGrid.BatchLights> gridBatches = new ArrayList<>(orderedBatches.size());
 
         int lightIndex = 0;
         double globalPower = 0.0;
-        for (int sectionIndex = 0; sectionIndex < orderedSections.size(); sectionIndex++) {
-            if ((sectionIndex & 63) == 0) checkCancelled(cancelled);
-            SectionInput section = orderedSections.get(sectionIndex);
-            int count = lightCount(section.lights);
+        for (int batchIndex = 0; batchIndex < orderedBatches.size(); batchIndex++) {
+            if ((batchIndex & 63) == 0) checkCancelled(cancelled);
+            RetainedLightBatch batch = orderedBatches.get(batchIndex);
+            int count = batch.lights().size();
             int first = lightIndex;
-            double sectionPower = 0.0;
-            float ox = section.sectionX * 16f - rebaseX;
-            float oy = section.sectionY * 16f - rebaseY;
-            float oz = section.sectionZ * 16f - rebaseZ;
-            for (int source = 0; source < section.lights.length;
-                 source += SOURCE_FLOATS_PER_LIGHT, lightIndex++) {
+            double batchPower = 0.0;
+            for (LightDescriptor.Finite descriptor : batch.lights()) {
+                if (!(descriptor instanceof LightDescriptor.Rectangle light)) {
+                    throw new IllegalArgumentException(
+                            "The retained legacy GPU ABI accepts rectangle lights only");
+                }
                 int destination = lightIndex * GPU_FLOATS_PER_LIGHT;
-                int sectionDestination = lightIndex * 3;
-                lightSectionCoords[sectionDestination] = section.sectionX;
-                lightSectionCoords[sectionDestination + 1] = section.sectionY;
-                lightSectionCoords[sectionDestination + 2] = section.sectionZ;
-                float leR = section.lights[source + 16];
-                float leG = section.lights[source + 17];
-                float leB = section.lights[source + 18];
+                int cellDestination = lightIndex * 3;
+                lightCellCoords[cellDestination] = batch.cellX();
+                lightCellCoords[cellDestination + 1] = batch.cellY();
+                lightCellCoords[cellDestination + 2] = batch.cellZ();
+                float leR = (float) light.radianceRedCdM2();
+                float leG = (float) light.radianceGreenCdM2();
+                float leB = (float) light.radianceBlueCdM2();
                 int packedLe = packR11G11B10(leR, leG, leB);
-                float halfUx = section.lights[source + 8];
-                float halfUy = section.lights[source + 9];
-                float halfUz = section.lights[source + 10];
-                float halfVx = section.lights[source + 12];
-                float halfVy = section.lights[source + 13];
-                float halfVz = section.lights[source + 14];
-                packedLights[destination] = section.lights[source] + ox;
-                packedLights[destination + 1] = section.lights[source + 1] + oy;
-                packedLights[destination + 2] = section.lights[source + 2] + oz;
+                float halfUx = (float) light.halfUx();
+                float halfUy = (float) light.halfUy();
+                float halfUz = (float) light.halfUz();
+                float halfVx = (float) light.halfVx();
+                float halfVy = (float) light.halfVy();
+                float halfVz = (float) light.halfVz();
+                packedLights[destination] = (float) (light.positionX() - rebaseX);
+                packedLights[destination + 1] = (float) (light.positionY() - rebaseY);
+                packedLights[destination + 2] = (float) (light.positionZ() - rebaseZ);
                 packedLights[destination + 3] = Float.intBitsToFloat(packedLe);
                 // Half axes at half precision: these are block-scale offsets from the rectangle centre,
                 // well inside half's range and resolution. The centre itself stays f32 because the RIS
@@ -100,100 +100,98 @@ final class RtLightHierarchy {
                 float crossX = halfUy * halfVz - halfUz * halfVy;
                 float crossY = halfUz * halfVx - halfUx * halfVz;
                 float crossZ = halfUx * halfVy - halfUy * halfVx;
-                if (crossX * section.lights[source + 4] + crossY * section.lights[source + 5]
-                        + crossZ * section.lights[source + 6] < 0.0f) {
+                if (crossX * light.normalX() + crossY * light.normalY()
+                        + crossZ * light.normalZ() < 0.0) {
                     packedLights[destination + 7] = Float.intBitsToFloat(NORMAL_FLIP_BIT);
                 }
                 // Collector output and the packed GPU record are linear ACEScg/AP1.
                 double luminance = 0.27222872 * unpackUnsignedFloat(packedLe & 0x7ff, 6)
                         + 0.67408177 * unpackUnsignedFloat((packedLe >>> 11) & 0x7ff, 6)
                         + 0.05368952 * unpackUnsignedFloat((packedLe >>> 22) & 0x3ff, 5);
-                double power = Math.max(0.0, section.lights[source + 3] * luminance);
+                double area = 4.0 * Math.sqrt(crossX * crossX + crossY * crossY + crossZ * crossZ);
+                double power = Math.max(0.0, area * luminance);
                 powers[lightIndex] = power;
-                sectionPower += power;
+                batchPower += power;
                 globalPower += power;
+                lightIndex++;
             }
-            sectionFirstLights[section.sectionSlot] = first;
-            sectionLightCounts[section.sectionSlot] = count;
-            if (sectionPower > 0.0) {
-                gridSections.add(new RtLightGrid.SectionLights(first, count,
-                        section.sectionX, section.sectionY, section.sectionZ, sectionPower));
+            batchFirstLights[batch.slot()] = first;
+            batchLightCounts[batch.slot()] = count;
+            if (batchPower > 0.0) {
+                gridBatches.add(new RtRetainedLightGrid.BatchLights(first, count,
+                        batch.cellX(), batch.cellY(), batch.cellZ(), batchPower));
             }
         }
 
         AliasData globalAliases = buildAlias(powers, 0, totalLights, cancelled);
         int[] localAliasIndices = new int[totalLights];
         float[] localAliasAccept = new float[totalLights];
-        AliasScratch localScratch = new AliasScratch(maxSectionLights);
-        for (int slot = 0; slot < sectionCapacity; slot++) {
+        AliasScratch localScratch = new AliasScratch(maxBatchLights);
+        for (int slot = 0; slot < batchCapacity; slot++) {
             if ((slot & 255) == 0) checkCancelled(cancelled);
-            int count = sectionLightCounts[slot];
+            int count = batchLightCounts[slot];
             if (count == 0) continue;
-            int first = sectionFirstLights[slot];
+            int first = batchFirstLights[slot];
             if (count > 0xffff) {
-                throw new IllegalStateException("Section light count exceeds Span16 capacity: " + count);
+                throw new IllegalStateException("Batch light count exceeds Span16 capacity: " + count);
             }
             buildAliasInto(powers, first, count, localAliasIndices, localAliasAccept,
                     first, localScratch, cancelled);
         }
 
-        RtLightGrid.Data grid = totalLights > 0
-                ? RtLightGrid.build(gridSections, rebaseX, rebaseY, rebaseZ, cancelled) : null;
+        RtRetainedLightGrid.Data grid = totalLights > 0
+                ? RtRetainedLightGrid.build(gridBatches, rebaseX, rebaseY, rebaseZ, cancelled) : null;
         if (grid != null && (grid.dimX() > MAX_PACKED_GRID_DIM || grid.dimY() > MAX_PACKED_GRID_DIM
                 || grid.dimZ() > MAX_PACKED_GRID_DIM)) {
             grid = null;
         }
         if (grid != null) {
-            int gridSectionX = (grid.originX() + rebaseX) / 16;
-            int gridSectionY = (grid.originY() + rebaseY) / 16;
-            int gridSectionZ = (grid.originZ() + rebaseZ) / 16;
+            int gridCellX = (grid.originX() + rebaseX) / 16;
+            int gridCellY = (grid.originY() + rebaseY) / 16;
+            int gridCellZ = (grid.originZ() + rebaseZ) / 16;
             for (int i = 0; i < totalLights; i++) {
                 int source = i * 3;
-                int x = lightSectionCoords[source] - gridSectionX;
-                int y = lightSectionCoords[source + 1] - gridSectionY;
-                int z = lightSectionCoords[source + 2] - gridSectionZ;
+                int x = lightCellCoords[source] - gridCellX;
+                int y = lightCellCoords[source + 1] - gridCellY;
+                int z = lightCellCoords[source + 2] - gridCellZ;
                 if ((x | y | z) < 0 || x >= MAX_PACKED_GRID_DIM || y >= MAX_PACKED_GRID_DIM
                         || z >= MAX_PACKED_GRID_DIM) {
-                    throw new IllegalStateException("Light section is outside packed light grid");
+                    throw new IllegalStateException("Light cell is outside packed light grid");
                 }
                 int destination = i * GPU_FLOATS_PER_LIGHT + 7;
                 int flags = Float.floatToRawIntBits(packedLights[destination]) & NORMAL_FLIP_BIT;
                 packedLights[destination] = Float.intBitsToFloat(flags | x | (y << 10) | (z << 20));
             }
         }
-        // The CPU BVH is derived from the same immutable terrain snapshot as the active grid. It stays
+        // The CPU BVH is derived from the same immutable retained-light snapshot as the active grid. It stays
         // host-side because shaders require a sampling record that preserves the proposal PDF.
-        LightBvh.Data lightBvh = LightBvh.build(MinecraftTerrainLightAdapter.describe(
-                        orderedSections, rebaseX, rebaseY, rebaseZ, cancelled),
-                MinecraftTerrainLightAdapter.METERS_PER_WORLD_UNIT, cancelled);
+        List<LightDescriptor.Finite> descriptors = orderedBatches.stream()
+                .flatMap(batch -> batch.lights().stream()).toList();
+        LightBvh.Data lightBvh = LightBvh.build(descriptors, metersPerWorldUnit, cancelled);
         return new Data(packedLights, globalAliases,
-                sectionFirstLights, sectionLightCounts,
+                batchFirstLights, batchLightCounts,
                 new AliasData(localAliasIndices, localAliasAccept), grid, lightBvh, totalLights,
                 globalPower > 0.0 ? (float) (1.0 / globalPower) : 0.0f,
-                rebaseX, rebaseY, rebaseZ);
+                rebaseX, rebaseY, rebaseZ, metersPerWorldUnit);
     }
 
-    private static int lightCount(float[] lights) {
-        return lights != null ? lights.length / SOURCE_FLOATS_PER_LIGHT : 0;
-    }
-
-    private static List<SectionInput> orderedSections(List<SectionInput> sections,
-                                                      BooleanSupplier cancelled) {
-        if (sections.size() < 2) return sections;
+    private static List<RetainedLightBatch> orderedBatches(List<RetainedLightBatch> batches,
+                                                             BooleanSupplier cancelled) {
+        if (batches.size() < 2) return batches;
         int minX = Integer.MAX_VALUE, minY = Integer.MAX_VALUE, minZ = Integer.MAX_VALUE;
-        for (int i = 0; i < sections.size(); i++) {
+        for (int i = 0; i < batches.size(); i++) {
             if ((i & 255) == 0) checkCancelled(cancelled);
-            SectionInput section = sections.get(i);
-            minX = Math.min(minX, section.sectionX);
-            minY = Math.min(minY, section.sectionY);
-            minZ = Math.min(minZ, section.sectionZ);
+            RetainedLightBatch batch = batches.get(i);
+            minX = Math.min(minX, batch.cellX());
+            minY = Math.min(minY, batch.cellY());
+            minZ = Math.min(minZ, batch.cellZ());
         }
         final int originX = minX, originY = minY, originZ = minZ;
-        ArrayList<SectionInput> ordered = new ArrayList<>(sections);
-        ordered.sort(Comparator.comparingLong((SectionInput section) -> mortonKey(
-                        section.sectionX - originX, section.sectionY - originY,
-                        section.sectionZ - originZ))
-                .thenComparingInt(SectionInput::sectionSlot));
+        ArrayList<RetainedLightBatch> ordered = new ArrayList<>(batches);
+        ordered.sort(Comparator.comparingLong((RetainedLightBatch batch) -> mortonKey(
+                        batch.cellX() - originX, batch.cellY() - originY,
+                        batch.cellZ() - originZ))
+                .thenComparingInt(RetainedLightBatch::slot));
         return ordered;
     }
 
@@ -225,7 +223,7 @@ final class RtLightHierarchy {
      * {@code alias[destinationOffset+i]} for {@code i} in {@code [0, count)}. No-op (both arrays
      * untouched) if the window is empty or its total weight is not positive. Returns the total
      * weight (0.0 in both those cases) so callers that also need it (e.g. a per-cell inverse-weight
-     * normalizer) don't have to recompute it. Shared by {@link RtLightGrid}'s per-cell section
+     * normalizer) don't have to recompute it. Shared by {@link RtRetainedLightGrid}'s per-cell batch
      * distributions, which follow the same offset convention.
      */
     static double buildAliasInto(double[] weights, int weightOffset, int count,
@@ -322,23 +320,17 @@ final class RtLightHierarchy {
         }
     }
 
-    record SectionInput(int sectionSlot, int sectionX, int sectionY, int sectionZ, float[] lights) {
-        SectionInput {
-            lights = lights != null ? lights : new float[0];
-        }
-    }
-
-    record AliasData(int[] aliasIndices, float[] accept) {
+    public record AliasData(int[] aliasIndices, float[] accept) {
         long bytes() {
             return Math.multiplyExact((long) aliasIndices.length, 8L);
         }
     }
 
-    record Data(float[] packedLights, AliasData globalAliases,
-                int[] sectionFirstLights, int[] sectionLightCounts,
-                AliasData localAliases, RtLightGrid.Data grid, LightBvh.Data lightBvh, int lightCount,
+    public record Data(float[] packedLights, AliasData globalAliases,
+                int[] batchFirstLights, int[] batchLightCounts,
+                AliasData localAliases, RtRetainedLightGrid.Data grid, LightBvh.Data lightBvh, int lightCount,
                 float invGlobalPowerSum,
-                int rebaseX, int rebaseY, int rebaseZ) {
+                int rebaseX, int rebaseY, int rebaseZ, double metersPerWorldUnit) {
         long lightBytes() {
             return Math.multiplyExact((long) packedLights.length, Float.BYTES);
         }

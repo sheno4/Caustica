@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.rt.terrain;
+package dev.comfyfluffy.caustica.rt.light;
 
 import org.junit.jupiter.api.Test;
 
@@ -8,13 +8,13 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
-final class RtLightGridTest {
+final class RtRetainedLightGridTest {
     @Test
     void materializesTheFullFiveCubedNeighborhoodWithoutUnlitResidencyInput() {
-        List<RtLightGrid.SectionLights> sections = List.of(
-                new RtLightGrid.SectionLights(7, 2, 0, 0, 0, 3.0));
+        List<RtRetainedLightGrid.BatchLights> sections = List.of(
+                new RtRetainedLightGrid.BatchLights(7, 2, 0, 0, 0, 3.0));
 
-        RtLightGrid.Data data = RtLightGrid.build(sections, 0, 0, 0, () -> false);
+        RtRetainedLightGrid.Data data = RtRetainedLightGrid.build(sections, 0, 0, 0, () -> false);
 
         assertEquals(125, data.populatedCells());
         assertEquals(-32, data.originX());
@@ -30,20 +30,21 @@ final class RtLightGridTest {
 
     @Test
     void retainsEveryCandidateBeyondTheOldLimit() {
-        RtLightGrid.Data data = RtLightGrid.build(
-                List.of(new RtLightGrid.SectionLights(7, 1, 0, 0, 0, 96.0)), 0, 0, 0, () -> false);
+        RtRetainedLightGrid.Data data = RtRetainedLightGrid.build(
+                List.of(new RtRetainedLightGrid.BatchLights(7, 1, 0, 0, 0, 96.0)),
+                0, 0, 0, () -> false);
 
         assertEquals(1, data.cellCounts()[0]);
         assertEquals(125, data.spanFirstLights().length);
         assertEquals(7, data.spanFirstLights()[0]);
-        assertEquals(125, data.representedSections());
+        assertEquals(125, data.representedBatches());
     }
 
     @Test
     void aliasColumnsReconstructExactSectionAndGlobalProbabilities() {
-        RtLightGrid.Data data = RtLightGrid.build(List.of(
-                new RtLightGrid.SectionLights(4, 1, 0, 0, 0, 1.0),
-                new RtLightGrid.SectionLights(8, 1, 1, 0, 0, 3.0)), 0, 0, 0, () -> false);
+        RtRetainedLightGrid.Data data = RtRetainedLightGrid.build(List.of(
+                new RtRetainedLightGrid.BatchLights(4, 1, 0, 0, 0, 1.0),
+                new RtRetainedLightGrid.BatchLights(8, 1, 1, 0, 0, 3.0)), 0, 0, 0, () -> false);
         int x = -data.originX() / 16;
         int y = -data.originY() / 16;
         int z = -data.originZ() / 16;
@@ -59,11 +60,12 @@ final class RtLightGridTest {
 
     @Test
     void skipsGridWhenThereAreNoLights() {
-        assertNull(RtLightGrid.build(List.of(new RtLightGrid.SectionLights(0, 1, 0, 0, 0, 0.0)),
+        assertNull(RtRetainedLightGrid.build(
+                List.of(new RtRetainedLightGrid.BatchLights(0, 1, 0, 0, 0, 0.0)),
                 0, 0, 0, () -> false));
     }
 
-    private static double aliasProbability(RtLightGrid.Data data, int first, int count,
+    private static double aliasProbability(RtRetainedLightGrid.Data data, int first, int count,
                                            int targetFirstLight) {
         double probability = 0.0;
         for (int column = 0; column < count; column++) {
