@@ -26,11 +26,11 @@ final class RtMaterialTextureData {
     private RtMaterialTextureData() {
     }
 
-    record Level(int width, int height, float[] surface0, float[] normalAo, float[] surface1) {
+    record Level(int width, int height, float[] surface0, float[] normal, float[] surface1) {
         Level {
             int values = Math.multiplyExact(Math.multiplyExact(width, height), CHANNELS);
             if (width <= 0 || height <= 0 || surface0.length != values
-                    || normalAo.length != values || surface1.length != values) {
+                    || normal.length != values || surface1.length != values) {
                 throw new IllegalArgumentException("Invalid canonical material level");
             }
         }
@@ -48,20 +48,21 @@ final class RtMaterialTextureData {
     /**
      * Reduce already-decoded physical channels. Emission is energy-averaged, normals are averaged then
      * renormalized, and lost normal length raises roughness so distant normal detail does not become a
-     * falsely smooth surface. Roughness is linear (GGX alpha) throughout — see {@link RtLabPbr}.
+     * falsely smooth surface. Roughness is stored perceptual (OpenPBR r) but reduced in GGX alpha, which
+     * is where normal-map variance actually adds — see the Toksvig term below.
      */
     static Level reduce(Level src) {
         int width = Math.max(1, (src.width + 1) / 2);
         int height = Math.max(1, (src.height + 1) / 2);
         float[] surface0 = new float[width * height * CHANNELS];
-        float[] normalAo = new float[surface0.length];
+        float[] normal = new float[surface0.length];
         float[] surface1 = new float[surface0.length];
         for (int y = 0; y < height; y++) {
             for (int x = 0; x < width; x++) {
                 float alphaSum = 0.0f;
                 float metal = 0.0f, emission = 0.0f, sss = 0.0f;
-                float nx = 0.0f, ny = 0.0f, nz = 0.0f, ao = 0.0f, heightValue = 0.0f;
-                float f0r = 0.0f, f0g = 0.0f, f0b = 0.0f, transmission = 0.0f;
+                float nx = 0.0f, ny = 0.0f, nz = 0.0f, heightValue = 0.0f;
+                float specR = 0.0f, specG = 0.0f, specB = 0.0f, ior = 0.0f;
                 int samples = 0;
                 for (int oy = 0; oy < 2; oy++) {
                     int sy = y * 2 + oy;
@@ -70,24 +71,24 @@ final class RtMaterialTextureData {
                         int sx = x * 2 + ox;
                         if (sx >= src.width) continue;
                         int si = (sy * src.width + sx) * CHANNELS;
-                        alphaSum += src.surface0[si];
+                        float roughness = src.surface0[si];
+                        alphaSum += roughness * roughness;
                         metal += src.surface0[si + 1];
                         emission += src.surface0[si + 2];
                         sss += src.surface0[si + 3];
 
-                        float tx = src.normalAo[si] * 2.0f - 1.0f;
-                        float ty = src.normalAo[si + 1] * 2.0f - 1.0f;
+                        float tx = src.normal[si] * 2.0f - 1.0f;
+                        float ty = src.normal[si + 1] * 2.0f - 1.0f;
                         float tz = (float) Math.sqrt(Math.max(0.0f, 1.0f - tx * tx - ty * ty));
                         nx += tx;
                         ny += ty;
                         nz += tz;
-                        ao += src.normalAo[si + 2];
-                        heightValue += src.normalAo[si + 3];
+                        heightValue += src.normal[si + 3];
 
-                        f0r += src.surface1[si];
-                        f0g += src.surface1[si + 1];
-                        f0b += src.surface1[si + 2];
-                        transmission += src.surface1[si + 3];
+                        specR += src.surface1[si];
+                        specG += src.surface1[si + 1];
+                        specB += src.surface1[si + 2];
+                        ior += src.surface1[si + 3];
                         samples++;
                     }
                 }
@@ -104,24 +105,24 @@ final class RtMaterialTextureData {
                 }
                 int di = (y * width + x) * CHANNELS;
                 // Toksvig-style variance term. This is intentionally conservative and monotonic.
-                // Both terms are in linear-roughness (GGX alpha) space, which is where normal-map
-                // variance adds: alpha behaves like a variance, so averaging and widening are both
-                // plain sums here — no perceptual round-trip.
-                surface0[di] = clamp01(alphaSum * inv + Math.max(0.0f, 1.0f - normalLength));
+                // Averaging and widening both happen in GGX alpha, which is where normal-map variance
+                // adds: alpha behaves like a variance, so both are plain sums. The result goes back to
+                // perceptual roughness because that is what the page stores.
+                float alpha = clamp01(alphaSum * inv + Math.max(0.0f, 1.0f - normalLength));
+                surface0[di] = (float) Math.sqrt(alpha);
                 surface0[di + 1] = clamp01(metal * inv);
                 surface0[di + 2] = clamp01(emission * inv);
                 surface0[di + 3] = clamp01(sss * inv);
-                normalAo[di] = clamp01(nx * 0.5f + 0.5f);
-                normalAo[di + 1] = clamp01(ny * 0.5f + 0.5f);
-                normalAo[di + 2] = clamp01(ao * inv);
-                normalAo[di + 3] = clamp01(heightValue * inv);
-                surface1[di] = clamp01(f0r * inv);
-                surface1[di + 1] = clamp01(f0g * inv);
-                surface1[di + 2] = clamp01(f0b * inv);
-                surface1[di + 3] = clamp01(transmission * inv);
+                normal[di] = clamp01(nx * 0.5f + 0.5f);
+                normal[di + 1] = clamp01(ny * 0.5f + 0.5f);
+                normal[di + 3] = clamp01(heightValue * inv);
+                surface1[di] = clamp01(specR * inv);
+                surface1[di + 1] = clamp01(specG * inv);
+                surface1[di + 2] = clamp01(specB * inv);
+                surface1[di + 3] = clamp01(ior * inv);
             }
         }
-        return new Level(width, height, surface0, normalAo, surface1);
+        return new Level(width, height, surface0, normal, surface1);
     }
 
     static int unorm8(float value) {

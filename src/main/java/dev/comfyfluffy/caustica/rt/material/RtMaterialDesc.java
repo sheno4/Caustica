@@ -1,22 +1,26 @@
 package dev.comfyfluffy.caustica.rt.material;
 
-/** Immutable physical material description produced at the resource-epoch boundary. */
+/**
+ * Immutable material description produced at the resource-epoch boundary, in OpenPBR vocabulary. Only
+ * the uniform half lives here; anything varying per texel is in the canonical pages.
+ */
 public record RtMaterialDesc(
         int model,
         Source source,
         int features,
-        float roughness,
-        float metalness,
-        float ior,
-        float transmission,
+        /** OpenPBR {@code specular_roughness}: perceptual. GGX alpha is its square, taken in the shader. */
+        float specularRoughness,
+        float baseMetalness,
+        float specularIor,
+        float transmissionWeight,
         EmissionSource emissionSource,
         /**
-         * Final HDR emitting-surface luminance in cd/m²: the look-package block baseline, replaced by
-         * a resource-pack {@code emission.strength_cd_m2} value when present.
-         * 0 when {@code emissionSource == NONE}. Applied uniformly regardless of source — LabPBR,
-         * heuristic-mask, or state-uniform all get the same baseline unless absolutely overridden.
+         * OpenPBR {@code emission_luminance}: final HDR emitting-surface luminance in cd/m², the
+         * look-package block baseline replaced by a resource-pack {@code emission.luminance_cd_m2} value
+         * when present. 0 when {@code emissionSource == NONE}. Applied uniformly regardless of source —
+         * LabPBR, heuristic-mask, or state-uniform all get the same baseline unless absolutely overridden.
          */
-        float emissionStrength,
+        float emissionLuminance,
         EmissionSummary emissionSummary
 ) {
     public enum Source {
@@ -47,8 +51,10 @@ public record RtMaterialDesc(
         if (source == null || emissionSource == null || emissionSummary == null) {
             throw new IllegalArgumentException("Material description enums/summary must be present");
         }
-        if (!finite01(roughness) || !finite01(metalness) || !Float.isFinite(ior) || ior <= 0.0f
-                || !finite01(transmission) || !Float.isFinite(emissionStrength) || emissionStrength < 0.0f) {
+        if (!finite01(specularRoughness) || !finite01(baseMetalness)
+                || !Float.isFinite(specularIor) || specularIor <= 0.0f
+                || !finite01(transmissionWeight)
+                || !Float.isFinite(emissionLuminance) || emissionLuminance < 0.0f) {
             throw new IllegalArgumentException("Invalid physical material parameters");
         }
     }

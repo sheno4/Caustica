@@ -40,7 +40,7 @@ void main<TC : IComposition>(inout Payload payload) {
     payload.f0 = half3(0.0h, 0.0h, 0.0h);
     payload.flags = 0u;
     payload.roughMetal = packHalf2(float2(1.0, 0.0));
-    payload.emissionSss = packHalf2(float2(0.0, 0.0));
+    payload.emission = packHalf2(float2(0.0, 0.0));
     payload.iorTransmission = packHalf2(float2(1.0, 0.0));
     payload.rayCone = 0u;
 }

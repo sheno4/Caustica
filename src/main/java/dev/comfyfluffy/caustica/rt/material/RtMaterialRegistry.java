@@ -56,7 +56,8 @@ public final class RtMaterialRegistry {
     public static final int MODEL_DIELECTRIC = 3;
     public static final int FEATURE_SPEC = 1;
     public static final int FEATURE_NORMAL = 2;
-    public static final int FEATURE_HEURISTIC_EMISSION = 4;
+    /** A per-texel emission mask was compiled into the page; it says nothing about where it came from. */
+    public static final int FEATURE_EMISSION_MASK = 4;
     /** Bindless albedo slot reserved for the vanilla block atlas, seeded by {@code RtEntityTextures}. */
     public static final int BLOCK_ATLAS_ALBEDO_SLOT = 0;
 
@@ -87,8 +88,8 @@ public final class RtMaterialRegistry {
     private static final float TRANSLUCENT_NEUTRAL_EXTINCTION = 0.15f;
     private static final int WHITE_SHADOW_TINT = 0x00FFFFFF;
     // HDR radiance of a full (level-15-equivalent) emitter, modulated by albedo. Baked into every
-    // emissive RtMaterialDesc.emissionStrength at compile time (compileDesc/compileEntityDesc), times
-    // any resource-pack absolute emission.strength_cd_m2 override; see header() and RtMaterialOverrides.
+    // emissive RtMaterialDesc.emissionLuminance at compile time (compileDesc/compileEntityDesc), times
+    // any resource-pack absolute emission.luminance_cd_m2 override; see surface() and RtMaterialOverrides.
     //
     // Photometric: cd/m² of the emitting surface, per {@link dev.comfyfluffy.caustica.rt.RtSceneUnits}.
     //
@@ -103,16 +104,19 @@ public final class RtMaterialRegistry {
     public static float defaultEmissionLuminanceCdM2() {
         return RtLookPackage.current().lighting().blockEmissionLuminanceCdM2();
     }
-    private static final int EMISSION_STRENGTH_SHIFT = 8;
-    private static final int EMISSION_STRENGTH_MASK = 65535;
-    // Ceiling of the 16-bit fixed-point strength field, raised with the baseline above. HALF_MAX is the
+    private static final int EMISSION_LUMINANCE_SHIFT = 8;
+    private static final int EMISSION_LUMINANCE_MASK = 65535;
+    // Ceiling of the 16-bit fixed-point luminance field, raised with the baseline above. HALF_MAX is the
     // real transport ceiling downstream — Payload.emissionSss is a half2 lane and Light.le is packed
     // R11G11B10 — so clamping here rather than higher keeps the encoded value representable end to end.
     // The quantisation step is MAX/65535 ≈ 1 cd/m², i.e. 0.007% at the baseline. A resource pack's
     // maximum 5x multiplier would reach 75,000 and clamps to this: a 0.19 EV reduction on something
     // already several EV past display white, so invisible.
-    private static final float MAX_EMISSION_STRENGTH = 65504.0f;
+    private static final float MAX_EMISSION_LUMINANCE = 65504.0f;
+    // SurfaceMaterial.page = pageIndex:24 | maxLod:8. The LOD limit describes the page rectangle rather
+    // than the surface, so it travels with the page reference; mirrored by surfacePage/surfacePageMaxLod.
     private static final int MAX_LOD_SHIFT = 24;
+    private static final int PAGE_MASK = 0xFFFFFF;
 
     private static final int MODEL_VARIANTS = 2; // ordinary opaque/cutout and transparent dielectric
     private static final int EMISSION_VARIANTS = 2; // state-gated emission disabled/enabled
@@ -145,6 +149,7 @@ public final class RtMaterialRegistry {
     private final List<MaterialBindingData> bindingRecords = new ArrayList<>();
     private final Map<MaterialBindingData, Integer> bindingIds = new HashMap<>();
     private int entityFallbackId;
+    private int particleId;
     private int bindingCapacity;
     private int nextSurfaceId;
     private int surfaceCapacity;
@@ -209,6 +214,8 @@ public final class RtMaterialRegistry {
         int nextEntityFallbackId = tables.add(
                 compileEntityDesc(0, true, RtMaterialDesc.EmissionSummary.NONE),
                 transparentWhiteAverage(), fallbackEntry, null, ENTITY_COVERAGE_CUTOFF);
+        int nextParticleId = tables.add(compileParticleDesc(), transparentWhiteAverage(), fallbackEntry,
+                null, ENTITY_COVERAGE_CUTOFF);
 
         IdentityHashMap<TextureAtlasSprite, int[]> ids = new IdentityHashMap<>();
         List<MutableCompiledOverride> compiledOverrides = new ArrayList<>();
@@ -218,7 +225,7 @@ public final class RtMaterialRegistry {
         for (TextureAtlasSprite sprite : sprites) {
             RtBlockMaterials.Entry entry = entriesBySprite.get(sprite);
             int baseFeatures = entry.features()
-                    & (FEATURE_SPEC | FEATURE_NORMAL | FEATURE_HEURISTIC_EMISSION);
+                    & (FEATURE_SPEC | FEATURE_NORMAL | FEATURE_EMISSION_MASK);
             SpriteStats stats = spriteStats.getOrDefault(sprite, SpriteStats.NEUTRAL);
 
             // The first sprite-wide (block == null) rule owns this sprite for every state, so its variants
@@ -239,7 +246,7 @@ public final class RtMaterialRegistry {
             for (RtMaterials.Profile profile : SPRITE_PROFILES) {
                 for (boolean glass : new boolean[]{false, true}) {
                     for (boolean emitting : new boolean[]{false, true}) {
-                        int features = emitting ? baseFeatures : baseFeatures & ~FEATURE_HEURISTIC_EMISSION;
+                        int features = emitting ? baseFeatures : baseFeatures & ~FEATURE_EMISSION_MASK;
                         RtMaterialDesc desc = compileDesc(glass ? MODEL_DIELECTRIC : MODEL_OPAQUE, features,
                                 profile, emitting, false,
                                 variantSummary(features, emitting, entry, stats.uniformSummary()),
@@ -260,7 +267,7 @@ public final class RtMaterialRegistry {
                 for (RtMaterials.Profile profile : SPRITE_PROFILES) {
                     for (boolean glass : new boolean[]{false, true}) {
                         for (boolean emitting : new boolean[]{false, true}) {
-                            int features = emitting ? baseFeatures : baseFeatures & ~FEATURE_HEURISTIC_EMISSION;
+                            int features = emitting ? baseFeatures : baseFeatures & ~FEATURE_EMISSION_MASK;
                             RtMaterialDesc base = compileDesc(glass ? MODEL_DIELECTRIC : MODEL_OPAQUE,
                                     features, profile, emitting, false,
                                     variantSummary(features, emitting, entry, stats.uniformSummary()),
@@ -351,6 +358,7 @@ public final class RtMaterialRegistry {
             bindingIds.put(bindingRecords.get(i), i);
         }
         entityFallbackId = nextEntityFallbackId;
+        particleId = nextParticleId;
         bindingCapacity = nextBindingCapacity;
         nextSurfaceId = surfaceCount;
         surfaceCapacity = nextSurfaceCapacity;
@@ -433,6 +441,15 @@ public final class RtMaterialRegistry {
 
     public int entityFallbackId(boolean stochasticCoverage) {
         return stochasticCoverage ? withStochasticCoverage(entityFallbackId) : entityFallbackId;
+    }
+
+    /**
+     * The binding every particle billboard submits with. A billboard is a thin surface with nothing
+     * behind it, so it needs no path of its own — its material says so, and the shading that follows is
+     * the same one every other surface gets.
+     */
+    public int particleId(boolean stochasticCoverage) {
+        return stochasticCoverage ? withStochasticCoverage(particleId) : particleId;
     }
 
     /**
@@ -528,6 +545,7 @@ public final class RtMaterialRegistry {
         bindingRecords.clear();
         bindingIds.clear();
         entityFallbackId = 0;
+        particleId = 0;
         bindingCapacity = 0;
         nextSurfaceId = 0;
         surfaceCapacity = 0;
@@ -552,7 +570,7 @@ public final class RtMaterialRegistry {
     private static RtMaterialDesc.EmissionSummary variantSummary(int features, boolean emitting,
                                                                  RtBlockMaterials.Entry entry,
                                                                  RtMaterialDesc.EmissionSummary uniformSummary) {
-        if ((features & (FEATURE_SPEC | FEATURE_HEURISTIC_EMISSION)) != 0) return entry.emissionSummary();
+        if ((features & (FEATURE_SPEC | FEATURE_EMISSION_MASK)) != 0) return entry.emissionSummary();
         return emitting ? uniformSummary : RtMaterialDesc.EmissionSummary.NONE;
     }
 
@@ -567,14 +585,14 @@ public final class RtMaterialRegistry {
                                               boolean emitting, boolean neutral,
                                               RtMaterialDesc.EmissionSummary emissionSummary,
                                               float dielectricIor) {
-        float roughness = model == MODEL_DIELECTRIC ? 0.0025f : profile.roughness(); // linear; s = 0.95
+        float roughness = model == MODEL_DIELECTRIC ? 0.05f : profile.roughness(); // perceptual; s = 0.95
         float metalness = model == MODEL_DIELECTRIC ? 0.0f : profile.metalness();
         // Refractive index is per material, not per model: ice and window glass are both
         // MODEL_DIELECTRIC but bend light by measurably different amounts.
         float ior = switch (model) {
             case MODEL_WATER -> RtDielectrics.WATER_IOR;
             case MODEL_DIELECTRIC -> dielectricIor;
-            default -> 1.0f;
+            default -> RtDielectrics.DEFAULT_IOR;
         };
         float transmission = model == MODEL_WATER || model == MODEL_DIELECTRIC ? 1.0f : 0.0f;
         boolean labPbr = (features & (FEATURE_SPEC | FEATURE_NORMAL)) != 0;
@@ -583,17 +601,28 @@ public final class RtMaterialRegistry {
         RtMaterialDesc.EmissionSource emissionSource;
         if ((features & FEATURE_SPEC) != 0) {
             emissionSource = RtMaterialDesc.EmissionSource.LAB_PBR;
-        } else if ((features & FEATURE_HEURISTIC_EMISSION) != 0) {
+        } else if ((features & FEATURE_EMISSION_MASK) != 0) {
             emissionSource = RtMaterialDesc.EmissionSource.HEURISTIC_MASK;
         } else if (emitting) {
             emissionSource = RtMaterialDesc.EmissionSource.STATE_UNIFORM;
         } else {
             emissionSource = RtMaterialDesc.EmissionSource.NONE;
         }
-        float emissionStrength = emissionSource == RtMaterialDesc.EmissionSource.NONE
+        float emissionLuminance = emissionSource == RtMaterialDesc.EmissionSource.NONE
                 ? 0.0f : defaultEmissionLuminanceCdM2();
         return new RtMaterialDesc(model, source, features, roughness, metalness, ior, transmission,
-                emissionSource, emissionStrength, emissionSummary);
+                emissionSource, emissionLuminance, emissionSummary);
+    }
+
+    /**
+     * A particle billboard: fully rough, no reflectance, and a transmission weight at the symmetric point
+     * so light from either side scatters identically. Index 1 is what makes the specular lobe vanish
+     * rather than merely darken — a camera-facing sprite has no interface to reflect off, and Fresnel at
+     * a grazing angle would otherwise give it a rim it was never meant to have.
+     */
+    private static RtMaterialDesc compileParticleDesc() {
+        return new RtMaterialDesc(MODEL_OPAQUE, RtMaterialDesc.Source.NEUTRAL, 0, 1.0f, 0.0f, 1.0f, 0.5f,
+                RtMaterialDesc.EmissionSource.NONE, 0.0f, RtMaterialDesc.EmissionSummary.NONE);
     }
 
     private static RtMaterialDesc compileEntityDesc(int features, boolean neutral,
@@ -603,10 +632,10 @@ public final class RtMaterialRegistry {
                 : (authored ? RtMaterialDesc.Source.LAB_PBR : RtMaterialDesc.Source.HEURISTIC);
         RtMaterialDesc.EmissionSource emissionSource = (features & FEATURE_SPEC) != 0
                 ? RtMaterialDesc.EmissionSource.LAB_PBR : RtMaterialDesc.EmissionSource.NONE;
-        float emissionStrength = emissionSource == RtMaterialDesc.EmissionSource.NONE
+        float emissionLuminance = emissionSource == RtMaterialDesc.EmissionSource.NONE
                 ? 0.0f : defaultEmissionLuminanceCdM2();
         return new RtMaterialDesc(MODEL_OPAQUE, source, features, RtMaterials.ENTITY_ROUGH, 0.0f,
-                1.0f, 0.0f, emissionSource, emissionStrength, emissionSummary);
+                RtDielectrics.DEFAULT_IOR, 0.0f, emissionSource, emissionLuminance, emissionSummary);
     }
 
     /**
@@ -670,16 +699,17 @@ public final class RtMaterialRegistry {
     private static SurfaceMaterialData surface(RtMaterialDesc desc, RtBlockMaterials.Entry entry,
                                                float albedoU, float albedoV,
                                                float albedoInvDu, float albedoInvDv) {
-        int packedFeatures = desc.features() | (entry.maxLod() << MAX_LOD_SHIFT);
-        // Packed unconditionally (0 for non-emissive materials): the shader multiplies surface.emission
+        // Packed unconditionally (0 for non-emissive materials): the shader multiplies the emission mask
         // by this every time, regardless of source, so the package baseline needs no shader copy.
-        int strength = Math.round(Math.min(MAX_EMISSION_STRENGTH, desc.emissionStrength())
-                * (EMISSION_STRENGTH_MASK / MAX_EMISSION_STRENGTH));
-        packedFeatures |= strength << EMISSION_STRENGTH_SHIFT;
-        return new SurfaceMaterialData(desc.model(), packedFeatures, entry.pageIndex(),
+        int luminance = Math.round(Math.min(MAX_EMISSION_LUMINANCE, desc.emissionLuminance())
+                * (EMISSION_LUMINANCE_MASK / MAX_EMISSION_LUMINANCE));
+        int packedFeatures = desc.features() | (luminance << EMISSION_LUMINANCE_SHIFT);
+        int page = (entry.pageIndex() & PAGE_MASK) | (entry.maxLod() << MAX_LOD_SHIFT);
+        return new SurfaceMaterialData(desc.model(), packedFeatures, page,
                 new Float4(entry.materialU(), entry.materialV(), entry.materialDu(), entry.materialDv()),
                 new Float4(albedoU, albedoV, albedoInvDu, albedoInvDv),
-                new Float4(desc.roughness(), desc.metalness(), desc.ior(), desc.transmission()));
+                desc.specularRoughness(), desc.baseMetalness(), desc.specularIor(),
+                desc.transmissionWeight());
     }
 
     /**

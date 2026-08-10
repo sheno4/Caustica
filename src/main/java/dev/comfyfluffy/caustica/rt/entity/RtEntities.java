@@ -989,9 +989,9 @@ public final class RtEntities {
                     particleScratch.clear();
                     sq.extract(particleScratch, cam, partial);
                     for (SingleQuadParticle.Layer layer : particleScratch.layers()) {
-                        // Billboards carry no authored material, but the record now names their albedo
-                        // slot, so each layer needs the neutral entity material for its atlas.
-                        capture.currentMaterialId = RtMaterialRegistry.INSTANCE.entityFallbackId(false);
+                        // Billboards are thin two-sided scatterers, which their material says with a
+                        // transmission weight; each layer pairs that one material with its own atlas slot.
+                        capture.currentMaterialId = RtMaterialRegistry.INSTANCE.particleId(false);
                         capture.currentTexSlot = RtEntityTextures.INSTANCE.slotForAtlas(layer.textureAtlasLocation());
                         particleScratch.buildLayer(layer, particleCapture);
                         particleCapture.flush();

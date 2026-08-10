@@ -20,6 +20,12 @@ import java.util.Map;
 public final class RtDielectrics {
     private RtDielectrics() {}
 
+    /**
+     * OpenPBR's default {@code specular_ior}, and what an opaque surface with no authored reflectance
+     * gets: it is the index that makes normal-incidence reflectance the familiar 0.04. Opaque materials
+     * never refract, so it only ever reaches the Fresnel term.
+     */
+    public static final float DEFAULT_IOR = 1.5f;
     /** Soda-lime glass. The default for anything translucent that is not otherwise classified. */
     public static final float GLASS_IOR = 1.52f;
     /** Fresh water at room temperature; also the fluid singleton's index. */

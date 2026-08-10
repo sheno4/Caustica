@@ -36,7 +36,7 @@ public struct SpecSurface {
     public float3 previousNormal; // the same normal one frame ago; equal to `normal` unless the surface animates
     public float3 biasNormal;     // geometric normal, used only to offset a ray origin off the surface
     public float3 motionPrev;     // current-minus-previous displacement of the reflecting surface
-    public float roughness;
+    public float roughness;       // perceptual, the quantity DLSS-RR expects
     public float3 albedo;         // specular albedo fed to DLSS-RR for demodulation (0 = pure diffuse)
 };
 public static SpecSurface gv_spec = {};
@@ -99,7 +99,7 @@ public float2 resolveSpecularGuides(SpecSurface surface, float3 primaryDir,
     specAlbedo = surface.albedo;
     if (length(surface.normal) < 0.5
             || max(surface.albedo.r, max(surface.albedo.g, surface.albedo.b)) <= 0.001
-            || surface.roughness > SPEC_MOTION_ALPHA_MAX) {
+            || surface.roughness > SPEC_MOTION_ROUGHNESS_MAX) {
         return float2(0.0, 0.0);
     }
 
@@ -122,14 +122,11 @@ public float2 resolveSpecularGuides(SpecSurface surface, float3 primaryDir,
         // Closest-hit writes motionPrev for every material. Terrain/water are zero; dynamic opaque and
         // dielectric entities carry their per-vertex/object displacement.
         reflectedMotionPrev = payload.motionPrev;
-        if (surface.roughness <= MIRROR_ALPHA_MAX
-                && (reflectedMaterial == MATERIAL_OPAQUE
-                    || reflectedMaterial == MATERIAL_PARTICLE)
+        if (surface.roughness <= MIRROR_ROUGHNESS_MAX
+                && reflectedMaterial == MATERIAL_OPAQUE
                 && payloadEmission() <= 0.0) {
-            float3 reflectedAlbedo = payloadAlbedo();
-            float3 reflectedDiffuse = reflectedMaterial == MATERIAL_PARTICLE
-                    ? reflectedAlbedo
-                    : reflectedAlbedo * (1.0 - clamp(payloadMetalness(), 0.0, 1.0));
+            float3 reflectedDiffuse = payloadAlbedo()
+                    * (1.0 - clamp(payloadMetalness(), 0.0, 1.0));
             if (max(reflectedDiffuse.r, max(reflectedDiffuse.g, reflectedDiffuse.b)) > 0.001) {
                 specAlbedo = surface.albedo * reflectedDiffuse;
             }
@@ -182,16 +179,12 @@ public void resolveTransmissionGuide(float3 surfacePos, float3 transmittedDir,
 
         uint material = payloadMaterial();
         float3 interfacePos = ro + direction * payload.hitT;
-        if (material == MATERIAL_OPAQUE || material == MATERIAL_PARTICLE) {
-            float endpointRoughness = material == MATERIAL_PARTICLE
-                    ? 1.0 : clamp(payloadRoughness(), 0.0, 1.0);
-            float3 hitAlbedo = payloadAlbedo();
-            float3 endpointAlbedo = material == MATERIAL_PARTICLE
-                    ? hitAlbedo
-                    : hitAlbedo * (1.0 - clamp(payloadMetalness(), 0.0, 1.0));
+        if (material == MATERIAL_OPAQUE) {
+            float3 endpointAlbedo = payloadAlbedo()
+                    * (1.0 - clamp(payloadMetalness(), 0.0, 1.0));
             setTransmissionGuide(interfacePos - worldPush.camOffset, payload.motionPrev,
-                    payloadNormal(), endpointRoughness, guideFilter * endpointAlbedo,
-                    payloadEmission() > 0.0);
+                    payloadNormal(), clamp(payloadRoughness(), 0.0, 1.0),
+                    guideFilter * endpointAlbedo, payloadEmission() > 0.0);
             return;
         }
         if (material != MATERIAL_WATER && material != MATERIAL_DIELECTRIC) return;

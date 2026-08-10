@@ -35,7 +35,7 @@ void main(uint3 id : SV_DispatchThreadID) {
     if (id.x == 0xFFFFFFFFu) {
         float sink = worldPushLayoutProbe[0].values[0].invViewProj[0][0]
                 + float(materialBindingLayoutProbe[0].values[0].packed0)
-                + surfaceMaterialLayoutProbe[0].values[0].params.x
+                + surfaceMaterialLayoutProbe[0].values[0].specularRoughness
                 + exposureStateLayoutProbe[0].values[0].previous
                 + float(pushConstantsLayoutProbe.frameIndex);
     }

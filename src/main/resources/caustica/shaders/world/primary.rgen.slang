@@ -3,7 +3,7 @@
 // Traces one camera radiance ray, captures DLSS-RR guides, and writes one or two resumable
 // continuations per pixel. At the first eligible dielectric it queues both post-interface branches and
 // stops; every later radiance trace belongs to Pass B. Deterministic guide probes may continue through
-// refraction, but Pass A does no NEE, RIS, SSS, or BSDF sampling.
+// refraction, but Pass A does no NEE, RIS, or BSDF sampling.
 //
 // Perspective setup: invViewProj = inverse(proj * viewRot) maps clip to camera-relative world. Primary
 // rays are reconstructed from two unprojected points (near and far plane) rather than assuming the eye
@@ -64,33 +64,22 @@ public PathSegment tracePrimary(PathSegment seg,
         float3 hitPos = ro + rd * payload.hitT;
         uint material = payloadMaterial();
         if (material != MATERIAL_WATER && material != MATERIAL_DIELECTRIC) {
-            float rough = material == MATERIAL_PARTICLE
-                    ? 1.0 : clamp(payloadRoughness(), 0.0, 1.0);
-            bool exactSpecular = material == MATERIAL_OPAQUE && isDeltaAlpha(rough);
-            rough = exactSpecular ? 0.0 : rough;
-            float metal = material == MATERIAL_PARTICLE
-                    ? 0.0 : clamp(payloadMetalness(), 0.0, 1.0);
-            float3 hitAlbedo = payloadAlbedo();
-            float3 diffAlb = material == MATERIAL_PARTICLE
-                    ? hitAlbedo : hitAlbedo * (1.0 - metal);
+            float rough = clamp(payloadRoughness(), 0.0, 1.0);
+            rough = isDeltaRoughness(rough) ? 0.0 : rough;
+            float metal = clamp(payloadMetalness(), 0.0, 1.0);
             if (bounce == 0) {
+                float3 v = -rd;
                 gv_normal = n;
                 gv_hitCamRel = hitPos - worldPush.camOffset;
                 gv_motionUseRefracted = false;
                 gv_motionObjDisp = payload.motionPrev;
                 gv_emissive = payloadEmission() > 0.0;
-                if (material == MATERIAL_PARTICLE) {
-                    gv_albedo = hitAlbedo;
-                    gv_rough = 1.0;
-                    gv_spec = makeSpecSurface(gv_hitCamRel, n, 1.0,
-                                              float3(0.0, 0.0, 0.0));
-                } else {
-                    float3 v = -rd;
-                    gv_albedo = diffAlb;
-                    gv_rough = rough;
-                    gv_spec = makeSpecSurface(gv_hitCamRel, n, float3(payload.motionPrev), rough,
-                                              rrSpecularAlbedo(payload.f0, rough, dot(n, v)));
-                }
+                gv_albedo = payloadAlbedo() * (1.0 - metal);
+                gv_rough = rough;
+                // rrSpecularAlbedo integrates the GGX lobe, so it takes alpha; the guide itself keeps
+                // the perceptual value.
+                gv_spec = makeSpecSurface(gv_hitCamRel, n, float3(payload.motionPrev), rough,
+                                          rrSpecularAlbedo(payload.f0, rough * rough, dot(n, v)));
             }
 
             return terminal;

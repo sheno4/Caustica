@@ -1,9 +1,9 @@
 {
-  "format": 2,
+  "format": 3,
   "match": {
     "sprite": "minecraft:block/copper_torch"
   },
   "emission": {
-    "strength_cd_m2": 6000.0
+    "luminance_cd_m2": 6000.0
   }
 }

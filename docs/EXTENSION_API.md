@@ -335,23 +335,35 @@ The engine owns sprite and texture discovery, LabPBR and other source-format dec
 priority and JSON merging, canonical texture pages and mips, stable material IDs within a resource epoch,
 core surface attributes and sampling, alpha coverage for geometry and OMM, and material lifetime.
 
-`createSurface` receives a canonical description: base color and opacity, shading and geometric normal,
-linear roughness, metalness, IOR and transmission, emission, AO and subsurface hints, semantic tags
-(water, particle, foliage, portal). Policy like "foliage gets more SSS" is expressed in `createSurface`
-keyed on those tags, not in a data file — more expressive, and it removes the ambiguity of two systems
-both describing a complete surface.
+**That canonical description is a subset of OpenPBR Surface**, so `createSurface` receives OpenPBR
+parameters under OpenPBR names: `base_color`/`base_metalness`, `specular_roughness`/`specular_ior`/
+`specular_color`, `transmission_weight`, `emission_color`/`emission_luminance`, `geometry_opacity` and
+`geometry_thin_walled`, alongside the shading and geometric normal and the semantic tags (water,
+particle, foliage, portal). Policy like "foliage scatters more" is expressed in `createSurface` keyed on
+those tags, not in a data file — more expressive, and it removes the ambiguity of two systems both
+describing a complete surface.
 
-**That canonical description becomes a subset of OpenPBR Surface** — see `MATERIAL_MODEL_PLAN.md` for
-the field mapping and what is deliberately omitted. Adopted as a *description* vocabulary only: the
-engine keeps transport in full per §4.4, so OpenPBR's layered evaluation is not adopted with it. Nearly
-every field already exists under a homegrown name, and emission is already anchored in cd/m² where
-OpenPBR wants nits. The two genuine additions are `geometry_opacity` — coverage, distinct from
-transmission, which is the distinction the current alpha channel conflates — and `geometry_thin_walled`,
-which belongs to SSS foliage rather than to glass: a glass block has two interfaces and an interior,
-while a leaf is a single surface with none.
+Adopted as a *description* vocabulary only: the engine keeps transport in full per §4.4, so OpenPBR's
+layered evaluation is not adopted with it. Three consequences are worth stating because they are not
+renames:
 
-This makes the paragraph above literally true rather than aspirational. LabPBR becomes an adapter that
-decodes into the canonical description, instead of leaking its own concepts into it.
+- **`specular_roughness` is perceptual.** OpenPBR fixes `alpha = r²`, so the square is taken where a lobe
+  is evaluated. `SurfaceClosure.alphaRoughness` is the squared value, which is why the two fields have
+  different names.
+- **Normal-incidence reflectance is not a parameter.** A dielectric's follows from `specular_ior` tinted
+  by `specular_color`, a metal's is `base_color`; `openPbrSpecularF0` is the one derivation.
+- **There is no ambient-occlusion parameter, deliberately.** AO approximates occlusion a rasteriser
+  cannot trace, and this engine traces it, so multiplying an authored AO into base color would darken it
+  twice.
+- **There is no subsurface parameter either.** OpenPBR's subsurface lobe degenerates into diffuse
+  reflection and transmission on a surface with no interior, and that degeneration is the only subsurface
+  transport this engine implements, so it is spelled `transmission_weight` on a thin-walled surface and
+  nothing else. That one weight is also what makes a billboard two-sided, so there is no separate
+  two-sided flag, no separate subsurface term, and no separate particle shading path.
+
+LabPBR is an adapter that decodes into this description rather than leaking its own concepts into it:
+its perceptual smoothness becomes `specular_roughness`, and its authored reflectance inverts into
+`specular_ior` for a dielectric or `base_color` for a metal.
 
 Per-block data the canonical attributes do not carry (a stylization group, a palette index) is an opaque
 extension namespace in the *resource pack*: the engine defines the format and the merge, the feature

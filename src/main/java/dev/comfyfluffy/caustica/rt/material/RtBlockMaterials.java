@@ -26,7 +26,11 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
-/** Compiles block and entity LabPBR inputs into canonical pages with explicit semantic mip chains. */
+/**
+ * Compiles block and entity LabPBR inputs into canonical pages with explicit semantic mip chains. The
+ * pages hold OpenPBR parameters, so this is where the source format stops existing — see
+ * {@link RtLabPbr} for the per-texel adapter and {@code bindings.slang} for the resulting channel ABI.
+ */
 public final class RtBlockMaterials {
     public static final RtBlockMaterials INSTANCE = new RtBlockMaterials();
 
@@ -57,11 +61,11 @@ public final class RtBlockMaterials {
                         RtMaterialDesc.EmissionSummary emissionSummary, RtEmissionGrid emissionGrid) {
     }
 
-    private record Page(RtMaterialPageTexture surface0, RtMaterialPageTexture normalAo,
+    private record Page(RtMaterialPageTexture surface0, RtMaterialPageTexture normal,
                         RtMaterialPageTexture surface1, int index) {
         void destroy() {
             surface0.destroy();
-            normalAo.destroy();
+            normal.destroy();
             surface1.destroy();
         }
     }
@@ -161,10 +165,10 @@ public final class RtBlockMaterials {
             }
             // Authored LabPBR owns emission whenever _s exists. Albedo inference is only compiled for
             // sprites proven to occur on an emitting block state. A resource-pack
-            // emission.strength_cd_m2 override replaces the level once resolved — it never
+            // emission.luminance_cd_m2 override replaces the level once resolved — it never
             // changes which sprites get a mask compiled here.
             if ((features & RtMaterialRegistry.FEATURE_SPEC) == 0 && emissionSemantics.permits(sprite)) {
-                features |= RtMaterialRegistry.FEATURE_HEURISTIC_EMISSION;
+                features |= RtMaterialRegistry.FEATURE_EMISSION_MASK;
                 heuristicCount++;
             }
             if (features != 0) {
@@ -254,8 +258,8 @@ public final class RtBlockMaterials {
             pages.add(new Page(
                     new RtMaterialPageTexture(ctx, pageSize, pageSize, pixels.surface0,
                             "material surface0 page " + pageIndex),
-                    new RtMaterialPageTexture(ctx, pageSize, pageSize, pixels.normalAo,
-                            "material normalAo page " + pageIndex),
+                    new RtMaterialPageTexture(ctx, pageSize, pageSize, pixels.normal,
+                            "material normal page " + pageIndex),
                     new RtMaterialPageTexture(ctx, pageSize, pageSize, pixels.surface1,
                             "material surface1 page " + pageIndex),
                     pageIndex));
@@ -297,7 +301,7 @@ public final class RtBlockMaterials {
 
     public void bindPages(RtPipeline pipeline, long sampler) {
         for (Page page : pages) {
-            pipeline.setMaterialPage(page.index(), page.surface0().view(), page.normalAo().view(),
+            pipeline.setMaterialPage(page.index(), page.surface0().view(), page.normal().view(),
                     page.surface1().view(), sampler);
         }
     }
@@ -347,14 +351,14 @@ public final class RtBlockMaterials {
     private static Decoded decode(Candidate candidate) throws Exception {
         NativeImage spec = (candidate.features & RtMaterialRegistry.FEATURE_SPEC) != 0
                 ? load(candidate.specLocation) : null;
-        NativeImage normal = (candidate.features & RtMaterialRegistry.FEATURE_NORMAL) != 0
+        NativeImage normalMap = (candidate.features & RtMaterialRegistry.FEATURE_NORMAL) != 0
                 ? load(candidate.normalLocation) : null;
         NativeImage resourceAlbedo = candidate.blockSprite() ? null : load(candidate.albedoLocation);
         try {
             int width = candidate.width;
             int height = candidate.height;
             float[] surface0 = new float[width * height * 4];
-            float[] normalAo = new float[surface0.length];
+            float[] normal = new float[surface0.length];
             float[] surface1 = new float[surface0.length];
             float[] linearAlbedo = new float[surface0.length];
             float[] authoredEmission = spec != null ? new float[width * height] : null;
@@ -375,23 +379,28 @@ public final class RtBlockMaterials {
                     linearAlbedo[i + 3] = aa;
                     if (spec != null) {
                         int pixel = sample(spec, x, y, width, height, candidate.blockSprite());
-                        RtLabPbr.Specular decoded = RtLabPbr.decodeSpec(
+                        RtLabPbr.Texel decoded = RtLabPbr.decodeSpec(
                                 ARGB.red(pixel) / 255.0f, ARGB.green(pixel) / 255.0f,
                                 ARGB.blue(pixel) / 255.0f, ARGB.alpha(pixel) / 255.0f, ar, ag, ab);
-                        surface0[i] = decoded.roughness();
+                        surface0[i] = decoded.specularRoughness();
                         surface0[i + 1] = decoded.metalness();
                         surface0[i + 2] = decoded.emission();
                         authoredEmission[y * width + x] = decoded.emission() * aa;
-                        surface0[i + 3] = decoded.sss();
-                        surface1[i] = decoded.f0r();
-                        surface1[i + 1] = decoded.f0g();
-                        surface1[i + 2] = decoded.f0b();
+                        surface0[i + 3] = decoded.transmissionWeight();
+                        surface1[i] = decoded.colorR();
+                        surface1[i + 1] = decoded.colorG();
+                        surface1[i + 2] = decoded.colorB();
+                        surface1[i + 3] = RtLabPbr.encodeIor(decoded.specularIor());
                     } else {
                         surface0[i] = 1.0f;
-                        surface1[i] = surface1[i + 1] = surface1[i + 2] = 0.04f;
+                        surface1[i] = surface1[i + 1] = surface1[i + 2] = 1.0f;
+                        surface1[i + 3] = RtLabPbr.encodeIor(RtDielectrics.DEFAULT_IOR);
                     }
-                    if (normal != null) {
-                        int pixel = sample(normal, x, y, width, height, candidate.blockSprite());
+                    // LabPBR's ambient-occlusion channel is deliberately dropped: it approximates
+                    // occlusion for rasterisers that cannot trace it, and multiplying it into base colour
+                    // here would darken what the path tracer already computes.
+                    if (normalMap != null) {
+                        int pixel = sample(normalMap, x, y, width, height, candidate.blockSprite());
                         float nx = ARGB.red(pixel) / 127.5f - 1.0f;
                         float ny = ARGB.green(pixel) / 127.5f - 1.0f;
                         float lengthSq = nx * nx + ny * ny;
@@ -400,13 +409,11 @@ public final class RtBlockMaterials {
                             nx *= invLength;
                             ny *= invLength;
                         }
-                        normalAo[i] = nx * 0.5f + 0.5f;
-                        normalAo[i + 1] = ny * 0.5f + 0.5f;
-                        normalAo[i + 2] = ARGB.blue(pixel) / 255.0f;
-                        normalAo[i + 3] = ARGB.alpha(pixel) / 255.0f;
+                        normal[i] = nx * 0.5f + 0.5f;
+                        normal[i + 1] = ny * 0.5f + 0.5f;
+                        normal[i + 3] = ARGB.alpha(pixel) / 255.0f;
                     } else {
-                        normalAo[i] = normalAo[i + 1] = 0.5f;
-                        normalAo[i + 2] = 1.0f;
+                        normal[i] = normal[i + 1] = 0.5f;
                     }
                 }
             }
@@ -416,7 +423,7 @@ public final class RtBlockMaterials {
                 emissionSummary = RtEmissionHeuristic.summarize(linearAlbedo, authoredEmission);
                 grid = emissionGrid(linearAlbedo, authoredEmission, width, height);
             }
-            boolean heuristic = (candidate.features & RtMaterialRegistry.FEATURE_HEURISTIC_EMISSION) != 0;
+            boolean heuristic = (candidate.features & RtMaterialRegistry.FEATURE_EMISSION_MASK) != 0;
             if (heuristic) {
                 RtEmissionHeuristic.Result emission = RtEmissionHeuristic.compile(linearAlbedo);
                 float[] mask = emission.mask();
@@ -428,25 +435,26 @@ public final class RtBlockMaterials {
             }
             int maxLod = maxLodFor(width, height);
             return new Decoded(RtMaterialTextureData.mipChain(new RtMaterialTextureData.Level(width, height,
-                    surface0, normalAo, surface1), maxLod), emissionSummary, grid);
+                    surface0, normal, surface1), maxLod), emissionSummary, grid);
         } finally {
             if (spec != null) spec.close();
-            if (normal != null) normal.close();
+            if (normalMap != null) normalMap.close();
             if (resourceAlbedo != null) resourceAlbedo.close();
         }
     }
 
     private static final class PagePixels {
         final List<byte[]> surface0;
-        final List<byte[]> normalAo;
+        final List<byte[]> normal;
         final List<byte[]> surface1;
         final int pageSize;
 
         PagePixels(int pageSize, int mipCount) {
             this.pageSize = pageSize;
             surface0 = allocate(pageSize, mipCount, 255, 0, 0, 0);
-            normalAo = allocate(pageSize, mipCount, 128, 128, 255, 0);
-            surface1 = allocate(pageSize, mipCount, 10, 10, 10, 0);
+            normal = allocate(pageSize, mipCount, 128, 128, 0, 0);
+            surface1 = allocate(pageSize, mipCount, 255, 255, 255,
+                    RtMaterialTextureData.unorm8(RtLabPbr.encodeIor(RtDielectrics.DEFAULT_IOR)));
         }
 
         void writeFallback() {
@@ -461,7 +469,7 @@ public final class RtBlockMaterials {
                 int cy = candidate.y >> mip;
                 int gutter = Math.max(1, GUTTER >> mip);
                 blit(surface0.get(mip), width, cx, cy, gutter, level.width(), level.height(), level.surface0());
-                blit(normalAo.get(mip), width, cx, cy, gutter, level.width(), level.height(), level.normalAo());
+                blit(normal.get(mip), width, cx, cy, gutter, level.width(), level.height(), level.normal());
                 blit(surface1.get(mip), width, cx, cy, gutter, level.width(), level.height(), level.surface1());
             }
         }

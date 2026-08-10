@@ -29,21 +29,15 @@ public float ggxG1(float ndx, float alpha) {
     return 2.0 * ndx / (ndx + sqrt(a2 + (1.0 - a2) * ndx * ndx) + 1.0e-7);
 }
 
+// Schlick's grazing limit is white, which is wrong for a surface with no interface at all: a billboard
+// authored at specular_ior 1 has F0 = 0 and must stay matte edge-on rather than picking up a rim. Scaling
+// the limit by F0 leaves every real material (F0 >= 0.02) at the usual full-white grazing response and
+// collapses the lobe only where there is genuinely nothing to reflect off.
 public float3 fresnelSchlick(float cosT, float3 f0) {
     float m = clamp(1.0 - cosT, 0.0, 1.0);
     float m2 = m * m;
-    return f0 + (1.0 - f0) * (m2 * m2 * m);
-}
-
-// Henyey–Greenstein phase function (with 4π normalisation so it integrates to 1 over the sphere).
-// g=0 → isotropic; g>0 → forward-scatter peak at cosT=1 (light and view aligned through a thin slab).
-public static const float SSS_G        = 0.6; // forward-scatter anisotropy; leaves/grass are quite directional
-public static const float SSS_STRENGTH = 1.0; // 1.0 ≈ 2.5× the Lambertian at peak (sss=1, cosT=1, backNdl=1)
-// Keep SSS on the first two Pass B hits. Pass A's primary/interface prefix is outside this local depth.
-public static const int   MAX_SSS_INDIRECT_DEPTH = 1;
-public float hg(float cosT, float g) {
-    float g2 = g * g;
-    return (1.0 - g2) / (4.0 * PI * pow(max(0.0, 1.0 + g2 - 2.0 * g * cosT), 1.5));
+    float grazing = clamp(50.0 * f0.g, 0.0, 1.0);
+    return f0 + (grazing - f0) * (m2 * m2 * m);
 }
 
 // NVIDIA RR guide-buffer helper: integrated/view-dependent specular reflectivity, not raw F0.
@@ -120,21 +114,6 @@ public float primaryRayConeSpread(float2 ndc, float2 size, float3 dir) {
     float3 dx = primaryRayDir(ndc + float2(onePixelNdc.x, 0.0));
     float3 dy = primaryRayDir(ndc + float2(0.0, onePixelNdc.y));
     return max(max(length(cross(dir, dx)), length(cross(dir, dy))), RAY_CONE_MIN_SPREAD);
-}
-
-// Cosine-weighted hemisphere sample about n (Malley's method). For a Lambertian BRDF this is the
-// importance-sampling match: BRDF*cos/pdf = (albedo/PI)*cos / (cos/PI) = albedo, so the continuation
-// throughput is just *= albedo with no PI/cos bookkeeping left over.
-public float3 cosineDir(float3 n, inout uint s) {
-    float u1 = rndf(s);
-    float u2 = rndf(s);
-    float r = sqrt(u1);
-    float phi = 6.2831853 * u2;
-    float3 t = normalize(abs(n.x) > 0.9 ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0));
-    float3 b = normalize(cross(n, t));
-    t = cross(b, n);
-    float3 local = float3(r * cos(phi), r * sin(phi), sqrt(max(0.0, 1.0 - u1)));
-    return normalize(local.x * t + local.y * b + local.z * n);
 }
 
 /**

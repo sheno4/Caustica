@@ -1,10 +1,11 @@
-// Composition-generic closest-hit shader. Geometry decode, texture sampling, LabPBR decode, ray-cone
-// LOD, and the block-breaking overlay stay engine-owned; opaque terrain and entity materials are routed
-// through the selected surface slot's createSurface implementation.
+// Composition-generic closest-hit shader. Geometry decode, texture sampling, source-format decode,
+// ray-cone LOD, and the block-breaking overlay stay engine-owned; every surface that does not bound a
+// medium — terrain, entities, block entities, particle billboards alike — is routed through the selected
+// surface slot's createSurface implementation.
 //
 // WorldShaderCompiler specializes this generic entry point with the active composition.
-// Water, stained glass, ice, and particles stay on engine-owned paths because dielectric transitions and
-// fixed billboard receivers are not surface-slot policy.
+// Water, stained glass and ice stay on an engine-owned path because a dielectric transition refracts and
+// pushes a medium, which is transport rather than surface-slot policy.
 import world_common;
 import math;
 import bindings;
@@ -18,14 +19,14 @@ import caustica_api;
 // fixed name is generated.
 import caustica_pass_resources;
 
+// `roughness` is OpenPBR's perceptual specular_roughness, matching what the payload carries end to end.
 void payloadSetPacked(inout Payload payload, uint material, float roughness, float metalness,
-        float emission, float sss, float ior, float transmission, uint emissionSource) {
+        float emission, float ior, float transmission) {
     // PAYLOAD_GUIDE_RAY describes the ray, not the hit, so it is carried across rather than overwritten
     // with the rest of the word. Everything else in flags is this hit's own output.
-    payload.flags = material | (emissionSource << PAYLOAD_EMISSION_SOURCE_SHIFT)
-            | (payload.flags & PAYLOAD_GUIDE_RAY);
+    payload.flags = material | (payload.flags & PAYLOAD_GUIDE_RAY);
     payload.roughMetal = packHalf2(float2(roughness, metalness));
-    payload.emissionSss = packHalf2(float2(emission, sss));
+    payload.emission = packHalf2(float2(emission, 0.0));
     payload.iorTransmission = packHalf2(float2(ior, transmission));
 }
 
@@ -38,15 +39,15 @@ void payloadSetDielectric(inout Payload payload, uint material, bool entering) {
 // it is looking at. A surface covering too little of its footprint is not that answer: report it as a
 // crossing and let the walk take the content behind it instead.
 //
-// The two axes compose here as they do everywhere else — coverage says how much of the footprint the
-// surface occupies, transmittance how much light passes where it does — so what terminates a guide is the
-// product being opaque enough. One global threshold; per-material tuning would need a consumer first.
+// Only coverage decides this. A thin wall's diffuse transmission does not make it see-through — light
+// passes through a leaf, but what the guide is looking at is still the leaf. Seeing past a surface is a
+// refractive crossing, and those never reach here. One global threshold; per-material tuning would need a
+// consumer first.
 static const float GUIDE_COVERAGE_THRESHOLD = 0.5;
 
-bool guideCoverageCrossing(Payload payload, float coverage, float transmission) {
+bool guideCoverageCrossing(Payload payload, float coverage) {
     return (payload.flags & PAYLOAD_GUIDE_RAY) != 0u
-            && clamp(coverage, 0.0, 1.0) * (1.0 - clamp(transmission, 0.0, 1.0))
-                    <= GUIDE_COVERAGE_THRESHOLD;
+            && clamp(coverage, 0.0, 1.0) <= GUIDE_COVERAGE_THRESHOLD;
 }
 
 /**
@@ -60,15 +61,7 @@ void payloadSetCoverageCrossing(inout Payload payload, float3 opticalColor, floa
     packAlbedo(payload, opticalColor);
     packNormal(payload, normal);
     payload.f0 = half3(0.0h, 0.0h, 0.0h);
-    payloadSetPacked(payload, MATERIAL_DIELECTRIC, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0,
-            EMISSION_SOURCE_NONE);
-}
-
-uint materialEmissionSource(SurfaceMaterial mat, float emission) {
-    if (emission <= 0.0) return EMISSION_SOURCE_NONE;
-    if ((mat.features & MATERIAL_FEATURE_SPEC) != 0u) return EMISSION_SOURCE_LAB_PBR;
-    if ((mat.features & MATERIAL_FEATURE_HEURISTIC_EMISSION) != 0u) return EMISSION_SOURCE_HEURISTIC;
-    return EMISSION_SOURCE_UNIFORM;
+    payloadSetPacked(payload, MATERIAL_DIELECTRIC, 0.0, 0.0, 0.0, 1.0, 1.0);
 }
 
 /** The surface parameters a binding names. Loaded only here: no any-hit reads them. */
@@ -79,8 +72,6 @@ SurfaceMaterial loadSurfaceMaterial(MaterialBinding binding) {
 MaterialBinding loadBinding(uint materialId) {
     return ConstPtr<MaterialBinding>(pc.materialTableAddr)[materialId];
 }
-
-static const float NORMAL_AO_STRENGTH = 0.5;
 
 static const float RAY_CONE_MIN_WIDTH = 1.0e-5;
 static const float RAY_CONE_MIN_TEXEL_FOOTPRINT = 1.0e-4;
@@ -118,8 +109,7 @@ float rayConeUnitUvLod(uint rayCone, float2 textureSizePx) {
     return clamp(log2(footprint), 0.0, RAY_CONE_MAX_LOD);
 }
 
-float3 perturbNormal(float3 n, float3 p0, float3 p1, float3 p2, float2 t0, float2 t1, float2 t2, float3 vdir, float4 ntex, out float ao) {
-    ao = 1.0;
+float3 perturbNormal(float3 n, float3 p0, float3 p1, float3 p2, float2 t0, float2 t1, float2 t2, float3 vdir, float2 ntex) {
     float2 g1 = t1 - t0;
     float2 g2 = t2 - t0;
     float det = g1.x * g2.y - g1.y * g2.x;
@@ -130,26 +120,36 @@ float3 perturbNormal(float3 n, float3 p0, float3 p1, float3 p2, float2 t0, float
     float3 traw = ((p1 - p0) * g2.y - (p2 - p0) * g1.y) * r;
     float3 T = normalize(traw - n * dot(n, traw));
     float3 B = cross(n, T) * (det < 0.0 ? -1.0 : 1.0);
-    float2 nxy = ntex.xy * 2.0 - 1.0;
+    float2 nxy = ntex * 2.0 - 1.0;
     float nz = sqrt(max(0.0, 1.0 - dot(nxy, nxy)));
     float3 nm = normalize(nxy.x * T + nxy.y * B + nz * n);
     float NoV = dot(nm, vdir);
     if (NoV < 0.02) {
         nm = normalize(nm + vdir * (0.02 - NoV));
     }
-    ao = lerp(1.0, ntex.b, NORMAL_AO_STRENGTH);
     return nm;
 }
 
-struct Surface {
-    float3 normal;
-    float3 f0;
-    float roughness;
-    float metalness;
-    float emission;
-    float sss;
-    float ao;
+/**
+ * The OpenPBR parameters one hit resolves: the material's uniform values, overridden per texel wherever
+ * the canonical pages carry authored data. Names and meanings are the spec's, so `specularRoughness` is
+ * perceptual r and reflectance is absent — derive it with `openPbrSpecularF0`.
+ */
+struct DecodedSurface {
+    float3 normal;            // OpenPBR geometry_normal: the shading normal after the normal map
+    float3 baseColor;
+    float3 specularColor;
+    float specularRoughness;
+    float baseMetalness;
+    float specularIor;
+    float emissionLuminance;  // cd/m²
+    float transmissionWeight;
 };
+
+float3 decodedSpecularF0(DecodedSurface surface) {
+    return openPbrSpecularF0(surface.baseColor, surface.baseMetalness, surface.specularIor,
+            surface.specularColor);
+}
 
 float4 samplePageSurface0(uint page, float2 uv, float lod) {
     return materialSurface0Tex[NonUniformResourceIndex(page)].SampleLevel(uv, lod);
@@ -157,50 +157,59 @@ float4 samplePageSurface0(uint page, float2 uv, float lod) {
 float4 samplePageSurface1(uint page, float2 uv, float lod) {
     return materialSurface1Tex[NonUniformResourceIndex(page)].SampleLevel(uv, lod);
 }
-float4 samplePageNormalAo(uint page, float2 uv, float lod) {
-    return materialNormalAoTex[NonUniformResourceIndex(page)].SampleLevel(uv, lod);
+float4 samplePageNormal(uint page, float2 uv, float lod) {
+    return materialNormalTex[NonUniformResourceIndex(page)].SampleLevel(uv, lod);
 }
 
-Surface evaluateMaterial(SurfaceMaterial mat, float2 atlasUv, float lod, float3 albedo,
+// `stateEmission` is the per-primitive block-light level: what an emitter with no authored mask emits,
+// and what a heuristic mask modulates.
+DecodedSurface evaluateMaterial(SurfaceMaterial mat, float2 atlasUv, float lod, float3 baseColor,
         float3 geometricNormal, float3 p0, float3 p1, float3 p2,
-        float2 uv0, float2 uv1, float2 uv2, float3 vdir,
-        float fallbackRoughness, float fallbackMetalness, float fallbackEmission, bool allowSss) {
-    Surface surface;
+        float2 uv0, float2 uv1, float2 uv2, float3 vdir, float stateEmission) {
+    DecodedSurface surface;
     surface.normal = geometricNormal;
-    surface.roughness = fallbackRoughness;
-    surface.metalness = fallbackMetalness;
-    surface.f0 = lerp(float3(0.04, 0.04, 0.04), albedo, fallbackMetalness);
-    surface.emission = fallbackEmission;
-    surface.sss = 0.0;
-    surface.ao = 1.0;
+    surface.baseColor = baseColor;
+    surface.specularColor = float3(1.0, 1.0, 1.0);
+    surface.specularRoughness = mat.specularRoughness;
+    surface.baseMetalness = mat.baseMetalness;
+    surface.specularIor = mat.specularIor;
+    surface.emissionLuminance = stateEmission;
+    surface.transmissionWeight = mat.transmissionWeight;
 
     float2 localUv = clamp((atlasUv - mat.albedoUv.xy) * mat.albedoUv.zw,
             float2(0.0, 0.0), float2(1.0, 1.0));
     float2 pageUv = mat.materialUv.xy + localUv * mat.materialUv.zw;
-    float maxMaterialLod = float((mat.features >> MATERIAL_MAX_LOD_SHIFT) & MATERIAL_MAX_LOD_MASK);
-    float materialLod = min(lod, maxMaterialLod);
-    uint page = mat.texturePage;
-    if ((mat.features & (MATERIAL_FEATURE_SPEC | MATERIAL_FEATURE_HEURISTIC_EMISSION)) != 0u) {
+    float materialLod = min(lod, surfacePageMaxLod(mat));
+    uint page = surfacePage(mat);
+    if ((mat.features & (MATERIAL_FEATURE_SPEC | MATERIAL_FEATURE_EMISSION_MASK)) != 0u) {
         float4 surface0 = samplePageSurface0(page, pageUv, materialLod);
         if ((mat.features & MATERIAL_FEATURE_SPEC) != 0u) {
             float4 surface1 = samplePageSurface1(page, pageUv, materialLod);
-            surface.roughness = surface0.r;
-            surface.metalness = surface0.g;
-            surface.emission = surface0.b;
-            surface.sss = allowSss ? surface0.a : 0.0;
-            surface.f0 = clamp(bt709ToAcesCg(surface1.rgb), float3(0.0), float3(1.0));
+            surface.specularRoughness = surface0.r;
+            surface.baseMetalness = surface0.g;
+            surface.emissionLuminance = surface0.b;
+            // The source format's subsurface channel: on a surface with no interior that IS diffuse
+            // transmission, so it lands directly on the transmission weight. A dielectric's own
+            // transmission is refractive and uniform, so those paths take the material's value instead
+            // of this one.
+            surface.transmissionWeight = surface0.a;
+            surface.specularIor = surfaceIorFromPage(surface1.a);
+            // One page channel, two OpenPBR parameters, because the source format allows only one: a
+            // LabPBR texel authors either a conductor's reflectance — which IS base_color for a metal —
+            // or a dielectric's specular tint, and its own metalness says which. Both reduce to the same
+            // reflectance through openPbrSpecularF0.
+            float3 authored = clamp(bt709ToAcesCg(surface1.rgb), float3(0.0), float3(1.0));
+            surface.baseColor = lerp(baseColor, authored, surface.baseMetalness);
+            surface.specularColor = lerp(authored, float3(1.0, 1.0, 1.0), surface.baseMetalness);
         } else {
-            surface.emission = surface0.b * fallbackEmission;
+            surface.emissionLuminance = surface0.b * stateEmission;
         }
     }
-    float strength = float((mat.features >> MATERIAL_EMISSION_STRENGTH_SHIFT)
-            & MATERIAL_EMISSION_STRENGTH_MASK)
-            * (MATERIAL_MAX_EMISSION_STRENGTH / float(MATERIAL_EMISSION_STRENGTH_MASK));
-    surface.emission *= strength;
+    surface.emissionLuminance *= surfaceEmissionLuminance(mat);
     if ((mat.features & MATERIAL_FEATURE_NORMAL) != 0u) {
-        float4 normalAo = samplePageNormalAo(page, pageUv, materialLod);
+        float4 normalTexel = samplePageNormal(page, pageUv, materialLod);
         surface.normal = perturbNormal(geometricNormal, p0, p1, p2, uv0, uv1, uv2,
-                vdir, normalAo, surface.ao);
+                vdir, normalTexel.xy);
     }
     return surface;
 }
@@ -230,28 +239,32 @@ float3 applyBreaking(float3 albedo709, uint rayCone, float3 rayOrigin, float3 ra
     return albedo709;
 }
 
-// Builds the canonical, engine-decoded material facts handed to createSurface. `finalAlbedo`
-// is ACEScg, post block-breaking overlay, but deliberately NOT ao- or metal-multiplied: those two splits
-// are the surface slot's job.
-// `diffuseAlbedo = baseColor * (1 - metalness) * ao`. Multiplication commutes, so folding ao/breaking in
-// either order reproduces the built-in surface result.
-MaterialInput buildMaterialInput(Surface surface, float3 finalAlbedo, float interiorIor) {
+// Builds the OpenPBR description handed to createSurface. The base colour is ACEScg and already carries
+// the block-breaking overlay; the metalness split is the surface slot's job, so nothing is pre-multiplied
+// here.
+//
+// Everything reaching this point is thin-walled by construction: a surface that refracts and bounds a
+// medium was routed to the engine's dielectric transport instead, so nothing left here has an interior
+// for light to travel through. That is what makes its transmission weight the diffuse kind.
+MaterialInput buildMaterialInput(DecodedSurface surface) {
     MaterialInput material;
-    material.baseColor = finalAlbedo;
-    material.opacity = 1.0; // opaque bucket only; any-hit already resolved cutout alpha
-    material.alphaRoughness = surface.roughness;
-    material.metalness = surface.metalness;
-    material.specularF0 = surface.f0;
+    material.baseColor = surface.baseColor;
+    material.baseMetalness = surface.baseMetalness;
+    material.specularRoughness = surface.specularRoughness;
+    material.specularIor = surface.specularIor;
+    material.specularColor = surface.specularColor;
+    material.transmissionWeight = surface.transmissionWeight;
+    // Minecraft's convention is that an emitter glows in its own texture colour, so this adapter — not
+    // the model — ties emission_color to base_color.
+    //
     // The payload's emission channel is still a scalar multiplied against the final albedo at the read
-    // site (indirect_core), not an independent colour — see the Payload struct doc. A slot's
-    // emissionRadiance is accepted here for API completeness and future use, but is not yet threaded back
-    // out; the engine's own LabPBR/heuristic emission stays authoritative until the payload ABI carries a
-    // real emission colour. This is the same representational gap as demodulationAlbedo.
-    material.emissionRadiance = finalAlbedo * max(surface.emission, 0.0);
-    material.transmission = 0.0; // opaque bucket only; dielectrics never reach this path
-    material.interiorIor = interiorIor;
-    material.subsurface = surface.sss;
-    material.ambientOcclusion = surface.ao;
+    // site (indirect_core), not an independent colour, so a slot that computes its own emissionRadiance
+    // is not yet threaded back out; the engine's own emission stays authoritative until the payload ABI
+    // carries a real emission colour. This is the same representational gap as demodulationAlbedo.
+    material.emissionColor = surface.baseColor;
+    material.emissionLuminance = max(surface.emissionLuminance, 0.0);
+    material.geometryOpacity = 1.0; // opaque bucket only; any-hit already resolved cutout coverage
+    material.geometryThinWalled = true;
     // No semantic material tags (foliage/water/portal/...) are compiled into SurfaceMaterial yet.
     material.materialTags = 0u;
     return material;
@@ -286,50 +299,12 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
     uint rayCone = payload.rayCone;
     TC.Surface surfaceModel;
 
-    // Particle billboards remain engine-owned and do not route through the surface slot.
-    if ((InstanceID() & PARTICLE_BIT) != 0u) {
-        uint idx = InstanceID() & IDX_MASK;
-        EntityGeom g = ConstPtr<EntityGeom>(pc.entityTableAddr)[idx];
-        uint pid = PrimitiveIndex() + g.triBase[GeometryIndex()];
-        Prim pr = ConstPtr<Prim>(g.primAddr)[pid];
-        ConstPtr<uint> ib = ConstPtr<uint>(g.idxAddr);
-        ConstPtr<float2> uvb = ConstPtr<float2>(g.uvAddr);
-        uint p0 = ib[3u * pid + 0u];
-        uint p1 = ib[3u * pid + 1u];
-        uint p2 = ib[3u * pid + 2u];
-        float3 pbary = float3(1.0 - attribs.x - attribs.y, attribs.x, attribs.y);
-        float2 puv = pbary.x * uvb[p0] + pbary.y * uvb[p1] + pbary.z * uvb[p2];
-        uint pslot = bindingAlbedoSlot(loadBinding(pr.materialId));
-        float3x3 o2w = (float3x3)ObjectToWorld3x4();
-        float3 pp0 = mul(o2w, HitTriangleVertexPosition(0));
-        float3 pp1 = mul(o2w, HitTriangleVertexPosition(1));
-        float3 pp2 = mul(o2w, HitTriangleVertexPosition(2));
-        float particleLod = rayConeTextureLod(rayCone, texSizePx(entityAlbedoTex[NonUniformResourceIndex(pslot)]),
-                pp0, pp1, pp2, uvb[p0], uvb[p1], uvb[p2]);
-        float3 pn = normalize(pr.normal.xyz);
-        if (dot(pn, WorldRayDirection()) > 0.0) {
-            pn = -pn;
-        }
-        float3 particleAlbedo709 = srgbToLinear(
-                entityAlbedoTex[NonUniformResourceIndex(pslot)].SampleLevel(puv, particleLod).rgb)
-                * srgbToLinear(pr.tint.rgb);
-        packAlbedo(payload, bt709ToAcesCg(particleAlbedo709));
-        packNormal(payload, pn);
-        payload.hitT = RayTCurrent();
-        if (g.dispAddr != 0) {
-            ConstPtr<float4> pd = ConstPtr<float4>(g.dispAddr);
-            payload.motionPrev = half3(pbary.x * pd[p0].xyz + pbary.y * pd[p1].xyz + pbary.z * pd[p2].xyz);
-        } else {
-            payload.motionPrev = half3(g.rigidDisp.xyz);
-        }
-        payload.f0 = half3(0.0h, 0.0h, 0.0h);
-        payloadSetPacked(payload, MATERIAL_PARTICLE, 1.0, 0.0, 0.0, 0.0,
-                1.0, 0.0, EMISSION_SOURCE_NONE);
-        return;
-    }
-    // Dynamic entities: captured ModelPart geometry routed through the surface slot.
-    if ((InstanceID() & ENTITY_BIT) != 0u) {
-        uint eidx = InstanceID() & ~ENTITY_BIT;
+    // Captured geometry: dynamic entities, block entities, and particle billboards, all indexing the
+    // entity table and all routed through the surface slot. A billboard needs no path of its own — it is
+    // a thin surface that answers light from either side, which its material says with a transmission
+    // weight of one half.
+    if ((InstanceID() & (ENTITY_BIT | PARTICLE_BIT)) != 0u) {
+        uint eidx = InstanceID() & IDX_MASK;
         EntityGeom g = ConstPtr<EntityGeom>(pc.entityTableAddr)[eidx];
         uint pid = PrimitiveIndex() + g.triBase[GeometryIndex()];
         Prim pr = ConstPtr<Prim>(g.primAddr)[pid];
@@ -364,10 +339,9 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
 
         if (material != MATERIAL_OPAQUE) {
             // Dielectric/transmissive entities stay on the engine material path.
-            Surface surface = evaluateMaterial(mat, euvCoord, entityLod, albedo, geometricNormal,
-                    ep0, ep1, ep2, euv[e0], euv[e1], euv[e2], vdir,
-                    mat.params.x, mat.params.y, pr.normal.w, false);
-            packAlbedo(payload, albedo * surface.ao);
+            DecodedSurface surface = evaluateMaterial(mat, euvCoord, entityLod, albedo, geometricNormal,
+                    ep0, ep1, ep2, euv[e0], euv[e1], euv[e2], vdir, 0.0);
+            packAlbedo(payload, surface.baseColor);
             packNormal(payload, surface.normal);
             payload.hitT = RayTCurrent();
             if (g.dispAddr != 0) {
@@ -376,16 +350,16 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
             } else {
                 payload.motionPrev = half3(g.rigidDisp.xyz);
             }
-            payload.f0 = half3(surface.f0);
-            payloadSetPacked(payload, material, surface.roughness, surface.metalness,
-                    0.0, 0.0, mat.params.z, mat.params.w, EMISSION_SOURCE_NONE);
+            payload.f0 = half3(decodedSpecularF0(surface));
+            payloadSetPacked(payload, material, surface.specularRoughness, surface.baseMetalness,
+                    0.0, mat.specularIor, mat.transmissionWeight);
             payloadSetDielectric(payload, material, entering);
             return;
         }
 
         // Checked before the material pages are sampled and the surface slot runs: a guide walking
         // through foliage or a blended entity pays for neither.
-        if (guideCoverageCrossing(payload, entityTexel.a, mat.params.w)) {
+        if (guideCoverageCrossing(payload, entityTexel.a)) {
             payload.hitT = RayTCurrent();
             if (g.dispAddr != 0) {
                 ConstPtr<float4> dd = ConstPtr<float4>(g.dispAddr);
@@ -398,11 +372,10 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
             return;
         }
 
-        Surface surface = evaluateMaterial(mat, euvCoord, entityLod, albedo, geometricNormal,
-                ep0, ep1, ep2, euv[e0], euv[e1], euv[e2], vdir,
-                mat.params.x, mat.params.y, pr.normal.w, true);
+        DecodedSurface surface = evaluateMaterial(mat, euvCoord, entityLod, albedo, geometricNormal,
+                ep0, ep1, ep2, euv[e0], euv[e1], euv[e2], vdir, pr.normal.w);
 
-        MaterialInput material0 = buildMaterialInput(surface, albedo, mat.params.z);
+        MaterialInput material0 = buildMaterialInput(surface);
         float3 hitPos = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
         SurfaceInput input = buildSurfaceInput(material0, hitPos,
                 geometricNormal, surface.normal, vdir, euvCoord, entityLod);
@@ -418,10 +391,8 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
             payload.motionPrev = half3(g.rigidDisp.xyz);
         }
         payload.f0 = half3(closure.specularF0);
-        float emission = surface.emission;
-        payloadSetPacked(payload, material, closure.alphaRoughness, 0.0,
-                emission, closure.subsurface, mat.params.z, closure.transmission,
-                materialEmissionSource(mat, emission));
+        payloadSetPacked(payload, material, sqrt(closure.alphaRoughness), 0.0,
+                surface.emissionLuminance, closure.interiorIor, closure.transmission);
         return;
     }
 
@@ -460,22 +431,19 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
         float4 gtex = entityAlbedoTex[NonUniformResourceIndex(blockSlot)].SampleLevel(uv, blockLod);
         float3 gtex709 = srgbToLinear(gtex.rgb);
         float3 tint709 = srgbToLinear(tint);
-        float3 opticalColor709 = lerp(float3(1.0), gtex709 * tint709, gtex.a);
-        float3 glassAlbedo = bt709ToAcesCg(opticalColor709);
-        Surface glassSurface = evaluateMaterial(terrainMat, uv, blockLod, glassAlbedo, geometricNormal,
-                tp0, tp1, tp2, uv0, uv1, uv2, vdir,
-                terrainMat.params.x, terrainMat.params.y, 0.0, false);
-        float3 n = glassSurface.normal;
-        packAlbedo(payload, bt709ToAcesCg(applyBreaking(
-                opticalColor709 * glassSurface.ao, rayCone, WorldRayOrigin(),
-                WorldRayDirection(), RayTCurrent(), n)));
-        packNormal(payload, n);
+        float3 opticalColor709 = applyBreaking(lerp(float3(1.0), gtex709 * tint709, gtex.a), rayCone,
+                WorldRayOrigin(), WorldRayDirection(), RayTCurrent(), geometricNormal);
+        DecodedSurface glassSurface = evaluateMaterial(terrainMat, uv, blockLod,
+                bt709ToAcesCg(opticalColor709), geometricNormal,
+                tp0, tp1, tp2, uv0, uv1, uv2, vdir, 0.0);
+        packAlbedo(payload, glassSurface.baseColor);
+        packNormal(payload, glassSurface.normal);
         payload.hitT = RayTCurrent();
         payload.motionPrev = half3(0.0h, 0.0h, 0.0h);
-        payload.f0 = half3(glassSurface.f0);
-        payloadSetPacked(payload, MATERIAL_DIELECTRIC, glassSurface.roughness,
-                glassSurface.metalness, 0.0, 0.0, terrainMat.params.z,
-                terrainMat.params.w, EMISSION_SOURCE_NONE);
+        payload.f0 = half3(decodedSpecularF0(glassSurface));
+        payloadSetPacked(payload, MATERIAL_DIELECTRIC, glassSurface.specularRoughness,
+                glassSurface.baseMetalness, 0.0, terrainMat.specularIor,
+                terrainMat.transmissionWeight);
         payloadSetDielectric(payload, MATERIAL_DIELECTRIC, entering);
         return;
     }
@@ -484,30 +452,29 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
     float4 blockTexel = entityAlbedoTex[NonUniformResourceIndex(blockSlot)].SampleLevel(uv, blockLod);
     float3 albedo709 = srgbToLinear(blockTexel.rgb) * tint709;
 
+    // The mesher folds a +2 flag for non-SOLID block layers into the emission lane; only the block-light
+    // level below it is a material input.
+    float ew = pr.normal.w;
+    float stateEmission = ew >= 1.5 ? ew - 2.0 : ew;
+
     if (terrainMat.model == MATERIAL_WATER) {
         // Water stays on the engine dielectric path.
-        packAlbedo(payload, bt709ToAcesCg(tint709));
+        DecodedSurface surface = evaluateMaterial(terrainMat, uv, blockLod, bt709ToAcesCg(tint709),
+                geometricNormal, tp0, tp1, tp2, uv0, uv1, uv2, vdir, stateEmission);
+        packAlbedo(payload, surface.baseColor);
+        packNormal(payload, surface.normal);
         payload.hitT = RayTCurrent();
         payload.motionPrev = half3(0.0h, 0.0h, 0.0h);
-        float ew = pr.normal.w;
-        bool nonSolid = ew >= 1.5;
-        float emission = nonSolid ? ew - 2.0 : ew;
-        Surface surface = evaluateMaterial(terrainMat, uv, blockLod, unpackAlbedo(payload), geometricNormal,
-                tp0, tp1, tp2, uv0, uv1, uv2, vdir,
-                terrainMat.params.x, terrainMat.params.y, emission, false);
-        packAlbedo(payload, unpackAlbedo(payload) * surface.ao);
-        packNormal(payload, surface.normal);
-        payload.f0 = half3(surface.f0);
-        payloadSetPacked(payload, MATERIAL_WATER, surface.roughness, surface.metalness,
-                surface.emission, surface.sss, terrainMat.params.z, terrainMat.params.w,
-                materialEmissionSource(terrainMat, surface.emission));
+        payload.f0 = half3(decodedSpecularF0(surface));
+        payloadSetPacked(payload, MATERIAL_WATER, surface.specularRoughness, surface.baseMetalness,
+                surface.emissionLuminance, terrainMat.specularIor, terrainMat.transmissionWeight);
         payloadSetDielectric(payload, MATERIAL_WATER, entering);
         return;
     }
 
     // Checked before the material pages are sampled and the surface slot runs: a guide walking through
     // foliage pays for neither.
-    if (guideCoverageCrossing(payload, blockTexel.a, terrainMat.params.w)) {
+    if (guideCoverageCrossing(payload, blockTexel.a)) {
         payload.hitT = RayTCurrent();
         payload.motionPrev = half3(0.0h, 0.0h, 0.0h);
         payloadSetCoverageCrossing(payload,
@@ -516,24 +483,19 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
     }
 
     // Opaque terrain: the reflective path routed through the surface slot.
-    packAlbedo(payload, bt709ToAcesCg(albedo709));
     payload.hitT = RayTCurrent();
     payload.motionPrev = half3(0.0h, 0.0h, 0.0h);
 
-    float ew = pr.normal.w;
-    bool nonSolid = ew >= 1.5;
-    float emission = nonSolid ? ew - 2.0 : ew;
-    Surface surface = evaluateMaterial(terrainMat, uv, blockLod, unpackAlbedo(payload), geometricNormal,
-            tp0, tp1, tp2, uv0, uv1, uv2, vdir,
-            terrainMat.params.x, terrainMat.params.y, emission, nonSolid);
-
-    // Block-breaking overlay is a rendering trick, not a material fact,
-    // so it stays engine-side and composites into baseColor before the slot sees it.
+    // Block-breaking overlay is a rendering trick, not a material fact, so it stays engine-side and
+    // composites into the texture colour before any material decode sees it. Keyed on the geometric
+    // normal: the decal is projected onto the block face, not onto the normal map's perturbation of it.
     float3 brokenAlbedo709 = applyBreaking(albedo709, rayCone, WorldRayOrigin(),
-            WorldRayDirection(), RayTCurrent(), surface.normal);
-    float3 finalAlbedo = bt709ToAcesCg(brokenAlbedo709);
+            WorldRayDirection(), RayTCurrent(), geometricNormal);
+    DecodedSurface surface = evaluateMaterial(terrainMat, uv, blockLod,
+            bt709ToAcesCg(brokenAlbedo709), geometricNormal,
+            tp0, tp1, tp2, uv0, uv1, uv2, vdir, stateEmission);
 
-    MaterialInput material0 = buildMaterialInput(surface, finalAlbedo, terrainMat.params.z);
+    MaterialInput material0 = buildMaterialInput(surface);
     float3 hitPos = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
     SurfaceInput input = buildSurfaceInput(material0, hitPos,
             geometricNormal, surface.normal, vdir, uv, blockLod);
@@ -542,9 +504,8 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
     packAlbedo(payload, closure.diffuseAlbedo);
     packNormal(payload, closure.shadingNormal);
     payload.f0 = half3(closure.specularF0);
-    payloadSetPacked(payload, MATERIAL_OPAQUE, closure.alphaRoughness, 0.0,
-            surface.emission, closure.subsurface, terrainMat.params.z, closure.transmission,
-            materialEmissionSource(terrainMat, surface.emission));
+    payloadSetPacked(payload, MATERIAL_OPAQUE, sqrt(closure.alphaRoughness), 0.0,
+            surface.emissionLuminance, closure.interiorIor, closure.transmission);
     // RIS emitter-NEE membership: raygen gates this emitter's direct-hit emission term (RIS covers it).
     if ((pr.flags & TERRAIN_PRIM_IN_LIGHT_BUFFER) != 0u) {
         payload.flags |= PAYLOAD_EMITTER_IN_LIST;

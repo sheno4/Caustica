@@ -150,9 +150,9 @@ public struct Payload {
     public float  hitT;        // >= 0 on hit, < 0 on miss.
     public half3  motionPrev;  // per-vertex world displacement since last frame.
     public half3  f0;          // specular F0.
-    public uint   flags;       // bits 0..1 material, bit 2 celestial, bit 3 water-entering, bits 4..6 emission source.
-    public uint   roughMetal;  // packHalf2x16(roughness, metalness)
-    public uint   emissionSss; // packHalf2x16(emission, sss)
+    public uint   flags;       // bits 0..1 material, bit 2 celestial, bit 3 dielectric-entering.
+    public uint   roughMetal;  // packHalf2x16(perceptual roughness, metalness)
+    public uint   emission;    // packHalf2x16(emission cd/m², unused)
     public uint   iorTransmission; // packHalf2x16(IOR, transmission factor)
     public uint   rayCone;     // packHalf2x16(width, spread)
 };
@@ -168,12 +168,6 @@ public static const uint PAYLOAD_EMITTER_IN_LIST = 128u;
 // meaningful on a miss and this bit only on a hit, so they never need to be read together, but they get
 // distinct bits anyway to keep the two concerns unambiguous.
 public static const uint PAYLOAD_DIELECTRIC_ENTERING = 8u;
-public static const uint PAYLOAD_EMISSION_SOURCE_SHIFT = 4u;
-public static const uint PAYLOAD_EMISSION_SOURCE_MASK = 7u;
-public static const uint EMISSION_SOURCE_NONE = 0u;
-public static const uint EMISSION_SOURCE_UNIFORM = 1u;
-public static const uint EMISSION_SOURCE_HEURISTIC = 2u;
-public static const uint EMISSION_SOURCE_LAB_PBR = 3u;
 
 // Set by traceGuide so the radiance any-hit can suppress stochastic alpha. A guide probe answers which
 // surface a reflection/refraction points at, so a coin-flip there is a flickering control signal rather
@@ -190,7 +184,6 @@ public static const uint MATERIAL_OPAQUE = 0u;
 // (inset) translucent terrain layer. MATERIAL_DIELECTRIC is everything else transparent: glass, ice, and
 // any solid transparent block a pack defines.
 public static const uint MATERIAL_WATER = 1u;
-public static const uint MATERIAL_PARTICLE = 2u;
 public static const uint MATERIAL_DIELECTRIC = 3u;
 
 // Entity per-triangle record (48 B). The final lane mirrors TerrainPrim's integer material metadata.
@@ -260,33 +253,62 @@ public float3 bindingShadowTint(MaterialBinding binding) {
             * (1.0 / 255.0);
 }
 
-// Closest-hit-only surface parameters, shared by every binding that names them. Source-format data has
-// already been decoded into canonical pages; texturePage indexes the dedicated canonical page arrays.
+// Closest-hit-only surface parameters, shared by every binding that names them. The uniform half of the
+// authored OpenPBR Surface subset: everything that varies per texel lives in the canonical pages `page`
+// names instead. Source-format data has already been decoded, so nothing here is LabPBR-shaped.
 // materialUv maps sprite-local UV into the packed page, while albedoUv maps the vanilla atlas rectangle
 // back to sprite-local UV.
 public struct SurfaceMaterial {
     public uint model;
-    public uint features;     // low feature bits; bits 24..31 = maximum valid material-page LOD
-    public uint texturePage;
+    public uint features;     // MATERIAL_FEATURE_* | emission luminance
+    // Canonical page index in bits 0..23, and in bits 24..31 the maximum LOD at which this material's
+    // rectangle within that page is still valid. The LOD limit describes the page rectangle, not the
+    // surface, which is why it travels with the page reference rather than with the parameters below.
+    public uint page;
     public float4 materialUv; // packed-page uvMin.xy + uvExtent.xy
     public float4 albedoUv;   // vanilla atlas uvMin.xy + inverse uvExtent.xy
-    public float4 params;     // roughness, metalness, IOR, transmission
+    // OpenPBR names, OpenPBR meanings. specularRoughness is PERCEPTUAL r: the GGX alpha every lobe wants
+    // is its square, computed where the lobe is evaluated. Nothing in the pipeline stores alpha.
+    public float specularRoughness;
+    public float baseMetalness;
+    public float specularIor;
+    public float transmissionWeight;
 };
 
+// "Is there a texture to sample": a compiled fetch-skipping optimisation, not an authored concept.
 public static const uint MATERIAL_FEATURE_SPEC = 1u;
 public static const uint MATERIAL_FEATURE_NORMAL = 2u;
-public static const uint MATERIAL_FEATURE_HEURISTIC_EMISSION = 4u;
+public static const uint MATERIAL_FEATURE_EMISSION_MASK = 4u;
 // Final HDR emitting-surface luminance (look-package baseline or absolute JSON cd/m² override), baked in Java
 // at material-compile time (RtMaterialRegistry) and packed here as a 16-bit fraction of the max — every
 // emissive material carries a value (0 for non-emissive), not just resource-pack-overridden ones, so the
 // full features word's spare 16 bits (8..23) hold the encoded value.
-public static const uint MATERIAL_EMISSION_STRENGTH_SHIFT = 8u;
-public static const uint MATERIAL_EMISSION_STRENGTH_MASK = 65535u;
-// Mirrors RtMaterialRegistry.MAX_EMISSION_STRENGTH — HALF_MAX, the ceiling emission can survive through
-// Payload.emissionSss (half2) and Light.le (R11G11B10). Emission is measured in cd/m².
-public static const float MATERIAL_MAX_EMISSION_STRENGTH = 65504.0;
+public static const uint MATERIAL_EMISSION_LUMINANCE_SHIFT = 8u;
+public static const uint MATERIAL_EMISSION_LUMINANCE_MASK = 65535u;
+// Mirrors RtMaterialRegistry.MAX_EMISSION_LUMINANCE — HALF_MAX, the ceiling emission can survive through
+// Payload.emission (half2) and Light.le (R11G11B10). Emission is measured in cd/m².
+public static const float MATERIAL_MAX_EMISSION_LUMINANCE = 65504.0;
+public static const uint MATERIAL_PAGE_MASK = 0xFFFFFFu;
 public static const uint MATERIAL_MAX_LOD_SHIFT = 24u;
-public static const uint MATERIAL_MAX_LOD_MASK = 255u;
+
+public uint surfacePage(SurfaceMaterial mat) { return mat.page & MATERIAL_PAGE_MASK; }
+public float surfacePageMaxLod(SurfaceMaterial mat) { return float(mat.page >> MATERIAL_MAX_LOD_SHIFT); }
+
+/** OpenPBR emission_luminance in cd/m²: the emissive baseline this material's emission mask scales. */
+public float surfaceEmissionLuminance(SurfaceMaterial mat) {
+    return float((mat.features >> MATERIAL_EMISSION_LUMINANCE_SHIFT) & MATERIAL_EMISSION_LUMINANCE_MASK)
+            * (MATERIAL_MAX_EMISSION_LUMINANCE / float(MATERIAL_EMISSION_LUMINANCE_MASK));
+}
+
+/**
+ * Decode the canonical page's specular_ior channel. IOR is stored as its amplitude reflectance
+ * (ior - 1) / (ior + 1), which maps the whole dielectric range onto a unorm8 with useful precision where
+ * real materials sit; RtLabPbr owns the matching encode.
+ */
+public float surfaceIorFromPage(float encoded) {
+    float amplitude = clamp(encoded, 0.0, 254.0 / 255.0);
+    return (1.0 + amplitude) / (1.0 - amplitude);
+}
 
 // Per-section geometry record: packed buffer addresses + per-bucket triangle offsets
 // (gl_PrimitiveID restarts at 0 per geometry, so hit shaders re-add triBase[geometryIndex]).

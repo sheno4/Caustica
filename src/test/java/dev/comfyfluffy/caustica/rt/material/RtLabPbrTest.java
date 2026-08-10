@@ -9,39 +9,81 @@ final class RtLabPbrTest {
 
     @Test
     void decodesDielectricAndIgnoredEmission() {
-        RtLabPbr.Specular value = RtLabPbr.decodeSpec(
+        RtLabPbr.Texel value = RtLabPbr.decodeSpec(
                 0.25f, 0.04f, 64.0f / 255.0f, 1.0f,
                 0.7f, 0.6f, 0.5f);
-        assertEquals(0.5625f, value.roughness(), EPS);
+        assertEquals(0.75f, value.specularRoughness(), EPS);
         assertEquals(0.0f, value.metalness(), EPS);
-        assertEquals(0.04f, value.f0r(), EPS);
+        // A dielectric authors reflectance, which inverts into an index; the tint stays neutral because
+        // the source format has only one channel for it.
+        assertEquals(RtLabPbr.iorFromF0(0.04f), value.specularIor(), EPS);
+        assertEquals(1.0f, value.colorR(), EPS);
         assertEquals(0.0f, value.emission(), EPS);
-        assertEquals(0.0f, value.sss(), EPS);
+        assertEquals(0.0f, value.transmissionWeight(), EPS);
     }
 
     @Test
-    void decodesGenericMetalEmissionAndSss() {
-        RtLabPbr.Specular value = RtLabPbr.decodeSpec(
+    void decodesGenericMetalEmissionAndThinTransmission() {
+        RtLabPbr.Texel value = RtLabPbr.decodeSpec(
                 0.5f, 1.0f, 1.0f, 127.0f / 255.0f,
                 0.7f, 0.6f, 0.5f);
-        assertEquals(0.25f, value.roughness(), EPS);
+        assertEquals(0.5f, value.specularRoughness(), EPS);
         assertEquals(1.0f, value.metalness(), EPS);
-        assertEquals(0.7f, value.f0r(), EPS);
-        assertEquals(0.6f, value.f0g(), EPS);
-        assertEquals(0.5f, value.f0b(), EPS);
+        // Above the predefined range the albedo IS the conductor's reflectance, i.e. its base colour.
+        assertEquals(0.7f, value.colorR(), EPS);
+        assertEquals(0.6f, value.colorG(), EPS);
+        assertEquals(0.5f, value.colorB(), EPS);
         assertEquals(0.5f, value.emission(), 0.002f);
-        assertEquals(1.0f, value.sss(), EPS);
+        // The strongest authored subsurface is the symmetric thin scatterer, not a pure transmitter.
+        assertEquals(0.5f, value.transmissionWeight(), EPS);
     }
 
     @Test
     void decodesPredefinedGoldWithoutUsingAlbedo() {
-        RtLabPbr.Specular value = RtLabPbr.decodeSpec(
+        RtLabPbr.Texel value = RtLabPbr.decodeSpec(
                 1.0f, 231.0f / 255.0f, 0.0f, 1.0f,
                 0.0f, 0.0f, 0.0f);
-        assertEquals(0.0f, value.roughness(), EPS);
+        assertEquals(0.0f, value.specularRoughness(), EPS);
         assertEquals(1.0f, value.metalness(), EPS);
-        assertEquals(0.944f, value.f0r(), 0.002f);
-        assertEquals(0.776f, value.f0g(), 0.002f);
-        assertEquals(0.373f, value.f0b(), 0.002f);
+        assertEquals(0.944f, value.colorR(), 0.002f);
+        assertEquals(0.776f, value.colorG(), 0.002f);
+        assertEquals(0.373f, value.colorB(), 0.002f);
+    }
+
+    /**
+     * The roughness conversion fails silently in either direction — everything still renders, just at
+     * the wrong gloss — so it is pinned against the authored smoothness values rather than checked by
+     * eye. OpenPBR fixes alpha = r^2, and LabPBR authors perceptual smoothness, so r = 1 - s.
+     */
+    @Test
+    void perceptualSmoothnessMapsToOpenPbrRoughnessAndItsSquareIsGgxAlpha() {
+        float[][] smoothnessToAlpha = {
+                {0.0f, 1.0f}, {0.1f, 0.81f}, {0.5f, 0.25f}, {0.9f, 0.01f}, {1.0f, 0.0f}};
+        for (float[] pair : smoothnessToAlpha) {
+            RtLabPbr.Texel value = RtLabPbr.decodeSpec(pair[0], 0.04f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f);
+            assertEquals(1.0f - pair[0], value.specularRoughness(), EPS);
+            float alpha = value.specularRoughness() * value.specularRoughness();
+            assertEquals(pair[1], alpha, EPS);
+        }
+    }
+
+    /**
+     * The F0 inversion must round-trip: what the adapter stores as an index, decoded and pushed back
+     * through the Fresnel relation, has to be the reflectance the pack authored.
+     */
+    @Test
+    void authoredReflectanceRoundTripsThroughTheStoredIndex() {
+        for (float f0 : new float[]{0.0f, 0.02f, 0.04f, 0.08f, 0.2f, 0.5f, 0.89f}) {
+            float ior = RtLabPbr.iorFromF0(f0);
+            float decoded = RtLabPbr.decodeIor(RtLabPbr.encodeIor(ior));
+            float amplitude = (decoded - 1.0f) / (decoded + 1.0f);
+            assertEquals(f0, amplitude * amplitude, 1.0e-4f);
+        }
+    }
+
+    @Test
+    void theDefaultIndexIsTheOneThatGivesTheFamiliarFourPercent() {
+        float amplitude = (RtDielectrics.DEFAULT_IOR - 1.0f) / (RtDielectrics.DEFAULT_IOR + 1.0f);
+        assertEquals(0.04f, amplitude * amplitude, EPS);
     }
 }

@@ -1,5 +1,5 @@
-// Shared composition-generic indirect integrator. The engine owns path bookkeeping, termination, medium state,
-// dielectric transitions, ray cones, particle shading, and direct-light gating. Opaque vertices call the
+// Shared composition-generic indirect integrator. The engine owns path bookkeeping, termination, medium
+// state, dielectric transitions, ray cones, and direct-light gating. Every other vertex calls the
 // selected surface slot for BSDF evaluation, sampling, and the post-estimator response.
 //
 // The closure is reconstructed from the payload written by closest_hit.slang, so no material policy is
@@ -28,18 +28,18 @@ import trace_policy;
 import caustica_pass_resources;
 
 // Rebuilds the closure closest_hit.slang's createSurface already computed for this hit. Its
-// fields are exactly what the payload carries (diffuseAlbedo/specularF0/alphaRoughness/subsurface/
-// transmission), so this is a struct literal, not a re-evaluation of the material.
+// fields are exactly what the payload carries (diffuseAlbedo/specularF0/roughness/transmission), so this
+// is a struct literal, not a re-evaluation of the material. The one conversion is perceptual roughness
+// back to the GGX alpha the closure is defined in.
 SurfaceClosure payloadSurfaceClosure(float3 n) {
     SurfaceClosure closure;
     closure.shadingNormal = n;
     closure.diffuseAlbedo = payloadAlbedo();
     closure.specularF0 = payload.f0;
-    closure.alphaRoughness = clamp(payloadRoughness(), 0.0, 1.0);
+    closure.alphaRoughness = payloadAlphaRoughness();
     closure.emissionRadiance = float3(0.0); // not read by evaluateBsdf/sampleBsdf; see payload doc
     closure.transmission = payloadTransmission();
     closure.interiorIor = max(payloadIor(), 1.0);
-    closure.subsurface = payloadSss();
     closure.flags = 0u;
     return closure;
 }
@@ -63,7 +63,6 @@ public float3 tracePath<TC : IComposition, TTrace : IRadianceTrace>(TC.Surface s
     MediumStack medium = seg.medium;
     bool waterWaves = (worldPush.flags & 16u) != 0u;
     bool showCelestial = seg.showCelestial;
-    int indirectDepth = 0;
     TTrace tracer;
     for (int bounce = seg.bounce; bounce <= maxBounces; bounce++) {
         uint pathPhaseHint = bounce >= maxBounces ? 2u : (bounce >= rrStart ? 1u : 0u);
@@ -87,7 +86,6 @@ public float3 tracePath<TC : IComposition, TTrace : IRadianceTrace>(TC.Surface s
         float3 hitPos = ro + rd * payload.hitT;
         rayConeWidth = max(rayConeWidth + rayConeSpread * max(payload.hitT, 0.0), RAY_CONE_MIN_WIDTH);
         uint material = payloadMaterial();
-        int hitDepth = indirectDepth++;
 
         // ---- Dielectric interface: engine-owned in full.
         if (material == MATERIAL_WATER || material == MATERIAL_DIELECTRIC) {
@@ -141,46 +139,8 @@ public float3 tracePath<TC : IComposition, TTrace : IRadianceTrace>(TC.Surface s
             continue;
         }
 
-        // ---- Particles: fixed camera-facing receiver, not routed through the surface slot.
-        if (material == MATERIAL_PARTICLE) {
-            float3 albedo = payloadAlbedo();
-
-            float3 lightDir = celestialLight.dir;
-            float lightHalfAngle = celestialLight.halfAngle;
-            if (lightHalfAngle > 0.0) {
-                lightDir = sampleSquare(lightDir, lightHalfAngle, seed);
-            }
-            float signedNdl = dot(n, lightDir);
-            float ndl = abs(signedNdl);
-            if (ndl > 0.0) {
-                float3 shadowOrigin = hitPos + (signedNdl >= 0.0 ? n : -n) * SURF_BIAS;
-                float3 vis = visibility(shadowOrigin, lightDir, 10000.0).transmittance;
-                if (max(vis.r, max(vis.g, vis.b)) > 0.0) {
-                    L += throughput * albedo * INV_PI * celestialLight.illuminance * ndl * vis;
-                }
-            }
-
-            if (risOn) {
-                float3 v = -rd;
-                Reservoir r = risInitial(hitPos, n, v, rd, albedo, float3(0.0, 0.0, 0.0), 1.0,
-                                         true, 0.0, seed, proposalSeed);
-                L += throughput * shadeReservoir(r, hitPos, n, v, rd, albedo, float3(0.0, 0.0, 0.0), 1.0,
-                                                 true, 0.0);
-            }
-
-            if (bounce >= maxBounces) {
-                break;
-            }
-            throughput *= albedo;
-            ro = hitPos + n * SURF_BIAS;
-            rd = cosineDir(n, seed);
-            rayConeSpread = max(rayConeSpread, RAY_CONE_DIFFUSE_SPREAD);
-            showCelestial = false;
-            continue;
-        }
-
-        // ---- Opaque terrain/entity: the reflective closure built at closest-hit.
-        float3 p = hitPos + n * SURF_BIAS;
+        // ---- Every surface that does not bound a medium: the closure built at closest-hit. Terrain,
+        // entities and billboards differ only in the parameters they carry.
         float3 v = -rd;
         SurfaceClosure closure = payloadSurfaceClosure(n);
         float3 diffAlb = closure.diffuseAlbedo;
@@ -197,13 +157,18 @@ public float3 tracePath<TC : IComposition, TTrace : IRadianceTrace>(TC.Surface s
             vertexRadiance += payloadAlbedo() * emission;
         }
 
-        // NEE toward the dominant celestial body: the slot BSDF is the estimator's target function.
+        // NEE toward the dominant celestial body: the slot BSDF is the estimator's target function. One
+        // ray serves both hemispheres — a light is either in front of the surface, where the BSDF answers
+        // with reflection, or behind it, where a thin wall answers with transmission and an opaque one
+        // answers with nothing. The origin is biased onto whichever side the light is.
         float3 lightDir = celestialLight.dir;
         float lightHalfAngle = celestialLight.halfAngle;
         if (lightHalfAngle > 0.0) {
             lightDir = sampleSquare(lightDir, lightHalfAngle, seed);
         }
-        float ndl = max(0.0, dot(n, lightDir));
+        float signedNdl = dot(n, lightDir);
+        float ndl = abs(signedNdl);
+        float3 p = hitPos + (signedNdl >= 0.0 ? n : -n) * SURF_BIAS;
         if (ndl > 0.0) {
             VisibilityResult shadow = visibility(p, lightDir, 10000.0);
             float3 vis = shadow.transmittance;
@@ -224,29 +189,10 @@ public float3 tracePath<TC : IComposition, TTrace : IRadianceTrace>(TC.Surface s
         // evalSampleContrib in lighting.slang), evaluated against the same diffAlb/F0/rough the closure
         // carries. RIS still uses the engine reference target function rather than evaluateBsdf.
         if (risOn) {
-            float activeSss = hitDepth <= MAX_SSS_INDIRECT_DEPTH ? closure.subsurface : 0.0;
-            Reservoir r = risInitial(hitPos, n, v, rd, diffAlb, F0, rough, false, activeSss,
+            Reservoir r = risInitial(hitPos, n, v, rd, diffAlb, F0, rough, closure.transmission,
                                      seed, proposalSeed);
-            vertexRadiance += shadeReservoir(r, hitPos, n, v, rd, diffAlb, F0, rough, false,
-                                             activeSss);
-        }
-
-        // Thin-surface SSS transmission is a fixed engine-owned HG closed form.
-        if (closure.subsurface > 0.0 && hitDepth <= MAX_SSS_INDIRECT_DEPTH) {
-            float backNdl = max(0.0, dot(-n, lightDir));
-            if (backNdl > 0.0) {
-                VisibilityResult shadowBack = visibility(hitPos - n * SURF_BIAS, lightDir, 10000.0);
-                float3 visB = shadowBack.transmittance;
-                if (medium.current.water && waterWaves && shadowBack.waterHitT > 0.0) {
-                    visB *= waterCaustic(hitPos + lightDir * shadowBack.waterHitT,
-                                         lightDir, shadowBack.waterHitT);
-                }
-                if (max(visB.r, max(visB.g, visB.b)) > 0.0) {
-                    float cosT = dot(lightDir, rd);
-                    vertexRadiance += diffAlb * closure.subsurface * SSS_STRENGTH * hg(cosT, SSS_G)
-                            * backNdl * celestialLight.illuminance * visB;
-                }
-            }
+            vertexRadiance += shadeReservoir(r, hitPos, n, v, rd, diffAlb, F0, rough,
+                                             closure.transmission);
         }
 
         // Look policy applies once to this vertex's total shaded contribution; it is identity
@@ -269,8 +215,10 @@ public float3 tracePath<TC : IComposition, TTrace : IRadianceTrace>(TC.Surface s
             break;
         }
         throughput *= sample.throughputWeight;
-        ro = p;
         rd = sample.incomingDirection;
+        // A transmitted bounce leaves through the far side, so the origin follows the direction rather
+        // than the normal.
+        ro = hitPos + (dot(n, rd) >= 0.0 ? n : -n) * SURF_BIAS;
         // Engine invariant derived from the slot's lobe classification: a diffuse
         // bounce is already covered by the NEE term above, so it must not also see the celestial disc.
         showCelestial = (sample.eventFlags & EVENT_DIFFUSE) == 0u;
@@ -291,8 +239,8 @@ public float3 tracePath<TC : IComposition, TTrace : IRadianceTrace>(TC.Surface s
 public void runIndirect<TC : IComposition, TTrace : IRadianceTrace>() {
     worldPush = ConstPtr<WorldPush>(pc.worldPushAddr)[0];
     // celestialLight (world_core.slang) is a fixed hand-authored sun, so the three consumers below
-    // (particle lighting, main NEE, SSS backscatter) all fire against the same constant direction and
-    // illuminance every frame, regardless of the time of day the sky slot is drawing.
+    // NEE fires against the same constant direction and illuminance every frame, regardless of the time
+    // of day the sky slot is drawing.
     TC.Surface surfaceModel;
     uint2 dispatchIndex = DispatchRaysIndex().xy;
     uint2 dimensions = DispatchRaysDimensions().xy;

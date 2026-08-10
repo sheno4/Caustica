@@ -34,15 +34,18 @@ public uint payloadMaterial() { return payload.flags & PAYLOAD_MATERIAL_MASK; }
 // travelling into the volume (vs. out of it) at this hit's face.
 public bool payloadDielectricEntering() { return (payload.flags & PAYLOAD_DIELECTRIC_ENTERING) != 0u; }
 public bool payloadEmitterInList() { return (payload.flags & PAYLOAD_EMITTER_IN_LIST) != 0u; }
-// LINEAR roughness, i.e. GGX alpha directly — NOT perceptual roughness. This is the one convention used
-// end to end: LabPBR defines roughness = (1 - perceptualSmoothness)^2 and RtLabPbr.decode stores exactly
-// that, RtMaterials.Profile carries the same units, and DLSS-RR wants linear roughness in its guide. So
-// nothing squares it: ggxD/ggxG1/sampleGGXVNDF/rrSpecularAlbedo all take this value as alpha as-is, and
-// any threshold compared against it is an alpha threshold.
+// OpenPBR specular_roughness: PERCEPTUAL, not GGX alpha. This is the one convention used end to end —
+// the material record, the canonical pages and this payload lane all carry r, and the GGX alpha every
+// lobe wants is r*r, squared where the lobe is evaluated. ggxD/ggxG1/sampleGGXVNDF/rrSpecularAlbedo all
+// take alpha, so a value handed to one of them is squared first; DLSS-RR wants r and gets it unsquared.
 public float payloadRoughness() { return unpackHalf2(payload.roughMetal).x; }
+/** GGX alpha for this hit: the payload's perceptual roughness squared. */
+public float payloadAlphaRoughness() {
+    float roughness = clamp(payloadRoughness(), 0.0, 1.0);
+    return roughness * roughness;
+}
 public float payloadMetalness() { return unpackHalf2(payload.roughMetal).y; }
-public float payloadEmission() { return unpackHalf2(payload.emissionSss).x; }
-public float payloadSss() { return unpackHalf2(payload.emissionSss).y; }
+public float payloadEmission() { return unpackHalf2(payload.emission).x; }
 public float payloadIor() { return unpackHalf2(payload.iorTransmission).x; }
 public float payloadTransmission() { return unpackHalf2(payload.iorTransmission).y; }
 
@@ -105,14 +108,14 @@ public static const float RAY_CONE_MIN_WIDTH = 1.0e-5;
 public static const float RAY_CONE_DIFFUSE_SPREAD = 0.25;
 public static const float RAY_CONE_GLOSSY_SPREAD_SCALE = 0.35;
 
-// Stored roughness IS alpha (see payloadRoughness), so these compare against it directly.
-public static const float MIRROR_ALPHA_MAX = 4.0e-4; // LabPBR perceptual smoothness >= 0.98
+// Stored roughness is perceptual (see payloadRoughness), so these are perceptual thresholds.
+public static const float MIRROR_ROUGHNESS_MAX = 0.02; // LabPBR perceptual smoothness >= 0.98
 // Above this the specular lobe is too broad for a single mirrored reprojection to describe, so the
 // reflection MV is left at zero and RR falls back to the ordinary MV.
-public static const float SPEC_MOTION_ALPHA_MAX = 0.25; // perceptual smoothness <= 0.5
+public static const float SPEC_MOTION_ROUGHNESS_MAX = 0.5; // perceptual smoothness <= 0.5
 
-public bool isDeltaAlpha(float roughness) {
-    return clamp(roughness, 0.0, 1.0) <= MIRROR_ALPHA_MAX;
+public bool isDeltaRoughness(float roughness) {
+    return clamp(roughness, 0.0, 1.0) <= MIRROR_ROUGHNESS_MAX;
 }
 
 // Continuations one sample may carry: the camera segment, plus the reflection branch a primary

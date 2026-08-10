@@ -22,18 +22,38 @@ final class RtMaterialTextureDataTest {
 
     @Test
     void renormalizesNormalsAndRaisesRoughnessForLostDetail() {
-        float[] normalAo = {
+        float[] normal = {
                 1.0f, 0.5f, 1.0f, 0.0f,
                 0.0f, 0.5f, 1.0f, 0.0f,
                 1.0f, 0.5f, 1.0f, 0.0f,
                 0.0f, 0.5f, 1.0f, 0.0f
         };
         RtMaterialTextureData.Level reduced = RtMaterialTextureData.reduce(level(
-                repeatedNormal(4, 0.1f, 0.0f, 0.0f, 0.0f), normalAo,
+                repeatedNormal(4, 0.1f, 0.0f, 0.0f, 0.0f), normal,
                 repeatedNormal(4, 0.04f, 0.04f, 0.04f, 0.0f)));
-        assertEquals(0.5f, reduced.normalAo()[0], EPS);
-        assertEquals(0.5f, reduced.normalAo()[1], EPS);
+        assertEquals(0.5f, reduced.normal()[0], EPS);
+        assertEquals(0.5f, reduced.normal()[1], EPS);
         assertTrue(reduced.surface0()[0] > 0.9f, "opposing normal detail must widen the lobe");
+    }
+
+    /**
+     * Roughness is stored perceptual but reduced in GGX alpha, so a mip of two very different
+     * roughnesses is the alpha mean re-encoded — not the perceptual mean, which would under-report the
+     * widened lobe.
+     */
+    @Test
+    void reducesRoughnessInAlphaAndStoresItPerceptual() {
+        float[] roughness = {
+                0.2f, 0.0f, 0.0f, 0.0f,
+                0.8f, 0.0f, 0.0f, 0.0f,
+                0.2f, 0.0f, 0.0f, 0.0f,
+                0.8f, 0.0f, 0.0f, 0.0f
+        };
+        RtMaterialTextureData.Level reduced = RtMaterialTextureData.reduce(level(roughness,
+                repeatedNormal(4, 0.5f, 0.5f, 0.0f, 0.0f),
+                repeatedNormal(4, 1.0f, 1.0f, 1.0f, 0.0f)));
+        float expected = (float) Math.sqrt((0.2f * 0.2f + 0.8f * 0.8f) / 2.0f);
+        assertEquals(expected, reduced.surface0()[0], EPS);
     }
 
     @Test
@@ -49,8 +69,8 @@ final class RtMaterialTextureDataTest {
         assertEquals(0.25f, reduced.surface0()[6], EPS);
     }
 
-    private static RtMaterialTextureData.Level level(float[] surface0, float[] normalAo, float[] surface1) {
-        return new RtMaterialTextureData.Level(2, 2, surface0, normalAo, surface1);
+    private static RtMaterialTextureData.Level level(float[] surface0, float[] normal, float[] surface1) {
+        return new RtMaterialTextureData.Level(2, 2, surface0, normal, surface1);
     }
 
     private static float[] repeatedNormal(int count, float x, float y, float z, float w) {
