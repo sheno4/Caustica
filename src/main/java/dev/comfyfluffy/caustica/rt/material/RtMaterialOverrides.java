@@ -3,10 +3,6 @@ package dev.comfyfluffy.caustica.rt.material;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.api.provider.MaterialRule;
-import net.minecraft.client.renderer.texture.TextureAtlasSprite;
-import net.minecraft.core.registries.BuiltInRegistries;
-import net.minecraft.resources.Identifier;
-import net.minecraft.world.level.block.state.BlockState;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -58,8 +54,8 @@ public final class RtMaterialOverrides {
             }
             surfaceImplementation = index;
         }
-        return new Rule(identifier(rule.id()), identifier(rule.match().material()),
-                identifier(rule.match().geometry()), model, parameters.specularRoughness(),
+        return new Rule(rule.id(), rule.match().material(), rule.match().geometry(),
+                model, parameters.specularRoughness(),
                 parameters.baseMetalness(), parameters.specularIor(), parameters.transmissionWeight(),
                 parameters.emissionLuminanceCdM2(), surfaceImplementation);
     }
@@ -68,7 +64,7 @@ public final class RtMaterialOverrides {
         return rules;
     }
 
-    public record Rule(Identifier source, Identifier sprite, Identifier block, Integer model,
+    public record Rule(ResourceId source, ResourceId material, ResourceId geometry, Integer model,
                        Float roughness, Float metalness, Float ior, Float transmission,
                        /**
                         * OpenPBR {@code emission_luminance}: absolute emitting-surface luminance in cd/m²
@@ -83,17 +79,12 @@ public final class RtMaterialOverrides {
                         * everything compiled today is the built-in surface.
                         */
                        Integer surfaceImplementation) {
-        boolean matchesSprite(TextureAtlasSprite value) {
-            return value != null && sprite.equals(value.contents().name());
+        boolean matchesMaterial(ResourceId value) {
+            return material.equals(value);
         }
 
-        boolean matchesEntity(Identifier value) {
-            return block == null && sprite.equals(value);
-        }
-
-        boolean matches(TextureAtlasSprite value, BlockState state) {
-            if (!matchesSprite(value)) return false;
-            return block == null || state != null && block.equals(BuiltInRegistries.BLOCK.getKey(state.getBlock()));
+        boolean matches(ResourceId material, ResourceId geometry) {
+            return matchesMaterial(material) && (this.geometry == null || this.geometry.equals(geometry));
         }
 
         RtMaterialDesc apply(RtMaterialDesc base) {
@@ -127,7 +118,4 @@ public final class RtMaterialOverrides {
         }
     }
 
-    private static Identifier identifier(ResourceId id) {
-        return id == null ? null : Identifier.fromNamespaceAndPath(id.namespace(), id.path());
-    }
 }

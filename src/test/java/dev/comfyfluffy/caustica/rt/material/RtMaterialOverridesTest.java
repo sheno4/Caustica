@@ -51,7 +51,8 @@ final class RtMaterialOverridesTest {
                 "emission":{"luminance_cd_m2":2000.0,"color_source":"base_color"},
                 "transmission":{"weight":1.0}}
                 """).getAsJsonObject(), Identifier.parse("test:materials/glass.json"));
-        assertEquals(Identifier.parse("minecraft:block/blue_stained_glass"), rule.sprite());
+        assertEquals(ResourceId.parse("minecraft:block/blue_stained_glass"), rule.material());
+        assertEquals(ResourceId.parse("minecraft:blue_stained_glass"), rule.geometry());
         assertEquals(RtMaterialRegistry.MODEL_DIELECTRIC, rule.model());
         assertEquals(1.52f, rule.ior());
         assertEquals(2000.0f, rule.emissionLuminanceCdM2());
@@ -197,8 +198,10 @@ final class RtMaterialOverridesTest {
                 "block":"minecraft:stone"}}
                 """).getAsJsonObject(), Identifier.parse("test:block.json"));
 
-        assertTrue(entityRule.matchesEntity(Identifier.parse("minecraft:entity/zombie/zombie")));
-        assertFalse(entityRule.matchesEntity(Identifier.parse("minecraft:entity/zombie/husk")));
-        assertFalse(blockRule.matchesEntity(Identifier.parse("minecraft:entity/zombie/zombie")));
+        ResourceId zombie = ResourceId.parse("minecraft:entity/zombie/zombie");
+        assertTrue(entityRule.matches(zombie, null));
+        assertFalse(entityRule.matches(ResourceId.parse("minecraft:entity/zombie/husk"), null));
+        assertFalse(blockRule.matches(zombie, null));
+        assertTrue(blockRule.matches(zombie, ResourceId.parse("minecraft:stone")));
     }
 }

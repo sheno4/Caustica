@@ -16,6 +16,7 @@ import dev.comfyfluffy.caustica.rt.gen.SurfaceMaterialData;
 import dev.comfyfluffy.caustica.rt.gen.SurfaceMaterialData.Float4;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.Identifier;
 import net.minecraft.util.ARGB;
 import net.minecraft.world.level.block.state.BlockState;
@@ -244,6 +245,7 @@ public final class RtMaterialRegistry {
         }
         for (TextureAtlasSprite sprite : sprites) {
             RtBlockMaterials.Entry entry = entriesBySprite.get(sprite);
+            ResourceId material = resourceId(sprite.contents().name());
             int baseFeatures = entry.features()
                     & (FEATURE_SPEC | FEATURE_NORMAL | FEATURE_EMISSION_MASK);
             SpriteStats stats = spriteStats.getOrDefault(sprite, SpriteStats.NEUTRAL);
@@ -253,7 +255,7 @@ public final class RtMaterialRegistry {
             // block-conditional rules stay in the per-quad runtime scan.
             MutableCompiledOverride spriteWide = null;
             for (MutableCompiledOverride compiled : compiledOverrides) {
-                if (compiled.rule.block() == null && compiled.rule.matchesSprite(sprite)) {
+                if (compiled.rule.geometry() == null && compiled.rule.matchesMaterial(material)) {
                     spriteWide = compiled;
                     compiled.matchedSprite = true;
                     break;
@@ -282,7 +284,7 @@ public final class RtMaterialRegistry {
             ids.put(sprite, variants);
 
             for (MutableCompiledOverride compiled : compiledOverrides) {
-                if (compiled.rule.block() == null || !compiled.rule.matchesSprite(sprite)) continue;
+                if (compiled.rule.geometry() == null || !compiled.rule.matchesMaterial(material)) continue;
                 int[] overrideVariants = new int[profileVariants];
                 for (RtMaterials.Profile profile : SPRITE_PROFILES) {
                     for (boolean glass : new boolean[]{false, true}) {
@@ -309,17 +311,18 @@ public final class RtMaterialRegistry {
         Set<RtMaterialOverrides.Rule> entityMatchedOverrides = new HashSet<>();
         for (Identifier name : entityResources) {
             RtBlockMaterials.Entry entry = entriesByResource.get(name);
+            ResourceId material = resourceId(name);
             int features = entry.features() & (FEATURE_SPEC | FEATURE_NORMAL);
             RtMaterialDesc desc = compileEntityDesc(features, false, entry.emissionSummary());
             for (RtMaterialOverrides.Rule rule : overrides.rules()) {
-                if (!rule.matchesEntity(name)) continue;
+                if (!rule.matches(material, null)) continue;
                 desc = rule.apply(desc);
                 entityMatchedOverrides.add(rule);
                 break;
             }
             int id = tables.add(desc, transparentWhiteAverage(), entry, null, ENTITY_COVERAGE_CUTOFF);
             nextEntityTextureIds.put(name, id);
-            nextNamedMaterialIds.put(resourceId(name), id);
+            nextNamedMaterialIds.put(material, id);
             nextEntityTemplates.put(name, new EntityTemplate(desc, entry));
         }
 
@@ -341,9 +344,8 @@ public final class RtMaterialRegistry {
                     definition.specularRoughness(), definition.baseMetalness(), definition.specularIor(),
                     definition.transmissionWeight(), RtMaterialDesc.EmissionSource.NONE, 0.0f,
                     RtMaterialDesc.EmissionSummary.NONE, surfaceImplementation);
-            Identifier name = identifier(definition.id());
             for (RtMaterialOverrides.Rule rule : overrides.rules()) {
-                if (!rule.matchesEntity(name)) continue;
+                if (!rule.matches(definition.id(), null)) continue;
                 desc = rule.apply(desc);
                 entityMatchedOverrides.add(rule);
                 break;
@@ -395,7 +397,7 @@ public final class RtMaterialRegistry {
                 matchedOverrideRules++;
             } else {
                 CausticaMod.LOGGER.warn("RT material override {} matched no compiled texture ({})",
-                        compiled.rule.source(), compiled.rule.sprite());
+                        compiled.rule.source(), compiled.rule.material());
             }
         }
         byte[] sbtClasses = new byte[tables.bindings.size()];
@@ -662,10 +664,6 @@ public final class RtMaterialRegistry {
 
     private static ResourceId resourceId(Identifier id) {
         return ResourceId.of(id.getNamespace(), id.getPath());
-    }
-
-    private static Identifier identifier(ResourceId id) {
-        return Identifier.fromNamespaceAndPath(id.namespace(), id.path());
     }
 
     private static int index(RtMaterials.Profile profile, boolean glass, boolean emitting) {
@@ -1114,9 +1112,12 @@ public final class RtMaterialRegistry {
             RtMaterials.Profile profile = RtMaterials.profile(state);
             boolean emitting = state != null && state.getLightEmission() > 0;
             int variant = index(profile, glass, emitting);
+            ResourceId material = sprite != null ? resourceId(sprite.contents().name()) : null;
+            ResourceId geometry = state != null
+                    ? resourceId(BuiltInRegistries.BLOCK.getKey(state.getBlock())) : null;
             // Only block-conditional rules remain here; sprite-wide overrides were compiled into `ids`.
             for (CompiledOverride override : overrides) {
-                if (!override.rule.matches(sprite, state)) continue;
+                if (!override.rule.matches(material, geometry)) continue;
                 int[] variants = override.ids.get(sprite);
                 if (variants != null) return variants[variant];
             }

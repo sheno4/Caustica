@@ -2,6 +2,7 @@ package dev.comfyfluffy.caustica.rt.material;
 
 import com.mojang.blaze3d.platform.NativeImage;
 import dev.comfyfluffy.caustica.CausticaMod;
+import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.mixin.SpriteContentsAccessor;
 import dev.comfyfluffy.caustica.mixin.TextureAtlasAccessor;
 import dev.comfyfluffy.caustica.rt.GpuContext;
@@ -544,10 +545,10 @@ public final class RtBlockMaterials {
         // (roughness/metalness/model, or an absolute emission.strength_cd_m2 once some other source
         // supplies emission) have a compiled Candidate/Entry to apply to.
         for (RtMaterialOverrides.Rule rule : overrides.rules()) {
-            if (rule.block() != null || blockNames.contains(rule.sprite())) {
+            if (rule.geometry() != null || blockNames.contains(identifier(rule.material()))) {
                 continue;
             }
-            Identifier albedo = textureLocation(rule.sprite());
+            Identifier albedo = textureLocation(identifier(rule.material()));
             if (resourceExists(albedo)) {
                 result.merge(albedo, 0, (a, b) -> a | b);
             }
@@ -557,6 +558,10 @@ public final class RtBlockMaterials {
 
     private static Identifier sibling(Identifier name, String suffix) {
         return Identifier.fromNamespaceAndPath(name.getNamespace(), "textures/" + name.getPath() + suffix);
+    }
+
+    private static Identifier identifier(ResourceId id) {
+        return Identifier.fromNamespaceAndPath(id.namespace(), id.path());
     }
 
     private static Identifier textureLocation(Identifier logicalName) {
