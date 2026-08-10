@@ -70,13 +70,15 @@ public float3 evalSampleContrib(float3 sp, float3 lnrm, float3 le, float area, f
         float D = ggxD(ndh, rough);
         float Gs = ggxG1(ndv, rough) * ggxG1(ndl, rough);
         float3 Fs = fresnelSchlick(vdh, F0);
-        float3 brdf = diffAlb * (1.0 - transmission) * INV_PI
+        float3 layerTransmission = glossyLayerTransmission(F0, ndv, ndl);
+        float3 brdf = diffAlb * layerTransmission * (1.0 - transmission) * INV_PI
                 + (D * Gs) * Fs / (4.0 * ndv * ndl);
         contrib = brdf * le * (G * area);
     } else if (transmission > 0.0) {
         float backNdl = -ndl;
         float G = backNdl * cosL / dist2;
-        contrib = diffAlb * transmission * INV_PI * le * (G * area);
+        float3 layerTransmission = glossyLayerTransmission(F0, max(0.0, dot(n, v)), backNdl);
+        contrib = diffAlb * layerTransmission * transmission * INV_PI * le * (G * area);
     }
     phat = luminance(contrib);
     return contrib;

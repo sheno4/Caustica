@@ -165,8 +165,10 @@ public struct Payload {
     // rather than a third half3: it costs one word and is finer than the fp16 the normal itself uses.
     public uint   previousNormal;
     public uint   flags;       // bit 0 transmissive, bit 1 water, bit 2 celestial, bit 3 dielectric-entering.
-    public uint   roughMetal;  // packHalf2x16(perceptual roughness, metalness)
-    public uint   emission;    // packHalf2x16(emission cd/m², unused)
+    // Metalness has already been resolved into diffuse albedo and F0 at closest-hit, so its former half
+    // is the third component of emission without increasing the cross-stage payload.
+    public uint   roughEmissionB; // packHalf2x16(perceptual roughness, emission radiance B)
+    public uint   emissionRG;     // packHalf2x16(emission radiance R, G)
     public uint   iorTransmission; // packHalf2x16(IOR, transmission factor)
     public uint   rayCone;     // packHalf2x16(width, spread)
 };
@@ -313,7 +315,7 @@ public static const uint MATERIAL_FEATURE_EMISSION_MASK = 4u;
 public static const uint MATERIAL_EMISSION_LUMINANCE_SHIFT = 8u;
 public static const uint MATERIAL_EMISSION_LUMINANCE_MASK = 65535u;
 // Mirrors RtMaterialRegistry.MAX_EMISSION_LUMINANCE — HALF_MAX, the ceiling emission can survive through
-// Payload.emission (half2) and Light.le (R11G11B10). Emission is measured in cd/m².
+// the payload's fp16 emission components and Light.le (R11G11B10). Emission is measured in cd/m².
 public static const float MATERIAL_MAX_EMISSION_LUMINANCE = 65504.0;
 public static const uint MATERIAL_PAGE_MASK = 0xFFFFFFu;
 public static const uint MATERIAL_MAX_LOD_SHIFT = 24u;
@@ -433,4 +435,3 @@ public void packSky(inout Payload p, float3 sky) {
     p.surface1 = asuint(sky.y);
     p.surface2 = asuint(sky.z);
 }
-

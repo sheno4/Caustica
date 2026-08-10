@@ -45,6 +45,8 @@ public SurfaceClosure surfaceClosure(MaterialInput material) {
     surface.diffuseAlbedo = material.baseColor * (1.0 - material.baseMetalness);
     surface.specularF0 = clamp(openPbrSpecularF0(material), float3(0.0), float3(1.0));
     surface.alphaRoughness = max(roughness * roughness, 4.0e-4);
+    surface.emissionRadiance = max(material.emissionColor, float3(0.0))
+            * max(material.emissionLuminance, 0.0);
     // Only a thin wall transmits diffusely; a volume's transmission is refractive, owned by the engine's
     // dielectric transport, and never reaches a closure at all.
     surface.transmission = material.geometryThinWalled
@@ -63,6 +65,7 @@ public SurfaceClosure payloadSurfaceClosure(float3 shadingNormal) {
     surface.diffuseAlbedo = payloadAlbedo();
     surface.specularF0 = payload.f0;
     surface.alphaRoughness = payloadAlphaRoughness();
+    surface.emissionRadiance = payloadEmissionRadiance();
     surface.transmission = payloadTransmission();
     return surface;
 }
@@ -87,7 +90,8 @@ public BsdfEvaluation evaluateBsdf(BsdfQuery query) {
     if (ndl <= 0.0) {
         if (transmission <= 0.0) return result;
         float backNdl = -ndl;
-        result.value = query.surface.diffuseAlbedo * transmission * INV_PI;
+        float3 layerTransmission = glossyLayerTransmission(query.surface.specularF0, ndv, -ndl);
+        result.value = query.surface.diffuseAlbedo * layerTransmission * transmission * INV_PI;
         result.pdf = backNdl * INV_PI * (1.0 - specularSelection) * transmission;
         result.eventFlags = EVENT_DIFFUSE | EVENT_TRANSMISSION;
         return result;
@@ -100,7 +104,8 @@ public BsdfEvaluation evaluateBsdf(BsdfQuery query) {
     float distribution = ggxD(ndh, alpha);
     float geometry = ggxG1(ndv, alpha) * ggxG1(ndl, alpha);
     float3 fresnel = fresnelSchlick(vdh, query.surface.specularF0);
-    float3 diffuse = query.surface.diffuseAlbedo * (1.0 - transmission) * INV_PI;
+    float3 layerTransmission = glossyLayerTransmission(query.surface.specularF0, ndv, ndl);
+    float3 diffuse = query.surface.diffuseAlbedo * layerTransmission * (1.0 - transmission) * INV_PI;
     float3 specular = distribution * geometry * fresnel / max(4.0 * ndv * ndl, 1.0e-6);
     float diffusePdf = ndl * INV_PI * (1.0 - specularSelection) * (1.0 - transmission);
     float specularPdf = distribution * ndh / max(4.0 * vdh, 1.0e-6) * specularSelection;

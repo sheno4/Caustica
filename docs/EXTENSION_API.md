@@ -96,7 +96,8 @@ closest-hit runs before raygen decides refraction, so the perturbed normal is pu
 (`MaterialInput.geometryNormal`, packed by `writeHitPayload`) and transport reads it there — which also
 removed the derivation of that normal in three separate files. The "must match guide and shading"
 invariant of §4.4 now holds by construction. Procedural *emission* needs nothing new either: an end portal
-is an `ISurfaceModel` writing `emission_luminance`.
+is an `ISurfaceModel` writing `emission_color` and `emission_luminance`; the resolved radiance travels in
+the closure and payload independently from `base_color`.
 
 ### 2.2 The generated composition root
 

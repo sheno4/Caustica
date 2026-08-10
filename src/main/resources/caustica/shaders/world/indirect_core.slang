@@ -125,12 +125,11 @@ public float3 tracePath<TC : IComposition, TTrace : IRadianceTrace>(TC.Surfaces 
 
         float3 vertexRadiance = float3(0.0, 0.0, 0.0);
 
-        // Emissive surfaces: unchanged engine bookkeeping (the payload has no independent emission
-        // colour channel yet; see closest_hit.slang's material input construction).
-        float emission = payloadEmission();
+        // Emissive surfaces carry the resolved OpenPBR emission colour independently from base colour.
+        float3 emissionRadiance = closure.emissionRadiance;
         bool gateEmitter = risOn && payloadEmitterInList();
-        if (emission > 0.0 && (!gateEmitter || showCelestial)) {
-            vertexRadiance += payloadAlbedo() * emission;
+        if (any(emissionRadiance > 0.0) && (!gateEmitter || showCelestial)) {
+            vertexRadiance += emissionRadiance;
         }
 
         // NEE toward the dominant celestial body: the engine BSDF is the estimator's target function. One

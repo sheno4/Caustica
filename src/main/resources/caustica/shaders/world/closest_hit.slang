@@ -25,13 +25,14 @@ import caustica_pass_resources;
 
 // `roughness` is OpenPBR's perceptual specular_roughness, matching what the payload carries end to end.
 // `materialFlags` is PAYLOAD_TRANSMISSIVE | PAYLOAD_WATER as they apply to this hit (0 for opaque).
-void payloadSetPacked(inout Payload payload, uint materialFlags, float roughness, float metalness,
-        float emission, float ior, float transmission) {
+void payloadSetPacked(inout Payload payload, uint materialFlags, float roughness,
+        float3 emissionRadiance, float ior, float transmission) {
     // PAYLOAD_GUIDE_RAY describes the ray, not the hit, so it is carried across rather than overwritten
     // with the rest of the word. Everything else in flags is this hit's own output.
     payload.flags = materialFlags | (payload.flags & PAYLOAD_GUIDE_RAY);
-    payload.roughMetal = packHalf2(float2(roughness, metalness));
-    payload.emission = packHalf2(float2(emission, 0.0));
+    float3 finiteEmission = clamp(emissionRadiance, float3(0.0), float3(HALF_MAX));
+    payload.roughEmissionB = packHalf2(float2(roughness, finiteEmission.b));
+    payload.emissionRG = packHalf2(finiteEmission.rg);
     payload.iorTransmission = packHalf2(float2(ior, transmission));
 }
 
@@ -71,7 +72,7 @@ void payloadSetCoverageCrossing(inout Payload payload, float3 opticalColor, floa
     packNormal(payload, normal);
     payload.previousNormal = packNormalOct(normal);
     payload.f0 = half3(0.0h, 0.0h, 0.0h);
-    payloadSetPacked(payload, PAYLOAD_TRANSMISSIVE, 0.0, 0.0, 0.0, 1.0, 1.0);
+    payloadSetPacked(payload, PAYLOAD_TRANSMISSIVE, 0.0, float3(0.0), 1.0, 1.0);
 }
 
 /** The surface parameters a binding names. Loaded only here: no any-hit reads them. */
@@ -265,9 +266,6 @@ MaterialInput buildMaterialInput(DecodedSurface surface, SurfaceMaterial mat, bo
     // Minecraft's convention is that an emitter glows in its own texture colour, so this adapter — not
     // the model — ties emission_color to base_color.
     //
-    // The payload's emission channel is still a scalar multiplied against the final albedo at the read
-    // site (indirect_core), not an independent colour, so an implementation that computes its own
-    // emission colour is not yet threaded back out; its luminance is.
     material.emissionColor = surface.baseColor;
     material.emissionLuminance = max(surface.emissionLuminance, 0.0);
     material.geometryOpacity = 1.0; // any-hit already resolved coverage before this stage ran
@@ -343,15 +341,19 @@ void writeHitPayload(inout Payload payload, MaterialInput material, uint surface
     if ((materialFlags & PAYLOAD_TRANSMISSIVE) != 0u) {
         packAlbedo(payload, material.baseColor);
         payload.f0 = half3(openPbrSpecularF0(material));
-        payloadSetPacked(payload, materialFlags, material.specularRoughness, material.baseMetalness,
-                emissionLuminance, material.specularIor, material.transmissionWeight);
+        float3 emissionRadiance = max(material.emissionColor, float3(0.0))
+                * max(emissionLuminance, 0.0);
+        payloadSetPacked(payload, materialFlags, material.specularRoughness, emissionRadiance,
+                material.specularIor, material.transmissionWeight);
         if (entering) payload.flags |= PAYLOAD_DIELECTRIC_ENTERING;
         return;
     }
     SurfaceClosure closure = surfaceClosure(material);
     packAlbedo(payload, closure.diffuseAlbedo);
     payload.f0 = half3(closure.specularF0);
-    payloadSetPacked(payload, 0u, sqrt(closure.alphaRoughness), 0.0, emissionLuminance,
+    closure.emissionRadiance = max(material.emissionColor, float3(0.0))
+            * max(emissionLuminance, 0.0);
+    payloadSetPacked(payload, 0u, sqrt(closure.alphaRoughness), closure.emissionRadiance,
             material.specularIor, closure.transmission);
 }
 

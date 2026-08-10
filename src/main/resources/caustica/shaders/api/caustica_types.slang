@@ -132,6 +132,8 @@ public struct SurfaceClosure {
     public float3 diffuseAlbedo;
     public float3 specularF0;
     public float alphaRoughness;
+    /** Emitted radiance in scene-linear ACEScg, after emission_color and luminance are combined. */
+    public float3 emissionRadiance;
     /**
      * Fraction of the diffuse response leaving the far side of the surface. 0 is an ordinary opaque
      * surface, 0.5 is a symmetric thin scatterer that answers a light from either side identically —

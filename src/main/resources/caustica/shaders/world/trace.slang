@@ -50,8 +50,8 @@ public Payload makeRadiancePayload(uint flags, uint rayCone) {
     p.f0 = half3(0.0h, 0.0h, 0.0h);
     p.previousNormal = 0u;
     p.flags = flags;
-    p.roughMetal = 0u;
-    p.emission = 0u;
+    p.roughEmissionB = 0u;
+    p.emissionRG = 0u;
     p.iorTransmission = 0u;
     p.rayCone = rayCone;
     return p;
@@ -96,8 +96,8 @@ public Payload makeShadowPayload() {
     // world_guide.rmiss clears this sentinel. An accepted opaque hit skips closest-hit and therefore
     // leaves it set, while ignored translucent/water hits continue until either a later opaque hit or miss.
     shadowPayload.flags = 1u;
-    shadowPayload.roughMetal = 0u;
-    shadowPayload.emission = 0u;
+    shadowPayload.roughEmissionB = 0u;
+    shadowPayload.emissionRG = 0u;
     shadowPayload.iorTransmission = 0u;
     shadowPayload.rayCone = 0u;
     return shadowPayload;

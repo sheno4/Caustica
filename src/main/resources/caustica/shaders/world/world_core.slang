@@ -23,7 +23,7 @@ public struct VisibilityResult {
 
 // Views onto the module-level payload's hand-packed surface words (see Payload.surface0..2). Hit shaders
 // take their payload as a parameter and call the world_common forms directly; these exist so raygen-side
-// code reads the same as the payloadRoughness()/payloadEmission() accessors below it.
+// code reads the same as the payloadRoughness()/payloadEmissionRadiance() accessors below it.
 public float3 payloadAlbedo() { return unpackAlbedo(payload); }
 /**
  * The SHADING normal: the material's normal map and any procedural perturbation are already applied, so
@@ -52,14 +52,16 @@ public uint payloadSurfaceImpl() { return payload.flags >> PAYLOAD_SURFACE_IMPL_
 // the material record, the canonical pages and this payload lane all carry r, and the GGX alpha every
 // lobe wants is r*r, squared where the lobe is evaluated. ggxD/ggxG1/sampleGGXVNDF all take alpha, so a
 // value handed to one of them is squared first; DLSS-RR wants r and gets it unsquared.
-public float payloadRoughness() { return unpackHalf2(payload.roughMetal).x; }
+public float payloadRoughness() { return unpackHalf2(payload.roughEmissionB).x; }
 /** GGX alpha for this hit: the payload's perceptual roughness squared. */
 public float payloadAlphaRoughness() {
     float roughness = clamp(payloadRoughness(), 0.0, 1.0);
     return roughness * roughness;
 }
-public float payloadMetalness() { return unpackHalf2(payload.roughMetal).y; }
-public float payloadEmission() { return unpackHalf2(payload.emission).x; }
+public float3 payloadEmissionRadiance() {
+    return float3(unpackHalf2(payload.emissionRG), unpackHalf2(payload.roughEmissionB).y);
+}
+public bool payloadEmissive() { return any(payloadEmissionRadiance() > 0.0); }
 public float payloadIor() { return unpackHalf2(payload.iorTransmission).x; }
 public float payloadTransmission() { return unpackHalf2(payload.iorTransmission).y; }
 

@@ -122,7 +122,7 @@ public float2 resolveSpecularGuides(SpecSurface surface, float3 primaryDir,
         reflectedMotionPrev = payload.motionPrev;
         if (surface.roughness <= MIRROR_ROUGHNESS_MAX
                 && !payloadDielectric()
-                && payloadEmission() <= 0.0) {
+                && !payloadEmissive()) {
             float3 reflectedDiffuse = guideFor(payloadSurfaceClosure(payloadNormal()),
                     -specDir).diffuseAlbedo;
             if (max(reflectedDiffuse.r, max(reflectedDiffuse.g, reflectedDiffuse.b)) > 0.001) {
@@ -180,7 +180,7 @@ public void resolveTransmissionGuide(float3 surfacePos, float3 transmittedDir,
             SurfaceGuide endpoint = guideFor(payloadSurfaceClosure(payloadNormal()), -direction);
             setTransmissionGuide(interfacePos - worldPush.camOffset, payload.motionPrev,
                     endpoint.normal, endpoint.perceptualRoughness,
-                    guideFilter * endpoint.diffuseAlbedo, payloadEmission() > 0.0);
+                    guideFilter * endpoint.diffuseAlbedo, payloadEmissive());
             return;
         }
 

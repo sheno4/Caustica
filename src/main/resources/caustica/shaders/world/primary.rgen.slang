@@ -73,7 +73,7 @@ public PathSegment tracePrimary(PathSegment seg,
                 gv_hitCamRel = hitPos - worldPush.camOffset;
                 gv_motionUseRefracted = false;
                 gv_motionObjDisp = payload.motionPrev;
-                gv_emissive = payloadEmission() > 0.0;
+                gv_emissive = payloadEmissive();
                 gv_albedo = guide.diffuseAlbedo;
                 gv_rough = guide.perceptualRoughness;
                 gv_spec = makeSpecSurface(gv_hitCamRel, guide.normal, float3(payload.motionPrev),

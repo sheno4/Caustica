@@ -40,6 +40,13 @@ public float3 fresnelSchlick(float cosT, float3 f0) {
     return f0 + (grazing - f0) * (m2 * m2 * m);
 }
 
+/** Energy reaching a diffuse substrate after crossing the glossy interface in both directions. */
+public float3 glossyLayerTransmission(float3 f0, float outgoingCosine, float incomingCosine) {
+    float3 outgoing = 1.0 - fresnelSchlick(clamp(outgoingCosine, 0.0, 1.0), f0);
+    float3 incoming = 1.0 - fresnelSchlick(clamp(incomingCosine, 0.0, 1.0), f0);
+    return max(outgoing * incoming, float3(0.0));
+}
+
 // Exact (unpolarized) Fresnel reflectance for a dielectric interface. cosI is the incidence cosine on
 // the incoming side; etaI/etaT are the IORs the ray travels from / into. Returns 1.0 on total internal
 // reflection (sin of the transmitted angle >= 1), which matches refract() returning the zero vector —
