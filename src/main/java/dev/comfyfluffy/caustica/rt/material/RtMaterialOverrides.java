@@ -1,31 +1,21 @@
 package dev.comfyfluffy.caustica.rt.material;
 
-import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.api.ResourceId;
-import net.minecraft.client.Minecraft;
+import dev.comfyfluffy.caustica.api.provider.MaterialRule;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.Identifier;
-import net.minecraft.server.packs.resources.Resource;
 import net.minecraft.world.level.block.state.BlockState;
 
-import java.io.Reader;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
-import java.util.Map;
 
 /**
- * Optional resource-pack material properties compiled ahead of LabPBR and engine heuristics. Keys are
- * OpenPBR parameter names, so {@code specular.roughness} is perceptual and {@code specular.ior} drives
- * both the Fresnel split and the Snell bend. The one non-OpenPBR key is {@code surface}, naming the
- * registered {@code ISurfaceModel} implementation the description is routed through.
+ * Ordered provider material rules compiled ahead of source textures and engine heuristics. Parameters
+ * use OpenPBR meanings; the optional surface names a registered {@code ISurfaceModel} implementation.
  */
 public final class RtMaterialOverrides {
-    public static final int FORMAT = 4;
     public static final RtMaterialOverrides EMPTY = new RtMaterialOverrides(List.of());
 
     private final List<Rule> rules;
@@ -42,91 +32,36 @@ public final class RtMaterialOverrides {
         int indexOf(ResourceId surfaceId);
     }
 
-    public static RtMaterialOverrides load(SurfaceResolver surfaces) {
-        Map<Identifier, Resource> resources = Minecraft.getInstance().getResourceManager().listResources(
-                "materials", id -> id.getPath().endsWith(".json"));
-        List<Map.Entry<Identifier, Resource>> ordered = new ArrayList<>(resources.entrySet());
-        ordered.sort(Map.Entry.comparingByKey(Comparator.comparing(Identifier::toString)));
+    public static RtMaterialOverrides from(List<MaterialRule> submitted, SurfaceResolver surfaces) {
         List<Rule> rules = new ArrayList<>();
-        for (Map.Entry<Identifier, Resource> entry : ordered) {
-            try (Reader reader = entry.getValue().openAsReader()) {
-                rules.add(parse(JsonParser.parseReader(reader).getAsJsonObject(), entry.getKey(), surfaces));
+        for (MaterialRule rule : submitted) {
+            try {
+                rules.add(compile(rule, surfaces));
             } catch (Throwable throwable) {
-                CausticaMod.LOGGER.warn("Ignoring invalid RT material override {}", entry.getKey(), throwable);
+                CausticaMod.LOGGER.warn("Ignoring invalid RT material rule {}", rule.id(), throwable);
             }
         }
-        // More-specific block+sprite rules win over sprite-wide rules. Ties use the resource identifier,
-        // while the resource manager has already selected the highest-priority pack for each identifier.
-        rules.sort(Comparator.comparing((Rule rule) -> rule.block() == null)
-                .thenComparing(rule -> rule.source().toString()));
-        CausticaMod.LOGGER.info("RT material overrides: format={}, rules={}", FORMAT, rules.size());
+        CausticaMod.LOGGER.info("RT material rules: submitted={}, compiled={}", submitted.size(), rules.size());
         return rules.isEmpty() ? EMPTY : new RtMaterialOverrides(rules);
     }
 
-    static Rule parse(JsonObject root, Identifier source, SurfaceResolver surfaces) {
-        int format = requiredInt(root, "format");
-        if (format != FORMAT) throw new IllegalArgumentException("Unsupported material format " + format);
-        JsonObject match = requiredObject(root, "match");
-        Identifier sprite = Identifier.parse(requiredString(match, "sprite"));
-        Identifier block = match.has("block") ? Identifier.parse(match.get("block").getAsString()) : null;
-
-        Integer model = null;
-        if (root.has("model")) {
-            // "water" is the animated fluid surface (waves, caustics, biome-tint absorption); "dielectric" is
-            // every other transparent material.
-            model = switch (root.get("model").getAsString()) {
-                case "opaque" -> RtMaterialRegistry.MODEL_OPAQUE;
-                case "water" -> RtMaterialRegistry.MODEL_WATER;
-                case "dielectric" -> RtMaterialRegistry.MODEL_DIELECTRIC;
-                default -> throw new IllegalArgumentException("Unknown material model");
-            };
-        }
-        Float metalness = root.has("base") ? optionalFloat(root.getAsJsonObject("base"), "metalness") : null;
-        Float roughness = null;
-        Float ior = null;
-        if (root.has("specular")) {
-            JsonObject specular = root.getAsJsonObject("specular");
-            roughness = optionalFloat(specular, "roughness");
-            ior = optionalFloat(specular, "ior");
-        }
-        Float emissionLuminanceCdM2 = null;
-        if (root.has("emission")) {
-            JsonObject emission = root.getAsJsonObject("emission");
-            emissionLuminanceCdM2 = optionalFloat(emission, "luminance_cd_m2");
-            if (emission.has("color_source") && !"base_color".equals(emission.get("color_source").getAsString())) {
-                throw new IllegalArgumentException("emission color_source must be base_color");
-            }
-        }
-        Float transmission = root.has("transmission")
-                ? optionalFloat(root.getAsJsonObject("transmission"), "weight") : null;
+    private static Rule compile(MaterialRule rule, SurfaceResolver surfaces) {
+        MaterialRule.Parameters parameters = rule.parameters();
+        Integer model = parameters.transmissionWeight() == null ? null
+                : parameters.transmissionWeight() > 0.0f
+                ? RtMaterialRegistry.MODEL_DIELECTRIC : RtMaterialRegistry.MODEL_OPAQUE;
         Integer surfaceImplementation = null;
-        if (root.has("surface")) {
-            ResourceId surfaceId = ResourceId.parse(root.get("surface").getAsString());
-            int index = surfaces.indexOf(surfaceId);
+        if (parameters.surface() != null) {
+            int index = surfaces.indexOf(parameters.surface());
             if (index < 0) {
-                throw new IllegalArgumentException("No registered surface implementation " + surfaceId);
+                throw new IllegalArgumentException("No registered surface implementation " + parameters.surface());
             }
             surfaceImplementation = index;
         }
-        validate01("specular.roughness", roughness);
-        validate01("base.metalness", metalness);
-        validate01("transmission.weight", transmission);
-        if (ior != null && (!Float.isFinite(ior) || ior <= 0.0f)) {
-            throw new IllegalArgumentException("specular.ior must be positive");
-        }
-        if (emissionLuminanceCdM2 != null && !Float.isFinite(emissionLuminanceCdM2)) {
-            throw new IllegalArgumentException("emission.luminance_cd_m2 must be finite");
-        }
-        if (emissionLuminanceCdM2 != null
-                && (emissionLuminanceCdM2 < 0.0f || emissionLuminanceCdM2 > 65504.0f)) {
-            float clamped = Math.max(0.0f, Math.min(65504.0f, emissionLuminanceCdM2));
-            CausticaMod.LOGGER.warn("RT material override {}: emission.luminance_cd_m2 {} out of range "
-                            + "[0,65504], clamping to {}",
-                    source, emissionLuminanceCdM2, clamped);
-            emissionLuminanceCdM2 = clamped;
-        }
-        return new Rule(source, sprite, block, model, roughness, metalness, ior, transmission,
-                emissionLuminanceCdM2, surfaceImplementation);
+        return new Rule(identifier(rule.id()), identifier(rule.match().material()),
+                identifier(rule.match().geometry()), model, parameters.specularRoughness(),
+                parameters.baseMetalness(), parameters.specularIor(), parameters.transmissionWeight(),
+                parameters.emissionLuminanceCdM2(), surfaceImplementation);
     }
 
     public List<Rule> rules() {
@@ -192,31 +127,7 @@ public final class RtMaterialOverrides {
         }
     }
 
-    private static JsonObject requiredObject(JsonObject object, String name) {
-        JsonElement element = object.get(name);
-        if (element == null || !element.isJsonObject()) throw new IllegalArgumentException("Missing object " + name);
-        return element.getAsJsonObject();
-    }
-
-    private static String requiredString(JsonObject object, String name) {
-        JsonElement element = object.get(name);
-        if (element == null || !element.isJsonPrimitive()) throw new IllegalArgumentException("Missing string " + name);
-        return element.getAsString();
-    }
-
-    private static int requiredInt(JsonObject object, String name) {
-        JsonElement element = object.get(name);
-        if (element == null || !element.isJsonPrimitive()) throw new IllegalArgumentException("Missing integer " + name);
-        return element.getAsInt();
-    }
-
-    private static Float optionalFloat(JsonObject object, String name) {
-        return object.has(name) ? object.get(name).getAsFloat() : null;
-    }
-
-    private static void validate01(String name, Float value) {
-        if (value != null && (!Float.isFinite(value) || value < 0.0f || value > 1.0f)) {
-            throw new IllegalArgumentException(name + " must be in [0,1]");
-        }
+    private static Identifier identifier(ResourceId id) {
+        return id == null ? null : Identifier.fromNamespaceAndPath(id.namespace(), id.path());
     }
 }

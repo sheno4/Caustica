@@ -7,11 +7,11 @@ import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.client.VanillaRenderController;
 import dev.comfyfluffy.caustica.client.WorldRenderScaler;
 import dev.comfyfluffy.caustica.mixin.GpuDeviceAccessor;
+import dev.comfyfluffy.caustica.minecraft.MinecraftUiOverlay;
 import dev.comfyfluffy.caustica.ngx.NgxRuntime;
 import dev.comfyfluffy.caustica.rt.entity.RtEntityTextures;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg;
 import dev.comfyfluffy.caustica.rt.provider.ProviderManager;
-import dev.comfyfluffy.caustica.rt.terrain.RtTerrain;
 import dev.comfyfluffy.caustica.rt.terrain.RtWorkerPool;
 import dev.comfyfluffy.caustica.slang.SlangRuntime;
 
@@ -201,9 +201,6 @@ public final class RtRuntime {
             if (!scenePresent) {
                 return false;
             }
-            if (starting && resourcesReady) {
-                RtTerrain.frame(context);
-            }
             if (starting && (displayWidth <= 0 || displayHeight <= 0
                     || !RtComposite.INSTANCE.ensurePresentationResourcesReady(
                     context, sceneId, displayWidth, displayHeight))) {
@@ -222,7 +219,7 @@ public final class RtRuntime {
             SlangRuntime.INSTANCE.requestShutdownWhenIdle();
             if (context == null) {
                 ProviderManager.INSTANCE.shutdownResources();
-                RtUiOverlay.destroy();
+                MinecraftUiOverlay.destroy();
                 return;
             }
 
@@ -230,7 +227,7 @@ public final class RtRuntime {
             // every queue before the remaining providers or runtime owners free session GPU resources.
             context.gpuExecutor().drainAndWaitIdle();
             ProviderManager.INSTANCE.shutdownResources();
-            RtUiOverlay.destroy();
+            MinecraftUiOverlay.destroy();
             RtComposite.INSTANCE.destroy();
             RtEntityTextures.INSTANCE.reset();
             RtDlssFg.INSTANCE.destroy();

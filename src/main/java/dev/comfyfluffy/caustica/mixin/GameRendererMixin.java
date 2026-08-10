@@ -8,10 +8,10 @@ import com.mojang.blaze3d.vulkan.VulkanDevice;
 import dev.comfyfluffy.caustica.client.VanillaRenderController;
 import dev.comfyfluffy.caustica.client.WorldRenderScaler;
 import dev.comfyfluffy.caustica.minecraft.MinecraftFrameAdapter;
+import dev.comfyfluffy.caustica.minecraft.MinecraftUiOverlay;
 import dev.comfyfluffy.caustica.rt.RtComposite;
 import dev.comfyfluffy.caustica.rt.RtReflex;
 import dev.comfyfluffy.caustica.rt.RtRuntime;
-import dev.comfyfluffy.caustica.rt.RtUiOverlay;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.GameRenderer;
@@ -49,7 +49,7 @@ public abstract class GameRendererMixin {
 		if (!RtRuntime.frameActive()) {
 			return;
 		}
-		RtUiOverlay.beginFrame();
+		MinecraftUiOverlay.beginFrame();
 		// Clear the stale HDR-present flag every frame: composite() only runs while a level renders, so on
 		// menu frames it would otherwise stay true from the last world frame and present a black HDR image.
 		RtComposite.INSTANCE.beginFrame();
@@ -85,15 +85,15 @@ public abstract class GameRendererMixin {
 					target = "Lnet/minecraft/client/renderer/GameRenderer;renderItemInHand(Lnet/minecraft/client/renderer/state/level/CameraRenderState;FLorg/joml/Matrix4fc;)V"))
 	private void caustica$redirectHandToOverlay(GameRenderer self, CameraRenderState cameraState, float deltaPartialTick,
 			Matrix4fc modelViewMatrix, Operation<Void> original) {
-		boolean redirect = RtUiOverlay.enabled();
+		boolean redirect = MinecraftUiOverlay.enabled();
 		if (redirect) {
-			RtUiOverlay.beginOutputRedirect(this.mainRenderTarget);
+			MinecraftUiOverlay.beginOutputRedirect(this.mainRenderTarget);
 		}
 		try {
 			original.call(self, cameraState, deltaPartialTick, modelViewMatrix);
 		} finally {
 			if (redirect) {
-				RtUiOverlay.endOutputRedirect();
+				MinecraftUiOverlay.endOutputRedirect();
 			}
 		}
 	}
@@ -108,15 +108,15 @@ public abstract class GameRendererMixin {
 					target = "Lnet/minecraft/client/renderer/feature/FeatureRenderDispatcher;renderAllFeatures(Lnet/minecraft/client/renderer/SubmitNodeStorage;)V"))
 	private void caustica$redirectScreenEffectsToOverlay(FeatureRenderDispatcher self, SubmitNodeStorage storage,
 			Operation<Void> original) {
-		boolean redirect = RtUiOverlay.enabled();
+		boolean redirect = MinecraftUiOverlay.enabled();
 		if (redirect) {
-			RtUiOverlay.beginOutputRedirect(this.mainRenderTarget);
+			MinecraftUiOverlay.beginOutputRedirect(this.mainRenderTarget);
 		}
 		try {
 			original.call(self, storage);
 		} finally {
 			if (redirect) {
-				RtUiOverlay.endOutputRedirect();
+				MinecraftUiOverlay.endOutputRedirect();
 			}
 		}
 	}
@@ -169,7 +169,7 @@ public abstract class GameRendererMixin {
 			return;
 		}
 		// Fold RT world overlays into the shared transparent UI image before hand/screen effects and the GUI
-		// add their own layers. RtUiOverlay then performs the single final blend to SDR/HDR.
+		// add their own layers. MinecraftUiOverlay then performs the single final blend to SDR/HDR.
 		try {
 			RtComposite.INSTANCE.recordOverlayPasses();
 		} finally {
@@ -193,7 +193,7 @@ public abstract class GameRendererMixin {
 		// DLSS-FG quality: snapshot the main target before the combined UI overlay composites back below.
 		// Hand/screen effects, world overlays and GUI are carried by the optional DLSSG UI resource.
 		RtComposite.INSTANCE.captureFgHudless(this.mainRenderTarget);
-		dev.comfyfluffy.caustica.rt.RtUiOverlay.compositeIfUsed();
+		MinecraftUiOverlay.compositeIfUsed();
 	}
 
 	@Shadow

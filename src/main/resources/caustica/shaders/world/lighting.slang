@@ -10,16 +10,20 @@ import world_core;
 import bindings;
 import math;
 import trace;
+import water;
 
 public struct Reservoir {
     public float3 pos;  // light sample point (rebased world space)
-    public float3 lnrm; // emitter outward normal
-    public float3 le;   // emitter radiance
+    public float3 lnrm; // emitter outward normal, or sampled toward-source direction for distant lights
+    public float3 le;   // emitter radiance/intensity, or integrated illuminance for distant lights
     public float area;  // emitter rectangle area (the area-light pdf factor)
     public float M;
     public float W;
     public float wSum;
     public float phat;
+    public uint lightType; // 0 rectangle, 1 point, 2 spot, 3 distant
+    public float shapeScalar; // cos(outer angular radius) for spot and distant
+    public float metersPerWorldUnit;
 };
 
 public Reservoir resEmpty() {
@@ -32,7 +36,92 @@ public Reservoir resEmpty() {
     r.W = 0.0;
     r.wSum = 0.0;
     r.phat = 0.0;
+    r.lightType = 0u;
+    r.shapeScalar = -1.0;
+    r.metersPerWorldUnit = 1.0;
     return r;
+}
+
+// Delta-light contribution for point and constant-intensity spot emitters. Intensity is candela and
+// distance is in world metres, so intensity/dist² is incident illuminance at the receiver.
+public float3 evalDeltaLightContrib(float3 lightPos, float3 lightDirection, float3 intensity,
+                            float range, float outerCos, float metersPerWorldUnit, uint lightType,
+                            float3 hitPos, float3 n, float3 v, float3 diffAlb, float3 F0,
+                            float rough, float transmission, out float phat) {
+    phat = 0.0;
+    float3 toL = lightPos - hitPos;
+    float dist2 = dot(toL, toL);
+    if (dist2 < 1.0e-6 || dist2 > range * range) return float3(0.0);
+    float3 wi = toL * rsqrt(dist2);
+    if (lightType == 2u && dot(lightDirection, -wi) < outerCos) return float3(0.0);
+    float ndl = dot(n, wi);
+    float3 response = float3(0.0);
+    if (ndl > 0.0) {
+        float3 h = normalize(wi + v);
+        float ndh = max(0.0, dot(n, h));
+        float ndv = max(1.0e-4, dot(n, v));
+        float vdh = max(0.0, dot(v, h));
+        float D = ggxD(ndh, rough);
+        float Gs = ggxG1(ndv, rough) * ggxG1(ndl, rough);
+        float3 Fs = fresnelSchlick(vdh, F0);
+        float3 layerTransmission = glossyLayerTransmission(F0, ndv, ndl);
+        float3 brdf = diffAlb * layerTransmission * (1.0 - transmission) * INV_PI
+                + (D * Gs) * Fs / (4.0 * ndv * ndl);
+        float dist2Meters = dist2 * metersPerWorldUnit * metersPerWorldUnit;
+        response = brdf * intensity * (ndl / dist2Meters);
+    } else if (transmission > 0.0) {
+        float backNdl = -ndl;
+        float3 layerTransmission = glossyLayerTransmission(F0, max(0.0, dot(n, v)), backNdl);
+        float dist2Meters = dist2 * metersPerWorldUnit * metersPerWorldUnit;
+        response = diffAlb * layerTransmission * transmission * INV_PI * intensity
+                * (backNdl / dist2Meters);
+    }
+    phat = luminance(response);
+    return response;
+}
+
+// A distant descriptor carries total normal illuminance integrated over a uniform-radiance cone. The
+// uniform solid-angle proposal cancels its radiance into E*2/(1+cos(alpha)); the factor tends to one for
+// an exact directional source. This keeps the continuous angular PDF out of the RIS population PDF.
+public float3 evalDistantLightContrib(float3 lightDirection, float3 illuminance, float outerCos,
+                              float3 n, float3 v, float3 diffAlb, float3 F0, float rough,
+                              float transmission, out float phat) {
+    phat = 0.0;
+    float ndl = dot(n, lightDirection);
+    float3 response = float3(0.0);
+    float angularWeight = 2.0 / (1.0 + outerCos);
+    if (ndl > 0.0) {
+        float3 h = normalize(lightDirection + v);
+        float ndh = max(0.0, dot(n, h));
+        float ndv = max(1.0e-4, dot(n, v));
+        float vdh = max(0.0, dot(v, h));
+        float D = ggxD(ndh, rough);
+        float Gs = ggxG1(ndv, rough) * ggxG1(ndl, rough);
+        float3 Fs = fresnelSchlick(vdh, F0);
+        float3 layerTransmission = glossyLayerTransmission(F0, ndv, ndl);
+        float3 brdf = diffAlb * layerTransmission * (1.0 - transmission) * INV_PI
+                + (D * Gs) * Fs / (4.0 * ndv * ndl);
+        response = brdf * illuminance * (ndl * angularWeight);
+    } else if (transmission > 0.0) {
+        float backNdl = -ndl;
+        float3 layerTransmission = glossyLayerTransmission(F0, max(0.0, dot(n, v)), backNdl);
+        response = diffAlb * layerTransmission * transmission * INV_PI * illuminance
+                * (backNdl * angularWeight);
+    }
+    phat = luminance(response);
+    return response;
+}
+
+public float3 sampleUniformCone(float3 axis, float outerCos, inout uint seed) {
+    if (outerCos >= 0.9999999) return axis;
+    float cosTheta = lerp(outerCos, 1.0, rndf(seed));
+    float sinTheta = sqrt(max(0.0, 1.0 - cosTheta * cosTheta));
+    float phi = 2.0 * PI * rndf(seed);
+    float3 reference = abs(axis.y) < 0.999 ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0);
+    float3 tangent = normalize(cross(reference, axis));
+    float3 bitangent = cross(axis, tangent);
+    return normalize(axis * cosTheta + tangent * (sinTheta * cos(phi))
+            + bitangent * (sinTheta * sin(phi)));
 }
 
 // Unshadowed contribution of a fixed light sample point at surface (hitPos,n,v); out p-hat = its
@@ -230,6 +319,9 @@ public void selectLightGridLight(LightGridCell cell, bool useLocal, inout uint p
 public Reservoir risInitial(float3 hitPos, float3 n, float3 v, float3 rd, float3 diffAlb, float3 F0,
                      float rough, float transmission, inout uint seed, inout uint proposalSeed) {
     Reservoir r = resEmpty();
+    bool hasTerrainLights = worldPush.risCandidates > 0u
+            && pc.lightBufAddr != 0 && worldPush.lightCount > 0u;
+    bool hasProviderLights = worldPush.providerLightAddr != 0 && worldPush.providerLightCount > 0u;
     LightGridCell gridCell;
     int3 gridCellCoord;
     float3 gridLookup = hitPos;
@@ -239,22 +331,75 @@ public Reservoir risInitial(float3 hitPos, float3 n, float3 v, float3 rd, float3
         gridLookup += (float3(rndf(proposalSeed), rndf(proposalSeed), rndf(proposalSeed)) - 0.5)
                 * worldPush.lightGridOrigin.w;
     }
-    bool hasGridCell = findLightGridCell(gridLookup, gridCell, gridCellCoord);
-    uint candidateCount = worldPush.risCandidates;
+    bool hasGridCell = hasTerrainLights && findLightGridCell(gridLookup, gridCell, gridCellCoord);
+    uint candidateCount = max(worldPush.risCandidates, hasProviderLights ? 1u : 0u);
     r.M = float(candidateCount);
-    // Deterministically stratify the proposal mixture. At the default M=8 this schedules exactly six
-    // local and two global candidates, with every lane taking the same branch for a given candidate.
-    // Counts that are not divisible by four use the nearest practical split with at least one global
-    // candidate; M=1 is global-only so the estimator retains full support.
+    // Keep both populations in every candidate's proposal support. Provider lights get one quarter of
+    // the mixture when terrain emitters also exist, and the full proposal when they are the only source.
+    float providerProbability = hasProviderLights ? (hasTerrainLights ? 0.25 : 1.0) : 0.0;
     uint globalCandidateCount = hasGridCell
             ? max(1u, (candidateCount + 2u) / 4u) : candidateCount;
-    uint localCandidateCount = candidateCount - globalCandidateCount;
-    float localProbability = float(localCandidateCount) / float(candidateCount);
+    float stratifiedLocalProbability = 1.0
+            - float(globalCandidateCount) / float(candidateCount);
+    float localProbability = hasProviderLights
+            ? (hasGridCell ? 0.75 : 0.0) : stratifiedLocalProbability;
     for (uint c = 0u; c < candidateCount; c++) {
+        bool providerCandidate = hasProviderLights
+                && (!hasTerrainLights || rndf(proposalSeed) < providerProbability);
+        if (providerCandidate) {
+            uint providerIndex = min(uint(rndf(proposalSeed)
+                    * float(worldPush.providerLightCount)), worldPush.providerLightCount - 1u);
+            ProviderLight light = ConstPtr<ProviderLight>(worldPush.providerLightAddr)[providerIndex];
+            float3 samplePos = light.pos;
+            float3 sampleNormal = light.axis0;
+            float sampleArea = light.range;
+            if (light.type == 0u) {
+                float s = rndf(seed) * 2.0 - 1.0;
+                float t = rndf(seed) * 2.0 - 1.0;
+                samplePos += s * light.axis0 + t * light.axis1;
+                sampleNormal = normalize(cross(light.axis0, light.axis1)) * light.shapeScalar;
+                sampleArea = 4.0 * length(cross(light.axis0, light.axis1));
+            } else if (light.type == 3u) {
+                sampleNormal = sampleUniformCone(light.axis0, light.shapeScalar, seed);
+            }
+            float phat;
+            if (light.type == 0u) {
+                evalSampleContrib(samplePos, sampleNormal, light.intensity, sampleArea,
+                        hitPos, n, v, rd, diffAlb, F0, rough, transmission, phat);
+            } else if (light.type == 3u) {
+                evalDistantLightContrib(sampleNormal, light.intensity, light.shapeScalar,
+                        n, v, diffAlb, F0, rough, transmission, phat);
+            } else {
+                evalDeltaLightContrib(samplePos, light.axis0, light.intensity, light.range,
+                        light.shapeScalar, light.metersPerWorldUnit, light.type, hitPos, n, v, diffAlb, F0,
+                        rough, transmission, phat);
+            }
+            if (phat <= 0.0) continue;
+            // This is the discrete population PDF. Rectangle area and the normalized distant angular
+            // proposal are already canceled inside their contribution evaluations; point and spot are
+            // delta distributions and have no continuous shape PDF.
+            float sourcePdf = providerProbability / float(worldPush.providerLightCount);
+            float w = phat / max(sourcePdf, 1.0e-20);
+            r.wSum += w;
+            if (rndf(seed) * r.wSum < w) {
+                r.pos = samplePos;
+                r.lnrm = sampleNormal;
+                r.le = light.intensity;
+                r.area = sampleArea;
+                r.phat = phat;
+                r.lightType = light.type;
+                r.shapeScalar = light.shapeScalar;
+                r.metersPerWorldUnit = light.metersPerWorldUnit;
+            }
+            continue;
+        }
         uint li;
         uint globalsBefore = (c * globalCandidateCount) / candidateCount;
         uint globalsAfter = ((c + 1u) * globalCandidateCount) / candidateCount;
-        bool useLocal = hasGridCell && globalsAfter == globalsBefore;
+        // With provider lights every candidate samples the exact full mixture independently. The
+        // terrain-only path keeps its lower-variance deterministic 3:1 cell/global stratification.
+        bool useLocal = hasGridCell && (hasProviderLights
+                ? rndf(proposalSeed) < localProbability : globalsAfter == globalsBefore);
         selectLightGridLight(gridCell, useLocal, proposalSeed, li);
         Light lg = ConstPtr<Light>(pc.lightBufAddr)[li];
         // Soft shadows: uniform point on the emitter rectangle ((s,t) in [-1,1]^2, pdf 1/area).
@@ -271,7 +416,8 @@ public Reservoir risInitial(float3 hitPos, float3 n, float3 v, float3 rd, float3
         if (phat <= 0.0) {
             continue;
         }
-        float sourcePdf = proposalPdf(lg, le, gridCell, gridCellCoord, localProbability);
+        float sourcePdf = (1.0 - providerProbability)
+                * proposalPdf(lg, le, gridCell, gridCellCoord, localProbability);
         float w = phat / max(sourcePdf, 1.0e-20);
         r.wSum += w;
         if (rndf(seed) * r.wSum < w) { // weighted reservoir update
@@ -280,6 +426,9 @@ public Reservoir risInitial(float3 hitPos, float3 n, float3 v, float3 rd, float3
             r.le = le;
             r.area = area;
             r.phat = phat;
+            r.lightType = 0u;
+            r.shapeScalar = -1.0;
+            r.metersPerWorldUnit = 1.0;
         }
     }
     r.W = r.phat > 0.0 ? (r.wSum / (r.M * r.phat)) : 0.0;
@@ -291,15 +440,35 @@ public Reservoir risInitial(float3 hitPos, float3 n, float3 v, float3 rd, float3
 // the survivor, reflection or transmission — the origin is biased toward the sample's side of the
 // surface.
 public float3 shadeReservoir(Reservoir s, float3 hitPos, float3 n, float3 v, float3 rd, float3 diffAlb,
-                      float3 F0, float rough, float transmission) {
+                      float3 F0, float rough, float transmission, bool waterCaustics) {
     if (s.W <= 0.0 || s.phat <= 0.0) {
         return float3(0.0, 0.0, 0.0);
     }
     float phat;
-    float3 contrib = evalSampleContrib(s.pos, s.lnrm, s.le, s.area, hitPos, n, v, rd,
-            diffAlb, F0, rough, transmission, phat);
+    float3 contrib;
+    if (s.lightType == 0u) {
+        contrib = evalSampleContrib(s.pos, s.lnrm, s.le, s.area, hitPos, n, v, rd,
+                diffAlb, F0, rough, transmission, phat);
+    } else if (s.lightType == 3u) {
+        contrib = evalDistantLightContrib(s.lnrm, s.le, s.shapeScalar,
+                n, v, diffAlb, F0, rough, transmission, phat);
+    } else {
+        contrib = evalDeltaLightContrib(s.pos, s.lnrm, s.le, s.area, s.shapeScalar,
+                s.metersPerWorldUnit, s.lightType, hitPos, n, v, diffAlb, F0, rough,
+                transmission, phat);
+    }
     if (phat <= 0.0) {
         return float3(0.0, 0.0, 0.0);
+    }
+    if (s.lightType == 3u) {
+        float side = dot(n, s.lnrm) >= 0.0 ? 1.0 : -1.0;
+        float3 origin = hitPos + side * n * SURF_BIAS;
+        VisibilityResult shadow = visibility(origin, s.lnrm, RAY_TMAX);
+        float3 vis = shadow.transmittance;
+        if (waterCaustics && shadow.waterHitT > 0.0) {
+            vis *= waterCaustic(origin + s.lnrm * shadow.waterHitT, s.lnrm, shadow.waterHitT);
+        }
+        return contrib * vis * s.W;
     }
     // Pick the shadow-ray origin on the sample's side of the surface FIRST, then measure the ray from
     // that origin — measuring dist from hitPos while tracing from the biased origin shifts the ray tip

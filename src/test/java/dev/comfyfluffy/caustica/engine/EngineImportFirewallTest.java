@@ -23,7 +23,9 @@ final class EngineImportFirewallTest {
                 List<String> lines = Files.readAllLines(source);
                 for (int line = 0; line < lines.size(); line++) {
                     String text = lines.get(line);
-                    if (text.contains("net.minecraft.")) {
+                    if (text.contains("net.minecraft.") || text.contains("net.fabricmc.")
+                            || text.contains("com.mojang.")
+                            || text.contains("dev.comfyfluffy.caustica.minecraft.")) {
                         violations.add(engineSources.relativize(source) + ":" + (line + 1) + ": " + text);
                     }
                 }

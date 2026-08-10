@@ -1,7 +1,7 @@
 // Colour-space primitives shared by the engine and every extension.
 //
-// The renderer works in scene-linear ACEScg (AP1/D60) end to end. Minecraft's atlases, vanilla sprite
-// textures, and captured vertex colours are authored as sRGB/BT.709 (D65), so a colour crosses this
+// The renderer works in scene-linear ACEScg (AP1/D60) end to end. Source textures and vertex colours
+// authored as sRGB/BT.709 (D65) cross this
 // OCIO-derived chromatic-adaptation + primary-conversion seam exactly once, before it enters any BRDF,
 // throughput, medium, light, guide, or radiance calculation. A surface or sky slot returning radiance
 // converts here rather than defining its own matrix, or the two sides drift.

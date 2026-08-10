@@ -2,6 +2,7 @@ package dev.comfyfluffy.caustica.rt.material;
 
 import com.google.gson.JsonParser;
 import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.minecraft.provider.MinecraftMaterialSource;
 import net.minecraft.resources.Identifier;
 import org.junit.jupiter.api.Test;
 
@@ -22,7 +23,8 @@ final class RtMaterialOverridesTest {
                     : ResourceId.parse("caustica:end_portal").equals(id) ? 2 : -1;
 
     private static RtMaterialOverrides.Rule parse(com.google.gson.JsonObject root, Identifier source) {
-        return RtMaterialOverrides.parse(root, source, SURFACES);
+        return RtMaterialOverrides.from(List.of(MinecraftMaterialSource.parse(root, source)), SURFACES)
+                .rules().getFirst();
     }
 
     @Test
@@ -88,7 +90,7 @@ final class RtMaterialOverridesTest {
     }
 
     @Test
-    void waterModelKeepsItsOwnIndexWhenSelectedByName() {
+    void minecraftWaterPresetBecomesOpenPbrTransmissionAtTheBoundary() {
         var rule = parse(JsonParser.parseString("""
                 {"format":4,"match":{"sprite":"somemod:block/pool"},"model":"water"}
                 """).getAsJsonObject(), Identifier.parse("test:materials/pool.json"));
@@ -96,7 +98,7 @@ final class RtMaterialOverridesTest {
                 RtMaterialDesc.Source.HEURISTIC, 0, 0.8f, 0.0f, 1.0f, 0.0f,
                 RtMaterialDesc.EmissionSource.NONE, 0.0f, RtMaterialDesc.EmissionSummary.NONE, 0);
         RtMaterialDesc applied = rule.apply(base);
-        assertEquals(RtMaterialRegistry.MODEL_WATER, applied.model());
+        assertEquals(RtMaterialRegistry.MODEL_DIELECTRIC, applied.model());
         assertEquals(RtDielectrics.WATER_IOR, applied.specularIor());
         assertEquals(1.0f, applied.transmissionWeight());
     }
@@ -165,9 +167,10 @@ final class RtMaterialOverridesTest {
         assertEquals(1, rule.surfaceImplementation());
         assertEquals(1, rule.apply(base).surfaceImplementation());
 
-        assertThrows(IllegalArgumentException.class, () -> parse(JsonParser.parseString("""
+        var absent = MinecraftMaterialSource.parse(JsonParser.parseString("""
                 {"format":4,"match":{"sprite":"somemod:block/crystal"},"surface":"somemod:absent"}
-                """).getAsJsonObject(), Identifier.parse("test:materials/absent.json")));
+                """).getAsJsonObject(), Identifier.parse("test:materials/absent.json"));
+        assertTrue(RtMaterialOverrides.from(List.of(absent), SURFACES).rules().isEmpty());
     }
 
     /** A rule that says nothing about the surface leaves whatever the material already compiled with. */

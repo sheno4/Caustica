@@ -8,8 +8,6 @@ import dev.comfyfluffy.caustica.api.OptionValues;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.api.pass.PassSetup;
 import dev.comfyfluffy.caustica.api.pass.RenderStage;
-import dev.comfyfluffy.caustica.api.provider.LightProvider;
-import dev.comfyfluffy.caustica.api.provider.LightSink;
 import com.mojang.blaze3d.textures.GpuTextureView;
 import com.mojang.blaze3d.vulkan.VulkanGpuTextureView;
 import dev.comfyfluffy.caustica.rt.GpuContext;
@@ -42,24 +40,18 @@ import java.util.List;
  * LUT re-renders every frame.
  *
  * <p>Lives under {@code dev.comfyfluffy.caustica.builtin} rather than the engine's {@code rt} tree
- * deliberately: this pass ships through the same {@code CausticaRenderPass}/{@code LightProvider}
+ * deliberately: this pass ships through the {@code CausticaRenderPass}
  * registration API a third-party extension would use, so it only reaches engine internals through public
  * surface — {@link GpuContext}, {@link GpuImage}, the {@link ComputeDispatch}/{@link PassShaderCompiler}
  * pass-authoring helpers, {@link RtLookPackage#current()} for the photometric lighting anchors, and
  * {@link PassFrame#options()} for the {@code sky.*} geometry options declared as constants below.
  *
- * <p>Sole owner of the sky's per-frame state. It samples Minecraft's celestial state once, derives
- * everything from it, and publishes the result as the push constant for its own LUT bakes and as a set-2
- * uniform buffer ({@code skyInputs}) the sky slot reads, so the baked LUTs and the frame they shade cannot
- * disagree.
- *
- * <p>{@link #submitLights} has no consumer, so the engine has no sun or moon as a light: celestial NEE
- * does not fire. The engine consuming that submission is what makes it real.
+ * <p>Owns the sky rendering state. It samples Minecraft's celestial state and publishes the same packed
+ * inputs to its LUT bakes and sky slot. The Minecraft light adapter samples those host attributes
+ * independently to submit the corresponding distant lights through the light-provider API.
  */
-public final class SkyLutPass implements CausticaRenderPass, LightProvider {
+public final class SkyLutPass implements CausticaRenderPass {
     public static final ResourceId ID = ResourceId.of("caustica", "sky_lut");
-    private static final long SUN_LIGHT_KEY = 0L;
-    private static final long MOON_LIGHT_KEY = 1L;
     private static final Identifier SUN_SPRITE_ID = Identifier.withDefaultNamespace("sun");
     private static final Identifier[] MOON_SPRITE_IDS = createMoonSpriteIds();
     static final int TRANSMITTANCE_WIDTH = 256;
@@ -136,12 +128,6 @@ public final class SkyLutPass implements CausticaRenderPass, LightProvider {
     private float moonV0;
     private float moonU1 = 1f;
     private float moonV1 = 1f;
-    // submitLights() has no PassFrame/OptionValues of its own (LightProvider is a separate registration
-    // mechanism from CausticaRenderPass, invoked by ProviderManager, not RenderPassManager) — it reuses
-    // whichever state record() last gathered rather than reading options itself. Null until the first
-    // record(); submitLights() has zero consumers today (see its javadoc), so skipping in that window is
-    // harmless.
-    private volatile SkyState lastSkyState;
 
     @Override
     public ResourceId id() {
@@ -199,7 +185,6 @@ public final class SkyLutPass implements CausticaRenderPass, LightProvider {
     @Override
     public void record(PassFrame frame) {
         SkyState state = gatherSkyState(frame.options());
-        lastSkyState = state;
         // Before skyInputs(): this is what resolves the sprite rects skyInputs() then reads. Called the
         // other way round, the buffer carries the previous frame's UVs — and on the first frame the
         // untouched full-range defaults, which stretch the whole atlas (sun plus every moon phase) across
@@ -235,30 +220,6 @@ public final class SkyLutPass implements CausticaRenderPass, LightProvider {
         skyViewDispatch.beginFrame();
         skyViewDispatch.dispatch(frame.commandBuffer(), new GpuImage[]{skyView, transmittance, multiScatter},
                 push, groups(SKY_VIEW_WIDTH), groups(SKY_VIEW_HEIGHT), 1);
-    }
-
-    /**
-     * Submits the sun and moon as distant directional lights from the same state this frame's LUT bake
-     * used. See {@link LightSink}'s javadoc for why nothing reads these.
-     */
-    @Override
-    public void submitLights(LightSink sink) {
-        SkyState state = lastSkyState;
-        if (state == null) {
-            return;
-        }
-        float peakSun = (float) Math.cos(state.sunAngleRadians());
-        sink.directionalLight(SUN_LIGHT_KEY,
-                (float) -Math.sin(state.sunAngleRadians()),
-                (float) (Math.cos(state.noonTiltRadians()) * peakSun),
-                (float) (Math.sin(state.noonTiltRadians()) * peakSun),
-                state.sunIlluminanceLux());
-        float peakMoon = (float) Math.cos(state.moonAngleRadians());
-        sink.directionalLight(MOON_LIGHT_KEY,
-                (float) -Math.sin(state.moonAngleRadians()),
-                (float) (Math.cos(state.noonTiltRadians()) * peakMoon),
-                (float) (Math.sin(state.noonTiltRadians()) * peakMoon),
-                state.moonIlluminanceLux());
     }
 
     @Override

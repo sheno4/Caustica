@@ -46,4 +46,12 @@ final class FiniteLightTest {
                 new LightDescriptor.Spot(1, 0, 0, 0, 0, 0, 1,
                         4, Double.NaN, 1, 1, 1), 1.0));
     }
+
+    @Test
+    void rectangleNormalMustDescribeItsActualEmitterPlane() {
+        assertThrows(IllegalArgumentException.class, () -> FiniteLight.from(
+                new LightDescriptor.Rectangle(1, 0, 0, 0,
+                        1, 0, 0, 0, 1, 0,
+                        0, 1, 0, 1, 1, 1), 1.0));
+    }
 }

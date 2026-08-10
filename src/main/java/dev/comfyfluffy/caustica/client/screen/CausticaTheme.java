@@ -7,7 +7,7 @@ import net.minecraft.util.ARGB;
  * {@code fill}/{@code text} primitives — no vanilla sprite, no nine-slice, no widget texture.
  *
  * <p><b>Two constraints shape the palette, both from how this screen reaches the display.</b> Everything the
- * GUI draws is redirected into {@code RtUiOverlay}'s transparent {@code RGBA8_UNORM} target and composited
+ * GUI draws is redirected into {@code MinecraftUiOverlay}'s transparent {@code RGBA8_UNORM} target and composited
  * back over the scene, so alpha is real: any surface under text is near-opaque here, and only the backdrop
  * and the hover wash are meaningfully translucent. And because that overlay is SDR-authored and, in HDR, is
  * composited at a fixed nit level beside a scene that may peak far above it, <b>nothing uses brightness as a

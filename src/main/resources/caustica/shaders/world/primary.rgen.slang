@@ -7,8 +7,8 @@
 //
 // Perspective setup: invViewProj = inverse(proj * viewRot) maps clip to camera-relative world. Primary
 // rays are reconstructed from two unprojected points (near and far plane) rather than assuming the eye
-// is at the origin, because Minecraft bakes view bobbing into the projection, so the effective eye comes
-// from the matrix. camOffset shifts camera-relative space into the terrain's rebased coordinates. Depth
+// is at the origin, because a host may encode an effective eye offset in the projection matrix.
+// camOffset shifts camera-relative space into the scene's rebased coordinates. Depth
 // is reversed-Z (near=1, far=0).
 //
 // Pass A deliberately uses ordinary TraceRay. Its short, visually coherent direct/interface walk is
@@ -36,18 +36,18 @@ public PathSegment tracePrimary(PathSegment seg,
     float rayConeWidth = seg.rayConeWidth;
     float rayConeSpread = max(seg.rayConeSpread, RAY_CONE_MIN_SPREAD);
     uint seed = seg.seed;
-    bool showCelestial = seg.showCelestial;
+    bool showEnvironmentEmitter = seg.showEnvironmentEmitter;
     nextRecord = PATH_NO_NEXT;
 
     {
         int bounce = seg.bounce;
         PathSegment terminal = makePathSegment(ro, rd, throughput, medium,
                                                rayConeWidth, rayConeSpread, seed, bounce,
-                                               showCelestial);
+                                               showEnvironmentEmitter);
         // The camera's own first trace is what the guide images describe, so closest-hit resolves the
         // previous-frame normal of an animated surface only here.
-        traceRadiance(CULL_PRIMARY, ro, 0.0, rd, 10000.0,
-                      showCelestial, rayConeWidth, rayConeSpread, bounce == 0);
+        traceRadiance(CULL_PRIMARY, ro, 0.0, rd, RAY_TMAX,
+                      showEnvironmentEmitter, rayConeWidth, rayConeSpread, bounce == 0);
 
         if (payload.hitT < 0.0) {
             if (bounce == 0) {

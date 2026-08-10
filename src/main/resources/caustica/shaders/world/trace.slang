@@ -61,9 +61,9 @@ public Payload makeRadiancePayload(uint flags, uint rayCone) {
 // shaders directly and therefore requires no invocation-reorder capability. `reconstructionAnchor` marks
 // the camera's own first trace, whose hit is the one the guide images describe.
 public void traceRadiance(uint cullMask, float3 ro, float tmin, float3 rd, float tmax,
-                    bool showCelestial, float rayConeWidth, float rayConeSpread,
+                    bool showEnvironmentEmitter, float rayConeWidth, float rayConeSpread,
                     bool reconstructionAnchor = false) {
-    payload = makeRadiancePayload((showCelestial ? PAYLOAD_SHOW_CELESTIAL : 0u)
+    payload = makeRadiancePayload((showEnvironmentEmitter ? PAYLOAD_SHOW_CELESTIAL : 0u)
                     | (reconstructionAnchor ? PAYLOAD_PRIMARY_RAY : 0u),
             packHalf2(float2(rayConeWidth, rayConeSpread)));
     TraceRay(topLevelAS, RAY_FLAG_NONE, cullMask,

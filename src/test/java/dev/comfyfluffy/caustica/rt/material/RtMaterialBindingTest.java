@@ -39,6 +39,14 @@ final class RtMaterialBindingTest {
     }
 
     @Test
+    void texturelessDefinitionFlagOccupiesAStableBindingBit() {
+        int packed = RtMaterialRegistry.packBinding0(0, 0,
+                RtMaterialRegistry.BINDING_TEXTURELESS, 0);
+        assertEquals(4, RtMaterialRegistry.bindingFlags(packed));
+        assertEquals(0x00100000, packed);
+    }
+
+    @Test
     void coverageCutoffSurvivesQuantisation() {
         // The two cutoffs terrain and entity materials compile with. An 8-bit unorm must land close enough
         // that no texel changes side of the alpha test — sprite alpha is itself 8-bit.

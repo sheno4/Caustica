@@ -1,6 +1,6 @@
 module caustica_types;
 
-// Extension colours and radiance are scene-linear ACEScg. Distances are Minecraft blocks and
+// Extension colours and radiance are scene-linear ACEScg. Distances are scene world units and
 // directions are normalized and point away from the shaded position.
 public static const uint EVENT_NONE = 0x0u;
 public static const uint EVENT_DIFFUSE = 0x1u;
@@ -58,9 +58,8 @@ public struct MaterialInput {
      */
     public float transmissionWeight;
     /**
-     * OpenPBR emission_color and emission_luminance (cd/m²). Minecraft's convention is that an emitter
-     * glows in its own texture colour, so the engine's material adapter sets emissionColor = baseColor;
-     * that is the adapter's choice, not the model's, and a slot is free to compute its own.
+     * OpenPBR emission_color and emission_luminance (cd/m²). A material adapter may derive emission
+     * colour from its base texture, but that is source policy rather than part of this model.
      */
     public float3 emissionColor;
     public float emissionLuminance;
@@ -68,13 +67,12 @@ public struct MaterialInput {
     public float geometryOpacity;
     /**
      * OpenPBR geometry_thin_walled: one surface with no interior — a leaf, a blade of grass, a billboard,
-     * and equally the shell of an opaque block, since nothing is ever transported through its inside.
+     * and equally an opaque shell whose interior is never transported through.
      * Glass is the opposite case: two interfaces with a real interior, so the engine refracts and pushes
      * a medium instead, and those surfaces never reach this description. It selects which transmission
      * `transmissionWeight` means.
      */
     public bool geometryThinWalled;
-    public uint materialTags;
 };
 
 /**
@@ -114,8 +112,8 @@ public struct SurfaceInput {
     public float time;
     /** `time` one frame ago; equal to `time` when no adjacent frame exists to reproject from. */
     public float previousTime;
-    public float biomeTemperature;
-    public float biomeHumidity;
+    public float environmentTemperature;
+    public float environmentHumidity;
     /** SURFACE_* bits describing this hit. */
     public uint surfaceFlags;
 };

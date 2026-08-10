@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.rt.provider;
+package dev.comfyfluffy.caustica.minecraft.provider;
 
 import dev.comfyfluffy.caustica.api.provider.SceneProvider;
 import dev.comfyfluffy.caustica.api.ResourceId;

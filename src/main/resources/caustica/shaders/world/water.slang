@@ -121,7 +121,7 @@ public float3 applyWaterWaves(float3 nGeo, float2 worldXZ, float t, float footpr
 // position of the refracted sun ray as a function of surface position and finite-difference it. The
 // caustic intensity is the inverse Jacobian determinant of that surface→floor mapping (area compression = brightening, real
 // fold caustics where det → 0). Because this uses the SAME wave field as the visible surface normals,
-// the caustic pattern stays in sync with the ripples, and the per-sample sun-quad jitter (sampleSquare)
+// the caustic pattern stays in sync with the ripples, and the per-sample distant-light direction
 // shifts the pattern per sample → caustics physically blur with depth under DLSS-RR accumulation.
 public static const float CAUSTIC_EPS = 0.25; // finite-difference step (m); also low-passes sub-step wave detail
 public static const float CAUSTIC_MAX = 6.0;  // focusing clamp: keeps fold-line singularities from becoming fireflies

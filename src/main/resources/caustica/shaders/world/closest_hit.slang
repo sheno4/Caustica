@@ -263,19 +263,19 @@ MaterialInput buildMaterialInput(DecodedSurface surface, SurfaceMaterial mat, bo
     material.specularIor = dielectric ? mat.specularIor : surface.specularIor;
     material.specularColor = surface.specularColor;
     material.transmissionWeight = dielectric ? mat.transmissionWeight : surface.transmissionWeight;
-    // Minecraft's convention is that an emitter glows in its own texture colour, so this adapter — not
-    // the model — ties emission_color to base_color.
+    // The source adapter defines textured emission as glowing in the decoded base colour. That policy is
+    // applied here, before a registered surface may replace emission_color independently.
     //
     material.emissionColor = surface.baseColor;
     material.emissionLuminance = max(surface.emissionLuminance, 0.0);
     material.geometryOpacity = 1.0; // any-hit already resolved coverage before this stage ran
     material.geometryThinWalled = !dielectric;
     // No semantic material tags (foliage/water/portal/...) are compiled into SurfaceMaterial yet.
-    material.materialTags = 0u;
     return material;
 }
 
-// No biome sampling reaches closest-hit. An implementation sees a neutral 0.5/0.5 placeholder rather
+// No environment-field sampling reaches closest-hit. An implementation sees a neutral 0.5/0.5
+// placeholder rather
 // than fabricated real values.
 static const float PLACEHOLDER_BIOME_TEMPERATURE = 0.5;
 static const float PLACEHOLDER_BIOME_HUMIDITY = 0.5;
@@ -293,8 +293,8 @@ SurfaceInput buildSurfaceInput(Payload payload, float3 position, float3 geometri
     input.proceduralDomainAnchor = frameProceduralDomainAnchor();
     input.time = frameTime();
     input.previousTime = framePreviousTime();
-    input.biomeTemperature = PLACEHOLDER_BIOME_TEMPERATURE;
-    input.biomeHumidity = PLACEHOLDER_BIOME_HUMIDITY;
+    input.environmentTemperature = PLACEHOLDER_BIOME_TEMPERATURE;
+    input.environmentHumidity = PLACEHOLDER_BIOME_HUMIDITY;
     input.surfaceFlags = (payload.flags & PAYLOAD_PRIMARY_RAY) != 0u
             ? SURFACE_RECONSTRUCTION_ANCHOR : 0u;
     return input;
@@ -389,14 +389,22 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
         float3 ep0 = mul(entityO2w, HitTriangleVertexPosition(0));
         float3 ep1 = mul(entityO2w, HitTriangleVertexPosition(1));
         float3 ep2 = mul(entityO2w, HitTriangleVertexPosition(2));
-        float entityLod = rayConeTextureLod(rayCone, texSizePx(entityAlbedoTex[NonUniformResourceIndex(texSlot)]),
-                ep0, ep1, ep2, euv[e0], euv[e1], euv[e2]);
-        float4 entityTexel = entityAlbedoTex[NonUniformResourceIndex(texSlot)].SampleLevel(euvCoord, entityLod);
+        bool textureless = (bindingFlags(binding) & BINDING_TEXTURELESS) != 0u;
+        float entityLod = 0.0;
+        float4 entityTexel = float4(1.0);
+        if (!textureless) {
+            entityLod = rayConeTextureLod(rayCone,
+                    texSizePx(entityAlbedoTex[NonUniformResourceIndex(texSlot)]),
+                    ep0, ep1, ep2, euv[e0], euv[e1], euv[e2]);
+            entityTexel = entityAlbedoTex[NonUniformResourceIndex(texSlot)].SampleLevel(euvCoord, entityLod);
+        }
         bool transmissive = (bindingFlags(binding) & BINDING_TRANSMISSIVE) != 0u;
         float3 baseAlbedo709 = srgbToLinear(entityTexel.rgb) * srgbToLinear(pr.tint.rgb);
         float3 opticalColor709 = transmissive
                 ? lerp(float3(1.0), baseAlbedo709, entityTexel.a) : baseAlbedo709;
-        float3 albedo = bt709ToAcesCg(opticalColor709);
+        float3 albedo = textureless
+                ? mat.albedoUv.xyz * bt709ToAcesCg(srgbToLinear(pr.tint.rgb))
+                : bt709ToAcesCg(opticalColor709);
 
         float3 motionPrev;
         if (g.dispAddr != 0) {
@@ -465,7 +473,7 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
 
     bool transmissive = (bindingFlags(terrainBinding) & BINDING_TRANSMISSIVE) != 0u;
     // BINDING_RECORD_CROSSING is today set for water alone, and it tells the two dielectrics apart for
-    // the two things that differ: water's colour is the per-primitive biome tint with no texture fetch,
+    // the two things that differ: water's colour is the per-primitive source tint with no texture fetch,
     // and its surface animates.
     bool isWaterMaterial = transmissive
             && (bindingFlags(terrainBinding) & BINDING_RECORD_CROSSING) != 0u;

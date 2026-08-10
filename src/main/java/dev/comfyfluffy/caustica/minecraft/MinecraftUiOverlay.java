@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.rt;
+package dev.comfyfluffy.caustica.minecraft;
 
 import java.util.Optional;
 
@@ -20,6 +20,9 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.BindGroupLayouts;
 import net.minecraft.client.renderer.RenderPipelines;
 
+import dev.comfyfluffy.caustica.rt.RtComposite;
+import dev.comfyfluffy.caustica.rt.RtRuntime;
+
 /**
  * Transparent final-UI overlay. World-space overlay features and the vanilla GUI/HUD
  * are routed into one transparent {@code RGBA8} target, then that single image is composited back over the
@@ -40,7 +43,7 @@ import net.minecraft.client.renderer.RenderPipelines;
  * main depth right before the GUI. Blur ({@code GameRenderer.processBlurEffect}) still operates on the real
  * main target, so the world behind screens is blurred as usual and the overlay composites over the result.
  */
-public final class RtUiOverlay {
+public final class MinecraftUiOverlay {
     private static final Vector4f TRANSPARENT = new Vector4f(0.0f, 0.0f, 0.0f, 0.0f);
 
     /** Fullscreen blit that composites the premultiplied overlay over the destination (premultiplied-over). */
@@ -62,7 +65,7 @@ public final class RtUiOverlay {
     // via beginFrame().
     private static boolean overlayClearedThisFrame;
 
-    private RtUiOverlay() {
+    private MinecraftUiOverlay() {
     }
 
     /**

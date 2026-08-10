@@ -32,7 +32,6 @@ public final class BuiltinExtension implements CausticaExtension {
                 .options(SkyLutPass.OPTIONS)
                 .renderPass(new BloomPass())
                 .renderPass(skyLut)
-                .lightProvider(ResourceId.of("caustica", "sky_lut"), skyLut)
                 .register();
         registry.setDefault(Slots.SKY, ID);
     }

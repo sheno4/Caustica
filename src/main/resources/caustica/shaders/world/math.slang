@@ -12,7 +12,7 @@ public float luminance(float3 c) { return dot(c, ACESCG_LUMA); }
 // NOTE: the 1e-7 denominator guard is not merely a divide-by-zero epsilon, and it is load-bearing. At
 // the lobe peak d == a2, so the guard dominates PI*d*d until a2 >> 1.8e-4, i.e. rough >> 0.116; every
 // smoother material has its NEE highlight peak truncated. That truncation is what keeps the sun from
-// being counted twice: a specular continuation sets showCelestial, so the BSDF-sampled ray may hit the
+// being counted twice: a specular continuation sets showEnvironmentEmitter, so its ray may hit the
 // sun disc in world.rmiss while NEE is also adding a sun term for the same lobe, with no MIS weighting
 // between them. Removing the guard restores the physical peak AND the double count, and makes the
 // single-sample sun estimator explode wherever the lobe is tighter than the disc (~0.0047 rad). The
@@ -88,35 +88,6 @@ public float primaryRayConeSpread(float2 ndc, float2 size, float3 dir) {
     float3 dx = primaryRayDir(ndc + float2(onePixelNdc.x, 0.0));
     float3 dy = primaryRayDir(ndc + float2(0.0, onePixelNdc.y));
     return max(max(length(cross(dir, dx)), length(cross(dir, dy))), RAY_CONE_MIN_SPREAD);
-}
-
-/**
- * Tangent frame for a celestial body's square, kept level with the horizon: {@code right} is horizontal
- * and {@code up} lies in the vertical plane through the body, so a body never rolls about its own centre
- * as it crosses the sky. A sky slot that draws a body must build its square in this same frame, or the
- * sampled light and the drawn body will not line up.
- */
-void celestialSquareFrame(float3 bodyDir, out float3 right, out float3 up) {
-    // Near the zenith the horizontal reference degenerates; the arc's tilt keeps the sun/moon well away
-    // from it in practice, so any stable fallback will do.
-    float3 reference = abs(bodyDir.y) > 0.9995 ? float3(0.0, 0.0, 1.0) : float3(0.0, 1.0, 0.0);
-    right = normalize(cross(reference, bodyDir));
-    up = cross(bodyDir, right);
-}
-
-// Soft shadows: sample a direction within the light's SQUARE angular extent about `axis`. MC's sun/moon
-// are square quads, so the NEE shadow ray samples a square (not a cone) — the same square, in the same
-// horizon-levelled tangent frame (celestialSquareFrame above) a sky slot draws the visible body in.
-// Averaged over frames by DLSS-RR this yields soft penumbrae that widen with occluder distance
-// (contact-hardening) for free. halfAngle <= 0 ⇒ exact direction (hard).
-public float3 sampleSquare(float3 axis, float halfAngle, inout uint s) {
-    float3 right;
-    float3 up;
-    celestialSquareFrame(axis, right, up);
-    float t = tan(halfAngle);
-    float u = (rndf(s) * 2.0 - 1.0) * t;
-    float v = (rndf(s) * 2.0 - 1.0) * t;
-    return normalize(axis + u * right + v * up);
 }
 
 // Sample a GGX visible-normal (VNDF, Heitz 2018) about geometric normal n for view ve, returning the

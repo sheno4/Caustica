@@ -29,7 +29,7 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
 
     if ((flags & BINDING_TRANSMISSIVE) != 0u) {
         // Per-primitive tint multiplies base colour, and transmission colour is authored relative to it,
-        // so biome water colour and dyed glass both flow through here without a second meaning.
+        // so source-tinted water and dyed glass both flow through here without a second meaning.
         packAlbedo(payload, unpackAlbedo(payload) * transmittance
                 * bt709ToAcesCg(srgbToLinear(hit.tint)));
         // Any-hit order is arbitrary, so keep the nearest: for an underwater shading point that is where

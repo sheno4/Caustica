@@ -13,7 +13,7 @@ import dev.comfyfluffy.caustica.rt.RtComposite;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
-import dev.comfyfluffy.caustica.rt.RtUiOverlay;
+import dev.comfyfluffy.caustica.minecraft.MinecraftUiOverlay;
 import dev.comfyfluffy.caustica.rt.accel.GpuImage;
 import net.minecraft.client.Minecraft;
 import dev.comfyfluffy.caustica.api.ResourceId;
@@ -50,7 +50,7 @@ import java.util.List;
  *
  * <p>Routing every feature through one shared buffer instead of blending straight onto vanilla's SDR
  * {@code main} keeps SDR/HDR presentation unified: {@link #record} folds that buffer into
- * {@link RtUiOverlay}'s transparent overlay before the vanilla GUI renders, so the GUI remains topmost and
+ * {@link MinecraftUiOverlay}'s transparent overlay before the vanilla GUI renders, so the GUI remains topmost and
  * the final present path only has one UI image to blend. The block outline applies its private MSAA
  * mask-resolve before its result reaches {@code overlayImage}; MSAA is the overlay edge-AA mechanism.
  *
@@ -58,7 +58,7 @@ import java.util.List;
  * having it handed in: {@link RtComposite#currentGraphicsUse()} for the shared TLAS-lifetime completion
  * token, and {@code Minecraft.getInstance().gameRenderer.mainRenderTarget()} for the post-upscale render
  * target — the same object {@code GameRendererMixin}'s {@code this.mainRenderTarget} field holds at the
- * call site (see {@code RtUiOverlay.java}'s identical read).
+ * call site (see {@code MinecraftUiOverlay.java}'s identical read).
  */
 public final class WorldOverlayPass implements CausticaRenderPass {
     public static final ResourceId ID = ResourceId.of("caustica", "world_overlay");
@@ -70,8 +70,8 @@ public final class WorldOverlayPass implements CausticaRenderPass {
     private final List<OverlayFeature> features =
             List.of(new GlowOutlineFeature(), new NameTagFeature(), new BlockOutlineFeature());
 
-    // Shared world-overlay buffer every feature composites into. uiComposite* blends it into RtUiOverlay's
-    // transparent target; RtUiOverlay owns the one final SDR/HDR blend to the real target.
+    // Shared world-overlay buffer every feature composites into. uiComposite* blends it into MinecraftUiOverlay's
+    // transparent target; MinecraftUiOverlay owns the one final SDR/HDR blend to the real target.
     private GpuContext ctx;
     private GpuImage overlayImage;
     private OverlayPipelines.Pipeline uiCompositePipeline;
@@ -117,7 +117,7 @@ public final class WorldOverlayPass implements CausticaRenderPass {
     public void record(PassFrame frame) {
         RtGpuExecutor.GraphicsUse graphicsUse = RtComposite.INSTANCE.currentGraphicsUse();
         RenderTarget main = Minecraft.getInstance().gameRenderer.mainRenderTarget();
-        if (graphicsUse == null || main == null || main.getColorTexture() == null || !RtUiOverlay.enabled()) {
+        if (graphicsUse == null || main == null || main.getColorTexture() == null || !MinecraftUiOverlay.enabled()) {
             return;
         }
         int width = main.width;
@@ -132,7 +132,7 @@ public final class WorldOverlayPass implements CausticaRenderPass {
             if (ready.isEmpty()) {
                 return;
             }
-            RenderTarget uiTarget = RtUiOverlay.beginCompositeLayer(main);
+            RenderTarget uiTarget = MinecraftUiOverlay.beginCompositeLayer(main);
             long targetView = vkImageView(uiTarget.getColorTextureView());
             if (targetView == 0L) {
                 CausticaMod.LOGGER.warn("World overlay: UI overlay target has no Vulkan image view; skipping");

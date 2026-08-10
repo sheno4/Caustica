@@ -12,7 +12,7 @@ public final class LightBvh {
     private LightBvh() {
     }
 
-    public static Data build(List<? extends LightDescriptor> descriptors,
+    public static Data build(List<? extends LightDescriptor.Finite> descriptors,
                              double metersPerWorldUnit, BooleanSupplier cancelled) {
         FiniteLight[] lights = new FiniteLight[descriptors.size()];
         for (int i = 0; i < lights.length; i++) {
@@ -25,7 +25,7 @@ public final class LightBvh {
                 lights[0].descriptor().positionY(), lights[0].descriptor().positionZ());
         for (int i = 1; i < lights.length; i++) {
             if ((i & 255) == 0) checkCancelled(cancelled);
-            LightDescriptor light = lights[i].descriptor();
+            LightDescriptor.Finite light = lights[i].descriptor();
             centroidBounds = centroidBounds.include(light.positionX(), light.positionY(),
                     light.positionZ());
         }
@@ -68,7 +68,7 @@ public final class LightBvh {
         return node.isLeaf() ? 1 : 1 + Math.max(depth(nodes, node.left()), depth(nodes, node.right()));
     }
 
-    private static long mortonKey(LightDescriptor light, Aabb bounds) {
+    private static long mortonKey(LightDescriptor.Finite light, Aabb bounds) {
         int x = quantize(light.positionX(), bounds.minX(), bounds.maxX());
         int y = quantize(light.positionY(), bounds.minY(), bounds.maxY());
         int z = quantize(light.positionZ(), bounds.minZ(), bounds.maxZ());
@@ -175,12 +175,19 @@ public final class LightBvh {
         private static double[] rotateToward(OrientationCone a, OrientationCone b,
                                              double separation, double rotation) {
             if (separation < 1.0e-12) return new double[]{a.axisX, a.axisY, a.axisZ};
-            double sinSeparation = Math.sin(separation);
-            if (Math.abs(sinSeparation) > 1.0e-12) {
-                double wa = Math.sin(separation - rotation) / sinSeparation;
-                double wb = Math.sin(rotation) / sinSeparation;
-                return new double[]{wa * a.axisX + wb * b.axisX,
-                        wa * a.axisY + wb * b.axisY, wa * a.axisZ + wb * b.axisZ};
+            double dot = Math.clamp(a.axisX * b.axisX + a.axisY * b.axisY
+                    + a.axisZ * b.axisZ, -1.0, 1.0);
+            double tx = b.axisX - dot * a.axisX;
+            double ty = b.axisY - dot * a.axisY;
+            double tz = b.axisZ - dot * a.axisZ;
+            double tangentLength = Math.sqrt(tx * tx + ty * ty + tz * tz);
+            if (tangentLength > 0.0) {
+                tx /= tangentLength;
+                ty /= tangentLength;
+                tz /= tangentLength;
+                return new double[]{Math.cos(rotation) * a.axisX + Math.sin(rotation) * tx,
+                        Math.cos(rotation) * a.axisY + Math.sin(rotation) * ty,
+                        Math.cos(rotation) * a.axisZ + Math.sin(rotation) * tz};
             }
             // Antipodal axes have no unique shortest arc; choose a stable perpendicular.
             double px = Math.abs(a.axisX) < 0.9 ? 0.0 : -a.axisZ;

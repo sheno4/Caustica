@@ -7,6 +7,10 @@ public interface SceneProvider {
     default void prepareFrame() {
     }
 
+    /** Submit this frame's desired retained meshes and world-space instances. */
+    default void submitGeometry(SceneGeometrySink sink) {
+    }
+
     default void invalidate() {
     }
 

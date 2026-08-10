@@ -72,6 +72,8 @@ public struct WorldPush {
     public float4   lightGridOrigin;     // xyz minimum cell origin in rebased blocks, w cell size
     public int4     lightGridDims;       // xyz dense grid dimensions, w reserved
     public uint     lightCount;       // packed Light records in pc.lightBufAddr
+    public uint64_t providerLightAddr; // current-frame ProviderLight records (0 = none submitted)
+    public uint     providerLightCount;
     public uint     risCandidates;    // RIS candidate count M per diffuse vertex (0 = emitter NEE off)
     // Pre-exposure scalar applied to radiance at the outImage write
     // ONLY, so all light transport above stays in absolute scene units. Keeps stored fp16 values
@@ -97,6 +99,21 @@ public struct Light {
     public uint   halfUzVx; // half2(U.z, V.x)
     public uint   halfVyz;  // half2(V.y, V.z)
     public uint   section;  // 10:10:10 grid-relative section coord + bit 30 normal-flip
+};
+
+// Host-neutral light record submitted by LightProvider. Shape-specific lanes are:
+// rectangle: axis0/axis1 are half axes and shapeScalar is the geometric-normal sign;
+// point: range is the finite influence radius; spot: axis0 is direction and shapeScalar is cos(outer);
+// distant: axis0 points toward the source, shapeScalar is cos(angular radius), intensity is lux.
+public struct ProviderLight {
+    public float3 pos;
+    public uint type; // 0 rectangle, 1 point, 2 spot, 3 distant
+    public float3 axis0;
+    public float range;
+    public float3 axis1;
+    public float shapeScalar;
+    public float3 intensity;
+    public float metersPerWorldUnit;
 };
 
 // Eight-byte Vose alias-table column. PDFs are reconstructed from the selected Light.
@@ -207,7 +224,7 @@ public static const uint PAYLOAD_GUIDE_RAY = 256u;
 // than a second encoding of it.
 public static const uint PAYLOAD_TRANSMISSIVE = 1u;
 // Set alongside PAYLOAD_TRANSMISSIVE for water specifically (forwarded from BINDING_RECORD_CROSSING,
-// which today is set only for water): an animated wave surface, the caustic term, and biome-tint
+// which today is set only for water): an animated wave surface, the caustic term, and source-tint
 // absorption calibrated per block of depth are behaviour nothing else needs. Every other transmissive
 // surface — glass, ice, any solid transparent block a pack defines — is this bit unset.
 public static const uint PAYLOAD_WATER = 2u;
@@ -259,6 +276,9 @@ public static const uint BINDING_TRANSMISSIVE = 1u;
 // Report the nearest crossing distance in Payload.hitT. For an underwater shading point that is where its
 // sun shadow ray leaves the medium, which is where world.rgen evaluates the refraction caustic.
 public static const uint BINDING_RECORD_CROSSING = 2u;
+// The binding owns a uniform linear base colour in SurfaceMaterial.albedoUv.xyz and never samples an
+// albedo texture. Textureless definitions use opaque coverage, so any-hit needs no corresponding path.
+public static const uint BINDING_TEXTURELESS = 4u;
 
 public uint bindingAlbedoSlot(MaterialBinding binding) { return binding.packed0 & 0xFFFFu; }
 public uint bindingCoverage(MaterialBinding binding) { return (binding.packed0 >> 16) & 3u; }
@@ -328,9 +348,11 @@ public float surfaceIorFromPage(float encoded) {
     return (1.0 + amplitude) / (1.0 - amplitude);
 }
 
-// One record for every TLAS instance. PrimitiveIndex restarts at zero for each BLAS geometry, so hit
-// shaders add triBase[GeometryIndex()]. A zero indexAddr means UVs are already stored in triangle-corner
-// order; otherwise it addresses the triangle index array used to look up shared vertex UVs.
+// One record for every distinct geometry stream referenced by a TLAS instance. Immutable provider
+// instances may share one record when they reference the same mesh; dynamic producers use one record per
+// instance for motion state. PrimitiveIndex restarts at zero for each BLAS geometry, so hit shaders add
+// triBase[GeometryIndex()]. A zero indexAddr means UVs are already stored in triangle-corner order;
+// otherwise it addresses the triangle index array used to look up shared vertex UVs.
 public struct GeometryRecord {
     public uint64_t primAddr;
     public uint64_t idxAddr;

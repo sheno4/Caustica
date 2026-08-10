@@ -40,18 +40,21 @@ public float3 tracePath<TC : IComposition, TTrace : IRadianceTrace>(TC.Surfaces 
     float rayConeSpread = max(seg.rayConeSpread, RAY_CONE_MIN_SPREAD);
     int maxBounces = int(worldPush.maxBounces);
     int rrStart = maxBounces <= 3 ? 1 : 2;
-    bool risOn = worldPush.risCandidates > 0u && worldPush.lightCount > 0u && pc.lightBufAddr != 0;
+    bool terrainRisOn = worldPush.risCandidates > 0u
+            && worldPush.lightCount > 0u && pc.lightBufAddr != 0;
+    bool providerRisOn = worldPush.providerLightCount > 0u && worldPush.providerLightAddr != 0;
+    bool risOn = terrainRisOn || providerRisOn;
     uint proposalSeed = pix.x * 1973u + pix.y * 9277u + 26699u
             ^ worldPush.frameIndex * 2654435761u ^ sampleIndex * 2246822519u;
     proposalSeed = pcg(proposalSeed);
     MediumStack medium = seg.medium;
     bool waterWaves = (worldPush.flags & 16u) != 0u;
-    bool showCelestial = seg.showCelestial;
+    bool showEnvironmentEmitter = seg.showEnvironmentEmitter;
     TTrace tracer;
     for (int bounce = seg.bounce; bounce <= maxBounces; bounce++) {
         uint pathPhaseHint = bounce >= maxBounces ? 2u : (bounce >= rrStart ? 1u : 0u);
-        tracer.trace(bounce == 0 ? CULL_PRIMARY : CULL_SECONDARY, ro, 0.0, rd, 10000.0,
-                showCelestial, rayConeWidth, rayConeSpread, pathPhaseHint);
+        tracer.trace(bounce == 0 ? CULL_PRIMARY : CULL_SECONDARY, ro, 0.0, rd, RAY_TMAX,
+                showEnvironmentEmitter, rayConeWidth, rayConeSpread, pathPhaseHint);
 
         if (payload.hitT < 0.0) {
             if (medium.current.water) {
@@ -104,7 +107,7 @@ public float3 tracePath<TC : IComposition, TTrace : IRadianceTrace>(TC.Surfaces 
                     mediumPop(medium);
                 }
             }
-            showCelestial = true;
+            showEnvironmentEmitter = true;
             if (bounce >= rrStart) {
                 float q = clamp(max(throughput.r, max(throughput.g, throughput.b)), 0.02, 1.0);
                 if (rndf(seed) > q) {
@@ -127,47 +130,19 @@ public float3 tracePath<TC : IComposition, TTrace : IRadianceTrace>(TC.Surfaces 
 
         // Emissive surfaces carry the resolved OpenPBR emission colour independently from base colour.
         float3 emissionRadiance = closure.emissionRadiance;
-        bool gateEmitter = risOn && payloadEmitterInList();
-        if (any(emissionRadiance > 0.0) && (!gateEmitter || showCelestial)) {
+        bool gateEmitter = terrainRisOn && payloadEmitterInList();
+        if (any(emissionRadiance > 0.0) && (!gateEmitter || showEnvironmentEmitter)) {
             vertexRadiance += emissionRadiance;
         }
 
-        // NEE toward the dominant celestial body: the engine BSDF is the estimator's target function. One
-        // ray serves both hemispheres — a light is either in front of the surface, where the BSDF answers
-        // with reflection, or behind it, where a thin wall answers with transmission and an opaque one
-        // answers with nothing. The origin is biased onto whichever side the light is.
-        float3 lightDir = celestialLight.dir;
-        float lightHalfAngle = celestialLight.halfAngle;
-        if (lightHalfAngle > 0.0) {
-            lightDir = sampleSquare(lightDir, lightHalfAngle, seed);
-        }
-        float signedNdl = dot(n, lightDir);
-        float ndl = abs(signedNdl);
-        float3 p = hitPos + (signedNdl >= 0.0 ? n : -n) * SURF_BIAS;
-        if (ndl > 0.0) {
-            VisibilityResult shadow = visibility(p, lightDir, 10000.0);
-            float3 vis = shadow.transmittance;
-            if (medium.current.water && waterWaves && shadow.waterHitT > 0.0) {
-                vis *= waterCaustic(p + lightDir * shadow.waterHitT, lightDir, shadow.waterHitT);
-            }
-            if (max(vis.r, max(vis.g, vis.b)) > 0.0) {
-                BsdfQuery bsdfQuery;
-                bsdfQuery.surface = closure;
-                bsdfQuery.outgoingDirection = v;
-                bsdfQuery.incomingDirection = lightDir;
-                BsdfEvaluation eval = evaluateBsdf(bsdfQuery);
-                vertexRadiance += eval.value * celestialLight.illuminance * ndl * vis;
-            }
-        }
-
-        // RIS direct lighting from block emitters: the engine's own reference target function (matching
-        // evalSampleContrib in lighting.slang), evaluated against the same diffAlb/F0/rough the closure
-        // carries. RIS still uses the engine reference target function rather than evaluateBsdf.
+        // RIS direct lighting from terrain emitters and host-supplied lights, evaluated with the engine's
+        // reference target function against the same parameters the material closure carries.
         if (risOn) {
             Reservoir r = risInitial(hitPos, n, v, rd, diffAlb, F0, rough, closure.transmission,
                                      seed, proposalSeed);
             vertexRadiance += shadeReservoir(r, hitPos, n, v, rd, diffAlb, F0, rough,
-                                             closure.transmission);
+                                             closure.transmission,
+                                             medium.current.water && waterWaves);
         }
 
         // Look policy applies once to this vertex's total shaded contribution, through the same
@@ -194,11 +169,11 @@ public float3 tracePath<TC : IComposition, TTrace : IRadianceTrace>(TC.Surfaces 
         // A transmitted bounce leaves through the far side, so the origin follows the direction rather
         // than the normal.
         ro = hitPos + (dot(n, rd) >= 0.0 ? n : -n) * SURF_BIAS;
-        // Engine invariant derived from the slot's lobe classification: a diffuse
-        // bounce is already covered by the NEE term above, so it must not also see the celestial disc.
-        showCelestial = (sample.eventFlags & EVENT_DIFFUSE) == 0u;
+        // A diffuse bounce is covered by the direct-light estimator, so it must not also see a visible
+        // distant emitter in the sky implementation.
+        showEnvironmentEmitter = (sample.eventFlags & EVENT_DIFFUSE) == 0u;
         rayConeSpread = max(rayConeSpread,
-                showCelestial ? rough * RAY_CONE_GLOSSY_SPREAD_SCALE : RAY_CONE_DIFFUSE_SPREAD);
+                showEnvironmentEmitter ? rough * RAY_CONE_GLOSSY_SPREAD_SCALE : RAY_CONE_DIFFUSE_SPREAD);
 
         if (bounce >= rrStart) {
             float q = clamp(max(throughput.r, max(throughput.g, throughput.b)), 0.02, 1.0);
@@ -213,9 +188,6 @@ public float3 tracePath<TC : IComposition, TTrace : IRadianceTrace>(TC.Surfaces 
 
 public void runIndirect<TC : IComposition, TTrace : IRadianceTrace>() {
     worldPush = ConstPtr<WorldPush>(pc.worldPushAddr)[0];
-    // celestialLight (world_core.slang) is a fixed hand-authored sun, so the three consumers below
-    // NEE fires against the same constant direction and illuminance every frame, regardless of the time
-    // of day the sky slot is drawing.
     TC.Surfaces surfaces;
     uint2 dispatchIndex = DispatchRaysIndex().xy;
     uint2 dimensions = DispatchRaysDimensions().xy;

@@ -1,8 +1,8 @@
 // Participating media: the tint-to-extinction mappings and the depth-2 medium stack the dielectric
 // interface pushes and pops. Depends on core only.
 
-// Per-channel Beer–Lambert extinction from a water body's biome tint (carried in the payload's albedo view
-// for water hits, or worldPush.cameraMedium for the camera's own biome when starting submerged). A blue
+// Per-channel Beer–Lambert extinction from a water body's source tint (carried in the payload's albedo
+// view for water hits, or worldPush.cameraMedium when the camera starts submerged). A blue
 // ocean tint (low red) absorbs red fastest → bluer with depth; swamp green-brown shifts the hue. The floor
 // keeps even a white-tinted body very slightly absorbing so deep water never reads as clear vacuum.
 
@@ -17,7 +17,8 @@ public float3 waterExtinction(float3 tint) {
     return WATER_ABSORB_FLOOR + WATER_DENSITY * (float3(1.0, 1.0, 1.0) - clamp(tint, 0.0, 1.0));
 }
 
-// A non-water dielectric's tint is a filter over one block of travel rather than a biome water colour, so
+// A non-water dielectric's tint is a filter over one scene unit of travel rather than a water source
+// colour, so
 // it maps to extinction by inverting Beer-Lambert over that reference distance: transmittance t after one
 // block means sigma = -ln(t). `transmission` scales that transmittance, so it keeps the sense the
 // material's authored factor has everywhere else — 1 passes the tint through unchanged, 0 is opaque.
@@ -36,9 +37,8 @@ public float3 volumeExtinction(float3 tint, float transmission) {
 // per-segment Beer-Lambert attenuation.
 //
 // The stack is depth 2 (current + the one it will return to) held in named fields, NOT an array. A
-// dynamically indexed local array lands in scratch memory, and this raygen is already register-bound —
-// paying an occupancy hit for nesting that Minecraft does not produce would be a bad trade. Depth 2
-// covers air->water->glass and air->glass->water, which is the realistic worst case; anything deeper
+// dynamically indexed local array lands in scratch memory, and this raygen is already register-bound.
+// Depth 2 covers the supported nested-interface cases; anything deeper
 // degrades to air on the way out, and because `entering` is re-derived per face from geometry rather
 // than toggled, the path re-synchronises at the next crossing instead of staying corrupted.
 public struct Medium {
@@ -77,7 +77,7 @@ public void mediumPop(inout MediumStack stack) {
     stack.outer = airMedium();
 }
 
-// Water's tint is a biome colour whose absorption is calibrated per block of depth; any other volume
+// Water's source tint has absorption calibrated per scene unit of depth; any other volume
 // dielectric's tint is a filter over a reference block of travel. Both end up as per-channel extinction.
 public Medium makeDielectricMedium(bool isWater, float ior, float3 tint, float transmission) {
     Medium m;

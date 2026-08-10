@@ -2,6 +2,8 @@ package dev.comfyfluffy.caustica.rt.material;
 
 import com.mojang.blaze3d.platform.NativeImage;
 import dev.comfyfluffy.caustica.CausticaMod;
+import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.api.provider.MaterialDefinition;
 import dev.comfyfluffy.caustica.mixin.SpriteContentsAccessor;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtColor;
@@ -75,6 +77,7 @@ public final class RtMaterialRegistry {
     // Transmittance — how much light passes where the surface is present. Mirrors BINDING_* in Slang.
     private static final int BINDING_TRANSMISSIVE = 1;
     private static final int BINDING_RECORD_CROSSING = 2;
+    static final int BINDING_TEXTURELESS = 4;
     // MaterialBinding.packed0 = albedoSlot:16 | coverageMode:2 | flags:6 | surfaceImpl:8;
     // packed1 = coverageCutoff:8. Mirrored by the bindingAlbedoSlot/bindingCoverage/bindingFlags/
     // bindingSurfaceImpl/bindingCutoff accessors in world_common.slang — the any-hit reads these fields
@@ -152,6 +155,7 @@ public final class RtMaterialRegistry {
     private GpuBuffer surfaceTable;
     private long nextEpoch;
     private Map<Identifier, Integer> entityTextureIds = Map.of();
+    private Map<ResourceId, Integer> namedMaterialIds = Map.of();
     private Map<Identifier, EntityTemplate> entityTemplates = Map.of();
     private final Map<EntitySpriteKey, Integer> entitySpriteIds = new HashMap<>();
     // Host mirror of the uploaded binding table, and its content index. Every binding — compiled or
@@ -178,7 +182,9 @@ public final class RtMaterialRegistry {
     }
 
     /** Build and atomically publish the block and entity registry for the current resource epoch. */
-    public void rebuild(GpuContext ctx, RtBlockMaterials blockMaterials, RtMaterialOverrides overrides) {
+    public void rebuild(GpuContext ctx, RtBlockMaterials blockMaterials, RtMaterialOverrides overrides,
+                        List<MaterialDefinition> definitions,
+                        RtMaterialOverrides.SurfaceResolver surfaces) {
         Map<TextureAtlasSprite, RtBlockMaterials.Entry> entriesBySprite = blockMaterials.preparedEntries();
         List<TextureAtlasSprite> sprites = new ArrayList<>(entriesBySprite.keySet());
         sprites.sort(Comparator.comparing(sprite -> sprite.contents().name().toString()));
@@ -298,6 +304,7 @@ public final class RtMaterialRegistry {
         }
 
         Map<Identifier, Integer> nextEntityTextureIds = new HashMap<>();
+        Map<ResourceId, Integer> nextNamedMaterialIds = new HashMap<>();
         Map<Identifier, EntityTemplate> nextEntityTemplates = new HashMap<>();
         Set<RtMaterialOverrides.Rule> entityMatchedOverrides = new HashSet<>();
         for (Identifier name : entityResources) {
@@ -312,7 +319,37 @@ public final class RtMaterialRegistry {
             }
             int id = tables.add(desc, transparentWhiteAverage(), entry, null, ENTITY_COVERAGE_CUTOFF);
             nextEntityTextureIds.put(name, id);
+            nextNamedMaterialIds.put(resourceId(name), id);
             nextEntityTemplates.put(name, new EntityTemplate(desc, entry));
+        }
+
+        for (MaterialDefinition definition : definitions) {
+            if (nextNamedMaterialIds.containsKey(definition.id())) {
+                throw new IllegalStateException("Duplicate submitted material " + definition.id());
+            }
+            int surfaceImplementation = BUILTIN_SURFACE_IMPLEMENTATION;
+            if (definition.surface() != null) {
+                surfaceImplementation = surfaces.indexOf(definition.surface());
+                if (surfaceImplementation < 0) {
+                    CausticaMod.LOGGER.warn("Ignoring material definition {} with unregistered surface {}",
+                            definition.id(), definition.surface());
+                    continue;
+                }
+            }
+            int model = definition.transmissionWeight() > 0.0f ? MODEL_DIELECTRIC : MODEL_OPAQUE;
+            RtMaterialDesc desc = new RtMaterialDesc(model, RtMaterialDesc.Source.NEUTRAL, 0,
+                    definition.specularRoughness(), definition.baseMetalness(), definition.specularIor(),
+                    definition.transmissionWeight(), RtMaterialDesc.EmissionSource.NONE, 0.0f,
+                    RtMaterialDesc.EmissionSummary.NONE, surfaceImplementation);
+            Identifier name = identifier(definition.id());
+            for (RtMaterialOverrides.Rule rule : overrides.rules()) {
+                if (!rule.matchesEntity(name)) continue;
+                desc = rule.apply(desc);
+                entityMatchedOverrides.add(rule);
+                break;
+            }
+            int id = tables.addDefinition(desc, definition);
+            nextNamedMaterialIds.put(definition.id(), id);
         }
 
         // Full entity textures have fixed [0,1] UVs and receive IDs above. Atlas sprites need a second,
@@ -369,6 +406,7 @@ public final class RtMaterialRegistry {
                 List.copyOf(descriptions), Collections.unmodifiableList(new ArrayList<>(grids)), frozenOverrides,
                 tables.cutoutVariants.toIntArray(), sbtClasses);
         entityTextureIds = Collections.unmodifiableMap(nextEntityTextureIds);
+        namedMaterialIds = Collections.unmodifiableMap(nextNamedMaterialIds);
         entityTemplates = Collections.unmodifiableMap(nextEntityTemplates);
         entitySpriteIds.clear();
         bindingRecords.clear();
@@ -429,6 +467,13 @@ public final class RtMaterialRegistry {
         Snapshot current = snapshot;
         if (current == null) throw new IllegalStateException("RT terrain materials are not prepared");
         return current;
+    }
+
+    /** Resolve a stable extension material name to the current resource epoch's private binding ID. */
+    public int bindingId(ResourceId material) {
+        Integer id = namedMaterialIds.get(material);
+        if (id == null) throw new IllegalArgumentException("No submitted material named " + material);
+        return id;
     }
 
     public long epoch() {
@@ -595,6 +640,7 @@ public final class RtMaterialRegistry {
     public void destroy() {
         snapshot = null;
         entityTextureIds = Map.of();
+        namedMaterialIds = Map.of();
         entityTemplates = Map.of();
         entitySpriteIds.clear();
         bindingRecords.clear();
@@ -612,6 +658,14 @@ public final class RtMaterialRegistry {
             surfaceTable.destroy();
             surfaceTable = null;
         }
+    }
+
+    private static ResourceId resourceId(Identifier id) {
+        return ResourceId.of(id.getNamespace(), id.getPath());
+    }
+
+    private static Identifier identifier(ResourceId id) {
+        return Identifier.fromNamespaceAndPath(id.namespace(), id.path());
     }
 
     private static int index(RtMaterials.Profile profile, boolean glass, boolean emitting) {
@@ -736,6 +790,20 @@ public final class RtMaterialRegistry {
             return id;
         }
 
+        int addDefinition(RtMaterialDesc desc, MaterialDefinition definition) {
+            int surfaceId = surfaces.size();
+            surfaces.add(surfaceDefinition(desc, definition));
+            float[] average = {definition.baseColorR(), definition.baseColorG(), definition.baseColorB(), 1.0f};
+            MaterialBindingData base = binding(surfaceId, desc, average,
+                    BLOCK_ATLAS_ALBEDO_SLOT, ENTITY_COVERAGE_CUTOFF);
+            int flags = bindingFlags(base.packed0()) | BINDING_TEXTURELESS;
+            MaterialBindingData textureless = new MaterialBindingData(
+                    packBinding0(BLOCK_ATLAS_ALBEDO_SLOT, COVERAGE_OPAQUE, flags,
+                            bindingSurfaceImpl(base.packed0())),
+                    base.surface(), base.shadowTint(), base.packed1());
+            return append(textureless, desc, null);
+        }
+
         /** The base's binding with {@link #COVERAGE_CUTOUT}, over the same surface/description/grid. */
         private int addCutoutSibling(int baseId) {
             MaterialBindingData base = bindings.get(baseId);
@@ -797,6 +865,12 @@ public final class RtMaterialRegistry {
                 new Float4(albedoU, albedoV, albedoInvDu, albedoInvDv),
                 desc.specularRoughness(), desc.baseMetalness(), desc.specularIor(),
                 desc.transmissionWeight());
+    }
+
+    private static SurfaceMaterialData surfaceDefinition(RtMaterialDesc desc, MaterialDefinition definition) {
+        return new SurfaceMaterialData(0, 0, new Float4(0.0f, 0.0f, 0.0f, 0.0f),
+                new Float4(definition.baseColorR(), definition.baseColorG(), definition.baseColorB(), 1.0f),
+                desc.specularRoughness(), desc.baseMetalness(), desc.specularIor(), desc.transmissionWeight());
     }
 
     /**

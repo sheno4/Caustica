@@ -3,7 +3,7 @@ package dev.comfyfluffy.caustica.engine.light;
 import java.util.Objects;
 
 /** Canonical finite-light metadata consumed by engine-owned spatial light structures. */
-public record FiniteLight(LightDescriptor descriptor, LightBvh.Aabb bounds,
+public record FiniteLight(LightDescriptor.Finite descriptor, LightBvh.Aabb bounds,
                           LightBvh.OrientationCone orientation,
                           double luminousPowerLumens) {
     // ACEScg/AP1 luminance coefficients. This is the same Y used by the transport shaders.
@@ -20,7 +20,7 @@ public record FiniteLight(LightDescriptor descriptor, LightBvh.Aabb bounds,
         }
     }
 
-    public static FiniteLight from(LightDescriptor descriptor, double metersPerWorldUnit) {
+    public static FiniteLight from(LightDescriptor.Finite descriptor, double metersPerWorldUnit) {
         Objects.requireNonNull(descriptor, "descriptor");
         if (!(metersPerWorldUnit > 0.0) || !Double.isFinite(metersPerWorldUnit)) {
             throw new IllegalArgumentException("metersPerWorldUnit must be finite and positive");
@@ -53,6 +53,13 @@ public record FiniteLight(LightDescriptor descriptor, LightBvh.Aabb bounds,
         }
         double[] normal = normalized(light.normalX(), light.normalY(), light.normalZ(),
                 "Rectangle light normal");
+        double crossLength = length(crossX, crossY, crossZ);
+        double alignment = Math.abs((crossX * normal[0] + crossY * normal[1]
+                + crossZ * normal[2]) / crossLength);
+        if (alignment < 0.999999) {
+            throw new IllegalArgumentException(
+                    "Rectangle light normal must be parallel to its half-axis cross product");
+        }
         double extentX = Math.abs(light.halfUx()) + Math.abs(light.halfVx());
         double extentY = Math.abs(light.halfUy()) + Math.abs(light.halfVy());
         double extentZ = Math.abs(light.halfUz()) + Math.abs(light.halfVz());
@@ -115,7 +122,7 @@ public record FiniteLight(LightDescriptor descriptor, LightBvh.Aabb bounds,
         return Math.max(0.0, LUMA_R * red + LUMA_G * green + LUMA_B * blue);
     }
 
-    private static void requireFinitePosition(LightDescriptor light) {
+    private static void requireFinitePosition(LightDescriptor.Finite light) {
         requireFinite(light.positionX(), light.positionY(), light.positionZ());
     }
 

@@ -76,10 +76,9 @@ public final class ComputeDispatch {
     }
 
     /**
-     * Clamped point sampling, for a pass reading Minecraft's own pixel art rather than a smooth function.
-     * Filtering a sprite that is magnified many times over — vanilla's 32x32 sun across a quad spanning
-     * tens of degrees — blurs it into a smudge; the texture was authored at the resolution it is meant to
-     * be seen at. Use {@link #createLinearClampSampler} for anything continuous, such as a baked LUT.
+     * Clamped point sampling for discrete texel art rather than a smooth function. Filtering a sprite
+     * magnified many times over blurs authored texels together. Use {@link #createLinearClampSampler} for
+     * anything continuous, such as a baked LUT.
      */
     public static long createNearestClampSampler(GpuContext ctx, String label) {
         return createClampSampler(ctx, label, VK10.VK_FILTER_NEAREST);

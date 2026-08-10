@@ -1,19 +1,16 @@
 package dev.comfyfluffy.caustica.api.provider;
 
+import dev.comfyfluffy.caustica.engine.light.LightDescriptor;
+
 /**
  * Where a {@link LightProvider} hands off the lights it wants in the scene, once per frame, via
  * {@link LightProvider#submitLights(LightSink)}.
  *
- * <p>Nothing downstream consumes a submission: the light system has no dynamic tier a
- * provider-supplied light could join, since every record in the light database carries a Minecraft
- * chunk-section coordinate a provider light has no equivalent for. Calling this records intent for
- * design and API feedback, not shadows; it is wired up so an extension can be written and reviewed
- * against the real shape.
+ * <p>Descriptors are copied into the renderer's current-frame light snapshot. A provider must submit
+ * every light it wants to keep each frame; omitting a light removes it immediately.
  */
+@FunctionalInterface
 public interface LightSink {
-    /**
-     * A distant directional light (sun/moon-like): no position, just a unit direction and absolute
-     * illuminance in lux, scene-linear BT.709. {@code key} is stable and local to the provider.
-     */
-    void directionalLight(long key, float dirX, float dirY, float dirZ, float illuminanceLux);
+    /** Submit one host-neutral light descriptor in scene coordinates and physical units. */
+    void submit(LightDescriptor light);
 }

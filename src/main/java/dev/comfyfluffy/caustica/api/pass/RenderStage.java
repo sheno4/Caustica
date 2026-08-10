@@ -26,7 +26,7 @@ public enum RenderStage {
     EXPOSURE,
     /** Tone mapping and display-referred look transforms. */
     LOOK,
-    /** HUD, name tags, block outlines, and other screen-space overlays. */
+    /** Host UI and other screen-space overlays. */
     OVERLAY,
     /** Final blit/composite immediately before presentation. */
     PRESENT

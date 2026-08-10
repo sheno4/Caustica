@@ -4,7 +4,7 @@ import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vulkan.VulkanDevice;
 
 import dev.comfyfluffy.caustica.rt.RtReflex;
-import dev.comfyfluffy.caustica.rt.RtUiOverlay;
+import dev.comfyfluffy.caustica.minecraft.MinecraftUiOverlay;
 
 import net.minecraft.client.Minecraft;
 
@@ -30,7 +30,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class MinecraftMixin {
 	@Inject(method = "close", at = @At("HEAD"))
 	private void caustica$destroyUiOverlayBeforeRendererShutdown(CallbackInfo ci) {
-		RtUiOverlay.destroy();
+		MinecraftUiOverlay.destroy();
 	}
 
 	@Inject(method = "runTick", at = @At("HEAD"))

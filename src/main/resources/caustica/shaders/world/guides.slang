@@ -110,7 +110,7 @@ public float2 resolveSpecularGuides(SpecSurface surface, float3 primaryDir,
     // deterministic guide probe.
     traceGuide(CULL_SECONDARY,
             offsetSurfaceOrigin(surfacePos, surface.normal, specDir, SURF_BIAS),
-            RAY_TMIN, specDir, 10000.0,
+            RAY_TMIN, specDir, RAY_TMAX,
             max(length(surface.camRel) * primaryConeSpread, RAY_CONE_MIN_WIDTH),
             max(primaryConeSpread, RAY_CONE_MIN_SPREAD));
     float3 reflectedHit;
@@ -166,7 +166,7 @@ public void resolveTransmissionGuide(float3 surfacePos, float3 transmittedDir,
     // The camera interface consumed bounce 0; the remaining configured bounce budget is the natural
     // cap for deterministic guide crossings too.
     for (uint crossing = 0u; crossing < worldPush.maxBounces; ++crossing) {
-        traceGuide(CULL_PRIMARY, ro, RAY_TMIN, direction, 10000.0,
+        traceGuide(CULL_PRIMARY, ro, RAY_TMIN, direction, RAY_TMAX,
                 rayConeWidth, rayConeSpread);
         if (payload.hitT <= 0.0) {
             setTransmissionGuide((ro + direction * 1.0e6) - worldPush.camOffset,

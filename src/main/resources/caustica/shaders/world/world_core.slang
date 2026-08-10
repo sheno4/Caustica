@@ -68,42 +68,12 @@ public float payloadTransmission() { return unpackHalf2(payload.iorTransmission)
 public static const float PI = 3.14159265359;
 public static const float INV_PI = 0.31830988618;
 
-// The sky (atmosphere LUT + sun/moon discs + stars) is evaluated in world.rmiss. On a miss, raygen reads
-// payloadSky() and accumulates that radiance.
-//
-// celestialLight is the single directional light NEE samples, and it is a HAND-AUTHORED FIXED SUN, not a
-// per-frame value. Nothing produces a celestial light: a sky extension submits sun and moon through
-// LightProvider.submitLights, and the engine consuming that submission is what will replace this
-// constant. Until then this light does not track Minecraft's time of day — it stays lit at night, and its
-// direction is independent of the sun disc the sky slot draws, so the two only agree at noon.
-public static CelestialLight celestialLight = {
-    // Minecraft's noon sun under SkyLutPass's default 30° south tilt, i.e. celestialDirection(0, π/6).
-    // Points TOWARD the light: every consumer uses it as both dot(n, dir) and a shadow-ray direction.
-    float3(0.0, 0.86602540, 0.5),
-    // Direct normal illuminance at ground level, ACEScg. The look package's 128,000 lux is top of
-    // atmosphere and the sky LUT applies the atmosphere's transmittance to it; nothing applies that
-    // transmittance to this light, so it carries the surface figure instead. BT.709 white maps to ACEScg
-    // white (the matrix rows sum to one), so a neutral sun is equal across the three channels.
-    float3(100000.0, 100000.0, 100000.0),
-    // SkyLutPass's default sky.sun-angular-radius-degrees, 0.6° — deliberately wider than the real sun's
-    // 0.267° so sampleSquare's single sample per vertex yields visible contact-hardening penumbrae.
-    0.010471976
-};
 public static const float SURF_BIAS = 0.005;  // offset secondary-ray origins along the normal (anti-acne)
 public static const float RAY_TMIN = 0.001;   // tiny tmin: the normal offset already clears the surface
+public static const float RAY_TMAX = 1.0e20;  // scale-independent bound for rays toward the environment
 
 // Water is a smooth dielectric. IOR 1.333; absorption is per-block Beer-Lambert extinction.
 public static const float WATER_IOR = 1.333;
-/**
- * The distant celestial light every NEE call site reads from. Every consumer gates on {@code ndl} and
- * illuminance, so a zero-illuminance light fires no shadow ray.
- */
-public struct CelestialLight {
-    public float3 dir;          // unit, toward the light
-    public float3 illuminance;  // linear ACEScg (the transport basis), lux at the viewer
-    public float  halfAngle;    // radians; <= 0 samples the exact direction, giving hard shadows
-};
-
 public static const float3 SKY_SPEC_ALBEDO = float3(0.5, 0.5, 0.5); // RR guide default for sky pixels.
 public static const float3 SKY_DIFF_ALBEDO = float3(0.5, 0.5, 0.5);
 

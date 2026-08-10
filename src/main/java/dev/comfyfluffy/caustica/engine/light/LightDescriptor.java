@@ -1,18 +1,17 @@
 package dev.comfyfluffy.caustica.engine.light;
 
-/**
- * Host-supplied description of a finite light. Positions and geometric vectors are in scene world
- * units; photometric values use the units named by each record. The engine applies the scene's
- * meters-per-world-unit scale when it creates a {@link FiniteLight}.
- */
+/** Host-supplied light description using scene coordinates and the photometric units named below. */
 public sealed interface LightDescriptor {
     long key();
 
-    double positionX();
+    /** A spatial emitter eligible for finite-light acceleration structures. */
+    sealed interface Finite extends LightDescriptor permits Rectangle, Point, Spot {
+        double positionX();
 
-    double positionY();
+        double positionY();
 
-    double positionZ();
+        double positionZ();
+    }
 
     /** A one-sided rectangular emitter with scene-linear ACEScg radiance in cd/m². */
     record Rectangle(long key,
@@ -21,7 +20,7 @@ public sealed interface LightDescriptor {
                      double halfVx, double halfVy, double halfVz,
                      double normalX, double normalY, double normalZ,
                      double radianceRedCdM2, double radianceGreenCdM2,
-                     double radianceBlueCdM2) implements LightDescriptor {
+                     double radianceBlueCdM2) implements Finite {
     }
 
     /**
@@ -32,7 +31,7 @@ public sealed interface LightDescriptor {
                  double positionX, double positionY, double positionZ,
                  double rangeMeters,
                  double intensityRedCandela, double intensityGreenCandela,
-                 double intensityBlueCandela) implements LightDescriptor {
+                 double intensityBlueCandela) implements Finite {
     }
 
     /**
@@ -44,6 +43,17 @@ public sealed interface LightDescriptor {
                 double directionX, double directionY, double directionZ,
                 double rangeMeters, double outerHalfAngleRadians,
                 double intensityRedCandela, double intensityGreenCandela,
-                double intensityBlueCandela) implements LightDescriptor {
+                double intensityBlueCandela) implements Finite {
+    }
+
+    /**
+     * A distant angular emitter. Direction points toward the source, illuminance is the total
+     * scene-linear ACEScg normal illuminance integrated over the source in lux, and angular radius is
+     * the sampling cone's half-angle in radians. A zero radius is an exact directional source.
+     */
+    record Distant(long key,
+                   double directionX, double directionY, double directionZ,
+                   double illuminanceRedLux, double illuminanceGreenLux,
+                   double illuminanceBlueLux, double angularRadiusRadians) implements LightDescriptor {
     }
 }

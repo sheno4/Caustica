@@ -17,7 +17,9 @@ import dev.comfyfluffy.caustica.client.CausticaJitter;
 import dev.comfyfluffy.caustica.engine.frame.FrameSnapshot;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.mixin.CommandEncoderAccessor;
+import dev.comfyfluffy.caustica.minecraft.MinecraftUiOverlay;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushConstantsData;
+import dev.comfyfluffy.caustica.rt.light.RtProviderLights;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushData;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushData.BreakEntry;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushData.Float2;
@@ -52,6 +54,8 @@ import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
 import dev.comfyfluffy.caustica.rt.accel.GpuImage;
 import dev.comfyfluffy.caustica.rt.entity.RtEntities;
 import dev.comfyfluffy.caustica.rt.entity.RtEntityTextures;
+import dev.comfyfluffy.caustica.rt.geometry.RtGeometryMaterialResolver;
+import dev.comfyfluffy.caustica.rt.geometry.RtSceneGeometryManager;
 import dev.comfyfluffy.caustica.rt.material.RtBlockMaterials;
 import dev.comfyfluffy.caustica.rt.material.RtEmissionSemantics;
 import dev.comfyfluffy.caustica.rt.material.RtMaterialOverrides;
@@ -201,6 +205,12 @@ public final class RtComposite {
     private static final int PUSH_RING = 6;
     private PushSlot[] pushRing;
     private int pushSlot;
+    private final RtProviderLights providerLights = new RtProviderLights();
+    private final RtSceneGeometryManager sceneGeometry = new RtSceneGeometryManager(handle -> {
+        int bindingId = RtMaterialRegistry.INSTANCE.bindingId(handle.id());
+        return new RtGeometryMaterialResolver.ResolvedMaterial(bindingId,
+                RtMaterialRegistry.INSTANCE.sbtClassFor(bindingId));
+    });
     private RtDisplayPipeline displayPipeline;
     private RenderPassManager renderPassManager;
     private long renderPassSceneId = Long.MIN_VALUE;
@@ -315,11 +325,6 @@ public final class RtComposite {
     private final Matrix4f frameProjection = new Matrix4f();
     private final Matrix4f frameViewRotation = new Matrix4f();
     private FrameSnapshot frameSnapshot;
-
-    // Per-frame TLAS resources, rebuilt in place from a small ring of persistent slots (see
-    // RtAccel.TlasRing — replaces the old create-and-defer-destroy-per-frame churn whose VMA slow path
-    // showed up as rare multi-ms prepareTlas spikes).
-    private final RtAccel.TlasRing tlasRing = new RtAccel.TlasRing();
 
     // This frame's TLAS handle, published after prepareTlas so the world-overlay pass (block outline's
     // rayQueryEXT occlusion test) can bind the exact same acceleration structure the primary trace used —
@@ -971,14 +976,17 @@ public final class RtComposite {
         // Bindless slot 0 = fallback texture (the block atlas) so an entity whose texture can't be
         // resolved samples something defined rather than an unbound (partially-bound) descriptor.
         RtBlockMaterials.INSTANCE.reset();
-        RtMaterialOverrides materialOverrides = RtMaterialOverrides.load(
-                CausticaApi.registry()::surfaceIndex);
+        ProviderManager.MaterialContributions materials = ProviderManager.INSTANCE.collectMaterials();
+        RtMaterialOverrides materialOverrides = RtMaterialOverrides.from(
+                materials.rules(), CausticaApi.registry()::surfaceIndex);
         RtEmissionSemantics emissionSemantics = RtEmissionSemantics.analyze();
         RtBlockMaterials.INSTANCE.prepareAll(ctx, bindlessTextureCapacity, emissionSemantics, materialOverrides);
         RtEntityTextures.INSTANCE.reset(bindlessTextureCapacity);
         worldPipeline.setEntityAlbedoTexture(0, atlasView, sampler);
         RtBlockMaterials.INSTANCE.bindPages(worldPipeline, sampler);
-        RtMaterialRegistry.INSTANCE.rebuild(ctx, RtBlockMaterials.INSTANCE, materialOverrides);
+        RtMaterialRegistry.INSTANCE.rebuild(ctx, RtBlockMaterials.INSTANCE, materialOverrides,
+                materials.definitions(), CausticaApi.registry()::surfaceIndex);
+        sceneGeometry.invalidateMaterials();
         materialBindingsReady = true;
         bindPassResources();
         // Atlas UVs and material IDs are one resource epoch. Drop old terrain as a unit rather than
@@ -1254,6 +1262,8 @@ public final class RtComposite {
         exposure.beginFrame(graphicsUseWaiter);
         pendingGraphicsUse = graphicsUse;
         RtEntities.FrameEntities frameEntities = null;
+        RtSceneGeometryManager.FrameGeometry providerGeometry = null;
+        RtProviderLights.Frame providerLightFrame = null;
         VkCommandBuffer cmd = encoder.allocateAndBeginTransientCommandBuffer();
         RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_COMMAND_BUFFER, cmd.address(), "composite command buffer");
         int debugView = debugView();
@@ -1304,6 +1314,9 @@ public final class RtComposite {
             // float precision). hitPos.xz (rebased) + anchor reconstructs a world-pinned coordinate, so a
             // pattern stays fixed in the world as the player moves and the rebase origin shifts.
             SceneOrigin sceneOrigin = new SceneOrigin(terrain.blockX, terrain.blockY, terrain.blockZ);
+            providerLightFrame = providerLights.writeFrame(ctx,
+                    ProviderManager.INSTANCE.frameLights(), sceneOrigin.x(), sceneOrigin.y(),
+                    sceneOrigin.z(), graphicsUseWaiter);
             double proceduralPeriod = PROCEDURAL_ANCHOR_MASK + 1.0;
             Float2 proceduralDomainAnchor = new Float2(sceneOrigin.wrappedX(proceduralPeriod),
                     sceneOrigin.wrappedZ(proceduralPeriod));
@@ -1315,8 +1328,12 @@ public final class RtComposite {
             // generations are reclaimed by graphics-timeline completion.
             // Entity BLASes are built inline below and merged into the per-frame TLAS. The frame table
             // starts with retained terrain records and appends dynamic geometry records in the same index space.
-            RtEntities.FrameEntities fe = RtEntities.INSTANCE.beginFrame(ctx, terrain.staticInstances(),
-                    terrain.geometryTablePrefix(), terrain.blockX, terrain.blockY, terrain.blockZ,
+            RtSceneGeometryManager.Capture geometryCapture = sceneGeometry.beginCapture();
+            ProviderManager.INSTANCE.submitGeometry(geometryCapture::sink);
+            providerGeometry = sceneGeometry.finishFrame(ctx, geometryCapture, terrain.staticInstances(),
+                    terrain.geometryTablePrefix(), sceneOrigin);
+            RtEntities.FrameEntities fe = RtEntities.INSTANCE.beginFrame(ctx, providerGeometry.instances(),
+                    providerGeometry.tablePrefix(), terrain.blockX, terrain.blockY, terrain.blockZ,
                     snapshot.cameraX(), snapshot.cameraY(), snapshot.cameraZ(),
                     frameProjection, frameViewRotation);
             frameEntities = fe;
@@ -1353,6 +1370,8 @@ public final class RtComposite {
                     new Float4(terrain.lightGridOriginX(), terrain.lightGridOriginY(), terrain.lightGridOriginZ(), 16f),
                     new Int4(terrain.lightGridDimX(), terrain.lightGridDimY(), terrain.lightGridDimZ(), 0),
                     terrain.lightCount(),
+                    providerLightFrame.bufferAddress(),
+                    providerLightFrame.lightCount(),
                     CausticaConfig.Rt.Lights.RIS_CANDIDATES.value(),
                     // Must be the SAME value the exposure resolve divides out this frame (it reads it
                     // from the same RtExposure accessor), or the two stop cancelling.
@@ -1363,16 +1382,20 @@ public final class RtComposite {
             RtEntityTextures.INSTANCE.uploadPending(active, atlasSampler(ctx));
             // Build the entity BLAS, the TLAS that references it and the terrain BLAS, then the trace.
             // Barriers separate each stage; the graphics-use timeline guards resource reuse.
-            if (!fe.blas().isEmpty()) {
-                try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("entity.blasRecord")) {
-                    RtAccel.recordBlasBuilds(ctx, cmd, fe.blas());
+            if (!providerGeometry.blasBuilds().isEmpty() || !fe.blas().isEmpty()) {
+                try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("geometry.blasRecord")) {
+                    if (!providerGeometry.blasBuilds().isEmpty()) {
+                        RtAccel.recordBlasBuilds(ctx, cmd, providerGeometry.blasBuilds());
+                    }
+                    if (!fe.blas().isEmpty()) {
+                        RtAccel.recordBlasBuilds(ctx, cmd, fe.blas());
+                    }
                 }
-                VulkanCommandEncoder.memoryBarrier(cmd, stack); // entity BLAS writes visible to the TLAS build
+                VulkanCommandEncoder.memoryBarrier(cmd, stack); // provider/entity BLAS writes visible to the TLAS build
             }
             RtAccel.PreparedTlas frameTlas;
             try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("frame.prepareTlas")) {
-                frameTlas = RtAccel.prepareTlas(ctx, fe.baseInstances(), fe.dynamicInstances(), tlasRing,
-                        graphicsUse);
+                frameTlas = sceneGeometry.prepareTlas(ctx, providerGeometry, fe.dynamicInstances(), graphicsUse);
             }
             active.setTlas(frameTlas.accel.handle, graphicsUse, graphicsUseWaiter);
             currentTlasHandle = frameTlas.accel.handle;
@@ -1504,6 +1527,8 @@ public final class RtComposite {
         // Do not attach a merely reserved token: failed recording may never signal it. Once execute succeeds,
         // every owner in this frame's manifest is protected through the final overlay consumer.
         RtEntities.INSTANCE.markGraphicsUse(frameEntities, graphicsUse);
+        sceneGeometry.markGraphicsUse(providerGeometry, ctx, graphicsUse);
+        providerLights.markGraphicsUse(providerLightFrame, graphicsUse);
         exposure.markStateReadbackUse(graphicsUse);
     }
 
@@ -1546,7 +1571,8 @@ public final class RtComposite {
     public void destroy() {
         // Session teardown stops the GPU executor and waits the device idle before entering here, so the
         // TLAS ring's slots are no longer in flight and can be freed immediately.
-        tlasRing.destroy();
+        sceneGeometry.shutdown();
+        providerLights.destroy();
         RtDlssRr.INSTANCE.destroy();
         if (displayImage != null) {
             displayImage.destroy();
@@ -1775,7 +1801,7 @@ public final class RtComposite {
             // the compute pass. A memory barrier first makes the overlay writes + the world HDR writes visible
             // to the compute; the dep1 barrier below (ALL writes -> transfer read) then covers the compute's
             // HDR write for the blit.
-            long overlayView = RtUiOverlay.populatedThisFrame() ? RtUiOverlay.overlayColorView() : 0L;
+            long overlayView = MinecraftUiOverlay.populatedThisFrame() ? MinecraftUiOverlay.overlayColorView() : 0L;
             if (overlayView != 0L) {
                 ensureHdrUiResources();
                 if (hdrCompositePipeline != null) {
@@ -1786,7 +1812,7 @@ public final class RtComposite {
                     hdrCompositePipeline.setImages(hdrDisplayImage.view, overlayView, hdrUiSampler);
                     hdrCompositePipeline.dispatch(cmd, src.width, src.height, CausticaConfig.Rt.Hdr.uiNits());
                 }
-                RtUiOverlay.markConsumed();
+                MinecraftUiOverlay.markConsumed();
             }
             // Swapchain UNDEFINED -> TRANSFER_DST, plus make the HDR compute writes visible to the blit read.
             VkImageMemoryBarrier2.Buffer toDst = VkImageMemoryBarrier2.calloc(1, stack).sType$Default();
@@ -1978,14 +2004,14 @@ public final class RtComposite {
      * DLSS Frame Generation quality: capture a copy of {@code main} (the main render target) into
      * {@link #fgHudlessImage} for {@link #fgInterpolate} to feed DLSSG as the "hudless" resource. Call from
      * {@code GameRendererMixin} right after {@code GuiRenderer.render()} but BEFORE
-     * {@link RtUiOverlay#compositeIfUsed()} — at that point, when the UI overlay redirect is active, {@code
+     * {@link MinecraftUiOverlay#compositeIfUsed()} — at that point, when the UI overlay redirect is active, {@code
      * main} still has no combined UI baked in (world overlays, hand/screen effects and GUI went to the
      * overlay target instead). No-op (and {@link #fgInterpolate} passes 0/0/0 for hudless, same as always)
      * unless both FG and the UI overlay redirect are active — capturing this without the redirect would just
      * copy the ALREADY-composited backbuffer, which is useless as a distinct hudless input.
      */
     public void captureFgHudless(RenderTarget main) {
-        if (!RtDlssFg.enabled() || !RtUiOverlay.enabled() || main == null || main.getColorTexture() == null) {
+        if (!RtDlssFg.enabled() || !MinecraftUiOverlay.enabled() || main == null || main.getColorTexture() == null) {
             return;
         }
         GpuContext ctx = GpuContext.currentOrNull();
@@ -2079,8 +2105,8 @@ public final class RtComposite {
      * #presentHdr} <em>before</em> its own UI composite ran, mirroring {@link #captureFgHudless}'s pre-UI
      * timing); and DLSSG's own (also PQ-encoded) output is returned as-is, since the swapchain itself is
      * PQ-native and can blit it directly. The UI resource itself needs no HDR-specific handling — it's the
-     * same combined {@link RtUiOverlay} texture used by both present paths (only the *compositing* math that
-     * consumes it differs, done separately by {@code presentHdr}/{@code RtUiOverlay}, not here).
+     * same combined {@link MinecraftUiOverlay} texture used by both present paths (only the *compositing* math that
+     * consumes it differs, done separately by {@code presentHdr}/{@code MinecraftUiOverlay}, not here).
      */
     public GpuImage fgInterpolate(VulkanCommandEncoder enc, long backbufferView, long backbufferImage,
             int swapW, int swapH, int index, int count, boolean hdrBackbuffer) {
@@ -2116,10 +2142,10 @@ public final class RtComposite {
         long hudlessView = hudlessReady ? hudlessSrc.view : 0L;
         long hudlessImg = hudlessReady ? hudlessSrc.image : 0L;
         int hudlessFmt = hdrBackbuffer ? VK10.VK_FORMAT_R16G16B16A16_SFLOAT : VK10.VK_FORMAT_R8G8B8A8_UNORM;
-        boolean uiReady = RtUiOverlay.overlayWidth() == swapW && RtUiOverlay.overlayHeight() == swapH
-                && RtUiOverlay.overlayColorView() != 0L && RtUiOverlay.overlayColorImage() != 0L;
-        long uiView = uiReady ? RtUiOverlay.overlayColorView() : 0L;
-        long uiImg = uiReady ? RtUiOverlay.overlayColorImage() : 0L;
+        boolean uiReady = MinecraftUiOverlay.overlayWidth() == swapW && MinecraftUiOverlay.overlayHeight() == swapH
+                && MinecraftUiOverlay.overlayColorView() != 0L && MinecraftUiOverlay.overlayColorImage() != 0L;
+        long uiView = uiReady ? MinecraftUiOverlay.overlayColorView() : 0L;
+        long uiImg = uiReady ? MinecraftUiOverlay.overlayColorImage() : 0L;
 
         VkCommandBuffer cmd = enc.allocateAndBeginTransientCommandBuffer();
         boolean ok = RtDlssFg.INSTANCE.evaluate(cmd.address(),
