@@ -135,7 +135,7 @@ public final class RtPipeline {
 
     /**
      * Builds the RT pipeline. {@code rahit} (nullable) adds any-hit-capable triangle hit records. With the
-     * world pipeline, the hit SBT region is laid out to match {@link RtAccel}'s terrain bucket/ray-type
+     * world pipeline, the hit SBT region is laid out to match {@link RtAccel}'s terrain class/ray-type
      * constants: radiance records first, shadow records second, then entity records. The fixed world
      * descriptor layout is declared in {@code shaders/rt_bindings.slang}.
      *

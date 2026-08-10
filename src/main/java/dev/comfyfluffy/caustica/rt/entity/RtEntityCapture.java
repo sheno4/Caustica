@@ -35,10 +35,10 @@ public final class RtEntityCapture implements VertexConsumer {
     // One classification per triangle in capture order. The upload path repacks indices + primitive
     // records into fixed {opaque, masked, transmissive} BLAS geometries while positions/UVs stay shared.
     // Keeping capture order here preserves glow meshes, parity checks and motion topology.
-    final IntArrayList alphaBuckets = new IntArrayList(indexCapacity(DEFAULT_VERTEX_CAPACITY) / 3);
+    final IntArrayList sbtClasses = new IntArrayList(indexCapacity(DEFAULT_VERTEX_CAPACITY) / 3);
     private final IntArrayList packedIdx = new IntArrayList(indexCapacity(DEFAULT_VERTEX_CAPACITY));
     private final FloatArrayList packedPrim = new FloatArrayList(primCapacity(DEFAULT_VERTEX_CAPACITY));
-    private final int[] packedBucketTris = new int[RtAccel.SBT_CLASSES];
+    private final int[] packedClassTris = new int[RtAccel.SBT_CLASSES];
 
     // Bindless texture slot for the geometry currently being submitted (set by the collector per
     // submitModel, so body + feature layers get their own texture).
@@ -57,7 +57,7 @@ public final class RtEntityCapture implements VertexConsumer {
     // Conservative default: unknown submissions retain alpha testing instead of incorrectly becoming
     // opaque. RtEntityCollector assigns this from the resolved material's binding before every known
     // submission.
-    int currentAlphaBucket = RtAccel.CLASS_MASKED;
+    int currentSbtClass = RtAccel.CLASS_MASKED;
     // Decal-stacking rank for the current submission (0 = no offset). Set by the collector from
     // SubmitNodeCollector#order(int) — see emitQuad's coincident-layer push.
     int currentOrder;
@@ -96,14 +96,14 @@ public final class RtEntityCapture implements VertexConsumer {
         idx.clear();
         uvList.clear();
         prim.clear();
-        alphaBuckets.clear();
+        sbtClasses.clear();
         packedIdx.clear();
         packedPrim.clear();
         ensureVertexCapacity(expectedVertices);
         n = 0;
         currentTexSlot = 0;
         currentMaterialId = 0;
-        currentAlphaBucket = RtAccel.CLASS_MASKED;
+        currentSbtClass = RtAccel.CLASS_MASKED;
         currentOrder = 0;
         uvRemap = false;
     }
@@ -116,7 +116,7 @@ public final class RtEntityCapture implements VertexConsumer {
         idx.ensureCapacity(indexCapacity(vertexCount));
         uvList.ensureCapacity(vertexCount * 2);
         prim.ensureCapacity(primCapacity(vertexCount));
-        alphaBuckets.ensureCapacity(indexCapacity(vertexCount) / 3);
+        sbtClasses.ensureCapacity(indexCapacity(vertexCount) / 3);
         packedIdx.ensureCapacity(indexCapacity(vertexCount));
         packedPrim.ensureCapacity(primCapacity(vertexCount));
     }
@@ -156,7 +156,7 @@ public final class RtEntityCapture implements VertexConsumer {
     void copySubmissionStateTo(RtEntityCapture target) {
         target.currentTexSlot = currentTexSlot;
         target.currentMaterialId = currentMaterialId;
-        target.currentAlphaBucket = currentAlphaBucket;
+        target.currentSbtClass = currentSbtClass;
         target.currentOrder = currentOrder;
         target.uvRemap = uvRemap;
         target.uvU0 = uvU0;
@@ -186,15 +186,15 @@ public final class RtEntityCapture implements VertexConsumer {
                 reference.prim.elements(), reference.prim.size(), label);
         int triangleStart = idxStart / 3;
         int triangleCount = (idx.size() - idxStart) / 3;
-        if (triangleCount != reference.alphaBuckets.size()) {
-            throw new IllegalStateException(label + " alpha bucket size mismatch: actual=" + triangleCount
-                    + ", reference=" + reference.alphaBuckets.size());
+        if (triangleCount != reference.sbtClasses.size()) {
+            throw new IllegalStateException(label + " SBT class size mismatch: actual=" + triangleCount
+                    + ", reference=" + reference.sbtClasses.size());
         }
         for (int i = 0; i < triangleCount; i++) {
-            int actual = alphaBuckets.getInt(triangleStart + i);
-            int expected = reference.alphaBuckets.getInt(i);
+            int actual = sbtClasses.getInt(triangleStart + i);
+            int expected = reference.sbtClasses.getInt(i);
             if (actual != expected) {
-                throw new IllegalStateException(label + " alpha bucket[" + i + "] mismatch: actual="
+                throw new IllegalStateException(label + " SBT class[" + i + "] mismatch: actual="
                         + actual + ", reference=" + expected);
             }
         }
@@ -246,20 +246,20 @@ public final class RtEntityCapture implements VertexConsumer {
      */
     PackedGeometry packGeometry() {
         int triangleCount = idx.size() / 3;
-        if (alphaBuckets.size() != triangleCount || prim.size() != triangleCount * 12) {
+        if (sbtClasses.size() != triangleCount || prim.size() != triangleCount * 12) {
             throw new IllegalStateException("Malformed entity capture: triangles=" + triangleCount
-                    + ", alphaBuckets=" + alphaBuckets.size() + ", primFloats=" + prim.size());
+                    + ", sbtClasses=" + sbtClasses.size() + ", primFloats=" + prim.size());
         }
         packedIdx.clear();
         packedPrim.clear();
-        java.util.Arrays.fill(packedBucketTris, 0);
+        java.util.Arrays.fill(packedClassTris, 0);
         packedIdx.ensureCapacity(idx.size());
         packedPrim.ensureCapacity(prim.size());
         int[] indices = idx.elements();
         float[] primitives = prim.elements();
-        for (int bucket = 0; bucket < RtAccel.SBT_CLASSES; bucket++) {
+        for (int cls = 0; cls < RtAccel.SBT_CLASSES; cls++) {
             for (int tri = 0; tri < triangleCount; tri++) {
-                if (alphaBuckets.getInt(tri) != bucket) {
+                if (sbtClasses.getInt(tri) != cls) {
                     continue;
                 }
                 int indexBase = tri * 3;
@@ -270,18 +270,18 @@ public final class RtEntityCapture implements VertexConsumer {
                 for (int lane = 0; lane < 12; lane++) {
                     packedPrim.add(primitives[primBase + lane]);
                 }
-                packedBucketTris[bucket]++;
+                packedClassTris[cls]++;
             }
         }
         if (packedIdx.size() != idx.size() || packedPrim.size() != prim.size()) {
-            throw new IllegalStateException("Entity capture contains an invalid alpha bucket");
+            throw new IllegalStateException("Entity capture contains an invalid SBT class");
         }
-        return new PackedGeometry(packedIdx, packedPrim, packedBucketTris);
+        return new PackedGeometry(packedIdx, packedPrim, packedClassTris);
     }
 
-    record PackedGeometry(IntArrayList indices, FloatArrayList primitives, int[] bucketTris) {
-        int[] copyBucketTris() {
-            return bucketTris.clone();
+    record PackedGeometry(IntArrayList indices, FloatArrayList primitives, int[] classTris) {
+        int[] copyClassTris() {
+            return classTris.clone();
         }
     }
 
@@ -424,7 +424,7 @@ public final class RtEntityCapture implements VertexConsumer {
             prim.add(0f); // flags
             prim.add(0f); // aux0
             prim.add(0f); // aux1
-            alphaBuckets.add(currentAlphaBucket);
+            sbtClasses.add(currentSbtClass);
         }
     }
 

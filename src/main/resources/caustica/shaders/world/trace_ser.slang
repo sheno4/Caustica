@@ -14,7 +14,7 @@ import trace;
 //
 // The payload is built TWICE from the trace state rather than carried across ReorderThread. Traversal
 // runs only world.rahit, which never writes a RADIANCE payload: its terrain tint paths live in the
-// translucent/water buckets, which carry no any-hit record for radiance rays, and its entity paths are
+// transmissive class, which carries no any-hit record for radiance rays, and its entity paths are
 // gated on RAY_FLAG_SKIP_CLOSEST_HIT_SHADER. So whatever TraceRay leaves in the payload holds no
 // information. Reading it back and carrying it over would pin all ten members — 72 bytes — in registers
 // across the one point where SER must spill every live value. Rebuilding costs a few constant moves and
@@ -26,7 +26,7 @@ public void traceRadianceReordered(uint cullMask, float3 ro, float tmin, float3 
     uint rayCone = packHalf2(float2(rayConeWidth, rayConeSpread));
     Payload tracePayload = makeRadiancePayload(flags, rayCone);
     HitObject hObj = HitObject::TraceRay(topLevelAS, RAY_FLAG_NONE, cullMask,
-            SBT_RADIANCE, SBT_STRIDE_BUCKET, MISS_RADIANCE,
+            SBT_RADIANCE, SBT_STRIDE_CLASS, MISS_RADIANCE,
             makeRay(ro, tmin, rd, tmax), tracePayload);
     // The hit object groups shader IDs first. Its SBT index then supplies the SBT class
     // ({opaque, masked, transmissive}); terrain and entity record ranges are both multiples of

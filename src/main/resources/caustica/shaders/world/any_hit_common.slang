@@ -5,9 +5,8 @@
 // Only the producer's geometry decode differs; the material half of both entry points reads one 16-byte
 // MaterialBinding and branches on nothing else.
 //
-//  * terrain (per-section): InstanceID() indexes the section table; GeometryIndex() is the material
-//    bucket, and PrimitiveIndex() restarts at zero per geometry, so triBase re-forms the section-local
-//    triangle.
+//  * terrain (per-section): InstanceID() indexes the section table; GeometryIndex() is the SBT class,
+//    and PrimitiveIndex() restarts at zero per geometry, so triBase re-forms the section-local triangle.
 //  * entity (ENTITY_BIT / PARTICLE_BIT): InstanceID()'s low bits index the entity geometry table, whose
 //    UVs are indexed rather than per-corner.
 //

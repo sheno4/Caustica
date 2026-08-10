@@ -278,7 +278,7 @@ public final class RtAccel {
         private final int[] terrainTris; // per-class triangle counts in SBT_CLASSES order (null if !terrainSplit)
         private final boolean entitySplit;
         private final int[] entityTris; // per-class triangle counts in SBT_CLASSES order (null if !entitySplit)
-        private final OpacityMicromap opacityMicromap; // optional, terrain cutout bucket only
+        private final OpacityMicromap opacityMicromap; // optional, terrain masked class only
 
         private PreparedBlas(RtAccel accel, GpuBuffer scratch, GpuBuffer externalBacking, long vertexAddr, long indexAddr,
                              int maxVertex, int triangleCount, boolean opaque, String label, boolean updatable, boolean update) {
@@ -393,13 +393,13 @@ public final class RtAccel {
     }
 
     /**
-     * Allocate a terrain section BLAS split into fixed SBT classes (any-hit opt). {@code bucketTris}
+     * Allocate a terrain section BLAS split into fixed SBT classes (any-hit opt). {@code classTris}
      * holds triangle counts in {@link #SBT_CLASSES} order: opaque, masked, transmissive. All geometries
      * reference the same packed vertex/index buffers; zero-triangle classes are kept so
      * {@code gl_GeometryIndexEXT} remains a stable material/SBT index in the shaders.
      */
     public static PreparedBlas prepareTerrainBlas(GpuContext ctx, GpuBuffer positions, int vertexCount,
-                                                  GpuBuffer indices, int[] bucketTris, OpacityMicromapInput opacityMicromapInput,
+                                                  GpuBuffer indices, int[] classTris, OpacityMicromapInput opacityMicromapInput,
                                                   boolean compact, String label) {
         VkDevice vk = ctx.vk();
         String debugLabel = labelOr(label, "terrain BLAS");
@@ -410,7 +410,7 @@ public final class RtAccel {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             opacityMicromap = prepareOpacityMicromap(ctx, opacityMicromapInput, debugLabel);
             VkAccelerationStructureBuildSizesInfoKHR sizes = queryTerrainBlasSizes(vk, stack, positions, indices,
-                    vertexCount, bucketTris, opacityMicromap, compact);
+                    vertexCount, classTris, opacityMicromap, compact);
             backing = ctx.createAsyncBuffer(sizes.accelerationStructureSize(), VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, false,
                     debugLabel + " backing");
             scratch = createScratchBuffer(ctx, sizes.buildScratchSize(), debugLabel + " build scratch");
@@ -426,7 +426,7 @@ public final class RtAccel {
                         debugLabel + " compacted-size query");
             }
             return PreparedBlas.terrain(accel, scratch, null, positions.deviceAddress, indices.deviceAddress, vertexCount - 1,
-                    bucketTris, opacityMicromap, debugLabel);
+                    classTris, opacityMicromap, debugLabel);
         } catch (Throwable t) {
             if (accel != null) {
                 accel.destroy();
@@ -571,19 +571,19 @@ public final class RtAccel {
 
     /** Multi-geometry entity BLAS: packed indices are ordered opaque, then any-hit. */
     public static PreparedBlas prepareEntityBlas(GpuContext ctx, long vertexAddr, int vertexCount,
-                                                 long indexAddr, int[] bucketTris, String label) {
-        requireEntityBuckets(bucketTris);
+                                                 long indexAddr, int[] classTris, String label) {
+        requireEntityClasses(classTris);
         VkDevice vk = ctx.vk();
         String debugLabel = labelOr(label, "entity BLAS");
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkAccelerationStructureBuildSizesInfoKHR sizes = queryEntityBlasSizes(vk, stack, vertexAddr,
-                    indexAddr, vertexCount, bucketTris, false);
+                    indexAddr, vertexCount, classTris, false);
             GpuBuffer backing = ctx.createBuffer(sizes.accelerationStructureSize(),
                     VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, false, debugLabel + " backing");
             GpuBuffer scratch = createScratchBuffer(ctx, sizes.buildScratchSize(), debugLabel + " build scratch");
             RtAccel accel = createBlasOn(ctx, stack, backing, sizes.accelerationStructureSize(), false, debugLabel);
             return PreparedBlas.entity(accel, scratch, backing, vertexAddr, indexAddr, vertexCount - 1,
-                    bucketTris.clone(), debugLabel, false, false);
+                    classTris.clone(), debugLabel, false, false);
         }
     }
 
@@ -596,26 +596,26 @@ public final class RtAccel {
     }
 
     public static PersistentBuild preparePersistentEntityBlasBuild(GpuContext ctx, long vertexAddr, int vertexCount,
-                                                                   long indexAddr, int[] bucketTris, String label) {
-        PreparedBlas op = prepareEntityBlas(ctx, vertexAddr, vertexCount, indexAddr, bucketTris, label);
+                                                                   long indexAddr, int[] classTris, String label) {
+        PreparedBlas op = prepareEntityBlas(ctx, vertexAddr, vertexCount, indexAddr, classTris, label);
         return new PersistentBuild(op, op.accel, op.externalBacking, op.scratch);
     }
 
     public static UpdatableBuild prepareUpdatableEntityBlasBuild(GpuContext ctx, long vertexAddr, int vertexCount,
-                                                                 long indexAddr, int[] bucketTris, String label) {
-        requireEntityBuckets(bucketTris);
+                                                                 long indexAddr, int[] classTris, String label) {
+        requireEntityClasses(classTris);
         VkDevice vk = ctx.vk();
         String debugLabel = labelOr(label, "updatable entity BLAS");
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkAccelerationStructureBuildSizesInfoKHR sizes = queryEntityBlasSizes(vk, stack, vertexAddr,
-                    indexAddr, vertexCount, bucketTris, true);
+                    indexAddr, vertexCount, classTris, true);
             long accelSize = sizes.accelerationStructureSize();
             GpuBuffer backing = ctx.createBuffer(accelSize,
                     VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, false, debugLabel + " backing");
             GpuBuffer scratch = createScratchBuffer(ctx, sizes.buildScratchSize(), debugLabel + " build scratch");
             RtAccel accel = createBlasOn(ctx, stack, backing, accelSize, false, debugLabel);
             PreparedBlas op = PreparedBlas.entity(accel, scratch, backing, vertexAddr, indexAddr,
-                    vertexCount - 1, bucketTris.clone(), debugLabel, true, false);
+                    vertexCount - 1, classTris.clone(), debugLabel, true, false);
             return new UpdatableBuild(op, accel, backing, scratch, sizes.updateScratchSize());
         }
     }
@@ -666,10 +666,10 @@ public final class RtAccel {
     }
 
     public static PreparedBlas refitEntityUpdate(RtAccel accel, GpuBuffer scratch, long vertexAddr, long indexAddr,
-                                                 int vertexCount, int[] bucketTris, String label) {
-        requireEntityBuckets(bucketTris);
+                                                 int vertexCount, int[] classTris, String label) {
+        requireEntityClasses(classTris);
         return PreparedBlas.entity(accel, scratch, null, vertexAddr, indexAddr, vertexCount - 1,
-                bucketTris.clone(), labelOr(label, "entity BLAS refit"), true, true);
+                classTris.clone(), labelOr(label, "entity BLAS refit"), true, true);
     }
 
     /** Reclaim a transient entity BLAS: destroy its AS handle, then its backing + scratch buffers. */
@@ -707,11 +707,11 @@ public final class RtAccel {
         return sizes;
     }
 
-    private static void requireEntityBuckets(int[] bucketTris) {
-        if (bucketTris == null || bucketTris.length != SBT_CLASSES) {
-            throw new IllegalArgumentException("Expected " + SBT_CLASSES + " entity bucket counts");
+    private static void requireEntityClasses(int[] classTris) {
+        if (classTris == null || classTris.length != SBT_CLASSES) {
+            throw new IllegalArgumentException("Expected " + SBT_CLASSES + " entity SBT class counts");
         }
-        for (int count : bucketTris) {
+        for (int count : classTris) {
             if (count < 0) throw new IllegalArgumentException("Negative entity triangle count");
         }
     }
@@ -773,21 +773,21 @@ public final class RtAccel {
                                                                                long indexAddr, int vertexCount) {
         VkAccelerationStructureGeometryKHR.Buffer geometries =
                 VkAccelerationStructureGeometryKHR.calloc(SBT_CLASSES, stack);
-        for (int bucket = 0; bucket < SBT_CLASSES; bucket++) {
-            fillTriangleGeometry(geometries.get(bucket), vertexAddr, indexAddr, vertexCount,
-                    bucket == CLASS_OPAQUE);
+        for (int cls = 0; cls < SBT_CLASSES; cls++) {
+            fillTriangleGeometry(geometries.get(cls), vertexAddr, indexAddr, vertexCount,
+                    cls == CLASS_OPAQUE);
         }
         return geometries;
     }
 
     private static VkAccelerationStructureBuildRangeInfoKHR.Buffer entityBuildRanges(MemoryStack stack,
-                                                                                      int[] bucketTris) {
+                                                                                      int[] classTris) {
         VkAccelerationStructureBuildRangeInfoKHR.Buffer ranges =
                 VkAccelerationStructureBuildRangeInfoKHR.calloc(SBT_CLASSES, stack);
         int triangleBase = 0;
-        for (int bucket = 0; bucket < SBT_CLASSES; bucket++) {
-            int count = bucketTris[bucket];
-            ranges.get(bucket).primitiveCount(count)
+        for (int cls = 0; cls < SBT_CLASSES; cls++) {
+            int count = classTris[cls];
+            ranges.get(cls).primitiveCount(count)
                     .primitiveOffset(triangleBase * 3 * Integer.BYTES)
                     .firstVertex(0).transformOffset(0);
             triangleBase += count;
@@ -797,7 +797,7 @@ public final class RtAccel {
 
     private static VkAccelerationStructureBuildSizesInfoKHR queryEntityBlasSizes(VkDevice vk, MemoryStack stack,
                                                                                   long vertexAddr, long indexAddr,
-                                                                                  int vertexCount, int[] bucketTris,
+                                                                                  int vertexCount, int[] classTris,
                                                                                   boolean allowUpdate) {
         VkAccelerationStructureGeometryKHR.Buffer geometries = entityGeometries(stack, vertexAddr, indexAddr, vertexCount);
         VkAccelerationStructureBuildGeometryInfoKHR.Buffer build = VkAccelerationStructureBuildGeometryInfoKHR.calloc(1, stack);
@@ -805,7 +805,7 @@ public final class RtAccel {
                 .flags(buildFlags(allowUpdate)).mode(VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR)
                 .geometryCount(geometries.capacity()).pGeometries(geometries);
         java.nio.IntBuffer maxPrims = stack.mallocInt(SBT_CLASSES);
-        maxPrims.put(bucketTris).flip();
+        maxPrims.put(classTris).flip();
         VkAccelerationStructureBuildSizesInfoKHR sizes = VkAccelerationStructureBuildSizesInfoKHR.calloc(stack).sType$Default();
         vkGetAccelerationStructureBuildSizesKHR(vk, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
                 build.get(0), maxPrims, sizes);
@@ -839,11 +839,11 @@ public final class RtAccel {
 
     /** One triangle geometry per SBT class, in {@link #SBT_CLASSES} order; only opaque is flagged opaque. */
     private static VkAccelerationStructureGeometryKHR.Buffer terrainGeometries(MemoryStack stack, long vertexAddr,
-                                                                               long indexAddr, int vertexCount, int[] bucketTris,
+                                                                               long indexAddr, int vertexCount, int[] classTris,
                                                                                OpacityMicromap opacityMicromap) {
-        VkAccelerationStructureGeometryKHR.Buffer geom = VkAccelerationStructureGeometryKHR.calloc(bucketTris.length, stack);
+        VkAccelerationStructureGeometryKHR.Buffer geom = VkAccelerationStructureGeometryKHR.calloc(classTris.length, stack);
         VkAccelerationStructureTrianglesOpacityMicromapEXT ommAttachment = null;
-        if (opacityMicromap != null && bucketTris[CLASS_MASKED] > 0) {
+        if (opacityMicromap != null && classTris[CLASS_MASKED] > 0) {
             VkMicromapUsageEXT.Buffer usage = micromapUsage(stack, opacityMicromap.triangleCount, opacityMicromap.subdivisionLevel);
             ommAttachment = VkAccelerationStructureTrianglesOpacityMicromapEXT.calloc(stack).sType$Default()
                     .indexType(VK_INDEX_TYPE_NONE_KHR)
@@ -854,7 +854,7 @@ public final class RtAccel {
                     .micromap(opacityMicromap.handle);
             ommAttachment.indexBuffer().deviceAddress(0L);
         }
-        for (int b = 0; b < bucketTris.length; b++) {
+        for (int b = 0; b < classTris.length; b++) {
             VkAccelerationStructureGeometryKHR out = geom.get(b);
             fillTriangleGeometry(out, vertexAddr, indexAddr, vertexCount, b == CLASS_OPAQUE);
             if (b == CLASS_MASKED && ommAttachment != null) {
@@ -864,33 +864,33 @@ public final class RtAccel {
         return geom;
     }
 
-    /** Build ranges parallel to {@link #terrainGeometries}; empty buckets get a zero primitive count. */
-    private static VkAccelerationStructureBuildRangeInfoKHR.Buffer terrainBuildRanges(MemoryStack stack, int[] bucketTris) {
-        VkAccelerationStructureBuildRangeInfoKHR.Buffer range = VkAccelerationStructureBuildRangeInfoKHR.calloc(bucketTris.length, stack);
+    /** Build ranges parallel to {@link #terrainGeometries}; empty classes get a zero primitive count. */
+    private static VkAccelerationStructureBuildRangeInfoKHR.Buffer terrainBuildRanges(MemoryStack stack, int[] classTris) {
+        VkAccelerationStructureBuildRangeInfoKHR.Buffer range = VkAccelerationStructureBuildRangeInfoKHR.calloc(classTris.length, stack);
         int acc = 0;
-        for (int b = 0; b < bucketTris.length; b++) {
-            int tris = bucketTris[b];
+        for (int b = 0; b < classTris.length; b++) {
+            int tris = classTris[b];
             range.get(b).primitiveCount(tris).primitiveOffset(acc * 3 * Integer.BYTES).firstVertex(0).transformOffset(0);
             acc += tris;
         }
         return range;
     }
 
-    private static int terrainGeomCount(int[] bucketTris) {
-        return bucketTris.length;
+    private static int terrainGeomCount(int[] classTris) {
+        return classTris.length;
     }
 
     private static VkAccelerationStructureBuildSizesInfoKHR queryTerrainBlasSizes(VkDevice vk, MemoryStack stack, GpuBuffer positions,
-                                                                                  GpuBuffer indices, int vertexCount, int[] bucketTris,
+                                                                                  GpuBuffer indices, int vertexCount, int[] classTris,
                                                                                   OpacityMicromap opacityMicromap, boolean compact) {
         VkAccelerationStructureGeometryKHR.Buffer geom = terrainGeometries(stack, positions.deviceAddress, indices.deviceAddress,
-                vertexCount, bucketTris, opacityMicromap);
+                vertexCount, classTris, opacityMicromap);
         VkAccelerationStructureBuildGeometryInfoKHR.Buffer build = VkAccelerationStructureBuildGeometryInfoKHR.calloc(1, stack);
         build.sType$Default().type(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR)
                 .flags(buildFlags(false) | (compact ? VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR : 0))
                 .mode(VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR).geometryCount(geom.capacity()).pGeometries(geom);
         java.nio.IntBuffer maxPrims = stack.mallocInt(geom.capacity());
-        for (int tris : bucketTris) {
+        for (int tris : classTris) {
             maxPrims.put(tris);
         }
         maxPrims.flip();

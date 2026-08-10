@@ -216,8 +216,12 @@ public final class RtMaterialRegistry {
         int nextEntityFallbackId = tables.add(
                 compileEntityDesc(0, true, RtMaterialDesc.EmissionSummary.NONE),
                 transparentWhiteAverage(), fallbackEntry, null, ENTITY_COVERAGE_CUTOFF);
-        int nextParticleId = tables.add(compileParticleDesc(), transparentWhiteAverage(), fallbackEntry,
-                null, ENTITY_COVERAGE_CUTOFF);
+        // A billboard's footprint is genuinely masked — the sprite's transparent border is absence, not a
+        // clear surface — so the particle binding IS the cutout-coverage one. Compiling it that way keeps
+        // the SBT class derivable from the binding at the one producer that has no render type to ask.
+        int nextParticleId = tables.cutoutVariants.getInt(
+                tables.add(compileParticleDesc(), transparentWhiteAverage(), fallbackEntry,
+                        null, ENTITY_COVERAGE_CUTOFF, true));
 
         IdentityHashMap<TextureAtlasSprite, int[]> ids = new IdentityHashMap<>();
         List<MutableCompiledOverride> compiledOverrides = new ArrayList<>();
@@ -454,7 +458,9 @@ public final class RtMaterialRegistry {
     /**
      * The binding every particle billboard submits with. A billboard is a thin surface with nothing
      * behind it, so it needs no path of its own — its material says so, and the shading that follows is
-     * the same one every other surface gets.
+     * the same one every other surface gets. Compiled with cutout coverage (the sprite's transparent
+     * border is absence, not a clear surface), so a caller that isn't blending needs no derivation and
+     * the SBT class falls out of {@link #sbtClassFor} like every other producer's.
      */
     public int particleId(boolean stochasticCoverage) {
         return stochasticCoverage ? withStochasticCoverage(particleId) : particleId;

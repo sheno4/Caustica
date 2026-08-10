@@ -10,7 +10,7 @@ import net.minecraft.client.renderer.texture.TextureAtlasSprite;
  * RIS emitter-NEE light collection. Enumerates a section's emissive terrain quads into a
  * samplable light list, in <b>section-local</b> coordinates (flattened into rebased world space at
  * publish, see {@code RtTerrain.applyBuildChanges}). Runs on the meshing worker over the transient
- * per-bucket arrays, before packing — pure CPU + material-snapshot reads only.
+ * per-class arrays, before packing — pure CPU + material-snapshot reads only.
  *
  * <p><b>One rectangle light per emissive quad.</b> {@code emit()}/{@code emitQuad()} always write a quad
  * as two lockstep triangles (0,1,2)(0,2,3) over 4 consecutive verts with prim/cornerUv records in step,
@@ -71,12 +71,12 @@ final class RtLightCollector {
     private static final int PRIM_FLAGS_LANE = 9;
 
     /**
-     * Collect one geometry bucket's emissive quads into {@code out} (packed light records,
-     * section-local) and stamp NEE membership into the bucket's prim records in place. Only the opaque
-     * and cutout buckets can emit: glass is shaded with zero emission and water never emits (lava lives
-     * in the opaque bucket).
+     * Collect one geometry class's emissive quads into {@code out} (packed light records,
+     * section-local) and stamp NEE membership into the class's prim records in place. Only the opaque
+     * and masked classes can emit: glass is shaded with zero emission and water never emits (lava lives
+     * in the opaque class).
      */
-    static void collectBucket(FloatArrayList out, FloatArrayList verts, FloatArrayList prim,
+    static void collectClass(FloatArrayList out, FloatArrayList verts, FloatArrayList prim,
                               FloatArrayList cornerUv, TextureAtlasSprite[] sprites,
                               RtMaterialRegistry.Snapshot materials, float minFillRatio) {
         int quads = prim.size() / (2 * PRIM_FLOATS);

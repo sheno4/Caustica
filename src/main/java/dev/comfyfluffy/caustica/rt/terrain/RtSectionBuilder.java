@@ -70,7 +70,7 @@ final class RtSectionBuilder {
             upload.flush();
 
             blas = RtAccel.prepareTerrainBlas(ctx, positions, vertCount, indices,
-                    packed.bucketTris(), ommInput, compactBlas, label + " BLAS");
+                    packed.classTris(), ommInput, compactBlas, label + " BLAS");
             return new PreparedSection(key, positions, indices, uvs, material, upload, blas,
                     packed.triBase(), sox, soy, soz, packed.lights());
         } catch (Throwable t) {

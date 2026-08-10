@@ -105,7 +105,7 @@ final class RtTerrainMesher {
         }
         // RIS emitter-NEE light collection — BEFORE packing: it also stamps NEE membership into the prim
         // records, which packSection then copies out. Only opaque + masked can emit (glass is shaded
-        // emission-free, water never emits; lava lives in the opaque bucket).
+        // emission-free, water never emits; lava lives in the opaque class).
         float[] lights = EMPTY_LIGHTS;
         if (CausticaConfig.Rt.Lights.RIS_CANDIDATES.value() > 0) {
             FloatArrayList collected = new FloatArrayList();
@@ -128,22 +128,22 @@ final class RtTerrainMesher {
     private static void collectLights(FloatArrayList out, Geom geom,
                                       RtMaterialRegistry.Snapshot materials, float minFillRatio) {
         if (geom != null && !geom.idx.isEmpty()) {
-            RtLightCollector.collectBucket(out, geom.verts, geom.prim, geom.cornerUv,
+            RtLightCollector.collectClass(out, geom.verts, geom.prim, geom.cornerUv,
                     geom.ommSprites.elements(), materials, minFillRatio);
         }
     }
 
     private static PackedSection packSection(SectionMesh mesh, float[] lights) {
-        Geom[] buckets = mesh.buckets(); // { opaque, masked, transmissive }, indexed by RtAccel.CLASS_*
+        Geom[] classes = mesh.classes(); // { opaque, masked, transmissive }, indexed by RtAccel.CLASS_*
         int vertFloats = 0, idxCount = 0, uvFloats = 0, primFloats = 0, triCount = 0;
-        int[] bucketTris = new int[buckets.length];
-        for (int b = 0; b < buckets.length; b++) {
-            vertFloats += buckets[b].verts.size();
-            idxCount += buckets[b].idx.size();
-            uvFloats += buckets[b].cornerUv.size();
-            primFloats += buckets[b].prim.size();
-            bucketTris[b] = buckets[b].triCount();
-            triCount += bucketTris[b];
+        int[] classTris = new int[classes.length];
+        for (int b = 0; b < classes.length; b++) {
+            vertFloats += classes[b].verts.size();
+            idxCount += classes[b].idx.size();
+            uvFloats += classes[b].cornerUv.size();
+            primFloats += classes[b].prim.size();
+            classTris[b] = classes[b].triCount();
+            triCount += classTris[b];
         }
         RtMaterialAbi.requireTriangleParity(primFloats, idxCount);
 
@@ -151,10 +151,10 @@ final class RtTerrainMesher {
         int[] indices = new int[idxCount];
         float[] uvs = new float[uvFloats];
         float[] material = new float[primFloats];
-        int[] triBase = new int[buckets.length];
+        int[] triBase = new int[classes.length];
         int posOff = 0, idxOff = 0, uvOff = 0, matOff = 0, vertBase = 0, triAcc = 0;
-        for (int b = 0; b < buckets.length; b++) {
-            Geom geom = buckets[b];
+        for (int b = 0; b < classes.length; b++) {
+            Geom geom = classes[b];
             triBase[b] = triAcc;
             int vertSize = geom.verts.size();
             System.arraycopy(geom.verts.elements(), 0, positions, posOff, vertSize);
@@ -176,9 +176,9 @@ final class RtTerrainMesher {
             uvOff += uvSize;
             matOff += matSize;
             vertBase += vertSize / 3;
-            triAcc += bucketTris[b];
+            triAcc += classTris[b];
         }
-        return new PackedSection(positions, indices, uvs, material, bucketTris, triBase, lights);
+        return new PackedSection(positions, indices, uvs, material, classTris, triBase, lights);
     }
 
     private static void tessellate(BlockAndTintGetter region, BlockStateModelSet modelSet,
@@ -232,23 +232,23 @@ final class RtTerrainMesher {
     }
 
 
-    /** Pure-CPU worker result: tessellated mesh plus optional opacity micromap input for its cutout bucket. */
+    /** Pure-CPU worker result: tessellated mesh plus optional opacity micromap input for its cutout class. */
     record CpuSection(PackedSection packed, RtAccel.OpacityMicromapInput opacityMicromap) {
     }
 
     /** Worker-packed terrain payload; native preparation allocates buffers and bulk-copies these arrays.
      *  {@code lights} = packed section-local RIS light records (possibly empty), CPU-side only. */
     record PackedSection(float[] positions, int[] indices, float[] uvs, float[] material,
-                         int[] bucketTris, int[] triBase, float[] lights) {
+                         int[] classTris, int[] triBase, float[] lights) {
     }
 
 
     /**
      * Transient CPU accumulator for one section's quads while tessellating. Split into per-SBT-class
-     * geometry buckets so the BLAS can flag opaque blocks {@code VK_GEOMETRY_OPAQUE_BIT}, keep genuinely
-     * masked (alpha-tested) geometry in an any-hit bucket, and route transmissive geometry (glass, water)
+     * geometry classes so the BLAS can flag opaque blocks {@code VK_GEOMETRY_OPAQUE_BIT}, keep genuinely
+     * masked (alpha-tested) geometry in an any-hit class, and route transmissive geometry (glass, water)
      * through closest-hit-only records for radiance but any-hit records for shadow tint/pass-through. The
-     * buckets are concatenated in {@code RtAccel.CLASS_*} order into the packed section buffers during
+     * classes are concatenated in {@code RtAccel.CLASS_*} order into the packed section buffers during
      * preparation, so each geometry's triangles occupy a contiguous range.
      */
     private static final class SectionMesh {
@@ -257,18 +257,18 @@ final class RtTerrainMesher {
         private static final int OPAQUE_TRI_CAP = 768;
         private static final int MASKED_TRI_CAP = 256;
         private static final int TRANSMISSIVE_TRI_CAP = 192; // glass + water share this class now
-        // One bucket per fixed RtAccel SBT class: opaque, masked, transmissive.
+        // One geometry per fixed RtAccel SBT class: opaque, masked, transmissive.
         private static final Geom EMPTY_GEOM = new Geom(0);
         Geom opaque;
         Geom masked;
         Geom transmissive;
-        private final Geom[] buckets = new Geom[RtAccel.SBT_CLASSES];
+        private final Geom[] classes = new Geom[RtAccel.SBT_CLASSES];
 
-        Geom[] buckets() {
-            buckets[RtAccel.CLASS_OPAQUE] = geomOrEmpty(opaque);
-            buckets[RtAccel.CLASS_MASKED] = geomOrEmpty(masked);
-            buckets[RtAccel.CLASS_TRANSMISSIVE] = geomOrEmpty(transmissive);
-            return buckets;
+        Geom[] classes() {
+            classes[RtAccel.CLASS_OPAQUE] = geomOrEmpty(opaque);
+            classes[RtAccel.CLASS_MASKED] = geomOrEmpty(masked);
+            classes[RtAccel.CLASS_TRANSMISSIVE] = geomOrEmpty(transmissive);
+            return classes;
         }
 
         Geom maskedOrEmpty() {
@@ -297,7 +297,7 @@ final class RtTerrainMesher {
                     && (transmissive == null || transmissive.idx.isEmpty());
         }
 
-        /** Empty the buckets keeping their backing arrays — the mesh is reused across jobs per worker thread. */
+        /** Empty the classes keeping their backing arrays — the mesh is reused across jobs per worker thread. */
         void reset() {
             resetGeom(opaque);
             resetGeom(masked);
@@ -311,7 +311,7 @@ final class RtTerrainMesher {
         }
     }
 
-    /** One geometry bucket's packed, section-local mesh data. */
+    /** One geometry class's packed, section-local mesh data. */
     private static final class Geom {
         final FloatArrayList verts;
         final IntArrayList idx;
@@ -494,7 +494,7 @@ final class RtTerrainMesher {
             pendingCount = 0;
         }
 
-        /** Resolve coplanar ties among the current block's quads, then emit them into the section buckets. */
+        /** Resolve coplanar ties among the current block's quads, then emit them into the section classes. */
         void flushBlock() {
             int n = pendingCount;
             if (n == 0) {
@@ -587,7 +587,7 @@ final class RtTerrainMesher {
             }
         }
 
-        /** Emit one resolved quad into its section bucket (2 triangles, corner UVs, per-prim records). */
+        /** Emit one resolved quad into its section class (2 triangles, corner UVs, per-prim records). */
         private void emit(PendingQuad q) {
             // Recess translucent (glass / ice) faces slightly into their own block. Vanilla culls a glass
             // face that touches a full solid block, but KEEPS the one touching a non-occluding neighbour
@@ -638,7 +638,7 @@ final class RtTerrainMesher {
         }
     }
 
-    /** One block's buffered quad, awaiting coplanar resolution before it is emitted into a section bucket. */
+    /** One block's buffered quad, awaiting coplanar resolution before it is emitted into a section class. */
     private static final class PendingQuad {
         final float[] x = new float[4], y = new float[4], z = new float[4];
         final long[] uv = new long[4];

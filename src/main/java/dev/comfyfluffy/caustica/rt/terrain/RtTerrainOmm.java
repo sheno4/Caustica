@@ -70,8 +70,8 @@ final class RtTerrainOmm {
     }
 
     /**
-     * Classify every triangle in the cutout bucket and build an {@link RtAccel.OpacityMicromapInput}.
-     * Returns {@code null} if OMM is disabled, the bucket is empty, or every triangle is UNKNOWN
+     * Classify every triangle in the masked class and build an {@link RtAccel.OpacityMicromapInput}.
+     * Returns {@code null} if OMM is disabled, the class is empty, or every triangle is UNKNOWN
      * (no useful classification to attach).
      *
      * @param triCount   number of triangles ({@code idx.size() / 3})

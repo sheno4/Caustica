@@ -263,7 +263,7 @@ MaterialInput buildMaterialInput(DecodedSurface surface) {
     // carries a real emission colour. This is the same representational gap as demodulationAlbedo.
     material.emissionColor = surface.baseColor;
     material.emissionLuminance = max(surface.emissionLuminance, 0.0);
-    material.geometryOpacity = 1.0; // opaque bucket only; any-hit already resolved cutout coverage
+    material.geometryOpacity = 1.0; // opaque class only; any-hit already resolved cutout coverage
     material.geometryThinWalled = true;
     // No semantic material tags (foliage/water/portal/...) are compiled into SurfaceMaterial yet.
     material.materialTags = 0u;

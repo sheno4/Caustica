@@ -334,7 +334,7 @@ public struct EntityGeom {
     public uint reserved;
 };
 
-// TLAS instance-custom-index encoding + terrain geometry buckets (shared by rahit/rchit).
+// TLAS instance-custom-index encoding + terrain geometry classes (shared by rahit/rchit).
 public static const uint ENTITY_BIT = 0x800000u;
 public static const uint PARTICLE_BIT = 0x400000u; // particles share the entity cutout path
 public static const uint IDX_MASK = 0x3FFFFFu;     // low 22 bits = geom-table index

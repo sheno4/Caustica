@@ -14,7 +14,7 @@ public static const uint CULL_PRIMARY = 0x02u;
 public static const uint SBT_CLASSES = 3u; // opaque, masked, transmissive — RtAccel.SBT_CLASSES
 public static const uint SBT_RADIANCE = 0u;
 public static const uint SBT_SHADOW = SBT_CLASSES;
-public static const uint SBT_STRIDE_BUCKET = 1u;
+public static const uint SBT_STRIDE_CLASS = 1u;
 public static const uint MISS_RADIANCE = 0u;
 public static const uint MISS_GUIDE = 1u;
 
@@ -63,7 +63,7 @@ public void traceRadiance(uint cullMask, float3 ro, float tmin, float3 rd, float
     payload = makeRadiancePayload(showCelestial ? PAYLOAD_SHOW_CELESTIAL : 0u,
             packHalf2(float2(rayConeWidth, rayConeSpread)));
     TraceRay(topLevelAS, RAY_FLAG_NONE, cullMask,
-            SBT_RADIANCE, SBT_STRIDE_BUCKET, MISS_RADIANCE,
+            SBT_RADIANCE, SBT_STRIDE_CLASS, MISS_RADIANCE,
             makeRay(ro, tmin, rd, tmax), payload);
 }
 
@@ -74,7 +74,7 @@ public void traceRadiance(uint cullMask, float3 ro, float tmin, float3 rd, float
 public void traceGuide(uint cullMask, float3 ro, float tmin, float3 rd, float tmax,
                 float rayConeWidth, float rayConeSpread) {
     payload = makeRadiancePayload(PAYLOAD_GUIDE_RAY, packHalf2(float2(rayConeWidth, rayConeSpread)));
-    TraceRay(topLevelAS, RAY_FLAG_NONE, cullMask, SBT_RADIANCE, SBT_STRIDE_BUCKET,
+    TraceRay(topLevelAS, RAY_FLAG_NONE, cullMask, SBT_RADIANCE, SBT_STRIDE_CLASS,
             MISS_GUIDE, makeRay(ro, tmin, rd, tmax), payload);
 }
 
@@ -108,7 +108,7 @@ public VisibilityResult visibility(float3 origin, float3 dir, float tmax) {
     // needs only ordinary TraceRay and no invocation-reorder capability.
     TraceRay(topLevelAS,
             RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
-            CULL_SECONDARY, SBT_SHADOW, SBT_STRIDE_BUCKET, MISS_GUIDE,
+            CULL_SECONDARY, SBT_SHADOW, SBT_STRIDE_CLASS, MISS_GUIDE,
             makeRay(origin, RAY_TMIN, dir, tmax), shadowPayload);
     VisibilityResult result;
     result.transmittance = shadowPayload.flags == 0u

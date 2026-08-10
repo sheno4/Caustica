@@ -190,7 +190,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         if (!stochasticAlpha && hasCutoutDefine(renderType)) {
             capture.currentMaterialId = RtMaterialRegistry.INSTANCE.withCutoutCoverage(capture.currentMaterialId);
         }
-        capture.currentAlphaBucket = RtMaterialRegistry.INSTANCE.sbtClassFor(capture.currentMaterialId);
+        capture.currentSbtClass = RtMaterialRegistry.INSTANCE.sbtClassFor(capture.currentMaterialId);
         // Pose the model from its render state (idempotent re-pose; mirrors what the renderer does for
         // its feature layers), then render the posed parts into the capture. renderToBuffer applies the
         // PoseStack to every vertex/normal, so the capture receives world-/camera-relative geometry.
@@ -321,7 +321,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         if (cutout) {
             capture.currentMaterialId = RtMaterialRegistry.INSTANCE.withCutoutCoverage(capture.currentMaterialId);
         }
-        capture.currentAlphaBucket = RtMaterialRegistry.INSTANCE.sbtClassFor(capture.currentMaterialId);
+        capture.currentSbtClass = RtMaterialRegistry.INSTANCE.sbtClassFor(capture.currentMaterialId);
         capture.currentOrder = 0; // baked-quad paths never stack decal layers
         capture.addBakedQuad(pose, q, tintColor(q.materialInfo().tintIndex(), tintLayers));
     }
@@ -367,10 +367,14 @@ public final class RtEntityCollector implements SubmitNodeCollector {
      * the submission isn't already stochastic — the SBT class then falls out of the resolved binding via
      * {@link RtMaterialRegistry#sbtClassFor}, so this is the only piece {@code isTranslucent} doesn't
      * already tell the caller.
+     *
+     * <p>A submission with no render type to inspect is treated as masked: coverage now has to be asked
+     * for, and an unknown submission losing its alpha test shows up as solid quads, while a redundant
+     * alpha test only costs an any-hit.
      */
     private static boolean hasCutoutDefine(RenderType renderType) {
         if (renderType == null) {
-            return false;
+            return true;
         }
         Object setup = ((RenderTypeAccessor) renderType).caustica$state();
         RenderPipeline pipeline = ((RenderSetupAccessor) setup).caustica$pipeline();
@@ -482,7 +486,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
             if (!stochasticAlpha && hasCutoutDefine(renderType)) {
                 capture.currentMaterialId = RtMaterialRegistry.INSTANCE.withCutoutCoverage(capture.currentMaterialId);
             }
-            capture.currentAlphaBucket = RtMaterialRegistry.INSTANCE.sbtClassFor(capture.currentMaterialId);
+            capture.currentSbtClass = RtMaterialRegistry.INSTANCE.sbtClassFor(capture.currentMaterialId);
             capture.currentOrder = 0;
             capture.clearUvRemap(); // glyph U/V are already atlas-space
             renderable.render(pose, textVertexConsumer, lightCoords, false);
@@ -573,7 +577,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         capture.currentOrder = 0;
         capture.currentTexSlot = RtEntityTextures.INSTANCE.whiteSlot();
         capture.currentMaterialId = RtMaterialRegistry.INSTANCE.entityFallbackId(false);
-        capture.currentAlphaBucket = RtAccel.CLASS_OPAQUE; // fully opaque white texture, no alpha test
+        capture.currentSbtClass = RtAccel.CLASS_OPAQUE; // fully opaque white texture, no alpha test
         Matrix4f pose = poseStack.last().pose();
         // Same derivation as LeashFeatureRenderer.prepare: the ribbon's horizontal half-extent is the
         // curve's ground-plane perpendicular, and the attachment offset shifts the whole curve in the
@@ -793,7 +797,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         if (cutout) {
             capture.currentMaterialId = RtMaterialRegistry.INSTANCE.withCutoutCoverage(capture.currentMaterialId);
         }
-        capture.currentAlphaBucket = RtMaterialRegistry.INSTANCE.sbtClassFor(capture.currentMaterialId);
+        capture.currentSbtClass = RtMaterialRegistry.INSTANCE.sbtClassFor(capture.currentMaterialId);
         capture.currentOrder = 0; // baked-quad paths never stack decal layers
         for (int i = 0; i < 4; i++) {
             pose.transformPosition(quad.x(i) + offsetX, quad.y(i) + offsetY, quad.z(i) + offsetZ, meshPos);
@@ -876,7 +880,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         if (!lines && !stochasticAlpha && hasCutoutDefine(renderType)) {
             capture.currentMaterialId = RtMaterialRegistry.INSTANCE.withCutoutCoverage(capture.currentMaterialId);
         }
-        capture.currentAlphaBucket = lines ? RtAccel.CLASS_OPAQUE
+        capture.currentSbtClass = lines ? RtAccel.CLASS_OPAQUE
                 : RtMaterialRegistry.INSTANCE.sbtClassFor(capture.currentMaterialId);
 
         if (lines) {
