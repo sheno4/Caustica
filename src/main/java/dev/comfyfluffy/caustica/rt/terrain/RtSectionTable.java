@@ -4,6 +4,7 @@ import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.accel.RtAccel;
 import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
+import dev.comfyfluffy.caustica.rt.geometry.RtGeometryAbi;
 import dev.comfyfluffy.caustica.rt.terrain.RtSectionBuilder.PreparedSection;
 import it.unimi.dsi.fastutil.longs.LongArrayList;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
@@ -19,10 +20,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  * registry, and published static-instance list here while {@link RtTerrain} retains publication order.
  */
 final class RtSectionTable {
-    // 8 (primAddr) + 8 (uvAddr) + 3*4 (triBase[3]) = 28, but std430 rounds a struct's size up to its
-    // largest member's alignment (8, from the two uint64_t addresses), so this stays 32 — the last 4
-    // bytes are unread tail padding, not a 4th triBase slot.
-    private static final int SECTION_ENTRY_BYTES = 32;
+    private static final int SECTION_ENTRY_BYTES = RtGeometryAbi.RECORD_BYTES;
     GpuBuffer buffer;
     int capacity;
     int nextSlot;
@@ -34,8 +32,8 @@ final class RtSectionTable {
     private long dirtyStart = Long.MAX_VALUE;
     private long dirtyEnd;
 
-    long address() {
-        return buffer.deviceAddress;
+    RtGeometryAbi.TablePrefix prefix() {
+        return new RtGeometryAbi.TablePrefix(buffer.mapped, nextSlot);
     }
 
     int liveSlotCapacity(List<PreparedSection> prepared,
@@ -166,11 +164,10 @@ final class RtSectionTable {
     void write(SectionGeom geom) {
         long offset = (long) geom.slot * SECTION_ENTRY_BYTES;
         long base = buffer.mapped + offset;
-        MemoryUtil.memPutLong(base, geom.material.deviceAddress);
-        MemoryUtil.memPutLong(base + 8, geom.uvs.deviceAddress);
-        MemoryUtil.memPutInt(base + 16, geom.triBase[0]);
-        MemoryUtil.memPutInt(base + 20, geom.triBase[1]);
-        MemoryUtil.memPutInt(base + 24, geom.triBase[2]);
+        // Terrain UVs are stored once per triangle corner. A zero index address is the canonical record's
+        // signal to consume them directly instead of indexing a shared vertex-UV array.
+        RtGeometryAbi.writeRecord(base, geom.material.deviceAddress, 0L, geom.uvs.deviceAddress, 0L,
+                0f, 0f, 0f, geom.triBase[0], geom.triBase[1], geom.triBase[2], 0);
         markDirty(offset, SECTION_ENTRY_BYTES);
     }
 

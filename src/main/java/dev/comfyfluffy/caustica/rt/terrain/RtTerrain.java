@@ -67,6 +67,7 @@ import dev.comfyfluffy.caustica.rt.terrain.RtTerrainMesher.WorkerTessState;
 import dev.comfyfluffy.caustica.rt.terrain.RtSectionBuilder.PreparedSection;
 import dev.comfyfluffy.caustica.rt.terrain.RtSectionTable.Generation;
 import dev.comfyfluffy.caustica.rt.terrain.RtSectionTable.SectionGeom;
+import dev.comfyfluffy.caustica.rt.geometry.RtGeometryAbi;
 /**
  * Per-section terrain residency synced to vanilla's loaded chunks. A singleton manager
  * keeps a map of resident 16³ sections. The 20 TPS tick maintains the desired window around the player
@@ -80,8 +81,8 @@ import dev.comfyfluffy.caustica.rt.terrain.RtSectionTable.SectionGeom;
  * tint, alpha cutout, and model quad transforms). Vertices are section-local (f32-exact); each TLAS
  * instance carries a
  * translation {@code sectionOrigin − rebaseOrigin} (rebase = player block at the last rebuild, so
- * transforms stay small at any world coordinate) and an {@code instanceCustomIndex} into a BDA
- * section table ({@code {primAddr, uvAddr, triBase[3]}} per section) the hit shaders read. The index
+ * transforms stay small at any world coordinate) and an {@code instanceCustomIndex} into the retained
+ * prefix of the frame geometry table. The index
  * buffer itself is retained only for the BLAS build (per-triangle corner UVs mean shading never needs
  * an index-buffer read — lever B), so its address isn't duplicated into this table.
  *
@@ -109,7 +110,6 @@ public final class RtTerrain {
         return CausticaConfig.Rt.Terrain.MAX_INFLIGHT_SECTIONS.value();
     }
 
-    private static final int SECTION_ENTRY_BYTES = 32; // {u64 primAddr, u64 uvAddr, u32 triBase[3]}, std430-padded
     private static final long NO_TESS_TOKEN = Long.MIN_VALUE;
     private static final int NO_MISSING_INDEX = -1;
     private static final long NO_DIRTY_GROUP = 0L;
@@ -203,7 +203,7 @@ public final class RtTerrain {
     }
 
     /**
-     * The manager if it has a valid (possibly zero-instance) section table to trace against, else null.
+     * The manager if it has valid (possibly zero-instance) retained geometry state to trace against, else null.
      * Null only while genuinely uninitialized (no world, or mid-teardown) — a transient empty-residency
      * window (world join, dimension change, a full evict) still returns non-null so the RT frame keeps
      * tracing (sky/entities only) instead of a caller falling back to vanilla.
@@ -222,17 +222,17 @@ public final class RtTerrain {
 
     /**
      * The static section instances to put in this frame's TLAS (BLAS address + sectionOrigin−rebase
-     * transform). {@code instanceCustomIndex} is the list position, which {@link RtAccel#prepareTlas}
-     * assigns and which the hit shaders use to index the section table. The list is stable between
+     * transform). {@code instanceCustomIndex} is the retained table slot, which the hit shaders use to
+     * index the frame geometry table. The list is stable between
      * residency rebuilds, so the per-frame TLAS rebuild just re-references the same BLAS each frame.
      */
     public List<RtAccel.Instance> staticInstances() {
         return table.instances;
     }
 
-    /** Section table device address: {@code {u64 primAddr, u64 uvAddr, u32 triBase[3]}} per section, indexed by gl_InstanceCustomIndexEXT. */
-    public long tableAddress() {
-        return table.address();
+    /** Host-visible retained geometry records copied into the frame's unified table. */
+    public RtGeometryAbi.TablePrefix geometryTablePrefix() {
+        return table.prefix();
     }
 
     /** RIS-sampled global light buffer device address, or 0 while no lights are published. */

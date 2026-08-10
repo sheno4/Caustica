@@ -16,14 +16,13 @@ public typealias DevicePtr<T> = Ptr<T, Access.ReadWrite, AddressSpace.Device, St
 
 // Push constant block. The hot inline lanes avoid dereferencing WorldPush for values that are read in
 // hit shaders or used for raygen control flow — every 64-bit device address lives here for exactly that
-// reason, rather than behind the worldPushAddr indirection. tableAddr/entityTableAddr/materialTableAddr
+// reason, rather than behind the worldPushAddr indirection. geometryTableAddr/materialTableAddr
 // are read in world.rahit/world.rchit, which never load WorldPush at all; the light-buffer addresses are
 // only read in world.rgen, which loads WorldPush anyway, but keeping every Addr in one place means there
 // is exactly one struct to check when adding a new device buffer, instead of two.
 public struct WorldPushConstants {
     public uint64_t worldPushAddr;
-    public uint64_t tableAddr;
-    public uint64_t entityTableAddr;
+    public uint64_t geometryTableAddr;
     public uint64_t materialTableAddr;   // MaterialBinding[], indexed by Prim.materialId
     public uint64_t materialSurfaceAddr; // SurfaceMaterial[], indexed by MaterialBinding.surface
     public uint64_t lightBufAddr;        // RIS emitter-NEE global light buffer (0 = none published)
@@ -122,7 +121,7 @@ public struct LightGridSpan {
     public float accept;
 };
 
-// TerrainPrim.flags bit 0: this emissive quad is in the light buffer (RtLightCollector membership).
+// Prim.flags bit 0: this emissive quad is in the light buffer (RtLightCollector membership).
 public static const uint TERRAIN_PRIM_IN_LIGHT_BUFFER = 1u;
 
 // Largest finite half. Producers of fp16 HDR storage clamp to this instead of letting the conversion
@@ -213,20 +212,10 @@ public static const uint PAYLOAD_TRANSMISSIVE = 1u;
 // surface — glass, ice, any solid transparent block a pack defines — is this bit unset.
 public static const uint PAYLOAD_WATER = 2u;
 
-// Entity per-triangle record (48 B). The final lane mirrors TerrainPrim's integer material metadata.
+// Canonical per-triangle record (48 B). Geometry producers resolve source-specific attributes before
+// writing this representation; the hit shaders do not branch on producer identity.
 public struct Prim {
     public float4 normal; // xyz = geometric normal, w = per-primitive emission strength
-    public float4 tint;
-    public uint materialId;
-    public uint flags;
-    public uint aux0;
-    public uint aux1;
-};
-
-// Terrain per-triangle record (48 B). The final 16-byte lane contains integer geometry-local metadata;
-// shared surface parameters live once in SurfaceMaterial instead of being copied into every triangle.
-public struct TerrainPrim {
-    public float4 normal;
     public float4 tint;
     public uint materialId;
     public uint flags;
@@ -339,34 +328,18 @@ public float surfaceIorFromPage(float encoded) {
     return (1.0 + amplitude) / (1.0 - amplitude);
 }
 
-// Per-section geometry record: packed buffer addresses + per-class triangle offsets
-// (gl_PrimitiveID restarts at 0 per geometry, so hit shaders re-add triBase[geometryIndex]).
-public struct Section {
-    public uint64_t primAddr;
-    public uint64_t uvAddr;
-    public uint triBase[3]; // fixed SBT class order: opaque/masked/transmissive
-};
-
-// Entity geometry record: packed buffer addresses, motion, and per-geometry triangle bases. Entity BLAS
-// geometry order is opaque/masked/transmissive (RtAccel.SBT_CLASSES), the same order terrain uses;
-// PrimitiveIndex restarts at zero for each geometry. `reserved` is a single uint, not two: shrunk from
-// std430 tail padding when triBase grew from 2 to 3 lanes, keeping the struct at 64 bytes rather than
-// padding out to 80 (float4 alignment already lands triBase on a 4-byte boundary with no slack to spare
-// beyond one more uint).
-public struct EntityGeom {
+// One record for every TLAS instance. PrimitiveIndex restarts at zero for each BLAS geometry, so hit
+// shaders add triBase[GeometryIndex()]. A zero indexAddr means UVs are already stored in triangle-corner
+// order; otherwise it addresses the triangle index array used to look up shared vertex UVs.
+public struct GeometryRecord {
     public uint64_t primAddr;
     public uint64_t idxAddr;
     public uint64_t uvAddr;
     public uint64_t dispAddr;
     public float4 rigidDisp;
     public uint triBase[3];
-    public uint reserved;
+    public uint flags;
 };
-
-// TLAS instance-custom-index encoding + terrain geometry classes (shared by rahit/rchit).
-public static const uint ENTITY_BIT = 0x800000u;
-public static const uint PARTICLE_BIT = 0x400000u; // particles share the entity cutout path
-public static const uint IDX_MASK = 0x3FFFFFu;     // low 22 bits = geom-table index
 
 // packHalf2x16 equivalent (Slang core module has no GLSL pack builtin; f32tof16 returns the half
 // bit-pattern in the low 16 bits).

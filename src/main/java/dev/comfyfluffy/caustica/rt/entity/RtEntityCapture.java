@@ -242,7 +242,7 @@ public final class RtEntityCapture implements VertexConsumer {
 
     /**
      * Repack triangles into the fixed entity BLAS geometry order. PrimitiveIndex restarts at zero for
-     * each Vulkan geometry, so the returned counts also define the triangle bases written to EntityGeom.
+     * each Vulkan geometry, so the returned counts also define the triangle bases written to GeometryRecord.
      */
     PackedGeometry packGeometry() {
         int triangleCount = idx.size() / 3;

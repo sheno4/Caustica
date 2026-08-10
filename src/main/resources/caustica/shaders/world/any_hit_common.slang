@@ -2,13 +2,8 @@
 // neither pays the other's register allocation: any-hit is the most frequently invoked stage in the
 // pipeline and its allocation bounds occupancy for everything else in it.
 //
-// Only the producer's geometry decode differs; the material half of both entry points reads one 16-byte
-// MaterialBinding and branches on nothing else.
-//
-//  * terrain (per-section): InstanceID() indexes the section table; GeometryIndex() is the SBT class,
-//    and PrimitiveIndex() restarts at zero per geometry, so triBase re-forms the section-local triangle.
-//  * entity (ENTITY_BIT / PARTICLE_BIT): InstanceID()'s low bits index the entity geometry table, whose
-//    UVs are indexed rather than per-corner.
+// GeometryIndex() is the SBT class and PrimitiveIndex() restarts at zero per geometry, so triBase
+// re-forms the record-local triangle. UV storage may be indexed or already triangle-corner ordered.
 //
 // Radiance and shadow rays share the exact Payload ABI, as Vulkan requires for every stage reachable by
 // a trace. Shadow traversal uses albedo.rgb as accumulated transmittance and hitT as the nearest recorded
@@ -32,28 +27,21 @@ public float3 barycentrics(float2 attribs) {
 
 public HitBinding decodeHit(float3 bary, uint pid) {
     HitBinding hit;
-    uint materialId;
-    if ((InstanceID() & (ENTITY_BIT | PARTICLE_BIT)) != 0u) {
-        EntityGeom g = ConstPtr<EntityGeom>(pc.entityTableAddr)[InstanceID() & IDX_MASK];
-        uint tri = pid + g.triBase[GeometryIndex()];
+    GeometryRecord g = ConstPtr<GeometryRecord>(pc.geometryTableAddr)[InstanceID()];
+    uint tri = pid + g.triBase[GeometryIndex()];
+    if (g.idxAddr != 0u) {
         ConstPtr<uint> indices = ConstPtr<uint>(g.idxAddr);
         ConstPtr<float2> uvs = ConstPtr<float2>(g.uvAddr);
         hit.uv = bary.x * uvs[indices[3u * tri + 0u]]
                 + bary.y * uvs[indices[3u * tri + 1u]]
                 + bary.z * uvs[indices[3u * tri + 2u]];
-        Prim pr = ConstPtr<Prim>(g.primAddr)[tri];
-        materialId = pr.materialId;
-        hit.tint = pr.tint.rgb;
     } else {
-        Section sec = ConstPtr<Section>(pc.tableAddr)[InstanceID()];
-        uint tri = pid + sec.triBase[GeometryIndex()];
-        ConstPtr<float2> uvs = ConstPtr<float2>(sec.uvAddr);
+        ConstPtr<float2> uvs = ConstPtr<float2>(g.uvAddr);
         hit.uv = bary.x * uvs[3u * tri + 0u] + bary.y * uvs[3u * tri + 1u] + bary.z * uvs[3u * tri + 2u];
-        TerrainPrim pr = ConstPtr<TerrainPrim>(sec.primAddr)[tri];
-        materialId = pr.materialId;
-        hit.tint = pr.tint.rgb;
     }
-    hit.binding = ConstPtr<MaterialBinding>(pc.materialTableAddr)[materialId];
+    Prim pr = ConstPtr<Prim>(g.primAddr)[tri];
+    hit.tint = pr.tint.rgb;
+    hit.binding = ConstPtr<MaterialBinding>(pc.materialTableAddr)[pr.materialId];
     return hit;
 }
 
@@ -75,6 +63,6 @@ public float4 sampleCoverageTexel(HitBinding hit) {
 public float stochasticAlphaThreshold(uint pid) {
     uint2 px = DispatchRaysIndex().xy;
     uint seed = px.x * 73856093u ^ px.y * 19349663u ^ pc.frameIndex * 83492791u
-            ^ pid * 2654435761u ^ (InstanceID() & IDX_MASK) * 1013904223u ^ asuint(RayTCurrent());
+            ^ pid * 2654435761u ^ InstanceID() * 1013904223u ^ asuint(RayTCurrent());
     return rndf(seed);
 }

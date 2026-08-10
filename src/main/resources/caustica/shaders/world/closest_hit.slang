@@ -363,12 +363,10 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
     uint rayCone = payload.rayCone;
     TC.Surfaces surfaces;
 
-    // Captured geometry: dynamic entities, block entities, and particle billboards, all indexing the
-    // entity table. A billboard needs no path of its own — it is a thin surface that answers light from
-    // either side, which its material says with a transmission weight of one half.
-    if ((InstanceID() & (ENTITY_BIT | PARTICLE_BIT)) != 0u) {
-        uint eidx = InstanceID() & IDX_MASK;
-        EntityGeom g = ConstPtr<EntityGeom>(pc.entityTableAddr)[eidx];
+    GeometryRecord g = ConstPtr<GeometryRecord>(pc.geometryTableAddr)[InstanceID()];
+    // Indexed geometry stores shared vertex UVs. A billboard needs no path of its own — it is a thin
+    // surface that answers light from either side, which its material says with a transmission weight of one half.
+    if (g.idxAddr != 0u) {
         uint pid = PrimitiveIndex() + g.triBase[GeometryIndex()];
         Prim pr = ConstPtr<Prim>(g.primAddr)[pid];
         float3x3 entityO2w = (float3x3)ObjectToWorld3x4();
@@ -436,9 +434,8 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
         return;
     }
 
-    Section sec = ConstPtr<Section>(pc.tableAddr)[InstanceID()];
-    uint pid = PrimitiveIndex() + sec.triBase[GeometryIndex()];
-    TerrainPrim pr = ConstPtr<TerrainPrim>(sec.primAddr)[pid];
+    uint pid = PrimitiveIndex() + g.triBase[GeometryIndex()];
+    Prim pr = ConstPtr<Prim>(g.primAddr)[pid];
     MaterialBinding terrainBinding = loadBinding(pr.materialId);
     SurfaceMaterial terrainMat = loadSurfaceMaterial(terrainBinding);
     float3 geometricNormal = normalize(pr.normal.xyz);
@@ -446,7 +443,7 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
 
     bool entering = dot(WorldRayDirection(), geometricNormal) < 0.0;
 
-    ConstPtr<float2> uvs = ConstPtr<float2>(sec.uvAddr);
+    ConstPtr<float2> uvs = ConstPtr<float2>(g.uvAddr);
     float2 uv0 = uvs[3u * pid + 0u];
     float2 uv1 = uvs[3u * pid + 1u];
     float2 uv2 = uvs[3u * pid + 2u];

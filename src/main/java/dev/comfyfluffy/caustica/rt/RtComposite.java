@@ -1313,10 +1313,10 @@ public final class RtComposite {
             // the trace sees the finished TLAS. Section BLASes are already built (async, by RtTerrain);
             // only the cheap instance-level TLAS is rebuilt per frame. Retired terrain geometry/table
             // generations are reclaimed by graphics-timeline completion.
-            // Entity BLASes are built inline below and merged into the per-frame TLAS. geomTableAddr
-            // feeds the hit shader entity path (per-prim normal/tint) and motion vectors.
+            // Entity BLASes are built inline below and merged into the per-frame TLAS. The frame table
+            // starts with retained terrain records and appends dynamic geometry records in the same index space.
             RtEntities.FrameEntities fe = RtEntities.INSTANCE.beginFrame(ctx, terrain.staticInstances(),
-                    terrain.blockX, terrain.blockY, terrain.blockZ,
+                    terrain.geometryTablePrefix(), terrain.blockX, terrain.blockY, terrain.blockZ,
                     snapshot.cameraX(), snapshot.cameraY(), snapshot.cameraZ(),
                     frameProjection, frameViewRotation);
             frameEntities = fe;
@@ -1383,11 +1383,11 @@ public final class RtComposite {
 
             // Push the BDA ring slot's address plus the small hot subset used directly by the shaders.
             // Every 64-bit device address the trace needs lives here, not behind worldPushAddr: the
-            // section/entity/material tables are read from world.rahit/world.rchit, which never load
+            // geometry/material tables are read from world.rahit/world.rchit, which never load
             // WorldPush at all, and the RIS light buffers are read from world.rgen's hot inner loop, so
             // none of them should cost an extra BDA dereference to find.
             ByteBuffer pushConstants = stack.malloc(WorldPushConstantsData.BYTE_SIZE);
-            new WorldPushConstantsData(pushBuf.deviceAddress, terrain.tableAddress(), fe.geomTableAddr(),
+            new WorldPushConstantsData(pushBuf.deviceAddress, fe.geometryTableAddress(),
                     RtMaterialRegistry.INSTANCE.bindingTableAddress(),
                     RtMaterialRegistry.INSTANCE.surfaceTableAddress(),
                     terrain.lightBufferAddress(), terrain.lightAliasBufferAddress(),

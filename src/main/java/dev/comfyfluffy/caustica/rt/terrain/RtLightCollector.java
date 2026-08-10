@@ -29,7 +29,7 @@ import net.minecraft.client.renderer.texture.TextureAtlasSprite;
  * approximation), so total power equals the quad's true emissive integral: the rectangle contains every
  * emissive sample, hence {@code Le_rect * rectArea == quadArea * mean(albedo*mask)}.
  *
- * <p><b>Membership.</b> An in-buffer quad gets {@code TerrainPrim.flags} bit 0 set on both triangles, so
+ * <p><b>Membership.</b> An in-buffer quad gets {@code Prim.flags} bit 0 set on both triangles, so
  * the raygen can gate its direct-hit emission term. Emitters too weak or too sparse (fill-ratio
  * gate) stay excluded and are always-gathered on path hits — bit-identical to the no-NEE path.
  */
@@ -40,7 +40,7 @@ final class RtLightCollector {
     /** Floats per packed light record — see {@link #append} for the 5-vec4 layout. */
     static final int FLOATS_PER_LIGHT = 20;
 
-    /** {@code TerrainPrim.flags} bit 0: this emissive quad is in the light buffer (NEE membership). */
+    /** {@code Prim.flags} bit 0: this emissive quad is in the light buffer (NEE membership). */
     static final int PRIM_FLAG_IN_LIGHT_BUFFER = 1;
 
     /** Block-light levels below this are non-emissive (smallest real level is 1/15). */
@@ -67,7 +67,7 @@ final class RtLightCollector {
     /** Samples per axis over the quad's (a,b) parameter square; matches the emission grid resolution. */
     private static final int SCAN = RtEmissionGrid.SIZE;
 
-    private static final int PRIM_FLOATS = 12; // TerrainPrim lanes per triangle
+    private static final int PRIM_FLOATS = 12; // Prim lanes per triangle
     private static final int PRIM_FLAGS_LANE = 9;
 
     /**
