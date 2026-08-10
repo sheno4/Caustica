@@ -55,10 +55,19 @@ public struct WorldPush {
     public uint     maxBounces;
     // Sky state is deliberately absent: it belongs to the selected sky slot and lives in that pass's
     // own buffer (SkyInputs, caustica_sky_atmosphere), which engine-generic code cannot reach.
-    public float4   waterParams;      // xyz linear ACEScg camera-biome water tint, w wave time (s)
-    public float4   waterAnchor;      // xy world-stable wave-domain anchor, z previous wave time
-    public float4x4 curViewProj;      // forward camera-relative view-projection
+    //
+    // Linear ACEScg tint of the medium the eye itself is inside, for a camera that starts submerged. A
+    // hit's own medium comes from its per-primitive tint, never from here.
+    public float3   cameraMedium;
+    public float    time;                   // animation time (s), wrapped
+    // World-pinned origin for procedural evaluation: the rebase origin reduced mod a fixed power of two,
+    // so a pattern evaluated at (rebased position + this) stays fixed in the world at usable precision.
+    public float2   proceduralDomainAnchor;
+    public float    previousTime;           // `time` last frame; equal to `time` with no adjacent frame
+    // Placed here rather than after curViewProj so the two frame-constant lanes above fill their
+    // sixteen-byte slot exactly; the breaking array that reads it still follows the matrix.
     public uint     breakCount;
+    public float4x4 curViewProj;      // forward camera-relative view-projection
     public BreakEntry breaking[8];    // Java capacity and breakCount serialization are generated from this
     public float4   lightRebase;      // xyz hierarchy-to-current rebase, w inverse total light power
     public float4   lightGridOrigin;     // xyz minimum cell origin in rebased blocks, w cell size
@@ -150,6 +159,11 @@ public struct Payload {
     public float  hitT;        // >= 0 on hit, < 0 on miss.
     public half3  motionPrev;  // per-vertex world displacement since last frame.
     public half3  f0;          // specular F0.
+    // Octahedral 16:16 of the shading normal one frame ago — equal to the normal itself unless the
+    // surface animates. Written only for the hit reconstruction anchors on (see PAYLOAD_PRIMARY_RAY),
+    // because that is the only hit whose reflection is reprojected through the surface plane. Packed
+    // rather than a third half3: it costs one word and is finer than the fp16 the normal itself uses.
+    public uint   previousNormal;
     public uint   flags;       // bit 0 transmissive, bit 1 water, bit 2 celestial, bit 3 dielectric-entering.
     public uint   roughMetal;  // packHalf2x16(perceptual roughness, metalness)
     public uint   emission;    // packHalf2x16(emission cd/m², unused)
@@ -168,6 +182,16 @@ public static const uint PAYLOAD_EMITTER_IN_LIST = 128u;
 // meaningful on a miss and this bit only on a hit, so they never need to be read together, but they get
 // distinct bits anyway to keep the two concerns unambiguous.
 public static const uint PAYLOAD_DIELECTRIC_ENTERING = 8u;
+
+// Which registered surface implementation this hit resolved through, forwarded from its
+// MaterialBinding so the estimator can call the same one's response hook a stage later. The high byte of
+// the flags word rather than a payload lane of its own: it is eight bits and the word had them free.
+public static const uint PAYLOAD_SURFACE_IMPL_SHIFT = 24u;
+
+// Set by the camera's own first radiance trace: this hit is what the reconstructor anchors on, so
+// closest-hit resolves the extra state only reconstruction reads — an animated surface's previous-frame
+// normal. Every other ray leaves it clear and pays for none of it.
+public static const uint PAYLOAD_PRIMARY_RAY = 512u;
 
 // Set by traceGuide so the radiance any-hit can suppress stochastic alpha. A guide probe answers which
 // surface a reflection/refraction points at, so a coin-flip there is a flickering control signal rather
@@ -219,8 +243,9 @@ public struct TerrainPrim {
 // different coverage mode costs sixteen bytes rather than a cloned material, so entity render types and
 // stochastic submissions are bindings instead of record variants.
 public struct MaterialBinding {
-    // albedoSlot:16 | coverageMode:2 | flags:6. Slot 0 is the vanilla block atlas, so a zero-initialised
-    // binding samples terrain albedo correctly; entity render types resolve their own slot through
+    // albedoSlot:16 | coverageMode:2 | flags:6 | surfaceImpl:8. Slot 0 is the vanilla block atlas and
+    // implementation 0 is the built-in surface, so a zero-initialised binding samples terrain albedo and
+    // resolves the reference surface; entity render types resolve their own slot through
     // RtEntityTextures.
     public uint packed0;
     public uint surface;    // index into the SurfaceMaterial table; closest-hit only
@@ -247,6 +272,8 @@ public static const uint BINDING_RECORD_CROSSING = 2u;
 public uint bindingAlbedoSlot(MaterialBinding binding) { return binding.packed0 & 0xFFFFu; }
 public uint bindingCoverage(MaterialBinding binding) { return (binding.packed0 >> 16) & 3u; }
 public uint bindingFlags(MaterialBinding binding) { return (binding.packed0 >> 18) & 63u; }
+/** Which registered surface implementation this material's description is routed through. */
+public uint bindingSurfaceImpl(MaterialBinding binding) { return binding.packed0 >> 24; }
 public float bindingCutoff(MaterialBinding binding) { return float(binding.packed1 & 255u) * (1.0 / 255.0); }
 
 public float3 bindingShadowTint(MaterialBinding binding) {
@@ -372,6 +399,26 @@ public float3 unpackNormal(Payload p) {
 public void packNormal(inout Payload p, float3 normal) {
     p.surface1 = (p.surface1 & 0x0000FFFFu) | (f32tof16(normal.x) << 16);
     p.surface2 = packHalf2(normal.yz);
+}
+
+// Octahedral 16:16 unit-vector packing, used for Payload.previousNormal. The octahedron maps the sphere
+// onto [-1,1]^2 with bounded distortion, so a 16-bit pair resolves finer than the fp16 the payload's
+// other normal is stored as, in a quarter of the words.
+public uint packNormalOct(float3 n) {
+    float3 v = n / max(abs(n.x) + abs(n.y) + abs(n.z), 1.0e-8);
+    float2 p = v.z >= 0.0 ? v.xy
+            : (1.0 - abs(float2(v.y, v.x))) * float2(v.x >= 0.0 ? 1.0 : -1.0, v.y >= 0.0 ? 1.0 : -1.0);
+    uint2 q = uint2(round(clamp(p * 0.5 + 0.5, 0.0, 1.0) * 65535.0));
+    return q.x | (q.y << 16);
+}
+
+public float3 unpackNormalOct(uint packed) {
+    float2 p = float2(uint2(packed & 0xFFFFu, packed >> 16)) * (1.0 / 65535.0) * 2.0 - 1.0;
+    float3 v = float3(p, 1.0 - abs(p.x) - abs(p.y));
+    float fold = max(-v.z, 0.0);
+    v.x += v.x >= 0.0 ? -fold : fold;
+    v.y += v.y >= 0.0 ? -fold : fold;
+    return normalize(v);
 }
 
 // Miss view: full fp32, so absolute photometric sky needs no pre-exposure round trip through the payload

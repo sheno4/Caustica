@@ -1,5 +1,5 @@
-// Stateless math: luminance, GGX (D/G/VNDF), Fresnel, Henyey-Greenstein, the RR specular-albedo
-// fit, the PCG stream, and direction sampling. No bindings, no globals, no rays.
+// Stateless math: luminance, GGX (D/G/VNDF), Fresnel, Henyey-Greenstein, the PCG stream, and direction
+// sampling. No bindings, no globals, no rays.
 
 module math;
 
@@ -38,39 +38,6 @@ public float3 fresnelSchlick(float cosT, float3 f0) {
     float m2 = m * m;
     float grazing = clamp(50.0 * f0.g, 0.0, 1.0);
     return f0 + (grazing - f0) * (m2 * m2 * m);
-}
-
-// NVIDIA RR guide-buffer helper: integrated/view-dependent specular reflectivity, not raw F0.
-// alpha is GGX alpha (== the linear roughness materials store), NoV is the first-hit view cosine.
-public float3 rrSpecularAlbedo(float3 specularColor, float alpha, float NoV) {
-    NoV = abs(NoV);
-    float NoV2 = NoV * NoV;
-    float alpha2 = alpha * alpha;
-    float4 X = float4(1.0, NoV, NoV2, NoV * NoV2);
-    float4 Y = float4(1.0, alpha, alpha2, alpha * alpha2);
-
-    float2 m1 = float2(
-            dot(float2(0.99044, -1.28514), X.xy),
-            dot(float2(1.29678, -0.755907), X.xy));
-    float3 Xxyw = float3(X.x, X.y, X.w);
-    float3 m2 = float3(
-            dot(float3(1.0, 2.92338, 59.4188), Xxyw),
-            dot(float3(20.3225, -27.0302, 222.592), Xxyw),
-            dot(float3(121.563, 626.13, 316.627), Xxyw));
-    float bias = dot(m1, Y.xy) / max(dot(m2, float3(Y.x, Y.y, Y.w)), 1.0e-7);
-
-    float2 m3 = float2(
-            dot(float2(0.0365463, 3.32707), X.xy),
-            dot(float2(9.0632, -9.04756), X.xy));
-    float3 Xxzw = float3(X.x, X.z, X.w);
-    float3 m4 = float3(
-            dot(float3(1.0, 3.59685, -1.36772), Xxzw),
-            dot(float3(9.04401, -16.3174, 9.22949), Xxzw),
-            dot(float3(5.56589, 19.7886, -20.2123), Xxzw));
-    float scale = dot(m3, Y.xy) / max(dot(m4, float3(Y.x, Y.y, Y.w)), 1.0e-7);
-
-    bias *= clamp(specularColor.g * 50.0, 0.0, 1.0);
-    return specularColor * max(0.0, scale) + float3(max(0.0, bias), max(0.0, bias), max(0.0, bias));
 }
 
 // Exact (unpolarized) Fresnel reflectance for a dielectric interface. cosI is the incidence cosine on

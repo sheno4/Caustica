@@ -21,6 +21,13 @@ public final class CausticaRegistry {
     private final Map<Identifier, MaterialSource> materialSources = new LinkedHashMap<>();
     private final Map<Slot, Identifier> defaults = new LinkedHashMap<>();
     private final Map<Slot, Identifier> selected = new LinkedHashMap<>();
+    /**
+     * Registration order IS the ABI: a surface implementation's position here is the index materials pack
+     * into their binding and the case the generated dispatch switch resolves. {@code caustica:builtin}
+     * registers first, so index 0 is always the built-in surface, which is what a zero-initialised
+     * binding and any unresolved name fall back to.
+     */
+    private final List<Feature.SurfaceImplementation> surfaces = new ArrayList<>();
 
     public static CausticaRegistry withBuiltins() {
         CausticaRegistry registry = new CausticaRegistry();
@@ -45,7 +52,13 @@ public final class CausticaRegistry {
         requireUnique(sceneProviders, feature.sceneProviders(), SceneProvider::id, "scene provider");
         requireUnique(lightProviders, feature.lightProviders(), LightProvider::id, "light provider");
         requireUnique(materialSources, feature.materialSources(), MaterialSource::id, "material source");
+        for (Feature.SurfaceImplementation surface : feature.surfaces()) {
+            if (surfaceIndex(surface.id()) >= 0) {
+                throw new IllegalStateException("duplicate surface implementation id " + surface.id());
+            }
+        }
         features.put(feature.id(), feature);
+        surfaces.addAll(feature.surfaces());
         for (CausticaRenderPass renderPass : feature.renderPasses()) {
             renderPasses.put(renderPass.id(), renderPass);
         }
@@ -114,6 +127,24 @@ public final class CausticaRegistry {
         return Map.copyOf(features);
     }
 
+    /** Every registered surface implementation, in the order that IS their compiled index. */
+    public synchronized List<Feature.SurfaceImplementation> surfaces() {
+        return List.copyOf(surfaces);
+    }
+
+    /**
+     * The compiled index of a surface implementation, or -1 when nothing registered that id. Materials
+     * resolve their authored name through this once at compile time; the shader only ever sees the index.
+     */
+    public synchronized int surfaceIndex(Identifier surfaceId) {
+        for (int index = 0; index < surfaces.size(); index++) {
+            if (surfaces.get(index).id().equals(surfaceId)) {
+                return index;
+            }
+        }
+        return -1;
+    }
+
     public synchronized Map<Identifier, CausticaRenderPass> renderPasses() {
         return Collections.unmodifiableMap(new LinkedHashMap<>(renderPasses));
     }
@@ -150,7 +181,11 @@ public final class CausticaRegistry {
             Feature feature = features.get(featureId);
             bindings.put(slot, new SelectedBinding(feature, binding(slot, featureId)));
         }
-        return new Selection(bindings);
+        Map<Identifier, Feature> owners = new LinkedHashMap<>();
+        for (Feature.SurfaceImplementation surface : surfaces) {
+            owners.put(surface.id(), features.get(surface.featureId()));
+        }
+        return new Selection(bindings, List.copyOf(surfaces), Map.copyOf(owners));
     }
 
     private Feature.Binding binding(Slot slot, Identifier featureId) {
@@ -172,16 +207,39 @@ public final class CausticaRegistry {
         }
     }
 
-    public record Selection(Map<Slot, SelectedBinding> bindings) {
+    /**
+     * What one world pipeline is compiled from: the feature bound to each slot, plus every registered
+     * surface implementation in index order (the dispatch switch's cases) and the feature each came from
+     * (whose shader source resolves its module).
+     */
+    public record Selection(Map<Slot, SelectedBinding> bindings,
+                            List<Feature.SurfaceImplementation> surfaces,
+                            Map<Identifier, Feature> surfaceOwners) {
         public Selection {
             bindings = Map.copyOf(bindings);
+            surfaces = List.copyOf(surfaces);
+            surfaceOwners = Map.copyOf(surfaceOwners);
             if (!bindings.keySet().containsAll(Slots.ALL)) {
                 throw new IllegalArgumentException("selection must bind every engine slot");
+            }
+            if (surfaces.isEmpty()) {
+                throw new IllegalArgumentException(
+                        "selection needs at least the built-in surface implementation");
             }
         }
 
         public SelectedBinding binding(Slot slot) {
             return Objects.requireNonNull(bindings.get(slot), "unbound slot " + slot.id());
+        }
+
+        /** Every feature contributing Slang to this composition, whether through a slot or a surface. */
+        public List<Feature> features() {
+            List<Feature> features = new ArrayList<>();
+            bindings.values().stream().map(SelectedBinding::feature)
+                    .filter(feature -> !features.contains(feature)).forEach(features::add);
+            surfaces.stream().map(surface -> surfaceOwners.get(surface.id()))
+                    .filter(feature -> !features.contains(feature)).forEach(features::add);
+            return List.copyOf(features);
         }
     }
 }

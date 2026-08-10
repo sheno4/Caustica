@@ -148,7 +148,9 @@ public final class RtComposite {
         return CausticaConfig.Rt.Composite.WATER_WAVES.value();
     }
 
-    private static final int WATER_ANCHOR_MASK = 4095;
+    // Modulus of the world-pinned procedural domain anchor. Documented engine constant, not a per-surface
+    // tunable: a very low-frequency field could alias across it where the wave spectrum does not.
+    private static final int PROCEDURAL_ANCHOR_MASK = 4095;
     // The versioned look package owns every photometric anchor and the sky geometry. Its sun illuminance is the
     // photometric solar constant at the top of the atmosphere; the shader's transmittance LUT brings that
     // to ~117,000 lux under a zenith sun and reddens/dims it through sunset, and because world.rmiss tints
@@ -308,8 +310,8 @@ public final class RtComposite {
     private float mvCamDeltaY;
     private float mvCamDeltaZ;
     private boolean mvHasPrev;
-    private float previousWaterWaveTime;
-    private boolean waterWaveTimeValid;
+    private float previousProceduralTime;
+    private boolean proceduralTimeValid;
     private long atlasSampler;
     private boolean failed;
     private boolean loggedActive;
@@ -802,26 +804,30 @@ public final class RtComposite {
     private static WorldShaders compileWorldShaders(WorldShaderCompiler compiler, boolean reordered) {
         Composition composition = compiler.composition();
         var sky = composition.selection().binding(Slots.SKY);
-        var surface = composition.selection().binding(Slots.SURFACE);
+        // Surfaces are per material rather than per composition, so the label names how many
+        // implementations the dispatch switch fans out to, not one bound feature.
+        int surfaceCount = composition.selection().surfaces().size();
         RtShaderCode primary = RtShaderCode.of("primary",
                 compiler.compilePlain("primary.rgen.slang", WorldShaderCompiler.ENTRY_POINT));
         RtShaderCode indirect = RtShaderCode.of(
-                "indirect(" + surface.feature().id() + (reordered ? ", EXT_SER)" : ")"),
+                "indirect(" + surfaceCount + " surfaces" + (reordered ? ", EXT_SER)" : ")"),
                 compiler.compileIndirect(reordered));
         RtShaderCode skyMiss = RtShaderCode.of(
                 "sky_miss(" + sky.feature().id() + ")", compiler.compileSkyMiss());
         RtShaderCode guideMiss = RtShaderCode.of("guide_miss",
                 compiler.compilePlain("guide.rmiss.slang", WorldShaderCompiler.ENTRY_POINT));
         RtShaderCode closestHit = RtShaderCode.of(
-                "closest_hit(" + surface.feature().id() + ")", compiler.compileClosestHit());
+                "closest_hit(" + surfaceCount + " surfaces)", compiler.compileClosestHit());
         RtShaderCode radianceAnyHit = RtShaderCode.of("radiance_any_hit",
                 compiler.compilePlain("radiance_any_hit.rahit.slang", WorldShaderCompiler.ENTRY_POINT));
         RtShaderCode shadowAnyHit = RtShaderCode.of("shadow_any_hit",
                 compiler.compilePlain("shadow_any_hit.rahit.slang", WorldShaderCompiler.ENTRY_POINT));
         WorldShaders shaders = new WorldShaders(primary, indirect, skyMiss, guideMiss, closestHit,
                 radianceAnyHit, shadowAnyHit);
-        CausticaMod.LOGGER.info("World shader composition active: sky={} ({}), surface={} ({}), SER={}",
-                sky.feature().id(), sky.binding().type(), surface.feature().id(), surface.binding().type(),
+        CausticaMod.LOGGER.info("World shader composition active: sky={} ({}), surfaces={}, SER={}",
+                sky.feature().id(), sky.binding().type(),
+                composition.selection().surfaces().stream()
+                        .map(implementation -> implementation.id().toString()).toList(),
                 reordered ? "EXT" : "none");
         return shaders;
     }
@@ -980,7 +986,8 @@ public final class RtComposite {
         // Bindless slot 0 = fallback texture (the block atlas) so an entity whose texture can't be
         // resolved samples something defined rather than an unbound (partially-bound) descriptor.
         RtBlockMaterials.INSTANCE.reset();
-        RtMaterialOverrides materialOverrides = RtMaterialOverrides.load();
+        RtMaterialOverrides materialOverrides = RtMaterialOverrides.load(
+                CausticaApi.registry()::surfaceIndex);
         RtEmissionSemantics emissionSemantics = RtEmissionSemantics.analyze();
         RtBlockMaterials.INSTANCE.prepareAll(ctx, bindlessTextureCapacity, emissionSemantics, materialOverrides);
         RtEntityTextures.INSTANCE.reset(bindlessTextureCapacity);
@@ -1212,7 +1219,7 @@ public final class RtComposite {
         displayPipeline.invalidateImages();
 
         mvHasPrev = false; // recreated images -> first MV frame is zero
-        waterWaveTimeValid = false;
+        proceduralTimeValid = false;
         if (worldPipeline != null) {
             worldPipeline.setStorageImage(output.view);
             bindGuideImages();
@@ -1305,8 +1312,8 @@ public final class RtComposite {
                 flags |= 0b10000; // animated water wave normals
             }
 
-            // Water parameters: camera-biome tint plus wrapped animation time. Per-water-body tint
-            // comes from the primitive; this is the fallback for a camera already inside the medium.
+            // The medium the eye itself is inside: the camera's own biome water colour, used only when
+            // the camera starts submerged. Every hit takes its tint from its own primitive instead.
             float wtr = 0.25f, wtg = 0.46f, wtb = 0.9f; // neutral ocean-ish default if no level/biome
             if (level != null) {
                 int wc = BiomeColors.getAverageWaterColor(level, cameraBlockPos);
@@ -1314,21 +1321,22 @@ public final class RtComposite {
                 wtg = ((wc >> 8) & 0xFF) / 255f;
                 wtb = (wc & 0xFF) / 255f;
             }
-            float waterWaveTime = (float) (System.nanoTime() / 1.0e9 % 3600.0);
-            float waterWaveDelta = waterWaveTime - previousWaterWaveTime;
-            // A first frame, long pause, or one-hour phase wrap has no adjacent wave frame to reproject.
-            // Use the current phase so the reflection MV is neutral instead of manufacturing a huge jump.
-            float priorWaterWaveTime = waterWaveTimeValid
-                    && waterWaveDelta >= 0f && waterWaveDelta <= 0.25f
-                    ? previousWaterWaveTime : waterWaveTime;
-            previousWaterWaveTime = waterWaveTime;
-            waterWaveTimeValid = true;
-            Float4 waterParams = linearAcesCgFromSrgb(wtr, wtg, wtb, waterWaveTime);
-            // Wave-domain anchor: the terrain rebase origin reduced mod 4096 (kept small for shader
-            // float precision). hitPos.xz (rebased) + anchor reconstructs a world-pinned coordinate, so the
-            // ripple pattern stays fixed in the world as the player moves and the rebase origin shifts.
-            Float4 waterAnchor = new Float4(terrain.blockX & WATER_ANCHOR_MASK,
-                    terrain.blockZ & WATER_ANCHOR_MASK, priorWaterWaveTime, 0f);
+            Float4 cameraMediumAcesCg = linearAcesCgFromSrgb(wtr, wtg, wtb, 1f);
+            Float3 cameraMedium = new Float3(cameraMediumAcesCg.x(), cameraMediumAcesCg.y(),
+                    cameraMediumAcesCg.z());
+            float time = (float) (System.nanoTime() / 1.0e9 % 3600.0);
+            float delta = time - previousProceduralTime;
+            // A first frame, long pause, or one-hour phase wrap has no adjacent frame to reproject. Use
+            // the current phase so a procedural surface reports no motion instead of a huge jump.
+            float previousTime = proceduralTimeValid && delta >= 0f && delta <= 0.25f
+                    ? previousProceduralTime : time;
+            previousProceduralTime = time;
+            proceduralTimeValid = true;
+            // Procedural domain anchor: the terrain rebase origin reduced mod 4096 (kept small for shader
+            // float precision). hitPos.xz (rebased) + anchor reconstructs a world-pinned coordinate, so a
+            // pattern stays fixed in the world as the player moves and the rebase origin shifts.
+            Float2 proceduralDomainAnchor = new Float2(terrain.blockX & PROCEDURAL_ANCHOR_MASK,
+                    terrain.blockZ & PROCEDURAL_ANCHOR_MASK);
 
             // Rebuild the TLAS this frame from static section instances merged with dynamic entity
             // instances, bind it into the pipeline's descriptor ring, record the build, then barrier so
@@ -1356,10 +1364,12 @@ public final class RtComposite {
                     new Float2(jitterX, jitterY),
                     flags,
                     maxBounces(),
-                    waterParams,
-                    waterAnchor,
-                    mvCurProjView,
+                    cameraMedium,
+                    time,
+                    proceduralDomainAnchor,
+                    previousTime,
                     breaking.length,
+                    mvCurProjView,
                     breaking,
                     // RIS emitter NEE: candidate count (0 = emitter NEE off; the shader also requires
                     // lightCount > 0, so an empty buffer leaves only direct-hit emission). The light buffer
@@ -1690,7 +1700,7 @@ public final class RtComposite {
         renderSizeRrQuality = Integer.MIN_VALUE;
         fgReset = true;
         mvHasPrev = false;
-        waterWaveTimeValid = false;
+        proceduralTimeValid = false;
         failed = false;
         loggedActive = false;
         frameCaptured = false;

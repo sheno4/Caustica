@@ -1083,8 +1083,6 @@ public final class CausticaConfig {
         public static final class Composition {
             public static final OptionalStringSetting SKY =
                     optionalString("caustica.composition.sky", "composition.slots.sky");
-            public static final OptionalStringSetting SURFACE =
-                    optionalString("caustica.composition.surface", "composition.slots.surface");
 
             private Composition() {
             }

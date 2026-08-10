@@ -19,6 +19,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -41,7 +42,9 @@ final class WorldShaderCompilerTest {
             assertSpirv(compiler.compileClosestHit(), 1024);
             assertSpirv(compiler.compileIndirect(false), 1024);
             assertTrue(compiler.composition().rootSource().contains("typealias Sky = LutSky"));
-            assertTrue(compiler.composition().rootSource().contains("typealias Surface = BuiltinSurface"));
+            assertTrue(compiler.composition().rootSource().contains("typealias Surfaces = SurfaceDispatch"));
+            assertTrue(compiler.composition().rootSource()
+                    .contains("default: { BuiltinSurface s; s.evaluateSurface(input, material); return; }"));
         }
         try (WorldShaderCompiler compiler = compiler(cacheDirectory.resolve("ser"))) {
             assertSpirv(compiler.compileSkyMiss(), 1024);
@@ -116,6 +119,55 @@ final class WorldShaderCompilerTest {
             assertTrue(java.nio.file.Files.isRegularFile(cacheDirectory.resolve(
                     "features/test/sky/test_sky_helper.slang")));
         }
+    }
+
+    /**
+     * A registered implementation becomes a case in the generated switch, keyed by the index materials
+     * pack into their binding — the engine itself never names it.
+     */
+    @Test
+    void aRegisteredSurfaceImplementationBecomesADispatchCase(@TempDir Path cacheDirectory)
+            throws Exception {
+        CausticaRegistry registry = registryWithTestSurface("test_surface", "TestSurface");
+
+        try (WorldShaderCompiler compiler = WorldShaderCompiler.create(cacheDirectory, registry.selection())) {
+            String root = compiler.composition().rootSource();
+            assertTrue(root.contains("case 1u: { TestSurface s; s.evaluateSurface(input, material); return; }"),
+                    root);
+            assertTrue(root.contains("case 1u: { TestSurface s; return s.evaluateResponse(radiance, surface); }"),
+                    root);
+            assertSpirv(compiler.compileClosestHit(), 1024);
+            assertSpirv(compiler.compileIndirect(false), 1024);
+        }
+    }
+
+    /**
+     * One bad third-party implementation must not take the world pipeline with it. It keeps its index —
+     * renumbering would repoint every material compiled against the old order — and the switch resolves
+     * that index to the built-in surface instead.
+     */
+    @Test
+    void aSurfaceImplementationThatDoesNotCompileFallsBackToTheBuiltIn(@TempDir Path cacheDirectory)
+            throws Exception {
+        CausticaRegistry registry = registryWithTestSurface("test_surface_broken", "BrokenSurface");
+
+        try (WorldShaderCompiler compiler = WorldShaderCompiler.create(cacheDirectory, registry.selection())) {
+            String root = compiler.composition().rootSource();
+            assertFalse(root.contains("BrokenSurface"), root);
+            assertFalse(root.contains("case 1u"), root);
+            assertSpirv(compiler.compileClosestHit(), 1024);
+        }
+    }
+
+    private static CausticaRegistry registryWithTestSurface(String module, String type) {
+        CausticaRegistry registry = CausticaRegistry.withBuiltins();
+        registry.feature(Identifier.fromNamespaceAndPath("test", "surface"))
+                .title(Component.literal("Test surface"))
+                .category(FeatureCategory.GENERAL)
+                .shaderSource(ShaderSource.classpath("/caustica-test/shaders"))
+                .surface(Identifier.fromNamespaceAndPath("test", "surface"), module, type)
+                .register();
+        return registry;
     }
 
     @Test

@@ -21,7 +21,13 @@ public record RtMaterialDesc(
          * LabPBR, heuristic-mask, or state-uniform all get the same baseline unless absolutely overridden.
          */
         float emissionLuminance,
-        EmissionSummary emissionSummary
+        EmissionSummary emissionSummary,
+        /**
+         * Index of the registered {@code ISurfaceModel} implementation this material's description is
+         * routed through, resolved from an authored name at load time. 0 is the built-in surface, which
+         * is what everything gets unless an override names another.
+         */
+        int surfaceImplementation
 ) {
     public enum Source {
         OVERRIDE,
@@ -50,6 +56,11 @@ public record RtMaterialDesc(
     public RtMaterialDesc {
         if (source == null || emissionSource == null || emissionSummary == null) {
             throw new IllegalArgumentException("Material description enums/summary must be present");
+        }
+        if (surfaceImplementation < 0 || surfaceImplementation > 255) {
+            // The compiled binding carries it in eight bits, so an out-of-range index would alias
+            // another implementation rather than fail.
+            throw new IllegalArgumentException("Surface implementation index out of range");
         }
         if (!finite01(specularRoughness) || !finite01(baseMetalness)
                 || !Float.isFinite(specularIor) || specularIor <= 0.0f

@@ -153,8 +153,10 @@ never kills the frame loop. Same discipline as the existing per-stage shader fal
 
 These look alike and are not:
 
-- **Slot binding.** The engine declares `ISurfaceModel.createSurface(...)`; a feature implements it and
+- **Slot binding.** The engine declares `ISkyModel.evaluateEnvironment(...)`; a feature implements it and
   binds the slot. Checked, narrow, versioned. Engine changes produce a compile error naming the method.
+  Registered *sets* — `ISurfaceModel` implementations, which materials select between rather than
+  competing for one winner — are the same mechanism with a generated switch instead of a typealias.
 - **Slang module substitution.** The engine imports `water`; a feature's `water.slang` wins on the search
   path. Broad and powerful, but ABI-by-convention: every function the engine calls in that module becomes
   an implicit contract, and *adding* a call the engine makes can break overrides silently.
@@ -499,8 +501,8 @@ Honest status, so this reads as a target and not a claim:
   input struct needs it, added then.
 - **Known gap: the engine has no sun or moon as a *light*.** Celestial NEE does not fire and
   `celestialLight` sits at its zero-illuminance default. Nothing read the celestial state that used to sit
-  on `FrameContext`, so nothing renders differently — but a third-party surface slot cannot do a day/night
-  blend. The fix is one thing: `SkyLutPass` already calls `LightProvider.submitLights(LightSink)`, and the
+  on `FrameContext`, so nothing renders differently — but a third-party surface implementation cannot do a
+  day/night blend. The fix is one thing: `SkyLutPass` already calls `LightProvider.submitLights(LightSink)`, and the
   engine has to start consuming it.
 - **Physical layering hasn't happened.** `core` / `core_minecraft` / extensions is still a target; the
   package tree is flat (`rt/...`, not `engine/...` + `mc/...`). §2.4's plan — interfaces now, jars later —
@@ -552,10 +554,8 @@ system. All three are largely parallel; the couplings that are easy to miss:
   bloom pass both become features on the same builder. The slot rename and the composition-root spike do
   not wait on the pass API, and the pass API does not wait on the registry.
 - **The light track waits on neither.** L1 touches no slot interface and no registry. Its one overlap is
-  opportunistic: L1c rewrites `risInitial` anyway, which is the cheap moment to route RIS's target
-  function through the surface slot's `evaluateBsdf` and retire the convergence debt in
-  `EXTENSION_API.md` §11 — but if the slot split has not landed, L1c keeps the inline target function and
-  the debt stays put.
+  opportunistic: L1c rewrites `risInitial` anyway, which is the cheap moment to converge RIS's target
+  function with the engine's own `evaluateBsdf` and retire the convergence debt in `EXTENSION_API.md` §11.
 
 ## 9. Open questions
 

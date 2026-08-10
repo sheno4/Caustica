@@ -1,10 +1,10 @@
 // Shared composition-generic indirect integrator. The engine owns path bookkeeping, termination, medium
-// state, dielectric transitions, ray cones, and direct-light gating. Every other vertex calls the
-// selected surface slot for BSDF evaluation, sampling, and the post-estimator response.
+// state, dielectric transitions, ray cones, direct-light gating, and the BSDF itself; the surface
+// implementation a material named is called only for the post-estimator response.
 //
 // The closure is reconstructed from the payload written by closest_hit.slang, so no material policy is
-// re-evaluated here. Celestial visibility is derived from BsdfSample.eventFlags. The built-in model uses
-// a tight continuous GGX lobe at zero roughness because the slot contract has no delta-lobe event.
+// re-evaluated here. Celestial visibility is derived from BsdfSample.eventFlags. The BSDF uses a tight
+// continuous GGX lobe at zero roughness because the estimator has no delta-lobe event.
 //
 // Thin entry modules select ordinary tracing or EXT_SER while this integrator stays shared.
 module indirect_core;
@@ -17,6 +17,7 @@ import segment;
 import water;
 import trace;
 import lighting;
+import surface_bsdf;
 import bindings;
 import caustica_types;
 import caustica_surface;
@@ -27,24 +28,7 @@ import trace_policy;
 // import in closest_hit.slang, and sky_miss.slang for the compiler rule behind it.
 import caustica_pass_resources;
 
-// Rebuilds the closure closest_hit.slang's createSurface already computed for this hit. Its
-// fields are exactly what the payload carries (diffuseAlbedo/specularF0/roughness/transmission), so this
-// is a struct literal, not a re-evaluation of the material. The one conversion is perceptual roughness
-// back to the GGX alpha the closure is defined in.
-SurfaceClosure payloadSurfaceClosure(float3 n) {
-    SurfaceClosure closure;
-    closure.shadingNormal = n;
-    closure.diffuseAlbedo = payloadAlbedo();
-    closure.specularF0 = payload.f0;
-    closure.alphaRoughness = payloadAlphaRoughness();
-    closure.emissionRadiance = float3(0.0); // not read by evaluateBsdf/sampleBsdf; see payload doc
-    closure.transmission = payloadTransmission();
-    closure.interiorIor = max(payloadIor(), 1.0);
-    closure.flags = 0u;
-    return closure;
-}
-
-public float3 tracePath<TC : IComposition, TTrace : IRadianceTrace>(TC.Surface surfaceModel,
+public float3 tracePath<TC : IComposition, TTrace : IRadianceTrace>(TC.Surfaces surfaces,
         PathSegment seg, uint2 pix, uint sampleIndex) {
     float3 L = float3(0.0, 0.0, 0.0);
     float3 ro = seg.ro;
@@ -86,7 +70,8 @@ public float3 tracePath<TC : IComposition, TTrace : IRadianceTrace>(TC.Surface s
         float3 hitPos = ro + rd * payload.hitT;
         rayConeWidth = max(rayConeWidth + rayConeSpread * max(payload.hitT, 0.0), RAY_CONE_MIN_WIDTH);
 
-        // ---- Dielectric interface: engine-owned in full.
+        // ---- Dielectric interface: engine-owned in full. The normal is whatever closest-hit published,
+        // waves and all, so nothing is re-derived here.
         if (payloadDielectric()) {
             if (bounce >= maxBounces) {
                 break;
@@ -95,14 +80,6 @@ public float3 tracePath<TC : IComposition, TTrace : IRadianceTrace>(TC.Surface s
             bool entering = payloadDielectricEntering();
             float3 tint = payloadAlbedo();
             float transmission = clamp(payloadTransmission(), 0.0, 1.0);
-
-            float3 geometricNormal = n;
-            if (isWater && waterWaves) {
-                float2 waterDomain = hitPos.xz + worldPush.waterAnchor.xy;
-                float waterFootprint = rayConeWidth / max(abs(dot(-rd, geometricNormal)), 0.2);
-                n = applyWaterWaves(geometricNormal, waterDomain,
-                                    worldPush.waterParams.w, waterFootprint);
-            }
 
             Medium entered = makeDielectricMedium(isWater, max(payloadIor(), 1.0), tint, transmission);
             float etaI = medium.current.ior;
@@ -116,11 +93,11 @@ public float3 tracePath<TC : IComposition, TTrace : IRadianceTrace>(TC.Surface s
             bool chooseReflection = rndf(seed) < F;
             if (chooseReflection) {
                 rd = reflect(rd, n);
-                ro = offsetSurfaceOrigin(hitPos, geometricNormal, rd, SURF_BIAS);
+                ro = offsetSurfaceOrigin(hitPos, n, rd, SURF_BIAS);
             } else {
                 if (dot(transmittedDir, transmittedDir) <= 0.0) break;
                 rd = normalize(transmittedDir);
-                ro = offsetSurfaceOrigin(hitPos, geometricNormal, rd, transmitBias);
+                ro = offsetSurfaceOrigin(hitPos, n, rd, transmitBias);
                 if (entering) {
                     mediumPush(medium, entered);
                 } else {
@@ -156,7 +133,7 @@ public float3 tracePath<TC : IComposition, TTrace : IRadianceTrace>(TC.Surface s
             vertexRadiance += payloadAlbedo() * emission;
         }
 
-        // NEE toward the dominant celestial body: the slot BSDF is the estimator's target function. One
+        // NEE toward the dominant celestial body: the engine BSDF is the estimator's target function. One
         // ray serves both hemispheres — a light is either in front of the surface, where the BSDF answers
         // with reflection, or behind it, where a thin wall answers with transmission and an opaque one
         // answers with nothing. The origin is biased onto whichever side the light is.
@@ -179,7 +156,7 @@ public float3 tracePath<TC : IComposition, TTrace : IRadianceTrace>(TC.Surface s
                 bsdfQuery.surface = closure;
                 bsdfQuery.outgoingDirection = v;
                 bsdfQuery.incomingDirection = lightDir;
-                BsdfEvaluation eval = surfaceModel.evaluateBsdf(bsdfQuery);
+                BsdfEvaluation eval = evaluateBsdf(bsdfQuery);
                 vertexRadiance += eval.value * celestialLight.illuminance * ndl * vis;
             }
         }
@@ -194,22 +171,22 @@ public float3 tracePath<TC : IComposition, TTrace : IRadianceTrace>(TC.Surface s
                                              closure.transmission);
         }
 
-        // Look policy applies once to this vertex's total shaded contribution; it is identity
-        // for the built-in surface, so this is exactly the sum of the terms above.
-        L += throughput * surfaceModel.evaluateResponse(vertexRadiance, closure);
+        // Look policy applies once to this vertex's total shaded contribution, through the same
+        // implementation the material named at closest-hit; it is identity for the built-in surface, so
+        // this is exactly the sum of the terms above.
+        L += throughput * surfaces.evaluateResponse(payloadSurfaceImpl(), vertexRadiance, closure);
 
         if (bounce >= maxBounces) {
             break;
         }
 
-        // Indirect continuation: the slot samples its BSDF. throughputWeight already carries
-        // value*|N.L|/pdf (the estimator contract), so no separate lobe-selection division is needed
-        // here; no separate lobe-selection division is applied.
+        // Indirect continuation. throughputWeight already carries value*|N.L|/pdf (the estimator
+        // contract), so no separate lobe-selection division is applied here.
         BsdfSampleQuery sampleQuery;
         sampleQuery.surface = closure;
         sampleQuery.outgoingDirection = v;
         sampleQuery.random = float3(rndf(seed), rndf(seed), rndf(seed));
-        BsdfSample sample = surfaceModel.sampleBsdf(sampleQuery);
+        BsdfSample sample = sampleBsdf(sampleQuery);
         if (sample.pdf <= 0.0) {
             break;
         }
@@ -240,7 +217,7 @@ public void runIndirect<TC : IComposition, TTrace : IRadianceTrace>() {
     // celestialLight (world_core.slang) is a fixed hand-authored sun, so the three consumers below
     // NEE fires against the same constant direction and illuminance every frame, regardless of the time
     // of day the sky slot is drawing.
-    TC.Surface surfaceModel;
+    TC.Surfaces surfaces;
     uint2 dispatchIndex = DispatchRaysIndex().xy;
     uint2 dimensions = DispatchRaysDimensions().xy;
     int2 pix = int2(dispatchIndex);
@@ -253,7 +230,7 @@ public void runIndirect<TC : IComposition, TTrace : IRadianceTrace>() {
         PackedPathSegment packed = queue[recordIndex];
         PathSegment segment = unpackPathSegment(packed);
         for (uint s = 0u; s < spp; ++s) {
-            frameRadiance += tracePath<TC, TTrace>(surfaceModel, segment,
+            frameRadiance += tracePath<TC, TTrace>(surfaces, segment,
                     uint2(pix), s + leaf * spp);
         }
         if (packed.nextRecord == PATH_NO_NEXT) {

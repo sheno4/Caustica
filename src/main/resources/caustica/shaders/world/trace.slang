@@ -48,6 +48,7 @@ public Payload makeRadiancePayload(uint flags, uint rayCone) {
     p.hitT = -1.0; // miss sentinel: world.rmiss writes only the surface words, so a miss leaves this negative
     p.motionPrev = half3(0.0h, 0.0h, 0.0h);
     p.f0 = half3(0.0h, 0.0h, 0.0h);
+    p.previousNormal = 0u;
     p.flags = flags;
     p.roughMetal = 0u;
     p.emission = 0u;
@@ -57,10 +58,13 @@ public Payload makeRadiancePayload(uint flags, uint rayCone) {
 }
 
 // Ordinary radiance trace for latency-sensitive, coherent work such as Pass A. It invokes hit/miss
-// shaders directly and therefore requires no invocation-reorder capability.
+// shaders directly and therefore requires no invocation-reorder capability. `reconstructionAnchor` marks
+// the camera's own first trace, whose hit is the one the guide images describe.
 public void traceRadiance(uint cullMask, float3 ro, float tmin, float3 rd, float tmax,
-                    bool showCelestial, float rayConeWidth, float rayConeSpread) {
-    payload = makeRadiancePayload(showCelestial ? PAYLOAD_SHOW_CELESTIAL : 0u,
+                    bool showCelestial, float rayConeWidth, float rayConeSpread,
+                    bool reconstructionAnchor = false) {
+    payload = makeRadiancePayload((showCelestial ? PAYLOAD_SHOW_CELESTIAL : 0u)
+                    | (reconstructionAnchor ? PAYLOAD_PRIMARY_RAY : 0u),
             packHalf2(float2(rayConeWidth, rayConeSpread)));
     TraceRay(topLevelAS, RAY_FLAG_NONE, cullMask,
             SBT_RADIANCE, SBT_STRIDE_CLASS, MISS_RADIANCE,
@@ -88,6 +92,7 @@ public Payload makeShadowPayload() {
     shadowPayload.hitT = -1.0; // water-crossing sentinel, filled by the water any-hit
     shadowPayload.motionPrev = half3(0.0h, 0.0h, 0.0h);
     shadowPayload.f0 = half3(0.0h, 0.0h, 0.0h);
+    shadowPayload.previousNormal = 0u;
     // world_guide.rmiss clears this sentinel. An accepted opaque hit skips closest-hit and therefore
     // leaves it set, while ignored translucent/water hits continue until either a later opaque hit or miss.
     shadowPayload.flags = 1u;

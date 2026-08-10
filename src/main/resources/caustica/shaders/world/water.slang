@@ -141,9 +141,9 @@ public float waterCaustic(float3 exitPos, float3 lightDir, float waterDist) {
     float fade = smoothstep(0.06, 0.18, lightDir.y);
     if (fade <= 0.0) return 1.0;
     float h = max(waterDist * lightDir.y, 0.05); // vertical depth of the receiver below the exit point
-    float t = worldPush.waterParams.w;
+    float t = worldPush.time;
     float3 inc = -lightDir;
-    float2 base = exitPos.xz + worldPush.waterAnchor.xy;  // world-stable wave domain (same as applyWaterWaves)
+    float2 base = exitPos.xz + worldPush.proceduralDomainAnchor; // same domain applyWaterWaves evaluates
     float2 p0 = causticLanding(base, t, inc, h);
     float2 px = causticLanding(base + float2(CAUSTIC_EPS, 0.0), t, inc, h);
     float2 pz = causticLanding(base + float2(0.0, CAUSTIC_EPS), t, inc, h);

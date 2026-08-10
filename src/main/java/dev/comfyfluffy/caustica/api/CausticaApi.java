@@ -32,7 +32,6 @@ public final class CausticaApi {
         // After registration, so a saved id can be resolved against the features that actually loaded, and
         // before selection(), so the first composition the renderer compiles is already the chosen one.
         applyPersistedSelection(REGISTRY, Slots.SKY, CausticaConfig.Rt.Composition.SKY.get());
-        applyPersistedSelection(REGISTRY, Slots.SURFACE, CausticaConfig.Rt.Composition.SURFACE.get());
         REGISTRY.selection();
         // Loaded here, not from the renderer: option values have to be readable before any GPU context
         // exists (a settings screen opened from the title menu) and before the engine decides which passes

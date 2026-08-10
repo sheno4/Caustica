@@ -68,32 +68,35 @@ binding. v1:
 | Slot | Slang interface | Built-in default |
 |---|---|---|
 | `caustica:sky` | `ISkyModel` | `LutSky` |
-| `caustica:surface` | `ISurfaceModel` | `BuiltinSurface` |
 
 Adding a slot is an API change, not something a feature can invent — same rule as render-pass hooks in
-`ARCHITECTURE.md` §4. Two is the honest set: it is exactly what an engine stage actually calls. A
-`caustica:medium` slot shipped alongside these and was removed — see §4.4. Water waves want a third
-(`caustica:interface`, a `perturbNormal` hook); that slot lands with its first consumer, not before.
+`ARCHITECTURE.md` §4. A `caustica:medium` slot shipped alongside this one and was removed — see §4.4.
 
-**That consumer arrived, and then dissolved the slot.** `MATERIAL_MODEL_PLAN.md` turns water into an
-ordinary zero-roughness transmissive surface whose wave normal is its only residue. That normal is
-consumed by *transport* rather than shading — `applyWaterWaves` runs in `primary.rgen` and `guides.slang`
-to build the refraction direction — which is what made a separate slot look necessary. But closest-hit
-runs first, so a surface implementation can publish the perturbed normal into the payload and transport
-reads it from there, which also removes today's double derivation across those two files. No
-`caustica:interface` slot, and the "must match guide and shading" invariant of §4.4 holds by
-construction. Procedural *emission* likewise needs nothing new — with per-material dispatch below, an end
-portal is an `ISurfaceModel` writing `emission_luminance`.
+**Surfaces are deliberately not a slot.** A slot means exactly one binding wins for the whole scene, and
+that is the wrong shape for appearance: a feature contributing geometry cannot contribute how it looks
+without seizing every other material's appearance too. So `ISurfaceModel` implementations are registered
+as a *set* — `FeatureBuilder.surface(id, module, type)` — and each material names the one it wants. The
+generated composition root emits a `switch` over the registered implementations rather than a
+`typealias`; every implementation still inlines, register pressure becomes the max over implementations,
+and compile time grows with the count. It also composes with SER: an implementation id can enter the
+reorder hint so same-surface hits execute coherently. Existential dynamic dispatch is the alternative
+and is worse in a hit shader.
 
-**One binding per slot is the current limit, and it is the wrong one.** `IComposition` declares
-`associatedtype Surface : ISurfaceModel` — exactly one surface type per composition, resolved by generic
-specialization — so a feature that contributes geometry cannot contribute its appearance without seizing
-the surface slot for the entire scene. The fix is to change what the generated composition root emits:
-an ordered list of implementations plus a generated `switch`, selected per material. Every
-implementation still inlines; register pressure becomes the max over implementations; compile time grows
-with the count. It also composes with SER — the implementation id can enter the reorder hint so
-same-surface hits execute coherently. Existential dynamic dispatch is the alternative and is worse in a
-hit shader.
+Registration order is the ABI. An implementation's position in the registered list is the eight-bit index
+a compiled `MaterialBinding` carries and the case the switch resolves; `caustica:builtin` registers first,
+so index 0 is always the reference surface and is what an unnamed or unresolvable choice falls back to.
+Each non-default implementation is compiled on its own before the root is generated, and one that fails
+keeps its index — renumbering would repoint every material compiled against the old order — while the
+switch resolves it to the built-in surface instead. A broken third-party surface therefore renders as the
+reference one rather than taking the world pipeline down.
+
+**A `caustica:interface` slot was proposed and is not needed.** Water waves looked like they wanted one:
+the wave normal is consumed by *transport* rather than shading, to build the refraction direction. But
+closest-hit runs before raygen decides refraction, so the perturbed normal is published into the payload
+(`MaterialInput.geometryNormal`, packed by `writeHitPayload`) and transport reads it there — which also
+removed the derivation of that normal in three separate files. The "must match guide and shading"
+invariant of §4.4 now holds by construction. Procedural *emission* needs nothing new either: an end portal
+is an `ISurfaceModel` writing `emission_luminance`.
 
 ### 2.2 The generated composition root
 
@@ -103,23 +106,35 @@ file — the **composition root** — and specializes every generic entry point 
 ```slang
 // generated; never authored
 import caustica_api;
+import caustica_types;
+import caustica_surface;
+import caustica_builtin_surface;
 import nethersky_sky;
-import wavewater_medium;
-import caustica_builtin;
+import somemod_crystal;
 
-export struct Composition : IComposition {
-    public typealias Sky     = NetherSky;        // caustica:nether_sky
-    public typealias Surface = BuiltinSurface;   // built-in default
-    public typealias Medium  = WaveWaterMedium;  // wavewater:waves
-}
+public struct SurfaceDispatch : ISurfaceDispatch {
+    public void evaluateSurface(uint implementation, SurfaceInput input,
+            inout MaterialInput material) {
+        switch (implementation) {
+        case 1u: { CrystalSurface s; s.evaluateSurface(input, material); return; }
+        default: { BuiltinSurface s; s.evaluateSurface(input, material); return; }
+        }
+    }
+    // evaluateResponse switches the same way
+};
+
+public struct Composition : IComposition {
+    public typealias Sky      = NetherSky;        // caustica:nether_sky
+    public typealias Surfaces = SurfaceDispatch;  // every registered implementation
+};
 ```
 
 against
 
 ```slang
 public interface IComposition {
-    associatedtype Sky     : ISkyModel;
-    associatedtype Surface : ISurfaceModel;
+    associatedtype Sky      : ISkyModel;
+    associatedtype Surfaces : ISurfaceDispatch;
 };
 ```
 
@@ -221,35 +236,58 @@ reached only through import" convention is doing the work, not the prefix.
 
 ```slang
 public interface ISurfaceModel {
-    // Interpretation of the engine-decoded canonical material. All material policy lives here.
-    public float evaluateCoverage(SurfaceInput input);
-    public SurfaceClosure createSurface(SurfaceInput input);
-
-    // Estimator contract. value and pdf must agree; pdf >= 0; both finite. Never called with a
-    // transmissive closure — the engine routes those through its own dielectric interface.
-    public BsdfEvaluation evaluateBsdf(BsdfQuery query);
-    public BsdfSample sampleBsdf(BsdfSampleQuery query);   // weight, direction, EVENT_* flags
+    // Edit the OpenPBR description the engine decoded for this hit: override what you own — an animated
+    // normal, a procedurally computed emission — and leave the rest.
+    public void evaluateSurface(SurfaceInput input, inout MaterialInput material);
 
     // Look. Applied by the engine to an already-shaded contribution. Never used by the estimator.
     public float3 evaluateResponse(float3 radiance, SurfaceClosure surface);
 };
 ```
 
-**This interface narrows once the canonical description becomes OpenPBR** — see `MATERIAL_MODEL_PLAN.md`
-§6.3. `evaluateBsdf`/`sampleBsdf` leave the slot and the engine implements the OpenPBR BSDF once,
-validated against the spec's own white furnace test; the slot keeps `evaluateSurface` (filling canonical
-parameters) and `evaluateResponse` (the look hook). The invariant below stops being a contract a
-third party can break and becomes one it cannot express. Animated water and procedural portal emission —
-the two consumers driving this — need only parameters, and publishing a perturbed `geometry_normal` from
-closest-hit also removes the need for the `caustica:interface` slot in §2.1 before it is ever built.
+**An implementation supplies parameters, not lobes.** The engine turns the description into a
+`SurfaceClosure` and owns the OpenPBR BSDF — evaluation, sampling, and the value/pdf agreement every
+lighting backend targets. That was previously `evaluateBsdf`/`sampleBsdf` on this interface and the
+single most important invariant in the API; it is now one an implementation cannot express, which is
+worth more than one it merely must not break. The accepted loss is that a genuinely different *lobe*
+(hair, cloth, a coat) becomes engine work — OpenPBR already reserves the parameters for those, so the
+growth path is "the engine implements more of OpenPBR" rather than a third-party BSDF the estimator has
+to trust.
 
-Two things are deliberately separated, and this is the single most important invariant in the API:
+Two things are deliberately separated:
 
 - **The BSDF is the estimator's target function.** RIS candidate weighting, ReSTIR reuse, and MIS all
-  depend on it. Value and pdf must agree, stay finite, stay non-negative, or every engine lighting backend
-  is biased.
+  depend on it. It is engine-owned for exactly that reason.
 - **The response is the look.** Quantization, banding, palette snapping, cel thresholds — applied to an
-  already-shaded contribution, never to the BSDF. Non-physical by design and unconstrained.
+  already-shaded contribution, never to the BSDF. Non-physical by design and unconstrained. It dispatches
+  through the same implementation the material named at closest-hit, forwarded in the payload.
+
+### 4.1.1 The reconstruction contract
+
+Guides are engine-derived, through one named public function:
+
+```slang
+public struct SurfaceGuide {
+    public float3 diffuseAlbedo;       // roughness-classified, not base_color
+    public float3 specularAlbedo;      // the complementary component
+    public float3 normal;
+    public float  perceptualRoughness; // OpenPBR r = sqrt(GGX alpha), not alpha
+};
+
+public SurfaceGuide guideFor(SurfaceClosure surface, float3 viewDirection);
+```
+
+It is public rather than engine-private on purpose. Blender's Cycles builds its Ray Reconstruction guides
+by asking *every closure* for its albedo and roughness and summing the weighted result; a future
+closure-level API here would need the same answer per lobe, and if guides were derived privately a custom
+closure would have no way to feed reconstruction — discovered only when someone tried to add one. Naming
+the contract now costs nothing and makes the per-lobe version a sum over the same struct.
+
+Two things it encodes deliberately: `perceptualRoughness` is OpenPBR r, not GGX alpha (feeding alpha
+under-reports roughness and tells the reconstructor surfaces are sharper than they are); and diffuse
+versus specular albedo are *denoising categories*, not BSDF types, so a rough glossy lobe belongs
+progressively to the diffuse guide. `guideFor` blends across that crossing with a `smoothstep` rather
+than a hard cutoff, which would pop as a surface's roughness drifts over it.
 
 With the look pack cut, `evaluateResponse` is now the *only* look hook in the API. Exposure, bloom, LMT,
 and photometric anchors are engine-owned in this revision. It stays because it costs nothing (it is
@@ -315,16 +353,23 @@ its shape was right — a full eval/sample/pdf phase estimator under the same ag
 BSDF, since volume NEE needs all three. What it lacked was a volumetric integrator to be called from.
 The slot returns with one.
 
-Consequence, accepted: refraction is not stylizable. The engine's transmission-chain walk selects the
-guide branch and uses material IOR, so exaggerated or absent refraction would produce guides describing
-different geometry than what was shaded. The escape is a `caustica:interface` slot with a `perturbNormal`
-hook — added with its first consumer, with the "must match guide and shading" invariant enforced from day
-one rather than retrofitted.
+**Refraction is shaped by the surface, but only through its normal.** The engine's transmission-chain walk
+selects the guide branch and uses material IOR, so exaggerated or absent refraction would produce guides
+describing different geometry than what was shaded. What an implementation *can* do is perturb
+`MaterialInput.geometryNormal`, which closest-hit publishes into the payload; transport, shading and the
+guides then read one normal, so the "must match guide and shading" invariant holds by construction rather
+than by rule. That replaced the proposed `caustica:interface` slot and the three separate derivations of
+the water wave normal (`primary.rgen`, `guides.slang`, `indirect_core.slang`) that motivated it.
 
-Water is that consumer (§2.1). One question to settle when the slot lands: the wave normal is currently
-derived twice, in `primary.rgen` and in `guides.slang`, from the same inputs. Either closest-hit
-publishes the perturbed normal into the payload and both stop re-deriving it, or transport calls the slot
-at each use site — the invariant above is easier to hold in the first shape.
+A surface whose normal animates also fills `previousGeometryNormal`, which the payload carries so a
+reflection can be reprojected through the plane the surface occupied last frame. It is resolved only for
+the hit `SurfaceInput.surfaceFlags` marks with `SURFACE_RECONSTRUCTION_ANCHOR` — the camera's own first
+hit, the only one the guide images describe — so no other ray pays for it.
+
+Water itself is still an engine material rather than a registered implementation: `waterCaustic`
+differentiates the same wave field from inside the engine's own shadow-ray transport, and there is no hook
+through which an extension could answer that. Moving it needs that hook first; the normal it publishes is
+already the general mechanism.
 
 ## 5. Materials
 
@@ -335,13 +380,16 @@ The engine owns sprite and texture discovery, LabPBR and other source-format dec
 priority and JSON merging, canonical texture pages and mips, stable material IDs within a resource epoch,
 core surface attributes and sampling, alpha coverage for geometry and OMM, and material lifetime.
 
-**That canonical description is a subset of OpenPBR Surface**, so `createSurface` receives OpenPBR
+**That canonical description is a subset of OpenPBR Surface**, so `evaluateSurface` receives OpenPBR
 parameters under OpenPBR names: `base_color`/`base_metalness`, `specular_roughness`/`specular_ior`/
-`specular_color`, `transmission_weight`, `emission_color`/`emission_luminance`, `geometry_opacity` and
-`geometry_thin_walled`, alongside the shading and geometric normal and the semantic tags (water,
-particle, foliage, portal). Policy like "foliage scatters more" is expressed in `createSurface` keyed on
-those tags, not in a data file — more expressive, and it removes the ambiguity of two systems both
-describing a complete surface.
+`specular_color`, `transmission_weight`, `emission_color`/`emission_luminance`, `geometry_normal`,
+`geometry_opacity` and `geometry_thin_walled`, alongside the semantic tags (water, particle, foliage,
+portal). Policy like "foliage scatters more" is expressed in `evaluateSurface` keyed on those tags, not in
+a data file — more expressive, and it removes the ambiguity of two systems both describing a complete
+surface.
+
+Which implementation runs is itself material data: a resource-pack material override may carry
+`"surface": "namespace:id"`, resolved once at load to the registered index the compiled binding packs.
 
 Adopted as a *description* vocabulary only: the engine keeps transport in full per §4.4, so OpenPBR's
 layered evaluation is not adopted with it. Three consequences are worth stating because they are not
@@ -527,9 +575,8 @@ separate mechanisms with their own extraction targets, and interleaving them her
 revision grew a second roadmap. `ARCHITECTURE.md` §8.1 records where the three tracks actually couple.
 
 One coupling reaches back into this list: `LIGHT_SYSTEM_PLAN.md` L1c rewrites `risInitial`, which is the
-cheap moment to route RIS's target function through `evaluateBsdf` and retire the debt in §11. That makes
-step 3 here (splitting the API module per slot) worth landing before L1c if the two are close in time —
-opportunistic, not blocking.
+cheap moment to route RIS's target function through the engine's own `evaluateBsdf` and retire the debt in
+§11.
 
 ### 10.1 The `Rt` prefix
 
@@ -566,20 +613,21 @@ frame through the surface slice, and `indirect.slang` has no EXT_SER-reordered v
 trades the SER optimization for slot appearance. The SER branch needs splitting into its own module before
 the build-time path can go.
 
-Known accepted divergences until then: the built-in surface has no delta/mirror lobe (`EVENT_*` has no
-flag for one), so a roughness-0 material renders as a very tight glossy lobe rather than an exact mirror;
-and RIS emitter lighting keeps its own target function rather than calling `evaluateBsdf`. The RIS one
-has a scheduled payoff point rather than an open-ended one — `LIGHT_SYSTEM_PLAN.md` L1c rewrites
-`risInitial` for presampled light tiles, and routing it through the slot there is far cheaper than a
-dedicated pass over the same code.
+Known accepted divergences until then: the engine BSDF has no delta/mirror lobe (`EVENT_*` has no flag for
+one), so a roughness-0 material renders as a very tight glossy lobe rather than an exact mirror; and RIS
+emitter lighting keeps its own target function rather than calling `evaluateBsdf`, even though both are now
+engine code. The RIS one has a scheduled payoff point rather than an open-ended one —
+`LIGHT_SYSTEM_PLAN.md` L1c rewrites `risInitial` for presampled light tiles, and converging them there is
+far cheaper than a dedicated pass over the same code.
 
 ## 12. Open questions
 
 1. Do associated types survive the shim (§2.2), and if not, is the forwarding-struct root acceptable in
    captures and diagnostics?
-2. Does `caustica:surface` want to be one slot or two? Material interpretation (`createSurface`) and the
-   BSDF are separable, and a feature that only wants "foliage gets more SSS" should not have to
-   reimplement Cook-Torrance.
+2. ~~Does `caustica:surface` want to be one slot or two?~~ Answered by narrowing it to parameters: the
+   BSDF left the interface entirely, so "foliage gets more SSS" is a `transmission_weight` write and
+   nobody reimplements Cook-Torrance. What remains open is whether a closure-level API returns later for
+   genuinely different lobes, and `SurfaceGuide` is public so that it can (§4.1.1).
 3. What does a feature that needs *both* a slot binding and a render pass look like when the pass API
    lands — one toggle, or does the pass need its own?
 4. Should options that reach specialization be distinguished at the declaration from those that reach a

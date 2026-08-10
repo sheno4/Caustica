@@ -10,10 +10,19 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class RtMaterialOverridesTest {
+    /** Two registered implementations: the built-in at 0 and one third-party surface at 1. */
+    private static final RtMaterialOverrides.SurfaceResolver SURFACES = id ->
+            Identifier.parse("caustica:surface").equals(id) ? 0
+                    : Identifier.parse("somemod:crystal").equals(id) ? 1 : -1;
+
+    private static RtMaterialOverrides.Rule parse(com.google.gson.JsonObject root, Identifier source) {
+        return RtMaterialOverrides.parse(root, source, SURFACES);
+    }
+
     @Test
     void parsesVersionedExtensibleMaterialProperties() {
-        var rule = RtMaterialOverrides.parse(JsonParser.parseString("""
-                {"format":3,"match":{"block":"minecraft:blue_stained_glass",
+        var rule = parse(JsonParser.parseString("""
+                {"format":4,"match":{"block":"minecraft:blue_stained_glass",
                 "sprite":"minecraft:block/blue_stained_glass"},"model":"dielectric",
                 "base":{"metalness":0.0},"specular":{"roughness":0.06,"ior":1.52},
                 "emission":{"luminance_cd_m2":2000.0,"color_source":"base_color"},
@@ -26,7 +35,7 @@ final class RtMaterialOverridesTest {
         RtMaterialDesc base = new RtMaterialDesc(RtMaterialRegistry.MODEL_OPAQUE,
                 RtMaterialDesc.Source.LAB_PBR, RtMaterialRegistry.FEATURE_SPEC,
                 0.8f, 0.0f, 1.0f, 0.0f, RtMaterialDesc.EmissionSource.LAB_PBR,
-                5.0f, new RtMaterialDesc.EmissionSummary(0.2f, 0.1f, 0.05f, 0.1f, 0.5f));
+                5.0f, new RtMaterialDesc.EmissionSummary(0.2f, 0.1f, 0.05f, 0.1f, 0.5f), 0);
         RtMaterialDesc applied = rule.apply(base);
         assertEquals(RtMaterialDesc.Source.OVERRIDE, applied.source());
         // luminance_cd_m2 replaces the level but keeps LabPBR's mask/source/summary.
@@ -41,9 +50,9 @@ final class RtMaterialOverridesTest {
     void specularIorOverridesTheBuiltInIndex() {
         RtMaterialDesc glassBase = new RtMaterialDesc(RtMaterialRegistry.MODEL_DIELECTRIC,
                 RtMaterialDesc.Source.HEURISTIC, 0, 0.05f, 0.0f, RtDielectrics.GLASS_IOR, 1.0f,
-                RtMaterialDesc.EmissionSource.NONE, 0.0f, RtMaterialDesc.EmissionSummary.NONE);
-        var rule = RtMaterialOverrides.parse(JsonParser.parseString("""
-                {"format":3,"match":{"sprite":"somemod:block/crystal"},
+                RtMaterialDesc.EmissionSource.NONE, 0.0f, RtMaterialDesc.EmissionSummary.NONE, 0);
+        var rule = parse(JsonParser.parseString("""
+                {"format":4,"match":{"sprite":"somemod:block/crystal"},
                 "model":"dielectric","specular":{"ior":2.417}}
                 """).getAsJsonObject(), Identifier.parse("test:materials/crystal.json"));
         RtMaterialDesc applied = rule.apply(glassBase);
@@ -51,20 +60,20 @@ final class RtMaterialOverridesTest {
         assertEquals(2.417f, applied.specularIor());
 
         // Omitting ior on a rule that does not change the model leaves the base index alone.
-        var silent = RtMaterialOverrides.parse(JsonParser.parseString("""
-                {"format":3,"match":{"sprite":"somemod:block/crystal"},"specular":{"roughness":0.5}}
+        var silent = parse(JsonParser.parseString("""
+                {"format":4,"match":{"sprite":"somemod:block/crystal"},"specular":{"roughness":0.5}}
                 """).getAsJsonObject(), Identifier.parse("test:materials/crystal.json"));
         assertEquals(RtDielectrics.GLASS_IOR, silent.apply(glassBase).specularIor());
     }
 
     @Test
     void waterModelKeepsItsOwnIndexWhenSelectedByName() {
-        var rule = RtMaterialOverrides.parse(JsonParser.parseString("""
-                {"format":3,"match":{"sprite":"somemod:block/pool"},"model":"water"}
+        var rule = parse(JsonParser.parseString("""
+                {"format":4,"match":{"sprite":"somemod:block/pool"},"model":"water"}
                 """).getAsJsonObject(), Identifier.parse("test:materials/pool.json"));
         RtMaterialDesc base = new RtMaterialDesc(RtMaterialRegistry.MODEL_OPAQUE,
                 RtMaterialDesc.Source.HEURISTIC, 0, 0.8f, 0.0f, 1.0f, 0.0f,
-                RtMaterialDesc.EmissionSource.NONE, 0.0f, RtMaterialDesc.EmissionSummary.NONE);
+                RtMaterialDesc.EmissionSource.NONE, 0.0f, RtMaterialDesc.EmissionSummary.NONE, 0);
         RtMaterialDesc applied = rule.apply(base);
         assertEquals(RtMaterialRegistry.MODEL_WATER, applied.model());
         assertEquals(RtDielectrics.WATER_IOR, applied.specularIor());
@@ -73,13 +82,13 @@ final class RtMaterialOverridesTest {
 
     @Test
     void emissionLuminanceCannotForceEmissionOntoANonEmissiveMaterial() {
-        var rule = RtMaterialOverrides.parse(JsonParser.parseString("""
-                {"format":3,"match":{"sprite":"minecraft:block/stone"},
+        var rule = parse(JsonParser.parseString("""
+                {"format":4,"match":{"sprite":"minecraft:block/stone"},
                 "emission":{"luminance_cd_m2":5000.0}}
                 """).getAsJsonObject(), Identifier.parse("test:boost.json"));
         RtMaterialDesc base = new RtMaterialDesc(RtMaterialRegistry.MODEL_OPAQUE,
                 RtMaterialDesc.Source.HEURISTIC, 0, 0.8f, 0.0f, 1.0f, 0.0f,
-                RtMaterialDesc.EmissionSource.NONE, 0.0f, RtMaterialDesc.EmissionSummary.NONE);
+                RtMaterialDesc.EmissionSource.NONE, 0.0f, RtMaterialDesc.EmissionSummary.NONE, 0);
 
         RtMaterialDesc applied = rule.apply(base);
 
@@ -89,19 +98,19 @@ final class RtMaterialOverridesTest {
 
     @Test
     void rejectsUnknownVersionsAndOutOfRangePhysicalValues() {
-        assertThrows(IllegalArgumentException.class, () -> RtMaterialOverrides.parse(
+        assertThrows(IllegalArgumentException.class, () -> parse(
                 JsonParser.parseString("{\"format\":1,\"match\":{\"sprite\":\"minecraft:block/stone\"}}")
                         .getAsJsonObject(), Identifier.parse("test:bad.json")));
-        assertThrows(IllegalArgumentException.class, () -> RtMaterialOverrides.parse(
-                JsonParser.parseString("{\"format\":3,\"match\":{\"sprite\":\"minecraft:block/stone\"},"
+        assertThrows(IllegalArgumentException.class, () -> parse(
+                JsonParser.parseString("{\"format\":4,\"match\":{\"sprite\":\"minecraft:block/stone\"},"
                         + "\"base\":{\"metalness\":2}}")
                         .getAsJsonObject(), Identifier.parse("test:bad.json")));
     }
 
     @Test
     void clampsOutOfRangeEmissionLuminanceInsteadOfThrowing() {
-        var rule = RtMaterialOverrides.parse(
-                JsonParser.parseString("{\"format\":3,\"match\":{\"sprite\":\"minecraft:block/stone\"},"
+        var rule = parse(
+                JsonParser.parseString("{\"format\":4,\"match\":{\"sprite\":\"minecraft:block/stone\"},"
                         + "\"emission\":{\"luminance_cd_m2\":70000}}")
                         .getAsJsonObject(), Identifier.parse("test:clamp.json"));
         assertEquals(65504.0f, rule.emissionLuminanceCdM2());
@@ -113,20 +122,54 @@ final class RtMaterialOverridesTest {
      */
     @Test
     void rejectsThePreviousFormatRatherThanReinterpretingItsRoughness() {
-        assertThrows(IllegalArgumentException.class, () -> RtMaterialOverrides.parse(
+        assertThrows(IllegalArgumentException.class, () -> parse(
                 JsonParser.parseString("{\"format\":2,\"match\":{\"sprite\":\"minecraft:block/stone\"},"
                         + "\"base\":{\"roughness\":0.25}}")
                         .getAsJsonObject(), Identifier.parse("test:legacy.json")));
     }
 
+    /**
+     * The authored name is resolved to a registered index here, once, so nothing downstream carries an
+     * identifier — and a name nothing registered is loud rather than silently rendering as something else.
+     */
+    @Test
+    void resolvesTheAuthoredSurfaceNameToARegisteredImplementationIndex() {
+        var rule = parse(JsonParser.parseString("""
+                {"format":4,"match":{"sprite":"somemod:block/crystal"},"surface":"somemod:crystal"}
+                """).getAsJsonObject(), Identifier.parse("test:materials/crystal.json"));
+        RtMaterialDesc base = new RtMaterialDesc(RtMaterialRegistry.MODEL_OPAQUE,
+                RtMaterialDesc.Source.HEURISTIC, 0, 0.8f, 0.0f, 1.0f, 0.0f,
+                RtMaterialDesc.EmissionSource.NONE, 0.0f, RtMaterialDesc.EmissionSummary.NONE, 0);
+
+        assertEquals(1, rule.surfaceImplementation());
+        assertEquals(1, rule.apply(base).surfaceImplementation());
+
+        assertThrows(IllegalArgumentException.class, () -> parse(JsonParser.parseString("""
+                {"format":4,"match":{"sprite":"somemod:block/crystal"},"surface":"somemod:absent"}
+                """).getAsJsonObject(), Identifier.parse("test:materials/absent.json")));
+    }
+
+    /** A rule that says nothing about the surface leaves whatever the material already compiled with. */
+    @Test
+    void aRuleWithNoSurfaceKeyKeepsTheInheritedImplementation() {
+        var rule = parse(JsonParser.parseString("""
+                {"format":4,"match":{"sprite":"somemod:block/crystal"},"specular":{"roughness":0.5}}
+                """).getAsJsonObject(), Identifier.parse("test:materials/crystal.json"));
+        RtMaterialDesc base = new RtMaterialDesc(RtMaterialRegistry.MODEL_OPAQUE,
+                RtMaterialDesc.Source.HEURISTIC, 0, 0.8f, 0.0f, 1.0f, 0.0f,
+                RtMaterialDesc.EmissionSource.NONE, 0.0f, RtMaterialDesc.EmissionSummary.NONE, 1);
+
+        assertEquals(1, rule.apply(base).surfaceImplementation());
+    }
+
     @Test
     void spriteWideRulesApplyToCompiledEntityResources() {
-        var entityRule = RtMaterialOverrides.parse(JsonParser.parseString("""
-                {"format":3,"match":{"sprite":"minecraft:entity/zombie/zombie"},
+        var entityRule = parse(JsonParser.parseString("""
+                {"format":4,"match":{"sprite":"minecraft:entity/zombie/zombie"},
                 "specular":{"roughness":0.7}}
                 """).getAsJsonObject(), Identifier.parse("test:entity.json"));
-        var blockRule = RtMaterialOverrides.parse(JsonParser.parseString("""
-                {"format":3,"match":{"sprite":"minecraft:entity/zombie/zombie",
+        var blockRule = parse(JsonParser.parseString("""
+                {"format":4,"match":{"sprite":"minecraft:entity/zombie/zombie",
                 "block":"minecraft:stone"}}
                 """).getAsJsonObject(), Identifier.parse("test:block.json"));
 

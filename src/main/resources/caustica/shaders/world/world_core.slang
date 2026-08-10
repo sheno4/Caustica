@@ -25,7 +25,14 @@ public struct VisibilityResult {
 // take their payload as a parameter and call the world_common forms directly; these exist so raygen-side
 // code reads the same as the payloadRoughness()/payloadEmission() accessors below it.
 public float3 payloadAlbedo() { return unpackAlbedo(payload); }
+/**
+ * The SHADING normal: the material's normal map and any procedural perturbation are already applied, so
+ * transport refracts through the same normal the shading and the guides see. Nothing downstream
+ * re-derives it.
+ */
 public float3 payloadNormal() { return unpackNormal(payload); }
+/** {@link payloadNormal} one frame ago. Only resolved for a PAYLOAD_PRIMARY_RAY hit. */
+public float3 payloadPreviousNormal() { return unpackNormalOct(payload.previousNormal); }
 /** Sky radiance on a miss — absolute scene units, full fp32. Only meaningful when hitT < 0. */
 public float3 payloadSky() { return unpackSky(payload); }
 
@@ -39,10 +46,12 @@ public bool payloadWater() { return (payload.flags & PAYLOAD_WATER) != 0u; }
 // travelling into the volume (vs. out of it) at this hit's face.
 public bool payloadDielectricEntering() { return (payload.flags & PAYLOAD_DIELECTRIC_ENTERING) != 0u; }
 public bool payloadEmitterInList() { return (payload.flags & PAYLOAD_EMITTER_IN_LIST) != 0u; }
+/** The registered surface implementation this hit resolved through; 0 is the built-in surface. */
+public uint payloadSurfaceImpl() { return payload.flags >> PAYLOAD_SURFACE_IMPL_SHIFT; }
 // OpenPBR specular_roughness: PERCEPTUAL, not GGX alpha. This is the one convention used end to end —
 // the material record, the canonical pages and this payload lane all carry r, and the GGX alpha every
-// lobe wants is r*r, squared where the lobe is evaluated. ggxD/ggxG1/sampleGGXVNDF/rrSpecularAlbedo all
-// take alpha, so a value handed to one of them is squared first; DLSS-RR wants r and gets it unsquared.
+// lobe wants is r*r, squared where the lobe is evaluated. ggxD/ggxG1/sampleGGXVNDF all take alpha, so a
+// value handed to one of them is squared first; DLSS-RR wants r and gets it unsquared.
 public float payloadRoughness() { return unpackHalf2(payload.roughMetal).x; }
 /** GGX alpha for this hit: the payload's perceptual roughness squared. */
 public float payloadAlphaRoughness() {
@@ -118,10 +127,6 @@ public static const float MIRROR_ROUGHNESS_MAX = 0.02; // LabPBR perceptual smoo
 // Above this the specular lobe is too broad for a single mirrored reprojection to describe, so the
 // reflection MV is left at zero and RR falls back to the ordinary MV.
 public static const float SPEC_MOTION_ROUGHNESS_MAX = 0.5; // perceptual smoothness <= 0.5
-
-public bool isDeltaRoughness(float roughness) {
-    return clamp(roughness, 0.0, 1.0) <= MIRROR_ROUGHNESS_MAX;
-}
 
 // Continuations one sample may carry: the camera segment, plus the reflection branch a primary
 // dielectric splits off. Raising this needs a real queue, which is what the continuation buffer is for.

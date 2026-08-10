@@ -18,8 +18,6 @@
 
 	"caustica.slot.caustica.sky": "Sky",
 	"caustica.slot.caustica.sky.tooltip": "Which extension draws the sky and everything a ray sees when it leaves the world.",
-	"caustica.slot.caustica.surface": "Surface",
-	"caustica.slot.caustica.surface.tooltip": "Which extension decides how light scatters off block and entity surfaces.",
 	"caustica.slot.default_suffix": "default",
 
 	"caustica.summary.title": "FRAME ORDER",

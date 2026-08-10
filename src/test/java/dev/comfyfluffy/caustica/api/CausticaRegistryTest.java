@@ -23,7 +23,12 @@ final class CausticaRegistryTest {
         CausticaRegistry.Selection selection = registry.selection();
 
         assertEquals(BuiltinExtension.ID, selection.binding(Slots.SKY).feature().id());
-        assertEquals("BuiltinSurface", selection.binding(Slots.SURFACE).binding().type());
+        // Surfaces are a set, not a slot: the built-in registers first so it is always index 0, the
+        // fallback a material with no explicit choice resolves to.
+        assertEquals(1, selection.surfaces().size());
+        assertEquals("BuiltinSurface", selection.surfaces().get(0).type());
+        assertEquals(0, registry.surfaceIndex(BuiltinExtension.BUILTIN_SURFACE));
+        assertEquals(-1, registry.surfaceIndex(Identifier.fromNamespaceAndPath("nope", "nope")));
         assertTrue(registry.renderPasses().containsKey(
                 Identifier.fromNamespaceAndPath("caustica", "bloom")));
         assertTrue(registry.renderPasses().containsKey(
@@ -57,8 +62,6 @@ final class CausticaRegistryTest {
         Identifier featureId = registerTestSky(registry);
 
         assertEquals(List.of(BuiltinExtension.ID, featureId), registry.candidates(Slots.SKY));
-        assertEquals(List.of(BuiltinExtension.ID), registry.candidates(Slots.SURFACE),
-                "a slot only the built-in binds offers exactly one candidate");
     }
 
     @Test
@@ -96,9 +99,6 @@ final class CausticaRegistryTest {
 
         CausticaApi.applyPersistedSelection(registry, Slots.SKY, "NOT AN ID");
         assertTrue(registry.isDefaultSelected(Slots.SKY));
-
-        CausticaApi.applyPersistedSelection(registry, Slots.SURFACE, featureId.toString());
-        assertTrue(registry.isDefaultSelected(Slots.SURFACE));
 
         CausticaApi.applyPersistedSelection(registry, Slots.SKY, null);
         assertTrue(registry.isDefaultSelected(Slots.SKY));

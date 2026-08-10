@@ -163,6 +163,5 @@ final class CausticaConfigTest {
     void slotBindingsPersistAsOptionalStringsWithNoScreenRow() {
         assertNull(CausticaConfig.Rt.Composition.SKY.group());
         assertEquals("composition.slots.sky", CausticaConfig.Rt.Composition.SKY.tomlPath());
-        assertEquals("composition.slots.surface", CausticaConfig.Rt.Composition.SURFACE.tomlPath());
     }
 }

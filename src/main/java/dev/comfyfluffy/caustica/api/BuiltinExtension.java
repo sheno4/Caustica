@@ -11,6 +11,8 @@ import net.minecraft.resources.Identifier;
 
 final class BuiltinExtension implements CausticaExtension {
     static final Identifier ID = Identifier.fromNamespaceAndPath("caustica", "builtin");
+    /** The reference surface, and the index-0 fallback of the per-material dispatch. */
+    static final Identifier BUILTIN_SURFACE = Identifier.fromNamespaceAndPath("caustica", "surface");
 
     @Override
     public void register(CausticaRegistry registry) {
@@ -22,7 +24,9 @@ final class BuiltinExtension implements CausticaExtension {
                 .category(FeatureCategory.GENERAL)
                 .shaderSource(ShaderSource.classpath("/caustica/shaders/builtin", "sky", "surface", "bloom", "common"))
                 .bind(Slots.SKY, "caustica_sky_slot", "LutSky")
-                .bind(Slots.SURFACE, "caustica_builtin_surface", "BuiltinSurface")
+                // Registered first, so it takes index 0: the implementation every material resolves to
+                // unless it names another, and the fallback for a name nothing registered.
+                .surface(BUILTIN_SURFACE, "caustica_builtin_surface", "BuiltinSurface")
                 // Anchors SkyLutPass's own binding declarations outside the generic Sky-slot mechanism —
                 // Slang forbids a slot IMPLEMENTATION from declaring global shader parameters itself. See
                 // FeatureBuilder.passResourceModule's javadoc.
@@ -43,6 +47,5 @@ final class BuiltinExtension implements CausticaExtension {
                 .materialSource(new MinecraftMaterialSource())
                 .register();
         registry.setDefault(Slots.SKY, ID);
-        registry.setDefault(Slots.SURFACE, ID);
     }
 }

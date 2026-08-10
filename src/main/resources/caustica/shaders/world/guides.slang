@@ -12,8 +12,10 @@ import world_core;
 import bindings;
 import math;
 import medium;
-import water;
 import trace;
+import surface_bsdf;
+import caustica_types;
+import caustica_surface;
 
 public static float3 gv_normal = float3(0.0, 0.0, 0.0);
 public static float3 gv_albedo = float3(0.0, 0.0, 0.0);
@@ -34,22 +36,20 @@ public struct SpecSurface {
     public float3 camRel;         // interface position relative to the current camera
     public float3 normal;         // FP32: reflection reprojection amplifies normal quantization at distance
     public float3 previousNormal; // the same normal one frame ago; equal to `normal` unless the surface animates
-    public float3 biasNormal;     // geometric normal, used only to offset a ray origin off the surface
     public float3 motionPrev;     // current-minus-previous displacement of the reflecting surface
     public float roughness;       // perceptual, the quantity DLSS-RR expects
     public float3 albedo;         // specular albedo fed to DLSS-RR for demodulation (0 = pure diffuse)
 };
 public static SpecSurface gv_spec = {};
 
-// Static surfaces reuse one normal for all three roles. Water overrides them (wave-displaced shading
-// normal now and last frame, flat geometric normal for the bias) via the six-argument form.
+// A static surface's previous normal is its current one; an animated one carries what closest-hit
+// published for the frame before.
 public SpecSurface makeSpecSurface(float3 camRel, float3 normal, float3 previousNormal,
-                            float3 biasNormal, float3 motionPrev, float roughness, float3 albedo) {
+                            float3 motionPrev, float roughness, float3 albedo) {
     SpecSurface s;
     s.camRel = camRel;
     s.normal = normal;
     s.previousNormal = previousNormal;
-    s.biasNormal = biasNormal;
     s.motionPrev = motionPrev;
     s.roughness = roughness;
     s.albedo = albedo;
@@ -57,13 +57,12 @@ public SpecSurface makeSpecSurface(float3 camRel, float3 normal, float3 previous
 }
 
 public SpecSurface makeSpecSurface(float3 camRel, float3 normal, float roughness, float3 albedo) {
-    return makeSpecSurface(camRel, normal, normal, normal,
-            float3(0.0, 0.0, 0.0), roughness, albedo);
+    return makeSpecSurface(camRel, normal, normal, float3(0.0, 0.0, 0.0), roughness, albedo);
 }
 
 public SpecSurface makeSpecSurface(float3 camRel, float3 normal, float3 motionPrev,
                             float roughness, float3 albedo) {
-    return makeSpecSurface(camRel, normal, normal, normal, motionPrev, roughness, albedo);
+    return makeSpecSurface(camRel, normal, normal, motionPrev, roughness, albedo);
 }
 // angle can land behind the eye even though the reflector itself is comfortably in view.
 public float2 projectPrevNdc(float3 worldPos, out bool valid) {
@@ -110,7 +109,7 @@ public float2 resolveSpecularGuides(SpecSurface surface, float3 primaryDir,
     // Pass A stops radiance traversal at the first split, so reflection motion keeps one dedicated,
     // deterministic guide probe.
     traceGuide(CULL_SECONDARY,
-            offsetSurfaceOrigin(surfacePos, surface.biasNormal, specDir, SURF_BIAS),
+            offsetSurfaceOrigin(surfacePos, surface.normal, specDir, SURF_BIAS),
             RAY_TMIN, specDir, 10000.0,
             max(length(surface.camRel) * primaryConeSpread, RAY_CONE_MIN_WIDTH),
             max(primaryConeSpread, RAY_CONE_MIN_SPREAD));
@@ -124,8 +123,8 @@ public float2 resolveSpecularGuides(SpecSurface surface, float3 primaryDir,
         if (surface.roughness <= MIRROR_ROUGHNESS_MAX
                 && !payloadDielectric()
                 && payloadEmission() <= 0.0) {
-            float3 reflectedDiffuse = payloadAlbedo()
-                    * (1.0 - clamp(payloadMetalness(), 0.0, 1.0));
+            float3 reflectedDiffuse = guideFor(payloadSurfaceClosure(payloadNormal()),
+                    -specDir).diffuseAlbedo;
             if (max(reflectedDiffuse.r, max(reflectedDiffuse.g, reflectedDiffuse.b)) > 0.001) {
                 specAlbedo = surface.albedo * reflectedDiffuse;
             }
@@ -178,11 +177,10 @@ public void resolveTransmissionGuide(float3 surfacePos, float3 transmittedDir,
 
         float3 interfacePos = ro + direction * payload.hitT;
         if (!payloadDielectric()) {
-            float3 endpointAlbedo = payloadAlbedo()
-                    * (1.0 - clamp(payloadMetalness(), 0.0, 1.0));
+            SurfaceGuide endpoint = guideFor(payloadSurfaceClosure(payloadNormal()), -direction);
             setTransmissionGuide(interfacePos - worldPush.camOffset, payload.motionPrev,
-                    payloadNormal(), clamp(payloadRoughness(), 0.0, 1.0),
-                    guideFilter * endpointAlbedo, payloadEmission() > 0.0);
+                    endpoint.normal, endpoint.perceptualRoughness,
+                    guideFilter * endpoint.diffuseAlbedo, payloadEmission() > 0.0);
             return;
         }
 
@@ -200,15 +198,8 @@ public void resolveTransmissionGuide(float3 surfacePos, float3 transmittedDir,
 
         bool isWater = payloadWater();
         bool entering = payloadDielectricEntering();
-        float3 geometricNormal = normalize(payloadNormal());
-        float3 interfaceNormal = geometricNormal;
-        if (isWater && (worldPush.flags & 16u) != 0u) {
-            float waterFootprint = rayConeWidth
-                    / max(abs(dot(-direction, geometricNormal)), 0.2);
-            interfaceNormal = applyWaterWaves(geometricNormal,
-                    interfacePos.xz + worldPush.waterAnchor.xy,
-                    worldPush.waterParams.w, waterFootprint);
-        }
+        // Waves and every other procedural perturbation are already in the published normal.
+        float3 interfaceNormal = normalize(payloadNormal());
 
         float transmission = clamp(payloadTransmission(), 0.0, 1.0);
         Medium entered = makeDielectricMedium(isWater, max(payloadIor(), 1.0),
@@ -231,7 +222,7 @@ public void resolveTransmissionGuide(float3 surfacePos, float3 transmittedDir,
             mediumPop(medium);
         }
         direction = normalize(nextDirection);
-        ro = offsetSurfaceOrigin(interfacePos, geometricNormal, direction,
+        ro = offsetSurfaceOrigin(interfacePos, interfaceNormal, direction,
                 isWater ? SURF_BIAS : INSET_TRANSMIT_BIAS);
     }
 }

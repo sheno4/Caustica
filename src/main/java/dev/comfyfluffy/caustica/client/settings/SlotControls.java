@@ -32,9 +32,6 @@ public final class SlotControls {
         if (slot.equals(Slots.SKY)) {
             return CausticaConfig.Rt.Composition.SKY;
         }
-        if (slot.equals(Slots.SURFACE)) {
-            return CausticaConfig.Rt.Composition.SURFACE;
-        }
         return null;
     }
 

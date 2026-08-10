@@ -62,6 +62,11 @@ public final class RtMaterialRegistry {
     public static final int FEATURE_EMISSION_MASK = 4;
     /** Bindless albedo slot reserved for the vanilla block atlas, seeded by {@code RtEntityTextures}. */
     public static final int BLOCK_ATLAS_ALBEDO_SLOT = 0;
+    /**
+     * The surface implementation every material compiles with unless an override names another.
+     * {@code caustica:builtin} registers its own first, so index 0 is always the reference surface.
+     */
+    public static final int BUILTIN_SURFACE_IMPLEMENTATION = 0;
 
     // Coverage — is the surface present along this ray — mirrored by world_common.slang's COVERAGE_*.
     private static final int COVERAGE_OPAQUE = 0;
@@ -70,14 +75,17 @@ public final class RtMaterialRegistry {
     // Transmittance — how much light passes where the surface is present. Mirrors BINDING_* in Slang.
     private static final int BINDING_TRANSMISSIVE = 1;
     private static final int BINDING_RECORD_CROSSING = 2;
-    // MaterialBinding.packed0 = albedoSlot:16 | coverageMode:2 | flags:6; packed1 = coverageCutoff:8.
-    // Mirrored by the bindingAlbedoSlot/bindingCoverage/bindingFlags/bindingCutoff accessors in
-    // world_common.slang — the any-hit reads these fields out of one aligned load, so the shifts are ABI.
+    // MaterialBinding.packed0 = albedoSlot:16 | coverageMode:2 | flags:6 | surfaceImpl:8;
+    // packed1 = coverageCutoff:8. Mirrored by the bindingAlbedoSlot/bindingCoverage/bindingFlags/
+    // bindingSurfaceImpl/bindingCutoff accessors in world_common.slang — the any-hit reads these fields
+    // out of one aligned load, so the shifts are ABI.
     private static final int ALBEDO_SLOT_MASK = 0xFFFF;
     private static final int COVERAGE_SHIFT = 16;
     private static final int COVERAGE_MASK = 3;
     private static final int FLAGS_SHIFT = 18;
     private static final int FLAGS_MASK = 63;
+    private static final int SURFACE_IMPL_SHIFT = 24;
+    private static final int SURFACE_IMPL_MASK = 255;
     private static final int CUTOFF_MASK = 255;
 
     // Coverage cutoffs, packed into MaterialBinding.packed1 so no any-hit branches on the producer.
@@ -475,7 +483,7 @@ public final class RtMaterialRegistry {
         MaterialBindingData base = bindingRecords.get(bindingId);
         return intern(new MaterialBindingData(
                 packBinding0(bindingAlbedoSlot(base.packed0()), COVERAGE_STOCHASTIC,
-                        bindingFlags(base.packed0())),
+                        bindingFlags(base.packed0()), bindingSurfaceImpl(base.packed0())),
                 base.surface(), base.shadowTint(), base.packed1()));
     }
 
@@ -490,7 +498,7 @@ public final class RtMaterialRegistry {
         MaterialBindingData base = bindingRecords.get(bindingId);
         return intern(new MaterialBindingData(
                 packBinding0(bindingAlbedoSlot(base.packed0()), COVERAGE_CUTOUT,
-                        bindingFlags(base.packed0())),
+                        bindingFlags(base.packed0()), bindingSurfaceImpl(base.packed0())),
                 base.surface(), base.shadowTint(), base.packed1()));
     }
 
@@ -519,7 +527,8 @@ public final class RtMaterialRegistry {
     public synchronized int withAlbedoSlot(int bindingId, int albedoSlot) {
         MaterialBindingData base = bindingRecords.get(bindingId);
         return intern(new MaterialBindingData(
-                packBinding0(albedoSlot, bindingCoverage(base.packed0()), bindingFlags(base.packed0())),
+                packBinding0(albedoSlot, bindingCoverage(base.packed0()), bindingFlags(base.packed0()),
+                        bindingSurfaceImpl(base.packed0())),
                 base.surface(), base.shadowTint(), base.packed1()));
     }
 
@@ -657,7 +666,7 @@ public final class RtMaterialRegistry {
         float emissionLuminance = emissionSource == RtMaterialDesc.EmissionSource.NONE
                 ? 0.0f : defaultEmissionLuminanceCdM2();
         return new RtMaterialDesc(model, source, features, roughness, metalness, ior, transmission,
-                emissionSource, emissionLuminance, emissionSummary);
+                emissionSource, emissionLuminance, emissionSummary, BUILTIN_SURFACE_IMPLEMENTATION);
     }
 
     /**
@@ -668,7 +677,8 @@ public final class RtMaterialRegistry {
      */
     private static RtMaterialDesc compileParticleDesc() {
         return new RtMaterialDesc(MODEL_OPAQUE, RtMaterialDesc.Source.NEUTRAL, 0, 1.0f, 0.0f, 1.0f, 0.5f,
-                RtMaterialDesc.EmissionSource.NONE, 0.0f, RtMaterialDesc.EmissionSummary.NONE);
+                RtMaterialDesc.EmissionSource.NONE, 0.0f, RtMaterialDesc.EmissionSummary.NONE,
+                BUILTIN_SURFACE_IMPLEMENTATION);
     }
 
     private static RtMaterialDesc compileEntityDesc(int features, boolean neutral,
@@ -681,7 +691,8 @@ public final class RtMaterialRegistry {
         float emissionLuminance = emissionSource == RtMaterialDesc.EmissionSource.NONE
                 ? 0.0f : defaultEmissionLuminanceCdM2();
         return new RtMaterialDesc(MODEL_OPAQUE, source, features, RtMaterials.ENTITY_ROUGH, 0.0f,
-                RtDielectrics.DEFAULT_IOR, 0.0f, emissionSource, emissionLuminance, emissionSummary);
+                RtDielectrics.DEFAULT_IOR, 0.0f, emissionSource, emissionLuminance, emissionSummary,
+                BUILTIN_SURFACE_IMPLEMENTATION);
     }
 
     /**
@@ -730,7 +741,7 @@ public final class RtMaterialRegistry {
             MaterialBindingData base = bindings.get(baseId);
             return append(new MaterialBindingData(
                             packBinding0(bindingAlbedoSlot(base.packed0()), COVERAGE_CUTOUT,
-                                    bindingFlags(base.packed0())),
+                                    bindingFlags(base.packed0()), bindingSurfaceImpl(base.packed0())),
                             base.surface(), base.shadowTint(), base.packed1()),
                     descriptions.get(baseId), grids.get(baseId));
         }
@@ -817,13 +828,19 @@ public final class RtMaterialRegistry {
             default -> {
             }
         }
-        return new MaterialBindingData(packBinding0(albedoSlot, coverage, flags), surfaceId, shadowTint,
-                packCoverageCutoff(coverageCutoff));
+        return new MaterialBindingData(
+                packBinding0(albedoSlot, coverage, flags, desc.surfaceImplementation()), surfaceId,
+                shadowTint, packCoverageCutoff(coverageCutoff));
     }
 
-    static int packBinding0(int albedoSlot, int coverageMode, int flags) {
+    static int packBinding0(int albedoSlot, int coverageMode, int flags, int surfaceImplementation) {
         return (albedoSlot & ALBEDO_SLOT_MASK) | ((coverageMode & COVERAGE_MASK) << COVERAGE_SHIFT)
-                | ((flags & FLAGS_MASK) << FLAGS_SHIFT);
+                | ((flags & FLAGS_MASK) << FLAGS_SHIFT)
+                | ((surfaceImplementation & SURFACE_IMPL_MASK) << SURFACE_IMPL_SHIFT);
+    }
+
+    static int bindingSurfaceImpl(int packed0) {
+        return (packed0 >>> SURFACE_IMPL_SHIFT) & SURFACE_IMPL_MASK;
     }
 
     static int bindingAlbedoSlot(int packed0) {

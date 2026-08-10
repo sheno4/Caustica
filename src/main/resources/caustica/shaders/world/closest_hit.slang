@@ -1,13 +1,17 @@
 // Composition-generic closest-hit shader. Geometry decode, texture sampling, source-format decode,
-// ray-cone LOD, and the block-breaking overlay stay engine-owned; every surface that does not bound a
-// medium — terrain, entities, block entities, particle billboards alike — is routed through the selected
-// surface slot's createSurface implementation.
+// ray-cone LOD, and the block-breaking overlay stay engine-owned; the OpenPBR description every hit
+// resolves to is then handed to the surface implementation its material names, which may edit it.
 //
 // WorldShaderCompiler specializes this generic entry point with the active composition.
-// Water, stained glass and ice stay on an engine-owned path because a dielectric transition refracts and
-// pushes a medium, which is transport rather than surface-slot policy.
+//
+// Every hit goes through the implementation, including the dielectrics. What differs is what happens
+// AFTER: a surface that bounds a medium refracts and pushes one, which is transport and stays
+// engine-owned, while everything else resolves to a closure the estimator shades with. Both read the
+// same description, so a procedural normal reaches refraction and shading alike.
 import world_common;
 import math;
+import water;
+import surface_bsdf;
 import bindings;
 import caustica_types;
 import caustica_surface;
@@ -31,9 +35,14 @@ void payloadSetPacked(inout Payload payload, uint materialFlags, float roughness
     payload.iorTransmission = packHalf2(float2(ior, transmission));
 }
 
-void payloadSetDielectric(inout Payload payload, bool entering) {
-    if (entering) payload.flags |= PAYLOAD_DIELECTRIC_ENTERING;
+/** Per-frame constants a procedural surface evaluates against; closest-hit reads them one field at a
+ * time rather than loading the whole push block for a handful of scalars. */
+float frameTime() { return ConstPtr<WorldPush>(pc.worldPushAddr)[0].time; }
+float framePreviousTime() { return ConstPtr<WorldPush>(pc.worldPushAddr)[0].previousTime; }
+float2 frameProceduralDomainAnchor() {
+    return ConstPtr<WorldPush>(pc.worldPushAddr)[0].proceduralDomainAnchor;
 }
+bool frameWaterWaves() { return (ConstPtr<WorldPush>(pc.worldPushAddr)[0].flags & 16u) != 0u; }
 
 // A guide is a control signal, not a sample that averages out, so it needs one answer about which surface
 // it is looking at. A surface covering too little of its footprint is not that answer: report it as a
@@ -60,6 +69,7 @@ bool guideCoverageCrossing(Payload payload, float coverage) {
 void payloadSetCoverageCrossing(inout Payload payload, float3 opticalColor, float3 normal) {
     packAlbedo(payload, opticalColor);
     packNormal(payload, normal);
+    payload.previousNormal = packNormalOct(normal);
     payload.f0 = half3(0.0h, 0.0h, 0.0h);
     payloadSetPacked(payload, PAYLOAD_TRANSMISSIVE, 0.0, 0.0, 0.0, 1.0, 1.0);
 }
@@ -145,11 +155,6 @@ struct DecodedSurface {
     float emissionLuminance;  // cd/m²
     float transmissionWeight;
 };
-
-float3 decodedSpecularF0(DecodedSurface surface) {
-    return openPbrSpecularF0(surface.baseColor, surface.baseMetalness, surface.specularIor,
-            surface.specularColor);
-}
 
 float4 samplePageSurface0(uint page, float2 uv, float lod) {
     return materialSurface0Tex[NonUniformResourceIndex(page)].SampleLevel(uv, lod);
@@ -239,70 +244,126 @@ float3 applyBreaking(float3 albedo709, uint rayCone, float3 rayOrigin, float3 ra
     return albedo709;
 }
 
-// Builds the OpenPBR description handed to createSurface. The base colour is ACEScg and already carries
-// the block-breaking overlay; the metalness split is the surface slot's job, so nothing is pre-multiplied
-// here.
+// Builds the OpenPBR description handed to the surface implementation. The base colour is ACEScg and
+// already carries the block-breaking overlay; the metalness split belongs to the closure, so nothing is
+// pre-multiplied here.
 //
-// Everything reaching this point is thin-walled by construction: a surface that refracts and bounds a
-// medium was routed to the engine's dielectric transport instead, so nothing left here has an interior
-// for light to travel through. That is what makes its transmission weight the diffuse kind.
-MaterialInput buildMaterialInput(DecodedSurface surface) {
+// `dielectric` is the one structural fact the decode cannot supply: a surface that refracts has two
+// interfaces and a real interior, so its transmission is the refractive kind and it is uniform across
+// the volume — the per-texel subsurface channel a thin wall reads as diffuse transmission does not
+// apply, and neither does the page's per-texel IOR.
+MaterialInput buildMaterialInput(DecodedSurface surface, SurfaceMaterial mat, bool dielectric) {
     MaterialInput material;
+    material.geometryNormal = surface.normal;
+    material.previousGeometryNormal = surface.normal;
     material.baseColor = surface.baseColor;
     material.baseMetalness = surface.baseMetalness;
     material.specularRoughness = surface.specularRoughness;
-    material.specularIor = surface.specularIor;
+    material.specularIor = dielectric ? mat.specularIor : surface.specularIor;
     material.specularColor = surface.specularColor;
-    material.transmissionWeight = surface.transmissionWeight;
+    material.transmissionWeight = dielectric ? mat.transmissionWeight : surface.transmissionWeight;
     // Minecraft's convention is that an emitter glows in its own texture colour, so this adapter — not
     // the model — ties emission_color to base_color.
     //
     // The payload's emission channel is still a scalar multiplied against the final albedo at the read
-    // site (indirect_core), not an independent colour, so a slot that computes its own emissionRadiance
-    // is not yet threaded back out; the engine's own emission stays authoritative until the payload ABI
-    // carries a real emission colour. This is the same representational gap as demodulationAlbedo.
+    // site (indirect_core), not an independent colour, so an implementation that computes its own
+    // emission colour is not yet threaded back out; its luminance is.
     material.emissionColor = surface.baseColor;
     material.emissionLuminance = max(surface.emissionLuminance, 0.0);
-    material.geometryOpacity = 1.0; // opaque class only; any-hit already resolved cutout coverage
-    material.geometryThinWalled = true;
+    material.geometryOpacity = 1.0; // any-hit already resolved coverage before this stage ran
+    material.geometryThinWalled = !dielectric;
     // No semantic material tags (foliage/water/portal/...) are compiled into SurfaceMaterial yet.
     material.materialTags = 0u;
     return material;
 }
 
-// No biome sampling reaches closest-hit. A slot sees a neutral 0.5/0.5 placeholder rather than
-// fabricated real values.
+// No biome sampling reaches closest-hit. An implementation sees a neutral 0.5/0.5 placeholder rather
+// than fabricated real values.
 static const float PLACEHOLDER_BIOME_TEMPERATURE = 0.5;
 static const float PLACEHOLDER_BIOME_HUMIDITY = 0.5;
 
-SurfaceInput buildSurfaceInput(MaterialInput material, float3 position,
-        float3 geometricNormal, float3 shadingNormal, float3 outgoingDirection, float2 uv, float lod) {
+SurfaceInput buildSurfaceInput(Payload payload, float3 position, float3 geometricNormal,
+        float3 outgoingDirection, float2 uv, float lod) {
     SurfaceInput input;
-    input.material = material;
     input.position = position;
     input.geometricNormal = geometricNormal;
-    input.shadingNormal = shadingNormal;
     input.outgoingDirection = outgoingDirection;
     input.textureCoordinate = uv;
     // Approximated from the ray-cone LOD already computed for texture filtering, not a true dUV
     // footprint; the built-in surface does not read this field.
     input.textureFootprint = exp2(lod);
+    input.proceduralDomainAnchor = frameProceduralDomainAnchor();
+    input.time = frameTime();
+    input.previousTime = framePreviousTime();
     input.biomeTemperature = PLACEHOLDER_BIOME_TEMPERATURE;
     input.biomeHumidity = PLACEHOLDER_BIOME_HUMIDITY;
-    input.surfaceFlags = 0u;
+    input.surfaceFlags = (payload.flags & PAYLOAD_PRIMARY_RAY) != 0u
+            ? SURFACE_RECONSTRUCTION_ANCHOR : 0u;
     return input;
+}
+
+/**
+ * The wave-displaced normal of an animated water surface, published like any other procedural normal so
+ * refraction, shading and the guides all read the same one. Water is still an engine material rather
+ * than a registered implementation because the caustic term differentiates this same wave field from
+ * inside the engine's own transport, and there is no hook for an extension to answer that.
+ */
+void applyWaterSurface(SurfaceInput input, inout MaterialInput material, float rayConeWidth) {
+    if (!frameWaterWaves()) return;
+    float2 domain = input.position.xz + input.proceduralDomainAnchor;
+    float footprint = rayConeWidth / max(abs(dot(input.outgoingDirection, input.geometricNormal)), 0.2);
+    if ((input.surfaceFlags & SURFACE_RECONSTRUCTION_ANCHOR) == 0u
+            || abs(input.geometricNormal.y) < 0.5) {
+        material.geometryNormal = applyWaterWaves(input.geometricNormal, domain, input.time, footprint);
+        material.previousGeometryNormal = material.geometryNormal;
+        return;
+    }
+    float2 currentGrad;
+    float2 previousGrad;
+    waterWaveGradTemporal(domain, input.time, input.previousTime, footprint,
+            currentGrad, previousGrad);
+    float orientation = input.geometricNormal.y >= 0.0 ? 1.0 : -1.0;
+    material.geometryNormal = orientation * normalize(float3(-currentGrad.x, 1.0, -currentGrad.y));
+    material.previousGeometryNormal =
+            orientation * normalize(float3(-previousGrad.x, 1.0, -previousGrad.y));
+}
+
+/**
+ * The one payload write both routes share. A dielectric publishes what its transport needs — the medium
+ * tint, the interface IOR, which side the ray is on — and everything else publishes the closure the
+ * estimator shades with. The normal is the same field in both, so a perturbation reaches either.
+ */
+void writeHitPayload(inout Payload payload, MaterialInput material, uint surfaceImpl,
+        uint materialFlags, bool entering, float3 motionPrev, float emissionLuminance) {
+    materialFlags |= surfaceImpl << PAYLOAD_SURFACE_IMPL_SHIFT;
+    payload.hitT = RayTCurrent();
+    payload.motionPrev = half3(motionPrev);
+    packNormal(payload, normalize(material.geometryNormal));
+    payload.previousNormal = packNormalOct(normalize(material.previousGeometryNormal));
+    if ((materialFlags & PAYLOAD_TRANSMISSIVE) != 0u) {
+        packAlbedo(payload, material.baseColor);
+        payload.f0 = half3(openPbrSpecularF0(material));
+        payloadSetPacked(payload, materialFlags, material.specularRoughness, material.baseMetalness,
+                emissionLuminance, material.specularIor, material.transmissionWeight);
+        if (entering) payload.flags |= PAYLOAD_DIELECTRIC_ENTERING;
+        return;
+    }
+    SurfaceClosure closure = surfaceClosure(material);
+    packAlbedo(payload, closure.diffuseAlbedo);
+    payload.f0 = half3(closure.specularF0);
+    payloadSetPacked(payload, 0u, sqrt(closure.alphaRoughness), 0.0, emissionLuminance,
+            material.specularIor, closure.transmission);
 }
 
 [shader("closesthit")]
 void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) {
     float2 attribs = attr.barycentrics;
     uint rayCone = payload.rayCone;
-    TC.Surface surfaceModel;
+    TC.Surfaces surfaces;
 
     // Captured geometry: dynamic entities, block entities, and particle billboards, all indexing the
-    // entity table and all routed through the surface slot. A billboard needs no path of its own — it is
-    // a thin surface that answers light from either side, which its material says with a transmission
-    // weight of one half.
+    // entity table. A billboard needs no path of its own — it is a thin surface that answers light from
+    // either side, which its material says with a transmission weight of one half.
     if ((InstanceID() & (ENTITY_BIT | PARTICLE_BIT)) != 0u) {
         uint eidx = InstanceID() & IDX_MASK;
         EntityGeom g = ConstPtr<EntityGeom>(pc.entityTableAddr)[eidx];
@@ -337,63 +398,39 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
                 ? lerp(float3(1.0), baseAlbedo709, entityTexel.a) : baseAlbedo709;
         float3 albedo = bt709ToAcesCg(opticalColor709);
 
-        if (transmissive) {
-            // Dielectric/transmissive entities stay on the engine material path. Water is terrain-only —
-            // nothing produces a water-material entity — so this is a single generic dielectric branch.
-            DecodedSurface surface = evaluateMaterial(mat, euvCoord, entityLod, albedo, geometricNormal,
-                    ep0, ep1, ep2, euv[e0], euv[e1], euv[e2], vdir, 0.0);
-            packAlbedo(payload, surface.baseColor);
-            packNormal(payload, surface.normal);
-            payload.hitT = RayTCurrent();
-            if (g.dispAddr != 0) {
-                ConstPtr<float4> dd = ConstPtr<float4>(g.dispAddr);
-                payload.motionPrev = half3(ebary.x * dd[e0].xyz + ebary.y * dd[e1].xyz + ebary.z * dd[e2].xyz);
-            } else {
-                payload.motionPrev = half3(g.rigidDisp.xyz);
-            }
-            payload.f0 = half3(decodedSpecularF0(surface));
-            payloadSetPacked(payload, PAYLOAD_TRANSMISSIVE, surface.specularRoughness, surface.baseMetalness,
-                    0.0, mat.specularIor, mat.transmissionWeight);
-            payloadSetDielectric(payload, entering);
-            return;
+        float3 motionPrev;
+        if (g.dispAddr != 0) {
+            ConstPtr<float4> dd = ConstPtr<float4>(g.dispAddr);
+            motionPrev = ebary.x * dd[e0].xyz + ebary.y * dd[e1].xyz + ebary.z * dd[e2].xyz;
+        } else {
+            motionPrev = g.rigidDisp.xyz;
         }
 
-        // Checked before the material pages are sampled and the surface slot runs: a guide walking
-        // through foliage or a blended entity pays for neither.
-        if (guideCoverageCrossing(payload, entityTexel.a)) {
+        // Checked before the material pages are sampled and the implementation runs: a guide walking
+        // through foliage or a blended entity pays for neither. A dielectric is a crossing already, so
+        // it has nothing to gain here.
+        if (!transmissive && guideCoverageCrossing(payload, entityTexel.a)) {
             payload.hitT = RayTCurrent();
-            if (g.dispAddr != 0) {
-                ConstPtr<float4> dd = ConstPtr<float4>(g.dispAddr);
-                payload.motionPrev = half3(ebary.x * dd[e0].xyz + ebary.y * dd[e1].xyz + ebary.z * dd[e2].xyz);
-            } else {
-                payload.motionPrev = half3(g.rigidDisp.xyz);
-            }
+            payload.motionPrev = half3(motionPrev);
             payloadSetCoverageCrossing(payload,
                     bt709ToAcesCg(lerp(float3(1.0), baseAlbedo709, entityTexel.a)), geometricNormal);
             return;
         }
 
+        // Water is terrain-only — nothing produces a water-material entity — so a transmissive entity is
+        // a plain dielectric, and its own LabPBR emission is suppressed the same way glass's is.
         DecodedSurface surface = evaluateMaterial(mat, euvCoord, entityLod, albedo, geometricNormal,
-                ep0, ep1, ep2, euv[e0], euv[e1], euv[e2], vdir, pr.normal.w);
+                ep0, ep1, ep2, euv[e0], euv[e1], euv[e2], vdir, transmissive ? 0.0 : pr.normal.w);
 
-        MaterialInput material0 = buildMaterialInput(surface);
+        MaterialInput material = buildMaterialInput(surface, mat, transmissive);
         float3 hitPos = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
-        SurfaceInput input = buildSurfaceInput(material0, hitPos,
-                geometricNormal, surface.normal, vdir, euvCoord, entityLod);
-        SurfaceClosure closure = surfaceModel.createSurface(input);
+        SurfaceInput input = buildSurfaceInput(payload, hitPos, geometricNormal, vdir,
+                euvCoord, entityLod);
+        uint surfaceImpl = bindingSurfaceImpl(binding);
+        surfaces.evaluateSurface(surfaceImpl, input, material);
 
-        packAlbedo(payload, closure.diffuseAlbedo);
-        packNormal(payload, closure.shadingNormal);
-        payload.hitT = RayTCurrent();
-        if (g.dispAddr != 0) {
-            ConstPtr<float4> dd = ConstPtr<float4>(g.dispAddr);
-            payload.motionPrev = half3(ebary.x * dd[e0].xyz + ebary.y * dd[e1].xyz + ebary.z * dd[e2].xyz);
-        } else {
-            payload.motionPrev = half3(g.rigidDisp.xyz);
-        }
-        payload.f0 = half3(closure.specularF0);
-        payloadSetPacked(payload, 0u, sqrt(closure.alphaRoughness), 0.0,
-                surface.emissionLuminance, closure.interiorIor, closure.transmission);
+        writeHitPayload(payload, material, surfaceImpl, transmissive ? PAYLOAD_TRANSMISSIVE : 0u,
+                entering, motionPrev, transmissive ? 0.0 : material.emissionLuminance);
         return;
     }
 
@@ -428,88 +465,67 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
     }
 
     bool transmissive = (bindingFlags(terrainBinding) & BINDING_TRANSMISSIVE) != 0u;
-    if (transmissive) {
-        // Water and glass/ice both stay on the engine dielectric path. BINDING_RECORD_CROSSING (today
-        // water-only) tells them apart for the one thing that differs: water's colour is the
-        // per-primitive biome tint with no texture fetch; glass samples its own texture and takes
-        // block-breaking.
-        bool isWaterMaterial = (bindingFlags(terrainBinding) & BINDING_RECORD_CROSSING) != 0u;
-        float3 tint709 = srgbToLinear(tint);
-        float3 opticalColor709;
-        float emissionInput = 0.0;
-        if (isWaterMaterial) {
-            opticalColor709 = tint709;
-            // The mesher folds a +2 flag for non-SOLID block layers into the emission lane; only the
-            // block-light level below it is a material input.
-            float ew = pr.normal.w;
-            emissionInput = ew >= 1.5 ? ew - 2.0 : ew;
-        } else {
-            float4 gtex = entityAlbedoTex[NonUniformResourceIndex(blockSlot)].SampleLevel(uv, blockLod);
-            float3 gtex709 = srgbToLinear(gtex.rgb);
-            opticalColor709 = applyBreaking(lerp(float3(1.0), gtex709 * tint709, gtex.a), rayCone,
-                    WorldRayOrigin(), WorldRayDirection(), RayTCurrent(), geometricNormal);
-        }
-        DecodedSurface surface = evaluateMaterial(terrainMat, uv, blockLod,
-                bt709ToAcesCg(opticalColor709), geometricNormal,
-                tp0, tp1, tp2, uv0, uv1, uv2, vdir, emissionInput);
-        packAlbedo(payload, surface.baseColor);
-        packNormal(payload, surface.normal);
-        payload.hitT = RayTCurrent();
-        payload.motionPrev = half3(0.0h, 0.0h, 0.0h);
-        payload.f0 = half3(decodedSpecularF0(surface));
-        payloadSetPacked(payload, PAYLOAD_TRANSMISSIVE | (isWaterMaterial ? PAYLOAD_WATER : 0u),
-                surface.specularRoughness, surface.baseMetalness,
-                isWaterMaterial ? surface.emissionLuminance : 0.0,
-                terrainMat.specularIor, terrainMat.transmissionWeight);
-        payloadSetDielectric(payload, entering);
-        return;
-    }
-
+    // BINDING_RECORD_CROSSING is today set for water alone, and it tells the two dielectrics apart for
+    // the two things that differ: water's colour is the per-primitive biome tint with no texture fetch,
+    // and its surface animates.
+    bool isWaterMaterial = transmissive
+            && (bindingFlags(terrainBinding) & BINDING_RECORD_CROSSING) != 0u;
     float3 tint709 = srgbToLinear(tint);
-    float4 blockTexel = entityAlbedoTex[NonUniformResourceIndex(blockSlot)].SampleLevel(uv, blockLod);
-    float3 albedo709 = srgbToLinear(blockTexel.rgb) * tint709;
 
     // The mesher folds a +2 flag for non-SOLID block layers into the emission lane; only the block-light
     // level below it is a material input.
     float ew = pr.normal.w;
     float stateEmission = ew >= 1.5 ? ew - 2.0 : ew;
 
-    // Checked before the material pages are sampled and the surface slot runs: a guide walking through
+    float4 blockTexel = float4(1.0, 1.0, 1.0, 1.0);
+    float3 opticalColor709;
+    if (isWaterMaterial) {
+        opticalColor709 = tint709;
+    } else {
+        blockTexel = entityAlbedoTex[NonUniformResourceIndex(blockSlot)].SampleLevel(uv, blockLod);
+        float3 texel709 = srgbToLinear(blockTexel.rgb);
+        // Glass covers its whole footprint: the see-through part of the sprite is clear glass, so its
+        // alpha filters the colour rather than deciding presence.
+        float3 base709 = transmissive ? lerp(float3(1.0), texel709 * tint709, blockTexel.a)
+                                      : texel709 * tint709;
+        // Block-breaking overlay is a rendering trick, not a material fact, so it stays engine-side and
+        // composites into the texture colour before any material decode sees it. Keyed on the geometric
+        // normal: the decal is projected onto the block face, not onto the normal map's perturbation.
+        opticalColor709 = applyBreaking(base709, rayCone, WorldRayOrigin(), WorldRayDirection(),
+                RayTCurrent(), geometricNormal);
+    }
+
+    // Checked before the material pages are sampled and the implementation runs: a guide walking through
     // foliage pays for neither.
-    if (guideCoverageCrossing(payload, blockTexel.a)) {
+    if (!transmissive && guideCoverageCrossing(payload, blockTexel.a)) {
         payload.hitT = RayTCurrent();
         payload.motionPrev = half3(0.0h, 0.0h, 0.0h);
         payloadSetCoverageCrossing(payload,
-                bt709ToAcesCg(lerp(float3(1.0), albedo709, blockTexel.a)), geometricNormal);
+                bt709ToAcesCg(lerp(float3(1.0), opticalColor709, blockTexel.a)), geometricNormal);
         return;
     }
 
-    // Opaque terrain: the reflective path routed through the surface slot.
-    payload.hitT = RayTCurrent();
-    payload.motionPrev = half3(0.0h, 0.0h, 0.0h);
-
-    // Block-breaking overlay is a rendering trick, not a material fact, so it stays engine-side and
-    // composites into the texture colour before any material decode sees it. Keyed on the geometric
-    // normal: the decal is projected onto the block face, not onto the normal map's perturbation of it.
-    float3 brokenAlbedo709 = applyBreaking(albedo709, rayCone, WorldRayOrigin(),
-            WorldRayDirection(), RayTCurrent(), geometricNormal);
+    // Glass suppresses its own authored emission; water carries the block-light level of its own quad.
+    float emissionInput = transmissive && !isWaterMaterial ? 0.0 : stateEmission;
     DecodedSurface surface = evaluateMaterial(terrainMat, uv, blockLod,
-            bt709ToAcesCg(brokenAlbedo709), geometricNormal,
-            tp0, tp1, tp2, uv0, uv1, uv2, vdir, stateEmission);
+            bt709ToAcesCg(opticalColor709), geometricNormal,
+            tp0, tp1, tp2, uv0, uv1, uv2, vdir, emissionInput);
 
-    MaterialInput material0 = buildMaterialInput(surface);
+    MaterialInput material = buildMaterialInput(surface, terrainMat, transmissive);
     float3 hitPos = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
-    SurfaceInput input = buildSurfaceInput(material0, hitPos,
-            geometricNormal, surface.normal, vdir, uv, blockLod);
-    SurfaceClosure closure = surfaceModel.createSurface(input);
+    SurfaceInput input = buildSurfaceInput(payload, hitPos, geometricNormal, vdir, uv, blockLod);
+    if (isWaterMaterial) {
+        applyWaterSurface(input, material, rayConeHitWidth(rayCone));
+    }
+    uint surfaceImpl = bindingSurfaceImpl(terrainBinding);
+    surfaces.evaluateSurface(surfaceImpl, input, material);
 
-    packAlbedo(payload, closure.diffuseAlbedo);
-    packNormal(payload, closure.shadingNormal);
-    payload.f0 = half3(closure.specularF0);
-    payloadSetPacked(payload, 0u, sqrt(closure.alphaRoughness), 0.0,
-            surface.emissionLuminance, closure.interiorIor, closure.transmission);
+    writeHitPayload(payload, material, surfaceImpl,
+            transmissive ? (PAYLOAD_TRANSMISSIVE | (isWaterMaterial ? PAYLOAD_WATER : 0u)) : 0u,
+            entering, float3(0.0, 0.0, 0.0),
+            transmissive && !isWaterMaterial ? 0.0 : material.emissionLuminance);
     // RIS emitter-NEE membership: raygen gates this emitter's direct-hit emission term (RIS covers it).
-    if ((pr.flags & TERRAIN_PRIM_IN_LIGHT_BUFFER) != 0u) {
+    if (!transmissive && (pr.flags & TERRAIN_PRIM_IN_LIGHT_BUFFER) != 0u) {
         payload.flags |= PAYLOAD_EMITTER_IN_LIST;
     }
 }

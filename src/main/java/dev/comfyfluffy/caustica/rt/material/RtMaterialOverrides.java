@@ -20,10 +20,11 @@ import java.util.Map;
 /**
  * Optional resource-pack material properties compiled ahead of LabPBR and engine heuristics. Keys are
  * OpenPBR parameter names, so {@code specular.roughness} is perceptual and {@code specular.ior} drives
- * both the Fresnel split and the Snell bend.
+ * both the Fresnel split and the Snell bend. The one non-OpenPBR key is {@code surface}, naming the
+ * registered {@code ISurfaceModel} implementation the description is routed through.
  */
 public final class RtMaterialOverrides {
-    public static final int FORMAT = 3;
+    public static final int FORMAT = 4;
     public static final RtMaterialOverrides EMPTY = new RtMaterialOverrides(List.of());
 
     private final List<Rule> rules;
@@ -32,7 +33,15 @@ public final class RtMaterialOverrides {
         this.rules = List.copyOf(rules);
     }
 
-    public static RtMaterialOverrides load() {
+    /**
+     * Resolves an authored {@code surface} name to a registered implementation index. Names are resolved
+     * once, here, so the compiled material carries only the index and the shader never sees an identifier.
+     */
+    public interface SurfaceResolver {
+        int indexOf(Identifier surfaceId);
+    }
+
+    public static RtMaterialOverrides load(SurfaceResolver surfaces) {
         Map<Identifier, Resource> resources = Minecraft.getInstance().getResourceManager().listResources(
                 "materials", id -> id.getPath().endsWith(".json"));
         List<Map.Entry<Identifier, Resource>> ordered = new ArrayList<>(resources.entrySet());
@@ -40,7 +49,7 @@ public final class RtMaterialOverrides {
         List<Rule> rules = new ArrayList<>();
         for (Map.Entry<Identifier, Resource> entry : ordered) {
             try (Reader reader = entry.getValue().openAsReader()) {
-                rules.add(parse(JsonParser.parseReader(reader).getAsJsonObject(), entry.getKey()));
+                rules.add(parse(JsonParser.parseReader(reader).getAsJsonObject(), entry.getKey(), surfaces));
             } catch (Throwable throwable) {
                 CausticaMod.LOGGER.warn("Ignoring invalid RT material override {}", entry.getKey(), throwable);
             }
@@ -53,7 +62,7 @@ public final class RtMaterialOverrides {
         return rules.isEmpty() ? EMPTY : new RtMaterialOverrides(rules);
     }
 
-    static Rule parse(JsonObject root, Identifier source) {
+    static Rule parse(JsonObject root, Identifier source, SurfaceResolver surfaces) {
         int format = requiredInt(root, "format");
         if (format != FORMAT) throw new IllegalArgumentException("Unsupported material format " + format);
         JsonObject match = requiredObject(root, "match");
@@ -89,6 +98,15 @@ public final class RtMaterialOverrides {
         }
         Float transmission = root.has("transmission")
                 ? optionalFloat(root.getAsJsonObject("transmission"), "weight") : null;
+        Integer surfaceImplementation = null;
+        if (root.has("surface")) {
+            Identifier surfaceId = Identifier.parse(root.get("surface").getAsString());
+            int index = surfaces.indexOf(surfaceId);
+            if (index < 0) {
+                throw new IllegalArgumentException("No registered surface implementation " + surfaceId);
+            }
+            surfaceImplementation = index;
+        }
         validate01("specular.roughness", roughness);
         validate01("base.metalness", metalness);
         validate01("transmission.weight", transmission);
@@ -107,7 +125,7 @@ public final class RtMaterialOverrides {
             emissionLuminanceCdM2 = clamped;
         }
         return new Rule(source, sprite, block, model, roughness, metalness, ior, transmission,
-                emissionLuminanceCdM2);
+                emissionLuminanceCdM2, surfaceImplementation);
     }
 
     public List<Rule> rules() {
@@ -122,7 +140,13 @@ public final class RtMaterialOverrides {
                         * {@code _s}, heuristic mask, or state-uniform block light). A material with no
                         * natural emission stays unlit.
                         */
-                       Float emissionLuminanceCdM2) {
+                       Float emissionLuminanceCdM2,
+                       /**
+                        * Registered surface-implementation index, already resolved from the authored
+                        * {@code surface} name. Null leaves the material on what it inherited, which for
+                        * everything compiled today is the built-in surface.
+                        */
+                       Integer surfaceImplementation) {
         boolean matchesSprite(TextureAtlasSprite value) {
             return value != null && sprite.equals(value.contents().name());
         }
@@ -151,7 +175,8 @@ public final class RtMaterialOverrides {
                     ? emissionLuminanceCdM2 : base.emissionLuminance();
             return new RtMaterialDesc(nextModel, RtMaterialDesc.Source.OVERRIDE, base.features(),
                     nextRoughness, nextMetalness, nextIor, nextTransmission,
-                    base.emissionSource(), nextEmissionLuminance, base.emissionSummary());
+                    base.emissionSource(), nextEmissionLuminance, base.emissionSummary(),
+                    surfaceImplementation != null ? surfaceImplementation : base.surfaceImplementation());
         }
 
         private static float defaultIor(int model) {

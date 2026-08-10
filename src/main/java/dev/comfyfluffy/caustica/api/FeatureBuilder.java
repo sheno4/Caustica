@@ -21,6 +21,7 @@ public final class FeatureBuilder {
     private FeatureCategory category = FeatureCategory.GENERAL;
     private ShaderSource shaderSource;
     private final Map<Slot, Feature.Binding> bindings = new LinkedHashMap<>();
+    private final List<Feature.SurfaceImplementation> surfaces = new ArrayList<>();
     private final List<Option<?>> options = new ArrayList<>();
     private final List<String> optionGroups = new ArrayList<>();
     private final List<CausticaRenderPass> renderPasses = new ArrayList<>();
@@ -61,6 +62,21 @@ public final class FeatureBuilder {
         if (bindings.putIfAbsent(slot, binding) != null) {
             throw new IllegalStateException(id + " binds slot " + slot.id() + " more than once");
         }
+        return this;
+    }
+
+    /**
+     * Register a Slang {@code ISurfaceModel} implementation under {@code id}. Surface implementations do
+     * not compete for a slot: every registered one is compiled into the composition and a material
+     * selects the one it wants by this id, so a mod adding one changes nothing about what any other
+     * material renders as.
+     */
+    public FeatureBuilder surface(Identifier id, String module, String type) {
+        Objects.requireNonNull(id, "id");
+        if (surfaces.stream().anyMatch(existing -> existing.id().equals(id))) {
+            throw new IllegalStateException(this.id + " declares duplicate surface implementation " + id);
+        }
+        surfaces.add(new Feature.SurfaceImplementation(this.id, id, module, type));
         return this;
     }
 
@@ -156,8 +172,9 @@ public final class FeatureBuilder {
         registered = true;
         Component resolvedTitle = title != null ? title
                 : Component.literal(id.getNamespace() + ':' + id.getPath());
-        Feature feature = new Feature(id, resolvedTitle, description, category, shaderSource, bindings, options,
-                optionGroups, renderPasses, sceneProviders, lightProviders, materialSources, passResourceModules);
+        Feature feature = new Feature(id, resolvedTitle, description, category, shaderSource, bindings,
+                surfaces, options, optionGroups, renderPasses, sceneProviders, lightProviders,
+                materialSources, passResourceModules);
         registry.register(feature);
         return feature;
     }

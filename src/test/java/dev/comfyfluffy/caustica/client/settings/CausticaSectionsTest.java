@@ -128,7 +128,7 @@ final class CausticaSectionsTest {
 
         SettingsSection composition = CausticaSections.composition(registry);
 
-        assertEquals(List.of("sky", "surface"),
+        assertEquals(List.of("sky"),
                 composition.groups().stream().map(SettingGroup::id).toList());
         SettingGroup sky = groupOf(composition, "sky");
         assertEquals(List.of("caustica:sky"), sky.rows().stream().map(SettingControl::id).toList());

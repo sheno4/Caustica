@@ -13,23 +13,29 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 final class RtMaterialBindingTest {
     @Test
     void bindingFieldsSurviveTheirNeighboursAtFullRange() {
-        int packed = RtMaterialRegistry.packBinding0(0xFFFF, 2, 63);
+        int packed = RtMaterialRegistry.packBinding0(0xFFFF, 2, 63, 255);
         assertEquals(0xFFFF, RtMaterialRegistry.bindingAlbedoSlot(packed));
         assertEquals(2, RtMaterialRegistry.bindingCoverage(packed));
         assertEquals(63, RtMaterialRegistry.bindingFlags(packed));
+        assertEquals(255, RtMaterialRegistry.bindingSurfaceImpl(packed));
         // Pinned literally: the shader decodes this word with its own shifts, so the exact bit positions
         // are the contract, not just the round trip through these helpers.
-        assertEquals(0x00FEFFFF, packed);
+        assertEquals(0xFFFEFFFF, packed);
     }
 
     @Test
     void oneFieldNeverBleedsIntoAnother() {
-        int slotOnly = RtMaterialRegistry.packBinding0(0xFFFF, 0, 0);
+        int slotOnly = RtMaterialRegistry.packBinding0(0xFFFF, 0, 0, 0);
         assertEquals(0, RtMaterialRegistry.bindingCoverage(slotOnly));
         assertEquals(0, RtMaterialRegistry.bindingFlags(slotOnly));
-        int flagsOnly = RtMaterialRegistry.packBinding0(0, 0, 63);
+        assertEquals(0, RtMaterialRegistry.bindingSurfaceImpl(slotOnly));
+        int flagsOnly = RtMaterialRegistry.packBinding0(0, 0, 63, 0);
         assertEquals(0, RtMaterialRegistry.bindingAlbedoSlot(flagsOnly));
         assertEquals(0, RtMaterialRegistry.bindingCoverage(flagsOnly));
+        assertEquals(0, RtMaterialRegistry.bindingSurfaceImpl(flagsOnly));
+        int implOnly = RtMaterialRegistry.packBinding0(0, 0, 0, 255);
+        assertEquals(0, RtMaterialRegistry.bindingAlbedoSlot(implOnly));
+        assertEquals(0, RtMaterialRegistry.bindingFlags(implOnly));
     }
 
     @Test

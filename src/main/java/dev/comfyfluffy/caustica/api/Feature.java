@@ -14,7 +14,8 @@ import java.util.Objects;
 import java.util.Set;
 
 public record Feature(Identifier id, Component title, Component description, FeatureCategory category,
-                      ShaderSource shaderSource, Map<Slot, Binding> bindings, List<Option<?>> options,
+                      ShaderSource shaderSource, Map<Slot, Binding> bindings,
+                      List<SurfaceImplementation> surfaces, List<Option<?>> options,
                       List<String> optionGroups,
                       List<CausticaRenderPass> renderPasses, List<SceneProvider> sceneProviders,
                       List<LightProvider> lightProviders, List<MaterialSource> materialSources,
@@ -25,6 +26,7 @@ public record Feature(Identifier id, Component title, Component description, Fea
         Objects.requireNonNull(description, "description");
         Objects.requireNonNull(category, "category");
         bindings = Map.copyOf(bindings);
+        surfaces = List.copyOf(surfaces);
         options = List.copyOf(options);
         optionGroups = List.copyOf(optionGroups);
         renderPasses = List.copyOf(renderPasses);
@@ -34,6 +36,10 @@ public record Feature(Identifier id, Component title, Component description, Fea
         passResourceModules = List.copyOf(passResourceModules);
         if (!bindings.isEmpty() && shaderSource == null) {
             throw new IllegalArgumentException(id + ": a feature with slot bindings needs a shader source");
+        }
+        if (!surfaces.isEmpty() && shaderSource == null) {
+            throw new IllegalArgumentException(
+                    id + ": a feature with surface implementations needs a shader source");
         }
         if (!passResourceModules.isEmpty() && shaderSource == null) {
             throw new IllegalArgumentException(id + ": a feature with pass resource modules needs a shader source");
@@ -71,6 +77,20 @@ public record Feature(Identifier id, Component title, Component description, Fea
         public Binding {
             Objects.requireNonNull(featureId, "featureId");
             Objects.requireNonNull(slot, "slot");
+            Slot.requireSlangIdentifier(module, "module");
+            Slot.requireSlangIdentifier(type, "type");
+        }
+    }
+
+    /**
+     * A Slang type implementing {@code ISurfaceModel}, named by {@code id} so a material can select it.
+     * Unlike a slot binding these do not compete: every registered implementation is compiled into the
+     * composition at once and each material names the one it wants.
+     */
+    public record SurfaceImplementation(Identifier featureId, Identifier id, String module, String type) {
+        public SurfaceImplementation {
+            Objects.requireNonNull(featureId, "featureId");
+            Objects.requireNonNull(id, "id");
             Slot.requireSlangIdentifier(module, "module");
             Slot.requireSlangIdentifier(type, "type");
         }

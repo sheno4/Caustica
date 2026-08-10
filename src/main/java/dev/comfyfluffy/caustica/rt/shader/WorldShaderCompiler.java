@@ -30,8 +30,10 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
+import java.util.function.UnaryOperator;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Stream;
 
 /** Compiles world-pipeline entry points and specializes composition-generic stages at runtime. */
 public final class WorldShaderCompiler implements AutoCloseable {
@@ -53,6 +55,7 @@ public final class WorldShaderCompiler implements AutoCloseable {
     private static final String API_ROOT = "/caustica/shaders/api/";
     private static final String COMPOSITION_MODULE = "caustica_composition";
     private static final String COMPOSITION_TYPE = "Composition";
+    private static final String SURFACE_DISPATCH_TYPE = "SurfaceDispatch";
     /**
      * Fixed, always-valid module name every composition-generic engine stage (e.g. {@code sky_miss.slang})
      * imports unconditionally. Its content is generated per composition from every selected feature's
@@ -68,7 +71,7 @@ public final class WorldShaderCompiler implements AutoCloseable {
             "bindings.slang", "closest_hit.slang",
             "guide.rmiss.slang", "guides.slang", "indirect.slang", "indirect_core.slang",
             "indirect_ser.slang", "lighting.slang", "math.slang", "medium.slang",
-            "primary.rgen.slang", "segment.slang", "sky_miss.slang",
+            "primary.rgen.slang", "segment.slang", "sky_miss.slang", "surface_bsdf.slang",
             "trace.slang", "trace_ordinary.slang", "trace_policy.slang", "trace_reordered.slang",
             "trace_ser.slang", "water.slang", "world_common.slang", "world_core.slang");
     private static final List<String> API_MODULES = List.of(
@@ -123,8 +126,7 @@ public final class WorldShaderCompiler implements AutoCloseable {
         extractClasspath(WORLD_SHADER_ROOT, WORLD_MODULES, worldDirectory, "world", sources);
         extractClasspath(API_ROOT, API_MODULES, apiDirectory, "api", sources);
 
-        List<Feature> selectedFeatures = selection.bindings().values().stream()
-                .map(CausticaRegistry.SelectedBinding::feature).distinct().toList();
+        List<Feature> selectedFeatures = selection.features();
         Map<String, ResolvedFeatureModule> extensionModules = resolveFeatureModules(selection, selectedFeatures);
         Map<Feature, Path> directories = new LinkedHashMap<>();
         for (Feature feature : selectedFeatures) {
@@ -140,19 +142,13 @@ public final class WorldShaderCompiler implements AutoCloseable {
                     resolved.bytes());
         }
 
-        String rootSource = compositionRoot(selection);
         Files.createDirectories(compositionDirectory);
-        Files.writeString(compositionDirectory.resolve(COMPOSITION_MODULE + ".slang"), rootSource,
-                StandardCharsets.UTF_8);
-
         String anchorSource = passResourceAnchorModule(selectedFeatures);
         Files.writeString(compositionDirectory.resolve(PASS_RESOURCE_ANCHOR_MODULE + ".slang"), anchorSource,
                 StandardCharsets.UTF_8);
         sources.put("generated/" + PASS_RESOURCE_ANCHOR_MODULE + ".slang",
                 anchorSource.getBytes(StandardCharsets.UTF_8));
-
-        Composition composition = Composition.create(selection, COMPOSITION_MODULE, COMPOSITION_TYPE,
-                rootSource, sources);
+        writeSurfaceProbes(selection, compositionDirectory);
 
         List<Path> searchPaths = new ArrayList<>();
         searchPaths.add(worldDirectory);
@@ -160,7 +156,78 @@ public final class WorldShaderCompiler implements AutoCloseable {
         searchPaths.add(compositionDirectory);
         searchPaths.addAll(directories.values());
         SlangSession session = SlangRuntime.INSTANCE.openSession(searchPaths, false, true);
+
+        // The root is generated only after every third-party implementation has proved it compiles, so a
+        // broken one degrades to the built-in surface instead of taking the world pipeline with it.
+        String rootSource = compositionRoot(selection, rejectedSurfaces(session, selection));
+        Files.writeString(compositionDirectory.resolve(COMPOSITION_MODULE + ".slang"), rootSource,
+                StandardCharsets.UTF_8);
+
+        Composition composition = Composition.create(selection, COMPOSITION_MODULE, COMPOSITION_TYPE,
+                rootSource, sources);
         return new WorldShaderCompiler(session, worldDirectory, cleanupDirectory, composition);
+    }
+
+    /**
+     * One single-implementation composition per non-default surface, used to compile that implementation
+     * on its own. Index 0 is skipped: it is the built-in surface every real stage compiles anyway, and
+     * the fallback a rejection resolves to, so probing it would only cost a compile.
+     */
+    private static void writeSurfaceProbes(CausticaRegistry.Selection selection, Path directory)
+            throws IOException {
+        List<Feature.SurfaceImplementation> surfaces = selection.surfaces();
+        String skyModule = selection.binding(Slots.SKY).binding().module();
+        String skyType = selection.binding(Slots.SKY).binding().type();
+        for (int index = 1; index < surfaces.size(); index++) {
+            Feature.SurfaceImplementation surface = surfaces.get(index);
+            String source = "module " + surfaceProbeModule(index) + ";\n\n"
+                    + "import caustica_api;\nimport caustica_types;\nimport caustica_surface;\n"
+                    + "import " + skyModule + ";\n"
+                    + (skyModule.equals(surface.module()) ? "" : "import " + surface.module() + ";\n")
+                    + "\npublic struct ProbeSurfaces : ISurfaceDispatch {\n"
+                    + "    public void evaluateSurface(uint implementation, SurfaceInput input,\n"
+                    + "            inout MaterialInput material) {\n"
+                    + "        " + surface.type() + " s; s.evaluateSurface(input, material);\n    }\n\n"
+                    + "    public float3 evaluateResponse(uint implementation, float3 radiance,\n"
+                    + "            SurfaceClosure surface) {\n"
+                    + "        " + surface.type() + " s; return s.evaluateResponse(radiance, surface);\n"
+                    + "    }\n};\n\n"
+                    + "public struct ProbeComposition : IComposition {\n"
+                    + "    public typealias Sky = " + skyType + ";\n"
+                    + "    public typealias Surfaces = ProbeSurfaces;\n};\n";
+            Files.writeString(directory.resolve(surfaceProbeModule(index) + ".slang"), source,
+                    StandardCharsets.UTF_8);
+        }
+    }
+
+    /**
+     * Indices whose implementation does not compile. They keep their index — renumbering would silently
+     * repoint every material compiled against the old order — and the generated switch resolves them to
+     * the built-in surface instead.
+     */
+    private static Set<Integer> rejectedSurfaces(SlangSession session,
+                                                 CausticaRegistry.Selection selection) {
+        List<Feature.SurfaceImplementation> surfaces = selection.surfaces();
+        Set<Integer> rejected = new LinkedHashSet<>();
+        for (int index = 1; index < surfaces.size(); index++) {
+            Feature.SurfaceImplementation surface = surfaces.get(index);
+            try {
+                // Specializing a real stage, not just compiling the module: only this reaches the rules
+                // that apply to a type used as a composition's implementation, such as the ban on
+                // declaring global shader parameters.
+                session.compileSpecialized(CLOSEST_HIT_MODULE, ENTRY_POINT,
+                        surfaceProbeModule(index), "ProbeComposition");
+            } catch (RuntimeException e) {
+                CausticaMod.LOGGER.error("Surface implementation {} from {} does not compile; materials "
+                        + "naming it render as the built-in surface", surface.id(), surface.featureId(), e);
+                rejected.add(index);
+            }
+        }
+        return rejected;
+    }
+
+    private static String surfaceProbeModule(int index) {
+        return "caustica_surface_probe_" + index;
     }
 
     public Composition composition() {
@@ -338,6 +405,9 @@ public final class WorldShaderCompiler implements AutoCloseable {
         for (CausticaRegistry.SelectedBinding selected : selection.bindings().values()) {
             resolveFeatureModule(selected.binding().module(), selectedFeatures, resolved, visiting);
         }
+        for (Feature.SurfaceImplementation surface : selection.surfaces()) {
+            resolveFeatureModule(surface.module(), selectedFeatures, resolved, visiting);
+        }
         // A feature's passResourceModule may not be reachable from any slot-bound module's own imports
         // (e.g. caustica:builtin is still selected via SURFACE even when a different feature wins
         // SKY) — resolve these as additional roots so passResourceAnchorModule's imports always resolve.
@@ -384,21 +454,58 @@ public final class WorldShaderCompiler implements AutoCloseable {
         visiting.remove(module);
     }
 
-    private static String compositionRoot(CausticaRegistry.Selection selection) {
+    /**
+     * Generates the composition root: the slot aliases, plus the per-material surface dispatch as a
+     * literal switch over every registered implementation. The engine never names an implementation —
+     * a material carries the index, and index 0 is both the built-in surface and the default case, so an
+     * index no longer backed by a registration renders as the reference surface rather than nothing.
+     */
+    private static String compositionRoot(CausticaRegistry.Selection selection,
+                                          Set<Integer> rejectedSurfaces) {
         StringBuilder source = new StringBuilder("module ").append(COMPOSITION_MODULE)
-                .append(";\n\nimport caustica_api;\n");
-        selection.bindings().values().stream().map(selected -> selected.binding().module())
+                .append(";\n\nimport caustica_api;\nimport caustica_types;\nimport caustica_surface;\n");
+        List<Feature.SurfaceImplementation> surfaces = selection.surfaces();
+        Stream.concat(selection.bindings().values().stream().map(selected -> selected.binding().module()),
+                        java.util.stream.IntStream.range(0, surfaces.size())
+                                .filter(index -> !rejectedSurfaces.contains(index))
+                                .mapToObj(index -> surfaces.get(index).module()))
                 .distinct().sorted().forEach(module -> source.append("import ").append(module).append(";\n"));
+
+        source.append("\npublic struct ").append(SURFACE_DISPATCH_TYPE).append(" : ISurfaceDispatch {\n")
+                .append("    public void evaluateSurface(uint implementation, SurfaceInput input,\n")
+                .append("            inout MaterialInput material) {\n")
+                .append("        switch (implementation) {\n");
+        appendSurfaceCases(source, selection, rejectedSurfaces,
+                type -> "{ " + type + " s; s.evaluateSurface(input, material); return; }");
+        source.append("        }\n    }\n\n")
+                .append("    public float3 evaluateResponse(uint implementation, float3 radiance,\n")
+                .append("            SurfaceClosure surface) {\n")
+                .append("        switch (implementation) {\n");
+        appendSurfaceCases(source, selection, rejectedSurfaces,
+                type -> "{ " + type + " s; return s.evaluateResponse(radiance, surface); }");
+        source.append("        }\n    }\n};\n");
+
         source.append("\npublic struct ").append(COMPOSITION_TYPE).append(" : IComposition {\n");
-        appendAlias(source, "Sky", selection.binding(Slots.SKY));
-        appendAlias(source, "Surface", selection.binding(Slots.SURFACE));
+        appendAlias(source, "Sky", selection.binding(Slots.SKY).binding().type());
+        appendAlias(source, "Surfaces", SURFACE_DISPATCH_TYPE);
         return source.append("};\n").toString();
     }
 
-    private static void appendAlias(StringBuilder source, String name,
-                                    CausticaRegistry.SelectedBinding selected) {
-        source.append("    public typealias ").append(name).append(" = ")
-                .append(selected.binding().type()).append(";\n");
+    private static void appendSurfaceCases(StringBuilder source, CausticaRegistry.Selection selection,
+                                           Set<Integer> rejectedSurfaces, UnaryOperator<String> body) {
+        List<Feature.SurfaceImplementation> surfaces = selection.surfaces();
+        for (int index = 1; index < surfaces.size(); index++) {
+            if (rejectedSurfaces.contains(index)) {
+                continue; // falls through to the default case, i.e. the built-in surface
+            }
+            source.append("        case ").append(index).append("u: ")
+                    .append(body.apply(surfaces.get(index).type())).append('\n');
+        }
+        source.append("        default: ").append(body.apply(surfaces.get(0).type())).append('\n');
+    }
+
+    private static void appendAlias(StringBuilder source, String name, String type) {
+        source.append("    public typealias ").append(name).append(" = ").append(type).append(";\n");
     }
 
     /**

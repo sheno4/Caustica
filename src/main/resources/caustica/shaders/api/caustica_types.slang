@@ -12,6 +12,13 @@ public static const uint EVENT_TRANSMISSION = 0x10u;
 public static const uint DIMENSION_ULTRAWARM = 0x4u;
 
 /**
+ * SurfaceInput.surfaceFlags: this hit is the one the reconstructor sees, so a surface whose normal
+ * animates should also fill `previousGeometryNormal` — that pair is what a reflection reprojects with.
+ * Unset on every other hit, where the previous normal is never read and evaluating it would be waste.
+ */
+public static const uint SURFACE_RECONSTRUCTION_ANCHOR = 0x1u;
+
+/**
  * The authored surface description, a subset of OpenPBR Surface. Field names are the spec's, so a value
  * here means what the spec says it means — most of all `specularRoughness`, which is OpenPBR r and NOT
  * the GGX alpha the BSDF consumes (alpha = r * r).
@@ -20,6 +27,20 @@ public static const uint DIMENSION_ULTRAWARM = 0x4u;
  * `specularColor` for a dielectric and from `baseColor` for a metal. Use `openPbrSpecularF0`.
  */
 public struct MaterialInput {
+    /**
+     * OpenPBR geometry_normal: the shading normal, already carrying the material's normal map. It is
+     * writable because a procedural surface's normal IS its description — the engine's transport reads
+     * this one for refraction, so perturbing it here is what makes a wave a wave.
+     */
+    public float3 geometryNormal;
+    /**
+     * `geometryNormal` one frame ago. Not an OpenPBR parameter: reconstruction reprojects a reflection
+     * through the surface plane and needs to know where that plane was, which only the function that
+     * produced the normal can answer. The engine pre-fills it with `geometryNormal`, which is the right
+     * answer for everything that does not animate; fill it only when
+     * SURFACE_RECONSTRUCTION_ANCHOR is set.
+     */
+    public float3 previousGeometryNormal;
     public float3 baseColor;
     public float baseMetalness;
     /** OpenPBR specular_roughness: perceptual. GGX alpha is its square. */
@@ -71,23 +92,39 @@ public float3 openPbrSpecularF0(MaterialInput material) {
             material.specularColor);
 }
 
+/**
+ * Where the surface is being looked at, and the frame constants a procedural one evaluates against. The
+ * description itself is not here: it arrives as the `inout MaterialInput` an implementation edits.
+ */
 public struct SurfaceInput {
-    public MaterialInput material;
     public float3 position;
+    /** The triangle's own normal, oriented toward the viewer. Unperturbed by any normal map. */
     public float3 geometricNormal;
-    public float3 shadingNormal;
     public float3 outgoingDirection;
     public float2 textureCoordinate;
     public float textureFootprint;
+    /**
+     * A world-pinned, precision-safe origin for world-space procedural evaluation: add it to `position`'s
+     * horizontal components and the pattern stays fixed in the world as the player moves and the engine
+     * rebases its coordinates. Its modulus is an engine constant, so a very low-frequency field can alias
+     * across it where an ordinary one does not.
+     */
+    public float2 proceduralDomainAnchor;
+    /** Animation time in seconds, wrapped. Paired with `previousTime` so motion is derivable. */
+    public float time;
+    /** `time` one frame ago; equal to `time` when no adjacent frame exists to reproject from. */
+    public float previousTime;
     public float biomeTemperature;
     public float biomeHumidity;
+    /** SURFACE_* bits describing this hit. */
     public uint surfaceFlags;
 };
 
 /**
- * What the estimator and the transport read. Unlike MaterialInput this is not authored vocabulary: it is
- * already resolved into the quantities a BSDF evaluates with, so reflectance is F0 and roughness is GGX
- * alpha (the square of MaterialInput.specularRoughness).
+ * Exactly what the engine's BSDF evaluates with. Unlike MaterialInput this is not authored vocabulary
+ * and nothing outside the engine produces one: reflectance is already F0 and roughness is already GGX
+ * alpha (the square of MaterialInput.specularRoughness). It reaches an extension only as the surface
+ * `evaluateResponse` is stylizing, and it is exactly the state the payload carries between stages.
  */
 public struct SurfaceClosure {
     public float3 shadingNormal;
@@ -95,15 +132,12 @@ public struct SurfaceClosure {
     public float3 diffuseAlbedo;
     public float3 specularF0;
     public float alphaRoughness;
-    public float3 emissionRadiance;
     /**
      * Fraction of the diffuse response leaving the far side of the surface. 0 is an ordinary opaque
      * surface, 0.5 is a symmetric thin scatterer that answers a light from either side identically —
      * which is what a billboard is — and 1 transmits everything.
      */
     public float transmission;
-    public float interiorIor;
-    public uint flags;
 };
 
 public struct BsdfQuery {

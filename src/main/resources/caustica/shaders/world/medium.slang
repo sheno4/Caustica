@@ -2,7 +2,7 @@
 // interface pushes and pops. Depends on core only.
 
 // Per-channel Beer–Lambert extinction from a water body's biome tint (carried in the payload's albedo view
-// for water hits, or worldPush.waterParams.xyz for the camera's own biome when starting submerged). A blue
+// for water hits, or worldPush.cameraMedium for the camera's own biome when starting submerged). A blue
 // ocean tint (low red) absorbs red fastest → bluer with depth; swamp green-brown shifts the hue. The floor
 // keeps even a white-tinted body very slightly absorbing so deep water never reads as clear vacuum.
 
