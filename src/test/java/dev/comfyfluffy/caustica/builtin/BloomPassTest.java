@@ -4,7 +4,7 @@ import dev.comfyfluffy.caustica.api.ShaderSource;
 import dev.comfyfluffy.caustica.api.pass.ComputeDispatch;
 import dev.comfyfluffy.caustica.api.pass.PassShaderCompiler;
 import dev.comfyfluffy.caustica.rt.gen.BloomPushData;
-import net.minecraft.resources.Identifier;
+import dev.comfyfluffy.caustica.api.ResourceId;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -73,7 +73,7 @@ final class BloomPassTest {
 
     @Test
     void runtimeShaderCompilesAndBuildDoesNotPackageABloomSpirv(@TempDir Path cache) throws Exception {
-        Identifier id = Identifier.fromNamespaceAndPath("caustica", "bloom");
+        ResourceId id = ResourceId.of("caustica", "bloom");
         PassShaderCompiler.CompiledProgram compiled = PassShaderCompiler.compile(cache, id,
                 ShaderSource.classpath("/caustica/shaders/builtin", "bloom"), "caustica_bloom", "main");
         PassShaderCompiler.CompiledProgram cached = PassShaderCompiler.compile(cache.resolve("second"), id,

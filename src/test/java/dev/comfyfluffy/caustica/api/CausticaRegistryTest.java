@@ -1,11 +1,9 @@
 package dev.comfyfluffy.caustica.api;
 
-import net.minecraft.network.chat.Component;
-import net.minecraft.resources.Identifier;
+import dev.comfyfluffy.caustica.api.DisplayText;
+import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.api.provider.SceneProvider;
-import dev.comfyfluffy.caustica.rt.provider.MinecraftLightProvider;
-import dev.comfyfluffy.caustica.rt.provider.MinecraftMaterialSource;
-import dev.comfyfluffy.caustica.rt.provider.MinecraftSceneProvider;
+import dev.comfyfluffy.caustica.builtin.BuiltinExtension;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -18,7 +16,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 final class CausticaRegistryTest {
     @Test
     void builtInFeatureSuppliesEveryDefaultSlot() {
-        CausticaRegistry registry = CausticaRegistry.withBuiltins();
+        CausticaRegistry registry = builtins();
 
         CausticaRegistry.Selection selection = registry.selection();
 
@@ -28,22 +26,19 @@ final class CausticaRegistryTest {
         assertEquals(1, selection.surfaces().size());
         assertEquals("BuiltinSurface", selection.surfaces().get(0).type());
         assertEquals(0, registry.surfaceIndex(BuiltinExtension.BUILTIN_SURFACE));
-        assertEquals(-1, registry.surfaceIndex(Identifier.fromNamespaceAndPath("nope", "nope")));
+        assertEquals(-1, registry.surfaceIndex(ResourceId.of("nope", "nope")));
         assertTrue(registry.renderPasses().containsKey(
-                Identifier.fromNamespaceAndPath("caustica", "bloom")));
+                ResourceId.of("caustica", "bloom")));
         assertTrue(registry.renderPasses().containsKey(
-                Identifier.fromNamespaceAndPath("caustica", "sky_lut")));
-        assertTrue(registry.sceneProviders().containsKey(MinecraftSceneProvider.ID));
-        assertTrue(registry.lightProviders().containsKey(MinecraftLightProvider.ID));
-        assertTrue(registry.materialSources().containsKey(MinecraftMaterialSource.ID));
+                ResourceId.of("caustica", "sky_lut")));
     }
 
     @Test
     void slotSelectionIsExplicitAndCanReturnToTheDefault() {
-        CausticaRegistry registry = CausticaRegistry.withBuiltins();
-        Identifier featureId = Identifier.fromNamespaceAndPath("test", "sky");
+        CausticaRegistry registry = builtins();
+        ResourceId featureId = ResourceId.of("test", "sky");
         registry.feature(featureId)
-                .title(Component.literal("Test sky"))
+                .title(DisplayText.literal("Test sky"))
                 .category(FeatureCategory.SKY)
                 .shaderSource(ShaderSource.classpath("/test/shaders"))
                 .bind(Slots.SKY, "test_sky", "TestSky")
@@ -58,16 +53,16 @@ final class CausticaRegistryTest {
 
     @Test
     void candidatesListTheDefaultFirstSoARadioGroupCanMarkIt() {
-        CausticaRegistry registry = CausticaRegistry.withBuiltins();
-        Identifier featureId = registerTestSky(registry);
+        CausticaRegistry registry = builtins();
+        ResourceId featureId = registerTestSky(registry);
 
         assertEquals(List.of(BuiltinExtension.ID, featureId), registry.candidates(Slots.SKY));
     }
 
     @Test
     void defaultAndExplicitSelectionAreDistinguishable() {
-        CausticaRegistry registry = CausticaRegistry.withBuiltins();
-        Identifier featureId = registerTestSky(registry);
+        CausticaRegistry registry = builtins();
+        ResourceId featureId = registerTestSky(registry);
 
         assertTrue(registry.isDefaultSelected(Slots.SKY));
         assertEquals(BuiltinExtension.ID, registry.selectedFeature(Slots.SKY));
@@ -83,31 +78,10 @@ final class CausticaRegistryTest {
         assertTrue(registry.isDefaultSelected(Slots.SKY));
     }
 
-    @Test
-    void aPersistedSelectionAppliesOnlyWhenTheFeatureIsInstalledAndBindsTheSlot() {
-        CausticaRegistry registry = CausticaRegistry.withBuiltins();
-        Identifier featureId = registerTestSky(registry);
-
-        CausticaApi.applyPersistedSelection(registry, Slots.SKY, featureId.toString());
-        assertEquals(featureId, registry.selectedFeature(Slots.SKY));
-
-        // An uninstalled feature, a malformed id, and one that binds a different slot all fall back rather
-        // than throwing: an extension the player removed must not stop the game from starting.
-        registry.selectDefault(Slots.SKY);
-        CausticaApi.applyPersistedSelection(registry, Slots.SKY, "test:not_installed");
-        assertTrue(registry.isDefaultSelected(Slots.SKY));
-
-        CausticaApi.applyPersistedSelection(registry, Slots.SKY, "NOT AN ID");
-        assertTrue(registry.isDefaultSelected(Slots.SKY));
-
-        CausticaApi.applyPersistedSelection(registry, Slots.SKY, null);
-        assertTrue(registry.isDefaultSelected(Slots.SKY));
-    }
-
-    private static Identifier registerTestSky(CausticaRegistry registry) {
-        Identifier featureId = Identifier.fromNamespaceAndPath("test", "sky");
+    private static ResourceId registerTestSky(CausticaRegistry registry) {
+        ResourceId featureId = ResourceId.of("test", "sky");
         registry.feature(featureId)
-                .title(Component.literal("Test sky"))
+                .title(DisplayText.literal("Test sky"))
                 .category(FeatureCategory.SKY)
                 .shaderSource(ShaderSource.classpath("/test/shaders"))
                 .bind(Slots.SKY, "test_sky", "TestSky")
@@ -117,31 +91,40 @@ final class CausticaRegistryTest {
 
     @Test
     void rejectsDuplicateFeaturesBindingsAndOptions() {
-        CausticaRegistry registry = CausticaRegistry.withBuiltins();
+        CausticaRegistry registry = builtins();
         assertThrows(IllegalStateException.class, () -> registry.feature(BuiltinExtension.ID).register());
 
-        Identifier id = Identifier.fromNamespaceAndPath("test", "invalid");
+        ResourceId id = ResourceId.of("test", "invalid");
         FeatureBuilder builder = registry.feature(id)
                 .shaderSource(ShaderSource.classpath("/test/shaders"))
                 .bind(Slots.SKY, "test_sky", "TestSky");
         assertThrows(IllegalStateException.class,
                 () -> builder.bind(Slots.SKY, "second_sky", "SecondSky"));
 
-        FeatureBuilder optionBuilder = registry.feature(Identifier.fromNamespaceAndPath("test", "options"))
+        FeatureBuilder optionBuilder = registry.feature(ResourceId.of("test", "options"))
                 .option(Option.bool("enabled", true));
         assertThrows(IllegalStateException.class,
                 () -> optionBuilder.option(Option.bool("enabled", false)));
 
         var bloom = registry.renderPasses().get(
-                Identifier.fromNamespaceAndPath("caustica", "bloom"));
+                ResourceId.of("caustica", "bloom"));
         assertThrows(IllegalStateException.class, () -> registry.feature(
-                        Identifier.fromNamespaceAndPath("test", "duplicate_pass"))
+                        ResourceId.of("test", "duplicate_pass"))
                 .renderPass(bloom).register());
 
         SceneProvider duplicateScene = new SceneProvider() {
         };
+        ResourceId sceneId = ResourceId.of("test", "scene");
+        registry.feature(ResourceId.of("test", "scene_owner"))
+                .sceneProvider(sceneId, duplicateScene).register();
         assertThrows(IllegalStateException.class, () -> registry.feature(
-                        Identifier.fromNamespaceAndPath("test", "duplicate_scene"))
-                .sceneProvider(MinecraftSceneProvider.ID, duplicateScene).register());
+                        ResourceId.of("test", "duplicate_scene"))
+                .sceneProvider(sceneId, duplicateScene).register());
+    }
+
+    private static CausticaRegistry builtins() {
+        CausticaRegistry registry = new CausticaRegistry();
+        new BuiltinExtension().register(registry);
+        return registry;
     }
 }

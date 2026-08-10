@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.rt.material;
 
 import com.google.gson.JsonParser;
+import dev.comfyfluffy.caustica.api.ResourceId;
 import net.minecraft.resources.Identifier;
 import org.junit.jupiter.api.Test;
 
@@ -16,8 +17,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 final class RtMaterialOverridesTest {
     /** Two registered implementations: the built-in at 0 and one third-party surface at 1. */
     private static final RtMaterialOverrides.SurfaceResolver SURFACES = id ->
-            Identifier.parse("caustica:surface").equals(id) ? 0
-                    : Identifier.parse("somemod:crystal").equals(id) ? 1 : -1;
+            ResourceId.parse("caustica:surface").equals(id) ? 0
+                    : ResourceId.parse("somemod:crystal").equals(id) ? 1 : -1;
 
     private static RtMaterialOverrides.Rule parse(com.google.gson.JsonObject root, Identifier source) {
         return RtMaterialOverrides.parse(root, source, SURFACES);

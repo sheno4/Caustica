@@ -4,9 +4,7 @@ import dev.comfyfluffy.caustica.api.pass.CausticaRenderPass;
 import dev.comfyfluffy.caustica.api.provider.LightProvider;
 import dev.comfyfluffy.caustica.api.provider.MaterialSource;
 import dev.comfyfluffy.caustica.api.provider.ProviderRegistration;
-import dev.comfyfluffy.caustica.api.provider.ProviderId;
 import dev.comfyfluffy.caustica.api.provider.SceneProvider;
-import net.minecraft.resources.Identifier;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -16,13 +14,13 @@ import java.util.Map;
 import java.util.Objects;
 
 public final class CausticaRegistry {
-    private final Map<Identifier, Feature> features = new LinkedHashMap<>();
-    private final Map<Identifier, CausticaRenderPass> renderPasses = new LinkedHashMap<>();
-    private final Map<ProviderId, SceneProvider> sceneProviders = new LinkedHashMap<>();
-    private final Map<ProviderId, LightProvider> lightProviders = new LinkedHashMap<>();
-    private final Map<ProviderId, MaterialSource> materialSources = new LinkedHashMap<>();
-    private final Map<Slot, Identifier> defaults = new LinkedHashMap<>();
-    private final Map<Slot, Identifier> selected = new LinkedHashMap<>();
+    private final Map<ResourceId, Feature> features = new LinkedHashMap<>();
+    private final Map<ResourceId, CausticaRenderPass> renderPasses = new LinkedHashMap<>();
+    private final Map<ResourceId, SceneProvider> sceneProviders = new LinkedHashMap<>();
+    private final Map<ResourceId, LightProvider> lightProviders = new LinkedHashMap<>();
+    private final Map<ResourceId, MaterialSource> materialSources = new LinkedHashMap<>();
+    private final Map<Slot, ResourceId> defaults = new LinkedHashMap<>();
+    private final Map<Slot, ResourceId> selected = new LinkedHashMap<>();
     /**
      * Registration order IS the ABI: a surface implementation's position here is the index materials pack
      * into their binding and the case the generated dispatch switch resolves. {@code caustica:builtin}
@@ -31,13 +29,7 @@ public final class CausticaRegistry {
      */
     private final List<Feature.SurfaceImplementation> surfaces = new ArrayList<>();
 
-    public static CausticaRegistry withBuiltins() {
-        CausticaRegistry registry = new CausticaRegistry();
-        new BuiltinExtension().register(registry);
-        return registry;
-    }
-
-    public FeatureBuilder feature(Identifier id) {
+    public FeatureBuilder feature(ResourceId id) {
         Objects.requireNonNull(id, "id");
         return new FeatureBuilder(this, id);
     }
@@ -72,14 +64,14 @@ public final class CausticaRegistry {
                 materialSources.put(registration.id(), registration.provider()));
     }
 
-    synchronized void setDefault(Slot slot, Identifier featureId) {
+    public synchronized void setDefault(Slot slot, ResourceId featureId) {
         binding(slot, featureId);
         if (defaults.putIfAbsent(slot, featureId) != null) {
             throw new IllegalStateException("slot " + slot.id() + " already has a default binding");
         }
     }
 
-    public synchronized void select(Slot slot, Identifier featureId) {
+    public synchronized void select(Slot slot, ResourceId featureId) {
         binding(slot, featureId);
         selected.put(slot, featureId);
     }
@@ -95,9 +87,9 @@ public final class CausticaRegistry {
      * Every feature that binds {@code slot}, the default first and the rest in registration order — the
      * choice a settings screen offers for that slot. A slot always has at least its default.
      */
-    public synchronized List<Identifier> candidates(Slot slot) {
-        Identifier defaultFeature = defaults.get(slot);
-        List<Identifier> candidates = new ArrayList<>();
+    public synchronized List<ResourceId> candidates(Slot slot) {
+        ResourceId defaultFeature = defaults.get(slot);
+        List<ResourceId> candidates = new ArrayList<>();
         if (defaultFeature != null) {
             candidates.add(defaultFeature);
         }
@@ -110,12 +102,12 @@ public final class CausticaRegistry {
     }
 
     /** The binding used when nothing is selected — always a built-in, so a new extension changes nothing. */
-    public synchronized Identifier defaultFeature(Slot slot) {
+    public synchronized ResourceId defaultFeature(Slot slot) {
         return defaults.get(slot);
     }
 
     /** What {@link #selection()} will resolve this slot to, whether that came from a choice or the default. */
-    public synchronized Identifier selectedFeature(Slot slot) {
+    public synchronized ResourceId selectedFeature(Slot slot) {
         return selected.getOrDefault(slot, defaults.get(slot));
     }
 
@@ -128,7 +120,7 @@ public final class CausticaRegistry {
         return !selected.containsKey(slot);
     }
 
-    public synchronized Map<Identifier, Feature> features() {
+    public synchronized Map<ResourceId, Feature> features() {
         return Map.copyOf(features);
     }
 
@@ -141,7 +133,7 @@ public final class CausticaRegistry {
      * The compiled index of a surface implementation, or -1 when nothing registered that id. Materials
      * resolve their authored name through this once at compile time; the shader only ever sees the index.
      */
-    public synchronized int surfaceIndex(Identifier surfaceId) {
+    public synchronized int surfaceIndex(ResourceId surfaceId) {
         for (int index = 0; index < surfaces.size(); index++) {
             if (surfaces.get(index).id().equals(surfaceId)) {
                 return index;
@@ -150,23 +142,23 @@ public final class CausticaRegistry {
         return -1;
     }
 
-    public synchronized Map<Identifier, CausticaRenderPass> renderPasses() {
+    public synchronized Map<ResourceId, CausticaRenderPass> renderPasses() {
         return Collections.unmodifiableMap(new LinkedHashMap<>(renderPasses));
     }
 
-    public synchronized Map<ProviderId, SceneProvider> sceneProviders() {
+    public synchronized Map<ResourceId, SceneProvider> sceneProviders() {
         return Collections.unmodifiableMap(new LinkedHashMap<>(sceneProviders));
     }
 
-    public synchronized Map<ProviderId, LightProvider> lightProviders() {
+    public synchronized Map<ResourceId, LightProvider> lightProviders() {
         return Collections.unmodifiableMap(new LinkedHashMap<>(lightProviders));
     }
 
-    public synchronized Map<ProviderId, MaterialSource> materialSources() {
+    public synchronized Map<ResourceId, MaterialSource> materialSources() {
         return Collections.unmodifiableMap(new LinkedHashMap<>(materialSources));
     }
 
-    private static <T> void requireUnique(Map<ProviderId, T> registered,
+    private static <T> void requireUnique(Map<ResourceId, T> registered,
                                           Iterable<ProviderRegistration<T>> candidates, String kind) {
         for (ProviderRegistration<T> candidate : candidates) {
             if (registered.containsKey(candidate.id())) {
@@ -178,21 +170,21 @@ public final class CausticaRegistry {
     public synchronized Selection selection() {
         Map<Slot, SelectedBinding> bindings = new LinkedHashMap<>();
         for (Slot slot : Slots.ALL) {
-            Identifier featureId = selected.getOrDefault(slot, defaults.get(slot));
+            ResourceId featureId = selected.getOrDefault(slot, defaults.get(slot));
             if (featureId == null) {
                 throw new IllegalStateException("slot " + slot.id() + " has no default binding");
             }
             Feature feature = features.get(featureId);
             bindings.put(slot, new SelectedBinding(feature, binding(slot, featureId)));
         }
-        Map<Identifier, Feature> owners = new LinkedHashMap<>();
+        Map<ResourceId, Feature> owners = new LinkedHashMap<>();
         for (Feature.SurfaceImplementation surface : surfaces) {
             owners.put(surface.id(), features.get(surface.featureId()));
         }
         return new Selection(bindings, List.copyOf(surfaces), Map.copyOf(owners));
     }
 
-    private Feature.Binding binding(Slot slot, Identifier featureId) {
+    private Feature.Binding binding(Slot slot, ResourceId featureId) {
         Feature feature = features.get(featureId);
         if (feature == null) {
             throw new IllegalArgumentException("unknown feature " + featureId);
@@ -218,7 +210,7 @@ public final class CausticaRegistry {
      */
     public record Selection(Map<Slot, SelectedBinding> bindings,
                             List<Feature.SurfaceImplementation> surfaces,
-                            Map<Identifier, Feature> surfaceOwners) {
+                            Map<ResourceId, Feature> surfaceOwners) {
         public Selection {
             bindings = Map.copyOf(bindings);
             surfaces = List.copyOf(surfaces);

@@ -3,9 +3,9 @@ package dev.comfyfluffy.caustica.client.settings;
 import dev.comfyfluffy.caustica.api.CausticaRegistry;
 import dev.comfyfluffy.caustica.api.pass.CausticaRenderPass;
 import dev.comfyfluffy.caustica.api.pass.RenderStage;
-import dev.comfyfluffy.caustica.api.provider.ProviderId;
+import dev.comfyfluffy.caustica.api.ResourceId;
 import net.minecraft.network.chat.Component;
-import net.minecraft.resources.Identifier;
+import dev.comfyfluffy.caustica.api.ResourceId;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -21,13 +21,13 @@ import java.util.List;
 public record CompositionSummary(List<Lane> lanes, List<ProviderRow> providers) {
 
     /** One row of the frame diagram: either a stage a pass can register into, or an engine-owned anchor. */
-    public record Lane(Component title, List<Identifier> passes, boolean engineOwned) {
+    public record Lane(Component title, List<ResourceId> passes, boolean engineOwned) {
         public boolean isEmpty() {
             return passes.isEmpty();
         }
     }
 
-    public record ProviderRow(Component title, List<ProviderId> ids) {
+    public record ProviderRow(Component title, List<ResourceId> ids) {
     }
 
     public static CompositionSummary of(CausticaRegistry registry) {
@@ -49,7 +49,7 @@ public record CompositionSummary(List<Lane> lanes, List<ProviderRow> providers) 
         return new CompositionSummary(List.copyOf(lanes), providers);
     }
 
-    private static List<Identifier> passesIn(List<CausticaRenderPass> passes, RenderStage stage) {
+    private static List<ResourceId> passesIn(List<CausticaRenderPass> passes, RenderStage stage) {
         return passes.stream().filter(pass -> pass.stage() == stage).map(CausticaRenderPass::id).toList();
     }
 

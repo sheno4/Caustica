@@ -3,7 +3,7 @@ package dev.comfyfluffy.caustica.client.settings;
 import dev.comfyfluffy.caustica.CausticaOptions;
 import dev.comfyfluffy.caustica.api.Option;
 import net.minecraft.network.chat.Component;
-import net.minecraft.resources.Identifier;
+import dev.comfyfluffy.caustica.api.ResourceId;
 
 /**
  * Adapts an extension's declared {@link Option}s to {@link SettingControl}. Reads go through the live view
@@ -17,7 +17,7 @@ public final class OptionControls {
     private OptionControls() {
     }
 
-    public static SettingControl of(CausticaOptions store, Identifier featureId, Option<?> option) {
+    public static SettingControl of(CausticaOptions store, ResourceId featureId, Option<?> option) {
         return switch (option.kind()) {
             case BOOL -> new BoolRow(store, featureId, cast(option));
             case RANGE -> new RangeRow(store, featureId, cast(option));
@@ -31,7 +31,7 @@ public final class OptionControls {
         return (Option<T>) option;
     }
 
-    private record BoolRow(CausticaOptions store, Identifier featureId, Option<Boolean> option)
+    private record BoolRow(CausticaOptions store, ResourceId featureId, Option<Boolean> option)
             implements SettingControl.BoolControl {
         @Override
         public String id() {
@@ -69,7 +69,7 @@ public final class OptionControls {
         }
     }
 
-    private record RangeRow(CausticaOptions store, Identifier featureId, Option<Float> option)
+    private record RangeRow(CausticaOptions store, ResourceId featureId, Option<Float> option)
             implements SettingControl.RangeControl {
         @Override
         public String id() {

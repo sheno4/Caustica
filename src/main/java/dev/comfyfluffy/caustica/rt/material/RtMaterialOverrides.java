@@ -4,6 +4,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import dev.comfyfluffy.caustica.CausticaMod;
+import dev.comfyfluffy.caustica.api.ResourceId;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -38,7 +39,7 @@ public final class RtMaterialOverrides {
      * once, here, so the compiled material carries only the index and the shader never sees an identifier.
      */
     public interface SurfaceResolver {
-        int indexOf(Identifier surfaceId);
+        int indexOf(ResourceId surfaceId);
     }
 
     public static RtMaterialOverrides load(SurfaceResolver surfaces) {
@@ -100,7 +101,7 @@ public final class RtMaterialOverrides {
                 ? optionalFloat(root.getAsJsonObject("transmission"), "weight") : null;
         Integer surfaceImplementation = null;
         if (root.has("surface")) {
-            Identifier surfaceId = Identifier.parse(root.get("surface").getAsString());
+            ResourceId surfaceId = ResourceId.parse(root.get("surface").getAsString());
             int index = surfaces.indexOf(surfaceId);
             if (index < 0) {
                 throw new IllegalArgumentException("No registered surface implementation " + surfaceId);

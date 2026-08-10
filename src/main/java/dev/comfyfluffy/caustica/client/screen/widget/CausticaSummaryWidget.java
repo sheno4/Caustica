@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.client.screen.widget;
 
-import dev.comfyfluffy.caustica.api.provider.ProviderId;
+import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.client.screen.CausticaTheme;
 import dev.comfyfluffy.caustica.client.settings.CompositionSummary;
 import net.minecraft.client.gui.Font;
@@ -9,7 +9,7 @@ import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.narration.NarratedElementType;
 import net.minecraft.client.gui.narration.NarrationElementOutput;
 import net.minecraft.network.chat.Component;
-import net.minecraft.resources.Identifier;
+import dev.comfyfluffy.caustica.api.ResourceId;
 
 import java.util.List;
 
@@ -90,18 +90,18 @@ public final class CausticaSummaryWidget extends AbstractWidget {
     }
 
     /** Namespace dropped: every id on this page is Caustica's until a third extension exists to disambiguate. */
-    private static Component joinedPasses(List<Identifier> ids) {
+    private static Component joinedPasses(List<ResourceId> ids) {
         if (ids.isEmpty()) {
             return Component.translatable("caustica.summary.none");
         }
-        return Component.literal(String.join(", ", ids.stream().map(Identifier::getPath).toList()));
+        return Component.literal(String.join(", ", ids.stream().map(ResourceId::path).toList()));
     }
 
-    private static Component joinedProviders(List<ProviderId> ids) {
+    private static Component joinedProviders(List<ResourceId> ids) {
         if (ids.isEmpty()) {
             return Component.translatable("caustica.summary.none");
         }
-        return Component.literal(String.join(", ", ids.stream().map(ProviderId::path).toList()));
+        return Component.literal(String.join(", ", ids.stream().map(ResourceId::path).toList()));
     }
 
     @Override

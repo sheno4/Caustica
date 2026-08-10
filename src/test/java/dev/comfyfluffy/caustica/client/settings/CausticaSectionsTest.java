@@ -5,7 +5,7 @@ import dev.comfyfluffy.caustica.api.CausticaRegistry;
 import dev.comfyfluffy.caustica.api.Feature;
 import dev.comfyfluffy.caustica.api.Option;
 import dev.comfyfluffy.caustica.builtin.BloomPass;
-import net.minecraft.resources.Identifier;
+import dev.comfyfluffy.caustica.api.ResourceId;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -20,8 +20,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class CausticaSectionsTest {
     // BuiltinExtension is package-private, and widening it for a test would be the wrong trade.
-    private static final Identifier BUILTIN = Identifier.fromNamespaceAndPath("caustica", "builtin");
-    private static final Identifier PROVIDER_ONLY = Identifier.fromNamespaceAndPath("test", "provider_only");
+    private static final ResourceId BUILTIN = ResourceId.of("caustica", "builtin");
+    private static final ResourceId PROVIDER_ONLY = ResourceId.of("test", "provider_only");
 
     @TempDir
     Path configDir;
@@ -40,7 +40,7 @@ final class CausticaSectionsTest {
 
     @Test
     void everyRegisteredFeatureWithOptionsBecomesItsOwnSection() {
-        CausticaRegistry registry = CausticaRegistry.withBuiltins();
+        CausticaRegistry registry = dev.comfyfluffy.caustica.TestRegistries.withBuiltins();
 
         List<SettingsSection> sections = CausticaSections.build(registry, options(registry));
 
@@ -52,7 +52,7 @@ final class CausticaSectionsTest {
     /** A scene-provider-only extension has nothing to render, so it must not leave an empty page behind. */
     @Test
     void aFeatureWithNoOptionsGetsNoSection() {
-        CausticaRegistry registry = CausticaRegistry.withBuiltins();
+        CausticaRegistry registry = dev.comfyfluffy.caustica.TestRegistries.withBuiltins();
         registry.feature(PROVIDER_ONLY).register();
 
         List<SettingsSection> sections = CausticaSections.build(registry, options(registry));
@@ -62,7 +62,7 @@ final class CausticaSectionsTest {
 
     @Test
     void theHeaderBoolIsSeparatedFromTheRowsItCollapses() {
-        CausticaRegistry registry = CausticaRegistry.withBuiltins();
+        CausticaRegistry registry = dev.comfyfluffy.caustica.TestRegistries.withBuiltins();
         Feature builtin = registry.features().get(BUILTIN);
 
         SettingsSection section = CausticaSections.feature(builtin, options(registry));
@@ -77,7 +77,7 @@ final class CausticaSectionsTest {
 
     @Test
     void aGroupWithNoHeaderCollapsesOnlyByCaret() {
-        CausticaRegistry registry = CausticaRegistry.withBuiltins();
+        CausticaRegistry registry = dev.comfyfluffy.caustica.TestRegistries.withBuiltins();
         Feature builtin = registry.features().get(BUILTIN);
 
         SettingGroup sky = groupOf(CausticaSections.feature(builtin, options(registry)), "sky");
@@ -89,7 +89,7 @@ final class CausticaSectionsTest {
 
     @Test
     void aHeaderBoolDecidesVisibilityRegardlessOfTheCaret() {
-        CausticaRegistry registry = CausticaRegistry.withBuiltins();
+        CausticaRegistry registry = dev.comfyfluffy.caustica.TestRegistries.withBuiltins();
         Feature builtin = registry.features().get(BUILTIN);
         SettingGroup bloom = groupOf(CausticaSections.feature(builtin, options(registry)), "bloom");
 
@@ -102,7 +102,7 @@ final class CausticaSectionsTest {
 
     @Test
     void groupsFollowTheFeaturesDeclaredOrder() {
-        CausticaRegistry registry = CausticaRegistry.withBuiltins();
+        CausticaRegistry registry = dev.comfyfluffy.caustica.TestRegistries.withBuiltins();
         Feature builtin = registry.features().get(BUILTIN);
 
         SettingsSection section = CausticaSections.feature(builtin, options(registry));
@@ -124,7 +124,7 @@ final class CausticaSectionsTest {
 
     @Test
     void everySlotBecomesItsOwnGroupOnTheCompositionSection() {
-        CausticaRegistry registry = CausticaRegistry.withBuiltins();
+        CausticaRegistry registry = dev.comfyfluffy.caustica.TestRegistries.withBuiltins();
 
         SettingsSection composition = CausticaSections.composition(registry);
 
@@ -140,7 +140,7 @@ final class CausticaSectionsTest {
 
     @Test
     void resettingASectionRestoresEveryDeclaredDefault() {
-        CausticaRegistry registry = CausticaRegistry.withBuiltins();
+        CausticaRegistry registry = dev.comfyfluffy.caustica.TestRegistries.withBuiltins();
         Feature builtin = registry.features().get(BUILTIN);
         SettingsSection section = CausticaSections.feature(builtin, options(registry));
         SettingControl.RangeControl strength = (SettingControl.RangeControl) section.allControls().stream()
@@ -158,7 +158,7 @@ final class CausticaSectionsTest {
 
     @Test
     void aThirdPartyFeatureGetsAStableAccentAcrossLaunches() {
-        Identifier featureId = Identifier.fromNamespaceAndPath("someone", "else");
+        ResourceId featureId = ResourceId.of("someone", "else");
 
         assertEquals(CausticaSections.accentFor(featureId), CausticaSections.accentFor(featureId));
         assertEquals(0xFFFFB74D, CausticaSections.accentFor(BUILTIN));
@@ -166,8 +166,8 @@ final class CausticaSectionsTest {
 
     @Test
     void anUngroupedOptionStillGetsARow() {
-        CausticaRegistry registry = CausticaRegistry.withBuiltins();
-        Identifier featureId = Identifier.fromNamespaceAndPath("test", "loose");
+        CausticaRegistry registry = dev.comfyfluffy.caustica.TestRegistries.withBuiltins();
+        ResourceId featureId = ResourceId.of("test", "loose");
         Feature feature = registry.feature(featureId).option(Option.bool("loose", true)).register();
 
         SettingGroup other = groupOf(CausticaSections.feature(feature, options(registry)), "other");

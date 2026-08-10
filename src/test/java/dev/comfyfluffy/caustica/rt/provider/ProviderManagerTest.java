@@ -1,7 +1,7 @@
 package dev.comfyfluffy.caustica.rt.provider;
 
 import dev.comfyfluffy.caustica.api.provider.SceneProvider;
-import dev.comfyfluffy.caustica.api.provider.ProviderId;
+import dev.comfyfluffy.caustica.api.ResourceId;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -42,7 +42,7 @@ final class ProviderManagerTest {
                 healthyCalls.incrementAndGet();
             }
         };
-        Map<ProviderId, SceneProvider> scenes = new LinkedHashMap<>();
+        Map<ResourceId, SceneProvider> scenes = new LinkedHashMap<>();
         scenes.put(id("failing"), failing);
         scenes.put(id("healthy"), healthy);
         ProviderManager manager = new ProviderManager(scenes, Map.of(), Map.of());
@@ -220,7 +220,7 @@ final class ProviderManagerTest {
         return new ProviderManager(Map.of(id(path), provider), Map.of(), Map.of());
     }
 
-    private static ProviderId id(String path) {
-        return ProviderId.of("test", path);
+    private static ResourceId id(String path) {
+        return ResourceId.of("test", path);
     }
 }

@@ -16,7 +16,7 @@ import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
 import dev.comfyfluffy.caustica.rt.RtUiOverlay;
 import dev.comfyfluffy.caustica.rt.accel.GpuImage;
 import net.minecraft.client.Minecraft;
-import net.minecraft.resources.Identifier;
+import dev.comfyfluffy.caustica.api.ResourceId;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.KHRDynamicRendering;
 import org.lwjgl.vulkan.VK10;
@@ -61,7 +61,7 @@ import java.util.List;
  * call site (see {@code RtUiOverlay.java}'s identical read).
  */
 public final class WorldOverlayPass implements CausticaRenderPass {
-    public static final Identifier ID = Identifier.fromNamespaceAndPath("caustica", "world_overlay");
+    public static final ResourceId ID = ResourceId.of("caustica", "world_overlay");
 
     /** The shared overlay buffer's + presented image's VkFormat ({@code GpuFormat.RGBA8_UNORM}). */
     public static final int TARGET_FORMAT = VK10.VK_FORMAT_R8G8B8A8_UNORM;
@@ -78,7 +78,7 @@ public final class WorldOverlayPass implements CausticaRenderPass {
     private OverlayPipelines.ReadOnlyImageSet uiCompositeSet;
 
     @Override
-    public Identifier id() {
+    public ResourceId id() {
         return ID;
     }
 

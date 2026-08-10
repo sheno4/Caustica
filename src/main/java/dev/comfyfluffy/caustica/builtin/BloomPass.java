@@ -12,7 +12,7 @@ import dev.comfyfluffy.caustica.api.pass.RenderStage;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.accel.GpuImage;
 import dev.comfyfluffy.caustica.rt.gen.BloomPushData;
-import net.minecraft.resources.Identifier;
+import dev.comfyfluffy.caustica.api.ResourceId;
 import org.lwjgl.vulkan.VK10;
 
 import java.io.IOException;
@@ -33,7 +33,7 @@ import java.util.List;
  * would use, so it only reaches engine internals through public surface.
  */
 public final class BloomPass implements CausticaRenderPass {
-    public static final Identifier ID = Identifier.fromNamespaceAndPath("caustica", "bloom");
+    public static final ResourceId ID = ResourceId.of("caustica", "bloom");
     private static final ShaderSource SHADERS = ShaderSource.classpath("/caustica/shaders/builtin", "bloom");
     // destination, source (sampled), exposure, incoming chain image. The last two are each read by only
     // some modes but bound on every dispatch, so one pipeline covers the pyramid and the composite.
@@ -72,7 +72,7 @@ public final class BloomPass implements CausticaRenderPass {
     private GpuImage[] levels = new GpuImage[0];
 
     @Override
-    public Identifier id() {
+    public ResourceId id() {
         return ID;
     }
 

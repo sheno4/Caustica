@@ -4,7 +4,7 @@ import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.api.Option;
 import dev.comfyfluffy.caustica.api.Slot;
 import net.minecraft.network.chat.Component;
-import net.minecraft.resources.Identifier;
+import dev.comfyfluffy.caustica.api.ResourceId;
 
 /**
  * Every translation key the settings screen uses, derived rather than declared. An extension gets labelled
@@ -41,22 +41,22 @@ public final class LangKeys {
      * {@code caustica.option.<namespace>.<path>.<optionId>}. Option ids may contain dots
      * ({@code bloom.strength}), which nest naturally in the key rather than colliding.
      */
-    public static Component optionLabel(Identifier featureId, Option<?> option) {
+    public static Component optionLabel(ResourceId featureId, Option<?> option) {
         return Component.translatable(optionKey(featureId, option));
     }
 
-    public static Component optionTooltip(Identifier featureId, Option<?> option) {
+    public static Component optionTooltip(ResourceId featureId, Option<?> option) {
         return Component.translatable(optionKey(featureId, option) + ".tooltip");
     }
 
-    private static String optionKey(Identifier featureId, Option<?> option) {
-        return "caustica.option." + featureId.getNamespace() + "." + featureId.getPath() + "." + option.id();
+    private static String optionKey(ResourceId featureId, Option<?> option) {
+        return "caustica.option." + featureId.namespace() + "." + featureId.path() + "." + option.id();
     }
 
     /** {@code caustica.group.<namespace>.<path>.<groupId>}. */
-    public static Component optionGroup(Identifier featureId, String groupId) {
+    public static Component optionGroup(ResourceId featureId, String groupId) {
         return Component.translatable(
-                "caustica.group." + featureId.getNamespace() + "." + featureId.getPath() + "." + groupId);
+                "caustica.group." + featureId.namespace() + "." + featureId.path() + "." + groupId);
     }
 
     /** {@code caustica.slot.<namespace>.<path>}. */
@@ -69,12 +69,12 @@ public final class LangKeys {
     }
 
     private static String slotKey(Slot slot) {
-        return "caustica.slot." + slot.id().getNamespace() + "." + slot.id().getPath();
+        return "caustica.slot." + slot.id().namespace() + "." + slot.id().path();
     }
 
     /** A feature's own name, reusing the convention {@code BuiltinExtension} already declares. */
-    public static Component featureDescription(Identifier featureId) {
+    public static Component featureDescription(ResourceId featureId) {
         return Component.translatable(
-                "feature." + featureId.getNamespace() + "." + featureId.getPath() + ".description");
+                "feature." + featureId.namespace() + "." + featureId.path() + ".description");
     }
 }

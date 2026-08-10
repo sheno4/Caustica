@@ -12,7 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class CompositionTest {
-    private static final CausticaRegistry.Selection SELECTION = CausticaRegistry.withBuiltins().selection();
+    private static final CausticaRegistry.Selection SELECTION = dev.comfyfluffy.caustica.TestRegistries.withBuiltins().selection();
 
     @Test
     void contentHashCoversSourceNamesBytesAndGeneratedRoot() {

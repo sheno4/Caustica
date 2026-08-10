@@ -5,7 +5,7 @@ import dev.comfyfluffy.caustica.api.pass.PassFrame;
 import dev.comfyfluffy.caustica.api.pass.PassSetup;
 import dev.comfyfluffy.caustica.api.pass.RenderStage;
 import dev.comfyfluffy.caustica.rt.accel.GpuImage;
-import net.minecraft.resources.Identifier;
+import dev.comfyfluffy.caustica.api.ResourceId;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -140,27 +140,27 @@ final class RenderPassManagerTest {
         assertEquals(1, destroys.get());
     }
 
-    private static Identifier identifierOf(String path) {
-        return Identifier.fromNamespaceAndPath("caustica", path);
+    private static ResourceId identifierOf(String path) {
+        return ResourceId.of("caustica", path);
     }
 
     private static class FakePass implements CausticaRenderPass {
-        private final Identifier id;
+        private final ResourceId id;
         private final RenderStage stage;
-        private final List<Identifier> after;
+        private final List<ResourceId> after;
 
         FakePass(String path, RenderStage stage) {
             this(path, stage, List.of());
         }
 
-        FakePass(String path, RenderStage stage, List<Identifier> after) {
+        FakePass(String path, RenderStage stage, List<ResourceId> after) {
             this.id = identifierOf(path);
             this.stage = stage;
             this.after = after;
         }
 
         @Override
-        public Identifier id() {
+        public ResourceId id() {
             return id;
         }
 
@@ -170,7 +170,7 @@ final class RenderPassManagerTest {
         }
 
         @Override
-        public List<Identifier> after() {
+        public List<ResourceId> after() {
             return after;
         }
 

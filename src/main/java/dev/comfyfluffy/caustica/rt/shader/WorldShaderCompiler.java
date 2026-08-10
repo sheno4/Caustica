@@ -130,8 +130,8 @@ public final class WorldShaderCompiler implements AutoCloseable {
         Map<String, ResolvedFeatureModule> extensionModules = resolveFeatureModules(selection, selectedFeatures);
         Map<Feature, Path> directories = new LinkedHashMap<>();
         for (Feature feature : selectedFeatures) {
-            Path directory = featureDirectory.resolve(feature.id().getNamespace())
-                    .resolve(feature.id().getPath());
+            Path directory = featureDirectory.resolve(feature.id().namespace())
+                    .resolve(feature.id().path());
             directories.put(feature, directory);
             Files.createDirectories(directory);
         }

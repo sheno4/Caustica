@@ -4,10 +4,7 @@ import dev.comfyfluffy.caustica.api.pass.CausticaRenderPass;
 import dev.comfyfluffy.caustica.api.provider.LightProvider;
 import dev.comfyfluffy.caustica.api.provider.MaterialSource;
 import dev.comfyfluffy.caustica.api.provider.ProviderRegistration;
-import dev.comfyfluffy.caustica.api.provider.ProviderId;
 import dev.comfyfluffy.caustica.api.provider.SceneProvider;
-import net.minecraft.network.chat.Component;
-import net.minecraft.resources.Identifier;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -17,9 +14,9 @@ import java.util.Objects;
 
 public final class FeatureBuilder {
     private final CausticaRegistry registry;
-    private final Identifier id;
-    private Component title;
-    private Component description = Component.empty();
+    private final ResourceId id;
+    private DisplayText title;
+    private DisplayText description = DisplayText.EMPTY;
     private FeatureCategory category = FeatureCategory.GENERAL;
     private ShaderSource shaderSource;
     private final Map<Slot, Feature.Binding> bindings = new LinkedHashMap<>();
@@ -33,18 +30,18 @@ public final class FeatureBuilder {
     private final List<String> passResourceModules = new ArrayList<>();
     private boolean registered;
 
-    FeatureBuilder(CausticaRegistry registry, Identifier id) {
+    FeatureBuilder(CausticaRegistry registry, ResourceId id) {
         this.registry = registry;
         this.id = id;
     }
 
-    public FeatureBuilder title(Component title) {
+    public FeatureBuilder title(DisplayText title) {
         this.title = Objects.requireNonNull(title, "title");
         return this;
     }
 
     /** One line describing what this feature does, shown beside its title where a slot offers a choice. */
-    public FeatureBuilder description(Component description) {
+    public FeatureBuilder description(DisplayText description) {
         this.description = Objects.requireNonNull(description, "description");
         return this;
     }
@@ -73,7 +70,7 @@ public final class FeatureBuilder {
      * selects the one it wants by this id, so a mod adding one changes nothing about what any other
      * material renders as.
      */
-    public FeatureBuilder surface(Identifier id, String module, String type) {
+    public FeatureBuilder surface(ResourceId id, String module, String type) {
         Objects.requireNonNull(id, "id");
         if (surfaces.stream().anyMatch(existing -> existing.id().equals(id))) {
             throw new IllegalStateException(this.id + " declares duplicate surface implementation " + id);
@@ -120,7 +117,7 @@ public final class FeatureBuilder {
         return this;
     }
 
-    public FeatureBuilder sceneProvider(ProviderId providerId, SceneProvider provider) {
+    public FeatureBuilder sceneProvider(ResourceId providerId, SceneProvider provider) {
         ProviderRegistration<SceneProvider> registration = new ProviderRegistration<>(providerId, provider);
         if (sceneProviders.stream().anyMatch(existing -> existing.id().equals(providerId))) {
             throw new IllegalStateException(id + " declares duplicate scene provider " + providerId);
@@ -129,7 +126,7 @@ public final class FeatureBuilder {
         return this;
     }
 
-    public FeatureBuilder lightProvider(ProviderId providerId, LightProvider provider) {
+    public FeatureBuilder lightProvider(ResourceId providerId, LightProvider provider) {
         ProviderRegistration<LightProvider> registration = new ProviderRegistration<>(providerId, provider);
         if (lightProviders.stream().anyMatch(existing -> existing.id().equals(providerId))) {
             throw new IllegalStateException(id + " declares duplicate light provider " + providerId);
@@ -138,7 +135,7 @@ public final class FeatureBuilder {
         return this;
     }
 
-    public FeatureBuilder materialSource(ProviderId sourceId, MaterialSource source) {
+    public FeatureBuilder materialSource(ResourceId sourceId, MaterialSource source) {
         ProviderRegistration<MaterialSource> registration = new ProviderRegistration<>(sourceId, source);
         if (materialSources.stream().anyMatch(existing -> existing.id().equals(sourceId))) {
             throw new IllegalStateException(id + " declares duplicate material source " + sourceId);
@@ -169,8 +166,7 @@ public final class FeatureBuilder {
             throw new IllegalStateException(id + " is already registered");
         }
         registered = true;
-        Component resolvedTitle = title != null ? title
-                : Component.literal(id.getNamespace() + ':' + id.getPath());
+        DisplayText resolvedTitle = title != null ? title : DisplayText.literal(id.toString());
         Feature feature = new Feature(id, resolvedTitle, description, category, shaderSource, bindings,
                 surfaces, options, optionGroups, renderPasses, sceneProviders, lightProviders,
                 materialSources, passResourceModules);

@@ -1,10 +1,8 @@
 package dev.comfyfluffy.caustica.api;
 
-import net.minecraft.resources.Identifier;
-
 import java.util.Objects;
 
-public record Slot(Identifier id, String interfaceModule, String interfaceType) {
+public record Slot(ResourceId id, String interfaceModule, String interfaceType) {
     public Slot {
         Objects.requireNonNull(id, "id");
         requireSlangIdentifier(interfaceModule, "interfaceModule");

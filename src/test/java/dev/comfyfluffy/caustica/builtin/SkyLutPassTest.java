@@ -4,7 +4,7 @@ import dev.comfyfluffy.caustica.api.ShaderSource;
 import dev.comfyfluffy.caustica.rt.gen.SkyInputsData;
 import dev.comfyfluffy.caustica.api.pass.ComputeDispatch;
 import dev.comfyfluffy.caustica.api.pass.PassShaderCompiler;
-import net.minecraft.resources.Identifier;
+import dev.comfyfluffy.caustica.api.ResourceId;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -85,7 +85,7 @@ final class SkyLutPassTest {
     private static void compileAndValidate(Path cache, ShaderSource source, String module,
                                            java.util.List<ComputeDispatch.Binding> bindings,
                                            int pushConstantBytes) throws Exception {
-        Identifier id = Identifier.fromNamespaceAndPath("caustica", module);
+        ResourceId id = ResourceId.of("caustica", module);
         PassShaderCompiler.CompiledProgram compiled = PassShaderCompiler.compile(cache, id, source, module, "main");
         assertEquals(0x07230203, ByteBuffer.wrap(compiled.spirv()).order(ByteOrder.LITTLE_ENDIAN).getInt());
         PassShaderCompiler.validateBindings(id, compiled.reflectionJson(), bindings, pushConstantBytes,

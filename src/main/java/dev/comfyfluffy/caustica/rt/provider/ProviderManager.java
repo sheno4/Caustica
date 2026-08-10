@@ -5,7 +5,7 @@ import dev.comfyfluffy.caustica.api.CausticaApi;
 import dev.comfyfluffy.caustica.api.provider.LightProvider;
 import dev.comfyfluffy.caustica.api.provider.LightSink;
 import dev.comfyfluffy.caustica.api.provider.MaterialSource;
-import dev.comfyfluffy.caustica.api.provider.ProviderId;
+import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.api.provider.SceneProvider;
 import java.util.HashSet;
 import java.util.Map;
@@ -26,12 +26,12 @@ public final class ProviderManager {
     private final Set<ProviderKey> failed = new HashSet<>();
     private final Set<ProviderKey> stoppedThisSession = new HashSet<>();
     private final Set<ProviderKey> shutDownThisSession = new HashSet<>();
-    private final Map<ProviderId, SceneProvider> scenes;
-    private final Map<ProviderId, LightProvider> lights;
-    private final Map<ProviderId, MaterialSource> materials;
+    private final Map<ResourceId, SceneProvider> scenes;
+    private final Map<ResourceId, LightProvider> lights;
+    private final Map<ResourceId, MaterialSource> materials;
 
-    ProviderManager(Map<ProviderId, SceneProvider> scenes, Map<ProviderId, LightProvider> lights,
-                    Map<ProviderId, MaterialSource> materials) {
+    ProviderManager(Map<ResourceId, SceneProvider> scenes, Map<ResourceId, LightProvider> lights,
+                    Map<ResourceId, MaterialSource> materials) {
         this.scenes = scenes;
         this.lights = lights;
         this.materials = materials;
@@ -77,20 +77,20 @@ public final class ProviderManager {
         shutdownStopped("material", materials(), MaterialSource::shutdown);
     }
 
-    private Map<ProviderId, SceneProvider> scenes() {
+    private Map<ResourceId, SceneProvider> scenes() {
         return scenes != null ? scenes : CausticaApi.registry().sceneProviders();
     }
 
-    private Map<ProviderId, LightProvider> lights() {
+    private Map<ResourceId, LightProvider> lights() {
         return lights != null ? lights : CausticaApi.registry().lightProviders();
     }
 
-    private Map<ProviderId, MaterialSource> materials() {
+    private Map<ResourceId, MaterialSource> materials() {
         return materials != null ? materials : CausticaApi.registry().materialSources();
     }
 
-    private <T> void invoke(String kind, Map<ProviderId, T> providers, Consumer<T> action, Consumer<T> stop) {
-        for (Map.Entry<ProviderId, T> entry : providers.entrySet()) {
+    private <T> void invoke(String kind, Map<ResourceId, T> providers, Consumer<T> action, Consumer<T> stop) {
+        for (Map.Entry<ResourceId, T> entry : providers.entrySet()) {
             ProviderKey key = new ProviderKey(kind, entry.getKey());
             if (failed.contains(key) || stoppedThisSession.contains(key)) {
                 continue;
@@ -105,8 +105,8 @@ public final class ProviderManager {
         }
     }
 
-    private <T> void stopRemaining(String kind, Map<ProviderId, T> providers, Consumer<T> action) {
-        for (Map.Entry<ProviderId, T> entry : providers.entrySet()) {
+    private <T> void stopRemaining(String kind, Map<ResourceId, T> providers, Consumer<T> action) {
+        for (Map.Entry<ResourceId, T> entry : providers.entrySet()) {
             ProviderKey key = new ProviderKey(kind, entry.getKey());
             if (failed.contains(key) && !stoppedThisSession.contains(key)) {
                 continue;
@@ -115,7 +115,7 @@ public final class ProviderManager {
         }
     }
 
-    private <T> void stopOne(String kind, Map.Entry<ProviderId, T> entry, ProviderKey key, Consumer<T> action) {
+    private <T> void stopOne(String kind, Map.Entry<ResourceId, T> entry, ProviderKey key, Consumer<T> action) {
         if (!stoppedThisSession.add(key)) {
             return;
         }
@@ -127,8 +127,8 @@ public final class ProviderManager {
         }
     }
 
-    private <T> void shutdownStopped(String kind, Map<ProviderId, T> providers, Consumer<T> action) {
-        for (Map.Entry<ProviderId, T> entry : providers.entrySet()) {
+    private <T> void shutdownStopped(String kind, Map<ResourceId, T> providers, Consumer<T> action) {
+        for (Map.Entry<ResourceId, T> entry : providers.entrySet()) {
             ProviderKey key = new ProviderKey(kind, entry.getKey());
             if (!stoppedThisSession.contains(key) || !shutDownThisSession.add(key)) {
                 continue;
@@ -142,6 +142,6 @@ public final class ProviderManager {
         }
     }
 
-    private record ProviderKey(String kind, ProviderId id) {
+    private record ProviderKey(String kind, ResourceId id) {
     }
 }

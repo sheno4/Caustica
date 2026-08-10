@@ -6,8 +6,7 @@ import com.electronwill.nightconfig.toml.TomlFormat;
 import dev.comfyfluffy.caustica.api.Feature;
 import dev.comfyfluffy.caustica.api.Option;
 import dev.comfyfluffy.caustica.api.OptionValues;
-import net.fabricmc.loader.api.FabricLoader;
-import net.minecraft.resources.Identifier;
+import dev.comfyfluffy.caustica.api.ResourceId;
 
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
@@ -47,7 +46,7 @@ public final class CausticaOptions {
     private static final String FILE_NAME = "caustica-options.toml";
 
     /** Per feature, its declared options by id — built once so a read is a map lookup, not a list scan. */
-    private final Map<Identifier, Map<String, Option<?>>> declared;
+    private final Map<ResourceId, Map<String, Option<?>>> declared;
     private final CommentedFileConfig file;
     /**
      * Immutable and swapped wholesale under {@code synchronized} by {@link #apply}, rather than a mutable
@@ -58,20 +57,15 @@ public final class CausticaOptions {
     /** TOML path to value for everything {@link #apply} has changed since the last {@link #save}. */
     private final Map<String, Object> pending = new LinkedHashMap<>();
 
-    private CausticaOptions(Map<Identifier, Map<String, Option<?>>> declared, CommentedFileConfig file,
+    private CausticaOptions(Map<ResourceId, Map<String, Option<?>>> declared, CommentedFileConfig file,
                             Map<String, Object> values) {
         this.declared = declared;
         this.file = file;
         this.values = values;
     }
 
-    /** Loads from the Fabric config directory. See {@link #load(Path, Map)} to point at another file. */
-    public static CausticaOptions load(Map<Identifier, Feature> features) {
-        return load(FabricLoader.getInstance().getConfigDir().resolve(FILE_NAME), features);
-    }
-
-    /** The path is a parameter so a test can point at a temp file without a Fabric runtime present. */
-    public static CausticaOptions load(Path path, Map<Identifier, Feature> features) {
+    /** Loads the option store at the host-selected path. */
+    public static CausticaOptions load(Path path, Map<ResourceId, Feature> features) {
         CommentedFileConfig file = CommentedFileConfig.builder(path, TomlFormat.instance())
                 .onFileNotFound(FileNotFoundAction.CREATE_EMPTY)
                 .preserveInsertionOrder()
@@ -82,7 +76,7 @@ public final class CausticaOptions {
         } catch (Exception e) {
             CausticaMod.LOGGER.warn("Failed to read Caustica options config {}: {}", path, e.toString());
         }
-        Map<Identifier, Map<String, Option<?>>> declared = new LinkedHashMap<>();
+        Map<ResourceId, Map<String, Option<?>>> declared = new LinkedHashMap<>();
         Map<String, Object> values = new LinkedHashMap<>();
         for (Feature feature : features.values()) {
             Map<String, Option<?>> byId = new LinkedHashMap<>();
@@ -96,7 +90,7 @@ public final class CausticaOptions {
     }
 
     /** A live view scoped to one feature's declared options; reads whatever is current at each call. */
-    public OptionValues options(Identifier featureId) {
+    public OptionValues options(ResourceId featureId) {
         return view(featureId, values);
     }
 
@@ -105,7 +99,7 @@ public final class CausticaOptions {
      * {@code RenderPassManager} serves every pass in a frame from the one map it took at
      * {@code beginFrame}.
      */
-    public OptionValues view(Identifier featureId, Map<String, Object> snapshot) {
+    public OptionValues view(ResourceId featureId, Map<String, Object> snapshot) {
         Map<String, Option<?>> featureOptions = declared.get(featureId);
         Objects.requireNonNull(featureOptions, () -> "unknown feature " + featureId);
         return new View(featureId, featureOptions, snapshot);
@@ -124,7 +118,7 @@ public final class CausticaOptions {
      * <p>Separate from {@link #save()} because a dragged slider writes once per tick: persisting each one
      * would put a synchronous file write on the caller's thread at frame rate.
      */
-    public synchronized void apply(Identifier featureId, Option<?> option, Object rawValue) {
+    public synchronized void apply(ResourceId featureId, Option<?> option, Object rawValue) {
         Option<?> declaredOption = declaredOption(featureId, option.id());
         if (!declaredOption.equals(option)) {
             throw new IllegalArgumentException(featureId + " declared a different option than the '"
@@ -151,12 +145,12 @@ public final class CausticaOptions {
      * Applies a value and persists it. Nothing invalidates a pass on a write, so an option a pass reads only
      * at create/resize time takes effect when that next runs rather than immediately.
      */
-    public synchronized void set(Identifier featureId, Option<?> option, Object rawValue) {
+    public synchronized void set(ResourceId featureId, Option<?> option, Object rawValue) {
         apply(featureId, option, rawValue);
         save();
     }
 
-    private Option<?> declaredOption(Identifier featureId, String optionId) {
+    private Option<?> declaredOption(ResourceId featureId, String optionId) {
         Map<String, Option<?>> featureOptions = declared.get(featureId);
         Objects.requireNonNull(featureOptions, () -> "unknown feature " + featureId);
         Option<?> option = featureOptions.get(optionId);
@@ -166,7 +160,7 @@ public final class CausticaOptions {
         return option;
     }
 
-    private record View(Identifier featureId, Map<String, Option<?>> declared, Map<String, Object> values)
+    private record View(ResourceId featureId, Map<String, Option<?>> declared, Map<String, Object> values)
             implements OptionValues {
         @Override
         @SuppressWarnings("unchecked")
@@ -187,7 +181,7 @@ public final class CausticaOptions {
         }
     }
 
-    private static Object resolveInitial(CommentedFileConfig file, Identifier featureId, Option<?> option) {
+    private static Object resolveInitial(CommentedFileConfig file, ResourceId featureId, Option<?> option) {
         String property = System.getProperty(systemPropertyKey(featureId, option.id()));
         if (property != null) {
             Object parsed = parse(option, property);
@@ -227,15 +221,15 @@ public final class CausticaOptions {
                 "options storage does not yet support " + option.kind() + " (" + option.id() + ")");
     }
 
-    private static String key(Identifier featureId, String optionId) {
+    private static String key(ResourceId featureId, String optionId) {
         return featureId + "." + optionId;
     }
 
-    private static String tomlPath(Identifier featureId, String optionId) {
-        return featureId.getNamespace() + ":" + featureId.getPath() + "." + optionId;
+    private static String tomlPath(ResourceId featureId, String optionId) {
+        return featureId.namespace() + ":" + featureId.path() + "." + optionId;
     }
 
-    private static String systemPropertyKey(Identifier featureId, String optionId) {
-        return SYSTEM_PROPERTY_PREFIX + featureId.getNamespace() + "." + featureId.getPath() + "." + optionId;
+    private static String systemPropertyKey(ResourceId featureId, String optionId) {
+        return SYSTEM_PROPERTY_PREFIX + featureId.namespace() + "." + featureId.path() + "." + optionId;
     }
 }

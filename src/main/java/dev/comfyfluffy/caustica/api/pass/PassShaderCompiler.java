@@ -3,13 +3,11 @@ package dev.comfyfluffy.caustica.api.pass;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import dev.comfyfluffy.caustica.CausticaMod;
+import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.api.ShaderSource;
 import dev.comfyfluffy.caustica.slang.SlangCompileResult;
 import dev.comfyfluffy.caustica.slang.SlangRuntime;
 import dev.comfyfluffy.caustica.slang.SlangSession;
-import net.fabricmc.loader.api.FabricLoader;
-import net.minecraft.resources.Identifier;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -38,28 +36,36 @@ import java.util.regex.Pattern;
  * for.
  */
 public final class PassShaderCompiler {
+    private static final System.Logger LOGGER = System.getLogger(PassShaderCompiler.class.getName());
     private static final Pattern IMPORT = Pattern.compile(
             "(?m)^\\s*import\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*;");
     private static final Map<ProgramCacheKey, CompiledProgram> PROGRAM_CACHE = new ConcurrentHashMap<>();
+    private static volatile Path defaultCacheRoot = Path.of(
+            System.getProperty("java.io.tmpdir"), "caustica-shaders", "passes");
 
     private PassShaderCompiler() {
     }
 
     /** Shared source-extraction cache root every built-in pass compiles under. */
     public static Path defaultCacheRoot() {
-        return FabricLoader.getInstance().getGameDir().resolve("caustica-shaders").resolve("passes");
+        return defaultCacheRoot;
     }
 
-    public static CompiledProgram compile(Path cacheRoot, Identifier id, ShaderSource source, String module,
+    /** Configures the process-wide cache location before passes are created. */
+    public static void defaultCacheRoot(Path cacheRoot) {
+        defaultCacheRoot = cacheRoot.toAbsolutePath().normalize();
+    }
+
+    public static CompiledProgram compile(Path cacheRoot, ResourceId id, ShaderSource source, String module,
                                    String entryPoint) throws IOException {
-        Path directory = cacheRoot.resolve(id.getNamespace()).resolve(id.getPath());
+        Path directory = cacheRoot.resolve(id.namespace()).resolve(id.path());
         Files.createDirectories(directory);
         Map<String, String> modules = new LinkedHashMap<>();
         extract(source, module, directory, modules, new LinkedHashSet<>());
         ProgramCacheKey cacheKey = new ProgramCacheKey(id, Map.copyOf(modules), module, entryPoint);
         CompiledProgram cached = PROGRAM_CACHE.get(cacheKey);
         if (cached != null) {
-            CausticaMod.LOGGER.info("Reusing cached render-pass program {}", id);
+            LOGGER.log(System.Logger.Level.DEBUG, "Reusing cached render-pass program {0}", id);
             return cached;
         }
         String moduleSource = modules.get(module);
@@ -69,7 +75,7 @@ public final class PassShaderCompiler {
         try (SlangSession session = SlangRuntime.INSTANCE.openSession(List.of(directory), true, true)) {
             result = session.compile(module, sourcePath.toString(), moduleSource, entryPoint);
         }
-        CausticaMod.LOGGER.info("Compiled render-pass program {} in {} ms ({} bytes SPIR-V)",
+        LOGGER.log(System.Logger.Level.INFO, "Compiled render-pass program {0} in {1} ms ({2} bytes SPIR-V)",
                 id, String.format(java.util.Locale.ROOT, "%.1f",
                         (System.nanoTime() - startNanos) / 1.0e6), result.spirv().length);
         CompiledProgram compiled = new CompiledProgram(result.spirv(), result.reflectionJson());
@@ -106,7 +112,7 @@ public final class PassShaderCompiler {
      * bindings may be undeclared or missing, push-constant size must match, and the entry point must
      * exist as a compute stage with the given thread group size.
      */
-    public static void validateBindings(Identifier id, String reflectionJson, List<ComputeDispatch.Binding> expected,
+    public static void validateBindings(ResourceId id, String reflectionJson, List<ComputeDispatch.Binding> expected,
                                  int pushConstantBytes, String entryPoint, int localSizeX, int localSizeY,
                                  int localSizeZ) throws IOException {
         JsonObject reflection = JsonParser.parseString(reflectionJson).getAsJsonObject();
@@ -181,7 +187,7 @@ public final class PassShaderCompiler {
     public record CompiledProgram(byte[] spirv, String reflectionJson) {
     }
 
-    private record ProgramCacheKey(Identifier id, Map<String, String> modules,
+    private record ProgramCacheKey(ResourceId id, Map<String, String> modules,
                                    String module, String entryPoint) {
     }
 

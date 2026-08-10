@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.api.pass;
 
-import net.minecraft.resources.Identifier;
+import dev.comfyfluffy.caustica.api.ResourceId;
 
 import java.util.List;
 
@@ -21,7 +21,7 @@ import java.util.List;
  * continues without it.
  */
 public interface CausticaRenderPass {
-    Identifier id();
+    ResourceId id();
 
     RenderStage stage();
 
@@ -29,7 +29,7 @@ public interface CausticaRenderPass {
      * Ids of other passes in the same stage this pass must record after. Ignored for passes in a
      * different stage — stage order already implies it there. Defaults to no ordering constraint.
      */
-    default List<Identifier> after() {
+    default List<ResourceId> after() {
         return List.of();
     }
 

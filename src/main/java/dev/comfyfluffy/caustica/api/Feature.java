@@ -5,16 +5,13 @@ import dev.comfyfluffy.caustica.api.provider.LightProvider;
 import dev.comfyfluffy.caustica.api.provider.MaterialSource;
 import dev.comfyfluffy.caustica.api.provider.ProviderRegistration;
 import dev.comfyfluffy.caustica.api.provider.SceneProvider;
-import net.minecraft.network.chat.Component;
-import net.minecraft.resources.Identifier;
-
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
-public record Feature(Identifier id, Component title, Component description, FeatureCategory category,
+public record Feature(ResourceId id, DisplayText title, DisplayText description, FeatureCategory category,
                       ShaderSource shaderSource, Map<Slot, Binding> bindings,
                       List<SurfaceImplementation> surfaces, List<Option<?>> options,
                       List<String> optionGroups,
@@ -76,7 +73,7 @@ public record Feature(Identifier id, Component title, Component description, Fea
         }
     }
 
-    public record Binding(Identifier featureId, Slot slot, String module, String type) {
+    public record Binding(ResourceId featureId, Slot slot, String module, String type) {
         public Binding {
             Objects.requireNonNull(featureId, "featureId");
             Objects.requireNonNull(slot, "slot");
@@ -90,7 +87,7 @@ public record Feature(Identifier id, Component title, Component description, Fea
      * Unlike a slot binding these do not compete: every registered implementation is compiled into the
      * composition at once and each material names the one it wants.
      */
-    public record SurfaceImplementation(Identifier featureId, Identifier id, String module, String type) {
+    public record SurfaceImplementation(ResourceId featureId, ResourceId id, String module, String type) {
         public SurfaceImplementation {
             Objects.requireNonNull(featureId, "featureId");
             Objects.requireNonNull(id, "id");

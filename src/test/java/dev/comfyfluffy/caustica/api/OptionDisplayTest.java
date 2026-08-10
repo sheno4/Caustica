@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.api;
 
-import net.minecraft.resources.Identifier;
+import dev.comfyfluffy.caustica.api.ResourceId;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -13,7 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class OptionDisplayTest {
-    private static final Identifier FEATURE = Identifier.fromNamespaceAndPath("test", "display");
+    private static final ResourceId FEATURE = ResourceId.of("test", "display");
 
     @Test
     void anOptionCarriesNoDisplayMetadataUntilItIsAskedFor() {
@@ -77,7 +77,7 @@ final class OptionDisplayTest {
 
     @Test
     void anOptionInAnUndeclaredGroupIsRejectedAtRegistration() {
-        CausticaRegistry registry = CausticaRegistry.withBuiltins();
+        CausticaRegistry registry = dev.comfyfluffy.caustica.TestRegistries.withBuiltins();
 
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
                 () -> registry.feature(FEATURE).option(Option.bool("flag", true).inGroup("ghost")).register());
@@ -86,7 +86,7 @@ final class OptionDisplayTest {
 
     @Test
     void twoHeadersInOneGroupAreRejectedAtRegistration() {
-        CausticaRegistry registry = CausticaRegistry.withBuiltins();
+        CausticaRegistry registry = dev.comfyfluffy.caustica.TestRegistries.withBuiltins();
 
         assertThrows(IllegalArgumentException.class, () -> registry.feature(FEATURE)
                 .group("bloom")
@@ -101,7 +101,7 @@ final class OptionDisplayTest {
      */
     @Test
     void anOptionKindTheStoreCannotBackIsRejectedAtRegistration() {
-        CausticaRegistry registry = CausticaRegistry.withBuiltins();
+        CausticaRegistry registry = dev.comfyfluffy.caustica.TestRegistries.withBuiltins();
 
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class, () -> registry.feature(FEATURE)
                 .option(Option.color("tint", 0xFF8800))
@@ -112,7 +112,7 @@ final class OptionDisplayTest {
 
     @Test
     void aDeclaredGroupSurvivesOntoTheFeatureInDeclarationOrder() {
-        CausticaRegistry registry = CausticaRegistry.withBuiltins();
+        CausticaRegistry registry = dev.comfyfluffy.caustica.TestRegistries.withBuiltins();
 
         Feature feature = registry.feature(FEATURE)
                 .group("bloom")
@@ -125,8 +125,8 @@ final class OptionDisplayTest {
 
     @Test
     void theBuiltinFeatureDeclaresEveryGroupItsPassesUse() {
-        Feature builtin = CausticaRegistry.withBuiltins().features()
-                .get(Identifier.fromNamespaceAndPath("caustica", "builtin"));
+        Feature builtin = dev.comfyfluffy.caustica.TestRegistries.withBuiltins().features()
+                .get(ResourceId.of("caustica", "builtin"));
 
         for (Option<?> option : builtin.options()) {
             assertTrue(option.group() != null && builtin.optionGroups().contains(option.group()),

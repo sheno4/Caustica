@@ -14,7 +14,7 @@ import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
 import dev.comfyfluffy.caustica.rt.accel.GpuImage;
-import net.minecraft.resources.Identifier;
+import dev.comfyfluffy.caustica.api.ResourceId;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VkCommandBuffer;
 
@@ -46,7 +46,7 @@ public final class RenderPassManager {
     private final Set<CausticaRenderPass> destroyed = new HashSet<>();
     private final Map<String, WorldResource> worldResources = new LinkedHashMap<>();
     private final Map<String, CausticaRenderPass> worldResourcePublishers = new LinkedHashMap<>();
-    private final Map<Identifier, Feature> passFeature;
+    private final Map<ResourceId, Feature> passFeature;
     private final CausticaOptions optionsStore;
     private GpuImage reconstructedColor;
     private GpuImage exposureImage;
@@ -98,7 +98,7 @@ public final class RenderPassManager {
     }
 
     private RenderPassManager(GpuContext ctx, List<CausticaRenderPass> ordered,
-                              Map<Identifier, Feature> passFeature, CausticaOptions optionsStore) {
+                              Map<ResourceId, Feature> passFeature, CausticaOptions optionsStore) {
         this.ctx = ctx;
         this.ordered = ordered;
         this.passFeature = passFeature;
@@ -113,10 +113,10 @@ public final class RenderPassManager {
      * values outlive the Vulkan device and have to be readable before one exists. Every reader is a pass
      * reading its own feature's options; engine code outside a pass has no path to them.
      */
-    public static RenderPassManager create(GpuContext ctx, Map<Identifier, Feature> features,
+    public static RenderPassManager create(GpuContext ctx, Map<ResourceId, Feature> features,
                                            CausticaOptions options) {
-        Map<Identifier, CausticaRenderPass> registered = new LinkedHashMap<>();
-        Map<Identifier, Feature> passFeature = new LinkedHashMap<>();
+        Map<ResourceId, CausticaRenderPass> registered = new LinkedHashMap<>();
+        Map<ResourceId, Feature> passFeature = new LinkedHashMap<>();
         for (Feature feature : features.values()) {
             for (CausticaRenderPass pass : feature.renderPasses()) {
                 registered.put(pass.id(), pass);
@@ -326,20 +326,20 @@ public final class RenderPassManager {
     }
 
     private static List<CausticaRenderPass> topoSortStage(List<CausticaRenderPass> stagePasses) {
-        Map<Identifier, CausticaRenderPass> byId = new LinkedHashMap<>();
+        Map<ResourceId, CausticaRenderPass> byId = new LinkedHashMap<>();
         for (CausticaRenderPass pass : stagePasses) {
             byId.put(pass.id(), pass);
         }
-        Map<Identifier, Integer> remainingDeps = new LinkedHashMap<>();
-        Map<Identifier, List<Identifier>> dependents = new LinkedHashMap<>();
+        Map<ResourceId, Integer> remainingDeps = new LinkedHashMap<>();
+        Map<ResourceId, List<ResourceId>> dependents = new LinkedHashMap<>();
         for (CausticaRenderPass pass : stagePasses) {
-            List<Identifier> afterHere = pass.after().stream().filter(byId::containsKey).toList();
+            List<ResourceId> afterHere = pass.after().stream().filter(byId::containsKey).toList();
             remainingDeps.put(pass.id(), afterHere.size());
-            for (Identifier dependency : afterHere) {
+            for (ResourceId dependency : afterHere) {
                 dependents.computeIfAbsent(dependency, ignored -> new ArrayList<>()).add(pass.id());
             }
         }
-        TreeSet<Identifier> ready = new TreeSet<>(Comparator.comparing(Identifier::toString));
+        TreeSet<ResourceId> ready = new TreeSet<>(Comparator.naturalOrder());
         remainingDeps.forEach((id, count) -> {
             if (count == 0) {
                 ready.add(id);
@@ -347,9 +347,9 @@ public final class RenderPassManager {
         });
         List<CausticaRenderPass> result = new ArrayList<>();
         while (!ready.isEmpty()) {
-            Identifier next = ready.pollFirst();
+            ResourceId next = ready.pollFirst();
             result.add(byId.get(next));
-            for (Identifier dependent : dependents.getOrDefault(next, List.of())) {
+            for (ResourceId dependent : dependents.getOrDefault(next, List.of())) {
                 int left = remainingDeps.merge(dependent, -1, Integer::sum);
                 if (left == 0) {
                     ready.add(dependent);
@@ -357,7 +357,7 @@ public final class RenderPassManager {
             }
         }
         if (result.size() != stagePasses.size()) {
-            Set<Identifier> cyclic = new HashSet<>(byId.keySet());
+            Set<ResourceId> cyclic = new HashSet<>(byId.keySet());
             result.forEach(pass -> cyclic.remove(pass.id()));
             throw new IllegalStateException("render pass ordering cycle involving " + cyclic);
         }

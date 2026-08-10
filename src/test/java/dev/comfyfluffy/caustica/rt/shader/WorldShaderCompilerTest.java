@@ -4,8 +4,8 @@ import dev.comfyfluffy.caustica.api.CausticaRegistry;
 import dev.comfyfluffy.caustica.api.FeatureCategory;
 import dev.comfyfluffy.caustica.api.ShaderSource;
 import dev.comfyfluffy.caustica.api.Slots;
-import net.minecraft.network.chat.Component;
-import net.minecraft.resources.Identifier;
+import dev.comfyfluffy.caustica.api.DisplayText;
+import dev.comfyfluffy.caustica.api.ResourceId;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -56,7 +56,7 @@ final class WorldShaderCompilerTest {
     @Test
     void isolatedCompilerCompilesEveryWorldStage(@TempDir Path cacheDirectory) throws Exception {
         try (WorldShaderCompiler compiler = WorldShaderCompiler.createIsolated(
-                cacheDirectory, CausticaRegistry.withBuiltins().selection())) {
+                cacheDirectory, dev.comfyfluffy.caustica.TestRegistries.withBuiltins().selection())) {
             List<byte[]> stages = List.of(
                     compiler.compilePlain("primary.rgen.slang", WorldShaderCompiler.ENTRY_POINT),
                     compiler.compileIndirect(false),
@@ -103,10 +103,10 @@ final class WorldShaderCompilerTest {
     @Test
     void compilesASelectedClasspathFeatureAndItsTransitiveImport(@TempDir Path cacheDirectory)
             throws Exception {
-        CausticaRegistry registry = CausticaRegistry.withBuiltins();
-        Identifier featureId = Identifier.fromNamespaceAndPath("test", "sky");
+        CausticaRegistry registry = dev.comfyfluffy.caustica.TestRegistries.withBuiltins();
+        ResourceId featureId = ResourceId.of("test", "sky");
         registry.feature(featureId)
-                .title(Component.literal("Test sky"))
+                .title(DisplayText.literal("Test sky"))
                 .category(FeatureCategory.SKY)
                 .shaderSource(ShaderSource.classpath("/caustica-test/shaders"))
                 .bind(Slots.SKY, "test_sky", "TestSky")
@@ -160,12 +160,12 @@ final class WorldShaderCompilerTest {
     }
 
     private static CausticaRegistry registryWithTestSurface(String module, String type) {
-        CausticaRegistry registry = CausticaRegistry.withBuiltins();
-        registry.feature(Identifier.fromNamespaceAndPath("test", "surface"))
-                .title(Component.literal("Test surface"))
+        CausticaRegistry registry = dev.comfyfluffy.caustica.TestRegistries.withBuiltins();
+        registry.feature(ResourceId.of("test", "surface"))
+                .title(DisplayText.literal("Test surface"))
                 .category(FeatureCategory.GENERAL)
                 .shaderSource(ShaderSource.classpath("/caustica-test/shaders"))
-                .surface(Identifier.fromNamespaceAndPath("test", "surface"), module, type)
+                .surface(ResourceId.of("test", "surface"), module, type)
                 .register();
         return registry;
     }
@@ -252,7 +252,7 @@ final class WorldShaderCompilerTest {
     }
 
     private static WorldShaderCompiler compiler(Path cacheDirectory) throws Exception {
-        return WorldShaderCompiler.create(cacheDirectory, CausticaRegistry.withBuiltins().selection());
+        return WorldShaderCompiler.create(cacheDirectory, dev.comfyfluffy.caustica.TestRegistries.withBuiltins().selection());
     }
 
     private static void assertSpirv(byte[] spirv, int minimumBytes) {

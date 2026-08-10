@@ -7,8 +7,9 @@ import dev.comfyfluffy.caustica.api.Feature;
 import dev.comfyfluffy.caustica.api.Option;
 import dev.comfyfluffy.caustica.api.Slot;
 import dev.comfyfluffy.caustica.api.Slots;
+import dev.comfyfluffy.caustica.minecraft.MinecraftDisplayText;
 import net.minecraft.network.chat.Component;
-import net.minecraft.resources.Identifier;
+import dev.comfyfluffy.caustica.api.ResourceId;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -91,7 +92,7 @@ public final class CausticaSections {
     static SettingsSection composition(CausticaRegistry registry) {
         List<SettingGroup> groups = new ArrayList<>();
         for (Slot slot : Slots.ALL) {
-            groups.add(new SettingGroup(slot.id().getPath(), LangKeys.slotLabel(slot), null,
+            groups.add(new SettingGroup(slot.id().path(), LangKeys.slotLabel(slot), null,
                     List.of(SlotControls.of(registry, slot))));
         }
         return new SettingsSection(COMPOSITION_ID, Component.translatable("caustica.section.composition"),
@@ -131,11 +132,12 @@ public final class CausticaSections {
         if (!ungrouped.isEmpty()) {
             groups.add(new SettingGroup("other", Component.translatable("caustica.group.other"), null, ungrouped));
         }
-        return new SettingsSection(feature.id().toString(), feature.title(), accentFor(feature.id()), groups);
+        return new SettingsSection(feature.id().toString(), MinecraftDisplayText.component(feature.title()),
+                accentFor(feature.id()), groups);
     }
 
-    static int accentFor(Identifier featureId) {
-        if (featureId.equals(Identifier.fromNamespaceAndPath("caustica", "builtin"))) {
+    static int accentFor(ResourceId featureId) {
+        if (featureId.equals(ResourceId.of("caustica", "builtin"))) {
             return ACCENT_BUILTIN;
         }
         return ACCENT_WHEEL[Math.floorMod(featureId.hashCode(), ACCENT_WHEEL.length)];

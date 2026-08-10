@@ -4,7 +4,7 @@ import dev.comfyfluffy.caustica.api.CausticaRegistry;
 import dev.comfyfluffy.caustica.api.Feature;
 import dev.comfyfluffy.caustica.api.Option;
 import dev.comfyfluffy.caustica.api.OptionValues;
-import net.minecraft.resources.Identifier;
+import dev.comfyfluffy.caustica.api.ResourceId;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -18,8 +18,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class CausticaOptionsTest {
-    private static final Identifier FEATURE = Identifier.fromNamespaceAndPath("test", "options");
-    private static final Identifier OTHER_FEATURE = Identifier.fromNamespaceAndPath("test", "other");
+    private static final ResourceId FEATURE = ResourceId.of("test", "options");
+    private static final ResourceId OTHER_FEATURE = ResourceId.of("test", "other");
     private static final Option<Float> ALPHA = Option.range("alpha", 0.0f, 1.0f, 0.25f);
     private static final Option<Boolean> FLAG = Option.bool("flag", true);
     // A dotted id, as the builtin feature's "bloom.strength" is: it nests inside the feature's own TOML
@@ -32,8 +32,8 @@ final class CausticaOptionsTest {
     @TempDir
     Path configDir;
 
-    private Map<Identifier, Feature> features() {
-        CausticaRegistry registry = CausticaRegistry.withBuiltins();
+    private Map<ResourceId, Feature> features() {
+        CausticaRegistry registry = dev.comfyfluffy.caustica.TestRegistries.withBuiltins();
         registry.feature(FEATURE).option(ALPHA).option(FLAG).option(NESTED).register();
         // A second feature declaring the *same* option ids, to pin that values are namespaced per feature.
         registry.feature(OTHER_FEATURE).option(ALPHA).register();
@@ -215,7 +215,7 @@ final class CausticaOptionsTest {
     @Test
     void anUnknownFeatureThrows() {
         CausticaOptions options = load();
-        Identifier unknown = Identifier.fromNamespaceAndPath("test", "missing");
+        ResourceId unknown = ResourceId.of("test", "missing");
 
         assertThrows(NullPointerException.class, () -> options.options(unknown));
         assertThrows(NullPointerException.class, () -> options.set(unknown, ALPHA, 0.5));

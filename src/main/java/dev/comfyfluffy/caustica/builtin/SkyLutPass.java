@@ -5,6 +5,7 @@ import dev.comfyfluffy.caustica.api.ShaderSource;
 import dev.comfyfluffy.caustica.api.pass.CausticaRenderPass;
 import dev.comfyfluffy.caustica.api.pass.PassFrame;
 import dev.comfyfluffy.caustica.api.OptionValues;
+import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.api.pass.PassSetup;
 import dev.comfyfluffy.caustica.api.pass.RenderStage;
 import dev.comfyfluffy.caustica.api.provider.LightProvider;
@@ -56,7 +57,7 @@ import java.util.List;
  * does not fire. The engine consuming that submission is what makes it real.
  */
 public final class SkyLutPass implements CausticaRenderPass, LightProvider {
-    public static final Identifier ID = Identifier.fromNamespaceAndPath("caustica", "sky_lut");
+    public static final ResourceId ID = ResourceId.of("caustica", "sky_lut");
     private static final long SUN_LIGHT_KEY = 0L;
     private static final long MOON_LIGHT_KEY = 1L;
     private static final Identifier SUN_SPRITE_ID = Identifier.withDefaultNamespace("sun");
@@ -143,7 +144,7 @@ public final class SkyLutPass implements CausticaRenderPass, LightProvider {
     private volatile SkyState lastSkyState;
 
     @Override
-    public Identifier id() {
+    public ResourceId id() {
         return ID;
     }
 
@@ -186,7 +187,7 @@ public final class SkyLutPass implements CausticaRenderPass, LightProvider {
 
     private ComputeDispatch compile(String module, List<ComputeDispatch.Binding> bindings,
                                     int pushConstantBytes) throws IOException {
-        Identifier programId = Identifier.fromNamespaceAndPath("caustica", module);
+        ResourceId programId = ResourceId.of("caustica", module);
         PassShaderCompiler.CompiledProgram compiled = PassShaderCompiler.compile(
                 PassShaderCompiler.defaultCacheRoot(), programId, SHADERS, module, "main");
         PassShaderCompiler.validateBindings(programId, compiled.reflectionJson(), bindings,

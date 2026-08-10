@@ -55,7 +55,7 @@ final class LangKeysTest {
     @Test
     void everyDerivedKeyHasAnEnglishEntry() throws IOException {
         JsonObject lang = lang();
-        CausticaRegistry registry = CausticaRegistry.withBuiltins();
+        CausticaRegistry registry = dev.comfyfluffy.caustica.TestRegistries.withBuiltins();
         CausticaConfig.ensureRegistered();
         List<String> missing = new ArrayList<>();
 
@@ -121,7 +121,7 @@ final class LangKeysTest {
     void everyFrameSummaryRowHasATitle() throws IOException {
         JsonObject lang = lang();
         List<String> missing = new ArrayList<>();
-        CompositionSummary summary = CompositionSummary.of(CausticaRegistry.withBuiltins());
+        CompositionSummary summary = CompositionSummary.of(dev.comfyfluffy.caustica.TestRegistries.withBuiltins());
 
         summary.lanes().forEach(lane -> require(lang, missing, lane.title()));
         summary.providers().forEach(row -> require(lang, missing, row.title()));

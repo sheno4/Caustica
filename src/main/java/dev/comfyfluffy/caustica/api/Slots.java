@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.api;
 
-import net.minecraft.resources.Identifier;
+import dev.comfyfluffy.caustica.api.ResourceId;
 
 import java.util.List;
 
@@ -17,6 +17,6 @@ public final class Slots {
     }
 
     private static Slot slot(String path, String module, String type) {
-        return new Slot(Identifier.fromNamespaceAndPath("caustica", path), module, type);
+        return new Slot(ResourceId.of("caustica", path), module, type);
     }
 }

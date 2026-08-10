@@ -4,8 +4,9 @@ import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.api.CausticaRegistry;
 import dev.comfyfluffy.caustica.api.Slot;
 import dev.comfyfluffy.caustica.api.Slots;
+import dev.comfyfluffy.caustica.minecraft.MinecraftDisplayText;
 import net.minecraft.network.chat.Component;
-import net.minecraft.resources.Identifier;
+import dev.comfyfluffy.caustica.api.ResourceId;
 
 import java.util.List;
 
@@ -23,7 +24,7 @@ public final class SlotControls {
     private SlotControls() {
     }
 
-    public static SettingControl.ChoiceControl<Identifier> of(CausticaRegistry registry, Slot slot) {
+    public static SettingControl.ChoiceControl<ResourceId> of(CausticaRegistry registry, Slot slot) {
         return new SlotRow(registry, slot, persistedSetting(slot));
     }
 
@@ -36,7 +37,7 @@ public final class SlotControls {
     }
 
     private record SlotRow(CausticaRegistry registry, Slot slot, CausticaConfig.OptionalStringSetting persisted)
-            implements SettingControl.ChoiceControl<Identifier> {
+            implements SettingControl.ChoiceControl<ResourceId> {
         @Override
         public String id() {
             return slot.id().toString();
@@ -58,17 +59,17 @@ public final class SlotControls {
         }
 
         @Override
-        public List<Identifier> choices() {
+        public List<ResourceId> choices() {
             return registry.candidates(slot);
         }
 
         @Override
-        public Identifier get() {
+        public ResourceId get() {
             return registry.selectedFeature(slot);
         }
 
         @Override
-        public void set(Identifier value) {
+        public void set(ResourceId value) {
             if (value.equals(registry.defaultFeature(slot))) {
                 registry.selectDefault(slot);
                 if (persisted != null) {
@@ -83,14 +84,14 @@ public final class SlotControls {
         }
 
         @Override
-        public Identifier defaultValue() {
+        public ResourceId defaultValue() {
             return registry.defaultFeature(slot);
         }
 
         /** The default is marked in the label, since a dropdown shows one entry at a time. */
         @Override
-        public Component labelOf(Identifier value) {
-            Component title = registry.features().get(value).title();
+        public Component labelOf(ResourceId value) {
+            Component title = MinecraftDisplayText.component(registry.features().get(value).title());
             if (!value.equals(registry.defaultFeature(slot))) {
                 return title;
             }
