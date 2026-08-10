@@ -9,8 +9,6 @@ import dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg;
 
 import it.unimi.dsi.fastutil.longs.LongList;
 
-import net.minecraft.client.Minecraft;
-
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.KHRSwapchain;
 import org.lwjgl.vulkan.KHRSynchronization2;
@@ -75,10 +73,10 @@ public final class RtFramePresenter {
     private RtFramePresenter() {
     }
 
-    /** Whether FG extra-present should run this frame (enabled, available, in a world). */
-    public boolean isActive() {
+    /** Whether FG extra-present should run this frame for a host scene that is ready to present. */
+    public boolean isActive(boolean sceneAvailable) {
         return !failed && RtDlssFg.enabled() && RtDlssFg.INSTANCE.isAvailable()
-                && Minecraft.getInstance().level != null;
+                && sceneAvailable;
     }
 
     /**

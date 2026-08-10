@@ -15,6 +15,7 @@ import dev.comfyfluffy.caustica.rt.RtHdr;
 import dev.comfyfluffy.caustica.rt.RtReflex;
 import dev.comfyfluffy.caustica.rt.RtRuntime;
 import it.unimi.dsi.fastutil.longs.LongList;
+import net.minecraft.client.Minecraft;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.KHRSurface;
 import org.lwjgl.vulkan.KHRSwapchain;
@@ -383,7 +384,8 @@ public abstract class VulkanGpuSurfaceMixin {
 	 */
 	@Inject(method = "blitFromTexture", at = @At("TAIL"))
 	private void caustica$presentGeneratedFrames(CommandEncoderBackend commandEncoder, GpuTextureView textureView, CallbackInfo ci) {
-		if (this.currentImageIndex < 0 || !RtFramePresenter.INSTANCE.isActive()) {
+		if (this.currentImageIndex < 0
+				|| !RtFramePresenter.INSTANCE.isActive(Minecraft.getInstance().level != null)) {
 			return;
 		}
 		long srcImage = textureView.texture() instanceof com.mojang.blaze3d.vulkan.VulkanGpuTexture t ? t.vkImage() : 0L;
@@ -407,7 +409,8 @@ public abstract class VulkanGpuSurfaceMixin {
 	 */
 	@Unique
 	private void caustica$presentGeneratedFramesHdr(VulkanCommandEncoder enc, RtComposite rt) {
-		if (this.currentImageIndex < 0 || !RtFramePresenter.INSTANCE.isActive()) {
+		if (this.currentImageIndex < 0
+				|| !RtFramePresenter.INSTANCE.isActive(Minecraft.getInstance().level != null)) {
 			return;
 		}
 		long hdrView = rt.hdrBackbufferView();

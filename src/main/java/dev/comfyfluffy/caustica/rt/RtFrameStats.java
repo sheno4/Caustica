@@ -14,20 +14,21 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import net.fabricmc.loader.api.FabricLoader;
+import java.util.Objects;
 
 /**
  * Opt-in render-frame timing and hitch detection. Gated by {@code -Dcaustica.rt.frameStats}; every method
  * is a cheap branch when disabled. The profile begins when RT client-tick work starts (or at
  * {@code GameRenderer.render} HEAD when there was no RT tick work) and ends at render TAIL, so the hitch
  * decision uses one frame envelope rather than one action/pass at a time. Every completed frame is appended
- * as one row to {@code <gameDir>/rt-frame-stats/frame.csv} (fresh file per session), and a log line is
+ * as one row to {@code <outputDirectory>/frame.csv} (fresh file per session), and a log line is
  * emitted only when the frame exceeds {@value #HITCH_MULTIPLIER}x its rolling median. That hitch line
  * includes all detailed stage timings and counters recorded during the frame.
  */
 public final class RtFrameStats {
     private static final int MEDIAN_WINDOW = 64;
     private static final double HITCH_MULTIPLIER = 1.5;
+    private static final OutputLocation OUTPUT = new OutputLocation(defaultOutputDirectory());
 
     // trackGc: per-frame GC deltas (collection count + reported pause ms) help distinguish JVM pauses from
     // uninstrumented render work when a hitch's unaccounted time is large.
@@ -117,6 +118,48 @@ public final class RtFrameStats {
     }
 
     private RtFrameStats() {
+    }
+
+    /**
+     * Select the directory profiles lazily create their CSV files in. Bootstrap must call this before any
+     * profile attempts to open its writer; changing the directory after that point is an error.
+     */
+    public static void configureOutputDirectory(Path directory) {
+        OUTPUT.configure(directory);
+    }
+
+    static Path defaultOutputDirectory() {
+        return Path.of(System.getProperty("user.dir", "."), "rt-frame-stats")
+                .toAbsolutePath().normalize();
+    }
+
+    static final class OutputLocation {
+        private Path directory;
+        private boolean writerInitializationAttempted;
+
+        OutputLocation(Path directory) {
+            this.directory = normalize(directory);
+        }
+
+        synchronized void configure(Path directory) {
+            if (writerInitializationAttempted) {
+                throw new IllegalStateException("RtFrameStats output directory is fixed after writer initialization");
+            }
+            this.directory = normalize(directory);
+        }
+
+        synchronized Path beginWriterInitialization() {
+            writerInitializationAttempted = true;
+            return directory;
+        }
+
+        synchronized Path directory() {
+            return directory;
+        }
+
+        private static Path normalize(Path directory) {
+            return Objects.requireNonNull(directory, "directory").toAbsolutePath().normalize();
+        }
     }
 
     public static boolean enabled() {
@@ -283,7 +326,7 @@ public final class RtFrameStats {
                 return;
             }
             csvOpenAttempted = true;
-            Path dir = FabricLoader.getInstance().getGameDir().resolve("rt-frame-stats");
+            Path dir = OUTPUT.beginWriterInitialization();
             Path file = dir.resolve(name + ".csv");
             try {
                 Files.createDirectories(dir);
