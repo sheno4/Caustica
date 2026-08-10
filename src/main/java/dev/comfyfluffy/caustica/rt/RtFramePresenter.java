@@ -6,6 +6,7 @@ import com.mojang.blaze3d.vulkan.VulkanDevice;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.rt.accel.GpuImage;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg;
+import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
 
 import it.unimi.dsi.fastutil.longs.LongList;
 
@@ -93,7 +94,8 @@ public final class RtFramePresenter {
      */
     public void prepareExtraFrames(VulkanCommandEncoder enc, VulkanDevice device, long swapchain,
             LongList swapchainImages, long[] presentSemaphores, int swapW, int swapH,
-            long backbufferView, long srcImage, int srcW, int srcH, int generatedCount, boolean hdrBackbuffer) {
+            long backbufferView, long srcImage, int srcW, int srcH, int generatedCount,
+            boolean hdrBackbuffer, UiPresentationResources ui) {
         pendingCount = 0;
         if (failed || swapchain == 0L || srcImage == 0L || generatedCount <= 0) {
             return;
@@ -105,7 +107,7 @@ public final class RtFramePresenter {
                 // back to duplicating the real frame for just this one frame. A genuine FG failure instead
                 // throws, caught below, which disables FG for the session.
                 GpuImage interp = RtComposite.INSTANCE.fgInterpolate(enc, backbufferView, srcImage,
-                        swapW, swapH, i + 1, generatedCount, hdrBackbuffer);
+                        swapW, swapH, i + 1, generatedCount, hdrBackbuffer, ui);
                 if (interp != null) {
                     interpOkInWindow++;
                 } else {

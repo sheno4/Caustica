@@ -3,10 +3,8 @@ package dev.comfyfluffy.caustica.rt;
 import com.mojang.blaze3d.pipeline.RenderTarget;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.textures.GpuTexture;
-import com.mojang.blaze3d.textures.GpuTextureView;
 import com.mojang.blaze3d.vulkan.VulkanCommandEncoder;
 import com.mojang.blaze3d.vulkan.VulkanGpuTexture;
-import com.mojang.blaze3d.vulkan.VulkanGpuTextureView;
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.api.CausticaApi;
@@ -14,10 +12,12 @@ import dev.comfyfluffy.caustica.api.CausticaRegistry;
 import dev.comfyfluffy.caustica.api.Slots;
 import dev.comfyfluffy.caustica.api.pass.RenderStage;
 import dev.comfyfluffy.caustica.client.CausticaJitter;
+import dev.comfyfluffy.caustica.engine.frame.DamageOverlay;
 import dev.comfyfluffy.caustica.engine.frame.FrameSnapshot;
+import dev.comfyfluffy.caustica.engine.frame.SceneResources;
+import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.mixin.CommandEncoderAccessor;
-import dev.comfyfluffy.caustica.minecraft.MinecraftUiOverlay;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushConstantsData;
 import dev.comfyfluffy.caustica.rt.light.RtProviderLights;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushData;
@@ -26,12 +26,6 @@ import dev.comfyfluffy.caustica.rt.gen.WorldPushData.Float2;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushData.Float3;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushData.Float4;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushData.Int4;
-import net.fabricmc.loader.api.FabricLoader;
-import net.minecraft.client.Minecraft;
-import net.minecraft.client.renderer.texture.TextureAtlas;
-import net.minecraft.client.resources.model.ModelBakery;
-import net.minecraft.core.BlockPos;
-import net.minecraft.util.Mth;
 import org.joml.Matrix4f;
 import org.joml.Matrix4fc;
 import org.lwjgl.system.MemoryStack;
@@ -120,6 +114,11 @@ public final class RtComposite {
             runnable -> shaderThread(runnable, "build"));
     private static final Map<WorldShaderCacheKey, WorldShaderBuild> WORLD_SHADER_CACHE =
             new ConcurrentHashMap<>();
+    private static Path shaderCacheRoot;
+
+    public static void configureShaderCacheRoot(Path root) {
+        shaderCacheRoot = Objects.requireNonNull(root, "root").toAbsolutePath().normalize();
+    }
 
     private static Thread shaderThread(Runnable runnable, String role) {
         Thread thread = new Thread(runnable,
@@ -183,14 +182,15 @@ public final class RtComposite {
     private WorldShaderBuild worldShaderBuild;
 
     private RtPipeline worldPipeline;
-    // Set at the HEAD of Minecraft.reloadResourcePacks() (mixin): a resource reload recreates the block
+    // Set at the start of a host resource reload: a reload recreates the block
     // atlas + entity textures. We tear down the world pipeline there (drops all descriptor references) and
     // rebuild it once the NEW atlas is in place — detected by the atlas view handle changing away from
-    // boundBlockAlbedoAtlasHandle to a fresh non-zero value (MC's deferred free keeps the old handle live for a few
+    // boundBlockAlbedoAtlasHandle to a fresh non-zero value (deferred free keeps the old handle live for a few
     // frames, so "handle != 0" alone isn't enough to tell old from new).
     private volatile boolean reloadRebindRequested;
     // The block-atlas view handle currently bound into the world pipeline (set by bindWorldTextures).
     private long boundBlockAlbedoAtlasHandle;
+    private long baseColorAtlasView;
     private int bindlessTextureCapacity;
     // True after the LabPBR atlases have been resolved/bound for the currently alive world pipeline.
     private boolean materialBindingsReady;
@@ -488,7 +488,7 @@ public final class RtComposite {
             return true;
         }
         if (reloadRebindRequested) {
-            long atlas = blockAlbedoAtlasView();
+            long atlas = baseColorAtlasView;
             return atlas == 0L || atlas == boundBlockAlbedoAtlasHandle;
         }
         return false;
@@ -536,8 +536,8 @@ public final class RtComposite {
     }
 
     /**
-     * Reset per-frame present state at the very start of {@link net.minecraft.client.renderer.GameRenderer}
-     * render (before any RT work). Critical for menu/no-world frames: {@link #composite()} is only called
+     * Reset per-frame present state at the very start of host rendering. Critical for menu/no-world
+     * frames: {@link #composite()} is only called
      * while a level is rendering ({@code WorldRenderScaler} opens its window in {@code renderLevel}), so on
      * menu frames {@code composite} never runs and {@code hdrWrittenThisFrame} would otherwise keep its stale
      * {@code true} from the last world frame — presenting a black/stale HDR image behind the menu. Clearing it
@@ -706,7 +706,7 @@ public final class RtComposite {
             lookLut = RtToneLut.loadResource(ctx, LOOK.lmtResource());
         }
         if (reloadRebindRequested) {
-            long atlas = blockAlbedoAtlasView();
+            long atlas = baseColorAtlasView;
             if (atlas == 0L || atlas == boundBlockAlbedoAtlasHandle) {
                 return false;
             }
@@ -728,14 +728,15 @@ public final class RtComposite {
      * atlas), or until we're in a world with the atlas ready. The heavy {@code _s}/{@code _n} atlases are
      * deliberately not built at the menu — only once a world is entered.
      */
-    public boolean ensureResourcesReady(GpuContext ctx) {
+    public boolean ensureResourcesReady(GpuContext ctx, SceneResources sceneResources) {
+        baseColorAtlasView = sceneResources.baseColorAtlasView();
         if (failed || reloadRebindRequested) {
             return false;
         }
         if (worldPipeline != null) {
             return true;
         }
-        if (Minecraft.getInstance().level == null || blockAlbedoAtlasView() == 0L) {
+        if (!sceneResources.sceneReady() || baseColorAtlasView == 0L) {
             return false;
         }
         try {
@@ -856,8 +857,8 @@ public final class RtComposite {
             return true;
         }
         if (pendingWorldShaderBuild == null) {
-            Path cache = FabricLoader.getInstance().getGameDir()
-                    .resolve("caustica-shaders").resolve("sources");
+            Path cache = Objects.requireNonNull(shaderCacheRoot,
+                    "shader cache root was not configured by the host");
             CausticaMod.LOGGER.info("Preparing world shaders off thread");
             AtomicBoolean abandoned = new AtomicBoolean();
             pendingWorldShaderBuild = new PendingWorldShaderBuild(key, abandoned,
@@ -970,7 +971,7 @@ public final class RtComposite {
      */
     private void bindWorldTextures(GpuContext ctx) {
         long sampler = atlasSampler(ctx);
-        long atlasView = blockAlbedoAtlasView();
+        long atlasView = baseColorAtlasView;
         boundBlockAlbedoAtlasHandle = atlasView; // remember what we bound so a reload can detect the new atlas
         worldPipeline.setBlockAlbedoAtlas(atlasView, sampler);
         // Bindless slot 0 = fallback texture (the block atlas) so an entity whose texture can't be
@@ -1051,12 +1052,11 @@ public final class RtComposite {
     }
 
     /**
-     * Hooked at the HEAD of {@link net.minecraft.client.Minecraft#reloadResourcePacks()} (mixin). A
-     * resource reload re-stitches the block atlas (and reloads entity textures): MC frees the old GPU
+     * Called before the host re-stitches the block atlas and reloads entity textures. The host frees old GPU
      * images via its deferred destruction queue, which refuses while any descriptor set still references
      * them ("in use by VkDescriptorSet" → device lost). So we drain in-flight frames and then <b>destroy
      * the world pipeline outright</b> — dropping every descriptor reference (block atlas binding 2 +
-     * bindless set) — so MC can free its textures cleanly. The pipeline is cheap to rebuild (no terrain
+     * bindless set) — so the host can free its textures cleanly. The pipeline is cheap to rebuild (no terrain
      * re-upload); {@code ensureWorld} recreates it on the first world frame after the reload, once the new
      * atlas is ready (gated in {@link #composite}). The new material epoch clears terrain before trace.
      */
@@ -1337,11 +1337,7 @@ public final class RtComposite {
                     snapshot.cameraX(), snapshot.cameraY(), snapshot.cameraZ(),
                     frameProjection, frameViewRotation);
             frameEntities = fe;
-            // Block-breaking overlay: resolves each destroy-stage RenderType's texture into the
-            // SAME bindless entity-texture array (destroy_stage_N.png is a standalone Sampler0 texture,
-            // not a block-atlas sprite — see ModelBakery.BREAKING_LOCATIONS/DESTROY_TYPES), so any newly
-            // resolved slot rides along with the uploadPending() call right below.
-            BreakEntry[] breaking = breakingEntries(terrain);
+            BreakEntry[] breaking = breakingEntries(snapshot, terrain);
             new WorldPushData(
                     frameInvViewProj,
                     new Float3(sceneOrigin.relativeX(snapshot.cameraX()),
@@ -1532,37 +1528,19 @@ public final class RtComposite {
         exposure.markStateReadbackUse(graphicsUse);
     }
 
-    /**
-     * Block-breaking overlay: mirrors vanilla's {@code ClientLevel.destructionProgress()} (populated
-     * by network packets, independent of the cancelled {@code LevelRenderer.render()}) into the push's
-     * {@code breaking[]} list, so {@code world.rchit} can blend
-     * the matching destroy-stage crack texture into a hit terrain block's albedo. Each block's own
-     * destroy-stage texture ({@code minecraft:textures/block/destroy_stage_N.png}, resolved via
-     * {@link ModelBakery#DESTROY_TYPES}) is a standalone {@code Sampler0} texture, not a block-atlas sprite,
-     * so it rides the same bindless entity-texture array as entity textures ({@link RtEntityTextures}).
-     */
-    private BreakEntry[] breakingEntries(RtTerrain terrain) {
+    /** Rebase this frame's host-authored damage overlays into the shader push array. */
+    private BreakEntry[] breakingEntries(FrameSnapshot snapshot, RtTerrain terrain) {
         BreakEntry[] result = new BreakEntry[WorldPushData.BREAKING_CAPACITY];
         int count = 0;
-        var level = Minecraft.getInstance().level;
-        if (level != null) {
-            for (var entry : level.destructionProgress().long2ObjectEntrySet()) {
-                if (count >= result.length) {
-                    break;
-                }
-                var progresses = entry.getValue();
-                if (progresses == null || progresses.isEmpty()) {
-                    continue;
-                }
-                int stage = Mth.clamp(progresses.last().getProgress(), 0, 9);
-                BlockPos pos = BlockPos.of(entry.getLongKey());
-                int slot = RtEntityTextures.INSTANCE.slotFor(ModelBakery.DESTROY_TYPES.get(stage));
-                result[count++] = new BreakEntry(new Int4(
-                        pos.getX() - terrain.blockX,
-                        pos.getY() - terrain.blockY,
-                        pos.getZ() - terrain.blockZ,
-                        slot));
+        for (DamageOverlay overlay : snapshot.damageOverlays()) {
+            if (count >= result.length) {
+                break;
             }
+            result[count++] = new BreakEntry(new Int4(
+                    overlay.worldX() - terrain.blockX,
+                    overlay.worldY() - terrain.blockY,
+                    overlay.worldZ() - terrain.blockZ,
+                    overlay.textureSlot()));
         }
         return count == result.length ? result : java.util.Arrays.copyOf(result, count);
     }
@@ -1723,19 +1701,6 @@ public final class RtComposite {
         return atlasSampler;
     }
 
-    private static long blockAlbedoAtlasView() {
-        GpuTextureView view = Minecraft.getInstance().getTextureManager()
-                .getTexture(TextureAtlas.LOCATION_BLOCKS).getTextureView();
-        return vkImageView(view);
-    }
-
-    private static long vkImageView(GpuTextureView view) {
-        if (view instanceof VulkanGpuTextureView vulkanView) {
-            return vulkanView.vkImageView();
-        }
-        throw new IllegalStateException("cannot resolve VkImageView for " + view);
-    }
-
     private static long vkImage(GpuTexture texture) {
         if (texture instanceof VulkanGpuTexture vulkanTexture) {
             return vulkanTexture.vkImage();
@@ -1774,14 +1739,15 @@ public final class RtComposite {
     }
 
     /**
-     * Blit this frame's PQ-encoded HDR image straight into the swapchain image, replacing Minecraft's SDR
+     * Blit this frame's PQ-encoded HDR image straight into the swapchain image, replacing the host SDR
      * blit. Replicates {@code VulkanGpuSurface.blitFromTexture}'s barrier + acquire-wait/present-signal
      * sequence with the HDR {@link GpuImage} as the (GENERAL-layout) source; an added memory barrier makes the
      * display-compute writes visible to the blit read. The SDR main target is bypassed; the combined UI image
      * is blended over the HDR image here at paper white before the swapchain blit. The magic stage/access
      * values mirror vanilla {@code blitFromTexture} exactly. Y is flipped to match the vanilla swapchain blit.
      */
-    public void presentHdr(VulkanCommandEncoder enc, long swapchainImage, int swapW, int swapH, long acquireSem, long presentSem) {
+    public void presentHdr(VulkanCommandEncoder enc, long swapchainImage, int swapW, int swapH,
+                           long acquireSem, long presentSem, UiPresentationResources ui) {
         GpuImage src = hdrDisplayImage;
         int copyW = Math.min(swapW, src.width);
         int copyH = Math.min(swapH, src.height);
@@ -1801,7 +1767,7 @@ public final class RtComposite {
             // the compute pass. A memory barrier first makes the overlay writes + the world HDR writes visible
             // to the compute; the dep1 barrier below (ALL writes -> transfer read) then covers the compute's
             // HDR write for the blit.
-            long overlayView = MinecraftUiOverlay.populatedThisFrame() ? MinecraftUiOverlay.overlayColorView() : 0L;
+            long overlayView = ui.populated() ? ui.colorView() : 0L;
             if (overlayView != 0L) {
                 ensureHdrUiResources();
                 if (hdrCompositePipeline != null) {
@@ -1812,7 +1778,6 @@ public final class RtComposite {
                     hdrCompositePipeline.setImages(hdrDisplayImage.view, overlayView, hdrUiSampler);
                     hdrCompositePipeline.dispatch(cmd, src.width, src.height, CausticaConfig.Rt.Hdr.uiNits());
                 }
-                MinecraftUiOverlay.markConsumed();
             }
             // Swapchain UNDEFINED -> TRANSFER_DST, plus make the HDR compute writes visible to the blit read.
             VkImageMemoryBarrier2.Buffer toDst = VkImageMemoryBarrier2.calloc(1, stack).sType$Default();
@@ -2004,14 +1969,13 @@ public final class RtComposite {
      * DLSS Frame Generation quality: capture a copy of {@code main} (the main render target) into
      * {@link #fgHudlessImage} for {@link #fgInterpolate} to feed DLSSG as the "hudless" resource. Call from
      * {@code GameRendererMixin} right after {@code GuiRenderer.render()} but BEFORE
-     * {@link MinecraftUiOverlay#compositeIfUsed()} — at that point, when the UI overlay redirect is active, {@code
-     * main} still has no combined UI baked in (world overlays, hand/screen effects and GUI went to the
-     * overlay target instead). No-op (and {@link #fgInterpolate} passes 0/0/0 for hudless, same as always)
+     * the host composites its UI layer. At that point, when the UI redirect is active, {@code main} still
+     * has no combined UI baked in. No-op (and {@link #fgInterpolate} passes 0/0/0 for hudless, same as always)
      * unless both FG and the UI overlay redirect are active — capturing this without the redirect would just
      * copy the ALREADY-composited backbuffer, which is useless as a distinct hudless input.
      */
-    public void captureFgHudless(RenderTarget main) {
-        if (!RtDlssFg.enabled() || !MinecraftUiOverlay.enabled() || main == null || main.getColorTexture() == null) {
+    public void captureFgHudless(RenderTarget main, UiPresentationResources ui) {
+        if (!RtDlssFg.enabled() || !ui.enabled() || main == null || main.getColorTexture() == null) {
             return;
         }
         GpuContext ctx = GpuContext.currentOrNull();
@@ -2081,7 +2045,7 @@ public final class RtComposite {
 
     /**
      * DLSS Frame Generation: record the DLSSG evaluate for generated frame {@code index} of {@code count}
-     * (backbuffer = the final frame; HW depth = {@code gDepth}; motion = {@code gMotion}) into Minecraft's
+     * (backbuffer = the final frame; HW depth = {@code gDepth}; motion = {@code gMotion}) into the host
      * command encoder, returning the interpolated output image (backbuffer size) for {@link RtFramePresenter}
      * to blit into a generated swapchain image. On {@code index == 1} it ensures the feature (created in its
      * own synchronous submit), the per-index output images, and the jitter-free reprojection matrices.
@@ -2105,11 +2069,11 @@ public final class RtComposite {
      * #presentHdr} <em>before</em> its own UI composite ran, mirroring {@link #captureFgHudless}'s pre-UI
      * timing); and DLSSG's own (also PQ-encoded) output is returned as-is, since the swapchain itself is
      * PQ-native and can blit it directly. The UI resource itself needs no HDR-specific handling — it's the
-     * same combined {@link MinecraftUiOverlay} texture used by both present paths (only the *compositing* math that
-     * consumes it differs, done separately by {@code presentHdr}/{@code MinecraftUiOverlay}, not here).
+     * same combined host UI texture used by both present paths; only the compositing math differs.
      */
     public GpuImage fgInterpolate(VulkanCommandEncoder enc, long backbufferView, long backbufferImage,
-            int swapW, int swapH, int index, int count, boolean hdrBackbuffer) {
+            int swapW, int swapH, int index, int count, boolean hdrBackbuffer,
+            UiPresentationResources ui) {
         if (failed || gDepth == null || gMotion == null || frameSnapshot == null) {
             return null;
         }
@@ -2142,10 +2106,10 @@ public final class RtComposite {
         long hudlessView = hudlessReady ? hudlessSrc.view : 0L;
         long hudlessImg = hudlessReady ? hudlessSrc.image : 0L;
         int hudlessFmt = hdrBackbuffer ? VK10.VK_FORMAT_R16G16B16A16_SFLOAT : VK10.VK_FORMAT_R8G8B8A8_UNORM;
-        boolean uiReady = MinecraftUiOverlay.overlayWidth() == swapW && MinecraftUiOverlay.overlayHeight() == swapH
-                && MinecraftUiOverlay.overlayColorView() != 0L && MinecraftUiOverlay.overlayColorImage() != 0L;
-        long uiView = uiReady ? MinecraftUiOverlay.overlayColorView() : 0L;
-        long uiImg = uiReady ? MinecraftUiOverlay.overlayColorImage() : 0L;
+        boolean uiReady = ui.width() == swapW && ui.height() == swapH
+                && ui.colorView() != 0L && ui.colorImage() != 0L;
+        long uiView = uiReady ? ui.colorView() : 0L;
+        long uiImg = uiReady ? ui.colorImage() : 0L;
 
         VkCommandBuffer cmd = enc.allocateAndBeginTransientCommandBuffer();
         boolean ok = RtDlssFg.INSTANCE.evaluate(cmd.address(),

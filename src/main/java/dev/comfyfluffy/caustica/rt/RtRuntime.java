@@ -8,6 +8,7 @@ import dev.comfyfluffy.caustica.client.VanillaRenderController;
 import dev.comfyfluffy.caustica.client.WorldRenderScaler;
 import dev.comfyfluffy.caustica.mixin.GpuDeviceAccessor;
 import dev.comfyfluffy.caustica.minecraft.MinecraftUiOverlay;
+import dev.comfyfluffy.caustica.engine.frame.SceneResources;
 import dev.comfyfluffy.caustica.ngx.NgxRuntime;
 import dev.comfyfluffy.caustica.rt.entity.RtEntityTextures;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg;
@@ -35,7 +36,7 @@ public final class RtRuntime {
     }
 
     /** Reconcile the requested mode and advance session startup at the client-tick boundary. */
-    public void tick(boolean scenePresent, boolean startupSceneReady, long sceneId,
+    public void tick(SceneResources sceneResources, boolean startupSceneReady, long sceneId,
                      int displayWidth, int displayHeight, Runnable reconfigureSurface) {
         boolean requested = CausticaConfig.Rt.ENABLED.value();
         if (!requested) {
@@ -55,7 +56,7 @@ public final class RtRuntime {
         }
 
         boolean starting = state == State.STARTING;
-        boolean sessionReady = session.tick(scenePresent, sceneId, displayWidth, displayHeight, starting);
+        boolean sessionReady = session.tick(sceneResources, sceneId, displayWidth, displayHeight, starting);
         if (RtComposite.INSTANCE.hasFailed()) {
             fail(reconfigureSurface);
             return;
@@ -184,7 +185,7 @@ public final class RtRuntime {
     private static final class Session {
         private GpuContext context;
 
-        boolean tick(boolean scenePresent, long sceneId, int displayWidth, int displayHeight,
+        boolean tick(SceneResources sceneResources, long sceneId, int displayWidth, int displayHeight,
                      boolean starting) {
             if (context == null) {
                 context = GpuContext.get();
@@ -193,12 +194,12 @@ public final class RtRuntime {
                 }
             }
 
-            boolean resourcesReady = RtComposite.INSTANCE.ensureResourcesReady(context);
+            boolean resourcesReady = RtComposite.INSTANCE.ensureResourcesReady(context, sceneResources);
             if (resourcesReady) {
                 RtFrameStats.FRAME.beginIfInactive();
                 ProviderManager.INSTANCE.updateScenes();
             }
-            if (!scenePresent) {
+            if (!sceneResources.sceneReady()) {
                 return false;
             }
             if (starting && (displayWidth <= 0 || displayHeight <= 0

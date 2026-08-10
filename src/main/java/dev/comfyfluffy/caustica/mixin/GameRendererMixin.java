@@ -192,7 +192,8 @@ public abstract class GameRendererMixin {
 		}
 		// DLSS-FG quality: snapshot the main target before the combined UI overlay composites back below.
 		// Hand/screen effects, world overlays and GUI are carried by the optional DLSSG UI resource.
-		RtComposite.INSTANCE.captureFgHudless(this.mainRenderTarget);
+        RtComposite.INSTANCE.captureFgHudless(this.mainRenderTarget,
+                MinecraftFrameAdapter.INSTANCE.captureUiPresentation());
 		MinecraftUiOverlay.compositeIfUsed();
 	}
 

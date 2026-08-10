@@ -13,6 +13,7 @@ import dev.comfyfluffy.caustica.api.Slots;
 import dev.comfyfluffy.caustica.api.pass.PassShaderCompiler;
 import dev.comfyfluffy.caustica.builtin.BuiltinExtension;
 import dev.comfyfluffy.caustica.rt.RtFrameStats;
+import dev.comfyfluffy.caustica.rt.RtComposite;
 import net.fabricmc.loader.api.FabricLoader;
 
 /** Fabric discovery, config paths, and Minecraft provider installation for the public renderer API. */
@@ -34,8 +35,9 @@ public final class MinecraftApiBootstrap {
             }
         }
         applyPersistedSelection(registry, Slots.SKY, CausticaConfig.Rt.Composition.SKY.get());
-        PassShaderCompiler.defaultCacheRoot(FabricLoader.getInstance().getGameDir()
-                .resolve("caustica-shaders").resolve("passes"));
+        var shaderCache = FabricLoader.getInstance().getGameDir().resolve("caustica-shaders");
+        PassShaderCompiler.defaultCacheRoot(shaderCache.resolve("passes"));
+        RtComposite.configureShaderCacheRoot(shaderCache.resolve("sources"));
         RtFrameStats.configureOutputDirectory(FabricLoader.getInstance().getGameDir()
                 .resolve("rt-frame-stats"));
         CausticaOptions options = CausticaOptions.load(
