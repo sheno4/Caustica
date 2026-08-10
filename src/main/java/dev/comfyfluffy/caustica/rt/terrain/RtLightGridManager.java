@@ -272,10 +272,16 @@ final class RtLightGridManager {
         if (CausticaConfig.Rt.Lights.DUMP.value()) dumpNearbyLights(uploaded.data);
 
         if (CausticaConfig.Rt.Lights.STATS.value()) {
-            CausticaMod.LOGGER.info("RT light hierarchy {}: {} lights / {} section slots / {} light grid spans / {} KiB",
+            double legacyPower = uploaded.data.invGlobalPowerSum() > 0.0f
+                    ? 1.0 / uploaded.data.invGlobalPowerSum() : 0.0;
+            CausticaMod.LOGGER.info("RT light hierarchy {}: {} lights / {} section slots / {} light grid spans / {} KiB; shadow BVH {} nodes / depth {} / {} lm (legacy power {}, expected lm {})",
                     uploaded.requestId, uploaded.data.lightCount(), uploaded.data.sectionFirstLights().length,
                     grid != null ? grid.spanFirstLights().length : 0,
-                    (uploaded.layout.totalBytes + 1023L) >> 10);
+                    (uploaded.layout.totalBytes + 1023L) >> 10,
+                    uploaded.data.lightBvh().nodes().size(), uploaded.data.lightBvh().maxDepth(),
+                    uploaded.data.lightBvh().totalLuminousPowerLumens(), legacyPower,
+                    legacyPower * Math.PI * MinecraftTerrainLightAdapter.METERS_PER_WORLD_UNIT
+                            * MinecraftTerrainLightAdapter.METERS_PER_WORLD_UNIT);
         }
     }
 

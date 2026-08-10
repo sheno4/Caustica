@@ -38,6 +38,9 @@ final class RtLightHierarchyTest {
         assertEquals(1f / 6f, data.invGlobalPowerSum(), 1.0e-6f);
         assertEquals(3L * stride * Float.BYTES, data.lightBytes());
         assertEquals(3L * 8L, data.globalAliases().bytes());
+        assertEquals(3, data.lightBvh().lights().size());
+        assertEquals(5, data.lightBvh().nodes().size());
+        assertEquals(6.0 * Math.PI, data.lightBvh().totalLuminousPowerLumens(), 1.0e-6);
     }
 
     @Test
@@ -107,6 +110,11 @@ final class RtLightHierarchyTest {
     private static float[] light(float area, float radiance) {
         float[] record = new float[RtLightCollector.FLOATS_PER_LIGHT];
         record[3] = area;
+        record[4] = 0f;
+        record[5] = 0f;
+        record[6] = 1f;
+        record[8] = 0.5f;
+        record[13] = area * 0.5f;
         record[16] = radiance;
         record[17] = radiance;
         record[18] = radiance;

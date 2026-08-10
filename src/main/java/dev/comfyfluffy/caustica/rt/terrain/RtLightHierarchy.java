@@ -1,5 +1,7 @@
 package dev.comfyfluffy.caustica.rt.terrain;
 
+import dev.comfyfluffy.caustica.engine.light.LightBvh;
+
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -159,9 +161,14 @@ final class RtLightHierarchy {
                 packedLights[destination] = Float.intBitsToFloat(flags | x | (y << 10) | (z << 20));
             }
         }
+        // The CPU BVH is derived from the same immutable terrain snapshot as the active grid. It stays
+        // host-side because shaders require a sampling record that preserves the proposal PDF.
+        LightBvh.Data lightBvh = LightBvh.build(MinecraftTerrainLightAdapter.describe(
+                        orderedSections, rebaseX, rebaseY, rebaseZ, cancelled),
+                MinecraftTerrainLightAdapter.METERS_PER_WORLD_UNIT, cancelled);
         return new Data(packedLights, globalAliases,
                 sectionFirstLights, sectionLightCounts,
-                new AliasData(localAliasIndices, localAliasAccept), grid, totalLights,
+                new AliasData(localAliasIndices, localAliasAccept), grid, lightBvh, totalLights,
                 globalPower > 0.0 ? (float) (1.0 / globalPower) : 0.0f,
                 rebaseX, rebaseY, rebaseZ);
     }
@@ -329,7 +336,7 @@ final class RtLightHierarchy {
 
     record Data(float[] packedLights, AliasData globalAliases,
                 int[] sectionFirstLights, int[] sectionLightCounts,
-                AliasData localAliases, RtLightGrid.Data grid, int lightCount,
+                AliasData localAliases, RtLightGrid.Data grid, LightBvh.Data lightBvh, int lightCount,
                 float invGlobalPowerSum,
                 int rebaseX, int rebaseY, int rebaseZ) {
         long lightBytes() {
