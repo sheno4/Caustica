@@ -310,12 +310,15 @@ int32_t caustica_slang_compile_entry_point(
         std::string diagnostics_text;
         Slang::ComPtr<slang::IBlob> diagnostics;
 
-        Slang::ComPtr<slang::IModule> module;
-        module.attach(session->session->loadModuleFromSourceString(
+        // Borrowed, never owned: the session's module cache holds every module it loads for the session's
+        // lifetime and returns the pointer without adding a reference. Wrapping one in a ComPtr releases a
+        // reference this call never took, which frees a cached module out from under later loads and faults
+        // inside Slang on a subsequent compile rather than at the site of the mistake.
+        slang::IModule* module = session->session->loadModuleFromSourceString(
             module_name,
             source_path,
             source,
-            diagnostics.writeRef()));
+            diagnostics.writeRef());
         append_diagnostics(diagnostics_text, diagnostics);
         if (!module)
         {
@@ -333,7 +336,7 @@ int32_t caustica_slang_compile_entry_point(
             return result;
         }
 
-        slang::IComponentType* components[] = {module.get(), entry.get()};
+        slang::IComponentType* components[] = {module, entry.get()};
         Slang::ComPtr<slang::IComponentType> composite;
         diagnostics.setNull();
         result = session->session->createCompositeComponentType(
@@ -386,8 +389,10 @@ int32_t caustica_slang_compile_specialized_entry_point(
         std::string diagnostics_text;
         Slang::ComPtr<slang::IBlob> diagnostics;
 
-        Slang::ComPtr<slang::IModule> engine;
-        engine.attach(session->session->loadModule(engine_module, diagnostics.writeRef()));
+        // Borrowed, not owned — see caustica_slang_compile_entry_point. This path reloads the same
+        // composition module on every stage, so an extra release here is the one that actually kills the
+        // process once enough stages share a session.
+        slang::IModule* engine = session->session->loadModule(engine_module, diagnostics.writeRef());
         append_diagnostics(diagnostics_text, diagnostics);
         if (!engine)
         {
@@ -397,8 +402,8 @@ int32_t caustica_slang_compile_specialized_entry_point(
 
         const SlangInt first_implementation_module = session->session->getLoadedModuleCount();
         diagnostics.setNull();
-        Slang::ComPtr<slang::IModule> implementation;
-        implementation.attach(session->session->loadModule(implementation_module, diagnostics.writeRef()));
+        slang::IModule* implementation = session->session->loadModule(implementation_module,
+            diagnostics.writeRef());
         append_diagnostics(diagnostics_text, diagnostics);
         if (!implementation)
         {
@@ -476,7 +481,7 @@ int32_t caustica_slang_compile_specialized_entry_point(
             return result;
         }
 
-        slang::IComponentType* components[] = {engine.get(), implementation.get(), specialized_entry.get()};
+        slang::IComponentType* components[] = {engine, implementation, specialized_entry.get()};
         Slang::ComPtr<slang::IComponentType> composite;
         diagnostics.setNull();
         result = session->session->createCompositeComponentType(
