@@ -4,6 +4,10 @@ import com.google.gson.JsonParser;
 import net.minecraft.resources.Identifier;
 import org.junit.jupiter.api.Test;
 
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -17,6 +21,21 @@ final class RtMaterialOverridesTest {
 
     private static RtMaterialOverrides.Rule parse(com.google.gson.JsonObject root, Identifier source) {
         return RtMaterialOverrides.parse(root, source, SURFACES);
+    }
+
+    @Test
+    void bundledOverridesUseTheCurrentFormat() throws Exception {
+        for (String name : List.of("torch", "soul_torch", "copper_torch")) {
+            String path = "/assets/caustica/materials/" + name + ".json";
+            try (var stream = RtMaterialOverridesTest.class.getResourceAsStream(path)) {
+                if (stream == null) {
+                    throw new AssertionError("missing bundled material override " + path);
+                }
+                var root = JsonParser.parseReader(new InputStreamReader(stream, StandardCharsets.UTF_8))
+                        .getAsJsonObject();
+                parse(root, Identifier.fromNamespaceAndPath("caustica", "materials/" + name + ".json"));
+            }
+        }
     }
 
     @Test
