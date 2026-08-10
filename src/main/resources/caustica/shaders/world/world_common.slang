@@ -150,7 +150,7 @@ public struct Payload {
     public float  hitT;        // >= 0 on hit, < 0 on miss.
     public half3  motionPrev;  // per-vertex world displacement since last frame.
     public half3  f0;          // specular F0.
-    public uint   flags;       // bits 0..1 material, bit 2 celestial, bit 3 dielectric-entering.
+    public uint   flags;       // bit 0 transmissive, bit 1 water, bit 2 celestial, bit 3 dielectric-entering.
     public uint   roughMetal;  // packHalf2x16(perceptual roughness, metalness)
     public uint   emission;    // packHalf2x16(emission cd/m², unused)
     public uint   iorTransmission; // packHalf2x16(IOR, transmission factor)
@@ -176,15 +176,16 @@ public static const uint PAYLOAD_DIELECTRIC_ENTERING = 8u;
 // any-hit has already run by then, so the bit never needs to survive the hit.
 public static const uint PAYLOAD_GUIDE_RAY = 256u;
 
-public static const uint PAYLOAD_MATERIAL_MASK = 3u;
-public static const uint MATERIAL_OPAQUE = 0u;
-// Both dielectrics are volumes: they refract and push a participating medium. They stay distinct ids
-// because water owns behaviour nothing else has — an animated wave surface, the caustic term, biome-tint
-// absorption calibrated per block of depth, and a chit path fed by the fluid mesher rather than the
-// (inset) translucent terrain layer. MATERIAL_DIELECTRIC is everything else transparent: glass, ice, and
-// any solid transparent block a pack defines.
-public static const uint MATERIAL_WATER = 1u;
-public static const uint MATERIAL_DIELECTRIC = 3u;
+// Set by world.rchit whenever the hit routes through the engine's dielectric transport (refracts, pushes
+// a medium) rather than the generic PBR surface slot — derived from MaterialBinding.flags &
+// BINDING_TRANSMISSIVE, the same bit the any-hits already read, so this is a forward of that fact rather
+// than a second encoding of it.
+public static const uint PAYLOAD_TRANSMISSIVE = 1u;
+// Set alongside PAYLOAD_TRANSMISSIVE for water specifically (forwarded from BINDING_RECORD_CROSSING,
+// which today is set only for water): an animated wave surface, the caustic term, and biome-tint
+// absorption calibrated per block of depth are behaviour nothing else needs. Every other transmissive
+// surface — glass, ice, any solid transparent block a pack defines — is this bit unset.
+public static const uint PAYLOAD_WATER = 2u;
 
 // Entity per-triangle record (48 B). The final lane mirrors TerrainPrim's integer material metadata.
 public struct Prim {
@@ -259,7 +260,6 @@ public float3 bindingShadowTint(MaterialBinding binding) {
 // materialUv maps sprite-local UV into the packed page, while albedoUv maps the vanilla atlas rectangle
 // back to sprite-local UV.
 public struct SurfaceMaterial {
-    public uint model;
     public uint features;     // MATERIAL_FEATURE_* | emission luminance
     // Canonical page index in bits 0..23, and in bits 24..31 the maximum LOD at which this material's
     // rectangle within that page is still valid. The LOD limit describes the page rectangle, not the
@@ -310,24 +310,28 @@ public float surfaceIorFromPage(float encoded) {
     return (1.0 + amplitude) / (1.0 - amplitude);
 }
 
-// Per-section geometry record: packed buffer addresses + per-bucket triangle offsets
+// Per-section geometry record: packed buffer addresses + per-class triangle offsets
 // (gl_PrimitiveID restarts at 0 per geometry, so hit shaders re-add triBase[geometryIndex]).
 public struct Section {
     public uint64_t primAddr;
     public uint64_t uvAddr;
-    public uint triBase[4]; // fixed bucket order: solid/cutout/translucent/water
+    public uint triBase[3]; // fixed SBT class order: opaque/masked/transmissive
 };
 
 // Entity geometry record: packed buffer addresses, motion, and per-geometry triangle bases. Entity BLAS
-// geometry order is opaque/any-hit; PrimitiveIndex restarts at zero for each geometry.
+// geometry order is opaque/masked/transmissive (RtAccel.SBT_CLASSES), the same order terrain uses;
+// PrimitiveIndex restarts at zero for each geometry. `reserved` is a single uint, not two: shrunk from
+// std430 tail padding when triBase grew from 2 to 3 lanes, keeping the struct at 64 bytes rather than
+// padding out to 80 (float4 alignment already lands triBase on a 4-byte boundary with no slack to spare
+// beyond one more uint).
 public struct EntityGeom {
     public uint64_t primAddr;
     public uint64_t idxAddr;
     public uint64_t uvAddr;
     public uint64_t dispAddr;
     public float4 rigidDisp;
-    public uint triBase[2];
-    public uint2 reserved;
+    public uint triBase[3];
+    public uint reserved;
 };
 
 // TLAS instance-custom-index encoding + terrain geometry buckets (shared by rahit/rchit).

@@ -157,7 +157,6 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         }
         long materialStart = profileDynamicEntity ? RtFrameStats.FRAME.startStage() : 0L;
         boolean stochasticAlpha = isTranslucent(renderType);
-        capture.currentAlphaBucket = alphaBucket(renderType);
         // Resolve this submission's texture to a bindless slot; the capture stamps it on every prim.
         // Block-entity models (chests/signs/beds) texture from an atlas SPRITE: use that atlas + remap
         // the ModelPart 0..1 UVs into the sprite's region. Mobs use a full texture (sprite == null).
@@ -188,6 +187,10 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         } finally {
             RtFrameStats.FRAME.endStage("entity.capture.submit.material", materialStart);
         }
+        if (!stochasticAlpha && hasCutoutDefine(renderType)) {
+            capture.currentMaterialId = RtMaterialRegistry.INSTANCE.withCutoutCoverage(capture.currentMaterialId);
+        }
+        capture.currentAlphaBucket = RtMaterialRegistry.INSTANCE.sbtClassFor(capture.currentMaterialId);
         // Pose the model from its render state (idempotent re-pose; mirrors what the renderer does for
         // its feature layers), then render the posed parts into the capture. renderToBuffer applies the
         // PoseStack to every vertex/normal, so the capture receives world-/camera-relative geometry.
@@ -310,10 +313,15 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         // dropped and held translucent block items (glass, ice, etc.) use the thin-dielectric variant
         // instead of the opaque DEFAULT variant. No BlockState reaches submitItem, so the layer is the
         // authoritative semantic available here; glass-model roughness/IOR are profile-independent.
-        boolean transmissive = q.materialInfo().layer() == ChunkSectionLayer.TRANSLUCENT;
-        capture.currentAlphaBucket = alphaBucket(q.materialInfo().layer(), false);
+        ChunkSectionLayer layer = q.materialInfo().layer();
+        boolean transmissive = layer == ChunkSectionLayer.TRANSLUCENT;
+        boolean cutout = !transmissive && layer != ChunkSectionLayer.SOLID;
         setSpriteMaterial(sprite, transmissive ? RtMaterials.Profile.GLASS : RtMaterials.Profile.DEFAULT,
                 transmissive, false);
+        if (cutout) {
+            capture.currentMaterialId = RtMaterialRegistry.INSTANCE.withCutoutCoverage(capture.currentMaterialId);
+        }
+        capture.currentAlphaBucket = RtMaterialRegistry.INSTANCE.sbtClassFor(capture.currentMaterialId);
         capture.currentOrder = 0; // baked-quad paths never stack decal layers
         capture.addBakedQuad(pose, q, tintColor(q.materialInfo().tintIndex(), tintLayers));
     }
@@ -351,32 +359,23 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         return cts != null && cts.blendFunction().isPresent();
     }
 
-    /** Classify one vanilla submission for the entity BLAS geometry split. */
-    private static int alphaBucket(RenderType renderType) {
+    /**
+     * True when a render type's pipeline carries the vanilla {@code ALPHA_CUTOUT} shader define — a
+     * genuinely masked (alpha-tested) submission, as opposed to blended (stochastic) or fully opaque.
+     * Matching the define is more robust than matching pipeline names and also works for mod-provided
+     * RenderPipelines. Callers apply {@link RtMaterialRegistry#withCutoutCoverage} when this is true and
+     * the submission isn't already stochastic — the SBT class then falls out of the resolved binding via
+     * {@link RtMaterialRegistry#sbtClassFor}, so this is the only piece {@code isTranslucent} doesn't
+     * already tell the caller.
+     */
+    private static boolean hasCutoutDefine(RenderType renderType) {
         if (renderType == null) {
-            return RtAccel.ENTITY_BUCKET_ANY_HIT;
+            return false;
         }
         Object setup = ((RenderTypeAccessor) renderType).caustica$state();
         RenderPipeline pipeline = ((RenderSetupAccessor) setup).caustica$pipeline();
-        ColorTargetState cts = pipeline.getColorTargetState();
-        if (cts != null && cts.blendFunction().isPresent()) {
-            return RtAccel.ENTITY_BUCKET_ANY_HIT;
-        }
-        // Vanilla's cutout pipelines carry the exact ALPHA_CUTOUT shader define. This is more robust
-        // than matching pipeline names and also works for mod-provided RenderPipelines.
-        if (pipeline.getShaderDefines().values().containsKey("ALPHA_CUTOUT")
-                || pipeline.getShaderDefines().flags().contains("ALPHA_CUTOUT")) {
-            return RtAccel.ENTITY_BUCKET_ANY_HIT;
-        }
-        return RtAccel.ENTITY_BUCKET_OPAQUE;
-    }
-
-    private static int alphaBucket(ChunkSectionLayer layer, boolean stochasticAlpha) {
-        if (stochasticAlpha || layer == ChunkSectionLayer.TRANSLUCENT) {
-            return RtAccel.ENTITY_BUCKET_ANY_HIT;
-        }
-        return layer == ChunkSectionLayer.SOLID
-                ? RtAccel.ENTITY_BUCKET_OPAQUE : RtAccel.ENTITY_BUCKET_ANY_HIT;
+        return pipeline.getShaderDefines().values().containsKey("ALPHA_CUTOUT")
+                || pipeline.getShaderDefines().flags().contains("ALPHA_CUTOUT");
     }
 
     /** Read the draw topology so custom triangle effects are never mis-grouped as RT quads. */
@@ -478,9 +477,12 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         public void acceptRenderable(TextRenderable renderable) {
             RenderType renderType = renderable.renderType(displayMode);
             boolean stochasticAlpha = isTranslucent(renderType);
-            capture.currentAlphaBucket = alphaBucket(renderType);
             capture.currentTexSlot = RtEntityTextures.INSTANCE.slotFor(renderType);
             capture.currentMaterialId = RtMaterialRegistry.INSTANCE.entityFallbackId(stochasticAlpha);
+            if (!stochasticAlpha && hasCutoutDefine(renderType)) {
+                capture.currentMaterialId = RtMaterialRegistry.INSTANCE.withCutoutCoverage(capture.currentMaterialId);
+            }
+            capture.currentAlphaBucket = RtMaterialRegistry.INSTANCE.sbtClassFor(capture.currentMaterialId);
             capture.currentOrder = 0;
             capture.clearUvRemap(); // glyph U/V are already atlas-space
             renderable.render(pose, textVertexConsumer, lightCoords, false);
@@ -571,7 +573,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         capture.currentOrder = 0;
         capture.currentTexSlot = RtEntityTextures.INSTANCE.whiteSlot();
         capture.currentMaterialId = RtMaterialRegistry.INSTANCE.entityFallbackId(false);
-        capture.currentAlphaBucket = RtAccel.ENTITY_BUCKET_OPAQUE;
+        capture.currentAlphaBucket = RtAccel.CLASS_OPAQUE; // fully opaque white texture, no alpha test
         Matrix4f pose = poseStack.last().pose();
         // Same derivation as LeashFeatureRenderer.prepare: the ribbon's horizontal half-extent is the
         // curve's ground-plane perpendicular, and the attachment offset shifts the whole curve in the
@@ -781,13 +783,17 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         boolean transmissive = quad.chunkLayer() == ChunkSectionLayer.TRANSLUCENT;
         boolean stochasticAlpha = itemMesh && !transmissive && quad.itemRenderType() != null
                 && quad.itemRenderType().hasBlending();
-        capture.currentAlphaBucket = alphaBucket(quad.chunkLayer(), stochasticAlpha);
+        boolean cutout = !transmissive && !stochasticAlpha && quad.chunkLayer() != ChunkSectionLayer.SOLID;
         if (state != null) {
             setBlockSpriteMaterial(sprite, state, transmissive, stochasticAlpha);
         } else {
             setSpriteMaterial(sprite, transmissive ? RtMaterials.Profile.GLASS : RtMaterials.Profile.DEFAULT,
                     transmissive, stochasticAlpha);
         }
+        if (cutout) {
+            capture.currentMaterialId = RtMaterialRegistry.INSTANCE.withCutoutCoverage(capture.currentMaterialId);
+        }
+        capture.currentAlphaBucket = RtMaterialRegistry.INSTANCE.sbtClassFor(capture.currentMaterialId);
         capture.currentOrder = 0; // baked-quad paths never stack decal layers
         for (int i = 0; i < 4; i++) {
             pose.transformPosition(quad.x(i) + offsetX, quad.y(i) + offsetY, quad.z(i) + offsetZ, meshPos);
@@ -867,7 +873,11 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         capture.currentMaterialId = lines
                 ? RtMaterialRegistry.INSTANCE.entityFallbackId(false)
                 : RtEntityTextures.INSTANCE.materialIdFor(renderType, stochasticAlpha);
-        capture.currentAlphaBucket = lines ? RtAccel.ENTITY_BUCKET_OPAQUE : alphaBucket(renderType);
+        if (!lines && !stochasticAlpha && hasCutoutDefine(renderType)) {
+            capture.currentMaterialId = RtMaterialRegistry.INSTANCE.withCutoutCoverage(capture.currentMaterialId);
+        }
+        capture.currentAlphaBucket = lines ? RtAccel.CLASS_OPAQUE
+                : RtMaterialRegistry.INSTANCE.sbtClassFor(capture.currentMaterialId);
 
         if (lines) {
             lineVertexConsumer.begin();

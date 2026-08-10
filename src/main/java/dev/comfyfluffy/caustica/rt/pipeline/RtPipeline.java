@@ -451,28 +451,22 @@ public final class RtPipeline {
     }
 
     /**
-     * Which any-hit stage a hit record uses, or {@code VK_SHADER_UNUSED_KHR}. Masked geometry alpha-tests
-     * on both ray types; transmissive geometry runs any-hit only on shadow rays, where it tints and lets
-     * traversal continue, and uses a closest-hit-only record for radiance.
+     * Which any-hit stage a hit record uses, or {@code VK_SHADER_UNUSED_KHR}. One formula for both
+     * producers: terrain and entity geometry share the same {@link RtAccel#SBT_CLASSES}-sized record
+     * space (see {@code RtAccel.Instance}). Masked geometry alpha-tests on both ray types; transmissive
+     * geometry runs any-hit only on shadow rays, where it tints and lets traversal continue, and uses a
+     * closest-hit-only record for radiance.
      */
     private static int anyHitStage(boolean hasAhit, int relativeHitGroup,
                                    int radianceAhitStage, int shadowAhitStage) {
         if (!hasAhit) {
             return VK_SHADER_UNUSED_KHR;
         }
-        int rayType;
-        boolean usesAnyHit;
-        if (relativeHitGroup < RtAccel.SBT_ENTITY_OFFSET) {
-            rayType = relativeHitGroup / RtAccel.TERRAIN_BUCKETS;
-            int bucket = relativeHitGroup % RtAccel.TERRAIN_BUCKETS;
-            usesAnyHit = rayType == RtAccel.SBT_RAY_RADIANCE
-                    ? bucket == RtAccel.BUCKET_CUTOUT
-                    : bucket != RtAccel.BUCKET_SOLID;
-        } else {
-            int entityRelative = relativeHitGroup - RtAccel.SBT_ENTITY_OFFSET;
-            rayType = entityRelative / RtAccel.TERRAIN_BUCKETS;
-            usesAnyHit = entityRelative % RtAccel.TERRAIN_BUCKETS == RtAccel.ENTITY_BUCKET_ANY_HIT;
-        }
+        int rayType = relativeHitGroup / RtAccel.SBT_CLASSES;
+        int cls = relativeHitGroup % RtAccel.SBT_CLASSES;
+        boolean usesAnyHit = rayType == RtAccel.SBT_RAY_RADIANCE
+                ? cls == RtAccel.CLASS_MASKED
+                : cls != RtAccel.CLASS_OPAQUE;
         if (!usesAnyHit) {
             return VK_SHADER_UNUSED_KHR;
         }

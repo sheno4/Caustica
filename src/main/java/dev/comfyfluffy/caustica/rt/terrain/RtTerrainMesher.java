@@ -104,22 +104,22 @@ final class RtTerrainMesher {
             return new CpuSection(null, null);
         }
         // RIS emitter-NEE light collection — BEFORE packing: it also stamps NEE membership into the prim
-        // records, which packSection then copies out. Only opaque + cutout can emit (glass is shaded
+        // records, which packSection then copies out. Only opaque + masked can emit (glass is shaded
         // emission-free, water never emits; lava lives in the opaque bucket).
         float[] lights = EMPTY_LIGHTS;
         if (CausticaConfig.Rt.Lights.RIS_CANDIDATES.value() > 0) {
             FloatArrayList collected = new FloatArrayList();
             float minFill = CausticaConfig.Rt.Lights.MIN_FILL_RATIO.value();
             collectLights(collected, mesh.opaque, materials, minFill);
-            collectLights(collected, mesh.cutout, materials, minFill);
+            collectLights(collected, mesh.masked, materials, minFill);
             if (!collected.isEmpty()) {
                 lights = collected.toFloatArray();
             }
         }
-        Geom cutout = mesh.cutoutOrEmpty();
+        Geom masked = mesh.maskedOrEmpty();
         RtAccel.OpacityMicromapInput ommInput =
-                RtTerrainOmm.buildInput(cutout.triCount(), cutout.cornerUv.elements(),
-                        cutout.ommSprites.elements(), cutout.ommSprites.size());
+                RtTerrainOmm.buildInput(masked.triCount(), masked.cornerUv.elements(),
+                        masked.ommSprites.elements(), masked.ommSprites.size());
         return new CpuSection(packSection(mesh, lights), ommInput);
     }
 
@@ -134,7 +134,7 @@ final class RtTerrainMesher {
     }
 
     private static PackedSection packSection(SectionMesh mesh, float[] lights) {
-        Geom[] buckets = mesh.buckets(); // { solid, cutout, translucent, water }, indexed by RtAccel.BUCKET_*
+        Geom[] buckets = mesh.buckets(); // { opaque, masked, transmissive }, indexed by RtAccel.CLASS_*
         int vertFloats = 0, idxCount = 0, uvFloats = 0, primFloats = 0, triCount = 0;
         int[] bucketTris = new int[buckets.length];
         for (int b = 0; b < buckets.length; b++) {
@@ -244,53 +244,47 @@ final class RtTerrainMesher {
 
 
     /**
-     * Transient CPU accumulator for one section's quads while tessellating. Split into per-material geometry
-     * buckets so the BLAS can flag solid blocks {@code VK_GEOMETRY_OPAQUE_BIT}, keep true alpha cutout in
-     * an any-hit bucket, and route translucent/water through closest-hit-only records for radiance but
-     * any-hit records for shadow tint/pass-through. The buckets are concatenated in {@code BUCKET_*} order
-     * into the packed section buffers during preparation, so each geometry's triangles occupy a contiguous range.
+     * Transient CPU accumulator for one section's quads while tessellating. Split into per-SBT-class
+     * geometry buckets so the BLAS can flag opaque blocks {@code VK_GEOMETRY_OPAQUE_BIT}, keep genuinely
+     * masked (alpha-tested) geometry in an any-hit bucket, and route transmissive geometry (glass, water)
+     * through closest-hit-only records for radiance but any-hit records for shadow tint/pass-through. The
+     * buckets are concatenated in {@code RtAccel.CLASS_*} order into the packed section buffers during
+     * preparation, so each geometry's triangles occupy a contiguous range.
      */
     private static final class SectionMesh {
         // Conservative worker-side starting capacities. These trade a little transient RAM for avoiding the
         // repeated grow/copy ladder on normal terrain sections.
         private static final int OPAQUE_TRI_CAP = 768;
-        private static final int CUTOUT_TRI_CAP = 256;
-        private static final int TRANSLUCENT_TRI_CAP = 64;
-        private static final int WATER_TRI_CAP = 128;
-        // One bucket per fixed RtAccel terrain geometry: solid, cutout, translucent, water.
+        private static final int MASKED_TRI_CAP = 256;
+        private static final int TRANSMISSIVE_TRI_CAP = 192; // glass + water share this class now
+        // One bucket per fixed RtAccel SBT class: opaque, masked, transmissive.
         private static final Geom EMPTY_GEOM = new Geom(0);
         Geom opaque;
-        Geom cutout;
-        Geom translucent;
-        Geom water;
-        private final Geom[] buckets = new Geom[RtAccel.TERRAIN_BUCKETS];
+        Geom masked;
+        Geom transmissive;
+        private final Geom[] buckets = new Geom[RtAccel.SBT_CLASSES];
 
         Geom[] buckets() {
-            buckets[RtAccel.BUCKET_SOLID] = geomOrEmpty(opaque);
-            buckets[RtAccel.BUCKET_CUTOUT] = geomOrEmpty(cutout);
-            buckets[RtAccel.BUCKET_TRANSLUCENT] = geomOrEmpty(translucent);
-            buckets[RtAccel.BUCKET_WATER] = geomOrEmpty(water);
+            buckets[RtAccel.CLASS_OPAQUE] = geomOrEmpty(opaque);
+            buckets[RtAccel.CLASS_MASKED] = geomOrEmpty(masked);
+            buckets[RtAccel.CLASS_TRANSMISSIVE] = geomOrEmpty(transmissive);
             return buckets;
         }
 
-        Geom cutoutOrEmpty() {
-            return geomOrEmpty(cutout);
+        Geom maskedOrEmpty() {
+            return geomOrEmpty(masked);
         }
 
         Geom opaque() {
             return opaque != null ? opaque : (opaque = new Geom(OPAQUE_TRI_CAP));
         }
 
-        Geom cutout() {
-            return cutout != null ? cutout : (cutout = new Geom(CUTOUT_TRI_CAP));
+        Geom masked() {
+            return masked != null ? masked : (masked = new Geom(MASKED_TRI_CAP));
         }
 
-        Geom translucent() {
-            return translucent != null ? translucent : (translucent = new Geom(TRANSLUCENT_TRI_CAP));
-        }
-
-        Geom water() {
-            return water != null ? water : (water = new Geom(WATER_TRI_CAP));
+        Geom transmissive() {
+            return transmissive != null ? transmissive : (transmissive = new Geom(TRANSMISSIVE_TRI_CAP));
         }
 
         private static Geom geomOrEmpty(Geom geom) {
@@ -299,17 +293,15 @@ final class RtTerrainMesher {
 
         boolean isEmpty() {
             return (opaque == null || opaque.idx.isEmpty())
-                    && (cutout == null || cutout.idx.isEmpty())
-                    && (translucent == null || translucent.idx.isEmpty())
-                    && (water == null || water.idx.isEmpty());
+                    && (masked == null || masked.idx.isEmpty())
+                    && (transmissive == null || transmissive.idx.isEmpty());
         }
 
         /** Empty the buckets keeping their backing arrays — the mesh is reused across jobs per worker thread. */
         void reset() {
             resetGeom(opaque);
-            resetGeom(cutout);
-            resetGeom(translucent);
-            resetGeom(water);
+            resetGeom(masked);
+            resetGeom(transmissive);
         }
 
         private static void resetGeom(Geom geom) {
@@ -471,7 +463,13 @@ final class RtTerrainMesher {
             q.emission = quad.emissive() ? 1f : (state != null ? state.getLightEmission() / 15f : 0f);
             TextureAtlasSprite sprite = spriteFinder.find(quad);
             q.sprite = sprite;
-            q.materialId = materials.resolve(sprite, state, q.translucent);
+            int materialId = materials.resolve(sprite, state, q.translucent);
+            // Genuinely masked: alpha-tested, not merely "non-SOLID" (q.cutout also covers TRANSLUCENT,
+            // whose coverage stays OPAQUE — see RtMaterialRegistry.binding). Only this needs the coverage
+            // override; solid and translucent quads keep the resolved id's default OPAQUE coverage. The
+            // sibling is compiled into the snapshot, so this stays a pure read on the worker thread.
+            boolean needsMaskedCoverage = q.cutout && !q.translucent;
+            q.materialId = needsMaskedCoverage ? materials.withCutoutCoverage(materialId) : materialId;
         }
 
         /** Fabric's cull predicate returns true when the nominal face should be discarded. */
@@ -598,7 +596,11 @@ final class RtTerrainMesher {
             if (q.translucent) {
                 offset(q, -TRANSLUCENT_INSET);
             }
-            Geom g = q.translucent ? cur.translucent() : (q.cutout ? cur.cutout() : cur.opaque());
+            Geom g = switch (materials.sbtClassFor(q.materialId)) {
+                case RtAccel.CLASS_MASKED -> cur.masked();
+                case RtAccel.CLASS_TRANSMISSIVE -> cur.transmissive();
+                default -> cur.opaque();
+            };
             int base = g.verts.size() / 3;
             for (int k = 0; k < 4; k++) {
                 g.verts.add(q.x[k]);
@@ -715,10 +717,15 @@ final class RtTerrainMesher {
         }
 
         private void emitQuad() {
-            // Water gets its own geometry → water bucket: its any-hit only passes shadow rays through (the
-            // closest-hit does the dielectric), classified by geometry index with no memory load. Lava is an
-            // opaque emitter → opaque bucket (no any-hit at all).
-            Geom g = water ? cur.water() : cur.opaque();
+            // Water's binding is transmissive (opaque coverage) → CLASS_TRANSMISSIVE, same class glass
+            // lands in: its any-hit only passes shadow rays through (the closest-hit does the dielectric).
+            // Lava is an opaque emitter → CLASS_OPAQUE (no any-hit at all).
+            int materialId = water ? materials.waterId() : materials.lavaId();
+            Geom g = switch (materials.sbtClassFor(materialId)) {
+                case RtAccel.CLASS_MASKED -> cur.masked();
+                case RtAccel.CLASS_TRANSMISSIVE -> cur.transmissive();
+                default -> cur.opaque();
+            };
             FloatArrayList verts = g.verts;
             IntArrayList idx = g.idx;
             int base = verts.size() / 3;
@@ -748,7 +755,6 @@ final class RtTerrainMesher {
                 ny /= len;
                 nz /= len;
             }
-            int materialId = water ? materials.waterId() : materials.lavaId();
             // Biome water tint: vanilla's FluidRenderer bakes BiomeColors.getAverageWaterColor into the
             // per-vertex colour, so the average of the quad's four colours is this water body's tint. The
             // path tracer turns it into a per-channel Beer–Lambert extinction (ocean blue vs swamp green).

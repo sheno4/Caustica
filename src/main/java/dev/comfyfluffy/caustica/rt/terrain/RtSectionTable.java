@@ -19,6 +19,9 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  * registry, and published static-instance list here while {@link RtTerrain} retains publication order.
  */
 final class RtSectionTable {
+    // 8 (primAddr) + 8 (uvAddr) + 3*4 (triBase[3]) = 28, but std430 rounds a struct's size up to its
+    // largest member's alignment (8, from the two uint64_t addresses), so this stays 32 — the last 4
+    // bytes are unread tail padding, not a 4th triBase slot.
     private static final int SECTION_ENTRY_BYTES = 32;
     GpuBuffer buffer;
     int capacity;
@@ -168,7 +171,6 @@ final class RtSectionTable {
         MemoryUtil.memPutInt(base + 16, geom.triBase[0]);
         MemoryUtil.memPutInt(base + 20, geom.triBase[1]);
         MemoryUtil.memPutInt(base + 24, geom.triBase[2]);
-        MemoryUtil.memPutInt(base + 28, geom.triBase[3]);
         markDirty(offset, SECTION_ENTRY_BYTES);
     }
 

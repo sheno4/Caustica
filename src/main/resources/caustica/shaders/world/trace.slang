@@ -11,9 +11,9 @@ import bindings;
 
 public static const uint CULL_SECONDARY = 0x01u;
 public static const uint CULL_PRIMARY = 0x02u;
-public static const uint TERRAIN_BUCKETS = 4u;
+public static const uint SBT_CLASSES = 3u; // opaque, masked, transmissive — RtAccel.SBT_CLASSES
 public static const uint SBT_RADIANCE = 0u;
-public static const uint SBT_SHADOW = TERRAIN_BUCKETS;
+public static const uint SBT_SHADOW = SBT_CLASSES;
 public static const uint SBT_STRIDE_BUCKET = 1u;
 public static const uint MISS_RADIANCE = 0u;
 public static const uint MISS_GUIDE = 1u;
@@ -102,8 +102,8 @@ public VisibilityResult visibility(float3 origin, float3 dir, float tmax) {
     // Vulkan requires an identical payload structure for every stage reachable by this trace. The shadow
     // path uses only the albedo view as accumulated transmittance and hitT as the nearest-water crossing.
     Payload shadowPayload = makeShadowPayload();
-    // Shadow SBT records run any-hit only for cutout/translucent/water. Cutout alpha-tests; translucent
-    // and water tint that transmittance and pass through. Solid blocks terminate traversal. There is no
+    // Shadow SBT records run any-hit only for masked/transmissive classes. Masked alpha-tests; transmissive
+    // tints that transmittance and passes through. Opaque geometry terminates traversal. There is no
     // closest shader worth executing. The lightweight guide miss clears the flags sentinel so this path
     // needs only ordinary TraceRay and no invocation-reorder capability.
     TraceRay(topLevelAS,

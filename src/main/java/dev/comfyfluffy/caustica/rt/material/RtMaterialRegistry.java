@@ -7,10 +7,12 @@ import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtColor;
 import dev.comfyfluffy.caustica.rt.RtLookPackage;
 import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
+import dev.comfyfluffy.caustica.rt.accel.RtAccel;
 import dev.comfyfluffy.caustica.rt.entity.RtEntityTextures;
 import dev.comfyfluffy.caustica.rt.gen.MaterialBindingData;
 import dev.comfyfluffy.caustica.rt.gen.SurfaceMaterialData;
 import dev.comfyfluffy.caustica.rt.gen.SurfaceMaterialData.Float4;
+import it.unimi.dsi.fastutil.ints.IntArrayList;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.resources.Identifier;
 import net.minecraft.util.ARGB;
@@ -186,7 +188,7 @@ public final class RtMaterialRegistry {
         CompiledTables tables = new CompiledTables(3 + profileVariants + sprites.size() * profileVariants);
         tables.add(compileDesc(MODEL_OPAQUE, 0, RtMaterials.Profile.DEFAULT, false, true,
                 RtMaterialDesc.EmissionSummary.NONE), transparentWhiteAverage(), fallbackEntry, null,
-                TERRAIN_COVERAGE_CUTOFF);
+                TERRAIN_COVERAGE_CUTOFF, true);
         int[] fallbackVariants = new int[profileVariants];
         for (RtMaterials.Profile profile : SPRITE_PROFILES) {
             for (boolean glass : new boolean[]{false, true}) {
@@ -199,7 +201,7 @@ public final class RtMaterialRegistry {
                     fallbackVariants[variant] = tables.add(
                             compileDesc(glass ? MODEL_DIELECTRIC : MODEL_OPAQUE, 0, profile, emitting, true,
                                     RtMaterialDesc.EmissionSummary.NONE),
-                            transparentWhiteAverage(), fallbackEntry, null, TERRAIN_COVERAGE_CUTOFF);
+                            transparentWhiteAverage(), fallbackEntry, null, TERRAIN_COVERAGE_CUTOFF, !glass);
                 }
             }
         }
@@ -255,7 +257,7 @@ public final class RtMaterialRegistry {
                             desc = spriteWide.rule.apply(desc);
                         }
                         variants[index(profile, glass, emitting)] = tables.add(desc, stats.average(),
-                                entry, stats.albedoGrid(), TERRAIN_COVERAGE_CUTOFF);
+                                entry, stats.albedoGrid(), TERRAIN_COVERAGE_CUTOFF, !glass);
                     }
                 }
             }
@@ -274,7 +276,8 @@ public final class RtMaterialRegistry {
                                     dielectricIor);
                             RtMaterialDesc desc = compiled.rule.apply(base);
                             overrideVariants[index(profile, glass, emitting)] = tables.add(desc,
-                                    stats.average(), entry, stats.albedoGrid(), TERRAIN_COVERAGE_CUTOFF);
+                                    stats.average(), entry, stats.albedoGrid(), TERRAIN_COVERAGE_CUTOFF,
+                                    !glass);
                         }
                     }
                 }
@@ -346,8 +349,13 @@ public final class RtMaterialRegistry {
                         compiled.rule.source(), compiled.rule.sprite());
             }
         }
+        byte[] sbtClasses = new byte[tables.bindings.size()];
+        for (int i = 0; i < sbtClasses.length; i++) {
+            sbtClasses[i] = (byte) sbtClassOf(tables.bindings.get(i));
+        }
         Snapshot next = new Snapshot(epoch, Collections.unmodifiableMap(ids), fallbackVariants, waterId, lavaId,
-                List.copyOf(descriptions), Collections.unmodifiableList(new ArrayList<>(grids)), frozenOverrides);
+                List.copyOf(descriptions), Collections.unmodifiableList(new ArrayList<>(grids)), frozenOverrides,
+                tables.cutoutVariants.toIntArray(), sbtClasses);
         entityTextureIds = Collections.unmodifiableMap(nextEntityTextureIds);
         entityTemplates = Collections.unmodifiableMap(nextEntityTemplates);
         entitySpriteIds.clear();
@@ -463,6 +471,38 @@ public final class RtMaterialRegistry {
                 packBinding0(bindingAlbedoSlot(base.packed0()), COVERAGE_STOCHASTIC,
                         bindingFlags(base.packed0())),
                 base.surface(), base.shadowTint(), base.packed1()));
+    }
+
+    /**
+     * The binding resolving {@code bindingId}'s surface with deterministic cutout coverage. Compiled
+     * materials default to {@code COVERAGE_OPAQUE} (see {@link #binding}); a producer that knows its
+     * footprint is genuinely masked — a cutout-layer terrain quad, a cutout-rendered entity — calls this
+     * to get the alpha-tested variant instead. Cheap: coverage lives in the separately-interned
+     * {@code MaterialBindingData}, so this never touches the precompiled surface/profile-variant table.
+     */
+    public synchronized int withCutoutCoverage(int bindingId) {
+        MaterialBindingData base = bindingRecords.get(bindingId);
+        return intern(new MaterialBindingData(
+                packBinding0(bindingAlbedoSlot(base.packed0()), COVERAGE_CUTOUT,
+                        bindingFlags(base.packed0())),
+                base.surface(), base.shadowTint(), base.packed1()));
+    }
+
+    /**
+     * The SBT hit-group class {@code bindingId} needs: {@link RtAccel#CLASS_MASKED} when the surface's
+     * footprint is genuinely tested (cutout/stochastic coverage, any-hit on both ray types),
+     * {@link RtAccel#CLASS_TRANSMISSIVE} when it always covers its footprint but tints/passes light
+     * (shadow any-hit only), else {@link RtAccel#CLASS_OPAQUE} (no any-hit at all). The one derivation
+     * both terrain and entity geometry route through — see {@code MATERIAL_MODEL_PLAN.md} §5.
+     */
+    public int sbtClassFor(int bindingId) {
+        return sbtClassOf(bindingRecords.get(bindingId));
+    }
+
+    private static int sbtClassOf(MaterialBindingData binding) {
+        if (bindingCoverage(binding.packed0()) != COVERAGE_OPAQUE) return RtAccel.CLASS_MASKED;
+        int flags = bindingFlags(binding.packed0());
+        return (flags & BINDING_TRANSMISSIVE) != 0 ? RtAccel.CLASS_TRANSMISSIVE : RtAccel.CLASS_OPAQUE;
     }
 
     /**
@@ -639,32 +679,62 @@ public final class RtMaterialRegistry {
     }
 
     /**
-     * The compiled tables under construction during a rebuild. Every compiled surface gets exactly one
-     * binding, so the returned binding ID is what geometry stores and what {@link Snapshot} indexes its
-     * descriptions and emission grids by.
+     * The compiled tables under construction during a rebuild. Every compiled surface gets one binding —
+     * plus, for terrain-reachable materials, the cutout-coverage sibling a masked producer asks for — so
+     * the returned binding ID is what geometry stores and what {@link Snapshot} indexes its descriptions,
+     * emission grids and SBT classes by. Siblings share the base's surface, description and grid, so they
+     * cost sixteen table bytes and two list slots each and keep every parallel array dense.
      */
     private static final class CompiledTables {
         final List<SurfaceMaterialData> surfaces;
         final List<MaterialBindingData> bindings;
         final List<RtMaterialDesc> descriptions;
         final List<RtEmissionGrid> grids;
+        /** Parallel to {@code bindings}: the cutout-coverage variant of each ID, or the ID itself. */
+        final IntArrayList cutoutVariants;
 
         CompiledTables(int expected) {
             surfaces = new ArrayList<>(expected);
             bindings = new ArrayList<>(expected);
             descriptions = new ArrayList<>(expected);
             grids = new ArrayList<>(expected);
+            cutoutVariants = new IntArrayList(expected);
         }
 
         int add(RtMaterialDesc desc, float[] average, RtBlockMaterials.Entry entry,
                 RtEmissionGrid uniformGrid, float coverageCutoff) {
+            return add(desc, average, entry, uniformGrid, coverageCutoff, false);
+        }
+
+        int add(RtMaterialDesc desc, float[] average, RtBlockMaterials.Entry entry,
+                RtEmissionGrid uniformGrid, float coverageCutoff, boolean cutoutSibling) {
             int surfaceId = surfaces.size();
             surfaces.add(surface(desc, entry, entry.albedoU(), entry.albedoV(),
                     entry.albedoInvDu(), entry.albedoInvDv()));
+            int id = append(binding(surfaceId, desc, average, BLOCK_ATLAS_ALBEDO_SLOT, coverageCutoff),
+                    desc, gridFor(desc, entry, uniformGrid));
+            if (cutoutSibling) {
+                cutoutVariants.set(id, addCutoutSibling(id));
+            }
+            return id;
+        }
+
+        /** The base's binding with {@link #COVERAGE_CUTOUT}, over the same surface/description/grid. */
+        private int addCutoutSibling(int baseId) {
+            MaterialBindingData base = bindings.get(baseId);
+            return append(new MaterialBindingData(
+                            packBinding0(bindingAlbedoSlot(base.packed0()), COVERAGE_CUTOUT,
+                                    bindingFlags(base.packed0())),
+                            base.surface(), base.shadowTint(), base.packed1()),
+                    descriptions.get(baseId), grids.get(baseId));
+        }
+
+        private int append(MaterialBindingData binding, RtMaterialDesc desc, RtEmissionGrid grid) {
             int id = bindings.size();
-            bindings.add(binding(surfaceId, desc, average, BLOCK_ATLAS_ALBEDO_SLOT, coverageCutoff));
+            bindings.add(binding);
             descriptions.add(desc);
-            grids.add(gridFor(desc, entry, uniformGrid));
+            grids.add(grid);
+            cutoutVariants.add(id); // no sibling of its own until one is compiled below
             return id;
         }
     }
@@ -705,7 +775,7 @@ public final class RtMaterialRegistry {
                 * (EMISSION_LUMINANCE_MASK / MAX_EMISSION_LUMINANCE));
         int packedFeatures = desc.features() | (luminance << EMISSION_LUMINANCE_SHIFT);
         int page = (entry.pageIndex() & PAGE_MASK) | (entry.maxLod() << MAX_LOD_SHIFT);
-        return new SurfaceMaterialData(desc.model(), packedFeatures, page,
+        return new SurfaceMaterialData(packedFeatures, page,
                 new Float4(entry.materialU(), entry.materialV(), entry.materialDu(), entry.materialDv()),
                 new Float4(albedoU, albedoV, albedoInvDu, albedoInvDv),
                 desc.specularRoughness(), desc.baseMetalness(), desc.specularIor(),
@@ -720,21 +790,22 @@ public final class RtMaterialRegistry {
      */
     private static MaterialBindingData binding(int surfaceId, RtMaterialDesc desc, float[] average,
                                                int albedoSlot, float coverageCutoff) {
-        int coverage = COVERAGE_CUTOUT;
+        // Opaque by default: a material only needs COVERAGE_CUTOUT/STOCHASTIC when a producer knows its
+        // footprint is genuinely masked (see withCutoutCoverage/withStochasticCoverage) — most compiled
+        // materials, including solid terrain, never call either and get the cheap no-any-hit class.
+        int coverage = COVERAGE_OPAQUE;
         int flags = 0;
         int shadowTint = WHITE_SHADOW_TINT;
         switch (desc.model()) {
             case MODEL_DIELECTRIC -> {
                 // Glass covers its whole footprint — the see-through part of the sprite is clear glass,
                 // not absence — so a shadow ray samples no texel and takes the compiled colour.
-                coverage = COVERAGE_OPAQUE;
                 flags = BINDING_TRANSMISSIVE;
                 shadowTint = translucentShadowTint(average);
             }
             // A water surface passes light through uniformly; its colour is the per-primitive biome tint,
             // which multiplies base colour and so flows through transmittance without a second meaning.
             case MODEL_WATER -> {
-                coverage = COVERAGE_OPAQUE;
                 flags = BINDING_TRANSMISSIVE | BINDING_RECORD_CROSSING;
             }
             default -> {
@@ -883,10 +954,13 @@ public final class RtMaterialRegistry {
         private final List<RtMaterialDesc> descriptions;
         private final List<RtEmissionGrid> grids;
         private final List<CompiledOverride> overrides;
+        private final int[] cutoutVariants;
+        private final byte[] sbtClasses;
 
         private Snapshot(long epoch, Map<TextureAtlasSprite, int[]> ids, int[] fallbackVariants,
                          int waterId, int lavaId, List<RtMaterialDesc> descriptions,
-                         List<RtEmissionGrid> grids, List<CompiledOverride> overrides) {
+                         List<RtEmissionGrid> grids, List<CompiledOverride> overrides,
+                         int[] cutoutVariants, byte[] sbtClasses) {
             this.epoch = epoch;
             this.ids = ids;
             this.fallbackVariants = fallbackVariants;
@@ -895,6 +969,8 @@ public final class RtMaterialRegistry {
             this.descriptions = descriptions;
             this.grids = grids;
             this.overrides = overrides;
+            this.cutoutVariants = cutoutVariants;
+            this.sbtClasses = sbtClasses;
         }
 
         public long epoch() {
@@ -920,6 +996,21 @@ public final class RtMaterialRegistry {
         /** Emission summary grid matching this material's shaded emission source, or null when none. */
         public RtEmissionGrid emissionGrid(int materialId) {
             return grids.get(materialId);
+        }
+
+        /**
+         * The snapshot-local equivalent of {@link RtMaterialRegistry#withCutoutCoverage}: the ID resolving
+         * this material with deterministic cutout coverage, precompiled at rebuild so a terrain worker
+         * never interns into the live registry. IDs without a compiled sibling (dielectric/water/fluid
+         * variants, which no masked producer reaches) map to themselves.
+         */
+        public int withCutoutCoverage(int materialId) {
+            return cutoutVariants[materialId];
+        }
+
+        /** The SBT hit-group class of a snapshot material — see {@link RtMaterialRegistry#sbtClassFor}. */
+        public int sbtClassFor(int materialId) {
+            return sbtClasses[materialId];
         }
 
         public int resolve(TextureAtlasSprite sprite, BlockState state, boolean glass) {

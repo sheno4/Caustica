@@ -62,8 +62,7 @@ public PathSegment tracePrimary(PathSegment seg,
 
         float3 n = payloadNormal();
         float3 hitPos = ro + rd * payload.hitT;
-        uint material = payloadMaterial();
-        if (material != MATERIAL_WATER && material != MATERIAL_DIELECTRIC) {
+        if (!payloadDielectric()) {
             float rough = clamp(payloadRoughness(), 0.0, 1.0);
             rough = isDeltaRoughness(rough) ? 0.0 : rough;
             float metal = clamp(payloadMetalness(), 0.0, 1.0);
@@ -93,7 +92,7 @@ public PathSegment tracePrimary(PathSegment seg,
         rayConeWidth = max(rayConeWidth + rayConeSpread * max(payload.hitT, 0.0),
                            RAY_CONE_MIN_WIDTH);
 
-        bool isWater = material == MATERIAL_WATER;
+        bool isWater = payloadWater();
         bool entering = payloadDielectricEntering();
         float3 geometricNormal = n;
         float3 previousNormal = n;

@@ -118,12 +118,11 @@ public float2 resolveSpecularGuides(SpecSurface surface, float3 primaryDir,
     float3 reflectedMotionPrev;
     if (payload.hitT > 0.0) {
         reflectedHit = surfacePos + specDir * payload.hitT;
-        uint reflectedMaterial = payloadMaterial();
         // Closest-hit writes motionPrev for every material. Terrain/water are zero; dynamic opaque and
         // dielectric entities carry their per-vertex/object displacement.
         reflectedMotionPrev = payload.motionPrev;
         if (surface.roughness <= MIRROR_ROUGHNESS_MAX
-                && reflectedMaterial == MATERIAL_OPAQUE
+                && !payloadDielectric()
                 && payloadEmission() <= 0.0) {
             float3 reflectedDiffuse = payloadAlbedo()
                     * (1.0 - clamp(payloadMetalness(), 0.0, 1.0));
@@ -177,9 +176,8 @@ public void resolveTransmissionGuide(float3 surfacePos, float3 transmittedDir,
             return;
         }
 
-        uint material = payloadMaterial();
         float3 interfacePos = ro + direction * payload.hitT;
-        if (material == MATERIAL_OPAQUE) {
+        if (!payloadDielectric()) {
             float3 endpointAlbedo = payloadAlbedo()
                     * (1.0 - clamp(payloadMetalness(), 0.0, 1.0));
             setTransmissionGuide(interfacePos - worldPush.camOffset, payload.motionPrev,
@@ -187,7 +185,6 @@ public void resolveTransmissionGuide(float3 surfacePos, float3 transmittedDir,
                     guideFilter * endpointAlbedo, payloadEmission() > 0.0);
             return;
         }
-        if (material != MATERIAL_WATER && material != MATERIAL_DIELECTRIC) return;
 
         // A coverage crossing: closest-hit reports a surface too sparse to be this walk's endpoint as a
         // dielectric with IOR 1. There is no index contrast, so it neither bends the ray nor bounds a
@@ -201,7 +198,7 @@ public void resolveTransmissionGuide(float3 surfacePos, float3 transmittedDir,
             continue;
         }
 
-        bool isWater = material == MATERIAL_WATER;
+        bool isWater = payloadWater();
         bool entering = payloadDielectricEntering();
         float3 geometricNormal = normalize(payloadNormal());
         float3 interfaceNormal = geometricNormal;

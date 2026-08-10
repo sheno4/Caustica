@@ -29,7 +29,12 @@ public float3 payloadNormal() { return unpackNormal(payload); }
 /** Sky radiance on a miss — absolute scene units, full fp32. Only meaningful when hitT < 0. */
 public float3 payloadSky() { return unpackSky(payload); }
 
-public uint payloadMaterial() { return payload.flags & PAYLOAD_MATERIAL_MASK; }
+// Named payloadDielectric rather than payloadTransmissive to stay unambiguous next to
+// payloadTransmission() below — a bool ("does this hit route through the dielectric transport") vs. that
+// function's OpenPBR transmission_weight float. Forwards MaterialBinding.flags & BINDING_TRANSMISSIVE.
+public bool payloadDielectric() { return (payload.flags & PAYLOAD_TRANSMISSIVE) != 0u; }
+// Set alongside payloadDielectric for water specifically; see PAYLOAD_WATER.
+public bool payloadWater() { return (payload.flags & PAYLOAD_WATER) != 0u; }
 // Set by world.rchit on any dielectric hit (see PAYLOAD_DIELECTRIC_ENTERING) — whether the ray was
 // travelling into the volume (vs. out of it) at this hit's face.
 public bool payloadDielectricEntering() { return (payload.flags & PAYLOAD_DIELECTRIC_ENTERING) != 0u; }

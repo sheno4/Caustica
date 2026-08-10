@@ -81,7 +81,7 @@ import dev.comfyfluffy.caustica.rt.terrain.RtSectionTable.SectionGeom;
  * instance carries a
  * translation {@code sectionOrigin − rebaseOrigin} (rebase = player block at the last rebuild, so
  * transforms stay small at any world coordinate) and an {@code instanceCustomIndex} into a BDA
- * section table ({@code {primAddr, uvAddr, triBase[4]}} per section) the hit shaders read. The index
+ * section table ({@code {primAddr, uvAddr, triBase[3]}} per section) the hit shaders read. The index
  * buffer itself is retained only for the BLAS build (per-triangle corner UVs mean shading never needs
  * an index-buffer read — lever B), so its address isn't duplicated into this table.
  *
@@ -109,7 +109,7 @@ public final class RtTerrain {
         return CausticaConfig.Rt.Terrain.MAX_INFLIGHT_SECTIONS.value();
     }
 
-    private static final int SECTION_ENTRY_BYTES = 32; // {u64 primAddr, u64 uvAddr, u32 triBase[4]}
+    private static final int SECTION_ENTRY_BYTES = 32; // {u64 primAddr, u64 uvAddr, u32 triBase[3]}, std430-padded
     private static final long NO_TESS_TOKEN = Long.MIN_VALUE;
     private static final int NO_MISSING_INDEX = -1;
     private static final long NO_DIRTY_GROUP = 0L;
@@ -230,7 +230,7 @@ public final class RtTerrain {
         return table.instances;
     }
 
-    /** Section table device address: {@code {u64 primAddr, u64 uvAddr, u32 triBase[4]}} per section, indexed by gl_InstanceCustomIndexEXT. */
+    /** Section table device address: {@code {u64 primAddr, u64 uvAddr, u32 triBase[3]}} per section, indexed by gl_InstanceCustomIndexEXT. */
     public long tableAddress() {
         return table.address();
     }

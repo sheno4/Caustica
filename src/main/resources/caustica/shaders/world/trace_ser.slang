@@ -28,11 +28,13 @@ public void traceRadianceReordered(uint cullMask, float3 ro, float tmin, float3 
     HitObject hObj = HitObject::TraceRay(topLevelAS, RAY_FLAG_NONE, cullMask,
             SBT_RADIANCE, SBT_STRIDE_BUCKET, MISS_RADIANCE,
             makeRay(ro, tmin, rd, tmax), tracePayload);
-    // The hit object groups shader IDs first. Its SBT index then supplies the two-bit geometry/material
-    // bucket ({solid, cutout, translucent, water}); terrain and entity record ranges are both multiples
-    // of TERRAIN_BUCKETS, so the low bits have the same meaning. The high two bits describe path lifetime:
-    // pre-roulette, roulette-active, or guaranteed terminal after this hit.
-    uint materialHint = hObj.GetShaderTableIndex() & (TERRAIN_BUCKETS - 1u);
+    // The hit object groups shader IDs first. Its SBT index then supplies the SBT class
+    // ({opaque, masked, transmissive}); terrain and entity record ranges are both multiples of
+    // SBT_CLASSES, so the low index has the same meaning on either producer. SBT_CLASSES is 3, not a
+    // power of two, so this is a modulo rather than a mask — the result still fits the same two hint bits
+    // (0..2) that a 4-way mask produced. The high two bits describe path lifetime: pre-roulette,
+    // roulette-active, or guaranteed terminal after this hit.
+    uint materialHint = hObj.GetShaderTableIndex() % SBT_CLASSES;
     uint coherenceHint = (pathPhaseHint << 2u) | materialHint;
     ReorderThread(hObj, coherenceHint, 4u);
     payload = makeRadiancePayload(flags, rayCone);

@@ -33,12 +33,12 @@ public final class RtEntityCapture implements VertexConsumer {
     final FloatArrayList uvList = new FloatArrayList(DEFAULT_VERTEX_CAPACITY * 2);  // 2 floats/vertex (entity-texture UV)
     final FloatArrayList prim = new FloatArrayList(primCapacity(DEFAULT_VERTEX_CAPACITY)); // 12 floats/triangle
     // One classification per triangle in capture order. The upload path repacks indices + primitive
-    // records into fixed {opaque, any-hit} BLAS geometries while positions/UVs stay shared. Keeping
-    // capture order here preserves glow meshes, parity checks and motion topology.
+    // records into fixed {opaque, masked, transmissive} BLAS geometries while positions/UVs stay shared.
+    // Keeping capture order here preserves glow meshes, parity checks and motion topology.
     final IntArrayList alphaBuckets = new IntArrayList(indexCapacity(DEFAULT_VERTEX_CAPACITY) / 3);
     private final IntArrayList packedIdx = new IntArrayList(indexCapacity(DEFAULT_VERTEX_CAPACITY));
     private final FloatArrayList packedPrim = new FloatArrayList(primCapacity(DEFAULT_VERTEX_CAPACITY));
-    private final int[] packedBucketTris = new int[RtAccel.ENTITY_BUCKETS];
+    private final int[] packedBucketTris = new int[RtAccel.SBT_CLASSES];
 
     // Bindless texture slot for the geometry currently being submitted (set by the collector per
     // submitModel, so body + feature layers get their own texture).
@@ -55,8 +55,9 @@ public final class RtEntityCapture implements VertexConsumer {
     private int albedoMemoSlot = -1;
     private int albedoMemoMaterial;
     // Conservative default: unknown submissions retain alpha testing instead of incorrectly becoming
-    // opaque. RtEntityCollector assigns this from the RenderPipeline before every known submission.
-    int currentAlphaBucket = RtAccel.ENTITY_BUCKET_ANY_HIT;
+    // opaque. RtEntityCollector assigns this from the resolved material's binding before every known
+    // submission.
+    int currentAlphaBucket = RtAccel.CLASS_MASKED;
     // Decal-stacking rank for the current submission (0 = no offset). Set by the collector from
     // SubmitNodeCollector#order(int) — see emitQuad's coincident-layer push.
     int currentOrder;
@@ -102,7 +103,7 @@ public final class RtEntityCapture implements VertexConsumer {
         n = 0;
         currentTexSlot = 0;
         currentMaterialId = 0;
-        currentAlphaBucket = RtAccel.ENTITY_BUCKET_ANY_HIT;
+        currentAlphaBucket = RtAccel.CLASS_MASKED;
         currentOrder = 0;
         uvRemap = false;
     }
@@ -256,7 +257,7 @@ public final class RtEntityCapture implements VertexConsumer {
         packedPrim.ensureCapacity(prim.size());
         int[] indices = idx.elements();
         float[] primitives = prim.elements();
-        for (int bucket = 0; bucket < RtAccel.ENTITY_BUCKETS; bucket++) {
+        for (int bucket = 0; bucket < RtAccel.SBT_CLASSES; bucket++) {
             for (int tri = 0; tri < triangleCount; tri++) {
                 if (alphaBuckets.getInt(tri) != bucket) {
                     continue;

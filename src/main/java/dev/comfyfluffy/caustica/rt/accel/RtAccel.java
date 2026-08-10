@@ -268,16 +268,16 @@ public final class RtAccel {
         // {@code update} = this recorded op is an in-place UPDATE rather than a full BUILD.
         private final boolean updatable;
         private final boolean update;
-        // Terrain multi-geometry split (any-hit opt): one geometry per material bucket, in the fixed packed
-        // order { solid, cutout, translucent, water } (see TERRAIN_BUCKETS). Bucket 0 (solid) is flagged
-        // VK_GEOMETRY_OPAQUE_BIT. The fixed geometry indices are also SBT material indices: radiance rays
-        // use closest-hit-only records for solid/translucent/water and an any-hit record for true cutout;
-        // shadow rays use any-hit records for cutout/translucent/water.
+        // Terrain multi-geometry split (any-hit opt): one geometry per SBT class, in the fixed packed
+        // order { opaque, masked, transmissive } (see SBT_CLASSES). Class 0 (opaque) is flagged
+        // VK_GEOMETRY_OPAQUE_BIT. The fixed geometry indices are also SBT class indices: radiance rays use
+        // closest-hit-only records for opaque/transmissive and an any-hit record for masked; shadow rays
+        // use any-hit records for masked/transmissive.
         // Both split flags false ⇒ the legacy single-geometry path keyed on triangleCount.
         private final boolean terrainSplit;
-        private final int[] terrainTris; // per-bucket triangle counts in TERRAIN_BUCKETS order (null if !terrainSplit)
+        private final int[] terrainTris; // per-class triangle counts in SBT_CLASSES order (null if !terrainSplit)
         private final boolean entitySplit;
-        private final int[] entityTris; // opaque/any-hit counts (null if !entitySplit)
+        private final int[] entityTris; // per-class triangle counts in SBT_CLASSES order (null if !entitySplit)
         private final OpacityMicromap opacityMicromap; // optional, terrain cutout bucket only
 
         private PreparedBlas(RtAccel accel, GpuBuffer scratch, GpuBuffer externalBacking, long vertexAddr, long indexAddr,
@@ -308,7 +308,7 @@ public final class RtAccel {
             this.opacityMicromap = opacityMicromap;
         }
 
-        /** A terrain section BLAS split into fixed per-bucket geometries in {@link RtAccel#TERRAIN_BUCKETS} order. */
+        /** A terrain section BLAS split into fixed per-class geometries in {@link RtAccel#SBT_CLASSES} order. */
         static PreparedBlas terrain(RtAccel accel, GpuBuffer scratch, GpuBuffer externalBacking, long vertexAddr, long indexAddr, int maxVertex,
                                     int[] terrainTris, OpacityMicromap opacityMicromap, String label) {
             int total = 0;
@@ -340,22 +340,19 @@ public final class RtAccel {
         }
     }
 
-    /** Terrain material buckets. Geometry indices are fixed and double as SBT material record indices. */
-    public static final int BUCKET_SOLID = 0;
-    public static final int BUCKET_CUTOUT = 1;
-    public static final int BUCKET_TRANSLUCENT = 2;
-    public static final int BUCKET_WATER = 3;
-    public static final int TERRAIN_BUCKETS = 4;
-    /** Entity BLAS geometries: opaque bypasses any-hit; everything else shares one any-hit geometry. */
-    public static final int ENTITY_BUCKET_OPAQUE = 0;
-    public static final int ENTITY_BUCKET_ANY_HIT = 1;
-    public static final int ENTITY_BUCKETS = 2;
+    // SBT hit-group classes, shared by terrain and entity geometry alike. Geometry indices are fixed and
+    // double as SBT material record indices, on both producers' BLAS — see MATERIAL_MODEL_PLAN.md §5:
+    // "masked" and "masked+transmissive" share one record because the shadow any-hit reads the binding's
+    // transmissive flag itself, so three classes cover every reachable (coverage, transmittance) pair.
+    public static final int CLASS_OPAQUE = 0;       // no any-hit either ray type
+    public static final int CLASS_MASKED = 1;       // any-hit both ray types (cutout/stochastic coverage)
+    public static final int CLASS_TRANSMISSIVE = 2; // any-hit shadow only (opaque coverage, transmissive)
+    public static final int SBT_CLASSES = 3;
     public static final int SBT_RAY_RADIANCE = 0;
     public static final int SBT_RAY_SHADOW = 1;
-    public static final int SBT_TERRAIN_RADIANCE_OFFSET = SBT_RAY_RADIANCE * TERRAIN_BUCKETS;
-    public static final int SBT_TERRAIN_SHADOW_OFFSET = SBT_RAY_SHADOW * TERRAIN_BUCKETS;
-    public static final int SBT_ENTITY_OFFSET = TERRAIN_BUCKETS * 2;
-    public static final int SBT_HIT_GROUP_COUNT = SBT_ENTITY_OFFSET + TERRAIN_BUCKETS * 2;
+    public static final int SBT_RADIANCE_OFFSET = SBT_RAY_RADIANCE * SBT_CLASSES; // 0
+    public static final int SBT_SHADOW_OFFSET = SBT_RAY_SHADOW * SBT_CLASSES;     // 3
+    public static final int SBT_HIT_GROUP_COUNT = SBT_CLASSES * 2;                // 6
 
     /**
      * Result of {@link #prepareUpdatableBlasBuild}: the per-frame BUILD op to record, plus the persistent
@@ -396,9 +393,9 @@ public final class RtAccel {
     }
 
     /**
-     * Allocate a terrain section BLAS split into fixed material buckets (any-hit opt). {@code bucketTris}
-     * holds triangle counts in {@link #TERRAIN_BUCKETS} order: solid, cutout, translucent, water. All
-     * geometries reference the same packed vertex/index buffers; zero-triangle buckets are kept so
+     * Allocate a terrain section BLAS split into fixed SBT classes (any-hit opt). {@code bucketTris}
+     * holds triangle counts in {@link #SBT_CLASSES} order: opaque, masked, transmissive. All geometries
+     * reference the same packed vertex/index buffers; zero-triangle classes are kept so
      * {@code gl_GeometryIndexEXT} remains a stable material/SBT index in the shaders.
      */
     public static PreparedBlas prepareTerrainBlas(GpuContext ctx, GpuBuffer positions, int vertexCount,
@@ -711,8 +708,8 @@ public final class RtAccel {
     }
 
     private static void requireEntityBuckets(int[] bucketTris) {
-        if (bucketTris == null || bucketTris.length != ENTITY_BUCKETS) {
-            throw new IllegalArgumentException("Expected " + ENTITY_BUCKETS + " entity bucket counts");
+        if (bucketTris == null || bucketTris.length != SBT_CLASSES) {
+            throw new IllegalArgumentException("Expected " + SBT_CLASSES + " entity bucket counts");
         }
         for (int count : bucketTris) {
             if (count < 0) throw new IllegalArgumentException("Negative entity triangle count");
@@ -771,14 +768,14 @@ public final class RtAccel {
         tri.indexData().deviceAddress(indexAddr);
     }
 
-    /** Fixed entity geometry order; empty buckets remain present so GeometryIndex/SBT routing is stable. */
+    /** Fixed entity geometry order; empty classes remain present so GeometryIndex/SBT routing is stable. */
     private static VkAccelerationStructureGeometryKHR.Buffer entityGeometries(MemoryStack stack, long vertexAddr,
                                                                                long indexAddr, int vertexCount) {
         VkAccelerationStructureGeometryKHR.Buffer geometries =
-                VkAccelerationStructureGeometryKHR.calloc(ENTITY_BUCKETS, stack);
-        for (int bucket = 0; bucket < ENTITY_BUCKETS; bucket++) {
+                VkAccelerationStructureGeometryKHR.calloc(SBT_CLASSES, stack);
+        for (int bucket = 0; bucket < SBT_CLASSES; bucket++) {
             fillTriangleGeometry(geometries.get(bucket), vertexAddr, indexAddr, vertexCount,
-                    bucket == ENTITY_BUCKET_OPAQUE);
+                    bucket == CLASS_OPAQUE);
         }
         return geometries;
     }
@@ -786,9 +783,9 @@ public final class RtAccel {
     private static VkAccelerationStructureBuildRangeInfoKHR.Buffer entityBuildRanges(MemoryStack stack,
                                                                                       int[] bucketTris) {
         VkAccelerationStructureBuildRangeInfoKHR.Buffer ranges =
-                VkAccelerationStructureBuildRangeInfoKHR.calloc(ENTITY_BUCKETS, stack);
+                VkAccelerationStructureBuildRangeInfoKHR.calloc(SBT_CLASSES, stack);
         int triangleBase = 0;
-        for (int bucket = 0; bucket < ENTITY_BUCKETS; bucket++) {
+        for (int bucket = 0; bucket < SBT_CLASSES; bucket++) {
             int count = bucketTris[bucket];
             ranges.get(bucket).primitiveCount(count)
                     .primitiveOffset(triangleBase * 3 * Integer.BYTES)
@@ -807,7 +804,7 @@ public final class RtAccel {
         build.get(0).sType$Default().type(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR)
                 .flags(buildFlags(allowUpdate)).mode(VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR)
                 .geometryCount(geometries.capacity()).pGeometries(geometries);
-        java.nio.IntBuffer maxPrims = stack.mallocInt(ENTITY_BUCKETS);
+        java.nio.IntBuffer maxPrims = stack.mallocInt(SBT_CLASSES);
         maxPrims.put(bucketTris).flip();
         VkAccelerationStructureBuildSizesInfoKHR sizes = VkAccelerationStructureBuildSizesInfoKHR.calloc(stack).sType$Default();
         vkGetAccelerationStructureBuildSizesKHR(vk, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
@@ -840,13 +837,13 @@ public final class RtAccel {
         return build;
     }
 
-    /** One triangle geometry per bucket, in {@link #TERRAIN_BUCKETS} order; only solid is flagged opaque. */
+    /** One triangle geometry per SBT class, in {@link #SBT_CLASSES} order; only opaque is flagged opaque. */
     private static VkAccelerationStructureGeometryKHR.Buffer terrainGeometries(MemoryStack stack, long vertexAddr,
                                                                                long indexAddr, int vertexCount, int[] bucketTris,
                                                                                OpacityMicromap opacityMicromap) {
         VkAccelerationStructureGeometryKHR.Buffer geom = VkAccelerationStructureGeometryKHR.calloc(bucketTris.length, stack);
         VkAccelerationStructureTrianglesOpacityMicromapEXT ommAttachment = null;
-        if (opacityMicromap != null && bucketTris[BUCKET_CUTOUT] > 0) {
+        if (opacityMicromap != null && bucketTris[CLASS_MASKED] > 0) {
             VkMicromapUsageEXT.Buffer usage = micromapUsage(stack, opacityMicromap.triangleCount, opacityMicromap.subdivisionLevel);
             ommAttachment = VkAccelerationStructureTrianglesOpacityMicromapEXT.calloc(stack).sType$Default()
                     .indexType(VK_INDEX_TYPE_NONE_KHR)
@@ -859,8 +856,8 @@ public final class RtAccel {
         }
         for (int b = 0; b < bucketTris.length; b++) {
             VkAccelerationStructureGeometryKHR out = geom.get(b);
-            fillTriangleGeometry(out, vertexAddr, indexAddr, vertexCount, b == BUCKET_SOLID);
-            if (b == BUCKET_CUTOUT && ommAttachment != null) {
+            fillTriangleGeometry(out, vertexAddr, indexAddr, vertexCount, b == CLASS_OPAQUE);
+            if (b == CLASS_MASKED && ommAttachment != null) {
                 out.geometry().triangles().pNext(ommAttachment.address());
             }
         }
@@ -906,9 +903,9 @@ public final class RtAccel {
     /**
      * A TLAS instance: a 3x4 row-major transform, the device address of its BLAS, the 24-bit
      * {@code instanceCustomIndex} the hit shaders read, the 8-bit visibility {@code mask} (ANDed with the
-     * trace cull mask), and the base SBT hit-record offset. Terrain uses offset 0 so geometry index selects
-     * the material bucket. Entities use {@link #SBT_ENTITY_OFFSET}; their fixed geometry index then selects
-     * opaque or any-hit; the remaining two records in each four-record entity SBT block stay unused.
+     * trace cull mask), and the base SBT hit-record offset. Terrain and entity instances both use offset 0
+     * — they share the same {@link #SBT_CLASSES}-sized record space, so {@code gl_GeometryIndexEXT} alone
+     * selects the class on either producer's BLAS.
      */
     public record Instance(float[] transform3x4, long blasDeviceAddress, int customIndex, int mask, int sbtRecordOffset) {
         public Instance(float[] transform3x4, long blasDeviceAddress, int customIndex) {

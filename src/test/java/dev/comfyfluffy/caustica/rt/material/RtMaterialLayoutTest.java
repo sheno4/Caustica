@@ -31,13 +31,12 @@ final class RtMaterialLayoutTest {
         assertEquals(64, SurfaceMaterialData.BYTE_SIZE);
         ByteBuffer data = ByteBuffer.allocateDirect(SurfaceMaterialData.BYTE_SIZE)
                 .order(ByteOrder.nativeOrder());
-        new SurfaceMaterialData(3, 5, 7,
+        new SurfaceMaterialData(5, 7,
                 new Float4(0.01f, 0.02f, 0.03f, 0.04f),
                 new Float4(0.05f, 0.06f, 7.0f, 8.0f),
                 0.1f, 0.2f, 1.52f, 1.0f).write(data);
-        assertEquals(3, data.getInt(0));
-        assertEquals(5, data.getInt(4));
-        assertEquals(7, data.getInt(8));
+        assertEquals(5, data.getInt(0));  // features
+        assertEquals(7, data.getInt(4));  // page
         assertEquals(0.01f, data.getFloat(16));
         assertEquals(7.0f, data.getFloat(40));
         assertEquals(0.1f, data.getFloat(48));  // specularRoughness, perceptual

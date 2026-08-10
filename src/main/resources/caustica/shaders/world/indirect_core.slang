@@ -85,14 +85,13 @@ public float3 tracePath<TC : IComposition, TTrace : IRadianceTrace>(TC.Surface s
         float3 n = payloadNormal();
         float3 hitPos = ro + rd * payload.hitT;
         rayConeWidth = max(rayConeWidth + rayConeSpread * max(payload.hitT, 0.0), RAY_CONE_MIN_WIDTH);
-        uint material = payloadMaterial();
 
         // ---- Dielectric interface: engine-owned in full.
-        if (material == MATERIAL_WATER || material == MATERIAL_DIELECTRIC) {
+        if (payloadDielectric()) {
             if (bounce >= maxBounces) {
                 break;
             }
-            bool isWater = material == MATERIAL_WATER;
+            bool isWater = payloadWater();
             bool entering = payloadDielectricEntering();
             float3 tint = payloadAlbedo();
             float transmission = clamp(payloadTransmission(), 0.0, 1.0);

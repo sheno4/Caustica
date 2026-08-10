@@ -16,13 +16,13 @@ final class RtEntityCaptureTest {
     @Test
     void packsTrianglesIntoFixedAlphaBucketOrder() {
         RtEntityCapture capture = capture();
-        addQuad(capture, RtAccel.ENTITY_BUCKET_ANY_HIT, 22);
-        addQuad(capture, RtAccel.ENTITY_BUCKET_OPAQUE, 11);
-        addQuad(capture, RtAccel.ENTITY_BUCKET_ANY_HIT, 33);
+        addQuad(capture, RtAccel.CLASS_MASKED, 22);
+        addQuad(capture, RtAccel.CLASS_OPAQUE, 11);
+        addQuad(capture, RtAccel.CLASS_MASKED, 33);
 
         RtEntityCapture.PackedGeometry packed = capture.packGeometry();
 
-        assertArrayEquals(new int[] {2, 4}, packed.bucketTris());
+        assertArrayEquals(new int[] {2, 4, 0}, packed.bucketTris());
         assertArrayEquals(new int[] {
                 4, 5, 6, 4, 6, 7,
                 0, 1, 2, 0, 2, 3,
@@ -34,11 +34,11 @@ final class RtEntityCaptureTest {
     @Test
     void resetClearsBucketMetadata() {
         RtEntityCapture capture = capture();
-        addQuad(capture, RtAccel.ENTITY_BUCKET_OPAQUE, 11);
+        addQuad(capture, RtAccel.CLASS_OPAQUE, 11);
 
         capture.reset();
 
-        assertArrayEquals(new int[] {0, 0}, capture.packGeometry().bucketTris());
+        assertArrayEquals(new int[] {0, 0, 0}, capture.packGeometry().bucketTris());
     }
 
     /** Capture with no GPU material table: keep the base material as-is instead of resolving a variant. */
