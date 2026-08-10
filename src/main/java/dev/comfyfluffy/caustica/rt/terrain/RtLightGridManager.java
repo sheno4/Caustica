@@ -6,7 +6,6 @@ import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor.GraphicsUse;
 import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
-import net.minecraft.client.Minecraft;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.VK10;
@@ -54,12 +53,12 @@ final class RtLightGridManager {
      * generation at a time, so callers must only invoke this while {@link #isIdle()}.
      */
     void request(GpuContext ctx, Collection<RtLightHierarchy.SectionInput> sections,
-                 int rebaseX, int rebaseY, int rebaseZ) {
+                 int rebaseX, int rebaseY, int rebaseZ, DebugFocus debugFocus) {
         if (!isIdle()) {
             throw new IllegalStateException(
                     "RtLightGridManager.request() called while a generation is still in flight");
         }
-        Input input = new Input(List.copyOf(sections), rebaseX, rebaseY, rebaseZ);
+        Input input = new Input(List.copyOf(sections), rebaseX, rebaseY, rebaseZ, debugFocus);
         long requestId;
         synchronized (buildLock) {
             requestId = ++latestRequest;
@@ -150,7 +149,7 @@ final class RtLightGridManager {
                 } else {
                     // VMA allocation, staging serialization/flush, and executor enqueue all stay on this
                     // worker. The render thread only atomically publishes Uploaded.
-                    submitUpload(request.ctx, request.requestId, data);
+                    submitUpload(request.ctx, request.requestId, data, request.input.debugFocus);
                 }
             }
         } catch (Throwable t) {
@@ -162,7 +161,8 @@ final class RtLightGridManager {
         }
     }
 
-    private void submitUpload(GpuContext ctx, long requestId, RtLightHierarchy.Data data) {
+    private void submitUpload(GpuContext ctx, long requestId, RtLightHierarchy.Data data,
+                              DebugFocus debugFocus) {
         Layout layout = Layout.of(data, data.grid() != null);
 
         GpuBuffer arena = null;
@@ -212,7 +212,7 @@ final class RtLightGridManager {
                         cmd -> recordUpload(cmd, submittedUpload, submittedArena,
                                 submittedLayout.totalBytes),
                         () -> { },
-                        (build, failure) -> finishUpload(requestId, data,
+                        (build, failure) -> finishUpload(requestId, data, debugFocus,
                                 submittedUpload, submittedArena, submittedLayout, build, failure));
                 accepted = true;
                 upload = null;
@@ -234,7 +234,8 @@ final class RtLightGridManager {
         }
     }
 
-    private void finishUpload(long requestId, RtLightHierarchy.Data data, GpuBuffer upload,
+    private void finishUpload(long requestId, RtLightHierarchy.Data data, DebugFocus debugFocus,
+                              GpuBuffer upload,
                               GpuBuffer arena, Layout layout,
                               RtGpuExecutor.Build build, Throwable failure) {
         try {
@@ -242,7 +243,8 @@ final class RtLightGridManager {
         } finally {
             try {
                 if (isLatest(requestId)) {
-                    completions.add(new Uploaded(requestId, data, arena, layout, build, failure));
+                    completions.add(new Uploaded(requestId, data, debugFocus,
+                            arena, layout, build, failure));
                 }
                 else arena.destroy();
             } finally {
@@ -269,7 +271,9 @@ final class RtLightGridManager {
         published = next;
         old.retire(ctx, ctx.gpuExecutor().latestGraphicsUse());
 
-        if (CausticaConfig.Rt.Lights.DUMP.value()) dumpNearbyLights(uploaded.data);
+        if (CausticaConfig.Rt.Lights.DUMP.value() && uploaded.debugFocus != null) {
+            dumpNearbyLights(uploaded.data, uploaded.debugFocus);
+        }
 
         if (CausticaConfig.Rt.Lights.STATS.value()) {
             double legacyPower = uploaded.data.invGlobalPowerSum() > 0.0f
@@ -285,12 +289,10 @@ final class RtLightGridManager {
         }
     }
 
-    private static void dumpNearbyLights(RtLightHierarchy.Data data) {
-        var player = Minecraft.getInstance().player;
-        if (player == null) return;
-        double px = player.getX() - data.rebaseX();
-        double py = player.getY() - data.rebaseY();
-        double pz = player.getZ() - data.rebaseZ();
+    private static void dumpNearbyLights(RtLightHierarchy.Data data, DebugFocus focus) {
+        double px = focus.relativeX(data.rebaseX());
+        double py = focus.relativeY(data.rebaseY());
+        double pz = focus.relativeZ(data.rebaseZ());
         double radius = CausticaConfig.Rt.Lights.DUMP_RADIUS.value();
         double radiusSq = radius * radius;
         float[] lights = data.packedLights();
@@ -368,8 +370,14 @@ final class RtLightGridManager {
         }
     }
 
+    record DebugFocus(double worldX, double worldY, double worldZ) {
+        double relativeX(int rebaseX) { return worldX - rebaseX; }
+        double relativeY(int rebaseY) { return worldY - rebaseY; }
+        double relativeZ(int rebaseZ) { return worldZ - rebaseZ; }
+    }
+
     private record Input(List<RtLightHierarchy.SectionInput> sections,
-                         int rebaseX, int rebaseY, int rebaseZ) { }
+                         int rebaseX, int rebaseY, int rebaseZ, DebugFocus debugFocus) { }
 
     record PublishedState(GpuBuffer arena, Layout layout, int lightCount,
                           float invGlobalPowerSum,
@@ -434,7 +442,8 @@ final class RtLightGridManager {
     private sealed interface Completion permits Failed, Empty, Uploaded { }
     private record Failed(long requestId, Throwable failure) implements Completion { }
     private record Empty(long requestId) implements Completion { }
-    private record Uploaded(long requestId, RtLightHierarchy.Data data, GpuBuffer arena, Layout layout,
+    private record Uploaded(long requestId, RtLightHierarchy.Data data, DebugFocus debugFocus,
+                            GpuBuffer arena, Layout layout,
                             RtGpuExecutor.Build build, Throwable failure) implements Completion {
         void destroy() { arena.destroy(); }
     }

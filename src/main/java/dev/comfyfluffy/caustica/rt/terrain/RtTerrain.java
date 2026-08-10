@@ -1620,7 +1620,11 @@ public final class RtTerrain {
         }
         // The manager creates one immutable worker snapshot directly from the sorted values view,
         // avoiding the previous ArrayList + defensive-copy pair on the render thread.
-        lightGrid.request(ctx, lightSections.values(), blockX, blockY, blockZ);
+        var player = Minecraft.getInstance().player;
+        RtLightGridManager.DebugFocus debugFocus = player != null
+                ? new RtLightGridManager.DebugFocus(player.getX(), player.getY(), player.getZ())
+                : null;
+        lightGrid.request(ctx, lightSections.values(), blockX, blockY, blockZ, debugFocus);
         lightHierarchyDirty = false;
         lastLightHierarchyRequestNanos = now;
     }
