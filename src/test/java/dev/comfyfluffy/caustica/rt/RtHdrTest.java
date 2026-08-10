@@ -27,6 +27,14 @@ final class RtHdrTest {
         assertThrows(IllegalArgumentException.class, () -> RtHdr.masteringMetadata(0));
     }
 
+    @Test
+    void exposesTheMetadataExtensionDecisionFromDeviceNegotiation() {
+        RtHdr.publishMetadataExtension(false);
+        assertEquals(false, RtHdr.metadataExtensionEnabled());
+        RtHdr.publishMetadataExtension(true);
+        assertEquals(true, RtHdr.metadataExtensionEnabled());
+    }
+
     private static void assertChromaticity(RtHdr.Chromaticity actual, float x, float y) {
         assertEquals(x, actual.x(), EPSILON);
         assertEquals(y, actual.y(), EPSILON);

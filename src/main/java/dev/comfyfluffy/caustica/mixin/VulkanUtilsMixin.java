@@ -2,7 +2,7 @@ package dev.comfyfluffy.caustica.mixin;
 
 import com.mojang.blaze3d.vulkan.VulkanDevice;
 import com.mojang.blaze3d.vulkan.VulkanUtils;
-import dev.comfyfluffy.caustica.rt.VulkanDiagnostics;
+import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftVulkanDiagnostics;
 import org.lwjgl.vulkan.VK10;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -17,7 +17,7 @@ public abstract class VulkanUtilsMixin {
     private static void caustica$reportDeviceFault(VulkanDevice device, int result, String message,
                                                     CallbackInfo ci) {
         if (result == VK10.VK_ERROR_DEVICE_LOST) {
-            VulkanDiagnostics.reportDeviceLost(device, message);
+            MinecraftVulkanDiagnostics.reportDeviceLost(device, message);
         }
     }
 }

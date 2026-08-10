@@ -10,8 +10,9 @@ import com.mojang.blaze3d.vulkan.VulkanBackend;
 import com.mojang.blaze3d.vulkan.VulkanPhysicalDevice;
 import com.mojang.blaze3d.vulkan.init.VulkanFeature;
 import dev.comfyfluffy.caustica.CausticaMod;
+import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftDeviceBringup;
+import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftVulkanDiagnostics;
 import dev.comfyfluffy.caustica.rt.RtDeviceBringup;
-import dev.comfyfluffy.caustica.rt.RtHdr;
 import dev.comfyfluffy.caustica.rt.VulkanDiagnostics;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VK12;
@@ -102,14 +103,13 @@ public abstract class VulkanBackendMixin {
 						extension, physicalDevice.deviceName());
 			}
 		}
-		VulkanDiagnostics.addDeviceFaultExtension(augmented, physicalDevice);
-		RtHdr.addDeviceExtension(augmented, physicalDevice);
-		RtDeviceBringup.addExtensions(augmented, physicalDevice);
+		MinecraftVulkanDiagnostics.addExtensions(augmented, physicalDevice);
+		MinecraftDeviceBringup.addExtensions(augmented, physicalDevice);
 		args.set(0, augmented);
 
 		caustica$addCoreDeviceFeatures(args, physicalDevice);
-		VulkanDiagnostics.addDeviceFaultFeature(args);
-		RtDeviceBringup.addFeatures(args, physicalDevice);
+		MinecraftVulkanDiagnostics.addFeatures(args);
+		MinecraftDeviceBringup.addFeatures(args, physicalDevice);
 		VulkanDiagnostics.logEnabledExtensions(augmented);
 	}
 
@@ -165,7 +165,7 @@ public abstract class VulkanBackendMixin {
 	private static void caustica$augmentDeviceCreateInfo(Collection<String> extensions,
 			VulkanPhysicalDevice physicalDevice, Set<VulkanFeature> features,
 			CallbackInfoReturnable<VkDevice> cir, @Local VkDeviceCreateInfo deviceCreateInfo) {
-		RtDeviceBringup.reserveComputeQueue(deviceCreateInfo, physicalDevice, MemoryStack.stackGet());
+		MinecraftDeviceBringup.reserveComputeQueue(deviceCreateInfo, physicalDevice, MemoryStack.stackGet());
 		VulkanDiagnostics.attachNvDiagnosticsConfig(deviceCreateInfo, MemoryStack.stackGet());
 	}
 }

@@ -1,7 +1,6 @@
 package dev.comfyfluffy.caustica.rt;
 
 import java.nio.IntBuffer;
-import java.util.List;
 
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.EXTHdrMetadata;
@@ -11,7 +10,6 @@ import org.lwjgl.vulkan.VkHdrMetadataEXT;
 import org.lwjgl.vulkan.VkPhysicalDevice;
 import org.lwjgl.vulkan.VkSurfaceFormatKHR;
 
-import com.mojang.blaze3d.vulkan.VulkanPhysicalDevice;
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 
@@ -49,24 +47,9 @@ public final class RtHdr {
     private RtHdr() {
     }
 
-    /**
-     * Opportunistically enables {@code VK_EXT_hdr_metadata}. It is a function-only device extension, so
-     * there is no feature struct to chain into device creation. HDR presentation still works when it is
-     * absent; only the mastering hints to the presentation engine are unavailable.
-     */
-    public static void addDeviceExtension(List<String> augmentedExtensions, VulkanPhysicalDevice physicalDevice) {
-        hdrMetadataExtensionEnabled = false;
-        String extension = EXTHdrMetadata.VK_EXT_HDR_METADATA_EXTENSION_NAME;
-        if (!physicalDevice.hasDeviceExtension(extension)) {
-            CausticaMod.LOGGER.warn("HDR: device [{}] does not support {}; static mastering metadata disabled",
-                    physicalDevice.deviceName(), extension);
-            return;
-        }
-        if (!augmentedExtensions.contains(extension)) {
-            augmentedExtensions.add(extension);
-        }
-        hdrMetadataExtensionEnabled = true;
-        CausticaMod.LOGGER.info("HDR: enabling {} for PQ swapchain mastering metadata", extension);
+    /** Publishes whether device negotiation enabled the function-only metadata extension. */
+    public static void publishMetadataExtension(boolean enabled) {
+        hdrMetadataExtensionEnabled = enabled;
     }
 
     /** Whether {@code VK_EXT_hdr_metadata} was included in the device extension list. */
