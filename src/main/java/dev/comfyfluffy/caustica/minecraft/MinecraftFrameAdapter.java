@@ -8,6 +8,7 @@ import dev.comfyfluffy.caustica.rt.RtColor;
 import dev.comfyfluffy.caustica.rt.RtRuntime;
 import dev.comfyfluffy.caustica.rt.entity.RtEntityTextures;
 import dev.comfyfluffy.caustica.rt.terrain.RtTerrain;
+import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftVulkanBackend;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.renderer.BiomeColors;
@@ -39,6 +40,7 @@ public final class MinecraftFrameAdapter {
     }
 
     public void tickRuntime(Minecraft client) {
+        MinecraftVulkanBackend.installCurrent();
         ClientLevel level = client.level;
         long currentSceneId = identify(level);
         var target = client.gameRenderer.mainRenderTarget();

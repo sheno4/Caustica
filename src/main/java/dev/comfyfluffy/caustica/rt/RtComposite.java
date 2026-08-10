@@ -1,26 +1,17 @@
 package dev.comfyfluffy.caustica.rt;
 
-import com.mojang.blaze3d.pipeline.RenderTarget;
-import com.mojang.blaze3d.systems.RenderSystem;
-import com.mojang.blaze3d.textures.GpuTexture;
-import com.mojang.blaze3d.vulkan.VulkanCommandEncoder;
-import com.mojang.blaze3d.vulkan.VulkanGpuTexture;
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.api.CausticaApi;
 import dev.comfyfluffy.caustica.api.CausticaRegistry;
 import dev.comfyfluffy.caustica.api.Slots;
 import dev.comfyfluffy.caustica.api.pass.RenderStage;
-import dev.comfyfluffy.caustica.client.CausticaJitter;
 import dev.comfyfluffy.caustica.engine.frame.DamageOverlay;
 import dev.comfyfluffy.caustica.engine.frame.FrameSnapshot;
 import dev.comfyfluffy.caustica.engine.frame.SceneResources;
 import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
 import dev.comfyfluffy.caustica.engine.material.MaterialEmissionIndex;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
-import dev.comfyfluffy.caustica.minecraft.material.MinecraftEmissionSemantics;
-import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialClassifier;
-import dev.comfyfluffy.caustica.mixin.CommandEncoderAccessor;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushConstantsData;
 import dev.comfyfluffy.caustica.rt.light.RtProviderLights;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushData;
@@ -61,12 +52,14 @@ import dev.comfyfluffy.caustica.rt.pipeline.RtDisplayPipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDlssRr;
 import dev.comfyfluffy.caustica.rt.pipeline.RtHdrCompositePipeline;
+import dev.comfyfluffy.caustica.rt.pipeline.RtJitter;
 import dev.comfyfluffy.caustica.rt.pipeline.RtSdrPresentPipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtExposure;
 import dev.comfyfluffy.caustica.rt.shader.Composition;
 import dev.comfyfluffy.caustica.rt.shader.WorldShaderCompiler;
 import dev.comfyfluffy.caustica.rt.pass.RenderPassManager;
 import dev.comfyfluffy.caustica.rt.provider.ProviderManager;
+import dev.comfyfluffy.caustica.rt.backend.GraphicsSubmission;
 import dev.comfyfluffy.caustica.rt.pipeline.RtPipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtShaderCode;
 import dev.comfyfluffy.caustica.rt.pipeline.RtToneLut;
@@ -198,7 +191,7 @@ public final class RtComposite {
     private boolean materialBindingsReady;
     // The RenderPassManager world-resource generation currently written into the world pipeline's set 2.
     private int boundWorldResourceGeneration = -1;
-    // Set when a new material epoch is published. The first composite returns to vanilla so the next
+    // Set when a new material epoch is published. The first composite returns to source rasterization so the next
     // client tick can apply RtTerrain's full-clear before any old-epoch primitive IDs are traced.
     private boolean materialEpochTraceGate;
     // World push data lives in a host-visible BDA ring; only the slot address and a small hot subset are
@@ -233,7 +226,7 @@ public final class RtComposite {
     // this image is blitted straight to the swapchain.
     private GpuImage hdrDisplayImage;
     // Set true after this frame's display dispatch wrote hdrDisplayImage (HDR enabled + RT ran); gates the
-    // HDR present blit so a frame where RT did not run falls back to the vanilla SDR present.
+    // HDR present blit so a frame where RT did not run falls back to the host SDR present.
     private boolean hdrWrittenThisFrame;
     // DLSS-FG "hudless" resource: a copy of the main render target before the combined UI overlay
     // composites back on top. Lazily allocated (only meaningful once FG + the UI overlay redirect are both
@@ -364,7 +357,10 @@ public final class RtComposite {
      * @return {@code true} when a current RT frame was available and written
      */
     public boolean exportLatestResidualExposureExr(Path outputPath) throws java.io.IOException {
-        RenderSystem.assertOnRenderThread();
+        GpuContext context = GpuContext.currentOrNull();
+        if (context != null) {
+            context.backend().assertRenderThread();
+        }
         GpuContext ctx = GpuContext.currentOrNull();
         if (!enabled() || failed || ctx == null || rrOutput == null || exposure.image() == null
                 || displayW <= 0 || displayH <= 0 || pendingGraphicsUse != null) {
@@ -468,18 +464,18 @@ public final class RtComposite {
     }
 
     /**
-     * Whether the current frame must retain vanilla world rendering while RT resource state converges.
+     * Whether the current frame must retain source rasterization while RT resource state converges.
      *
      * <p>The composite still runs at the normal seam so it can consume the one-frame epoch gate or observe
-     * the newly uploaded atlas. This method only prevents {@code LevelRenderer} from being cancelled before
-     * a deliberately transient {@link #composite} return. Such a return is not a renderer failure and must
-     * not trip {@code VanillaRenderController}'s permanent safety latch.</p>
+     * the newly uploaded atlas. This prevents the source renderer from being suppressed before a deliberately
+     * transient {@link #composite} return. Such a return is not a renderer failure and must not trip the host's
+     * permanent safety latch.</p>
      */
-    public boolean requiresVanillaWorldFallback() {
+    public boolean requiresSourceWorldFallback() {
         // Pipeline creation publishes a new material epoch and deliberately makes composite() return
-        // false once so RtTerrain can apply the matching full clear. Keep vanilla alive for that bring-up
-        // frame; otherwise LevelRenderer is cancelled before composite() discovers it must fall back and
-        // VanillaRenderController permanently latches the resulting missing replacement frame.
+        // false once so RtTerrain can apply the matching full clear. Keep source rasterization alive for that
+        // bring-up frame; otherwise it is suppressed before composite() discovers it must fall back and the
+        // host permanently latches the resulting missing replacement frame.
         if (worldPipeline == null || !materialBindingsReady) {
             return true;
         }
@@ -497,18 +493,18 @@ public final class RtComposite {
     }
 
     /**
-     * Complete the material epoch while startup is retaining vanilla presentation. The runtime calls this
+     * Complete the material epoch while startup is retaining source presentation. The runtime calls this
      * only after the terrain update has applied the pending full clear, so activation depends on resource
      * readiness rather than an additional tick or rendered frame.
      */
     public boolean completeStartupBoundary() {
         materialEpochTraceGate = false;
-        return !requiresVanillaWorldFallback();
+        return !requiresSourceWorldFallback();
     }
 
     /**
      * Clear the failure latch on an explicit render-state invalidation (F3+A, dimension change) so RT
-     * re-arms after a transient error instead of staying on vanilla until restart. A deterministic
+     * re-arms after a transient error instead of staying on the source renderer until restart. A deterministic
      * failure just latches again on the next frame (bounded log spam: one error line per invalidation).
      */
     public void resetFailureLatch() {
@@ -539,9 +535,8 @@ public final class RtComposite {
 
     /**
      * Reset per-frame present state at the very start of host rendering. Critical for menu/no-world
-     * frames: {@link #composite()} is only called
-     * while a level is rendering ({@code WorldRenderScaler} opens its window in {@code renderLevel}), so on
-     * menu frames {@code composite} never runs and {@code hdrWrittenThisFrame} would otherwise keep its stale
+     * frames: {@link #composite()} is only called while the host opens its world-composition window, so on
+     * non-world frames {@code composite} never runs and {@code hdrWrittenThisFrame} would otherwise keep its stale
      * {@code true} from the last world frame — presenting a black/stale HDR image behind the menu. Clearing it
      * here every frame makes {@link #isHdrPresentActive()} false on menu frames so the SDR convert-present path
      * runs instead.
@@ -557,7 +552,10 @@ public final class RtComposite {
 
     /** This frame's completion token, valid until {@link #finishGraphicsUse()} signals it. */
     public RtGpuExecutor.GraphicsUse currentGraphicsUse() {
-        RenderSystem.assertOnRenderThread();
+        GpuContext context = GpuContext.currentOrNull();
+        if (context != null) {
+            context.backend().assertRenderThread();
+        }
         return pendingGraphicsUse;
     }
 
@@ -576,14 +574,17 @@ public final class RtComposite {
         // this only guards the alloc/submit plumbing around it, so a transient device-lost-adjacent failure
         // here can't interrupt the rest of the frame either.
         try {
-            var encoder = (VulkanCommandEncoder) ((CommandEncoderAccessor) RenderSystem.getDevice()
-                    .createCommandEncoder()).caustica$getBackend();
-            VkCommandBuffer cmd = encoder.allocateAndBeginTransientCommandBuffer();
+            GpuContext context = GpuContext.currentOrNull();
+            if (context == null) {
+                return;
+            }
+            GraphicsSubmission submission = context.backend().createGraphicsSubmission();
+            VkCommandBuffer cmd = submission.beginTransientCommandBuffer();
             renderPassManager.record(RenderStage.OVERLAY, cmd);
             if (VK10.vkEndCommandBuffer(cmd) != VK10.VK_SUCCESS) {
                 throw new IllegalStateException("vkEndCommandBuffer(overlay passes) failed");
             }
-            encoder.execute(cmd);
+            submission.execute(cmd);
         } catch (Throwable t) {
             CausticaMod.LOGGER.error("Recording overlay render passes failed", t);
         }
@@ -599,9 +600,8 @@ public final class RtComposite {
         if (ctx == null) {
             throw new IllegalStateException("RT context disappeared before graphics use completed");
         }
-        var encoder = (VulkanCommandEncoder) ((CommandEncoderAccessor) RenderSystem.getDevice()
-                .createCommandEncoder()).caustica$getBackend();
-        ctx.gpuExecutor().endGraphicsUse(encoder, graphicsUse);
+        GraphicsSubmission submission = ctx.backend().createGraphicsSubmission();
+        ctx.gpuExecutor().endGraphicsUse(submission, graphicsUse);
         pendingGraphicsUse = null;
     }
 
@@ -609,7 +609,7 @@ public final class RtComposite {
         RtFrameStats.FRAME.end();
     }
 
-    public boolean composite(GpuTexture nativeColor, int width, int height) {
+    public boolean composite(long nativeColorImage, int width, int height) {
         frameCounter++; // global frame serial used by remaining per-frame/entity rings and diagnostics
         VulkanDiagnostics.setInFlight("graphics-latest", "frame=" + frameCounter + " size=" + width + "x" + height);
         hdrWrittenThisFrame = false; // set true again below once this frame's HDR display image is written
@@ -643,7 +643,7 @@ public final class RtComposite {
             }
             refreshMaterialBindingsIfNeeded(ctx);
             updateMotion(snapshot);
-            recordFrame(ctx, active, nativeColor, snapshot);
+            recordFrame(ctx, active, nativeColorImage, snapshot);
             if (!loggedActive) {
                 loggedActive = true;
                 CausticaMod.LOGGER.info("RT composite active (terrain): {}x{}, RT output replaces the world target", width, height);
@@ -652,12 +652,12 @@ public final class RtComposite {
         } catch (Throwable t) {
             ctx.gpuExecutor().throwIfFailed();
             failed = true;
-            CausticaMod.LOGGER.error("RT composite failed; reverting to vanilla path", t);
+            CausticaMod.LOGGER.error("RT composite failed; reverting to source rasterization", t);
             return false;
         }
     }
 
-    /** Build every display-sized resource while startup is still presenting vanilla. */
+    /** Build every display-sized resource while startup is still presenting the source renderer. */
     public boolean ensurePresentationResourcesReady(GpuContext ctx, long sceneId, int width, int height) {
         if (failed || sceneId == 0L) {
             return false;
@@ -666,7 +666,7 @@ public final class RtComposite {
             return ensurePresentationResources(ctx, sceneId, width, height);
         } catch (Throwable t) {
             failed = true;
-            CausticaMod.LOGGER.error("RT presentation resource bring-up failed; reverting to vanilla path", t);
+            CausticaMod.LOGGER.error("RT presentation resource bring-up failed; reverting to host presentation", t);
             return false;
         }
     }
@@ -745,7 +745,7 @@ public final class RtComposite {
             return ensureWorld(ctx) != null;
         } catch (Throwable t) {
             failed = true;
-            CausticaMod.LOGGER.error("RT resource bring-up failed; reverting to vanilla path", t);
+            CausticaMod.LOGGER.error("RT resource bring-up failed; reverting to source rasterization", t);
             return false;
         }
     }
@@ -982,13 +982,13 @@ public final class RtComposite {
         ProviderManager.MaterialContributions materials = ProviderManager.INSTANCE.collectMaterials();
         RtMaterialOverrides materialOverrides = RtMaterialOverrides.from(
                 materials.rules(), CausticaApi.registry()::surfaceIndex);
-        MaterialEmissionIndex emissionSemantics = MinecraftEmissionSemantics.analyze();
+        MaterialEmissionIndex emissionSemantics = RtRuntime.host().analyzeMaterialEmission();
         RtBlockMaterials.INSTANCE.prepareAll(ctx, bindlessTextureCapacity, emissionSemantics, materialOverrides);
         RtEntityTextures.INSTANCE.reset(bindlessTextureCapacity);
         worldPipeline.setEntityAlbedoTexture(0, atlasView, sampler);
         RtBlockMaterials.INSTANCE.bindPages(worldPipeline, sampler);
         RtMaterialRegistry.INSTANCE.rebuild(ctx, RtBlockMaterials.INSTANCE, materialOverrides,
-                MinecraftMaterialClassifier::dielectricIor,
+                RtRuntime.host()::dielectricIor,
                 materials.definitions(), CausticaApi.registry()::surfaceIndex);
         sceneGeometry.invalidateMaterials();
         materialBindingsReady = true;
@@ -1252,13 +1252,13 @@ public final class RtComposite {
         mvHasPrev = true;
     }
 
-    private void recordFrame(GpuContext ctx, RtPipeline active, GpuTexture nativeColor,
+    private void recordFrame(GpuContext ctx, RtPipeline active, long nativeColorImage,
                              FrameSnapshot snapshot) {
-        long dstImage = vkImage(nativeColor);
-        var encoder = (VulkanCommandEncoder) ((CommandEncoderAccessor) RenderSystem.getDevice().createCommandEncoder()).caustica$getBackend();
+        long dstImage = nativeColorImage;
+        GraphicsSubmission submission = ctx.backend().createGraphicsSubmission();
         RtGpuExecutor gpuExecutor = ctx.gpuExecutor();
         // Reserve the graphics-use value that guards this frame's reusable TLAS and entity resources.
-        RtGpuExecutor.GraphicsUse graphicsUse = gpuExecutor.beginGraphicsUse(encoder);
+        RtGpuExecutor.GraphicsUse graphicsUse = gpuExecutor.beginGraphicsUse(submission);
         RtGpuExecutor.GraphicsUseWaiter graphicsUseWaiter = gpuExecutor.graphicsUseWaiter();
         // Reuse a completed readback slot, then latch one pre-exposure value for both raygen and resolve.
         // This belongs after the timeline snapshot and before any world push data is written.
@@ -1267,7 +1267,7 @@ public final class RtComposite {
         RtEntities.FrameEntities frameEntities = null;
         RtSceneGeometryManager.FrameGeometry providerGeometry = null;
         RtProviderLights.Frame providerLightFrame = null;
-        VkCommandBuffer cmd = encoder.allocateAndBeginTransientCommandBuffer();
+        VkCommandBuffer cmd = submission.beginTransientCommandBuffer();
         RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_COMMAND_BUFFER, cmd.address(), "composite command buffer");
         int debugView = debugView();
         RtTerrain terrain = RtTerrain.currentOrNull();
@@ -1278,9 +1278,9 @@ public final class RtComposite {
             float jitterX = 0f;
             float jitterY = 0f;
             if (rrPath) {
-                CausticaJitter.INSTANCE.prepare(renderW, renderH, displayW);
-                jitterX = CausticaJitter.INSTANCE.jitterPixelsX() * jitterSignX();
-                jitterY = CausticaJitter.INSTANCE.jitterPixelsY() * jitterSignY();
+                RtJitter.INSTANCE.prepare(renderW, renderH, displayW);
+                jitterX = RtJitter.INSTANCE.jitterPixelsX() * jitterSignX();
+                jitterY = RtJitter.INSTANCE.jitterPixelsY() * jitterSignY();
             }
 
             boolean rrDone = false;
@@ -1390,7 +1390,7 @@ public final class RtComposite {
                         RtAccel.recordBlasBuilds(ctx, cmd, fe.blas());
                     }
                 }
-                VulkanCommandEncoder.memoryBarrier(cmd, stack); // provider/entity BLAS writes visible to the TLAS build
+                VulkanBarriers.memoryBarrier(cmd, stack); // provider/entity BLAS writes visible to the TLAS build
             }
             RtAccel.PreparedTlas frameTlas;
             try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("frame.prepareTlas")) {
@@ -1401,7 +1401,7 @@ public final class RtComposite {
             try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("frame.recordTlas")) {
                 RtAccel.recordTlasBuild(ctx, cmd, frameTlas);
             }
-            VulkanCommandEncoder.memoryBarrier(cmd, stack); // TLAS build visible to the trace
+            VulkanBarriers.memoryBarrier(cmd, stack); // TLAS build visible to the trace
 
             // Push the BDA ring slot's address plus the small hot subset used directly by the shaders.
             // Every 64-bit device address the trace needs lives here, not behind worldPushAddr: the
@@ -1430,12 +1430,12 @@ public final class RtComposite {
                  RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.tracePrimary")) {
                 active.trace(cmd, renderW, renderH, pushConstants, 0);
             }
-            VulkanCommandEncoder.memoryBarrier(cmd, stack); // continuation/guide writes visible to the indirect trace
+            VulkanBarriers.memoryBarrier(cmd, stack); // continuation/guide writes visible to the indirect trace
             try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "world indirect trace");
                  RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.traceIndirect")) {
                 active.trace(cmd, renderW, renderH, pushConstants, 1);
             }
-            VulkanCommandEncoder.memoryBarrier(cmd, stack); // RT writes visible to DLSS reads
+            VulkanBarriers.memoryBarrier(cmd, stack); // RT writes visible to DLSS reads
             // DLSS-RR denoise + upscale. The RT pass wrote noisy color (render res) + guides;
             // RR reads them and writes the display-res denoised result straight into rrOutput.
             if (rrPath && RtDlssRr.INSTANCE.ensureFeature(cmd.address(), renderW, renderH, displayW, displayH)) {
@@ -1452,13 +1452,13 @@ public final class RtComposite {
             // downstream debug pass always have a valid display-res scene image. With RR off
             // render == display, so this is a 1:1 copy.
             if (!rrDone) {
-                VulkanCommandEncoder.memoryBarrier(cmd, stack);
+                VulkanBarriers.memoryBarrier(cmd, stack);
                 try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "fallback upscale");
                      RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.upscale")) {
                     blitUpscale(cmd, stack, output, rrOutput);
                 }
             }
-            VulkanCommandEncoder.memoryBarrier(cmd, stack); // rrOutput visible to exposure histogram
+            VulkanBarriers.memoryBarrier(cmd, stack); // rrOutput visible to exposure histogram
 
             // Auto-exposure meters rrOutput (the post-RR, denoised/converged image), not the raw
             // pre-RR trace: RR has no notion of exposure (DLSS-RR Integration Guide §3.7 — ignore
@@ -1472,7 +1472,7 @@ public final class RtComposite {
                 exposure.record(ctx, cmd, stack, rrOutput, gDepth, gAlbedo);
                 exposure.recordStateReadback(cmd, stack);
             }
-            VulkanCommandEncoder.memoryBarrier(cmd, stack); // exposure image visible to downstream passes
+            VulkanBarriers.memoryBarrier(cmd, stack); // exposure image visible to downstream passes
 
             try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "post chain");
                  RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.postChain")) {
@@ -1495,7 +1495,7 @@ public final class RtComposite {
                         true, lookLut.size);
             }
             hdrWrittenThisFrame = CausticaConfig.Rt.Hdr.enabled();
-            VulkanCommandEncoder.memoryBarrier(cmd, stack); // display output visible to debug composite
+            VulkanBarriers.memoryBarrier(cmd, stack); // display output visible to debug composite
 
             if (debugView != 0) {
                 // Debug content is composited only after the real scene has completed trace, RR/fallback,
@@ -1510,19 +1510,19 @@ public final class RtComposite {
                 }
                 hdrWrittenThisFrame = false;
             }
-            VulkanCommandEncoder.memoryBarrier(cmd, stack);
+            VulkanBarriers.memoryBarrier(cmd, stack);
 
             try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "copy composite to main target");
                  RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.copyOutput")) {
                 VK10.vkCmdCopyImage(cmd, displayImage.image, VK10.VK_IMAGE_LAYOUT_GENERAL,
                         dstImage, VK10.VK_IMAGE_LAYOUT_GENERAL, copyRegion(stack, displayW, displayH));
             }
-            VulkanCommandEncoder.memoryBarrier(cmd, stack);
+            VulkanBarriers.memoryBarrier(cmd, stack);
         }
         if (VK10.vkEndCommandBuffer(cmd) != VK10.VK_SUCCESS) {
             throw new IllegalStateException("vkEndCommandBuffer(rt composite) failed");
         }
-        encoder.execute(cmd); // deferred into the frame's submission — correct for per-frame work
+        submission.execute(cmd);
         // Do not attach a merely reserved token: failed recording may never signal it. Once execute succeeds,
         // every owner in this frame's manifest is protected through the final overlay consumer.
         RtEntities.INSTANCE.markGraphicsUse(frameEntities, graphicsUse);
@@ -1704,13 +1704,6 @@ public final class RtComposite {
         return atlasSampler;
     }
 
-    private static long vkImage(GpuTexture texture) {
-        if (texture instanceof VulkanGpuTexture vulkanTexture) {
-            return vulkanTexture.vkImage();
-        }
-        throw new IllegalStateException("cannot resolve VkImage for " + texture);
-    }
-
     private static VkImageCopy.Buffer copyRegion(MemoryStack stack, int width, int height) {
         VkImageCopy.Buffer region = VkImageCopy.calloc(1, stack);
         region.get(0).srcSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(0).baseArrayLayer(0).layerCount(1);
@@ -1719,7 +1712,7 @@ public final class RtComposite {
         return region;
     }
 
-    /** Whether the HDR present path (HDR image + combined UI -> PQ swapchain) should replace the vanilla SDR blit. */
+    /** Whether the HDR present path (HDR image + combined UI -> PQ swapchain) should replace the host SDR blit. */
     public boolean isHdrPresentActive() {
         return CausticaConfig.Rt.Hdr.enabled()
                 && hdrWrittenThisFrame
@@ -1747,15 +1740,15 @@ public final class RtComposite {
      * sequence with the HDR {@link GpuImage} as the (GENERAL-layout) source; an added memory barrier makes the
      * display-compute writes visible to the blit read. The SDR main target is bypassed; the combined UI image
      * is blended over the HDR image here at paper white before the swapchain blit. The magic stage/access
-     * values mirror vanilla {@code blitFromTexture} exactly. Y is flipped to match the vanilla swapchain blit.
+     * values mirror the host blit exactly. Y is flipped to match the host swapchain blit.
      */
-    public void presentHdr(VulkanCommandEncoder enc, long swapchainImage, int swapW, int swapH,
+    public void presentHdr(GraphicsSubmission submission, long swapchainImage, int swapW, int swapH,
                            long acquireSem, long presentSem, UiPresentationResources ui) {
         GpuImage src = hdrDisplayImage;
         int copyW = Math.min(swapW, src.width);
         int copyH = Math.min(swapH, src.height);
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkCommandBuffer cmd = enc.allocateAndBeginTransientCommandBuffer();
+            VkCommandBuffer cmd = submission.beginTransientCommandBuffer();
 
             // DLSS-FG "hudless" capture: hdrDisplayImage right now holds the RT world before the combined
             // UI overlay is blended in. Snapshot it before that composite overwrites it in place, mirroring
@@ -1793,7 +1786,7 @@ public final class RtComposite {
             VkDependencyInfo dep1 = VkDependencyInfo.calloc(stack).sType$Default().pImageMemoryBarriers(toDst).pMemoryBarriers(srcVis);
             KHRSynchronization2.vkCmdPipelineBarrier2KHR(cmd, dep1);
 
-            // Blit HDR (GENERAL) -> swapchain (TRANSFER_DST), Y-flipped like vanilla.
+            // Blit HDR (GENERAL) -> swapchain (TRANSFER_DST), Y-flipped like the host path.
             VkImageBlit.Buffer region = VkImageBlit.calloc(1, stack);
             region.get(0).srcSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(0).baseArrayLayer(0).layerCount(1);
             region.get(0).dstSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(0).baseArrayLayer(0).layerCount(1);
@@ -1817,9 +1810,9 @@ public final class RtComposite {
             if (VK10.vkEndCommandBuffer(cmd) != VK10.VK_SUCCESS) {
                 throw new IllegalStateException("vkEndCommandBuffer(hdr present) failed");
             }
-            enc.waitSemaphore(acquireSem, 0L, 65536L);
-            enc.execute(cmd);
-            enc.signalSemaphore(presentSem, 0L, 4096L);
+            submission.waitSemaphore(acquireSem, 0L, 65536L);
+            submission.execute(cmd);
+            submission.signalSemaphore(presentSem, 0L, 4096L);
         }
     }
 
@@ -1858,13 +1851,13 @@ public final class RtComposite {
 
     /**
      * Whether a non-RT frame (menu, title panorama, loading screen) should be SDR-&gt;PQ converted for
-     * present instead of vanilla's raw SDR blit. True when the PQ swapchain is active but this frame did
+     * present instead of the host's raw SDR blit. True when the PQ swapchain is active but this frame did
      * not produce an HDR image ({@link #isHdrPresentActive()} false).
      */
     public boolean isPqSdrPresentActive() {
         // The conversion is needed only while the CURRENT swapchain is PQ and this frame has no HDR
         // image (menus/loading, or the short interval after the toggle changed but before configure()).
-        // Once configure recreates a native-SDR swapchain, vanilla's ordinary blit is correct.
+        // Once configure recreates a native-SDR swapchain, the host's ordinary blit is correct.
         return CausticaConfig.Rt.Hdr.swapchainPqActive()
                 && RtRuntime.hasSession()
                 && !isHdrPresentActive();
@@ -1874,10 +1867,10 @@ public final class RtComposite {
      * Present a non-RT (menu/loading) frame to the PQ swapchain: convert the SDR main target (sRGB-encoded
      * rgba8, GENERAL layout, already holding the composited panorama + UI) to PQ-encoded at paper white via
      * a compute pass into {@link #sdrPresentImage}, then blit that into the swapchain. Mirrors
-     * {@link #presentHdr} barrier-for-barrier; returns false (keep vanilla SDR blit) if resources are
+     * {@link #presentHdr} barrier-for-barrier; returns false (keep the host SDR blit) if resources are
      * unavailable.
      */
-    public boolean presentSdrToPq(VulkanCommandEncoder enc, long swapchainImage, int swapW, int swapH,
+    public boolean presentSdrToPq(GraphicsSubmission submission, long swapchainImage, int swapW, int swapH,
             long sdrMainView, long acquireSem, long presentSem) {
         if (!RtRuntime.hasSession() || sdrMainView == 0L || failed) {
             return false;
@@ -1900,7 +1893,7 @@ public final class RtComposite {
         int copyW = Math.min(swapW, dst.width);
         int copyH = Math.min(swapH, dst.height);
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkCommandBuffer cmd = enc.allocateAndBeginTransientCommandBuffer();
+            VkCommandBuffer cmd = submission.beginTransientCommandBuffer();
 
             // Make the prior GUI/overlay writes to the SDR main target visible to the compute sample.
             VkMemoryBarrier2.Buffer pre = VkMemoryBarrier2.calloc(1, stack).sType$Default();
@@ -1922,7 +1915,7 @@ public final class RtComposite {
             VkDependencyInfo dep1 = VkDependencyInfo.calloc(stack).sType$Default().pImageMemoryBarriers(toDst).pMemoryBarriers(srcVis);
             KHRSynchronization2.vkCmdPipelineBarrier2KHR(cmd, dep1);
 
-            // Blit converted PQ image (GENERAL) -> swapchain (TRANSFER_DST), Y-flipped like vanilla.
+            // Blit converted PQ image (GENERAL) -> swapchain (TRANSFER_DST), Y-flipped like the host path.
             VkImageBlit.Buffer region = VkImageBlit.calloc(1, stack);
             region.get(0).srcSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(0).baseArrayLayer(0).layerCount(1);
             region.get(0).dstSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(0).baseArrayLayer(0).layerCount(1);
@@ -1946,9 +1939,9 @@ public final class RtComposite {
             if (VK10.vkEndCommandBuffer(cmd) != VK10.VK_SUCCESS) {
                 throw new IllegalStateException("vkEndCommandBuffer(sdr present) failed");
             }
-            enc.waitSemaphore(acquireSem, 0L, 65536L);
-            enc.execute(cmd);
-            enc.signalSemaphore(presentSem, 0L, 4096L);
+            submission.waitSemaphore(acquireSem, 0L, 65536L);
+            submission.execute(cmd);
+            submission.signalSemaphore(presentSem, 0L, 4096L);
         }
         return true;
     }
@@ -1977,41 +1970,35 @@ public final class RtComposite {
      * unless both FG and the UI overlay redirect are active — capturing this without the redirect would just
      * copy the ALREADY-composited backbuffer, which is useless as a distinct hudless input.
      */
-    public void captureFgHudless(RenderTarget main, UiPresentationResources ui) {
-        if (!RtDlssFg.enabled() || !ui.enabled() || main == null || main.getColorTexture() == null) {
+    public void captureFgHudless(long sourceImage, int width, int height, UiPresentationResources ui) {
+        if (!RtDlssFg.enabled() || !ui.enabled() || sourceImage == 0L) {
             return;
         }
         GpuContext ctx = GpuContext.currentOrNull();
         if (ctx == null) {
             return;
         }
-        long srcImage;
-        try {
-            srcImage = vkImage(main.getColorTexture());
-        } catch (IllegalStateException e) {
-            return; // not a Vulkan-backed texture (shouldn't happen on this backend)
-        }
-        if (fgHudlessImage == null || fgHudlessImage.width != main.width || fgHudlessImage.height != main.height) {
+        if (fgHudlessImage == null || fgHudlessImage.width != width || fgHudlessImage.height != height) {
             if (fgHudlessImage != null) {
                 fgHudlessImage.destroy();
             }
-            fgHudlessImage = ctx.createStorageImage(main.width, main.height, VK10.VK_FORMAT_R8G8B8A8_UNORM,
-                    "FG hudless capture " + main.width + "x" + main.height);
+            fgHudlessImage = ctx.createStorageImage(width, height, VK10.VK_FORMAT_R8G8B8A8_UNORM,
+                    "FG hudless capture " + width + "x" + height);
         }
-        var encoder = (VulkanCommandEncoder) ((CommandEncoderAccessor) RenderSystem.getDevice().createCommandEncoder()).caustica$getBackend();
-        VkCommandBuffer cmd = encoder.allocateAndBeginTransientCommandBuffer();
+        GraphicsSubmission submission = ctx.backend().createGraphicsSubmission();
+        VkCommandBuffer cmd = submission.beginTransientCommandBuffer();
         try (MemoryStack stack = MemoryStack.stackPush()) {
             // Make writes into `main` visible to the copy (the combined UI has not touched `main` yet this
             // frame — it went to the UI overlay target instead).
-            VulkanCommandEncoder.memoryBarrier(cmd, stack);
-            VK10.vkCmdCopyImage(cmd, srcImage, VK10.VK_IMAGE_LAYOUT_GENERAL,
-                    fgHudlessImage.image, VK10.VK_IMAGE_LAYOUT_GENERAL, copyRegion(stack, main.width, main.height));
-            VulkanCommandEncoder.memoryBarrier(cmd, stack);
+            VulkanBarriers.memoryBarrier(cmd, stack);
+            VK10.vkCmdCopyImage(cmd, sourceImage, VK10.VK_IMAGE_LAYOUT_GENERAL,
+                    fgHudlessImage.image, VK10.VK_IMAGE_LAYOUT_GENERAL, copyRegion(stack, width, height));
+            VulkanBarriers.memoryBarrier(cmd, stack);
         }
         if (VK10.vkEndCommandBuffer(cmd) != VK10.VK_SUCCESS) {
             throw new IllegalStateException("vkEndCommandBuffer(fg hudless capture) failed");
         }
-        encoder.execute(cmd);
+        submission.execute(cmd);
     }
 
     /**
@@ -2040,10 +2027,10 @@ public final class RtComposite {
         // Make composite()'s writes to hdrDisplayImage (an earlier submit this frame) visible to this copy;
         // the copy's write is then made visible to the UI-composite dispatch that follows (and to DLSSG's
         // read, in a later command buffer) by the same idiom.
-        VulkanCommandEncoder.memoryBarrier(cmd, stack);
+        VulkanBarriers.memoryBarrier(cmd, stack);
         VK10.vkCmdCopyImage(cmd, src.image, VK10.VK_IMAGE_LAYOUT_GENERAL,
                 fgHdrHudlessImage.image, VK10.VK_IMAGE_LAYOUT_GENERAL, copyRegion(stack, src.width, src.height));
-        VulkanCommandEncoder.memoryBarrier(cmd, stack);
+        VulkanBarriers.memoryBarrier(cmd, stack);
     }
 
     /**
@@ -2074,7 +2061,7 @@ public final class RtComposite {
      * PQ-native and can blit it directly. The UI resource itself needs no HDR-specific handling — it's the
      * same combined host UI texture used by both present paths; only the compositing math differs.
      */
-    public GpuImage fgInterpolate(VulkanCommandEncoder enc, long backbufferView, long backbufferImage,
+    public GpuImage fgInterpolate(GraphicsSubmission submission, long backbufferView, long backbufferImage,
             int swapW, int swapH, int index, int count, boolean hdrBackbuffer,
             UiPresentationResources ui) {
         if (failed || gDepth == null || gMotion == null || frameSnapshot == null) {
@@ -2114,7 +2101,7 @@ public final class RtComposite {
         long uiView = uiReady ? ui.colorView() : 0L;
         long uiImg = uiReady ? ui.colorImage() : 0L;
 
-        VkCommandBuffer cmd = enc.allocateAndBeginTransientCommandBuffer();
+        VkCommandBuffer cmd = submission.beginTransientCommandBuffer();
         boolean ok = RtDlssFg.INSTANCE.evaluate(cmd.address(),
                 backbufferView, backbufferImage, fmt,
                 gDepth.view, gDepth.image, VK10.VK_FORMAT_R32_SFLOAT,
@@ -2133,7 +2120,7 @@ public final class RtComposite {
         if (!ok) {
             throw new IllegalStateException("ngxshim_evaluate_dlssg failed (RtDlssFg.evaluate returned false)");
         }
-        enc.execute(cmd);
+        submission.execute(cmd);
         return out;
     }
 

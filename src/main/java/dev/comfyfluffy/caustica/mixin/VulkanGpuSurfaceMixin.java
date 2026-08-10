@@ -16,7 +16,9 @@ import dev.comfyfluffy.caustica.rt.RtReflex;
 import dev.comfyfluffy.caustica.rt.RtRuntime;
 import dev.comfyfluffy.caustica.minecraft.MinecraftFrameAdapter;
 import dev.comfyfluffy.caustica.minecraft.MinecraftUiOverlay;
+import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftVulkanBackend;
 import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
+import dev.comfyfluffy.caustica.rt.backend.GraphicsSubmission;
 import it.unimi.dsi.fastutil.longs.LongList;
 import net.minecraft.client.Minecraft;
 import org.lwjgl.system.MemoryStack;
@@ -339,13 +341,14 @@ public abstract class VulkanGpuSurfaceMixin {
 		long presentSem = this.presentSemaphores[this.currentImageIndex];
 		if (rt.isHdrPresentActive()) {
 			VulkanCommandEncoder enc = (VulkanCommandEncoder) commandEncoder;
+			GraphicsSubmission submission = MinecraftVulkanBackend.wrap(enc);
 			UiPresentationResources ui = MinecraftFrameAdapter.INSTANCE.captureUiPresentation();
-			rt.presentHdr(enc, swapchainImage, this.swapchainWidth, this.swapchainHeight,
+			rt.presentHdr(submission, swapchainImage, this.swapchainWidth, this.swapchainHeight,
 					acquireSem, presentSem, ui);
 			if (ui.populated() && ui.colorView() != 0L) {
 				MinecraftUiOverlay.markConsumed();
 			}
-			caustica$presentGeneratedFramesHdr(enc, rt, ui);
+			caustica$presentGeneratedFramesHdr(submission, rt, ui);
 			ci.cancel();
 			return;
 		}
@@ -354,7 +357,8 @@ public abstract class VulkanGpuSurfaceMixin {
 		// through to vanilla SDR if conversion resources aren't ready or the source view is not a Vulkan view.
 		if (rt.isPqSdrPresentActive()) {
 			long sdrView = caustica$vkImageView(textureView);
-			if (sdrView != 0L && rt.presentSdrToPq((VulkanCommandEncoder) commandEncoder, swapchainImage,
+			if (sdrView != 0L && rt.presentSdrToPq(
+					MinecraftVulkanBackend.wrap((VulkanCommandEncoder) commandEncoder), swapchainImage,
 					this.swapchainWidth, this.swapchainHeight, sdrView, acquireSem, presentSem)) {
 				ci.cancel();
 			}
@@ -402,7 +406,8 @@ public abstract class VulkanGpuSurfaceMixin {
 			return;
 		}
 		int generatedCount = dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg.INSTANCE.effectiveMultiFrameCount();
-		RtFramePresenter.INSTANCE.prepareExtraFrames((VulkanCommandEncoder) commandEncoder, this.device,
+		RtFramePresenter.INSTANCE.prepareExtraFrames(
+				MinecraftVulkanBackend.wrap((VulkanCommandEncoder) commandEncoder), this.device.vkDevice(),
 				this.swapchain, this.swapchainImages, this.presentSemaphores,
 				this.swapchainWidth, this.swapchainHeight,
 				srcView, srcImage, textureView.getWidth(0), textureView.getHeight(0), generatedCount, false,
@@ -417,7 +422,7 @@ public abstract class VulkanGpuSurfaceMixin {
 	 * {@code presentHdr} call, but mirrors the defensive {@code srcImage == 0L} check in the SDR path).
 	 */
 	@Unique
-	private void caustica$presentGeneratedFramesHdr(VulkanCommandEncoder enc, RtComposite rt,
+	private void caustica$presentGeneratedFramesHdr(GraphicsSubmission submission, RtComposite rt,
 			UiPresentationResources ui) {
 		if (this.currentImageIndex < 0
 				|| !RtFramePresenter.INSTANCE.isActive(Minecraft.getInstance().level != null)) {
@@ -429,7 +434,7 @@ public abstract class VulkanGpuSurfaceMixin {
 			return;
 		}
 		int generatedCount = dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg.INSTANCE.effectiveMultiFrameCount();
-		RtFramePresenter.INSTANCE.prepareExtraFrames(enc, this.device, this.swapchain, this.swapchainImages,
+		RtFramePresenter.INSTANCE.prepareExtraFrames(submission, this.device.vkDevice(), this.swapchain, this.swapchainImages,
 				this.presentSemaphores, this.swapchainWidth, this.swapchainHeight,
 				hdrView, hdrImage, this.swapchainWidth, this.swapchainHeight, generatedCount, true, ui);
 	}

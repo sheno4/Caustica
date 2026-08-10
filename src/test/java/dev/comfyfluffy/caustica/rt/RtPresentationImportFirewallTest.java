@@ -18,8 +18,11 @@ final class RtPresentationImportFirewallTest {
 
         List<String> violations = Files.readAllLines(source).stream()
                 .filter(line -> line.startsWith("import "))
-                .filter(line -> line.contains("net.minecraft.")
+                .filter(line -> line.contains("com.mojang.")
+                        || line.contains("net.minecraft.")
                         || line.contains("net.fabricmc.")
+                        || line.contains("dev.comfyfluffy.caustica.client.")
+                        || line.contains("dev.comfyfluffy.caustica.mixin.")
                         || line.contains("dev.comfyfluffy.caustica.minecraft."))
                 .toList();
         assertTrue(violations.isEmpty(), "frame presentation crossed the Minecraft import firewall:\n"

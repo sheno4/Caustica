@@ -1,8 +1,7 @@
 package dev.comfyfluffy.caustica.rt;
 
-import com.mojang.blaze3d.systems.RenderSystem;
-import com.mojang.blaze3d.vulkan.VulkanCommandEncoder;
-import com.mojang.blaze3d.vulkan.VulkanQueue;
+import dev.comfyfluffy.caustica.rt.backend.GraphicsSubmission;
+import dev.comfyfluffy.caustica.rt.backend.VulkanQueueRef;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VK10;
@@ -35,8 +34,8 @@ import static org.lwjgl.vulkan.KHRSynchronization2.VK_PIPELINE_STAGE_2_RAY_TRACI
 
 /**
  * Single-owner asynchronous GPU submission lane on a queue reserved by Caustica at device creation.
- * Minecraft never fetches or submits to this queue index, so the executor can satisfy Vulkan's external
- * queue-synchronization rule without coordinating a host mutex with Blaze3D.
+ * The host never fetches or submits to this reserved queue, so the executor exclusively satisfies Vulkan's
+ * queue-synchronization rule while sharing the logical device with graphics work.
  */
 public final class RtGpuExecutor {
     private static final int MAX_BUILD_BATCH = 32;
@@ -47,7 +46,7 @@ public final class RtGpuExecutor {
                     | VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
 
     private final GpuContext ctx;
-    private final VulkanQueue computeQueue;
+    private final VulkanQueueRef computeQueue;
     private final long buildTimeline;
     private final long graphicsTimeline;
     private final LinkedBlockingQueue<Job> jobs = new LinkedBlockingQueue<>();
@@ -107,7 +106,7 @@ public final class RtGpuExecutor {
     }
 
     /** Attach published-build waits and reserve the completion token shared by this frame's RT resources. */
-    public GraphicsUse beginGraphicsUse(VulkanCommandEncoder encoder) {
+    public GraphicsUse beginGraphicsUse(GraphicsSubmission submission) {
         assertRenderThread();
         checkExecutorFailure();
         long waitValue = pendingPublishWaitValue.get();
@@ -116,19 +115,27 @@ public final class RtGpuExecutor {
             // already been submitted. A Build is assigned its timeline value when queued on this Java
             // executor, so do not expose that future value to the graphics/present chain prematurely.
             awaitBuildSubmission(waitValue);
-            encoder.waitSemaphore(buildTimeline, waitValue, TERRAIN_READ_STAGES);
+            enqueueBuildWait(submission, buildTimeline, waitValue);
         }
         return new GraphicsUse(nextGraphicsValue.incrementAndGet());
     }
 
     /** Signal the frame token after its final terrain, TLAS, entity, and overlay consumer. */
-    public void endGraphicsUse(VulkanCommandEncoder encoder, GraphicsUse graphicsUse) {
+    public void endGraphicsUse(GraphicsSubmission submission, GraphicsUse graphicsUse) {
         assertRenderThread();
-        encoder.signalSemaphore(graphicsTimeline, graphicsUse.value, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT_KHR);
+        enqueueGraphicsSignal(submission, graphicsTimeline, graphicsUse.value);
         latestGraphicsUseValue.accumulateAndGet(graphicsUse.value, Math::max);
         if (hasPendingDestroys()) {
             jobs.offer(WAKE);
         }
+    }
+
+    static void enqueueBuildWait(GraphicsSubmission submission, long semaphore, long value) {
+        submission.waitSemaphore(semaphore, value, TERRAIN_READ_STAGES);
+    }
+
+    static void enqueueGraphicsSignal(GraphicsSubmission submission, long semaphore, long value) {
+        submission.signalSemaphore(semaphore, value, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT_KHR);
     }
 
     /** Create a waiter that shares one completed-value snapshot across several resource reuse checks. */
@@ -390,7 +397,10 @@ public final class RtGpuExecutor {
     }
 
     private static void assertRenderThread() {
-        RenderSystem.assertOnRenderThread();
+        var backend = GpuContext.backendOrNull();
+        if (backend != null) {
+            backend.assertRenderThread();
+        }
     }
 
     private void processDestroyJobs() {
@@ -442,10 +452,10 @@ public final class RtGpuExecutor {
                     .stageMask(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT_KHR);
             VkSubmitInfo2.Buffer submit = VkSubmitInfo2.calloc(1, stack).sType$Default()
                     .pCommandBufferInfos(command).pSignalSemaphoreInfos(signal);
-            VulkanDiagnostics.noteQueueSubmission(computeQueue.vkQueue(), "Caustica compute queue");
+            VulkanDiagnostics.noteQueueSubmission(computeQueue.queue(), "Caustica compute queue");
             synchronized (ctx.deviceQueueHostLock()) {
                 GpuContext.check(org.lwjgl.vulkan.KHRSynchronization2.vkQueueSubmit2KHR(
-                        computeQueue.vkQueue(), submit, 0L), "vkQueueSubmit2KHR(RT GPU executor)");
+                        computeQueue.queue(), submit, 0L), "vkQueueSubmit2KHR(RT GPU executor)");
             }
             submitted = true;
             synchronized (submissionLock) {
@@ -489,7 +499,7 @@ public final class RtGpuExecutor {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkCommandPoolCreateInfo ci = VkCommandPoolCreateInfo.calloc(stack).sType$Default()
                     .flags(VK10.VK_COMMAND_POOL_CREATE_TRANSIENT_BIT)
-                    .queueFamilyIndex(computeQueue.queueFamilyIndex());
+                    .queueFamilyIndex(computeQueue.familyIndex());
             LongBuffer out = stack.mallocLong(1);
             GpuContext.check(VK10.vkCreateCommandPool(ctx.vk(), ci, null, out), "vkCreateCommandPool(RT GPU executor)");
             commandPool = out.get(0);

@@ -4,6 +4,7 @@ import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.rt.RtComposite;
 import dev.comfyfluffy.caustica.rt.RtRuntime;
 import dev.comfyfluffy.caustica.minecraft.MinecraftFrameAdapter;
+import dev.comfyfluffy.caustica.minecraft.MinecraftRuntimeHost;
 import dev.comfyfluffy.caustica.rt.provider.ProviderManager;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
@@ -14,6 +15,7 @@ public final class CausticaClient implements ClientModInitializer {
 	@Override
 	public void onInitializeClient() {
 		CausticaMod.LOGGER.info("Caustica client initialized");
+		RtRuntime.INSTANCE.installHost(MinecraftRuntimeHost.INSTANCE);
 
 		// Class-init runs DebugScreenEntries.register(...) via its ID field; touching the class here
 		// makes the entry discoverable in F3's entry list. Off by default -- the player opts in the

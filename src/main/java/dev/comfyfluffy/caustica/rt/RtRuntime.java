@@ -1,13 +1,7 @@
 package dev.comfyfluffy.caustica.rt;
 
-import com.mojang.blaze3d.systems.RenderSystem;
-import com.mojang.blaze3d.vulkan.VulkanDevice;
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
-import dev.comfyfluffy.caustica.client.VanillaRenderController;
-import dev.comfyfluffy.caustica.client.WorldRenderScaler;
-import dev.comfyfluffy.caustica.mixin.GpuDeviceAccessor;
-import dev.comfyfluffy.caustica.minecraft.MinecraftUiOverlay;
 import dev.comfyfluffy.caustica.engine.frame.SceneResources;
 import dev.comfyfluffy.caustica.ngx.NgxRuntime;
 import dev.comfyfluffy.caustica.rt.entity.RtEntityTextures;
@@ -31,8 +25,21 @@ public final class RtRuntime {
     private State state = State.OFF;
     private Session session;
     private boolean frameActive;
+    private RtRuntimeHost host;
 
     private RtRuntime() {
+    }
+
+    public void installHost(RtRuntimeHost installedHost) {
+        host = installedHost;
+    }
+
+    public static RtRuntimeHost host() {
+        RtRuntimeHost installedHost = INSTANCE.host;
+        if (installedHost == null) {
+            throw new IllegalStateException("RT runtime host is not installed");
+        }
+        return installedHost;
     }
 
     /** Reconcile the requested mode and advance session startup at the client-tick boundary. */
@@ -74,7 +81,7 @@ public final class RtRuntime {
         state = State.ACTIVE;
         RtComposite.INSTANCE.resetExposureHistory();
         RtComposite.INSTANCE.resetFailureLatch();
-        VanillaRenderController.INSTANCE.resetFailureLatch();
+        host().resetPresentationFailure();
         if (CausticaConfig.Rt.Hdr.ENABLED.value()) {
             reconfigureSurface.run();
         }
@@ -131,18 +138,18 @@ public final class RtRuntime {
         return INSTANCE.frameActive;
     }
 
-    /** True while a session exists, including vanilla-rendered startup. */
+    /** True while a session exists, including source-rendered startup. */
     public static boolean hasSession() {
         return INSTANCE.session != null;
     }
 
-    /** PQ belongs to an active RT session; Off and Starting use Minecraft's native SDR swapchain. */
+    /** PQ belongs to an active RT session; Off and Starting use the host's native SDR swapchain. */
     public static boolean wantsPqSwapchain() {
         return active() && CausticaConfig.Rt.Hdr.ENABLED.value();
     }
 
     private void start() {
-        if (!RtDeviceBringup.rtRequested()) {
+        if (GpuContext.backendOrNull() == null || !GpuContext.backendOrNull().rayTracingProvisioned()) {
             state = State.FAILED;
             CausticaMod.LOGGER.warn("RT runtime unavailable: the Vulkan device was not provisioned for ray tracing");
             return;
@@ -151,23 +158,21 @@ public final class RtRuntime {
         ProviderManager.INSTANCE.beginSession();
         session = new Session();
         state = State.STARTING;
-        CausticaMod.LOGGER.info("RT runtime starting; vanilla presentation remains active");
+        CausticaMod.LOGGER.info("RT runtime starting; source presentation remains active");
     }
 
     /**
-     * Hand world rendering back to vanilla. Nothing has to be rebuilt or waited on: vanilla's chunk
-     * visibility graph stayed in sync throughout the session (see {@code LevelRendererMixin}) and its
-     * sections stayed marked dirty (see {@code LevelExtractorMixin}), so the very next frame compiles
-     * whatever it needs.
+     * Hand world rendering back to the source renderer. Its visibility state and resources remain live
+     * throughout the RT session, so no rebuild or wait is required.
      */
     private void stop(Runnable reconfigureSurface) {
         closeSession(reconfigureSurface, State.OFF);
-        CausticaMod.LOGGER.info("RT runtime off; vanilla presentation restored");
+        CausticaMod.LOGGER.info("RT runtime off; source presentation restored");
     }
 
     private void fail(Runnable reconfigureSurface) {
         closeSession(reconfigureSurface, State.FAILED);
-        CausticaMod.LOGGER.warn("RT runtime startup failed; vanilla presentation remains active");
+        CausticaMod.LOGGER.warn("RT runtime startup failed; source presentation remains active");
     }
 
     private void closeSession(Runnable reconfigureSurface, State terminalState) {
@@ -214,13 +219,13 @@ public final class RtRuntime {
         }
 
         void close() {
-            WorldRenderScaler.INSTANCE.destroy();
+            host().resetFrameBridge();
             ProviderManager.INSTANCE.stopProviders();
             RtWorkerPool.INSTANCE.shutdown();
             SlangRuntime.INSTANCE.requestShutdownWhenIdle();
             if (context == null) {
                 ProviderManager.INSTANCE.shutdownResources();
-                MinecraftUiOverlay.destroy();
+                host().destroyUiPresentation();
                 return;
             }
 
@@ -228,14 +233,12 @@ public final class RtRuntime {
             // every queue before the remaining providers or runtime owners free session GPU resources.
             context.gpuExecutor().drainAndWaitIdle();
             ProviderManager.INSTANCE.shutdownResources();
-            MinecraftUiOverlay.destroy();
+            host().destroyUiPresentation();
             RtComposite.INSTANCE.destroy();
             RtEntityTextures.INSTANCE.reset();
             RtDlssFg.INSTANCE.destroy();
-            if (((GpuDeviceAccessor) RenderSystem.getDevice()).caustica$getBackend() instanceof VulkanDevice device) {
-                RtFramePresenter.INSTANCE.destroy(device);
-                RtReflex.INSTANCE.destroy(device.vkDevice());
-            }
+            RtFramePresenter.INSTANCE.destroy(context.vk());
+            RtReflex.INSTANCE.destroy(context.vk());
             // GpuContext owns per-device infrastructure and survives RT sessions. Client shutdown destroys it.
             context = null;
         }

@@ -5,6 +5,7 @@ import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import com.mojang.blaze3d.pipeline.RenderTarget;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vulkan.VulkanDevice;
+import com.mojang.blaze3d.vulkan.VulkanGpuTexture;
 import dev.comfyfluffy.caustica.client.VanillaRenderController;
 import dev.comfyfluffy.caustica.client.WorldRenderScaler;
 import dev.comfyfluffy.caustica.minecraft.MinecraftFrameAdapter;
@@ -192,7 +193,9 @@ public abstract class GameRendererMixin {
 		}
 		// DLSS-FG quality: snapshot the main target before the combined UI overlay composites back below.
 		// Hand/screen effects, world overlays and GUI are carried by the optional DLSSG UI resource.
-        RtComposite.INSTANCE.captureFgHudless(this.mainRenderTarget,
+        long mainImage = this.mainRenderTarget.getColorTexture() instanceof VulkanGpuTexture texture
+                ? texture.vkImage() : 0L;
+        RtComposite.INSTANCE.captureFgHudless(mainImage, this.mainRenderTarget.width, this.mainRenderTarget.height,
                 MinecraftFrameAdapter.INSTANCE.captureUiPresentation());
 		MinecraftUiOverlay.compositeIfUsed();
 	}

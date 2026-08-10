@@ -1,9 +1,9 @@
 package dev.comfyfluffy.caustica.rt.pipeline;
 
-import com.mojang.blaze3d.vulkan.VulkanCommandEncoder;
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.rt.GpuContext;
+import dev.comfyfluffy.caustica.rt.VulkanBarriers;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
 import dev.comfyfluffy.caustica.rt.RtSceneUnits;
@@ -219,10 +219,10 @@ public final class RtExposure {
         try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "exposure histogram clear")) {
             VK10.vkCmdFillBuffer(cmd, histogram.handle, 0, histogram.size, 0);
         }
-        VulkanCommandEncoder.memoryBarrier(cmd, stack);
+        VulkanBarriers.memoryBarrier(cmd, stack);
         AutoConfig config = autoConfig();
         pipeline.dispatchHistogram(cmd, traceColor.width, traceColor.height, config);
-        VulkanCommandEncoder.memoryBarrier(cmd, stack);
+        VulkanBarriers.memoryBarrier(cmd, stack);
         pipeline.dispatchResolve(cmd, config, frameTimeSeconds());
         logDiagnosticsIfDue();
     }

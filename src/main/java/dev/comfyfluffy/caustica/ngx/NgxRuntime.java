@@ -1,16 +1,13 @@
 package dev.comfyfluffy.caustica.ngx;
 
-import com.mojang.blaze3d.systems.RenderSystem;
-import com.mojang.blaze3d.vulkan.VulkanDevice;
-
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
-import dev.comfyfluffy.caustica.mixin.GpuDeviceAccessor;
 
 import net.fabricmc.loader.api.FabricLoader;
 
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VK10;
+import org.lwjgl.vulkan.VkDevice;
 import org.lwjgl.vulkan.VkInstance;
 
 import java.io.IOException;
@@ -50,6 +47,7 @@ public final class NgxRuntime {
     private NgxLibrary lib;
     private boolean initialized;
     private boolean failed;
+    private long initializedDevice;
 
     private NgxRuntime() {
     }
@@ -59,7 +57,7 @@ public final class NgxRuntime {
      * {@code null} if it is unavailable. Idempotent; latches failure so it isn't retried every frame
      * (cleared by {@link #shutdown()} so a fresh device can re-init).
      */
-    public synchronized NgxLibrary acquire(VulkanDevice device) {
+    public synchronized NgxLibrary acquire(VkDevice device) {
         if (initialized) {
             return lib;
         }
@@ -89,13 +87,12 @@ public final class NgxRuntime {
 
     /**
      * Shut down NGX. Call only at device teardown, after every feature has been released. Resolves the
-     * device from the current render backend; no-op if NGX was never initialized.
+     * initialized device handle captured by {@link #acquire}; no-op if NGX was never initialized.
      */
     public synchronized void shutdown() {
-        if (lib != null && initialized
-                && ((GpuDeviceAccessor) RenderSystem.getDevice()).caustica$getBackend() instanceof VulkanDevice device) {
+        if (lib != null && initialized) {
             try {
-                lib.shutdown(device.vkDevice().address());
+                lib.shutdown(initializedDevice);
             } catch (Throwable t) {
                 CausticaMod.LOGGER.warn("NGX shutdown failed", t);
             }
@@ -103,6 +100,7 @@ public final class NgxRuntime {
         initialized = false;
         failed = false;
         lib = null;
+        initializedDevice = 0L;
     }
 
     /** NVSDK_NGX_Result: failure when the top 12 bits == 0xBAD. Shared by all NGX feature wrappers. */
@@ -110,7 +108,7 @@ public final class NgxRuntime {
         return (result & 0xFFF00000) == 0xBAD00000;
     }
 
-    private void init(VulkanDevice device) {
+    private void init(VkDevice device) {
         if (!PLATFORM_NATIVES.supported()) {
             throw new IllegalStateException("NGX natives are not bundled for " + PLATFORM_NATIVES.platformDir());
         }
@@ -137,20 +135,21 @@ public final class NgxRuntime {
             CausticaMod.LOGGER.warn("Could not create NGX data path {}", dataPath, e);
         }
 
-        VkInstance instance = device.vkDevice().getPhysicalDevice().getInstance();
+        VkInstance instance = device.getPhysicalDevice().getInstance();
         try (Arena arena = Arena.ofConfined()) {
             long gdpa;
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 gdpa = VK10.vkGetInstanceProcAddr(instance, stack.ASCII("vkGetDeviceProcAddr"));
             }
             int rc = lib.init(0L, wideString(arena, dataPath.toString()),
-                    instance.address(), device.vkDevice().getPhysicalDevice().address(), device.vkDevice().address(),
+                    instance.address(), device.getPhysicalDevice().address(), device.address(),
                     0L, gdpa, wideString(arena, nativesDir == null ? "" : nativesDir.toString()));
             if (ngxFailed(rc)) {
                 throw new IllegalStateException("ngxshim_init failed: 0x" + Integer.toHexString(rc)
                         + " last=0x" + Integer.toHexString(lib.lastResult()));
             }
         }
+        initializedDevice = device.address();
         CausticaMod.LOGGER.info("NGX initialized (shim {})", shim);
     }
 

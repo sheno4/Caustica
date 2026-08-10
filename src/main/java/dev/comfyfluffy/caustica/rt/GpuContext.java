@@ -1,10 +1,8 @@
 package dev.comfyfluffy.caustica.rt;
 
-import com.mojang.blaze3d.systems.RenderSystem;
-import com.mojang.blaze3d.vulkan.VulkanDevice;
-import com.mojang.blaze3d.vulkan.VulkanQueue;
 import dev.comfyfluffy.caustica.CausticaMod;
-import dev.comfyfluffy.caustica.mixin.GpuDeviceAccessor;
+import dev.comfyfluffy.caustica.rt.backend.VulkanQueueRef;
+import dev.comfyfluffy.caustica.rt.backend.VulkanRendererBackend;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.util.vma.Vma;
@@ -44,7 +42,7 @@ import java.util.function.Consumer;
 import static org.lwjgl.vulkan.KHRRayTracingPipeline.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR;
 
 /**
- * Shared per-device GPU resources: a buffer-device-address-enabled VMA allocator (vanilla's
+ * Shared per-device GPU resources: a buffer-device-address-enabled VMA allocator (the host's
  * lacks the flag), the graphics queue + a transient command pool for synchronous one-shot
  * submits, and the RT pipeline limits (SBT handle size / alignment). Single owner for the
  * plumbing every RT module needs — and, since {@link dev.comfyfluffy.caustica.api.pass.CausticaRenderPass}
@@ -54,13 +52,13 @@ import static org.lwjgl.vulkan.KHRRayTracingPipeline.VK_STRUCTURE_TYPE_PHYSICAL_
  */
 public final class GpuContext {
     private static GpuContext instance;
-    private static boolean unavailable;
+    private static VulkanRendererBackend backend;
 
-    private final VulkanDevice device;
+    private final VulkanRendererBackend host;
     private final VkDevice vk;
     private final long vma;
-    private final VulkanQueue graphicsQueue;
-    private final VulkanQueue computeQueue;
+    private final VulkanQueueRef graphicsQueue;
+    private final VulkanQueueRef computeQueue;
     /** Serializes device-wide host waits against submissions from the Caustica compute thread. */
     private final Object deviceQueueHostLock = new Object();
     private final RtGpuExecutor gpuExecutor;
@@ -72,14 +70,13 @@ public final class GpuContext {
     private final long updateAfterBindCombinedImageSamplerLimit;
     private long commandPool;
 
-    private GpuContext(VulkanDevice device, long vma, int handleSize, int baseAlign, int handleAlign,
+    private GpuContext(VulkanRendererBackend host, long vma, int handleSize, int baseAlign, int handleAlign,
                       int maxSbtStride, int scratchAlign, long updateAfterBindCombinedImageSamplerLimit) {
-        this.device = device;
-        this.vk = device.vkDevice();
+        this.host = host;
+        this.vk = host.device();
         this.vma = vma;
-        this.graphicsQueue = device.graphicsQueue();
-        this.computeQueue = new VulkanQueue(device, RtDeviceBringup.computeQueueFamilyIndex(),
-                RtDeviceBringup.computeQueueIndex());
+        this.graphicsQueue = host.graphicsQueue();
+        this.computeQueue = host.computeQueue();
         this.shaderGroupHandleSize = handleSize;
         this.shaderGroupBaseAlignment = baseAlign;
         this.shaderGroupHandleAlignment = handleAlign;
@@ -89,27 +86,35 @@ public final class GpuContext {
         this.gpuExecutor = new RtGpuExecutor(this);
     }
 
-    /** The RT context for the current Vulkan device, or null if RT/Vulkan isn't available. */
+    /** Install the host backend once its Vulkan device and reserved compute queue exist. */
+    public static synchronized void installBackend(VulkanRendererBackend installed) {
+        if (backend != null && backend.device().address() != installed.device().address()) {
+            throw new IllegalStateException("Cannot replace a live renderer Vulkan backend");
+        }
+        backend = installed;
+    }
+
+    public static VulkanRendererBackend backendOrNull() {
+        return backend;
+    }
+
+    /** The RT context for the installed Vulkan device, or null if no compatible backend is available. */
     public static GpuContext get() {
         if (instance != null) {
             return instance;
         }
-        if (!(((GpuDeviceAccessor) RenderSystem.getDevice()).caustica$getBackend() instanceof VulkanDevice device)) {
+        VulkanRendererBackend installed = backend;
+        if (installed == null) {
             return null;
         }
-        return getOrCreate(device);
+        return getOrCreate(installed);
     }
 
-    private static synchronized GpuContext getOrCreate(VulkanDevice device) {
-        if (instance != null || unavailable) {
+    private static synchronized GpuContext getOrCreate(VulkanRendererBackend installed) {
+        if (instance != null) {
             return instance;
         }
-        if (!RtDeviceBringup.computeQueueReserved()) {
-            unavailable = true;
-            CausticaMod.LOGGER.warn("Caustica RT disabled: no dedicated compute queue was reserved at device creation");
-            return null;
-        }
-        instance = create(device);
+        instance = create(installed);
         return instance;
     }
 
@@ -117,12 +122,12 @@ public final class GpuContext {
         return instance;
     }
 
-    private static GpuContext create(VulkanDevice device) {
-        VkDevice vk = device.vkDevice();
+    private static GpuContext create(VulkanRendererBackend host) {
+        VkDevice vk = host.device();
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkPhysicalDevice phys = vk.getPhysicalDevice();
 
-            // BDA-enabled allocator (vanilla's createVma omits the flag).
+            // BDA-enabled allocator (the host allocator omits the flag).
             VmaVulkanFunctions fns = VmaVulkanFunctions.calloc(stack).set(phys.getInstance(), vk);
             VmaAllocatorCreateInfo aci = VmaAllocatorCreateInfo.calloc(stack)
                     .flags(Vma.VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT)
@@ -165,7 +170,7 @@ public final class GpuContext {
                     Integer.toUnsignedLong(rtProps.maxShaderGroupStride()),
                     asProps.minAccelerationStructureScratchOffsetAlignment(), combinedImageSamplerLimit);
 
-            return new GpuContext(device, pVma.get(0), rtProps.shaderGroupHandleSize(), rtProps.shaderGroupBaseAlignment(),
+            return new GpuContext(host, pVma.get(0), rtProps.shaderGroupHandleSize(), rtProps.shaderGroupBaseAlignment(),
                     rtProps.shaderGroupHandleAlignment(), rtProps.maxShaderGroupStride(),
                     asProps.minAccelerationStructureScratchOffsetAlignment(), combinedImageSamplerLimit);
         }
@@ -179,8 +184,8 @@ public final class GpuContext {
         return result;
     }
 
-    public VulkanDevice device() {
-        return device;
+    public VulkanRendererBackend backend() {
+        return host;
     }
 
     public VkDevice vk() {
@@ -195,7 +200,7 @@ public final class GpuContext {
         return gpuExecutor;
     }
 
-    VulkanQueue computeQueue() {
+    VulkanQueueRef computeQueue() {
         return computeQueue;
     }
 
@@ -278,9 +283,9 @@ public final class GpuContext {
             VkBufferCreateInfo bci = VkBufferCreateInfo.calloc(stack).sType$Default()
                     .size(size).usage(usage | VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT)
                     .sharingMode(VK10.VK_SHARING_MODE_EXCLUSIVE);
-            if (asyncShared && graphicsQueue.queueFamilyIndex() != computeQueue.queueFamilyIndex()) {
+            if (asyncShared && graphicsQueue.familyIndex() != computeQueue.familyIndex()) {
                 bci.sharingMode(VK10.VK_SHARING_MODE_CONCURRENT)
-                        .pQueueFamilyIndices(stack.ints(graphicsQueue.queueFamilyIndex(), computeQueue.queueFamilyIndex()));
+                        .pQueueFamilyIndices(stack.ints(graphicsQueue.familyIndex(), computeQueue.familyIndex()));
             }
             VmaAllocationCreateInfo aci = VmaAllocationCreateInfo.calloc(stack).usage(hostVisible
                     ? Vma.VMA_MEMORY_USAGE_AUTO
@@ -320,7 +325,7 @@ public final class GpuContext {
     /**
      * Create a storage image of the given format (STORAGE + TRANSFER_SRC/DST), transitioned to GENERAL.
      * The RT trace target uses an HDR float format (R16G16B16A16_SFLOAT) so radiance values above 1 are
-     * preserved for the tonemap seam; the world-target copy stays R8G8B8A8 to match vanilla's LDR target
+     * preserved for the tonemap seam; the world-target copy stays R8G8B8A8 to match the host LDR target
      * for the vkCmdCopyImage round-trip (copy requires texel-size-compatible formats).
      */
     public GpuImage createStorageImage(int width, int height, int format, String label) {
@@ -473,7 +478,7 @@ public final class GpuContext {
     /**
      * Record + submit a one-shot command buffer synchronously (own pool + queue submit + fence).
      * Use for init work that must complete before a CPU read or before the buffers are reused —
-     * Blaze3D's {@code VulkanCommandEncoder.execute()} only defers into the frame's submission.
+     * A host graphics submission is deferred, so initialization that must complete immediately uses this path.
      */
     public synchronized void submitSync(Consumer<VkCommandBuffer> record) {
         ensurePool();
@@ -498,7 +503,7 @@ public final class GpuContext {
             RtDebugLabels.name(this, VK10.VK_OBJECT_TYPE_FENCE, fence, "submitSync fence");
 
             VkSubmitInfo si = VkSubmitInfo.calloc(stack).sType$Default().pCommandBuffers(stack.pointers(cmd));
-            check(VK10.vkQueueSubmit(graphicsQueue.vkQueue(), si, fence), "vkQueueSubmit");
+            check(VK10.vkQueueSubmit(graphicsQueue.queue(), si, fence), "vkQueueSubmit");
             check(VK10.vkWaitForFences(vk, pFence, true, Long.MAX_VALUE), "vkWaitForFences");
 
             VK10.vkDestroyFence(vk, fence, null);
@@ -523,7 +528,6 @@ public final class GpuContext {
             Vma.vmaDestroyAllocator(vma);
         }
         instance = null;
-        unavailable = false;
     }
 
     private void ensurePool() {
@@ -533,7 +537,7 @@ public final class GpuContext {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkCommandPoolCreateInfo ci = VkCommandPoolCreateInfo.calloc(stack).sType$Default()
                     .flags(VK10.VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT | VK10.VK_COMMAND_POOL_CREATE_TRANSIENT_BIT)
-                    .queueFamilyIndex(graphicsQueue.queueFamilyIndex());
+                    .queueFamilyIndex(graphicsQueue.familyIndex());
             LongBuffer p = stack.mallocLong(1);
             check(VK10.vkCreateCommandPool(vk, ci, null, p), "vkCreateCommandPool");
             commandPool = p.get(0);
@@ -544,7 +548,7 @@ public final class GpuContext {
     public static void check(int rc, String what) {
         if (rc != VK10.VK_SUCCESS) {
             if (rc == VK10.VK_ERROR_DEVICE_LOST && instance != null) {
-                VulkanDiagnostics.reportDeviceLost(instance.device, what);
+                VulkanDiagnostics.reportDeviceLost(instance.vk, what);
             }
             throw new IllegalStateException(what + " failed: " + rc);
         }

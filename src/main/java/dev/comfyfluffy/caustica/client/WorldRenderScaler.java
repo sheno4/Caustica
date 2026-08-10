@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.client;
 
 import com.mojang.blaze3d.pipeline.RenderTarget;
+import com.mojang.blaze3d.vulkan.VulkanGpuTexture;
 import dev.comfyfluffy.caustica.rt.RtComposite;
 
 /**
@@ -48,7 +49,9 @@ public final class WorldRenderScaler {
 				VanillaRenderController.INSTANCE.markMissedBeforeHandSeam();
 				return;
 			}
-			boolean success = RtComposite.INSTANCE.composite(mainTarget.getColorTexture(), mainTarget.width, mainTarget.height);
+			long image = mainTarget.getColorTexture() instanceof VulkanGpuTexture texture ? texture.vkImage() : 0L;
+			boolean success = image != 0L
+					&& RtComposite.INSTANCE.composite(image, mainTarget.width, mainTarget.height);
 			VanillaRenderController.INSTANCE.markRtCompositeResult(success);
 		}
 	}

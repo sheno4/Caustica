@@ -1,10 +1,8 @@
 package dev.comfyfluffy.caustica.rt;
 
-import com.mojang.blaze3d.vulkan.VulkanCommandEncoder;
-import com.mojang.blaze3d.vulkan.VulkanDevice;
-
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.rt.accel.GpuImage;
+import dev.comfyfluffy.caustica.rt.backend.GraphicsSubmission;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg;
 import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
 
@@ -15,6 +13,7 @@ import org.lwjgl.vulkan.KHRSwapchain;
 import org.lwjgl.vulkan.KHRSynchronization2;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkCommandBuffer;
+import org.lwjgl.vulkan.VkDevice;
 import org.lwjgl.vulkan.VkDependencyInfo;
 import org.lwjgl.vulkan.VkImageBlit;
 import org.lwjgl.vulkan.VkImageMemoryBarrier2;
@@ -30,13 +29,9 @@ import java.nio.LongBuffer;
  * DLSS Frame Generation present engine (slice 2). Shows more than one image per rendered frame: the
  * generated frame(s), then the real frame.
  *
- * <p>It hooks Minecraft's frame tail (Minecraft.java: {@code blitFromTexture} → {@code encoder.submit()} →
- * {@code present()}). At {@code blitFromTexture} TAIL it acquires extra swapchain image(s) and records a
- * Y-flipped blit into <em>Minecraft's own command encoder</em> (the persistent singleton), so MC's
- * once-per-frame {@code submit()} flushes our work in the same {@code vkQueueSubmit} that signals the real
- * frame — this is what makes our present semaphores actually get signaled (the deferred-submit model is why
- * a self-contained present here failed validation). Then at {@code present()} HEAD we present the extra
- * image(s) before MC presents the real one, giving display order generated-then-real.
+ * <p>The host calls {@link #prepareExtraFrames} before flushing its deferred graphics submission, then calls
+ * {@link #flushPendingPresents} after that submit and before presenting the real frame. This makes the
+ * binary present semaphores part of the host submission and gives display order generated-then-real.
  *
  * <p>The generated frame is {@link RtDlssFg}'s real DLSSG-interpolated output (via
  * {@link RtComposite#fgInterpolate}); when there's simply no captured RT frame this tick (menu/loading/
@@ -58,7 +53,7 @@ public final class RtFramePresenter {
     private int acquireCursor;
     private boolean failed;
 
-    // Frames acquired + recorded this frame, awaiting present at present() HEAD (after MC's submit flush).
+    // Frames acquired and recorded this frame, awaiting the host's post-submit present seam.
     private int[] pendingImageIndex = new int[0];
     private long[] pendingPresentSem = new long[0];
     private int pendingCount;
@@ -82,8 +77,8 @@ public final class RtFramePresenter {
 
     /**
      * Acquire {@code generatedCount} extra swapchain images and record a Y-flipped blit of {@code srcImage}
-     * (the final rendered frame, GENERAL layout) into each, using Minecraft's command encoder {@code enc} so
-     * the work rides MC's next {@code submit()}. The presents happen later in {@link #flushPendingPresents}.
+     * (the final rendered frame, GENERAL layout) into each through the host's deferred submission. The
+     * presents happen later in {@link #flushPendingPresents}.
      * Blits DLSSG's real interpolated output per generated frame, or a duplicate of the real frame when RT
      * simply isn't producing frames this tick (routine). A genuine DLSSG failure latches FG off for the
      * session — see {@link RtComposite#fgInterpolate}.
@@ -92,7 +87,7 @@ public final class RtFramePresenter {
      *     ({@link RtComposite#hdrBackbufferView()}, already UI-composited) rather than the SDR main target —
      *     selects DLSSG's HDR backbuffer format/flag in {@link RtComposite#fgInterpolate}.
      */
-    public void prepareExtraFrames(VulkanCommandEncoder enc, VulkanDevice device, long swapchain,
+    public void prepareExtraFrames(GraphicsSubmission submission, VkDevice device, long swapchain,
             LongList swapchainImages, long[] presentSemaphores, int swapW, int swapH,
             long backbufferView, long srcImage, int srcW, int srcH, int generatedCount,
             boolean hdrBackbuffer, UiPresentationResources ui) {
@@ -106,7 +101,7 @@ public final class RtFramePresenter {
                 // null = no captured RT frame this tick (menu/loading/transition — routine, not a bug): fall
                 // back to duplicating the real frame for just this one frame. A genuine FG failure instead
                 // throws, caught below, which disables FG for the session.
-                GpuImage interp = RtComposite.INSTANCE.fgInterpolate(enc, backbufferView, srcImage,
+                GpuImage interp = RtComposite.INSTANCE.fgInterpolate(submission, backbufferView, srcImage,
                         swapW, swapH, i + 1, generatedCount, hdrBackbuffer, ui);
                 if (interp != null) {
                     interpOkInWindow++;
@@ -123,7 +118,7 @@ public final class RtFramePresenter {
                 int imageIndex;
                 try (MemoryStack stack = MemoryStack.stackPush()) {
                     IntBuffer pIndex = stack.callocInt(1);
-                    int r = KHRSwapchain.vkAcquireNextImageKHR(device.vkDevice(), swapchain, ACQUIRE_TIMEOUT_NS, acquireSem, 0L, pIndex);
+                    int r = KHRSwapchain.vkAcquireNextImageKHR(device, swapchain, ACQUIRE_TIMEOUT_NS, acquireSem, 0L, pIndex);
                     if (r != VK10.VK_SUCCESS && r != 1000001003 /* SUBOPTIMAL */) {
                         return; // out-of-date/timeout: present what we have, let MC recover
                     }
@@ -131,7 +126,7 @@ public final class RtFramePresenter {
                 }
                 long dstImage = swapchainImages.getLong(imageIndex);
                 long presentSem = presentSemaphores[imageIndex];
-                recordBlit(enc, blitSrc, dstImage, copyW, copyH, acquireSem, presentSem);
+                recordBlit(submission, blitSrc, dstImage, copyW, copyH, acquireSem, presentSem);
 
                 pendingImageIndex[pendingCount] = imageIndex;
                 pendingPresentSem[pendingCount] = presentSem;
@@ -208,9 +203,9 @@ public final class RtFramePresenter {
         interpFallbackInWindow = 0;
     }
 
-    private void recordBlit(VulkanCommandEncoder enc, long srcImage, long dstImage, int copyW, int copyH,
+    private void recordBlit(GraphicsSubmission submission, long srcImage, long dstImage, int copyW, int copyH,
             long acquireSem, long presentSem) {
-        VkCommandBuffer cmd = enc.allocateAndBeginTransientCommandBuffer();
+        VkCommandBuffer cmd = submission.beginTransientCommandBuffer();
         try (MemoryStack stack = MemoryStack.stackPush()) {
             // Swapchain UNDEFINED -> TRANSFER_DST (stage/access values mirror MC's blitFromTexture).
             VkImageMemoryBarrier2.Buffer toDst = VkImageMemoryBarrier2.calloc(1, stack).sType$Default();
@@ -225,7 +220,7 @@ public final class RtFramePresenter {
             VkDependencyInfo dep1 = VkDependencyInfo.calloc(stack).sType$Default().pImageMemoryBarriers(toDst).pMemoryBarriers(srcVis);
             KHRSynchronization2.vkCmdPipelineBarrier2KHR(cmd, dep1);
 
-            // Blit final frame (GENERAL) -> swapchain (TRANSFER_DST), Y-flipped like vanilla.
+            // Blit final frame (GENERAL) -> swapchain (TRANSFER_DST), Y-flipped like the host path.
             VkImageBlit.Buffer region = VkImageBlit.calloc(1, stack);
             region.get(0).srcSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(0).baseArrayLayer(0).layerCount(1);
             region.get(0).dstSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(0).baseArrayLayer(0).layerCount(1);
@@ -249,15 +244,19 @@ public final class RtFramePresenter {
         if (VK10.vkEndCommandBuffer(cmd) != VK10.VK_SUCCESS) {
             throw new IllegalStateException("vkEndCommandBuffer(fg blit) failed");
         }
-        // Register on MC's encoder (same order as MC's blitFromTexture): wait on the acquire, run the blit,
-        // signal the image's present semaphore. MC's once-per-frame submit() flushes this in one
-        // vkQueueSubmit, which is what actually signals presentSem (deferred-submit model).
-        enc.waitSemaphore(acquireSem, 0L, 65536L);
-        enc.execute(cmd);
-        enc.signalSemaphore(presentSem, 0L, 4096L);
+        // Preserve the host present order: wait on acquire, run the blit, then signal the present semaphore.
+        // The deferred host submit is what actually signals the binary semaphore.
+        enqueuePresent(submission, cmd, acquireSem, presentSem);
     }
 
-    private void ensureCapacity(VulkanDevice device, int semaphoreCount, int generatedCount) {
+    static void enqueuePresent(GraphicsSubmission submission, VkCommandBuffer commandBuffer,
+                               long acquireSemaphore, long presentSemaphore) {
+        submission.waitSemaphore(acquireSemaphore, 0L, 65536L);
+        submission.execute(commandBuffer);
+        submission.signalSemaphore(presentSemaphore, 0L, 4096L);
+    }
+
+    private void ensureCapacity(VkDevice device, int semaphoreCount, int generatedCount) {
         if (pendingImageIndex.length < generatedCount) {
             pendingImageIndex = new int[generatedCount];
             pendingPresentSem = new long[generatedCount];
@@ -271,7 +270,7 @@ public final class RtFramePresenter {
             VkSemaphoreCreateInfo sci = VkSemaphoreCreateInfo.calloc(stack).sType$Default();
             LongBuffer p = stack.mallocLong(1);
             for (int i = 0; i < semaphoreCount; i++) {
-                if (VK10.vkCreateSemaphore(device.vkDevice(), sci, null, p) != VK10.VK_SUCCESS) {
+                if (VK10.vkCreateSemaphore(device, sci, null, p) != VK10.VK_SUCCESS) {
                     throw new IllegalStateException("vkCreateSemaphore(fg acquire) failed");
                 }
                 acquireSemaphores[i] = p.get(0);
@@ -281,10 +280,10 @@ public final class RtFramePresenter {
     }
 
     /** Destroy the acquire-semaphore pool (device teardown). */
-    public void destroy(VulkanDevice device) {
+    public void destroy(VkDevice device) {
         for (long sem : acquireSemaphores) {
             if (sem != 0L) {
-                VK10.vkDestroySemaphore(device.vkDevice(), sem, null);
+                VK10.vkDestroySemaphore(device, sem, null);
             }
         }
         acquireSemaphores = new long[0];

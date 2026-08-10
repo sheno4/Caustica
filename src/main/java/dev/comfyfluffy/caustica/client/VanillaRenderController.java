@@ -154,7 +154,7 @@ public final class VanillaRenderController {
 		if (RtTerrain.currentOrNull() == null) {
 			return "RT terrain is not ready";
 		}
-		if (RtComposite.INSTANCE.requiresVanillaWorldFallback()) {
+		if (RtComposite.INSTANCE.requiresSourceWorldFallback()) {
 			return "RT resources are crossing an epoch boundary";
 		}
 		if (mainTarget == null || mainTarget.getColorTexture() == null || mainTarget.getDepthTexture() == null) {

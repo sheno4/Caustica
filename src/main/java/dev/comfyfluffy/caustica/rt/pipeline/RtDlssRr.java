@@ -1,17 +1,15 @@
 package dev.comfyfluffy.caustica.rt.pipeline;
 
-import com.mojang.blaze3d.systems.RenderSystem;
-import com.mojang.blaze3d.vulkan.VulkanDevice;
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtRuntime;
 import dev.comfyfluffy.caustica.rt.accel.GpuImage;
-import dev.comfyfluffy.caustica.mixin.GpuDeviceAccessor;
 import dev.comfyfluffy.caustica.ngx.NgxLibrary;
 import dev.comfyfluffy.caustica.ngx.NgxRuntime;
 import org.joml.Matrix4fc;
 import org.lwjgl.vulkan.VK10;
+import org.lwjgl.vulkan.VkDevice;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
@@ -25,7 +23,7 @@ import java.lang.foreign.ValueLayout;
 public final class RtDlssRr {
     public static final RtDlssRr INSTANCE = new RtDlssRr();
 
-    /** Desired RR mode for session resource sizing, including RT startup frames rendered by vanilla. */
+    /** Desired RR mode for session resource sizing, including RT startup frames rendered by the source renderer. */
     public static boolean configured() {
         return CausticaConfig.Rt.DlssRr.ENABLED.value();
     }
@@ -143,10 +141,11 @@ public final class RtDlssRr {
         if (!configured() || failed) {
             return null;
         }
-        if (!(((GpuDeviceAccessor) RenderSystem.getDevice()).caustica$getBackend() instanceof VulkanDevice device)) {
+        GpuContext context = GpuContext.currentOrNull();
+        if (context == null) {
             return null;
         }
-        ensureInitialized(device);
+        ensureInitialized(context.vk());
         if (!lib.hasQueryOptimalDlssd()) {
             throw new IllegalStateException("ngxshim is missing ngxshim_query_optimal_dlssd (stale native shim)");
         }
@@ -177,9 +176,11 @@ public final class RtDlssRr {
         if (!enabled() || failed) {
             return false;
         }
-        if (!(((GpuDeviceAccessor) RenderSystem.getDevice()).caustica$getBackend() instanceof VulkanDevice device)) {
+        GpuContext context = GpuContext.currentOrNull();
+        if (context == null) {
             return false;
         }
+        VkDevice device = context.vk();
         try {
             ensureInitialized(device);
             int quality = quality();
@@ -213,7 +214,7 @@ public final class RtDlssRr {
         }
     }
 
-    private void ensureInitialized(VulkanDevice device) {
+    private void ensureInitialized(VkDevice device) {
         if (initialized) {
             return;
         }
@@ -239,8 +240,9 @@ public final class RtDlssRr {
      * teardown ({@code NgxRuntime.shutdown()} in {@code CausticaClient.shutdownRt}), so FG can keep using NGX.
      */
     public void destroy() {
-        if (((GpuDeviceAccessor) RenderSystem.getDevice()).caustica$getBackend() instanceof VulkanDevice device) {
-            releaseFeature(device);
+        GpuContext context = GpuContext.currentOrNull();
+        if (context != null) {
+            releaseFeature(context.vk());
         }
         initialized = false;
         failed = false;
@@ -249,13 +251,13 @@ public final class RtDlssRr {
         lastFrameNanos = 0L;
     }
 
-    private void releaseFeature(VulkanDevice device) {
+    private void releaseFeature(VkDevice device) {
         if (!isNull(feature)) {
             GpuContext ctx = GpuContext.currentOrNull();
-            if (ctx != null && ctx.device() == device) {
+            if (ctx != null && ctx.vk().address() == device.address()) {
                 ctx.waitIdle();
             } else {
-                VK10.vkDeviceWaitIdle(device.vkDevice());
+                VK10.vkDeviceWaitIdle(device);
             }
             lib.release(feature);
             feature = MemorySegment.NULL;

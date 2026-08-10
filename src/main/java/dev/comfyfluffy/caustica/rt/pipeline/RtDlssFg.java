@@ -1,18 +1,15 @@
 package dev.comfyfluffy.caustica.rt.pipeline;
 
-import com.mojang.blaze3d.systems.RenderSystem;
-import com.mojang.blaze3d.vulkan.VulkanDevice;
-
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtRuntime;
-import dev.comfyfluffy.caustica.mixin.GpuDeviceAccessor;
 import dev.comfyfluffy.caustica.ngx.NgxLibrary;
 import dev.comfyfluffy.caustica.ngx.NgxRuntime;
 
 import org.joml.Matrix4fc;
 import org.lwjgl.vulkan.VK10;
+import org.lwjgl.vulkan.VkDevice;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
@@ -83,10 +80,11 @@ public final class RtDlssFg {
         if (probed || failed) {
             return;
         }
-        if (!(((GpuDeviceAccessor) RenderSystem.getDevice()).caustica$getBackend() instanceof VulkanDevice device)) {
+        GpuContext context = GpuContext.currentOrNull();
+        if (context == null) {
             return;
         }
-        NgxLibrary l = NgxRuntime.INSTANCE.acquire(device);
+        NgxLibrary l = NgxRuntime.INSTANCE.acquire(context.vk());
         if (l == null) {
             return; // NGX not up yet; try again next tick
         }
@@ -110,9 +108,11 @@ public final class RtDlssFg {
         if (!enabled() || failed) {
             return false;
         }
-        if (!(((GpuDeviceAccessor) RenderSystem.getDevice()).caustica$getBackend() instanceof VulkanDevice device)) {
+        GpuContext context = GpuContext.currentOrNull();
+        if (context == null) {
             return false;
         }
+        VkDevice device = context.vk();
         try {
             if (lib == null) {
                 lib = NgxRuntime.INSTANCE.acquire(device);
@@ -229,8 +229,9 @@ public final class RtDlssFg {
 
     /** Release the FG feature. NGX itself is shut down by {@link NgxRuntime} at device teardown. */
     public void destroy() {
-        if (((GpuDeviceAccessor) RenderSystem.getDevice()).caustica$getBackend() instanceof VulkanDevice device) {
-            releaseFeature(device);
+        GpuContext context = GpuContext.currentOrNull();
+        if (context != null) {
+            releaseFeature(context.vk());
         }
         initialized = false;
         failed = false;
@@ -240,13 +241,13 @@ public final class RtDlssFg {
         lib = null;
     }
 
-    private void releaseFeature(VulkanDevice device) {
+    private void releaseFeature(VkDevice device) {
         if (lib != null && !isNull(feature)) {
             GpuContext ctx = GpuContext.currentOrNull();
-            if (ctx != null && ctx.device() == device) {
+            if (ctx != null && ctx.vk().address() == device.address()) {
                 ctx.waitIdle();
             } else {
-                VK10.vkDeviceWaitIdle(device.vkDevice());
+                VK10.vkDeviceWaitIdle(device);
             }
             lib.release(feature);
         }

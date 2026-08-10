@@ -1,6 +1,5 @@
 package dev.comfyfluffy.caustica.rt.pass;
 
-import com.mojang.blaze3d.vulkan.VulkanCommandEncoder;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.CausticaOptions;
 import dev.comfyfluffy.caustica.api.Feature;
@@ -11,6 +10,7 @@ import dev.comfyfluffy.caustica.api.pass.PassFrame;
 import dev.comfyfluffy.caustica.api.pass.PassSetup;
 import dev.comfyfluffy.caustica.api.pass.RenderStage;
 import dev.comfyfluffy.caustica.rt.GpuContext;
+import dev.comfyfluffy.caustica.rt.VulkanBarriers;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
 import dev.comfyfluffy.caustica.rt.accel.GpuImage;
@@ -234,13 +234,13 @@ public final class RenderPassManager {
                 sceneColor = frame.takenTarget;
                 nextSceneColorTarget ^= 1;
                 try (MemoryStack stack = MemoryStack.stackPush()) {
-                    VulkanCommandEncoder.memoryBarrier(commandBuffer, stack);
+                    VulkanBarriers.memoryBarrier(commandBuffer, stack);
                 }
             }
         }
         if (any) {
             try (MemoryStack stack = MemoryStack.stackPush()) {
-                VulkanCommandEncoder.memoryBarrier(commandBuffer, stack);
+                VulkanBarriers.memoryBarrier(commandBuffer, stack);
             }
         }
     }
@@ -504,7 +504,7 @@ public final class RenderPassManager {
         @Override
         public void memoryBarrier() {
             try (MemoryStack stack = MemoryStack.stackPush()) {
-                VulkanCommandEncoder.memoryBarrier(commandBuffer, stack);
+                VulkanBarriers.memoryBarrier(commandBuffer, stack);
             }
         }
     }
