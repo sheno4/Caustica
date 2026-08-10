@@ -22,7 +22,7 @@ import trace;
 public void traceRadianceReordered(uint cullMask, float3 ro, float tmin, float3 rd, float tmax,
                             bool showEnvironmentEmitter, float rayConeWidth, float rayConeSpread,
                             uint pathPhaseHint) {
-    uint flags = showEnvironmentEmitter ? PAYLOAD_SHOW_CELESTIAL : 0u;
+    uint flags = showEnvironmentEmitter ? PAYLOAD_SHOW_ENVIRONMENT_EMITTERS : 0u;
     uint rayCone = packHalf2(float2(rayConeWidth, rayConeSpread));
     Payload tracePayload = makeRadiancePayload(flags, rayCone);
     HitObject hObj = HitObject::TraceRay(topLevelAS, RAY_FLAG_NONE, cullMask,

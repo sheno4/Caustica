@@ -4,7 +4,7 @@
 import world_common;
 import display_common;
 import caustica_bloom_types;
-import caustica_sky_atmosphere;
+import caustica_minecraft_sky_atmosphere;
 
 struct WorldPushLayoutProbe {
     WorldPush values[2]; // array stride is the complete, tail-padded WorldPush byte size

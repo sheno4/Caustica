@@ -21,9 +21,8 @@ public interface PassSetup {
     /**
      * Hand the engine a pass-produced image the world ray-tracing pipeline's own shaders sample, at the
      * binding {@code name} the pass's own Slang declares (a {@code [[vk::binding(N, 2)]]} in a module the
-     * pass owns — see {@code caustica_sky_bindings.slang} for the shape). The engine discovers the
-     * binding index from the active composition's own reflection; it never declares this slot itself,
-     * unlike the old fixed {@code EngineImage} enum this replaces. At most one pass may publish a given
+     * pass owns). The engine discovers the binding index from the active composition's own reflection;
+     * it never declares this slot itself. At most one pass may publish a given
      * name. The image must stay valid — and its identity stable across a resize unless republished — for
      * as long as this pass is active.
      */

@@ -18,7 +18,7 @@ import bindings;
 public struct HitBinding {
     public MaterialBinding binding;
     public float2 uv;
-    public float3 tint; // vanilla 8-bit convention, still sRGB-encoded
+    public float3 tint; // source 8-bit convention, still sRGB-encoded
 };
 
 public float3 barycentrics(float2 attribs) {

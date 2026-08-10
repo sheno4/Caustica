@@ -52,19 +52,16 @@ public struct WorldPush {
     public float2   jitter;
     public uint     flags;            // bit0 submerged, bit4 waves
     public uint     maxBounces;
-    // Sky state is deliberately absent: it belongs to the selected sky slot and lives in that pass's
-    // own buffer (SkyInputs, caustica_sky_atmosphere), which engine-generic code cannot reach.
+    // Environment state is deliberately absent: it belongs to the selected sky slot and lives in that
+    // pass's own resources, which engine-generic code cannot reach.
     //
     // Linear ACEScg tint of the medium the eye itself is inside, for a camera that starts submerged. A
     // hit's own medium comes from its per-primitive tint, never from here.
     public float3   cameraMedium;
     public float    time;                   // animation time (s), wrapped
-    // World-pinned origin for procedural evaluation: the rebase origin reduced mod a fixed power of two,
-    // so a pattern evaluated at (rebased position + this) stays fixed in the world at usable precision.
-    public float2   proceduralDomainAnchor;
-    public float    previousTime;           // `time` last frame; equal to `time` with no adjacent frame
-    // Placed here rather than after curViewProj so the two frame-constant lanes above fill their
-    // sixteen-byte slot exactly; the breaking array that reads it still follows the matrix.
+    // World-pinned offset for procedural evaluation: the 3D rebase origin reduced mod a fixed power of
+    // two, so (rebased position + this) stays fixed in scene space at usable precision.
+    public float3   proceduralDomainOffset;
     public uint     breakCount;
     public float4x4 curViewProj;      // forward camera-relative view-projection
     public BreakEntry breaking[8];    // Java capacity and breakCount serialization are generated from this
@@ -72,6 +69,7 @@ public struct WorldPush {
     public float4   lightGridOrigin;     // xyz minimum cell origin in rebased blocks, w cell size
     public int4     lightGridDims;       // xyz dense grid dimensions, w reserved
     public uint     lightCount;       // packed Light records in pc.lightBufAddr
+    public float    previousTime;     // `time` last frame; equal to `time` with no adjacent frame
     public uint64_t providerLightAddr; // current-frame ProviderLight records (0 = none submitted)
     public uint     providerLightCount;
     public uint     risCandidates;    // RIS candidate count M per diffuse vertex (0 = emitter NEE off)
@@ -180,7 +178,7 @@ public struct Payload {
     // because that is the only hit whose reflection is reprojected through the surface plane. Packed
     // rather than a third half3: it costs one word and is finer than the fp16 the normal itself uses.
     public uint   previousNormal;
-    public uint   flags;       // bit 0 transmissive, bit 1 water, bit 2 celestial, bit 3 dielectric-entering.
+    public uint   flags;       // bit 0 transmissive, bit 1 water, bit 2 environment emitter, bit 3 entering.
     // Metalness has already been resolved into diffuse albedo and F0 at closest-hit, so its former half
     // is the third component of emission without increasing the cross-stage payload.
     public uint   roughEmissionB; // packHalf2x16(perceptual roughness, emission radiance B)
@@ -189,14 +187,14 @@ public struct Payload {
     public uint   rayCone;     // packHalf2x16(width, spread)
 };
 
-public static const uint PAYLOAD_SHOW_CELESTIAL = 4u;
+public static const uint PAYLOAD_SHOW_ENVIRONMENT_EMITTERS = 4u;
 // Set by world.rchit on a terrain hit whose prim carries TERRAIN_PRIM_IN_LIGHT_BUFFER: this emitter is
 // RIS-sampled, so raygen gates its direct-hit emission on diffuse continuation rays (no double count).
 public static const uint PAYLOAD_EMITTER_IN_LIST = 128u;
 // Set by world.rchit on any dielectric hit (water or glass/ice): true when the incoming ray travels
 // against the prim's outward face normal (entering the volume), false when it exits. Derived from face
 // orientation rather than toggled, so a stray or missing face cannot corrupt the medium for the rest of
-// the path — each crossing re-derives which side it is on. Bit 2 (PAYLOAD_SHOW_CELESTIAL) is only
+// the path — each crossing re-derives which side it is on. Bit 2 (PAYLOAD_SHOW_ENVIRONMENT_EMITTERS) is only
 // meaningful on a miss and this bit only on a hit, so they never need to be read together, but they get
 // distinct bits anyway to keep the two concerns unambiguous.
 public static const uint PAYLOAD_DIELECTRIC_ENTERING = 8u;
@@ -251,7 +249,7 @@ public struct Prim {
 // different coverage mode costs sixteen bytes rather than a cloned material, so entity render types and
 // stochastic submissions are bindings instead of record variants.
 public struct MaterialBinding {
-    // albedoSlot:16 | coverageMode:2 | flags:6 | surfaceImpl:8. Slot 0 is the vanilla block atlas and
+    // albedoSlot:16 | coverageMode:2 | flags:6 | surfaceImpl:8. Slot 0 is the host albedo atlas and
     // implementation 0 is the built-in surface, so a zero-initialised binding samples terrain albedo and
     // resolves the reference surface; entity render types resolve their own slot through
     // RtEntityTextures.
@@ -295,7 +293,7 @@ public float3 bindingShadowTint(MaterialBinding binding) {
 // Closest-hit-only surface parameters, shared by every binding that names them. The uniform half of the
 // authored OpenPBR Surface subset: everything that varies per texel lives in the canonical pages `page`
 // names instead. Source-format data has already been decoded, so nothing here is LabPBR-shaped.
-// materialUv maps sprite-local UV into the packed page, while albedoUv maps the vanilla atlas rectangle
+// materialUv maps sprite-local UV into the packed page, while albedoUv maps the source atlas rectangle
 // back to sprite-local UV.
 public struct SurfaceMaterial {
     public uint features;     // MATERIAL_FEATURE_* | emission luminance
@@ -304,7 +302,7 @@ public struct SurfaceMaterial {
     // surface, which is why it travels with the page reference rather than with the parameters below.
     public uint page;
     public float4 materialUv; // packed-page uvMin.xy + uvExtent.xy
-    public float4 albedoUv;   // vanilla atlas uvMin.xy + inverse uvExtent.xy
+    public float4 albedoUv;   // source atlas uvMin.xy + inverse uvExtent.xy
     // OpenPBR names, OpenPBR meanings. specularRoughness is PERCEPTUAL r: the GGX alpha every lobe wants
     // is its square, computed where the lobe is evaluated. Nothing in the pipeline stores alpha.
     public float specularRoughness;

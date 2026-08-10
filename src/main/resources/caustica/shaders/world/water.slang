@@ -143,7 +143,7 @@ public float waterCaustic(float3 exitPos, float3 lightDir, float waterDist) {
     float h = max(waterDist * lightDir.y, 0.05); // vertical depth of the receiver below the exit point
     float t = worldPush.time;
     float3 inc = -lightDir;
-    float2 base = exitPos.xz + worldPush.proceduralDomainAnchor; // same domain applyWaterWaves evaluates
+    float2 base = (exitPos + worldPush.proceduralDomainOffset).xz; // same domain applyWaterWaves evaluates
     float2 p0 = causticLanding(base, t, inc, h);
     float2 px = causticLanding(base + float2(CAUSTIC_EPS, 0.0), t, inc, h);
     float2 pz = causticLanding(base + float2(0.0, CAUSTIC_EPS), t, inc, h);

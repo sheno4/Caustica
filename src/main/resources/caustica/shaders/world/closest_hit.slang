@@ -40,8 +40,8 @@ void payloadSetPacked(inout Payload payload, uint materialFlags, float roughness
  * time rather than loading the whole push block for a handful of scalars. */
 float frameTime() { return ConstPtr<WorldPush>(pc.worldPushAddr)[0].time; }
 float framePreviousTime() { return ConstPtr<WorldPush>(pc.worldPushAddr)[0].previousTime; }
-float2 frameProceduralDomainAnchor() {
-    return ConstPtr<WorldPush>(pc.worldPushAddr)[0].proceduralDomainAnchor;
+float3 frameProceduralDomainOffset() {
+    return ConstPtr<WorldPush>(pc.worldPushAddr)[0].proceduralDomainOffset;
 }
 bool frameWaterWaves() { return (ConstPtr<WorldPush>(pc.worldPushAddr)[0].flags & 16u) != 0u; }
 
@@ -274,12 +274,6 @@ MaterialInput buildMaterialInput(DecodedSurface surface, SurfaceMaterial mat, bo
     return material;
 }
 
-// No environment-field sampling reaches closest-hit. An implementation sees a neutral 0.5/0.5
-// placeholder rather
-// than fabricated real values.
-static const float PLACEHOLDER_BIOME_TEMPERATURE = 0.5;
-static const float PLACEHOLDER_BIOME_HUMIDITY = 0.5;
-
 SurfaceInput buildSurfaceInput(Payload payload, float3 position, float3 geometricNormal,
         float3 outgoingDirection, float2 uv, float lod) {
     SurfaceInput input;
@@ -290,11 +284,9 @@ SurfaceInput buildSurfaceInput(Payload payload, float3 position, float3 geometri
     // Approximated from the ray-cone LOD already computed for texture filtering, not a true dUV
     // footprint; the built-in surface does not read this field.
     input.textureFootprint = exp2(lod);
-    input.proceduralDomainAnchor = frameProceduralDomainAnchor();
+    input.proceduralPosition = position + frameProceduralDomainOffset();
     input.time = frameTime();
     input.previousTime = framePreviousTime();
-    input.environmentTemperature = PLACEHOLDER_BIOME_TEMPERATURE;
-    input.environmentHumidity = PLACEHOLDER_BIOME_HUMIDITY;
     input.surfaceFlags = (payload.flags & PAYLOAD_PRIMARY_RAY) != 0u
             ? SURFACE_RECONSTRUCTION_ANCHOR : 0u;
     return input;
@@ -308,7 +300,7 @@ SurfaceInput buildSurfaceInput(Payload payload, float3 position, float3 geometri
  */
 void applyWaterSurface(SurfaceInput input, inout MaterialInput material, float rayConeWidth) {
     if (!frameWaterWaves()) return;
-    float2 domain = input.position.xz + input.proceduralDomainAnchor;
+    float2 domain = input.proceduralPosition.xz;
     float footprint = rayConeWidth / max(abs(dot(input.outgoingDirection, input.geometricNormal)), 0.2);
     if ((input.surfaceFlags & SURFACE_RECONSTRUCTION_ANCHOR) == 0u
             || abs(input.geometricNormal.y) < 0.5) {

@@ -54,7 +54,9 @@ final class ApiImportFirewallTest {
                 List<String> lines = Files.readAllLines(source);
                 for (int line = 0; line < lines.size(); line++) {
                     String text = lines.get(line);
-                    if (text.contains("Minecraft") || text.contains("biome")) {
+                    String lower = text.toLowerCase(java.util.Locale.ROOT);
+                    if (lower.contains("minecraft") || lower.contains("vanilla")
+                            || lower.contains("overworld") || lower.contains("biome")) {
                         violations.add(shaderApi.relativize(source) + ":" + (line + 1) + ": " + text);
                     }
                 }

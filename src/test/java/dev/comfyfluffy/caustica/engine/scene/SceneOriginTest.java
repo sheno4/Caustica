@@ -19,6 +19,7 @@ class SceneOriginTest {
         SceneOrigin origin = new SceneOrigin(-1.0, 0.0, -4097.0);
 
         assertEquals(4095.0f, origin.wrappedX(4096.0));
+        assertEquals(0.0f, origin.wrappedY(4096.0));
         assertEquals(4095.0f, origin.wrappedZ(4096.0));
     }
 }

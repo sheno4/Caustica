@@ -21,6 +21,11 @@ public record SceneOrigin(double x, double y, double z) {
         return wrapped(x, period);
     }
 
+    /** Wrap the Y origin into {@code [0, period)} for a precision-safe procedural domain anchor. */
+    public float wrappedY(double period) {
+        return wrapped(y, period);
+    }
+
     /** Wrap the Z origin into {@code [0, period)} for a precision-safe procedural domain anchor. */
     public float wrappedZ(double period) {
         return wrapped(z, period);

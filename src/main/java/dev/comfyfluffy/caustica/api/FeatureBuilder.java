@@ -146,9 +146,9 @@ public final class FeatureBuilder {
 
     /**
      * Declare a Slang module (by module name, not slot) this feature wants anchored outside the generic
-     * composition mechanism — needed by any module a pass's own binding declarations live in (e.g.
-     * {@code caustica_sky_bindings.slang}), since Slang forbids a generic entry point's type-parameter
-     * implementation from declaring global shader parameters itself. The engine imports every registered
+     * composition mechanism — needed by any module a pass's own binding declarations live in (e.g. the
+     * active sky implementation's bindings module), since Slang forbids a generic entry point's
+     * type-parameter implementation from declaring global shader parameters itself. The engine imports every registered
      * feature's declared modules into one generated anchor module every composition-generic engine stage
      * (e.g. {@code sky_miss.slang}) imports unconditionally, so the pass never needs the engine to know
      * its resource names — only that this module exists.

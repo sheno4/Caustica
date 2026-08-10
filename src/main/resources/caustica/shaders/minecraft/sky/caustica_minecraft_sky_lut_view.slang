@@ -8,9 +8,9 @@
 //
 // Reads the same semantic sky values the engine writes into WorldPush, so the LUT and the frame it shades
 // use identical celestial and look inputs without exposing the world buffer to the pass API.
-module caustica_sky_lut_view;
+module caustica_minecraft_sky_lut_view;
 
-import caustica_sky_atmosphere;
+import caustica_minecraft_sky_atmosphere;
 
 [[vk::binding(0, 0)]] [format("rgba16f")] RWTexture2D<float4> skyViewImage;
 [[vk::binding(1, 0)]] Sampler2D transmittanceLut;

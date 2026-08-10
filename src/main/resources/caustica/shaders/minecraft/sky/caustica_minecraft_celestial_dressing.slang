@@ -1,10 +1,10 @@
-module caustica_celestial_dressing;
+module caustica_minecraft_celestial_dressing;
 
 // Small helpers for what a sky with a visible sun, moon, and starfield draws on top of its atmosphere
 // in-scatter. Shared by the Overworld sky slot and any other dimension sky, so a second sky can reuse
 // the star machinery with its own cell density and colour ramp instead of copy-pasting it.
 //
-// Deliberately independent of caustica_sky_atmosphere and its SkyState: every value here is a plain
+// Deliberately independent of caustica_minecraft_sky_atmosphere and its SkyState: every value here is a plain
 // scalar or vector the caller derives however its own atmosphere model works, not a dependency on the
 // Hillaire LUT machinery.
 

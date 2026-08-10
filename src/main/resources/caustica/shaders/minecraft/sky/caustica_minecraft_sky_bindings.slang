@@ -1,6 +1,6 @@
-module caustica_sky_bindings;
+module caustica_minecraft_sky_bindings;
 
-import caustica_sky_atmosphere;
+import caustica_minecraft_sky_atmosphere;
 
 // SkyLutPass's own descriptor bindings, at a set (2) reserved for pass-declared resources rather than
 // the engine's fixed set 0 (bindings.slang). The engine never names these — it discovers them from
@@ -9,7 +9,7 @@ import caustica_sky_atmosphere;
 // A pass owns its own resources end to end; the engine's only job is reserving the descriptor set index.
 [[vk::binding(0, 2)]] public Sampler2D skyView;
 [[vk::binding(1, 2)]] public Sampler2D transmittance;
-// This frame's sky inputs, filled by SkyLutPass. See SkyInputs in caustica_sky_atmosphere.
+// This frame's sky inputs, filled by SkyLutPass. See SkyInputs in caustica_minecraft_sky_atmosphere.
 [[vk::binding(2, 2)]] public ConstantBuffer<SkyInputs> skyInputs;
 // Vanilla's sun and moon-phase sprite atlas, sampled only inside the drawn discs. It belongs to whichever
 // slot actually draws celestial sprites: a sky for another dimension binds no such texture.

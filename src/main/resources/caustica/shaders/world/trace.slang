@@ -35,7 +35,8 @@ public float3 offsetSurfaceOrigin(float3 position, float3 surfaceNormal,
 }
 
 // A radiance payload carrying only the two words the invoked hit/miss shader READS: `flags`
-// (show-celestial gate, consumed by world.rmiss) and the packed ray cone (consumed by world.rchit for
+// (show-environment-emitter gate, consumed by world.rmiss) and the packed ray cone (consumed by
+// world.rchit for
 // texture LOD). Every other member is an OUTPUT that world.rchit/world.rmiss write, so it carries no
 // information into a trace and is initialized to a neutral value here.
 public Payload makeRadiancePayload(uint flags, uint rayCone) {
@@ -63,7 +64,7 @@ public Payload makeRadiancePayload(uint flags, uint rayCone) {
 public void traceRadiance(uint cullMask, float3 ro, float tmin, float3 rd, float tmax,
                     bool showEnvironmentEmitter, float rayConeWidth, float rayConeSpread,
                     bool reconstructionAnchor = false) {
-    payload = makeRadiancePayload((showEnvironmentEmitter ? PAYLOAD_SHOW_CELESTIAL : 0u)
+    payload = makeRadiancePayload((showEnvironmentEmitter ? PAYLOAD_SHOW_ENVIRONMENT_EMITTERS : 0u)
                     | (reconstructionAnchor ? PAYLOAD_PRIMARY_RAY : 0u),
             packHalf2(float2(rayConeWidth, rayConeSpread)));
     TraceRay(topLevelAS, RAY_FLAG_NONE, cullMask,

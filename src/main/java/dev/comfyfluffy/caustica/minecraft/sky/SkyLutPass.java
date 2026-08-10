@@ -53,7 +53,7 @@ public final class SkyLutPass implements CausticaRenderPass {
     static final int MULTISCATTER_HEIGHT = 32;
     static final int SKY_VIEW_WIDTH = 192;
     static final int SKY_VIEW_HEIGHT = 216;
-    private static final ShaderSource SHADERS = ShaderSource.classpath("/caustica/shaders/builtin", "sky", "common");
+    private static final ShaderSource SHADERS = ShaderSource.classpath("/caustica/shaders/minecraft", "sky");
 
     // The sky-geometry options this pass owns are declared here so the token passed to OptionValues#get
     // and the declaration registered by the Minecraft extension are the same
@@ -149,16 +149,19 @@ public final class SkyLutPass implements CausticaRenderPass {
                 VK10.VK_FORMAT_R16G16B16A16_SFLOAT, ID + " sky view");
         skyInputsBuffer = ctx.createBuffer(SkyInputsData.BYTE_SIZE,
                 VK10.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true, ID + " sky inputs");
-        // Names match caustica_sky_bindings.slang's own [[vk::binding(N, 2)]] declarations exactly —
+        // Names match caustica_minecraft_sky_bindings.slang's [[vk::binding(N, 2)]] declarations exactly —
         // that module, not this Java class, is what defines the resource's identity.
         setup.publishWorldResource("transmittance", transmittance, sampler);
         setup.publishWorldResource("skyView", skyView, sampler);
         setup.publishWorldResource("skyInputs", skyInputsBuffer);
 
         try {
-            transmittanceDispatch = compile("caustica_sky_lut_transmittance", TRANSMITTANCE_BINDINGS, 0);
-            multiScatterDispatch = compile("caustica_sky_lut_multiscatter", SCATTER_BINDINGS, SkyInputsData.BYTE_SIZE);
-            skyViewDispatch = compile("caustica_sky_lut_view", SCATTER_BINDINGS, SkyInputsData.BYTE_SIZE);
+            transmittanceDispatch = compile("caustica_minecraft_sky_lut_transmittance",
+                    TRANSMITTANCE_BINDINGS, 0);
+            multiScatterDispatch = compile("caustica_minecraft_sky_lut_multiscatter",
+                    SCATTER_BINDINGS, SkyInputsData.BYTE_SIZE);
+            skyViewDispatch = compile("caustica_minecraft_sky_lut_view", SCATTER_BINDINGS,
+                    SkyInputsData.BYTE_SIZE);
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }

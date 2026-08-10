@@ -21,10 +21,9 @@ public final class BuiltinExtension implements CausticaExtension {
                 .title(DisplayText.translatable("feature.caustica.builtin"))
                 .category(FeatureCategory.GENERAL)
                 .shaderSource(ShaderSource.classpath(
-                        "/caustica/shaders/builtin", "sky", "surface", "bloom", "common"))
-                .bind(Slots.SKY, "caustica_sky_slot", "LutSky")
+                        "/caustica/shaders/builtin", "sky", "surface", "bloom"))
+                .bind(Slots.SKY, "caustica_builtin_sky", "BuiltinSky")
                 .surface(BUILTIN_SURFACE, "caustica_builtin_surface", "BuiltinSurface")
-                .passResourceModule("caustica_sky_bindings")
                 .group(BloomPass.GROUP)
                 .options(BloomPass.OPTIONS)
                 .renderPass(new BloomPass())

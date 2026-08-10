@@ -2,13 +2,13 @@
 //
 // WorldShaderCompiler specializes this generic entry point with the active composition.
 //
-// The engine owns the entry point, descriptor bindings, payload ABI, and celestial-disc gate; the slot owns
+// The engine owns the entry point, descriptor bindings, payload ABI, and environment-emitter gate; the slot owns
 // `evaluateEnvironment`, which returns scene-linear ACEScg radiance for a direction.
 //
 // It is compiled at runtime because the concrete composition is selected at activation. It no longer
-// imports `sky` at all: celestial state left WorldPush for the selected sky slot's own buffer, so this
+// imports a concrete environment module: its state belongs to the selected sky slot's own resources, so this
 // wrapper has nothing to derive. The slot reads its own inputs through its own bindings; the engine's
-// job here is the entry point, payload ABI, and the celestial-disc gate.
+// job here is the entry point, payload ABI, and the environment-emitter gate.
 import world_common;
 import bindings;
 import caustica_types;
@@ -25,10 +25,9 @@ import caustica_pass_resources;
 void main<TC : IComposition>(inout Payload payload) {
     EnvironmentQuery query;
     query.direction = normalize(WorldRayDirection());
-    // Engine-owned double-count gate, set per-ray by raygen from the path state: a diffuse vertex that
-    // already sampled the sun through NEE must not also see the disc. The surface slot classifies lobes;
-    // it never sets this flag. See engineShowsCelestial in caustica_ray_engine_integrator.
-    query.showCelestialBodies = (payload.flags & PAYLOAD_SHOW_CELESTIAL) != 0u;
+    // Engine-owned double-count gate, set per-ray by raygen from the path state. The surface slot
+    // classifies lobes; it never sets this flag.
+    query.showEnvironmentEmitters = (payload.flags & PAYLOAD_SHOW_ENVIRONMENT_EMITTERS) != 0u;
 
     TC.Sky skyModel;
     // Slot radiance is already scene-linear ACEScg, so the engine applies no additional gamut transform.

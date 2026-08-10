@@ -34,4 +34,29 @@ final class BuiltinImportFirewallTest {
         assertTrue(violations.isEmpty(), "renderer builtin crossed the Minecraft import firewall:\n"
                 + String.join("\n", violations));
     }
+
+    @Test
+    void rendererBuiltinShadersDoNotContainHostAuthoredSkyCode() throws IOException {
+        Path sources = Path.of("src", "main", "resources", "caustica", "shaders", "builtin")
+                .toAbsolutePath().normalize();
+        assertTrue(Files.isDirectory(sources), "builtin shader source package is missing: " + sources);
+
+        List<String> violations = new ArrayList<>();
+        try (var paths = Files.walk(sources)) {
+            for (Path source : paths.filter(path -> path.toString().endsWith(".slang")).toList()) {
+                List<String> lines = Files.readAllLines(source);
+                for (int line = 0; line < lines.size(); line++) {
+                    String text = lines.get(line);
+                    String lower = text.toLowerCase(java.util.Locale.ROOT);
+                    if (lower.contains("minecraft") || lower.contains("vanilla")
+                            || lower.contains("overworld") || lower.contains("biome")
+                            || text.contains("caustica_minecraft_")) {
+                        violations.add(sources.relativize(source) + ":" + (line + 1) + ": " + text);
+                    }
+                }
+            }
+        }
+        assertTrue(violations.isEmpty(), "renderer builtin shader crossed the host-content firewall:\n"
+                + String.join("\n", violations));
+    }
 }

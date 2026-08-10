@@ -68,15 +68,17 @@ final class SkyLutPassTest {
 
     @Test
     void runtimeShadersCompileAndNoSkyLutSpirvIsPackaged(@TempDir Path cache) throws Exception {
-        ShaderSource source = ShaderSource.classpath("/caustica/shaders/builtin", "sky", "common");
+        ShaderSource source = ShaderSource.classpath("/caustica/shaders/minecraft", "sky");
 
-        compileAndValidate(cache, source, "caustica_sky_lut_transmittance", SkyLutPass.TRANSMITTANCE_BINDINGS, 0);
-        compileAndValidate(cache, source, "caustica_sky_lut_multiscatter", SkyLutPass.SCATTER_BINDINGS,
-                SkyInputsData.BYTE_SIZE);
-        compileAndValidate(cache, source, "caustica_sky_lut_view", SkyLutPass.SCATTER_BINDINGS,
-                SkyInputsData.BYTE_SIZE);
+        compileAndValidate(cache, source, "caustica_minecraft_sky_lut_transmittance",
+                SkyLutPass.TRANSMITTANCE_BINDINGS, 0);
+        compileAndValidate(cache, source, "caustica_minecraft_sky_lut_multiscatter",
+                SkyLutPass.SCATTER_BINDINGS, SkyInputsData.BYTE_SIZE);
+        compileAndValidate(cache, source, "caustica_minecraft_sky_lut_view",
+                SkyLutPass.SCATTER_BINDINGS, SkyInputsData.BYTE_SIZE);
 
-        assertNotNull(getClass().getResource("/caustica/shaders/builtin/sky/caustica_sky_lut_view.slang"));
+        assertNotNull(getClass().getResource(
+                "/caustica/shaders/minecraft/sky/caustica_minecraft_sky_lut_view.slang"));
         assertNull(getClass().getResource("/caustica/shaders/pipelines/sky_lut/view.comp.spv"));
         assertNull(getClass().getResource("/caustica/shaders/pipelines/sky_lut/transmittance.comp.spv"));
         assertNull(getClass().getResource("/caustica/shaders/pipelines/sky_lut/multiscatter.comp.spv"));

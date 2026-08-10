@@ -34,7 +34,8 @@ public final class MinecraftApiBootstrap {
                         extension.getClass().getName(), e);
             }
         }
-        applyPersistedSelection(registry, Slots.SKY, CausticaConfig.Rt.Composition.SKY.get());
+        applyPersistedSelection(registry, Slots.SKY, CausticaConfig.Rt.Composition.SKY.get(),
+                MinecraftProvidersExtension.ID);
         var shaderCache = FabricLoader.getInstance().getGameDir().resolve("caustica-shaders");
         PassShaderCompiler.defaultCacheRoot(shaderCache.resolve("passes"));
         RtComposite.configureShaderCacheRoot(shaderCache.resolve("sources"));
@@ -48,8 +49,10 @@ public final class MinecraftApiBootstrap {
                 CausticaApi.VERSION, registry.features().size());
     }
 
-    static void applyPersistedSelection(CausticaRegistry registry, Slot slot, String saved) {
+    static void applyPersistedSelection(CausticaRegistry registry, Slot slot, String saved,
+                                        ResourceId hostDefault) {
         if (saved == null) {
+            registry.select(slot, hostDefault);
             return;
         }
         ResourceId featureId = ResourceId.tryParse(saved);

@@ -12,9 +12,9 @@
 // Static (per look package: only the ground albedo enters from outside), so this runs once behind the
 // transmittance LUT and is never rebuilt per frame. The 64x20 inner work is why: ~1.3M medium samples for
 // the whole 32x32 table, trivial once and far too much per frame.
-module caustica_sky_lut_multiscatter;
+module caustica_minecraft_sky_lut_multiscatter;
 
-import caustica_sky_atmosphere;
+import caustica_minecraft_sky_atmosphere;
 
 [[vk::binding(0, 0)]] [format("rgba16f")] RWTexture2D<float4> multiScatterImage;
 [[vk::binding(1, 0)]] Sampler2D transmittanceLut;

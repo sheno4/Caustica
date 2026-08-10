@@ -41,7 +41,8 @@ final class WorldShaderCompilerTest {
             assertSpirv(compiler.compileSkyMiss(), 1024);
             assertSpirv(compiler.compileClosestHit(), 1024);
             assertSpirv(compiler.compileIndirect(false), 1024);
-            assertTrue(compiler.composition().rootSource().contains("typealias Sky = LutSky"));
+            assertTrue(compiler.composition().rootSource()
+                    .contains("typealias Sky = MinecraftOverworldSky"));
             assertTrue(compiler.composition().rootSource().contains("typealias Surfaces = SurfaceDispatch"));
             assertTrue(compiler.composition().rootSource()
                     .contains("default: { BuiltinSurface s; s.evaluateSurface(input, material); return; }"));
@@ -185,7 +186,7 @@ final class WorldShaderCompilerTest {
             throws Exception {
         try (WorldShaderCompiler compiler = compiler(cacheDirectory)) {
             compiler.compileSkyMiss();
-            // caustica_sky_bindings.slang, imported by the built-in LutSky, declares exactly these four:
+            // The selected Minecraft sky declares exactly these four resources:
             // its two LUTs, its per-frame sky inputs, and the celestials atlas. The uniform-buffer kind is
             // the point: reflection distinguishes the descriptor kinds a pass declares, not just images.
             assertEquals(Map.of(

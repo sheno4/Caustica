@@ -1,21 +1,15 @@
-module caustica_sky_slot;
+module caustica_minecraft_overworld_sky;
 
 import caustica_types;
 import caustica_color;
 import caustica_sky;
-import caustica_sky_atmosphere;
-import caustica_celestial_dressing;
-import caustica_sky_bindings;
+import caustica_minecraft_sky_atmosphere;
+import caustica_minecraft_celestial_dressing;
+import caustica_minecraft_sky_bindings;
 
-// Textured celestial discs, procedural stars, and night airglow, ported from main's (pre-extension-API)
-// sky.rmiss.slang — the extension-API refactor carried sky.slang's math primitives for all three
-// (celestialSquareLocal, SkyState.sunUv/moonUv, airglowLuminance) but never ported the code that actually
-// used them, leaving the sun/moon as an untextured analytic circle with no stars or airglow. Restored here
-// rather than in the engine's sky_miss.slang: a different sky slot (Nether, End — see
-// wants none of this — no stars, no discs, no airglow — so it belongs
-// with the Overworld atmosphere model, not the engine-generic miss shader. `discRadiance`/`hash13`/
-// `rotateAxis`/`stars` live in caustica_celestial_dressing (builtin/common/) since the End sky
-// is planned to reuse the star machinery with its own density/colour.
+// The Overworld sky owns its textured celestial discs, procedural stars, and night airglow. These
+// dressing choices stay with the Minecraft atmosphere model so the renderer-generic miss shader only
+// evaluates the selected ISkyModel implementation.
 
 // This sky's own choice of star look, passed into the shared, parameterized stars() below.
 static const float STAR_CELLS      = 21.0;  // cube-face grid resolution; with the threshold gives ~1500 stars
@@ -52,7 +46,7 @@ float3 lutSkyEvaluateEnvironment(EnvironmentQuery query) {
     color += stars(dir, normalize(celestialAxis(state.noonTilt)), state.starAngle, state.starLuminance,
             extinction, STAR_CELLS, STAR_THRESHOLD, STAR_COOL, STAR_WARM);
 
-    if (query.showCelestialBodies) {
+    if (query.showEnvironmentEmitters) {
         float2 local;
         if (celestialSquareLocal(dir, state.sunDir, state.sunDiscHalfAngle, local)) {
             // Tint from the body's CENTRE, not from this ray. The drawn quad spans tens of degrees
@@ -91,7 +85,7 @@ float3 lutSkyEvaluateEnvironment(EnvironmentQuery query) {
     return bt709ToAcesCg(max(color, float3(0.0)));
 }
 
-public struct LutSky : ISkyModel {
+public struct MinecraftOverworldSky : ISkyModel {
     public float3 evaluateEnvironment(EnvironmentQuery query) {
         return lutSkyEvaluateEnvironment(query);
     }

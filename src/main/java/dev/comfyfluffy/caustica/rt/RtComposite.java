@@ -1321,8 +1321,8 @@ public final class RtComposite {
                     ProviderManager.INSTANCE.frameLights(), sceneOrigin.x(), sceneOrigin.y(),
                     sceneOrigin.z(), graphicsUseWaiter);
             double proceduralPeriod = PROCEDURAL_ANCHOR_MASK + 1.0;
-            Float2 proceduralDomainAnchor = new Float2(sceneOrigin.wrappedX(proceduralPeriod),
-                    sceneOrigin.wrappedZ(proceduralPeriod));
+            Float3 proceduralDomainOffset = new Float3(sceneOrigin.wrappedX(proceduralPeriod),
+                    sceneOrigin.wrappedY(proceduralPeriod), sceneOrigin.wrappedZ(proceduralPeriod));
 
             // Rebuild the TLAS this frame from static section instances merged with dynamic entity
             // instances, bind it into the pipeline's descriptor ring, record the build, then barrier so
@@ -1355,8 +1355,7 @@ public final class RtComposite {
                     maxBounces(),
                     cameraMedium,
                     time,
-                    proceduralDomainAnchor,
-                    previousTime,
+                    proceduralDomainOffset,
                     breaking.length,
                     mvCurProjView,
                     breaking,
@@ -1369,6 +1368,7 @@ public final class RtComposite {
                     new Float4(terrain.lightGridOriginX(), terrain.lightGridOriginY(), terrain.lightGridOriginZ(), 16f),
                     new Int4(terrain.lightGridDimX(), terrain.lightGridDimY(), terrain.lightGridDimZ(), 0),
                     terrain.lightCount(),
+                    previousTime,
                     providerLightFrame.bufferAddress(),
                     providerLightFrame.lightCount(),
                     CausticaConfig.Rt.Lights.RIS_CANDIDATES.value(),

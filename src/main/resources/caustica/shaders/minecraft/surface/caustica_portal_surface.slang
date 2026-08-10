@@ -12,7 +12,7 @@ float portalHash(float2 cell) {
 /** Procedural, world-pinned emissive surface used by Minecraft's end-portal material adapter. */
 public struct PortalSurface : ISurfaceModel {
     public void evaluateSurface(SurfaceInput input, inout MaterialInput material) {
-        float2 world = input.position.xz + input.proceduralDomainAnchor;
+        float2 world = input.proceduralPosition.xz;
         float2 field = world * 0.45;
         float2 cell = floor(field);
         float2 local = frac(field) - 0.5;

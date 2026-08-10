@@ -18,7 +18,7 @@
 // Lengths are KILOMETRES and coefficients 1/km throughout. The LUT parameterisations take square roots of
 // differences of radii around 6360 vs 6460; in metres those differences lose most of their fp32
 // significand and the horizon row of the sky-view LUT visibly quantises.
-module caustica_sky_atmosphere;
+module caustica_minecraft_sky_atmosphere;
 
 
 public static const float SKY_PI = 3.14159265359;
@@ -470,7 +470,7 @@ public bool celestialSquareLocal(float3 dir, float3 bodyDir, float halfAngle, ou
 // the CPU.
 //
 // SkyLutPass fills one of these per frame and publishes it two ways: as the push constant for its own
-// LUT bakes, and as a set-2 uniform buffer the sky slot reads (caustica_sky_bindings). Both consumers read
+// LUT bakes, and as a set-2 uniform buffer the sky slot reads (caustica_minecraft_sky_bindings). Both consumers read
 // the same bytes, so the baked LUTs and the frame they shade cannot disagree. None of it is engine state
 // — a sky for another dimension needs none of these fields — so it lives with the pass that owns it.
 //

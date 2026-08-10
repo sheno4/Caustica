@@ -9,8 +9,6 @@ public static const uint EVENT_SPECULAR = 0x4u;
 public static const uint EVENT_REFLECTION = 0x8u;
 public static const uint EVENT_TRANSMISSION = 0x10u;
 
-public static const uint DIMENSION_ULTRAWARM = 0x4u;
-
 /**
  * SurfaceInput.surfaceFlags: this hit is the one the reconstructor sees, so a surface whose normal
  * animates should also fill `previousGeometryNormal` — that pair is what a reflection reprojects with.
@@ -102,18 +100,16 @@ public struct SurfaceInput {
     public float2 textureCoordinate;
     public float textureFootprint;
     /**
-     * A world-pinned, precision-safe origin for world-space procedural evaluation: add it to `position`'s
-     * horizontal components and the pattern stays fixed in the world as the player moves and the engine
-     * rebases its coordinates. Its modulus is an engine constant, so a very low-frequency field can alias
-     * across it where an ordinary one does not.
+     * A world-pinned, precision-safe position for procedural evaluation. It follows `position` while
+     * compensating for scene-origin rebases, so a pattern remains fixed in all three scene dimensions.
+     * Its modulus is an engine constant, so a very low-frequency field can alias across it where an
+     * ordinary one does not.
      */
-    public float2 proceduralDomainAnchor;
+    public float3 proceduralPosition;
     /** Animation time in seconds, wrapped. Paired with `previousTime` so motion is derivable. */
     public float time;
     /** `time` one frame ago; equal to `time` when no adjacent frame exists to reproject from. */
     public float previousTime;
-    public float environmentTemperature;
-    public float environmentHumidity;
     /** SURFACE_* bits describing this hit. */
     public uint surfaceFlags;
 };
@@ -167,5 +163,6 @@ public struct BsdfSample {
 
 public struct EnvironmentQuery {
     public float3 direction;
-    public bool showCelestialBodies;
+    /** Whether environment emitters already represented by direct-light sampling remain visible. */
+    public bool showEnvironmentEmitters;
 };

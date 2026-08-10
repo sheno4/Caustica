@@ -23,13 +23,30 @@ final class MinecraftApiBootstrapTest {
                 .bind(Slots.SKY, "test_sky", "TestSky")
                 .register();
 
-        MinecraftApiBootstrap.applyPersistedSelection(registry, Slots.SKY, featureId.toString());
+        MinecraftApiBootstrap.applyPersistedSelection(
+                registry, Slots.SKY, featureId.toString(), BuiltinExtension.ID);
         assertEquals(featureId, registry.selectedFeature(Slots.SKY));
 
         registry.selectDefault(Slots.SKY);
-        MinecraftApiBootstrap.applyPersistedSelection(registry, Slots.SKY, "test:not_installed");
-        MinecraftApiBootstrap.applyPersistedSelection(registry, Slots.SKY, "NOT AN ID");
-        MinecraftApiBootstrap.applyPersistedSelection(registry, Slots.SKY, null);
+        MinecraftApiBootstrap.applyPersistedSelection(
+                registry, Slots.SKY, "test:not_installed", featureId);
+        MinecraftApiBootstrap.applyPersistedSelection(
+                registry, Slots.SKY, "NOT AN ID", featureId);
         assertTrue(registry.isDefaultSelected(Slots.SKY));
+    }
+
+    @Test
+    void minecraftSkyIsTheHostDefaultButAnExplicitBuiltinSelectionIsPreserved() {
+        CausticaRegistry registry = new CausticaRegistry();
+        new BuiltinExtension().register(registry);
+        new MinecraftProvidersExtension().register(registry);
+
+        MinecraftApiBootstrap.applyPersistedSelection(
+                registry, Slots.SKY, null, MinecraftProvidersExtension.ID);
+        assertEquals(MinecraftProvidersExtension.ID, registry.selectedFeature(Slots.SKY));
+
+        MinecraftApiBootstrap.applyPersistedSelection(
+                registry, Slots.SKY, BuiltinExtension.ID.toString(), MinecraftProvidersExtension.ID);
+        assertEquals(BuiltinExtension.ID, registry.selectedFeature(Slots.SKY));
     }
 }

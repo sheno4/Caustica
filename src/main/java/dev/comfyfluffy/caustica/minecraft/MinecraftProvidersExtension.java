@@ -5,6 +5,7 @@ import dev.comfyfluffy.caustica.api.CausticaRegistry;
 import dev.comfyfluffy.caustica.api.DisplayText;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.api.ShaderSource;
+import dev.comfyfluffy.caustica.api.Slots;
 import dev.comfyfluffy.caustica.minecraft.overlay.WorldOverlayPass;
 import dev.comfyfluffy.caustica.minecraft.cloud.MinecraftCloudSceneProvider;
 import dev.comfyfluffy.caustica.minecraft.provider.MinecraftLightProvider;
@@ -21,8 +22,10 @@ public final class MinecraftProvidersExtension implements CausticaExtension {
     public void register(CausticaRegistry registry) {
         registry.feature(ID)
                 .title(DisplayText.literal("Minecraft"))
-                .shaderSource(ShaderSource.classpath("/caustica/shaders/minecraft", "surface"))
+                .shaderSource(ShaderSource.classpath("/caustica/shaders/minecraft", "surface", "sky"))
+                .bind(Slots.SKY, "caustica_minecraft_overworld_sky", "MinecraftOverworldSky")
                 .surface(END_PORTAL_SURFACE, "caustica_portal_surface", "PortalSurface")
+                .passResourceModule("caustica_minecraft_sky_bindings")
                 .group(SkyLutPass.GROUP)
                 .options(SkyLutPass.OPTIONS)
                 .renderPass(new SkyLutPass())

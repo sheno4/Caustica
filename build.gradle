@@ -86,6 +86,7 @@ def shaderGenRoot = layout.buildDirectory.dir("generated/shaders") // classpath 
 def runtimeWorldSourceDir = file("src/main/resources/caustica/shaders/world")
 def runtimeBuiltinSourceDir = file("src/main/resources/caustica/shaders/builtin")
 def runtimeApiSourceDir = file("src/main/resources/caustica/shaders/api")
+def runtimeMinecraftSourceDir = file("src/main/resources/caustica/shaders/minecraft")
 
 def resolveVulkanTool = { String name ->
 	def exe = org.gradle.internal.os.OperatingSystem.current().windows ? ".exe" : ""
@@ -212,6 +213,9 @@ def prepareShaderReflectionSources = tasks.register("prepareShaderReflectionSour
 	}
 	from(runtimeApiSourceDir) {
 		into "api"
+	}
+	from(runtimeMinecraftSourceDir) {
+		into "minecraft"
 	}
 	into(shaderReflectionRoot)
 }
