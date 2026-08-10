@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.api;
 
+import dev.comfyfluffy.caustica.api.provider.ProviderId;
 import dev.comfyfluffy.caustica.builtin.BloomPass;
 import dev.comfyfluffy.caustica.builtin.SkyLutPass;
 import dev.comfyfluffy.caustica.builtin.overlay.WorldOverlayPass;
@@ -41,10 +42,10 @@ final class BuiltinExtension implements CausticaExtension {
                 .renderPass(new BloomPass())
                 .renderPass(skyLut)
                 .renderPass(new WorldOverlayPass())
-                .sceneProvider(new MinecraftSceneProvider())
-                .lightProvider(new MinecraftLightProvider())
-                .lightProvider(skyLut)
-                .materialSource(new MinecraftMaterialSource())
+                .sceneProvider(MinecraftSceneProvider.ID, new MinecraftSceneProvider())
+                .lightProvider(MinecraftLightProvider.ID, new MinecraftLightProvider())
+                .lightProvider(ProviderId.of("caustica", "sky_lut"), skyLut)
+                .materialSource(MinecraftMaterialSource.ID, new MinecraftMaterialSource())
                 .register();
         registry.setDefault(Slots.SKY, ID);
     }

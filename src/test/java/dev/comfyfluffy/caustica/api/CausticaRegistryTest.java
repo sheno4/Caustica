@@ -138,9 +138,10 @@ final class CausticaRegistryTest {
                         Identifier.fromNamespaceAndPath("test", "duplicate_pass"))
                 .renderPass(bloom).register());
 
-        SceneProvider duplicateScene = () -> MinecraftSceneProvider.ID;
+        SceneProvider duplicateScene = new SceneProvider() {
+        };
         assertThrows(IllegalStateException.class, () -> registry.feature(
                         Identifier.fromNamespaceAndPath("test", "duplicate_scene"))
-                .sceneProvider(duplicateScene).register());
+                .sceneProvider(MinecraftSceneProvider.ID, duplicateScene).register());
     }
 }

@@ -3,6 +3,8 @@ package dev.comfyfluffy.caustica.api;
 import dev.comfyfluffy.caustica.api.pass.CausticaRenderPass;
 import dev.comfyfluffy.caustica.api.provider.LightProvider;
 import dev.comfyfluffy.caustica.api.provider.MaterialSource;
+import dev.comfyfluffy.caustica.api.provider.ProviderRegistration;
+import dev.comfyfluffy.caustica.api.provider.ProviderId;
 import dev.comfyfluffy.caustica.api.provider.SceneProvider;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
@@ -25,9 +27,9 @@ public final class FeatureBuilder {
     private final List<Option<?>> options = new ArrayList<>();
     private final List<String> optionGroups = new ArrayList<>();
     private final List<CausticaRenderPass> renderPasses = new ArrayList<>();
-    private final List<SceneProvider> sceneProviders = new ArrayList<>();
-    private final List<LightProvider> lightProviders = new ArrayList<>();
-    private final List<MaterialSource> materialSources = new ArrayList<>();
+    private final List<ProviderRegistration<SceneProvider>> sceneProviders = new ArrayList<>();
+    private final List<ProviderRegistration<LightProvider>> lightProviders = new ArrayList<>();
+    private final List<ProviderRegistration<MaterialSource>> materialSources = new ArrayList<>();
     private final List<String> passResourceModules = new ArrayList<>();
     private boolean registered;
 
@@ -118,33 +120,30 @@ public final class FeatureBuilder {
         return this;
     }
 
-    public FeatureBuilder sceneProvider(SceneProvider provider) {
-        Objects.requireNonNull(provider, "provider");
-        Objects.requireNonNull(provider.id(), "provider.id()");
-        if (sceneProviders.stream().anyMatch(existing -> existing.id().equals(provider.id()))) {
-            throw new IllegalStateException(id + " declares duplicate scene provider " + provider.id());
+    public FeatureBuilder sceneProvider(ProviderId providerId, SceneProvider provider) {
+        ProviderRegistration<SceneProvider> registration = new ProviderRegistration<>(providerId, provider);
+        if (sceneProviders.stream().anyMatch(existing -> existing.id().equals(providerId))) {
+            throw new IllegalStateException(id + " declares duplicate scene provider " + providerId);
         }
-        sceneProviders.add(provider);
+        sceneProviders.add(registration);
         return this;
     }
 
-    public FeatureBuilder lightProvider(LightProvider provider) {
-        Objects.requireNonNull(provider, "provider");
-        Objects.requireNonNull(provider.id(), "provider.id()");
-        if (lightProviders.stream().anyMatch(existing -> existing.id().equals(provider.id()))) {
-            throw new IllegalStateException(id + " declares duplicate light provider " + provider.id());
+    public FeatureBuilder lightProvider(ProviderId providerId, LightProvider provider) {
+        ProviderRegistration<LightProvider> registration = new ProviderRegistration<>(providerId, provider);
+        if (lightProviders.stream().anyMatch(existing -> existing.id().equals(providerId))) {
+            throw new IllegalStateException(id + " declares duplicate light provider " + providerId);
         }
-        lightProviders.add(provider);
+        lightProviders.add(registration);
         return this;
     }
 
-    public FeatureBuilder materialSource(MaterialSource source) {
-        Objects.requireNonNull(source, "source");
-        Objects.requireNonNull(source.id(), "source.id()");
-        if (materialSources.stream().anyMatch(existing -> existing.id().equals(source.id()))) {
-            throw new IllegalStateException(id + " declares duplicate material source " + source.id());
+    public FeatureBuilder materialSource(ProviderId sourceId, MaterialSource source) {
+        ProviderRegistration<MaterialSource> registration = new ProviderRegistration<>(sourceId, source);
+        if (materialSources.stream().anyMatch(existing -> existing.id().equals(sourceId))) {
+            throw new IllegalStateException(id + " declares duplicate material source " + sourceId);
         }
-        materialSources.add(source);
+        materialSources.add(registration);
         return this;
     }
 

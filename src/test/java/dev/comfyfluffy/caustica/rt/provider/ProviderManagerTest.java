@@ -1,7 +1,7 @@
 package dev.comfyfluffy.caustica.rt.provider;
 
 import dev.comfyfluffy.caustica.api.provider.SceneProvider;
-import net.minecraft.resources.Identifier;
+import dev.comfyfluffy.caustica.api.provider.ProviderId;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -21,11 +21,6 @@ final class ProviderManagerTest {
         AtomicInteger healthyCalls = new AtomicInteger();
         SceneProvider failing = new SceneProvider() {
             @Override
-            public Identifier id() {
-                return Identifier.fromNamespaceAndPath("test", "failing");
-            }
-
-            @Override
             public void update() {
                 failedCalls.incrementAndGet();
                 throw new IllegalStateException("expected");
@@ -43,18 +38,13 @@ final class ProviderManagerTest {
         };
         SceneProvider healthy = new SceneProvider() {
             @Override
-            public Identifier id() {
-                return Identifier.fromNamespaceAndPath("test", "healthy");
-            }
-
-            @Override
             public void update() {
                 healthyCalls.incrementAndGet();
             }
         };
-        Map<Identifier, SceneProvider> scenes = new LinkedHashMap<>();
-        scenes.put(failing.id(), failing);
-        scenes.put(healthy.id(), healthy);
+        Map<ProviderId, SceneProvider> scenes = new LinkedHashMap<>();
+        scenes.put(id("failing"), failing);
+        scenes.put(id("healthy"), healthy);
         ProviderManager manager = new ProviderManager(scenes, Map.of(), Map.of());
 
         manager.updateScenes();
@@ -75,7 +65,7 @@ final class ProviderManagerTest {
         SceneProvider failing = counting(shutdowns, () -> {
             throw new IllegalStateException("expected");
         });
-        ProviderManager manager = new ProviderManager(Map.of(failing.id(), failing), Map.of(), Map.of());
+        ProviderManager manager = manager("failing", failing);
 
         manager.updateScenes();
         shutdown(manager);
@@ -88,7 +78,7 @@ final class ProviderManagerTest {
         AtomicInteger shutdowns = new AtomicInteger();
         SceneProvider healthy = counting(shutdowns, () -> {
         });
-        ProviderManager manager = new ProviderManager(Map.of(healthy.id(), healthy), Map.of(), Map.of());
+        ProviderManager manager = manager("healthy", healthy);
 
         shutdown(manager);
         shutdown(manager);
@@ -101,11 +91,6 @@ final class ProviderManagerTest {
         List<String> events = new ArrayList<>();
         SceneProvider provider = new SceneProvider() {
             @Override
-            public Identifier id() {
-                return Identifier.fromNamespaceAndPath("test", "phased");
-            }
-
-            @Override
             public void stop() {
                 events.add("stop");
             }
@@ -115,7 +100,7 @@ final class ProviderManagerTest {
                 events.add("shutdown");
             }
         };
-        ProviderManager manager = new ProviderManager(Map.of(provider.id(), provider), Map.of(), Map.of());
+        ProviderManager manager = manager("phased", provider);
 
         manager.stopProviders();
         assertEquals(List.of("stop"), events);
@@ -129,7 +114,7 @@ final class ProviderManagerTest {
         AtomicInteger updates = new AtomicInteger();
         AtomicInteger shutdowns = new AtomicInteger();
         SceneProvider healthy = counting(shutdowns, updates::incrementAndGet);
-        ProviderManager manager = new ProviderManager(Map.of(healthy.id(), healthy), Map.of(), Map.of());
+        ProviderManager manager = manager("healthy", healthy);
 
         manager.beginSession();
         manager.updateScenes();
@@ -150,7 +135,7 @@ final class ProviderManagerTest {
             updates.incrementAndGet();
             throw new IllegalStateException("expected");
         });
-        ProviderManager manager = new ProviderManager(Map.of(failing.id(), failing), Map.of(), Map.of());
+        ProviderManager manager = manager("failing", failing);
 
         manager.beginSession();
         manager.updateScenes();
@@ -169,11 +154,6 @@ final class ProviderManagerTest {
         AtomicInteger shutdowns = new AtomicInteger();
         SceneProvider failing = new SceneProvider() {
             @Override
-            public Identifier id() {
-                return Identifier.fromNamespaceAndPath("test", "shutdown_failure");
-            }
-
-            @Override
             public void update() {
                 updates.incrementAndGet();
             }
@@ -184,7 +164,7 @@ final class ProviderManagerTest {
                 throw new IllegalStateException("expected");
             }
         };
-        ProviderManager manager = new ProviderManager(Map.of(failing.id(), failing), Map.of(), Map.of());
+        ProviderManager manager = manager("shutdown_failure", failing);
 
         manager.beginSession();
         manager.updateScenes();
@@ -202,17 +182,12 @@ final class ProviderManagerTest {
         AtomicInteger updates = new AtomicInteger();
         SceneProvider failing = new SceneProvider() {
             @Override
-            public Identifier id() {
-                return Identifier.fromNamespaceAndPath("test", "failing");
-            }
-
-            @Override
             public void update() {
                 updates.incrementAndGet();
                 throw new IllegalStateException("expected");
             }
         };
-        ProviderManager manager = new ProviderManager(Map.of(failing.id(), failing), Map.of(), Map.of());
+        ProviderManager manager = manager("failing", failing);
 
         manager.updateScenes();
         manager.prepareFrame();
@@ -224,11 +199,6 @@ final class ProviderManagerTest {
 
     private static SceneProvider counting(AtomicInteger shutdowns, Runnable update) {
         return new SceneProvider() {
-            @Override
-            public Identifier id() {
-                return Identifier.fromNamespaceAndPath("test", "counting");
-            }
-
             @Override
             public void update() {
                 update.run();
@@ -244,5 +214,13 @@ final class ProviderManagerTest {
     private static void shutdown(ProviderManager manager) {
         manager.stopProviders();
         manager.shutdownResources();
+    }
+
+    private static ProviderManager manager(String path, SceneProvider provider) {
+        return new ProviderManager(Map.of(id(path), provider), Map.of(), Map.of());
+    }
+
+    private static ProviderId id(String path) {
+        return ProviderId.of("test", path);
     }
 }

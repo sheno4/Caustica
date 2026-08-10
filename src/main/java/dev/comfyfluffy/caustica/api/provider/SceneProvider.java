@@ -1,10 +1,6 @@
 package dev.comfyfluffy.caustica.api.provider;
 
-import net.minecraft.resources.Identifier;
-
 public interface SceneProvider {
-    Identifier id();
-
     default void update() {
     }
 

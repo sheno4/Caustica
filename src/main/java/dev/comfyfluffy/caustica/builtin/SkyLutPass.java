@@ -57,8 +57,8 @@ import java.util.List;
  */
 public final class SkyLutPass implements CausticaRenderPass, LightProvider {
     public static final Identifier ID = Identifier.fromNamespaceAndPath("caustica", "sky_lut");
-    private static final Identifier SUN_LIGHT_ID = Identifier.fromNamespaceAndPath("caustica", "sky_sun");
-    private static final Identifier MOON_LIGHT_ID = Identifier.fromNamespaceAndPath("caustica", "sky_moon");
+    private static final long SUN_LIGHT_KEY = 0L;
+    private static final long MOON_LIGHT_KEY = 1L;
     private static final Identifier SUN_SPRITE_ID = Identifier.withDefaultNamespace("sun");
     private static final Identifier[] MOON_SPRITE_IDS = createMoonSpriteIds();
     static final int TRANSMITTANCE_WIDTH = 256;
@@ -247,13 +247,13 @@ public final class SkyLutPass implements CausticaRenderPass, LightProvider {
             return;
         }
         float peakSun = (float) Math.cos(state.sunAngleRadians());
-        sink.directionalLight(SUN_LIGHT_ID,
+        sink.directionalLight(SUN_LIGHT_KEY,
                 (float) -Math.sin(state.sunAngleRadians()),
                 (float) (Math.cos(state.noonTiltRadians()) * peakSun),
                 (float) (Math.sin(state.noonTiltRadians()) * peakSun),
                 state.sunIlluminanceLux());
         float peakMoon = (float) Math.cos(state.moonAngleRadians());
-        sink.directionalLight(MOON_LIGHT_ID,
+        sink.directionalLight(MOON_LIGHT_KEY,
                 (float) -Math.sin(state.moonAngleRadians()),
                 (float) (Math.cos(state.noonTiltRadians()) * peakMoon),
                 (float) (Math.sin(state.noonTiltRadians()) * peakMoon),

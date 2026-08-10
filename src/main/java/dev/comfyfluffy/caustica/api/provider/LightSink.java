@@ -1,7 +1,5 @@
 package dev.comfyfluffy.caustica.api.provider;
 
-import net.minecraft.resources.Identifier;
-
 /**
  * Where a {@link LightProvider} hands off the lights it wants in the scene, once per frame, via
  * {@link LightProvider#submitLights(LightSink)}.
@@ -15,7 +13,7 @@ import net.minecraft.resources.Identifier;
 public interface LightSink {
     /**
      * A distant directional light (sun/moon-like): no position, just a unit direction and absolute
-     * illuminance in lux, scene-linear BT.709.
+     * illuminance in lux, scene-linear BT.709. {@code key} is stable and local to the provider.
      */
-    void directionalLight(Identifier id, float dirX, float dirY, float dirZ, float illuminanceLux);
+    void directionalLight(long key, float dirX, float dirY, float dirZ, float illuminanceLux);
 }

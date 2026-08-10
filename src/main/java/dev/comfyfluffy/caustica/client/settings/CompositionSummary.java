@@ -3,6 +3,7 @@ package dev.comfyfluffy.caustica.client.settings;
 import dev.comfyfluffy.caustica.api.CausticaRegistry;
 import dev.comfyfluffy.caustica.api.pass.CausticaRenderPass;
 import dev.comfyfluffy.caustica.api.pass.RenderStage;
+import dev.comfyfluffy.caustica.api.provider.ProviderId;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 
@@ -26,7 +27,7 @@ public record CompositionSummary(List<Lane> lanes, List<ProviderRow> providers) 
         }
     }
 
-    public record ProviderRow(Component title, List<Identifier> ids) {
+    public record ProviderRow(Component title, List<ProviderId> ids) {
     }
 
     public static CompositionSummary of(CausticaRegistry registry) {

@@ -3,6 +3,7 @@ package dev.comfyfluffy.caustica.api;
 import dev.comfyfluffy.caustica.api.pass.CausticaRenderPass;
 import dev.comfyfluffy.caustica.api.provider.LightProvider;
 import dev.comfyfluffy.caustica.api.provider.MaterialSource;
+import dev.comfyfluffy.caustica.api.provider.ProviderRegistration;
 import dev.comfyfluffy.caustica.api.provider.SceneProvider;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
@@ -17,8 +18,10 @@ public record Feature(Identifier id, Component title, Component description, Fea
                       ShaderSource shaderSource, Map<Slot, Binding> bindings,
                       List<SurfaceImplementation> surfaces, List<Option<?>> options,
                       List<String> optionGroups,
-                      List<CausticaRenderPass> renderPasses, List<SceneProvider> sceneProviders,
-                      List<LightProvider> lightProviders, List<MaterialSource> materialSources,
+                      List<CausticaRenderPass> renderPasses,
+                      List<ProviderRegistration<SceneProvider>> sceneProviders,
+                      List<ProviderRegistration<LightProvider>> lightProviders,
+                      List<ProviderRegistration<MaterialSource>> materialSources,
                       List<String> passResourceModules) {
     public Feature {
         Objects.requireNonNull(id, "id");

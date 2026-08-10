@@ -1,13 +1,8 @@
 package dev.comfyfluffy.caustica.rt.provider;
 
 import dev.comfyfluffy.caustica.api.provider.LightProvider;
-import net.minecraft.resources.Identifier;
+import dev.comfyfluffy.caustica.api.provider.ProviderId;
 
 public final class MinecraftLightProvider implements LightProvider {
-    public static final Identifier ID = Identifier.fromNamespaceAndPath("caustica", "minecraft_lights");
-
-    @Override
-    public Identifier id() {
-        return ID;
-    }
+    public static final ProviderId ID = ProviderId.of("caustica", "minecraft_lights");
 }

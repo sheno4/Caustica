@@ -1,18 +1,13 @@
 package dev.comfyfluffy.caustica.rt.provider;
 
 import dev.comfyfluffy.caustica.api.provider.SceneProvider;
+import dev.comfyfluffy.caustica.api.provider.ProviderId;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.entity.RtEntities;
 import dev.comfyfluffy.caustica.rt.terrain.RtTerrain;
-import net.minecraft.resources.Identifier;
 
 public final class MinecraftSceneProvider implements SceneProvider {
-    public static final Identifier ID = Identifier.fromNamespaceAndPath("caustica", "minecraft_scene");
-
-    @Override
-    public Identifier id() {
-        return ID;
-    }
+    public static final ProviderId ID = ProviderId.of("caustica", "minecraft_scene");
 
     @Override
     public void update() {

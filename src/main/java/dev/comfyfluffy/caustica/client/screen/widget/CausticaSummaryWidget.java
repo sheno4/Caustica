@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.client.screen.widget;
 
+import dev.comfyfluffy.caustica.api.provider.ProviderId;
 import dev.comfyfluffy.caustica.client.screen.CausticaTheme;
 import dev.comfyfluffy.caustica.client.settings.CompositionSummary;
 import net.minecraft.client.gui.Font;
@@ -71,7 +72,7 @@ public final class CausticaSummaryWidget extends AbstractWidget {
                 graphics.fill(x, y + 3, x + 3, y + 6, marker);
                 graphics.text(font, lane.title(), x + 8, y,
                         lane.isEmpty() ? CausticaTheme.TEXT_DISABLED : CausticaTheme.TEXT_SECONDARY, false);
-                graphics.text(font, joined(lane.passes()), valueX, y,
+                graphics.text(font, joinedPasses(lane.passes()), valueX, y,
                         lane.isEmpty() ? CausticaTheme.TEXT_DISABLED : CausticaTheme.TEXT_PRIMARY, false);
             }
             y += LANE_HEIGHT;
@@ -83,17 +84,24 @@ public final class CausticaSummaryWidget extends AbstractWidget {
         y += LANE_HEIGHT;
         for (CompositionSummary.ProviderRow row : summary.providers()) {
             graphics.text(font, row.title(), x + 8, y, CausticaTheme.TEXT_SECONDARY, false);
-            graphics.text(font, joined(row.ids()), valueX, y, CausticaTheme.TEXT_PRIMARY, false);
+            graphics.text(font, joinedProviders(row.ids()), valueX, y, CausticaTheme.TEXT_PRIMARY, false);
             y += LANE_HEIGHT;
         }
     }
 
     /** Namespace dropped: every id on this page is Caustica's until a third extension exists to disambiguate. */
-    private static Component joined(List<Identifier> ids) {
+    private static Component joinedPasses(List<Identifier> ids) {
         if (ids.isEmpty()) {
             return Component.translatable("caustica.summary.none");
         }
         return Component.literal(String.join(", ", ids.stream().map(Identifier::getPath).toList()));
+    }
+
+    private static Component joinedProviders(List<ProviderId> ids) {
+        if (ids.isEmpty()) {
+            return Component.translatable("caustica.summary.none");
+        }
+        return Component.literal(String.join(", ", ids.stream().map(ProviderId::path).toList()));
     }
 
     @Override
