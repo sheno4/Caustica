@@ -15,6 +15,39 @@ public static const uint EVENT_TRANSMISSION = 0x10u;
  * Unset on every other hit, where the previous normal is never read and evaluating it would be waste.
  */
 public static const uint SURFACE_RECONSTRUCTION_ANCHOR = 0x1u;
+/** Enables optional time-varying procedural surface and medium evaluation for this frame. */
+public static const uint SURFACE_ANIMATION_ENABLED = 0x2u;
+
+/** The material values available when a transmissive surface creates its interior medium. */
+public struct MediumInput {
+    public float3 sourceColor;
+    public float specularIor;
+    public float transmissionWeight;
+};
+
+public static const uint MEDIUM_TERMINATE_ON_MISS = 0x1u;
+public static const uint MEDIUM_BOUNDARY_LIGHTING = 0x2u;
+
+/** Host-neutral transport properties produced by the material implementation at an interface. */
+public struct MediumProperties {
+    public float3 extinction;
+    /** Filter used only while reconstruction guides walk into the medium. */
+    public float3 guideTransmittance;
+    public float transmissionRayBias;
+    /** MEDIUM_* bits retained with the path's medium stack. */
+    public uint flags;
+};
+
+/** Inputs for a medium's optional multiplicative direct-light response at its exit boundary. */
+public struct MediumLightingInput {
+    public float3 boundaryPosition;
+    public float3 proceduralPosition;
+    public float3 lightDirection;
+    public float boundaryDistance;
+    public float mediumIor;
+    public float time;
+    public uint surfaceFlags;
+};
 
 /**
  * The authored surface description, a subset of OpenPBR Surface. Field names are the spec's, so a value

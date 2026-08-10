@@ -4,6 +4,7 @@ import dev.comfyfluffy.caustica.rt.gen.MaterialBindingData;
 import dev.comfyfluffy.caustica.rt.gen.SurfaceMaterialData;
 import dev.comfyfluffy.caustica.rt.gen.SurfaceMaterialData.Float4;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushConstantsData;
+import dev.comfyfluffy.caustica.rt.gen.WorldPushData;
 import org.junit.jupiter.api.Test;
 
 import java.nio.ByteBuffer;
@@ -12,6 +13,11 @@ import java.nio.ByteOrder;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 final class RtMaterialLayoutTest {
+    @Test
+    void reflectedWorldPushIncludesOnePackedCameraMediumWord() {
+        assertEquals(496, WorldPushData.BYTE_SIZE);
+    }
+
     @Test
     void reflectedMaterialBindingIsOneAlignedLoad() {
         // Sixteen bytes is the point of the record: it is what both any-hit entry points load, and one

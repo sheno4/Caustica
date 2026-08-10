@@ -9,8 +9,10 @@ import world_common;
 import world_core;
 import bindings;
 import math;
+import medium;
 import trace;
-import water;
+import caustica_surface;
+import caustica_types;
 
 public struct Reservoir {
     public float3 pos;  // light sample point (rebased world space)
@@ -439,8 +441,9 @@ public Reservoir risInitial(float3 hitPos, float3 n, float3 v, float3 rd, float3
 // ray, and return throughput-free radiance contrib*vis*W. The one ray serves whichever term fired for
 // the survivor, reflection or transmission — the origin is biased toward the sample's side of the
 // surface.
-public float3 shadeReservoir(Reservoir s, float3 hitPos, float3 n, float3 v, float3 rd, float3 diffAlb,
-                      float3 F0, float rough, float transmission, bool waterCaustics) {
+public float3 shadeReservoir<TSurfaces : ISurfaceDispatch>(TSurfaces surfaces, Reservoir s,
+        float3 hitPos, float3 n, float3 v, float3 rd, float3 diffAlb,
+        float3 F0, float rough, float transmission, Medium currentMedium) {
     if (s.W <= 0.0 || s.phat <= 0.0) {
         return float3(0.0, 0.0, 0.0);
     }
@@ -463,10 +466,27 @@ public float3 shadeReservoir(Reservoir s, float3 hitPos, float3 n, float3 v, flo
     if (s.lightType == 3u) {
         float side = dot(n, s.lnrm) >= 0.0 ? 1.0 : -1.0;
         float3 origin = hitPos + side * n * SURF_BIAS;
-        VisibilityResult shadow = visibility(origin, s.lnrm, RAY_TMAX);
+        bool hasExtinction = any(currentMedium.extinction > 0.0);
+        bool boundaryLighting = (currentMedium.flags & MEDIUM_BOUNDARY_LIGHTING) != 0u;
+        VisibilityResult shadow = visibility(origin, s.lnrm, RAY_TMAX,
+                hasExtinction || boundaryLighting, currentMedium.implementation);
         float3 vis = shadow.transmittance;
-        if (waterCaustics && shadow.waterHitT > 0.0) {
-            vis *= waterCaustic(origin + s.lnrm * shadow.waterHitT, s.lnrm, shadow.waterHitT);
+        if (hasExtinction) {
+            // A distant emitter whose ray never leaves the current medium has an infinite optical path.
+            vis *= shadow.boundaryHitT > 0.0
+                    ? exp(-currentMedium.extinction * shadow.boundaryHitT) : float3(0.0);
+        }
+        if (boundaryLighting && shadow.boundaryHitT > 0.0) {
+            MediumLightingInput input;
+            input.boundaryPosition = origin + s.lnrm * shadow.boundaryHitT;
+            input.proceduralPosition = input.boundaryPosition + worldPush.proceduralDomainOffset;
+            input.lightDirection = s.lnrm;
+            input.boundaryDistance = shadow.boundaryHitT;
+            input.mediumIor = currentMedium.ior;
+            input.time = worldPush.time;
+            input.surfaceFlags = (worldPush.flags & 16u) != 0u
+                    ? SURFACE_ANIMATION_ENABLED : 0u;
+            vis *= surfaces.evaluateMediumLighting(currentMedium.implementation, input);
         }
         return contrib * vis * s.W;
     }
@@ -479,8 +499,27 @@ public float3 shadeReservoir(Reservoir s, float3 hitPos, float3 n, float3 v, flo
     float3 toL = s.pos - origin;
     float dist = length(toL);
     // Stop just short of the sample point so the ray doesn't self-occlude on the emitter's own face.
-    VisibilityResult shadow = visibility(origin, toL / dist, dist * 0.999);
+    bool hasExtinction = any(currentMedium.extinction > 0.0);
+    bool boundaryLighting = (currentMedium.flags & MEDIUM_BOUNDARY_LIGHTING) != 0u;
+    VisibilityResult shadow = visibility(origin, toL / dist, dist * 0.999,
+            hasExtinction || boundaryLighting, currentMedium.implementation);
     float3 vis = shadow.transmittance;
+    if (hasExtinction) {
+        float mediumDistance = shadow.boundaryHitT > 0.0 ? shadow.boundaryHitT : dist;
+        vis *= exp(-currentMedium.extinction * mediumDistance);
+    }
+    if (boundaryLighting && shadow.boundaryHitT > 0.0) {
+        MediumLightingInput input;
+        input.boundaryPosition = origin + (toL / dist) * shadow.boundaryHitT;
+        input.proceduralPosition = input.boundaryPosition + worldPush.proceduralDomainOffset;
+        input.lightDirection = toL / dist;
+        input.boundaryDistance = shadow.boundaryHitT;
+        input.mediumIor = currentMedium.ior;
+        input.time = worldPush.time;
+        input.surfaceFlags = (worldPush.flags & 16u) != 0u
+                ? SURFACE_ANIMATION_ENABLED : 0u;
+        vis *= surfaces.evaluateMediumLighting(currentMedium.implementation, input);
+    }
     return contrib * vis * s.W;
 }
 

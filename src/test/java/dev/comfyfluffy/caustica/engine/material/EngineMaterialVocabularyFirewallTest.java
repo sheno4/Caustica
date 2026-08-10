@@ -31,4 +31,12 @@ final class EngineMaterialVocabularyFirewallTest {
         assertTrue(violations.isEmpty(), "neutral material vocabulary leaked host categories:\n"
                 + String.join("\n", violations));
     }
+
+    @Test
+    void neutralDefaultsDoNotPublishASourceSpecificLiquid() throws IOException {
+        String source = Files.readString(Path.of("src", "main", "java", "dev", "comfyfluffy",
+                "caustica", "engine", "material", "OpenPbrMaterialDefaults.java"));
+        assertTrue(!source.toLowerCase(java.util.Locale.ROOT).contains("water"));
+        assertTrue(!source.contains("REFERENCE_LIQUID_IOR"));
+    }
 }

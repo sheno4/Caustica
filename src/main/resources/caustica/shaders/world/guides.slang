@@ -1,6 +1,6 @@
 // DLSS-RR guide state and everything that resolves it: the gv_* captures, the foreground specular
 // surface and its reflection motion vector, and the image writes.
-// PRIMARY PASS ONLY. Depends on trace, water and segment.
+// PRIMARY PASS ONLY. Depends on trace, medium and segment.
 
 // Primary-visibility guide attributes. Pass A traces exactly one sample per pixel; a split reflection
 // leaf supplies the spec endpoint and its transmission leaf may replace the ordinary tuple.
@@ -30,7 +30,7 @@ public static bool gv_motionUseRefracted = false; // true when the MV tracks the
 // terrain/sky, an entity's per-vertex/object motion for a dynamic hit).
 public static float3 gv_motionObjDisp = float3(0.0, 0.0, 0.0);
 // Transmission replaces the ordinary guide tuple with the visible destination, so RR's specular inputs
-// (specular albedo + reflection MV) need the foreground glass/water interface kept separately. This is
+// (specular albedo + reflection MV) need the foreground dielectric interface kept separately. This is
 // the surface the reflection physically lives on; for an opaque primary hit it is that hit itself.
 public struct SpecSurface {
     public float3 camRel;         // interface position relative to the current camera
@@ -76,7 +76,7 @@ public float2 projectPrevNdc(float3 worldPos, out bool valid) {
 // along a straight line, so the reflection appears at proj(V). Project the mirror image directly.
 // Gotcha: intersecting a reflection ray with the surface plane divides by dot(mirrorDir, n), which
 // explodes at grazing angles and produces non-zero MV in a static scene. Mirroring is division-free, so
-// static MV is bit-exact zero at any incidence. The reflector is assumed static (terrain / water);
+// static MV is bit-exact zero at any incidence. The reflector may be static;
 // reflectedMotionPrev carries the reflected content's own displacement.
 public float2 previousReflectionNdc(float3 surfacePos, float3 surfaceNormal, float3 surfaceMotionPrev,
                              float3 reflectedWorldPos, float3 reflectedMotionPrev, out bool valid) {
@@ -117,7 +117,7 @@ public float2 resolveSpecularGuides(SpecSurface surface, float3 primaryDir,
     float3 reflectedMotionPrev;
     if (payload.hitT > 0.0) {
         reflectedHit = surfacePos + specDir * payload.hitT;
-        // Closest-hit writes motionPrev for every material. Terrain/water are zero; dynamic opaque and
+        // Closest-hit writes motionPrev for every material. Static geometry is zero; dynamic opaque and
         // dielectric entities carry their per-vertex/object displacement.
         reflectedMotionPrev = payload.motionPrev;
         if (surface.roughness <= MIRROR_ROUGHNESS_MAX
@@ -155,7 +155,8 @@ public void setTransmissionGuide(float3 hitCamRel, float3 motionPrev, float3 nor
 
 // Deterministic ordinary guide behind the first transmitted interface. This is guide-only work:
 // radiance reflection/transmission continuations are queued at the first split and traced by Pass B.
-public void resolveTransmissionGuide(float3 surfacePos, float3 transmittedDir,
+public void resolveTransmissionGuide<TSurfaces : ISurfaceDispatch>(TSurfaces surfaces,
+        float3 surfacePos, float3 transmittedDir,
                               float3 surfaceBiasNormal, MediumStack medium, float rayBias,
                               float rayConeWidth, float rayConeSpread, float3 guideFilter) {
     if (dot(transmittedDir, transmittedDir) <= 0.0) return;
@@ -196,25 +197,25 @@ public void resolveTransmissionGuide(float3 surfacePos, float3 transmittedDir,
             continue;
         }
 
-        bool isWater = payloadWater();
         bool entering = payloadDielectricEntering();
-        // Waves and every other procedural perturbation are already in the published normal.
+        // Every procedural perturbation is already in the published normal.
         float3 interfaceNormal = normalize(payloadNormal());
 
         float transmission = clamp(payloadTransmission(), 0.0, 1.0);
-        Medium entered = makeDielectricMedium(isWater, max(payloadIor(), 1.0),
-                                              payloadAlbedo(), transmission);
+        MediumBoundary boundary = evaluateMedium(surfaces, payloadSurfaceImpl(),
+                max(payloadIor(), 1.0), payloadAlbedo(), transmission);
+        Medium entered = boundary.medium;
         float etaT = entering ? entered.ior : medium.outer.ior;
         float3 nextDirection = refract(direction, interfaceNormal, medium.current.ior / etaT);
         if (dot(nextDirection, nextDirection) <= 0.0) {
             // Never let a TIR reflection become ordinary diffuse/depth.
             setTransmissionGuide(interfacePos - worldPush.camOffset,
-                    isWater ? float3(0.0, 0.0, 0.0) : float3(payload.motionPrev),
+                    float3(payload.motionPrev),
                     interfaceNormal, 0.0, float3(0.0, 0.0, 0.0), false);
             return;
         }
-        if (!isWater && entering) {
-            guideFilter *= payloadAlbedo();
+        if (entering) {
+            guideFilter *= boundary.guideTransmittance;
         }
         if (entering) {
             mediumPush(medium, entered);
@@ -223,7 +224,7 @@ public void resolveTransmissionGuide(float3 surfacePos, float3 transmittedDir,
         }
         direction = normalize(nextDirection);
         ro = offsetSurfaceOrigin(interfacePos, interfaceNormal, direction,
-                isWater ? SURF_BIAS : INSET_TRANSMIT_BIAS);
+                boundary.transmissionRayBias);
     }
 }
 

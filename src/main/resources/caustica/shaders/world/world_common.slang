@@ -50,14 +50,16 @@ public struct WorldPush {
     public float3   camDelta;
     public uint     spp;
     public float2   jitter;
-    public uint     flags;            // bit0 submerged, bit4 waves
+    // bit0 camera medium active, bit4 procedural animation, bits8..15 camera medium implementation.
+    public uint     flags;
     public uint     maxBounces;
     // Environment state is deliberately absent: it belongs to the selected sky slot and lives in that
     // pass's own resources, which engine-generic code cannot reach.
     //
-    // Linear ACEScg tint of the medium the eye itself is inside, for a camera that starts submerged. A
+    // Linear ACEScg source colour of the medium the eye itself is inside. A
     // hit's own medium comes from its per-primitive tint, never from here.
     public float3   cameraMedium;
+    public uint     cameraMediumIorTransmission; // packHalf2(specular IOR, transmission weight)
     public float    time;                   // animation time (s), wrapped
     // World-pinned offset for procedural evaluation: the 3D rebase origin reduced mod a fixed power of
     // two, so (rebased position + this) stays fixed in scene space at usable precision.
@@ -178,7 +180,7 @@ public struct Payload {
     // because that is the only hit whose reflection is reprojected through the surface plane. Packed
     // rather than a third half3: it costs one word and is finer than the fp16 the normal itself uses.
     public uint   previousNormal;
-    public uint   flags;       // bit 0 transmissive, bit 1 water, bit 2 environment emitter, bit 3 entering.
+    public uint   flags;       // low bits are hit state; high byte is the surface implementation.
     // Metalness has already been resolved into diffuse albedo and F0 at closest-hit, so its former half
     // is the third component of emission without increasing the cross-stage payload.
     public uint   roughEmissionB; // packHalf2x16(perceptual roughness, emission radiance B)
@@ -191,7 +193,7 @@ public static const uint PAYLOAD_SHOW_ENVIRONMENT_EMITTERS = 4u;
 // Set by world.rchit on a hit whose primitive carries PRIM_EMITTER_IN_LIGHT_BUFFER: this emitter is
 // RIS-sampled, so raygen gates its direct-hit emission on diffuse continuation rays (no double count).
 public static const uint PAYLOAD_EMITTER_IN_LIST = 128u;
-// Set by world.rchit on any dielectric hit (water or glass/ice): true when the incoming ray travels
+// Set by world.rchit on any dielectric hit: true when the incoming ray travels
 // against the prim's outward face normal (entering the volume), false when it exits. Derived from face
 // orientation rather than toggled, so a stray or missing face cannot corrupt the medium for the rest of
 // the path — each crossing re-derives which side it is on. Bit 2 (PAYLOAD_SHOW_ENVIRONMENT_EMITTERS) is only
@@ -221,11 +223,9 @@ public static const uint PAYLOAD_GUIDE_RAY = 256u;
 // BINDING_TRANSMISSIVE, the same bit the any-hits already read, so this is a forward of that fact rather
 // than a second encoding of it.
 public static const uint PAYLOAD_TRANSMISSIVE = 1u;
-// Set alongside PAYLOAD_TRANSMISSIVE for water specifically (forwarded from BINDING_RECORD_CROSSING,
-// which today is set only for water): an animated wave surface, the caustic term, and source-tint
-// absorption calibrated per block of depth are behaviour nothing else needs. Every other transmissive
-// surface — glass, ice, any solid transparent block a pack defines — is this bit unset.
-public static const uint PAYLOAD_WATER = 2u;
+// Shadow-only request: record the nearest transmissive crossing whose material implementation matches
+// the high-byte implementation carried by the payload. It is never interpreted as radiance hit state.
+public static const uint PAYLOAD_TRACK_MEDIUM_BOUNDARY = 2u;
 
 // Canonical per-triangle record (48 B). Geometry producers resolve source-specific attributes before
 // writing this representation; the hit shaders do not branch on producer identity.
@@ -270,9 +270,6 @@ public static const uint COVERAGE_STOCHASTIC = 2u;
 // Transmittance: the surface is there and passes light through, so a shadow ray filters and continues
 // rather than being blocked.
 public static const uint BINDING_TRANSMISSIVE = 1u;
-// Report the nearest crossing distance in Payload.hitT. For an underwater shading point that is where its
-// sun shadow ray leaves the medium, which is where world.rgen evaluates the refraction caustic.
-public static const uint BINDING_RECORD_CROSSING = 2u;
 // The binding owns a uniform linear base colour in SurfaceMaterial.albedoUv.xyz and never samples an
 // albedo texture. Textureless definitions use opaque coverage, so any-hit needs no corresponding path.
 public static const uint BINDING_TEXTURELESS = 4u;

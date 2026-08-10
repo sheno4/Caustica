@@ -108,14 +108,13 @@ public final class RtMaterialOverrides {
         }
 
         private static float defaultIor(int model) {
-            return model == RtMaterialRegistry.MODEL_WATER ? OpenPbrMaterialDefaults.REFERENCE_LIQUID_IOR
-                    : model == RtMaterialRegistry.MODEL_DIELECTRIC
+            return model == RtMaterialRegistry.MODEL_DIELECTRIC
                     ? OpenPbrMaterialDefaults.TRANSMISSIVE_SPECULAR_IOR
                     : OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR;
         }
 
         private static float defaultTransmission(int model) {
-            return model == RtMaterialRegistry.MODEL_WATER || model == RtMaterialRegistry.MODEL_DIELECTRIC
+            return model == RtMaterialRegistry.MODEL_DIELECTRIC
                     ? 1.0f : 0.0f;
         }
     }

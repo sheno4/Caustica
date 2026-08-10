@@ -39,6 +39,7 @@ import java.util.stream.Stream;
 public final class WorldShaderCompiler implements AutoCloseable {
     public static final String SKY_MISS_MODULE = "sky_miss";
     public static final String CLOSEST_HIT_MODULE = "closest_hit";
+    public static final String PRIMARY_MODULE = "primary_rgen";
     public static final String INDIRECT_MODULE = "indirect";
     public static final String INDIRECT_SER_MODULE = "indirect_ser";
     public static final String ENTRY_POINT = "main";
@@ -71,11 +72,11 @@ public final class WorldShaderCompiler implements AutoCloseable {
             "bindings.slang", "closest_hit.slang",
             "guide.rmiss.slang", "guides.slang", "indirect.slang", "indirect_core.slang",
             "indirect_ser.slang", "lighting.slang", "math.slang", "medium.slang",
-            "primary.rgen.slang", "segment.slang", "sky_miss.slang", "surface_bsdf.slang",
+            "primary_rgen.slang", "segment.slang", "sky_miss.slang", "surface_bsdf.slang",
             "trace.slang", "trace_ordinary.slang", "trace_policy.slang", "trace_reordered.slang",
-            "trace_ser.slang", "water.slang", "world_common.slang", "world_core.slang");
+            "trace_ser.slang", "world_common.slang", "world_core.slang");
     private static final List<String> API_MODULES = List.of(
-            "caustica_api.slang", "caustica_color.slang", "caustica_sky.slang",
+            "caustica_api.slang", "caustica_color.slang", "caustica_medium.slang", "caustica_sky.slang",
             "caustica_surface.slang", "caustica_types.slang");
     private static final Set<String> ENGINE_MODULE_NAMES = moduleNames(WORLD_MODULES, API_MODULES);
 
@@ -191,6 +192,12 @@ public final class WorldShaderCompiler implements AutoCloseable {
                     + "    public float3 evaluateResponse(uint implementation, float3 radiance,\n"
                     + "            SurfaceClosure surface) {\n"
                     + "        " + surface.type() + " s; return s.evaluateResponse(radiance, surface);\n"
+                    + "    }\n\n"
+                    + "    public MediumProperties evaluateMedium(uint implementation, MediumInput input) {\n"
+                    + "        " + surface.type() + " s; return s.evaluateMedium(input);\n"
+                    + "    }\n\n"
+                    + "    public float3 evaluateMediumLighting(uint implementation, MediumLightingInput input) {\n"
+                    + "        " + surface.type() + " s; return s.evaluateMediumLighting(input);\n"
                     + "    }\n};\n\n"
                     + "public struct ProbeComposition : IComposition {\n"
                     + "    public typealias Sky = " + skyType + ";\n"
@@ -347,6 +354,10 @@ public final class WorldShaderCompiler implements AutoCloseable {
         return compileSpecialized(CLOSEST_HIT_MODULE, ENTRY_POINT);
     }
 
+    public byte[] compilePrimary() {
+        return compileSpecialized(PRIMARY_MODULE, ENTRY_POINT);
+    }
+
     public byte[] compileIndirect(boolean reordered) {
         return compileSpecialized(reordered ? INDIRECT_SER_MODULE : INDIRECT_MODULE, ENTRY_POINT);
     }
@@ -483,6 +494,16 @@ public final class WorldShaderCompiler implements AutoCloseable {
                 .append("        switch (implementation) {\n");
         appendSurfaceCases(source, selection, rejectedSurfaces,
                 type -> "{ " + type + " s; return s.evaluateResponse(radiance, surface); }");
+        source.append("        }\n    }\n\n")
+                .append("    public MediumProperties evaluateMedium(uint implementation, MediumInput input) {\n")
+                .append("        switch (implementation) {\n");
+        appendSurfaceCases(source, selection, rejectedSurfaces,
+                type -> "{ " + type + " s; return s.evaluateMedium(input); }");
+        source.append("        }\n    }\n\n")
+                .append("    public float3 evaluateMediumLighting(uint implementation, MediumLightingInput input) {\n")
+                .append("        switch (implementation) {\n");
+        appendSurfaceCases(source, selection, rejectedSurfaces,
+                type -> "{ " + type + " s; return s.evaluateMediumLighting(input); }");
         source.append("        }\n    }\n};\n");
 
         source.append("\npublic struct ").append(COMPOSITION_TYPE).append(" : IComposition {\n");

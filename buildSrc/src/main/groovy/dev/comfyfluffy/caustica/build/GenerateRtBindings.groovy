@@ -27,7 +27,7 @@ abstract class GenerateRtBindings extends DefaultTask {
     @Inject abstract ExecOperations getExecOps()
 
     private static final List<Map> PIPELINES = [
-            [prefix: "WORLD", source: "pipelines/world/primary.rgen.slang", resources: [
+            [prefix: "WORLD", source: "pipelines/world/primary_reflection.rgen.slang", resources: [
                     TLAS: "topLevelAS", OUTPUT: "outImage", BLOCK_ALBEDO: "blockAlbedoAtlas",
                     G_NORMAL: "gNormal", G_ALBEDO: "gAlbedo", G_DEPTH: "gDepth", G_MOTION: "gMotion",
                     G_SPEC_ALBEDO: "gSpecAlbedo", G_SPEC_MOTION: "gSpecMotion",

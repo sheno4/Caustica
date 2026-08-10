@@ -83,20 +83,21 @@ public void traceGuide(uint cullMask, float3 ro, float tmin, float3 rd, float tm
             MISS_GUIDE, makeRay(ro, tmin, rd, tmax), payload);
 }
 
-public Payload makeShadowPayload() {
+public Payload makeShadowPayload(bool trackBoundary, uint mediumImplementation) {
     Payload shadowPayload;
     shadowPayload.surface0 = 0u;
     shadowPayload.surface1 = 0u;
     shadowPayload.surface2 = 0u;
     // The albedo view is this ray's accumulated transmittance; the any-hits multiply into it.
     packAlbedo(shadowPayload, float3(1.0, 1.0, 1.0));
-    shadowPayload.hitT = -1.0; // water-crossing sentinel, filled by the water any-hit
+    shadowPayload.hitT = -1.0; // boundary-crossing sentinel, filled by transmissive any-hit
     shadowPayload.motionPrev = half3(0.0h, 0.0h, 0.0h);
     shadowPayload.f0 = half3(0.0h, 0.0h, 0.0h);
     shadowPayload.previousNormal = 0u;
     // world_guide.rmiss clears this sentinel. An accepted opaque hit skips closest-hit and therefore
-    // leaves it set, while ignored translucent/water hits continue until either a later opaque hit or miss.
-    shadowPayload.flags = 1u;
+    // leaves it set, while ignored transmissive hits continue until either a later opaque hit or miss.
+    shadowPayload.flags = 1u | (trackBoundary ? PAYLOAD_TRACK_MEDIUM_BOUNDARY : 0u)
+            | (mediumImplementation << PAYLOAD_SURFACE_IMPL_SHIFT);
     shadowPayload.roughEmissionB = 0u;
     shadowPayload.emissionRG = 0u;
     shadowPayload.iorTransmission = 0u;
@@ -104,10 +105,11 @@ public Payload makeShadowPayload() {
     return shadowPayload;
 }
 
-public VisibilityResult visibility(float3 origin, float3 dir, float tmax) {
+public VisibilityResult visibility(float3 origin, float3 dir, float tmax,
+        bool trackBoundary, uint mediumImplementation) {
     // Vulkan requires an identical payload structure for every stage reachable by this trace. The shadow
-    // path uses only the albedo view as accumulated transmittance and hitT as the nearest-water crossing.
-    Payload shadowPayload = makeShadowPayload();
+    // path uses only the albedo view as accumulated transmittance and hitT as a tracked boundary crossing.
+    Payload shadowPayload = makeShadowPayload(trackBoundary, mediumImplementation);
     // Shadow SBT records run any-hit only for masked/transmissive classes. Masked alpha-tests; transmissive
     // tints that transmittance and passes through. Opaque geometry terminates traversal. There is no
     // closest shader worth executing. The lightweight guide miss clears the flags sentinel so this path
@@ -119,7 +121,7 @@ public VisibilityResult visibility(float3 origin, float3 dir, float tmax) {
     VisibilityResult result;
     result.transmittance = shadowPayload.flags == 0u
             ? unpackAlbedo(shadowPayload) : float3(0.0, 0.0, 0.0);
-    result.waterHitT = shadowPayload.hitT;
+    result.boundaryHitT = shadowPayload.hitT;
     return result;
 }
 

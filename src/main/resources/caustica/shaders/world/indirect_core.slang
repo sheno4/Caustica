@@ -14,7 +14,6 @@ import world_core;
 import math;
 import medium;
 import segment;
-import water;
 import trace;
 import lighting;
 import surface_bsdf;
@@ -48,7 +47,6 @@ public float3 tracePath<TC : IComposition, TTrace : IRadianceTrace>(TC.Surfaces 
             ^ worldPush.frameIndex * 2654435761u ^ sampleIndex * 2246822519u;
     proposalSeed = pcg(proposalSeed);
     MediumStack medium = seg.medium;
-    bool waterWaves = (worldPush.flags & 16u) != 0u;
     bool showEnvironmentEmitter = seg.showEnvironmentEmitter;
     TTrace tracer;
     for (int bounce = seg.bounce; bounce <= maxBounces; bounce++) {
@@ -57,7 +55,7 @@ public float3 tracePath<TC : IComposition, TTrace : IRadianceTrace>(TC.Surfaces 
                 showEnvironmentEmitter, rayConeWidth, rayConeSpread, pathPhaseHint);
 
         if (payload.hitT < 0.0) {
-            if (medium.current.water) {
+            if ((medium.current.flags & MEDIUM_TERMINATE_ON_MISS) != 0u) {
                 break;
             }
             float3 sky = payloadSky();
@@ -74,24 +72,25 @@ public float3 tracePath<TC : IComposition, TTrace : IRadianceTrace>(TC.Surfaces 
         rayConeWidth = max(rayConeWidth + rayConeSpread * max(payload.hitT, 0.0), RAY_CONE_MIN_WIDTH);
 
         // ---- Dielectric interface: engine-owned in full. The normal is whatever closest-hit published,
-        // waves and all, so nothing is re-derived here.
+        // including procedural perturbations, so nothing is re-derived here.
         if (payloadDielectric()) {
             if (bounce >= maxBounces) {
                 break;
             }
-            bool isWater = payloadWater();
             bool entering = payloadDielectricEntering();
             float3 tint = payloadAlbedo();
             float transmission = clamp(payloadTransmission(), 0.0, 1.0);
 
-            Medium entered = makeDielectricMedium(isWater, max(payloadIor(), 1.0), tint, transmission);
+            MediumBoundary boundary = evaluateMedium(surfaces, payloadSurfaceImpl(),
+                    max(payloadIor(), 1.0), tint, transmission);
+            Medium entered = boundary.medium;
             float etaI = medium.current.ior;
             float etaT = entering ? entered.ior : medium.outer.ior;
 
             float cosI = clamp(dot(-rd, n), 0.0, 1.0);
             float F = fresnelDielectric(cosI, etaI, etaT);
             float3 transmittedDir = refract(rd, n, etaI / etaT);
-            float transmitBias = isWater ? SURF_BIAS : INSET_TRANSMIT_BIAS;
+            float transmitBias = boundary.transmissionRayBias;
 
             bool chooseReflection = rndf(seed) < F;
             if (chooseReflection) {
@@ -140,9 +139,8 @@ public float3 tracePath<TC : IComposition, TTrace : IRadianceTrace>(TC.Surfaces 
         if (risOn) {
             Reservoir r = risInitial(hitPos, n, v, rd, diffAlb, F0, rough, closure.transmission,
                                      seed, proposalSeed);
-            vertexRadiance += shadeReservoir(r, hitPos, n, v, rd, diffAlb, F0, rough,
-                                             closure.transmission,
-                                             medium.current.water && waterWaves);
+            vertexRadiance += shadeReservoir(surfaces, r, hitPos, n, v, rd, diffAlb, F0,
+                    rough, closure.transmission, medium.current);
         }
 
         // Look policy applies once to this vertex's total shaded contribution, through the same

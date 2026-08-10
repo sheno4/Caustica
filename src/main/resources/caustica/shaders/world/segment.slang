@@ -120,8 +120,10 @@ public PackedPathSegment packPathSegment(PathSegment seg, uint nextRecord) {
     p.seed = seg.seed;
     p.pathFlags = (uint(seg.bounce) & 15u)
             | (seg.showEnvironmentEmitter ? 1u << 8u : 0u)
-            | (seg.medium.current.water ? 1u << 9u : 0u)
-            | (seg.medium.outer.water ? 1u << 10u : 0u);
+            | ((seg.medium.current.implementation & 255u) << 9u)
+            | ((seg.medium.outer.implementation & 255u) << 17u)
+            | ((seg.medium.current.flags & 3u) << 25u)
+            | ((seg.medium.outer.flags & 3u) << 27u);
     p.nextRecord = nextRecord;
     return p;
 }
@@ -131,11 +133,13 @@ public PathSegment unpackPathSegment(PackedPathSegment p) {
     Medium current;
     current.ior = iors.x;
     current.extinction = unpackRgb9e5(p.currentExtinction);
-    current.water = (p.pathFlags & (1u << 9u)) != 0u;
+    current.implementation = (p.pathFlags >> 9u) & 255u;
+    current.flags = (p.pathFlags >> 25u) & 3u;
     Medium outer;
     outer.ior = iors.y;
     outer.extinction = unpackRgb9e5(p.outerExtinction);
-    outer.water = (p.pathFlags & (1u << 10u)) != 0u;
+    outer.implementation = (p.pathFlags >> 17u) & 255u;
+    outer.flags = (p.pathFlags >> 27u) & 3u;
     MediumStack medium;
     medium.current = current;
     medium.outer = outer;

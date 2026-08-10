@@ -1,6 +1,7 @@
 module caustica_builtin_sky;
 
 import caustica_sky;
+import caustica_types;
 
 /** Resource-free reference environment used when no host sky model is selected. */
 public struct BuiltinSky : ISkyModel {

@@ -138,8 +138,8 @@ public final class RtComposite {
         return CausticaConfig.Rt.Composite.MAX_BOUNCES.value();
     }
 
-    private static boolean waterWaves() {
-        return CausticaConfig.Rt.Composite.WATER_WAVES.value();
+    private static int packHalf2(float x, float y) {
+        return (Float.floatToFloat16(y) << 16) | (Float.floatToFloat16(x) & 0xffff);
     }
 
     // Modulus of the world-pinned procedural domain anchor. Documented engine constant, not a per-surface
@@ -801,7 +801,7 @@ public final class RtComposite {
         // implementations the dispatch switch fans out to, not one bound feature.
         int surfaceCount = composition.selection().surfaces().size();
         RtShaderCode primary = RtShaderCode.of("primary",
-                compiler.compilePlain("primary.rgen.slang", WorldShaderCompiler.ENTRY_POINT));
+                compiler.compilePrimary());
         RtShaderCode indirect = RtShaderCode.of(
                 "indirect(" + surfaceCount + " surfaces" + (reordered ? ", EXT_SER)" : ")"),
                 compiler.compileIndirect(reordered));
@@ -1293,18 +1293,19 @@ public final class RtComposite {
             GpuBuffer pushBuf = selectedPushSlot.buffer;
             ByteBuffer push = MemoryUtil.memByteBuffer(pushBuf.mapped, WORLD_PUSH_SIZE);
             frameInvViewProj.set(frameProjection).mul(frameViewRotation).invert();
-            // flags: camera-in-water (so the path tracer starts in the water medium when the eye is
-            // submerged, fixing the air→water first-segment orientation) and animated water normals.
-            // Bit 1 remains unused to avoid conflicting with stale external readers.
-            int flags = snapshot.cameraInMedium() ? 0b01 : 0;
-            if (waterWaves()) {
-                flags |= 0b10000; // animated water wave normals
+            int flags = snapshot.proceduralSurfaceAnimationEnabled() ? 0b10000 : 0;
+            int cameraMediumIorTransmission = 0;
+            Float3 cameraMedium = new Float3(0.0f, 0.0f, 0.0f);
+            FrameSnapshot.CameraMedium frameMedium = snapshot.cameraMedium();
+            if (frameMedium != null) {
+                RtMaterialRegistry.Snapshot materialSnapshot = RtMaterialRegistry.INSTANCE.requireSnapshot();
+                int materialId = materialSnapshot.bindingId(frameMedium.material().id());
+                var material = materialSnapshot.material(materialId);
+                flags |= 0b01 | (material.surfaceImplementation() << 8);
+                cameraMediumIorTransmission = packHalf2(material.specularIor(), material.transmissionWeight());
+                FrameSnapshot.LinearRgb sourceColor = frameMedium.sourceColor();
+                cameraMedium = new Float3(sourceColor.red(), sourceColor.green(), sourceColor.blue());
             }
-
-            // The medium the eye itself is inside: the camera's own biome water colour, used only when
-            // the camera starts submerged. Every hit takes its tint from its own primitive instead.
-            FrameSnapshot.LinearRgb medium = snapshot.cameraMedium();
-            Float3 cameraMedium = new Float3(medium.red(), medium.green(), medium.blue());
             float time = (float) (snapshot.timeSeconds() % 3600.0);
             float delta = time - previousProceduralTime;
             // A first frame, long pause, or one-hour phase wrap has no adjacent frame to reproject. Use
@@ -1354,6 +1355,7 @@ public final class RtComposite {
                     flags,
                     maxBounces(),
                     cameraMedium,
+                    cameraMediumIorTransmission,
                     time,
                     proceduralDomainOffset,
                     breaking.length,

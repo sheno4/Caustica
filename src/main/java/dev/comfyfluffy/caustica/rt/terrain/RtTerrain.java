@@ -8,26 +8,28 @@ import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.rt.RtComposite;
 import dev.comfyfluffy.caustica.rt.GpuContext;
-import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.RtDeviceBringup;
 import dev.comfyfluffy.caustica.rt.RtFrameStats;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor.GraphicsUse;
 import dev.comfyfluffy.caustica.rt.accel.RtAccel;
-import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
+import dev.comfyfluffy.caustica.rt.geometry.RtGeometryAbi;
+import dev.comfyfluffy.caustica.rt.geometry.RtPackedGeometry;
+import dev.comfyfluffy.caustica.rt.geometry.RtRetainedGeometryBuilds;
+import dev.comfyfluffy.caustica.rt.geometry.RtRetainedGeometryBuilds.Prepared;
+import dev.comfyfluffy.caustica.rt.geometry.RtRetainedGeometryScene;
+import dev.comfyfluffy.caustica.rt.geometry.RtRetainedGeometryScene.Resident;
 import dev.comfyfluffy.caustica.rt.light.RetainedLightBatch;
 import dev.comfyfluffy.caustica.rt.light.RtRetainedLightScene;
 import dev.comfyfluffy.caustica.rt.material.RtMaterialRegistry;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
 import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
-import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongArrayList;
 import it.unimi.dsi.fastutil.longs.LongIterator;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import it.unimi.dsi.fastutil.longs.LongSet;
-import it.unimi.dsi.fastutil.objects.ObjectIterator;
 import net.fabricmc.fabric.api.client.renderer.v1.sprite.SpriteFinder;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.color.block.BlockColors;
@@ -54,10 +56,7 @@ import org.joml.Vector3fc;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
-import java.util.IdentityHashMap;
 import java.util.List;
-import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
@@ -66,10 +65,6 @@ import static dev.comfyfluffy.caustica.rt.terrain.RtTerrainMesher.buildCpuSectio
 import dev.comfyfluffy.caustica.rt.terrain.RtTerrainMesher.CpuSection;
 import dev.comfyfluffy.caustica.rt.terrain.RtTerrainMesher.PackedSection;
 import dev.comfyfluffy.caustica.rt.terrain.RtTerrainMesher.WorkerTessState;
-import dev.comfyfluffy.caustica.rt.terrain.RtSectionBuilder.PreparedSection;
-import dev.comfyfluffy.caustica.rt.terrain.RtSectionTable.Generation;
-import dev.comfyfluffy.caustica.rt.terrain.RtSectionTable.SectionGeom;
-import dev.comfyfluffy.caustica.rt.geometry.RtGeometryAbi;
 /**
  * Per-section terrain residency synced to vanilla's loaded chunks. A singleton manager
  * keeps a map of resident 16³ sections. The 20 TPS tick maintains the desired window around the player
@@ -132,11 +127,11 @@ public final class RtTerrain {
 
     private static final RtTerrain INSTANCE = new RtTerrain();
 
-    private final Long2ObjectOpenHashMap<SectionGeom> resident = new Long2ObjectOpenHashMap<>();
+    private final RtRetainedGeometryScene<float[]> geometry =
+            new RtRetainedGeometryScene<>(RtTerrain::sectionTableInitialCapacity);
     // Persistent palette snapshots for tessellation regions (render-thread only); invalidated on dirty
     // sections, column unload/window-leave, and full clears.
     private final RtSectionSnapshots snapshots = new RtSectionSnapshots();
-    private LongOpenHashSet published = new LongOpenHashSet();
     private final LongOpenHashSet empty = new LongOpenHashSet(); // loaded, in-window sections with no geometry
     private final Object dirtyLock = new Object();
     private final LongOpenHashSet dirty = new LongOpenHashSet(); // edited sections to re-extract
@@ -155,8 +150,8 @@ public final class RtTerrain {
     private final LongOpenHashSet queuedReextract = new LongOpenHashSet();
     // Publish accumulators: window sync (tick) and completion drain (streaming pass) may run on different
     // frames, so evicted geometry waits here until the next publish pass retires it.
-    private final List<SectionGeom> removed = new ArrayList<>();
-    private final List<PreparedSection> prepared = new ArrayList<>();
+    private final List<Resident<float[]>> removed = new ArrayList<>();
+    private final List<Prepared<float[]>> prepared = new ArrayList<>();
     // Worker/build bookkeeping. `inFlight` maps a dispatched section key to a monotonic token; a completed
     // task whose token no longer matches is discarded. The active-task barrier spans worker + GPU lifetime.
     private final Long2LongOpenHashMap inFlight = new Long2LongOpenHashMap();
@@ -169,8 +164,6 @@ public final class RtTerrain {
     private volatile long terrainEpoch = 1L;
     private long buildToken;
     private long dirtyGroupSeq;
-    private final RtSectionTable table = new RtSectionTable();
-    private boolean ready;
     // Full-residency invalidation requested off the render thread. Wired to Fabric's
     // InvalidateRenderStateCallback = vanilla LevelExtractor.allChanged() (dimension change via setLevel,
     // render-distance change, F3+A). Consumed in tick(), where the RT context is available.
@@ -211,7 +204,7 @@ public final class RtTerrain {
      * tracing (sky/entities only) instead of a caller falling back to vanilla.
      */
     public static RtTerrain currentOrNull() {
-        return INSTANCE.ready ? INSTANCE : null;
+        return INSTANCE.geometry.ready() ? INSTANCE : null;
     }
 
     public static boolean isSectionReady(BlockPos blockPos) {
@@ -219,7 +212,9 @@ public final class RtTerrain {
         int scy = SectionPos.blockToSectionCoord(blockPos.getY());
         int scz = SectionPos.blockToSectionCoord(blockPos.getZ());
         long key = sectionKey(scx, scy, scz);
-        return INSTANCE.ready && ((INSTANCE.resident.containsKey(key) && INSTANCE.published.contains(key)) || INSTANCE.empty.contains(key));
+        return INSTANCE.geometry.ready()
+                && ((INSTANCE.geometry.contains(key) && INSTANCE.geometry.isPublished(key))
+                || INSTANCE.empty.contains(key));
     }
 
     /**
@@ -229,12 +224,12 @@ public final class RtTerrain {
      * residency rebuilds, so the per-frame TLAS rebuild just re-references the same BLAS each frame.
      */
     public List<RtAccel.Instance> staticInstances() {
-        return table.instances;
+        return geometry.instances();
     }
 
     /** Host-visible retained geometry records copied into the frame's unified table. */
     public RtGeometryAbi.TablePrefix geometryTablePrefix() {
-        return table.prefix();
+        return geometry.tablePrefix();
     }
 
     /** RIS-sampled global light buffer device address, or 0 while no lights are published. */
@@ -514,7 +509,7 @@ public final class RtTerrain {
     }
 
     private void syncDesiredWindow(ClientChunkCache chunkSource, int pcx, int psy, int pcz,
-                                   int radius, int loY, int hiY, List<SectionGeom> removed) {
+                                   int radius, int loY, int hiY, List<Resident<float[]>> removed) {
         if (!windowValid || windowRadius != radius || windowLoY != loY || windowHiY != hiY
                 || Math.abs(pcx - windowPcx) > radius || Math.abs(pcz - windowPcz) > radius) {
             // First window, a shape change, or a jump past any overlap (teleport) — build from scratch.
@@ -527,7 +522,7 @@ public final class RtTerrain {
     }
 
     private void rebuildDesiredWindow(ClientChunkCache chunkSource, int pcx, int pcz,
-                                      int radius, int loY, int hiY, List<SectionGeom> removed) {
+                                      int radius, int loY, int hiY, List<Resident<float[]>> removed) {
         snapshots.clear(); // teleport / shape change — no per-column eviction diff, drop everything
         desired.clear();
         desiredColumns.clear();
@@ -563,7 +558,7 @@ public final class RtTerrain {
      * resident prune + a queue sort at r=32 — was a 10–30 ms hitch every 16 blocks of flight).
      */
     private void slideDesiredWindow(ClientChunkCache chunkSource, int pcx, int pcz,
-                                    int radius, int loY, int hiY, List<SectionGeom> removed) {
+                                    int radius, int loY, int hiY, List<Resident<float[]>> removed) {
         int newMinX = pcx - radius, newMaxX = pcx + radius;
         int newMinZ = pcz - radius, newMaxZ = pcz + radius;
         for (int scx = windowPcx - radius; scx <= windowPcx + radius; scx++) {
@@ -601,7 +596,7 @@ public final class RtTerrain {
         windowPcz = pcz;
     }
 
-    private void pollLoadedColumns(ClientChunkCache chunkSource, int loY, int hiY, List<SectionGeom> removed) {
+    private void pollLoadedColumns(ClientChunkCache chunkSource, int loY, int hiY, List<Resident<float[]>> removed) {
         for (LongIterator it = desiredColumns.iterator(); it.hasNext(); ) {
             long column = it.nextLong();
             int scx = columnX(column);
@@ -629,7 +624,7 @@ public final class RtTerrain {
         }
     }
 
-    private void removeDesiredColumnSections(int scx, int scz, int loY, int hiY, List<SectionGeom> removed) {
+    private void removeDesiredColumnSections(int scx, int scz, int loY, int hiY, List<Resident<float[]>> removed) {
         for (int scy = loY; scy <= hiY; scy++) {
             long key = sectionKey(scx, scy, scz);
             // Unloaded or out of the window — the chunk may reload with different data, so the cached
@@ -639,21 +634,15 @@ public final class RtTerrain {
             clearQueuedWork(key, true);
             invalidateInFlight(key);
             empty.remove(key);
-            SectionGeom g = resident.remove(key);
+            Resident<float[]> g = geometry.stageRemoval(key);
             if (g != null) {
                 removed.add(g);
             }
         }
     }
 
-    private void pruneUndesired(List<SectionGeom> removed) {
-        for (ObjectIterator<Long2ObjectMap.Entry<SectionGeom>> it = resident.long2ObjectEntrySet().fastIterator(); it.hasNext(); ) {
-            Long2ObjectMap.Entry<SectionGeom> e = it.next();
-            if (!desired.contains(e.getLongKey())) {
-                removed.add(e.getValue());
-                it.remove();
-            }
-        }
+    private void pruneUndesired(List<Resident<float[]>> removed) {
+        geometry.stageUndesired(desired::contains, removed);
         removeKeysNotIn(empty, desired);
         removeInFlightNotIn(desired);
         removeQueuedGroupsNotIn(desired);
@@ -685,7 +674,7 @@ public final class RtTerrain {
     }
 
     private boolean canGroupDirtySection(long key) {
-        return desired.contains(key) && (resident.containsKey(key) || empty.contains(key));
+        return desired.contains(key) && (geometry.contains(key) || empty.contains(key));
     }
 
     private boolean handleDirtySection(long key, long dirtyGroup) {
@@ -704,7 +693,7 @@ public final class RtTerrain {
         }
         // Keep the old geometry resident + traced; re-dispatch and swap when the new mesh is ready
         // (no eviction gap -> no flicker). Non-resident dirty keys re-enter the normal missing queue.
-        SectionGeom g = resident.get(key);
+        Resident<float[]> g = geometry.get(key);
         if (g != null) {
             if (queuedReextract.add(key)) {
                 reextract.add(key);
@@ -717,7 +706,7 @@ public final class RtTerrain {
     }
 
     private boolean enqueueMissingIfNeeded(long key) {
-        if (resident.containsKey(key) || empty.contains(key) || inFlight.containsKey(key)) {
+        if (geometry.contains(key) || empty.contains(key) || inFlight.containsKey(key)) {
             return false;
         }
         if (missingIndex.get(key) != NO_MISSING_INDEX) {
@@ -730,7 +719,7 @@ public final class RtTerrain {
     }
 
     private boolean enqueueMissing(long key, long dirtyGroup) {
-        if (resident.containsKey(key) || empty.contains(key) || inFlight.containsKey(key)) {
+        if (geometry.contains(key) || empty.contains(key) || inFlight.containsKey(key)) {
             return false;
         }
         // `missing` is unsorted; dispatch ranks it directly by distance from the player.
@@ -936,7 +925,7 @@ public final class RtTerrain {
         }
         for (int i = 0; i < heapSize && remaining > 0; i++) {
             long key = heapKey[i];
-            if (!desired.contains(key) || resident.containsKey(key) || empty.contains(key) || inFlight.containsKey(key)) {
+            if (!desired.contains(key) || geometry.contains(key) || empty.contains(key) || inFlight.containsKey(key)) {
                 removeMissing(key);
                 clearQueuedGroup(key, true);
                 continue;
@@ -1010,15 +999,15 @@ public final class RtTerrain {
                 continue;
             }
             // Skip ones the window pass freed this tick (out of view) — they're being retired, not rebuilt.
-            SectionGeom g = resident.get(key);
+            Resident<float[]> g = geometry.get(key);
             if (g == null || !desired.contains(key) || inFlight.containsKey(key)) {
                 queuedReextract.remove(key);
                 clearQueuedGroup(key, true);
                 removeUnsorted(reextract, i);
                 continue;
             }
-            int sx = g.sx >> 4;
-            int sz = g.sz >> 4;
+            int sx = g.originX() >> 4;
+            int sz = g.originZ() >> 4;
             if (!neighborChunksReady(chunkSource, sx, sz)) {
                 i++;
                 continue;
@@ -1043,10 +1032,11 @@ public final class RtTerrain {
         int dispatched = 0;
         for (int i = 0; i < heapSize && remaining > 0; i++) {
             long key = heapKey[i];
-            SectionGeom g = resident.get(key);
+            Resident<float[]> g = geometry.get(key);
             queuedReextract.remove(key);
             removeUnsorted(reextract, reextract.indexOf(key));
-            dispatchSectionBuild(dispatch, key, g.sx >> 4, g.sy >> 4, g.sz >> 4);
+            dispatchSectionBuild(dispatch, key,
+                    g.originX() >> 4, g.originY() >> 4, g.originZ() >> 4);
             remaining--;
             dispatched++;
         }
@@ -1103,7 +1093,10 @@ public final class RtTerrain {
                     if (packed == null) {
                         completeTask(task, null, null, null);
                     } else {
-                        PreparedSection prepared = RtSectionBuilder.prepare(dispatch.ctx(), packed,
+                        RtPackedGeometry<float[]> packedGeometry = new RtPackedGeometry<>(packed.positions(),
+                                packed.indices(), packed.uvs(), packed.material(), packed.classTris(),
+                                packed.triBase(), packed.lights());
+                        Prepared<float[]> prepared = RtRetainedGeometryBuilds.prepare(dispatch.ctx(), packedGeometry,
                                 cpu.opacityMicromap(), CausticaConfig.Rt.Terrain.BLAS_COMPACTION.value(),
                                 task.key, task.sox, task.soy, task.soz);
                         if (!isTaskCurrent(task)) {
@@ -1114,7 +1107,7 @@ public final class RtTerrain {
                         try {
                             submitTerrainBuild(dispatch.ctx(), task, prepared);
                         } catch (Throwable t) {
-                            RtSectionBuilder.destroy(prepared);
+                            RtRetainedGeometryBuilds.destroy(prepared);
                             throw t;
                         }
                     }
@@ -1135,77 +1128,13 @@ public final class RtTerrain {
         }
     }
 
-    /** Build a terrain BLAS and optionally compact-copy it before publication. */
-    private void submitTerrainBuild(GpuContext ctx, SectionTask task, PreparedSection prepared) {
-        ctx.gpuExecutor().submit(
-                () -> !isTaskCurrent(task),
-                cmd -> {
-                    RtSectionBuilder.recordUpload(cmd, prepared);
-                    RtAccel.recordBlasBuilds(ctx, cmd, List.of(prepared.blas()));
-                },
-                () -> {
-                    RtAccel.freeBlasScratch(List.of(prepared.blas()));
-                    prepared.releaseUpload();
-                },
-                (build, failure) -> {
-                    if (failure != null) {
-                        completeTask(task, prepared, build, failure);
-                        return;
-                    }
-                    if (!isTaskCurrent(task)) {
-                        completeTask(task, prepared, build, null);
-                        return;
-                    }
-                    if (prepared.blas().requestsCompaction()) {
-                        submitTerrainCompaction(ctx, task, prepared, build);
-                    } else {
-                        prepared.releaseBuildInputs();
-                        completeTask(task, prepared, build, null);
-                    }
-                });
+    /** Submit retained geometry while the source task continues to own cancellation and completion policy. */
+    private void submitTerrainBuild(GpuContext ctx, SectionTask task, Prepared<float[]> prepared) {
+        RtRetainedGeometryBuilds.submit(ctx, prepared, () -> !isTaskCurrent(task),
+                completion -> completeTask(task, completion.prepared(), completion.build(), completion.failure()));
     }
 
-    private void submitTerrainCompaction(GpuContext ctx, SectionTask task, PreparedSection prepared,
-                                         RtGpuExecutor.Build build) {
-        RtAccel.PreparedTerrainCompaction compaction;
-        try {
-            compaction = RtAccel.prepareTerrainCompaction(ctx, prepared.blas());
-        } catch (Throwable t) {
-            completeTask(task, prepared, build, t);
-            return;
-        }
-        try {
-            ctx.gpuExecutor().submit(
-                    () -> !isTaskCurrent(task),
-                    cmd -> RtAccel.recordTerrainCompaction(ctx, cmd, compaction),
-                    () -> {
-                        RtAccel.finishTerrainCompaction(compaction);
-                        prepared.releaseBuildInputs();
-                    },
-                    (copyBuild, failure) -> {
-                        if (failure != null) {
-                            Throwable terminal = failure;
-                            try {
-                                RtAccel.destroyTerrainCompaction(compaction);
-                            } catch (Throwable destroyFailure) {
-                                terminal.addSuppressed(destroyFailure);
-                            }
-                            completeTask(task, prepared, copyBuild, terminal);
-                            return;
-                        }
-                        completeTask(task, prepared.withBlas(compaction.compacted()), copyBuild, null);
-                    });
-        } catch (Throwable t) {
-            try {
-                RtAccel.destroyTerrainCompaction(compaction);
-            } catch (Throwable destroyFailure) {
-                t.addSuppressed(destroyFailure);
-            }
-            completeTask(task, prepared, build, t);
-        }
-    }
-
-    private void completeTask(SectionTask task, PreparedSection prepared, RtGpuExecutor.Build build, Throwable failure) {
+    private void completeTask(SectionTask task, Prepared<float[]> prepared, RtGpuExecutor.Build build, Throwable failure) {
         completeTask(new SectionResult(task, prepared, build, failure));
     }
 
@@ -1260,7 +1189,7 @@ public final class RtTerrain {
      * whose token no longer matches {@link #inFlight} is stale and its unpublished native result is
      * destroyed instead of entering the table.
      */
-    private void drainCompletedBuilds(GpuContext ctx, List<PreparedSection> prepared, List<SectionGeom> removed,
+    private void drainCompletedBuilds(GpuContext ctx, List<Prepared<float[]>> prepared, List<Resident<float[]>> removed,
                                       int resultCap) {
         int remaining = resultCap;
         while (remaining > 0) {
@@ -1297,13 +1226,13 @@ public final class RtTerrain {
                         + (task.sox >> 4) + "," + (task.soy >> 4) + "," + (task.soz >> 4),
                         result.failure());
             }
-            PreparedSection built = result.prepared();
+            Prepared<float[]> built = result.prepared();
             if (built != null) {
                 try {
                     ctx.gpuExecutor().markPublished(result.build());
                     RtFrameStats.FRAME.count("terrainBuildsCompleted", 1);
                 } catch (Throwable t) {
-                    RtSectionBuilder.destroy(built);
+                    RtRetainedGeometryBuilds.destroy(built);
                     if (dirtyGroup != NO_DIRTY_GROUP) {
                         cancelDirtyGroup(dirtyGroup);
                     }
@@ -1314,7 +1243,7 @@ public final class RtTerrain {
             if (dirtyGroup != NO_DIRTY_GROUP && dirtyGroups.containsKey(dirtyGroup)) {
                 DirtyGroup group = dirtyGroups.get(dirtyGroup);
                 if (built == null) {
-                    SectionGeom prev = resident.get(task.key);
+                    Resident<float[]> prev = geometry.get(task.key);
                     if (prev != null) {
                         group.removed.add(prev);
                     } else {
@@ -1331,7 +1260,7 @@ public final class RtTerrain {
                 if (built == null) {
                     // Legitimately empty (air or fully-enclosed). If this was an in-place re-extract whose new
                     // state is empty, evict the old geom and retire it in this publish pass.
-                    SectionGeom prev = resident.remove(task.key);
+                    Resident<float[]> prev = geometry.stageRemoval(task.key);
                     if (prev != null) {
                         removed.add(prev);
                     }
@@ -1353,7 +1282,7 @@ public final class RtTerrain {
         destroyPreparedSection(result.prepared());
     }
 
-    private void completeDirtyGroupMember(DirtyGroup group, List<PreparedSection> prepared, List<SectionGeom> removed) {
+    private void completeDirtyGroupMember(DirtyGroup group, List<Prepared<float[]>> prepared, List<Resident<float[]>> removed) {
         if (--group.remaining > 0) {
             return;
         }
@@ -1370,12 +1299,12 @@ public final class RtTerrain {
         if (group == null) {
             return;
         }
-        for (PreparedSection ps : group.prepared) {
+        for (Prepared<float[]> ps : group.prepared) {
             destroyPreparedSection(ps);
         }
         for (LongIterator it = group.restoreEmptyKeys.iterator(); it.hasNext(); ) {
             long key = it.nextLong();
-            if (desired.contains(key) && !resident.containsKey(key) && !inFlight.containsKey(key) && !isQueuedAnywhere(key)) {
+            if (desired.contains(key) && !geometry.contains(key) && !inFlight.containsKey(key) && !isQueuedAnywhere(key)) {
                 empty.add(key);
             }
         }
@@ -1395,7 +1324,7 @@ public final class RtTerrain {
             return;
         }
         for (DirtyGroup group : dirtyGroups.values()) {
-            for (PreparedSection ps : group.prepared) {
+            for (Prepared<float[]> ps : group.prepared) {
                 destroyPreparedSection(ps);
             }
         }
@@ -1404,12 +1333,12 @@ public final class RtTerrain {
         inFlightDirtyGroup.clear();
     }
 
-    private void destroyPreparedSection(PreparedSection ps) {
+    private void destroyPreparedSection(Prepared<float[]> ps) {
         GpuContext ctx = GpuContext.currentOrNull();
         if (ctx == null) {
-            RtSectionBuilder.destroy(ps);
+            RtRetainedGeometryBuilds.destroy(ps);
         } else {
-            ctx.gpuExecutor().retireUnpublished(() -> RtSectionBuilder.destroy(ps));
+            ctx.gpuExecutor().retireUnpublished(() -> RtRetainedGeometryBuilds.destroy(ps));
         }
     }
 
@@ -1425,8 +1354,8 @@ public final class RtTerrain {
     private static final class DirtyGroup {
         final long id;
         final LongArrayList keys;
-        final ArrayList<PreparedSection> prepared = new ArrayList<>();
-        final ArrayList<SectionGeom> removed = new ArrayList<>();
+        final ArrayList<Prepared<float[]>> prepared = new ArrayList<>();
+        final ArrayList<Resident<float[]>> removed = new ArrayList<>();
         final LongArrayList emptyKeys = new LongArrayList();
         final LongArrayList restoreEmptyKeys = new LongArrayList();
         int remaining;
@@ -1461,108 +1390,42 @@ public final class RtTerrain {
         }
     }
 
-    private record SectionResult(SectionTask task, PreparedSection prepared,
+    private record SectionResult(SectionTask task, Prepared<float[]> prepared,
                                  RtGpuExecutor.Build build, Throwable failure) {
     }
 
     private boolean shouldRebase(int rbx, int rby, int rbz) {
-        return !ready || table.buffer == null || table.instances == null
-                || Math.abs(rbx - blockX) > rebaseDistanceBlocks()
-                || Math.abs(rby - blockY) > rebaseDistanceBlocks()
-                || Math.abs(rbz - blockZ) > rebaseDistanceBlocks();
+        return geometry.shouldRebase(rbx, rby, rbz, rebaseDistanceBlocks());
     }
 
-    private void applyBuildChanges(GpuContext ctx, List<PreparedSection> prepared, List<SectionGeom> removed,
+    private void applyBuildChanges(GpuContext ctx, List<Prepared<float[]>> prepared, List<Resident<float[]>> removed,
                                    boolean rebase, int rbx, int rby, int rbz) {
-        GraphicsUse lastGraphicsUse = ctx.gpuExecutor().latestGraphicsUse();
-        int baseX = rebase ? rbx : blockX;
-        int baseY = rebase ? rby : blockY;
-        int baseZ = rebase ? rbz : blockZ;
-
         // Geometry extraction is driven by vanilla's block-dirty stream and can run continuously while
         // the world ticks. Rebuilding the global light tables for every geometry publication clears the
         // asynchronously published light grid state even when no emitter changed, making the shader alternate
         // between global-only and cell proposals. Track the actual light-record diff instead.
         boolean lightsChanged = false;
-        for (SectionGeom g : removed) {
-            SectionGeom current = resident.get(g.key);
-            boolean removesPublishedLights = current == g && hasLights(g.lights);
-            int removedLightSlot = removesPublishedLights ? g.slot : -1;
-            table.removePublished(resident, published, g);
+        RtRetainedGeometryScene.Publication<float[]> publication = geometry.publishBatch(ctx,
+                prepared, removed, desired::contains, rebase, rbx, rby, rbz);
+        for (RtRetainedGeometryScene.Removal<float[]> removal : publication.removals()) {
+            boolean removesPublishedLights = removal.removedCurrent()
+                    && hasLights(removal.geometry().metadata());
             lightsChanged |= removesPublishedLights;
-            if (removedLightSlot >= 0) lightSections.remove(removedLightSlot);
-        }
-        retire(ctx, lastGraphicsUse, removed);
-
-
-        if (!prepared.isEmpty()) {
-            Generation oldGeneration = table.beginWriteGeneration(ctx, table.liveSlotCapacity(prepared, resident));
-            if (oldGeneration != null) {
-                retireGeneration(ctx, lastGraphicsUse, oldGeneration);
-
+            if (removesPublishedLights && removal.slot() >= 0) {
+                lightSections.remove(removal.slot());
             }
         }
-
-        for (PreparedSection ps : prepared) {
-            SectionGeom g = new SectionGeom(ps.key(), ps.uvs(), ps.material(),
-                    ps.blas().accel, ps.triBase(), ps.sx(), ps.sy(), ps.sz(), ps.lights());
-            if (!desired.contains(ps.key())) {
-                // Left the window while its batched BLAS build was in flight (window sync keeps running
-                // during builds). Never published — retire the fresh, unreferenced geometry.
-                ctx.gpuExecutor().retireUnpublished(g::destroy);
-                continue;
+        for (RtRetainedGeometryScene.Update<float[]> update : publication.updates()) {
+            float[] previous = update.previous() != null ? update.previous().metadata() : null;
+            boolean changed = !sameLightRecords(previous, update.geometry().metadata());
+            lightsChanged |= changed;
+            if (changed || update.previous() == null) {
+                updateLightSection(update.geometry());
             }
-            SectionGeom prev = resident.get(ps.key());
-            boolean sectionLightsChanged = !sameLightRecords(prev != null ? prev.lights : null, g.lights);
-            lightsChanged |= sectionLightsChanged;
-            if (prev != null && prev.slot >= 0) {
-                g.slot = prev.slot;
-                g.instanceIndex = prev.instanceIndex;
-                table.slots.set(g.slot, g);
-                resident.put(ps.key(), g);
-                table.write(g);
-                table.instanceList.set(g.instanceIndex, table.instanceFor(g, baseX, baseY, baseZ));
-                retire(ctx, lastGraphicsUse, List.of(prev));
-            } else {
-                g.slot = table.allocateSlot();
-                g.instanceIndex = table.instanceList.size();
-                table.slots.set(g.slot, g);
-                resident.put(ps.key(), g);
-                table.write(g);
-                table.instanceList.add(table.instanceFor(g, baseX, baseY, baseZ));
-            }
-            if (sectionLightsChanged || prev == null) updateLightSection(g);
-            published.add(ps.key());
         }
-        table.flushWrites();
 
-        if (resident.isEmpty()) {
-            Generation emptyGeneration = table.detachGeneration();
-            if (emptyGeneration != null) {
-                retireGeneration(ctx, lastGraphicsUse, emptyGeneration);
-            }
-            table.nextSlot = 0;
-            table.freeSlots.clear();
-            table.slots.clear();
-            table.instanceList.clear();
-            table.instances = null;
+        if (publication.empty()) {
             lightSections.clear();
-            published.clear();
-            // The instance list + slot registry were just reset, but evicted geometry can still be waiting
-            // in the `removed` accumulator (window sync runs while a build is in flight — e.g. a respawn
-            // evicts everything at once) or in a dirty group's removed list. Their instanceIndex/slot point
-            // into the cleared lists; neutralize them so the eventual removePublishedSection is a no-op
-            // (their buffers are still retired normally when the accumulator is consumed).
-            for (SectionGeom g : this.removed) {
-                g.instanceIndex = -1;
-                g.slot = -1;
-            }
-            for (DirtyGroup group : dirtyGroups.values()) {
-                for (SectionGeom g : group.removed) {
-                    g.instanceIndex = -1;
-                    g.slot = -1;
-                }
-            }
             // Zero resident sections (e.g. every section just evicted on a respawn) is a transient
             // streaming state, not "no world" — keep tracing (sky/entities only) instead of handing the
             // frame back to vanilla; see ensureEmptyTableReady.
@@ -1573,20 +1436,13 @@ public final class RtTerrain {
         }
 
         if (rebase) {
-            for (int i = 0, n = table.instanceList.size(); i < n; i++) {
-                RtAccel.Instance inst = table.instanceList.get(i);
-                SectionGeom g = table.slots.get(inst.customIndex());
-                table.instanceList.set(i, table.instanceFor(g, baseX, baseY, baseZ));
-            }
             blockX = rbx;
             blockY = rby;
             blockZ = rbz;
         }
-        table.instances = table.instanceList;
         if (lightsChanged || rebase) {
             markLightHierarchyDirty();
         }
-        ready = true;
     }
 
     private static boolean hasLights(float[] lights) {
@@ -1599,13 +1455,13 @@ public final class RtTerrain {
         return Arrays.equals(previous, current);
     }
 
-    private void updateLightSection(SectionGeom g) {
-        if (!hasLights(g.lights)) {
-            lightSections.remove(g.slot);
+    private void updateLightSection(Resident<float[]> g) {
+        if (!hasLights(g.metadata())) {
+            lightSections.remove(g.slotIndex());
             return;
         }
-        lightSections.put(g.slot, MinecraftTerrainLightAdapter.describe(g.slot,
-                g.sx >> 4, g.sy >> 4, g.sz >> 4, g.lights));
+        lightSections.put(g.slotIndex(), MinecraftTerrainLightAdapter.describe(g.slotIndex(),
+                g.originX() >> 4, g.originY() >> 4, g.originZ() >> 4, g.metadata()));
     }
 
     private void markLightHierarchyDirty() {
@@ -1634,20 +1490,7 @@ public final class RtTerrain {
 
     /** Keep a valid zero-instance table through transient empty-residency windows. */
     private void ensureEmptyTableReady(GpuContext ctx) {
-        table.ensureEmpty(ctx);
-        ready = true;
-    }
-
-    /** Queue old GPU resources until the last graphics submission that could reference them completes. */
-    private void retire(GpuContext ctx, GraphicsUse lastGraphicsUse, List<SectionGeom> removed) {
-        for (SectionGeom g : removed) {
-            ctx.gpuExecutor().retireAfterGraphics(lastGraphicsUse, g::destroy);
-        }
-    }
-
-    private void retireGeneration(GpuContext ctx, GraphicsUse lastGraphicsUse, Generation generation) {
-        ctx.gpuExecutor().retireAfterGraphics(lastGraphicsUse,
-                () -> table.recycleGeneration(generation));
+        geometry.ensureEmpty(ctx);
     }
 
     /** Join outstanding worker/GPU tasks and destroy every unpublished terminal result. */
@@ -1692,7 +1535,6 @@ public final class RtTerrain {
         cancelAllDirtyGroups();
         ctx.waitIdle();
         ctx.gpuExecutor().flushDestroysAfterDeviceIdle();
-        table.destroyRecycledGenerations();
         snapshots.clear();
         synchronized (dirtyLock) {
             dirty.clear(); // any pending re-extract keys refer to the old world/coords — drop them
@@ -1714,48 +1556,15 @@ public final class RtTerrain {
         lightSections.clear();
         lightHierarchyDirty = false;
         lastLightHierarchyRequestNanos = 0L;
-        if (resident.isEmpty() && table.buffer == null && removed.isEmpty() && prepared.isEmpty()) {
-            empty.clear();
-            table.instances = null;
-            published.clear();
-            table.capacity = 0;
-            table.nextSlot = 0;
-            table.freeSlots.clear();
-            table.slots.clear();
-            table.instanceList.clear();
-            removed.clear();
-            prepared.clear();
-            ready = false;
-            return;
-        }
-        Generation currentGeneration = table.detachGeneration();
-        if (currentGeneration != null) {
-            currentGeneration.buffer().destroy();
-        }
-        table.capacity = 0;
-        table.nextSlot = 0;
-        table.freeSlots.clear();
-        table.slots.clear();
-        table.instanceList.clear();
-        lightSections.clear();
-        for (SectionGeom g : resident.values()) {
-            g.destroy();
-        }
-        resident.clear();
+        geometry.destroyAfterDeviceIdle(removed);
         empty.clear();
-        table.instances = null;
-        published.clear();
         // The accumulators can hold evicted-but-not-yet-retired geometry (window sync fills `removed`
         // between streaming passes) and built-but-not-yet-published sections; the GPU is idle here, free them.
-        for (SectionGeom g : removed) {
-            g.destroy();
-        }
         removed.clear();
-        for (PreparedSection ps : prepared) {
-            RtSectionBuilder.destroy(ps);
+        for (Prepared<float[]> ps : prepared) {
+            RtRetainedGeometryBuilds.destroy(ps);
         }
         prepared.clear();
-        ready = false;
     }
 
     /**
@@ -1774,16 +1583,7 @@ public final class RtTerrain {
         inFlightDirtyGroup.clear();
         cancelAllDirtyGroups();
 
-        GraphicsUse lastGraphicsUse = ctx.gpuExecutor().latestGraphicsUse();
-        Generation oldGeneration = table.detachGeneration();
-
-        Set<SectionGeom> oldGeometry = Collections.newSetFromMap(new IdentityHashMap<>());
-        oldGeometry.addAll(resident.values());
-        oldGeometry.addAll(removed);
-        resident.clear();
-        removed.clear();
-
-        ArrayList<PreparedSection> oldPrepared = new ArrayList<>(prepared);
+        ArrayList<Prepared<float[]>> oldPrepared = new ArrayList<>(prepared);
         prepared.clear();
         SectionResult completed;
         while ((completed = completedBuilds.poll()) != null) {
@@ -1809,28 +1609,15 @@ public final class RtTerrain {
         reextract.clear();
         queuedReextract.clear();
         empty.clear();
-        published.clear();
         windowValid = false;
-
-        table.capacity = 0;
-        table.nextSlot = 0;
-        table.freeSlots.clear();
-        table.slots.clear();
-        table.instanceList.clear();
-        table.instances = null;
         lightSections.clear();
         lightHierarchyDirty = false;
         lastLightHierarchyRequestNanos = 0L;
 
-        if (oldGeneration != null) {
-            retireGeneration(ctx, lastGraphicsUse, oldGeneration);
-        }
+        GraphicsUse lastGraphicsUse = ctx.gpuExecutor().latestGraphicsUse();
+        geometry.clearAsync(ctx, removed);
+        removed.clear();
         lightGrid.invalidate(ctx, lastGraphicsUse);
-        if (!oldGeometry.isEmpty()) {
-            ArrayList<SectionGeom> retirement = new ArrayList<>(oldGeometry);
-            ctx.gpuExecutor().retireAfterGraphics(lastGraphicsUse,
-                    () -> destroyDetachedGeometry(retirement));
-        }
         if (!oldPrepared.isEmpty()) {
             ctx.gpuExecutor().retireUnpublished(() -> destroyDetachedPrepared(oldPrepared));
         }
@@ -1839,26 +1626,11 @@ public final class RtTerrain {
         ensureEmptyTableReady(ctx);
     }
 
-    private static void destroyDetachedGeometry(List<SectionGeom> geometry) {
+    private static void destroyDetachedPrepared(List<Prepared<float[]>> sections) {
         Throwable failure = null;
-        for (SectionGeom geom : geometry) {
+        for (Prepared<float[]> section : sections) {
             try {
-                geom.destroy();
-            } catch (Throwable t) {
-                if (failure == null) failure = t;
-                else failure.addSuppressed(t);
-            }
-        }
-        if (failure != null) {
-            throw new RuntimeException("Failed to retire detached RT terrain geometry", failure);
-        }
-    }
-
-    private static void destroyDetachedPrepared(List<PreparedSection> sections) {
-        Throwable failure = null;
-        for (PreparedSection section : sections) {
-            try {
-                RtSectionBuilder.destroy(section);
+                RtRetainedGeometryBuilds.destroy(section);
             } catch (Throwable t) {
                 if (failure == null) failure = t;
                 else failure.addSuppressed(t);

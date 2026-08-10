@@ -17,6 +17,7 @@ import dev.comfyfluffy.caustica.minecraft.sky.SkyLutPass;
 public final class MinecraftProvidersExtension implements CausticaExtension {
     public static final ResourceId ID = ResourceId.of("caustica", "minecraft");
     public static final ResourceId END_PORTAL_SURFACE = ResourceId.of("caustica", "end_portal");
+    public static final ResourceId WATER_SURFACE = ResourceId.of("caustica", "minecraft_water");
 
     @Override
     public void register(CausticaRegistry registry) {
@@ -25,6 +26,7 @@ public final class MinecraftProvidersExtension implements CausticaExtension {
                 .shaderSource(ShaderSource.classpath("/caustica/shaders/minecraft", "surface", "sky"))
                 .bind(Slots.SKY, "caustica_minecraft_overworld_sky", "MinecraftOverworldSky")
                 .surface(END_PORTAL_SURFACE, "caustica_portal_surface", "PortalSurface")
+                .surface(WATER_SURFACE, "caustica_water_surface", "WaterSurface")
                 .passResourceModule("caustica_minecraft_sky_bindings")
                 .group(SkyLutPass.GROUP)
                 .options(SkyLutPass.OPTIONS)

@@ -16,7 +16,7 @@ public static Payload payload = {};
 
 public struct VisibilityResult {
     public float3 transmittance;
-    public float waterHitT;
+    public float boundaryHitT;
 };
 
 
@@ -40,8 +40,6 @@ public float3 payloadSky() { return unpackSky(payload); }
 // payloadTransmission() below — a bool ("does this hit route through the dielectric transport") vs. that
 // function's OpenPBR transmission_weight float. Forwards MaterialBinding.flags & BINDING_TRANSMISSIVE.
 public bool payloadDielectric() { return (payload.flags & PAYLOAD_TRANSMISSIVE) != 0u; }
-// Set alongside payloadDielectric for water specifically; see PAYLOAD_WATER.
-public bool payloadWater() { return (payload.flags & PAYLOAD_WATER) != 0u; }
 // Set by world.rchit on any dielectric hit (see PAYLOAD_DIELECTRIC_ENTERING) — whether the ray was
 // travelling into the volume (vs. out of it) at this hit's face.
 public bool payloadDielectricEntering() { return (payload.flags & PAYLOAD_DIELECTRIC_ENTERING) != 0u; }
@@ -72,8 +70,6 @@ public static const float SURF_BIAS = 0.005;  // offset secondary-ray origins al
 public static const float RAY_TMIN = 0.001;   // tiny tmin: the normal offset already clears the surface
 public static const float RAY_TMAX = 1.0e20;  // scale-independent bound for rays toward the environment
 
-// Water is a smooth dielectric. IOR 1.333; absorption is per-block Beer-Lambert extinction.
-public static const float WATER_IOR = 1.333;
 public static const float3 SKY_SPEC_ALBEDO = float3(0.5, 0.5, 0.5); // RR guide default for sky pixels.
 public static const float3 SKY_DIFF_ALBEDO = float3(0.5, 0.5, 0.5);
 
@@ -82,8 +78,8 @@ public static const float3 SKY_DIFF_ALBEDO = float3(0.5, 0.5, 0.5);
 // recessed into their block by that inset, so a face touching a slab/stair leaves a tiny gap before the
 // neighbour's surface. A large bias (SURF_BIAS) would restart the ray past that neighbour and see
 // through it; this lands the ray inside the gap so the neighbour is still hit, while still clearing the
-// surface it left to avoid self-intersection. Water is meshed by RtFluidMesher with no inset, so it uses
-// the ordinary bias.
+// surface it left to avoid self-intersection. Other geometry can request the ordinary surface bias
+// through its medium implementation.
 public static const float INSET_TRANSMIT_BIAS = 1.0e-4;
 
 // Ray-cone texture LOD: raygen tracks a one-pixel footprint along the path, and closest-hit converts it

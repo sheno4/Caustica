@@ -6,7 +6,7 @@ import world_common;
 [shader("miss")]
 void main(inout Payload payload) {
     // Preserve hitT: guide payloads already seed the -1 miss sentinel, while shadow any-hit may have
-    // recorded the nearest water crossing here for underwater caustics. Preserve the surface words too:
+    // recorded a requested medium-boundary crossing. Preserve the surface words too:
     // this record serves shadow rays, whose accumulated transmittance lives in their albedo view.
     packNormal(payload, float3(0.0, 0.0, 0.0));
     payload.flags = 0u;

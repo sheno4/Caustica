@@ -3,6 +3,8 @@ package dev.comfyfluffy.caustica.rt.material;
 import com.google.gson.JsonParser;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialDefaults;
+import dev.comfyfluffy.caustica.minecraft.MinecraftProvidersExtension;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialClassifier;
 import dev.comfyfluffy.caustica.minecraft.provider.MinecraftMaterialSource;
 import net.minecraft.resources.Identifier;
 import org.junit.jupiter.api.Test;
@@ -21,7 +23,8 @@ final class RtMaterialOverridesTest {
     private static final RtMaterialOverrides.SurfaceResolver SURFACES = id ->
             ResourceId.parse("caustica:surface").equals(id) ? 0
                     : ResourceId.parse("somemod:crystal").equals(id) ? 1
-                    : ResourceId.parse("caustica:end_portal").equals(id) ? 2 : -1;
+                    : ResourceId.parse("caustica:end_portal").equals(id) ? 2
+                    : MinecraftProvidersExtension.WATER_SURFACE.equals(id) ? 3 : -1;
 
     private static RtMaterialOverrides.Rule parse(com.google.gson.JsonObject root, Identifier source) {
         return RtMaterialOverrides.from(List.of(MinecraftMaterialSource.parse(root, source)), SURFACES)
@@ -103,7 +106,8 @@ final class RtMaterialOverridesTest {
                 RtMaterialDesc.EmissionSource.NONE, 0.0f, RtMaterialDesc.EmissionSummary.NONE, 0);
         RtMaterialDesc applied = rule.apply(base);
         assertEquals(RtMaterialRegistry.MODEL_DIELECTRIC, applied.model());
-        assertEquals(OpenPbrMaterialDefaults.REFERENCE_LIQUID_IOR, applied.specularIor());
+        assertEquals(MinecraftMaterialClassifier.WATER_IOR, applied.specularIor());
+        assertEquals(3, applied.surfaceImplementation());
         assertEquals(1.0f, applied.transmissionWeight());
     }
 

@@ -28,13 +28,14 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
     }
 
     if ((flags & BINDING_TRANSMISSIVE) != 0u) {
-        // Per-primitive tint multiplies base colour, and transmission colour is authored relative to it,
-        // so source-tinted water and dyed glass both flow through here without a second meaning.
+        // Per-primitive tint multiplies base colour, and transmission colour is authored relative to it.
         packAlbedo(payload, unpackAlbedo(payload) * transmittance
                 * bt709ToAcesCg(srgbToLinear(hit.tint)));
-        // Any-hit order is arbitrary, so keep the nearest: for an underwater shading point that is where
-        // its sun shadow ray leaves the medium. visibility() seeds the -1 sentinel.
-        if ((flags & BINDING_RECORD_CROSSING) != 0u) {
+        // Any-hit order is arbitrary. Track only a boundary produced by the current medium's
+        // implementation, so another transmissive volume cannot steal its crossing.
+        bool trackBoundary = (payload.flags & PAYLOAD_TRACK_MEDIUM_BOUNDARY) != 0u;
+        uint mediumImplementation = payload.flags >> PAYLOAD_SURFACE_IMPL_SHIFT;
+        if (trackBoundary && bindingSurfaceImpl(hit.binding) == mediumImplementation) {
             payload.hitT = payload.hitT < 0.0 ? RayTCurrent() : min(payload.hitT, RayTCurrent());
         }
         IgnoreHit();

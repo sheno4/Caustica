@@ -155,7 +155,7 @@ public final class RtAccel {
         return result;
     }
 
-    /** CPU-generated opacity micromap input for one terrain geometry's triangle order. */
+    /** CPU-generated opacity micromap input for one retained geometry's triangle order. */
     public record OpacityMicromapInput(byte[] data, byte[] triangles, int triangleCount, int subdivisionLevel,
                                        int bytesPerTriangle) {
     }
@@ -246,9 +246,8 @@ public final class RtAccel {
 
     /**
      * A BLAS whose AS + backing buffer are allocated but whose build command is recorded later, so
-     * many sections' builds can be batched into one submission — one {@code vkQueueSubmit} + fence
-     * wait per tick instead of one per section (each submit drains the graphics queue, so per-section
-     * submits were the dominant terrain-streaming stall).
+     * many retained builds can be batched into one submission — one {@code vkQueueSubmit} + fence
+     * wait per batch instead of one per geometry (each submit drains the graphics queue).
      * {@code opaque} marks geometry {@code OPAQUE} (solid, no any-hit) vs
      * {@code NO_DUPLICATE_ANY_HIT_INVOCATION} for alpha-tested cutout.
      */
@@ -268,17 +267,17 @@ public final class RtAccel {
         // {@code update} = this recorded op is an in-place UPDATE rather than a full BUILD.
         private final boolean updatable;
         private final boolean update;
-        // Terrain multi-geometry split (any-hit opt): one geometry per SBT class, in the fixed packed
+        // Retained packed multi-geometry split: one geometry per SBT class, in the fixed packed
         // order { opaque, masked, transmissive } (see SBT_CLASSES). Class 0 (opaque) is flagged
         // VK_GEOMETRY_OPAQUE_BIT. The fixed geometry indices are also SBT class indices: radiance rays use
         // closest-hit-only records for opaque/transmissive and an any-hit record for masked; shadow rays
         // use any-hit records for masked/transmissive.
         // Both split flags false ⇒ the legacy single-geometry path keyed on triangleCount.
-        private final boolean terrainSplit;
-        private final int[] terrainTris; // per-class triangle counts in SBT_CLASSES order (null if !terrainSplit)
+        private final boolean retainedSplit;
+        private final int[] retainedClassTriangles; // per-class triangle counts in SBT_CLASSES order (null if !retainedSplit)
         private final boolean entitySplit;
         private final int[] entityTris; // per-class triangle counts in SBT_CLASSES order (null if !entitySplit)
-        private final OpacityMicromap opacityMicromap; // optional, terrain masked class only
+        private final OpacityMicromap opacityMicromap; // optional, retained masked class only
 
         private PreparedBlas(RtAccel accel, GpuBuffer scratch, GpuBuffer externalBacking, long vertexAddr, long indexAddr,
                              int maxVertex, int triangleCount, boolean opaque, String label, boolean updatable, boolean update) {
@@ -288,7 +287,7 @@ public final class RtAccel {
 
         private PreparedBlas(RtAccel accel, GpuBuffer scratch, GpuBuffer externalBacking, long vertexAddr, long indexAddr,
                              int maxVertex, int triangleCount, boolean opaque, String label, boolean updatable, boolean update,
-                             boolean terrainSplit, int[] terrainTris, boolean entitySplit, int[] entityTris,
+                             boolean retainedSplit, int[] retainedClassTriangles, boolean entitySplit, int[] entityTris,
                              OpacityMicromap opacityMicromap) {
             this.accel = accel;
             this.scratch = scratch;
@@ -301,22 +300,22 @@ public final class RtAccel {
             this.label = label;
             this.updatable = updatable;
             this.update = update;
-            this.terrainSplit = terrainSplit;
-            this.terrainTris = terrainTris;
+            this.retainedSplit = retainedSplit;
+            this.retainedClassTriangles = retainedClassTriangles;
             this.entitySplit = entitySplit;
             this.entityTris = entityTris;
             this.opacityMicromap = opacityMicromap;
         }
 
-        /** A terrain section BLAS split into fixed per-class geometries in {@link RtAccel#SBT_CLASSES} order. */
-        static PreparedBlas terrain(RtAccel accel, GpuBuffer scratch, GpuBuffer externalBacking, long vertexAddr, long indexAddr, int maxVertex,
-                                    int[] terrainTris, OpacityMicromap opacityMicromap, String label) {
+        /** A retained packed BLAS split into fixed per-class geometries in {@link RtAccel#SBT_CLASSES} order. */
+        static PreparedBlas retained(RtAccel accel, GpuBuffer scratch, GpuBuffer externalBacking, long vertexAddr, long indexAddr, int maxVertex,
+                                    int[] retainedClassTriangles, OpacityMicromap opacityMicromap, String label) {
             int total = 0;
-            for (int t : terrainTris) {
+            for (int t : retainedClassTriangles) {
                 total += t;
             }
             return new PreparedBlas(accel, scratch, externalBacking, vertexAddr, indexAddr, maxVertex,
-                    total, false, label, false, false, true, terrainTris, false, null, opacityMicromap);
+                    total, false, label, false, false, true, retainedClassTriangles, false, null, opacityMicromap);
         }
 
         static PreparedBlas entity(RtAccel accel, GpuBuffer scratch, GpuBuffer externalBacking, long vertexAddr,
@@ -340,7 +339,7 @@ public final class RtAccel {
         }
     }
 
-    // SBT hit-group classes, shared by terrain and entity geometry alike. Geometry indices are fixed and
+    // SBT hit-group classes, shared by retained and dynamic geometry alike. Geometry indices are fixed and
     // double as SBT material record indices, on both producers' BLAS — see MATERIAL_MODEL_PLAN.md §5:
     // "masked" and "masked+transmissive" share one record because the shadow any-hit reads the binding's
     // transmissive flag itself, so three classes cover every reachable (coverage, transmittance) pair.
@@ -372,8 +371,8 @@ public final class RtAccel {
     public record PersistentBuild(PreparedBlas op, RtAccel accel, GpuBuffer backing, GpuBuffer scratch) {
     }
 
-    /** Source and destination of the second, compact-copy phase of a terrain BLAS build. */
-    public record PreparedTerrainCompaction(PreparedBlas source, PreparedBlas compacted) {
+    /** Source and destination of the second, compact-copy phase of a retained BLAS build. */
+    public record PreparedBlasCompaction(PreparedBlas source, PreparedBlas compacted) {
     }
 
     /** Allocate a BLAS (AS + backing + scratch) and query sizes, deferring the build to {@link #recordBlasBuilds}. */
@@ -393,23 +392,24 @@ public final class RtAccel {
     }
 
     /**
-     * Allocate a terrain section BLAS split into fixed SBT classes (any-hit opt). {@code classTris}
+     * Allocate a retained packed BLAS split into fixed SBT classes (any-hit opt). {@code classTris}
      * holds triangle counts in {@link #SBT_CLASSES} order: opaque, masked, transmissive. All geometries
      * reference the same packed vertex/index buffers; zero-triangle classes are kept so
      * {@code gl_GeometryIndexEXT} remains a stable material/SBT index in the shaders.
      */
-    public static PreparedBlas prepareTerrainBlas(GpuContext ctx, GpuBuffer positions, int vertexCount,
-                                                  GpuBuffer indices, int[] classTris, OpacityMicromapInput opacityMicromapInput,
-                                                  boolean compact, String label) {
+    public static PreparedBlas prepareRetainedBlas(GpuContext ctx, GpuBuffer positions, int vertexCount,
+                                                   GpuBuffer indices, int[] classTris,
+                                                   OpacityMicromapInput opacityMicromapInput,
+                                                   boolean compact, String label) {
         VkDevice vk = ctx.vk();
-        String debugLabel = labelOr(label, "terrain BLAS");
+        String debugLabel = labelOr(label, "retained BLAS");
         OpacityMicromap opacityMicromap = null;
         GpuBuffer backing = null;
         GpuBuffer scratch = null;
         RtAccel accel = null;
         try (MemoryStack stack = MemoryStack.stackPush()) {
             opacityMicromap = prepareOpacityMicromap(ctx, opacityMicromapInput, debugLabel);
-            VkAccelerationStructureBuildSizesInfoKHR sizes = queryTerrainBlasSizes(vk, stack, positions, indices,
+            VkAccelerationStructureBuildSizesInfoKHR sizes = queryRetainedBlasSizes(vk, stack, positions, indices,
                     vertexCount, classTris, opacityMicromap, compact);
             backing = ctx.createAsyncBuffer(sizes.accelerationStructureSize(), VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, false,
                     debugLabel + " backing");
@@ -420,12 +420,12 @@ public final class RtAccel {
                         .queryType(VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR).queryCount(1);
                 java.nio.LongBuffer pQueryPool = stack.mallocLong(1);
                 GpuContext.check(VK10.vkCreateQueryPool(vk, queryCi, null, pQueryPool),
-                        "vkCreateQueryPool(terrain BLAS compacted size)");
+                        "vkCreateQueryPool(retained BLAS compacted size)");
                 accel.compactionQueryPool = pQueryPool.get(0);
                 RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_QUERY_POOL, accel.compactionQueryPool,
                         debugLabel + " compacted-size query");
             }
-            return PreparedBlas.terrain(accel, scratch, null, positions.deviceAddress, indices.deviceAddress, vertexCount - 1,
+            return PreparedBlas.retained(accel, scratch, null, positions.deviceAddress, indices.deviceAddress, vertexCount - 1,
                     classTris, opacityMicromap, debugLabel);
         } catch (Throwable t) {
             if (accel != null) {
@@ -441,25 +441,25 @@ public final class RtAccel {
     }
 
     /**
-     * Read a completed terrain build's compacted-size query and allocate its compact-copy destination.
+     * Read a completed retained build's compacted-size query and allocate its compact-copy destination.
      * Called only after the compute timeline confirms the build/query submission completed.
      */
-    public static PreparedTerrainCompaction prepareTerrainCompaction(GpuContext ctx, PreparedBlas source) {
-        if (!source.terrainSplit || source.accel.compactionQueryPool == 0L) {
-            throw new IllegalArgumentException("terrain BLAS has no pending compaction query");
+    public static PreparedBlasCompaction prepareBlasCompaction(GpuContext ctx, PreparedBlas source) {
+        if (!source.retainedSplit || source.accel.compactionQueryPool == 0L) {
+            throw new IllegalArgumentException("retained BLAS has no pending compaction query");
         }
         long compactedSize;
         try (MemoryStack stack = MemoryStack.stackPush()) {
             java.nio.LongBuffer result = stack.mallocLong(1);
             GpuContext.check(VK10.vkGetQueryPoolResults(ctx.vk(), source.accel.compactionQueryPool,
                     0, 1, result, Long.BYTES, VK10.VK_QUERY_RESULT_64_BIT),
-                    "vkGetQueryPoolResults(terrain BLAS compacted size)");
+                    "vkGetQueryPoolResults(retained BLAS compacted size)");
             compactedSize = result.get(0);
         }
         VK10.vkDestroyQueryPool(ctx.vk(), source.accel.compactionQueryPool, null);
         source.accel.compactionQueryPool = 0L;
         if (compactedSize <= 0L) {
-            throw new IllegalStateException("terrain BLAS compacted size is " + compactedSize);
+            throw new IllegalStateException("retained BLAS compacted size is " + compactedSize);
         }
 
         GpuBuffer backing = null;
@@ -472,10 +472,10 @@ public final class RtAccel {
                     source.label + " compacted");
             OpacityMicromap opacityMicromap = source.accel.detachOpacityMicromap();
             compactedAccel.opacityMicromap = opacityMicromap;
-            PreparedBlas compacted = PreparedBlas.terrain(compactedAccel, source.scratch, null,
-                    source.vertexAddr, source.indexAddr, source.maxVertex, source.terrainTris,
+            PreparedBlas compacted = PreparedBlas.retained(compactedAccel, source.scratch, null,
+                    source.vertexAddr, source.indexAddr, source.maxVertex, source.retainedClassTriangles,
                     opacityMicromap, source.label);
-            return new PreparedTerrainCompaction(source, compacted);
+            return new PreparedBlasCompaction(source, compacted);
         } catch (Throwable t) {
             if (compactedAccel != null) {
                 compactedAccel.destroy();
@@ -544,7 +544,7 @@ public final class RtAccel {
      * Entity-path variant of {@link #prepareTrianglesBlas}: fully transient, rebuilt fresh every frame (no
      * persistent per-entity ring), so the AS backing is caller-owned rather than accel-owned. Reclaimed with
      * {@link #releaseEntityBlas} (NOT {@code freeBlasScratch} + {@code accel.destroy()}). Used only by
-     * {@link RtEntities}; the terrain path keeps {@link #prepareTrianglesBlas}.
+     * {@link RtEntities}; persistent retained geometry keeps {@link #prepareTrianglesBlas}.
      */
     public static PreparedBlas prepareEntityBlas(GpuContext ctx, GpuBuffer positions, int vertexCount,
                                                  GpuBuffer indices, int indexCount, boolean opaque, String label) {
@@ -719,7 +719,7 @@ public final class RtAccel {
     private static int buildFlags(boolean allowUpdate) {
         // ALLOW_DATA_ACCESS lets the closest-hit read vertex positions from the BLAS via
         // gl_HitTriangleVertexPositionsEXT (VK_KHR_ray_tracing_position_fetch) for the normal-map TBN.
-        // Applied to every BLAS (terrain/entity) AND the refit path, so the build/UPDATE flags stay
+        // Applied to every BLAS and the refit path, so the build/UPDATE flags stay
         // identical (a refit invariant) — this is the single shared flag source.
         return VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR
                 | VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_DATA_ACCESS_BIT_KHR
@@ -838,9 +838,9 @@ public final class RtAccel {
     }
 
     /** One triangle geometry per SBT class, in {@link #SBT_CLASSES} order; only opaque is flagged opaque. */
-    private static VkAccelerationStructureGeometryKHR.Buffer terrainGeometries(MemoryStack stack, long vertexAddr,
-                                                                               long indexAddr, int vertexCount, int[] classTris,
-                                                                               OpacityMicromap opacityMicromap) {
+    private static VkAccelerationStructureGeometryKHR.Buffer retainedGeometries(MemoryStack stack, long vertexAddr,
+                                                                                long indexAddr, int vertexCount, int[] classTris,
+                                                                                OpacityMicromap opacityMicromap) {
         VkAccelerationStructureGeometryKHR.Buffer geom = VkAccelerationStructureGeometryKHR.calloc(classTris.length, stack);
         VkAccelerationStructureTrianglesOpacityMicromapEXT ommAttachment = null;
         if (opacityMicromap != null && classTris[CLASS_MASKED] > 0) {
@@ -864,8 +864,8 @@ public final class RtAccel {
         return geom;
     }
 
-    /** Build ranges parallel to {@link #terrainGeometries}; empty classes get a zero primitive count. */
-    private static VkAccelerationStructureBuildRangeInfoKHR.Buffer terrainBuildRanges(MemoryStack stack, int[] classTris) {
+    /** Build ranges parallel to {@link #retainedGeometries}; empty classes get a zero primitive count. */
+    private static VkAccelerationStructureBuildRangeInfoKHR.Buffer retainedBuildRanges(MemoryStack stack, int[] classTris) {
         VkAccelerationStructureBuildRangeInfoKHR.Buffer range = VkAccelerationStructureBuildRangeInfoKHR.calloc(classTris.length, stack);
         int acc = 0;
         for (int b = 0; b < classTris.length; b++) {
@@ -876,14 +876,10 @@ public final class RtAccel {
         return range;
     }
 
-    private static int terrainGeomCount(int[] classTris) {
-        return classTris.length;
-    }
-
-    private static VkAccelerationStructureBuildSizesInfoKHR queryTerrainBlasSizes(VkDevice vk, MemoryStack stack, GpuBuffer positions,
+    private static VkAccelerationStructureBuildSizesInfoKHR queryRetainedBlasSizes(VkDevice vk, MemoryStack stack, GpuBuffer positions,
                                                                                   GpuBuffer indices, int vertexCount, int[] classTris,
                                                                                   OpacityMicromap opacityMicromap, boolean compact) {
-        VkAccelerationStructureGeometryKHR.Buffer geom = terrainGeometries(stack, positions.deviceAddress, indices.deviceAddress,
+        VkAccelerationStructureGeometryKHR.Buffer geom = retainedGeometries(stack, positions.deviceAddress, indices.deviceAddress,
                 vertexCount, classTris, opacityMicromap);
         VkAccelerationStructureBuildGeometryInfoKHR.Buffer build = VkAccelerationStructureBuildGeometryInfoKHR.calloc(1, stack);
         build.sType$Default().type(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR)
@@ -903,7 +899,7 @@ public final class RtAccel {
     /**
      * A TLAS instance: a 3x4 row-major transform, the device address of its BLAS, the 24-bit
      * {@code instanceCustomIndex} the hit shaders read, the 8-bit visibility {@code mask} (ANDed with the
-     * trace cull mask), and the base SBT hit-record offset. Terrain and entity instances both use offset 0
+     * trace cull mask), and the base SBT hit-record offset. Retained and dynamic instances both use offset 0
      * — they share the same {@link #SBT_CLASSES}-sized record space, so {@code gl_GeometryIndexEXT} alone
      * selects the class on either producer's BLAS.
      */
@@ -977,7 +973,7 @@ public final class RtAccel {
      * rebuilt in place — BUILD mode overwrites). Do NOT call {@link PreparedTlas#destroyAll} on the
      * result: the ring owns the resources.
      */
-    /** Pack terrain and dynamic instances as two contiguous ranges without a composite-list get per item. */
+    /** Pack base and dynamic instances as two contiguous ranges without a composite-list get per item. */
     public static PreparedTlas prepareTlas(GpuContext ctx, List<Instance> baseInstances,
                                            List<Instance> dynamicInstances, TlasRing ring, GraphicsUse graphicsUse) {
         int baseCount = baseInstances.size();
@@ -1094,9 +1090,9 @@ public final class RtAccel {
         }
     }
 
-    /** Record the compact copy after {@link #prepareTerrainCompaction} has sized its destination. */
-    public static void recordTerrainCompaction(GpuContext ctx, VkCommandBuffer cmd,
-                                               PreparedTerrainCompaction compaction) {
+    /** Record the compact copy after {@link #prepareBlasCompaction} has sized its destination. */
+    public static void recordBlasCompaction(GpuContext ctx, VkCommandBuffer cmd,
+                                            PreparedBlasCompaction compaction) {
         try (MemoryStack stack = MemoryStack.stackPush();
              RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd,
                      compaction.source.label + " compact")) {
@@ -1111,12 +1107,12 @@ public final class RtAccel {
     }
 
     /** Release the uncompacted source after the compact copy reaches timeline completion. */
-    public static void finishTerrainCompaction(PreparedTerrainCompaction compaction) {
+    public static void finishBlasCompaction(PreparedBlasCompaction compaction) {
         compaction.source.accel.destroy();
     }
 
     /** Release both AS allocations after a failed compact-copy phase. Geometry buffers remain caller-owned. */
-    public static void destroyTerrainCompaction(PreparedTerrainCompaction compaction) {
+    public static void destroyBlasCompaction(PreparedBlasCompaction compaction) {
         compaction.compacted.accel.destroy();
         compaction.source.accel.destroy();
     }
@@ -1141,8 +1137,8 @@ public final class RtAccel {
     }
 
     private static void recordBlasBuild(GpuContext ctx, VkCommandBuffer cmd, MemoryStack stack, PreparedBlas b) {
-        if (b.terrainSplit) {
-            recordTerrainBlasBuild(ctx, cmd, stack, b);
+        if (b.retainedSplit) {
+            recordRetainedBlasBuild(ctx, cmd, stack, b);
             return;
         }
         if (b.entitySplit) {
@@ -1189,9 +1185,8 @@ public final class RtAccel {
         vkCmdBuildAccelerationStructuresKHR(cmd, build, ppRanges);
     }
 
-    /** Record a terrain section's two-geometry (opaque + alpha) BUILD. Always a fresh BUILD — terrain
-     *  sections are never refit in place (re-extraction allocates a new BLAS), so no UPDATE branch. */
-    private static void recordTerrainBlasBuild(GpuContext ctx, VkCommandBuffer cmd, MemoryStack stack, PreparedBlas b) {
+    /** Record a retained packed multi-geometry BUILD. Retained replacements allocate a new BLAS, so no UPDATE branch. */
+    private static void recordRetainedBlasBuild(GpuContext ctx, VkCommandBuffer cmd, MemoryStack stack, PreparedBlas b) {
         boolean compact = b.requestsCompaction();
         if (compact) {
             VK10.vkCmdResetQueryPool(cmd, b.accel.compactionQueryPool, 0, 1);
@@ -1200,8 +1195,8 @@ public final class RtAccel {
             recordMicromapBuild(cmd, stack, b.opacityMicromap);
             micromapBuildBarrier(cmd, stack);
         }
-        VkAccelerationStructureGeometryKHR.Buffer geom = terrainGeometries(stack, b.vertexAddr, b.indexAddr,
-                b.maxVertex + 1, b.terrainTris, b.opacityMicromap);
+        VkAccelerationStructureGeometryKHR.Buffer geom = retainedGeometries(stack, b.vertexAddr, b.indexAddr,
+                b.maxVertex + 1, b.retainedClassTriangles, b.opacityMicromap);
         VkAccelerationStructureBuildGeometryInfoKHR.Buffer build = VkAccelerationStructureBuildGeometryInfoKHR.calloc(1, stack);
         build.sType$Default().type(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR)
                 .flags(buildFlags(false) | (compact ? VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR : 0))
@@ -1209,7 +1204,7 @@ public final class RtAccel {
                 .geometryCount(geom.capacity()).pGeometries(geom)
                 .dstAccelerationStructure(b.accel.handle);
         build.get(0).scratchData().deviceAddress(scratchAddress(ctx, b.scratch));
-        VkAccelerationStructureBuildRangeInfoKHR.Buffer range = terrainBuildRanges(stack, b.terrainTris);
+        VkAccelerationStructureBuildRangeInfoKHR.Buffer range = retainedBuildRanges(stack, b.retainedClassTriangles);
         PointerBuffer ppRange = stack.mallocPointer(1).put(0, range.address());
         vkCmdBuildAccelerationStructuresKHR(cmd, build, ppRange);
         if (compact) {

@@ -10,6 +10,9 @@ import dev.comfyfluffy.caustica.api.provider.MaterialDefinition;
 import dev.comfyfluffy.caustica.api.provider.MaterialHandle;
 import dev.comfyfluffy.caustica.api.provider.MaterialSink;
 import dev.comfyfluffy.caustica.api.provider.MaterialSource;
+import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialDefaults;
+import dev.comfyfluffy.caustica.minecraft.MinecraftProvidersExtension;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialClassifier;
 import dev.comfyfluffy.caustica.rt.material.RtBlockMaterials;
 import net.minecraft.client.Minecraft;
 import net.minecraft.resources.Identifier;
@@ -24,12 +27,14 @@ import java.util.Map;
 public final class MinecraftMaterialSource implements MaterialSource {
     public static final ResourceId ID = ResourceId.of("caustica", "minecraft_materials");
     public static final ResourceId CLOUD = ResourceId.of("caustica", "cloud");
+    public static final ResourceId WATER = ResourceId.of("minecraft", "water");
     public static final int FORMAT = 4;
 
     @Override
     public void submitMaterials(MaterialSink sink) {
         sink.define(new MaterialDefinition(new MaterialHandle(CLOUD), 0.82f, 0.86f, 0.9f,
                 0.92f, 0.0f, 1.33f, 0.0f, null));
+        sink.define(waterDefinition());
         Map<Identifier, Resource> resources = Minecraft.getInstance().getResourceManager().listResources(
                 "materials", id -> id.getPath().endsWith(".json"));
         List<Map.Entry<Identifier, Resource>> ordered = new ArrayList<>(resources.entrySet());
@@ -48,6 +53,13 @@ public final class MinecraftMaterialSource implements MaterialSource {
                 .thenComparing(MaterialRule::id));
         rules.forEach(sink::submit);
         CausticaMod.LOGGER.info("RT material source: format={}, rules={}", FORMAT, rules.size());
+    }
+
+    static MaterialDefinition waterDefinition() {
+        return new MaterialDefinition(new MaterialHandle(WATER), 1.0f, 1.0f, 1.0f,
+                OpenPbrMaterialDefaults.TRANSMISSIVE_SPECULAR_ROUGHNESS, 0.0f,
+                MinecraftMaterialClassifier.WATER_IOR, 1.0f,
+                MinecraftProvidersExtension.WATER_SURFACE);
     }
 
     public static MaterialRule parse(JsonObject root, Identifier source) {
@@ -93,10 +105,11 @@ public final class MinecraftMaterialSource implements MaterialSource {
         if (model != null) {
             if (transmission == null) transmission = "opaque".equals(model) ? 0.0f : 1.0f;
             if (ior == null) {
-                ior = "water".equals(model) ? 1.333f : 1.5f;
+                ior = "water".equals(model) ? MinecraftMaterialClassifier.WATER_IOR : 1.5f;
             }
         }
-        ResourceId surface = root.has("surface") ? ResourceId.parse(root.get("surface").getAsString()) : null;
+        ResourceId surface = root.has("surface") ? ResourceId.parse(root.get("surface").getAsString())
+                : "water".equals(model) ? MinecraftProvidersExtension.WATER_SURFACE : null;
         MaterialRule.Parameters parameters = new MaterialRule.Parameters(roughness, metalness, ior,
                 transmission, emissionLuminanceCdM2, surface);
         return new MaterialRule(resourceId(source), new MaterialRule.Match(texture, geometry), parameters);

@@ -24,8 +24,15 @@ import guides;
 import surface_bsdf;
 import caustica_types;
 import caustica_surface;
+import caustica_api;
+// Required in EVERY composition-specialized entry point, not just the ones that read a pass resource:
+// Slang rejects a module that declares global shader parameters if it is reachable only through the
+// generic type parameter, and TC exposes every slot the composition names, whether this stage calls it or
+// not. See sky_miss.slang for the full rule and WorldShaderCompiler.passResourceAnchorModule for how this
+// fixed name is generated.
+import caustica_pass_resources;
 
-public PathSegment tracePrimary(PathSegment seg,
+public PathSegment tracePrimary<TSurfaces : ISurfaceDispatch>(TSurfaces surfaces, PathSegment seg,
                                 DevicePtr<PackedPathSegment> queue,
                                 uint splitRecord,
                                 out uint nextRecord) {
@@ -91,20 +98,20 @@ public PathSegment tracePrimary(PathSegment seg,
         rayConeWidth = max(rayConeWidth + rayConeSpread * max(payload.hitT, 0.0),
                            RAY_CONE_MIN_WIDTH);
 
-        bool isWater = payloadWater();
         bool entering = payloadDielectricEntering();
-        // Closest-hit published this interface's shading normal, waves included, and the same normal one
-        // frame ago for a reflection to reproject through.
+        // Closest-hit published this interface's fully evaluated shading normal and the corresponding
+        // previous-frame normal for a reflection to reproject through.
         float3 previousNormal = payloadPreviousNormal();
 
         float transmission = clamp(payloadTransmission(), 0.0, 1.0);
-        Medium entered = makeDielectricMedium(isWater, max(payloadIor(), 1.0),
-                                              payloadAlbedo(), transmission);
+        MediumBoundary boundary = evaluateMedium(surfaces, payloadSurfaceImpl(),
+                max(payloadIor(), 1.0), payloadAlbedo(), transmission);
+        Medium entered = boundary.medium;
         float etaI = medium.current.ior;
         float etaT = entering ? entered.ior : medium.outer.ior;
         float F = fresnelDielectric(clamp(dot(-rd, n), 0.0, 1.0), etaI, etaT);
         float3 transmittedDir = refract(rd, n, etaI / etaT);
-        float transmitBias = isWater ? SURF_BIAS : INSET_TRANSMIT_BIAS;
+        float transmitBias = boundary.transmissionRayBias;
 
         if (bounce == 0) {
             gv_normal = n;
@@ -113,9 +120,9 @@ public PathSegment tracePrimary(PathSegment seg,
             gv_emissive = false;
             gv_hitCamRel = hitPos - worldPush.camOffset;
             gv_motionUseRefracted = false;
-            gv_motionObjDisp = isWater ? float3(0.0, 0.0, 0.0) : payload.motionPrev;
+            gv_motionObjDisp = payload.motionPrev;
             gv_spec = makeSpecSurface(gv_hitCamRel, n, previousNormal,
-                                      isWater ? float3(0.0, 0.0, 0.0) : float3(payload.motionPrev),
+                                      float3(payload.motionPrev),
                                       gv_rough, float3(F, F, F));
             if (dot(transmittedDir, transmittedDir) > 0.0) {
                 MediumStack guideMedium = medium;
@@ -124,10 +131,9 @@ public PathSegment tracePrimary(PathSegment seg,
                 } else {
                     mediumPop(guideMedium);
                 }
-                resolveTransmissionGuide(hitPos, transmittedDir, n,
+                resolveTransmissionGuide(surfaces, hitPos, transmittedDir, n,
                         guideMedium, transmitBias, rayConeWidth, rayConeSpread,
-                        !isWater && entering
-                                ? payloadAlbedo() : float3(1.0, 1.0, 1.0));
+                        entering ? boundary.guideTransmittance : float3(1.0));
             }
         }
 
@@ -185,9 +191,9 @@ public PathSegment tracePrimary(PathSegment seg,
     }
 }
 
-[shader("raygeneration")]
-void main() {
+public void runPrimary<TC : IComposition>() {
     worldPush = ConstPtr<WorldPush>(pc.worldPushAddr)[0];
+    TC.Surfaces surfaces = {};
     uint2 dispatchIndex = DispatchRaysIndex().xy;
     uint2 dimensions = DispatchRaysDimensions().xy;
     int2 pix = int2(dispatchIndex);
@@ -203,9 +209,14 @@ void main() {
     float rayConeSpread = primaryRayConeSpread(jndc, size, dir);
     uint seed = (dispatchIndex.x * 1973u + dispatchIndex.y * 9277u + 26699u)
             ^ (worldPush.frameIndex * 2654435761u);
-    MediumStack cameraMedium = makeMediumStack((worldPush.flags & 1u) != 0u
-            ? makeDielectricMedium(true, WATER_IOR, worldPush.cameraMedium, 1.0)
-            : airMedium());
+    Medium cameraStart = airMedium();
+    if ((worldPush.flags & 1u) != 0u) {
+        float2 cameraParameters = unpackHalf2(worldPush.cameraMediumIorTransmission);
+        uint implementation = (worldPush.flags >> 8u) & 255u;
+        cameraStart = evaluateMedium(surfaces, implementation, max(cameraParameters.x, 1.0),
+                worldPush.cameraMedium, clamp(cameraParameters.y, 0.0, 1.0)).medium;
+    }
+    MediumStack cameraMedium = makeMediumStack(cameraStart);
     uint pixelIndex = dispatchIndex.y * dimensions.x + dispatchIndex.x;
     uint baseRecordCount = dimensions.x * dimensions.y;
     uint splitRecord = baseRecordCount + pixelIndex;
@@ -215,9 +226,15 @@ void main() {
     PathSegment current = makePathSegment(origin, dir, float3(1.0, 1.0, 1.0),
             cameraMedium, 0.0, rayConeSpread, seed, 0, true);
     uint nextRecord;
-    PathSegment terminal = tracePrimary(
-            current, queue, splitRecord, nextRecord);
+    PathSegment terminal = tracePrimary(surfaces, current, queue, splitRecord, nextRecord);
     queue[pixelIndex] = packPathSegment(terminal, nextRecord);
 
     writeGuides(pix, dir, jndc, size, rayConeSpread);
 }
+
+#ifndef CAUSTICA_PRIMARY_REFLECTION
+[shader("raygeneration")]
+void main<TC : IComposition>() {
+    runPrimary<TC>();
+}
+#endif

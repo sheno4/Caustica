@@ -4,6 +4,7 @@ import com.mojang.blaze3d.vertex.VertexConsumer;
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialClassifier;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialLookup;
+import dev.comfyfluffy.caustica.minecraft.provider.MinecraftMaterialSource;
 import dev.comfyfluffy.caustica.rt.RtComposite;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
@@ -206,8 +207,8 @@ final class RtTerrainMesher {
                     FluidState fluid = state.getFluidState();
                     if (!fluid.isEmpty()) {
                         fluidCapture.emission = state.getLightEmission() / 15f;
-                        // Water is the dielectric fluid; lava stays an opaque emitter. Tagged per-prim
-                        // so the path tracer can branch (see emitQuad).
+                        // Minecraft selects the named transmissive fluid material; lava stays the
+                        // adapter's opaque emitter fallback.
                         fluidCapture.water = fluid.is(FluidTags.WATER);
                         RtFluidMesher.tesselate(region, m, fluidCapture, fluidRenderer.fluidModels, state, fluid);
                     }
@@ -720,10 +721,8 @@ final class RtTerrainMesher {
         }
 
         private void emitQuad() {
-            // Water's binding is transmissive (opaque coverage) → CLASS_TRANSMISSIVE, same class glass
-            // lands in: its any-hit only passes shadow rays through (the closest-hit does the dielectric).
-            // Lava is an opaque emitter → CLASS_OPAQUE (no any-hit at all).
-            int materialId = water ? materials.waterId() : materials.lavaId();
+            int materialId = water
+                    ? materials.bindingId(MinecraftMaterialSource.WATER) : materials.lavaId();
             Geom g = switch (materials.sbtClassFor(materialId)) {
                 case RtAccel.CLASS_MASKED -> cur.masked();
                 case RtAccel.CLASS_TRANSMISSIVE -> cur.transmissive();

@@ -46,7 +46,7 @@ final class GeometryShaderAbiTest {
                 .toAbsolutePath().normalize();
         String indexedWriters = read(List.of(java.resolve("geometry/RtSceneGeometryManager.java"),
                 java.resolve("entity/RtEntities.java")));
-        String directWriter = Files.readString(java.resolve("terrain/RtSectionTable.java"));
+        String directWriter = Files.readString(java.resolve("geometry/RtRetainedGeometryScene.java"));
 
         assertTrue(indexedWriters.contains("RtGeometryAbi.FLAG_INDEXED_TEXTURE_COORDINATES"));
         assertTrue(directWriter.contains("RtGeometryAbi.FLAG_TRIANGLE_CORNER_TEXTURE_COORDINATES"));

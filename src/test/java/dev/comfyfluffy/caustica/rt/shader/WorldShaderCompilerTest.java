@@ -13,6 +13,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
@@ -26,11 +27,13 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class WorldShaderCompilerTest {
+    private static final ResourceId TEST_SURFACE = ResourceId.of("test", "surface");
+
     @Test
     void packagesWorldSourcesWithoutPrecompiledWorldStages() {
-        assertNotNull(getClass().getResource("/caustica/shaders/world/primary.rgen.slang"));
+        assertNotNull(getClass().getResource("/caustica/shaders/world/primary_rgen.slang"));
         assertNotNull(getClass().getResource("/caustica/shaders/world/indirect_ser.slang"));
-        assertNull(getClass().getResource("/caustica/shaders/pipelines/world/primary.rgen.spv"));
+        assertNull(getClass().getResource("/caustica/shaders/pipelines/world/primary_rgen.spv"));
         assertNull(getClass().getResource("/caustica/shaders/pipelines/world/indirect_ser.rgen.spv"));
         assertNull(getClass().getResource("/caustica/shaders/pipelines/world/closest_hit.rchit.spv"));
     }
@@ -38,14 +41,17 @@ final class WorldShaderCompilerTest {
     @Test
     void compilesEveryCompositionGenericWorldStage(@TempDir Path cacheDirectory) throws Exception {
         try (WorldShaderCompiler compiler = compiler(cacheDirectory)) {
+            assertSpirv(compiler.compilePrimary(), 1024);
             assertSpirv(compiler.compileSkyMiss(), 1024);
             assertSpirv(compiler.compileClosestHit(), 1024);
             assertSpirv(compiler.compileIndirect(false), 1024);
-            assertTrue(compiler.composition().rootSource()
-                    .contains("typealias Sky = MinecraftOverworldSky"));
-            assertTrue(compiler.composition().rootSource().contains("typealias Surfaces = SurfaceDispatch"));
-            assertTrue(compiler.composition().rootSource()
-                    .contains("default: { BuiltinSurface s; s.evaluateSurface(input, material); return; }"));
+            String root = compiler.composition().rootSource();
+            // Nothing selected a sky, so the slot resolves to its default, which is always the renderer's
+            // own binding — registering a host sky must not silently take over the composition.
+            assertTrue(root.contains("typealias Sky = BuiltinSky"), root);
+            assertTrue(root.contains("typealias Surfaces = SurfaceDispatch"), root);
+            assertTrue(root.contains(
+                    "default: { BuiltinSurface s; s.evaluateSurface(input, material); return; }"), root);
         }
         try (WorldShaderCompiler compiler = compiler(cacheDirectory.resolve("ser"))) {
             assertSpirv(compiler.compileSkyMiss(), 1024);
@@ -59,7 +65,7 @@ final class WorldShaderCompilerTest {
         try (WorldShaderCompiler compiler = WorldShaderCompiler.createIsolated(
                 cacheDirectory, dev.comfyfluffy.caustica.TestRegistries.withBuiltins().selection())) {
             List<byte[]> stages = List.of(
-                    compiler.compilePlain("primary.rgen.slang", WorldShaderCompiler.ENTRY_POINT),
+                    compiler.compilePrimary(),
                     compiler.compileIndirect(false),
                     compiler.compileSkyMiss(),
                     compiler.compilePlain("guide.rmiss.slang", WorldShaderCompiler.ENTRY_POINT),
@@ -88,11 +94,12 @@ final class WorldShaderCompilerTest {
     // RtComposite compiles indirect BEFORE sky_miss; a session that only ever saw sky_miss first would
     // hide a missing anchor import in every other stage.
     @ParameterizedTest
-    @ValueSource(strings = {"indirect", "indirect_ser", "closest_hit", "sky_miss"})
+    @ValueSource(strings = {"primary", "indirect", "indirect_ser", "closest_hit", "sky_miss"})
     void everySpecializedStageCompilesFirstInAFreshSession(String stage, @TempDir Path cacheDirectory)
             throws Exception {
         try (WorldShaderCompiler compiler = compiler(cacheDirectory.resolve(stage))) {
             assertSpirv(switch (stage) {
+                case "primary" -> compiler.compilePrimary();
                 case "indirect" -> compiler.compileIndirect(false);
                 case "indirect_ser" -> compiler.compileIndirect(true);
                 case "closest_hit" -> compiler.compileClosestHit();
@@ -141,12 +148,15 @@ final class WorldShaderCompilerTest {
             throws Exception {
         CausticaRegistry registry = registryWithTestSurface("test_surface", "TestSurface");
 
+        String label = "case " + registry.surfaceIndex(TEST_SURFACE) + "u: { TestSurface s; ";
+
         try (WorldShaderCompiler compiler = WorldShaderCompiler.create(cacheDirectory, registry.selection())) {
             String root = compiler.composition().rootSource();
-            assertTrue(root.contains("case 2u: { TestSurface s; s.evaluateSurface(input, material); return; }"),
-                    root);
-            assertTrue(root.contains("case 2u: { TestSurface s; return s.evaluateResponse(radiance, surface); }"),
-                    root);
+            assertTrue(root.contains(label + "s.evaluateSurface(input, material); return; }"), root);
+            assertTrue(root.contains(label + "return s.evaluateResponse(radiance, surface); }"), root);
+            assertTrue(root.contains(label + "return s.evaluateMedium(input); }"), root);
+            assertTrue(root.contains(label + "return s.evaluateMediumLighting(input); }"), root);
+            assertSpirv(compiler.compilePrimary(), 1024);
             assertSpirv(compiler.compileClosestHit(), 1024);
             assertSpirv(compiler.compileIndirect(false), 1024);
         }
@@ -162,21 +172,23 @@ final class WorldShaderCompilerTest {
             throws Exception {
         CausticaRegistry registry = registryWithTestSurface("test_surface_broken", "BrokenSurface");
 
+        String label = "case " + registry.surfaceIndex(TEST_SURFACE) + "u";
+
         try (WorldShaderCompiler compiler = WorldShaderCompiler.create(cacheDirectory, registry.selection())) {
             String root = compiler.composition().rootSource();
             assertFalse(root.contains("BrokenSurface"), root);
-            assertFalse(root.contains("case 2u"), root);
+            assertFalse(root.contains(label), root);
             assertSpirv(compiler.compileClosestHit(), 1024);
         }
     }
 
     private static CausticaRegistry registryWithTestSurface(String module, String type) {
         CausticaRegistry registry = dev.comfyfluffy.caustica.TestRegistries.withBuiltins();
-        registry.feature(ResourceId.of("test", "surface"))
+        registry.feature(TEST_SURFACE)
                 .title(DisplayText.literal("Test surface"))
                 .category(FeatureCategory.GENERAL)
                 .shaderSource(ShaderSource.classpath("/caustica-test/shaders"))
-                .surface(ResourceId.of("test", "surface"), module, type)
+                .surface(TEST_SURFACE, module, type)
                 .register();
         return registry;
     }
@@ -253,13 +265,27 @@ final class WorldShaderCompilerTest {
 
     @ParameterizedTest
     @ValueSource(strings = {
-            "primary.rgen.slang", "guide.rmiss.slang",
+            "guide.rmiss.slang",
             "radiance_any_hit.rahit.slang", "shadow_any_hit.rahit.slang"})
     void compilesEveryPlainWorldStage(String moduleFileName, @TempDir Path cacheDirectory)
             throws Exception {
         try (WorldShaderCompiler compiler = compiler(cacheDirectory)) {
             assertSpirv(compiler.compilePlain(moduleFileName, WorldShaderCompiler.ENTRY_POINT), 256);
         }
+    }
+
+    @Test
+    void runtimePrimaryUsesCompositionSpecializationAndReflectionUsesOnlyItsBuildWrapper()
+            throws Exception {
+        String compiler = Files.readString(Path.of("src", "main", "java", "dev", "comfyfluffy",
+                "caustica", "rt", "shader", "WorldShaderCompiler.java"));
+        String generator = Files.readString(Path.of("buildSrc", "src", "main", "groovy", "dev",
+                "comfyfluffy", "caustica", "build", "GenerateRtBindings.groovy"));
+
+        assertTrue(compiler.contains("PRIMARY_MODULE = \"primary_rgen\""));
+        assertTrue(compiler.contains("compileSpecialized(PRIMARY_MODULE, ENTRY_POINT)"));
+        assertFalse(compiler.contains("primary_reflection"));
+        assertTrue(generator.contains("primary_reflection.rgen.slang"));
     }
 
     private static WorldShaderCompiler compiler(Path cacheDirectory) throws Exception {

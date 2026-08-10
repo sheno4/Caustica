@@ -2,6 +2,7 @@ module caustica_portal_surface;
 
 import caustica_surface;
 import caustica_types;
+import caustica_medium;
 
 float portalHash(float2 cell) {
     float3 p = frac(float3(cell.x, cell.y, cell.x) * 0.1031);
@@ -40,5 +41,13 @@ public struct PortalSurface : ISurfaceModel {
 
     public float3 evaluateResponse(float3 radiance, SurfaceClosure surface) {
         return radiance;
+    }
+
+    public MediumProperties evaluateMedium(MediumInput input) {
+        return referenceMedium(input);
+    }
+
+    public float3 evaluateMediumLighting(MediumLightingInput input) {
+        return float3(1.0);
     }
 };

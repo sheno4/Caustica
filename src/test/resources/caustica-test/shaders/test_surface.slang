@@ -2,6 +2,7 @@ module test_surface;
 
 import caustica_types;
 import caustica_surface;
+import caustica_medium;
 
 // A surface implementation that edits the description it was handed and stylizes what comes back, which
 // is the whole of what the narrowed interface allows.
@@ -15,5 +16,13 @@ public struct TestSurface : ISurfaceModel {
 
     public float3 evaluateResponse(float3 radiance, SurfaceClosure surface) {
         return radiance * 2.0;
+    }
+
+    public MediumProperties evaluateMedium(MediumInput input) {
+        return referenceMedium(input);
+    }
+
+    public float3 evaluateMediumLighting(MediumLightingInput input) {
+        return float3(1.0);
     }
 };

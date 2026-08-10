@@ -25,5 +25,9 @@ final class MinecraftProvidersExtensionTest {
                 registry.features().get(MinecraftProvidersExtension.ID).bindings().get(Slots.SKY).type());
         assertTrue(registry.features().get(MinecraftProvidersExtension.ID).passResourceModules()
                 .contains("caustica_minecraft_sky_bindings"));
+        assertTrue(registry.surfaces().stream()
+                .anyMatch(surface -> surface.id().equals(MinecraftProvidersExtension.WATER_SURFACE)
+                        && surface.module().equals("caustica_water_surface")
+                        && surface.type().equals("WaterSurface")));
     }
 }

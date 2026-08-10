@@ -53,7 +53,6 @@ public final class RtMaterialRegistry {
     // RtBlockMaterials.Entry.features uses the same bit values, so entry features flow into surfaces
     // with a plain mask.
     public static final int MODEL_OPAQUE = 0;
-    public static final int MODEL_WATER = 1;
     public static final int MODEL_DIELECTRIC = 3;
     public static final int FEATURE_SPEC = 1;
     public static final int FEATURE_NORMAL = 2;
@@ -73,7 +72,6 @@ public final class RtMaterialRegistry {
     private static final int COVERAGE_STOCHASTIC = 2;
     // Transmittance — how much light passes where the surface is present. Mirrors BINDING_* in Slang.
     private static final int BINDING_TRANSMISSIVE = 1;
-    private static final int BINDING_RECORD_CROSSING = 2;
     static final int BINDING_TEXTURELESS = 4;
     // MaterialBinding.packed0 = albedoSlot:16 | coverageMode:2 | flags:6 | surfaceImpl:8;
     // packed1 = coverageCutoff:8. Mirrored by the bindingAlbedoSlot/bindingCoverage/bindingFlags/
@@ -170,7 +168,7 @@ public final class RtMaterialRegistry {
         RtBlockMaterials.Entry fallbackEntry = pageCompiler.entry(null);
 
         int profileVariants = TEXTURE_PROFILES.length * MODEL_VARIANTS * EMISSION_VARIANTS;
-        CompiledTables tables = new CompiledTables(3 + profileVariants + atlasAssets.size() * profileVariants);
+        CompiledTables tables = new CompiledTables(2 + profileVariants + atlasAssets.size() * profileVariants);
         tables.add(compileDesc(MODEL_OPAQUE, 0, OpenPbrMaterialProfile.ROUGH_DIELECTRIC, false, true,
                 RtMaterialDesc.EmissionSummary.NONE), transparentWhiteAverage(), fallbackEntry, null,
                 PRIMARY_COVERAGE_CUTOFF, true);
@@ -190,10 +188,6 @@ public final class RtMaterialRegistry {
                 }
             }
         }
-        int waterId = tables.add(compileDesc(MODEL_WATER, 0, OpenPbrMaterialProfile.VERY_SMOOTH_DIELECTRIC,
-                false, true,
-                RtMaterialDesc.EmissionSummary.NONE), whiteAverage(), fallbackEntry, null,
-                PRIMARY_COVERAGE_CUTOFF);
         int lavaId = tables.add(compileDesc(MODEL_OPAQUE, 0, OpenPbrMaterialProfile.MEDIUM_ROUGH_DIELECTRIC,
                 true, true,
                 uniformWhiteSummary()), whiteAverage(), fallbackEntry,
@@ -365,7 +359,8 @@ public final class RtMaterialRegistry {
         for (int i = 0; i < sbtClasses.length; i++) {
             sbtClasses[i] = (byte) sbtClassOf(tables.bindings.get(i));
         }
-        Snapshot next = new Snapshot(epoch, Collections.unmodifiableMap(ids), fallbackVariants, waterId, lavaId,
+        Snapshot next = new Snapshot(epoch, Collections.unmodifiableMap(ids), fallbackVariants, lavaId,
+                Collections.unmodifiableMap(new HashMap<>(nextNamedMaterialIds)),
                 List.copyOf(descriptions), Collections.unmodifiableList(new ArrayList<>(grids)), frozenOverrides,
                 tables.cutoutVariants.toIntArray(), sbtClasses);
         runtimeTextureIds = Collections.unmodifiableMap(nextRuntimeTextureIds);
@@ -654,12 +649,9 @@ public final class RtMaterialRegistry {
         float metalness = model == MODEL_DIELECTRIC ? 0.0f : profile.baseMetalness();
         // Refractive index is per material, not per model: ice and window glass are both
         // MODEL_DIELECTRIC but bend light by measurably different amounts.
-        float ior = switch (model) {
-            case MODEL_WATER -> OpenPbrMaterialDefaults.REFERENCE_LIQUID_IOR;
-            case MODEL_DIELECTRIC -> dielectricIor;
-            default -> OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR;
-        };
-        float transmission = model == MODEL_WATER || model == MODEL_DIELECTRIC ? 1.0f : 0.0f;
+        float ior = model == MODEL_DIELECTRIC
+                ? dielectricIor : OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR;
+        float transmission = model == MODEL_DIELECTRIC ? 1.0f : 0.0f;
         boolean labPbr = (features & (FEATURE_SPEC | FEATURE_NORMAL)) != 0;
         RtMaterialDesc.Source source = neutral ? RtMaterialDesc.Source.NEUTRAL
                 : (labPbr ? RtMaterialDesc.Source.LAB_PBR : RtMaterialDesc.Source.HEURISTIC);
@@ -844,11 +836,6 @@ public final class RtMaterialRegistry {
                 flags = BINDING_TRANSMISSIVE;
                 shadowTint = translucentShadowTint(average);
             }
-            // A water surface passes light through uniformly; its colour is the per-primitive biome tint,
-            // which multiplies base colour and so flows through transmittance without a second meaning.
-            case MODEL_WATER -> {
-                flags = BINDING_TRANSMISSIVE | BINDING_RECORD_CROSSING;
-            }
             default -> {
             }
         }
@@ -942,8 +929,8 @@ public final class RtMaterialRegistry {
         private final long epoch;
         private final Map<ResourceId, int[]> ids;
         private final int[] fallbackVariants;
-        private final int waterId;
         private final int lavaId;
+        private final Map<ResourceId, Integer> namedMaterialIds;
         private final List<RtMaterialDesc> descriptions;
         private final List<RtEmissionGrid> grids;
         private final List<CompiledOverride> overrides;
@@ -951,14 +938,15 @@ public final class RtMaterialRegistry {
         private final byte[] sbtClasses;
 
         private Snapshot(long epoch, Map<ResourceId, int[]> ids, int[] fallbackVariants,
-                         int waterId, int lavaId, List<RtMaterialDesc> descriptions,
+                         int lavaId, Map<ResourceId, Integer> namedMaterialIds,
+                         List<RtMaterialDesc> descriptions,
                          List<RtEmissionGrid> grids, List<CompiledOverride> overrides,
                          int[] cutoutVariants, byte[] sbtClasses) {
             this.epoch = epoch;
             this.ids = ids;
             this.fallbackVariants = fallbackVariants;
-            this.waterId = waterId;
             this.lavaId = lavaId;
+            this.namedMaterialIds = namedMaterialIds;
             this.descriptions = descriptions;
             this.grids = grids;
             this.overrides = overrides;
@@ -970,12 +958,15 @@ public final class RtMaterialRegistry {
             return epoch;
         }
 
-        public int waterId() {
-            return waterId;
-        }
-
         public int lavaId() {
             return lavaId;
+        }
+
+        /** Resolve a stable name inside this immutable resource epoch. */
+        public int bindingId(ResourceId material) {
+            Integer id = namedMaterialIds.get(material);
+            if (id == null) throw new IllegalArgumentException("No submitted material named " + material);
+            return id;
         }
 
         public int materialCount() {
@@ -994,7 +985,7 @@ public final class RtMaterialRegistry {
         /**
          * The snapshot-local equivalent of {@link RtMaterialRegistry#withCutoutCoverage}: the ID resolving
          * this material with deterministic cutout coverage, precompiled at rebuild so a terrain worker
-         * never interns into the live registry. IDs without a compiled sibling (dielectric/water/fluid
+         * never interns into the live registry. IDs without a compiled sibling (dielectric/fluid
          * variants, which no masked producer reaches) map to themselves.
          */
         public int withCutoutCoverage(int materialId) {

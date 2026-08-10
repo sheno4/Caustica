@@ -1,5 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft;
 
+import dev.comfyfluffy.caustica.CausticaConfig;
+import dev.comfyfluffy.caustica.api.provider.MaterialHandle;
 import dev.comfyfluffy.caustica.engine.frame.DamageOverlay;
 import dev.comfyfluffy.caustica.engine.frame.FrameSnapshot;
 import dev.comfyfluffy.caustica.engine.frame.SceneResources;
@@ -9,6 +11,7 @@ import dev.comfyfluffy.caustica.rt.RtRuntime;
 import dev.comfyfluffy.caustica.rt.entity.RtEntityTextures;
 import dev.comfyfluffy.caustica.rt.terrain.RtTerrain;
 import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftVulkanBackend;
+import dev.comfyfluffy.caustica.minecraft.provider.MinecraftMaterialSource;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.renderer.BiomeColors;
@@ -67,8 +70,11 @@ public final class MinecraftFrameAdapter {
                 RtColor.srgbToLinear(((waterColor >> 16) & 0xFF) / 255.0),
                 RtColor.srgbToLinear(((waterColor >> 8) & 0xFF) / 255.0),
                 RtColor.srgbToLinear((waterColor & 0xFF) / 255.0));
+        FrameSnapshot.CameraMedium cameraMedium = submerged
+                ? new FrameSnapshot.CameraMedium(new MaterialHandle(MinecraftMaterialSource.WATER),
+                new FrameSnapshot.LinearRgb(medium[0], medium[1], medium[2])) : null;
         return new FrameSnapshot(projection, viewRotation, cameraX, cameraY, cameraZ,
-                submerged, new FrameSnapshot.LinearRgb(medium[0], medium[1], medium[2]),
+                cameraMedium, CausticaConfig.Rt.Composite.WATER_WAVES.value(),
                 System.nanoTime() / 1.0e9, METERS_PER_WORLD_UNIT, identify(level),
                 captureDamageOverlays(level));
     }

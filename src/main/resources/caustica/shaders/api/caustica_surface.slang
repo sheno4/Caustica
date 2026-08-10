@@ -1,6 +1,7 @@
 module caustica_surface;
 
 import caustica_types;
+import caustica_medium;
 
 /**
  * A surface implementation supplies PARAMETERS, not lobes. The engine implements the OpenPBR BSDF once,
@@ -20,6 +21,12 @@ public interface ISurfaceModel {
 
     /** Applied once to a vertex's total shaded contribution. Identity is the reference look. */
     public float3 evaluateResponse(float3 radiance, SurfaceClosure surface);
+
+    /** Describe the interior bounded by this surface when it is transmissive. */
+    public MediumProperties evaluateMedium(MediumInput input);
+
+    /** Multiplicative direct-light response evaluated at a tracked boundary crossing. */
+    public float3 evaluateMediumLighting(MediumLightingInput input);
 };
 
 /**
@@ -30,6 +37,8 @@ public interface ISurfaceModel {
 public interface ISurfaceDispatch {
     public void evaluateSurface(uint implementation, SurfaceInput input, inout MaterialInput material);
     public float3 evaluateResponse(uint implementation, float3 radiance, SurfaceClosure surface);
+    public MediumProperties evaluateMedium(uint implementation, MediumInput input);
+    public float3 evaluateMediumLighting(uint implementation, MediumLightingInput input);
 };
 
 /**

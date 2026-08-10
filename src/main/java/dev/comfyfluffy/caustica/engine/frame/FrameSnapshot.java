@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.engine.frame;
 
+import dev.comfyfluffy.caustica.api.provider.MaterialHandle;
 import org.joml.Matrix4f;
 import org.joml.Matrix4fc;
 
@@ -12,13 +13,21 @@ public final class FrameSnapshot {
     public record LinearRgb(float red, float green, float blue) {
     }
 
+    /** Named material and source colour for the volume containing the camera; null means vacuum. */
+    public record CameraMedium(MaterialHandle material, LinearRgb sourceColor) {
+        public CameraMedium {
+            Objects.requireNonNull(material, "material");
+            Objects.requireNonNull(sourceColor, "sourceColor");
+        }
+    }
+
     private final Matrix4f projection;
     private final Matrix4f viewRotation;
     private final double cameraX;
     private final double cameraY;
     private final double cameraZ;
-    private final boolean cameraInMedium;
-    private final LinearRgb cameraMedium;
+    private final CameraMedium cameraMedium;
+    private final boolean proceduralSurfaceAnimationEnabled;
     private final double timeSeconds;
     private final double metersPerWorldUnit;
     private final long sceneId;
@@ -26,7 +35,7 @@ public final class FrameSnapshot {
 
     public FrameSnapshot(Matrix4fc projection, Matrix4fc viewRotation,
                          double cameraX, double cameraY, double cameraZ,
-                         boolean cameraInMedium, LinearRgb cameraMedium,
+                         CameraMedium cameraMedium, boolean proceduralSurfaceAnimationEnabled,
                          double timeSeconds, double metersPerWorldUnit, long sceneId,
                          List<DamageOverlay> damageOverlays) {
         this.projection = new Matrix4f(Objects.requireNonNull(projection, "projection"));
@@ -34,8 +43,8 @@ public final class FrameSnapshot {
         this.cameraX = cameraX;
         this.cameraY = cameraY;
         this.cameraZ = cameraZ;
-        this.cameraInMedium = cameraInMedium;
-        this.cameraMedium = Objects.requireNonNull(cameraMedium, "cameraMedium");
+        this.cameraMedium = cameraMedium;
+        this.proceduralSurfaceAnimationEnabled = proceduralSurfaceAnimationEnabled;
         this.timeSeconds = timeSeconds;
         this.metersPerWorldUnit = metersPerWorldUnit;
         this.sceneId = sceneId;
@@ -70,12 +79,12 @@ public final class FrameSnapshot {
         return cameraZ;
     }
 
-    public boolean cameraInMedium() {
-        return cameraInMedium;
+    public CameraMedium cameraMedium() {
+        return cameraMedium;
     }
 
-    public LinearRgb cameraMedium() {
-        return cameraMedium;
+    public boolean proceduralSurfaceAnimationEnabled() {
+        return proceduralSurfaceAnimationEnabled;
     }
 
     public double timeSeconds() {

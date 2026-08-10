@@ -16,6 +16,7 @@ import java.util.Set;
 /** Translates Minecraft block and texture semantics into host-neutral OpenPBR compile inputs. */
 public final class MinecraftMaterialClassifier {
     public static final float ICE_IOR = 1.309f;
+    public static final float WATER_IOR = 1.333f;
 
     private static final Map<String, Float> IOR_BY_MATERIAL = Map.of(
             "block/ice", ICE_IOR,

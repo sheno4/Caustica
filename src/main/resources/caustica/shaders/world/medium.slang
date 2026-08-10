@@ -1,50 +1,22 @@
-// Participating media: the tint-to-extinction mappings and the depth-2 medium stack the dielectric
-// interface pushes and pops. Depends on core only.
-
-// Per-channel Beer–Lambert extinction from a water body's source tint (carried in the payload's albedo
-// view for water hits, or worldPush.cameraMedium when the camera starts submerged). A blue
-// ocean tint (low red) absorbs red fastest → bluer with depth; swamp green-brown shifts the hue. The floor
-// keeps even a white-tinted body very slightly absorbing so deep water never reads as clear vacuum.
-
+// Participating-medium state and the depth-two stack used by dielectric transport.
 module medium;
 
-import world_common;
-import world_core;
+import caustica_surface;
+import caustica_types;
 
-public static const float WATER_DENSITY = 0.1;
-public static const float3 WATER_ABSORB_FLOOR = float3(0.015, 0.010, 0.008);
-public float3 waterExtinction(float3 tint) {
-    return WATER_ABSORB_FLOOR + WATER_DENSITY * (float3(1.0, 1.0, 1.0) - clamp(tint, 0.0, 1.0));
-}
-
-// A non-water dielectric's tint is a filter over one scene unit of travel rather than a water source
-// colour, so
-// it maps to extinction by inverting Beer-Lambert over that reference distance: transmittance t after one
-// block means sigma = -ln(t). `transmission` scales that transmittance, so it keeps the sense the
-// material's authored factor has everywhere else — 1 passes the tint through unchanged, 0 is opaque.
-// Clamped away from zero so a fully saturated texel stays finite instead of producing an infinite sigma.
-public static const float VOLUME_TINT_REFERENCE_DISTANCE = 1.0; // blocks
-public float3 volumeExtinction(float3 tint, float transmission) {
-    float3 blockTransmittance = clamp(clamp(tint, 0.0, 1.0) * clamp(transmission, 0.0, 1.0),
-            1.0e-3, 1.0);
-    return -log(blockTransmittance) / VOLUME_TINT_REFERENCE_DISTANCE;
-}
-
-// ---- Participating medium the path is currently inside.
-//
-// Refraction needs the RELATIVE index across an interface, so the renderer has to know what it is
-// travelling through, not just what it is hitting. `ior` drives Snell/Fresnel; `extinction` drives the
-// per-segment Beer-Lambert attenuation.
-//
-// The stack is depth 2 (current + the one it will return to) held in named fields, NOT an array. A
-// dynamically indexed local array lands in scratch memory, and this raygen is already register-bound.
-// Depth 2 covers the supported nested-interface cases; anything deeper
-// degrades to air on the way out, and because `entering` is re-derived per face from geometry rather
-// than toggled, the path re-synchronises at the next crossing instead of staying corrupted.
 public struct Medium {
     public float ior;
     public float3 extinction;
-    public bool water; // drives the wave-refraction caustic on submerged receivers; nothing else is water-specific
+    /** Registered material implementation which produced this medium. */
+    public uint implementation;
+    /** MEDIUM_* behavior retained while the path remains inside. */
+    public uint flags;
+};
+
+public struct MediumBoundary {
+    public Medium medium;
+    public float3 guideTransmittance;
+    public float transmissionRayBias;
 };
 
 public struct MediumStack {
@@ -53,18 +25,19 @@ public struct MediumStack {
 };
 
 public Medium airMedium() {
-    Medium m;
-    m.ior = 1.0;
-    m.extinction = float3(0.0, 0.0, 0.0);
-    m.water = false;
-    return m;
+    Medium medium;
+    medium.ior = 1.0;
+    medium.extinction = float3(0.0);
+    medium.implementation = 0u;
+    medium.flags = 0u;
+    return medium;
 }
 
 public MediumStack makeMediumStack(Medium start) {
-    MediumStack s;
-    s.current = start;
-    s.outer = airMedium();
-    return s;
+    MediumStack stack;
+    stack.current = start;
+    stack.outer = airMedium();
+    return stack;
 }
 
 public void mediumPush(inout MediumStack stack, Medium entered) {
@@ -77,12 +50,19 @@ public void mediumPop(inout MediumStack stack) {
     stack.outer = airMedium();
 }
 
-// Water's source tint has absorption calibrated per scene unit of depth; any other volume
-// dielectric's tint is a filter over a reference block of travel. Both end up as per-channel extinction.
-public Medium makeDielectricMedium(bool isWater, float ior, float3 tint, float transmission) {
-    Medium m;
-    m.ior = ior;
-    m.extinction = isWater ? waterExtinction(tint) : volumeExtinction(tint, transmission);
-    m.water = isWater;
-    return m;
+public MediumBoundary evaluateMedium<TSurfaces : ISurfaceDispatch>(TSurfaces surfaces,
+        uint implementation, float ior, float3 sourceColor, float transmissionWeight) {
+    MediumInput input;
+    input.sourceColor = sourceColor;
+    input.specularIor = ior;
+    input.transmissionWeight = transmissionWeight;
+    MediumProperties properties = surfaces.evaluateMedium(implementation, input);
+    MediumBoundary boundary;
+    boundary.medium.ior = ior;
+    boundary.medium.extinction = properties.extinction;
+    boundary.medium.implementation = implementation;
+    boundary.medium.flags = properties.flags;
+    boundary.guideTransmittance = properties.guideTransmittance;
+    boundary.transmissionRayBias = properties.transmissionRayBias;
+    return boundary;
 }
