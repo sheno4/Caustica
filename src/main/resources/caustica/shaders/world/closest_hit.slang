@@ -1,5 +1,5 @@
 // Composition-generic closest-hit shader. Geometry decode, texture sampling, source-format decode,
-// ray-cone LOD, and the block-breaking overlay stay engine-owned; the OpenPBR description every hit
+// ray-cone LOD, and the breaking overlay stay engine-owned; the OpenPBR description every hit
 // resolves to is then handed to the surface implementation its material names, which may edit it.
 //
 // WorldShaderCompiler specializes this generic entry point with the active composition.
@@ -167,7 +167,7 @@ float4 samplePageNormal(uint page, float2 uv, float lod) {
     return materialNormalTex[NonUniformResourceIndex(page)].SampleLevel(uv, lod);
 }
 
-// `stateEmission` is the per-primitive block-light level: what an emitter with no authored mask emits,
+// `stateEmission` is the per-primitive source emission level: what an emitter with no authored mask emits,
 // and what a heuristic mask modulates.
 DecodedSurface evaluateMaterial(SurfaceMaterial mat, float2 atlasUv, float lod, float3 baseColor,
         float3 geometricNormal, float3 p0, float3 p1, float3 p2,
@@ -236,9 +236,9 @@ float3 applyBreaking(float3 albedo709, uint rayCone, float3 rayOrigin, float3 ra
             float2 decalUv = (an.x >= an.y && an.x >= an.z) ? local.zy
                            : (an.y >= an.z) ? local.xz
                            : local.xy;
-            float decalLod = rayConeUnitUvLod(rayCone, texSizePx(entityAlbedoTex[NonUniformResourceIndex(ps.w)]));
+            float decalLod = rayConeUnitUvLod(rayCone, texSizePx(albedoTextures[NonUniformResourceIndex(ps.w)]));
             float3 crack709 = srgbToLinear(
-                    entityAlbedoTex[NonUniformResourceIndex(ps.w)].SampleLevel(decalUv, decalLod).rgb);
+                    albedoTextures[NonUniformResourceIndex(ps.w)].SampleLevel(decalUv, decalLod).rgb);
             return clamp(crack709 * albedo709, 0.0, 1.0);
         }
     }
@@ -246,7 +246,7 @@ float3 applyBreaking(float3 albedo709, uint rayCone, float3 rayOrigin, float3 ra
 }
 
 // Builds the OpenPBR description handed to the surface implementation. The base colour is ACEScg and
-// already carries the block-breaking overlay; the metalness split belongs to the closure, so nothing is
+// already carries the breaking overlay; the metalness split belongs to the closure, so nothing is
 // pre-multiplied here.
 //
 // `dielectric` is the one structural fact the decode cannot supply: a surface that refracts has two
@@ -358,74 +358,76 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
     GeometryRecord g = ConstPtr<GeometryRecord>(pc.geometryTableAddr)[InstanceID()];
     // Indexed geometry stores shared vertex UVs. A billboard needs no path of its own — it is a thin
     // surface that answers light from either side, which its material says with a transmission weight of one half.
-    if (g.idxAddr != 0u) {
-        uint pid = PrimitiveIndex() + g.triBase[GeometryIndex()];
-        Prim pr = ConstPtr<Prim>(g.primAddr)[pid];
-        float3x3 entityO2w = (float3x3)ObjectToWorld3x4();
+    if ((g.flags & GEOMETRY_INDEXED_TEXTURE_COORDINATES) != 0u) {
+        uint pid = PrimitiveIndex() + g.triangleBase[GeometryIndex()];
+        Prim pr = ConstPtr<Prim>(g.primitiveAddress)[pid];
+        float3x3 objectToWorld = (float3x3)ObjectToWorld3x4();
         float3 vdir = -WorldRayDirection();
-        float3 geometricNormal = normalize(mul(entityO2w, pr.normal.xyz));
+        float3 geometricNormal = normalize(mul(objectToWorld, pr.normal.xyz));
         bool entering = dot(WorldRayDirection(), geometricNormal) < 0.0;
         if (dot(geometricNormal, vdir) < 0.0) {
             geometricNormal = -geometricNormal;
         }
-        ConstPtr<uint> eidxBuf = ConstPtr<uint>(g.idxAddr);
-        ConstPtr<float2> euv = ConstPtr<float2>(g.uvAddr);
-        uint e0 = eidxBuf[3u * pid + 0u];
-        uint e1 = eidxBuf[3u * pid + 1u];
-        uint e2 = eidxBuf[3u * pid + 2u];
-        float3 ebary = float3(1.0 - attribs.x - attribs.y, attribs.x, attribs.y);
-        float2 euvCoord = ebary.x * euv[e0] + ebary.y * euv[e1] + ebary.z * euv[e2];
+        ConstPtr<uint> indices = ConstPtr<uint>(g.indexAddress);
+        ConstPtr<float2> textureCoordinates = ConstPtr<float2>(g.textureCoordinateAddress);
+        uint i0 = indices[3u * pid + 0u];
+        uint i1 = indices[3u * pid + 1u];
+        uint i2 = indices[3u * pid + 2u];
+        float3 bary = float3(1.0 - attribs.x - attribs.y, attribs.x, attribs.y);
+        float2 uv = bary.x * textureCoordinates[i0] + bary.y * textureCoordinates[i1]
+                + bary.z * textureCoordinates[i2];
         MaterialBinding binding = loadBinding(pr.materialId);
         SurfaceMaterial mat = loadSurfaceMaterial(binding);
         uint texSlot = bindingAlbedoSlot(binding);
-        float3 ep0 = mul(entityO2w, HitTriangleVertexPosition(0));
-        float3 ep1 = mul(entityO2w, HitTriangleVertexPosition(1));
-        float3 ep2 = mul(entityO2w, HitTriangleVertexPosition(2));
+        float3 p0 = mul(objectToWorld, HitTriangleVertexPosition(0));
+        float3 p1 = mul(objectToWorld, HitTriangleVertexPosition(1));
+        float3 p2 = mul(objectToWorld, HitTriangleVertexPosition(2));
         bool textureless = (bindingFlags(binding) & BINDING_TEXTURELESS) != 0u;
-        float entityLod = 0.0;
-        float4 entityTexel = float4(1.0);
+        float textureLod = 0.0;
+        float4 albedoTexel = float4(1.0);
         if (!textureless) {
-            entityLod = rayConeTextureLod(rayCone,
-                    texSizePx(entityAlbedoTex[NonUniformResourceIndex(texSlot)]),
-                    ep0, ep1, ep2, euv[e0], euv[e1], euv[e2]);
-            entityTexel = entityAlbedoTex[NonUniformResourceIndex(texSlot)].SampleLevel(euvCoord, entityLod);
+            textureLod = rayConeTextureLod(rayCone,
+                    texSizePx(albedoTextures[NonUniformResourceIndex(texSlot)]),
+                    p0, p1, p2, textureCoordinates[i0], textureCoordinates[i1], textureCoordinates[i2]);
+            albedoTexel = albedoTextures[NonUniformResourceIndex(texSlot)].SampleLevel(uv, textureLod);
         }
         bool transmissive = (bindingFlags(binding) & BINDING_TRANSMISSIVE) != 0u;
-        float3 baseAlbedo709 = srgbToLinear(entityTexel.rgb) * srgbToLinear(pr.tint.rgb);
+        float3 baseAlbedo709 = srgbToLinear(albedoTexel.rgb) * srgbToLinear(pr.tint.rgb);
         float3 opticalColor709 = transmissive
-                ? lerp(float3(1.0), baseAlbedo709, entityTexel.a) : baseAlbedo709;
+                ? lerp(float3(1.0), baseAlbedo709, albedoTexel.a) : baseAlbedo709;
         float3 albedo = textureless
                 ? mat.albedoUv.xyz * bt709ToAcesCg(srgbToLinear(pr.tint.rgb))
                 : bt709ToAcesCg(opticalColor709);
 
         float3 motionPrev;
-        if (g.dispAddr != 0) {
-            ConstPtr<float4> dd = ConstPtr<float4>(g.dispAddr);
-            motionPrev = ebary.x * dd[e0].xyz + ebary.y * dd[e1].xyz + ebary.z * dd[e2].xyz;
+        if (g.motionAddress != 0) {
+            ConstPtr<float4> motion = ConstPtr<float4>(g.motionAddress);
+            motionPrev = bary.x * motion[i0].xyz + bary.y * motion[i1].xyz + bary.z * motion[i2].xyz;
         } else {
-            motionPrev = g.rigidDisp.xyz;
+            motionPrev = g.rigidMotion.xyz;
         }
 
         // Checked before the material pages are sampled and the implementation runs: a guide walking
-        // through foliage or a blended entity pays for neither. A dielectric is a crossing already, so
+        // through foliage or a blended surface pays for neither. A dielectric is a crossing already, so
         // it has nothing to gain here.
-        if (!transmissive && guideCoverageCrossing(payload, entityTexel.a)) {
+        if (!transmissive && guideCoverageCrossing(payload, albedoTexel.a)) {
             payload.hitT = RayTCurrent();
             payload.motionPrev = half3(motionPrev);
             payloadSetCoverageCrossing(payload,
-                    bt709ToAcesCg(lerp(float3(1.0), baseAlbedo709, entityTexel.a)), geometricNormal);
+                    bt709ToAcesCg(lerp(float3(1.0), baseAlbedo709, albedoTexel.a)), geometricNormal);
             return;
         }
 
-        // Water is terrain-only — nothing produces a water-material entity — so a transmissive entity is
-        // a plain dielectric, and its own LabPBR emission is suppressed the same way glass's is.
-        DecodedSurface surface = evaluateMaterial(mat, euvCoord, entityLod, albedo, geometricNormal,
-                ep0, ep1, ep2, euv[e0], euv[e1], euv[e2], vdir, transmissive ? 0.0 : pr.normal.w);
+        // This geometry class carries ordinary transmissive surfaces rather than the procedural crossing
+        // material handled by the direct-corner path, so its authored emission is suppressed when transmitted.
+        DecodedSurface surface = evaluateMaterial(mat, uv, textureLod, albedo, geometricNormal,
+                p0, p1, p2, textureCoordinates[i0], textureCoordinates[i1], textureCoordinates[i2],
+                vdir, transmissive ? 0.0 : pr.normal.w);
 
         MaterialInput material = buildMaterialInput(surface, mat, transmissive);
         float3 hitPos = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
         SurfaceInput input = buildSurfaceInput(payload, hitPos, geometricNormal, vdir,
-                euvCoord, entityLod);
+                uv, textureLod);
         uint surfaceImpl = bindingSurfaceImpl(binding);
         surfaces.evaluateSurface(surfaceImpl, input, material);
 
@@ -434,16 +436,16 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
         return;
     }
 
-    uint pid = PrimitiveIndex() + g.triBase[GeometryIndex()];
-    Prim pr = ConstPtr<Prim>(g.primAddr)[pid];
-    MaterialBinding terrainBinding = loadBinding(pr.materialId);
-    SurfaceMaterial terrainMat = loadSurfaceMaterial(terrainBinding);
+    uint pid = PrimitiveIndex() + g.triangleBase[GeometryIndex()];
+    Prim pr = ConstPtr<Prim>(g.primitiveAddress)[pid];
+    MaterialBinding binding = loadBinding(pr.materialId);
+    SurfaceMaterial mat = loadSurfaceMaterial(binding);
     float3 geometricNormal = normalize(pr.normal.xyz);
     float3 tint = pr.tint.rgb;
 
     bool entering = dot(WorldRayDirection(), geometricNormal) < 0.0;
 
-    ConstPtr<float2> uvs = ConstPtr<float2>(g.uvAddr);
+    ConstPtr<float2> uvs = ConstPtr<float2>(g.textureCoordinateAddress);
     float2 uv0 = uvs[3u * pid + 0u];
     float2 uv1 = uvs[3u * pid + 1u];
     float2 uv2 = uvs[3u * pid + 2u];
@@ -452,71 +454,70 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
     float3 tp0 = HitTriangleVertexPosition(0);
     float3 tp1 = HitTriangleVertexPosition(1);
     float3 tp2 = HitTriangleVertexPosition(2);
-    // Terrain albedo is the block atlas, reached through the shared bindless array like every other
-    // producer; the material record names the slot, so no geometry path carries a texture index.
-    uint blockSlot = bindingAlbedoSlot(terrainBinding);
-    float blockLod = rayConeTextureLod(rayCone,
-            texSizePx(entityAlbedoTex[NonUniformResourceIndex(blockSlot)]), tp0, tp1, tp2, uv0, uv1, uv2);
+    // The material record names the shared bindless albedo slot, so geometry records carry no texture index.
+    uint textureSlot = bindingAlbedoSlot(binding);
+    float textureLod = rayConeTextureLod(rayCone,
+            texSizePx(albedoTextures[NonUniformResourceIndex(textureSlot)]), tp0, tp1, tp2, uv0, uv1, uv2);
 
     float3 vdir = -WorldRayDirection();
     if (dot(geometricNormal, vdir) < 0.0) {
         geometricNormal = -geometricNormal;
     }
 
-    bool transmissive = (bindingFlags(terrainBinding) & BINDING_TRANSMISSIVE) != 0u;
+    bool transmissive = (bindingFlags(binding) & BINDING_TRANSMISSIVE) != 0u;
     // BINDING_RECORD_CROSSING is today set for water alone, and it tells the two dielectrics apart for
     // the two things that differ: water's colour is the per-primitive source tint with no texture fetch,
     // and its surface animates.
     bool isWaterMaterial = transmissive
-            && (bindingFlags(terrainBinding) & BINDING_RECORD_CROSSING) != 0u;
+            && (bindingFlags(binding) & BINDING_RECORD_CROSSING) != 0u;
     float3 tint709 = srgbToLinear(tint);
 
-    // The mesher folds a +2 flag for non-SOLID block layers into the emission lane; only the block-light
-    // level below it is a material input.
+    // The source folds a +2 non-solid-layer flag into the emission lane; only the state emission level
+    // below it is a material input.
     float ew = pr.normal.w;
     float stateEmission = ew >= 1.5 ? ew - 2.0 : ew;
 
-    float4 blockTexel = float4(1.0, 1.0, 1.0, 1.0);
+    float4 albedoTexel = float4(1.0, 1.0, 1.0, 1.0);
     float3 opticalColor709;
     if (isWaterMaterial) {
         opticalColor709 = tint709;
     } else {
-        blockTexel = entityAlbedoTex[NonUniformResourceIndex(blockSlot)].SampleLevel(uv, blockLod);
-        float3 texel709 = srgbToLinear(blockTexel.rgb);
+        albedoTexel = albedoTextures[NonUniformResourceIndex(textureSlot)].SampleLevel(uv, textureLod);
+        float3 texel709 = srgbToLinear(albedoTexel.rgb);
         // Glass covers its whole footprint: the see-through part of the sprite is clear glass, so its
         // alpha filters the colour rather than deciding presence.
-        float3 base709 = transmissive ? lerp(float3(1.0), texel709 * tint709, blockTexel.a)
+        float3 base709 = transmissive ? lerp(float3(1.0), texel709 * tint709, albedoTexel.a)
                                       : texel709 * tint709;
-        // Block-breaking overlay is a rendering trick, not a material fact, so it stays engine-side and
+        // The breaking overlay is a rendering trick, not a material fact, so it stays engine-side and
         // composites into the texture colour before any material decode sees it. Keyed on the geometric
-        // normal: the decal is projected onto the block face, not onto the normal map's perturbation.
+        // normal: the decal is projected onto the source face, not onto the normal map's perturbation.
         opticalColor709 = applyBreaking(base709, rayCone, WorldRayOrigin(), WorldRayDirection(),
                 RayTCurrent(), geometricNormal);
     }
 
     // Checked before the material pages are sampled and the implementation runs: a guide walking through
     // foliage pays for neither.
-    if (!transmissive && guideCoverageCrossing(payload, blockTexel.a)) {
+    if (!transmissive && guideCoverageCrossing(payload, albedoTexel.a)) {
         payload.hitT = RayTCurrent();
         payload.motionPrev = half3(0.0h, 0.0h, 0.0h);
         payloadSetCoverageCrossing(payload,
-                bt709ToAcesCg(lerp(float3(1.0), opticalColor709, blockTexel.a)), geometricNormal);
+                bt709ToAcesCg(lerp(float3(1.0), opticalColor709, albedoTexel.a)), geometricNormal);
         return;
     }
 
-    // Glass suppresses its own authored emission; water carries the block-light level of its own quad.
+    // Glass suppresses its own authored emission; water carries the source emission level of its own quad.
     float emissionInput = transmissive && !isWaterMaterial ? 0.0 : stateEmission;
-    DecodedSurface surface = evaluateMaterial(terrainMat, uv, blockLod,
+    DecodedSurface surface = evaluateMaterial(mat, uv, textureLod,
             bt709ToAcesCg(opticalColor709), geometricNormal,
             tp0, tp1, tp2, uv0, uv1, uv2, vdir, emissionInput);
 
-    MaterialInput material = buildMaterialInput(surface, terrainMat, transmissive);
+    MaterialInput material = buildMaterialInput(surface, mat, transmissive);
     float3 hitPos = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
-    SurfaceInput input = buildSurfaceInput(payload, hitPos, geometricNormal, vdir, uv, blockLod);
+    SurfaceInput input = buildSurfaceInput(payload, hitPos, geometricNormal, vdir, uv, textureLod);
     if (isWaterMaterial) {
         applyWaterSurface(input, material, rayConeHitWidth(rayCone));
     }
-    uint surfaceImpl = bindingSurfaceImpl(terrainBinding);
+    uint surfaceImpl = bindingSurfaceImpl(binding);
     surfaces.evaluateSurface(surfaceImpl, input, material);
 
     writeHitPayload(payload, material, surfaceImpl,
@@ -524,7 +525,7 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
             entering, float3(0.0, 0.0, 0.0),
             transmissive && !isWaterMaterial ? 0.0 : material.emissionLuminance);
     // RIS emitter-NEE membership: raygen gates this emitter's direct-hit emission term (RIS covers it).
-    if (!transmissive && (pr.flags & TERRAIN_PRIM_IN_LIGHT_BUFFER) != 0u) {
+    if (!transmissive && (pr.flags & PRIM_EMITTER_IN_LIGHT_BUFFER) != 0u) {
         payload.flags |= PAYLOAD_EMITTER_IN_LIST;
     }
 }

@@ -29,7 +29,7 @@ import world_common;
 //   surface1 — rgb: base_color on a metal texel, specular_color on a dielectric one (the source format
 //              authors one reflectance and its own metalness says which parameter that is)
 //              a: specular_ior, encoded as (ior - 1) / (ior + 1) — see surfaceIorFromPage
-[[vk::binding(0, 1)]] public Sampler2D entityAlbedoTex[];
+[[vk::binding(0, 1)]] public Sampler2D albedoTextures[];
 [[vk::binding(1, 1)]] public Sampler2D materialSurface0Tex[];
 [[vk::binding(2, 1)]] public Sampler2D materialNormalTex[];
 [[vk::binding(3, 1)]] public Sampler2D materialSurface1Tex[];

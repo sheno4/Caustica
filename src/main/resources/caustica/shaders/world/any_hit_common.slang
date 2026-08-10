@@ -2,7 +2,7 @@
 // neither pays the other's register allocation: any-hit is the most frequently invoked stage in the
 // pipeline and its allocation bounds occupancy for everything else in it.
 //
-// GeometryIndex() is the SBT class and PrimitiveIndex() restarts at zero per geometry, so triBase
+// GeometryIndex() is the SBT class and PrimitiveIndex() restarts at zero per geometry, so triangleBase
 // re-forms the record-local triangle. UV storage may be indexed or already triangle-corner ordered.
 //
 // Radiance and shadow rays share the exact Payload ABI, as Vulkan requires for every stage reachable by
@@ -28,29 +28,30 @@ public float3 barycentrics(float2 attribs) {
 public HitBinding decodeHit(float3 bary, uint pid) {
     HitBinding hit;
     GeometryRecord g = ConstPtr<GeometryRecord>(pc.geometryTableAddr)[InstanceID()];
-    uint tri = pid + g.triBase[GeometryIndex()];
-    if (g.idxAddr != 0u) {
-        ConstPtr<uint> indices = ConstPtr<uint>(g.idxAddr);
-        ConstPtr<float2> uvs = ConstPtr<float2>(g.uvAddr);
-        hit.uv = bary.x * uvs[indices[3u * tri + 0u]]
-                + bary.y * uvs[indices[3u * tri + 1u]]
-                + bary.z * uvs[indices[3u * tri + 2u]];
+    uint tri = pid + g.triangleBase[GeometryIndex()];
+    ConstPtr<float2> textureCoordinates = ConstPtr<float2>(g.textureCoordinateAddress);
+    if ((g.flags & GEOMETRY_INDEXED_TEXTURE_COORDINATES) != 0u) {
+        ConstPtr<uint> indices = ConstPtr<uint>(g.indexAddress);
+        hit.uv = bary.x * textureCoordinates[indices[3u * tri + 0u]]
+                + bary.y * textureCoordinates[indices[3u * tri + 1u]]
+                + bary.z * textureCoordinates[indices[3u * tri + 2u]];
     } else {
-        ConstPtr<float2> uvs = ConstPtr<float2>(g.uvAddr);
-        hit.uv = bary.x * uvs[3u * tri + 0u] + bary.y * uvs[3u * tri + 1u] + bary.z * uvs[3u * tri + 2u];
+        hit.uv = bary.x * textureCoordinates[3u * tri + 0u]
+                + bary.y * textureCoordinates[3u * tri + 1u]
+                + bary.z * textureCoordinates[3u * tri + 2u];
     }
-    Prim pr = ConstPtr<Prim>(g.primAddr)[tri];
+    Prim pr = ConstPtr<Prim>(g.primitiveAddress)[tri];
     hit.tint = pr.tint.rgb;
     hit.binding = ConstPtr<MaterialBinding>(pc.materialTableAddr)[pr.materialId];
     return hit;
 }
 
 /**
- * The albedo texel the coverage test reads. Both producers reach the atlas through the same bindless
- * array, so the slot named by the binding is the only thing that varies.
+ * The albedo texel the coverage test reads. Every geometry source reaches its texture through the same
+ * bindless array, so the slot named by the material binding is the only thing that varies.
  */
 public float4 sampleCoverageTexel(HitBinding hit) {
-    return entityAlbedoTex[NonUniformResourceIndex(bindingAlbedoSlot(hit.binding))]
+    return albedoTextures[NonUniformResourceIndex(bindingAlbedoSlot(hit.binding))]
             .SampleLevel(hit.uv, 0.0);
 }
 

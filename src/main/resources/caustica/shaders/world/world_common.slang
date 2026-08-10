@@ -35,7 +35,7 @@ public struct WorldPushConstants {
 };
 
 // Block-breaking overlay entry: xyz = breaking block position (rebased, same space as gl_WorldRay*),
-// w = bindless entityAlbedoTex slot of the destroy-stage texture.
+// w = bindless albedoTextures slot of the destroy-stage texture.
 public struct BreakEntry {
     public int4 posSlot;
 };
@@ -137,7 +137,7 @@ public struct LightGridSpan {
 };
 
 // Prim.flags bit 0: this emissive quad is in the light buffer (RtLightCollector membership).
-public static const uint TERRAIN_PRIM_IN_LIGHT_BUFFER = 1u;
+public static const uint PRIM_EMITTER_IN_LIGHT_BUFFER = 1u;
 
 // Largest finite half. Producers of fp16 HDR storage clamp to this instead of letting the conversion
 // round up to +inf and propagate as NaN — world.rgen's rgba16f outImage store most of all, which is the
@@ -188,7 +188,7 @@ public struct Payload {
 };
 
 public static const uint PAYLOAD_SHOW_ENVIRONMENT_EMITTERS = 4u;
-// Set by world.rchit on a terrain hit whose prim carries TERRAIN_PRIM_IN_LIGHT_BUFFER: this emitter is
+// Set by world.rchit on a hit whose primitive carries PRIM_EMITTER_IN_LIGHT_BUFFER: this emitter is
 // RIS-sampled, so raygen gates its direct-hit emission on diffuse continuation rays (no double count).
 public static const uint PAYLOAD_EMITTER_IN_LIST = 128u;
 // Set by world.rchit on any dielectric hit (water or glass/ice): true when the incoming ray travels
@@ -211,7 +211,7 @@ public static const uint PAYLOAD_PRIMARY_RAY = 512u;
 
 // Set by traceGuide so the radiance any-hit can suppress stochastic alpha. A guide probe answers which
 // surface a reflection/refraction points at, so a coin-flip there is a flickering control signal rather
-// than a sample that averages out; a deterministic accept lets a translucent entity reach closest-hit as
+// than a sample that averages out; a deterministic accept lets a translucent surface reach closest-hit as
 // a dielectric, which is the crossing the guide loop already walks. world.rchit overwrites flags, but the
 // any-hit has already run by then, so the bit never needs to survive the hit.
 public static const uint PAYLOAD_GUIDE_RAY = 256u;
@@ -242,17 +242,16 @@ public struct Prim {
 //
 // MaterialBinding is the only material record either any-hit loads: sixteen aligned bytes answering the
 // two questions traversal asks. Coverage — is the surface present along this ray — and transmittance —
-// how much light passes where it is present. The two are independent (a stained-glass-textured entity has
+// how much light passes where it is present. The two are independent (a stained-glass-textured surface has
 // both) and compose sequentially: test coverage, then apply interface behaviour.
 //
 // A binding is the cheap object. Pairing one SurfaceMaterial with a different bindless albedo slot or a
-// different coverage mode costs sixteen bytes rather than a cloned material, so entity render types and
-// stochastic submissions are bindings instead of record variants.
+// different coverage mode costs sixteen bytes rather than a cloned material, so source render types and
+// stochastic submissions use bindings instead of record variants.
 public struct MaterialBinding {
-    // albedoSlot:16 | coverageMode:2 | flags:6 | surfaceImpl:8. Slot 0 is the host albedo atlas and
-    // implementation 0 is the built-in surface, so a zero-initialised binding samples terrain albedo and
-    // resolves the reference surface; entity render types resolve their own slot through
-    // RtEntityTextures.
+    // albedoSlot:16 | coverageMode:2 | flags:6 | surfaceImpl:8. Slot 0 is the host's default albedo atlas
+    // and implementation 0 is the built-in surface, so a zero-initialised binding resolves the reference
+    // textured surface. Other source render types name their own bindless slot.
     public uint packed0;
     public uint surface;    // index into the SurfaceMaterial table; closest-hit only
     // 8:8:8 ACEScg transmittance through this surface, used when coverage is OPAQUE and no texel is
@@ -346,18 +345,21 @@ public float surfaceIorFromPage(float encoded) {
     return (1.0 + amplitude) / (1.0 - amplitude);
 }
 
-// One record for every distinct geometry stream referenced by a TLAS instance. Immutable provider
-// instances may share one record when they reference the same mesh; dynamic producers use one record per
-// instance for motion state. PrimitiveIndex restarts at zero for each BLAS geometry, so hit shaders add
-// triBase[GeometryIndex()]. A zero indexAddr means UVs are already stored in triangle-corner order;
-// otherwise it addresses the triangle index array used to look up shared vertex UVs.
+// One record for every distinct geometry stream referenced by a TLAS instance. Immutable instances may
+// share one record when they reference the same mesh; dynamic geometry uses one record per instance for
+// motion state. PrimitiveIndex restarts at zero for each BLAS geometry, so hit shaders add
+// triangleBase[GeometryIndex()]. Texture-coordinate storage is selected explicitly by flags rather than
+// inferred from whether an otherwise optional address happens to be zero.
+public static const uint GEOMETRY_TRIANGLE_CORNER_TEXTURE_COORDINATES = 0u;
+public static const uint GEOMETRY_INDEXED_TEXTURE_COORDINATES = 1u;
+
 public struct GeometryRecord {
-    public uint64_t primAddr;
-    public uint64_t idxAddr;
-    public uint64_t uvAddr;
-    public uint64_t dispAddr;
-    public float4 rigidDisp;
-    public uint triBase[3];
+    public uint64_t primitiveAddress;
+    public uint64_t indexAddress;
+    public uint64_t textureCoordinateAddress;
+    public uint64_t motionAddress;
+    public float4 rigidMotion;
+    public uint triangleBase[3];
     public uint flags;
 };
 

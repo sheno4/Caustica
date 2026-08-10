@@ -164,10 +164,11 @@ final class RtSectionTable {
     void write(SectionGeom geom) {
         long offset = (long) geom.slot * SECTION_ENTRY_BYTES;
         long base = buffer.mapped + offset;
-        // Terrain UVs are stored once per triangle corner. A zero index address is the canonical record's
-        // signal to consume them directly instead of indexing a shared vertex-UV array.
+        // Texture coordinates are stored once per triangle corner and declare that addressing mode
+        // independently of the unused index-address lane.
         RtGeometryAbi.writeRecord(base, geom.material.deviceAddress, 0L, geom.uvs.deviceAddress, 0L,
-                0f, 0f, 0f, geom.triBase[0], geom.triBase[1], geom.triBase[2], 0);
+                0f, 0f, 0f, geom.triBase[0], geom.triBase[1], geom.triBase[2],
+                RtGeometryAbi.FLAG_TRIANGLE_CORNER_TEXTURE_COORDINATES);
         markDirty(offset, SECTION_ENTRY_BYTES);
     }
 

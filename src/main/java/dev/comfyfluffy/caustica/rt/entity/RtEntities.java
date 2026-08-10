@@ -1732,7 +1732,8 @@ public final class RtEntities {
         long entry = build.tableBase + (long) build.geometryIndex() * TABLE_ENTRY_BYTES;
         RtGeometryAbi.writeRecord(entry, primAddr, idxAddr, uvAddr, dispAddr, rigidX, rigidY, rigidZ,
                 0, classTris[RtAccel.CLASS_OPAQUE],
-                classTris[RtAccel.CLASS_OPAQUE] + classTris[RtAccel.CLASS_MASKED], 0);
+                classTris[RtAccel.CLASS_OPAQUE] + classTris[RtAccel.CLASS_MASKED],
+                RtGeometryAbi.FLAG_INDEXED_TEXTURE_COORDINATES);
     }
 
     /** Select the next per-entity slot, waiting on its exact last graphics use before mutable reuse. */

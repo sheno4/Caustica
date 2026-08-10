@@ -226,11 +226,11 @@ public final class RtPipeline {
                 java.nio.IntBuffer bindFlags = stack.mallocInt(nb);
                 for (int b = 0; b < nb; b++) {
                     int stages = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-                    if (b == WORLD_ENTITY_ALBEDO && hasAhit) stages |= VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
+                    if (b == WORLD_ALBEDO_TEXTURES && hasAhit) stages |= VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
                     bl.get(b).binding(b).descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
                             .descriptorCount(bindlessTextures).stageFlags(stages);
                     int flags = VK12.VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
-                    if (b == WORLD_ENTITY_ALBEDO) flags |= VK12.VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+                    if (b == WORLD_ALBEDO_TEXTURES) flags |= VK12.VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
                     bindFlags.put(b, flags);
                 }
                 VkDescriptorSetLayoutBindingFlagsCreateInfo bf = VkDescriptorSetLayoutBindingFlagsCreateInfo.calloc(stack).sType$Default()
@@ -600,7 +600,7 @@ public final class RtPipeline {
 
     /** Append or initialize one entity-albedo slot. Existing slots never change while frames are in flight. */
     public void setEntityAlbedoTexture(int slot, long imageView, long sampler) {
-        setBindlessTexture(WORLD_ENTITY_ALBEDO, slot, imageView, sampler);
+        setBindlessTexture(WORLD_ALBEDO_TEXTURES, slot, imageView, sampler);
     }
 
     /** Bind one compact canonical page bundle at a resource-epoch boundary. */

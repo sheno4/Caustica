@@ -80,7 +80,8 @@ public final class RtSceneGeometryManager {
             long address = table.buffer.mapped + (long) entry.getValue() * RtGeometryAbi.RECORD_BYTES;
             RtGeometryAbi.writeRecord(address, resident.primitives.deviceAddress, resident.indices.deviceAddress,
                     resident.texCoords.deviceAddress, 0L, 0f, 0f, 0f,
-                    0, classes[0], classes[0] + classes[1], 0);
+                    0, classes[0], classes[0] + classes[1],
+                    RtGeometryAbi.FLAG_INDEXED_TEXTURE_COORDINATES);
         }
         if (recordCount != 0) {
             table.buffer.flush(0L, (long) recordCount * RtGeometryAbi.RECORD_BYTES);
