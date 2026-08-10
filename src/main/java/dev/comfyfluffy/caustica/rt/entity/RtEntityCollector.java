@@ -8,6 +8,7 @@ import com.mojang.blaze3d.vertex.VertexConsumer;
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialProfile;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialClassifier;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialLookup;
 import dev.comfyfluffy.caustica.mixin.ModelPartAccessor;
 import dev.comfyfluffy.caustica.mixin.RenderSetupAccessor;
 import dev.comfyfluffy.caustica.mixin.RenderTypeAccessor;
@@ -162,7 +163,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         // Block-entity models (chests/signs/beds) texture from an atlas SPRITE: use that atlas + remap
         // the ModelPart 0..1 UVs into the sprite's region. Mobs use a full texture (sprite == null).
         try {
-            capture.currentMaterialId = RtMaterialRegistry.INSTANCE.entityFallbackId(stochasticAlpha);
+            capture.currentMaterialId = RtMaterialRegistry.INSTANCE.runtimeFallbackId(stochasticAlpha);
             if (sprite != null) {
                 capture.setUvRemap(sprite.getU0(), sprite.getV0(), sprite.getU1(), sprite.getV1());
                 if (TextureAtlas.LOCATION_BLOCKS.equals(sprite.atlasLocation())) {
@@ -175,8 +176,9 @@ public final class RtEntityCollector implements SubmitNodeCollector {
                     // records this atlas's UV rectangle; it never mutates an existing material ID.
                     capture.currentTexSlot = RtEntityTextures.INSTANCE.slotForAtlas(sprite.atlasLocation());
                     capture.currentMaterialId = RtEntityTextures.entityPbr()
-                            ? RtMaterialRegistry.INSTANCE.resolveEntitySprite(sprite, stochasticAlpha)
-                            : RtMaterialRegistry.INSTANCE.entityFallbackId(stochasticAlpha);
+                            ? RtMaterialRegistry.INSTANCE.resolveAtlasReference(
+                                    MinecraftMaterialLookup.atlasMaterial(sprite), stochasticAlpha)
+                            : RtMaterialRegistry.INSTANCE.runtimeFallbackId(stochasticAlpha);
                 }
             } else {
                 // Mobs use full per-type textures. Their authored _s/_n maps were decoded into canonical
@@ -337,13 +339,14 @@ public final class RtEntityCollector implements SubmitNodeCollector {
                                    boolean transmissive, boolean stochasticAlpha) {
         if (sprite != null && TextureAtlas.LOCATION_BLOCKS.equals(sprite.atlasLocation())) {
             int materialId = RtMaterialRegistry.INSTANCE.requireSnapshot()
-                    .resolve(sprite, profile, transmissive, false);
+                    .resolve(MinecraftMaterialLookup.material(sprite), profile, transmissive, false);
             capture.currentMaterialId = stochasticAlpha
                     ? RtMaterialRegistry.INSTANCE.withStochasticCoverage(materialId) : materialId;
         } else if (sprite != null && RtEntityTextures.entityPbr()) {
-            capture.currentMaterialId = RtMaterialRegistry.INSTANCE.resolveEntitySprite(sprite, stochasticAlpha);
+            capture.currentMaterialId = RtMaterialRegistry.INSTANCE.resolveAtlasReference(
+                    MinecraftMaterialLookup.atlasMaterial(sprite), stochasticAlpha);
         } else {
-            capture.currentMaterialId = RtMaterialRegistry.INSTANCE.entityFallbackId(stochasticAlpha);
+            capture.currentMaterialId = RtMaterialRegistry.INSTANCE.runtimeFallbackId(stochasticAlpha);
         }
     }
 
@@ -484,7 +487,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
             RenderType renderType = renderable.renderType(displayMode);
             boolean stochasticAlpha = isTranslucent(renderType);
             capture.currentTexSlot = RtEntityTextures.INSTANCE.slotFor(renderType);
-            capture.currentMaterialId = RtMaterialRegistry.INSTANCE.entityFallbackId(stochasticAlpha);
+            capture.currentMaterialId = RtMaterialRegistry.INSTANCE.runtimeFallbackId(stochasticAlpha);
             if (!stochasticAlpha && hasCutoutDefine(renderType)) {
                 capture.currentMaterialId = RtMaterialRegistry.INSTANCE.withCutoutCoverage(capture.currentMaterialId);
             }
@@ -578,7 +581,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         capture.clearUvRemap();
         capture.currentOrder = 0;
         capture.currentTexSlot = RtEntityTextures.INSTANCE.whiteSlot();
-        capture.currentMaterialId = RtMaterialRegistry.INSTANCE.entityFallbackId(false);
+        capture.currentMaterialId = RtMaterialRegistry.INSTANCE.runtimeFallbackId(false);
         capture.currentSbtClass = RtAccel.CLASS_OPAQUE; // fully opaque white texture, no alpha test
         Matrix4f pose = poseStack.last().pose();
         // Same derivation as LeashFeatureRenderer.prepare: the ribbon's horizontal half-extent is the
@@ -695,8 +698,10 @@ public final class RtEntityCollector implements SubmitNodeCollector {
     private void setBlockSpriteMaterial(TextureAtlasSprite sprite, BlockState state,
                                         boolean transmissive, boolean stochasticAlpha) {
         if (sprite != null && TextureAtlas.LOCATION_BLOCKS.equals(sprite.atlasLocation())) {
-            int materialId = RtMaterialRegistry.INSTANCE.requireSnapshot()
-                    .resolve(sprite, MinecraftMaterialClassifier.classify(state), transmissive);
+            var classification = MinecraftMaterialClassifier.classify(state);
+            int materialId = RtMaterialRegistry.INSTANCE.requireSnapshot().resolve(
+                    MinecraftMaterialLookup.material(sprite), classification.geometry(),
+                    classification.variant(transmissive));
             capture.currentMaterialId = stochasticAlpha
                     ? RtMaterialRegistry.INSTANCE.withStochasticCoverage(materialId) : materialId;
         } else {
@@ -880,7 +885,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         capture.currentTexSlot = lines ? RtEntityTextures.INSTANCE.whiteSlot()
                 : RtEntityTextures.INSTANCE.slotFor(renderType);
         capture.currentMaterialId = lines
-                ? RtMaterialRegistry.INSTANCE.entityFallbackId(false)
+                ? RtMaterialRegistry.INSTANCE.runtimeFallbackId(false)
                 : RtEntityTextures.INSTANCE.materialIdFor(renderType, stochasticAlpha);
         if (!lines && !stochasticAlpha && hasCutoutDefine(renderType)) {
             capture.currentMaterialId = RtMaterialRegistry.INSTANCE.withCutoutCoverage(capture.currentMaterialId);

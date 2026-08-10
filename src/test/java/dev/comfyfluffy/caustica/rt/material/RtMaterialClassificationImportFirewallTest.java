@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 
@@ -21,8 +22,12 @@ final class RtMaterialClassificationImportFirewallTest {
 
         for (String renderer : new String[]{"RtMaterialRegistry.java", "RtBlockMaterials.java"}) {
             String text = Files.readString(MATERIAL_SOURCES.resolve(renderer));
-            assertFalse(text.contains("dev.comfyfluffy.caustica.minecraft.material."),
-                    () -> renderer + " imported a Minecraft material classifier");
+            for (String forbidden : List.of("net.minecraft.", "net.fabricmc.", "com.mojang.",
+                    "dev.comfyfluffy.caustica.minecraft.", "TextureAtlasSprite", "NativeImage",
+                    "Identifier", "SpriteContentsAccessor", "TextureAtlasAccessor")) {
+                assertFalse(text.contains(forbidden),
+                        () -> renderer + " crossed its host type firewall with " + forbidden);
+            }
             assertFalse(text.contains("RtMaterials") || text.contains("RtDielectrics")
                             || text.contains("RtEmissionSemantics"),
                     () -> renderer + " references a removed Minecraft classifier");

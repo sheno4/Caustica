@@ -9,4 +9,8 @@ public record MaterialClassification(ResourceId geometry, OpenPbrMaterialProfile
     public MaterialClassification {
         Objects.requireNonNull(profile, "profile");
     }
+
+    public MaterialVariant variant(boolean transmissive) {
+        return new MaterialVariant(profile, transmissive, emitting);
+    }
 }

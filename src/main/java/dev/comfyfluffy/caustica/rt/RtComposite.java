@@ -10,7 +10,7 @@ import dev.comfyfluffy.caustica.engine.frame.DamageOverlay;
 import dev.comfyfluffy.caustica.engine.frame.FrameSnapshot;
 import dev.comfyfluffy.caustica.engine.frame.SceneResources;
 import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
-import dev.comfyfluffy.caustica.engine.material.MaterialEmissionIndex;
+import dev.comfyfluffy.caustica.engine.material.MaterialCatalog;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushConstantsData;
 import dev.comfyfluffy.caustica.rt.light.RtProviderLights;
@@ -982,14 +982,14 @@ public final class RtComposite {
         ProviderManager.MaterialContributions materials = ProviderManager.INSTANCE.collectMaterials();
         RtMaterialOverrides materialOverrides = RtMaterialOverrides.from(
                 materials.rules(), CausticaApi.registry()::surfaceIndex);
-        MaterialEmissionIndex emissionSemantics = RtRuntime.host().analyzeMaterialEmission();
-        RtBlockMaterials.INSTANCE.prepareAll(ctx, bindlessTextureCapacity, emissionSemantics, materialOverrides);
+        MaterialCatalog materialCatalog = RtRuntime.host().materialCatalog(materials.rules());
+        RtBlockMaterials.INSTANCE.prepareAll(ctx, bindlessTextureCapacity, materialCatalog);
         RtEntityTextures.INSTANCE.reset(bindlessTextureCapacity);
         worldPipeline.setEntityAlbedoTexture(0, atlasView, sampler);
         RtBlockMaterials.INSTANCE.bindPages(worldPipeline, sampler);
-        RtMaterialRegistry.INSTANCE.rebuild(ctx, RtBlockMaterials.INSTANCE, materialOverrides,
-                RtRuntime.host()::dielectricIor,
-                materials.definitions(), CausticaApi.registry()::surfaceIndex);
+        RtMaterialRegistry.INSTANCE.rebuild(ctx, RtBlockMaterials.INSTANCE, materialCatalog,
+                materialOverrides, materials.definitions(), CausticaApi.registry()::surfaceIndex,
+                bindlessTextureCapacity);
         sceneGeometry.invalidateMaterials();
         materialBindingsReady = true;
         bindPassResources();

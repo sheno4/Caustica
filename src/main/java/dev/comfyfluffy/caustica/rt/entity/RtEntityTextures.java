@@ -6,6 +6,7 @@ import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.mixin.RenderSetupAccessor;
 import dev.comfyfluffy.caustica.mixin.RenderTypeAccessor;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialLookup;
 import dev.comfyfluffy.caustica.rt.material.RtMaterialRegistry;
 import dev.comfyfluffy.caustica.rt.pipeline.RtPipeline;
 import com.mojang.blaze3d.platform.NativeImage;
@@ -102,8 +103,9 @@ public final class RtEntityTextures {
 
     /** Canonical binding ID for a full entity texture, or the neutral runtime-texture fallback. */
     public int materialIdFor(RenderType renderType, boolean stochasticCoverage) {
-        if (!entityPbr()) return RtMaterialRegistry.INSTANCE.entityFallbackId(stochasticCoverage);
-        return RtMaterialRegistry.INSTANCE.resolveEntityTexture(textureLocation(renderType), stochasticCoverage);
+        if (!entityPbr()) return RtMaterialRegistry.INSTANCE.runtimeFallbackId(stochasticCoverage);
+        return RtMaterialRegistry.INSTANCE.resolveStandaloneTexture(
+                MinecraftMaterialLookup.logicalTexture(textureLocation(renderType)), stochasticCoverage);
     }
 
     /**
