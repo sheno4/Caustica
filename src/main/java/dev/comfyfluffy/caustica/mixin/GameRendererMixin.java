@@ -7,11 +7,13 @@ import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vulkan.VulkanDevice;
 import dev.comfyfluffy.caustica.client.VanillaRenderController;
 import dev.comfyfluffy.caustica.client.WorldRenderScaler;
+import dev.comfyfluffy.caustica.minecraft.MinecraftFrameAdapter;
 import dev.comfyfluffy.caustica.rt.RtComposite;
 import dev.comfyfluffy.caustica.rt.RtReflex;
 import dev.comfyfluffy.caustica.rt.RtRuntime;
 import dev.comfyfluffy.caustica.rt.RtUiOverlay;
 import net.minecraft.client.DeltaTracker;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.GameRenderer;
 import net.minecraft.client.renderer.SubmitNodeStorage;
 import net.minecraft.client.renderer.feature.FeatureRenderDispatcher;
@@ -143,8 +145,9 @@ public abstract class GameRendererMixin {
 		}
 
 		var cameraState = this.gameRenderState().levelRenderState.cameraRenderState;
-		RtComposite.INSTANCE.captureFrame(projection, cameraState.viewRotationMatrix,
-				cameraState.pos.x, cameraState.pos.y, cameraState.pos.z);
+		RtComposite.INSTANCE.captureFrame(MinecraftFrameAdapter.INSTANCE.capture(
+				Minecraft.getInstance(), projection, cameraState.viewRotationMatrix,
+				cameraState.pos.x, cameraState.pos.y, cameraState.pos.z));
 		VanillaRenderController.INSTANCE.markProjectionCaptured();
 		return projection;
 	}

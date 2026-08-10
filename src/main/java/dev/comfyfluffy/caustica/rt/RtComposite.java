@@ -14,6 +14,8 @@ import dev.comfyfluffy.caustica.api.CausticaRegistry;
 import dev.comfyfluffy.caustica.api.Slots;
 import dev.comfyfluffy.caustica.api.pass.RenderStage;
 import dev.comfyfluffy.caustica.client.CausticaJitter;
+import dev.comfyfluffy.caustica.engine.frame.FrameSnapshot;
+import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.mixin.CommandEncoderAccessor;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushConstantsData;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushData;
@@ -24,16 +26,10 @@ import dev.comfyfluffy.caustica.rt.gen.WorldPushData.Float4;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushData.Int4;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.multiplayer.ClientLevel;
-import net.minecraft.client.renderer.BiomeColors;
 import net.minecraft.client.renderer.texture.TextureAtlas;
 import net.minecraft.client.resources.model.ModelBakery;
 import net.minecraft.core.BlockPos;
-import net.minecraft.resources.Identifier;
-import net.minecraft.tags.FluidTags;
 import net.minecraft.util.Mth;
-import net.minecraft.world.attribute.EnvironmentAttributes;
-import net.minecraft.world.level.material.FluidState;
 import org.joml.Matrix4f;
 import org.joml.Matrix4fc;
 import org.lwjgl.system.MemoryStack;
@@ -207,7 +203,7 @@ public final class RtComposite {
     private int pushSlot;
     private RtDisplayPipeline displayPipeline;
     private RenderPassManager renderPassManager;
-    private ClientLevel renderPassLevel;
+    private long renderPassSceneId = Long.MIN_VALUE;
     private RtDebugPresentPipeline debugPresentPipeline;
     private RtToneLut sdrToneLut;
     private RtToneLut hdrToneLut;
@@ -302,7 +298,6 @@ public final class RtComposite {
     private final Matrix4f mvCurProjView = new Matrix4f();
     private final Matrix4f mvPushMatrix = new Matrix4f();
     private final Matrix4f frameInvViewProj = new Matrix4f();
-    private final BlockPos.MutableBlockPos cameraBlockPos = new BlockPos.MutableBlockPos();
     private double mvPrevCamX;
     private double mvPrevCamY;
     private double mvPrevCamZ;
@@ -319,10 +314,7 @@ public final class RtComposite {
     // Camera captured each frame from GameRenderer (unjittered level projection + camera rotation + pos).
     private final Matrix4f frameProjection = new Matrix4f();
     private final Matrix4f frameViewRotation = new Matrix4f();
-    private double camX;
-    private double camY;
-    private double camZ;
-    private boolean frameCaptured;
+    private FrameSnapshot frameSnapshot;
 
     // Per-frame TLAS resources, rebuilt in place from a small ring of persistent slots (see
     // RtAccel.TlasRing — replaces the old create-and-defer-destroy-per-frame churn whose VMA slow path
@@ -519,14 +511,9 @@ public final class RtComposite {
         }
     }
 
-    /** Capture the frame's camera for the next composite. Called from GameRendererMixin. */
-    public void captureFrame(Matrix4f projection, Matrix4fc viewRotation, double cameraX, double cameraY, double cameraZ) {
-        frameProjection.set(projection);
-        frameViewRotation.set(viewRotation);
-        camX = cameraX;
-        camY = cameraY;
-        camZ = cameraZ;
-        frameCaptured = true;
+    /** Capture the immutable host frame for the next composite. Called from the host render adapter. */
+    public void captureFrame(FrameSnapshot snapshot) {
+        frameSnapshot = Objects.requireNonNull(snapshot, "snapshot");
     }
 
     /** Reset exposure filtering after an explicit render-state invalidation such as F3+A. */
@@ -558,6 +545,7 @@ public final class RtComposite {
         }
         RtFrameStats.FRAME.beginIfInactive();
         hdrWrittenThisFrame = false;
+        frameSnapshot = null;
     }
 
     /** This frame's completion token, valid until {@link #finishGraphicsUse()} signals it. */
@@ -629,16 +617,13 @@ public final class RtComposite {
         // Providers prepare their frame contributions before the ready gate below. A failing provider is
         // disabled and cleaned up independently, so another provider can continue serving the frame.
         ProviderManager.INSTANCE.prepareFrame();
-        if (RtTerrain.currentOrNull() == null || !frameCaptured || Minecraft.getInstance().level == null) {
-            // No world this frame (incl. after quitting to the title — terrain residency + frameCaptured can
-            // linger until an explicit invalidate, which would otherwise present a stale/empty HDR image as a
-            // black menu background). Skip RT so the present path falls back to vanilla SDR / the PQ SDR
-            // convert path, which shows the menu + panorama correctly.
+        FrameSnapshot snapshot = frameSnapshot;
+        if (RtTerrain.currentOrNull() == null || snapshot == null) {
+            // No scene was captured this frame. Skip RT so the present path falls back to the host image.
             return false;
         }
-        ClientLevel level = Minecraft.getInstance().level;
         try {
-            if (!ensurePresentationResources(ctx, level, width, height)) {
+            if (!ensurePresentationResources(ctx, snapshot.sceneId(), width, height)) {
                 return false;
             }
             RtPipeline active = ensureWorld(ctx);
@@ -650,8 +635,8 @@ public final class RtComposite {
                 return false;
             }
             refreshMaterialBindingsIfNeeded(ctx);
-            updateMotion();
-            recordFrame(ctx, active, nativeColor);
+            updateMotion(snapshot);
+            recordFrame(ctx, active, nativeColor, snapshot);
             if (!loggedActive) {
                 loggedActive = true;
                 CausticaMod.LOGGER.info("RT composite active (terrain): {}x{}, RT output replaces the world target", width, height);
@@ -666,12 +651,12 @@ public final class RtComposite {
     }
 
     /** Build every display-sized resource while startup is still presenting vanilla. */
-    public boolean ensurePresentationResourcesReady(GpuContext ctx, int width, int height) {
-        if (failed || Minecraft.getInstance().level == null) {
+    public boolean ensurePresentationResourcesReady(GpuContext ctx, long sceneId, int width, int height) {
+        if (failed || sceneId == 0L) {
             return false;
         }
         try {
-            return ensurePresentationResources(ctx, Minecraft.getInstance().level, width, height);
+            return ensurePresentationResources(ctx, sceneId, width, height);
         } catch (Throwable t) {
             failed = true;
             CausticaMod.LOGGER.error("RT presentation resource bring-up failed; reverting to vanilla path", t);
@@ -679,10 +664,10 @@ public final class RtComposite {
         }
     }
 
-    private boolean ensurePresentationResources(GpuContext ctx, ClientLevel level, int width, int height)
+    private boolean ensurePresentationResources(GpuContext ctx, long sceneId, int width, int height)
             throws IOException {
-        if (renderPassLevel != level) {
-            renderPassLevel = level;
+        if (renderPassSceneId != sceneId) {
+            renderPassSceneId = sceneId;
             if (renderPassManager != null) {
                 renderPassManager.invalidate();
             }
@@ -1234,13 +1219,15 @@ public final class RtComposite {
      * into the previous frame's clip space, plus the per-frame camera translation. On the first frame
      * (or after a reset) push the current view-projection with zero delta so MVs come out zero.
      */
-    private void updateMotion() {
+    private void updateMotion(FrameSnapshot snapshot) {
+        snapshot.copyProjectionTo(frameProjection);
+        snapshot.copyViewRotationTo(frameViewRotation);
         mvCurProjView.set(frameProjection).mul(frameViewRotation);
         if (mvHasPrev) {
             mvPushMatrix.set(mvPrevProjView);
-            mvCamDeltaX = (float) (camX - mvPrevCamX);
-            mvCamDeltaY = (float) (camY - mvPrevCamY);
-            mvCamDeltaZ = (float) (camZ - mvPrevCamZ);
+            mvCamDeltaX = (float) (snapshot.cameraX() - mvPrevCamX);
+            mvCamDeltaY = (float) (snapshot.cameraY() - mvPrevCamY);
+            mvCamDeltaZ = (float) (snapshot.cameraZ() - mvPrevCamZ);
         } else {
             mvPushMatrix.set(mvCurProjView);
             mvCamDeltaX = 0f;
@@ -1248,13 +1235,14 @@ public final class RtComposite {
             mvCamDeltaZ = 0f;
         }
         mvPrevProjView.set(mvCurProjView);
-        mvPrevCamX = camX;
-        mvPrevCamY = camY;
-        mvPrevCamZ = camZ;
+        mvPrevCamX = snapshot.cameraX();
+        mvPrevCamY = snapshot.cameraY();
+        mvPrevCamZ = snapshot.cameraZ();
         mvHasPrev = true;
     }
 
-    private void recordFrame(GpuContext ctx, RtPipeline active, GpuTexture nativeColor) {
+    private void recordFrame(GpuContext ctx, RtPipeline active, GpuTexture nativeColor,
+                             FrameSnapshot snapshot) {
         long dstImage = vkImage(nativeColor);
         var encoder = (VulkanCommandEncoder) ((CommandEncoderAccessor) RenderSystem.getDevice().createCommandEncoder()).caustica$getBackend();
         RtGpuExecutor gpuExecutor = ctx.gpuExecutor();
@@ -1295,36 +1283,16 @@ public final class RtComposite {
             // flags: camera-in-water (so the path tracer starts in the water medium when the eye is
             // submerged, fixing the air→water first-segment orientation) and animated water normals.
             // Bit 1 remains unused to avoid conflicting with stale external readers.
-            int flags = 0;
-            var level = Minecraft.getInstance().level;
-            if (level != null) {
-                cameraBlockPos.set(Mth.floor(camX), Mth.floor(camY), Mth.floor(camZ));
-                // Height-aware, mirroring vanilla's own Camera.getFluidInCamera(): a plain block-granular
-                // test wrongly flags the eye submerged anywhere in a water column's top block, even well
-                // above its actual surface (shallow/flowing water, or standing with your head just over a
-                // source block).
-                FluidState fs = level.getFluidState(cameraBlockPos);
-                if (fs.is(FluidTags.WATER) && camY < cameraBlockPos.getY() + fs.getHeight(level, cameraBlockPos)) {
-                    flags |= 0b01;
-                }
-            }
+            int flags = snapshot.cameraInMedium() ? 0b01 : 0;
             if (waterWaves()) {
                 flags |= 0b10000; // animated water wave normals
             }
 
             // The medium the eye itself is inside: the camera's own biome water colour, used only when
             // the camera starts submerged. Every hit takes its tint from its own primitive instead.
-            float wtr = 0.25f, wtg = 0.46f, wtb = 0.9f; // neutral ocean-ish default if no level/biome
-            if (level != null) {
-                int wc = BiomeColors.getAverageWaterColor(level, cameraBlockPos);
-                wtr = ((wc >> 16) & 0xFF) / 255f;
-                wtg = ((wc >> 8) & 0xFF) / 255f;
-                wtb = (wc & 0xFF) / 255f;
-            }
-            Float4 cameraMediumAcesCg = linearAcesCgFromSrgb(wtr, wtg, wtb, 1f);
-            Float3 cameraMedium = new Float3(cameraMediumAcesCg.x(), cameraMediumAcesCg.y(),
-                    cameraMediumAcesCg.z());
-            float time = (float) (System.nanoTime() / 1.0e9 % 3600.0);
+            FrameSnapshot.LinearRgb medium = snapshot.cameraMedium();
+            Float3 cameraMedium = new Float3(medium.red(), medium.green(), medium.blue());
+            float time = (float) (snapshot.timeSeconds() % 3600.0);
             float delta = time - previousProceduralTime;
             // A first frame, long pause, or one-hour phase wrap has no adjacent frame to reproject. Use
             // the current phase so a procedural surface reports no motion instead of a huge jump.
@@ -1335,8 +1303,10 @@ public final class RtComposite {
             // Procedural domain anchor: the terrain rebase origin reduced mod 4096 (kept small for shader
             // float precision). hitPos.xz (rebased) + anchor reconstructs a world-pinned coordinate, so a
             // pattern stays fixed in the world as the player moves and the rebase origin shifts.
-            Float2 proceduralDomainAnchor = new Float2(terrain.blockX & PROCEDURAL_ANCHOR_MASK,
-                    terrain.blockZ & PROCEDURAL_ANCHOR_MASK);
+            SceneOrigin sceneOrigin = new SceneOrigin(terrain.blockX, terrain.blockY, terrain.blockZ);
+            double proceduralPeriod = PROCEDURAL_ANCHOR_MASK + 1.0;
+            Float2 proceduralDomainAnchor = new Float2(sceneOrigin.wrappedX(proceduralPeriod),
+                    sceneOrigin.wrappedZ(proceduralPeriod));
 
             // Rebuild the TLAS this frame from static section instances merged with dynamic entity
             // instances, bind it into the pipeline's descriptor ring, record the build, then barrier so
@@ -1346,7 +1316,9 @@ public final class RtComposite {
             // Entity BLASes are built inline below and merged into the per-frame TLAS. geomTableAddr
             // feeds the hit shader entity path (per-prim normal/tint) and motion vectors.
             RtEntities.FrameEntities fe = RtEntities.INSTANCE.beginFrame(ctx, terrain.staticInstances(),
-                    terrain.blockX, terrain.blockY, terrain.blockZ, camX, camY, camZ, frameProjection, frameViewRotation);
+                    terrain.blockX, terrain.blockY, terrain.blockZ,
+                    snapshot.cameraX(), snapshot.cameraY(), snapshot.cameraZ(),
+                    frameProjection, frameViewRotation);
             frameEntities = fe;
             // Block-breaking overlay: resolves each destroy-stage RenderType's texture into the
             // SAME bindless entity-texture array (destroy_stage_N.png is a standalone Sampler0 texture,
@@ -1355,8 +1327,9 @@ public final class RtComposite {
             BreakEntry[] breaking = breakingEntries(terrain);
             new WorldPushData(
                     frameInvViewProj,
-                    new Float3((float) (camX - terrain.blockX), (float) (camY - terrain.blockY),
-                            (float) (camZ - terrain.blockZ)),
+                    new Float3(sceneOrigin.relativeX(snapshot.cameraX()),
+                            sceneOrigin.relativeY(snapshot.cameraY()),
+                            sceneOrigin.relativeZ(snapshot.cameraZ())),
                     (int) frameCounter,
                     mvPushMatrix,
                     new Float3(mvCamDeltaX, mvCamDeltaY, mvCamDeltaZ),
@@ -1570,12 +1543,6 @@ public final class RtComposite {
     }
 
 
-    private static Float4 linearAcesCgFromSrgb(double r, double g, double b, float w) {
-        float[] acesCg = RtColor.linearBt709ToAcesCg(RtColor.srgbToLinear(r), RtColor.srgbToLinear(g),
-                RtColor.srgbToLinear(b));
-        return new Float4(acesCg[0], acesCg[1], acesCg[2], w);
-    }
-
     public void destroy() {
         // Session teardown stops the GPU executor and waits the device idle before entering here, so the
         // TLAS ring's slots are no longer in flight and can be freed immediately.
@@ -1617,7 +1584,7 @@ public final class RtComposite {
             renderPassManager.destroy();
             renderPassManager = null;
         }
-        renderPassLevel = null;
+        renderPassSceneId = Long.MIN_VALUE;
         if (debugPresentPipeline != null) {
             debugPresentPipeline.destroy();
             debugPresentPipeline = null;
@@ -1703,7 +1670,7 @@ public final class RtComposite {
         proceduralTimeValid = false;
         failed = false;
         loggedActive = false;
-        frameCaptured = false;
+        frameSnapshot = null;
         currentTlasHandle = 0L;
         pendingGraphicsUse = null;
         hdrWrittenThisFrame = false;
@@ -2117,7 +2084,7 @@ public final class RtComposite {
      */
     public GpuImage fgInterpolate(VulkanCommandEncoder enc, long backbufferView, long backbufferImage,
             int swapW, int swapH, int index, int count, boolean hdrBackbuffer) {
-        if (failed || gDepth == null || gMotion == null || !frameCaptured) {
+        if (failed || gDepth == null || gMotion == null || frameSnapshot == null) {
             return null;
         }
         GpuContext ctx = GpuContext.currentOrNull();

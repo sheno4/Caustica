@@ -14,7 +14,6 @@ import dev.comfyfluffy.caustica.rt.provider.ProviderManager;
 import dev.comfyfluffy.caustica.rt.terrain.RtTerrain;
 import dev.comfyfluffy.caustica.rt.terrain.RtWorkerPool;
 import dev.comfyfluffy.caustica.slang.SlangRuntime;
-import net.minecraft.client.Minecraft;
 
 /** Owns the live RT session and publishes one immutable rendering mode for each frame. */
 public final class RtRuntime {
@@ -36,11 +35,12 @@ public final class RtRuntime {
     }
 
     /** Reconcile the requested mode and advance session startup at the client-tick boundary. */
-    public void tick(Minecraft client) {
+    public void tick(boolean scenePresent, boolean startupSceneReady, long sceneId,
+                     int displayWidth, int displayHeight, Runnable reconfigureSurface) {
         boolean requested = CausticaConfig.Rt.ENABLED.value();
         if (!requested) {
             if (state == State.STARTING || state == State.ACTIVE) {
-                stop(client);
+                stop(reconfigureSurface);
             } else if (state == State.FAILED) {
                 state = State.OFF;
             }
@@ -55,9 +55,9 @@ public final class RtRuntime {
         }
 
         boolean starting = state == State.STARTING;
-        boolean sessionReady = session.tick(client, starting);
+        boolean sessionReady = session.tick(scenePresent, sceneId, displayWidth, displayHeight, starting);
         if (RtComposite.INSTANCE.hasFailed()) {
-            fail(client);
+            fail(reconfigureSurface);
             return;
         }
         if (!sessionReady) {
@@ -66,9 +66,7 @@ public final class RtRuntime {
         if (!starting) {
             return;
         }
-        if (client.level == null || client.player == null
-                || !RtTerrain.isSectionReady(client.player.blockPosition())
-                || !RtComposite.INSTANCE.completeStartupBoundary()) {
+        if (!startupSceneReady || !RtComposite.INSTANCE.completeStartupBoundary()) {
             return;
         }
 
@@ -77,7 +75,7 @@ public final class RtRuntime {
         RtComposite.INSTANCE.resetFailureLatch();
         VanillaRenderController.INSTANCE.resetFailureLatch();
         if (CausticaConfig.Rt.Hdr.ENABLED.value()) {
-            client.invalidateSurfaceConfiguration();
+            reconfigureSurface.run();
         }
         CausticaMod.LOGGER.info("RT runtime active");
     }
@@ -161,21 +159,21 @@ public final class RtRuntime {
      * sections stayed marked dirty (see {@code LevelExtractorMixin}), so the very next frame compiles
      * whatever it needs.
      */
-    private void stop(Minecraft client) {
-        closeSession(client, State.OFF);
+    private void stop(Runnable reconfigureSurface) {
+        closeSession(reconfigureSurface, State.OFF);
         CausticaMod.LOGGER.info("RT runtime off; vanilla presentation restored");
     }
 
-    private void fail(Minecraft client) {
-        closeSession(client, State.FAILED);
+    private void fail(Runnable reconfigureSurface) {
+        closeSession(reconfigureSurface, State.FAILED);
         CausticaMod.LOGGER.warn("RT runtime startup failed; vanilla presentation remains active");
     }
 
-    private void closeSession(Minecraft client, State terminalState) {
+    private void closeSession(Runnable reconfigureSurface, State terminalState) {
         state = State.STOPPING;
         frameActive = false;
         try {
-            client.invalidateSurfaceConfiguration();
+            reconfigureSurface.run();
             session.close();
         } finally {
             session = null;
@@ -186,7 +184,8 @@ public final class RtRuntime {
     private static final class Session {
         private GpuContext context;
 
-        boolean tick(Minecraft client, boolean starting) {
+        boolean tick(boolean scenePresent, long sceneId, int displayWidth, int displayHeight,
+                     boolean starting) {
             if (context == null) {
                 context = GpuContext.get();
                 if (context == null) {
@@ -199,15 +198,15 @@ public final class RtRuntime {
                 RtFrameStats.FRAME.beginIfInactive();
                 ProviderManager.INSTANCE.updateScenes();
             }
-            if (client.level == null) {
+            if (!scenePresent) {
                 return false;
             }
             if (starting && resourcesReady) {
                 RtTerrain.frame(context);
             }
-            var mainTarget = client.gameRenderer.mainRenderTarget();
-            if (starting && (mainTarget == null || !RtComposite.INSTANCE.ensurePresentationResourcesReady(
-                    context, mainTarget.width, mainTarget.height))) {
+            if (starting && (displayWidth <= 0 || displayHeight <= 0
+                    || !RtComposite.INSTANCE.ensurePresentationResourcesReady(
+                    context, sceneId, displayWidth, displayHeight))) {
                 return false;
             }
             if (CausticaConfig.Rt.Fg.ENABLED.value()) {

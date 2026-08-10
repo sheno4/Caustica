@@ -3,6 +3,7 @@ package dev.comfyfluffy.caustica.client;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.rt.RtComposite;
 import dev.comfyfluffy.caustica.rt.RtRuntime;
+import dev.comfyfluffy.caustica.minecraft.MinecraftFrameAdapter;
 import dev.comfyfluffy.caustica.rt.provider.ProviderManager;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
@@ -20,7 +21,7 @@ public final class CausticaClient implements ClientModInitializer {
 		@SuppressWarnings("unused")
 		Object registerExposureDebugEntry = RtExposureDebugEntry.ID;
 
-		ClientTickEvents.START_CLIENT_TICK.register(RtRuntime.INSTANCE::tick);
+		ClientTickEvents.START_CLIENT_TICK.register(MinecraftFrameAdapter.INSTANCE::tickRuntime);
 
 		// Vanilla's full render-state invalidation (LevelExtractor.allChanged(): dimension change via
 		// setLevel, render-distance change, F3+A) — drop RT terrain residency so it rebuilds for the new
