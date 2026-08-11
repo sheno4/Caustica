@@ -28,6 +28,7 @@ public final class CausticaRegistry {
      * binding and any unresolved name fall back to.
      */
     private final List<Feature.SurfaceImplementation> surfaces = new ArrayList<>();
+    private final List<Feature.SurfaceModifierImplementation> surfaceModifiers = new ArrayList<>();
 
     public FeatureBuilder feature(ResourceId id) {
         Objects.requireNonNull(id, "id");
@@ -51,8 +52,14 @@ public final class CausticaRegistry {
                 throw new IllegalStateException("duplicate surface implementation id " + surface.id());
             }
         }
+        for (Feature.SurfaceModifierImplementation modifier : feature.surfaceModifiers()) {
+            if (surfaceModifiers.stream().anyMatch(existing -> existing.id().equals(modifier.id()))) {
+                throw new IllegalStateException("duplicate surface modifier id " + modifier.id());
+            }
+        }
         features.put(feature.id(), feature);
         surfaces.addAll(feature.surfaces());
+        surfaceModifiers.addAll(feature.surfaceModifiers());
         for (CausticaRenderPass renderPass : feature.renderPasses()) {
             renderPasses.put(renderPass.id(), renderPass);
         }
@@ -129,6 +136,11 @@ public final class CausticaRegistry {
         return List.copyOf(surfaces);
     }
 
+    /** Every registered projected surface modifier, in deterministic application order. */
+    public synchronized List<Feature.SurfaceModifierImplementation> surfaceModifiers() {
+        return List.copyOf(surfaceModifiers);
+    }
+
     /**
      * The compiled index of a surface implementation, or -1 when nothing registered that id. Materials
      * resolve their authored name through this once at compile time; the shader only ever sees the index.
@@ -181,7 +193,12 @@ public final class CausticaRegistry {
         for (Feature.SurfaceImplementation surface : surfaces) {
             owners.put(surface.id(), features.get(surface.featureId()));
         }
-        return new Selection(bindings, List.copyOf(surfaces), Map.copyOf(owners));
+        Map<ResourceId, Feature> modifierOwners = new LinkedHashMap<>();
+        for (Feature.SurfaceModifierImplementation modifier : surfaceModifiers) {
+            modifierOwners.put(modifier.id(), features.get(modifier.featureId()));
+        }
+        return new Selection(bindings, List.copyOf(surfaces), Map.copyOf(owners),
+                List.copyOf(surfaceModifiers), Map.copyOf(modifierOwners));
     }
 
     private Feature.Binding binding(Slot slot, ResourceId featureId) {
@@ -210,11 +227,15 @@ public final class CausticaRegistry {
      */
     public record Selection(Map<Slot, SelectedBinding> bindings,
                             List<Feature.SurfaceImplementation> surfaces,
-                            Map<ResourceId, Feature> surfaceOwners) {
+                            Map<ResourceId, Feature> surfaceOwners,
+                            List<Feature.SurfaceModifierImplementation> surfaceModifiers,
+                            Map<ResourceId, Feature> surfaceModifierOwners) {
         public Selection {
             bindings = Map.copyOf(bindings);
             surfaces = List.copyOf(surfaces);
             surfaceOwners = Map.copyOf(surfaceOwners);
+            surfaceModifiers = List.copyOf(surfaceModifiers);
+            surfaceModifierOwners = Map.copyOf(surfaceModifierOwners);
             if (!bindings.keySet().containsAll(Slots.ALL)) {
                 throw new IllegalArgumentException("selection must bind every engine slot");
             }
@@ -234,6 +255,8 @@ public final class CausticaRegistry {
             bindings.values().stream().map(SelectedBinding::feature)
                     .filter(feature -> !features.contains(feature)).forEach(features::add);
             surfaces.stream().map(surface -> surfaceOwners.get(surface.id()))
+                    .filter(feature -> !features.contains(feature)).forEach(features::add);
+            surfaceModifiers.stream().map(modifier -> surfaceModifierOwners.get(modifier.id()))
                     .filter(feature -> !features.contains(feature)).forEach(features::add);
             return List.copyOf(features);
         }

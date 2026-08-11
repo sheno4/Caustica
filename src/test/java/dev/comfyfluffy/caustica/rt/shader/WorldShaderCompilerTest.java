@@ -50,6 +50,7 @@ final class WorldShaderCompilerTest {
             // own binding — registering a host sky must not silently take over the composition.
             assertTrue(root.contains("typealias Sky = BuiltinSky"), root);
             assertTrue(root.contains("typealias Surfaces = SurfaceDispatch"), root);
+            assertTrue(root.contains("typealias SurfaceModifiers = SurfaceModifierDispatch"), root);
             assertTrue(root.contains(
                     "default: { BuiltinSurface s; s.evaluateSurface(input, material); return; }"), root);
         }
@@ -182,6 +183,27 @@ final class WorldShaderCompilerTest {
         }
     }
 
+    @Test
+    void surfaceModifiersDispatchSequentiallyAndIsolateBrokenImplementations(@TempDir Path cacheDirectory)
+            throws Exception {
+        CausticaRegistry registry = dev.comfyfluffy.caustica.TestRegistries.withBuiltins();
+        registry.feature(ResourceId.of("test", "modifiers"))
+                .shaderSource(ShaderSource.classpath("/caustica-test/shaders"))
+                .surfaceModifier(ResourceId.of("test", "first"), "test_surface_modifiers", "FirstModifier")
+                .surfaceModifier(ResourceId.of("test", "broken"), "test_surface_modifier_broken", "BrokenModifier")
+                .surfaceModifier(ResourceId.of("test", "second"), "test_surface_modifiers", "SecondModifier")
+                .register();
+
+        try (WorldShaderCompiler compiler = WorldShaderCompiler.create(cacheDirectory, registry.selection())) {
+            String root = compiler.composition().rootSource();
+            int first = root.indexOf("FirstModifier m; m.applySurfaceModifier(input, material)");
+            int second = root.indexOf("SecondModifier m; m.applySurfaceModifier(input, material)");
+            assertTrue(first >= 0 && second > first, root);
+            assertFalse(root.contains("BrokenModifier"), root);
+            assertSpirv(compiler.compileClosestHit(), 1024);
+        }
+    }
+
     private static CausticaRegistry registryWithTestSurface(String module, String type) {
         CausticaRegistry registry = dev.comfyfluffy.caustica.TestRegistries.withBuiltins();
         registry.feature(TEST_SURFACE)
@@ -198,9 +220,7 @@ final class WorldShaderCompilerTest {
             throws Exception {
         try (WorldShaderCompiler compiler = compiler(cacheDirectory)) {
             compiler.compileSkyMiss();
-            // The selected Minecraft sky declares exactly these four resources:
-            // its two LUTs, its per-frame sky inputs, and the celestials atlas. The uniform-buffer kind is
-            // the point: reflection distinguishes the descriptor kinds a pass declares, not just images.
+            // The selected Minecraft feature declares the sky inputs and projected-damage modifier inputs.
             assertEquals(Map.of(
                     "skyView", new WorldShaderCompiler.PassResourceBinding(0,
                             WorldShaderCompiler.PassResourceKind.SAMPLED_IMAGE),
@@ -209,7 +229,9 @@ final class WorldShaderCompilerTest {
                     "skyInputs", new WorldShaderCompiler.PassResourceBinding(2,
                             WorldShaderCompiler.PassResourceKind.UNIFORM_BUFFER),
                     "celestialsAtlas", new WorldShaderCompiler.PassResourceBinding(3,
-                            WorldShaderCompiler.PassResourceKind.SAMPLED_IMAGE)),
+                            WorldShaderCompiler.PassResourceKind.SAMPLED_IMAGE),
+                    "minecraftDamageModifiers", new WorldShaderCompiler.PassResourceBinding(4,
+                            WorldShaderCompiler.PassResourceKind.UNIFORM_BUFFER)),
                     compiler.passResourceBindings());
         }
     }

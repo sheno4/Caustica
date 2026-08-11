@@ -22,6 +22,7 @@ final class RtGeometryAbiTest {
         assertEquals(60, RtGeometryAbi.FLAGS_OFFSET);
         assertEquals(0, RtGeometryAbi.FLAG_TRIANGLE_CORNER_TEXTURE_COORDINATES);
         assertEquals(1, RtGeometryAbi.FLAG_INDEXED_TEXTURE_COORDINATES);
+        assertEquals(2, RtGeometryAbi.FLAG_RECEIVES_PROJECTED_SURFACE_MODIFIERS);
     }
 
     @Test

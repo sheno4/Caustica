@@ -17,6 +17,7 @@ public final class RtGeometryAbi {
 
     public static final int FLAG_TRIANGLE_CORNER_TEXTURE_COORDINATES = 0;
     public static final int FLAG_INDEXED_TEXTURE_COORDINATES = 1;
+    public static final int FLAG_RECEIVES_PROJECTED_SURFACE_MODIFIERS = 1 << 1;
 
     private RtGeometryAbi() {
     }

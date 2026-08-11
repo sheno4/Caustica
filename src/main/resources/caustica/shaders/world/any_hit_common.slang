@@ -13,6 +13,7 @@ module any_hit_common;
 import world_common;
 import math;
 import bindings;
+import caustica_texture_resources;
 
 /** One hit's material binding, its interpolated base-color UV, and the per-primitive tint. */
 public struct HitBinding {

@@ -33,12 +33,6 @@ public struct WorldPushConstants {
     public uint frameIndex;
 };
 
-// Block-breaking overlay entry: xyz = breaking block position (rebased, same space as gl_WorldRay*),
-// w = bindless baseColorTextures index of the destroy-stage texture.
-public struct BreakEntry {
-    public int4 posSlot;
-};
-
 // Per-frame world data, read through a 64-bit device address. WorldPushData.java is generated from this
 // reflected type, including its serializer, byte size, vector/matrix types, and fixed-array capacities.
 public struct WorldPush {
@@ -63,9 +57,7 @@ public struct WorldPush {
     // World-pinned offset for procedural evaluation: the 3D rebase origin reduced mod a fixed power of
     // two, so (rebased position + this) stays fixed in scene space at usable precision.
     public float3   proceduralDomainOffset;
-    public uint     breakCount;
     public float4x4 curViewProj;      // forward camera-relative view-projection
-    public BreakEntry breaking[8];    // Java capacity and breakCount serialization are generated from this
     // Retained records are relative to their immutable build origin. xyz shifts them into the current
     // frame origin and w converts one scene unit to metres.
     public float4   retainedLightTransform;
@@ -328,6 +320,8 @@ public float surfaceIorFromPage(float encoded) {
 // inferred from whether an otherwise optional address happens to be zero.
 public static const uint GEOMETRY_TRIANGLE_CORNER_TEXTURE_COORDINATES = 0u;
 public static const uint GEOMETRY_INDEXED_TEXTURE_COORDINATES = 1u;
+/** Geometry opts into the registered projected surface-modifier chain. */
+public static const uint GEOMETRY_RECEIVES_PROJECTED_SURFACE_MODIFIERS = 2u;
 
 public struct GeometryRecord {
     public uint64_t primitiveAddress;

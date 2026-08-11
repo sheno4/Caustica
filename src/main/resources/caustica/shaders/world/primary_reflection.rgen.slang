@@ -3,6 +3,7 @@
 
 import caustica_api;
 import caustica_surface;
+import caustica_surface_modifier;
 import caustica_types;
 import caustica_builtin_sky;
 import caustica_builtin_surface;
@@ -29,9 +30,15 @@ struct ReflectionSurfaces : ISurfaceDispatch {
     }
 };
 
+struct ReflectionSurfaceModifiers : ISurfaceModifierDispatch {
+    void applySurfaceModifiers(SurfaceModifierInput input, inout MaterialInput material) {
+    }
+};
+
 struct ReflectionComposition : IComposition {
     typealias Sky = BuiltinSky;
     typealias Surfaces = ReflectionSurfaces;
+    typealias SurfaceModifiers = ReflectionSurfaceModifiers;
 };
 
 [shader("raygeneration")]

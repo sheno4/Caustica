@@ -27,7 +27,12 @@ final class RendererShaderNeutralityTest {
             "BINDING_RECORD_CROSSING",
             "waterHitT",
             "INSET_TRANSMIT_BIAS",
-            "LutSky");
+            "LutSky",
+            "DamageOverlay",
+            "BreakEntry",
+            "breakCount",
+            "applyBreaking",
+            "breaking[");
 
     @Test
     void rendererOwnedShadersExcludeHostSkyVocabularyAndRemovedAbiNames() throws IOException {

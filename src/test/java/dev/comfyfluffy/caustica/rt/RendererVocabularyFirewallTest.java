@@ -21,7 +21,10 @@ final class RendererVocabularyFirewallTest {
                     "terrain class", "then entity records", "terrain and entity",
                     "triangle spike and terrain")),
             Map.entry("rt/RtComposite.java", List.of(
-                    "boundBlockAlbedoAtlasHandle", "block atlas binding 2", "block atlas sampler")),
+                    "boundBlockAlbedoAtlasHandle", "block atlas binding 2", "block atlas sampler",
+                    "DamageOverlay", "BreakEntry", "breakCount", "breakingEntries")),
+            Map.entry("engine/frame/FrameSnapshot.java", List.of(
+                    "DamageOverlay", "damageOverlays", "textureSlot")),
             Map.entry("rt/material/RtMaterialAbi.java", List.of(
                     "TERRAIN_PRIM", "terrain material", "terrain index")),
             Map.entry("rt/material/RtMaterialRegistry.java", List.of(

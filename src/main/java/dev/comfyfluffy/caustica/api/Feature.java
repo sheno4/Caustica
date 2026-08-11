@@ -13,7 +13,9 @@ import java.util.Set;
 
 public record Feature(ResourceId id, DisplayText title, DisplayText description, FeatureCategory category,
                       ShaderSource shaderSource, Map<Slot, Binding> bindings,
-                      List<SurfaceImplementation> surfaces, List<Option<?>> options,
+                      List<SurfaceImplementation> surfaces,
+                      List<SurfaceModifierImplementation> surfaceModifiers,
+                      List<Option<?>> options,
                       List<String> optionGroups,
                       List<CausticaRenderPass> renderPasses,
                       List<ProviderRegistration<SceneProvider>> sceneProviders,
@@ -27,6 +29,7 @@ public record Feature(ResourceId id, DisplayText title, DisplayText description,
         Objects.requireNonNull(category, "category");
         bindings = Map.copyOf(bindings);
         surfaces = List.copyOf(surfaces);
+        surfaceModifiers = List.copyOf(surfaceModifiers);
         options = List.copyOf(options);
         optionGroups = List.copyOf(optionGroups);
         renderPasses = List.copyOf(renderPasses);
@@ -40,6 +43,10 @@ public record Feature(ResourceId id, DisplayText title, DisplayText description,
         if (!surfaces.isEmpty() && shaderSource == null) {
             throw new IllegalArgumentException(
                     id + ": a feature with surface implementations needs a shader source");
+        }
+        if (!surfaceModifiers.isEmpty() && shaderSource == null) {
+            throw new IllegalArgumentException(
+                    id + ": a feature with surface modifiers needs a shader source");
         }
         if (!passResourceModules.isEmpty() && shaderSource == null) {
             throw new IllegalArgumentException(id + ": a feature with pass resource modules needs a shader source");
@@ -89,6 +96,20 @@ public record Feature(ResourceId id, DisplayText title, DisplayText description,
      */
     public record SurfaceImplementation(ResourceId featureId, ResourceId id, String module, String type) {
         public SurfaceImplementation {
+            Objects.requireNonNull(featureId, "featureId");
+            Objects.requireNonNull(id, "id");
+            Slot.requireSlangIdentifier(module, "module");
+            Slot.requireSlangIdentifier(type, "type");
+        }
+    }
+
+    /**
+     * A projected, geometry-opted-in edit to the final OpenPBR material description. Every registered
+     * modifier runs in registration order; geometry without the receiver semantic pays for no dispatch.
+     */
+    public record SurfaceModifierImplementation(ResourceId featureId, ResourceId id,
+                                                String module, String type) {
+        public SurfaceModifierImplementation {
             Objects.requireNonNull(featureId, "featureId");
             Objects.requireNonNull(id, "id");
             Slot.requireSlangIdentifier(module, "module");

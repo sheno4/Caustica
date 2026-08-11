@@ -145,6 +145,16 @@ public struct SurfaceInput {
     public uint surfaceFlags;
 };
 
+/** Geometry and footprint inputs shared by projected surface modifiers. */
+public struct SurfaceModifierInput {
+    /** Hit position in the current scene-origin coordinate system. */
+    public float3 position;
+    /** The oriented triangle normal, before material or procedural perturbation. */
+    public float3 geometricNormal;
+    /** Ray footprint width at the hit, in scene world units. */
+    public float textureFootprint;
+};
+
 /**
  * Exactly what the engine's BSDF evaluates with. Unlike MaterialInput this is not authored vocabulary
  * and nothing outside the engine produces one: reflectance is already F0 and roughness is already GGX

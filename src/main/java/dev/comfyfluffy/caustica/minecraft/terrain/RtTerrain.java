@@ -128,7 +128,8 @@ public final class RtTerrain {
     private static final RtTerrain INSTANCE = new RtTerrain();
 
     private final RtRetainedGeometryScene<float[]> geometry =
-            new RtRetainedGeometryScene<>(RtTerrain::sectionTableInitialCapacity);
+            new RtRetainedGeometryScene<>(RtTerrain::sectionTableInitialCapacity,
+                    RtGeometryAbi.FLAG_RECEIVES_PROJECTED_SURFACE_MODIFIERS);
     // Persistent palette snapshots for tessellation regions (render-thread only); invalidated on dirty
     // sections, column unload/window-leave, and full clears.
     private final RtSectionSnapshots snapshots = new RtSectionSnapshots();

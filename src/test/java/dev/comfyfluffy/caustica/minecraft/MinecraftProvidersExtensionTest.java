@@ -5,6 +5,7 @@ import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.api.Slots;
 import dev.comfyfluffy.caustica.builtin.BuiltinExtension;
 import dev.comfyfluffy.caustica.minecraft.sky.SkyLutPass;
+import dev.comfyfluffy.caustica.minecraft.damage.MinecraftDamageModifierPass;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -19,12 +20,19 @@ final class MinecraftProvidersExtensionTest {
 
         assertTrue(registry.renderPasses().containsKey(ResourceId.of("caustica", "sky_lut")));
         assertTrue(registry.renderPasses().containsKey(ResourceId.of("caustica", "world_overlay")));
+        assertTrue(registry.renderPasses().containsKey(MinecraftDamageModifierPass.ID));
         assertTrue(registry.features().get(MinecraftProvidersExtension.ID).options()
                 .contains(SkyLutPass.SUN_NOON_SOUTH_TILT_DEGREES));
         assertEquals("MinecraftOverworldSky",
                 registry.features().get(MinecraftProvidersExtension.ID).bindings().get(Slots.SKY).type());
         assertTrue(registry.features().get(MinecraftProvidersExtension.ID).passResourceModules()
                 .contains("caustica_minecraft_sky_bindings"));
+        assertTrue(registry.features().get(MinecraftProvidersExtension.ID).passResourceModules()
+                .contains("caustica_minecraft_damage_bindings"));
+        assertTrue(registry.surfaceModifiers().stream()
+                .anyMatch(modifier -> modifier.id().equals(MinecraftDamageModifierPass.MODIFIER_ID)
+                        && modifier.module().equals("caustica_minecraft_damage_modifier")
+                        && modifier.type().equals("MinecraftDamageModifier")));
         assertTrue(registry.surfaces().stream()
                 .anyMatch(surface -> surface.id().equals(MinecraftProvidersExtension.WATER_SURFACE)
                         && surface.module().equals("caustica_water_surface")

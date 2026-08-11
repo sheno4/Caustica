@@ -24,6 +24,7 @@ public final class RtRetainedGeometryScene<M> {
     private static final int ENTRY_BYTES = RtGeometryAbi.RECORD_BYTES;
 
     private final IntSupplier initialCapacity;
+    private final int geometrySemanticFlags;
     private final Long2ObjectOpenHashMap<Resident<M>> residents = new Long2ObjectOpenHashMap<>();
     private final LongOpenHashSet published = new LongOpenHashSet();
     private final SlotRegistry<Resident<M>> slots = new SlotRegistry<>();
@@ -41,7 +42,12 @@ public final class RtRetainedGeometryScene<M> {
     private boolean ready;
 
     public RtRetainedGeometryScene(IntSupplier initialCapacity) {
+        this(initialCapacity, 0);
+    }
+
+    public RtRetainedGeometryScene(IntSupplier initialCapacity, int geometrySemanticFlags) {
         this.initialCapacity = initialCapacity;
+        this.geometrySemanticFlags = geometrySemanticFlags;
     }
 
     public boolean ready() {
@@ -324,7 +330,7 @@ public final class RtRetainedGeometryScene<M> {
         RtGeometryAbi.writeRecord(address, geometry.primitives.deviceAddress, 0L,
                 geometry.textureCoordinates.deviceAddress, 0L, 0f, 0f, 0f,
                 geometry.triangleBases[0], geometry.triangleBases[1], geometry.triangleBases[2],
-                RtGeometryAbi.FLAG_TRIANGLE_CORNER_TEXTURE_COORDINATES);
+                RtGeometryAbi.FLAG_TRIANGLE_CORNER_TEXTURE_COORDINATES | geometrySemanticFlags);
         markDirty(offset, ENTRY_BYTES);
     }
 

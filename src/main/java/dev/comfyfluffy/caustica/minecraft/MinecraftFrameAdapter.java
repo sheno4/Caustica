@@ -2,13 +2,12 @@ package dev.comfyfluffy.caustica.minecraft;
 
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.api.provider.MaterialHandle;
-import dev.comfyfluffy.caustica.engine.frame.DamageOverlay;
 import dev.comfyfluffy.caustica.engine.frame.FrameSnapshot;
 import dev.comfyfluffy.caustica.engine.frame.SceneResources;
 import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
 import dev.comfyfluffy.caustica.rt.RtColor;
 import dev.comfyfluffy.caustica.rt.RtRuntime;
-import dev.comfyfluffy.caustica.minecraft.entity.RtEntityTextures;
+import dev.comfyfluffy.caustica.minecraft.damage.MinecraftDamageModifierPass;
 import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
 import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftVulkanBackend;
 import dev.comfyfluffy.caustica.minecraft.provider.MinecraftMaterialSource;
@@ -16,7 +15,6 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.renderer.BiomeColors;
 import net.minecraft.client.renderer.texture.TextureAtlas;
-import net.minecraft.client.resources.model.ModelBakery;
 import net.minecraft.core.BlockPos;
 import net.minecraft.tags.FluidTags;
 import net.minecraft.util.Mth;
@@ -25,8 +23,6 @@ import org.joml.Matrix4fc;
 
 import com.mojang.blaze3d.vulkan.VulkanGpuTextureView;
 
-import java.util.ArrayList;
-import java.util.List;
 
 /** Converts Minecraft lifecycle and camera state into host-neutral renderer inputs. */
 public final class MinecraftFrameAdapter {
@@ -73,10 +69,10 @@ public final class MinecraftFrameAdapter {
         FrameSnapshot.CameraMedium cameraMedium = submerged
                 ? new FrameSnapshot.CameraMedium(new MaterialHandle(MinecraftMaterialSource.WATER),
                 new FrameSnapshot.LinearRgb(medium[0], medium[1], medium[2])) : null;
+        MinecraftDamageModifierPass.INSTANCE.capture(level);
         return new FrameSnapshot(projection, viewRotation, cameraX, cameraY, cameraZ,
                 cameraMedium, CausticaConfig.Rt.Composite.WATER_WAVES.value(),
-                System.nanoTime() / 1.0e9, METERS_PER_WORLD_UNIT, identify(level),
-                captureDamageOverlays(level));
+                System.nanoTime() / 1.0e9, METERS_PER_WORLD_UNIT, identify(level));
     }
 
     public SceneResources captureSceneResources(Minecraft client) {
@@ -100,28 +96,6 @@ public final class MinecraftFrameAdapter {
                                                            long colorImage, long colorView,
                                                            int width, int height) {
         return new UiPresentationResources(enabled, populated, colorImage, colorView, width, height);
-    }
-
-    private static List<DamageOverlay> captureDamageOverlays(ClientLevel level) {
-        if (level == null) {
-            return List.of();
-        }
-        ArrayList<DamageOverlay> result = new ArrayList<>();
-        for (var entry : level.destructionProgress().long2ObjectEntrySet()) {
-            var progresses = entry.getValue();
-            if (progresses == null || progresses.isEmpty()) {
-                continue;
-            }
-            int stage = Mth.clamp(progresses.last().getProgress(), 0, 9);
-            BlockPos pos = BlockPos.of(entry.getLongKey());
-            int slot = RtEntityTextures.INSTANCE.slotFor(ModelBakery.DESTROY_TYPES.get(stage));
-            result.add(new DamageOverlay(pos.getX(), pos.getY(), pos.getZ(), slot));
-        }
-        return snapshotDamageOverlays(result);
-    }
-
-    static List<DamageOverlay> snapshotDamageOverlays(List<DamageOverlay> overlays) {
-        return List.copyOf(overlays);
     }
 
     private long identify(ClientLevel level) {

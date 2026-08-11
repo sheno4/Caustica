@@ -120,6 +120,26 @@ final class CausticaRegistryTest {
                 .sceneProvider(sceneId, duplicateScene).register());
     }
 
+    @Test
+    void surfaceModifiersPreserveRegistrationOrderAndRejectDuplicateIds() {
+        CausticaRegistry registry = builtins();
+        ResourceId first = ResourceId.of("test", "first_modifier");
+        ResourceId second = ResourceId.of("test", "second_modifier");
+        registry.feature(ResourceId.of("test", "modifier_owner"))
+                .shaderSource(ShaderSource.classpath("/test/shaders"))
+                .surfaceModifier(first, "first_modifier", "FirstModifier")
+                .surfaceModifier(second, "second_modifier", "SecondModifier")
+                .register();
+
+        assertEquals(List.of(first, second), registry.selection().surfaceModifiers().stream()
+                .map(Feature.SurfaceModifierImplementation::id).toList());
+        assertThrows(IllegalStateException.class, () -> registry.feature(
+                        ResourceId.of("test", "duplicate_modifier_owner"))
+                .shaderSource(ShaderSource.classpath("/test/shaders"))
+                .surfaceModifier(first, "duplicate_modifier", "DuplicateModifier")
+                .register());
+    }
+
     private static CausticaRegistry builtins() {
         CausticaRegistry registry = new CausticaRegistry();
         new BuiltinExtension().register(registry);

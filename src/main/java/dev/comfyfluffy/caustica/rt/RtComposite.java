@@ -6,7 +6,6 @@ import dev.comfyfluffy.caustica.api.CausticaApi;
 import dev.comfyfluffy.caustica.api.CausticaRegistry;
 import dev.comfyfluffy.caustica.api.Slots;
 import dev.comfyfluffy.caustica.api.pass.RenderStage;
-import dev.comfyfluffy.caustica.engine.frame.DamageOverlay;
 import dev.comfyfluffy.caustica.engine.frame.FrameSnapshot;
 import dev.comfyfluffy.caustica.engine.frame.SceneResources;
 import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
@@ -15,7 +14,6 @@ import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushConstantsData;
 import dev.comfyfluffy.caustica.rt.light.RtLightScene;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushData;
-import dev.comfyfluffy.caustica.rt.gen.WorldPushData.BreakEntry;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushData.Float2;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushData.Float3;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushData.Float4;
@@ -1327,7 +1325,6 @@ public final class RtComposite {
                     new RtSceneSource.Camera(snapshot.cameraX(), snapshot.cameraY(), snapshot.cameraZ(),
                             frameProjection, frameViewRotation));
             sourceFrame = frame;
-            BreakEntry[] breaking = breakingEntries(snapshot, sceneOrigin);
             new WorldPushData(
                     frameInvViewProj,
                     new Float3(sceneOrigin.relativeX(snapshot.cameraX()),
@@ -1344,9 +1341,7 @@ public final class RtComposite {
                     cameraMediumIorTransmission,
                     time,
                     proceduralDomainOffset,
-                    breaking.length,
                     mvCurProjView,
-                    breaking,
                     new Float4(retainedLights.rebaseOffsetX(), retainedLights.rebaseOffsetY(),
                             retainedLights.rebaseOffsetZ(), retainedLights.metersPerWorldUnit()),
                     new Int4(retainedLights.rootNodeIndex(), retainedLights.finiteLightCount(),
@@ -1514,24 +1509,6 @@ public final class RtComposite {
         lightScene.markGraphicsUse(frameLights, graphicsUse);
         exposure.markStateReadbackUse(graphicsUse);
     }
-
-    /** Rebase this frame's host-authored damage overlays into the shader push array. */
-    private BreakEntry[] breakingEntries(FrameSnapshot snapshot, SceneOrigin origin) {
-        BreakEntry[] result = new BreakEntry[WorldPushData.BREAKING_CAPACITY];
-        int count = 0;
-        for (DamageOverlay overlay : snapshot.damageOverlays()) {
-            if (count >= result.length) {
-                break;
-            }
-            result[count++] = new BreakEntry(new Int4(
-                    (int) (overlay.worldX() - origin.x()),
-                    (int) (overlay.worldY() - origin.y()),
-                    (int) (overlay.worldZ() - origin.z()),
-                    overlay.textureSlot()));
-        }
-        return count == result.length ? result : java.util.Arrays.copyOf(result, count);
-    }
-
 
     public void destroy() {
         // Session teardown stops the GPU executor and waits the device idle before entering here, so the

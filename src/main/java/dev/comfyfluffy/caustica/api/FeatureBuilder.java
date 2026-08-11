@@ -21,6 +21,7 @@ public final class FeatureBuilder {
     private ShaderSource shaderSource;
     private final Map<Slot, Feature.Binding> bindings = new LinkedHashMap<>();
     private final List<Feature.SurfaceImplementation> surfaces = new ArrayList<>();
+    private final List<Feature.SurfaceModifierImplementation> surfaceModifiers = new ArrayList<>();
     private final List<Option<?>> options = new ArrayList<>();
     private final List<String> optionGroups = new ArrayList<>();
     private final List<CausticaRenderPass> renderPasses = new ArrayList<>();
@@ -126,6 +127,16 @@ public final class FeatureBuilder {
         return this;
     }
 
+    /** Register one projected surface modifier. Modifiers compose in registration order. */
+    public FeatureBuilder surfaceModifier(ResourceId id, String module, String type) {
+        Objects.requireNonNull(id, "id");
+        if (surfaceModifiers.stream().anyMatch(existing -> existing.id().equals(id))) {
+            throw new IllegalStateException(this.id + " declares duplicate surface modifier " + id);
+        }
+        surfaceModifiers.add(new Feature.SurfaceModifierImplementation(this.id, id, module, type));
+        return this;
+    }
+
     public FeatureBuilder lightProvider(ResourceId providerId, LightProvider provider) {
         ProviderRegistration<LightProvider> registration = new ProviderRegistration<>(providerId, provider);
         if (lightProviders.stream().anyMatch(existing -> existing.id().equals(providerId))) {
@@ -168,7 +179,7 @@ public final class FeatureBuilder {
         registered = true;
         DisplayText resolvedTitle = title != null ? title : DisplayText.literal(id.toString());
         Feature feature = new Feature(id, resolvedTitle, description, category, shaderSource, bindings,
-                surfaces, options, optionGroups, renderPasses, sceneProviders, lightProviders,
+                surfaces, surfaceModifiers, options, optionGroups, renderPasses, sceneProviders, lightProviders,
                 materialSources, passResourceModules);
         registry.register(feature);
         return feature;

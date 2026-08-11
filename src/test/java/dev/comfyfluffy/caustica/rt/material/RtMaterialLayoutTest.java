@@ -16,7 +16,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 final class RtMaterialLayoutTest {
     @Test
     void reflectedWorldPushIncludesOnePackedCameraMediumWord() {
-        assertEquals(496, WorldPushData.BYTE_SIZE);
+        assertEquals(368, WorldPushData.BYTE_SIZE);
     }
 
     @Test

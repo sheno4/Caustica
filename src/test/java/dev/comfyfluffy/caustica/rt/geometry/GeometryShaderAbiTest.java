@@ -39,7 +39,9 @@ final class GeometryShaderAbiTest {
         assertTrue(content.contains("public uint64_t primitiveAddress"));
         assertTrue(content.contains("public uint64_t textureCoordinateAddress"));
         assertTrue(content.contains("public uint triangleBase[3]"));
-        assertTrue(content.contains("[[vk::binding(0, 1)]] public Sampler2D baseColorTextures[]"));
+        String textures = Files.readString(Path.of("src", "main", "resources", "caustica", "shaders",
+                "api", "caustica_texture_resources.slang"));
+        assertTrue(textures.contains("[[vk::binding(0, 1)]] public Sampler2D baseColorTextures[]"));
         assertTrue(content.contains("bindingBaseColorTextureIndex"));
         assertTrue(content.contains("public float4 baseColorUv"));
         assertFalse(content.contains("[[vk::binding(2, 0)]]"), "retired set-0 binding 2 must remain a hole");
@@ -55,6 +57,9 @@ final class GeometryShaderAbiTest {
 
         assertTrue(indexedWriters.contains("RtGeometryAbi.FLAG_INDEXED_TEXTURE_COORDINATES"));
         assertTrue(directWriter.contains("RtGeometryAbi.FLAG_TRIANGLE_CORNER_TEXTURE_COORDINATES"));
+        assertTrue(directWriter.contains("geometrySemanticFlags"));
+        assertTrue(Files.readString(java.resolve("minecraft/terrain/RtTerrain.java"))
+                .contains("RtGeometryAbi.FLAG_RECEIVES_PROJECTED_SURFACE_MODIFIERS"));
     }
 
     @Test

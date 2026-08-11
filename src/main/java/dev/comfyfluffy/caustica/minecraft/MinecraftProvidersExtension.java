@@ -8,6 +8,7 @@ import dev.comfyfluffy.caustica.api.ShaderSource;
 import dev.comfyfluffy.caustica.api.Slots;
 import dev.comfyfluffy.caustica.minecraft.overlay.WorldOverlayPass;
 import dev.comfyfluffy.caustica.minecraft.cloud.MinecraftCloudSceneProvider;
+import dev.comfyfluffy.caustica.minecraft.damage.MinecraftDamageModifierPass;
 import dev.comfyfluffy.caustica.minecraft.provider.MinecraftLightProvider;
 import dev.comfyfluffy.caustica.minecraft.provider.MinecraftMaterialSource;
 import dev.comfyfluffy.caustica.minecraft.provider.MinecraftSceneProvider;
@@ -23,14 +24,19 @@ public final class MinecraftProvidersExtension implements CausticaExtension {
     public void register(CausticaRegistry registry) {
         registry.feature(ID)
                 .title(DisplayText.literal("Minecraft"))
-                .shaderSource(ShaderSource.classpath("/caustica/shaders/minecraft", "surface", "sky"))
+                .shaderSource(ShaderSource.classpath(
+                        "/caustica/shaders/minecraft", "surface", "sky", "modifier"))
                 .bind(Slots.SKY, "caustica_minecraft_overworld_sky", "MinecraftOverworldSky")
                 .surface(END_PORTAL_SURFACE, "caustica_portal_surface", "PortalSurface")
                 .surface(WATER_SURFACE, "caustica_water_surface", "WaterSurface")
                 .passResourceModule("caustica_minecraft_sky_bindings")
+                .surfaceModifier(MinecraftDamageModifierPass.MODIFIER_ID,
+                        "caustica_minecraft_damage_modifier", "MinecraftDamageModifier")
+                .passResourceModule("caustica_minecraft_damage_bindings")
                 .group(SkyLutPass.GROUP)
                 .options(SkyLutPass.OPTIONS)
                 .renderPass(new SkyLutPass())
+                .renderPass(MinecraftDamageModifierPass.INSTANCE)
                 .renderPass(new WorldOverlayPass())
                 .sceneProvider(MinecraftSceneProvider.ID, new MinecraftSceneProvider())
                 .sceneProvider(MinecraftCloudSceneProvider.ID, new MinecraftCloudSceneProvider())

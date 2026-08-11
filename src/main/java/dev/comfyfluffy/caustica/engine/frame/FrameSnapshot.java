@@ -5,7 +5,6 @@ import org.joml.Matrix4f;
 import org.joml.Matrix4fc;
 
 import java.util.Objects;
-import java.util.List;
 
 /** Immutable host-neutral state consumed while recording one rendered scene frame. */
 public final class FrameSnapshot {
@@ -31,13 +30,11 @@ public final class FrameSnapshot {
     private final double timeSeconds;
     private final double metersPerWorldUnit;
     private final long sceneId;
-    private final List<DamageOverlay> damageOverlays;
 
     public FrameSnapshot(Matrix4fc projection, Matrix4fc viewRotation,
                          double cameraX, double cameraY, double cameraZ,
                          CameraMedium cameraMedium, boolean proceduralSurfaceAnimationEnabled,
-                         double timeSeconds, double metersPerWorldUnit, long sceneId,
-                         List<DamageOverlay> damageOverlays) {
+                         double timeSeconds, double metersPerWorldUnit, long sceneId) {
         this.projection = new Matrix4f(Objects.requireNonNull(projection, "projection"));
         this.viewRotation = new Matrix4f(Objects.requireNonNull(viewRotation, "viewRotation"));
         this.cameraX = cameraX;
@@ -48,7 +45,6 @@ public final class FrameSnapshot {
         this.timeSeconds = timeSeconds;
         this.metersPerWorldUnit = metersPerWorldUnit;
         this.sceneId = sceneId;
-        this.damageOverlays = List.copyOf(damageOverlays);
     }
 
     public Matrix4f copyProjection() {
@@ -100,7 +96,4 @@ public final class FrameSnapshot {
         return sceneId;
     }
 
-    public List<DamageOverlay> damageOverlays() {
-        return damageOverlays;
-    }
 }

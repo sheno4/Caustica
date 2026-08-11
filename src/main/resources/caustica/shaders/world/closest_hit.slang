@@ -1,6 +1,6 @@
-// Composition-generic closest-hit shader. Geometry decode, texture sampling, source-format decode,
-// ray-cone LOD, and the breaking overlay stay engine-owned; the OpenPBR description every hit
-// resolves to is then handed to the surface implementation its material names, which may edit it.
+// Composition-generic closest-hit shader. Geometry decode, texture sampling, source-format decode, and
+// ray-cone LOD stay engine-owned; the OpenPBR description every hit resolves to is then handed to its
+// registered surface implementation and the geometry-opted-in modifier chain.
 //
 // WorldShaderCompiler specializes this generic entry point with the active composition.
 //
@@ -12,6 +12,7 @@ import world_common;
 import math;
 import surface_bsdf;
 import bindings;
+import caustica_texture_resources;
 import caustica_types;
 import caustica_surface;
 import caustica_api;
@@ -114,11 +115,6 @@ float rayConeTextureLod(uint rayCone, float2 textureSizePx, float3 p0, float3 p1
     return clamp(log2(footprint), 0.0, RAY_CONE_MAX_LOD);
 }
 
-float rayConeUnitUvLod(uint rayCone, float2 textureSizePx) {
-    float footprint = max(rayConeHitWidth(rayCone) * max(textureSizePx.x, textureSizePx.y), RAY_CONE_MIN_TEXEL_FOOTPRINT);
-    return clamp(log2(footprint), 0.0, RAY_CONE_MAX_LOD);
-}
-
 float3 perturbNormal(float3 n, float3 p0, float3 p1, float3 p2, float2 t0, float2 t1, float2 t2, float3 vdir, float2 ntex) {
     float2 g1 = t1 - t0;
     float2 g2 = t2 - t0;
@@ -214,34 +210,8 @@ DecodedSurface evaluateMaterial(SurfaceMaterial mat, float2 atlasUv, float lod, 
     return surface;
 }
 
-float3 applyBreaking(float3 albedo709, uint rayCone, float3 rayOrigin, float3 rayDir, float hitT, float3 n) {
-    ConstPtr<WorldPush> pcRef = ConstPtr<WorldPush>(pc.worldPushAddr);
-    uint breakCount = pcRef[0].breakCount;
-    if (breakCount == 0u) {
-        return albedo709;
-    }
-    float3 hitPos = rayOrigin + rayDir * hitT;
-    int3 blockPos = int3(floor(hitPos - n * 0.01));
-    for (uint bi = 0u; bi < breakCount; ++bi) {
-        int4 ps = pcRef[0].breaking[bi].posSlot;
-        if (all(ps.xyz == blockPos)) {
-            float3 local = hitPos - float3(blockPos);
-            float3 an = abs(n);
-            float2 decalUv = (an.x >= an.y && an.x >= an.z) ? local.zy
-                           : (an.y >= an.z) ? local.xz
-                           : local.xy;
-            float decalLod = rayConeUnitUvLod(rayCone, texSizePx(baseColorTextures[NonUniformResourceIndex(ps.w)]));
-            float3 crack709 = srgbToLinear(
-                    baseColorTextures[NonUniformResourceIndex(ps.w)].SampleLevel(decalUv, decalLod).rgb);
-            return clamp(crack709 * albedo709, 0.0, 1.0);
-        }
-    }
-    return albedo709;
-}
-
-// Builds the OpenPBR description handed to the surface implementation. The base colour is ACEScg and
-// already carries the breaking overlay; the metalness split belongs to the closure, so nothing is
-// pre-multiplied here.
+// Builds the OpenPBR description handed to the surface implementation. The base colour is ACEScg; the
+// metalness split belongs to the closure, so nothing is pre-multiplied here.
 //
 // `dielectric` is structural input from the binding: a volume has two interfaces and a real interior,
 // while every closure path is a thin wall. Surface evaluation cannot rewrite that decision because
@@ -289,6 +259,15 @@ SurfaceInput buildSurfaceInput(Payload payload, float3 position, float3 geometri
     return input;
 }
 
+SurfaceModifierInput buildSurfaceModifierInput(float3 position, float3 geometricNormal,
+        float textureFootprint) {
+    SurfaceModifierInput input;
+    input.position = position;
+    input.geometricNormal = geometricNormal;
+    input.textureFootprint = textureFootprint;
+    return input;
+}
+
 /**
  * The one payload write both routes share. A dielectric publishes what its transport needs — the medium
  * tint, the interface IOR, which side the ray is on — and everything else publishes the closure the
@@ -329,6 +308,7 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
     float2 attribs = attr.barycentrics;
     uint rayCone = payload.rayCone;
     TC.Surfaces surfaces;
+    TC.SurfaceModifiers surfaceModifiers;
 
     GeometryRecord g = ConstPtr<GeometryRecord>(pc.geometryTableAddr)[InstanceID()];
     // Indexed geometry stores shared vertex UVs. A billboard needs no path of its own — it is a thin
@@ -404,6 +384,10 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
                 uv, textureLod, rayConeHitWidth(rayCone));
         uint surfaceImpl = bindingSurfaceImpl(binding);
         surfaces.evaluateSurface(surfaceImpl, input, material);
+        if ((g.flags & GEOMETRY_RECEIVES_PROJECTED_SURFACE_MODIFIERS) != 0u) {
+            surfaceModifiers.applySurfaceModifiers(
+                    buildSurfaceModifierInput(hitPos, geometricNormal, rayConeHitWidth(rayCone)), material);
+        }
 
         writeHitPayload(payload, material, surfaceImpl, transmissive ? PAYLOAD_TRANSMISSIVE : 0u,
                 entering, motionPrev, transmissive ? 0.0 : material.emissionLuminance);
@@ -459,12 +443,7 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
         // alpha filters the colour rather than deciding presence.
         float3 base709 = transmissive ? lerp(float3(1.0), texel709 * tint709, baseColorTexel.a)
                                       : texel709 * tint709;
-        // The breaking overlay is a rendering trick, not a material fact, so it stays engine-side and
-        // composites into the texture colour before any material decode sees it. Keyed on the geometric
-        // normal: the decal is projected onto the source face, not onto the normal map's perturbation.
-        float3 opticalColor709 = applyBreaking(base709, rayCone, WorldRayOrigin(), WorldRayDirection(),
-                RayTCurrent(), geometricNormal);
-        albedo = bt709ToAcesCg(opticalColor709);
+        albedo = bt709ToAcesCg(base709);
     }
 
     // Checked before the material pages are sampled and the implementation runs: a guide walking through
@@ -486,6 +465,10 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
             rayConeHitWidth(rayCone));
     uint surfaceImpl = bindingSurfaceImpl(binding);
     surfaces.evaluateSurface(surfaceImpl, input, material);
+    if ((g.flags & GEOMETRY_RECEIVES_PROJECTED_SURFACE_MODIFIERS) != 0u) {
+        surfaceModifiers.applySurfaceModifiers(
+                buildSurfaceModifierInput(hitPos, geometricNormal, rayConeHitWidth(rayCone)), material);
+    }
 
     writeHitPayload(payload, material, surfaceImpl, transmissive ? PAYLOAD_TRANSMISSIVE : 0u,
             entering, float3(0.0), transmissive ? 0.0 : material.emissionLuminance);
