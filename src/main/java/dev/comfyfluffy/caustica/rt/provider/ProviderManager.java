@@ -15,6 +15,11 @@ import dev.comfyfluffy.caustica.api.provider.SceneProvider;
 import dev.comfyfluffy.caustica.api.provider.SceneGeometrySink;
 import dev.comfyfluffy.caustica.api.provider.GeometryTransform;
 import dev.comfyfluffy.caustica.api.provider.TriangleMesh;
+import dev.comfyfluffy.caustica.rt.GpuContext;
+import dev.comfyfluffy.caustica.rt.accel.RtAccel;
+import dev.comfyfluffy.caustica.rt.geometry.RtGeometryAbi;
+import dev.comfyfluffy.caustica.rt.pipeline.RtPipeline;
+import dev.comfyfluffy.caustica.rt.scene.RtSceneSource;
 import java.util.HashSet;
 import java.util.ArrayList;
 import java.util.List;
@@ -22,6 +27,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 public final class ProviderManager {
     public static final ProviderManager INSTANCE = new ProviderManager(null, null, null);
@@ -90,6 +96,54 @@ public final class ProviderManager {
     /** Immutable light snapshot assembled by {@link #prepareFrame()}. */
     public List<LightDescriptor> frameLights() {
         return frameLights;
+    }
+
+    /** Select the single active optimized scene source and snapshot its retained frame state. */
+    public PrimaryScene primaryScene() {
+        SceneSourceEntry entry = primarySceneSource();
+        if (entry == null) {
+            return null;
+        }
+        RtSceneSource.Retained retained = invokeSceneSource(entry, "retained scene",
+                entry.source()::retainedScene);
+        return retained != null ? new PrimaryScene(entry.id(), retained) : null;
+    }
+
+    /** Append the selected source's frame-varying geometry to the renderer-assembled base table. */
+    public RtSceneSource.Frame beginPrimaryFrame(PrimaryScene selected, GpuContext ctx,
+                                                  List<RtAccel.Instance> baseInstances,
+                                                  RtGeometryAbi.TablePrefix geometryTable,
+                                                  RtSceneSource.Camera camera) {
+        SceneSourceEntry entry = requireSceneSource(selected.provider());
+        return invokeSceneSource(entry, "frame geometry",
+                () -> entry.source().beginFrame(ctx, selected.retained(), baseInstances, geometryTable, camera));
+    }
+
+    public int bindlessTextureCapacity() {
+        SceneSourceEntry entry = primarySceneSource();
+        return entry != null
+                ? invokeSceneSource(entry, "bindless texture capacity", entry.source()::bindlessTextureCapacity)
+                : 1;
+    }
+
+    public void resetBindlessTextures(int capacity) {
+        SceneSourceEntry entry = primarySceneSource();
+        if (entry != null) {
+            invokeSceneSource(entry, "bindless texture reset", () -> {
+                entry.source().resetBindlessTextures(capacity);
+                return null;
+            });
+        }
+    }
+
+    public void uploadPendingTextures(RtPipeline pipeline, long sampler) {
+        SceneSourceEntry entry = primarySceneSource();
+        if (entry != null) {
+            invokeSceneSource(entry, "bindless texture upload", () -> {
+                entry.source().uploadPendingTextures(pipeline, sampler);
+                return null;
+            });
+        }
     }
 
     /** Collect each scene source transactionally into its provider-scoped geometry sink. */
@@ -229,6 +283,49 @@ public final class ProviderManager {
         return materials != null ? materials : CausticaApi.registry().materialSources();
     }
 
+    private SceneSourceEntry primarySceneSource() {
+        SceneSourceEntry selected = null;
+        for (Map.Entry<ResourceId, SceneProvider> entry : scenes().entrySet()) {
+            ProviderKey key = new ProviderKey("scene", entry.getKey());
+            if (failed.contains(key) || stoppedThisSession.contains(key)
+                    || !(entry.getValue() instanceof RtSceneSource source)) {
+                continue;
+            }
+            if (selected != null) {
+                throw new IllegalStateException("multiple optimized scene sources are active: "
+                        + selected.id() + " and " + entry.getKey());
+            }
+            selected = new SceneSourceEntry(entry.getKey(), entry, key, source);
+        }
+        return selected;
+    }
+
+    private SceneSourceEntry requireSceneSource(ResourceId id) {
+        SceneSourceEntry entry = primarySceneSource();
+        if (entry == null || !entry.id().equals(id)) {
+            throw new IllegalStateException("optimized scene source is no longer active: " + id);
+        }
+        return entry;
+    }
+
+    private <T> T invokeSceneSource(SceneSourceEntry entry, String operation, Supplier<T> action) {
+        try {
+            return action.get();
+        } catch (Throwable failure) {
+            failed.add(entry.key());
+            CausticaMod.LOGGER.error("Caustica scene provider {} failed during {} and was disabled",
+                    entry.id(), operation, failure);
+            stopOne("scene", entry.provider(), entry.key(), SceneProvider::stop);
+            if (failure instanceof RuntimeException runtime) {
+                throw runtime;
+            }
+            if (failure instanceof Error error) {
+                throw error;
+            }
+            throw new RuntimeException(failure);
+        }
+    }
+
     private <T> void invoke(String kind, Map<ResourceId, T> providers, Consumer<T> action, Consumer<T> stop) {
         for (Map.Entry<ResourceId, T> entry : providers.entrySet()) {
             ProviderKey key = new ProviderKey(kind, entry.getKey());
@@ -283,5 +380,12 @@ public final class ProviderManager {
     }
 
     private record ProviderKey(String kind, ResourceId id) {
+    }
+
+    private record SceneSourceEntry(ResourceId id, Map.Entry<ResourceId, SceneProvider> provider,
+                                    ProviderKey key, RtSceneSource source) {
+    }
+
+    public record PrimaryScene(ResourceId provider, RtSceneSource.Retained retained) {
     }
 }

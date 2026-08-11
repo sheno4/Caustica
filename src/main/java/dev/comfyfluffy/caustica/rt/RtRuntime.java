@@ -4,10 +4,8 @@ import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.engine.frame.SceneResources;
 import dev.comfyfluffy.caustica.ngx.NgxRuntime;
-import dev.comfyfluffy.caustica.rt.entity.RtEntityTextures;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg;
 import dev.comfyfluffy.caustica.rt.provider.ProviderManager;
-import dev.comfyfluffy.caustica.rt.terrain.RtWorkerPool;
 import dev.comfyfluffy.caustica.slang.SlangRuntime;
 
 /** Owns the live RT session and publishes one immutable rendering mode for each frame. */
@@ -127,7 +125,7 @@ public final class RtRuntime {
      *
      * <p>Stable across a whole frame: the state only advances on the client tick, which runs before both
      * {@code GameRenderer.extract} and {@code GameRenderer.render}. The extract-side and render-side hooks
-     * that must agree on who owns terrain therefore never disagree within one frame.</p>
+     * that must agree on scene ownership therefore never disagree within one frame.</p>
      */
     public static boolean active() {
         return INSTANCE.state == State.ACTIVE;
@@ -221,7 +219,6 @@ public final class RtRuntime {
         void close() {
             host().resetFrameBridge();
             ProviderManager.INSTANCE.stopProviders();
-            RtWorkerPool.INSTANCE.shutdown();
             SlangRuntime.INSTANCE.requestShutdownWhenIdle();
             if (context == null) {
                 ProviderManager.INSTANCE.shutdownResources();
@@ -235,7 +232,7 @@ public final class RtRuntime {
             ProviderManager.INSTANCE.shutdownResources();
             host().destroyUiPresentation();
             RtComposite.INSTANCE.destroy();
-            RtEntityTextures.INSTANCE.reset();
+            host().resetSceneTextures();
             RtDlssFg.INSTANCE.destroy();
             RtFramePresenter.INSTANCE.destroy(context.vk());
             RtReflex.INSTANCE.destroy(context.vk());

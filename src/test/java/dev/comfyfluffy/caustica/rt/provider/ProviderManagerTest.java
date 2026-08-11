@@ -10,8 +10,15 @@ import dev.comfyfluffy.caustica.engine.light.LightDescriptor;
 import dev.comfyfluffy.caustica.api.provider.MaterialRule;
 import dev.comfyfluffy.caustica.api.provider.MaterialSource;
 import dev.comfyfluffy.caustica.api.provider.MaterialDefinition;
-import dev.comfyfluffy.caustica.api.provider.MaterialHandle;
 import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
+import dev.comfyfluffy.caustica.rt.GpuContext;
+import dev.comfyfluffy.caustica.rt.RtGpuExecutor.GraphicsUse;
+import dev.comfyfluffy.caustica.rt.accel.RtAccel;
+import dev.comfyfluffy.caustica.rt.geometry.RtGeometryAbi;
+import dev.comfyfluffy.caustica.rt.pipeline.RtPipeline;
+import dev.comfyfluffy.caustica.rt.scene.RtSceneSource;
+import org.joml.Matrix4f;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -21,6 +28,9 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class ProviderManagerTest {
     @Test
@@ -371,6 +381,59 @@ final class ProviderManagerTest {
         assertEquals(1, duplicateStops.get());
     }
 
+    @Test
+    void optimizedSceneSelectionDelegatesWithoutCopyingFrameProducts() {
+        OptimizedProvider source = new OptimizedProvider();
+        ProviderManager manager = manager("optimized", source);
+
+        ProviderManager.PrimaryScene selected = manager.primaryScene();
+        assertEquals(id("optimized"), selected.provider());
+        assertSame(source.retained, selected.retained());
+        assertEquals(37, manager.bindlessTextureCapacity());
+
+        manager.resetBindlessTextures(64);
+        manager.uploadPendingTextures(null, 91L);
+        RtSceneSource.Frame frame = manager.beginPrimaryFrame(selected, null, List.of(),
+                source.retained.geometryTable(),
+                new RtSceneSource.Camera(1, 2, 3, new Matrix4f(), new Matrix4f()));
+        frame.markGraphicsUse(null);
+
+        assertSame(source.frame, frame);
+        assertEquals(64, source.resetCapacity);
+        assertEquals(91L, source.uploadSampler);
+        assertEquals(1, source.frameMarks.get());
+
+        manager.stopProviders();
+        assertNull(manager.primaryScene());
+        assertEquals(1, manager.bindlessTextureCapacity());
+    }
+
+    @Test
+    void rejectsMultipleActiveOptimizedSceneSources() {
+        Map<ResourceId, SceneProvider> scenes = new LinkedHashMap<>();
+        scenes.put(id("first_optimized"), new OptimizedProvider());
+        scenes.put(id("second_optimized"), new OptimizedProvider());
+        ProviderManager manager = new ProviderManager(scenes, Map.of(), Map.of());
+
+        assertThrows(IllegalStateException.class, manager::primaryScene);
+        assertThrows(IllegalStateException.class, manager::bindlessTextureCapacity);
+    }
+
+    @Test
+    void failingOptimizedFrameStopsAndDisablesItsProvider() {
+        OptimizedProvider source = new OptimizedProvider();
+        ProviderManager manager = manager("failing_optimized", source);
+        ProviderManager.PrimaryScene selected = manager.primaryScene();
+        source.failFrame = true;
+
+        assertThrows(IllegalStateException.class, () -> manager.beginPrimaryFrame(selected, null,
+                List.of(), source.retained.geometryTable(),
+                new RtSceneSource.Camera(0, 0, 0, new Matrix4f(), new Matrix4f())));
+
+        assertEquals(1, source.stops.get());
+        assertNull(manager.primaryScene());
+    }
+
     private static SceneProvider counting(AtomicInteger shutdowns, Runnable update) {
         return new SceneProvider() {
             @Override
@@ -422,5 +485,73 @@ final class ProviderManagerTest {
     private static MaterialDefinition definition(String path) {
         return new MaterialDefinition(new MaterialHandle(id(path)), 1.0f, 1.0f, 1.0f,
                 1.0f, 0.0f, 1.5f, 0.0f, null);
+    }
+
+    private static final class OptimizedProvider implements SceneProvider, RtSceneSource {
+        final AtomicInteger stops = new AtomicInteger();
+        final AtomicInteger frameMarks = new AtomicInteger();
+        final Retained retained = new Retained(SceneOrigin.ZERO, List.of(),
+                new RtGeometryAbi.TablePrefix(1L, 0),
+                new LightGrid(0, 0, 0, 0, 0,
+                        0, 0, 0, 0, 0, 0, 0, 1,
+                        0, 0, 0, 0));
+        final Frame frame = new Frame() {
+            @Override
+            public List<RtAccel.Instance> dynamicInstances() {
+                return List.of();
+            }
+
+            @Override
+            public List<RtAccel.PreparedBlas> blasBuilds() {
+                return List.of();
+            }
+
+            @Override
+            public long geometryTableAddress() {
+                return 1L;
+            }
+
+            @Override
+            public void markGraphicsUse(GraphicsUse graphicsUse) {
+                frameMarks.incrementAndGet();
+            }
+        };
+        boolean failFrame;
+        int resetCapacity;
+        long uploadSampler;
+
+        @Override
+        public Retained retainedScene() {
+            return retained;
+        }
+
+        @Override
+        public Frame beginFrame(GpuContext ctx, Retained retained, List<RtAccel.Instance> baseInstances,
+                                RtGeometryAbi.TablePrefix geometryTable, Camera camera) {
+            if (failFrame) {
+                throw new IllegalStateException("expected");
+            }
+            return frame;
+        }
+
+        @Override
+        public int bindlessTextureCapacity() {
+            return 37;
+        }
+
+        @Override
+        public void resetBindlessTextures(int capacity) {
+            resetCapacity = capacity;
+        }
+
+        @Override
+        public void uploadPendingTextures(RtPipeline pipeline, long sampler) {
+            uploadSampler = sampler;
+        }
+
+        @Override
+        public void stop() {
+            stops.incrementAndGet();
+        }
     }
 }

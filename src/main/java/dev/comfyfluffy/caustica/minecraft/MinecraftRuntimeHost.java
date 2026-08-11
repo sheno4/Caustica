@@ -6,6 +6,7 @@ import dev.comfyfluffy.caustica.client.WorldRenderScaler;
 import dev.comfyfluffy.caustica.engine.material.MaterialCatalog;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialCatalogBuilder;
 import dev.comfyfluffy.caustica.rt.RtRuntimeHost;
+import dev.comfyfluffy.caustica.rt.entity.RtEntityTextures;
 
 import java.util.List;
 
@@ -29,6 +30,11 @@ public final class MinecraftRuntimeHost implements RtRuntimeHost {
     @Override
     public void destroyUiPresentation() {
         MinecraftUiOverlay.destroy();
+    }
+
+    @Override
+    public void resetSceneTextures() {
+        RtEntityTextures.INSTANCE.reset();
     }
 
     @Override

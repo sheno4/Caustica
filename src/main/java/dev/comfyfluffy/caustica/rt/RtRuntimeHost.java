@@ -13,5 +13,7 @@ public interface RtRuntimeHost {
 
     void destroyUiPresentation();
 
+    void resetSceneTextures();
+
     MaterialCatalog materialCatalog(List<MaterialRule> rules);
 }
