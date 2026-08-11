@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.mixin;
 
-import dev.comfyfluffy.caustica.rt.entity.ContainedBlockSource;
+import dev.comfyfluffy.caustica.minecraft.entity.ContainedBlockSource;
 import net.minecraft.client.renderer.block.BlockModelResolver;
 import net.minecraft.client.renderer.block.BlockModelRenderState;
 import net.minecraft.client.renderer.block.model.BlockDisplayContext;

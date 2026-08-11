@@ -4,7 +4,7 @@ import com.mojang.blaze3d.pipeline.RenderTarget;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.rt.RtComposite;
 import dev.comfyfluffy.caustica.rt.GpuContext;
-import dev.comfyfluffy.caustica.rt.terrain.RtTerrain;
+import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
 
 public final class VanillaRenderController {
 	public static final VanillaRenderController INSTANCE = new VanillaRenderController();

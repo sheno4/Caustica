@@ -3,7 +3,7 @@ package dev.comfyfluffy.caustica.mixin;
 import com.mojang.blaze3d.buffers.GpuBufferSlice;
 import com.mojang.blaze3d.resource.GraphicsResourceAllocator;
 import dev.comfyfluffy.caustica.client.VanillaRenderController;
-import dev.comfyfluffy.caustica.rt.terrain.RtTerrain;
+import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraft.client.renderer.state.OptionsRenderState;

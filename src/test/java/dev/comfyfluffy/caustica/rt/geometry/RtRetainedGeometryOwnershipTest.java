@@ -30,7 +30,7 @@ final class RtRetainedGeometryOwnershipTest {
 
         assertFalse(Files.exists(java.resolve("rt/terrain/RtSectionBuilder.java")));
         assertFalse(Files.exists(java.resolve("rt/terrain/RtSectionTable.java")));
-        String producer = Files.readString(java.resolve("rt/terrain/RtTerrain.java"));
+        String producer = Files.readString(java.resolve("minecraft/terrain/RtTerrain.java"));
         for (String forbidden : List.of("prepareRetainedBlas", "prepareBlasCompaction",
                 "recordBlasCompaction", "finishBlasCompaction", "destroyBlasCompaction",
                 "createAsyncBuffer", "createUploadBuffer")) {

@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.rt.entity;
+package dev.comfyfluffy.caustica.minecraft.entity;
 
 import com.mojang.blaze3d.vertex.PoseStack;
 import dev.comfyfluffy.caustica.CausticaConfig;

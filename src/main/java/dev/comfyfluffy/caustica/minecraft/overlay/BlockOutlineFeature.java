@@ -32,8 +32,8 @@ import dev.comfyfluffy.caustica.rt.RtDeviceBringup;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
 import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
 import dev.comfyfluffy.caustica.rt.accel.GpuImage;
-import dev.comfyfluffy.caustica.rt.entity.RtEntities;
-import dev.comfyfluffy.caustica.rt.terrain.RtTerrain;
+import dev.comfyfluffy.caustica.minecraft.entity.RtEntities;
+import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
 
 /**
  * The targeted block's wireframe outline: a real {@link VoxelShape} edge list (not just a full-cube

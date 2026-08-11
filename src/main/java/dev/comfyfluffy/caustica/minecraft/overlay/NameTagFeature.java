@@ -32,7 +32,7 @@ import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
 import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
-import dev.comfyfluffy.caustica.rt.entity.RtEntities;
+import dev.comfyfluffy.caustica.minecraft.entity.RtEntities;
 
 /**
  * Entity name tags — full-res, post-upscale, billboarded text quads. Unlike glow (which reuses the

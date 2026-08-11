@@ -6,13 +6,13 @@ import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor.GraphicsUse;
 import dev.comfyfluffy.caustica.rt.accel.RtAccel;
-import dev.comfyfluffy.caustica.rt.entity.RtEntities;
-import dev.comfyfluffy.caustica.rt.entity.RtEntityTextures;
+import dev.comfyfluffy.caustica.minecraft.entity.RtEntities;
+import dev.comfyfluffy.caustica.minecraft.entity.RtEntityTextures;
 import dev.comfyfluffy.caustica.rt.geometry.RtGeometryAbi;
 import dev.comfyfluffy.caustica.rt.pipeline.RtPipeline;
 import dev.comfyfluffy.caustica.rt.scene.RtSceneSource;
-import dev.comfyfluffy.caustica.rt.terrain.RtTerrain;
-import dev.comfyfluffy.caustica.rt.terrain.RtWorkerPool;
+import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
+import dev.comfyfluffy.caustica.minecraft.terrain.RtWorkerPool;
 
 import java.util.List;
 

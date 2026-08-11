@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.rt.terrain;
+package dev.comfyfluffy.caustica.minecraft.terrain;
 
 import dev.comfyfluffy.caustica.rt.RtFrameStats;
 import it.unimi.dsi.fastutil.longs.Long2ObjectLinkedOpenHashMap;

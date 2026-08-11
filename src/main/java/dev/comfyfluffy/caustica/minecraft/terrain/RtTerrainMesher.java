@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.rt.terrain;
+package dev.comfyfluffy.caustica.minecraft.terrain;
 
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import dev.comfyfluffy.caustica.CausticaConfig;

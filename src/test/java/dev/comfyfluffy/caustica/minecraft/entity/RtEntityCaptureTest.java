@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.rt.entity;
+package dev.comfyfluffy.caustica.minecraft.entity;
 
 import dev.comfyfluffy.caustica.rt.accel.RtAccel;
 import org.junit.jupiter.api.Test;

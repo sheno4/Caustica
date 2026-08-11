@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.rt.entity;
+package dev.comfyfluffy.caustica.minecraft.entity;
 
 import net.minecraft.world.level.block.state.BlockState;
 import org.jspecify.annotations.Nullable;

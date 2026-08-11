@@ -543,8 +543,8 @@ public final class RtAccel {
     /**
      * Entity-path variant of {@link #prepareTrianglesBlas}: fully transient, rebuilt fresh every frame (no
      * persistent per-entity ring), so the AS backing is caller-owned rather than accel-owned. Reclaimed with
-     * {@link #releaseEntityBlas} (NOT {@code freeBlasScratch} + {@code accel.destroy()}). Used only by
-     * {@link RtEntities}; persistent retained geometry keeps {@link #prepareTrianglesBlas}.
+     * {@link #releaseEntityBlas} (NOT {@code freeBlasScratch} + {@code accel.destroy()}). Persistent
+     * retained geometry keeps {@link #prepareTrianglesBlas}.
      */
     public static PreparedBlas prepareEntityBlas(GpuContext ctx, GpuBuffer positions, int vertexCount,
                                                  GpuBuffer indices, int indexCount, boolean opaque, String label) {

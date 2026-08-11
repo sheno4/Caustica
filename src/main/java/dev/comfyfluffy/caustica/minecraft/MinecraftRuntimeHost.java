@@ -6,7 +6,7 @@ import dev.comfyfluffy.caustica.client.WorldRenderScaler;
 import dev.comfyfluffy.caustica.engine.material.MaterialCatalog;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialCatalogBuilder;
 import dev.comfyfluffy.caustica.rt.RtRuntimeHost;
-import dev.comfyfluffy.caustica.rt.entity.RtEntityTextures;
+import dev.comfyfluffy.caustica.minecraft.entity.RtEntityTextures;
 
 import java.util.List;
 

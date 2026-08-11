@@ -17,7 +17,7 @@ import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
 import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
 import dev.comfyfluffy.caustica.rt.accel.GpuImage;
-import dev.comfyfluffy.caustica.rt.entity.RtEntities;
+import dev.comfyfluffy.caustica.minecraft.entity.RtEntities;
 
 /**
  * Entity glow (Glowing-effect) outline — full-res, post-upscale, depth-less. Two passes:

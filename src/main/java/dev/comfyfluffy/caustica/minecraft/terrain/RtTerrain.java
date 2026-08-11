@@ -1,6 +1,6 @@
 
 
-package dev.comfyfluffy.caustica.rt.terrain;
+package dev.comfyfluffy.caustica.minecraft.terrain;
 
 import com.mojang.blaze3d.vertex.QuadInstance;
 import com.mojang.blaze3d.vertex.VertexConsumer;
@@ -60,11 +60,11 @@ import java.util.List;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
-import static dev.comfyfluffy.caustica.rt.terrain.RtTerrainMesher.WORKER_TESS;
-import static dev.comfyfluffy.caustica.rt.terrain.RtTerrainMesher.buildCpuSection;
-import dev.comfyfluffy.caustica.rt.terrain.RtTerrainMesher.CpuSection;
-import dev.comfyfluffy.caustica.rt.terrain.RtTerrainMesher.PackedSection;
-import dev.comfyfluffy.caustica.rt.terrain.RtTerrainMesher.WorkerTessState;
+import static dev.comfyfluffy.caustica.minecraft.terrain.RtTerrainMesher.WORKER_TESS;
+import static dev.comfyfluffy.caustica.minecraft.terrain.RtTerrainMesher.buildCpuSection;
+import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrainMesher.CpuSection;
+import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrainMesher.PackedSection;
+import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrainMesher.WorkerTessState;
 /**
  * Per-section terrain residency synced to vanilla's loaded chunks. A singleton manager
  * keeps a map of resident 16³ sections. The 20 TPS tick maintains the desired window around the player

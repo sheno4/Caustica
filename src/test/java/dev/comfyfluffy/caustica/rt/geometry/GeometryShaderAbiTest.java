@@ -42,11 +42,11 @@ final class GeometryShaderAbiTest {
 
     @Test
     void everyGeometryTableWriterDeclaresItsTextureCoordinateMode() throws IOException {
-        Path java = Path.of("src", "main", "java", "dev", "comfyfluffy", "caustica", "rt")
+        Path java = Path.of("src", "main", "java", "dev", "comfyfluffy", "caustica")
                 .toAbsolutePath().normalize();
-        String indexedWriters = read(List.of(java.resolve("geometry/RtSceneGeometryManager.java"),
-                java.resolve("entity/RtEntities.java")));
-        String directWriter = Files.readString(java.resolve("geometry/RtRetainedGeometryScene.java"));
+        String indexedWriters = read(List.of(java.resolve("rt/geometry/RtSceneGeometryManager.java"),
+                java.resolve("minecraft/entity/RtEntities.java")));
+        String directWriter = Files.readString(java.resolve("rt/geometry/RtRetainedGeometryScene.java"));
 
         assertTrue(indexedWriters.contains("RtGeometryAbi.FLAG_INDEXED_TEXTURE_COORDINATES"));
         assertTrue(directWriter.contains("RtGeometryAbi.FLAG_TRIANGLE_CORNER_TEXTURE_COORDINATES"));

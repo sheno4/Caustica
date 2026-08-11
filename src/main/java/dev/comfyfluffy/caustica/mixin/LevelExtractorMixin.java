@@ -3,7 +3,7 @@ package dev.comfyfluffy.caustica.mixin;
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import dev.comfyfluffy.caustica.client.VanillaRenderController;
-import dev.comfyfluffy.caustica.rt.terrain.RtTerrain;
+import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
 import dev.comfyfluffy.caustica.rt.RtRuntime;
 import net.minecraft.client.Camera;
 import net.minecraft.client.DeltaTracker;

@@ -1,8 +1,8 @@
 package dev.comfyfluffy.caustica.mixin;
 
 import com.mojang.blaze3d.vertex.PoseStack;
-import dev.comfyfluffy.caustica.rt.entity.ContainedBlockSource;
-import dev.comfyfluffy.caustica.rt.entity.RtEntityCollector;
+import dev.comfyfluffy.caustica.minecraft.entity.ContainedBlockSource;
+import dev.comfyfluffy.caustica.minecraft.entity.RtEntityCollector;
 import net.minecraft.client.renderer.SubmitNodeCollector;
 import net.minecraft.client.renderer.block.BlockModelRenderState;
 import net.minecraft.world.level.block.state.BlockState;
