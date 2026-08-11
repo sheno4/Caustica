@@ -10,11 +10,14 @@ import java.lang.management.ManagementFactory;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * Opt-in render-frame timing and hitch detection. Gated by {@code -Dcaustica.rt.frameStats}; every method
@@ -30,68 +33,24 @@ public final class RtFrameStats {
     private static final double HITCH_MULTIPLIER = 1.5;
     private static final OutputLocation OUTPUT = new OutputLocation(defaultOutputDirectory());
 
-    // trackGc: per-frame GC deltas (collection count + reported pause ms) help distinguish JVM pauses from
-    // uninstrumented render work when a hitch's unaccounted time is large.
-    public static final Profile FRAME = new Profile("frame",
-            new String[] {
-                    "terrain.windowSync",
-                    "terrain.dirtyDrain",
-                    "terrain.drainCompletion",
-                    "terrain.snapshotDispatch",
-                    "terrain.publish",
-                    "entity.capture",
-                    "entity.capture.extract",
-                    "entity.capture.submit",
-                    "entity.capture.submit.material",
-                    "entity.capture.submit.setupAnim",
-                    "entity.capture.submit.modelDraw",
-                    "entity.capture.submit.modelDraw.direct",
-                    "entity.capture.submit.modelDraw.fallback",
-                    "entity.capture.submit.bakedQuads",
-                    "entity.capture.submit.metrics",
-                    "entity.capture.submit.parity",
-                    "entity.capture.motion",
-                    "entity.capture.rigidReuse",
-                    "entity.capture.rigidReuse.equal",
-                    "entity.capture.rigidReuse.yaw",
-                    "entity.capture.rigidReuse.shade",
-                    "entity.capture.append.alloc",
-                    "entity.capture.append.copy",
-                    "entity.capture.append.blas",
-                    "entity.uploadFlush",
-                    "entity.blockEntities",
-                    "entity.particles",
-                    "entity.blasRecord",
-                    "frame.prepareTlas",
-                    "frame.recordTlas",
-                    "frame.trace",
-                    "frame.skyLut",
-                    // Wavefront trace and downstream debug stages.
-                    "frame.tracePrimary",
-                    "frame.traceIndirect",
-                    "frame.exposure",
-                    "frame.dlssRr",
-                    "frame.upscale",
-                    "frame.postChain",
-                    "frame.displayMap",
-                    "frame.debugPresent",
-                    "frame.copyOutput"
-            },
-            new String[] {"sectionsSnapshotted", "sectionCopies", "terrainBuildsCompleted",
-                    "terrainMaterialEpochRejects", "entitiesCaptured", "blockEntitiesCaptured",
-                    "particlesCaptured", "refits", "entityReuse", "entityRigidFitSuccesses",
-                    "entityRigidFitFailures", "vmaBufferCreates",
-                    "entityModelSubmissions", "entityCuboids",
-                    "entityModelQuads", "entityModelVertices", "entityBakedQuads", "entityBakedVertices",
-                    "entityDirectSubmissions", "entityDirectFallbacks", "entityDirectQuads", "entityDirectVertices",
-                    "entitySpecializedCuboids", "entityGenericCuboids",
-                    "entityParityChecks", "entityVmaBufferCreates", "entityGeometryBufferReuses",
-                    "entityScratchBufferReuses", "entityUploadBytes", "entityMotionUploadBytes",
-                    "entityPackedBytes", "entityPackedPaddingBytes", "entityRetainedGeometryBytes",
-                    "entityFrameListsWaits", "entityTableWaits", "entitySlotWaits",
-                    "entityGraphicsWaitNanos", "entityMotionFlushes", "entityTableFlushes",
-                    "entityBlockEntityRetirements", "entitySlotRetirements", "entityTableRetirements"},
-            true);
+    private static final MetricSchema RENDERER_FRAME_METRICS = new MetricSchema(List.of(
+            new StageMetric("geometry.blasRecord", true),
+            new StageMetric("frame.prepareTlas", true),
+            new StageMetric("frame.recordTlas", true),
+            new StageMetric("frame.skyLut", true),
+            new StageMetric("frame.tracePrimary", true),
+            new StageMetric("frame.traceIndirect", true),
+            new StageMetric("frame.exposure", true),
+            new StageMetric("frame.dlssRr", true),
+            new StageMetric("frame.upscale", true),
+            new StageMetric("frame.postChain", true),
+            new StageMetric("frame.displayMap", true),
+            new StageMetric("frame.debugPresent", true),
+            new StageMetric("frame.copyOutput", true)), List.of());
+
+    // Per-frame GC deltas help distinguish JVM pauses from uninstrumented render work when a hitch's
+    // unaccounted time is large. The host appends its own producer metrics during bootstrap.
+    public static final Profile FRAME = new Profile("frame", RENDERER_FRAME_METRICS, true);
 
     private static final List<GarbageCollectorMXBean> GC_BEANS = ManagementFactory.getGarbageCollectorMXBeans();
 
@@ -120,12 +79,80 @@ public final class RtFrameStats {
     private RtFrameStats() {
     }
 
+    /** One timed stage and whether its duration belongs in the frame's accounted-time sum. */
+    public record StageMetric(String name, boolean contributesToAccountedTime) {
+        public StageMetric {
+            requireMetricName(name);
+        }
+    }
+
+    /** Immutable stage/counter vocabulary contributed by the renderer or its host. */
+    public record MetricSchema(List<StageMetric> stages, List<String> counters) {
+        public MetricSchema {
+            stages = List.copyOf(stages);
+            counters = List.copyOf(counters);
+            Set<String> names = new HashSet<>();
+            for (StageMetric stage : stages) {
+                Objects.requireNonNull(stage, "stage metric");
+                if (!names.add(stage.name())) {
+                    throw new IllegalArgumentException("Duplicate RtFrameStats name: " + stage.name());
+                }
+            }
+            for (String counter : counters) {
+                requireMetricName(counter);
+                if (!names.add(counter)) {
+                    throw new IllegalArgumentException("Duplicate RtFrameStats name: " + counter);
+                }
+            }
+        }
+
+        MetricSchema append(MetricSchema extension) {
+            Objects.requireNonNull(extension, "metric schema");
+            ArrayList<StageMetric> combinedStages = new ArrayList<>(stages.size() + extension.stages.size());
+            combinedStages.addAll(stages);
+            combinedStages.addAll(extension.stages);
+            ArrayList<String> combinedCounters = new ArrayList<>(counters.size() + extension.counters.size());
+            combinedCounters.addAll(counters);
+            combinedCounters.addAll(extension.counters);
+            return new MetricSchema(combinedStages, combinedCounters);
+        }
+
+        long accountedNanos(long[] stageNanos) {
+            if (stageNanos.length != stages.size()) {
+                throw new IllegalArgumentException("stage duration count does not match metric schema");
+            }
+            long total = 0L;
+            for (int i = 0; i < stages.size(); i++) {
+                if (stages.get(i).contributesToAccountedTime()) {
+                    total += stageNanos[i];
+                }
+            }
+            return total;
+        }
+    }
+
+    /** Append host frame metrics before the frame profile is first used. */
+    public static void configureFrameMetrics(MetricSchema metrics) {
+        FRAME.configureMetrics(metrics);
+    }
+
+    static MetricSchema rendererFrameMetrics() {
+        return RENDERER_FRAME_METRICS;
+    }
+
     /**
      * Select the directory profiles lazily create their CSV files in. Bootstrap must call this before any
      * profile attempts to open its writer; changing the directory after that point is an error.
      */
     public static void configureOutputDirectory(Path directory) {
         OUTPUT.configure(directory);
+    }
+
+    private static void requireMetricName(String name) {
+        Objects.requireNonNull(name, "metric name");
+        if (name.isBlank() || name.indexOf(',') >= 0) {
+            throw new IllegalArgumentException("Invalid RtFrameStats name: " + name);
+        }
     }
 
     static Path defaultOutputDirectory() {
@@ -176,13 +203,15 @@ public final class RtFrameStats {
     /** A timed render frame: per-stage nanos + named counters, plus a rolling-median hitch log. */
     public static final class Profile {
         private final String name;
-        private final String[] stageNames;
-        private final String[] counterNames;
-        private final Map<String, Integer> stageIndices;
-        private final Map<String, Integer> counterIndices;
+        private final MetricSchema baseMetrics;
         private final boolean trackGc;
-        private final long[] stageNanos;
-        private final long[] counters;
+        private MetricSchema metrics;
+        private String[] stageNames;
+        private String[] counterNames;
+        private Map<String, Integer> stageIndices;
+        private Map<String, Integer> counterIndices;
+        private long[] stageNanos;
+        private long[] counters;
         private final long[] history = new long[MEDIAN_WINDOW];
         private int historyCount;
         private int historyPos;
@@ -193,16 +222,31 @@ public final class RtFrameStats {
         private PrintWriter csv;
         private boolean csvOpenAttempted;
         private boolean active;
+        private boolean metricsConfigured;
+        private volatile boolean metricsUsed;
 
-        private Profile(String name, String[] stageNames, String[] counterNames) {
-            this(name, stageNames, counterNames, false);
+        Profile(String name, MetricSchema metrics, boolean trackGc) {
+            this.name = name;
+            this.baseMetrics = Objects.requireNonNull(metrics, "metrics");
+            this.trackGc = trackGc;
+            applyMetrics(metrics);
         }
 
-        private Profile(String name, String[] stageNames, String[] counterNames, boolean trackGc) {
-            this.name = name;
-            this.stageNames = stageNames;
-            this.counterNames = counterNames;
-            this.trackGc = trackGc;
+        synchronized void configureMetrics(MetricSchema extension) {
+            if (metricsUsed) {
+                throw new IllegalStateException("RtFrameStats metrics are fixed after first profile use");
+            }
+            if (metricsConfigured) {
+                throw new IllegalStateException("RtFrameStats metrics are already configured");
+            }
+            applyMetrics(baseMetrics.append(extension));
+            metricsConfigured = true;
+        }
+
+        private void applyMetrics(MetricSchema configured) {
+            this.metrics = configured;
+            this.stageNames = configured.stages().stream().map(StageMetric::name).toArray(String[]::new);
+            this.counterNames = configured.counters().toArray(String[]::new);
             this.stageNanos = new long[stageNames.length];
             this.counters = new long[counterNames.length];
             this.stageIndices = index(stageNames);
@@ -211,6 +255,7 @@ public final class RtFrameStats {
 
         /** Start timing a new frame; clears this frame's stage/counter accumulators. */
         public void begin() {
+            metricsUsed = true;
             active = false;
             if (!enabled()) {
                 return;
@@ -352,18 +397,13 @@ public final class RtFrameStats {
         private void logHitch(long total, long median, long gcCount, long gcMs) {
             StringBuilder sb = new StringBuilder("RT hitch [").append(name).append("] ")
                     .append(ms(total)).append("ms (median ").append(ms(median)).append("ms):");
-            long staged = 0;
             for (int i = 0; i < stageNames.length; i++) {
-                // entity.capture.* is a detailed subdivision nested inside the top-level entity.capture
-                // envelope. Report it, but do not double-count it when deriving unaccounted frame time.
-                if (!stageNames[i].startsWith("entity.capture.")) {
-                    staged += stageNanos[i];
-                }
                 sb.append(' ').append(stageNames[i]).append('=').append(ms(stageNanos[i])).append("ms");
             }
             // Time inside this frame not covered by any stage timer — a big value here with gcPause>0 means
             // a GC pause landed mid-frame; with gcPause=0 it points at an uninstrumented stage.
-            sb.append(" unaccounted=").append(ms(Math.max(0, total - staged))).append("ms");
+            sb.append(" unaccounted=")
+                    .append(ms(Math.max(0, total - metrics.accountedNanos(stageNanos)))).append("ms");
             for (int i = 0; i < counterNames.length; i++) {
                 sb.append(' ').append(counterNames[i]).append('=').append(counters[i]);
             }

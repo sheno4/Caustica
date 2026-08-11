@@ -51,4 +51,48 @@ final class RtFrameStatsBoundaryTest {
         assertTrue(violations.isEmpty(), "frame stats crossed the host import firewall:\n"
                 + String.join("\n", violations));
     }
+
+    @Test
+    void rendererSchemaOwnsGenericGeometryAndFrameStages() {
+        RtFrameStats.MetricSchema schema = RtFrameStats.rendererFrameMetrics();
+        assertTrue(schema.stages().stream().anyMatch(stage -> stage.name().equals("geometry.blasRecord")));
+        assertTrue(schema.stages().stream().filter(stage -> stage.name().startsWith("frame."))
+                .allMatch(RtFrameStats.StageMetric::contributesToAccountedTime));
+        assertTrue(schema.counters().isEmpty());
+    }
+
+    @Test
+    void metricSchemasRejectDuplicatesAndProfilesRejectLateOrRepeatedConfiguration() {
+        assertThrows(IllegalArgumentException.class, () -> new RtFrameStats.MetricSchema(List.of(
+                new RtFrameStats.StageMetric("duplicate", true),
+                new RtFrameStats.StageMetric("duplicate", false)), List.of()));
+        assertThrows(IllegalArgumentException.class, () -> new RtFrameStats.MetricSchema(
+                List.of(new RtFrameStats.StageMetric("duplicate", true)), List.of("duplicate")));
+
+        RtFrameStats.MetricSchema base = new RtFrameStats.MetricSchema(
+                List.of(new RtFrameStats.StageMetric("base", true)), List.of());
+        RtFrameStats.Profile collision = new RtFrameStats.Profile("collision", base, false);
+        assertThrows(IllegalArgumentException.class, () -> collision.configureMetrics(
+                new RtFrameStats.MetricSchema(List.of(new RtFrameStats.StageMetric("base", true)), List.of())));
+
+        RtFrameStats.Profile repeated = new RtFrameStats.Profile("repeated", base, false);
+        repeated.configureMetrics(new RtFrameStats.MetricSchema(List.of(), List.of("host")));
+        assertThrows(IllegalStateException.class, () -> repeated.configureMetrics(
+                new RtFrameStats.MetricSchema(List.of(), List.of("other"))));
+
+        RtFrameStats.Profile used = new RtFrameStats.Profile("used", base, false);
+        used.begin();
+        assertThrows(IllegalStateException.class, () -> used.configureMetrics(
+                new RtFrameStats.MetricSchema(List.of(), List.of("late"))));
+    }
+
+    @Test
+    void explicitAccountingExcludesNestedDetailStages() {
+        RtFrameStats.MetricSchema schema = new RtFrameStats.MetricSchema(List.of(
+                new RtFrameStats.StageMetric("outer", true),
+                new RtFrameStats.StageMetric("outer.detail", false),
+                new RtFrameStats.StageMetric("next", true)), List.of());
+
+        assertEquals(17L, schema.accountedNanos(new long[]{10L, 6L, 7L}));
+    }
 }

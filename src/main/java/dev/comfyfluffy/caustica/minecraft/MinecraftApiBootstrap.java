@@ -41,6 +41,7 @@ public final class MinecraftApiBootstrap {
         RtComposite.configureShaderCacheRoot(shaderCache.resolve("sources"));
         RtFrameStats.configureOutputDirectory(FabricLoader.getInstance().getGameDir()
                 .resolve("rt-frame-stats"));
+        RtFrameStats.configureFrameMetrics(MinecraftFrameMetrics.schema());
         CausticaOptions options = CausticaOptions.load(
                 FabricLoader.getInstance().getConfigDir().resolve("caustica-options.toml"),
                 registry.features());
