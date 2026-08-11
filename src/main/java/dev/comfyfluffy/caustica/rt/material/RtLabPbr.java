@@ -5,8 +5,9 @@ import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialDefaults;
 /**
  * Adapter from the LabPBR 1.3 specular texture into the engine's OpenPBR vocabulary. LabPBR is a source
  * format, not a material model: it authors normal-incidence reflectance and perceptual smoothness, where
- * OpenPBR authors {@code specular_ior}/{@code specular_color} and {@code specular_roughness}. Inverting
- * that is this class's job, and it is the only place the source format's conventions are known.
+ * the supported OpenPBR subset authors {@code specular_ior}, conductor {@code base_color}, and
+ * {@code specular_roughness}. Inverting that is this class's job, and it is the only place the source
+ * format's conventions are known.
  */
 public final class RtLabPbr {
     private RtLabPbr() {
@@ -17,19 +18,6 @@ public final class RtLabPbr {
      * stops one unorm8 step short and caps at the ~509 that step corresponds to.
      */
     private static final float MAX_AMPLITUDE = 254.0f / 255.0f;
-
-    /**
-     * What the source format's strongest subsurface authoring becomes as an OpenPBR transmission weight.
-     *
-     * <p>There is no subsurface parameter in this engine: OpenPBR's subsurface lobe degenerates into
-     * diffuse reflection and transmission on a surface with no interior, and that degeneration is the
-     * only subsurface transport here, so the authored channel is a transmission weight and nothing else.
-     * One half is the symmetric point — the diffuse response splits evenly between the two sides, so the
-     * surface answers a light from either side identically. That is the most a leaf can scatter through
-     * without transmitting more than it reflects, and it is exactly what a billboard is, which is why
-     * fully-authored foliage and a particle land on the same value.
-     */
-    private static final float SYMMETRIC_THIN_TRANSMISSION = 0.5f;
 
     private static final float[][] METAL_N = {
             {2.9114f, 2.9497f, 2.5845f},
@@ -62,15 +50,15 @@ public final class RtLabPbr {
         float g = clamp01(green) * 255.0f;
         float metalness;
         float specularIor;
-        float colorR;
-        float colorG;
-        float colorB;
+        float metalBaseColorR;
+        float metalBaseColorG;
+        float metalBaseColorB;
         if (g < 229.5f) {
             // Dielectric: the authored reflectance is a scalar, so it carries no tint and inverts
-            // entirely into specular_ior. specular_color stays white — LabPBR cannot express one.
+            // entirely into specular_ior. The RGB page lanes are neutral because no metal colour applies.
             metalness = 0.0f;
             specularIor = iorFromF0(clamp01(green));
-            colorR = colorG = colorB = 1.0f;
+            metalBaseColorR = metalBaseColorG = metalBaseColorB = 1.0f;
         } else {
             // Metal: a conductor's normal-incidence reflectance IS its OpenPBR base_color, either from
             // the predefined n/k table or, above the table's range, from the albedo itself. A metal has
@@ -81,13 +69,13 @@ public final class RtLabPbr {
             specularIor = OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR;
             if (g < 237.5f) {
                 int metal = Math.round(g) - 230;
-                colorR = metalF0(metal, 0);
-                colorG = metalF0(metal, 1);
-                colorB = metalF0(metal, 2);
+                metalBaseColorR = metalF0(metal, 0);
+                metalBaseColorG = metalF0(metal, 1);
+                metalBaseColorB = metalF0(metal, 2);
             } else {
-                colorR = clamp01(albedoR);
-                colorG = clamp01(albedoG);
-                colorB = clamp01(albedoB);
+                metalBaseColorR = clamp01(albedoR);
+                metalBaseColorG = clamp01(albedoG);
+                metalBaseColorB = clamp01(albedoB);
             }
         }
 
@@ -95,8 +83,8 @@ public final class RtLabPbr {
         float emission = a < 254.5f ? a / 254.0f : 0.0f;
         float b = clamp01(blue) * 255.0f;
         float subsurface = b > 64.5f ? (b - 65.0f) / 190.0f : 0.0f;
-        return new Texel(specularRoughness, metalness, specularIor, colorR, colorG, colorB, emission,
-                subsurface * SYMMETRIC_THIN_TRANSMISSION);
+        return new Texel(specularRoughness, metalness, specularIor,
+                metalBaseColorR, metalBaseColorG, metalBaseColorB, emission, subsurface);
     }
 
     /**
@@ -134,14 +122,9 @@ public final class RtLabPbr {
         return Math.max(0.0f, Math.min(1.0f, value));
     }
 
-    /**
-     * One decoded texel in OpenPBR vocabulary. {@code colorR/G/B} is the one union the source format
-     * forces: {@code base_color} where {@code metalness} is 1, {@code specular_color} where it is 0. A
-     * LabPBR texel authors exactly one reflectance and its own metalness says which parameter that is,
-     * so a single set of channels can carry both without ambiguity.
-     */
+    /** One decoded texel in the supported OpenPBR vocabulary. */
     public record Texel(float specularRoughness, float metalness, float specularIor,
-                        float colorR, float colorG, float colorB,
-                        float emission, float transmissionWeight) {
+                        float metalBaseColorR, float metalBaseColorG, float metalBaseColorB,
+                        float emission, float subsurfaceWeight) {
     }
 }

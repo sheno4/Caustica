@@ -121,8 +121,6 @@ public float3 tracePath<TC : IComposition, TTrace : IRadianceTrace>(TC.Surfaces 
         // entities and billboards differ only in the parameters they carry.
         float3 v = -rd;
         SurfaceClosure closure = payloadSurfaceClosure(n);
-        float3 diffAlb = closure.diffuseAlbedo;
-        float3 F0 = closure.specularF0;
         float rough = closure.alphaRoughness;
 
         float3 vertexRadiance = float3(0.0, 0.0, 0.0);
@@ -137,10 +135,9 @@ public float3 tracePath<TC : IComposition, TTrace : IRadianceTrace>(TC.Surfaces 
         // RIS direct lighting from terrain emitters and host-supplied lights, evaluated with the engine's
         // reference target function against the same parameters the material closure carries.
         if (risOn) {
-            Reservoir r = risInitial(hitPos, n, v, rd, diffAlb, F0, rough, closure.transmission,
-                                     seed, proposalSeed);
-            vertexRadiance += shadeReservoir(surfaces, r, hitPos, n, v, rd, diffAlb, F0,
-                    rough, closure.transmission, medium.current);
+            Reservoir r = risInitial(hitPos, v, closure, seed, proposalSeed);
+            vertexRadiance += shadeReservoir(surfaces, r, hitPos, n, v,
+                    closure, medium.current);
         }
 
         // Look policy applies once to this vertex's total shaded contribution, through the same

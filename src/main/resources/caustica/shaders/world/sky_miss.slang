@@ -41,5 +41,7 @@ void main<TC : IComposition>(inout Payload payload) {
     payload.roughEmissionB = packHalf2(float2(1.0, 0.0));
     payload.emissionRG = packHalf2(float2(0.0, 0.0));
     payload.iorTransmission = packHalf2(float2(1.0, 0.0));
+    payload.diffuseTransmissionAlbedo = half3(0.0h, 0.0h, 0.0h);
+    payload.thinTransmissionColor = half3(0.0h, 0.0h, 0.0h);
     payload.rayCone = 0u;
 }

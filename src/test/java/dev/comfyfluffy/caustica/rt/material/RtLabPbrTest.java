@@ -16,12 +16,11 @@ final class RtLabPbrTest {
                 0.7f, 0.6f, 0.5f);
         assertEquals(0.75f, value.specularRoughness(), EPS);
         assertEquals(0.0f, value.metalness(), EPS);
-        // A dielectric authors reflectance, which inverts into an index; the tint stays neutral because
-        // the source format has only one channel for it.
+        // A dielectric authors scalar reflectance, which inverts entirely into an index.
         assertEquals(RtLabPbr.iorFromF0(0.04f), value.specularIor(), EPS);
-        assertEquals(1.0f, value.colorR(), EPS);
+        assertEquals(1.0f, value.metalBaseColorR(), EPS);
         assertEquals(0.0f, value.emission(), EPS);
-        assertEquals(0.0f, value.transmissionWeight(), EPS);
+        assertEquals(0.0f, value.subsurfaceWeight(), EPS);
     }
 
     @Test
@@ -32,12 +31,11 @@ final class RtLabPbrTest {
         assertEquals(0.5f, value.specularRoughness(), EPS);
         assertEquals(1.0f, value.metalness(), EPS);
         // Above the predefined range the albedo IS the conductor's reflectance, i.e. its base colour.
-        assertEquals(0.7f, value.colorR(), EPS);
-        assertEquals(0.6f, value.colorG(), EPS);
-        assertEquals(0.5f, value.colorB(), EPS);
+        assertEquals(0.7f, value.metalBaseColorR(), EPS);
+        assertEquals(0.6f, value.metalBaseColorG(), EPS);
+        assertEquals(0.5f, value.metalBaseColorB(), EPS);
         assertEquals(0.5f, value.emission(), 0.002f);
-        // The strongest authored subsurface is the symmetric thin scatterer, not a pure transmitter.
-        assertEquals(0.5f, value.transmissionWeight(), EPS);
+        assertEquals(1.0f, value.subsurfaceWeight(), EPS);
     }
 
     @Test
@@ -47,9 +45,9 @@ final class RtLabPbrTest {
                 0.0f, 0.0f, 0.0f);
         assertEquals(0.0f, value.specularRoughness(), EPS);
         assertEquals(1.0f, value.metalness(), EPS);
-        assertEquals(0.944f, value.colorR(), 0.002f);
-        assertEquals(0.776f, value.colorG(), 0.002f);
-        assertEquals(0.373f, value.colorB(), 0.002f);
+        assertEquals(0.944f, value.metalBaseColorR(), 0.002f);
+        assertEquals(0.776f, value.metalBaseColorG(), 0.002f);
+        assertEquals(0.373f, value.metalBaseColorB(), 0.002f);
     }
 
     /**

@@ -338,10 +338,10 @@ public final class RtBlockMaterials {
                         surface0[i + 1] = decoded.metalness();
                         surface0[i + 2] = decoded.emission();
                         authoredEmission[y * width + x] = decoded.emission() * aa;
-                        surface0[i + 3] = decoded.transmissionWeight();
-                        surface1[i] = decoded.colorR();
-                        surface1[i + 1] = decoded.colorG();
-                        surface1[i + 2] = decoded.colorB();
+                        surface0[i + 3] = decoded.subsurfaceWeight();
+                        surface1[i] = decoded.metalBaseColorR();
+                        surface1[i + 1] = decoded.metalBaseColorG();
+                        surface1[i + 2] = decoded.metalBaseColorB();
                         surface1[i + 3] = RtLabPbr.encodeIor(decoded.specularIor());
                     } else {
                         surface0[i] = 1.0f;

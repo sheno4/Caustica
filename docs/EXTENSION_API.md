@@ -394,21 +394,31 @@ The engine owns canonical texture pages and mips, epoch-local material and surfa
 coverage, GPU records, SBT classification and retirement. Geometry sees only `MaterialHandle(ResourceId)`.
 
 The authored vocabulary is explicitly **OpenPBR Surface 1.1.1**, not an assertion that every OpenPBR
-lobe is implemented. The writable subset is `base_color`, `base_metalness`, `specular_roughness`,
-`specular_ior`, `specular_color`, `transmission_weight`, `emission_color`, `emission_luminance`,
-`geometry_normal`, `geometry_opacity` and `geometry_thin_walled`. The source adapter supplies these from
-textures, rules or a `MaterialDefinition`; the built-in reference surface leaves them unchanged.
+lobe is implemented. The writable surface-evaluation subset is `base_color`, `base_metalness`,
+`specular_roughness`, `specular_ior`, `transmission_weight`, `transmission_color`,
+`subsurface_weight`, `subsurface_color`, `subsurface_scatter_anisotropy`, `emission_color`,
+`emission_luminance` and `geometry_normal`. The source adapter supplies the compiled initial description;
+a registered surface may edit it, and the built-in reference surface leaves it unchanged.
 
-Parameters outside that subset are fixed at the OpenPBR 1.1.1 defaults: `base_weight=1`,
-`base_diffuse_roughness=0`, `specular_weight=1`, `specular_roughness_anisotropy=0`,
-`transmission_color=(1,1,1)`, `transmission_depth=0`, `transmission_scatter=(0,0,0)`,
-`transmission_scatter_anisotropy=0`, `transmission_dispersion_scale=0`, and the subsurface, coat, fuzz and
-thin-film weights are zero. Their subordinate parameters therefore cannot affect transport. Geometry
-tangents/coat normals remain the unmodified geometry values. Fields in the writable subset have no
-second extension-API default: a `MaterialDefinition` supplies its required uniform values, a host adapter
-supplies the complete current material, and a null `MaterialRule` field means inherit that value.
-Unsupported anisotropy, diffuse roughness, coat, fuzz, full subsurface volume, dispersion, thin film and
-displacement are not silently approximated as extension features.
+`geometry_opacity` is resolved by coverage traversal before closest-hit surface evaluation, so it is not
+a writable `MaterialInput` field. `geometry_thin_walled` is likewise structural: a compiled binding
+selects either the engine's two-interface volume transport or the closure path's thin sheet before the
+surface implementation runs. Neither field is exposed as a late write that could not affect transport.
+
+Writable fields that are not source-authored start at the OpenPBR 1.1.1 defaults:
+`transmission_color=(1,1,1)`, `subsurface_weight=0`, `subsurface_color=(0.8,0.8,0.8)` and
+`subsurface_scatter_anisotropy=0`. Parameters outside the subset are fixed at their specification
+defaults: `base_weight=1`, `base_diffuse_roughness=0`, `specular_weight=1`,
+`specular_roughness_anisotropy=0`, `transmission_depth=0`, `transmission_scatter=(0,0,0)`,
+`transmission_scatter_anisotropy=0`, `transmission_dispersion_scale=0`, and the coat, fuzz and thin-film
+weights are zero. `specular_color` is fixed at its white default: the subset derives dielectric F0 from
+IOR and metal F0 from `base_color`, but does not claim OpenPBR's conductor F82 edge tint. Unsupported
+subordinate parameters cannot affect transport. Geometry
+tangents/coat normals remain the unmodified geometry values. A `MaterialDefinition` supplies base
+colour, roughness, metalness, IOR and transmission weight; a host adapter supplies any richer current
+material; and a null `MaterialRule` field means inherit the compiled value. Unsupported anisotropy,
+diffuse roughness, coat, fuzz, full subsurface volume, dispersion, thin film and displacement are not
+silently approximated as extensions.
 
 There is deliberately no `materialTags` field and no water/particle/foliage/portal semantic tag in the
 public Slang API. The end portal is ordinary material data selecting a registered procedural surface;
@@ -425,16 +435,18 @@ renames:
 - **`specular_roughness` is perceptual.** OpenPBR fixes `alpha = r²`, so the square is taken where a lobe
   is evaluated. `SurfaceClosure.alphaRoughness` is the squared value, which is why the two fields have
   different names.
-- **Normal-incidence reflectance is not a parameter.** A dielectric's follows from `specular_ior` tinted
-  by `specular_color`, a metal's is `base_color`; `openPbrSpecularF0` is the one derivation.
+- **Normal-incidence reflectance is not a parameter.** A dielectric's follows from `specular_ior`, a
+  metal's is `base_color`; `openPbrSpecularF0` is the one derivation. `specular_color` remains unsupported
+  rather than being treated as an F0 tint, which would give the OpenPBR parameter the wrong meaning.
 - **There is no ambient-occlusion parameter, deliberately.** AO approximates occlusion a rasteriser
   cannot trace, and this engine traces it, so multiplying an authored AO into base color would darken it
   twice.
-- **There is no subsurface parameter either.** OpenPBR's subsurface lobe degenerates into diffuse
-  reflection and transmission on a surface with no interior, and that degeneration is the only subsurface
-  transport this engine implements, so it is spelled `transmission_weight` on a thin-walled surface and
-  nothing else. That one weight is also what makes a billboard two-sided, so there is no separate
-  two-sided flag, no separate subsurface term, and no separate particle shading path.
+- **Thin-wall transmission keeps the two OpenPBR mechanisms distinct.** `transmission_weight` selects an
+  absorbing dielectric sheet with a roughened, straight-through BTDF. `subsurface_weight` selects the
+  dense scattering sheet; `subsurface_color` is split into diffuse reflection and diffuse transmission
+  by `subsurface_scatter_anisotropy`, with total albedo conserved. Radius parameters are ignored only in
+  this infinitesimally thin mode. Non-thin-walled transmission remains the engine's refractive medium
+  transport rather than this sheet closure.
 
 LabPBR is an adapter that decodes into this description rather than leaking its own concepts into it:
 its perceptual smoothness becomes `specular_roughness`, and its authored reflectance inverts into
@@ -604,17 +616,15 @@ Runtime-composed `closest_hit.slang` and `indirect.slang` are the only world pat
 fallback stages and `dynamicWorldShaders` toggle are gone. Remaining convergence is within the engine's
 estimators, not between two shader pipelines.
 
-Known accepted divergences until then: the engine BSDF has no delta/mirror lobe (`EVENT_*` has no flag for
-one), so a roughness-0 material renders as a very tight glossy lobe rather than an exact mirror; and RIS
-emitter lighting keeps its own target function rather than calling `evaluateBsdf`, even though both are now
-engine code. The RIS one has a scheduled payoff point rather than an open-ended one —
-`LIGHT_SYSTEM_PLAN.md` L1c rewrites `risInitial` for presampled light tiles, and converging them there is
-far cheaper than a dedicated pass over the same code.
+Known accepted divergence: the engine BSDF has no delta/mirror lobe (`EVENT_*` has no flag for one), so a
+roughness-0 material renders as a very tight glossy lobe rather than an exact mirror. Direct-light RIS
+and indirect continuation both call `evaluateBsdf`; the reservoir target therefore uses the same lobe
+values as the path sampler.
 
 ## 12. Open questions
 
 1. ~~Does `caustica:surface` want to be one slot or two?~~ Answered by narrowing it to parameters: the
-   BSDF left the interface entirely, so "foliage gets more SSS" is a `transmission_weight` write and
+   BSDF left the interface entirely, so "foliage gets more SSS" is a `subsurface_weight` write and
    nobody reimplements Cook-Torrance. What remains open is whether a closure-level API returns later for
    genuinely different lobes, and `SurfaceGuide` is public so that it can (§4.1.1).
 2. Should options that reach specialization be distinguished at the declaration from those that reach a

@@ -54,6 +54,8 @@ public Payload makeRadiancePayload(uint flags, uint rayCone) {
     p.roughEmissionB = 0u;
     p.emissionRG = 0u;
     p.iorTransmission = 0u;
+    p.diffuseTransmissionAlbedo = half3(0.0h, 0.0h, 0.0h);
+    p.thinTransmissionColor = half3(0.0h, 0.0h, 0.0h);
     p.rayCone = rayCone;
     return p;
 }
@@ -101,6 +103,8 @@ public Payload makeShadowPayload(bool trackBoundary, uint mediumImplementation) 
     shadowPayload.roughEmissionB = 0u;
     shadowPayload.emissionRG = 0u;
     shadowPayload.iorTransmission = 0u;
+    shadowPayload.diffuseTransmissionAlbedo = half3(0.0h, 0.0h, 0.0h);
+    shadowPayload.thinTransmissionColor = half3(0.0h, 0.0h, 0.0h);
     shadowPayload.rayCone = 0u;
     return shadowPayload;
 }

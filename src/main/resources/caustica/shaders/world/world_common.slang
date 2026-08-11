@@ -185,7 +185,11 @@ public struct Payload {
     // is the third component of emission without increasing the cross-stage payload.
     public uint   roughEmissionB; // packHalf2x16(perceptual roughness, emission radiance B)
     public uint   emissionRG;     // packHalf2x16(emission radiance R, G)
-    public uint   iorTransmission; // packHalf2x16(IOR, transmission factor)
+    // Volume hit: IOR, transmission_weight. Surface hit: thin transmission_weight, reserved zero.
+    public uint   iorTransmission;
+    // Surface-only closure lanes. Volume hits, misses and shadow rays leave them zero.
+    public half3  diffuseTransmissionAlbedo;
+    public half3  thinTransmissionColor;
     public uint   rayCone;     // packHalf2x16(width, spread)
 };
 

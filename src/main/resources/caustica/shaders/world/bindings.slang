@@ -24,10 +24,9 @@ import world_common;
 // Canonical material pages. Source formats are decoded into these by RtBlockMaterials, so the channels
 // below are OpenPBR parameters, not LabPBR bytes. Every channel is a unorm8.
 //
-//   surface0 — specular_roughness (perceptual r), base_metalness, emission mask, transmission_weight
+//   surface0 — specular_roughness (perceptual r), base_metalness, emission mask, subsurface_weight
 //   normal   — tangent-space normal xy; z is reconstructed. b unused, a authored height (unused)
-//   surface1 — rgb: base_color on a metal texel, specular_color on a dielectric one (the source format
-//              authors one reflectance and its own metalness says which parameter that is)
+//   surface1 — rgb: base_color on a metal texel, neutral on a dielectric one
 //              a: specular_ior, encoded as (ior - 1) / (ior + 1) — see surfaceIorFromPage
 [[vk::binding(0, 1)]] public Sampler2D albedoTextures[];
 [[vk::binding(1, 1)]] public Sampler2D materialSurface0Tex[];

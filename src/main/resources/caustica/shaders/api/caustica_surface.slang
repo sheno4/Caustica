@@ -61,7 +61,7 @@ public struct SurfaceGuide {
 
 // NVIDIA RR guide-buffer helper: integrated/view-dependent specular reflectivity, not raw F0.
 // alpha is GGX alpha, NoV the view cosine at this hit.
-float3 rrSpecularAlbedo(float3 specularColor, float alpha, float NoV) {
+float3 rrSpecularAlbedo(float3 specularReflectance, float alpha, float NoV) {
     NoV = abs(NoV);
     float NoV2 = NoV * NoV;
     float alpha2 = alpha * alpha;
@@ -88,8 +88,9 @@ float3 rrSpecularAlbedo(float3 specularColor, float alpha, float NoV) {
             dot(float3(5.56589, 19.7886, -20.2123), Xxzw));
     float scale = dot(m3, Y.xy) / max(dot(m4, float3(Y.x, Y.y, Y.w)), 1.0e-7);
 
-    bias *= clamp(specularColor.g * 50.0, 0.0, 1.0);
-    return specularColor * max(0.0, scale) + float3(max(0.0, bias), max(0.0, bias), max(0.0, bias));
+    bias *= clamp(specularReflectance.g * 50.0, 0.0, 1.0);
+    return specularReflectance * max(0.0, scale)
+            + float3(max(0.0, bias), max(0.0, bias), max(0.0, bias));
 }
 
 // Where a glossy lobe stops reading as specular to the reconstructor and starts reading as diffuse.

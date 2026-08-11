@@ -55,7 +55,7 @@ public struct MediumLightingInput {
  * the GGX alpha the BSDF consumes (alpha = r * r).
  *
  * Normal-incidence reflectance is deliberately absent: OpenPBR derives it from `specularIor` and
- * `specularColor` for a dielectric and from `baseColor` for a metal. Use `openPbrSpecularF0`.
+ * `specularIor` for a dielectric and from `baseColor` for a metal. Use `openPbrSpecularF0`.
  */
 public struct MaterialInput {
     /**
@@ -77,48 +77,46 @@ public struct MaterialInput {
     /** OpenPBR specular_roughness: perceptual. GGX alpha is its square. */
     public float specularRoughness;
     public float specularIor;
-    /** OpenPBR specular_color: a tint on the Fresnel factor, white when the material does not tint it. */
-    public float3 specularColor;
     /**
-     * OpenPBR transmission_weight. What it means depends on `geometryThinWalled`, exactly as the spec
-     * says it should: through a thin wall it is DIFFUSE transmission — the fraction of the diffuse
-     * response that leaves the far side — and through a volume it is the refractive transmission the
-     * engine's dielectric transport owns. There is no separate subsurface parameter: OpenPBR's
-     * subsurface lobe degenerates into diffuse reflection and transmission in thin-walled mode, and that
-     * degeneration is the only subsurface transport this engine implements, so it is spelled here.
+     * OpenPBR transmission_weight: the mix between the opaque dielectric base and the translucent base.
+     * A volume routes the latter through the engine's refractive medium transport. A thin wall resolves
+     * it as an absorbing, non-scattering dielectric sheet with a straight-through rough BTDF.
      */
     public float transmissionWeight;
+    /**
+     * OpenPBR transmission_color. The supported thin-sheet model treats it as normal-incidence
+     * transmittance through the sheet. Volume colour remains a geometry-source input to the medium hook.
+     */
+    public float3 transmissionColor;
+    /** OpenPBR subsurface_weight: the mix between glossy-diffuse and subsurface slabs. */
+    public float subsurfaceWeight;
+    /** OpenPBR subsurface_color: the dense scattering sheet's observed colour. */
+    public float3 subsurfaceColor;
+    /**
+     * OpenPBR subsurface_scatter_anisotropy. In thin-walled mode it divides subsurface energy between
+     * diffuse reflection and diffuse transmission exactly as the specification defines.
+     */
+    public float subsurfaceScatterAnisotropy;
     /**
      * OpenPBR emission_color and emission_luminance (cd/m²). A material adapter may derive emission
      * colour from its base texture, but that is source policy rather than part of this model.
      */
     public float3 emissionColor;
     public float emissionLuminance;
-    /** OpenPBR geometry_opacity: coverage, i.e. whether the surface is present over this footprint. */
-    public float geometryOpacity;
-    /**
-     * OpenPBR geometry_thin_walled: one surface with no interior — a leaf, a blade of grass, a billboard,
-     * and equally an opaque shell whose interior is never transported through.
-     * Glass is the opposite case: two interfaces with a real interior, so the engine refracts and pushes
-     * a medium instead, and those surfaces never reach this description. It selects which transmission
-     * `transmissionWeight` means.
-     */
-    public bool geometryThinWalled;
 };
 
 /**
  * OpenPBR normal-incidence reflectance. Not an authored parameter: a dielectric's follows from
- * `specularIor` and is tinted by `specularColor`; a metal's is `baseColor`.
+ * `specularIor`; a metal's is `baseColor`. OpenPBR specular_color is fixed at its white default in the
+ * supported subset because its conductor F82 edge-tint semantics are not implemented.
  */
-public float3 openPbrSpecularF0(float3 baseColor, float baseMetalness, float specularIor,
-        float3 specularColor) {
+public float3 openPbrSpecularF0(float3 baseColor, float baseMetalness, float specularIor) {
     float amplitude = (specularIor - 1.0) / (specularIor + 1.0);
-    return lerp(amplitude * amplitude * specularColor, baseColor, clamp(baseMetalness, 0.0, 1.0));
+    return lerp(float3(amplitude * amplitude), baseColor, clamp(baseMetalness, 0.0, 1.0));
 }
 
 public float3 openPbrSpecularF0(MaterialInput material) {
-    return openPbrSpecularF0(material.baseColor, material.baseMetalness, material.specularIor,
-            material.specularColor);
+    return openPbrSpecularF0(material.baseColor, material.baseMetalness, material.specularIor);
 }
 
 /**
@@ -155,18 +153,18 @@ public struct SurfaceInput {
  */
 public struct SurfaceClosure {
     public float3 shadingNormal;
-    /** The whole diffuse response, before `transmission` splits it between the two hemispheres. */
+    /** Sum of diffuse reflection and transmission albedos; used directly by reconstruction guides. */
     public float3 diffuseAlbedo;
+    /** The diffuse part of `diffuseAlbedo` that leaves through the far hemisphere. */
+    public float3 diffuseTransmissionAlbedo;
     public float3 specularF0;
     public float alphaRoughness;
     /** Emitted radiance in scene-linear ACEScg, after emission_color and luminance are combined. */
     public float3 emissionRadiance;
-    /**
-     * Fraction of the diffuse response leaving the far side of the surface. 0 is an ordinary opaque
-     * surface, 0.5 is a symmetric thin scatterer that answers a light from either side identically —
-     * which is what a billboard is — and 1 transmits everything.
-     */
-    public float transmission;
+    /** OpenPBR transmission_color used by the thin dielectric sheet. */
+    public float3 thinTransmissionColor;
+    /** OpenPBR transmission_weight after the dielectric share of the base has been applied. */
+    public float thinTransmissionWeight;
 };
 
 public struct BsdfQuery {

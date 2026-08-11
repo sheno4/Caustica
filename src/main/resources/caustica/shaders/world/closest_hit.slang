@@ -148,12 +148,11 @@ float3 perturbNormal(float3 n, float3 p0, float3 p1, float3 p2, float2 t0, float
 struct DecodedSurface {
     float3 normal;            // OpenPBR geometry_normal: the shading normal after the normal map
     float3 baseColor;
-    float3 specularColor;
     float specularRoughness;
     float baseMetalness;
     float specularIor;
     float emissionLuminance;  // cd/m²
-    float transmissionWeight;
+    float subsurfaceWeight;
 };
 
 float4 samplePageSurface0(uint page, float2 uv, float lod) {
@@ -174,12 +173,11 @@ DecodedSurface evaluateMaterial(SurfaceMaterial mat, float2 atlasUv, float lod, 
     DecodedSurface surface;
     surface.normal = geometricNormal;
     surface.baseColor = baseColor;
-    surface.specularColor = float3(1.0, 1.0, 1.0);
     surface.specularRoughness = mat.specularRoughness;
     surface.baseMetalness = mat.baseMetalness;
     surface.specularIor = mat.specularIor;
     surface.emissionLuminance = stateEmission;
-    surface.transmissionWeight = mat.transmissionWeight;
+    surface.subsurfaceWeight = 0.0;
 
     float2 localUv = clamp((atlasUv - mat.albedoUv.xy) * mat.albedoUv.zw,
             float2(0.0, 0.0), float2(1.0, 1.0));
@@ -193,19 +191,16 @@ DecodedSurface evaluateMaterial(SurfaceMaterial mat, float2 atlasUv, float lod, 
             surface.specularRoughness = surface0.r;
             surface.baseMetalness = surface0.g;
             surface.emissionLuminance = surface0.b;
-            // The source format's subsurface channel: on a surface with no interior that IS diffuse
-            // transmission, so it lands directly on the transmission weight. A dielectric's own
-            // transmission is refractive and uniform, so those paths take the material's value instead
-            // of this one.
-            surface.transmissionWeight = surface0.a;
+            // The source adapter's subsurface channel maps to OpenPBR subsurface_weight. In thin-walled
+            // mode the engine splits it into diffuse reflection and transmission using the authored
+            // anisotropy; it is separate from the translucent dielectric selected by transmission_weight.
+            surface.subsurfaceWeight = surface0.a;
             surface.specularIor = surfaceIorFromPage(surface1.a);
-            // One page channel, two OpenPBR parameters, because the source format allows only one: a
-            // LabPBR texel authors either a conductor's reflectance — which IS base_color for a metal —
-            // or a dielectric's specular tint, and its own metalness says which. Both reduce to the same
-            // reflectance through openPbrSpecularF0.
+            // The source format's RGB reflectance is conductor base_color only. A dielectric's scalar
+            // reflectance has already become specular_ior; OpenPBR specular_color stays at its unsupported
+            // white default rather than being misinterpreted as an F0 tint.
             float3 authored = clamp(bt709ToAcesCg(surface1.rgb), float3(0.0), float3(1.0));
             surface.baseColor = lerp(baseColor, authored, surface.baseMetalness);
-            surface.specularColor = lerp(authored, float3(1.0, 1.0, 1.0), surface.baseMetalness);
         } else {
             surface.emissionLuminance = surface0.b * stateEmission;
         }
@@ -248,10 +243,9 @@ float3 applyBreaking(float3 albedo709, uint rayCone, float3 rayOrigin, float3 ra
 // already carries the breaking overlay; the metalness split belongs to the closure, so nothing is
 // pre-multiplied here.
 //
-// `dielectric` is the one structural fact the decode cannot supply: a surface that refracts has two
-// interfaces and a real interior, so its transmission is the refractive kind and it is uniform across
-// the volume — the per-texel subsurface channel a thin wall reads as diffuse transmission does not
-// apply, and neither does the page's per-texel IOR.
+// `dielectric` is structural input from the binding: a volume has two interfaces and a real interior,
+// while every closure path is a thin wall. Surface evaluation cannot rewrite that decision because
+// coverage and traversal classification have already happened.
 MaterialInput buildMaterialInput(DecodedSurface surface, SurfaceMaterial mat, bool dielectric) {
     MaterialInput material;
     material.geometryNormal = surface.normal;
@@ -260,15 +254,20 @@ MaterialInput buildMaterialInput(DecodedSurface surface, SurfaceMaterial mat, bo
     material.baseMetalness = surface.baseMetalness;
     material.specularRoughness = surface.specularRoughness;
     material.specularIor = dielectric ? mat.specularIor : surface.specularIor;
-    material.specularColor = surface.specularColor;
-    material.transmissionWeight = dielectric ? mat.transmissionWeight : surface.transmissionWeight;
+    material.transmissionWeight = dielectric ? mat.transmissionWeight : 0.0;
+    material.transmissionColor = float3(1.0);
+    material.subsurfaceWeight = dielectric ? 0.0 : surface.subsurfaceWeight;
+    // The source adapter maps an authored LabPBR subsurface channel to an albedo-coloured OpenPBR sheet.
+    // With no authored subsurface value, retain OpenPBR's independent 0.8 default for a procedural
+    // implementation that chooses to turn the weight on.
+    material.subsurfaceColor = surface.subsurfaceWeight > 0.0
+            ? surface.baseColor : float3(0.8);
+    material.subsurfaceScatterAnisotropy = 0.0;
     // The source adapter defines textured emission as glowing in the decoded base colour. That policy is
     // applied here, before a registered surface may replace emission_color independently.
     //
     material.emissionColor = surface.baseColor;
     material.emissionLuminance = max(surface.emissionLuminance, 0.0);
-    material.geometryOpacity = 1.0; // any-hit already resolved coverage before this stage ran
-    material.geometryThinWalled = !dielectric;
     return material;
 }
 
@@ -303,6 +302,8 @@ void writeHitPayload(inout Payload payload, MaterialInput material, uint surface
     packNormal(payload, normalize(material.geometryNormal));
     payload.previousNormal = packNormalOct(normalize(material.previousGeometryNormal));
     if ((materialFlags & PAYLOAD_TRANSMISSIVE) != 0u) {
+        payload.diffuseTransmissionAlbedo = half3(0.0h, 0.0h, 0.0h);
+        payload.thinTransmissionColor = half3(0.0h, 0.0h, 0.0h);
         packAlbedo(payload, material.baseColor);
         payload.f0 = half3(openPbrSpecularF0(material));
         float3 emissionRadiance = max(material.emissionColor, float3(0.0))
@@ -314,11 +315,13 @@ void writeHitPayload(inout Payload payload, MaterialInput material, uint surface
     }
     SurfaceClosure closure = surfaceClosure(material);
     packAlbedo(payload, closure.diffuseAlbedo);
+    payload.diffuseTransmissionAlbedo = half3(closure.diffuseTransmissionAlbedo);
+    payload.thinTransmissionColor = half3(closure.thinTransmissionColor);
     payload.f0 = half3(closure.specularF0);
     closure.emissionRadiance = max(material.emissionColor, float3(0.0))
             * max(emissionLuminance, 0.0);
     payloadSetPacked(payload, materialFlags, sqrt(closure.alphaRoughness), closure.emissionRadiance,
-            material.specularIor, closure.transmission);
+            closure.thinTransmissionWeight, 0.0);
 }
 
 [shader("closesthit")]

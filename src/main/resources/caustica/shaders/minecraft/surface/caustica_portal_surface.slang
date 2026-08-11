@@ -31,12 +31,9 @@ public struct PortalSurface : ISurfaceModel {
         material.baseMetalness = 0.0;
         material.specularRoughness = 0.42;
         material.specularIor = 1.35;
-        material.specularColor = float3(1.0);
         material.transmissionWeight = 0.0;
         material.emissionColor = lerp(deep, violet, flow) + starlight * stars;
         material.emissionLuminance = 24.0 + 160.0 * stars;
-        material.geometryOpacity = 1.0;
-        material.geometryThinWalled = true;
     }
 
     public float3 evaluateResponse(float3 radiance, SurfaceClosure surface) {

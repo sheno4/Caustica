@@ -13,6 +13,7 @@ import medium;
 import trace;
 import caustica_surface;
 import caustica_types;
+import surface_bsdf;
 
 public struct Reservoir {
     public float3 pos;  // light sample point (rebased world space)
@@ -44,40 +45,34 @@ public Reservoir resEmpty() {
     return r;
 }
 
+float3 evaluateClosureResponse(SurfaceClosure surface, float3 outgoingDirection,
+        float3 incomingDirection, out float phat) {
+    BsdfQuery query;
+    query.surface = surface;
+    query.outgoingDirection = outgoingDirection;
+    query.incomingDirection = incomingDirection;
+    BsdfEvaluation evaluation = evaluateBsdf(query);
+    float3 response = evaluation.value
+            * abs(dot(surface.shadingNormal, incomingDirection));
+    phat = luminance(response);
+    return response;
+}
+
 // Delta-light contribution for point and constant-intensity spot emitters. Intensity is candela and
 // distance is in world metres, so intensity/dist² is incident illuminance at the receiver.
 public float3 evalDeltaLightContrib(float3 lightPos, float3 lightDirection, float3 intensity,
                             float range, float outerCos, float metersPerWorldUnit, uint lightType,
-                            float3 hitPos, float3 n, float3 v, float3 diffAlb, float3 F0,
-                            float rough, float transmission, out float phat) {
+                            float3 hitPos, float3 v, SurfaceClosure surface, out float phat) {
     phat = 0.0;
     float3 toL = lightPos - hitPos;
     float dist2 = dot(toL, toL);
     if (dist2 < 1.0e-6 || dist2 > range * range) return float3(0.0);
     float3 wi = toL * rsqrt(dist2);
     if (lightType == 2u && dot(lightDirection, -wi) < outerCos) return float3(0.0);
-    float ndl = dot(n, wi);
-    float3 response = float3(0.0);
-    if (ndl > 0.0) {
-        float3 h = normalize(wi + v);
-        float ndh = max(0.0, dot(n, h));
-        float ndv = max(1.0e-4, dot(n, v));
-        float vdh = max(0.0, dot(v, h));
-        float D = ggxD(ndh, rough);
-        float Gs = ggxG1(ndv, rough) * ggxG1(ndl, rough);
-        float3 Fs = fresnelSchlick(vdh, F0);
-        float3 layerTransmission = glossyLayerTransmission(F0, ndv, ndl);
-        float3 brdf = diffAlb * layerTransmission * (1.0 - transmission) * INV_PI
-                + (D * Gs) * Fs / (4.0 * ndv * ndl);
-        float dist2Meters = dist2 * metersPerWorldUnit * metersPerWorldUnit;
-        response = brdf * intensity * (ndl / dist2Meters);
-    } else if (transmission > 0.0) {
-        float backNdl = -ndl;
-        float3 layerTransmission = glossyLayerTransmission(F0, max(0.0, dot(n, v)), backNdl);
-        float dist2Meters = dist2 * metersPerWorldUnit * metersPerWorldUnit;
-        response = diffAlb * layerTransmission * transmission * INV_PI * intensity
-                * (backNdl / dist2Meters);
-    }
+    float responsePhat;
+    float3 response = evaluateClosureResponse(surface, v, wi, responsePhat);
+    float dist2Meters = dist2 * metersPerWorldUnit * metersPerWorldUnit;
+    response *= intensity / dist2Meters;
     phat = luminance(response);
     return response;
 }
@@ -86,30 +81,11 @@ public float3 evalDeltaLightContrib(float3 lightPos, float3 lightDirection, floa
 // uniform solid-angle proposal cancels its radiance into E*2/(1+cos(alpha)); the factor tends to one for
 // an exact directional source. This keeps the continuous angular PDF out of the RIS population PDF.
 public float3 evalDistantLightContrib(float3 lightDirection, float3 illuminance, float outerCos,
-                              float3 n, float3 v, float3 diffAlb, float3 F0, float rough,
-                              float transmission, out float phat) {
-    phat = 0.0;
-    float ndl = dot(n, lightDirection);
-    float3 response = float3(0.0);
+                              float3 v, SurfaceClosure surface, out float phat) {
     float angularWeight = 2.0 / (1.0 + outerCos);
-    if (ndl > 0.0) {
-        float3 h = normalize(lightDirection + v);
-        float ndh = max(0.0, dot(n, h));
-        float ndv = max(1.0e-4, dot(n, v));
-        float vdh = max(0.0, dot(v, h));
-        float D = ggxD(ndh, rough);
-        float Gs = ggxG1(ndv, rough) * ggxG1(ndl, rough);
-        float3 Fs = fresnelSchlick(vdh, F0);
-        float3 layerTransmission = glossyLayerTransmission(F0, ndv, ndl);
-        float3 brdf = diffAlb * layerTransmission * (1.0 - transmission) * INV_PI
-                + (D * Gs) * Fs / (4.0 * ndv * ndl);
-        response = brdf * illuminance * (ndl * angularWeight);
-    } else if (transmission > 0.0) {
-        float backNdl = -ndl;
-        float3 layerTransmission = glossyLayerTransmission(F0, max(0.0, dot(n, v)), backNdl);
-        response = diffAlb * layerTransmission * transmission * INV_PI * illuminance
-                * (backNdl * angularWeight);
-    }
+    float responsePhat;
+    float3 response = evaluateClosureResponse(surface, v, lightDirection, responsePhat)
+            * illuminance * angularWeight;
     phat = luminance(response);
     return response;
 }
@@ -126,18 +102,15 @@ public float3 sampleUniformCone(float3 axis, float outerCos, inout uint seed) {
             + bitangent * (sinTheta * sin(phi)));
 }
 
-// Unshadowed contribution of a fixed light sample point at surface (hitPos,n,v); out p-hat = its
+// Unshadowed contribution of a fixed light sample point at surface; out p-hat = its
 // luminance (the resampling target). Evaluated from the UNBIASED hitPos — SURF_BIAS is applied only to
 // the shadow-ray origin in shadeReservoir, on whichever side the survivor sample lands.
 //
-// The engine's reference target function, matching the built-in BSDF's two hemispheres: a candidate in
-// front of the surface gets the Lambert(+GGX) reflection split, one behind it gets the thin wall's
-// diffuse transmission. `transmission` is what divides the diffuse response between them, so a billboard
-// at one half answers a light from either side identically and an opaque surface at zero answers a light
-// behind it with nothing.
-public float3 evalSampleContrib(float3 sp, float3 lnrm, float3 le, float area, float3 hitPos, float3 n,
-                         float3 v, float3 rd, float3 diffAlb, float3 F0, float rough,
-                         float transmission, out float phat) {
+// The target calls the same closure evaluator as indirect continuation. This is load-bearing for rough
+// thin-sheet transmission: a duplicated Lambert/GGX approximation would give RIS a different p-hat from
+// the BSDF that ultimately transports the selected contribution.
+public float3 evalSampleContrib(float3 sp, float3 lnrm, float3 le, float area, float3 hitPos,
+                         float3 v, SurfaceClosure surface, out float phat) {
     phat = 0.0;
     float3 toL = sp - hitPos;
     float dist2 = dot(toL, toL);
@@ -150,27 +123,9 @@ public float3 evalSampleContrib(float3 sp, float3 lnrm, float3 le, float area, f
     if (cosL <= 0.0) {
         return float3(0.0, 0.0, 0.0); // receiver behind the emitter face
     }
-    float ndl = dot(n, wi);
-    float3 contrib = float3(0.0, 0.0, 0.0);
-    if (ndl > 0.0) {
-        float G = ndl * cosL / dist2; // area-light geometry term (x area)
-        float3 h = normalize(wi + v);
-        float ndh = max(0.0, dot(n, h));
-        float ndv = max(1.0e-4, dot(n, v));
-        float vdh = max(0.0, dot(v, h));
-        float D = ggxD(ndh, rough);
-        float Gs = ggxG1(ndv, rough) * ggxG1(ndl, rough);
-        float3 Fs = fresnelSchlick(vdh, F0);
-        float3 layerTransmission = glossyLayerTransmission(F0, ndv, ndl);
-        float3 brdf = diffAlb * layerTransmission * (1.0 - transmission) * INV_PI
-                + (D * Gs) * Fs / (4.0 * ndv * ndl);
-        contrib = brdf * le * (G * area);
-    } else if (transmission > 0.0) {
-        float backNdl = -ndl;
-        float G = backNdl * cosL / dist2;
-        float3 layerTransmission = glossyLayerTransmission(F0, max(0.0, dot(n, v)), backNdl);
-        contrib = diffAlb * layerTransmission * transmission * INV_PI * le * (G * area);
-    }
+    float responsePhat;
+    float3 contrib = evaluateClosureResponse(surface, v, wi, responsePhat)
+            * le * (cosL * area / dist2);
     phat = luminance(contrib);
     return contrib;
 }
@@ -318,8 +273,8 @@ public void selectLightGridLight(LightGridCell cell, bool useLocal, inout uint p
 
 // Initial RIS over M power-weighted candidates -> one resampled sample, no shadow ray yet. The chosen
 // sample's W = wSum / (M * p-hat); M counts every candidate, including zero-weight ones.
-public Reservoir risInitial(float3 hitPos, float3 n, float3 v, float3 rd, float3 diffAlb, float3 F0,
-                     float rough, float transmission, inout uint seed, inout uint proposalSeed) {
+public Reservoir risInitial(float3 hitPos, float3 v, SurfaceClosure surface,
+                     inout uint seed, inout uint proposalSeed) {
     Reservoir r = resEmpty();
     bool hasTerrainLights = worldPush.risCandidates > 0u
             && pc.lightBufAddr != 0 && worldPush.lightCount > 0u;
@@ -367,14 +322,14 @@ public Reservoir risInitial(float3 hitPos, float3 n, float3 v, float3 rd, float3
             float phat;
             if (light.type == 0u) {
                 evalSampleContrib(samplePos, sampleNormal, light.intensity, sampleArea,
-                        hitPos, n, v, rd, diffAlb, F0, rough, transmission, phat);
+                        hitPos, v, surface, phat);
             } else if (light.type == 3u) {
                 evalDistantLightContrib(sampleNormal, light.intensity, light.shapeScalar,
-                        n, v, diffAlb, F0, rough, transmission, phat);
+                        v, surface, phat);
             } else {
                 evalDeltaLightContrib(samplePos, light.axis0, light.intensity, light.range,
-                        light.shapeScalar, light.metersPerWorldUnit, light.type, hitPos, n, v, diffAlb, F0,
-                        rough, transmission, phat);
+                        light.shapeScalar, light.metersPerWorldUnit, light.type,
+                        hitPos, v, surface, phat);
             }
             if (phat <= 0.0) continue;
             // This is the discrete population PDF. Rectangle area and the normalized distant angular
@@ -413,8 +368,8 @@ public Reservoir risInitial(float3 hitPos, float3 n, float3 v, float3 rd, float3
         float3 lightNormal = lightGeometricNormal(lg);
         float area = lightArea(lg);
         float phat;
-        evalSampleContrib(sp, lightNormal, le, area, hitPos, n, v, rd,
-                diffAlb, F0, rough, transmission, phat);
+        evalSampleContrib(sp, lightNormal, le, area, hitPos, v,
+                surface, phat);
         if (phat <= 0.0) {
             continue;
         }
@@ -442,23 +397,22 @@ public Reservoir risInitial(float3 hitPos, float3 n, float3 v, float3 rd, float3
 // the survivor, reflection or transmission — the origin is biased toward the sample's side of the
 // surface.
 public float3 shadeReservoir<TSurfaces : ISurfaceDispatch>(TSurfaces surfaces, Reservoir s,
-        float3 hitPos, float3 n, float3 v, float3 rd, float3 diffAlb,
-        float3 F0, float rough, float transmission, Medium currentMedium) {
+        float3 hitPos, float3 n, float3 v, SurfaceClosure surface,
+        Medium currentMedium) {
     if (s.W <= 0.0 || s.phat <= 0.0) {
         return float3(0.0, 0.0, 0.0);
     }
     float phat;
     float3 contrib;
     if (s.lightType == 0u) {
-        contrib = evalSampleContrib(s.pos, s.lnrm, s.le, s.area, hitPos, n, v, rd,
-                diffAlb, F0, rough, transmission, phat);
+        contrib = evalSampleContrib(s.pos, s.lnrm, s.le, s.area, hitPos, v,
+                surface, phat);
     } else if (s.lightType == 3u) {
         contrib = evalDistantLightContrib(s.lnrm, s.le, s.shapeScalar,
-                n, v, diffAlb, F0, rough, transmission, phat);
+                v, surface, phat);
     } else {
         contrib = evalDeltaLightContrib(s.pos, s.lnrm, s.le, s.area, s.shapeScalar,
-                s.metersPerWorldUnit, s.lightType, hitPos, n, v, diffAlb, F0, rough,
-                transmission, phat);
+                s.metersPerWorldUnit, s.lightType, hitPos, v, surface, phat);
     }
     if (phat <= 0.0) {
         return float3(0.0, 0.0, 0.0);

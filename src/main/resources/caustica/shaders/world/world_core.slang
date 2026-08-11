@@ -62,6 +62,11 @@ public float3 payloadEmissionRadiance() {
 public bool payloadEmissive() { return any(payloadEmissionRadiance() > 0.0); }
 public float payloadIor() { return unpackHalf2(payload.iorTransmission).x; }
 public float payloadTransmission() { return unpackHalf2(payload.iorTransmission).y; }
+public float3 payloadDiffuseTransmissionAlbedo() {
+    return float3(payload.diffuseTransmissionAlbedo);
+}
+public float3 payloadThinTransmissionColor() { return float3(payload.thinTransmissionColor); }
+public float payloadThinTransmissionWeight() { return unpackHalf2(payload.iorTransmission).x; }
 
 public static const float PI = 3.14159265359;
 public static const float INV_PI = 0.31830988618;
