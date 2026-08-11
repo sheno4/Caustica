@@ -168,13 +168,15 @@ public final class RtEntityCollector implements SubmitNodeCollector {
                 capture.setUvRemap(sprite.getU0(), sprite.getV0(), sprite.getU1(), sprite.getV1());
                 if (TextureAtlas.LOCATION_BLOCKS.equals(sprite.atlasLocation())) {
                     // A block entity drawing from the block atlas (rare) → reuse the terrain _s/_n atlases.
-                    capture.currentTexSlot = RtEntityTextures.INSTANCE.slotForAtlas(sprite.atlasLocation());
+                    capture.currentBaseColorTextureIndex = RtEntityTextures.INSTANCE.slotForAtlas(
+                            sprite.atlasLocation());
                     setSpriteMaterial(sprite, stochasticAlpha);
                 } else {
-                    // Dedicated block-entity atlas: albedo remains atlas-bound, while the immutable
+                    // Dedicated block-entity atlas: base color remains atlas-bound, while the immutable
                     // canonical texels were pack-compiled. Appending the first-seen sprite header only
                     // records this atlas's UV rectangle; it never mutates an existing material ID.
-                    capture.currentTexSlot = RtEntityTextures.INSTANCE.slotForAtlas(sprite.atlasLocation());
+                    capture.currentBaseColorTextureIndex = RtEntityTextures.INSTANCE.slotForAtlas(
+                            sprite.atlasLocation());
                     capture.currentMaterialId = RtEntityTextures.entityPbr()
                             ? RtMaterialRegistry.INSTANCE.resolveAtlasReference(
                                     MinecraftMaterialLookup.atlasMaterial(sprite), stochasticAlpha)
@@ -183,7 +185,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
             } else {
                 // Mobs use full per-type textures. Their authored _s/_n maps were decoded into canonical
                 // pages during resource-pack load, so capture stores only the stable material ID.
-                capture.currentTexSlot = RtEntityTextures.INSTANCE.slotFor(renderType);
+                capture.currentBaseColorTextureIndex = RtEntityTextures.INSTANCE.slotFor(renderType);
                 capture.currentMaterialId = RtEntityTextures.INSTANCE.materialIdFor(renderType, stochasticAlpha);
                 capture.clearUvRemap();
             }
@@ -309,7 +311,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
     /** Capture one baked quad, resolving its atlas (block vs item) to a bindless slot stamped per-prim. */
     private void addQuad(Matrix4f pose, BakedQuad q, int[] tintLayers) {
         TextureAtlasSprite sprite = q.materialInfo().sprite();
-        capture.currentTexSlot = sprite != null
+        capture.currentBaseColorTextureIndex = sprite != null
                 ? RtEntityTextures.INSTANCE.slotForAtlas(sprite.atlasLocation())
                 : 0;
         // Baked item quads retain the block model's material layer. Mirror terrain's classification so
@@ -486,7 +488,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         public void acceptRenderable(TextRenderable renderable) {
             RenderType renderType = renderable.renderType(displayMode);
             boolean stochasticAlpha = isTranslucent(renderType);
-            capture.currentTexSlot = RtEntityTextures.INSTANCE.slotFor(renderType);
+            capture.currentBaseColorTextureIndex = RtEntityTextures.INSTANCE.slotFor(renderType);
             capture.currentMaterialId = RtMaterialRegistry.INSTANCE.runtimeFallbackId(stochasticAlpha);
             if (!stochasticAlpha && hasCutoutDefine(renderType)) {
                 capture.currentMaterialId = RtMaterialRegistry.INSTANCE.withCutoutCoverage(capture.currentMaterialId);
@@ -580,7 +582,7 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         }
         capture.clearUvRemap();
         capture.currentOrder = 0;
-        capture.currentTexSlot = RtEntityTextures.INSTANCE.whiteSlot();
+        capture.currentBaseColorTextureIndex = RtEntityTextures.INSTANCE.whiteSlot();
         capture.currentMaterialId = RtMaterialRegistry.INSTANCE.runtimeFallbackId(false);
         capture.currentSbtClass = RtAccel.CLASS_OPAQUE; // fully opaque white texture, no alpha test
         Matrix4f pose = poseStack.last().pose();
@@ -790,7 +792,8 @@ public final class RtEntityCollector implements SubmitNodeCollector {
                              float offsetX, float offsetY, float offsetZ) {
         TextureAtlasSprite sprite = Minecraft.getInstance().getAtlasManager()
                 .getAtlasOrThrow(quad.atlas().getId()).spriteFinder().find(quad);
-        capture.currentTexSlot = RtEntityTextures.INSTANCE.slotForAtlas(quad.atlas().getTextureLocation());
+        capture.currentBaseColorTextureIndex = RtEntityTextures.INSTANCE.slotForAtlas(
+                quad.atlas().getTextureLocation());
         // Chunk-layer translucency denotes a block-derived dielectric; a blended item render type denotes
         // ordinary stochastic alpha when the quad did not come from such a layer.
         boolean transmissive = quad.chunkLayer() == ChunkSectionLayer.TRANSLUCENT;
@@ -880,9 +883,9 @@ public final class RtEntityCollector implements SubmitNodeCollector {
         pendingOrder = 0;
         capture.clearUvRemap(); // custom callbacks already emit final texture/atlas UV coordinates
         boolean stochasticAlpha = isTranslucent(renderType);
-        // Lines are untextured: bind the white slot so albedo is exactly the vertex colour (slot 0 is
+        // Lines are untextured: bind the white texture so base color is exactly the vertex colour (index 0 is
         // the block atlas, whose (0,0) texel would tint the ribbon arbitrarily).
-        capture.currentTexSlot = lines ? RtEntityTextures.INSTANCE.whiteSlot()
+        capture.currentBaseColorTextureIndex = lines ? RtEntityTextures.INSTANCE.whiteSlot()
                 : RtEntityTextures.INSTANCE.slotFor(renderType);
         capture.currentMaterialId = lines
                 ? RtMaterialRegistry.INSTANCE.runtimeFallbackId(false)

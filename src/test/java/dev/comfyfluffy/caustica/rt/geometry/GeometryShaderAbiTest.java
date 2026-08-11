@@ -15,7 +15,8 @@ final class GeometryShaderAbiTest {
             "primAddr", "idxAddr", "uvAddr", "dispAddr", "rigidDisp", "triBase",
             "TERRAIN_PRIM_IN_LIGHT_BUFFER", "terrainBinding", "terrainMat", "entityO2w",
             "entityLod", "entityTexel", "blockSlot", "blockLod", "blockTexel",
-            "entityAlbedoTex");
+            "entityAlbedoTex", "blockAlbedoAtlas", "albedoTextures", "albedoSlot",
+            "bindingAlbedoSlot", "albedoUv");
 
     @Test
     void geometryShadersUseExplicitProducerNeutralAddressing() throws IOException {
@@ -38,6 +39,10 @@ final class GeometryShaderAbiTest {
         assertTrue(content.contains("public uint64_t primitiveAddress"));
         assertTrue(content.contains("public uint64_t textureCoordinateAddress"));
         assertTrue(content.contains("public uint triangleBase[3]"));
+        assertTrue(content.contains("[[vk::binding(0, 1)]] public Sampler2D baseColorTextures[]"));
+        assertTrue(content.contains("bindingBaseColorTextureIndex"));
+        assertTrue(content.contains("public float4 baseColorUv"));
+        assertFalse(content.contains("[[vk::binding(2, 0)]]"), "retired set-0 binding 2 must remain a hole");
     }
 
     @Test

@@ -12,8 +12,9 @@ import com.mojang.blaze3d.vertex.VertexConsumer;
  * <p>Positions arrive camera-relative ({@code SingleQuadParticle.extract} subtracts the camera position);
  * a per-frame {@link #setOffset offset} (camPos − rebaseOrigin) shifts them into the renderer's rebased
  * space so the TLAS instance transform is identity, exactly like captured entities. The per-particle colour
- * rides through as raw albedo; raygen applies RT direct/indirect lighting instead of baking vanilla's
- * lightmap here. The texture slot comes through {@link RtEntityCapture#currentTexSlot} (set per layer by
+ * rides through as raw base color; raygen applies RT direct/indirect lighting instead of baking vanilla's
+ * lightmap here. The base-color texture comes through
+ * {@link RtEntityCapture#currentBaseColorTextureIndex} (set per layer by
  * the caller).
  */
 public final class RtParticleCapture implements VertexConsumer {

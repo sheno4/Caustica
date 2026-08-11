@@ -84,11 +84,11 @@ final class EndPortalMaterialIntegrationTest {
 
         MaterialBindingData binding = createBinding(23, portalMaterial,
                 new float[]{1.0f, 1.0f, 1.0f, 0.0f},
-                RtMaterialRegistry.SHARED_ATLAS_ALBEDO_SLOT, 0.1f);
+                RtMaterialRegistry.SHARED_ATLAS_BASE_COLOR_TEXTURE_INDEX, 0.1f);
         assertEquals(23, binding.surface());
         assertEquals(portalSurfaceIndex, RtMaterialRegistry.bindingSurfaceImpl(binding.packed0()));
-        assertEquals(RtMaterialRegistry.SHARED_ATLAS_ALBEDO_SLOT,
-                RtMaterialRegistry.bindingAlbedoSlot(binding.packed0()));
+        assertEquals(RtMaterialRegistry.SHARED_ATLAS_BASE_COLOR_TEXTURE_INDEX,
+                RtMaterialRegistry.bindingBaseColorTextureIndex(binding.packed0()));
         assertEquals(0, RtMaterialRegistry.bindingCoverage(binding.packed0()));
         assertEquals(0, RtMaterialRegistry.bindingFlags(binding.packed0()));
     }
@@ -105,13 +105,13 @@ final class EndPortalMaterialIntegrationTest {
     }
 
     private static MaterialBindingData createBinding(int surfaceId, RtMaterialDesc material,
-                                                      float[] average, int albedoSlot,
+                                                      float[] average, int baseColorTextureIndex,
                                                       float coverageCutoff) throws Exception {
         Method method = RtMaterialRegistry.class.getDeclaredMethod("binding", int.class,
                 RtMaterialDesc.class, float[].class, int.class, float.class);
         assertTrue(method.trySetAccessible(), "binding factory must be accessible to the integration test");
         return (MaterialBindingData) method.invoke(null, surfaceId, material, average,
-                albedoSlot, coverageCutoff);
+                baseColorTextureIndex, coverageCutoff);
     }
 
     private static Identifier materialTextureLocation(ResourceId material) throws Exception {

@@ -34,7 +34,7 @@ public struct WorldPushConstants {
 };
 
 // Block-breaking overlay entry: xyz = breaking block position (rebased, same space as gl_WorldRay*),
-// w = bindless albedoTextures slot of the destroy-stage texture.
+// w = bindless baseColorTextures index of the destroy-stage texture.
 public struct BreakEntry {
     public int4 posSlot;
 };
@@ -222,13 +222,14 @@ public struct Prim {
 // how much light passes where it is present. The two are independent (a stained-glass-textured surface has
 // both) and compose sequentially: test coverage, then apply interface behaviour.
 //
-// A binding is the cheap object. Pairing one SurfaceMaterial with a different bindless albedo slot or a
+// A binding is the cheap object. Pairing one SurfaceMaterial with a different base-color texture index or a
 // different coverage mode costs sixteen bytes rather than a cloned material, so source render types and
 // stochastic submissions use bindings instead of record variants.
 public struct MaterialBinding {
-    // albedoSlot:16 | coverageMode:2 | flags:6 | surfaceImpl:8. Slot 0 is the host's default albedo atlas
+    // baseColorTextureIndex:16 | coverageMode:2 | flags:6 | surfaceImpl:8. Index 0 is the host's default
+    // base-color texture
     // and implementation 0 is the built-in surface, so a zero-initialised binding resolves the reference
-    // textured surface. Other source render types name their own bindless slot.
+    // textured surface. Other source render types name their own bindless texture index.
     public uint packed0;
     public uint surface;    // index into the SurfaceMaterial table; closest-hit only
     // 8:8:8 ACEScg transmittance through this surface, used when coverage is OPAQUE and no texel is
@@ -247,11 +248,11 @@ public static const uint COVERAGE_STOCHASTIC = 2u;
 // Transmittance: the surface is there and passes light through, so a shadow ray filters and continues
 // rather than being blocked.
 public static const uint BINDING_TRANSMISSIVE = 1u;
-// The binding owns a uniform linear base colour in SurfaceMaterial.albedoUv.xyz and never samples an
-// albedo texture. Textureless definitions use opaque coverage, so any-hit needs no corresponding path.
+// The binding owns a uniform linear base colour in SurfaceMaterial.baseColorUv.xyz and never samples a
+// base-color texture. Textureless definitions use opaque coverage, so any-hit needs no corresponding path.
 public static const uint BINDING_TEXTURELESS = 4u;
 
-public uint bindingAlbedoSlot(MaterialBinding binding) { return binding.packed0 & 0xFFFFu; }
+public uint bindingBaseColorTextureIndex(MaterialBinding binding) { return binding.packed0 & 0xFFFFu; }
 public uint bindingCoverage(MaterialBinding binding) { return (binding.packed0 >> 16) & 3u; }
 public uint bindingFlags(MaterialBinding binding) { return (binding.packed0 >> 18) & 63u; }
 /** Which registered surface implementation this material's description is routed through. */
@@ -266,7 +267,7 @@ public float3 bindingShadowTint(MaterialBinding binding) {
 // Closest-hit-only surface parameters, shared by every binding that names them. The uniform half of the
 // authored OpenPBR Surface subset: everything that varies per texel lives in the canonical pages `page`
 // names instead. Source-format data has already been decoded, so nothing here is LabPBR-shaped.
-// materialUv maps sprite-local UV into the packed page, while albedoUv maps the source atlas rectangle
+// materialUv maps sprite-local UV into the packed page, while baseColorUv maps the source atlas rectangle
 // back to sprite-local UV.
 public struct SurfaceMaterial {
     public uint features;     // MATERIAL_FEATURE_* | emission luminance
@@ -275,7 +276,7 @@ public struct SurfaceMaterial {
     // surface, which is why it travels with the page reference rather than with the parameters below.
     public uint page;
     public float4 materialUv; // packed-page uvMin.xy + uvExtent.xy
-    public float4 albedoUv;   // source atlas uvMin.xy + inverse uvExtent.xy
+    public float4 baseColorUv; // source atlas uvMin.xy + inverse uvExtent.xy
     // OpenPBR names, OpenPBR meanings. specularRoughness is PERCEPTUAL r: the GGX alpha every lobe wants
     // is its square, computed where the lobe is evaluated. Nothing in the pipeline stores alpha.
     public float specularRoughness;

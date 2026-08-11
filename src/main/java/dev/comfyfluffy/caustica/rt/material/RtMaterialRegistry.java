@@ -36,8 +36,9 @@ import java.util.Set;
  *
  * <p>The compiled record is two tables. {@link SurfaceMaterialData} carries the closest-hit surface
  * parameters; {@link MaterialBindingData} carries the sixteen bytes traversal reads — coverage mode,
- * bindless albedo slot, and the uniform shadow transmittance — and names a surface. Geometry stores
- * binding IDs, so pairing one surface with another albedo slot or coverage mode is a sixteen-byte append
+ * bindless base-color texture index, and the uniform shadow transmittance — and names a surface. Geometry
+ * stores binding IDs, so pairing one surface with another base-color texture or coverage mode is a
+ * sixteen-byte append
  * rather than a cloned material, and bindings are interned on content: the same triple is one ID however
  * it was reached.
  *
@@ -57,8 +58,8 @@ public final class RtMaterialRegistry {
     public static final int FEATURE_NORMAL = 2;
     /** A per-texel emission mask was compiled into the page; it says nothing about where it came from. */
     public static final int FEATURE_EMISSION_MASK = 4;
-    /** Bindless albedo slot reserved for the host's shared atlas. */
-    public static final int SHARED_ATLAS_ALBEDO_SLOT = 0;
+    /** Bindless base-color texture index reserved for the host's shared atlas. */
+    public static final int SHARED_ATLAS_BASE_COLOR_TEXTURE_INDEX = 0;
     /**
      * The surface implementation every material compiles with unless an override names another.
      * {@code caustica:builtin} registers its own first, so index 0 is always the reference surface.
@@ -72,11 +73,11 @@ public final class RtMaterialRegistry {
     // Transmittance — how much light passes where the surface is present. Mirrors BINDING_* in Slang.
     private static final int BINDING_TRANSMISSIVE = 1;
     static final int BINDING_TEXTURELESS = 4;
-    // MaterialBinding.packed0 = albedoSlot:16 | coverageMode:2 | flags:6 | surfaceImpl:8;
-    // packed1 = coverageCutoff:8. Mirrored by the bindingAlbedoSlot/bindingCoverage/bindingFlags/
+    // MaterialBinding.packed0 = baseColorTextureIndex:16 | coverageMode:2 | flags:6 | surfaceImpl:8;
+    // packed1 = coverageCutoff:8. Mirrored by the bindingBaseColorTextureIndex/bindingCoverage/bindingFlags/
     // bindingSurfaceImpl/bindingCutoff accessors in world_common.slang — the any-hit reads these fields
     // out of one aligned load, so the shifts are ABI.
-    private static final int ALBEDO_SLOT_MASK = 0xFFFF;
+    private static final int BASE_COLOR_TEXTURE_INDEX_MASK = 0xFFFF;
     private static final int COVERAGE_SHIFT = 16;
     private static final int COVERAGE_MASK = 3;
     private static final int FLAGS_SHIFT = 18;
@@ -315,7 +316,7 @@ public final class RtMaterialRegistry {
         // stitched UV rectangle supplied by the host at capture time.
         int surfaceCount = tables.surfaces.size();
         int nextSurfaceCapacity = Math.addExact(surfaceCount, Math.max(64, atlasAssets.size()));
-        // Bindings are appended per surface, albedo slot, and coverage mode actually submitted.
+        // Bindings are appended per surface, base-color texture index, and coverage mode actually submitted.
         int bindingCount = tables.bindings.size();
         int nextBindingCapacity = Math.addExact(bindingCount, Math.max(1024,
                 Math.addExact(Math.addExact(atlasAssets.size(), Math.multiplyExact(standaloneAssets.size(), 3)),
@@ -480,12 +481,12 @@ public final class RtMaterialRegistry {
     /**
      * The binding resolving {@code bindingId}'s surface with stochastic coverage. A blended submission
      * decides presence with white noise whatever cutoff the material compiled, so this overrides the
-     * coverage axis and leaves everything else — surface, albedo slot, transmittance — alone.
+     * coverage axis and leaves everything else — surface, base-color texture, transmittance — alone.
      */
     public synchronized int withStochasticCoverage(int bindingId) {
         MaterialBindingData base = bindingRecords.get(bindingId);
         return intern(new MaterialBindingData(
-                packBinding0(bindingAlbedoSlot(base.packed0()), COVERAGE_STOCHASTIC,
+                packBinding0(bindingBaseColorTextureIndex(base.packed0()), COVERAGE_STOCHASTIC,
                         bindingFlags(base.packed0()), bindingSurfaceImpl(base.packed0())),
                 base.surface(), base.shadowTint(), base.packed1()));
     }
@@ -500,7 +501,7 @@ public final class RtMaterialRegistry {
     public synchronized int withCutoutCoverage(int bindingId) {
         MaterialBindingData base = bindingRecords.get(bindingId);
         return intern(new MaterialBindingData(
-                packBinding0(bindingAlbedoSlot(base.packed0()), COVERAGE_CUTOUT,
+                packBinding0(bindingBaseColorTextureIndex(base.packed0()), COVERAGE_CUTOUT,
                         bindingFlags(base.packed0()), bindingSurfaceImpl(base.packed0())),
                 base.surface(), base.shadowTint(), base.packed1()));
     }
@@ -523,12 +524,12 @@ public final class RtMaterialRegistry {
     }
 
     /**
-     * The binding pairing {@code bindingId}'s surface with bindless albedo slot {@code albedoSlot}.
+     * The binding pairing {@code bindingId}'s surface with a bindless base-color texture.
      */
-    public synchronized int withAlbedoSlot(int bindingId, int albedoSlot) {
+    public synchronized int withBaseColorTextureIndex(int bindingId, int baseColorTextureIndex) {
         MaterialBindingData base = bindingRecords.get(bindingId);
         return intern(new MaterialBindingData(
-                packBinding0(albedoSlot, bindingCoverage(base.packed0()), bindingFlags(base.packed0()),
+                packBinding0(baseColorTextureIndex, bindingCoverage(base.packed0()), bindingFlags(base.packed0()),
                         bindingSurfaceImpl(base.packed0())),
                 base.surface(), base.shadowTint(), base.packed1()));
     }
@@ -560,14 +561,14 @@ public final class RtMaterialRegistry {
                 .order(ByteOrder.nativeOrder()));
         surfaceTable.flush(offset, SurfaceMaterialData.BYTE_SIZE);
         int id = intern(binding(surfaceId, template.desc(), transparentWhiteAverage(),
-                SHARED_ATLAS_ALBEDO_SLOT, RUNTIME_TEXTURE_COVERAGE_CUTOFF));
+                SHARED_ATLAS_BASE_COLOR_TEXTURE_INDEX, RUNTIME_TEXTURE_COVERAGE_CUTOFF));
         atlasReferenceIds.put(reference, id);
         return stochasticCoverage ? withStochasticCoverage(id) : id;
     }
 
     /**
      * The ID of a binding with this exact content, appending it to the uploaded table on first use.
-     * Content keying is what makes bindings cheap: a surface reached through a different albedo slot and
+     * Content keying is what makes bindings cheap: a surface reached through a different base-color texture and
      * then a different coverage mode lands on the same ID as the reverse order, so the variant product
      * never multiplies.
      */
@@ -734,7 +735,7 @@ public final class RtMaterialRegistry {
             int surfaceId = surfaces.size();
             surfaces.add(surface(desc, entry, entry.albedoU(), entry.albedoV(),
                     entry.albedoInvDu(), entry.albedoInvDv()));
-            int id = append(binding(surfaceId, desc, average, SHARED_ATLAS_ALBEDO_SLOT, coverageCutoff),
+            int id = append(binding(surfaceId, desc, average, SHARED_ATLAS_BASE_COLOR_TEXTURE_INDEX, coverageCutoff),
                     desc, gridFor(desc, entry, uniformGrid));
             if (cutoutSibling) {
                 cutoutVariants.set(id, addCutoutSibling(id));
@@ -747,10 +748,10 @@ public final class RtMaterialRegistry {
             surfaces.add(surfaceDefinition(desc, definition));
             float[] average = {definition.baseColorR(), definition.baseColorG(), definition.baseColorB(), 1.0f};
             MaterialBindingData base = binding(surfaceId, desc, average,
-                    SHARED_ATLAS_ALBEDO_SLOT, RUNTIME_TEXTURE_COVERAGE_CUTOFF);
+                    SHARED_ATLAS_BASE_COLOR_TEXTURE_INDEX, RUNTIME_TEXTURE_COVERAGE_CUTOFF);
             int flags = bindingFlags(base.packed0()) | BINDING_TEXTURELESS;
             MaterialBindingData textureless = new MaterialBindingData(
-                    packBinding0(SHARED_ATLAS_ALBEDO_SLOT, COVERAGE_OPAQUE, flags,
+                    packBinding0(SHARED_ATLAS_BASE_COLOR_TEXTURE_INDEX, COVERAGE_OPAQUE, flags,
                             bindingSurfaceImpl(base.packed0())),
                     base.surface(), base.shadowTint(), base.packed1());
             return append(textureless, desc, null);
@@ -760,7 +761,7 @@ public final class RtMaterialRegistry {
         private int addCutoutSibling(int baseId) {
             MaterialBindingData base = bindings.get(baseId);
             return append(new MaterialBindingData(
-                            packBinding0(bindingAlbedoSlot(base.packed0()), COVERAGE_CUTOUT,
+                            packBinding0(bindingBaseColorTextureIndex(base.packed0()), COVERAGE_CUTOUT,
                                     bindingFlags(base.packed0()), bindingSurfaceImpl(base.packed0())),
                             base.surface(), base.shadowTint(), base.packed1()),
                     descriptions.get(baseId), grids.get(baseId));
@@ -820,11 +821,11 @@ public final class RtMaterialRegistry {
     /**
      * The traversal binding a compiled surface gets. Coverage comes from how the surface occupies its
      * footprint and transmittance from whether light crosses it; the two are independent, so neither is
-     * derived from the other. Slot 0 is the shared atlas; other producers pair the same surface with
-     * their own slot through {@link #withAlbedoSlot}.
+     * derived from the other. Base-color texture index zero is the shared atlas; other producers pair the
+     * surface with their own texture through {@link #withBaseColorTextureIndex}.
      */
     private static MaterialBindingData binding(int surfaceId, RtMaterialDesc desc, float[] average,
-                                               int albedoSlot, float coverageCutoff) {
+                                               int baseColorTextureIndex, float coverageCutoff) {
         // Opaque by default: a material only needs COVERAGE_CUTOUT/STOCHASTIC when a producer knows its
         // footprint is genuinely masked (see withCutoutCoverage/withStochasticCoverage) — most compiled
         // materials, including solid terrain, never call either and get the cheap no-any-hit class.
@@ -842,12 +843,13 @@ public final class RtMaterialRegistry {
             }
         }
         return new MaterialBindingData(
-                packBinding0(albedoSlot, coverage, flags, desc.surfaceImplementation()), surfaceId,
+                packBinding0(baseColorTextureIndex, coverage, flags, desc.surfaceImplementation()), surfaceId,
                 shadowTint, packCoverageCutoff(coverageCutoff));
     }
 
-    static int packBinding0(int albedoSlot, int coverageMode, int flags, int surfaceImplementation) {
-        return (albedoSlot & ALBEDO_SLOT_MASK) | ((coverageMode & COVERAGE_MASK) << COVERAGE_SHIFT)
+    static int packBinding0(int baseColorTextureIndex, int coverageMode, int flags, int surfaceImplementation) {
+        return (baseColorTextureIndex & BASE_COLOR_TEXTURE_INDEX_MASK)
+                | ((coverageMode & COVERAGE_MASK) << COVERAGE_SHIFT)
                 | ((flags & FLAGS_MASK) << FLAGS_SHIFT)
                 | ((surfaceImplementation & SURFACE_IMPL_MASK) << SURFACE_IMPL_SHIFT);
     }
@@ -856,8 +858,8 @@ public final class RtMaterialRegistry {
         return (packed0 >>> SURFACE_IMPL_SHIFT) & SURFACE_IMPL_MASK;
     }
 
-    static int bindingAlbedoSlot(int packed0) {
-        return packed0 & ALBEDO_SLOT_MASK;
+    static int bindingBaseColorTextureIndex(int packed0) {
+        return packed0 & BASE_COLOR_TEXTURE_INDEX_MASK;
     }
 
     static int bindingCoverage(int packed0) {

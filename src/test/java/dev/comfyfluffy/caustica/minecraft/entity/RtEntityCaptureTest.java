@@ -44,7 +44,7 @@ final class RtEntityCaptureTest {
     /** Capture with no GPU material table: keep the base material as-is instead of resolving a variant. */
     private static RtEntityCapture capture() {
         RtEntityCapture capture = new RtEntityCapture();
-        capture.albedoMaterialResolver = (materialId, albedoSlot) -> materialId;
+        capture.baseColorMaterialResolver = (materialId, baseColorTextureIndex) -> materialId;
         return capture;
     }
 

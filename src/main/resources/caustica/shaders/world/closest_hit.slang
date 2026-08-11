@@ -179,7 +179,7 @@ DecodedSurface evaluateMaterial(SurfaceMaterial mat, float2 atlasUv, float lod, 
     surface.emissionLuminance = stateEmission;
     surface.subsurfaceWeight = 0.0;
 
-    float2 localUv = clamp((atlasUv - mat.albedoUv.xy) * mat.albedoUv.zw,
+    float2 localUv = clamp((atlasUv - mat.baseColorUv.xy) * mat.baseColorUv.zw,
             float2(0.0, 0.0), float2(1.0, 1.0));
     float2 pageUv = mat.materialUv.xy + localUv * mat.materialUv.zw;
     float materialLod = min(lod, surfacePageMaxLod(mat));
@@ -230,9 +230,9 @@ float3 applyBreaking(float3 albedo709, uint rayCone, float3 rayOrigin, float3 ra
             float2 decalUv = (an.x >= an.y && an.x >= an.z) ? local.zy
                            : (an.y >= an.z) ? local.xz
                            : local.xy;
-            float decalLod = rayConeUnitUvLod(rayCone, texSizePx(albedoTextures[NonUniformResourceIndex(ps.w)]));
+            float decalLod = rayConeUnitUvLod(rayCone, texSizePx(baseColorTextures[NonUniformResourceIndex(ps.w)]));
             float3 crack709 = srgbToLinear(
-                    albedoTextures[NonUniformResourceIndex(ps.w)].SampleLevel(decalUv, decalLod).rgb);
+                    baseColorTextures[NonUniformResourceIndex(ps.w)].SampleLevel(decalUv, decalLod).rgb);
             return clamp(crack709 * albedo709, 0.0, 1.0);
         }
     }
@@ -353,25 +353,25 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
                 + bary.z * textureCoordinates[i2];
         MaterialBinding binding = loadBinding(pr.materialId);
         SurfaceMaterial mat = loadSurfaceMaterial(binding);
-        uint texSlot = bindingAlbedoSlot(binding);
+        uint textureIndex = bindingBaseColorTextureIndex(binding);
         float3 p0 = mul(objectToWorld, HitTriangleVertexPosition(0));
         float3 p1 = mul(objectToWorld, HitTriangleVertexPosition(1));
         float3 p2 = mul(objectToWorld, HitTriangleVertexPosition(2));
         bool textureless = (bindingFlags(binding) & BINDING_TEXTURELESS) != 0u;
         float textureLod = 0.0;
-        float4 albedoTexel = float4(1.0);
+        float4 baseColorTexel = float4(1.0);
         if (!textureless) {
             textureLod = rayConeTextureLod(rayCone,
-                    texSizePx(albedoTextures[NonUniformResourceIndex(texSlot)]),
+                    texSizePx(baseColorTextures[NonUniformResourceIndex(textureIndex)]),
                     p0, p1, p2, textureCoordinates[i0], textureCoordinates[i1], textureCoordinates[i2]);
-            albedoTexel = albedoTextures[NonUniformResourceIndex(texSlot)].SampleLevel(uv, textureLod);
+            baseColorTexel = baseColorTextures[NonUniformResourceIndex(textureIndex)].SampleLevel(uv, textureLod);
         }
         bool transmissive = (bindingFlags(binding) & BINDING_TRANSMISSIVE) != 0u;
-        float3 baseAlbedo709 = srgbToLinear(albedoTexel.rgb) * srgbToLinear(pr.tint.rgb);
+        float3 baseColor709 = srgbToLinear(baseColorTexel.rgb) * srgbToLinear(pr.tint.rgb);
         float3 opticalColor709 = transmissive
-                ? lerp(float3(1.0), baseAlbedo709, albedoTexel.a) : baseAlbedo709;
+                ? lerp(float3(1.0), baseColor709, baseColorTexel.a) : baseColor709;
         float3 albedo = textureless
-                ? mat.albedoUv.xyz * bt709ToAcesCg(srgbToLinear(pr.tint.rgb))
+                ? mat.baseColorUv.xyz * bt709ToAcesCg(srgbToLinear(pr.tint.rgb))
                 : bt709ToAcesCg(opticalColor709);
 
         float3 motionPrev;
@@ -385,11 +385,11 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
         // Checked before the material pages are sampled and the implementation runs: a guide walking
         // through foliage or a blended surface pays for neither. A dielectric is a crossing already, so
         // it has nothing to gain here.
-        if (!transmissive && guideCoverageCrossing(payload, albedoTexel.a)) {
+        if (!transmissive && guideCoverageCrossing(payload, baseColorTexel.a)) {
             payload.hitT = RayTCurrent();
             payload.motionPrev = half3(motionPrev);
             payloadSetCoverageCrossing(payload,
-                    bt709ToAcesCg(lerp(float3(1.0), baseAlbedo709, albedoTexel.a)), geometricNormal);
+                    bt709ToAcesCg(lerp(float3(1.0), baseColor709, baseColorTexel.a)), geometricNormal);
             return;
         }
 
@@ -429,12 +429,12 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
     float3 tp1 = HitTriangleVertexPosition(1);
     float3 tp2 = HitTriangleVertexPosition(2);
     bool textureless = (bindingFlags(binding) & BINDING_TEXTURELESS) != 0u;
-    // The material record names the shared bindless albedo slot, so geometry records carry no texture index.
-    uint textureSlot = bindingAlbedoSlot(binding);
+    // The material record names the shared bindless base-color texture, so geometry carries no texture index.
+    uint textureIndex = bindingBaseColorTextureIndex(binding);
     float textureLod = 0.0;
     if (!textureless) {
         textureLod = rayConeTextureLod(rayCone,
-                texSizePx(albedoTextures[NonUniformResourceIndex(textureSlot)]),
+                texSizePx(baseColorTextures[NonUniformResourceIndex(textureIndex)]),
                 tp0, tp1, tp2, uv0, uv1, uv2);
     }
 
@@ -448,16 +448,16 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
 
     float stateEmission = pr.normal.w;
 
-    float4 albedoTexel = float4(1.0, 1.0, 1.0, 1.0);
+    float4 baseColorTexel = float4(1.0, 1.0, 1.0, 1.0);
     float3 albedo;
     if (textureless) {
-        albedo = mat.albedoUv.xyz * bt709ToAcesCg(tint709);
+        albedo = mat.baseColorUv.xyz * bt709ToAcesCg(tint709);
     } else {
-        albedoTexel = albedoTextures[NonUniformResourceIndex(textureSlot)].SampleLevel(uv, textureLod);
-        float3 texel709 = srgbToLinear(albedoTexel.rgb);
+        baseColorTexel = baseColorTextures[NonUniformResourceIndex(textureIndex)].SampleLevel(uv, textureLod);
+        float3 texel709 = srgbToLinear(baseColorTexel.rgb);
         // Glass covers its whole footprint: the see-through part of the sprite is clear glass, so its
         // alpha filters the colour rather than deciding presence.
-        float3 base709 = transmissive ? lerp(float3(1.0), texel709 * tint709, albedoTexel.a)
+        float3 base709 = transmissive ? lerp(float3(1.0), texel709 * tint709, baseColorTexel.a)
                                       : texel709 * tint709;
         // The breaking overlay is a rendering trick, not a material fact, so it stays engine-side and
         // composites into the texture colour before any material decode sees it. Keyed on the geometric
@@ -469,11 +469,11 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
 
     // Checked before the material pages are sampled and the implementation runs: a guide walking through
     // foliage pays for neither.
-    if (!transmissive && guideCoverageCrossing(payload, albedoTexel.a)) {
+    if (!transmissive && guideCoverageCrossing(payload, baseColorTexel.a)) {
         payload.hitT = RayTCurrent();
         payload.motionPrev = half3(0.0h, 0.0h, 0.0h);
         payloadSetCoverageCrossing(payload,
-                lerp(float3(1.0), albedo, albedoTexel.a), geometricNormal);
+                lerp(float3(1.0), albedo, baseColorTexel.a), geometricNormal);
         return;
     }
 

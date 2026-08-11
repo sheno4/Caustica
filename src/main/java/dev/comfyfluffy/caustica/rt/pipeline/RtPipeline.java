@@ -160,8 +160,7 @@ public final class RtPipeline {
                             + ") require the bindless descriptor set to also be present");
         }
         if (bindlessTextures > 0) {
-            long requiredCombinedSamplers = Math.addExact(
-                    Math.multiplyExact((long) bindlessTextures, WORLD_BINDLESS_COUNT), 1L);
+            long requiredCombinedSamplers = Math.multiplyExact((long) bindlessTextures, WORLD_BINDLESS_COUNT);
             long deviceLimit = ctx.updateAfterBindCombinedImageSamplerLimit();
             if (requiredCombinedSamplers > deviceLimit) {
                 throw new UnsupportedOperationException("Configured bindless texture capacity " + bindlessTextures
@@ -171,18 +170,14 @@ public final class RtPipeline {
         }
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkDescriptorSetLayoutBinding.Buffer binds = VkDescriptorSetLayoutBinding.calloc(
-                    WORLD_SET_BINDING_COUNT, stack);
-            binds.get(WORLD_TLAS).binding(WORLD_TLAS).descriptorType(VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR)
+                    WORLD_SET_DESCRIPTOR_COUNT, stack);
+            int worldBinding = 0;
+            binds.get(worldBinding++).binding(WORLD_TLAS).descriptorType(VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR)
                     .descriptorCount(1).stageFlags(VK_SHADER_STAGE_RAYGEN_BIT_KHR);
-            binds.get(WORLD_OUTPUT).binding(WORLD_OUTPUT).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)
+            binds.get(worldBinding++).binding(WORLD_OUTPUT).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)
                     .descriptorCount(1).stageFlags(VK_SHADER_STAGE_RAYGEN_BIT_KHR);
-            int atlasStages = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR
-                    | (hasAhit ? VK_SHADER_STAGE_ANY_HIT_BIT_KHR : 0);
-            binds.get(WORLD_BLOCK_ALBEDO).binding(WORLD_BLOCK_ALBEDO)
-                    .descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
-                    .descriptorCount(1).stageFlags(atlasStages);
             for (int binding = WORLD_G_NORMAL; binding <= WORLD_G_SPEC_MOTION; binding++) {
-                binds.get(binding).binding(binding).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)
+                binds.get(worldBinding++).binding(binding).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)
                         .descriptorCount(1).stageFlags(VK_SHADER_STAGE_RAYGEN_BIT_KHR);
             }
             VkDescriptorSetLayoutCreateInfo dslci = VkDescriptorSetLayoutCreateInfo.calloc(stack).sType$Default().pBindings(binds);
@@ -191,12 +186,10 @@ public final class RtPipeline {
             long dsl = p.get(0);
             RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT, dsl, label + " descriptor set layout");
 
-            VkDescriptorPoolSize.Buffer poolSizes = VkDescriptorPoolSize.calloc(3, stack);
+            VkDescriptorPoolSize.Buffer poolSizes = VkDescriptorPoolSize.calloc(2, stack);
             poolSizes.get(0).type(VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR).descriptorCount(RING);
             poolSizes.get(1).type(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)
                     .descriptorCount(RING * WORLD_SET_STORAGE_IMAGE_COUNT);
-            poolSizes.get(2).type(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
-                    .descriptorCount(RING * WORLD_SET_SAMPLER_COUNT);
             VkDescriptorPoolCreateInfo dpci = VkDescriptorPoolCreateInfo.calloc(stack).sType$Default().maxSets(RING).pPoolSizes(poolSizes);
             check(VK10.vkCreateDescriptorPool(vk, dpci, null, p), "vkCreateDescriptorPool");
             long pool = p.get(0);
@@ -225,11 +218,11 @@ public final class RtPipeline {
                 java.nio.IntBuffer bindFlags = stack.mallocInt(nb);
                 for (int b = 0; b < nb; b++) {
                     int stages = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-                    if (b == WORLD_ALBEDO_TEXTURES && hasAhit) stages |= VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
+                    if (b == WORLD_BASE_COLOR_TEXTURES && hasAhit) stages |= VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
                     bl.get(b).binding(b).descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
                             .descriptorCount(bindlessTextures).stageFlags(stages);
                     int flags = VK12.VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
-                    if (b == WORLD_ALBEDO_TEXTURES) flags |= VK12.VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+                    if (b == WORLD_BASE_COLOR_TEXTURES) flags |= VK12.VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
                     bindFlags.put(b, flags);
                 }
                 VkDescriptorSetLayoutBindingFlagsCreateInfo bf = VkDescriptorSetLayoutBindingFlagsCreateInfo.calloc(stack).sType$Default()
@@ -520,20 +513,6 @@ public final class RtPipeline {
         }
     }
 
-    /** Bind the block albedo atlas into every ring slot. */
-    public void setBlockAlbedoAtlas(long imageView, long sampler) {
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkDescriptorImageInfo.Buffer info = VkDescriptorImageInfo.calloc(1, stack);
-            info.get(0).sampler(sampler).imageView(imageView).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
-            VkWriteDescriptorSet.Buffer write = VkWriteDescriptorSet.calloc(RING, stack);
-            for (int i = 0; i < RING; i++) {
-                write.get(i).sType$Default().dstSet(descriptorSets[i]).dstBinding(WORLD_BLOCK_ALBEDO)
-                        .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).pImageInfo(info);
-            }
-            VK10.vkUpdateDescriptorSets(ctx.vk(), write, null);
-        }
-    }
-
     /**
      * Write one pass-declared image resource (sampled or storage — whichever the reflected Slang
      * declared) into the pass-resource set (set 2) at {@code bindingIndex} — resolved by the caller from
@@ -596,9 +575,9 @@ public final class RtPipeline {
         }
     }
 
-    /** Append or initialize one base-color slot. Existing slots never change while frames are in flight. */
-    public void setBaseColorTexture(int slot, long imageView, long sampler) {
-        setBindlessTexture(WORLD_ALBEDO_TEXTURES, slot, imageView, sampler);
+    /** Append or initialize one base-color texture index. Existing entries remain immutable in flight. */
+    public void setBaseColorTexture(int textureIndex, long imageView, long sampler) {
+        setBindlessTexture(WORLD_BASE_COLOR_TEXTURES, textureIndex, imageView, sampler);
     }
 
     /** Bind one compact canonical page bundle at a resource-epoch boundary. */

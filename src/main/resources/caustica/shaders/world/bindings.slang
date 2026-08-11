@@ -17,9 +17,7 @@ import world_common;
 [[vk::binding(7, 0)]] [format("rgba16f")] public RWTexture2D<float4> gSpecAlbedo;
 [[vk::binding(8, 0)]] [format("rg16f")] public RWTexture2D<float2> gSpecMotion;
 
-[[vk::binding(2, 0)]] public Sampler2D blockAlbedoAtlas;
-// Index 9 is deliberately unused. Set 0 is the engine's stable ABI, so a retired binding stays a
-// hole rather than being renumbered.
+// Binding 2 is deliberately unbound. Set 0 is stable, so the guide bindings remain at 3 through 8.
 
 // Canonical material pages. Source formats are decoded into these by RtBlockMaterials, so the channels
 // below are OpenPBR parameters, not LabPBR bytes. Every channel is a unorm8.
@@ -28,7 +26,7 @@ import world_common;
 //   normal   — tangent-space normal xy; z is reconstructed. b unused, a authored height (unused)
 //   surface1 — rgb: base_color on a metal texel, neutral on a dielectric one
 //              a: specular_ior, encoded as (ior - 1) / (ior + 1) — see surfaceIorFromPage
-[[vk::binding(0, 1)]] public Sampler2D albedoTextures[];
+[[vk::binding(0, 1)]] public Sampler2D baseColorTextures[];
 [[vk::binding(1, 1)]] public Sampler2D materialSurface0Tex[];
 [[vk::binding(2, 1)]] public Sampler2D materialNormalTex[];
 [[vk::binding(3, 1)]] public Sampler2D materialSurface1Tex[];

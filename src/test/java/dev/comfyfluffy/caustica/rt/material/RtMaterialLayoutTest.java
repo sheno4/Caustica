@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -49,6 +50,10 @@ final class RtMaterialLayoutTest {
         assertEquals(0.2f, data.getFloat(52));  // baseMetalness
         assertEquals(1.52f, data.getFloat(56)); // specularIor
         assertEquals(1.0f, data.getFloat(60));  // transmissionWeight
+        assertEquals("baseColorUv", Arrays.stream(SurfaceMaterialData.class.getRecordComponents())
+                .map(component -> component.getName())
+                .filter(name -> name.endsWith("ColorUv"))
+                .findFirst().orElseThrow());
     }
 
     @Test

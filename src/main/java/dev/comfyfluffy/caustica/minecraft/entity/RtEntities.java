@@ -936,7 +936,7 @@ public final class RtEntities {
      * needed to diff each particle's center against last frame for the MV. Each particle is extracted into
      * {@link #particleScratch} (its billboard quad), funneled through {@link #particleCapture} into the
      * shared {@code capture}, and its quad center cached by identity in {@link #particlePrev}. Per-layer
-     * texture slot comes from the layer's atlas (block/item/particle) via the bindless registry. One
+     * base-color texture index comes from the layer's atlas via the bindless registry. One
      * instance with mask {@link #PARTICLE_MASK} (primary-ray only).
      */
     private void captureParticles(GpuContext ctx, FrameBuild build, Minecraft mc, float partial,
@@ -997,7 +997,8 @@ public final class RtEntities {
                     particleScratch.clear();
                     sq.extract(particleScratch, cam, partial);
                     for (SingleQuadParticle.Layer layer : particleScratch.layers()) {
-                        capture.currentTexSlot = RtEntityTextures.INSTANCE.slotForAtlas(layer.textureAtlasLocation());
+                        capture.currentBaseColorTextureIndex = RtEntityTextures.INSTANCE.slotForAtlas(
+                                layer.textureAtlasLocation());
                         particleScratch.buildLayer(layer, particleCapture);
                         particleCapture.flush();
                     }

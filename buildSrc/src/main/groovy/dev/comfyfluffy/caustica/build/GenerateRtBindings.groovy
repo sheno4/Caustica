@@ -28,14 +28,14 @@ abstract class GenerateRtBindings extends DefaultTask {
 
     private static final List<Map> PIPELINES = [
             [prefix: "WORLD", source: "pipelines/world/primary_reflection.rgen.slang", resources: [
-                    TLAS: "topLevelAS", OUTPUT: "outImage", BLOCK_ALBEDO: "blockAlbedoAtlas",
+                    TLAS: "topLevelAS", OUTPUT: "outImage",
                     G_NORMAL: "gNormal", G_ALBEDO: "gAlbedo", G_DEPTH: "gDepth", G_MOTION: "gMotion",
                     G_SPEC_ALBEDO: "gSpecAlbedo", G_SPEC_MOTION: "gSpecMotion",
                     // The sky-view/transmittance LUTs, the celestials atlas, and the sky's per-frame
                     // inputs are none of them engine-fixed set-0 bindings: the selected pass declares
                     // them at set 2, discovered from per-composition runtime reflection instead of this
                     // build-time one.
-                    ALBEDO_TEXTURES: "albedoTextures", MATERIAL_SURFACE0: "materialSurface0Tex",
+                    BASE_COLOR_TEXTURES: "baseColorTextures", MATERIAL_SURFACE0: "materialSurface0Tex",
                     MATERIAL_NORMAL: "materialNormalTex", MATERIAL_SURFACE1: "materialSurface1Tex"]],
             [prefix: "DISPLAY", source: "pipelines/display/main.comp.slang", resources: [
                     OUTPUT: "outputImage", RT_IMAGE: "rtImage", EXPOSURE: "exposureImage", HDR_OUTPUT: "hdrImage",
@@ -97,8 +97,12 @@ abstract class GenerateRtBindings extends DefaultTask {
             }
             locations.values().groupBy { it.set }.each { set, bindings ->
                 def indices = bindings*.index.sort()
-                if (indices != (0..<indices.size()).toList()) {
-                    throw new GradleException("${spec.source} descriptor set ${set} is not contiguous: ${indices}")
+                def worldSetWithBindingHole = spec.prefix == "WORLD" && set == 0
+                def expected = worldSetWithBindingHole ? [0, 1, 3, 4, 5, 6, 7, 8]
+                        : (0..<indices.size()).toList()
+                if (indices != expected) {
+                    throw new GradleException(
+                            "${spec.source} descriptor set ${set} bindings differ; expected=${expected}, actual=${indices}")
                 }
             }
 
@@ -109,8 +113,8 @@ abstract class GenerateRtBindings extends DefaultTask {
                     throw new GradleException("overlay shaders disagree on descriptor set: ${overlaySet} and ${locations.VALUE.set}")
                 }
             } else if (spec.prefix == "WORLD") {
-                def ordinary = locations.findAll { suffix, ignored -> suffix != "ALBEDO_TEXTURES" && !(suffix as String).startsWith("MATERIAL_") }
-                def bindless = locations.findAll { suffix, ignored -> suffix == "ALBEDO_TEXTURES" || (suffix as String).startsWith("MATERIAL_") }
+                def ordinary = locations.findAll { suffix, ignored -> suffix != "BASE_COLOR_TEXTURES" && !(suffix as String).startsWith("MATERIAL_") }
+                def bindless = locations.findAll { suffix, ignored -> suffix == "BASE_COLOR_TEXTURES" || (suffix as String).startsWith("MATERIAL_") }
                 if ((ordinary.values()*.set as Set).size() != 1 || (bindless.values()*.set as Set).size() != 1
                         || ordinary.values().first().set == bindless.values().first().set) {
                     throw new GradleException("world resources do not have distinct ordinary and bindless sets: ${locations}")
@@ -121,6 +125,7 @@ abstract class GenerateRtBindings extends DefaultTask {
                 def storageImages = guides + ordinary.findAll { suffix, ignored -> suffix == "OUTPUT" }
                 def samplers = ordinary.findAll { suffix, ignored -> suffix != "TLAS" && !storageImages.containsKey(suffix) }
                 constants.WORLD_GUIDE_COUNT = guides.size()
+                constants.WORLD_SET_DESCRIPTOR_COUNT = ordinary.size()
                 constants.WORLD_SET_BINDING_COUNT = ordinary.values()*.index.max() + 1
                 constants.WORLD_SET_STORAGE_IMAGE_COUNT = storageImages.size()
                 constants.WORLD_SET_SAMPLER_COUNT = samplers.size()

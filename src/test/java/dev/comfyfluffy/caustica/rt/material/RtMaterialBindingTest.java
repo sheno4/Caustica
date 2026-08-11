@@ -14,7 +14,7 @@ final class RtMaterialBindingTest {
     @Test
     void bindingFieldsSurviveTheirNeighboursAtFullRange() {
         int packed = RtMaterialRegistry.packBinding0(0xFFFF, 2, 63, 255);
-        assertEquals(0xFFFF, RtMaterialRegistry.bindingAlbedoSlot(packed));
+        assertEquals(0xFFFF, RtMaterialRegistry.bindingBaseColorTextureIndex(packed));
         assertEquals(2, RtMaterialRegistry.bindingCoverage(packed));
         assertEquals(63, RtMaterialRegistry.bindingFlags(packed));
         assertEquals(255, RtMaterialRegistry.bindingSurfaceImpl(packed));
@@ -30,11 +30,11 @@ final class RtMaterialBindingTest {
         assertEquals(0, RtMaterialRegistry.bindingFlags(slotOnly));
         assertEquals(0, RtMaterialRegistry.bindingSurfaceImpl(slotOnly));
         int flagsOnly = RtMaterialRegistry.packBinding0(0, 0, 63, 0);
-        assertEquals(0, RtMaterialRegistry.bindingAlbedoSlot(flagsOnly));
+        assertEquals(0, RtMaterialRegistry.bindingBaseColorTextureIndex(flagsOnly));
         assertEquals(0, RtMaterialRegistry.bindingCoverage(flagsOnly));
         assertEquals(0, RtMaterialRegistry.bindingSurfaceImpl(flagsOnly));
         int implOnly = RtMaterialRegistry.packBinding0(0, 0, 0, 255);
-        assertEquals(0, RtMaterialRegistry.bindingAlbedoSlot(implOnly));
+        assertEquals(0, RtMaterialRegistry.bindingBaseColorTextureIndex(implOnly));
         assertEquals(0, RtMaterialRegistry.bindingFlags(implOnly));
     }
 

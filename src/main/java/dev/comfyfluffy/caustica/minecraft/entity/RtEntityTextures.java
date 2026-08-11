@@ -69,7 +69,7 @@ public final class RtEntityTextures {
     // Atlas-location → bindless slot, for items/blocks (which texture from an atlas, not a per-type
     // file). Seeded with the block atlas = slot 0 (also the fallback). Items use a separate item atlas.
     private final Map<Identifier, Integer> atlasSlotCache = new HashMap<>();
-    private final List<Pending> pending = new ArrayList<>(); // albedo slots awaiting descriptor upload
+    private final List<Pending> pending = new ArrayList<>(); // base-color texture indices awaiting upload
     // Descriptor array capacity of the currently alive world pipeline. A higher config value applies after
     // reset/recreate; a lower value stops allocating new slots immediately without invalidating old ones.
     private int capacity = maxTextures();
@@ -139,7 +139,7 @@ public final class RtEntityTextures {
     /**
      * Bindless slot of a solid-white 1x1 texture, for untextured geometry (leashes, custom line
      * ribbons) whose colour comes entirely from the per-prim tint. Slot 0 (the block atlas) is NOT a
-     * substitute: the hit shader multiplies albedo by the sampled texel, and UV (0,0) lands on
+     * substitute: the hit shader multiplies base color by the sampled texel, and UV (0,0) lands on
      * whatever sprite is stitched at the atlas origin. The texture is registered with the
      * TextureManager on first use and then resolved/cached by the ordinary atlas-slot path, so it
      * survives {@link #reset} like any other atlas. Falls back to slot 0 if registration fails.

@@ -167,17 +167,17 @@ public final class RtComposite {
     private WorldShaderBuild worldShaderBuild;
 
     private RtPipeline worldPipeline;
-    // Set at the start of a host resource reload: a reload recreates the block
-    // atlas and source textures. We tear down the world pipeline there (drops all descriptor references) and
-    // rebuild it once the NEW atlas is in place — detected by the atlas view handle changing away from
-    // boundBlockAlbedoAtlasHandle to a fresh non-zero value (deferred free keeps the old handle live for a few
+    // Set at the start of a host resource reload: a reload recreates the shared base-color atlas and source
+    // textures. We tear down the world pipeline there (drops all descriptor references) and rebuild it once
+    // the new atlas is in place — detected by the view handle changing away from
+    // boundBaseColorAtlasView to a fresh non-zero value (deferred free keeps the old handle live for a few
     // frames, so "handle != 0" alone isn't enough to tell old from new).
     private volatile boolean reloadRebindRequested;
-    // The block-atlas view handle currently bound into the world pipeline (set by bindWorldTextures).
-    private long boundBlockAlbedoAtlasHandle;
+    // The shared base-color atlas view currently bound into bindless index zero.
+    private long boundBaseColorAtlasView;
     private long baseColorAtlasView;
     private int bindlessTextureCapacity;
-    // True after the LabPBR atlases have been resolved/bound for the currently alive world pipeline.
+    // True after base-color textures and canonical material pages are bound for the live world pipeline.
     private boolean materialBindingsReady;
     // The RenderPassManager world-resource generation currently written into the world pipeline's set 2.
     private int boundWorldResourceGeneration = -1;
@@ -302,7 +302,7 @@ public final class RtComposite {
     private boolean mvHasPrev;
     private float previousProceduralTime;
     private boolean proceduralTimeValid;
-    private long atlasSampler;
+    private long materialTextureSampler;
     private boolean failed;
     private boolean loggedActive;
 
@@ -477,7 +477,7 @@ public final class RtComposite {
         }
         if (reloadRebindRequested) {
             long atlas = baseColorAtlasView;
-            return atlas == 0L || atlas == boundBlockAlbedoAtlasHandle;
+            return atlas == 0L || atlas == boundBaseColorAtlasView;
         }
         return false;
     }
@@ -700,7 +700,7 @@ public final class RtComposite {
         }
         if (reloadRebindRequested) {
             long atlas = baseColorAtlasView;
-            if (atlas == 0L || atlas == boundBlockAlbedoAtlasHandle) {
+            if (atlas == 0L || atlas == boundBaseColorAtlasView) {
                 return false;
             }
         }
@@ -956,18 +956,17 @@ public final class RtComposite {
     }
 
     /**
-     * Resolve + bind every world-pipeline texture: the block atlas (binding 2 + bindless fallback slot 0)
-     * and the canonical material page bundles in reserved bindless slots. Shared by first creation and
+     * Resolve and bind every world-pipeline texture: the shared base-color atlas at bindless index zero
+     * and the canonical material page bundles at their reserved bindless indices. Shared by first creation and
      * the post-reload rebind. Resets the source bindless registry, recreates material pages, builds
      * the shared material registry, and invalidates old-epoch geometry before tracing resumes.
      */
     private void bindWorldTextures(GpuContext ctx) {
-        long sampler = atlasSampler(ctx);
+        long sampler = materialTextureSampler(ctx);
         long atlasView = baseColorAtlasView;
-        boundBlockAlbedoAtlasHandle = atlasView; // remember what we bound so a reload can detect the new atlas
-        worldPipeline.setBlockAlbedoAtlas(atlasView, sampler);
-        // Bindless slot 0 = fallback texture so geometry whose texture cannot be
-        // resolved samples something defined rather than an unbound (partially-bound) descriptor.
+        boundBaseColorAtlasView = atlasView;
+        // Bindless base-color texture index zero is the fallback, so unresolved geometry samples
+        // something defined rather than an unbound (partially-bound) descriptor.
         RtBlockMaterials.INSTANCE.reset();
         ProviderManager.MaterialContributions materials = ProviderManager.INSTANCE.collectMaterials();
         RtMaterialOverrides materialOverrides = RtMaterialOverrides.from(
@@ -1048,8 +1047,8 @@ public final class RtComposite {
      * Called before the host re-stitches its atlas and reloads source textures. The host frees old GPU
      * images via its deferred destruction queue, which refuses while any descriptor set still references
      * them ("in use by VkDescriptorSet" → device lost). So we drain in-flight frames and then <b>destroy
-     * the world pipeline outright</b> — dropping every descriptor reference (block atlas binding 2 +
-     * bindless set) — so the host can free its textures cleanly. The pipeline is cheap to rebuild (no scene
+     * the world pipeline outright</b> — dropping every bindless descriptor reference — so the host can free
+     * its textures cleanly. The pipeline is cheap to rebuild (no scene
      * re-upload); {@code ensureWorld} recreates it on the first world frame after the reload, once the new
      * atlas is ready (gated in {@link #composite}). The new material epoch clears retained geometry before trace.
      */
@@ -1363,7 +1362,7 @@ public final class RtComposite {
             ).write(push);
             pushBuf.flush(0L, WORLD_PUSH_SIZE);
             // Upload source textures registered this frame before the trace, preserving descriptor order.
-            ProviderManager.INSTANCE.uploadPendingTextures(active, atlasSampler(ctx));
+            ProviderManager.INSTANCE.uploadPendingTextures(active, materialTextureSampler(ctx));
             // Build pending BLASes, then the TLAS that references retained and frame-varying geometry.
             // Barriers separate each stage; the graphics-use timeline guards resource reuse.
             if (!providerGeometry.blasBuilds().isEmpty() || !frame.blasBuilds().isEmpty()) {
@@ -1641,15 +1640,15 @@ public final class RtComposite {
             }
             pushRing = null;
         }
-        if (atlasSampler != 0L) {
+        if (materialTextureSampler != 0L) {
             GpuContext ctx = GpuContext.currentOrNull();
             if (ctx != null) {
-                VK10.vkDestroySampler(ctx.vk(), atlasSampler, null);
+                VK10.vkDestroySampler(ctx.vk(), materialTextureSampler, null);
             }
-            atlasSampler = 0L;
+            materialTextureSampler = 0L;
         }
         reloadRebindRequested = false;
-        boundBlockAlbedoAtlasHandle = 0L;
+        boundBaseColorAtlasView = 0L;
         boundWorldResourceGeneration = -1;
         displayW = -1;
         displayH = -1;
@@ -1668,8 +1667,8 @@ public final class RtComposite {
         hdrWrittenThisFrame = false;
     }
 
-    private long atlasSampler(GpuContext ctx) {
-        if (atlasSampler == 0L) {
+    private long materialTextureSampler(GpuContext ctx) {
+        if (materialTextureSampler == 0L) {
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 VkSamplerCreateInfo sci = VkSamplerCreateInfo.calloc(stack).sType$Default()
                         .magFilter(VK10.VK_FILTER_NEAREST).minFilter(VK10.VK_FILTER_NEAREST)
@@ -1680,13 +1679,14 @@ public final class RtComposite {
                         .minLod(0f).maxLod(16f);
                 LongBuffer p = stack.mallocLong(1);
                 if (VK10.vkCreateSampler(ctx.vk(), sci, null, p) != VK10.VK_SUCCESS) {
-                    throw new IllegalStateException("vkCreateSampler(block atlas) failed");
+                    throw new IllegalStateException("vkCreateSampler(material textures) failed");
                 }
-                atlasSampler = p.get(0);
-                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_SAMPLER, atlasSampler, "block atlas sampler");
+                materialTextureSampler = p.get(0);
+                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_SAMPLER, materialTextureSampler,
+                        "material texture sampler");
             }
         }
-        return atlasSampler;
+        return materialTextureSampler;
     }
 
     private static VkImageCopy.Buffer copyRegion(MemoryStack stack, int width, int height) {

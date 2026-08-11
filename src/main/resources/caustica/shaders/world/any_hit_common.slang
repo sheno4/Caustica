@@ -14,7 +14,7 @@ import world_common;
 import math;
 import bindings;
 
-/** One hit's material binding, its interpolated albedo UV, and the per-primitive tint. */
+/** One hit's material binding, its interpolated base-color UV, and the per-primitive tint. */
 public struct HitBinding {
     public MaterialBinding binding;
     public float2 uv;
@@ -47,11 +47,11 @@ public HitBinding decodeHit(float3 bary, uint pid) {
 }
 
 /**
- * The albedo texel the coverage test reads. Every geometry source reaches its texture through the same
- * bindless array, so the slot named by the material binding is the only thing that varies.
+ * The base-color texel the coverage test reads. Every geometry source reaches its texture through the same
+ * bindless array, so the texture index named by the material binding is the only thing that varies.
  */
 public float4 sampleCoverageTexel(HitBinding hit) {
-    return albedoTextures[NonUniformResourceIndex(bindingAlbedoSlot(hit.binding))]
+    return baseColorTextures[NonUniformResourceIndex(bindingBaseColorTextureIndex(hit.binding))]
             .SampleLevel(hit.uv, 0.0);
 }
 

@@ -19,7 +19,7 @@ import java.util.function.IntBinaryOperator;
  * {@code model.renderToBuffer(pose, this, …)}.
  *
  * <p>Accumulators use the same layout as terrain's {@code SectionMesh} (positions, indices, atlas UV,
- * per-prim {@code {normal.xyz, reserved}, {tint.rgb, albedoSlot}, {materialId, flags, aux0, aux1}}) so entities
+ * per-prim {@code {normal.xyz, reserved}, {tint.rgb, reserved}, {materialId, flags, aux0, aux1}}) so entities
  * share the terrain upload + BLAS path verbatim.
  */
 public final class RtEntityCapture implements VertexConsumer {
@@ -40,20 +40,20 @@ public final class RtEntityCapture implements VertexConsumer {
     private final FloatArrayList packedPrim = new FloatArrayList(primCapacity(DEFAULT_VERTEX_CAPACITY));
     private final int[] packedClassTris = new int[RtAccel.SBT_CLASSES];
 
-    // Bindless texture slot for the geometry currently being submitted (set by the collector per
+    // Bindless base-color texture index for the geometry currently being submitted (set by the collector per
     // submitModel, so body + feature layers get their own texture).
-    int currentTexSlot;
-    // Canonical material binding for this submission, before the albedo slot is folded in.
+    int currentBaseColorTextureIndex;
+    // Canonical material binding for this submission, before the base-color texture index is folded in.
     int currentMaterialId;
-    // Pairs this submission's bindless albedo slot with its material's surface. Defaults to the live
+    // Pairs this submission's bindless base-color texture with its material's surface. Defaults to the live
     // registry; capture itself stays a pure CPU accumulator, so unit tests substitute a resolver that
     // needs no GPU material table.
-    IntBinaryOperator albedoMaterialResolver = RtMaterialRegistry.INSTANCE::withAlbedoSlot;
-    // Collectors set the base material and the texture slot independently, so the resolved binding is
-    // memoised per (base, slot) pair: the lookup is paid once per submission, not once per triangle.
-    private int albedoMemoBase = -1;
-    private int albedoMemoSlot = -1;
-    private int albedoMemoMaterial;
+    IntBinaryOperator baseColorMaterialResolver = RtMaterialRegistry.INSTANCE::withBaseColorTextureIndex;
+    // Collectors set the base material and texture independently, so the resolved binding is memoised per
+    // (base, texture) pair: the lookup is paid once per submission, not once per triangle.
+    private int baseColorMemoBase = -1;
+    private int baseColorMemoTextureIndex = -1;
+    private int baseColorMemoMaterial;
     // Conservative default: unknown submissions retain alpha testing instead of incorrectly becoming
     // opaque. RtEntityCollector assigns this from the resolved material's binding before every known
     // submission.
@@ -75,14 +75,16 @@ public final class RtEntityCapture implements VertexConsumer {
     private final int[] qcol = new int[4];
     private final Vector3f scratch = new Vector3f(); // baked-quad position transform scratch
 
-    /** This submission's binding paired with its bindless albedo slot. */
-    private int albedoMaterialId() {
-        if (currentMaterialId != albedoMemoBase || currentTexSlot != albedoMemoSlot) {
-            albedoMemoBase = currentMaterialId;
-            albedoMemoSlot = currentTexSlot;
-            albedoMemoMaterial = albedoMaterialResolver.applyAsInt(currentMaterialId, currentTexSlot);
+    /** This submission's binding paired with its bindless base-color texture. */
+    private int baseColorMaterialId() {
+        if (currentMaterialId != baseColorMemoBase
+                || currentBaseColorTextureIndex != baseColorMemoTextureIndex) {
+            baseColorMemoBase = currentMaterialId;
+            baseColorMemoTextureIndex = currentBaseColorTextureIndex;
+            baseColorMemoMaterial = baseColorMaterialResolver.applyAsInt(
+                    currentMaterialId, currentBaseColorTextureIndex);
         }
-        return albedoMemoMaterial;
+        return baseColorMemoMaterial;
     }
 
     /** Clear all accumulators for a fresh entity capture. */
@@ -101,7 +103,7 @@ public final class RtEntityCapture implements VertexConsumer {
         packedPrim.clear();
         ensureVertexCapacity(expectedVertices);
         n = 0;
-        currentTexSlot = 0;
+        currentBaseColorTextureIndex = 0;
         currentMaterialId = 0;
         currentSbtClass = RtAccel.CLASS_MASKED;
         currentOrder = 0;
@@ -154,7 +156,7 @@ public final class RtEntityCapture implements VertexConsumer {
 
     /** Copy the per-submission material/UV state into a second capture used by the parity harness. */
     void copySubmissionStateTo(RtEntityCapture target) {
-        target.currentTexSlot = currentTexSlot;
+        target.currentBaseColorTextureIndex = currentBaseColorTextureIndex;
         target.currentMaterialId = currentMaterialId;
         target.currentSbtClass = currentSbtClass;
         target.currentOrder = currentOrder;
@@ -306,7 +308,7 @@ public final class RtEntityCapture implements VertexConsumer {
      * Capture a {@link BakedQuad} (held/dropped items via {@code submitItem}, falling blocks via {@code
      * submitBlockModel}) — its 4 positions transformed by {@code pose}, atlas UV from {@code packedUV},
      * a flat {@code color} tint. These quads carry no authored normal, so emitQuad computes a geometric
-     * one. They sample the block atlas (the capture's {@code currentTexSlot} = 0, the bindless fallback).
+     * one. They sample the shared atlas (the capture's {@code currentBaseColorTextureIndex} = 0).
      */
     public void addBakedQuad(Matrix4f pose, BakedQuad quad, int color) {
         for (int i = 0; i < 4; i++) {
@@ -419,8 +421,8 @@ public final class RtEntityCapture implements VertexConsumer {
             prim.add(tr);
             prim.add(tg);
             prim.add(tb);
-            prim.add(0f); // tint.w unused; albedo selection lives on the material record
-            prim.add(Float.intBitsToFloat(albedoMaterialId()));
+            prim.add(0f); // tint.w unused; base-color selection lives on the material record
+            prim.add(Float.intBitsToFloat(baseColorMaterialId()));
             prim.add(0f); // flags
             prim.add(0f); // aux0
             prim.add(0f); // aux1

@@ -17,10 +17,16 @@ final class RendererVocabularyFirewallTest {
     private static final Map<String, List<String>> RETIRED_TERMS = Map.ofEntries(
             Map.entry("rt/pipeline/RtPipeline.java", List.of(
                     "setEntityAlbedoTexture", "entity albedo", "entity-albedo", "entity-texture",
+                    "setBlockAlbedoAtlas", "WORLD_BLOCK_ALBEDO", "WORLD_ALBEDO_TEXTURES",
                     "terrain class", "then entity records", "terrain and entity",
                     "triangle spike and terrain")),
+            Map.entry("rt/RtComposite.java", List.of(
+                    "boundBlockAlbedoAtlasHandle", "block atlas binding 2", "block atlas sampler")),
             Map.entry("rt/material/RtMaterialAbi.java", List.of(
                     "TERRAIN_PRIM", "terrain material", "terrain index")),
+            Map.entry("rt/material/RtMaterialRegistry.java", List.of(
+                    "bindingAlbedoSlot", "withAlbedoSlot", "SHARED_ATLAS_ALBEDO_SLOT",
+                    "ALBEDO_SLOT_MASK", "albedo slot")),
             Map.entry("rt/RtColor.java", List.of("vanilla authors", "Minecraft colour")),
             Map.entry("rt/RtReflex.java", List.of(
                     "VulkanGpuSurfaceMixin", "MinecraftMixin", "runTick", "Minecraft can call",
