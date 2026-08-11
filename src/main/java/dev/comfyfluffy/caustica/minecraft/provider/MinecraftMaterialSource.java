@@ -29,6 +29,8 @@ public final class MinecraftMaterialSource implements MaterialSource {
     public static final ResourceId CLOUD = ResourceId.of("caustica", "cloud");
     public static final ResourceId WATER = ResourceId.of("minecraft", "water");
     public static final ResourceId LAVA_MATERIAL = ResourceId.of("minecraft", "block/lava_still");
+    public static final ResourceId PARTICLE_BILLBOARD =
+            ResourceId.of("caustica", "minecraft_particle_billboard");
     public static final int FORMAT = 4;
 
     @Override
@@ -36,6 +38,7 @@ public final class MinecraftMaterialSource implements MaterialSource {
         sink.define(new MaterialDefinition(new MaterialHandle(CLOUD), 0.82f, 0.86f, 0.9f,
                 0.92f, 0.0f, 1.33f, 0.0f, MaterialTopology.SURFACE, null));
         sink.define(waterDefinition());
+        sink.define(particleBillboardDefinition());
         Map<Identifier, Resource> resources = Minecraft.getInstance().getResourceManager().listResources(
                 "materials", id -> id.getPath().endsWith(".json"));
         List<Map.Entry<Identifier, Resource>> ordered = new ArrayList<>(resources.entrySet());
@@ -61,6 +64,11 @@ public final class MinecraftMaterialSource implements MaterialSource {
                 OpenPbrMaterialDefaults.TRANSMISSIVE_SPECULAR_ROUGHNESS, 0.0f,
                 MinecraftMaterialClassifier.WATER_IOR, 1.0f, MaterialTopology.MEDIUM_BOUNDARY,
                 MinecraftProvidersExtension.WATER_SURFACE);
+    }
+
+    static MaterialDefinition particleBillboardDefinition() {
+        return new MaterialDefinition(new MaterialHandle(PARTICLE_BILLBOARD), 1.0f, 1.0f, 1.0f,
+                1.0f, 0.0f, 1.0f, 0.5f, MaterialTopology.SURFACE, null);
     }
 
     public static MaterialRule parse(JsonObject root, Identifier source) {

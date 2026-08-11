@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.provider;
 
 import dev.comfyfluffy.caustica.api.provider.MaterialDefinition;
+import dev.comfyfluffy.caustica.api.provider.MaterialTopology;
 import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialDefaults;
 import dev.comfyfluffy.caustica.minecraft.MinecraftProvidersExtension;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialClassifier;
@@ -22,5 +23,18 @@ final class MinecraftMaterialSourceTest {
         assertEquals(MinecraftMaterialClassifier.WATER_IOR, material.specularIor());
         assertEquals(1.0f, material.transmissionWeight());
         assertEquals(MinecraftProvidersExtension.WATER_SURFACE, material.surface());
+    }
+
+    @Test
+    void namedParticleBillboardOwnsTheThinSurfaceCalibration() {
+        MaterialDefinition material = MinecraftMaterialSource.particleBillboardDefinition();
+
+        assertEquals(MinecraftMaterialSource.PARTICLE_BILLBOARD, material.handle().id());
+        assertEquals(MaterialTopology.SURFACE, material.topology());
+        assertEquals(1.0f, material.specularRoughness());
+        assertEquals(0.0f, material.baseMetalness());
+        assertEquals(1.0f, material.specularIor());
+        assertEquals(0.5f, material.transmissionWeight());
+        org.junit.jupiter.api.Assertions.assertNull(material.surface());
     }
 }

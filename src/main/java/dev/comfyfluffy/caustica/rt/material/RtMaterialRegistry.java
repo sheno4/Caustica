@@ -141,7 +141,6 @@ public final class RtMaterialRegistry {
     private final List<MaterialBindingData> bindingRecords = new ArrayList<>();
     private final Map<MaterialBindingData, Integer> bindingIds = new HashMap<>();
     private int runtimeFallbackId;
-    private int particleId;
     private int bindingCapacity;
     private int nextSurfaceId;
     private int surfaceCapacity;
@@ -194,13 +193,6 @@ public final class RtMaterialRegistry {
                 compileRuntimeTextureDesc(0, true, RtMaterialDesc.EmissionSummary.NONE,
                         defaultEmissionLuminance),
                 transparentWhiteAverage(), fallbackEntry, null, RUNTIME_TEXTURE_COVERAGE_CUTOFF);
-        // A billboard's footprint is genuinely masked — the texture's transparent border is absence, not a
-        // clear surface — so the particle binding IS the cutout-coverage one. Compiling it that way keeps
-        // the SBT class derivable from the binding at the one producer that has no render type to ask.
-        int nextParticleId = tables.cutoutVariants.getInt(
-                tables.add(compileParticleDesc(), transparentWhiteAverage(), fallbackEntry,
-                        null, RUNTIME_TEXTURE_COVERAGE_CUTOFF, true));
-
         Map<ResourceId, int[]> ids = new HashMap<>();
         List<MutableCompiledOverride> compiledOverrides = new ArrayList<>();
         for (RtMaterialOverrides.Rule rule : overrides.rules()) {
@@ -376,7 +368,6 @@ public final class RtMaterialRegistry {
             bindingIds.put(bindingRecords.get(i), i);
         }
         runtimeFallbackId = nextRuntimeFallbackId;
-        particleId = nextParticleId;
         bindingCapacity = nextBindingCapacity;
         nextSurfaceId = surfaceCount;
         surfaceCapacity = nextSurfaceCapacity;
@@ -469,17 +460,6 @@ public final class RtMaterialRegistry {
     }
 
     /**
-     * The binding every particle billboard submits with. A billboard is a thin surface with nothing
-     * behind it, so it needs no path of its own — its material says so, and the shading that follows is
-     * the same one every other surface gets. Compiled with cutout coverage (the texture's transparent
-     * border is absence, not a clear surface), so a caller that isn't blending needs no derivation and
-     * the SBT class falls out of {@link #sbtClassFor} like every other producer's.
-     */
-    public int particleId(boolean stochasticCoverage) {
-        return stochasticCoverage ? withStochasticCoverage(particleId) : particleId;
-    }
-
-    /**
      * The binding resolving {@code bindingId}'s surface with stochastic coverage. A blended submission
      * decides presence with white noise whatever cutoff the material compiled, so this overrides the
      * coverage axis and leaves everything else — surface, base-color texture, transmittance — alone.
@@ -507,6 +487,12 @@ public final class RtMaterialRegistry {
                 base.surface(), base.shadowTint(), base.packed1()));
     }
 
+    /** Derive cutout coverage only while {@code materials} is still the published resource epoch. */
+    public synchronized int withCutoutCoverage(Snapshot materials, int bindingId) {
+        requireCurrent(materials);
+        return withCutoutCoverage(bindingId);
+    }
+
     /**
      * The SBT hit-group class {@code bindingId} needs: {@link RtAccel#CLASS_MASKED} when the surface's
      * footprint is genuinely tested (cutout/stochastic coverage, any-hit on both ray types),
@@ -525,14 +511,38 @@ public final class RtMaterialRegistry {
     }
 
     /**
-     * The binding pairing {@code bindingId}'s surface with a bindless base-color texture.
+     * The binding pairing {@code bindingId}'s surface with a bindless base-color texture. Supplying a
+     * texture replaces a named definition's uniform base color while preserving its other parameters.
      */
     public synchronized int withBaseColorTextureIndex(int bindingId, int baseColorTextureIndex) {
         MaterialBindingData base = bindingRecords.get(bindingId);
-        return intern(new MaterialBindingData(
-                packBinding0(baseColorTextureIndex, bindingCoverage(base.packed0()), bindingFlags(base.packed0()),
+        return intern(baseColorTextureBinding(base, baseColorTextureIndex));
+    }
+
+    /** Pair a binding with a producer texture only while {@code materials} remains the current epoch. */
+    public synchronized int withBaseColorTextureIndex(Snapshot materials, int bindingId,
+                                                       int baseColorTextureIndex) {
+        requireCurrent(materials);
+        return withBaseColorTextureIndex(bindingId, baseColorTextureIndex);
+    }
+
+    static MaterialBindingData baseColorTextureBinding(MaterialBindingData base, int baseColorTextureIndex) {
+        int flags = bindingFlags(base.packed0()) & ~BINDING_TEXTURELESS;
+        return new MaterialBindingData(
+                packBinding0(baseColorTextureIndex, bindingCoverage(base.packed0()), flags,
                         bindingSurfaceImpl(base.packed0())),
-                base.surface(), base.shadowTint(), base.packed1()));
+                base.surface(), base.shadowTint(), base.packed1());
+    }
+
+    private void requireCurrent(Snapshot materials) {
+        Snapshot current = snapshot;
+        requireSameEpoch(materials.epoch(), current != null ? current.epoch() : 0L);
+    }
+
+    static void requireSameEpoch(long capturedEpoch, long currentEpoch) {
+        if (capturedEpoch != currentEpoch) {
+            throw new IllegalStateException("Material snapshot is not the current resource epoch");
+        }
     }
 
     /** Resolve a standalone texture to its pack-compiled binding ID. */
@@ -599,7 +609,6 @@ public final class RtMaterialRegistry {
         bindingRecords.clear();
         bindingIds.clear();
         runtimeFallbackId = 0;
-        particleId = 0;
         bindingCapacity = 0;
         nextSurfaceId = 0;
         surfaceCapacity = 0;
@@ -683,19 +692,6 @@ public final class RtMaterialRegistry {
                 ? 0.0f : defaultEmissionLuminance;
         return new RtMaterialDesc(transport, source, features, roughness, metalness, ior, transmission,
                 emissionSource, emissionLuminance, emissionSummary, BUILTIN_SURFACE_IMPLEMENTATION);
-    }
-
-    /**
-     * A particle billboard: fully rough, no reflectance, and a transmission weight at the symmetric point
-     * so light from either side scatters identically. Index 1 is what makes the specular lobe vanish
-     * rather than merely darken — a camera-facing sheet has no interface to reflect off, and Fresnel at
-     * a grazing angle would otherwise give it a rim it was never meant to have.
-     */
-    private static RtMaterialDesc compileParticleDesc() {
-        return new RtMaterialDesc(TRANSPORT_SURFACE, RtMaterialDesc.Source.NEUTRAL, 0,
-                1.0f, 0.0f, 1.0f, 0.5f,
-                RtMaterialDesc.EmissionSource.NONE, 0.0f, RtMaterialDesc.EmissionSummary.NONE,
-                BUILTIN_SURFACE_IMPLEMENTATION);
     }
 
     private static RtMaterialDesc compileRuntimeTextureDesc(int features, boolean neutral,

@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.rt.material;
 
+import dev.comfyfluffy.caustica.rt.gen.MaterialBindingData;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -44,6 +45,30 @@ final class RtMaterialBindingTest {
                 RtMaterialRegistry.BINDING_TEXTURELESS, 0);
         assertEquals(4, RtMaterialRegistry.bindingFlags(packed));
         assertEquals(0x00100000, packed);
+    }
+
+    @Test
+    void producerTextureReplacesUniformBaseColorWithoutChangingCoverage() {
+        int flags = RtMaterialRegistry.BINDING_TEXTURELESS | 8;
+        MaterialBindingData base = new MaterialBindingData(
+                RtMaterialRegistry.packBinding0(0, 2, flags, 7), 11, 0x123456, 19);
+
+        MaterialBindingData textured = RtMaterialRegistry.baseColorTextureBinding(base, 23);
+
+        assertEquals(23, RtMaterialRegistry.bindingBaseColorTextureIndex(textured.packed0()));
+        assertEquals(2, RtMaterialRegistry.bindingCoverage(textured.packed0()));
+        assertEquals(8, RtMaterialRegistry.bindingFlags(textured.packed0()));
+        assertEquals(7, RtMaterialRegistry.bindingSurfaceImpl(textured.packed0()));
+        assertEquals(base.surface(), textured.surface());
+        assertEquals(base.shadowTint(), textured.shadowTint());
+        assertEquals(base.packed1(), textured.packed1());
+    }
+
+    @Test
+    void staleMaterialEpochIsRejectedBeforeBindingDerivation() {
+        RtMaterialRegistry.requireSameEpoch(12L, 12L);
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException.class,
+                () -> RtMaterialRegistry.requireSameEpoch(12L, 13L));
     }
 
     @Test

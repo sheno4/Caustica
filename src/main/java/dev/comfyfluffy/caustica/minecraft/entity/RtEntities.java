@@ -4,6 +4,7 @@ import com.mojang.blaze3d.vertex.PoseStack;
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.mixin.ParticleEngineAccessor;
 import dev.comfyfluffy.caustica.mixin.ParticleGroupAccessor;
+import dev.comfyfluffy.caustica.minecraft.provider.MinecraftMaterialSource;
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -578,15 +579,18 @@ public final class RtEntities {
         long geometryTableAddress;
         TableSlot table;
         final RtGeometryAbi.TablePrefix retainedTable;
+        final RtMaterialRegistry.Snapshot materials;
         int count;        // geometry-table entries / TLAS instances
         int logicalCount; // ordinary entities + block entities + individual particles
 
         final GraphicsUseWaiter graphicsUseWaiter;
 
         FrameBuild(List<RtAccel.Instance> base, RtGeometryAbi.TablePrefix retainedTable,
+                   RtMaterialRegistry.Snapshot materials,
                    RtGpuExecutor gpuExecutor) {
             this.base = base;
             this.retainedTable = retainedTable;
+            this.materials = materials;
             this.graphicsUseWaiter = gpuExecutor.graphicsUseWaiter();
         }
 
@@ -608,7 +612,8 @@ public final class RtEntities {
     public FrameEntities beginFrame(GpuContext ctx, List<RtAccel.Instance> base,
                                     RtGeometryAbi.TablePrefix retainedTable, int rbx, int rby, int rbz,
                                     double camX, double camY, double camZ, Matrix4f projection, Matrix4f viewRotation) {
-        FrameBuild build = new FrameBuild(base, retainedTable, ctx.gpuExecutor());
+        RtMaterialRegistry registry = RtMaterialRegistry.INSTANCE;
+        FrameBuild build = new FrameBuild(base, retainedTable, registry.requireSnapshot(), ctx.gpuExecutor());
         beginBuildIfNeeded(ctx, build);
         if (!enabled()) {
             return finishFrame(build);
@@ -621,6 +626,9 @@ public final class RtEntities {
         float partial = mc.getDeltaTracker().getGameTimeDeltaPartialTick(false);
         setCamera(camX, camY, camZ, projection, viewRotation);
 
+        var defaultMaterialResolver = capture.baseColorMaterialResolver;
+        capture.baseColorMaterialResolver = (bindingId, textureIndex) ->
+                registry.withBaseColorTextureIndex(build.materials, bindingId, textureIndex);
         try {
             try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("entity.capture")) {
                 captureEntities(ctx, build, mc, level, partial, rbx, rby, rbz);
@@ -637,6 +645,8 @@ public final class RtEntities {
             ctx.waitIdle();
             shutdown();
             throw t;
+        } finally {
+            capture.baseColorMaterialResolver = defaultMaterialResolver;
         }
         evictStaleAccels(ctx);
         evictStaleBes(ctx);
@@ -959,12 +969,14 @@ public final class RtEntities {
             return;
         }
         capture.reset();
+        RtMaterialRegistry registry = RtMaterialRegistry.INSTANCE;
         // Billboards are thin two-sided scatterers, which their material says with a transmission weight;
-        // every layer shares that one material and pairs it with its own atlas slot. The material is the
-        // cutout-coverage binding (see RtMaterialRegistry.particleId), so the SBT class falls out of it
-        // like every other producer's rather than being asserted here.
-        capture.currentMaterialId = RtMaterialRegistry.INSTANCE.particleId(false);
-        capture.currentSbtClass = RtMaterialRegistry.INSTANCE.sbtClassFor(capture.currentMaterialId);
+        // every layer shares the Minecraft source's named material and pairs it with its own atlas slot.
+        // The transparent border is absent geometry, so the producer derives cutout coverage from the
+        // named binding captured in this resource epoch.
+        int particleMaterial = build.materials.bindingId(MinecraftMaterialSource.PARTICLE_BILLBOARD);
+        capture.currentMaterialId = registry.withCutoutCoverage(build.materials, particleMaterial);
+        capture.currentSbtClass = registry.sbtClassFor(capture.currentMaterialId);
         particleDisp.clear();
         // extract() emits camera-relative positions; shift them into rebased space (identity instance).
         Vec3 camPos = cam.position();
