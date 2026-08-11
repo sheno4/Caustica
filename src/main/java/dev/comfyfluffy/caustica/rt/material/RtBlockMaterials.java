@@ -2,6 +2,7 @@ package dev.comfyfluffy.caustica.rt.material;
 
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.engine.material.EmissionFootprint;
 import dev.comfyfluffy.caustica.engine.material.MaterialCatalog;
 import dev.comfyfluffy.caustica.engine.material.MaterialTextureImage;
 import dev.comfyfluffy.caustica.engine.material.MaterialTextureAsset;
@@ -41,10 +42,10 @@ public final class RtBlockMaterials {
     public record Entry(int features, int pageIndex, int maxLod,
                         float materialU, float materialV, float materialDu, float materialDv,
                         float albedoU, float albedoV, float albedoInvDu, float albedoInvDv,
-                        RtMaterialDesc.EmissionSummary emissionSummary, RtEmissionGrid emissionGrid,
+                        RtMaterialDesc.EmissionSummary emissionSummary, EmissionFootprint emissionFootprint,
                         float averageR, float averageG, float averageB, float averageA,
                         RtMaterialDesc.EmissionSummary uniformEmissionSummary,
-                        RtEmissionGrid albedoGrid) {
+                        EmissionFootprint albedoFootprint) {
         public float[] average() {
             return new float[]{averageR, averageG, averageB, averageA};
         }
@@ -61,7 +62,7 @@ public final class RtBlockMaterials {
 
     record AlbedoStats(float averageR, float averageG, float averageB, float averageA,
                        RtMaterialDesc.EmissionSummary uniformSummary,
-                       RtEmissionGrid grid) {
+                       EmissionFootprint footprint) {
         private static final AlbedoStats NEUTRAL = new AlbedoStats(1.0f, 1.0f, 1.0f, 0.0f,
                 RtMaterialDesc.EmissionSummary.NONE, null);
     }
@@ -73,7 +74,7 @@ public final class RtBlockMaterials {
         int x;
         int y;
         RtMaterialDesc.EmissionSummary emissionSummary = RtMaterialDesc.EmissionSummary.NONE;
-        RtEmissionGrid emissionGrid;
+        EmissionFootprint emissionFootprint;
         AlbedoStats stats = AlbedoStats.NEUTRAL;
 
         Candidate(MaterialTextureAsset asset) {
@@ -137,6 +138,7 @@ public final class RtBlockMaterials {
 
     /** Compile, pack, mip, upload, and publish one immutable host catalog. */
     public void prepareAll(GpuContext ctx, int materialPageCapacity, MaterialCatalog catalog) {
+        int footprintResolution = catalog.emissionFootprintResolution();
         List<Candidate> candidates = new ArrayList<>(catalog.atlasAssets().size() + catalog.standalone().size());
         catalog.atlasAssets().forEach(asset -> candidates.add(new Candidate(asset)));
         catalog.standalone().forEach(asset -> candidates.add(new Candidate(asset)));
@@ -197,9 +199,9 @@ public final class RtBlockMaterials {
         pagePixels[0].writeFallback();
         paged.parallelStream().filter(candidate -> candidate.page >= 0).forEach(candidate -> {
             try {
-                Decoded decoded = decode(candidate);
+                Decoded decoded = decode(candidate, footprintResolution);
                 candidate.emissionSummary = decoded.emissionSummary();
-                candidate.emissionGrid = decoded.emissionGrid();
+                candidate.emissionFootprint = decoded.emissionFootprint();
                 candidate.stats = decoded.stats();
                 pagePixels[candidate.page].write(candidate, decoded.levels());
             } catch (Throwable t) {
@@ -209,7 +211,7 @@ public final class RtBlockMaterials {
         });
         candidates.parallelStream().filter(candidate -> candidate.page < 0).forEach(candidate -> {
             try {
-                candidate.stats = scanAlbedo(candidate.asset);
+                candidate.stats = scanAlbedo(candidate.asset, footprintResolution);
             } catch (Throwable t) {
                 warnOnce("RT material image scan failed for " + candidate.asset.material(), t);
             }
@@ -274,8 +276,8 @@ public final class RtBlockMaterials {
                 candidate.x / (float) pageSize, candidate.y / (float) pageSize,
                 candidate.width() / (float) pageSize, candidate.height() / (float) pageSize,
                 uv.u(), uv.v(), uv.inverseDu(), uv.inverseDv(), candidate.emissionSummary,
-                candidate.emissionGrid, stats.averageR(), stats.averageG(), stats.averageB(), stats.averageA(),
-                stats.uniformSummary(), stats.grid());
+                candidate.emissionFootprint, stats.averageR(), stats.averageG(), stats.averageB(), stats.averageA(),
+                stats.uniformSummary(), stats.footprint());
     }
 
     private Entry fallbackFor(MaterialUv uv, AlbedoStats stats) {
@@ -283,16 +285,17 @@ public final class RtBlockMaterials {
                 fallback.materialU, fallback.materialV, fallback.materialDu, fallback.materialDv,
                 uv.u(), uv.v(), uv.inverseDu(), uv.inverseDv(), RtMaterialDesc.EmissionSummary.NONE, null,
                 stats.averageR(), stats.averageG(), stats.averageB(), stats.averageA(),
-                stats.uniformSummary(), stats.grid());
+                stats.uniformSummary(), stats.footprint());
     }
 
     private record Decoded(List<RtMaterialTextureData.Level> levels,
                            RtMaterialDesc.EmissionSummary emissionSummary,
-                           RtEmissionGrid emissionGrid, AlbedoStats stats) {
+                           EmissionFootprint emissionFootprint, AlbedoStats stats) {
     }
 
-    private static RtEmissionGrid emissionGrid(float[] linearAlbedo, float[] mask, int width, int height) {
-        RtEmissionGrid.Builder builder = new RtEmissionGrid.Builder(width, height);
+    private static EmissionFootprint emissionFootprint(float[] linearAlbedo, float[] mask,
+                                                       int width, int height, int resolution) {
+        EmissionFootprint.Builder builder = new EmissionFootprint.Builder(resolution, width, height);
         for (int y = 0; y < height; y++) {
             for (int x = 0; x < width; x++) {
                 int pixel = y * width + x;
@@ -305,7 +308,7 @@ public final class RtBlockMaterials {
         return builder.build();
     }
 
-    private static Decoded decode(Candidate candidate) throws Exception {
+    private static Decoded decode(Candidate candidate, int footprintResolution) throws Exception {
         try (MaterialTextureImage texture = candidate.asset.texture().open()) {
             int width = candidate.width();
             int height = candidate.height();
@@ -314,7 +317,7 @@ public final class RtBlockMaterials {
             float[] surface1 = new float[surface0.length];
             float[] linearAlbedo = new float[surface0.length];
             float[] authoredEmission = candidate.asset.emissionMask() ? new float[width * height] : null;
-            StatsAccumulator stats = new StatsAccumulator(width, height);
+            StatsAccumulator stats = new StatsAccumulator(width, height, footprintResolution);
             OpenPbrTextureTexel texel = new OpenPbrTextureTexel();
             for (int y = 0; y < height; y++) {
                 for (int x = 0; x < width; x++) {
@@ -346,20 +349,22 @@ public final class RtBlockMaterials {
                 }
             }
             RtMaterialDesc.EmissionSummary emissionSummary = RtMaterialDesc.EmissionSummary.NONE;
-            RtEmissionGrid grid = null;
+            EmissionFootprint footprint = null;
             if (authoredEmission != null) {
                 emissionSummary = summarizeEmission(linearAlbedo, authoredEmission);
-                grid = emissionGrid(linearAlbedo, authoredEmission, width, height);
+                footprint = emissionFootprint(linearAlbedo, authoredEmission, width, height,
+                        footprintResolution);
             }
             int maxLod = maxLodFor(width, height);
             return new Decoded(RtMaterialTextureData.mipChain(new RtMaterialTextureData.Level(width, height,
-                    surface0, normal, surface1), maxLod), emissionSummary, grid, stats.finish());
+                    surface0, normal, surface1), maxLod), emissionSummary, footprint,
+                    stats.finish());
         }
     }
 
-    static AlbedoStats scanAlbedo(MaterialTextureAsset asset) throws Exception {
+    static AlbedoStats scanAlbedo(MaterialTextureAsset asset, int footprintResolution) throws Exception {
         try (MaterialTextureImage image = asset.texture().open()) {
-            StatsAccumulator stats = new StatsAccumulator(asset.width(), asset.height());
+            StatsAccumulator stats = new StatsAccumulator(asset.width(), asset.height(), footprintResolution);
             for (int y = 0; y < asset.height(); y++) {
                 for (int x = 0; x < asset.width(); x++) {
                     stats.add(x, y, sample(image, x, y, asset.width(), asset.height()));
@@ -372,7 +377,7 @@ public final class RtBlockMaterials {
     private static final class StatsAccumulator {
         private final int width;
         private final int height;
-        private final RtEmissionGrid.Builder grid;
+        private final EmissionFootprint.Builder footprint;
         private long sr;
         private long sg;
         private long sb;
@@ -382,10 +387,10 @@ public final class RtBlockMaterials {
         private double lb;
         private int covered;
 
-        StatsAccumulator(int width, int height) {
+        StatsAccumulator(int width, int height, int footprintResolution) {
             this.width = width;
             this.height = height;
-            grid = new RtEmissionGrid.Builder(width, height);
+            footprint = new EmissionFootprint.Builder(footprintResolution, width, height);
         }
 
         void add(int x, int y, int pixel) {
@@ -404,7 +409,7 @@ public final class RtBlockMaterials {
             lr += pr;
             lg += pg;
             lb += pb;
-            grid.add(x, y, pr, pg, pb, coverage);
+            footprint.add(x, y, pr, pg, pb, coverage);
             if (a > 1) covered++;
         }
 
@@ -416,7 +421,8 @@ public final class RtBlockMaterials {
                     ? RtMaterialDesc.EmissionSummary.NONE
                     : new RtMaterialDesc.EmissionSummary((float) (lr * inv), (float) (lg * inv),
                     (float) (lb * inv), (float) (luminance * inv), covered * inv);
-            return new AlbedoStats(sr * scale, sg * scale, sb * scale, sa * scale, uniform, grid.build());
+            return new AlbedoStats(sr * scale, sg * scale, sb * scale, sa * scale, uniform,
+                    footprint.build());
         }
     }
 

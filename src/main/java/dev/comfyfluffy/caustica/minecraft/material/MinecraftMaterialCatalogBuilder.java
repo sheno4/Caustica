@@ -32,6 +32,8 @@ import java.util.Set;
 
 /** Builds the renderer's neutral material catalog from Minecraft atlases and resource packs. */
 public final class MinecraftMaterialCatalogBuilder {
+    private static final int EMISSION_FOOTPRINT_RESOLUTION = 16;
+
     private MinecraftMaterialCatalogBuilder() {
     }
 
@@ -63,7 +65,7 @@ public final class MinecraftMaterialCatalogBuilder {
         Set<ResourceId> blockNames = new HashSet<>();
         blocks.forEach(asset -> blockNames.add(asset.material()));
         List<MaterialTextureAsset> standalone = standaloneAssets(blockNames, rules);
-        return new MaterialCatalog(blocks, standalone,
+        return new MaterialCatalog(blocks, standalone, EMISSION_FOOTPRINT_RESOLUTION,
                 MinecraftLightingCalibration.current().blockEmissionLuminanceCdM2());
     }
 

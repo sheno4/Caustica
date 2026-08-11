@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.terrain;
 
-import dev.comfyfluffy.caustica.rt.material.RtEmissionGrid;
+import dev.comfyfluffy.caustica.engine.material.EmissionFootprint;
 import dev.comfyfluffy.caustica.rt.material.RtMaterialDesc;
 import dev.comfyfluffy.caustica.rt.material.RtMaterialRegistry;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
@@ -24,8 +24,8 @@ import net.minecraft.client.renderer.texture.TextureAtlasSprite;
  * light / uniform block light) is exactly what {@code world.rchit.evaluateMaterial} resolves, and
  * {@code emissionLuminance} is {@link RtMaterialDesc#emissionLuminance()} — the material-compile-time
  * baseline replaced by any resource-pack override, the single knob shared with the shader. The
- * per-material {@link RtEmissionGrid} was premultiplied from the same canonical decode. The light's
- * radiance is the mean over its bounding rectangle (dark texels included — a uniform-rectangle
+ * per-material {@link EmissionFootprint} stores the same premultiplied linear emission color and mask
+ * coverage. The light's radiance is the mean over its bounding rectangle (dark texels included — a uniform-rectangle
  * approximation), so total power equals the quad's true emissive integral: the rectangle contains every
  * emissive sample, hence {@code Le_rect * rectArea == quadArea * mean(albedo*mask)}.
  *
@@ -46,7 +46,7 @@ final class RtLightCollector {
     /** Block-light levels below this are non-emissive (smallest real level is 1/15). */
     private static final float EMISSION_EPS = 0.5f / 255f;
 
-    /** Grid-cell mask weights below this don't count as emissive coverage (mirrors the summary's 1/255). */
+    /** Footprint weights below this don't count as emissive coverage (mirrors the summary's 1/255). */
     private static final float WEIGHT_EPS = 1.0f / 255f;
 
     /** Degenerate (zero-area) rectangles carry no power and would NaN the estimator — skip them. */
@@ -61,9 +61,6 @@ final class RtLightCollector {
      * cd/m². Expressing it relative to the configured baseline keeps material brightness and sampling
      * eligibility independent.
      */
-    /** Samples per axis over the quad's (a,b) parameter square; matches the emission grid resolution. */
-    private static final int SCAN = RtEmissionGrid.SIZE;
-
     private static final int PRIM_FLOATS = 12; // Prim lanes per triangle
     private static final int PRIM_FLAGS_LANE = 9;
 
@@ -99,10 +96,12 @@ final class RtLightCollector {
             if (factor <= EMISSION_EPS) {
                 continue;
             }
-            RtEmissionGrid grid = materials.emissionGrid(materialId);
-            if (grid == null && source != RtMaterialDesc.EmissionSource.GEOMETRY_UNIFORM) {
+            EmissionFootprint footprint = materials.emissionFootprint(materialId);
+            if (footprint == null && source != RtMaterialDesc.EmissionSource.GEOMETRY_UNIFORM) {
                 continue; // masked source with no emissive texels
             }
+            int scan = footprint != null
+                    ? footprint.resolution() : materials.emissionFootprintResolution();
 
             // Quad corners: 4 consecutive verts. Parallelogram frame (exact for block faces, the same
             // approximation the barycentric UV map below already makes for irregular model quads).
@@ -138,15 +137,15 @@ final class RtLightCollector {
             }
 
             // Footprint scan over the quad's (a,b) parameter square. Fluid quads (null sprite) can't be
-            // localized into the sprite rect; they sample the grid by (a,b) directly — positionally
+            // localized into the sprite rect; they sample the footprint by (a,b) directly — positionally
             // approximate but color-exact, and fluid emitters (lava) are near-uniform anyway.
             float sumR = 0.0f, sumG = 0.0f, sumB = 0.0f;
             int emissive = 0;
-            int aMin = SCAN, aMax = -1, bMin = SCAN, bMax = -1;
-            for (int sb = 0; sb < SCAN; sb++) {
-                float b = (sb + 0.5f) / SCAN;
-                for (int sa = 0; sa < SCAN; sa++) {
-                    float a = (sa + 0.5f) / SCAN;
+            int aMin = scan, aMax = -1, bMin = scan, bMax = -1;
+            for (int sb = 0; sb < scan; sb++) {
+                float b = (sb + 0.5f) / scan;
+                for (int sa = 0; sa < scan; sa++) {
+                    float a = (sa + 0.5f) / scan;
                     float lu;
                     float lv;
                     if (localUv) {
@@ -162,15 +161,15 @@ final class RtLightCollector {
                     float r;
                     float g;
                     float bl;
-                    if (grid != null) {
-                        int cx = RtEmissionGrid.cellIndex(lu);
-                        int cy = RtEmissionGrid.cellIndex(lv);
-                        w = grid.weight(cx, cy);
-                        r = grid.r(cx, cy);
-                        g = grid.g(cx, cy);
-                        bl = grid.b(cx, cy);
+                    if (footprint != null) {
+                        int cx = footprint.sampleIndex(lu);
+                        int cy = footprint.sampleIndex(lv);
+                        w = footprint.weight(cx, cy);
+                        r = footprint.r(cx, cy);
+                        g = footprint.g(cx, cy);
+                        bl = footprint.b(cx, cy);
                     } else {
-                        w = 1.0f; // uniform source without a grid: flat white (albedo unknown)
+                        w = 1.0f; // uniform source without a footprint: flat white (albedo unknown)
                         r = 1.0f;
                         g = 1.0f;
                         bl = 1.0f;
@@ -192,8 +191,8 @@ final class RtLightCollector {
             }
 
             // Emissive-footprint bounding rectangle in (a,b), expanded to the scan cells' outer edges.
-            float aLo = aMin / (float) SCAN, aHi = (aMax + 1) / (float) SCAN;
-            float bLo = bMin / (float) SCAN, bHi = (bMax + 1) / (float) SCAN;
+            float aLo = aMin / (float) scan, aHi = (aMax + 1) / (float) scan;
+            float bLo = bMin / (float) scan, bHi = (bMax + 1) / (float) scan;
             int rectSamples = (aMax - aMin + 1) * (bMax - bMin + 1);
             float fill = emissive / (float) rectSamples;
             float rectArea = quadArea * (aHi - aLo) * (bHi - bLo);
@@ -205,7 +204,7 @@ final class RtLightCollector {
             // sum/rectSamples preserves the quad's total emissive power at rectArea. emissionLuminance()
             // is the material's final HDR luminance (catalog baseline or absolute JSON override,
             // baked in RtMaterialRegistry) — the single knob shared with world.rchit's direct-hit shading.
-            // Texture-grid averages are already linear BT.709; captured vertex/biome tint is still
+            // Footprint averages are already linear BT.709; captured vertex/biome tint is still
             // sRGB-encoded. Combine in the authored basis, use its invariant Y for the membership gate,
             // then store the emitter in the scene's linear ACEScg transport basis.
             float tintR = srgbToLinear(p[pb + 4]);

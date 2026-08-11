@@ -28,13 +28,15 @@ final class RtBlockMaterialsImageLifetimeTest {
             @Override public void close() { closes.incrementAndGet(); }
         }, MaterialUv.IDENTITY, false, false, false, OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR);
 
-        RtBlockMaterials.AlbedoStats stats = RtBlockMaterials.scanAlbedo(asset);
+        RtBlockMaterials.AlbedoStats stats = RtBlockMaterials.scanAlbedo(asset, 16);
 
         assertEquals(1, closes.get());
         assertEquals(0x20 / 255.0f, stats.averageR(), 1.0e-6f);
         assertEquals(0x40 / 255.0f, stats.averageG(), 1.0e-6f);
         assertEquals(0x60 / 255.0f, stats.averageB(), 1.0e-6f);
         assertEquals(1.0f, stats.averageA(), 1.0e-6f);
+        assertEquals(16, stats.footprint().resolution());
+        assertEquals(256, stats.footprint().sampleCount());
     }
 
     @Test
@@ -49,7 +51,7 @@ final class RtBlockMaterialsImageLifetimeTest {
             @Override public void close() { closes.incrementAndGet(); }
         }, MaterialUv.IDENTITY, false, false, false, OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR);
 
-        assertThrows(IllegalStateException.class, () -> RtBlockMaterials.scanAlbedo(asset));
+        assertThrows(IllegalStateException.class, () -> RtBlockMaterials.scanAlbedo(asset, 16));
         assertEquals(1, closes.get());
     }
 }

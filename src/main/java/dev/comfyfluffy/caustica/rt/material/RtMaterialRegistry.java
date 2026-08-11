@@ -5,6 +5,7 @@ import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.api.provider.MaterialDefinition;
 import dev.comfyfluffy.caustica.api.provider.MaterialTopology;
 import dev.comfyfluffy.caustica.engine.material.AtlasMaterialReference;
+import dev.comfyfluffy.caustica.engine.material.EmissionFootprint;
 import dev.comfyfluffy.caustica.engine.material.MaterialCatalog;
 import dev.comfyfluffy.caustica.engine.material.MaterialTextureAsset;
 import dev.comfyfluffy.caustica.engine.material.MaterialVariant;
@@ -233,7 +234,7 @@ public final class RtMaterialRegistry {
                             desc = materialWide.rule.apply(desc);
                         }
                         variants[index(profile, topology, emitting)] = tables.add(desc, entry.average(),
-                                entry, entry.albedoGrid(), PRIMARY_COVERAGE_CUTOFF,
+                                entry, entry.albedoFootprint(), PRIMARY_COVERAGE_CUTOFF,
                                 topology == MaterialTopology.SURFACE);
                     }
                 }
@@ -253,7 +254,7 @@ public final class RtMaterialRegistry {
                                     dielectricIor, defaultEmissionLuminance);
                             RtMaterialDesc desc = compiled.rule.apply(base);
                             overrideVariants[index(profile, topology, emitting)] = tables.add(desc,
-                                    entry.average(), entry, entry.albedoGrid(), PRIMARY_COVERAGE_CUTOFF,
+                                    entry.average(), entry, entry.albedoFootprint(), PRIMARY_COVERAGE_CUTOFF,
                                     topology == MaterialTopology.SURFACE);
                         }
                     }
@@ -341,7 +342,7 @@ public final class RtMaterialRegistry {
         GpuBuffer oldSurfaceTable = surfaceTable;
         long epoch = ++nextEpoch;
         List<RtMaterialDesc> descriptions = tables.descriptions;
-        List<RtEmissionGrid> grids = tables.grids;
+        List<EmissionFootprint> footprints = tables.footprints;
         List<CompiledOverride> frozenOverrides = compiledOverrides.stream()
                 .filter(value -> !value.ids.isEmpty())
                 .map(MutableCompiledOverride::freeze).toList();
@@ -360,9 +361,9 @@ public final class RtMaterialRegistry {
             sbtClasses[i] = (byte) sbtClassOf(tables.bindings.get(i));
         }
         Snapshot next = new Snapshot(epoch, Collections.unmodifiableMap(ids), fallbackVariants,
-                defaultEmissionLuminance,
+                defaultEmissionLuminance, catalog.emissionFootprintResolution(),
                 Collections.unmodifiableMap(new HashMap<>(nextNamedMaterialIds)),
-                List.copyOf(descriptions), Collections.unmodifiableList(new ArrayList<>(grids)), frozenOverrides,
+                List.copyOf(descriptions), Collections.unmodifiableList(new ArrayList<>(footprints)), frozenOverrides,
                 tables.cutoutVariants.toIntArray(), sbtClasses);
         runtimeTextureIds = Collections.unmodifiableMap(nextRuntimeTextureIds);
         namedMaterialIds = Collections.unmodifiableMap(nextNamedMaterialIds);
@@ -718,14 +719,14 @@ public final class RtMaterialRegistry {
      * The compiled tables under construction during a rebuild. Every compiled surface gets one binding —
      * plus, for terrain-reachable materials, the cutout-coverage sibling a masked producer asks for — so
      * the returned binding ID is what geometry stores and what {@link Snapshot} indexes its descriptions,
-     * emission grids and SBT classes by. Siblings share the base's surface, description and grid, so they
+     * emission footprints and SBT classes by. Siblings share the base's surface, description and footprint, so they
      * cost sixteen table bytes and two list slots each and keep every parallel array dense.
      */
     private static final class CompiledTables {
         final List<SurfaceMaterialData> surfaces;
         final List<MaterialBindingData> bindings;
         final List<RtMaterialDesc> descriptions;
-        final List<RtEmissionGrid> grids;
+        final List<EmissionFootprint> footprints;
         /** Parallel to {@code bindings}: the cutout-coverage variant of each ID, or the ID itself. */
         final IntArrayList cutoutVariants;
 
@@ -733,22 +734,22 @@ public final class RtMaterialRegistry {
             surfaces = new ArrayList<>(expected);
             bindings = new ArrayList<>(expected);
             descriptions = new ArrayList<>(expected);
-            grids = new ArrayList<>(expected);
+            footprints = new ArrayList<>(expected);
             cutoutVariants = new IntArrayList(expected);
         }
 
         int add(RtMaterialDesc desc, float[] average, RtBlockMaterials.Entry entry,
-                RtEmissionGrid uniformGrid, float coverageCutoff) {
-            return add(desc, average, entry, uniformGrid, coverageCutoff, false);
+                EmissionFootprint uniformFootprint, float coverageCutoff) {
+            return add(desc, average, entry, uniformFootprint, coverageCutoff, false);
         }
 
         int add(RtMaterialDesc desc, float[] average, RtBlockMaterials.Entry entry,
-                RtEmissionGrid uniformGrid, float coverageCutoff, boolean cutoutSibling) {
+                EmissionFootprint uniformFootprint, float coverageCutoff, boolean cutoutSibling) {
             int surfaceId = surfaces.size();
             surfaces.add(surface(desc, entry, entry.albedoU(), entry.albedoV(),
                     entry.albedoInvDu(), entry.albedoInvDv()));
             int id = append(binding(surfaceId, desc, average, SHARED_ATLAS_BASE_COLOR_TEXTURE_INDEX, coverageCutoff),
-                    desc, gridFor(desc, entry, uniformGrid));
+                    desc, footprintFor(desc, entry, uniformFootprint));
             if (cutoutSibling) {
                 cutoutVariants.set(id, addCutoutSibling(id));
             }
@@ -769,35 +770,35 @@ public final class RtMaterialRegistry {
             return append(textureless, desc, null);
         }
 
-        /** The base's binding with {@link #COVERAGE_CUTOUT}, over the same surface/description/grid. */
+        /** The base's binding with {@link #COVERAGE_CUTOUT}, over the same surface/description/footprint. */
         private int addCutoutSibling(int baseId) {
             MaterialBindingData base = bindings.get(baseId);
             return append(new MaterialBindingData(
                             packBinding0(bindingBaseColorTextureIndex(base.packed0()), COVERAGE_CUTOUT,
                                     bindingFlags(base.packed0()), bindingSurfaceImpl(base.packed0())),
                             base.surface(), base.shadowTint(), base.packed1()),
-                    descriptions.get(baseId), grids.get(baseId));
+                    descriptions.get(baseId), footprints.get(baseId));
         }
 
-        private int append(MaterialBindingData binding, RtMaterialDesc desc, RtEmissionGrid grid) {
+        private int append(MaterialBindingData binding, RtMaterialDesc desc, EmissionFootprint footprint) {
             int id = bindings.size();
             bindings.add(binding);
             descriptions.add(desc);
-            grids.add(grid);
+            footprints.add(footprint);
             cutoutVariants.add(id); // no sibling of its own until one is compiled below
             return id;
         }
     }
 
     /**
-     * The emission grid whose per-texel source matches what {@code world.rchit} shades for this
+     * The emission footprint whose sampled source matches what {@code world.rchit} shades for this
      * description — the same selection {@link #variantSummary}/override application made for the summary.
      */
-    private static RtEmissionGrid gridFor(RtMaterialDesc desc, RtBlockMaterials.Entry entry,
-                                          RtEmissionGrid uniformGrid) {
+    private static EmissionFootprint footprintFor(RtMaterialDesc desc, RtBlockMaterials.Entry entry,
+                                                  EmissionFootprint uniformFootprint) {
         return switch (desc.emissionSource()) {
-            case AUTHORED_MASK, DERIVED_MASK -> entry.emissionGrid();
-            case GEOMETRY_UNIFORM -> uniformGrid;
+            case AUTHORED_MASK, DERIVED_MASK -> entry.emissionFootprint();
+            case GEOMETRY_UNIFORM -> uniformFootprint;
             case NONE -> null;
         };
     }
@@ -926,32 +927,35 @@ public final class RtMaterialRegistry {
     private record CompiledOverride(RtMaterialOverrides.Rule rule, Map<ResourceId, int[]> ids) {
     }
 
-    /** Read-only lookup captured once by a terrain task. */
+    /** Read-only lookup captured once by a geometry-build task. */
     public static final class Snapshot {
         private final long epoch;
         private final Map<ResourceId, int[]> ids;
         private final int[] fallbackVariants;
         private final float defaultUniformEmissionLuminanceCdM2;
+        private final int emissionFootprintResolution;
         private final Map<ResourceId, Integer> namedMaterialIds;
         private final List<RtMaterialDesc> descriptions;
-        private final List<RtEmissionGrid> grids;
+        private final List<EmissionFootprint> footprints;
         private final List<CompiledOverride> overrides;
         private final int[] cutoutVariants;
         private final byte[] sbtClasses;
 
         private Snapshot(long epoch, Map<ResourceId, int[]> ids, int[] fallbackVariants,
                          float defaultUniformEmissionLuminanceCdM2,
+                         int emissionFootprintResolution,
                          Map<ResourceId, Integer> namedMaterialIds,
                          List<RtMaterialDesc> descriptions,
-                         List<RtEmissionGrid> grids, List<CompiledOverride> overrides,
+                         List<EmissionFootprint> footprints, List<CompiledOverride> overrides,
                          int[] cutoutVariants, byte[] sbtClasses) {
             this.epoch = epoch;
             this.ids = ids;
             this.fallbackVariants = fallbackVariants;
             this.defaultUniformEmissionLuminanceCdM2 = defaultUniformEmissionLuminanceCdM2;
+            this.emissionFootprintResolution = emissionFootprintResolution;
             this.namedMaterialIds = namedMaterialIds;
             this.descriptions = descriptions;
-            this.grids = grids;
+            this.footprints = footprints;
             this.overrides = overrides;
             this.cutoutVariants = cutoutVariants;
             this.sbtClasses = sbtClasses;
@@ -963,6 +967,10 @@ public final class RtMaterialRegistry {
 
         public float defaultUniformEmissionLuminanceCdM2() {
             return defaultUniformEmissionLuminanceCdM2;
+        }
+
+        public int emissionFootprintResolution() {
+            return emissionFootprintResolution;
         }
 
         /** Resolve a stable name inside this immutable resource epoch. */
@@ -980,14 +988,14 @@ public final class RtMaterialRegistry {
             return descriptions.get(materialId);
         }
 
-        /** Emission summary grid matching this material's shaded emission source, or null when none. */
-        public RtEmissionGrid emissionGrid(int materialId) {
-            return grids.get(materialId);
+        /** Emission footprint matching this material's shaded emission source, or null when none. */
+        public EmissionFootprint emissionFootprint(int materialId) {
+            return footprints.get(materialId);
         }
 
         /**
          * The snapshot-local equivalent of {@link RtMaterialRegistry#withCutoutCoverage}: the ID resolving
-         * this material with deterministic cutout coverage, precompiled at rebuild so a terrain worker
+         * this material with deterministic cutout coverage, precompiled at rebuild so a geometry worker
          * never interns into the live registry. IDs without a compiled sibling (dielectric/fluid
          * variants, which no masked producer reaches) map to themselves.
          */

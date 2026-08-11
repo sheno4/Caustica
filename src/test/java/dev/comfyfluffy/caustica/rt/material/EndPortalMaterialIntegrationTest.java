@@ -66,7 +66,7 @@ final class EndPortalMaterialIntegrationTest {
                     throw new AssertionError("catalog construction must not open the image");
                 }, MaterialUv.IDENTITY, false, false, false,
                 OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR);
-        MaterialCatalog catalog = new MaterialCatalog(List.of(), List.of(portalAsset), 15000.0f);
+        MaterialCatalog catalog = new MaterialCatalog(List.of(), List.of(portalAsset), 16, 15000.0f);
         assertSame(portalAsset, catalog.standalone().getFirst());
 
         RtMaterialOverrides overrides = RtMaterialOverrides.from(sink.rules, registry::surfaceIndex);

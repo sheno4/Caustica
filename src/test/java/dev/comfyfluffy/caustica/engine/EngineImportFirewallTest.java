@@ -12,7 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class EngineImportFirewallTest {
     @Test
-    void engineSourcesDoNotImportMinecraft() throws IOException {
+    void engineSourcesDoNotImportHostOrRendererImplementations() throws IOException {
         Path engineSources = Path.of("src", "main", "java", "dev", "comfyfluffy", "caustica", "engine")
                 .toAbsolutePath().normalize();
         assertTrue(Files.isDirectory(engineSources), "engine source package is missing: " + engineSources);
@@ -25,13 +25,14 @@ final class EngineImportFirewallTest {
                     String text = lines.get(line);
                     if (text.contains("net.minecraft.") || text.contains("net.fabricmc.")
                             || text.contains("com.mojang.")
-                            || text.contains("dev.comfyfluffy.caustica.minecraft.")) {
+                            || text.contains("dev.comfyfluffy.caustica.minecraft.")
+                            || text.contains("dev.comfyfluffy.caustica.rt.")) {
                         violations.add(engineSources.relativize(source) + ":" + (line + 1) + ": " + text);
                     }
                 }
             }
         }
-        assertTrue(violations.isEmpty(), "engine package crossed the Minecraft import firewall:\n"
+        assertTrue(violations.isEmpty(), "engine package crossed the host/renderer import firewall:\n"
                 + String.join("\n", violations));
     }
 }
