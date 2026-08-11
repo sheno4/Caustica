@@ -39,10 +39,13 @@ public float3 tracePath<TC : IComposition, TTrace : IRadianceTrace>(TC.Surfaces 
     float rayConeSpread = max(seg.rayConeSpread, RAY_CONE_MIN_SPREAD);
     int maxBounces = int(worldPush.maxBounces);
     int rrStart = maxBounces <= 3 ? 1 : 2;
-    bool terrainRisOn = worldPush.risCandidates > 0u
-            && worldPush.lightCount > 0u && pc.lightBufAddr != 0;
-    bool providerRisOn = worldPush.providerLightCount > 0u && worldPush.providerLightAddr != 0;
-    bool risOn = terrainRisOn || providerRisOn;
+    bool retainedLightsPresent = worldPush.retainedLightInfo.y > 0
+            && pc.retainedLightAddr != 0 && pc.retainedLightNodeAddr != 0;
+    bool frameLightsPresent = (worldPush.frameLightInfo.y > 0 || worldPush.frameLightInfo.w > 0)
+            && pc.frameLightAddr != 0;
+    bool risOn = worldPush.risCandidates > 0u && (retainedLightsPresent || frameLightsPresent);
+    bool linkedEmitterNeeOn = worldPush.risCandidates > 0u
+            && worldPush.retainedLightInfo.z > 0 && retainedLightsPresent;
     uint proposalSeed = pix.x * 1973u + pix.y * 9277u + 26699u
             ^ worldPush.frameIndex * 2654435761u ^ sampleIndex * 2246822519u;
     proposalSeed = pcg(proposalSeed);
@@ -127,13 +130,13 @@ public float3 tracePath<TC : IComposition, TTrace : IRadianceTrace>(TC.Surfaces 
 
         // Emissive surfaces carry the resolved OpenPBR emission colour independently from base colour.
         float3 emissionRadiance = closure.emissionRadiance;
-        bool gateEmitter = terrainRisOn && payloadEmitterInList();
+        bool gateEmitter = linkedEmitterNeeOn && payloadEmitterInList();
         if (any(emissionRadiance > 0.0) && (!gateEmitter || showEnvironmentEmitter)) {
             vertexRadiance += emissionRadiance;
         }
 
-        // RIS direct lighting from terrain emitters and host-supplied lights, evaluated with the engine's
-        // reference target function against the same parameters the material closure carries.
+        // RIS direct lighting from the unified light scene, evaluated with the engine's reference target
+        // function against the same parameters the material closure carries.
         if (risOn) {
             Reservoir r = risInitial(hitPos, v, closure, seed, proposalSeed);
             vertexRadiance += shadeReservoir(surfaces, r, hitPos, n, v,

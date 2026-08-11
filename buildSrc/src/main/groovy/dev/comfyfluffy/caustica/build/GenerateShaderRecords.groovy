@@ -233,6 +233,8 @@ abstract class GenerateShaderRecords extends DefaultTask {
             ["materialBindingLayoutProbe", "MaterialBinding", "MaterialBindingData", false],
             ["surfaceMaterialLayoutProbe", "SurfaceMaterial", "SurfaceMaterialData", false],
             ["exposureStateLayoutProbe", "ExposureState", "ExposureStateData", true],
+            ["gpuLightLayoutProbe", "GpuLight", "GpuLightData", false],
+            ["gpuLightNodeLayoutProbe", "GpuLightNode", "GpuLightNodeData", false],
     ]
 
     // (reflection parameter name, expected Slang struct name, generated Java class name) for every

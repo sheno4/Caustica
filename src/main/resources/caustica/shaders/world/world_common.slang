@@ -25,11 +25,10 @@ public struct WorldPushConstants {
     public uint64_t geometryTableAddr;
     public uint64_t materialTableAddr;   // MaterialBinding[], indexed by Prim.materialId
     public uint64_t materialSurfaceAddr; // SurfaceMaterial[], indexed by MaterialBinding.surface
-    public uint64_t lightBufAddr;        // RIS emitter-NEE global light buffer (0 = none published)
-    public uint64_t lightAliasAddr;      // power-weighted O(1) alias table (0 = uniform fallback)
-    public uint64_t lightLocalAliasAddr; // power aliases relative to each section's range
-    public uint64_t lightGridCellAddr;   // dense light grid cell headers (0 = global proposals only)
-    public uint64_t lightGridSpanAddr;   // packed weighted section spans referenced by cell headers
+    public uint64_t retainedLightAddr;
+    public uint64_t retainedLightNodeAddr;
+    public uint64_t frameLightAddr;
+    public uint64_t frameLightNodeAddr;
     public uint64_t pathQueueAddr;       // packed primary -> indirect continuation records
     public uint frameIndex;
 };
@@ -67,13 +66,15 @@ public struct WorldPush {
     public uint     breakCount;
     public float4x4 curViewProj;      // forward camera-relative view-projection
     public BreakEntry breaking[8];    // Java capacity and breakCount serialization are generated from this
-    public float4   lightRebase;      // xyz hierarchy-to-current rebase, w inverse total light power
-    public float4   lightGridOrigin;     // xyz minimum cell origin in rebased blocks, w cell size
-    public int4     lightGridDims;       // xyz dense grid dimensions, w reserved
-    public uint     lightCount;       // packed Light records in pc.lightBufAddr
+    // Retained records are relative to their immutable build origin. xyz shifts them into the current
+    // frame origin and w converts one scene unit to metres.
+    public float4   retainedLightTransform;
+    // x root node, y finite-light count, z linked geometry-emitter count, w reserved.
+    public int4     retainedLightInfo;
     public float    previousTime;     // `time` last frame; equal to `time` with no adjacent frame
-    public uint64_t providerLightAddr; // current-frame ProviderLight records (0 = none submitted)
-    public uint     providerLightCount;
+    // x root node, y finite count, z first distant record, w distant count.
+    public int4     frameLightInfo;
+    public float    frameMetersPerWorldUnit;
     public uint     risCandidates;    // RIS candidate count M per diffuse vertex (0 = emitter NEE off)
     // Pre-exposure scalar applied to radiance at the outImage write
     // ONLY, so all light transport above stays in absolute scene units. Keeps stored fp16 values
@@ -82,64 +83,36 @@ public struct WorldPush {
     public float    preExposure;
 };
 
-// 32-byte hot area-light record. Linear ACEScg radiance uses packed R11G11B10; the
-// grid-relative owner section uses three unsigned 10-bit coordinates; the geometric normal is
-// reconstructed from the half axes.
-//
-// 32 divides the 64-byte cache line, so a record never straddles one. RIS fetches random records M times
-// per shading vertex, making this alignment important. float3 forces 16-byte struct alignment and 32 is
-// a multiple of it, so this lands with no tail padding.
-//
-// The rectangle spans 2U x 2V, so its area is derived as 4*|U x V|. lightGeometricNormal already
-// needs that cross product, allowing the compiler to share the length with normalization.
-public struct Light {
-    public float3 pos;      // rebased world centre, f32 (the RIS target divides by distance to it)
-    public uint   le;       // bitcast R11G11B10 radiance
-    public uint   halfUxy;  // half2(U.x, U.y)
-    public uint   halfUzVx; // half2(U.z, V.x)
-    public uint   halfVyz;  // half2(V.y, V.z)
-    public uint   section;  // 10:10:10 grid-relative section coord + bit 30 normal-flip
-};
-
-// Host-neutral light record submitted by LightProvider. Shape-specific lanes are:
+// Source-neutral 64-byte light record. Shape-specific lanes are:
 // rectangle: axis0/axis1 are half axes and shapeScalar is the geometric-normal sign;
 // point: range is the finite influence radius; spot: axis0 is direction and shapeScalar is cos(outer);
-// distant: axis0 points toward the source, shapeScalar is cos(angular radius), intensity is lux.
-public struct ProviderLight {
+// distant: axis0 points toward the source, shapeScalar is cos(angular radius), radiometry is lux.
+// selectionMetric is finite luminous power in lumens or distant illuminance luminance in lux.
+public struct GpuLight {
     public float3 pos;
     public uint type; // 0 rectangle, 1 point, 2 spot, 3 distant
     public float3 axis0;
     public float range;
     public float3 axis1;
     public float shapeScalar;
-    public float3 intensity;
-    public float metersPerWorldUnit;
+    public float3 radiometry;
+    public float selectionMetric;
 };
 
-// Eight-byte Vose alias-table column. PDFs are reconstructed from the selected Light.
-public struct LightAlias {
-    public uint  aliasIndex;
-    public float accept;
+// Source-neutral 48-byte finite-light BVH node. Leaves have lightIndex >= 0; branches have two
+// non-negative child indices. Bounds and positions use the same segment-relative scene coordinates.
+public struct GpuLightNode {
+    public float3 boundsMin;
+    public int left;
+    public float3 boundsMax;
+    public int right;
+    public float luminousPowerLumens;
+    public int lightIndex;
+    public uint2 reserved;
 };
 
-// Dense light grid cell entry. Empty coordinates have spanCount=0; populated section cells point into
-// an immutable list of weighted section light ranges built and published alongside this grid.
-public struct LightGridCell {
-    public uint spanOffset;
-    public uint spanCount;
-    public float invWeightSum;
-};
-
-// One 16-byte Vose alias column for a cell's section distribution. The two light counts are uint16s.
-public struct LightGridSpan {
-    public uint firstLight;
-    public uint aliasFirstLight;
-    public uint packedLightCounts; // low16 self, high16 alias
-    public float accept;
-};
-
-// Prim.flags bit 0: this emissive quad is in the light buffer (RtLightCollector membership).
-public static const uint PRIM_EMITTER_IN_LIGHT_BUFFER = 1u;
+// Prim.flags bit 0: this emissive primitive has a linked record in the retained light scene.
+public static const uint PRIM_EMITTER_IN_LIGHT_SCENE = 1u;
 
 // Largest finite half. Producers of fp16 HDR storage clamp to this instead of letting the conversion
 // round up to +inf and propagate as NaN — world.rgen's rgba16f outImage store most of all, which is the
@@ -194,7 +167,7 @@ public struct Payload {
 };
 
 public static const uint PAYLOAD_SHOW_ENVIRONMENT_EMITTERS = 4u;
-// Set by world.rchit on a hit whose primitive carries PRIM_EMITTER_IN_LIGHT_BUFFER: this emitter is
+// Set by world.rchit on a hit whose primitive carries PRIM_EMITTER_IN_LIGHT_SCENE: this emitter is
 // RIS-sampled, so raygen gates its direct-hit emission on diffuse continuation rays (no double count).
 public static const uint PAYLOAD_EMITTER_IN_LIST = 128u;
 // Set by world.rchit on any dielectric hit: true when the incoming ray travels

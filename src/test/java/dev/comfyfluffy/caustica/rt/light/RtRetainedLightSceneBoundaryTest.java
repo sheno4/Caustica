@@ -24,8 +24,8 @@ final class RtRetainedLightSceneBoundaryTest {
 
     @Test
     void retainedLightCoreDoesNotImportHostAdapters() throws IOException {
-        for (String file : List.of("RetainedLightBatch.java", "RtRetainedLightGrid.java",
-                "RtRetainedLightSceneBuilder.java", "RtRetainedLightScene.java")) {
+        for (String file : List.of("RetainedLightBatch.java", "RtRetainedLightSceneBuilder.java",
+                "RtRetainedLightScene.java", "RtLightScene.java")) {
             Path source = lightSource(file);
             assertTrue(Files.isRegularFile(source), "retained-light source is missing: " + source);
             String text = Files.readString(source);
@@ -39,6 +39,8 @@ final class RtRetainedLightSceneBoundaryTest {
         Path oldTerrainOwner = Path.of("src", "main", "java", "dev", "comfyfluffy", "caustica",
                 "rt", "terrain", "RtLightGridManager.java").toAbsolutePath().normalize();
         assertFalse(Files.exists(oldTerrainOwner), "async light ownership returned to terrain package");
+        assertFalse(Files.exists(lightSource("RtRetainedLightGrid.java")));
+        assertFalse(Files.exists(lightSource("RtProviderLights.java")));
     }
 
     @Test
@@ -52,6 +54,22 @@ final class RtRetainedLightSceneBoundaryTest {
         assertTrue(visibility >= 0, "uploaded generation is not published to the graphics executor");
         assertTrue(publication > visibility, "state became visible before upload publication");
         assertTrue(retirement > publication, "previous buffers retired before the state handoff");
+    }
+
+    @Test
+    void transientSlotLifetimeStartsOnlyAfterSuccessfulSubmission() throws IOException {
+        Path composite = Path.of("src", "main", "java", "dev", "comfyfluffy", "caustica",
+                "rt", "RtComposite.java").toAbsolutePath().normalize();
+        String source = Files.readString(composite);
+        int execute = source.indexOf("submission.execute(cmd);");
+        int mark = source.indexOf("lightScene.markGraphicsUse(frameLights, graphicsUse);", execute);
+        assertTrue(execute >= 0);
+        assertTrue(mark > execute, "transient ring slot was marked before successful submission");
+
+        String scene = Files.readString(lightSource("RtLightScene.java"));
+        assertTrue(scene.contains("if (descriptors.isEmpty()) return Frame.EMPTY;"));
+        assertTrue(scene.indexOf("if (descriptors.isEmpty()) return Frame.EMPTY;")
+                < scene.indexOf("ensureRing(ctx);"), "empty frames should not consume a ring slot");
     }
 
     private static Path lightSource(String file) {

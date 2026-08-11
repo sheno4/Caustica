@@ -174,8 +174,9 @@ public final class RtTerrain {
     public int blockX;
     public int blockY;
     public int blockZ;
-    /** Coalesced asynchronous, atomically published light hierarchy and section-sized proposal grid. */
-    private final RtRetainedLightScene lightGrid = new RtRetainedLightScene(RtWorkerPool.INSTANCE::submit);
+    /** Coalesced asynchronous, atomically published retained finite-light hierarchy. */
+    private final RtRetainedLightScene retainedLightScene =
+            new RtRetainedLightScene(RtWorkerPool.INSTANCE::submit);
     /** Sorted light-only snapshot, updated with section publication instead of rescanning all geometry. */
     private final TreeMap<Integer, RetainedLightBatch> lightSections = new TreeMap<>();
     private boolean lightHierarchyDirty;
@@ -232,74 +233,8 @@ public final class RtTerrain {
         return geometry.tablePrefix();
     }
 
-    /** RIS-sampled global light buffer device address, or 0 while no lights are published. */
-    public long lightBufferAddress() {
-        return lightGrid.published().lightAddress();
-    }
-
-    /** Power-weighted light alias table device address, or 0 for the shader's uniform fallback. */
-    public long lightAliasBufferAddress() {
-        return lightGrid.published().globalAliasAddress();
-    }
-
-    public long lightLocalAliasBufferAddress() {
-        return lightGrid.published().localAliasAddress();
-    }
-
-    public float lightInvGlobalPowerSum() {
-        return lightGrid.published().invGlobalPowerSum();
-    }
-
-    public long lightGridCellBufferAddress() {
-        return lightGrid.published().cellAddress();
-    }
-
-    public long lightGridSpanBufferAddress() {
-        return lightGrid.published().spanAddress();
-    }
-
-    public int lightGridOriginX() {
-        RtRetainedLightScene.PublishedState hierarchy = lightGrid.published();
-        return hierarchy.originX() + hierarchy.rebaseX() - blockX;
-    }
-
-    public int lightGridOriginY() {
-        RtRetainedLightScene.PublishedState hierarchy = lightGrid.published();
-        return hierarchy.originY() + hierarchy.rebaseY() - blockY;
-    }
-
-    public int lightGridOriginZ() {
-        RtRetainedLightScene.PublishedState hierarchy = lightGrid.published();
-        return hierarchy.originZ() + hierarchy.rebaseZ() - blockZ;
-    }
-
-    public int lightRebaseOffsetX() {
-        return lightGrid.published().rebaseX() - blockX;
-    }
-
-    public int lightRebaseOffsetY() {
-        return lightGrid.published().rebaseY() - blockY;
-    }
-
-    public int lightRebaseOffsetZ() {
-        return lightGrid.published().rebaseZ() - blockZ;
-    }
-
-    public int lightGridDimX() {
-        return lightGrid.published().dimX();
-    }
-
-    public int lightGridDimY() {
-        return lightGrid.published().dimY();
-    }
-
-    public int lightGridDimZ() {
-        return lightGrid.published().dimZ();
-    }
-
-    /** Number of compact 64-byte records in the published light buffer. */
-    public int lightCount() {
-        return lightGrid.published().lightCount();
+    public RtRetainedLightScene.PublishedState retainedLights() {
+        return retainedLightScene.published();
     }
 
     /** Per-tick residency update: window sync + dirty drain (plus the streaming fallback, see {@link #frame}). */
@@ -453,7 +388,7 @@ public final class RtTerrain {
         }
         if (reextract.isEmpty() && missing.isEmpty()
                 && completedBuilds.isEmpty()
-                && !lightGrid.hasCompletions()
+                && !retainedLightScene.hasCompletions()
                 && !lightHierarchyDirty
                 && removed.isEmpty() && prepared.isEmpty()) {
             return;
@@ -480,9 +415,9 @@ public final class RtTerrain {
 
         // Publish only a fully uploaded hierarchy. Newer section changes supersede stale worker/upload
         // results, while the previous complete generation remains active until this atomic swap.
-        if (lightGrid.hasCompletions()) {
-            try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("terrain.lightGridPublish")) {
-                lightGrid.publishReady(ctx);
+        if (retainedLightScene.hasCompletions()) {
+            try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("terrain.lightScenePublish")) {
+                retainedLightScene.publishReady(ctx);
             }
         }
 
@@ -1402,8 +1337,7 @@ public final class RtTerrain {
                                    boolean rebase, int rbx, int rby, int rbz) {
         // Geometry extraction is driven by vanilla's block-dirty stream and can run continuously while
         // the world ticks. Rebuilding the global light tables for every geometry publication clears the
-        // asynchronously published light grid state even when no emitter changed, making the shader alternate
-        // between global-only and cell proposals. Track the actual light-record diff instead.
+        // Avoid rebuilding the asynchronously published light scene when no emitter changed.
         boolean lightsChanged = false;
         RtRetainedGeometryScene.Publication<float[]> publication = geometry.publishBatch(ctx,
                 prepared, removed, desired::contains, rebase, rbx, rby, rbz);
@@ -1470,19 +1404,18 @@ public final class RtTerrain {
 
     /** Snapshot only lit sections once the previous complete generation has published. */
     private void flushLightHierarchyUpdate(GpuContext ctx) {
-        if (!lightHierarchyDirty || !lightGrid.isIdle()) return;
+        if (!lightHierarchyDirty || !retainedLightScene.isIdle()) return;
         long now = System.nanoTime();
         if (lastLightHierarchyRequestNanos != 0L
                 && now - lastLightHierarchyRequestNanos < LIGHT_HIERARCHY_UPDATE_INTERVAL_NANOS) {
             return;
         }
-        // The manager creates one immutable worker snapshot directly from the sorted values view,
-        // avoiding the previous ArrayList + defensive-copy pair on the render thread.
+        // The manager creates one immutable worker snapshot directly from the sorted values view.
         var player = Minecraft.getInstance().player;
         RtRetainedLightScene.DebugFocus debugFocus = player != null
                 ? new RtRetainedLightScene.DebugFocus(player.getX(), player.getY(), player.getZ())
                 : null;
-        lightGrid.request(ctx, lightSections.values(), blockX, blockY, blockZ,
+        retainedLightScene.request(ctx, lightSections.values(), blockX, blockY, blockZ,
                 MinecraftTerrainLightAdapter.METERS_PER_WORLD_UNIT, debugFocus);
         lightHierarchyDirty = false;
         lastLightHierarchyRequestNanos = now;
@@ -1499,7 +1432,7 @@ public final class RtTerrain {
         // its failure path has already terminally failed every accepted queued build.
         ctx.gpuExecutor().throwIfFailed();
         awaitActiveTasks();
-        lightGrid.awaitIdle();
+        retainedLightScene.awaitIdle();
         Throwable failure = null;
         SectionResult result;
         while ((result = completedBuilds.poll()) != null) {
@@ -1527,7 +1460,7 @@ public final class RtTerrain {
         // Device teardown is the one path that must prove every worker and GPU callback has relinquished
         // its resources before the executor, allocator, and VkDevice disappear.
         terrainEpoch++;
-        lightGrid.cancelPending();
+        retainedLightScene.cancelPending();
         // Running jobs observe the new epoch/cancellation token; queued jobs are removed and complete their
         // lifecycle through their cancellation callbacks instead of continuing to mesh during teardown.
         RtWorkerPool.INSTANCE.shutdown();
@@ -1552,7 +1485,7 @@ public final class RtTerrain {
         reextract.clear();
         queuedReextract.clear();
         windowValid = false;
-        lightGrid.destroyAfterDeviceIdle();
+        retainedLightScene.destroyAfterDeviceIdle();
         lightSections.clear();
         lightHierarchyDirty = false;
         lastLightHierarchyRequestNanos = 0L;
@@ -1617,7 +1550,7 @@ public final class RtTerrain {
         GraphicsUse lastGraphicsUse = ctx.gpuExecutor().latestGraphicsUse();
         geometry.clearAsync(ctx, removed);
         removed.clear();
-        lightGrid.invalidate(ctx, lastGraphicsUse);
+        retainedLightScene.invalidate(ctx, lastGraphicsUse);
         if (!oldPrepared.isEmpty()) {
             ctx.gpuExecutor().retireUnpublished(() -> destroyDetachedPrepared(oldPrepared));
         }

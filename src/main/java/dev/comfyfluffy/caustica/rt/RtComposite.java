@@ -13,7 +13,7 @@ import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
 import dev.comfyfluffy.caustica.engine.material.MaterialCatalog;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushConstantsData;
-import dev.comfyfluffy.caustica.rt.light.RtProviderLights;
+import dev.comfyfluffy.caustica.rt.light.RtLightScene;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushData;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushData.BreakEntry;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushData.Float2;
@@ -198,7 +198,7 @@ public final class RtComposite {
     private static final int PUSH_RING = 6;
     private PushSlot[] pushRing;
     private int pushSlot;
-    private final RtProviderLights providerLights = new RtProviderLights();
+    private final RtLightScene lightScene = new RtLightScene();
     private final RtSceneGeometryManager sceneGeometry = new RtSceneGeometryManager(handle -> {
         int bindingId = RtMaterialRegistry.INSTANCE.bindingId(handle.id());
         return new RtGeometryMaterialResolver.ResolvedMaterial(bindingId,
@@ -1264,13 +1264,13 @@ public final class RtComposite {
         pendingGraphicsUse = graphicsUse;
         RtSceneSource.Frame sourceFrame = null;
         RtSceneGeometryManager.FrameGeometry providerGeometry = null;
-        RtProviderLights.Frame providerLightFrame = null;
+        RtLightScene.Frame frameLights = null;
         VkCommandBuffer cmd = submission.beginTransientCommandBuffer();
         RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_COMMAND_BUFFER, cmd.address(), "composite command buffer");
         int debugView = debugView();
         RtSceneSource.Retained retained = primaryScene.retained();
         SceneOrigin sceneOrigin = retained.origin();
-        RtSceneSource.LightGrid lightGrid = retained.lightGrid();
+        RtSceneSource.RetainedLights retainedLights = retained.retainedLights();
         try (MemoryStack stack = MemoryStack.stackPush(); RtDebugLabels.Scope frameLabel = RtDebugLabels.scope(ctx, cmd, "composite frame")) {
             // RR drives the upscale: trace + jitter at render res, DLSS-RR denoises+upscales to display.
             // A debug view observes this ordinary path; it never changes jitter or disables RR.
@@ -1317,9 +1317,9 @@ public final class RtComposite {
             // Procedural domain anchor: the scene rebase origin reduced mod 4096 (kept small for shader
             // float precision). hitPos.xz (rebased) + anchor reconstructs a world-pinned coordinate, so a
             // pattern stays fixed in the world as the player moves and the rebase origin shifts.
-            providerLightFrame = providerLights.writeFrame(ctx,
+            frameLights = lightScene.prepareFrame(ctx,
                     ProviderManager.INSTANCE.frameLights(), sceneOrigin.x(), sceneOrigin.y(),
-                    sceneOrigin.z(), graphicsUseWaiter);
+                    sceneOrigin.z(), snapshot.metersPerWorldUnit(), graphicsUseWaiter);
             double proceduralPeriod = PROCEDURAL_ANCHOR_MASK + 1.0;
             Float3 proceduralDomainOffset = new Float3(sceneOrigin.wrappedX(proceduralPeriod),
                     sceneOrigin.wrappedY(proceduralPeriod), sceneOrigin.wrappedZ(proceduralPeriod));
@@ -1356,18 +1356,14 @@ public final class RtComposite {
                     breaking.length,
                     mvCurProjView,
                     breaking,
-                    // RIS emitter NEE: candidate count (0 = emitter NEE off; the shader also requires
-                    // lightCount > 0, so an empty buffer leaves only direct-hit emission). The light buffer
-                    // device addresses themselves are pc.light*Addr — every 64-bit address lives in the
-                    // push-constant block now, not here.
-                    new Float4(lightGrid.rebaseOffsetX(), lightGrid.rebaseOffsetY(),
-                            lightGrid.rebaseOffsetZ(), lightGrid.inverseGlobalPowerSum()),
-                    new Float4(lightGrid.originX(), lightGrid.originY(), lightGrid.originZ(), lightGrid.cellSize()),
-                    new Int4(lightGrid.dimensionX(), lightGrid.dimensionY(), lightGrid.dimensionZ(), 0),
-                    lightGrid.lightCount(),
+                    new Float4(retainedLights.rebaseOffsetX(), retainedLights.rebaseOffsetY(),
+                            retainedLights.rebaseOffsetZ(), retainedLights.metersPerWorldUnit()),
+                    new Int4(retainedLights.rootNodeIndex(), retainedLights.finiteLightCount(),
+                            retainedLights.linkedEmitterCount(), 0),
                     previousTime,
-                    providerLightFrame.bufferAddress(),
-                    providerLightFrame.lightCount(),
+                    new Int4(frameLights.rootNodeIndex(), frameLights.finiteLightCount(),
+                            frameLights.distantFirstLight(), frameLights.distantLightCount()),
+                    frameLights.metersPerWorldUnit(),
                     CausticaConfig.Rt.Lights.RIS_CANDIDATES.value(),
                     // Must be the SAME value the exposure resolve divides out this frame (it reads it
                     // from the same RtExposure accessor), or the two stop cancelling.
@@ -1409,9 +1405,9 @@ public final class RtComposite {
             new WorldPushConstantsData(pushBuf.deviceAddress, frame.geometryTableAddress(),
                     RtMaterialRegistry.INSTANCE.bindingTableAddress(),
                     RtMaterialRegistry.INSTANCE.surfaceTableAddress(),
-                    lightGrid.lightAddress(), lightGrid.globalAliasAddress(),
-                    lightGrid.localAliasAddress(), lightGrid.cellAddress(),
-                    lightGrid.spanAddress(), continuationQueue.deviceAddress,
+                    retainedLights.lightAddress(), retainedLights.nodeAddress(),
+                    frameLights.lightAddress(), frameLights.nodeAddress(),
+                    continuationQueue.deviceAddress,
                     (int) frameCounter).write(pushConstants);
             renderPassManager.beginFrame();
             try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("frame.skyLut")) {
@@ -1524,7 +1520,7 @@ public final class RtComposite {
         // every owner in this frame's manifest is protected through the final overlay consumer.
         sourceFrame.markGraphicsUse(graphicsUse);
         sceneGeometry.markGraphicsUse(providerGeometry, ctx, graphicsUse);
-        providerLights.markGraphicsUse(providerLightFrame, graphicsUse);
+        lightScene.markGraphicsUse(frameLights, graphicsUse);
         exposure.markStateReadbackUse(graphicsUse);
     }
 
@@ -1550,7 +1546,7 @@ public final class RtComposite {
         // Session teardown stops the GPU executor and waits the device idle before entering here, so the
         // TLAS ring's slots are no longer in flight and can be freed immediately.
         sceneGeometry.shutdown();
-        providerLights.destroy();
+        lightScene.destroy();
         RtDlssRr.INSTANCE.destroy();
         if (displayImage != null) {
             displayImage.destroy();

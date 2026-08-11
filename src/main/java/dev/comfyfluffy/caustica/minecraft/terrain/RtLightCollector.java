@@ -14,7 +14,7 @@ import net.minecraft.client.renderer.texture.TextureAtlasSprite;
  *
  * <p><b>One rectangle light per emissive quad.</b> {@code emit()}/{@code emitQuad()} always write a quad
  * as two lockstep triangles (0,1,2)(0,2,3) over 4 consecutive verts with prim/cornerUv records in step,
- * so quad {@code k} is triangles {@code 2k, 2k+1} and its corners are verts {@code 4k..4k+3}. Unlike the
+ * so quad {@code k} is triangles {@code 2k, 2k+1} and its corners are verts {@code 4k..4k+3}.
  * The light is the emissive footprint's <b>bounding rectangle</b> (half-axes in the
  * record): it doesn't overshoot the emitter shape, and its (s,t) parameterization <i>is</i> the affine
  * sprite-local UV map used for exact radiance lookup.
@@ -29,7 +29,7 @@ import net.minecraft.client.renderer.texture.TextureAtlasSprite;
  * approximation), so total power equals the quad's true emissive integral: the rectangle contains every
  * emissive sample, hence {@code Le_rect * rectArea == quadArea * mean(albedo*mask)}.
  *
- * <p><b>Membership.</b> An in-buffer quad gets {@code Prim.flags} bit 0 set on both triangles, so
+ * <p><b>Membership.</b> A scene-linked quad gets {@code Prim.flags} bit 0 set on both triangles, so
  * the raygen can gate its direct-hit emission term. Emitters too weak or too sparse (fill-ratio
  * gate) stay excluded and are always-gathered on path hits — bit-identical to the no-NEE path.
  */
@@ -40,8 +40,8 @@ final class RtLightCollector {
     /** Floats per packed light record — see {@link #append} for the 5-vec4 layout. */
     static final int FLOATS_PER_LIGHT = 20;
 
-    /** {@code Prim.flags} bit 0: this emissive quad is in the light buffer (NEE membership). */
-    static final int PRIM_FLAG_IN_LIGHT_BUFFER = 1;
+    /** {@code Prim.flags} bit 0: this emissive quad has a linked retained light (NEE membership). */
+    static final int PRIM_FLAG_IN_LIGHT_SCENE = 1;
 
     /** Block-light levels below this are non-emissive (smallest real level is 1/15). */
     private static final float EMISSION_EPS = 0.5f / 255f;
@@ -264,8 +264,8 @@ final class RtLightCollector {
                     packHalf2(uvHvU, uvHvV),
                     leR, leG, leB, packHalf2(uvCu, uvCv));
 
-            p[pb + PRIM_FLAGS_LANE] = Float.intBitsToFloat(PRIM_FLAG_IN_LIGHT_BUFFER);
-            p[pb + PRIM_FLOATS + PRIM_FLAGS_LANE] = Float.intBitsToFloat(PRIM_FLAG_IN_LIGHT_BUFFER);
+            p[pb + PRIM_FLAGS_LANE] = Float.intBitsToFloat(PRIM_FLAG_IN_LIGHT_SCENE);
+            p[pb + PRIM_FLOATS + PRIM_FLAGS_LANE] = Float.intBitsToFloat(PRIM_FLAG_IN_LIGHT_SCENE);
         }
     }
 

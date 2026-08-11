@@ -492,9 +492,8 @@ final class ProviderManagerTest {
         final AtomicInteger frameMarks = new AtomicInteger();
         final Retained retained = new Retained(SceneOrigin.ZERO, List.of(),
                 new RtGeometryAbi.TablePrefix(1L, 0),
-                new LightGrid(0, 0, 0, 0, 0,
-                        0, 0, 0, 0, 0, 0, 0, 1,
-                        0, 0, 0, 0));
+                new RetainedLights(0, 0, -1, 0, 0,
+                        0, 0, 0, 1, 0));
         final Frame frame = new Frame() {
             @Override
             public List<RtAccel.Instance> dynamicInstances() {

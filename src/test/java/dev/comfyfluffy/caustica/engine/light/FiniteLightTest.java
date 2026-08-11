@@ -24,12 +24,14 @@ final class FiniteLightTest {
     void pointRangeConvertsFromMetersAndSpotPowerUsesConeSolidAngle() {
         FiniteLight point = FiniteLight.from(new LightDescriptor.Point(1, 0, 0, 0,
                 6, 2, 2, 2), 2.0);
-        assertEquals(-3.0, point.bounds().minX());
+        assertEquals(0.0, point.bounds().minX());
+        assertEquals(0.0, point.bounds().maxX());
         assertEquals(8.0 * Math.PI, point.luminousPowerLumens(), 1.0e-6);
 
         FiniteLight spot = FiniteLight.from(new LightDescriptor.Spot(2, 0, 0, 0,
                 0, 0, -2, 8, Math.PI / 3.0, 4, 4, 4), 2.0);
-        assertEquals(-4.0, spot.bounds().minZ());
+        assertEquals(0.0, spot.bounds().minZ());
+        assertEquals(0.0, spot.bounds().maxZ());
         assertEquals(4.0 * Math.PI, spot.luminousPowerLumens(), 1.0e-6);
         assertEquals(-1.0, spot.orientation().axisZ(), 0.0);
     }

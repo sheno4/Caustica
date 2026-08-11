@@ -66,16 +66,15 @@ public final class MinecraftSceneProvider implements SceneProvider, RtSceneSourc
             return null;
         }
         SceneOrigin origin = new SceneOrigin(terrain.blockX, terrain.blockY, terrain.blockZ);
-        LightGrid lightGrid = new LightGrid(
-                terrain.lightBufferAddress(), terrain.lightAliasBufferAddress(),
-                terrain.lightLocalAliasBufferAddress(), terrain.lightGridCellBufferAddress(),
-                terrain.lightGridSpanBufferAddress(),
-                terrain.lightRebaseOffsetX(), terrain.lightRebaseOffsetY(), terrain.lightRebaseOffsetZ(),
-                terrain.lightInvGlobalPowerSum(),
-                terrain.lightGridOriginX(), terrain.lightGridOriginY(), terrain.lightGridOriginZ(), 16f,
-                terrain.lightGridDimX(), terrain.lightGridDimY(), terrain.lightGridDimZ(),
-                terrain.lightCount());
-        return new Retained(origin, terrain.staticInstances(), terrain.geometryTablePrefix(), lightGrid);
+        var published = terrain.retainedLights();
+        RetainedLights lights = new RetainedLights(
+                published.lightAddress(), published.nodeAddress(), published.rootNodeIndex(),
+                published.lightCount(), published.lightCount(),
+                published.rebaseX() - terrain.blockX,
+                published.rebaseY() - terrain.blockY,
+                published.rebaseZ() - terrain.blockZ,
+                published.metersPerWorldUnit(), published.generation());
+        return new Retained(origin, terrain.staticInstances(), terrain.geometryTablePrefix(), lights);
     }
 
     @Override

@@ -17,8 +17,8 @@ import java.util.List;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
- * Asynchronous lifecycle for one light-hierarchy generation at a time. CPU packing, global and
- * batch-local alias construction, and light grid construction all run on a worker. The render thread
+ * Asynchronous lifecycle for one retained finite-light generation at a time. CPU record packing and
+ * BVH construction run on a worker. The render thread
  * only atomically publishes GPU-complete buffers; the worker also allocates/fills staging and device
  * buffers and enqueues the copy on {@link RtGpuExecutor}. The previous complete generation remains
  * shader-visible until that point. This class does not coalesce concurrent requests itself — {@link
@@ -171,7 +171,7 @@ public final class RtRetainedLightScene {
 
     private void submitUpload(GpuContext ctx, long requestId, RtRetainedLightSceneBuilder.Data data,
                               DebugFocus debugFocus) {
-        Layout layout = Layout.of(data, data.grid() != null);
+        Layout layout = Layout.of(data);
 
         GpuBuffer arena = null;
         GpuBuffer upload = null;
@@ -184,29 +184,8 @@ public final class RtRetainedLightScene {
 
             long cursor = upload.mapped + layout.lightOffset;
             MemoryUtil.memFloatBuffer(cursor, data.packedLights().length).put(data.packedLights());
-            cursor = upload.mapped + layout.globalAliasOffset;
-            writeAliases(cursor, data.globalAliases());
-            RtRetainedLightGrid.Data grid = layout.hasGrid ? data.grid() : null;
-            if (grid != null) {
-                cursor = upload.mapped + layout.localAliasOffset;
-                writeAliases(cursor, data.localAliases());
-                cursor = upload.mapped + layout.cellOffset;
-                for (int i = 0; i < grid.cellOffsets().length; i++) {
-                    MemoryUtil.memPutInt(cursor, grid.cellOffsets()[i]);
-                    MemoryUtil.memPutInt(cursor + 4, grid.cellCounts()[i]);
-                    MemoryUtil.memPutFloat(cursor + 8, grid.cellInvWeightSums()[i]);
-                    cursor += 12;
-                }
-                cursor = upload.mapped + layout.spanOffset;
-                for (int i = 0; i < grid.spanFirstLights().length; i++) {
-                    MemoryUtil.memPutInt(cursor, grid.spanFirstLights()[i]);
-                    MemoryUtil.memPutInt(cursor + 4, grid.spanAliasFirstLights()[i]);
-                    MemoryUtil.memPutInt(cursor + 8, grid.spanLightCounts()[i]
-                            | (grid.spanAliasLightCounts()[i] << 16));
-                    MemoryUtil.memPutFloat(cursor + 12, grid.spanAccept()[i]);
-                    cursor += 16;
-                }
-            }
+            cursor = upload.mapped + layout.nodeOffset;
+            MemoryUtil.memFloatBuffer(cursor, data.packedNodes().length).put(data.packedNodes());
             upload.flush();
 
             GpuBuffer submittedUpload = upload;
@@ -234,14 +213,6 @@ public final class RtRetainedLightScene {
         }
     }
 
-    private static void writeAliases(long cursor, RtRetainedLightSceneBuilder.AliasData aliases) {
-        for (int i = 0; i < aliases.aliasIndices().length; i++) {
-            MemoryUtil.memPutInt(cursor, aliases.aliasIndices()[i]);
-            MemoryUtil.memPutFloat(cursor + 4, aliases.accept()[i]);
-            cursor += 8;
-        }
-    }
-
     private void finishUpload(long requestId, RtRetainedLightSceneBuilder.Data data, DebugFocus debugFocus,
                               GpuBuffer upload,
                               GpuBuffer arena, Layout layout,
@@ -262,13 +233,10 @@ public final class RtRetainedLightScene {
     }
 
     private void publish(GpuContext ctx, Uploaded uploaded) {
-        RtRetainedLightGrid.Data grid = uploaded.layout.hasGrid ? uploaded.data.grid() : null;
         PublishedState next = new PublishedState(uploaded.arena, uploaded.layout,
-                uploaded.data.lightCount(), uploaded.data.invGlobalPowerSum(),
-                grid != null ? grid.originX() : 0, grid != null ? grid.originY() : 0,
-                grid != null ? grid.originZ() : 0, grid != null ? grid.dimX() : 0,
-                grid != null ? grid.dimY() : 0, grid != null ? grid.dimZ() : 0,
-                uploaded.data.rebaseX(), uploaded.data.rebaseY(), uploaded.data.rebaseZ(),
+                uploaded.data.lightCount(), uploaded.data.rootNodeIndex(),
+                (int) uploaded.data.rebaseX(), (int) uploaded.data.rebaseY(),
+                (int) uploaded.data.rebaseZ(), (float) uploaded.data.metersPerWorldUnit(),
                 uploaded.requestId);
         PublishedState old = published;
         // The executor's host-side timeline wait only proves that the transfer completed. It does not
@@ -284,16 +252,11 @@ public final class RtRetainedLightScene {
         }
 
         if (CausticaConfig.Rt.Lights.STATS.value()) {
-            double legacyPower = uploaded.data.invGlobalPowerSum() > 0.0f
-                    ? 1.0 / uploaded.data.invGlobalPowerSum() : 0.0;
-            CausticaMod.LOGGER.info("RT light hierarchy {}: {} lights / {} batch slots / {} light grid spans / {} KiB; shadow BVH {} nodes / depth {} / {} lm (legacy power {}, expected lm {})",
-                    uploaded.requestId, uploaded.data.lightCount(), uploaded.data.batchFirstLights().length,
-                    grid != null ? grid.spanFirstLights().length : 0,
-                    (uploaded.layout.totalBytes + 1023L) >> 10,
+            CausticaMod.LOGGER.info("RT light hierarchy {}: {} lights / {} nodes / depth {} / {} KiB / {} lm",
+                    uploaded.requestId, uploaded.data.lightCount(),
                     uploaded.data.lightBvh().nodes().size(), uploaded.data.lightBvh().maxDepth(),
-                    uploaded.data.lightBvh().totalLuminousPowerLumens(), legacyPower,
-                    legacyPower * Math.PI * uploaded.data.metersPerWorldUnit()
-                            * uploaded.data.metersPerWorldUnit());
+                    (uploaded.layout.totalBytes + 1023L) >> 10,
+                    uploaded.data.lightBvh().totalLuminousPowerLumens());
         }
     }
 
@@ -312,27 +275,13 @@ public final class RtRetainedLightScene {
             float z = lights[record + 2];
             double dx = x - px, dy = y - py, dz = z - pz;
             if (dx * dx + dy * dy + dz * dz > radiusSq) continue;
-            // Area is derived, not stored — 4*|halfU x halfV|.
-            int packedU = Float.floatToRawIntBits(lights[record + 4]);
-            int packedUzVx = Float.floatToRawIntBits(lights[record + 5]);
-            int packedV = Float.floatToRawIntBits(lights[record + 6]);
-            float hux = Float.float16ToFloat((short) packedU);
-            float huy = Float.float16ToFloat((short) (packedU >>> 16));
-            float huz = Float.float16ToFloat((short) packedUzVx);
-            float hvx = Float.float16ToFloat((short) (packedUzVx >>> 16));
-            float hvy = Float.float16ToFloat((short) packedV);
-            float hvz = Float.float16ToFloat((short) (packedV >>> 16));
-            float crossX = huy * hvz - huz * hvy;
-            float crossY = huz * hvx - hux * hvz;
-            float crossZ = hux * hvy - huy * hvx;
-            float area = 4f * (float) Math.sqrt(crossX * crossX + crossY * crossY + crossZ * crossZ);
-            int packedLe = Float.floatToRawIntBits(lights[record + 3]);
-            float leR = RtRetainedLightSceneBuilder.unpackUnsignedFloat(packedLe & 0x7ff, 6);
-            float leG = RtRetainedLightSceneBuilder.unpackUnsignedFloat((packedLe >>> 11) & 0x7ff, 6);
-            float leB = RtRetainedLightSceneBuilder.unpackUnsignedFloat((packedLe >>> 22) & 0x3ff, 5);
-            CausticaMod.LOGGER.info("RT light[{}] world=({}, {}, {}) area={} Le=({}, {}, {})",
-                    light, x + data.rebaseX(), y + data.rebaseY(), z + data.rebaseZ(),
-                    area, leR, leG, leB);
+            float leR = lights[record + 12];
+            float leG = lights[record + 13];
+            float leB = lights[record + 14];
+            int type = Float.floatToRawIntBits(lights[record + 3]);
+            CausticaMod.LOGGER.info("RT light[{}] type={} world=({}, {}, {}) radiometry=({}, {}, {}) metric={}",
+                    light, type, x + data.rebaseX(), y + data.rebaseY(), z + data.rebaseZ(),
+                    leR, leG, leB, lights[record + 15]);
             dumped++;
         }
         CausticaMod.LOGGER.info("RT light dump: {} lights within {} blocks", dumped, (int) radius);
@@ -379,9 +328,9 @@ public final class RtRetainedLightScene {
     }
 
     public record DebugFocus(double worldX, double worldY, double worldZ) {
-        public double relativeX(int rebaseX) { return worldX - rebaseX; }
-        public double relativeY(int rebaseY) { return worldY - rebaseY; }
-        public double relativeZ(int rebaseZ) { return worldZ - rebaseZ; }
+        public double relativeX(double rebaseX) { return worldX - rebaseX; }
+        public double relativeY(double rebaseY) { return worldY - rebaseY; }
+        public double relativeZ(double rebaseZ) { return worldZ - rebaseZ; }
     }
 
     @FunctionalInterface
@@ -394,23 +343,18 @@ public final class RtRetainedLightScene {
                          int rebaseX, int rebaseY, int rebaseZ,
                          double metersPerWorldUnit, DebugFocus debugFocus) { }
 
-    public record PublishedState(GpuBuffer arena, Layout layout, int lightCount,
-                          float invGlobalPowerSum,
-                          int originX, int originY, int originZ, int dimX, int dimY, int dimZ,
-                          int rebaseX, int rebaseY, int rebaseZ, long generation) {
+    public record PublishedState(GpuBuffer arena, Layout layout, int lightCount, int rootNodeIndex,
+                          int rebaseX, int rebaseY, int rebaseZ,
+                          float metersPerWorldUnit, long generation) {
         private static final PublishedState EMPTY = empty(0L);
 
         private static PublishedState empty(long generation) {
             return new PublishedState(
-                    null, Layout.EMPTY, 0, 0.0f,
-                    0, 0, 0, 0, 0, 0, 0, 0, 0, generation);
+                    null, Layout.EMPTY, 0, -1, 0, 0, 0, 1.0f, generation);
         }
 
         public long lightAddress() { return address(layout.lightOffset); }
-        public long globalAliasAddress() { return address(layout.globalAliasOffset); }
-        public long localAliasAddress() { return layout.hasGrid ? address(layout.localAliasOffset) : 0L; }
-        public long cellAddress() { return layout.hasGrid ? address(layout.cellOffset) : 0L; }
-        public long spanAddress() { return layout.hasGrid ? address(layout.spanOffset) : 0L; }
+        public long nodeAddress() { return address(layout.nodeOffset); }
 
         private long address(long offset) {
             return arena != null ? arena.deviceAddress + offset : 0L;
@@ -427,26 +371,16 @@ public final class RtRetainedLightScene {
         }
     }
 
-    public record Layout(long lightOffset, long globalAliasOffset, long localAliasOffset,
-                  long cellOffset, long spanOffset, long totalBytes, boolean hasGrid) {
-        private static final Layout EMPTY = new Layout(0, 0, 0, 0, 0, 0, false);
+    public record Layout(long lightOffset, long nodeOffset, long totalBytes) {
+        private static final Layout EMPTY = new Layout(0, 0, 0);
 
-        static Layout of(RtRetainedLightSceneBuilder.Data data, boolean includeGrid) {
+        static Layout of(RtRetainedLightSceneBuilder.Data data) {
             long cursor = 0L;
             long lights = cursor;
             cursor = align16(Math.addExact(cursor, data.lightBytes()));
-            long globalAliases = cursor;
-            cursor = align16(Math.addExact(cursor, data.globalAliases().bytes()));
-            long localAliases = 0L, cells = 0L, spans = 0L;
-            if (includeGrid) {
-                localAliases = cursor;
-                cursor = align16(Math.addExact(cursor, data.localAliases().bytes()));
-                cells = cursor;
-                cursor = align16(Math.addExact(cursor, data.grid().cellBytes()));
-                spans = cursor;
-                cursor = align16(Math.addExact(cursor, data.grid().spanBytes()));
-            }
-            return new Layout(lights, globalAliases, localAliases, cells, spans, cursor, includeGrid);
+            long nodes = cursor;
+            cursor = align16(Math.addExact(cursor, data.nodeBytes()));
+            return new Layout(lights, nodes, cursor);
         }
 
         private static long align16(long value) {

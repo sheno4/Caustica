@@ -82,9 +82,8 @@ public record FiniteLight(LightDescriptor.Finite descriptor, LightBvh.Aabb bound
         }
         requireNonNegative(light.intensityRedCandela(), light.intensityGreenCandela(),
                 light.intensityBlueCandela());
-        double rangeWorldUnits = light.rangeMeters() / metersPerWorldUnit;
-        LightBvh.Aabb bounds = LightBvh.Aabb.around(light.positionX(), light.positionY(),
-                light.positionZ(), rangeWorldUnits, rangeWorldUnits, rangeWorldUnits);
+        LightBvh.Aabb bounds = LightBvh.Aabb.point(light.positionX(), light.positionY(),
+                light.positionZ());
         double power = 4.0 * Math.PI * luminance(light.intensityRedCandela(),
                 light.intensityGreenCandela(), light.intensityBlueCandela());
         return new FiniteLight(light, bounds, LightBvh.OrientationCone.omnidirectional(), power);
@@ -106,10 +105,8 @@ public record FiniteLight(LightDescriptor.Finite descriptor, LightBvh.Aabb bound
                 light.intensityBlueCandela());
         double[] direction = normalized(light.directionX(), light.directionY(), light.directionZ(),
                 "Spot light direction");
-        double rangeWorldUnits = light.rangeMeters() / metersPerWorldUnit;
-        // The sphere around the apex is deliberately conservative for arbitrary cone orientations.
-        LightBvh.Aabb bounds = LightBvh.Aabb.around(light.positionX(), light.positionY(),
-                light.positionZ(), rangeWorldUnits, rangeWorldUnits, rangeWorldUnits);
+        LightBvh.Aabb bounds = LightBvh.Aabb.point(light.positionX(), light.positionY(),
+                light.positionZ());
         double solidAngle = 2.0 * Math.PI * (1.0 - Math.cos(light.outerHalfAngleRadians()));
         double power = solidAngle * luminance(light.intensityRedCandela(),
                 light.intensityGreenCandela(), light.intensityBlueCandela());

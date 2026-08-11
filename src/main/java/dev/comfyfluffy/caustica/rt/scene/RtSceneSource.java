@@ -26,14 +26,14 @@ public interface RtSceneSource {
 
     void uploadPendingTextures(RtPipeline pipeline, long sampler);
 
-    /** Stable retained geometry and source-owned light-grid bindings for one renderer frame. */
+    /** Stable retained geometry and source-owned finite-light segment for one renderer frame. */
     record Retained(SceneOrigin origin, List<RtAccel.Instance> instances,
-                    RtGeometryAbi.TablePrefix geometryTable, LightGrid lightGrid) {
+                    RtGeometryAbi.TablePrefix geometryTable, RetainedLights retainedLights) {
         public Retained {
             Objects.requireNonNull(origin, "origin");
             Objects.requireNonNull(instances, "instances");
             Objects.requireNonNull(geometryTable, "geometryTable");
-            Objects.requireNonNull(lightGrid, "lightGrid");
+            Objects.requireNonNull(retainedLights, "retainedLights");
         }
     }
 
@@ -45,13 +45,11 @@ public interface RtSceneSource {
         }
     }
 
-    /** Generic retained light-grid bindings consumed by the world renderer. */
-    record LightGrid(long lightAddress, long globalAliasAddress, long localAliasAddress,
-                     long cellAddress, long spanAddress,
-                     float rebaseOffsetX, float rebaseOffsetY, float rebaseOffsetZ,
-                     float inverseGlobalPowerSum,
-                     float originX, float originY, float originZ, float cellSize,
-                     int dimensionX, int dimensionY, int dimensionZ, int lightCount) {
+    /** Generic immutable finite-light segment consumed by the renderer's unified light scene. */
+    record RetainedLights(long lightAddress, long nodeAddress, int rootNodeIndex,
+                          int finiteLightCount, int linkedEmitterCount,
+                          float rebaseOffsetX, float rebaseOffsetY, float rebaseOffsetZ,
+                          float metersPerWorldUnit, long generation) {
     }
 
     /** Frame-varying geometry plus the source-owned lifetime manifest for a submitted frame. */

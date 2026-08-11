@@ -1,8 +1,4 @@
-// Direct lighting: the emitter light grid, RIS reservoirs, and reservoir shading.
-// INDIRECT PASS ONLY — the primary pass shades nothing. Depends on trace and math.
-
-// contribution weight, M the effective sample count. wSum/phat are streaming scratch (not persisted).
-
+// Direct lighting from one source-neutral retained/transient GPU light scene.
 module lighting;
 
 import world_common;
@@ -16,24 +12,24 @@ import caustica_types;
 import surface_bsdf;
 
 public struct Reservoir {
-    public float3 pos;  // light sample point (rebased world space)
-    public float3 lnrm; // emitter outward normal, or sampled toward-source direction for distant lights
-    public float3 le;   // emitter radiance/intensity, or integrated illuminance for distant lights
-    public float area;  // emitter rectangle area (the area-light pdf factor)
+    public float3 pos;
+    public float3 lnrm;
+    public float3 le;
+    public float area;
     public float M;
     public float W;
     public float wSum;
     public float phat;
-    public uint lightType; // 0 rectangle, 1 point, 2 spot, 3 distant
-    public float shapeScalar; // cos(outer angular radius) for spot and distant
+    public uint lightType;
+    public float shapeScalar;
     public float metersPerWorldUnit;
 };
 
 public Reservoir resEmpty() {
     Reservoir r;
-    r.pos = float3(0.0, 0.0, 0.0);
-    r.lnrm = float3(0.0, 0.0, 0.0);
-    r.le = float3(0.0, 0.0, 0.0);
+    r.pos = float3(0.0);
+    r.lnrm = float3(0.0);
+    r.le = float3(0.0);
     r.area = 0.0;
     r.M = 0.0;
     r.W = 0.0;
@@ -52,17 +48,15 @@ float3 evaluateClosureResponse(SurfaceClosure surface, float3 outgoingDirection,
     query.outgoingDirection = outgoingDirection;
     query.incomingDirection = incomingDirection;
     BsdfEvaluation evaluation = evaluateBsdf(query);
-    float3 response = evaluation.value
-            * abs(dot(surface.shadingNormal, incomingDirection));
+    float3 response = evaluation.value * abs(dot(surface.shadingNormal, incomingDirection));
     phat = luminance(response);
     return response;
 }
 
-// Delta-light contribution for point and constant-intensity spot emitters. Intensity is candela and
-// distance is in world metres, so intensity/dist² is incident illuminance at the receiver.
+// Intensity is candela and squared distance is converted to metres before inverse-square falloff.
 public float3 evalDeltaLightContrib(float3 lightPos, float3 lightDirection, float3 intensity,
-                            float range, float outerCos, float metersPerWorldUnit, uint lightType,
-                            float3 hitPos, float3 v, SurfaceClosure surface, out float phat) {
+        float range, float outerCos, float metersPerWorldUnit, uint lightType,
+        float3 hitPos, float3 v, SurfaceClosure surface, out float phat) {
     phat = 0.0;
     float3 toL = lightPos - hitPos;
     float dist2 = dot(toL, toL);
@@ -71,17 +65,15 @@ public float3 evalDeltaLightContrib(float3 lightPos, float3 lightDirection, floa
     if (lightType == 2u && dot(lightDirection, -wi) < outerCos) return float3(0.0);
     float responsePhat;
     float3 response = evaluateClosureResponse(surface, v, wi, responsePhat);
-    float dist2Meters = dist2 * metersPerWorldUnit * metersPerWorldUnit;
-    response *= intensity / dist2Meters;
+    response *= intensity / (dist2 * metersPerWorldUnit * metersPerWorldUnit);
     phat = luminance(response);
     return response;
 }
 
-// A distant descriptor carries total normal illuminance integrated over a uniform-radiance cone. The
-// uniform solid-angle proposal cancels its radiance into E*2/(1+cos(alpha)); the factor tends to one for
-// an exact directional source. This keeps the continuous angular PDF out of the RIS population PDF.
+// Illuminance is integrated over a uniform-radiance angular cone. Its normalized solid-angle sampler
+// cancels to E*2/(1+cos(alpha)); the delta-direction limit is exactly one.
 public float3 evalDistantLightContrib(float3 lightDirection, float3 illuminance, float outerCos,
-                              float3 v, SurfaceClosure surface, out float phat) {
+        float3 v, SurfaceClosure surface, out float phat) {
     float angularWeight = 2.0 / (1.0 + outerCos);
     float responsePhat;
     float3 response = evaluateClosureResponse(surface, v, lightDirection, responsePhat)
@@ -102,27 +94,16 @@ public float3 sampleUniformCone(float3 axis, float outerCos, inout uint seed) {
             + bitangent * (sinTheta * sin(phi)));
 }
 
-// Unshadowed contribution of a fixed light sample point at surface; out p-hat = its
-// luminance (the resampling target). Evaluated from the UNBIASED hitPos — SURF_BIAS is applied only to
-// the shadow-ray origin in shadeReservoir, on whichever side the survivor sample lands.
-//
-// The target calls the same closure evaluator as indirect continuation. This is load-bearing for rough
-// thin-sheet transmission: a duplicated Lambert/GGX approximation would give RIS a different p-hat from
-// the BSDF that ultimately transports the selected contribution.
+// Rectangle shape sampling is uniform in area; multiplying by area cancels that continuous PDF.
 public float3 evalSampleContrib(float3 sp, float3 lnrm, float3 le, float area, float3 hitPos,
-                         float3 v, SurfaceClosure surface, out float phat) {
+        float3 v, SurfaceClosure surface, out float phat) {
     phat = 0.0;
     float3 toL = sp - hitPos;
     float dist2 = dot(toL, toL);
-    if (dist2 < 1.0e-6) {
-        return float3(0.0, 0.0, 0.0);
-    }
-    float dist = sqrt(dist2);
-    float3 wi = toL / dist;
+    if (dist2 < 1.0e-6) return float3(0.0);
+    float3 wi = toL * rsqrt(dist2);
     float cosL = max(0.0, dot(lnrm, -wi));
-    if (cosL <= 0.0) {
-        return float3(0.0, 0.0, 0.0); // receiver behind the emitter face
-    }
+    if (cosL <= 0.0) return float3(0.0);
     float responsePhat;
     float3 contrib = evaluateClosureResponse(surface, v, wi, responsePhat)
             * le * (cosL * area / dist2);
@@ -130,293 +111,165 @@ public float3 evalSampleContrib(float3 sp, float3 lnrm, float3 le, float area, f
     return contrib;
 }
 
-// Select one light from the emitted-power distribution in O(1).
-public void selectGlobalLight(inout uint proposalSeed, out uint lightIndex) {
-    float aliasSample = rndf(proposalSeed) * float(worldPush.lightCount);
-    uint column = min(uint(aliasSample), worldPush.lightCount - 1u);
-    if (pc.lightAliasAddr != 0) {
-        LightAlias a = ConstPtr<LightAlias>(pc.lightAliasAddr)[column];
-        bool self = aliasSample - float(column) < a.accept;
-        lightIndex = self ? column : a.aliasIndex;
-    } else {
-        lightIndex = column;
+float finiteNodeImportance(GpuLightNode node, float3 hitPosRelative,
+        float metersPerWorldUnit) {
+    float3 closest = clamp(hitPosRelative, node.boundsMin, node.boundsMax);
+    float3 delta = hitPosRelative - closest;
+    float distanceMeters2 = max(dot(delta, delta)
+            * metersPerWorldUnit * metersPerWorldUnit, 1.0e-6);
+    return max(0.0, node.luminousPowerLumens) / (4.0 * PI * distanceMeters2);
+}
+
+float rootImportance(uint64_t nodeAddress, int rootIndex, float3 hitPosRelative,
+        float metersPerWorldUnit) {
+    if (nodeAddress == 0 || rootIndex < 0) return 0.0;
+    GpuLightNode root = ConstPtr<GpuLightNode>(nodeAddress)[uint(rootIndex)];
+    return finiteNodeImportance(root, hitPosRelative, metersPerWorldUnit);
+}
+
+bool traverseFinite(uint64_t lightAddress, uint64_t nodeAddress, int rootIndex,
+        float3 hitPosRelative, float metersPerWorldUnit, float rootPdf,
+        inout uint proposalSeed, out GpuLight light, out float sourcePdf) {
+    sourcePdf = rootPdf;
+    int nodeIndex = rootIndex;
+    while (nodeIndex >= 0) {
+        GpuLightNode node = ConstPtr<GpuLightNode>(nodeAddress)[uint(nodeIndex)];
+        if (node.lightIndex >= 0) {
+            light = ConstPtr<GpuLight>(lightAddress)[uint(node.lightIndex)];
+            return sourcePdf > 0.0;
+        }
+        GpuLightNode left = ConstPtr<GpuLightNode>(nodeAddress)[uint(node.left)];
+        GpuLightNode right = ConstPtr<GpuLightNode>(nodeAddress)[uint(node.right)];
+        float leftWeight = finiteNodeImportance(left, hitPosRelative, metersPerWorldUnit);
+        float rightWeight = finiteNodeImportance(right, hitPosRelative, metersPerWorldUnit);
+        float sum = leftWeight + rightWeight;
+        if (!(sum > 0.0)) return false;
+        bool chooseLeft = rndf(proposalSeed) * sum < leftWeight;
+        float selectedWeight = chooseLeft ? leftWeight : rightWeight;
+        sourcePdf *= selectedWeight / sum;
+        nodeIndex = chooseLeft ? node.left : node.right;
     }
+    return false;
 }
 
-public bool findLightGridCell(float3 p, out LightGridCell cell, out int3 cellCoord) {
-    cell.spanOffset = 0u;
-    cell.spanCount = 0u;
-    cell.invWeightSum = 0.0;
-    cellCoord = int3(0, 0, 0);
-    if (pc.lightGridCellAddr == 0 || pc.lightGridSpanAddr == 0) return false;
-    int3 coord = int3(floor((p - worldPush.lightGridOrigin.xyz) / worldPush.lightGridOrigin.w));
-    if (coord.x < 0 || coord.y < 0 || coord.z < 0
-            || coord.x >= worldPush.lightGridDims.x
-            || coord.y >= worldPush.lightGridDims.y
-            || coord.z >= worldPush.lightGridDims.z) return false;
-    uint linear = (uint(coord.z) * uint(worldPush.lightGridDims.y) + uint(coord.y))
-            * uint(worldPush.lightGridDims.x) + uint(coord.x);
-    cell = ConstPtr<LightGridCell>(pc.lightGridCellAddr)[linear];
-    cellCoord = coord;
-    return cell.spanCount > 0u;
-}
-
-public void selectSectionLight(uint firstLight, uint lightCount, inout uint proposalSeed,
-                        out uint lightIndex) {
-    float aliasSample = rndf(proposalSeed) * float(lightCount);
-    uint column = min(uint(aliasSample), lightCount - 1u);
-    LightAlias alias = ConstPtr<LightAlias>(pc.lightLocalAliasAddr)[firstLight + column];
-    bool self = aliasSample - float(column) < alias.accept;
-    uint localIndex = self ? column : alias.aliasIndex;
-    lightIndex = firstLight + localIndex;
-}
-
-public float unpackUnsignedFloat(uint bits, uint mantissaBits) {
-    uint mantissaMask = (1u << mantissaBits) - 1u;
-    uint mantissa = bits & mantissaMask;
-    uint exponent = (bits >> mantissaBits) & 31u;
-    if (exponent == 0u) {
-        return float(mantissa) * exp2(float(1 - 15 - int(mantissaBits)));
-    }
-    return (1.0 + float(mantissa) / float(1u << mantissaBits))
-            * exp2(float(int(exponent) - 15));
-}
-
-public float3 lightRadiance(Light light) {
-    uint packed = light.le;
-    return float3(unpackUnsignedFloat(packed & 0x7ffu, 6u),
-            unpackUnsignedFloat((packed >> 11u) & 0x7ffu, 6u),
-            unpackUnsignedFloat((packed >> 22u) & 0x3ffu, 5u));
-}
-
-public int3 lightSectionCoord(Light light) {
-    uint packed = light.section;
-    return int3(int(packed & 0x3ffu), int((packed >> 10u) & 0x3ffu),
-            int((packed >> 20u) & 0x3ffu));
-}
-
-// The half axes share three lanes two-at-a-time; see the Light record in world_common.
-public float3 lightHalfU(Light light) {
-    return float3(unpackHalf2(light.halfUxy), unpackHalf2(light.halfUzVx).x);
-}
-
-public float3 lightHalfV(Light light) {
-    return float3(unpackHalf2(light.halfUzVx).y, unpackHalf2(light.halfVyz));
-}
-
-// U x V drives both the emitter normal and the rectangle area, so it is computed once and shared.
-public float3 lightCrossUV(Light light) {
-    return cross(lightHalfU(light), lightHalfV(light));
-}
-
-// The rect spans 2U x 2V, so its area is 4|U x V|.
-public float lightArea(Light light) {
-    return 4.0 * length(lightCrossUV(light));
-}
-
-public float3 lightGeometricNormal(Light light) {
-    float3 normal = normalize(lightCrossUV(light));
-    return (light.section & 0x40000000u) != 0u ? -normal : normal;
-}
-
-public float proposalPdf(Light light, float3 le, LightGridCell cell, int3 cellCoord,
-                  float localProbability) {
-    float power = max(0.0, lightArea(light) * luminance(le));
-    float globalPdf = pc.lightAliasAddr != 0
-            ? power * worldPush.lightRebase.w : 1.0 / float(worldPush.lightCount);
-    float localPdf = 0.0;
-    if (localProbability > 0.0 && power > 0.0) {
-        int3 delta = lightSectionCoord(light) - cellCoord;
-        if (all(abs(delta) <= int3(2, 2, 2))) {
-            float3 deltaF = float3(delta);
-            localPdf = power * cell.invWeightSum / max(1.0, dot(deltaF, deltaF));
+bool selectSceneLight(float3 hitPos, inout uint proposalSeed, out GpuLight light,
+        out float3 segmentRebase, out float metersPerWorldUnit, out float sourcePdf) {
+    float retainedWeight = rootImportance(pc.retainedLightNodeAddr,
+            worldPush.retainedLightInfo.x, hitPos - worldPush.retainedLightTransform.xyz,
+            worldPush.retainedLightTransform.w);
+    float frameWeight = rootImportance(pc.frameLightNodeAddr, worldPush.frameLightInfo.x,
+            hitPos, worldPush.frameMetersPerWorldUnit);
+    float distantWeight = 0.0;
+    if (pc.frameLightAddr != 0) {
+        for (int i = 0; i < worldPush.frameLightInfo.w; i++) {
+            GpuLight distant = ConstPtr<GpuLight>(pc.frameLightAddr)[
+                    uint(worldPush.frameLightInfo.z + i)];
+            distantWeight += max(0.0, distant.selectionMetric);
         }
     }
-    return localProbability * localPdf + (1.0 - localProbability) * globalPdf;
-}
+    float totalWeight = retainedWeight + frameWeight + distantWeight;
+    if (!(totalWeight > 0.0)) return false;
 
-public void selectLightGridSpanLight(LightGridCell cell, inout uint proposalSeed,
-                              out uint lightIndex) {
-    ConstPtr<LightGridSpan> spans = ConstPtr<LightGridSpan>(pc.lightGridSpanAddr);
-    float aliasSample = rndf(proposalSeed) * float(cell.spanCount);
-    uint column = min(uint(aliasSample), cell.spanCount - 1u);
-    LightGridSpan span = spans[cell.spanOffset + column];
-    bool self = aliasSample - float(column) < span.accept;
-    uint firstLight = self ? span.firstLight : span.aliasFirstLight;
-    uint lightCount = self ? (span.packedLightCounts & 0xffffu)
-            : (span.packedLightCounts >> 16u);
-    selectSectionLight(firstLight, lightCount, proposalSeed, lightIndex);
-}
-
-// Sample the exact mixture q = alpha*qCell + (1-alpha)*qGlobal. qCell first selects a nearby section
-// by emitted power and section distance, then its section-local power alias. Every light in
-// the neighborhood is represented without a fixed cap; qGlobal gives distant lights full support.
-// Alias spans make weighted local selection O(1). The mixture PDF is reconstructed after the single
-// Light48 load: section power cancels with the section-local light PDF.
-public void selectLightGridLight(LightGridCell cell, bool useLocal, inout uint proposalSeed,
-                          out uint lightIndex) {
-    if (useLocal) {
-        selectLightGridSpanLight(cell, proposalSeed, lightIndex);
-    } else {
-        selectGlobalLight(proposalSeed, lightIndex);
+    float choice = rndf(proposalSeed) * totalWeight;
+    if (choice < retainedWeight) {
+        segmentRebase = worldPush.retainedLightTransform.xyz;
+        metersPerWorldUnit = worldPush.retainedLightTransform.w;
+        return traverseFinite(pc.retainedLightAddr, pc.retainedLightNodeAddr,
+                worldPush.retainedLightInfo.x, hitPos - segmentRebase, metersPerWorldUnit,
+                retainedWeight / totalWeight, proposalSeed, light, sourcePdf);
     }
+    choice -= retainedWeight;
+    if (choice < frameWeight) {
+        segmentRebase = float3(0.0);
+        metersPerWorldUnit = worldPush.frameMetersPerWorldUnit;
+        return traverseFinite(pc.frameLightAddr, pc.frameLightNodeAddr,
+                worldPush.frameLightInfo.x, hitPos, metersPerWorldUnit,
+                frameWeight / totalWeight, proposalSeed, light, sourcePdf);
+    }
+    choice -= frameWeight;
+    for (int i = 0; i < worldPush.frameLightInfo.w; i++) {
+        GpuLight distant = ConstPtr<GpuLight>(pc.frameLightAddr)[uint(worldPush.frameLightInfo.z + i)];
+        float weight = max(0.0, distant.selectionMetric);
+        if (choice < weight || i == worldPush.frameLightInfo.w - 1) {
+            light = distant;
+            segmentRebase = float3(0.0);
+            metersPerWorldUnit = worldPush.frameMetersPerWorldUnit;
+            sourcePdf = weight / totalWeight;
+            return sourcePdf > 0.0;
+        }
+        choice -= weight;
+    }
+    return false;
 }
 
-// ---- RIS cost profile. Temporary probes pinned the candidate walk out of the shader to bound what
-// memory-side RIS work could ever be worth. Against an
-// 18.0ms frame at M=8, removing every dependent load (span -> alias -> record) and all lane divergence
-// saved 5.9ms — a third of the frame. Split by vertex that was ~4.3ms at secondary vertices against
-// ~1.1ms at the primary hit, and forcing coherent selection recovered at most 1.3ms of it. So the cost
-// was chasing depth, not divergence, and it lived at secondary vertices. A presampled candidate pool
-// would attack the same 5.9ms structurally, but see the note on
-// proposalSeed in tracePath for why it should share the pool rather than the seed.
-
-// Initial RIS over M power-weighted candidates -> one resampled sample, no shadow ray yet. The chosen
-// sample's W = wSum / (M * p-hat); M counts every candidate, including zero-weight ones.
 public Reservoir risInitial(float3 hitPos, float3 v, SurfaceClosure surface,
-                     inout uint seed, inout uint proposalSeed) {
+        inout uint seed, inout uint proposalSeed) {
     Reservoir r = resEmpty();
-    bool hasTerrainLights = worldPush.risCandidates > 0u
-            && pc.lightBufAddr != 0 && worldPush.lightCount > 0u;
-    bool hasProviderLights = worldPush.providerLightAddr != 0 && worldPush.providerLightCount > 0u;
-    LightGridCell gridCell;
-    int3 gridCellCoord;
-    float3 gridLookup = hitPos;
-    if (pc.lightGridCellAddr != 0) {
-        // Stochastically blend across hard section boundaries. Every cell proposal retains full global
-        // support, so conditioning on this independently jittered lookup remains unbiased.
-        gridLookup += (float3(rndf(proposalSeed), rndf(proposalSeed), rndf(proposalSeed)) - 0.5)
-                * worldPush.lightGridOrigin.w;
-    }
-    bool hasGridCell = hasTerrainLights && findLightGridCell(gridLookup, gridCell, gridCellCoord);
-    uint candidateCount = max(worldPush.risCandidates, hasProviderLights ? 1u : 0u);
+    uint candidateCount = worldPush.risCandidates;
     r.M = float(candidateCount);
-    // Keep both populations in every candidate's proposal support. Provider lights get one quarter of
-    // the mixture when terrain emitters also exist, and the full proposal when they are the only source.
-    float providerProbability = hasProviderLights ? (hasTerrainLights ? 0.25 : 1.0) : 0.0;
-    uint globalCandidateCount = hasGridCell
-            ? max(1u, (candidateCount + 2u) / 4u) : candidateCount;
-    float stratifiedLocalProbability = 1.0
-            - float(globalCandidateCount) / float(candidateCount);
-    float localProbability = hasProviderLights
-            ? (hasGridCell ? 0.75 : 0.0) : stratifiedLocalProbability;
     for (uint c = 0u; c < candidateCount; c++) {
-        bool providerCandidate = hasProviderLights
-                && (!hasTerrainLights || rndf(proposalSeed) < providerProbability);
-        if (providerCandidate) {
-            uint providerIndex = min(uint(rndf(proposalSeed)
-                    * float(worldPush.providerLightCount)), worldPush.providerLightCount - 1u);
-            ProviderLight light = ConstPtr<ProviderLight>(worldPush.providerLightAddr)[providerIndex];
-            float3 samplePos = light.pos;
-            float3 sampleNormal = light.axis0;
-            float sampleArea = light.range;
-            if (light.type == 0u) {
-                float s = rndf(seed) * 2.0 - 1.0;
-                float t = rndf(seed) * 2.0 - 1.0;
-                samplePos += s * light.axis0 + t * light.axis1;
-                sampleNormal = normalize(cross(light.axis0, light.axis1)) * light.shapeScalar;
-                sampleArea = 4.0 * length(cross(light.axis0, light.axis1));
-            } else if (light.type == 3u) {
-                sampleNormal = sampleUniformCone(light.axis0, light.shapeScalar, seed);
-            }
-            float phat;
-            if (light.type == 0u) {
-                evalSampleContrib(samplePos, sampleNormal, light.intensity, sampleArea,
-                        hitPos, v, surface, phat);
-            } else if (light.type == 3u) {
-                evalDistantLightContrib(sampleNormal, light.intensity, light.shapeScalar,
-                        v, surface, phat);
-            } else {
-                evalDeltaLightContrib(samplePos, light.axis0, light.intensity, light.range,
-                        light.shapeScalar, light.metersPerWorldUnit, light.type,
-                        hitPos, v, surface, phat);
-            }
-            if (phat <= 0.0) continue;
-            // This is the discrete population PDF. Rectangle area and the normalized distant angular
-            // proposal are already canceled inside their contribution evaluations; point and spot are
-            // delta distributions and have no continuous shape PDF.
-            float sourcePdf = providerProbability / float(worldPush.providerLightCount);
-            float w = phat / max(sourcePdf, 1.0e-20);
-            r.wSum += w;
-            if (rndf(seed) * r.wSum < w) {
-                r.pos = samplePos;
-                r.lnrm = sampleNormal;
-                r.le = light.intensity;
-                r.area = sampleArea;
-                r.phat = phat;
-                r.lightType = light.type;
-                r.shapeScalar = light.shapeScalar;
-                r.metersPerWorldUnit = light.metersPerWorldUnit;
-            }
-            continue;
+        GpuLight light;
+        float3 segmentRebase;
+        float metersPerWorldUnit;
+        float sourcePdf;
+        if (!selectSceneLight(hitPos, proposalSeed, light, segmentRebase,
+                metersPerWorldUnit, sourcePdf)) continue;
+
+        float3 samplePos = light.pos + segmentRebase;
+        float3 sampleNormal = light.axis0;
+        float sampleArea = light.range;
+        if (light.type == 0u) {
+            samplePos += (rndf(seed) * 2.0 - 1.0) * light.axis0
+                    + (rndf(seed) * 2.0 - 1.0) * light.axis1;
+            sampleNormal = normalize(cross(light.axis0, light.axis1)) * light.shapeScalar;
+            sampleArea = 4.0 * length(cross(light.axis0, light.axis1));
+        } else if (light.type == 3u) {
+            sampleNormal = sampleUniformCone(light.axis0, light.shapeScalar, seed);
         }
-        uint li;
-        uint globalsBefore = (c * globalCandidateCount) / candidateCount;
-        uint globalsAfter = ((c + 1u) * globalCandidateCount) / candidateCount;
-        // With provider lights every candidate samples the exact full mixture independently. The
-        // terrain-only path keeps its lower-variance deterministic 3:1 cell/global stratification.
-        bool useLocal = hasGridCell && (hasProviderLights
-                ? rndf(proposalSeed) < localProbability : globalsAfter == globalsBefore);
-        selectLightGridLight(gridCell, useLocal, proposalSeed, li);
-        Light lg = ConstPtr<Light>(pc.lightBufAddr)[li];
-        // Soft shadows: uniform point on the emitter rectangle ((s,t) in [-1,1]^2, pdf 1/area).
-        float s = rndf(seed) * 2.0 - 1.0;
-        float t = rndf(seed) * 2.0 - 1.0;
-        float3 sp = lg.pos + worldPush.lightRebase.xyz
-                + s * lightHalfU(lg) + t * lightHalfV(lg);
-        float3 le = lightRadiance(lg);
-        float3 lightNormal = lightGeometricNormal(lg);
-        float area = lightArea(lg);
+
         float phat;
-        evalSampleContrib(sp, lightNormal, le, area, hitPos, v,
-                surface, phat);
-        if (phat <= 0.0) {
-            continue;
+        if (light.type == 0u) {
+            evalSampleContrib(samplePos, sampleNormal, light.radiometry, sampleArea,
+                    hitPos, v, surface, phat);
+        } else if (light.type == 3u) {
+            evalDistantLightContrib(sampleNormal, light.radiometry, light.shapeScalar,
+                    v, surface, phat);
+        } else {
+            evalDeltaLightContrib(samplePos, light.axis0, light.radiometry, light.range,
+                    light.shapeScalar, metersPerWorldUnit, light.type, hitPos, v, surface, phat);
         }
-        float sourcePdf = (1.0 - providerProbability)
-                * proposalPdf(lg, le, gridCell, gridCellCoord, localProbability);
-        float w = phat / max(sourcePdf, 1.0e-20);
-        r.wSum += w;
-        if (rndf(seed) * r.wSum < w) { // weighted reservoir update
-            r.pos = sp;
-            r.lnrm = lightNormal;
-            r.le = le;
-            r.area = area;
+        if (phat <= 0.0 || sourcePdf <= 0.0) continue;
+        float weight = phat / max(sourcePdf, 1.0e-20);
+        r.wSum += weight;
+        if (rndf(seed) * r.wSum < weight) {
+            r.pos = samplePos;
+            r.lnrm = sampleNormal;
+            r.le = light.radiometry;
+            r.area = sampleArea;
             r.phat = phat;
-            r.lightType = 0u;
-            r.shapeScalar = -1.0;
-            r.metersPerWorldUnit = 1.0;
+            r.lightType = light.type;
+            r.shapeScalar = light.shapeScalar;
+            r.metersPerWorldUnit = metersPerWorldUnit;
         }
     }
-    r.W = r.phat > 0.0 ? (r.wSum / (r.M * r.phat)) : 0.0;
+    r.W = r.phat > 0.0 ? r.wSum / (r.M * r.phat) : 0.0;
     return r;
 }
 
-// Shade a finalized reservoir: recompute the survivor's contribution at (hitPos,n,v), cast ONE shadow
-// ray, and return throughput-free radiance contrib*vis*W. The one ray serves whichever term fired for
-// the survivor, reflection or transmission — the origin is biased toward the sample's side of the
-// surface.
 public float3 shadeReservoir<TSurfaces : ISurfaceDispatch>(TSurfaces surfaces, Reservoir s,
-        float3 hitPos, float3 n, float3 v, SurfaceClosure surface,
-        Medium currentMedium) {
-    if (s.W <= 0.0 || s.phat <= 0.0) {
-        return float3(0.0, 0.0, 0.0);
-    }
+        float3 hitPos, float3 n, float3 v, SurfaceClosure surface, Medium currentMedium) {
+    if (s.W <= 0.0 || s.phat <= 0.0) return float3(0.0);
     float phat;
     float3 contrib;
     if (s.lightType == 0u) {
-        contrib = evalSampleContrib(s.pos, s.lnrm, s.le, s.area, hitPos, v,
-                surface, phat);
+        contrib = evalSampleContrib(s.pos, s.lnrm, s.le, s.area, hitPos, v, surface, phat);
     } else if (s.lightType == 3u) {
-        contrib = evalDistantLightContrib(s.lnrm, s.le, s.shapeScalar,
-                v, surface, phat);
+        contrib = evalDistantLightContrib(s.lnrm, s.le, s.shapeScalar, v, surface, phat);
     } else {
         contrib = evalDeltaLightContrib(s.pos, s.lnrm, s.le, s.area, s.shapeScalar,
                 s.metersPerWorldUnit, s.lightType, hitPos, v, surface, phat);
     }
-    if (phat <= 0.0) {
-        return float3(0.0, 0.0, 0.0);
-    }
+    if (phat <= 0.0) return float3(0.0);
     if (s.lightType == 3u) {
         float side = dot(n, s.lnrm) >= 0.0 ? 1.0 : -1.0;
         float3 origin = hitPos + side * n * SURF_BIAS;
@@ -426,7 +279,6 @@ public float3 shadeReservoir<TSurfaces : ISurfaceDispatch>(TSurfaces surfaces, R
                 hasExtinction || boundaryLighting, currentMedium.implementation);
         float3 vis = shadow.transmittance;
         if (hasExtinction) {
-            // A distant emitter whose ray never leaves the current medium has an infinite optical path.
             vis *= shadow.boundaryHitT > 0.0
                     ? exp(-currentMedium.extinction * shadow.boundaryHitT) : float3(0.0);
         }
@@ -438,21 +290,15 @@ public float3 shadeReservoir<TSurfaces : ISurfaceDispatch>(TSurfaces surfaces, R
             input.boundaryDistance = shadow.boundaryHitT;
             input.mediumIor = currentMedium.ior;
             input.time = worldPush.time;
-            input.surfaceFlags = (worldPush.flags & 16u) != 0u
-                    ? SURFACE_ANIMATION_ENABLED : 0u;
+            input.surfaceFlags = (worldPush.flags & 16u) != 0u ? SURFACE_ANIMATION_ENABLED : 0u;
             vis *= surfaces.evaluateMediumLighting(currentMedium.implementation, input);
         }
         return contrib * vis * s.W;
     }
-    // Pick the shadow-ray origin on the sample's side of the surface FIRST, then measure the ray from
-    // that origin — measuring dist from hitPos while tracing from the biased origin shifts the ray tip
-    // up to SURF_BIAS*ndl toward the emitter plane, beating the 0.001*dist stop-short margin for lights
-    // closer than ~SURF_BIAS/0.001 blocks -> shadow ray hits the emitter's own face -> per-texel black.
     float side = dot(n, s.pos - hitPos) >= 0.0 ? 1.0 : -1.0;
     float3 origin = hitPos + side * n * SURF_BIAS;
     float3 toL = s.pos - origin;
     float dist = length(toL);
-    // Stop just short of the sample point so the ray doesn't self-occlude on the emitter's own face.
     bool hasExtinction = any(currentMedium.extinction > 0.0);
     bool boundaryLighting = (currentMedium.flags & MEDIUM_BOUNDARY_LIGHTING) != 0u;
     VisibilityResult shadow = visibility(origin, toL / dist, dist * 0.999,
@@ -470,14 +316,8 @@ public float3 shadeReservoir<TSurfaces : ISurfaceDispatch>(TSurfaces surfaces, R
         input.boundaryDistance = shadow.boundaryHitT;
         input.mediumIor = currentMedium.ior;
         input.time = worldPush.time;
-        input.surfaceFlags = (worldPush.flags & 16u) != 0u
-                ? SURFACE_ANIMATION_ENABLED : 0u;
+        input.surfaceFlags = (worldPush.flags & 16u) != 0u ? SURFACE_ANIMATION_ENABLED : 0u;
         vis *= surfaces.evaluateMediumLighting(currentMedium.implementation, input);
     }
     return contrib * vis * s.W;
 }
-
-// TLAS instance-mask bits (set on the Java side, ANDed against these per-ray cull masks):
-//   bit 0 (0x01) — secondary rays: shadows, GI bounces, reflections.
-//   bit 1 (0x02) — the primary camera ray.
-// Terrain / entities / block entities keep 0xFF (both bits). Particles use 0x02: primary-visible
