@@ -4,6 +4,9 @@ import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialProfile;
 import dev.comfyfluffy.caustica.api.provider.MaterialTopology;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Field;
+
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 final class RtMaterialVariantOrderingTest {
@@ -13,7 +16,8 @@ final class RtMaterialVariantOrderingTest {
                 OpenPbrMaterialProfile.ROUGH_DIELECTRIC,
                 OpenPbrMaterialProfile.CONDUCTOR,
                 OpenPbrMaterialProfile.SMOOTH_DIELECTRIC,
-                OpenPbrMaterialProfile.POLISHED_DIELECTRIC
+                OpenPbrMaterialProfile.POLISHED_DIELECTRIC,
+                OpenPbrMaterialProfile.MEDIUM_ROUGH_DIELECTRIC
         };
         int expected = 0;
         for (OpenPbrMaterialProfile profile : profiles) {
@@ -22,6 +26,23 @@ final class RtMaterialVariantOrderingTest {
                     assertEquals(expected++, RtMaterialRegistry.index(profile, topology, emitting));
                 }
             }
+        }
+    }
+
+    /**
+     * A scene source picks a profile from the declared set and the registry must already hold a compiled
+     * variant for it — {@code Snapshot.resolve} runs on geometry workers and cannot intern a new one. A
+     * profile that exists but was never compiled throws only once a chunk containing that material meshes,
+     * which is far too late.
+     */
+    @Test
+    void everyDeclaredProfileHasACompiledVariantSlot() throws ReflectiveOperationException {
+        for (Field field : OpenPbrMaterialProfile.class.getFields()) {
+            if (field.getType() != OpenPbrMaterialProfile.class) continue;
+            OpenPbrMaterialProfile profile = (OpenPbrMaterialProfile) field.get(null);
+            assertDoesNotThrow(
+                    () -> RtMaterialRegistry.index(profile, MaterialTopology.SURFACE, false),
+                    field.getName() + " is declared but has no compiled variant");
         }
     }
 

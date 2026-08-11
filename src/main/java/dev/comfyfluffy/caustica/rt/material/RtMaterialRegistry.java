@@ -126,7 +126,8 @@ public final class RtMaterialRegistry {
     // Source adapters map geometry onto this finite set before calling the registry.
     private static final OpenPbrMaterialProfile[] TEXTURE_PROFILES = {
             OpenPbrMaterialProfile.ROUGH_DIELECTRIC, OpenPbrMaterialProfile.CONDUCTOR,
-            OpenPbrMaterialProfile.SMOOTH_DIELECTRIC, OpenPbrMaterialProfile.POLISHED_DIELECTRIC};
+            OpenPbrMaterialProfile.SMOOTH_DIELECTRIC, OpenPbrMaterialProfile.POLISHED_DIELECTRIC,
+            OpenPbrMaterialProfile.MEDIUM_ROUGH_DIELECTRIC};
 
     private volatile Snapshot snapshot;
     private GpuBuffer bindingTable;

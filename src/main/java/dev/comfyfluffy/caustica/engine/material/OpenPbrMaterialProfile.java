@@ -6,7 +6,6 @@ public record OpenPbrMaterialProfile(float specularRoughness, float baseMetalnes
     public static final OpenPbrMaterialProfile CONDUCTOR = new OpenPbrMaterialProfile(0.3f, 1.0f);
     public static final OpenPbrMaterialProfile SMOOTH_DIELECTRIC = new OpenPbrMaterialProfile(0.1f, 0.0f);
     public static final OpenPbrMaterialProfile POLISHED_DIELECTRIC = new OpenPbrMaterialProfile(0.35f, 0.0f);
-    public static final OpenPbrMaterialProfile VERY_SMOOTH_DIELECTRIC = new OpenPbrMaterialProfile(0.08f, 0.0f);
     public static final OpenPbrMaterialProfile MEDIUM_ROUGH_DIELECTRIC = new OpenPbrMaterialProfile(0.7f, 0.0f);
 
     public OpenPbrMaterialProfile {
