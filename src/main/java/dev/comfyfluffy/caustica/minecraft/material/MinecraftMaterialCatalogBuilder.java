@@ -2,6 +2,7 @@ package dev.comfyfluffy.caustica.minecraft.material;
 
 import com.mojang.blaze3d.platform.NativeImage;
 import dev.comfyfluffy.caustica.CausticaMod;
+import dev.comfyfluffy.caustica.minecraft.MinecraftLightingCalibration;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.api.provider.MaterialRule;
 import dev.comfyfluffy.caustica.engine.material.MaterialCatalog;
@@ -64,7 +65,8 @@ public final class MinecraftMaterialCatalogBuilder {
         List<MaterialTextureAsset> standalone = standaloneAssets(blockNames, rules);
         ResourceId lava = ResourceId.of("minecraft", "block/lava_still");
         return new MaterialCatalog(blocks, standalone,
-                blocks.stream().anyMatch(asset -> asset.material().equals(lava)) ? lava : null);
+                blocks.stream().anyMatch(asset -> asset.material().equals(lava)) ? lava : null,
+                MinecraftLightingCalibration.current().blockEmissionLuminanceCdM2());
     }
 
     private static List<MaterialTextureAsset> standaloneAssets(Set<ResourceId> blockNames,

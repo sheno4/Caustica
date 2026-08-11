@@ -27,7 +27,8 @@ final class RtMaterialClassificationImportFirewallTest {
                     "dev.comfyfluffy.caustica.minecraft.", "TextureAtlasSprite", "NativeImage",
                     "Identifier", "SpriteContentsAccessor", "TextureAtlasAccessor",
                     "labPbrSpecular", "labPbrNormal", "inferEmissionMask", "RtLabPbr",
-                    "RtEmissionHeuristic")) {
+                    "RtEmissionHeuristic", "RtLookPackage", "defaultEmissionLuminanceCdM2()",
+                    "lavaId")) {
                 assertFalse(text.contains(forbidden),
                         () -> renderer + " crossed its host type firewall with " + forbidden);
             }

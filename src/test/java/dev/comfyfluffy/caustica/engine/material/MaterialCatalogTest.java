@@ -17,17 +17,24 @@ final class MaterialCatalogTest {
     void catalogOrdersAssetsAndRejectsDuplicateNames() {
         MaterialTextureAsset a = asset(A, MaterialTextureKind.SHARED_ATLAS, image(0xFFFFFFFF));
         MaterialTextureAsset b = asset(B, MaterialTextureKind.SHARED_ATLAS, image(0xFF000000));
-        MaterialCatalog catalog = new MaterialCatalog(List.of(b, a), List.of(), A);
+        MaterialCatalog catalog = new MaterialCatalog(List.of(b, a), List.of(), A, 15000.0f);
         assertEquals(List.of(A, B), catalog.atlasAssets().stream().map(MaterialTextureAsset::material).toList());
+        assertEquals(15000.0f, catalog.defaultUniformEmissionLuminanceCdM2());
         assertThrows(IllegalArgumentException.class,
                 () -> new MaterialCatalog(List.of(a),
-                        List.of(asset(A, MaterialTextureKind.STANDALONE, image(0))), null));
+                        List.of(asset(A, MaterialTextureKind.STANDALONE, image(0))), null, 15000.0f));
     }
 
     @Test
     void defaultUniformEmissionReferenceMustResolve() {
         assertThrows(IllegalArgumentException.class,
-                () -> new MaterialCatalog(List.of(), List.of(), A));
+                () -> new MaterialCatalog(List.of(), List.of(), A, 15000.0f));
+    }
+
+    @Test
+    void defaultUniformEmissionLuminanceMustBePositive() {
+        assertThrows(IllegalArgumentException.class,
+                () -> new MaterialCatalog(List.of(), List.of(), null, 0.0f));
     }
 
     @Test

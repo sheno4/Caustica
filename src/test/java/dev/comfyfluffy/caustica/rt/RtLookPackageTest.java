@@ -3,24 +3,25 @@ package dev.comfyfluffy.caustica.rt;
 import com.google.gson.JsonParser;
 import org.junit.jupiter.api.Test;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class RtLookPackageTest {
     private static final String VALID = """
             {"schemaVersion":5,"id":"test","packageVersion":1,
              "exposure":{"minEv":-15,"maxEv":-2,"curve":"-2:-3,2:-2,8:0,15:1"},
-             "lmt":{"resource":"lmt.bin"},
-             "lighting":{"sunIlluminanceLux":128000,"moonIlluminanceLux":5,
-             "blockEmissionLuminanceCdM2":2000,"nightAirglowLuminanceCdM2":0.002,
-             "starLuminanceCdM2":10,"moonPhaseFixedFraction":0.1}}
+             "lmt":{"resource":"lmt.bin"}}
             """;
 
     @Test
     void acceptsACompleteCurrentSchemaPackage() {
         RtLookPackage look = parse(VALID);
-        assertEquals(128000.0f, look.lighting().sunIlluminanceLux());
-        assertEquals(0.1f, look.lighting().moonPhaseFixedFraction());
+        assertEquals(-15.0f, look.exposure().minEv());
+        assertEquals("/caustica/color/looks/test/lmt.bin", look.lmtResource());
     }
 
     @Test
@@ -33,13 +34,14 @@ final class RtLookPackageTest {
     void rejectsInvalidPhysicalRanges() {
         assertThrows(IllegalArgumentException.class, () -> parse(VALID.replace("\"minEv\":-15",
                 "\"minEv\":2")));
-        assertThrows(IllegalArgumentException.class, () -> parse(VALID.replace(
-                "\"moonPhaseFixedFraction\":0.1", "\"moonPhaseFixedFraction\":1.5")));
     }
 
     @Test
-    void rejectsAMissingLightingSection() {
-        assertThrows(IllegalArgumentException.class, () -> parse(VALID.replace("\"lighting\":", "\"nope\":")));
+    void rendererLookMetadataContainsNoMinecraftLightingVocabulary() throws Exception {
+        String source = Files.readString(Path.of("src/main/java/dev/comfyfluffy/caustica/rt/RtLookPackage.java"));
+        for (String forbidden : new String[]{"sun", "moon", "block", "night", "star", "phase", "Lighting"}) {
+            assertFalse(source.toLowerCase().contains(forbidden.toLowerCase()), forbidden);
+        }
     }
 
     private static RtLookPackage parse(String json) {

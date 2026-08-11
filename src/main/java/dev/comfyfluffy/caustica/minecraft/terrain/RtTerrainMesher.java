@@ -721,7 +721,7 @@ final class RtTerrainMesher {
 
         private void emitQuad() {
             int materialId = water
-                    ? materials.bindingId(MinecraftMaterialSource.WATER) : materials.lavaId();
+                    ? materials.bindingId(MinecraftMaterialSource.WATER) : materials.defaultUniformEmissionId();
             Geom g = switch (materials.sbtClassFor(materialId)) {
                 case RtAccel.CLASS_MASKED -> cur.masked();
                 case RtAccel.CLASS_TRANSMISSIVE -> cur.transmissive();

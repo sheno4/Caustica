@@ -13,8 +13,8 @@ import java.nio.charset.StandardCharsets;
  * Immutable, versioned calibration package for the scene-to-display pipeline.
  *
  * <p>The default package is deliberately a classpath asset rather than mutable TOML configuration:
- * exposure shaping, its scene-referred LMT, and the photometric light anchors are one authored look
- * and must move together. A future package selector can load another directory with the same schema
+ * exposure shaping and its scene-referred LMT are one authored look. A future package selector can
+ * load another directory with the same schema
  * without reintroducing independent knobs.
  */
 public record RtLookPackage(
@@ -22,8 +22,7 @@ public record RtLookPackage(
         String id,
         int packageVersion,
         Exposure exposure,
-        String lmtResource,
-        Lighting lighting) {
+        String lmtResource) {
     public static final int SCHEMA_VERSION = 5;
     public static final String DEFAULT_ID = "default";
     public static final String DEFAULT_JSON = "/caustica/color/looks/default/look.json";
@@ -73,20 +72,7 @@ public record RtLookPackage(
         }
         String lmtResource = jsonResource.substring(0, slash + 1) + lmtFile;
 
-        JsonObject lightingJson = requiredObject(root, "lighting");
-        Lighting lighting = new Lighting(
-                positive(lightingJson, "sunIlluminanceLux", jsonResource),
-                positive(lightingJson, "moonIlluminanceLux", jsonResource),
-                positive(lightingJson, "blockEmissionLuminanceCdM2", jsonResource),
-                nonNegative(lightingJson, "nightAirglowLuminanceCdM2", jsonResource),
-                nonNegative(lightingJson, "starLuminanceCdM2", jsonResource),
-                nonNegative(lightingJson, "moonPhaseFixedFraction", jsonResource));
-        if (lighting.moonPhaseFixedFraction() > 1.0f) {
-            throw new IllegalArgumentException(jsonResource
-                    + ": lighting.moonPhaseFixedFraction must be in [0,1]");
-        }
-
-        return new RtLookPackage(schemaVersion, id, packageVersion, exposure, lmtResource, lighting);
+        return new RtLookPackage(schemaVersion, id, packageVersion, exposure, lmtResource);
     }
 
     private static RtLookPackage load(String resource) {
@@ -142,32 +128,6 @@ public record RtLookPackage(
         return result;
     }
 
-    private static float positive(JsonObject object, String name, String resource) {
-        return positive(object, name, resource, "lighting");
-    }
-
-    private static float positive(JsonObject object, String name, String resource, String section) {
-        float value = requiredFinite(object, name);
-        if (value <= 0.0f) {
-            throw new IllegalArgumentException(resource + ": " + section + "." + name
-                    + " must be positive");
-        }
-        return value;
-    }
-
-    private static float nonNegative(JsonObject object, String name, String resource) {
-        return nonNegative(object, name, resource, "lighting");
-    }
-
-    private static float nonNegative(JsonObject object, String name, String resource, String section) {
-        float value = requiredFinite(object, name);
-        if (value < 0.0f) {
-            throw new IllegalArgumentException(resource + ": " + section + "." + name
-                    + " must be non-negative");
-        }
-        return value;
-    }
-
     private static void validateCurve(String spec, String resource) {
         String[] points = spec.split(",");
         if (points.length != 4) {
@@ -205,20 +165,4 @@ public record RtLookPackage(
     public record Exposure(float minEv, float maxEv, String curve) {
     }
 
-    /**
-     * Photometric anchors. {@code nightAirglowLuminanceCdM2} is airglow plus unresolved starlight—the
-     * physical floor of a moonless night, approximately 1e-3 cd/m². Atmospheric multiple scattering is
-     * evaluated separately.
-     */
-    public record Lighting(
-            float sunIlluminanceLux,
-            float moonIlluminanceLux,
-            float blockEmissionLuminanceCdM2,
-            float nightAirglowLuminanceCdM2,
-            float starLuminanceCdM2,
-            float moonPhaseFixedFraction) {
-        public float moonPhaseFraction() {
-            return 1.0f - moonPhaseFixedFraction;
-        }
-    }
 }

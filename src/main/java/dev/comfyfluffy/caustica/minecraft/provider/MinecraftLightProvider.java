@@ -9,7 +9,7 @@ import dev.comfyfluffy.caustica.minecraft.MinecraftProvidersExtension;
 import dev.comfyfluffy.caustica.minecraft.sky.SkyLutPass;
 import dev.comfyfluffy.caustica.engine.light.LightDescriptor;
 import dev.comfyfluffy.caustica.minecraft.CausticaItems;
-import dev.comfyfluffy.caustica.rt.RtLookPackage;
+import dev.comfyfluffy.caustica.minecraft.MinecraftLightingCalibration;
 import net.minecraft.client.Minecraft;
 import net.minecraft.world.attribute.EnvironmentAttributes;
 import net.minecraft.world.entity.EquipmentSlot;
@@ -38,7 +38,7 @@ public final class MinecraftLightProvider implements LightProvider {
             float partial = minecraft.getDeltaTracker().getGameTimeDeltaPartialTick(false);
             var probe = minecraft.gameRenderer.mainCamera().attributeProbe();
             OptionValues options = CausticaApi.options().options(MinecraftProvidersExtension.ID);
-            RtLookPackage.Lighting lighting = RtLookPackage.current().lighting();
+            MinecraftLightingCalibration lighting = MinecraftLightingCalibration.current();
             CelestialFrame frame = new CelestialFrame(
                     probe.getValue(EnvironmentAttributes.SUN_ANGLE, partial) * TO_RADIANS,
                     probe.getValue(EnvironmentAttributes.MOON_ANGLE, partial) * TO_RADIANS,

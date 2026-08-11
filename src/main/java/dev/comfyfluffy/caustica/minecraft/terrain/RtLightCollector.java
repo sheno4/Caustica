@@ -61,9 +61,6 @@ final class RtLightCollector {
      * cd/m². Expressing it relative to the configured baseline keeps material brightness and sampling
      * eligibility independent.
      */
-    private static final float LE_LUM_EPS =
-            0.001f * RtMaterialRegistry.defaultEmissionLuminanceCdM2();
-
     /** Samples per axis over the quad's (a,b) parameter square; matches the emission grid resolution. */
     private static final int SCAN = RtEmissionGrid.SIZE;
 
@@ -87,6 +84,7 @@ final class RtLightCollector {
             int pb = k * 2 * PRIM_FLOATS;
             int materialId = Float.floatToRawIntBits(p[pb + 8]);
             RtMaterialDesc desc = materials.material(materialId);
+            float leLuminanceEps = 0.001f * materials.defaultUniformEmissionLuminanceCdM2();
             RtMaterialDesc.EmissionSource source = desc.emissionSource();
             if (source == RtMaterialDesc.EmissionSource.NONE) {
                 continue;
@@ -205,7 +203,7 @@ final class RtLightCollector {
 
             // Rectangle-mean radiance: every emissive sample lies inside the rectangle, so
             // sum/rectSamples preserves the quad's total emissive power at rectArea. emissionLuminance()
-            // is the material's final HDR luminance (look-package baseline or absolute JSON override,
+            // is the material's final HDR luminance (catalog baseline or absolute JSON override,
             // baked in RtMaterialRegistry) — the single knob shared with world.rchit's direct-hit shading.
             // Texture-grid averages are already linear BT.709; captured vertex/biome tint is still
             // sRGB-encoded. Combine in the authored basis, use its invariant Y for the membership gate,
@@ -218,7 +216,7 @@ final class RtLightCollector {
             float le709G = sumG * scale * tintG;
             float le709B = sumB * scale * tintB;
             float lum = 0.2126f * le709R + 0.7152f * le709G + 0.0722f * le709B;
-            if (lum < LE_LUM_EPS || fill < minFillRatio) {
+            if (lum < leLuminanceEps || fill < minFillRatio) {
                 continue; // excluded: always-gathered on path hits, no energy lost
             }
             // Same OCIO-derived Linear Rec.709/D65 -> ACEScg/AP1/D60 matrix as world_common.slang.

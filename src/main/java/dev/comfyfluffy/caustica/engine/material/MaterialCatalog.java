@@ -10,7 +10,8 @@ import java.util.Set;
 /** Deterministically ordered material assets submitted by one scene adapter for a resource epoch. */
 public record MaterialCatalog(List<MaterialTextureAsset> atlasAssets,
                               List<MaterialTextureAsset> standalone,
-                              ResourceId defaultUniformEmissionAsset) {
+                              ResourceId defaultUniformEmissionAsset,
+                              float defaultUniformEmissionLuminanceCdM2) {
     public MaterialCatalog {
         atlasAssets = sorted(atlasAssets, MaterialTextureKind.SHARED_ATLAS);
         standalone = sorted(standalone, MaterialTextureKind.STANDALONE);
@@ -24,6 +25,10 @@ public record MaterialCatalog(List<MaterialTextureAsset> atlasAssets,
         if (defaultUniformEmissionAsset != null && !ids.contains(defaultUniformEmissionAsset)) {
             throw new IllegalArgumentException("Default uniform-emission asset is absent from the catalog: "
                     + defaultUniformEmissionAsset);
+        }
+        if (!Float.isFinite(defaultUniformEmissionLuminanceCdM2)
+                || defaultUniformEmissionLuminanceCdM2 <= 0.0f) {
+            throw new IllegalArgumentException("Default uniform-emission luminance must be positive");
         }
     }
 

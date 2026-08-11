@@ -13,8 +13,8 @@ package dev.comfyfluffy.caustica.rt;
  * modelled: "luminance" means the AP1/D60 Y of the stored ACEScg triple, consistent with
  * {@code ACESCG_LUMA} in the metering shaders.
  *
- * <p>The EV100 metering scale, {@code RtLookPackage}'s sun/moon illuminance, block/star/night-sky
- * luminance, exposure curve, and shader-derived disc and atmosphere levels all use this convention.
+ * <p>The EV100 metering scale, source-supplied light and emission values, exposure curve, and
+ * shader-derived environment levels all use this convention.
  */
 public final class RtSceneUnits {
     /** cd/m² that a scene value of {@code 1.0} represents. The unit definition; see class docs. */

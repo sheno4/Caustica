@@ -143,15 +143,7 @@ public final class RtComposite {
     // Modulus of the world-pinned procedural domain anchor. Documented engine constant, not a per-surface
     // tunable: a very low-frequency field could alias across it where the wave spectrum does not.
     private static final int PROCEDURAL_ANCHOR_MASK = 4095;
-    // The versioned look package owns every photometric anchor and the sky geometry. Its sun illuminance is the
-    // photometric solar constant at the top of the atmosphere; the shader's transmittance LUT brings that
-    // to ~117,000 lux under a zenith sun and reddens/dims it through sunset, and because world.rmiss tints
-    // the visible disc from the same LUT, the light on scene geometry and the sky's sunset are one number.
-    //
-    // world.rgen consumes it as ILLUMINANCE at normal incidence (lux) — the NEE term is brdf·E·ndl with no
-    // solid-angle factor, and the diffuse BRDF's 1/π turns 100,000 lux into
-    // 31,800 cd/m² white / 5,730 cd/m² 18%-grey noon surface. It is therefore independent of the sky
-    // package's angular radii, which only jitter the shadow ray and so only set penumbra softness.
+    // Renderer look metadata is exposure/LMT only; scene providers own their photometric calibration.
     private static final RtLookPackage LOOK = RtLookPackage.current();
     // Sign of the sub-pixel jitter as reported to DLSS-RR + applied to the primary ray, mirroring the
     // validated DLSS-SR convention (Vulkan flipped clip space wants Y negated).

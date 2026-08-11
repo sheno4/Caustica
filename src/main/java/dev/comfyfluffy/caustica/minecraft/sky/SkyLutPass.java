@@ -11,7 +11,7 @@ import dev.comfyfluffy.caustica.api.pass.RenderStage;
 import com.mojang.blaze3d.textures.GpuTextureView;
 import com.mojang.blaze3d.vulkan.VulkanGpuTextureView;
 import dev.comfyfluffy.caustica.rt.GpuContext;
-import dev.comfyfluffy.caustica.rt.RtLookPackage;
+import dev.comfyfluffy.caustica.minecraft.MinecraftLightingCalibration;
 import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
 import dev.comfyfluffy.caustica.rt.accel.GpuImage;
 import dev.comfyfluffy.caustica.rt.gen.SkyInputsData;
@@ -252,7 +252,7 @@ public final class SkyLutPass implements CausticaRenderPass {
         float starBrightness = probe.getValue(EnvironmentAttributes.STAR_BRIGHTNESS, partial);
         float moonPhase = probe.getValue(EnvironmentAttributes.MOON_PHASE, partial).index(); // 0 full .. 4 new
 
-        RtLookPackage.Lighting lighting = RtLookPackage.current().lighting();
+        MinecraftLightingCalibration lighting = MinecraftLightingCalibration.current();
         float sunNoonSouthTiltDegrees = options.get(SUN_NOON_SOUTH_TILT_DEGREES);
         float sunAngularRadiusDegrees = options.get(SUN_ANGULAR_RADIUS_DEGREES);
         float moonAngularRadiusDegrees = options.get(MOON_ANGULAR_RADIUS_DEGREES);
