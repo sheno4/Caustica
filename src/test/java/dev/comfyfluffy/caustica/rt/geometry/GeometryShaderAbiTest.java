@@ -52,6 +52,24 @@ final class GeometryShaderAbiTest {
         assertTrue(directWriter.contains("RtGeometryAbi.FLAG_TRIANGLE_CORNER_TEXTURE_COORDINATES"));
     }
 
+    @Test
+    void primitiveEmissionLaneContainsOnlyEmission() throws IOException {
+        Path root = Path.of("src", "main").toAbsolutePath().normalize();
+        String mesher = Files.readString(root.resolve(
+                "java/dev/comfyfluffy/caustica/minecraft/terrain/RtTerrainMesher.java"));
+        String collector = Files.readString(root.resolve(
+                "java/dev/comfyfluffy/caustica/minecraft/terrain/RtLightCollector.java"));
+        String closestHit = Files.readString(root.resolve(
+                "resources/caustica/shaders/world/closest_hit.slang"));
+
+        assertTrue(mesher.contains("prim.add(q.emission);"));
+        assertTrue(collector.contains("float stateEmission = p[pb + 3];"));
+        assertTrue(closestHit.contains("float stateEmission = pr.normal.w;"));
+        assertFalse(mesher.contains("q.emission + 2"));
+        assertFalse(collector.contains("ew >= 1.5"));
+        assertFalse(closestHit.contains("ew >= 1.5"));
+    }
+
     private static String read(List<Path> sources) throws IOException {
         StringBuilder content = new StringBuilder();
         for (Path source : sources) {

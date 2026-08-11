@@ -446,10 +446,7 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
     bool transmissive = (bindingFlags(binding) & BINDING_TRANSMISSIVE) != 0u;
     float3 tint709 = srgbToLinear(tint);
 
-    // The source folds a +2 non-solid-layer flag into the emission lane; only the state emission level
-    // below it is a material input.
-    float ew = pr.normal.w;
-    float stateEmission = ew >= 1.5 ? ew - 2.0 : ew;
+    float stateEmission = pr.normal.w;
 
     float4 albedoTexel = float4(1.0, 1.0, 1.0, 1.0);
     float3 albedo;

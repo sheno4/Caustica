@@ -92,9 +92,7 @@ final class RtLightCollector {
                 continue;
             }
 
-            // normal.w = block-light emission (0..1) + the +2 non-SOLID flag (see RtTerrainMesher.emit).
-            float ew = p[pb + 3];
-            float stateEmission = ew >= 1.5f ? ew - 2.0f : ew;
+            float stateEmission = p[pb + 3];
             float factor = switch (source) {
                 case LAB_PBR -> 1.0f; // authored _s emission REPLACES block light
                 case HEURISTIC_MASK, STATE_UNIFORM -> stateEmission;

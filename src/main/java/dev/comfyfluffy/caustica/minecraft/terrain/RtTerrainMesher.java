@@ -626,9 +626,8 @@ final class RtTerrainMesher {
                 prim.add(q.nx);
                 prim.add(q.ny);
                 prim.add(q.nz);
-                // normal.w = block-light emission (0..1) + a +2 flag for non-SOLID layers, so the closest
-                // hit can opt SOLID terrain out of SSS (leaves/foliage keep it). See world.rchit.
-                prim.add(q.cutout ? q.emission + 2f : q.emission);
+                // normal.w is the primitive's state-derived emission strength in [0,1].
+                prim.add(q.emission);
                 prim.add(q.tr);
                 prim.add(q.tg);
                 prim.add(q.tb);
