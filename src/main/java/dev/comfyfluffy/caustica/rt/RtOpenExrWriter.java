@@ -15,9 +15,8 @@ import java.util.Objects;
 /**
  * Minimal uncompressed scanline OpenEXR writer for RGBA half-float screenshots.
  *
- * <p>Keeping this in Java makes F2 capture self-contained: neither Python nor {@code uv} is needed while
- * Minecraft is running. The UV environment remains the reproducible workstation for inspecting and
- * processing the resulting files.
+ * <p>Keeping this in Java makes screenshot capture self-contained; the offline toolchain is only needed
+ * to inspect or process the resulting files.
  */
 final class RtOpenExrWriter {
     private static final int EXR_MAGIC = 20_000_630;

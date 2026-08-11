@@ -41,7 +41,7 @@ public final class RtGpuExecutor {
     private static final int MAX_BUILD_BATCH = 32;
     private static final Job STOP = new Job(null, null, null, null, null);
     private static final Job WAKE = new Job(null, null, null, null, null);
-    private static final long TERRAIN_READ_STAGES =
+    private static final long BUILD_READ_STAGES =
             VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR
                     | VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
 
@@ -66,7 +66,7 @@ public final class RtGpuExecutor {
     RtGpuExecutor(GpuContext ctx) {
         this.ctx = ctx;
         this.computeQueue = ctx.computeQueue();
-        this.buildTimeline = createTimeline("RT terrain build timeline");
+        this.buildTimeline = createTimeline("RT build timeline");
         this.graphicsTimeline = createTimeline("RT graphics-use timeline");
         createCommandPool();
         this.thread = new Thread(this::run, "Caustica GPU executor");
@@ -120,7 +120,7 @@ public final class RtGpuExecutor {
         return new GraphicsUse(nextGraphicsValue.incrementAndGet());
     }
 
-    /** Signal the frame token after its final terrain, TLAS, entity, and overlay consumer. */
+    /** Signal the frame token after its final graphics consumer. */
     public void endGraphicsUse(GraphicsSubmission submission, GraphicsUse graphicsUse) {
         assertRenderThread();
         enqueueGraphicsSignal(submission, graphicsTimeline, graphicsUse.value);
@@ -131,7 +131,7 @@ public final class RtGpuExecutor {
     }
 
     static void enqueueBuildWait(GraphicsSubmission submission, long semaphore, long value) {
-        submission.waitSemaphore(semaphore, value, TERRAIN_READ_STAGES);
+        submission.waitSemaphore(semaphore, value, BUILD_READ_STAGES);
     }
 
     static void enqueueGraphicsSignal(GraphicsSubmission submission, long semaphore, long value) {

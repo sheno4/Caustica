@@ -30,7 +30,7 @@ import static dev.comfyfluffy.caustica.rt.GpuContext.check;
 import static dev.comfyfluffy.caustica.rt.pipeline.RtBindings.*;
 
 /**
- * Compute pass that composites the vanilla UI overlay (premultiplied sRGB rgba8, sampled) over the
+ * Compute pass that composites the host UI overlay (premultiplied sRGB rgba8, sampled) over the
  * PQ-encoded HDR display image in place (decode-blend-reencode, since PQ is nonlinear), at paper white. Used
  * by the HDR present path (step C.2) after the GUI has rendered into the overlay, before the HDR image is
  * blitted to the PQ swapchain.

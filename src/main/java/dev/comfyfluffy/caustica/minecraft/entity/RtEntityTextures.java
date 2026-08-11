@@ -184,7 +184,7 @@ public final class RtEntityTextures {
             return;
         }
         for (Pending p : pending) {
-            pipeline.setEntityAlbedoTexture(p.slot(), p.view(), sampler);
+            pipeline.setBaseColorTexture(p.slot(), p.view(), sampler);
         }
         pending.clear();
     }

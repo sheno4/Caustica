@@ -983,7 +983,7 @@ public final class RtComposite {
         MaterialCatalog materialCatalog = RtRuntime.host().materialCatalog(materials.rules());
         RtBlockMaterials.INSTANCE.prepareAll(ctx, bindlessTextureCapacity, materialCatalog);
         ProviderManager.INSTANCE.resetBindlessTextures(bindlessTextureCapacity);
-        worldPipeline.setEntityAlbedoTexture(0, atlasView, sampler);
+        worldPipeline.setBaseColorTexture(0, atlasView, sampler);
         RtBlockMaterials.INSTANCE.bindPages(worldPipeline, sampler);
         RtMaterialRegistry.INSTANCE.rebuild(ctx, RtBlockMaterials.INSTANCE, materialCatalog,
                 materialOverrides, materials.definitions(), CausticaApi.registry()::surfaceIndex,

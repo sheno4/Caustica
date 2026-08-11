@@ -57,10 +57,9 @@ import static org.lwjgl.vulkan.KHRRayTracingPipeline.vkGetRayTracingShaderGroupH
 /**
  * An RT pipeline with an SBT of {raygen + N miss + triangle hit groups} and a descriptor
  * set of {binding 0 = TLAS, binding 1 = storage image}. Built from SPIR-V resources. Update the
- * bindings with {@link #setTlas}/{@link #setStorageImage}, then {@link #trace}. Reusable across
- * the triangle spike and terrain (extend the descriptor layout there as needed). Multiple miss
- * shaders (e.g. a primary sky miss at index 0 plus a shadow/visibility miss at index 1) are
- * supported by passing an array; {@code traceRayEXT}'s {@code missIndex} selects among them.
+ * bindings with {@link #setTlas}/{@link #setStorageImage}, then {@link #trace}. Multiple miss shaders
+ * (for example, a primary environment miss and a shadow-visibility miss) are supported by passing an
+ * array; {@code traceRayEXT}'s {@code missIndex} selects among them.
  */
 public final class RtPipeline {
     // A ring of descriptor sets: setTlas waits for the selected slot's exact prior graphics use before
@@ -82,8 +81,8 @@ public final class RtPipeline {
     private final int hitGroupCount;
     private final int pushConstantSize;
     private final int pushConstantStages;
-    // Optional second descriptor set (set 1) holding entity albedo and canonical material-page arrays.
-    // Only entity albedo is update-after-bind: its RenderType→slot registry is append-only. Material
+    // Optional second descriptor set (set 1) holding base-color and canonical material-page arrays.
+    // Only base color is update-after-bind: its producer texture-to-slot registry is append-only. Material
     // pages are populated once at the resource-epoch boundary. 0 when created without bindless textures.
     private final long bindlessLayout;
     private final long bindlessPool;
@@ -134,10 +133,10 @@ public final class RtPipeline {
     }
 
     /**
-     * Builds the RT pipeline. {@code rahit} (nullable) adds any-hit-capable triangle hit records. With the
-     * world pipeline, the hit SBT region is laid out to match {@link RtAccel}'s terrain class/ray-type
-     * constants: radiance records first, shadow records second, then entity records. The fixed world
-     * descriptor layout is declared in {@code shaders/rt_bindings.slang}.
+     * Builds the RT pipeline. {@code rahit} (nullable) adds any-hit-capable triangle hit records. The world
+     * pipeline's hit SBT region matches {@link RtAccel}'s fixed class/ray-type constants: radiance class
+     * records first, followed by shadow class records. The fixed world descriptor layout is declared in
+     * {@code shaders/rt_bindings.slang}.
      *
      * <p>{@code rgen} may hold several raygen shaders. They share this pipeline's descriptor set, miss
      * table and hit table; {@link #trace(VkCommandBuffer, int, int, ByteBuffer, int)} picks one per
@@ -216,10 +215,10 @@ public final class RtPipeline {
                 RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_DESCRIPTOR_SET, sets[i], label + " descriptor set " + i);
             }
 
-            // Optional bindless set (set 1): entity albedo plus canonical material page arrays.
+            // Optional bindless set (set 1): base color plus canonical material-page arrays.
             long bindlessLayout = 0L, bindlessPool = 0L, bindlessSet = 0L;
             if (bindlessTextures > 0) {
-                // Entity albedo and canonical material pages have independent index spaces. All arrays
+                // Base-color textures and canonical material pages have independent index spaces. All arrays
                 // use the configured capacity here; material pages occupy compact indices from zero.
                 int nb = WORLD_BINDLESS_COUNT;
                 VkDescriptorSetLayoutBinding.Buffer bl = VkDescriptorSetLayoutBinding.calloc(nb, stack);
@@ -451,11 +450,10 @@ public final class RtPipeline {
     }
 
     /**
-     * Which any-hit stage a hit record uses, or {@code VK_SHADER_UNUSED_KHR}. One formula for both
-     * producers: terrain and entity geometry share the same {@link RtAccel#SBT_CLASSES}-sized record
-     * space (see {@code RtAccel.Instance}). Masked geometry alpha-tests on both ray types; transmissive
-     * geometry runs any-hit only on shadow rays, where it tints and lets traversal continue, and uses a
-     * closest-hit-only record for radiance.
+     * Which any-hit stage a hit record uses, or {@code VK_SHADER_UNUSED_KHR}. Retained and frame-varying
+     * classified geometry share the same {@link RtAccel#SBT_CLASSES}-sized record space. Masked geometry
+     * alpha-tests on both ray types; transmissive geometry runs any-hit only on shadow rays, where it tints
+     * and lets traversal continue, and uses a closest-hit-only record for radiance.
      */
     private static int anyHitStage(boolean hasAhit, int relativeHitGroup,
                                    int radianceAhitStage, int shadowAhitStage) {
@@ -598,8 +596,8 @@ public final class RtPipeline {
         }
     }
 
-    /** Append or initialize one entity-albedo slot. Existing slots never change while frames are in flight. */
-    public void setEntityAlbedoTexture(int slot, long imageView, long sampler) {
+    /** Append or initialize one base-color slot. Existing slots never change while frames are in flight. */
+    public void setBaseColorTexture(int slot, long imageView, long sampler) {
         setBindlessTexture(WORLD_ALBEDO_TEXTURES, slot, imageView, sampler);
     }
 
@@ -622,7 +620,7 @@ public final class RtPipeline {
         }
     }
 
-    /** True if this pipeline was created with a bindless entity-texture set. */
+    /** True if this pipeline was created with a bindless texture set. */
     public boolean hasBindless() {
         return bindlessSet != 0L;
     }

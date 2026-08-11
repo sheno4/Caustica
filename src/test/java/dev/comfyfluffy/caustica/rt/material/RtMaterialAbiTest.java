@@ -9,6 +9,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 final class RtMaterialAbiTest {
     @Test
     void acceptsMatchingTriangleRecords() {
+        assertEquals(12, RtMaterialAbi.PRIMITIVE_RECORD_FLOATS);
+        assertEquals(48, RtMaterialAbi.PRIMITIVE_RECORD_BYTES);
         assertEquals(2, RtMaterialAbi.checkedPrimitiveCount(24));
         assertDoesNotThrow(() -> RtMaterialAbi.requireTriangleParity(24, 6));
     }

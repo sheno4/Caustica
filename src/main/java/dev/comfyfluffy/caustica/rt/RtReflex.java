@@ -19,26 +19,25 @@ import java.nio.LongBuffer;
 
 /**
  * NVIDIA Reflex per-frame sleep/pacing and latency markers, built on the timeline semaphore signaled
- * by {@code vkLatencySleepNV}. {@link RtDeviceBringup} enables the device support and
- * {@code VulkanGpuSurfaceMixin} configures each swapchain for latency mode.
+ * by {@code vkLatencySleepNV}. {@link RtDeviceBringup} enables device support, and the runtime host
+ * configures each swapchain for latency mode.
  *
  * <p>{@code vkLatencySleepNV} does not itself block — per the extension, it schedules the driver to signal
  * a semaphore value once the paced frame-start time is reached, and the caller is expected to wait on that
- * value itself. That host-side {@code vkWaitSemaphores} in {@link #sleep} IS the actual pacing mechanism;
- * it must run once near the top of the frame, before input sampling/simulation (see
- * {@code MinecraftMixin#caustica$reflexSleep}).
+ * value itself. The host-side {@code vkWaitSemaphores} in {@link #sleep} is the actual pacing mechanism;
+ * the runtime host calls it once near the top of the frame, before input sampling and simulation.
  *
  * <p>Sleep mode + the timeline semaphore are scoped to a specific swapchain object ({@link #applySleepMode}
  * must be re-called whenever the swapchain is (re)created, e.g. on resize) — tracked here by comparing the
  * swapchain handle, so a stale call after a swapchain recreation is a safe no-op until re-applied.
  *
  * <p>{@code presentID} correlates markers with a specific present call. Two independent monotonic counters
- * are kept: {@link #currentSimFrameId()} (bumped once per {@link #sleep} call, i.e. once per
- * {@code runTick}) tags the SIMULATION/RENDERSUBMIT markers, while {@link #advancePresentId()} is bumped
+ * are kept: {@link #currentSimFrameId()} is bumped once per {@link #sleep} call and tags the
+ * SIMULATION/RENDERSUBMIT markers, while {@link #advancePresentId()} is bumped
  * once per actual {@code vkQueuePresentKHR} call and is what's chained onto the present via
- * {@code VkPresentIdKHR} plus the PRESENT_START/END markers. They must be separate: Minecraft can call
- * {@code present()} from outside the normal tick loop (e.g. {@code Minecraft.setScreenAndShow}'s synchronous
- * redraw when opening a world), which would otherwise resend a stale, already-used presentID and violate
+ * {@code VkPresentIdKHR} plus the PRESENT_START/END markers. They must be separate because the host can
+ * present a synchronous redraw without advancing simulation, which would otherwise resend a stale,
+ * already-used presentID and violate
  * {@code VUID-VkPresentIdKHR-presentIds-04999} ("each presentIds entry must be greater than all previously
  * submitted present ids").
  */
@@ -129,7 +128,7 @@ public final class RtReflex {
 
     /**
      * Per-frame pacing: increment the frame counter, ask the driver to signal the timeline semaphore at the
-     * paced frame-start time, then block this (the game) thread until it does. Call once, near the top of
+     * paced frame-start time, then block the calling thread until it does. Call once, near the top of
      * the frame, before input sampling/simulation. No-op (returns immediately) unless {@link #applySleepMode}
      * has already been applied for this exact {@code swapchain}.
      */

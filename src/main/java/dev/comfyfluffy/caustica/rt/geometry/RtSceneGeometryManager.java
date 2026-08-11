@@ -22,7 +22,7 @@ import static org.lwjgl.vulkan.VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
 
 /**
  * Owns retained provider mesh uploads, BLASes, geometry records, and their exact graphics lifetime.
- * Caller-supplied retained geometry enters as a prefix until it is migrated to the same CPU mesh API.
+ * Caller-supplied retained geometry occupies a prefix before provider-owned geometry records.
  */
 public final class RtSceneGeometryManager {
     private static final int TABLE_RING = 4;

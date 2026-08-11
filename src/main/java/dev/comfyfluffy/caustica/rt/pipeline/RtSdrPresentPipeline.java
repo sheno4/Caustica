@@ -30,9 +30,9 @@ import static dev.comfyfluffy.caustica.rt.GpuContext.check;
 import static dev.comfyfluffy.caustica.rt.pipeline.RtBindings.*;
 
 /**
- * Compute pass that converts Minecraft's SDR main target (rgba8, sRGB-encoded, sampled) to a PQ-encoded
- * rgba16f image at paper white. Used by the HDR present path for non-RT frames (menus, loading screen, title
- * panorama) so they present correctly to the PQ swapchain instead of being raw-copied (misdisplayed). Same
+ * Compute pass that converts the host's SDR main target (rgba8, sRGB-encoded, sampled) to a PQ-encoded
+ * rgba16f image at paper white. Used by the HDR present path for non-RT frames so they present correctly
+ * to the PQ swapchain instead of being raw-copied and misdisplayed. Same
  * descriptor shape as {@link RtHdrCompositePipeline}: binding 0 = storage out, binding 1 = sampled SDR in.
  */
 public final class RtSdrPresentPipeline {

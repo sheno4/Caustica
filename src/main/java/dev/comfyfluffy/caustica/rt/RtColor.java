@@ -1,9 +1,8 @@
 package dev.comfyfluffy.caustica.rt;
 
 /**
- * Host-side colour conversions matching {@code caustica_color.slang}. Values the engine hands the GPU as
- * colours are linear ACEScg; vanilla authors in 8-bit sRGB, so every boundary that reads Minecraft colour
- * data crosses both transforms here.
+ * Host-side colour conversions matching {@code caustica_color.slang}. Renderer colours are linear ACEScg;
+ * source-authored encoded sRGB crosses both the transfer-function and gamut transforms here.
  */
 public final class RtColor {
     private RtColor() {
