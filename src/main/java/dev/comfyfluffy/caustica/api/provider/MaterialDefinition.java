@@ -7,13 +7,15 @@ import java.util.Objects;
 /**
  * A named, textureless OpenPBR material that geometry sources can reference through a stable handle.
  * Base color is scene-linear ACEScg. Roughness is OpenPBR perceptual roughness, not GGX alpha. A null
- * surface selects the renderer's built-in OpenPBR surface implementation.
+ * surface selects the renderer's built-in OpenPBR surface implementation. Topology is structural and
+ * independent of transmission weight: a transmitting surface is a thin sheet, not a medium boundary.
  */
 public record MaterialDefinition(MaterialHandle handle, float baseColorR, float baseColorG, float baseColorB,
                                  float specularRoughness, float baseMetalness, float specularIor,
-                                 float transmissionWeight, ResourceId surface) {
+                                 float transmissionWeight, MaterialTopology topology, ResourceId surface) {
     public MaterialDefinition {
         Objects.requireNonNull(handle, "handle");
+        Objects.requireNonNull(topology, "topology");
         unit("baseColorR", baseColorR);
         unit("baseColorG", baseColorG);
         unit("baseColorB", baseColorB);

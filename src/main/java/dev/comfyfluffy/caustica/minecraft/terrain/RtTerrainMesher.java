@@ -2,6 +2,9 @@ package dev.comfyfluffy.caustica.minecraft.terrain;
 
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import dev.comfyfluffy.caustica.CausticaConfig;
+import dev.comfyfluffy.caustica.api.provider.MaterialTopology;
+import dev.comfyfluffy.caustica.engine.material.MaterialVariant;
+import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialProfile;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialClassifier;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialLookup;
 import dev.comfyfluffy.caustica.minecraft.provider.MinecraftMaterialSource;
@@ -467,7 +470,8 @@ final class RtTerrainMesher {
             q.sprite = sprite;
             var classification = MinecraftMaterialClassifier.classify(state);
             int materialId = materials.resolve(MinecraftMaterialLookup.material(sprite),
-                    classification.geometry(), classification.variant(q.translucent));
+                    classification.geometry(), classification.variant(q.translucent
+                            ? MaterialTopology.MEDIUM_BOUNDARY : MaterialTopology.SURFACE));
             // Genuinely masked: alpha-tested, not merely "non-SOLID" (q.cutout also covers TRANSLUCENT,
             // whose coverage stays OPAQUE — see RtMaterialRegistry.binding). Only this needs the coverage
             // override; solid and translucent quads keep the resolved id's default OPAQUE coverage. The
@@ -721,7 +725,10 @@ final class RtTerrainMesher {
 
         private void emitQuad() {
             int materialId = water
-                    ? materials.bindingId(MinecraftMaterialSource.WATER) : materials.defaultUniformEmissionId();
+                    ? materials.bindingId(MinecraftMaterialSource.WATER)
+                    : materials.resolve(MinecraftMaterialSource.LAVA_MATERIAL, null,
+                            new MaterialVariant(OpenPbrMaterialProfile.MEDIUM_ROUGH_DIELECTRIC,
+                                    MaterialTopology.SURFACE, true));
             Geom g = switch (materials.sbtClassFor(materialId)) {
                 case RtAccel.CLASS_MASKED -> cur.masked();
                 case RtAccel.CLASS_TRANSMISSIVE -> cur.transmissive();

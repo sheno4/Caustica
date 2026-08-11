@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.engine.material;
 
 import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.api.provider.MaterialTopology;
 
 import java.util.Objects;
 
@@ -10,7 +11,7 @@ public record MaterialClassification(ResourceId geometry, OpenPbrMaterialProfile
         Objects.requireNonNull(profile, "profile");
     }
 
-    public MaterialVariant variant(boolean transmissive) {
-        return new MaterialVariant(profile, transmissive, emitting);
+    public MaterialVariant variant(MaterialTopology topology) {
+        return new MaterialVariant(profile, topology, emitting);
     }
 }

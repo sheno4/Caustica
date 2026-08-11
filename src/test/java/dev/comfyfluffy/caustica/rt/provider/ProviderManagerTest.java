@@ -4,6 +4,7 @@ import dev.comfyfluffy.caustica.api.provider.SceneProvider;
 import dev.comfyfluffy.caustica.api.provider.SceneGeometrySink;
 import dev.comfyfluffy.caustica.api.provider.GeometryTransform;
 import dev.comfyfluffy.caustica.api.provider.MaterialHandle;
+import dev.comfyfluffy.caustica.api.provider.MaterialTopology;
 import dev.comfyfluffy.caustica.api.provider.TriangleMesh;
 import dev.comfyfluffy.caustica.api.provider.LightProvider;
 import dev.comfyfluffy.caustica.engine.light.LightDescriptor;
@@ -484,7 +485,7 @@ final class ProviderManagerTest {
 
     private static MaterialDefinition definition(String path) {
         return new MaterialDefinition(new MaterialHandle(id(path)), 1.0f, 1.0f, 1.0f,
-                1.0f, 0.0f, 1.5f, 0.0f, null);
+                1.0f, 0.0f, 1.5f, 0.0f, MaterialTopology.SURFACE, null);
     }
 
     private static final class OptimizedProvider implements SceneProvider, RtSceneSource {

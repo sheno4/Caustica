@@ -57,10 +57,10 @@ final class RtMaterialOverridesTest {
                 """).getAsJsonObject(), Identifier.parse("test:materials/glass.json"));
         assertEquals(ResourceId.parse("minecraft:block/blue_stained_glass"), rule.material());
         assertEquals(ResourceId.parse("minecraft:blue_stained_glass"), rule.geometry());
-        assertEquals(RtMaterialRegistry.MODEL_DIELECTRIC, rule.model());
+        assertEquals(RtMaterialRegistry.TRANSPORT_MEDIUM_BOUNDARY, rule.transport());
         assertEquals(1.52f, rule.ior());
         assertEquals(2000.0f, rule.emissionLuminanceCdM2());
-        RtMaterialDesc base = new RtMaterialDesc(RtMaterialRegistry.MODEL_OPAQUE,
+        RtMaterialDesc base = new RtMaterialDesc(RtMaterialRegistry.TRANSPORT_SURFACE,
                 RtMaterialDesc.Source.AUTHORED_TEXTURE, RtMaterialRegistry.FEATURE_SPEC,
                 0.8f, 0.0f, 1.0f, 0.0f, RtMaterialDesc.EmissionSource.AUTHORED_MASK,
                 5.0f, new RtMaterialDesc.EmissionSummary(0.2f, 0.1f, 0.05f, 0.1f, 0.5f), 0);
@@ -76,7 +76,7 @@ final class RtMaterialOverridesTest {
 
     @Test
     void specularIorOverridesTheBuiltInIndex() {
-        RtMaterialDesc glassBase = new RtMaterialDesc(RtMaterialRegistry.MODEL_DIELECTRIC,
+        RtMaterialDesc glassBase = new RtMaterialDesc(RtMaterialRegistry.TRANSPORT_MEDIUM_BOUNDARY,
                 RtMaterialDesc.Source.DERIVED_TEXTURE, 0, 0.05f, 0.0f,
                 OpenPbrMaterialDefaults.TRANSMISSIVE_SPECULAR_IOR, 1.0f,
                 RtMaterialDesc.EmissionSource.NONE, 0.0f, RtMaterialDesc.EmissionSummary.NONE, 0);
@@ -85,7 +85,7 @@ final class RtMaterialOverridesTest {
                 "model":"dielectric","specular":{"ior":2.417}}
                 """).getAsJsonObject(), Identifier.parse("test:materials/crystal.json"));
         RtMaterialDesc applied = rule.apply(glassBase);
-        assertEquals(RtMaterialRegistry.MODEL_DIELECTRIC, applied.model());
+        assertEquals(RtMaterialRegistry.TRANSPORT_MEDIUM_BOUNDARY, applied.transport());
         assertEquals(2.417f, applied.specularIor());
 
         // Omitting ior on a rule that does not change the model leaves the base index alone.
@@ -101,11 +101,11 @@ final class RtMaterialOverridesTest {
         var rule = parse(JsonParser.parseString("""
                 {"format":4,"match":{"sprite":"somemod:block/pool"},"model":"water"}
                 """).getAsJsonObject(), Identifier.parse("test:materials/pool.json"));
-        RtMaterialDesc base = new RtMaterialDesc(RtMaterialRegistry.MODEL_OPAQUE,
+        RtMaterialDesc base = new RtMaterialDesc(RtMaterialRegistry.TRANSPORT_SURFACE,
                 RtMaterialDesc.Source.DERIVED_TEXTURE, 0, 0.8f, 0.0f, 1.0f, 0.0f,
                 RtMaterialDesc.EmissionSource.NONE, 0.0f, RtMaterialDesc.EmissionSummary.NONE, 0);
         RtMaterialDesc applied = rule.apply(base);
-        assertEquals(RtMaterialRegistry.MODEL_DIELECTRIC, applied.model());
+        assertEquals(RtMaterialRegistry.TRANSPORT_MEDIUM_BOUNDARY, applied.transport());
         assertEquals(MinecraftMaterialClassifier.WATER_IOR, applied.specularIor());
         assertEquals(3, applied.surfaceImplementation());
         assertEquals(1.0f, applied.transmissionWeight());
@@ -117,7 +117,7 @@ final class RtMaterialOverridesTest {
                 {"format":4,"match":{"sprite":"minecraft:block/stone"},
                 "emission":{"luminance_cd_m2":5000.0}}
                 """).getAsJsonObject(), Identifier.parse("test:boost.json"));
-        RtMaterialDesc base = new RtMaterialDesc(RtMaterialRegistry.MODEL_OPAQUE,
+        RtMaterialDesc base = new RtMaterialDesc(RtMaterialRegistry.TRANSPORT_SURFACE,
                 RtMaterialDesc.Source.DERIVED_TEXTURE, 0, 0.8f, 0.0f, 1.0f, 0.0f,
                 RtMaterialDesc.EmissionSource.NONE, 0.0f, RtMaterialDesc.EmissionSummary.NONE, 0);
 
@@ -168,7 +168,7 @@ final class RtMaterialOverridesTest {
         var rule = parse(JsonParser.parseString("""
                 {"format":4,"match":{"sprite":"somemod:block/crystal"},"surface":"somemod:crystal"}
                 """).getAsJsonObject(), Identifier.parse("test:materials/crystal.json"));
-        RtMaterialDesc base = new RtMaterialDesc(RtMaterialRegistry.MODEL_OPAQUE,
+        RtMaterialDesc base = new RtMaterialDesc(RtMaterialRegistry.TRANSPORT_SURFACE,
                 RtMaterialDesc.Source.DERIVED_TEXTURE, 0, 0.8f, 0.0f, 1.0f, 0.0f,
                 RtMaterialDesc.EmissionSource.NONE, 0.0f, RtMaterialDesc.EmissionSummary.NONE, 0);
 
@@ -187,7 +187,7 @@ final class RtMaterialOverridesTest {
         var rule = parse(JsonParser.parseString("""
                 {"format":4,"match":{"sprite":"somemod:block/crystal"},"specular":{"roughness":0.5}}
                 """).getAsJsonObject(), Identifier.parse("test:materials/crystal.json"));
-        RtMaterialDesc base = new RtMaterialDesc(RtMaterialRegistry.MODEL_OPAQUE,
+        RtMaterialDesc base = new RtMaterialDesc(RtMaterialRegistry.TRANSPORT_SURFACE,
                 RtMaterialDesc.Source.DERIVED_TEXTURE, 0, 0.8f, 0.0f, 1.0f, 0.0f,
                 RtMaterialDesc.EmissionSource.NONE, 0.0f, RtMaterialDesc.EmissionSummary.NONE, 1);
 
@@ -210,5 +210,20 @@ final class RtMaterialOverridesTest {
         assertFalse(entityRule.matches(ResourceId.parse("minecraft:entity/zombie/husk"), null));
         assertFalse(blockRule.matches(zombie, null));
         assertTrue(blockRule.matches(zombie, ResourceId.parse("minecraft:stone")));
+    }
+
+    @Test
+    void materialWideLavaRulesApplyToTheOrdinaryNullGeometryLookup() {
+        var materialWide = parse(JsonParser.parseString("""
+                {"format":4,"match":{"sprite":"minecraft:block/lava_still"},
+                "specular":{"roughness":0.37}}
+                """).getAsJsonObject(), Identifier.parse("test:lava.json"));
+        var geometrySpecific = parse(JsonParser.parseString("""
+                {"format":4,"match":{"sprite":"minecraft:block/lava_still","block":"minecraft:lava"},
+                "specular":{"roughness":0.12}}
+                """).getAsJsonObject(), Identifier.parse("test:lava_geometry.json"));
+
+        assertTrue(materialWide.matches(MinecraftMaterialSource.LAVA_MATERIAL, null));
+        assertFalse(geometrySpecific.matches(MinecraftMaterialSource.LAVA_MATERIAL, null));
     }
 }

@@ -63,9 +63,7 @@ public final class MinecraftMaterialCatalogBuilder {
         Set<ResourceId> blockNames = new HashSet<>();
         blocks.forEach(asset -> blockNames.add(asset.material()));
         List<MaterialTextureAsset> standalone = standaloneAssets(blockNames, rules);
-        ResourceId lava = ResourceId.of("minecraft", "block/lava_still");
         return new MaterialCatalog(blocks, standalone,
-                blocks.stream().anyMatch(asset -> asset.material().equals(lava)) ? lava : null,
                 MinecraftLightingCalibration.current().blockEmissionLuminanceCdM2());
     }
 

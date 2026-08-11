@@ -3,6 +3,7 @@ package dev.comfyfluffy.caustica.rt.material;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.api.provider.MaterialDefinition;
+import dev.comfyfluffy.caustica.api.provider.MaterialTopology;
 import dev.comfyfluffy.caustica.engine.material.AtlasMaterialReference;
 import dev.comfyfluffy.caustica.engine.material.MaterialCatalog;
 import dev.comfyfluffy.caustica.engine.material.MaterialTextureAsset;
@@ -49,11 +50,11 @@ import java.util.Set;
 public final class RtMaterialRegistry {
     public static final RtMaterialRegistry INSTANCE = new RtMaterialRegistry();
 
-    // Canonical SurfaceMaterial model/feature bits, mirrored by world_common.slang's MATERIAL_* constants.
+    // Canonical transport/feature values compiled into SurfaceMaterial and MaterialBinding.
     // RtBlockMaterials.Entry.features uses the same bit values, so entry features flow into surfaces
     // with a plain mask.
-    public static final int MODEL_OPAQUE = 0;
-    public static final int MODEL_DIELECTRIC = 3;
+    public static final int TRANSPORT_SURFACE = 0;
+    public static final int TRANSPORT_MEDIUM_BOUNDARY = 3;
     public static final int FEATURE_SPEC = 1;
     public static final int FEATURE_NORMAL = 2;
     /** A per-texel emission mask was compiled into the page; it says nothing about where it came from. */
@@ -117,10 +118,10 @@ public final class RtMaterialRegistry {
     private static final int MAX_LOD_SHIFT = 24;
     private static final int PAGE_MASK = 0xFFFFFF;
 
-    private static final int MODEL_VARIANTS = 2; // ordinary opaque/cutout and transparent dielectric
+    private static final int TOPOLOGY_VARIANTS = 2;
     private static final int EMISSION_VARIANTS = 2; // state-gated emission disabled/enabled
-    private static final int VARIANT_OPAQUE = 0;
-    private static final int VARIANT_GLASS = 1;
+    private static final int VARIANT_SURFACE = 0;
+    private static final int VARIANT_MEDIUM_BOUNDARY = 1;
     // Source adapters map geometry onto this finite set before calling the registry.
     private static final OpenPbrMaterialProfile[] TEXTURE_PROFILES = {
             OpenPbrMaterialProfile.ROUGH_DIELECTRIC, OpenPbrMaterialProfile.CONDUCTOR,
@@ -165,31 +166,29 @@ public final class RtMaterialRegistry {
         catalog.standalone().forEach(asset -> assets.put(asset.material(), asset));
         RtBlockMaterials.Entry fallbackEntry = pageCompiler.entry(null);
 
-        int profileVariants = TEXTURE_PROFILES.length * MODEL_VARIANTS * EMISSION_VARIANTS;
+        int profileVariants = TEXTURE_PROFILES.length * TOPOLOGY_VARIANTS * EMISSION_VARIANTS;
         CompiledTables tables = new CompiledTables(2 + profileVariants + atlasAssets.size() * profileVariants);
-        tables.add(compileDesc(MODEL_OPAQUE, 0, OpenPbrMaterialProfile.ROUGH_DIELECTRIC, false, true,
+        tables.add(compileDesc(TRANSPORT_SURFACE, 0, OpenPbrMaterialProfile.ROUGH_DIELECTRIC, false, true,
                 RtMaterialDesc.EmissionSummary.NONE, defaultEmissionLuminance), transparentWhiteAverage(), fallbackEntry, null,
                 PRIMARY_COVERAGE_CUTOFF, true);
         int[] fallbackVariants = new int[profileVariants];
         for (OpenPbrMaterialProfile profile : TEXTURE_PROFILES) {
-            for (boolean glass : new boolean[]{false, true}) {
+            for (MaterialTopology topology : MaterialTopology.values()) {
                 for (boolean emitting : new boolean[]{false, true}) {
-                    int variant = index(profile, glass, emitting);
-                    if (profile.equals(OpenPbrMaterialProfile.ROUGH_DIELECTRIC) && !glass && !emitting) {
+                    int variant = index(profile, topology, emitting);
+                    if (profile.equals(OpenPbrMaterialProfile.ROUGH_DIELECTRIC)
+                            && topology == MaterialTopology.SURFACE && !emitting) {
                         fallbackVariants[variant] = 0;
                         continue;
                     }
                     fallbackVariants[variant] = tables.add(
-                            compileDesc(glass ? MODEL_DIELECTRIC : MODEL_OPAQUE, 0, profile, emitting, true,
+                            compileDesc(transport(topology), 0, profile, emitting, true,
                                     RtMaterialDesc.EmissionSummary.NONE, defaultEmissionLuminance),
-                            transparentWhiteAverage(), fallbackEntry, null, PRIMARY_COVERAGE_CUTOFF, !glass);
+                            transparentWhiteAverage(), fallbackEntry, null, PRIMARY_COVERAGE_CUTOFF,
+                            topology == MaterialTopology.SURFACE);
                 }
             }
         }
-        int defaultUniformEmissionId = tables.add(compileDesc(MODEL_OPAQUE, 0, OpenPbrMaterialProfile.MEDIUM_ROUGH_DIELECTRIC,
-                true, true,
-                uniformWhiteSummary(), defaultEmissionLuminance), whiteAverage(), fallbackEntry,
-                albedoGridFor(entries, catalog.defaultUniformEmissionAsset()), PRIMARY_COVERAGE_CUTOFF);
         int nextRuntimeFallbackId = tables.add(
                 compileRuntimeTextureDesc(0, true, RtMaterialDesc.EmissionSummary.NONE,
                         defaultEmissionLuminance),
@@ -223,18 +222,19 @@ public final class RtMaterialRegistry {
             float dielectricIor = assets.get(material).dielectricIor();
             int[] variants = new int[profileVariants];
             for (OpenPbrMaterialProfile profile : TEXTURE_PROFILES) {
-                for (boolean glass : new boolean[]{false, true}) {
+                for (MaterialTopology topology : MaterialTopology.values()) {
                     for (boolean emitting : new boolean[]{false, true}) {
                         int features = emitting ? baseFeatures : baseFeatures & ~FEATURE_EMISSION_MASK;
-                        RtMaterialDesc desc = compileDesc(glass ? MODEL_DIELECTRIC : MODEL_OPAQUE, features,
+                        RtMaterialDesc desc = compileDesc(transport(topology), features,
                                 profile, emitting, false,
                                 variantSummary(features, emitting, entry, entry.uniformEmissionSummary()),
                                 dielectricIor, defaultEmissionLuminance);
                         if (materialWide != null) {
                             desc = materialWide.rule.apply(desc);
                         }
-                        variants[index(profile, glass, emitting)] = tables.add(desc, entry.average(),
-                                entry, entry.albedoGrid(), PRIMARY_COVERAGE_CUTOFF, !glass);
+                        variants[index(profile, topology, emitting)] = tables.add(desc, entry.average(),
+                                entry, entry.albedoGrid(), PRIMARY_COVERAGE_CUTOFF,
+                                topology == MaterialTopology.SURFACE);
                     }
                 }
             }
@@ -244,17 +244,17 @@ public final class RtMaterialRegistry {
                 if (compiled.rule.geometry() == null || !compiled.rule.matchesMaterial(material)) continue;
                 int[] overrideVariants = new int[profileVariants];
                 for (OpenPbrMaterialProfile profile : TEXTURE_PROFILES) {
-                    for (boolean glass : new boolean[]{false, true}) {
+                    for (MaterialTopology topology : MaterialTopology.values()) {
                         for (boolean emitting : new boolean[]{false, true}) {
                             int features = emitting ? baseFeatures : baseFeatures & ~FEATURE_EMISSION_MASK;
-                            RtMaterialDesc base = compileDesc(glass ? MODEL_DIELECTRIC : MODEL_OPAQUE,
+                            RtMaterialDesc base = compileDesc(transport(topology),
                                     features, profile, emitting, false,
                                     variantSummary(features, emitting, entry, entry.uniformEmissionSummary()),
                                     dielectricIor, defaultEmissionLuminance);
                             RtMaterialDesc desc = compiled.rule.apply(base);
-                            overrideVariants[index(profile, glass, emitting)] = tables.add(desc,
+                            overrideVariants[index(profile, topology, emitting)] = tables.add(desc,
                                     entry.average(), entry, entry.albedoGrid(), PRIMARY_COVERAGE_CUTOFF,
-                                    !glass);
+                                    topology == MaterialTopology.SURFACE);
                         }
                     }
                 }
@@ -297,8 +297,8 @@ public final class RtMaterialRegistry {
                     continue;
                 }
             }
-            int model = definition.transmissionWeight() > 0.0f ? MODEL_DIELECTRIC : MODEL_OPAQUE;
-            RtMaterialDesc desc = new RtMaterialDesc(model, RtMaterialDesc.Source.NEUTRAL, 0,
+            int definitionTransport = transport(definition.topology());
+            RtMaterialDesc desc = new RtMaterialDesc(definitionTransport, RtMaterialDesc.Source.NEUTRAL, 0,
                     definition.specularRoughness(), definition.baseMetalness(), definition.specularIor(),
                     definition.transmissionWeight(), RtMaterialDesc.EmissionSource.NONE, 0.0f,
                     RtMaterialDesc.EmissionSummary.NONE, surfaceImplementation);
@@ -360,7 +360,7 @@ public final class RtMaterialRegistry {
             sbtClasses[i] = (byte) sbtClassOf(tables.bindings.get(i));
         }
         Snapshot next = new Snapshot(epoch, Collections.unmodifiableMap(ids), fallbackVariants,
-                defaultUniformEmissionId, defaultEmissionLuminance,
+                defaultEmissionLuminance,
                 Collections.unmodifiableMap(new HashMap<>(nextNamedMaterialIds)),
                 List.copyOf(descriptions), Collections.unmodifiableList(new ArrayList<>(grids)), frozenOverrides,
                 tables.cutoutVariants.toIntArray(), sbtClasses);
@@ -612,7 +612,7 @@ public final class RtMaterialRegistry {
         }
     }
 
-    static int index(OpenPbrMaterialProfile profile, boolean glass, boolean emitting) {
+    static int index(OpenPbrMaterialProfile profile, MaterialTopology topology, boolean emitting) {
         int p = -1;
         for (int i = 0; i < TEXTURE_PROFILES.length; i++) {
             if (TEXTURE_PROFILES[i].equals(profile)) {
@@ -621,8 +621,19 @@ public final class RtMaterialRegistry {
             }
         }
         if (p < 0) throw new IllegalArgumentException("Unsupported texture material profile " + profile);
-        return (p * MODEL_VARIANTS + (glass ? VARIANT_GLASS : VARIANT_OPAQUE))
+        int topologyIndex = switch (topology) {
+            case SURFACE -> VARIANT_SURFACE;
+            case MEDIUM_BOUNDARY -> VARIANT_MEDIUM_BOUNDARY;
+        };
+        return (p * TOPOLOGY_VARIANTS + topologyIndex)
                 * EMISSION_VARIANTS + (emitting ? 1 : 0);
+    }
+
+    static int transport(MaterialTopology topology) {
+        return switch (topology) {
+            case SURFACE -> TRANSPORT_SURFACE;
+            case MEDIUM_BOUNDARY -> TRANSPORT_MEDIUM_BOUNDARY;
+        };
     }
 
     /** Texture masks own the summary; otherwise an emitting state uses the full texture. */
@@ -633,27 +644,27 @@ public final class RtMaterialRegistry {
         return emitting ? uniformSummary : RtMaterialDesc.EmissionSummary.NONE;
     }
 
-    private static RtMaterialDesc compileDesc(int model, int features, OpenPbrMaterialProfile profile,
+    private static RtMaterialDesc compileDesc(int transport, int features, OpenPbrMaterialProfile profile,
                                               boolean emitting, boolean neutral,
                                               RtMaterialDesc.EmissionSummary emissionSummary,
                                               float defaultEmissionLuminance) {
-        return compileDesc(model, features, profile, emitting, neutral, emissionSummary,
+        return compileDesc(transport, features, profile, emitting, neutral, emissionSummary,
                 OpenPbrMaterialDefaults.TRANSMISSIVE_SPECULAR_IOR, defaultEmissionLuminance);
     }
 
-    private static RtMaterialDesc compileDesc(int model, int features, OpenPbrMaterialProfile profile,
+    private static RtMaterialDesc compileDesc(int transport, int features, OpenPbrMaterialProfile profile,
                                               boolean emitting, boolean neutral,
                                               RtMaterialDesc.EmissionSummary emissionSummary,
                                               float dielectricIor, float defaultEmissionLuminance) {
-        float roughness = model == MODEL_DIELECTRIC
+        float roughness = transport == TRANSPORT_MEDIUM_BOUNDARY
                 ? OpenPbrMaterialDefaults.TRANSMISSIVE_SPECULAR_ROUGHNESS
                 : profile.specularRoughness();
-        float metalness = model == MODEL_DIELECTRIC ? 0.0f : profile.baseMetalness();
-        // Refractive index is per material, not per model: ice and window glass are both
-        // MODEL_DIELECTRIC but bend light by measurably different amounts.
-        float ior = model == MODEL_DIELECTRIC
+        float metalness = transport == TRANSPORT_MEDIUM_BOUNDARY ? 0.0f : profile.baseMetalness();
+        // Refractive index is per material, not per topology: different medium boundaries can bend
+        // light by measurably different amounts.
+        float ior = transport == TRANSPORT_MEDIUM_BOUNDARY
                 ? dielectricIor : OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR;
-        float transmission = model == MODEL_DIELECTRIC ? 1.0f : 0.0f;
+        float transmission = transport == TRANSPORT_MEDIUM_BOUNDARY ? 1.0f : 0.0f;
         boolean authored = (features & (FEATURE_SPEC | FEATURE_NORMAL)) != 0;
         RtMaterialDesc.Source source = neutral ? RtMaterialDesc.Source.NEUTRAL
                 : (authored ? RtMaterialDesc.Source.AUTHORED_TEXTURE : RtMaterialDesc.Source.DERIVED_TEXTURE);
@@ -669,7 +680,7 @@ public final class RtMaterialRegistry {
         }
         float emissionLuminance = emissionSource == RtMaterialDesc.EmissionSource.NONE
                 ? 0.0f : defaultEmissionLuminance;
-        return new RtMaterialDesc(model, source, features, roughness, metalness, ior, transmission,
+        return new RtMaterialDesc(transport, source, features, roughness, metalness, ior, transmission,
                 emissionSource, emissionLuminance, emissionSummary, BUILTIN_SURFACE_IMPLEMENTATION);
     }
 
@@ -680,7 +691,8 @@ public final class RtMaterialRegistry {
      * a grazing angle would otherwise give it a rim it was never meant to have.
      */
     private static RtMaterialDesc compileParticleDesc() {
-        return new RtMaterialDesc(MODEL_OPAQUE, RtMaterialDesc.Source.NEUTRAL, 0, 1.0f, 0.0f, 1.0f, 0.5f,
+        return new RtMaterialDesc(TRANSPORT_SURFACE, RtMaterialDesc.Source.NEUTRAL, 0,
+                1.0f, 0.0f, 1.0f, 0.5f,
                 RtMaterialDesc.EmissionSource.NONE, 0.0f, RtMaterialDesc.EmissionSummary.NONE,
                 BUILTIN_SURFACE_IMPLEMENTATION);
     }
@@ -695,7 +707,7 @@ public final class RtMaterialRegistry {
                 ? RtMaterialDesc.EmissionSource.AUTHORED_MASK : RtMaterialDesc.EmissionSource.NONE;
         float emissionLuminance = emissionSource == RtMaterialDesc.EmissionSource.NONE
                 ? 0.0f : defaultEmissionLuminance;
-        return new RtMaterialDesc(MODEL_OPAQUE, source, features,
+        return new RtMaterialDesc(TRANSPORT_SURFACE, source, features,
                 OpenPbrMaterialDefaults.RUNTIME_TEXTURE_SPECULAR_ROUGHNESS, 0.0f,
                 OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR, 0.0f,
                 emissionSource, emissionLuminance, emissionSummary,
@@ -790,12 +802,6 @@ public final class RtMaterialRegistry {
         };
     }
 
-    private static RtEmissionGrid albedoGridFor(Map<ResourceId, RtBlockMaterials.Entry> entries,
-                                                ResourceId reference) {
-        RtBlockMaterials.Entry entry = reference != null ? entries.get(reference) : null;
-        return entry != null ? entry.albedoGrid() : null;
-    }
-
     private static SurfaceMaterialData surface(RtMaterialDesc desc, RtBlockMaterials.Entry entry,
                                                float albedoU, float albedoV,
                                                float albedoInvDu, float albedoInvDv) {
@@ -832,10 +838,10 @@ public final class RtMaterialRegistry {
         int coverage = COVERAGE_OPAQUE;
         int flags = 0;
         int shadowTint = WHITE_SHADOW_TINT;
-        switch (desc.model()) {
-            case MODEL_DIELECTRIC -> {
-                // Glass covers its whole footprint — the see-through part of the texture is clear glass,
-                // not absence — so a shadow ray samples no texel and takes the compiled colour.
+        switch (desc.transport()) {
+            case TRANSPORT_MEDIUM_BOUNDARY -> {
+                // A medium boundary covers its whole footprint, so a shadow ray samples no coverage
+                // texel and takes the compiled transmittance colour.
                 flags = BINDING_TRANSMISSIVE;
                 shadowTint = translucentShadowTint(average);
             }
@@ -899,16 +905,8 @@ public final class RtMaterialRegistry {
         return packed;
     }
 
-    private static float[] whiteAverage() {
-        return new float[]{1.0f, 1.0f, 1.0f, 1.0f};
-    }
-
     private static float[] transparentWhiteAverage() {
         return new float[]{1.0f, 1.0f, 1.0f, 0.0f};
-    }
-
-    private static RtMaterialDesc.EmissionSummary uniformWhiteSummary() {
-        return new RtMaterialDesc.EmissionSummary(1.0f, 1.0f, 1.0f, 1.0f, 1.0f);
     }
 
     private static final class MutableCompiledOverride {
@@ -933,7 +931,6 @@ public final class RtMaterialRegistry {
         private final long epoch;
         private final Map<ResourceId, int[]> ids;
         private final int[] fallbackVariants;
-        private final int defaultUniformEmissionId;
         private final float defaultUniformEmissionLuminanceCdM2;
         private final Map<ResourceId, Integer> namedMaterialIds;
         private final List<RtMaterialDesc> descriptions;
@@ -943,7 +940,7 @@ public final class RtMaterialRegistry {
         private final byte[] sbtClasses;
 
         private Snapshot(long epoch, Map<ResourceId, int[]> ids, int[] fallbackVariants,
-                         int defaultUniformEmissionId, float defaultUniformEmissionLuminanceCdM2,
+                         float defaultUniformEmissionLuminanceCdM2,
                          Map<ResourceId, Integer> namedMaterialIds,
                          List<RtMaterialDesc> descriptions,
                          List<RtEmissionGrid> grids, List<CompiledOverride> overrides,
@@ -951,7 +948,6 @@ public final class RtMaterialRegistry {
             this.epoch = epoch;
             this.ids = ids;
             this.fallbackVariants = fallbackVariants;
-            this.defaultUniformEmissionId = defaultUniformEmissionId;
             this.defaultUniformEmissionLuminanceCdM2 = defaultUniformEmissionLuminanceCdM2;
             this.namedMaterialIds = namedMaterialIds;
             this.descriptions = descriptions;
@@ -963,10 +959,6 @@ public final class RtMaterialRegistry {
 
         public long epoch() {
             return epoch;
-        }
-
-        public int defaultUniformEmissionId() {
-            return defaultUniformEmissionId;
         }
 
         public float defaultUniformEmissionLuminanceCdM2() {
@@ -1009,7 +1001,7 @@ public final class RtMaterialRegistry {
         }
 
         public int resolve(ResourceId material, ResourceId geometry, MaterialVariant materialVariant) {
-            int variant = index(materialVariant.profile(), materialVariant.transmissive(),
+            int variant = index(materialVariant.profile(), materialVariant.topology(),
                     materialVariant.emitting());
             for (CompiledOverride override : overrides) {
                 if (!override.rule.matches(material, geometry)) continue;
@@ -1020,12 +1012,5 @@ public final class RtMaterialRegistry {
             return variants != null ? variants[variant] : fallbackVariants[variant];
         }
 
-        /** Stateless resolve for shared-atlas geometry. */
-        public int resolve(ResourceId material, OpenPbrMaterialProfile profile,
-                           boolean glass, boolean emitting) {
-            int[] variants = ids.get(material);
-            int variant = index(profile, glass, emitting);
-            return variants != null ? variants[variant] : fallbackVariants[variant];
-        }
     }
 }

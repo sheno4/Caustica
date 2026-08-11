@@ -31,10 +31,20 @@ final class MaterialRuleTest {
     @Test
     void texturelessDefinitionsHaveStableNamesAndUniformBaseColor() {
         MaterialDefinition definition = new MaterialDefinition(new MaterialHandle(ResourceId.parse("caustica:cloud")),
-                0.82f, 0.86f, 0.9f, 0.92f, 0.0f, 1.33f, 0.0f, null);
+                0.82f, 0.86f, 0.9f, 0.92f, 0.0f, 1.33f, 0.0f, MaterialTopology.SURFACE, null);
 
         assertEquals(ResourceId.parse("caustica:cloud"), definition.id());
         assertEquals(0.9f, definition.baseColorB());
+        assertEquals(MaterialTopology.SURFACE, definition.topology());
+    }
+
+    @Test
+    void transmissionDoesNotImplicitlyCreateAMediumBoundary() {
+        MaterialDefinition thinSheet = new MaterialDefinition(new MaterialHandle(id("thin_sheet")),
+                1.0f, 1.0f, 1.0f, 0.2f, 0.0f, 1.5f, 1.0f, MaterialTopology.SURFACE, null);
+
+        assertEquals(1.0f, thinSheet.transmissionWeight());
+        assertEquals(MaterialTopology.SURFACE, thinSheet.topology());
     }
 
     private static ResourceId id(String path) {

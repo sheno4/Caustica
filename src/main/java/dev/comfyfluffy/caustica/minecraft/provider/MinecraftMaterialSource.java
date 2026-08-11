@@ -10,6 +10,7 @@ import dev.comfyfluffy.caustica.api.provider.MaterialDefinition;
 import dev.comfyfluffy.caustica.api.provider.MaterialHandle;
 import dev.comfyfluffy.caustica.api.provider.MaterialSink;
 import dev.comfyfluffy.caustica.api.provider.MaterialSource;
+import dev.comfyfluffy.caustica.api.provider.MaterialTopology;
 import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialDefaults;
 import dev.comfyfluffy.caustica.minecraft.MinecraftProvidersExtension;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialClassifier;
@@ -27,12 +28,13 @@ public final class MinecraftMaterialSource implements MaterialSource {
     public static final ResourceId ID = ResourceId.of("caustica", "minecraft_materials");
     public static final ResourceId CLOUD = ResourceId.of("caustica", "cloud");
     public static final ResourceId WATER = ResourceId.of("minecraft", "water");
+    public static final ResourceId LAVA_MATERIAL = ResourceId.of("minecraft", "block/lava_still");
     public static final int FORMAT = 4;
 
     @Override
     public void submitMaterials(MaterialSink sink) {
         sink.define(new MaterialDefinition(new MaterialHandle(CLOUD), 0.82f, 0.86f, 0.9f,
-                0.92f, 0.0f, 1.33f, 0.0f, null));
+                0.92f, 0.0f, 1.33f, 0.0f, MaterialTopology.SURFACE, null));
         sink.define(waterDefinition());
         Map<Identifier, Resource> resources = Minecraft.getInstance().getResourceManager().listResources(
                 "materials", id -> id.getPath().endsWith(".json"));
@@ -57,7 +59,7 @@ public final class MinecraftMaterialSource implements MaterialSource {
     static MaterialDefinition waterDefinition() {
         return new MaterialDefinition(new MaterialHandle(WATER), 1.0f, 1.0f, 1.0f,
                 OpenPbrMaterialDefaults.TRANSMISSIVE_SPECULAR_ROUGHNESS, 0.0f,
-                MinecraftMaterialClassifier.WATER_IOR, 1.0f,
+                MinecraftMaterialClassifier.WATER_IOR, 1.0f, MaterialTopology.MEDIUM_BOUNDARY,
                 MinecraftProvidersExtension.WATER_SURFACE);
     }
 

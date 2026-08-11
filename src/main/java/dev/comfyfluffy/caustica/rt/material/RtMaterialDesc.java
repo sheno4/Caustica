@@ -5,7 +5,7 @@ package dev.comfyfluffy.caustica.rt.material;
  * the uniform half lives here; anything varying per texel is in the canonical pages.
  */
 public record RtMaterialDesc(
-        int model,
+        int transport,
         Source source,
         int features,
         /** OpenPBR {@code specular_roughness}: perceptual. GGX alpha is its square, taken in the shader. */

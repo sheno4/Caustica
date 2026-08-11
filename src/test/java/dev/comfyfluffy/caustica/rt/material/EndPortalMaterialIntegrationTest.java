@@ -66,14 +66,14 @@ final class EndPortalMaterialIntegrationTest {
                     throw new AssertionError("catalog construction must not open the image");
                 }, MaterialUv.IDENTITY, false, false, false,
                 OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR);
-        MaterialCatalog catalog = new MaterialCatalog(List.of(), List.of(portalAsset), null, 15000.0f);
+        MaterialCatalog catalog = new MaterialCatalog(List.of(), List.of(portalAsset), 15000.0f);
         assertSame(portalAsset, catalog.standalone().getFirst());
 
         RtMaterialOverrides overrides = RtMaterialOverrides.from(sink.rules, registry::surfaceIndex);
         RtMaterialOverrides.Rule compiledRule = overrides.rules().getFirst();
         assertTrue(compiledRule.matches(catalog.standalone().getFirst().material(), null));
 
-        RtMaterialDesc runtimeTexture = new RtMaterialDesc(RtMaterialRegistry.MODEL_OPAQUE,
+        RtMaterialDesc runtimeTexture = new RtMaterialDesc(RtMaterialRegistry.TRANSPORT_SURFACE,
                 RtMaterialDesc.Source.DERIVED_TEXTURE, 0,
                 OpenPbrMaterialDefaults.RUNTIME_TEXTURE_SPECULAR_ROUGHNESS, 0.0f,
                 OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR, 0.0f,

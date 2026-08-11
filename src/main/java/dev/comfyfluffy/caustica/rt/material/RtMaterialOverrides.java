@@ -44,9 +44,9 @@ public final class RtMaterialOverrides {
 
     private static Rule compile(MaterialRule rule, SurfaceResolver surfaces) {
         MaterialRule.Parameters parameters = rule.parameters();
-        Integer model = parameters.transmissionWeight() == null ? null
+        Integer transport = parameters.transmissionWeight() == null ? null
                 : parameters.transmissionWeight() > 0.0f
-                ? RtMaterialRegistry.MODEL_DIELECTRIC : RtMaterialRegistry.MODEL_OPAQUE;
+                ? RtMaterialRegistry.TRANSPORT_MEDIUM_BOUNDARY : RtMaterialRegistry.TRANSPORT_SURFACE;
         Integer surfaceImplementation = null;
         if (parameters.surface() != null) {
             int index = surfaces.indexOf(parameters.surface());
@@ -56,7 +56,7 @@ public final class RtMaterialOverrides {
             surfaceImplementation = index;
         }
         return new Rule(rule.id(), rule.match().material(), rule.match().geometry(),
-                model, parameters.specularRoughness(),
+                transport, parameters.specularRoughness(),
                 parameters.baseMetalness(), parameters.specularIor(), parameters.transmissionWeight(),
                 parameters.emissionLuminanceCdM2(), surfaceImplementation);
     }
@@ -65,7 +65,7 @@ public final class RtMaterialOverrides {
         return rules;
     }
 
-    public record Rule(ResourceId source, ResourceId material, ResourceId geometry, Integer model,
+    public record Rule(ResourceId source, ResourceId material, ResourceId geometry, Integer transport,
                        Float roughness, Float metalness, Float ior, Float transmission,
                        /**
                         * OpenPBR {@code emission_luminance}: absolute emitting-surface luminance in cd/m²
@@ -89,32 +89,32 @@ public final class RtMaterialOverrides {
         }
 
         RtMaterialDesc apply(RtMaterialDesc base) {
-            int nextModel = model != null ? model : base.model();
+            int nextTransport = transport != null ? transport : base.transport();
             float nextRoughness = roughness != null ? roughness : base.specularRoughness();
             float nextMetalness = metalness != null ? metalness : base.baseMetalness();
             float nextIor = ior != null ? ior
-                    : (model != null ? defaultIor(nextModel) : base.specularIor());
+                    : (transport != null ? defaultIor(nextTransport) : base.specularIor());
             float nextTransmission = transmission != null ? transmission
-                    : (model != null ? defaultTransmission(nextModel) : base.transmissionWeight());
+                    : (transport != null ? defaultTransmission(nextTransport) : base.transmissionWeight());
             // An absolute emitting-surface luminance. It can replace the level of an existing
             // Existing texture/state emission keeps its mask; an override does not create one.
             float nextEmissionLuminance = emissionLuminanceCdM2 != null
                     && base.emissionSource() != RtMaterialDesc.EmissionSource.NONE
                     ? emissionLuminanceCdM2 : base.emissionLuminance();
-            return new RtMaterialDesc(nextModel, RtMaterialDesc.Source.OVERRIDE, base.features(),
+            return new RtMaterialDesc(nextTransport, RtMaterialDesc.Source.OVERRIDE, base.features(),
                     nextRoughness, nextMetalness, nextIor, nextTransmission,
                     base.emissionSource(), nextEmissionLuminance, base.emissionSummary(),
                     surfaceImplementation != null ? surfaceImplementation : base.surfaceImplementation());
         }
 
-        private static float defaultIor(int model) {
-            return model == RtMaterialRegistry.MODEL_DIELECTRIC
+        private static float defaultIor(int transport) {
+            return transport == RtMaterialRegistry.TRANSPORT_MEDIUM_BOUNDARY
                     ? OpenPbrMaterialDefaults.TRANSMISSIVE_SPECULAR_IOR
                     : OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR;
         }
 
-        private static float defaultTransmission(int model) {
-            return model == RtMaterialRegistry.MODEL_DIELECTRIC
+        private static float defaultTransmission(int transport) {
+            return transport == RtMaterialRegistry.TRANSPORT_MEDIUM_BOUNDARY
                     ? 1.0f : 0.0f;
         }
     }

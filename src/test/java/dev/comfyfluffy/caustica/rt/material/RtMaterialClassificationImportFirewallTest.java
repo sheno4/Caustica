@@ -28,7 +28,8 @@ final class RtMaterialClassificationImportFirewallTest {
                     "Identifier", "SpriteContentsAccessor", "TextureAtlasAccessor",
                     "labPbrSpecular", "labPbrNormal", "inferEmissionMask", "RtLabPbr",
                     "RtEmissionHeuristic", "RtLookPackage", "defaultEmissionLuminanceCdM2()",
-                    "lavaId")) {
+                    "lavaId", "defaultUniformEmissionId", "defaultUniformEmissionAsset",
+                    "MODEL_OPAQUE", "MODEL_DIELECTRIC", "VARIANT_GLASS")) {
                 assertFalse(text.contains(forbidden),
                         () -> renderer + " crossed its host type firewall with " + forbidden);
             }

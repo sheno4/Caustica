@@ -6,6 +6,8 @@ import com.mojang.blaze3d.pipeline.RenderPipeline;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import dev.comfyfluffy.caustica.CausticaConfig;
+import dev.comfyfluffy.caustica.api.provider.MaterialTopology;
+import dev.comfyfluffy.caustica.engine.material.MaterialVariant;
 import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialProfile;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialClassifier;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialLookup;
@@ -341,7 +343,10 @@ public final class RtEntityCollector implements SubmitNodeCollector {
                                    boolean transmissive, boolean stochasticAlpha) {
         if (sprite != null && TextureAtlas.LOCATION_BLOCKS.equals(sprite.atlasLocation())) {
             int materialId = RtMaterialRegistry.INSTANCE.requireSnapshot()
-                    .resolve(MinecraftMaterialLookup.material(sprite), profile, transmissive, false);
+                    .resolve(MinecraftMaterialLookup.material(sprite), null,
+                            new MaterialVariant(profile,
+                                    transmissive ? MaterialTopology.MEDIUM_BOUNDARY : MaterialTopology.SURFACE,
+                                    false));
             capture.currentMaterialId = stochasticAlpha
                     ? RtMaterialRegistry.INSTANCE.withStochasticCoverage(materialId) : materialId;
         } else if (sprite != null && RtEntityTextures.entityPbr()) {
@@ -703,7 +708,8 @@ public final class RtEntityCollector implements SubmitNodeCollector {
             var classification = MinecraftMaterialClassifier.classify(state);
             int materialId = RtMaterialRegistry.INSTANCE.requireSnapshot().resolve(
                     MinecraftMaterialLookup.material(sprite), classification.geometry(),
-                    classification.variant(transmissive));
+                    classification.variant(transmissive
+                            ? MaterialTopology.MEDIUM_BOUNDARY : MaterialTopology.SURFACE));
             capture.currentMaterialId = stochasticAlpha
                     ? RtMaterialRegistry.INSTANCE.withStochasticCoverage(materialId) : materialId;
         } else {
