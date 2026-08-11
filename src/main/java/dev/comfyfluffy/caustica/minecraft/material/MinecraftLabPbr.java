@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.rt.material;
+package dev.comfyfluffy.caustica.minecraft.material;
 
 import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialDefaults;
 
@@ -9,8 +9,8 @@ import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialDefaults;
  * {@code specular_roughness}. Inverting that is this class's job, and it is the only place the source
  * format's conventions are known.
  */
-public final class RtLabPbr {
-    private RtLabPbr() {
+public final class MinecraftLabPbr {
+    private MinecraftLabPbr() {
     }
 
     /**

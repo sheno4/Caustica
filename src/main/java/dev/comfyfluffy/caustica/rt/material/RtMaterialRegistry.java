@@ -386,18 +386,18 @@ public final class RtMaterialRegistry {
         long emissive = descriptions.stream().filter(desc -> desc.emissionSource() != RtMaterialDesc.EmissionSource.NONE)
                 .count();
         long inferred = descriptions.stream().filter(desc -> desc.emissionSource()
-                == RtMaterialDesc.EmissionSource.HEURISTIC_MASK).count();
+                == RtMaterialDesc.EmissionSource.DERIVED_MASK).count();
         long authoredEmission = descriptions.stream().filter(desc -> desc.emissionSource()
-                == RtMaterialDesc.EmissionSource.LAB_PBR).count();
-        long uniformEmission = descriptions.stream().filter(desc -> desc.emissionSource()
-                == RtMaterialDesc.EmissionSource.STATE_UNIFORM).count();
+                == RtMaterialDesc.EmissionSource.AUTHORED_MASK).count();
+        long geometryUniformEmission = descriptions.stream().filter(desc -> desc.emissionSource()
+                == RtMaterialDesc.EmissionSource.GEOMETRY_UNIFORM).count();
         double averageCoverage = descriptions.stream().filter(desc -> desc.emissionSummary().emissive())
                 .mapToDouble(desc -> desc.emissionSummary().coverage()).average().orElse(0.0);
-        CausticaMod.LOGGER.info("RT materials: epoch={}, surfaces={}/{}, bindings={}/{}, atlasAssets={}, standaloneAssets={}, overrideRules={}, matchedOverrides={}, emissive={}, labPbrEmission={}, heuristicMasks={}, uniformEmission={}, avgEmissionCoverage={}, tableKiB={}",
+        CausticaMod.LOGGER.info("RT materials: epoch={}, surfaces={}/{}, bindings={}/{}, atlasAssets={}, standaloneAssets={}, overrideRules={}, matchedOverrides={}, emissive={}, authoredMasks={}, derivedMasks={}, geometryUniformEmission={}, avgEmissionCoverage={}, tableKiB={}",
                 epoch, surfaceCount, nextSurfaceCapacity, bindingCount, nextBindingCapacity,
                 atlasAssets.size(), standaloneAssets.size(), overrides.rules().size(),
                 matchedOverrideRules, emissive,
-                authoredEmission, inferred, uniformEmission,
+                authoredEmission, inferred, geometryUniformEmission,
                 String.format(java.util.Locale.ROOT, "%.3f", averageCoverage),
                 ((long) nextSurfaceCapacity * SurfaceMaterialData.BYTE_SIZE
                         + (long) nextBindingCapacity * MaterialBindingData.BYTE_SIZE) / 1024);
@@ -624,7 +624,7 @@ public final class RtMaterialRegistry {
                 * EMISSION_VARIANTS + (emitting ? 1 : 0);
     }
 
-    /** LabPBR/heuristic masks own the summary; otherwise an emitting state uses the full texture. */
+    /** Texture masks own the summary; otherwise an emitting state uses the full texture. */
     private static RtMaterialDesc.EmissionSummary variantSummary(int features, boolean emitting,
                                                                  RtBlockMaterials.Entry entry,
                                                                  RtMaterialDesc.EmissionSummary uniformSummary) {
@@ -652,16 +652,16 @@ public final class RtMaterialRegistry {
         float ior = model == MODEL_DIELECTRIC
                 ? dielectricIor : OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR;
         float transmission = model == MODEL_DIELECTRIC ? 1.0f : 0.0f;
-        boolean labPbr = (features & (FEATURE_SPEC | FEATURE_NORMAL)) != 0;
+        boolean authored = (features & (FEATURE_SPEC | FEATURE_NORMAL)) != 0;
         RtMaterialDesc.Source source = neutral ? RtMaterialDesc.Source.NEUTRAL
-                : (labPbr ? RtMaterialDesc.Source.LAB_PBR : RtMaterialDesc.Source.HEURISTIC);
+                : (authored ? RtMaterialDesc.Source.AUTHORED_TEXTURE : RtMaterialDesc.Source.DERIVED_TEXTURE);
         RtMaterialDesc.EmissionSource emissionSource;
         if ((features & FEATURE_SPEC) != 0) {
-            emissionSource = RtMaterialDesc.EmissionSource.LAB_PBR;
+            emissionSource = RtMaterialDesc.EmissionSource.AUTHORED_MASK;
         } else if ((features & FEATURE_EMISSION_MASK) != 0) {
-            emissionSource = RtMaterialDesc.EmissionSource.HEURISTIC_MASK;
+            emissionSource = RtMaterialDesc.EmissionSource.DERIVED_MASK;
         } else if (emitting) {
-            emissionSource = RtMaterialDesc.EmissionSource.STATE_UNIFORM;
+            emissionSource = RtMaterialDesc.EmissionSource.GEOMETRY_UNIFORM;
         } else {
             emissionSource = RtMaterialDesc.EmissionSource.NONE;
         }
@@ -687,9 +687,9 @@ public final class RtMaterialRegistry {
                                                     RtMaterialDesc.EmissionSummary emissionSummary) {
         boolean authored = (features & (FEATURE_SPEC | FEATURE_NORMAL)) != 0;
         RtMaterialDesc.Source source = neutral ? RtMaterialDesc.Source.NEUTRAL
-                : (authored ? RtMaterialDesc.Source.LAB_PBR : RtMaterialDesc.Source.HEURISTIC);
+                : (authored ? RtMaterialDesc.Source.AUTHORED_TEXTURE : RtMaterialDesc.Source.DERIVED_TEXTURE);
         RtMaterialDesc.EmissionSource emissionSource = (features & FEATURE_SPEC) != 0
-                ? RtMaterialDesc.EmissionSource.LAB_PBR : RtMaterialDesc.EmissionSource.NONE;
+                ? RtMaterialDesc.EmissionSource.AUTHORED_MASK : RtMaterialDesc.EmissionSource.NONE;
         float emissionLuminance = emissionSource == RtMaterialDesc.EmissionSource.NONE
                 ? 0.0f : defaultEmissionLuminanceCdM2();
         return new RtMaterialDesc(MODEL_OPAQUE, source, features,
@@ -781,8 +781,8 @@ public final class RtMaterialRegistry {
     private static RtEmissionGrid gridFor(RtMaterialDesc desc, RtBlockMaterials.Entry entry,
                                           RtEmissionGrid uniformGrid) {
         return switch (desc.emissionSource()) {
-            case LAB_PBR, HEURISTIC_MASK -> entry.emissionGrid();
-            case STATE_UNIFORM -> uniformGrid;
+            case AUTHORED_MASK, DERIVED_MASK -> entry.emissionGrid();
+            case GEOMETRY_UNIFORM -> uniformGrid;
             case NONE -> null;
         };
     }

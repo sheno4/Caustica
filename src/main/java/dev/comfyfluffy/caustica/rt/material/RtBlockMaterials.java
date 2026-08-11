@@ -3,11 +3,12 @@ package dev.comfyfluffy.caustica.rt.material;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.engine.material.MaterialCatalog;
-import dev.comfyfluffy.caustica.engine.material.MaterialImage;
+import dev.comfyfluffy.caustica.engine.material.MaterialTextureImage;
 import dev.comfyfluffy.caustica.engine.material.MaterialTextureAsset;
 import dev.comfyfluffy.caustica.engine.material.MaterialTextureKind;
 import dev.comfyfluffy.caustica.engine.material.MaterialUv;
 import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialDefaults;
+import dev.comfyfluffy.caustica.engine.material.OpenPbrTextureTexel;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.pipeline.RtPipeline;
 
@@ -78,9 +79,9 @@ public final class RtBlockMaterials {
         Candidate(MaterialTextureAsset asset) {
             this.asset = asset;
             int value = 0;
-            if (asset.labPbrSpecular() != null) value |= RtMaterialRegistry.FEATURE_SPEC;
-            if (asset.labPbrNormal() != null) value |= RtMaterialRegistry.FEATURE_NORMAL;
-            if (asset.inferEmissionMask()) value |= RtMaterialRegistry.FEATURE_EMISSION_MASK;
+            if (asset.surfaceParameters()) value |= RtMaterialRegistry.FEATURE_SPEC;
+            if (asset.normalMap()) value |= RtMaterialRegistry.FEATURE_NORMAL;
+            if (asset.emissionMask()) value |= RtMaterialRegistry.FEATURE_EMISSION_MASK;
             features = value;
         }
 
@@ -143,12 +144,12 @@ public final class RtBlockMaterials {
 
         int specCount = 0;
         int normalCount = 0;
-        int heuristicCount = 0;
+        int emissionMaskCount = 0;
         int largest = 1 + 2 * GUTTER;
         for (Candidate candidate : paged) {
             if ((candidate.features & RtMaterialRegistry.FEATURE_SPEC) != 0) specCount++;
             if ((candidate.features & RtMaterialRegistry.FEATURE_NORMAL) != 0) normalCount++;
-            if ((candidate.features & RtMaterialRegistry.FEATURE_EMISSION_MASK) != 0) heuristicCount++;
+            if ((candidate.features & RtMaterialRegistry.FEATURE_EMISSION_MASK) != 0) emissionMaskCount++;
             largest = Math.max(largest, Math.max(candidate.width(), candidate.height()) + 2 * GUTTER);
         }
 
@@ -241,9 +242,9 @@ public final class RtBlockMaterials {
             bytesPerBundle += (long) w * w * 4L;
             w = Math.max(1, w / 2);
         }
-        CausticaMod.LOGGER.info("RT canonical material pages: atlasAssets={}, standaloneAssets={}, spec={}, normal={}, heuristicEmission={}, pages={}, size={}x{}, validLod<={}, gpuMiB={}",
+        CausticaMod.LOGGER.info("RT canonical material pages: atlasAssets={}, standaloneAssets={}, surface={}, normal={}, emissionMasks={}, pages={}, size={}x{}, validLod<={}, gpuMiB={}",
                 catalog.atlasAssets().size(), catalog.standalone().size(), specCount, normalCount,
-                heuristicCount, pages.size(), pageSize, pageSize, MAX_VALID_LOD,
+                emissionMaskCount, pages.size(), pageSize, pageSize, MAX_VALID_LOD,
                 String.format(java.util.Locale.ROOT, "%.2f", bytesPerBundle * pages.size() * 3.0 / (1024.0 * 1024.0)));
     }
 
@@ -305,21 +306,20 @@ public final class RtBlockMaterials {
     }
 
     private static Decoded decode(Candidate candidate) throws Exception {
-        try (MaterialImage albedo = candidate.asset.albedo().open();
-             MaterialImage spec = open(candidate.asset.labPbrSpecular());
-             MaterialImage normalMap = open(candidate.asset.labPbrNormal())) {
+        try (MaterialTextureImage texture = candidate.asset.texture().open()) {
             int width = candidate.width();
             int height = candidate.height();
             float[] surface0 = new float[width * height * 4];
             float[] normal = new float[surface0.length];
             float[] surface1 = new float[surface0.length];
             float[] linearAlbedo = new float[surface0.length];
-            float[] authoredEmission = spec != null ? new float[width * height] : null;
+            float[] authoredEmission = candidate.asset.emissionMask() ? new float[width * height] : null;
             StatsAccumulator stats = new StatsAccumulator(width, height);
+            OpenPbrTextureTexel texel = new OpenPbrTextureTexel();
             for (int y = 0; y < height; y++) {
                 for (int x = 0; x < width; x++) {
                     int i = (y * width + x) * 4;
-                    int albedoPixel = sample(albedo, x, y, width, height);
+                    int albedoPixel = sample(texture, x, y, width, height);
                     stats.add(x, y, albedoPixel);
                     float ar = RtMaterialTextureData.srgbToLinear(red(albedoPixel));
                     float ag = RtMaterialTextureData.srgbToLinear(green(albedoPixel));
@@ -329,55 +329,27 @@ public final class RtBlockMaterials {
                     linearAlbedo[i + 1] = ag;
                     linearAlbedo[i + 2] = ab;
                     linearAlbedo[i + 3] = aa;
-                    if (spec != null) {
-                        int pixel = sample(spec, x, y, width, height);
-                        RtLabPbr.Texel decoded = RtLabPbr.decodeSpec(
-                                red(pixel) / 255.0f, green(pixel) / 255.0f,
-                                blue(pixel) / 255.0f, alpha(pixel) / 255.0f, ar, ag, ab);
-                        surface0[i] = decoded.specularRoughness();
-                        surface0[i + 1] = decoded.metalness();
-                        surface0[i + 2] = decoded.emission();
-                        authoredEmission[y * width + x] = decoded.emission() * aa;
-                        surface0[i + 3] = decoded.subsurfaceWeight();
-                        surface1[i] = decoded.metalBaseColorR();
-                        surface1[i + 1] = decoded.metalBaseColorG();
-                        surface1[i + 2] = decoded.metalBaseColorB();
-                        surface1[i + 3] = RtLabPbr.encodeIor(decoded.specularIor());
-                    } else {
-                        surface0[i] = 1.0f;
-                        surface1[i] = surface1[i + 1] = surface1[i + 2] = 1.0f;
-                        surface1[i + 3] = RtLabPbr.encodeIor(OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR);
-                    }
-                    if (normalMap != null) {
-                        int pixel = sample(normalMap, x, y, width, height);
-                        float nx = red(pixel) / 127.5f - 1.0f;
-                        float ny = green(pixel) / 127.5f - 1.0f;
-                        float lengthSq = nx * nx + ny * ny;
-                        if (lengthSq > 1.0f) {
-                            float invLength = 1.0f / (float) Math.sqrt(lengthSq);
-                            nx *= invLength;
-                            ny *= invLength;
-                        }
-                        normal[i] = nx * 0.5f + 0.5f;
-                        normal[i + 1] = ny * 0.5f + 0.5f;
-                        normal[i + 3] = alpha(pixel) / 255.0f;
-                    } else {
-                        normal[i] = normal[i + 1] = 0.5f;
-                    }
+                    texel.reset();
+                    texture.readOpenPbr(x, y, texel);
+                    surface0[i] = texel.specularRoughness;
+                    surface0[i + 1] = texel.baseMetalness;
+                    surface0[i + 2] = texel.emissionWeight;
+                    surface0[i + 3] = texel.subsurfaceWeight;
+                    normal[i] = texel.tangentNormalX * 0.5f + 0.5f;
+                    normal[i + 1] = texel.tangentNormalY * 0.5f + 0.5f;
+                    normal[i + 3] = texel.normalHeight;
+                    surface1[i] = texel.metalBaseColorR;
+                    surface1[i + 1] = texel.metalBaseColorG;
+                    surface1[i + 2] = texel.metalBaseColorB;
+                    surface1[i + 3] = encodeIor(texel.specularIor);
+                    if (authoredEmission != null) authoredEmission[y * width + x] = surface0[i + 2] * aa;
                 }
             }
             RtMaterialDesc.EmissionSummary emissionSummary = RtMaterialDesc.EmissionSummary.NONE;
             RtEmissionGrid grid = null;
-            if (spec != null) {
-                emissionSummary = RtEmissionHeuristic.summarize(linearAlbedo, authoredEmission);
+            if (authoredEmission != null) {
+                emissionSummary = summarizeEmission(linearAlbedo, authoredEmission);
                 grid = emissionGrid(linearAlbedo, authoredEmission, width, height);
-            }
-            if ((candidate.features & RtMaterialRegistry.FEATURE_EMISSION_MASK) != 0) {
-                RtEmissionHeuristic.Result emission = RtEmissionHeuristic.compile(linearAlbedo);
-                float[] mask = emission.mask();
-                for (int pixel = 0; pixel < mask.length; pixel++) surface0[pixel * 4 + 2] = mask[pixel];
-                emissionSummary = emission.summary();
-                grid = emissionGrid(linearAlbedo, mask, width, height);
             }
             int maxLod = maxLodFor(width, height);
             return new Decoded(RtMaterialTextureData.mipChain(new RtMaterialTextureData.Level(width, height,
@@ -386,7 +358,7 @@ public final class RtBlockMaterials {
     }
 
     static AlbedoStats scanAlbedo(MaterialTextureAsset asset) throws Exception {
-        try (MaterialImage image = asset.albedo().open()) {
+        try (MaterialTextureImage image = asset.texture().open()) {
             StatsAccumulator stats = new StatsAccumulator(asset.width(), asset.height());
             for (int y = 0; y < asset.height(); y++) {
                 for (int x = 0; x < asset.width(); x++) {
@@ -459,7 +431,7 @@ public final class RtBlockMaterials {
             surface0 = allocate(pageSize, mipCount, 255, 0, 0, 0);
             normal = allocate(pageSize, mipCount, 128, 128, 0, 0);
             surface1 = allocate(pageSize, mipCount, 255, 255, 255,
-                    RtMaterialTextureData.unorm8(RtLabPbr.encodeIor(OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR)));
+                    RtMaterialTextureData.unorm8(encodeIor(OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR)));
         }
 
         void writeFallback() {
@@ -520,15 +492,31 @@ public final class RtBlockMaterials {
         return Math.min(MAX_VALID_LOD, 31 - Integer.numberOfLeadingZeros(Math.max(width, height)));
     }
 
-    private static MaterialImage open(dev.comfyfluffy.caustica.engine.material.MaterialImageSource source)
-            throws Exception {
-        return source == null ? null : source.open();
-    }
-
-    private static int sample(MaterialImage image, int x, int y, int width, int height) {
+    private static int sample(MaterialTextureImage image, int x, int y, int width, int height) {
         int sx = Math.min(image.width() - 1, x * image.width() / width);
         int sy = Math.min(image.height() - 1, y * image.height() / height);
-        return image.argb(sx, sy);
+        return image.albedoArgb(sx, sy);
+    }
+
+    private static RtMaterialDesc.EmissionSummary summarizeEmission(float[] rgba, float[] mask) {
+        double r = 0, g = 0, b = 0, energy = 0;
+        int covered = 0;
+        for (int pixel = 0; pixel < mask.length; pixel++) {
+            int i = pixel * 4;
+            float weight = Math.clamp(mask[pixel], 0.0f, 1.0f);
+            float er = rgba[i] * weight, eg = rgba[i + 1] * weight, eb = rgba[i + 2] * weight;
+            r += er; g += eg; b += eb;
+            energy += 0.2126 * er + 0.7152 * eg + 0.0722 * eb;
+            if (weight > 1.0f / 255.0f) covered++;
+        }
+        if (energy <= 0.0) return RtMaterialDesc.EmissionSummary.NONE;
+        float inv = 1.0f / mask.length;
+        return new RtMaterialDesc.EmissionSummary((float) r * inv, (float) g * inv, (float) b * inv,
+                (float) energy * inv, covered * inv);
+    }
+
+    private static float encodeIor(float ior) {
+        return Math.clamp((ior - 1.0f) / (ior + 1.0f), 0.0f, 254.0f / 255.0f);
     }
 
     private static int alpha(int argb) {

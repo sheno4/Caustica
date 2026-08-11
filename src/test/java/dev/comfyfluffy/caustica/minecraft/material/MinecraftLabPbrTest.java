@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.rt.material;
+package dev.comfyfluffy.caustica.minecraft.material;
 
 import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialDefaults;
 
@@ -6,18 +6,18 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-final class RtLabPbrTest {
+final class MinecraftLabPbrTest {
     private static final float EPS = 1.0e-5f;
 
     @Test
     void decodesDielectricAndIgnoredEmission() {
-        RtLabPbr.Texel value = RtLabPbr.decodeSpec(
+        MinecraftLabPbr.Texel value = MinecraftLabPbr.decodeSpec(
                 0.25f, 0.04f, 64.0f / 255.0f, 1.0f,
                 0.7f, 0.6f, 0.5f);
         assertEquals(0.75f, value.specularRoughness(), EPS);
         assertEquals(0.0f, value.metalness(), EPS);
         // A dielectric authors scalar reflectance, which inverts entirely into an index.
-        assertEquals(RtLabPbr.iorFromF0(0.04f), value.specularIor(), EPS);
+        assertEquals(MinecraftLabPbr.iorFromF0(0.04f), value.specularIor(), EPS);
         assertEquals(1.0f, value.metalBaseColorR(), EPS);
         assertEquals(0.0f, value.emission(), EPS);
         assertEquals(0.0f, value.subsurfaceWeight(), EPS);
@@ -25,7 +25,7 @@ final class RtLabPbrTest {
 
     @Test
     void decodesGenericMetalEmissionAndThinTransmission() {
-        RtLabPbr.Texel value = RtLabPbr.decodeSpec(
+        MinecraftLabPbr.Texel value = MinecraftLabPbr.decodeSpec(
                 0.5f, 1.0f, 1.0f, 127.0f / 255.0f,
                 0.7f, 0.6f, 0.5f);
         assertEquals(0.5f, value.specularRoughness(), EPS);
@@ -40,7 +40,7 @@ final class RtLabPbrTest {
 
     @Test
     void decodesPredefinedGoldWithoutUsingAlbedo() {
-        RtLabPbr.Texel value = RtLabPbr.decodeSpec(
+        MinecraftLabPbr.Texel value = MinecraftLabPbr.decodeSpec(
                 1.0f, 231.0f / 255.0f, 0.0f, 1.0f,
                 0.0f, 0.0f, 0.0f);
         assertEquals(0.0f, value.specularRoughness(), EPS);
@@ -60,7 +60,7 @@ final class RtLabPbrTest {
         float[][] smoothnessToAlpha = {
                 {0.0f, 1.0f}, {0.1f, 0.81f}, {0.5f, 0.25f}, {0.9f, 0.01f}, {1.0f, 0.0f}};
         for (float[] pair : smoothnessToAlpha) {
-            RtLabPbr.Texel value = RtLabPbr.decodeSpec(pair[0], 0.04f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f);
+            MinecraftLabPbr.Texel value = MinecraftLabPbr.decodeSpec(pair[0], 0.04f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f);
             assertEquals(1.0f - pair[0], value.specularRoughness(), EPS);
             float alpha = value.specularRoughness() * value.specularRoughness();
             assertEquals(pair[1], alpha, EPS);
@@ -74,8 +74,8 @@ final class RtLabPbrTest {
     @Test
     void authoredReflectanceRoundTripsThroughTheStoredIndex() {
         for (float f0 : new float[]{0.0f, 0.02f, 0.04f, 0.08f, 0.2f, 0.5f, 0.89f}) {
-            float ior = RtLabPbr.iorFromF0(f0);
-            float decoded = RtLabPbr.decodeIor(RtLabPbr.encodeIor(ior));
+            float ior = MinecraftLabPbr.iorFromF0(f0);
+            float decoded = MinecraftLabPbr.decodeIor(MinecraftLabPbr.encodeIor(ior));
             float amplitude = (decoded - 1.0f) / (decoded + 1.0f);
             assertEquals(f0, amplitude * amplitude, 1.0e-4f);
         }

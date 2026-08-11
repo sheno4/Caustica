@@ -312,7 +312,8 @@ public float surfaceEmissionLuminance(SurfaceMaterial mat) {
 /**
  * Decode the canonical page's specular_ior channel. IOR is stored as its amplitude reflectance
  * (ior - 1) / (ior + 1), which maps the whole dielectric range onto a unorm8 with useful precision where
- * real materials sit; RtLabPbr owns the matching encode.
+ * real materials sit. The engine material page compiler owns the matching encode and clamps to the same
+ * one-unorm8-step-below-one ceiling before upload.
  */
 public float surfaceIorFromPage(float encoded) {
     float amplitude = clamp(encoded, 0.0, 254.0 / 255.0);

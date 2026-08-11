@@ -15,7 +15,8 @@ final class RtMaterialClassificationImportFirewallTest {
 
     @Test
     void minecraftClassifiersDoNotLiveInRendererMaterialPackage() throws IOException {
-        for (String removed : new String[]{"RtMaterials.java", "RtDielectrics.java", "RtEmissionSemantics.java"}) {
+        for (String removed : new String[]{"RtMaterials.java", "RtDielectrics.java", "RtEmissionSemantics.java",
+                "RtLabPbr.java", "RtEmissionHeuristic.java"}) {
             assertFalse(Files.exists(MATERIAL_SOURCES.resolve(removed)),
                     () -> removed + " must remain in the Minecraft adapter");
         }
@@ -24,7 +25,9 @@ final class RtMaterialClassificationImportFirewallTest {
             String text = Files.readString(MATERIAL_SOURCES.resolve(renderer));
             for (String forbidden : List.of("net.minecraft.", "net.fabricmc.", "com.mojang.",
                     "dev.comfyfluffy.caustica.minecraft.", "TextureAtlasSprite", "NativeImage",
-                    "Identifier", "SpriteContentsAccessor", "TextureAtlasAccessor")) {
+                    "Identifier", "SpriteContentsAccessor", "TextureAtlasAccessor",
+                    "labPbrSpecular", "labPbrNormal", "inferEmissionMask", "RtLabPbr",
+                    "RtEmissionHeuristic")) {
                 assertFalse(text.contains(forbidden),
                         () -> renderer + " crossed its host type firewall with " + forbidden);
             }

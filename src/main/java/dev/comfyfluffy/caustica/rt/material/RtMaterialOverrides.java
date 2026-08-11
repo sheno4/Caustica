@@ -9,7 +9,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Ordered provider material rules compiled ahead of source textures and engine heuristics. Parameters
+ * Ordered provider material rules compiled ahead of source textures and renderer defaults. Parameters
  * use OpenPBR meanings; the optional surface names a registered {@code ISurfaceModel} implementation.
  */
 public final class RtMaterialOverrides {
@@ -69,8 +69,8 @@ public final class RtMaterialOverrides {
                        Float roughness, Float metalness, Float ior, Float transmission,
                        /**
                         * OpenPBR {@code emission_luminance}: absolute emitting-surface luminance in cd/m²
-                        * for whatever emission mask the material naturally resolves to (LabPBR
-                        * {@code _s}, heuristic mask, or state-uniform block light). A material with no
+                        * for whatever emission mask the material naturally resolves to (authored,
+                        * derived, or geometry-uniform). A material with no
                         * natural emission stays unlit.
                         */
                        Float emissionLuminanceCdM2,
@@ -97,7 +97,7 @@ public final class RtMaterialOverrides {
             float nextTransmission = transmission != null ? transmission
                     : (model != null ? defaultTransmission(nextModel) : base.transmissionWeight());
             // An absolute emitting-surface luminance. It can replace the level of an existing
-            // LabPBR/heuristic/state emitter but does not create an emission mask where none exists.
+            // Existing texture/state emission keeps its mask; an override does not create one.
             float nextEmissionLuminance = emissionLuminanceCdM2 != null
                     && base.emissionSource() != RtMaterialDesc.EmissionSource.NONE
                     ? emissionLuminanceCdM2 : base.emissionLuminance();

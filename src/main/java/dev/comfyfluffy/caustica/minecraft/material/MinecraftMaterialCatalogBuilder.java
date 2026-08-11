@@ -46,14 +46,16 @@ public final class MinecraftMaterialCatalogBuilder {
             Optional<Resource> normal = resource(sibling(name, "_n.png"));
             NativeImage original = ((SpriteContentsAccessor) sprite.contents()).caustica$originalImage();
             MaterialImageSource albedo = borrowed(original, sprite.contents().width(), sprite.contents().height());
+            MaterialImageSource specular = spec.map(value -> resourceImage(value, true)).orElse(null);
+            MaterialImageSource normalMap = normal.map(value -> resourceImage(value, true)).orElse(null);
+            boolean inferEmission = spec.isEmpty() && emissions.permits(material);
             blocks.add(new MaterialTextureAsset(material, MaterialTextureKind.SHARED_ATLAS,
-                    sprite.contents().width(), sprite.contents().height(), albedo,
-                    spec.map(value -> resourceImage(value, true)).orElse(null),
-                    normal.map(value -> resourceImage(value, true)).orElse(null),
+                    sprite.contents().width(), sprite.contents().height(),
+                    new MinecraftMaterialTextureSource(albedo, specular, normalMap, inferEmission),
                     new MaterialUv(sprite.getU0(), sprite.getV0(),
                             inverseExtent(sprite.getU1() - sprite.getU0()),
                             inverseExtent(sprite.getV1() - sprite.getV0())),
-                    spec.isEmpty() && emissions.permits(material),
+                    spec.isPresent(), normal.isPresent(), spec.isPresent() || inferEmission,
                     MinecraftMaterialClassifier.dielectricIor(material)));
         }
 
@@ -81,11 +83,14 @@ public final class MinecraftMaterialCatalogBuilder {
                         ? resource(siblingTexture(albedoLocation, "_s")) : Optional.empty();
                 Optional<Resource> normal = (features & 2) != 0
                         ? resource(siblingTexture(albedoLocation, "_n")) : Optional.empty();
+                MaterialImageSource albedoSource = resourceImage(albedoResource.get(), false);
+                MaterialImageSource specular = spec.map(value -> resourceImage(value, false)).orElse(null);
+                MaterialImageSource normalMap = normal.map(value -> resourceImage(value, false)).orElse(null);
                 result.add(new MaterialTextureAsset(material, MaterialTextureKind.STANDALONE,
-                        albedo.width(), albedo.height(), resourceImage(albedoResource.get(), false),
-                        spec.map(value -> resourceImage(value, false)).orElse(null),
-                        normal.map(value -> resourceImage(value, false)).orElse(null),
-                        MaterialUv.IDENTITY, false, MinecraftMaterialClassifier.dielectricIor(material)));
+                        albedo.width(), albedo.height(),
+                        new MinecraftMaterialTextureSource(albedoSource, specular, normalMap, false),
+                        MaterialUv.IDENTITY, spec.isPresent(), normal.isPresent(), spec.isPresent(),
+                        MinecraftMaterialClassifier.dielectricIor(material)));
             } catch (Throwable throwable) {
                 CausticaMod.LOGGER.warn("RT entity material albedo load failed for {}", albedoLocation, throwable);
             }

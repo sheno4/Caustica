@@ -13,7 +13,6 @@ import dev.comfyfluffy.caustica.api.provider.MaterialSource;
 import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialDefaults;
 import dev.comfyfluffy.caustica.minecraft.MinecraftProvidersExtension;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialClassifier;
-import dev.comfyfluffy.caustica.rt.material.RtBlockMaterials;
 import net.minecraft.client.Minecraft;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.packs.resources.Resource;
@@ -113,11 +112,6 @@ public final class MinecraftMaterialSource implements MaterialSource {
         MaterialRule.Parameters parameters = new MaterialRule.Parameters(roughness, metalness, ior,
                 transmission, emissionLuminanceCdM2, surface);
         return new MaterialRule(resourceId(source), new MaterialRule.Match(texture, geometry), parameters);
-    }
-
-    @Override
-    public void shutdown() {
-        RtBlockMaterials.INSTANCE.destroy();
     }
 
     private static ResourceId resourceId(Identifier id) {

@@ -18,7 +18,7 @@ public record RtMaterialDesc(
          * OpenPBR {@code emission_luminance}: final HDR emitting-surface luminance in cd/m², the
          * look-package block baseline replaced by a resource-pack {@code emission.luminance_cd_m2} value
          * when present. 0 when {@code emissionSource == NONE}. Applied uniformly regardless of source —
-         * LabPBR, heuristic-mask, or state-uniform all get the same baseline unless absolutely overridden.
+         * Authored, derived-mask, and geometry-uniform emission use the same baseline unless overridden.
          */
         float emissionLuminance,
         EmissionSummary emissionSummary,
@@ -31,16 +31,16 @@ public record RtMaterialDesc(
 ) {
     public enum Source {
         OVERRIDE,
-        LAB_PBR,
-        HEURISTIC,
+        AUTHORED_TEXTURE,
+        DERIVED_TEXTURE,
         NEUTRAL
     }
 
     public enum EmissionSource {
         NONE,
-        LAB_PBR,
-        HEURISTIC_MASK,
-        STATE_UNIFORM
+        AUTHORED_MASK,
+        DERIVED_MASK,
+        GEOMETRY_UNIFORM
     }
 
     /** Normalized compiler output; per-primitive state light multiplies it when the source is state-gated. */

@@ -60,8 +60,17 @@ final class MaterialCatalogTest {
 
     private static MaterialTextureAsset asset(ResourceId id, MaterialTextureKind kind,
                                               MaterialImageSource source) {
-        return new MaterialTextureAsset(id, kind, 1, 1, source, null, null,
-                MaterialUv.IDENTITY, false, OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR);
+        return new MaterialTextureAsset(id, kind, 1, 1, () -> {
+            MaterialImage image = source.open();
+            return new MaterialTextureImage() {
+                @Override public int width() { return image.width(); }
+                @Override public int height() { return image.height(); }
+                @Override public int albedoArgb(int x, int y) { return image.argb(x, y); }
+                @Override public void readOpenPbr(int x, int y, OpenPbrTextureTexel out) { }
+                @Override public void close() { image.close(); }
+            };
+        }, MaterialUv.IDENTITY, false, false, false,
+                OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR);
     }
 
     private static MaterialImageSource image(int argb) {

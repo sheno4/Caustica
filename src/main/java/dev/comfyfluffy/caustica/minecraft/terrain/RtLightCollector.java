@@ -94,15 +94,15 @@ final class RtLightCollector {
 
             float stateEmission = p[pb + 3];
             float factor = switch (source) {
-                case LAB_PBR -> 1.0f; // authored _s emission REPLACES block light
-                case HEURISTIC_MASK, STATE_UNIFORM -> stateEmission;
+                case AUTHORED_MASK -> 1.0f;
+                case DERIVED_MASK, GEOMETRY_UNIFORM -> stateEmission;
                 case NONE -> 0.0f;
             };
             if (factor <= EMISSION_EPS) {
                 continue;
             }
             RtEmissionGrid grid = materials.emissionGrid(materialId);
-            if (grid == null && source != RtMaterialDesc.EmissionSource.STATE_UNIFORM) {
+            if (grid == null && source != RtMaterialDesc.EmissionSource.GEOMETRY_UNIFORM) {
                 continue; // masked source with no emissive texels
             }
 

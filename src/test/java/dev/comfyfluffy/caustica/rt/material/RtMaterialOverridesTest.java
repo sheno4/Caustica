@@ -61,13 +61,13 @@ final class RtMaterialOverridesTest {
         assertEquals(1.52f, rule.ior());
         assertEquals(2000.0f, rule.emissionLuminanceCdM2());
         RtMaterialDesc base = new RtMaterialDesc(RtMaterialRegistry.MODEL_OPAQUE,
-                RtMaterialDesc.Source.LAB_PBR, RtMaterialRegistry.FEATURE_SPEC,
-                0.8f, 0.0f, 1.0f, 0.0f, RtMaterialDesc.EmissionSource.LAB_PBR,
+                RtMaterialDesc.Source.AUTHORED_TEXTURE, RtMaterialRegistry.FEATURE_SPEC,
+                0.8f, 0.0f, 1.0f, 0.0f, RtMaterialDesc.EmissionSource.AUTHORED_MASK,
                 5.0f, new RtMaterialDesc.EmissionSummary(0.2f, 0.1f, 0.05f, 0.1f, 0.5f), 0);
         RtMaterialDesc applied = rule.apply(base);
         assertEquals(RtMaterialDesc.Source.OVERRIDE, applied.source());
         // luminance_cd_m2 replaces the level but keeps LabPBR's mask/source/summary.
-        assertEquals(RtMaterialDesc.EmissionSource.LAB_PBR, applied.emissionSource());
+        assertEquals(RtMaterialDesc.EmissionSource.AUTHORED_MASK, applied.emissionSource());
         assertEquals(2000.0f, applied.emissionLuminance());
         assertEquals(base.emissionSummary(), applied.emissionSummary());
         assertEquals(0.06f, applied.specularRoughness());
@@ -77,7 +77,7 @@ final class RtMaterialOverridesTest {
     @Test
     void specularIorOverridesTheBuiltInIndex() {
         RtMaterialDesc glassBase = new RtMaterialDesc(RtMaterialRegistry.MODEL_DIELECTRIC,
-                RtMaterialDesc.Source.HEURISTIC, 0, 0.05f, 0.0f,
+                RtMaterialDesc.Source.DERIVED_TEXTURE, 0, 0.05f, 0.0f,
                 OpenPbrMaterialDefaults.TRANSMISSIVE_SPECULAR_IOR, 1.0f,
                 RtMaterialDesc.EmissionSource.NONE, 0.0f, RtMaterialDesc.EmissionSummary.NONE, 0);
         var rule = parse(JsonParser.parseString("""
@@ -102,7 +102,7 @@ final class RtMaterialOverridesTest {
                 {"format":4,"match":{"sprite":"somemod:block/pool"},"model":"water"}
                 """).getAsJsonObject(), Identifier.parse("test:materials/pool.json"));
         RtMaterialDesc base = new RtMaterialDesc(RtMaterialRegistry.MODEL_OPAQUE,
-                RtMaterialDesc.Source.HEURISTIC, 0, 0.8f, 0.0f, 1.0f, 0.0f,
+                RtMaterialDesc.Source.DERIVED_TEXTURE, 0, 0.8f, 0.0f, 1.0f, 0.0f,
                 RtMaterialDesc.EmissionSource.NONE, 0.0f, RtMaterialDesc.EmissionSummary.NONE, 0);
         RtMaterialDesc applied = rule.apply(base);
         assertEquals(RtMaterialRegistry.MODEL_DIELECTRIC, applied.model());
@@ -118,7 +118,7 @@ final class RtMaterialOverridesTest {
                 "emission":{"luminance_cd_m2":5000.0}}
                 """).getAsJsonObject(), Identifier.parse("test:boost.json"));
         RtMaterialDesc base = new RtMaterialDesc(RtMaterialRegistry.MODEL_OPAQUE,
-                RtMaterialDesc.Source.HEURISTIC, 0, 0.8f, 0.0f, 1.0f, 0.0f,
+                RtMaterialDesc.Source.DERIVED_TEXTURE, 0, 0.8f, 0.0f, 1.0f, 0.0f,
                 RtMaterialDesc.EmissionSource.NONE, 0.0f, RtMaterialDesc.EmissionSummary.NONE, 0);
 
         RtMaterialDesc applied = rule.apply(base);
@@ -169,7 +169,7 @@ final class RtMaterialOverridesTest {
                 {"format":4,"match":{"sprite":"somemod:block/crystal"},"surface":"somemod:crystal"}
                 """).getAsJsonObject(), Identifier.parse("test:materials/crystal.json"));
         RtMaterialDesc base = new RtMaterialDesc(RtMaterialRegistry.MODEL_OPAQUE,
-                RtMaterialDesc.Source.HEURISTIC, 0, 0.8f, 0.0f, 1.0f, 0.0f,
+                RtMaterialDesc.Source.DERIVED_TEXTURE, 0, 0.8f, 0.0f, 1.0f, 0.0f,
                 RtMaterialDesc.EmissionSource.NONE, 0.0f, RtMaterialDesc.EmissionSummary.NONE, 0);
 
         assertEquals(1, rule.surfaceImplementation());
@@ -188,7 +188,7 @@ final class RtMaterialOverridesTest {
                 {"format":4,"match":{"sprite":"somemod:block/crystal"},"specular":{"roughness":0.5}}
                 """).getAsJsonObject(), Identifier.parse("test:materials/crystal.json"));
         RtMaterialDesc base = new RtMaterialDesc(RtMaterialRegistry.MODEL_OPAQUE,
-                RtMaterialDesc.Source.HEURISTIC, 0, 0.8f, 0.0f, 1.0f, 0.0f,
+                RtMaterialDesc.Source.DERIVED_TEXTURE, 0, 0.8f, 0.0f, 1.0f, 0.0f,
                 RtMaterialDesc.EmissionSource.NONE, 0.0f, RtMaterialDesc.EmissionSummary.NONE, 1);
 
         assertEquals(1, rule.apply(base).surfaceImplementation());
