@@ -8,10 +8,14 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class RendererShaderNeutralityTest {
+    private static final Pattern PRODUCER_VOCABULARY = Pattern.compile(
+            "\\b(minecraft|vanilla|overworld|biome|block|terrain|entity|lava|glowstone|section)\\b",
+            Pattern.CASE_INSENSITIVE);
     private static final List<String> REMOVED_IDENTIFIERS = List.of(
             "DIMENSION_ULTRAWARM",
             "environmentTemperature",
@@ -47,9 +51,7 @@ final class RendererShaderNeutralityTest {
                     List<String> lines = Files.readAllLines(source);
                     for (int line = 0; line < lines.size(); line++) {
                         String text = lines.get(line);
-                        String lower = text.toLowerCase(Locale.ROOT);
-                        if (lower.contains("minecraft") || lower.contains("vanilla")
-                                || lower.contains("overworld") || lower.contains("biome")) {
+                        if (PRODUCER_VOCABULARY.matcher(text).find()) {
                             violations.add(root.relativize(source) + ":" + (line + 1) + ": " + text);
                             continue;
                         }

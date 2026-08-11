@@ -37,7 +37,7 @@ void payloadSetPacked(inout Payload payload, uint materialFlags, float roughness
 }
 
 /** Per-frame constants a procedural surface evaluates against; closest-hit reads them one field at a
- * time rather than loading the whole push block for a handful of scalars. */
+ * time rather than loading the whole push record for a handful of scalars. */
 float frameTime() { return ConstPtr<WorldPush>(pc.worldPushAddr)[0].time; }
 float framePreviousTime() { return ConstPtr<WorldPush>(pc.worldPushAddr)[0].previousTime; }
 float3 frameProceduralDomainOffset() {

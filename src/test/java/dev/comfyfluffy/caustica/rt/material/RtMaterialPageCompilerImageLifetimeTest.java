@@ -14,7 +14,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
-final class RtBlockMaterialsImageLifetimeTest {
+final class RtMaterialPageCompilerImageLifetimeTest {
     @Test
     void compilerClosesEachOwnedImageViewAfterScanningWithoutCopyingItsBackingPixels() throws Exception {
         int[] pixels = {0xFF204060};
@@ -28,7 +28,7 @@ final class RtBlockMaterialsImageLifetimeTest {
             @Override public void close() { closes.incrementAndGet(); }
         }, MaterialUv.IDENTITY, false, false, false, OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR);
 
-        RtBlockMaterials.AlbedoStats stats = RtBlockMaterials.scanAlbedo(asset, 16);
+        RtMaterialPageCompiler.AlbedoStats stats = RtMaterialPageCompiler.scanAlbedo(asset, 16);
 
         assertEquals(1, closes.get());
         assertEquals(0x20 / 255.0f, stats.averageR(), 1.0e-6f);
@@ -51,7 +51,7 @@ final class RtBlockMaterialsImageLifetimeTest {
             @Override public void close() { closes.incrementAndGet(); }
         }, MaterialUv.IDENTITY, false, false, false, OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR);
 
-        assertThrows(IllegalStateException.class, () -> RtBlockMaterials.scanAlbedo(asset, 16));
+        assertThrows(IllegalStateException.class, () -> RtMaterialPageCompiler.scanAlbedo(asset, 16));
         assertEquals(1, closes.get());
     }
 }

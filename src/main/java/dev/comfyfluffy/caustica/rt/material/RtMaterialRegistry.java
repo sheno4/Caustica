@@ -52,7 +52,7 @@ public final class RtMaterialRegistry {
     public static final RtMaterialRegistry INSTANCE = new RtMaterialRegistry();
 
     // Canonical transport/feature values compiled into SurfaceMaterial and MaterialBinding.
-    // RtBlockMaterials.Entry.features uses the same bit values, so entry features flow into surfaces
+    // RtMaterialPageCompiler.Entry.features uses the same bit values, so entry features flow into surfaces
     // with a plain mask.
     public static final int TRANSPORT_SURFACE = 0;
     public static final int TRANSPORT_MEDIUM_BOUNDARY = 3;
@@ -145,17 +145,17 @@ public final class RtMaterialRegistry {
     private int nextSurfaceId;
     private int surfaceCapacity;
 
-    private record RuntimeTemplate(RtMaterialDesc desc, RtBlockMaterials.Entry entry) {
+    private record RuntimeTemplate(RtMaterialDesc desc, RtMaterialPageCompiler.Entry entry) {
     }
 
     private RtMaterialRegistry() {
     }
 
     /** Build and atomically publish the registry for the current resource epoch. */
-    public void rebuild(GpuContext ctx, RtBlockMaterials pageCompiler, MaterialCatalog catalog,
+    public void rebuild(GpuContext ctx, RtMaterialPageCompiler pageCompiler, MaterialCatalog catalog,
                         RtMaterialOverrides overrides, List<MaterialDefinition> definitions,
                         RtMaterialOverrides.SurfaceResolver surfaces, int runtimeTextureCapacity) {
-        Map<ResourceId, RtBlockMaterials.Entry> entries = pageCompiler.preparedEntries();
+        Map<ResourceId, RtMaterialPageCompiler.Entry> entries = pageCompiler.preparedEntries();
         float defaultEmissionLuminance = catalog.defaultUniformEmissionLuminanceCdM2();
         List<ResourceId> atlasAssets = catalog.atlasAssets().stream()
                 .map(MaterialTextureAsset::material).toList();
@@ -164,7 +164,7 @@ public final class RtMaterialRegistry {
         Map<ResourceId, MaterialTextureAsset> assets = new HashMap<>();
         catalog.atlasAssets().forEach(asset -> assets.put(asset.material(), asset));
         catalog.standalone().forEach(asset -> assets.put(asset.material(), asset));
-        RtBlockMaterials.Entry fallbackEntry = pageCompiler.entry(null);
+        RtMaterialPageCompiler.Entry fallbackEntry = pageCompiler.entry(null);
 
         int profileVariants = TEXTURE_PROFILES.length * TOPOLOGY_VARIANTS * EMISSION_VARIANTS;
         CompiledTables tables = new CompiledTables(2 + profileVariants + atlasAssets.size() * profileVariants);
@@ -199,7 +199,7 @@ public final class RtMaterialRegistry {
             compiledOverrides.add(new MutableCompiledOverride(rule));
         }
         for (ResourceId material : atlasAssets) {
-            RtBlockMaterials.Entry entry = entries.get(material);
+            RtMaterialPageCompiler.Entry entry = entries.get(material);
             int baseFeatures = entry.features()
                     & (FEATURE_SPEC | FEATURE_NORMAL | FEATURE_EMISSION_MASK);
 
@@ -260,7 +260,7 @@ public final class RtMaterialRegistry {
         Map<ResourceId, RuntimeTemplate> nextRuntimeTemplates = new HashMap<>();
         Set<RtMaterialOverrides.Rule> runtimeMatchedOverrides = new HashSet<>();
         for (ResourceId material : standaloneAssets) {
-            RtBlockMaterials.Entry entry = entries.get(material);
+            RtMaterialPageCompiler.Entry entry = entries.get(material);
             int features = entry.features() & (FEATURE_SPEC | FEATURE_NORMAL);
             RtMaterialDesc desc = compileRuntimeTextureDesc(features, false, entry.emissionSummary(),
                     defaultEmissionLuminance);
@@ -416,7 +416,7 @@ public final class RtMaterialRegistry {
 
     public Snapshot requireSnapshot() {
         Snapshot current = snapshot;
-        if (current == null) throw new IllegalStateException("RT terrain materials are not prepared");
+        if (current == null) throw new IllegalStateException("RT materials are not prepared");
         return current;
     }
 
@@ -648,7 +648,7 @@ public final class RtMaterialRegistry {
 
     /** Texture masks own the summary; otherwise an emitting state uses the full texture. */
     private static RtMaterialDesc.EmissionSummary variantSummary(int features, boolean emitting,
-                                                                 RtBlockMaterials.Entry entry,
+                                                                 RtMaterialPageCompiler.Entry entry,
                                                                  RtMaterialDesc.EmissionSummary uniformSummary) {
         if ((features & (FEATURE_SPEC | FEATURE_EMISSION_MASK)) != 0) return entry.emissionSummary();
         return emitting ? uniformSummary : RtMaterialDesc.EmissionSummary.NONE;
@@ -713,7 +713,7 @@ public final class RtMaterialRegistry {
 
     /**
      * The compiled tables under construction during a rebuild. Every compiled surface gets one binding —
-     * plus, for terrain-reachable materials, the cutout-coverage sibling a masked producer asks for — so
+     * plus the cutout-coverage sibling a masked geometry source asks for — so
      * the returned binding ID is what geometry stores and what {@link Snapshot} indexes its descriptions,
      * emission footprints and SBT classes by. Siblings share the base's surface, description and footprint, so they
      * cost sixteen table bytes and two list slots each and keep every parallel array dense.
@@ -734,12 +734,12 @@ public final class RtMaterialRegistry {
             cutoutVariants = new IntArrayList(expected);
         }
 
-        int add(RtMaterialDesc desc, float[] average, RtBlockMaterials.Entry entry,
+        int add(RtMaterialDesc desc, float[] average, RtMaterialPageCompiler.Entry entry,
                 EmissionFootprint uniformFootprint, float coverageCutoff) {
             return add(desc, average, entry, uniformFootprint, coverageCutoff, false);
         }
 
-        int add(RtMaterialDesc desc, float[] average, RtBlockMaterials.Entry entry,
+        int add(RtMaterialDesc desc, float[] average, RtMaterialPageCompiler.Entry entry,
                 EmissionFootprint uniformFootprint, float coverageCutoff, boolean cutoutSibling) {
             int surfaceId = surfaces.size();
             surfaces.add(surface(desc, entry, entry.albedoU(), entry.albedoV(),
@@ -790,7 +790,7 @@ public final class RtMaterialRegistry {
      * The emission footprint whose sampled source matches what {@code world.rchit} shades for this
      * description — the same selection {@link #variantSummary}/override application made for the summary.
      */
-    private static EmissionFootprint footprintFor(RtMaterialDesc desc, RtBlockMaterials.Entry entry,
+    private static EmissionFootprint footprintFor(RtMaterialDesc desc, RtMaterialPageCompiler.Entry entry,
                                                   EmissionFootprint uniformFootprint) {
         return switch (desc.emissionSource()) {
             case AUTHORED_MASK, DERIVED_MASK -> entry.emissionFootprint();
@@ -799,7 +799,7 @@ public final class RtMaterialRegistry {
         };
     }
 
-    private static SurfaceMaterialData surface(RtMaterialDesc desc, RtBlockMaterials.Entry entry,
+    private static SurfaceMaterialData surface(RtMaterialDesc desc, RtMaterialPageCompiler.Entry entry,
                                                float albedoU, float albedoV,
                                                float albedoInvDu, float albedoInvDv) {
         // Packed unconditionally (0 for non-emissive materials): the shader multiplies the emission mask
@@ -831,7 +831,7 @@ public final class RtMaterialRegistry {
                                                int baseColorTextureIndex, float coverageCutoff) {
         // Opaque by default: a material only needs COVERAGE_CUTOUT/STOCHASTIC when a producer knows its
         // footprint is genuinely masked (see withCutoutCoverage/withStochasticCoverage) — most compiled
-        // materials, including solid terrain, never call either and get the cheap no-any-hit class.
+        // fully opaque materials never call either and get the cheap no-any-hit class.
         int coverage = COVERAGE_OPAQUE;
         int flags = 0;
         int shadowTint = WHITE_SHADOW_TINT;

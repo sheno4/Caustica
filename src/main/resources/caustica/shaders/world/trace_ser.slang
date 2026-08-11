@@ -9,14 +9,13 @@ import bindings;
 import trace;
 
 // Trace into a hit object, reorder threads by hit coherence, THEN invoke the hit/miss shader. This is
-// where the divergent Section/Prim shading work (world.rchit/world.rahit) actually happens, so
+// where the divergent geometry-record shading work (world.rchit/world.rahit) actually happens, so
 // reordering before it is what pays for the reorder's own cost.
 //
 // The payload is built TWICE from the trace state rather than carried across ReorderThread. Traversal
-// runs only world.rahit, which never writes a RADIANCE payload: its terrain tint paths live in the
-// transmissive class, which carries no any-hit record for radiance rays, and its entity paths are
-// gated on RAY_FLAG_SKIP_CLOSEST_HIT_SHADER. So whatever TraceRay leaves in the payload holds no
-// information. Reading it back and carrying it over would pin all ten members — 72 bytes — in registers
+// runs only world.rahit, whose coverage decision never writes a RADIANCE payload, so whatever TraceRay
+// leaves in the payload holds no information. Reading it back and carrying it over would pin all ten
+// members — 72 bytes — in registers
 // across the one point where SER must spill every live value. Rebuilding costs a few constant moves and
 // leaves only these two words spanning the reorder.
 public void traceRadianceReordered(uint cullMask, float3 ro, float tmin, float3 rd, float tmax,
@@ -29,8 +28,8 @@ public void traceRadianceReordered(uint cullMask, float3 ro, float tmin, float3 
             SBT_RADIANCE, SBT_STRIDE_CLASS, MISS_RADIANCE,
             makeRay(ro, tmin, rd, tmax), tracePayload);
     // The hit object groups shader IDs first. Its SBT index then supplies the SBT class
-    // ({opaque, masked, transmissive}); terrain and entity record ranges are both multiples of
-    // SBT_CLASSES, so the low index has the same meaning on either producer. SBT_CLASSES is 3, not a
+    // ({opaque, masked, transmissive}); every geometry source assigns record ranges in multiples of
+    // SBT_CLASSES, so the low index has the same meaning for every record. SBT_CLASSES is 3, not a
     // power of two, so this is a modulo rather than a mask — the result still fits the same two hint bits
     // (0..2) that a 4-way mask produced. The high two bits describe path lifetime: pre-roulette,
     // roulette-active, or guaranteed terminal after this hit.

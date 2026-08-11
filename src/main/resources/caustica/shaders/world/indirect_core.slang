@@ -120,8 +120,8 @@ public float3 tracePath<TC : IComposition, TTrace : IRadianceTrace>(TC.Surfaces 
             continue;
         }
 
-        // ---- Every surface that does not bound a medium: the closure built at closest-hit. Terrain,
-        // entities and billboards differ only in the parameters they carry.
+        // ---- Every surface that does not bound a medium: the closure built at closest-hit. Geometry
+        // sources differ only in the parameters they carry.
         float3 v = -rd;
         SurfaceClosure closure = payloadSurfaceClosure(n);
         float rough = closure.alphaRoughness;

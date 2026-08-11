@@ -16,7 +16,7 @@ public record RtMaterialDesc(
         EmissionSource emissionSource,
         /**
          * OpenPBR {@code emission_luminance}: final HDR emitting-surface luminance in cd/m², the
-         * look-package block baseline replaced by a resource-pack {@code emission.luminance_cd_m2} value
+         * look-package baseline replaced by a source-authored {@code emission.luminance_cd_m2} value
          * when present. 0 when {@code emissionSource == NONE}. Applied uniformly regardless of source —
          * Authored, derived-mask, and geometry-uniform emission use the same baseline unless overridden.
          */

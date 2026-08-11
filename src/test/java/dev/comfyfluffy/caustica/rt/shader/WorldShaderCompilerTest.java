@@ -17,6 +17,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -76,7 +77,10 @@ final class WorldShaderCompilerTest {
             for (byte[] stage : stages) {
                 assertSpirv(stage, 256);
             }
-            assertEquals(4, compiler.passResourceBindings().size());
+            // Accumulated across every stage compiled in this session, so it spans every registered
+            // feature's own set-2 declarations rather than just the sky the miss stage reached.
+            assertEquals(Set.of("skyView", "transmittance", "skyInputs", "celestialsAtlas",
+                    "minecraftDamageModifiers"), compiler.passResourceBindings().keySet());
         }
     }
 

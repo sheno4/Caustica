@@ -21,8 +21,8 @@ import java.util.List;
 import java.util.Map;
 
 /** Compiles host-provided OpenPBR texture inputs into canonical GPU pages. */
-public final class RtBlockMaterials {
-    public static final RtBlockMaterials INSTANCE = new RtBlockMaterials();
+public final class RtMaterialPageCompiler {
+    public static final RtMaterialPageCompiler INSTANCE = new RtMaterialPageCompiler();
 
     private static final int DEFAULT_PAGE_SIZE = 2048;
     private static final int MAX_PAGE_SIZE = 8192;
@@ -35,7 +35,7 @@ public final class RtBlockMaterials {
     private Entry fallback;
     private boolean loggedFailure;
 
-    private RtBlockMaterials() {
+    private RtMaterialPageCompiler() {
     }
 
     /** Immutable texture-to-page mapping and compile-time image statistics. */

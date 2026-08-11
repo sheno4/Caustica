@@ -20,14 +20,14 @@ import caustica_surface;
 public static float3 gv_normal = float3(0.0, 0.0, 0.0);
 public static float3 gv_albedo = float3(0.0, 0.0, 0.0);
 // The diffuse-albedo guide's alpha lane is not consumed by DLSS-RR. Preserve whether the visible
-// guide endpoint emits so downstream exposure metering can cap large lava/glowstone populations
+// guide endpoint emits so downstream exposure metering can cap large emissive populations
 // without another material-ID image.
 public static bool gv_emissive = false;
 public static float gv_rough = 0.0;
 public static float3 gv_hitCamRel = float3(0.0, 0.0, 0.0);       // primary-surface hit position relative to the current camera
 public static bool gv_motionUseRefracted = false; // true when the MV tracks the refracted hit (its own reprojection delta)
-// World-space displacement of the motion-guide surface since the previous frame (0 for static
-// terrain/sky, an entity's per-vertex/object motion for a dynamic hit).
+// World-space displacement of the motion-guide surface since the previous frame (zero for a static
+// scene or environment hit, per-vertex/object motion for dynamic geometry).
 public static float3 gv_motionObjDisp = float3(0.0, 0.0, 0.0);
 // Transmission replaces the ordinary guide tuple with the visible destination, so RR's specular inputs
 // (specular albedo + reflection MV) need the foreground dielectric interface kept separately. This is

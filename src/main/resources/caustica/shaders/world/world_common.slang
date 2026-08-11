@@ -14,7 +14,7 @@ __exported import caustica_color;
 public typealias ConstPtr<T> = Ptr<T, Access.Read, AddressSpace.Device, Std430DataLayout>;
 public typealias DevicePtr<T> = Ptr<T, Access.ReadWrite, AddressSpace.Device, Std430DataLayout>;
 
-// Push constant block. The hot inline lanes avoid dereferencing WorldPush for values that are read in
+// Push constants. The hot inline lanes avoid dereferencing WorldPush for values that are read in
 // hit shaders or used for raygen control flow — every 64-bit device address lives here for exactly that
 // reason, rather than behind the worldPushAddr indirection. geometryTableAddr/materialTableAddr
 // are read in world.rahit/world.rchit, which never load WorldPush at all; the light-buffer addresses are
@@ -116,8 +116,8 @@ public static const float HALF_MAX = 65504.0;
 // Three-component quantities are packed into half pairs rather than declared as float3: they cost 6 bytes
 // instead of 12, and payload storage is reserved per trace call site, so every byte here is paid twice per
 // radiance trace (once for TraceRay, once for Invoke) and is preserved across the SER reorder. hitT stays
-// f32 — it reaches 10000 blocks and the hit position is reconstructed from it, where half's ~4-block
-// spacing at that magnitude would be visible.
+// f32 — it reaches 10000 scene units and the hit position is reconstructed from it, where half's
+// roughly four-unit spacing at that magnitude would be visible.
 public struct Payload {
     // surface0..2 are a hand-packed UNION of the two things a radiance ray can come back with. Reach them
     // only through unpackAlbedo/packAlbedo, unpackNormal/packNormal, unpackSky/packSky — the raw words

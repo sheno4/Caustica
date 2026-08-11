@@ -6,8 +6,10 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class RtMaterialClassificationImportFirewallTest {
     private static final Path MATERIAL_SOURCES = Path.of("src", "main", "java", "dev", "comfyfluffy",
@@ -21,7 +23,7 @@ final class RtMaterialClassificationImportFirewallTest {
                     () -> removed + " must remain in the Minecraft adapter");
         }
 
-        for (String renderer : new String[]{"RtMaterialRegistry.java", "RtBlockMaterials.java"}) {
+        for (String renderer : new String[]{"RtMaterialRegistry.java", "RtMaterialPageCompiler.java"}) {
             String text = Files.readString(MATERIAL_SOURCES.resolve(renderer));
             for (String forbidden : List.of("net.minecraft.", "net.fabricmc.", "com.mojang.",
                     "dev.comfyfluffy.caustica.minecraft.", "TextureAtlasSprite", "NativeImage",
@@ -38,5 +40,19 @@ final class RtMaterialClassificationImportFirewallTest {
                             || text.contains("RtEmissionSemantics"),
                     () -> renderer + " references a removed Minecraft classifier");
         }
+    }
+
+    @Test
+    void canonicalPageCompilerHasSourceNeutralOwnershipAndVocabulary() throws IOException {
+        Path compiler = MATERIAL_SOURCES.resolve("RtMaterialPageCompiler.java");
+        assertTrue(Files.isRegularFile(compiler));
+        assertFalse(Files.exists(MATERIAL_SOURCES.resolve("RtBlockMaterials.java")));
+
+        String source = Files.readString(compiler);
+        Pattern producerVocabulary = Pattern.compile(
+                "\\b(minecraft|vanilla|block|terrain|entity|lava|glowstone|section)\\b",
+                Pattern.CASE_INSENSITIVE);
+        assertFalse(producerVocabulary.matcher(source).find(),
+                "canonical material page compiler contains host-producer vocabulary");
     }
 }

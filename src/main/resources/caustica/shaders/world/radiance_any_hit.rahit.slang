@@ -4,7 +4,7 @@
 // Guide probes trace the radiance records with a cheaper miss, but they must not resolve coverage
 // stochastically: a guide answers "which surface does this reflection/refraction point at", and a
 // coin-flip on that is a flickering control signal rather than a sample that averages out. Taking the
-// deterministic cutoff instead lets a translucent entity reach closest-hit as a crossing, which is
+// deterministic cutoff instead lets a translucent covered surface reach closest-hit as a crossing, which is
 // exactly what the guide loop already knows how to walk through.
 import world_common;
 import bindings;

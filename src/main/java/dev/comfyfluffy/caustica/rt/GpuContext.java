@@ -46,8 +46,7 @@ import static org.lwjgl.vulkan.KHRRayTracingPipeline.VK_STRUCTURE_TYPE_PHYSICAL_
  * lacks the flag), the graphics queue + a transient command pool for synchronous one-shot
  * submits, and the RT pipeline limits (SBT handle size / alignment). Single owner for the
  * plumbing every RT module needs — and, since {@link dev.comfyfluffy.caustica.api.pass.CausticaRenderPass}
- * hands one to every registered pass via {@code PassSetup.context()}, every raster pass too
- * ({@code BloomPass}/{@code SkyLutPass} are compute-only, but {@code WorldOverlayPass} isn't).
+ * hands one to every registered pass via {@code PassSetup.context()}, raster passes too.
  * Obtained lazily via {@link #get}.
  */
 public final class GpuContext {
@@ -425,8 +424,8 @@ public final class GpuContext {
 
     /**
      * A multisampled colour attachment for a raster mask pass that gets dynamic-rendering-resolved into a
-     * single-sample target immediately afterwards (see {@code WorldOverlayPass.beginMsaaColorRendering}) —
-     * e.g. the block outline's 4x MSAA edge-AA pass. {@code COLOR_ATTACHMENT_BIT | TRANSIENT_ATTACHMENT_BIT}
+     * single-sample target immediately afterwards —
+     * e.g. a transient overlay's 4x MSAA edge-AA pass. {@code COLOR_ATTACHMENT_BIT | TRANSIENT_ATTACHMENT_BIT}
      * only: unlike {@link #createStorageImage}, this is never sampled/stored/copied, and multisample images
      * generally can't carry {@code STORAGE_BIT} anyway ({@code storageImageSampleCounts} is a separate,
      * often-unsupported device limit). Kept in {@code GENERAL} layout like every other image here.

@@ -40,7 +40,7 @@ import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
 import dev.comfyfluffy.caustica.rt.accel.GpuImage;
 import dev.comfyfluffy.caustica.rt.geometry.RtGeometryMaterialResolver;
 import dev.comfyfluffy.caustica.rt.geometry.RtSceneGeometryManager;
-import dev.comfyfluffy.caustica.rt.material.RtBlockMaterials;
+import dev.comfyfluffy.caustica.rt.material.RtMaterialPageCompiler;
 import dev.comfyfluffy.caustica.rt.material.RtMaterialOverrides;
 import dev.comfyfluffy.caustica.rt.material.RtMaterialRegistry;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDebugPresentPipeline;
@@ -304,14 +304,14 @@ public final class RtComposite {
     private boolean failed;
     private boolean loggedActive;
 
-    // Camera captured each frame from GameRenderer (unjittered level projection + camera rotation + pos).
+    // Camera captured each frame from the host adapter (unjittered projection, rotation, and position).
     private final Matrix4f frameProjection = new Matrix4f();
     private final Matrix4f frameViewRotation = new Matrix4f();
     private FrameSnapshot frameSnapshot;
 
-    // This frame's TLAS handle, published after prepareTlas so the world-overlay pass (block outline's
-    // rayQueryEXT occlusion test) can bind the exact same acceleration structure the primary trace used —
-    // same-queue submission order (WorldOverlayPass's transient buffer runs later, same graphics queue)
+    // This frame's TLAS handle, published after prepareTlas so a world-overlay pass's rayQueryEXT
+    // occlusion test can bind the exact same acceleration structure the primary trace used —
+    // same-queue submission order (the transient overlay buffer runs later on the same graphics queue)
     // makes the TLAS build's writes visible without an extra semaphore, matching every other overlay
     // feature's reliance on in-order queue execution for this frame's world content.
     private volatile long currentTlasHandle;
@@ -548,9 +548,9 @@ public final class RtComposite {
     }
 
     /**
-     * Record every registered {@link RenderStage#OVERLAY} pass (currently just {@code WorldOverlayPass}) on
-     * its own transient command buffer and submit it. Called once per frame from {@code GameRendererMixin}
-     * at the post-upscale seam — this can't run inside the main {@link #composite} recording because the
+     * Record every registered {@link RenderStage#OVERLAY} pass on its own transient command buffer and
+     * submit it. Called once per frame from the host's post-upscale hook — this can't run inside the main
+     * {@link #composite} recording because the
      * world hasn't been upscaled yet at that point. No-op if RT hasn't run this frame ({@link #composite}
      * never reached {@link #ensureRenderPassManager}).
      */
@@ -965,16 +965,16 @@ public final class RtComposite {
         boundBaseColorAtlasView = atlasView;
         // Bindless base-color texture index zero is the fallback, so unresolved geometry samples
         // something defined rather than an unbound (partially-bound) descriptor.
-        RtBlockMaterials.INSTANCE.reset();
+        RtMaterialPageCompiler.INSTANCE.reset();
         ProviderManager.MaterialContributions materials = ProviderManager.INSTANCE.collectMaterials();
         RtMaterialOverrides materialOverrides = RtMaterialOverrides.from(
                 materials.rules(), CausticaApi.registry()::surfaceIndex);
         MaterialCatalog materialCatalog = RtRuntime.host().materialCatalog(materials.rules());
-        RtBlockMaterials.INSTANCE.prepareAll(ctx, bindlessTextureCapacity, materialCatalog);
+        RtMaterialPageCompiler.INSTANCE.prepareAll(ctx, bindlessTextureCapacity, materialCatalog);
         ProviderManager.INSTANCE.resetBindlessTextures(bindlessTextureCapacity);
         worldPipeline.setBaseColorTexture(0, atlasView, sampler);
-        RtBlockMaterials.INSTANCE.bindPages(worldPipeline, sampler);
-        RtMaterialRegistry.INSTANCE.rebuild(ctx, RtBlockMaterials.INSTANCE, materialCatalog,
+        RtMaterialPageCompiler.INSTANCE.bindPages(worldPipeline, sampler);
+        RtMaterialRegistry.INSTANCE.rebuild(ctx, RtMaterialPageCompiler.INSTANCE, materialCatalog,
                 materialOverrides, materials.definitions(), CausticaApi.registry()::surfaceIndex,
                 bindlessTextureCapacity);
         sceneGeometry.invalidateMaterials();
@@ -1532,8 +1532,7 @@ public final class RtComposite {
             fgHdrHudlessImage.destroy();
             fgHdrHudlessImage = null;
         }
-        // WorldOverlayPass's features/pipelines/scratch are torn down by renderPassManager.destroy() below,
-        // as a registered RenderStage.OVERLAY pass.
+        // Registered overlay features, pipelines, and scratch resources are torn down by the pass manager.
         if (output != null) {
             output.destroy();
             output = null;
@@ -1602,7 +1601,7 @@ public final class RtComposite {
             worldPipeline.destroy();
             worldPipeline = null;
         }
-        RtBlockMaterials.INSTANCE.reset();
+        RtMaterialPageCompiler.INSTANCE.reset();
         abandonPendingWorldShaderBuild();
         releaseWorldShaders();
         bindlessTextureCapacity = 0;
@@ -1926,8 +1925,8 @@ public final class RtComposite {
     /**
      * DLSS Frame Generation quality: capture a copy of {@code main} (the main render target) into
      * {@link #fgHudlessImage} for {@link #fgInterpolate} to feed DLSSG as the "hudless" resource. Call from
-     * {@code GameRendererMixin} right after {@code GuiRenderer.render()} but BEFORE
-     * the host composites its UI layer. At that point, when the UI redirect is active, {@code main} still
+     * the host presentation hook after UI rendering but before the host composites its UI layer. At that
+     * point, when the UI redirect is active, {@code main} still
      * has no combined UI baked in. No-op (and {@link #fgInterpolate} passes 0/0/0 for hudless, same as always)
      * unless both FG and the UI overlay redirect are active — capturing this without the redirect would just
      * copy the ALREADY-composited backbuffer, which is useless as a distinct hudless input.
