@@ -22,7 +22,7 @@ import static org.lwjgl.vulkan.VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
 
 /**
  * Owns retained provider mesh uploads, BLASes, geometry records, and their exact graphics lifetime.
- * Existing host terrain enters as a retained prefix until it is migrated to the same CPU mesh API.
+ * Caller-supplied retained geometry enters as a prefix until it is migrated to the same CPU mesh API.
  */
 public final class RtSceneGeometryManager {
     private static final int TABLE_RING = 4;
@@ -177,7 +177,7 @@ public final class RtSceneGeometryManager {
         indices.flush(0L, (long) packed.indices().length * Integer.BYTES);
         texCoords.flush(0L, (long) packed.texCoords().length * Float.BYTES);
         primitives.flush(0L, (long) packed.primitives().length * Float.BYTES);
-        RtAccel.PersistentBuild build = RtAccel.preparePersistentEntityBlasBuild(ctx,
+        RtAccel.PersistentBuild build = RtAccel.preparePersistentBlasBuild(ctx,
                 positions.deviceAddress, packed.vertexCount(), indices.deviceAddress, packed.classTris(),
                 "scene geometry " + key + " BLAS");
         return new ResidentMesh(mesh, packed, positions, indices, texCoords, primitives,
@@ -283,7 +283,7 @@ public final class RtSceneGeometryManager {
         }
 
         void destroy() {
-            RtAccel.destroyEntityAccel(accel, backing);
+            RtAccel.destroyCallerOwnedAccel(accel, backing);
             positions.destroy();
             indices.destroy();
             texCoords.destroy();

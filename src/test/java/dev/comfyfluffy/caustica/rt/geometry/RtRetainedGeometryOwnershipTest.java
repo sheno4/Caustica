@@ -53,4 +53,30 @@ final class RtRetainedGeometryOwnershipTest {
         assertTrue(content.contains("prepareRetainedBlas"));
         assertTrue(content.contains("PreparedBlasCompaction"));
     }
+
+    @Test
+    void callerOwnedClassifiedBlasApiHasNoSourceNamedEntryPoints() throws IOException {
+        Path accel = Path.of("src", "main", "java", "dev", "comfyfluffy", "caustica", "rt",
+                "accel", "RtAccel.java").toAbsolutePath().normalize();
+        String content = Files.readString(accel);
+        String lower = content.toLowerCase(Locale.ROOT);
+        for (String sourceWord : List.of("entity", "terrain", "section", "minecraft", "vanilla")) {
+            assertFalse(lower.matches("(?s).*\\b" + sourceWord + "\\b.*"),
+                    "caller-owned BLAS path still contains source word " + sourceWord);
+        }
+        for (String sourceNamed : List.of("prepareEntityBlas", "preparePersistentEntityBlasBuild",
+                "prepareUpdatableEntityBlasBuild", "refitEntityUpdate", "releaseEntityBlas",
+                "destroyEntityAccel", "entitySplit", "entityTris", "requireEntityClasses",
+                "entityGeometries", "entityBuildRanges", "queryEntityBlasSizes",
+                "recordEntityBlasBuild", "PreparedBlas.entity", "_PLAN.md")) {
+            assertFalse(content.contains(sourceNamed), "caller-owned BLAS path still uses " + sourceNamed);
+        }
+        for (String neutralName : List.of("prepareTransientBlas", "preparePersistentBlasBuild",
+                "prepareUpdatableBlasBuild", "refitUpdate", "releaseTransientBlas",
+                "destroyCallerOwnedAccel", "externalClassSplit", "externalClassTriangles",
+                "classifiedGeometries", "classifiedBuildRanges", "queryClassifiedBlasSizes",
+                "recordClassifiedBlasBuild")) {
+            assertTrue(content.contains(neutralName), "caller-owned BLAS path is missing " + neutralName);
+        }
+    }
 }

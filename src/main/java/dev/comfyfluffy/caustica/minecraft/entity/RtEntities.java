@@ -542,7 +542,7 @@ public final class RtEntities {
 
         void releaseDeferred() {
             for (RtAccel.PreparedBlas b : pooledBlas) {
-                RtAccel.releaseEntityBlas(b);
+                RtAccel.releaseTransientBlas(b);
             }
             for (GpuBuffer s : blasScratch) {
                 s.destroy();
@@ -570,7 +570,7 @@ public final class RtEntities {
         FrameLists lists;
         List<RtAccel.Instance> instances;
         List<RtAccel.PreparedBlas> blas;        // all BLAS BUILD and UPDATE operations recorded this frame
-        List<RtAccel.PreparedBlas> pooledBlas;  // transient one-shot entity BLAS ops → releaseEntityBlas
+        List<RtAccel.PreparedBlas> pooledBlas;  // transient one-shot entity BLAS ops → releaseTransientBlas
         List<GpuBuffer> blasScratch;             // transient full-BUILD scratch → destroy() (AS persists)
         List<GpuBuffer> buffers;                 // transient motion/particle buffers → destroy()
         MotionArena motion;                     // suballocated entity/BE/particle displacement uploads
@@ -1216,7 +1216,7 @@ public final class RtEntities {
         long uvAddr = Math.addExact(geometry.deviceAddress, layout.uvOffset);
         long primAddr = Math.addExact(geometry.deviceAddress, layout.primOffset);
         // The cached mesh is replaced rather than updated in place, so build without ALLOW_UPDATE.
-        RtAccel.PersistentBuild pb = RtAccel.preparePersistentEntityBlasBuild(ctx, positionAddr, vertCount,
+        RtAccel.PersistentBuild pb = RtAccel.preparePersistentBlasBuild(ctx, positionAddr, vertCount,
                 indexAddr, packed.classTris(), label + " BLAS");
         build.blas.add(pb.op());
         build.blasScratch.add(pb.scratch());
@@ -1291,7 +1291,7 @@ public final class RtEntities {
         GpuBuffer backing = e.backing;
         GpuBuffer geometry = e.geometry;
         ctx.gpuExecutor().retireAfterGraphics(e.graphicsUse, () -> {
-            RtAccel.destroyEntityAccel(accel, backing);
+            RtAccel.destroyCallerOwnedAccel(accel, backing);
             geometry.destroy();
         });
         RtFrameStats.FRAME.count("entityBlockEntityRetirements", 1);
@@ -1578,7 +1578,8 @@ public final class RtEntities {
         long uvAddr = Math.addExact(geometry.deviceAddress, layout.uvOffset);
         long primAddr = Math.addExact(geometry.deviceAddress, layout.primOffset);
 
-        RtAccel.PreparedBlas blas = RtAccel.prepareEntityBlas(ctx, positionAddr, vertCount, indexAddr, packed.classTris(),
+        RtAccel.PreparedBlas blas = RtAccel.prepareTransientBlas(ctx, positionAddr, vertCount, indexAddr,
+                packed.classTris(),
                 "particle BLAS");
         build.blas.add(blas);
         build.pooledBlas.add(blas);
@@ -1789,7 +1790,7 @@ public final class RtEntities {
             } else {
                 RtFrameStats.FRAME.count("entityScratchBufferReuses", 1);
             }
-            build.blas.add(RtAccel.refitEntityUpdate(slot.accel, slot.updateScratch,
+            build.blas.add(RtAccel.refitUpdate(slot.accel, slot.updateScratch,
                     positionAddr, indexAddr, vertCount, classTris,
                     "entity BLAS refit"));
             slot.updatesSinceBuild++;
@@ -1797,7 +1798,7 @@ public final class RtEntities {
         }
         // (Re)build: the selected ring slot's exact prior graphics use has completed, so replace its old AS.
         if (slot.accel != null) {
-            RtAccel.destroyEntityAccel(slot.accel, slot.backing);
+            RtAccel.destroyCallerOwnedAccel(slot.accel, slot.backing);
             slot.accel = null;
             slot.backing = null;
         }
@@ -1807,7 +1808,7 @@ public final class RtEntities {
         }
         RtFrameStats.FRAME.count("entityVmaBufferCreates", 2); // persistent AS backing + transient build scratch
         if (refitEnabled) {
-            RtAccel.UpdatableBuild ub = RtAccel.prepareUpdatableEntityBlasBuild(ctx, positionAddr, vertCount,
+            RtAccel.UpdatableBuild ub = RtAccel.prepareUpdatableBlasBuild(ctx, positionAddr, vertCount,
                     indexAddr, classTris, "entity BLAS");
             slot.accel = ub.accel();
             slot.backing = ub.backing();
@@ -1815,7 +1816,7 @@ public final class RtEntities {
             build.blas.add(ub.op());
             build.blasScratch.add(ub.scratch());
         } else {
-            RtAccel.PersistentBuild pb = RtAccel.preparePersistentEntityBlasBuild(ctx, positionAddr, vertCount,
+            RtAccel.PersistentBuild pb = RtAccel.preparePersistentBlasBuild(ctx, positionAddr, vertCount,
                     indexAddr, classTris, "entity BLAS");
             slot.accel = pb.accel();
             slot.backing = pb.backing();
@@ -1879,7 +1880,7 @@ public final class RtEntities {
 
     private void destroyEntitySlot(EntitySlot slot) {
         if (slot.accel != null) {
-            RtAccel.destroyEntityAccel(slot.accel, slot.backing);
+            RtAccel.destroyCallerOwnedAccel(slot.accel, slot.backing);
             slot.accel = null;
             slot.backing = null;
         }
@@ -1911,7 +1912,7 @@ public final class RtEntities {
         slot.indices = null;
         slot.indexCount = 0;
         ctx.gpuExecutor().retireAfterGraphics(slot.graphicsUse, () -> {
-            if (accel != null) RtAccel.destroyEntityAccel(accel, backing);
+            if (accel != null) RtAccel.destroyCallerOwnedAccel(accel, backing);
             if (geometry != null) geometry.destroy();
             if (scratch != null) scratch.destroy();
         });
@@ -1980,7 +1981,7 @@ public final class RtEntities {
         }
         entityAccels.clear();
         for (BeEntry e : beCache.values()) {
-            RtAccel.destroyEntityAccel(e.accel, e.backing);
+            RtAccel.destroyCallerOwnedAccel(e.accel, e.backing);
             e.geometry.destroy();
         }
         beCache.clear();

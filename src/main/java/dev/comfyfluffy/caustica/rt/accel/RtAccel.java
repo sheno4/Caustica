@@ -76,7 +76,7 @@ import static org.lwjgl.vulkan.KHRSynchronization2.vkCmdPipelineBarrier2KHR;
 
 /**
  * A built acceleration structure (BLAS or TLAS) plus its backing buffer. Build with the static
- * factories; free with {@link #destroy()}. One BLAS per section; one TLAS rebuilt per frame.
+ * factories; free with {@link #destroy()}. One BLAS per retained geometry batch; one TLAS rebuilt per frame.
  */
 public final class RtAccel {
     private static final long TLAS_INSTANCE_ADDRESS_ALIGNMENT = 16L;
@@ -142,7 +142,7 @@ public final class RtAccel {
             VK10.vkDestroyQueryPool(vk, compactionQueryPool, null);
             compactionQueryPool = 0L;
         }
-        // An entity BLAS's backing is caller-owned (released via releaseEntityBlas, not destroyed here).
+        // Caller-owned backing is released separately from the acceleration-structure handle.
         if (ownsBacking) {
             backing.destroy();
         }
@@ -254,8 +254,8 @@ public final class RtAccel {
     public static final class PreparedBlas {
         public final RtAccel accel;
         private final GpuBuffer scratch;
-        // Non-null only for an entity BLAS (see prepareEntityBlas): the AS backing buffer, caller-owned,
-        // so releaseEntityBlas destroys it explicitly rather than accel.destroy() doing so.
+        // Non-null only when the AS backing buffer is caller-owned, so releaseTransientBlas destroys it
+        // explicitly rather than accel.destroy() doing so.
         private final GpuBuffer externalBacking;
         private final long vertexAddr;
         private final long indexAddr;
@@ -275,8 +275,8 @@ public final class RtAccel {
         // Both split flags false ⇒ the legacy single-geometry path keyed on triangleCount.
         private final boolean retainedSplit;
         private final int[] retainedClassTriangles; // per-class triangle counts in SBT_CLASSES order (null if !retainedSplit)
-        private final boolean entitySplit;
-        private final int[] entityTris; // per-class triangle counts in SBT_CLASSES order (null if !entitySplit)
+        private final boolean externalClassSplit;
+        private final int[] externalClassTriangles;
         private final OpacityMicromap opacityMicromap; // optional, retained masked class only
 
         private PreparedBlas(RtAccel accel, GpuBuffer scratch, GpuBuffer externalBacking, long vertexAddr, long indexAddr,
@@ -287,7 +287,8 @@ public final class RtAccel {
 
         private PreparedBlas(RtAccel accel, GpuBuffer scratch, GpuBuffer externalBacking, long vertexAddr, long indexAddr,
                              int maxVertex, int triangleCount, boolean opaque, String label, boolean updatable, boolean update,
-                             boolean retainedSplit, int[] retainedClassTriangles, boolean entitySplit, int[] entityTris,
+                             boolean retainedSplit, int[] retainedClassTriangles,
+                             boolean externalClassSplit, int[] externalClassTriangles,
                              OpacityMicromap opacityMicromap) {
             this.accel = accel;
             this.scratch = scratch;
@@ -302,8 +303,8 @@ public final class RtAccel {
             this.update = update;
             this.retainedSplit = retainedSplit;
             this.retainedClassTriangles = retainedClassTriangles;
-            this.entitySplit = entitySplit;
-            this.entityTris = entityTris;
+            this.externalClassSplit = externalClassSplit;
+            this.externalClassTriangles = externalClassTriangles;
             this.opacityMicromap = opacityMicromap;
         }
 
@@ -318,13 +319,14 @@ public final class RtAccel {
                     total, false, label, false, false, true, retainedClassTriangles, false, null, opacityMicromap);
         }
 
-        static PreparedBlas entity(RtAccel accel, GpuBuffer scratch, GpuBuffer externalBacking, long vertexAddr,
-                                   long indexAddr, int maxVertex, int[] entityTris, String label,
-                                   boolean updatable, boolean update) {
+        static PreparedBlas externalClassified(RtAccel accel, GpuBuffer scratch, GpuBuffer externalBacking,
+                                               long vertexAddr, long indexAddr, int maxVertex,
+                                               int[] classTriangles, String label,
+                                               boolean updatable, boolean update) {
             int total = 0;
-            for (int t : entityTris) total += t;
+            for (int triangles : classTriangles) total += triangles;
             return new PreparedBlas(accel, scratch, externalBacking, vertexAddr, indexAddr, maxVertex,
-                    total, false, label, updatable, update, false, null, true, entityTris, null);
+                    total, false, label, updatable, update, false, null, true, classTriangles, null);
         }
 
         public boolean requestsCompaction() {
@@ -339,10 +341,10 @@ public final class RtAccel {
         }
     }
 
-    // SBT hit-group classes, shared by retained and dynamic geometry alike. Geometry indices are fixed and
-    // double as SBT material record indices, on both producers' BLAS — see MATERIAL_MODEL_PLAN.md §5:
-    // "masked" and "masked+transmissive" share one record because the shadow any-hit reads the binding's
-    // transmissive flag itself, so three classes cover every reachable (coverage, transmittance) pair.
+    // SBT hit-group classes, shared by retained and transient geometry alike. Geometry indices are fixed and
+    // double as SBT material record indices. Masked and masked-transmissive surfaces share one record because
+    // shadow any-hit reads the binding's transmissive flag, so these three classes cover every reachable
+    // combination of coverage and transmittance.
     public static final int CLASS_OPAQUE = 0;       // no any-hit either ray type
     public static final int CLASS_MASKED = 1;       // any-hit both ray types (cutout/stochastic coverage)
     public static final int CLASS_TRANSMISSIVE = 2; // any-hit shadow only (opaque coverage, transmissive)
@@ -355,7 +357,7 @@ public final class RtAccel {
 
     /**
      * Result of {@link #prepareUpdatableBlasBuild}: the per-frame BUILD op to record, plus the persistent
-     * resources the caller's per-entity ring must keep ({@code backing}) and cache ({@code updateScratchSize}
+     * resources the caller's persistent slot must keep ({@code backing}) and cache ({@code updateScratchSize}
      * for sizing later refit scratch). The {@code scratch} is this frame's transient build scratch (release
      * at the frames-in-flight horizon, like the mesh buffers); the {@code op.accel} + {@code backing} persist.
      */
@@ -365,8 +367,8 @@ public final class RtAccel {
     /**
      * Initial BUILD for a caller-owned persistent BLAS that will never be updated in place. The caller
      * retains {@code accel} + {@code backing}, retires {@code scratch} after the build completes, and later
-     * destroys the pair with {@link #destroyEntityAccel}. This avoids ALLOW_UPDATE overhead for immutable
-     * cached geometry such as block entities.
+     * destroys the pair with {@link #destroyCallerOwnedAccel}. This avoids ALLOW_UPDATE overhead for
+     * immutable cached geometry.
      */
     public record PersistentBuild(PreparedBlas op, RtAccel accel, GpuBuffer backing, GpuBuffer scratch) {
     }
@@ -541,22 +543,21 @@ public final class RtAccel {
     }
 
     /**
-     * Entity-path variant of {@link #prepareTrianglesBlas}: fully transient, rebuilt fresh every frame (no
-     * persistent per-entity ring), so the AS backing is caller-owned rather than accel-owned. Reclaimed with
-     * {@link #releaseEntityBlas} (NOT {@code freeBlasScratch} + {@code accel.destroy()}). Persistent
-     * retained geometry keeps {@link #prepareTrianglesBlas}.
+     * Fully transient variant of {@link #prepareTrianglesBlas}. Its AS backing is caller-owned and must be
+     * reclaimed with {@link #releaseTransientBlas}, not {@code freeBlasScratch} plus
+     * {@code accel.destroy()}.
      */
-    public static PreparedBlas prepareEntityBlas(GpuContext ctx, GpuBuffer positions, int vertexCount,
-                                                 GpuBuffer indices, int indexCount, boolean opaque, String label) {
-        return prepareEntityBlas(ctx, positions.deviceAddress, vertexCount,
+    public static PreparedBlas prepareTransientBlas(GpuContext ctx, GpuBuffer positions, int vertexCount,
+                                                    GpuBuffer indices, int indexCount, boolean opaque, String label) {
+        return prepareTransientBlas(ctx, positions.deviceAddress, vertexCount,
                 indices.deviceAddress, indexCount, opaque, label);
     }
 
-    /** Address-based variant for transient entity geometry packed into sub-regions of one owner buffer. */
-    public static PreparedBlas prepareEntityBlas(GpuContext ctx, long vertexAddr, int vertexCount,
-                                                 long indexAddr, int indexCount, boolean opaque, String label) {
+    /** Address-based variant for transient geometry packed into sub-regions of one owner buffer. */
+    public static PreparedBlas prepareTransientBlas(GpuContext ctx, long vertexAddr, int vertexCount,
+                                                    long indexAddr, int indexCount, boolean opaque, String label) {
         VkDevice vk = ctx.vk();
-        String debugLabel = labelOr(label, "entity BLAS");
+        String debugLabel = labelOr(label, "transient BLAS");
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkAccelerationStructureBuildSizesInfoKHR sizes = queryBlasSizes(vk, stack, vertexAddr, indexAddr,
                     vertexCount, indexCount, opaque, false);
@@ -569,21 +570,21 @@ public final class RtAccel {
         }
     }
 
-    /** Multi-geometry entity BLAS: packed indices are ordered opaque, then any-hit. */
-    public static PreparedBlas prepareEntityBlas(GpuContext ctx, long vertexAddr, int vertexCount,
-                                                 long indexAddr, int[] classTris, String label) {
-        requireEntityClasses(classTris);
+    /** Caller-owned classified BLAS with packed indices in fixed {@link #SBT_CLASSES} order. */
+    public static PreparedBlas prepareTransientBlas(GpuContext ctx, long vertexAddr, int vertexCount,
+                                                    long indexAddr, int[] classTriangles, String label) {
+        requireClassTriangles(classTriangles);
         VkDevice vk = ctx.vk();
-        String debugLabel = labelOr(label, "entity BLAS");
+        String debugLabel = labelOr(label, "classified BLAS");
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkAccelerationStructureBuildSizesInfoKHR sizes = queryEntityBlasSizes(vk, stack, vertexAddr,
-                    indexAddr, vertexCount, classTris, false);
+            VkAccelerationStructureBuildSizesInfoKHR sizes = queryClassifiedBlasSizes(vk, stack, vertexAddr,
+                    indexAddr, vertexCount, classTriangles, false);
             GpuBuffer backing = ctx.createBuffer(sizes.accelerationStructureSize(),
                     VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, false, debugLabel + " backing");
             GpuBuffer scratch = createScratchBuffer(ctx, sizes.buildScratchSize(), debugLabel + " build scratch");
             RtAccel accel = createBlasOn(ctx, stack, backing, sizes.accelerationStructureSize(), false, debugLabel);
-            return PreparedBlas.entity(accel, scratch, backing, vertexAddr, indexAddr, vertexCount - 1,
-                    classTris.clone(), debugLabel, false, false);
+            return PreparedBlas.externalClassified(accel, scratch, backing, vertexAddr, indexAddr,
+                    vertexCount - 1, classTriangles.clone(), debugLabel, false, false);
         }
     }
 
@@ -591,40 +592,40 @@ public final class RtAccel {
     public static PersistentBuild preparePersistentBlasBuild(GpuContext ctx, long vertexAddr, int vertexCount,
                                                              long indexAddr, int indexCount, boolean opaque,
                                                              String label) {
-        PreparedBlas op = prepareEntityBlas(ctx, vertexAddr, vertexCount, indexAddr, indexCount, opaque, label);
+        PreparedBlas op = prepareTransientBlas(ctx, vertexAddr, vertexCount, indexAddr, indexCount, opaque, label);
         return new PersistentBuild(op, op.accel, op.externalBacking, op.scratch);
     }
 
-    public static PersistentBuild preparePersistentEntityBlasBuild(GpuContext ctx, long vertexAddr, int vertexCount,
-                                                                   long indexAddr, int[] classTris, String label) {
-        PreparedBlas op = prepareEntityBlas(ctx, vertexAddr, vertexCount, indexAddr, classTris, label);
+    public static PersistentBuild preparePersistentBlasBuild(GpuContext ctx, long vertexAddr, int vertexCount,
+                                                             long indexAddr, int[] classTriangles, String label) {
+        PreparedBlas op = prepareTransientBlas(ctx, vertexAddr, vertexCount, indexAddr, classTriangles, label);
         return new PersistentBuild(op, op.accel, op.externalBacking, op.scratch);
     }
 
-    public static UpdatableBuild prepareUpdatableEntityBlasBuild(GpuContext ctx, long vertexAddr, int vertexCount,
-                                                                 long indexAddr, int[] classTris, String label) {
-        requireEntityClasses(classTris);
+    public static UpdatableBuild prepareUpdatableBlasBuild(GpuContext ctx, long vertexAddr, int vertexCount,
+                                                           long indexAddr, int[] classTriangles, String label) {
+        requireClassTriangles(classTriangles);
         VkDevice vk = ctx.vk();
-        String debugLabel = labelOr(label, "updatable entity BLAS");
+        String debugLabel = labelOr(label, "updatable classified BLAS");
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkAccelerationStructureBuildSizesInfoKHR sizes = queryEntityBlasSizes(vk, stack, vertexAddr,
-                    indexAddr, vertexCount, classTris, true);
+            VkAccelerationStructureBuildSizesInfoKHR sizes = queryClassifiedBlasSizes(vk, stack, vertexAddr,
+                    indexAddr, vertexCount, classTriangles, true);
             long accelSize = sizes.accelerationStructureSize();
             GpuBuffer backing = ctx.createBuffer(accelSize,
                     VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, false, debugLabel + " backing");
             GpuBuffer scratch = createScratchBuffer(ctx, sizes.buildScratchSize(), debugLabel + " build scratch");
             RtAccel accel = createBlasOn(ctx, stack, backing, accelSize, false, debugLabel);
-            PreparedBlas op = PreparedBlas.entity(accel, scratch, backing, vertexAddr, indexAddr,
-                    vertexCount - 1, classTris.clone(), debugLabel, true, false);
+            PreparedBlas op = PreparedBlas.externalClassified(accel, scratch, backing, vertexAddr, indexAddr,
+                    vertexCount - 1, classTriangles.clone(), debugLabel, true, false);
             return new UpdatableBuild(op, accel, backing, scratch, sizes.updateScratchSize());
         }
     }
 
     /**
      * Create a new <em>updatable</em> (ALLOW_UPDATE) BLAS sized for this mesh, and prepare its initial full
-     * BUILD. The {@code accel} + {@code backing} persist in the caller's per-entity ring (NOT released per
+     * BUILD. The {@code accel} + {@code backing} persist in a caller-owned slot (not released per
      * frame); later frames refit it with {@link #refitUpdate} (cheap in-place UPDATE) while the topology is
-     * stable, and free it with {@link #destroyEntityAccel} on eviction / topology change.
+     * stable, and free it with {@link #destroyCallerOwnedAccel} on eviction or topology change.
      */
     public static UpdatableBuild prepareUpdatableBlasBuild(GpuContext ctx, GpuBuffer positions, int vertexCount,
                                                            GpuBuffer indices, int indexCount, boolean opaque, String label) {
@@ -632,7 +633,7 @@ public final class RtAccel {
                 indices.deviceAddress, indexCount, opaque, label);
     }
 
-    /** Address-based variant for entity geometry packed into sub-regions of one owner buffer. */
+    /** Address-based variant for geometry packed into sub-regions of one owner buffer. */
     public static UpdatableBuild prepareUpdatableBlasBuild(GpuContext ctx, long vertexAddr, int vertexCount,
                                                            long indexAddr, int indexCount, boolean opaque, String label) {
         VkDevice vk = ctx.vk();
@@ -665,22 +666,22 @@ public final class RtAccel {
                 opaque, debugLabel, true, true);
     }
 
-    public static PreparedBlas refitEntityUpdate(RtAccel accel, GpuBuffer scratch, long vertexAddr, long indexAddr,
-                                                 int vertexCount, int[] classTris, String label) {
-        requireEntityClasses(classTris);
-        return PreparedBlas.entity(accel, scratch, null, vertexAddr, indexAddr, vertexCount - 1,
-                classTris.clone(), labelOr(label, "entity BLAS refit"), true, true);
+    public static PreparedBlas refitUpdate(RtAccel accel, GpuBuffer scratch, long vertexAddr, long indexAddr,
+                                           int vertexCount, int[] classTriangles, String label) {
+        requireClassTriangles(classTriangles);
+        return PreparedBlas.externalClassified(accel, scratch, null, vertexAddr, indexAddr, vertexCount - 1,
+                classTriangles.clone(), labelOr(label, "classified BLAS refit"), true, true);
     }
 
-    /** Reclaim a transient entity BLAS: destroy its AS handle, then its backing + scratch buffers. */
-    public static void releaseEntityBlas(PreparedBlas blas) {
+    /** Reclaim a transient BLAS: destroy its AS handle, then its backing and scratch buffers. */
+    public static void releaseTransientBlas(PreparedBlas blas) {
         blas.accel.destroy(); // ownsBacking == false → destroys only the AS handle, not the backing buffer
         blas.externalBacking.destroy();
         blas.scratch.destroy();
     }
 
     /** Destroy a caller-owned-backing persistent AS: destroy the handle, then its backing buffer. */
-    public static void destroyEntityAccel(RtAccel accel, GpuBuffer backing) {
+    public static void destroyCallerOwnedAccel(RtAccel accel, GpuBuffer backing) {
         accel.destroy(); // ownsBacking == false → handle only
         backing.destroy();
     }
@@ -707,12 +708,12 @@ public final class RtAccel {
         return sizes;
     }
 
-    private static void requireEntityClasses(int[] classTris) {
-        if (classTris == null || classTris.length != SBT_CLASSES) {
-            throw new IllegalArgumentException("Expected " + SBT_CLASSES + " entity SBT class counts");
+    private static void requireClassTriangles(int[] classTriangles) {
+        if (classTriangles == null || classTriangles.length != SBT_CLASSES) {
+            throw new IllegalArgumentException("Expected " + SBT_CLASSES + " SBT class triangle counts");
         }
-        for (int count : classTris) {
-            if (count < 0) throw new IllegalArgumentException("Negative entity triangle count");
+        for (int count : classTriangles) {
+            if (count < 0) throw new IllegalArgumentException("Negative class triangle count");
         }
     }
 
@@ -768,9 +769,11 @@ public final class RtAccel {
         tri.indexData().deviceAddress(indexAddr);
     }
 
-    /** Fixed entity geometry order; empty classes remain present so GeometryIndex/SBT routing is stable. */
-    private static VkAccelerationStructureGeometryKHR.Buffer entityGeometries(MemoryStack stack, long vertexAddr,
-                                                                               long indexAddr, int vertexCount) {
+    /** Fixed class geometry order; empty classes remain present so GeometryIndex/SBT routing is stable. */
+    private static VkAccelerationStructureGeometryKHR.Buffer classifiedGeometries(MemoryStack stack,
+                                                                                   long vertexAddr,
+                                                                                   long indexAddr,
+                                                                                   int vertexCount) {
         VkAccelerationStructureGeometryKHR.Buffer geometries =
                 VkAccelerationStructureGeometryKHR.calloc(SBT_CLASSES, stack);
         for (int cls = 0; cls < SBT_CLASSES; cls++) {
@@ -780,13 +783,13 @@ public final class RtAccel {
         return geometries;
     }
 
-    private static VkAccelerationStructureBuildRangeInfoKHR.Buffer entityBuildRanges(MemoryStack stack,
-                                                                                      int[] classTris) {
+    private static VkAccelerationStructureBuildRangeInfoKHR.Buffer classifiedBuildRanges(MemoryStack stack,
+                                                                                          int[] classTriangles) {
         VkAccelerationStructureBuildRangeInfoKHR.Buffer ranges =
                 VkAccelerationStructureBuildRangeInfoKHR.calloc(SBT_CLASSES, stack);
         int triangleBase = 0;
         for (int cls = 0; cls < SBT_CLASSES; cls++) {
-            int count = classTris[cls];
+            int count = classTriangles[cls];
             ranges.get(cls).primitiveCount(count)
                     .primitiveOffset(triangleBase * 3 * Integer.BYTES)
                     .firstVertex(0).transformOffset(0);
@@ -795,17 +798,21 @@ public final class RtAccel {
         return ranges;
     }
 
-    private static VkAccelerationStructureBuildSizesInfoKHR queryEntityBlasSizes(VkDevice vk, MemoryStack stack,
-                                                                                  long vertexAddr, long indexAddr,
-                                                                                  int vertexCount, int[] classTris,
-                                                                                  boolean allowUpdate) {
-        VkAccelerationStructureGeometryKHR.Buffer geometries = entityGeometries(stack, vertexAddr, indexAddr, vertexCount);
+    private static VkAccelerationStructureBuildSizesInfoKHR queryClassifiedBlasSizes(VkDevice vk,
+                                                                                     MemoryStack stack,
+                                                                                     long vertexAddr,
+                                                                                     long indexAddr,
+                                                                                     int vertexCount,
+                                                                                     int[] classTriangles,
+                                                                                     boolean allowUpdate) {
+        VkAccelerationStructureGeometryKHR.Buffer geometries = classifiedGeometries(stack, vertexAddr,
+                indexAddr, vertexCount);
         VkAccelerationStructureBuildGeometryInfoKHR.Buffer build = VkAccelerationStructureBuildGeometryInfoKHR.calloc(1, stack);
         build.get(0).sType$Default().type(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR)
                 .flags(buildFlags(allowUpdate)).mode(VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR)
                 .geometryCount(geometries.capacity()).pGeometries(geometries);
         java.nio.IntBuffer maxPrims = stack.mallocInt(SBT_CLASSES);
-        maxPrims.put(classTris).flip();
+        maxPrims.put(classTriangles).flip();
         VkAccelerationStructureBuildSizesInfoKHR sizes = VkAccelerationStructureBuildSizesInfoKHR.calloc(stack).sType$Default();
         vkGetAccelerationStructureBuildSizesKHR(vk, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
                 build.get(0), maxPrims, sizes);
@@ -1141,8 +1148,8 @@ public final class RtAccel {
             recordRetainedBlasBuild(ctx, cmd, stack, b);
             return;
         }
-        if (b.entitySplit) {
-            recordEntityBlasBuild(ctx, cmd, stack, b);
+        if (b.externalClassSplit) {
+            recordClassifiedBlasBuild(ctx, cmd, stack, b);
             return;
         }
         VkAccelerationStructureGeometryKHR.Buffer geom = triangleGeometry(stack, b.vertexAddr, b.indexAddr, b.maxVertex + 1, b.opaque);
@@ -1164,10 +1171,10 @@ public final class RtAccel {
         vkCmdBuildAccelerationStructuresKHR(cmd, build, ppRange);
     }
 
-    /** Record the fixed opaque/any-hit entity geometries as one BUILD or in-place UPDATE. */
-    private static void recordEntityBlasBuild(GpuContext ctx, VkCommandBuffer cmd, MemoryStack stack,
-                                              PreparedBlas b) {
-        VkAccelerationStructureGeometryKHR.Buffer geometries = entityGeometries(stack, b.vertexAddr,
+    /** Record the fixed classified geometries as one BUILD or in-place UPDATE. */
+    private static void recordClassifiedBlasBuild(GpuContext ctx, VkCommandBuffer cmd, MemoryStack stack,
+                                                  PreparedBlas b) {
+        VkAccelerationStructureGeometryKHR.Buffer geometries = classifiedGeometries(stack, b.vertexAddr,
                 b.indexAddr, b.maxVertex + 1);
         VkAccelerationStructureBuildGeometryInfoKHR.Buffer build = VkAccelerationStructureBuildGeometryInfoKHR.calloc(1, stack);
         build.get(0).sType$Default().type(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR)
@@ -1180,7 +1187,8 @@ public final class RtAccel {
             build.get(0).srcAccelerationStructure(b.accel.handle);
         }
         build.get(0).scratchData().deviceAddress(scratchAddress(ctx, b.scratch));
-        VkAccelerationStructureBuildRangeInfoKHR.Buffer ranges = entityBuildRanges(stack, b.entityTris);
+        VkAccelerationStructureBuildRangeInfoKHR.Buffer ranges = classifiedBuildRanges(stack,
+                b.externalClassTriangles);
         PointerBuffer ppRanges = stack.mallocPointer(1).put(0, ranges.address());
         vkCmdBuildAccelerationStructuresKHR(cmd, build, ppRanges);
     }
