@@ -193,7 +193,7 @@ public void resolveTransmissionGuide<TSurfaces : ISurfaceDispatch>(TSurfaces sur
         if (payloadIor() <= 1.0) {
             guideFilter *= payloadAlbedo();
             ro = offsetSurfaceOrigin(interfacePos, normalize(payloadNormal()), direction,
-                    INSET_TRANSMIT_BIAS);
+                    COVERAGE_CONTINUATION_BIAS);
             continue;
         }
 

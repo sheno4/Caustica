@@ -78,14 +78,9 @@ public static const float RAY_TMAX = 1.0e20;  // scale-independent bound for ray
 public static const float3 SKY_SPEC_ALBEDO = float3(0.5, 0.5, 0.5); // RR guide default for sky pixels.
 public static const float3 SKY_DIFF_ALBEDO = float3(0.5, 0.5, 0.5);
 
-// Transmitted-ray origin offset when crossing a face from the TRANSLUCENT terrain layer (glass, ice).
-// Must be SMALLER than the mesher-side TRANSLUCENT_INSET (RtTerrainMesher, 2e-4 blocks): those quads are
-// recessed into their block by that inset, so a face touching a slab/stair leaves a tiny gap before the
-// neighbour's surface. A large bias (SURF_BIAS) would restart the ray past that neighbour and see
-// through it; this lands the ray inside the gap so the neighbour is still hit, while still clearing the
-// surface it left to avoid self-intersection. Other geometry can request the ordinary surface bias
-// through its medium implementation.
-public static const float INSET_TRANSMIT_BIAS = 1.0e-4;
+// Small origin offset for continuing a guide through a coverage hole. It clears the accepted triangle
+// without skipping a nearby surface that should become the guide endpoint.
+public static const float COVERAGE_CONTINUATION_BIAS = 1.0e-4;
 
 // Ray-cone texture LOD: raygen tracks a one-pixel footprint along the path, and closest-hit converts it
 // to texture mip levels from the local UV/world-space scale. Diffuse/glossy bounces widen the cone so

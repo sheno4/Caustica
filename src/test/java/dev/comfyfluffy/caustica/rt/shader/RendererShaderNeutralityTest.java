@@ -26,6 +26,7 @@ final class RendererShaderNeutralityTest {
             "PAYLOAD_WATER",
             "BINDING_RECORD_CROSSING",
             "waterHitT",
+            "INSET_TRANSMIT_BIAS",
             "LutSky");
 
     @Test
@@ -96,6 +97,16 @@ final class RendererShaderNeutralityTest {
         assertTrue(lighting.contains("exp(-currentMedium.extinction * mediumDistance)"));
         assertTrue(lighting.contains("? exp(-currentMedium.extinction * shadow.boundaryHitT)"
                 + " : float3(0.0)"));
+    }
+
+    @Test
+    void coverageContinuationUsesItsProducerNeutralBias() throws IOException {
+        Path world = Path.of("src", "main", "resources", "caustica", "shaders", "world");
+        String core = Files.readString(world.resolve("world_core.slang"));
+        String guides = Files.readString(world.resolve("guides.slang"));
+
+        assertTrue(core.contains("COVERAGE_CONTINUATION_BIAS = 1.0e-4"));
+        assertTrue(guides.contains("COVERAGE_CONTINUATION_BIAS"));
     }
 
     @Test
