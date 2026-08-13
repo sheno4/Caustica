@@ -6,6 +6,7 @@ import dev.comfyfluffy.caustica.engine.material.MaterialTextureAsset;
 import dev.comfyfluffy.caustica.engine.material.MaterialTextureKind;
 import dev.comfyfluffy.caustica.engine.material.MaterialUv;
 import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialDefaults;
+import dev.comfyfluffy.caustica.engine.material.OpenPbrColorBinding;
 import dev.comfyfluffy.caustica.engine.material.OpenPbrTextureTexel;
 import org.junit.jupiter.api.Test;
 
@@ -26,7 +27,9 @@ final class RtMaterialPageCompilerImageLifetimeTest {
             @Override public int albedoArgb(int x, int y) { return pixels[0]; }
             @Override public void readOpenPbr(int x, int y, OpenPbrTextureTexel out) { }
             @Override public void close() { closes.incrementAndGet(); }
-        }, MaterialUv.IDENTITY, false, false, false, OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR);
+        }, MaterialUv.IDENTITY, false, false, false,
+                OpenPbrColorBinding.PARAMETER_DEFAULT, OpenPbrColorBinding.PARAMETER_DEFAULT,
+                OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR);
 
         RtMaterialPageCompiler.AlbedoStats stats = RtMaterialPageCompiler.scanAlbedo(asset, 16);
 
@@ -35,8 +38,12 @@ final class RtMaterialPageCompilerImageLifetimeTest {
         assertEquals(0x40 / 255.0f, stats.averageG(), 1.0e-6f);
         assertEquals(0x60 / 255.0f, stats.averageB(), 1.0e-6f);
         assertEquals(1.0f, stats.averageA(), 1.0e-6f);
-        assertEquals(16, stats.footprint().resolution());
-        assertEquals(256, stats.footprint().sampleCount());
+        assertEquals(1.0f, stats.uniformEmissionSummary().averageR(), 1.0e-6f);
+        assertEquals(1.0f, stats.uniformEmissionSummary().averageG(), 1.0e-6f);
+        assertEquals(1.0f, stats.uniformEmissionSummary().averageB(), 1.0e-6f);
+        assertEquals(1.0f, stats.uniformEmissionFootprint().r(0, 0), 1.0e-6f);
+        assertEquals(16, stats.uniformEmissionFootprint().resolution());
+        assertEquals(256, stats.uniformEmissionFootprint().sampleCount());
     }
 
     @Test
@@ -49,7 +56,9 @@ final class RtMaterialPageCompilerImageLifetimeTest {
             @Override public int albedoArgb(int x, int y) { throw new IllegalStateException("broken image"); }
             @Override public void readOpenPbr(int x, int y, OpenPbrTextureTexel out) { }
             @Override public void close() { closes.incrementAndGet(); }
-        }, MaterialUv.IDENTITY, false, false, false, OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR);
+        }, MaterialUv.IDENTITY, false, false, false,
+                OpenPbrColorBinding.PARAMETER_DEFAULT, OpenPbrColorBinding.PARAMETER_DEFAULT,
+                OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR);
 
         assertThrows(IllegalStateException.class, () -> RtMaterialPageCompiler.scanAlbedo(asset, 16));
         assertEquals(1, closes.get());

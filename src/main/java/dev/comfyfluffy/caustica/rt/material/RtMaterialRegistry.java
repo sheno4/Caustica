@@ -60,6 +60,10 @@ public final class RtMaterialRegistry {
     public static final int FEATURE_NORMAL = 2;
     /** A per-texel emission mask was compiled into the page; it says nothing about where it came from. */
     public static final int FEATURE_EMISSION_MASK = 4;
+    /** The source binds canonical {@code subsurface_color} to evaluated {@code base_color}. */
+    public static final int FEATURE_SUBSURFACE_COLOR_BASE = 8;
+    /** The source binds canonical {@code emission_color} to evaluated {@code base_color}. */
+    public static final int FEATURE_EMISSION_COLOR_BASE = 16;
     /** Bindless base-color texture index reserved for the host's shared atlas. */
     public static final int SHARED_ATLAS_BASE_COLOR_TEXTURE_INDEX = 0;
     /**
@@ -202,7 +206,8 @@ public final class RtMaterialRegistry {
         for (ResourceId material : atlasAssets) {
             RtMaterialPageCompiler.Entry entry = entries.get(material);
             int baseFeatures = entry.features()
-                    & (FEATURE_SPEC | FEATURE_NORMAL | FEATURE_EMISSION_MASK);
+                    & (FEATURE_SPEC | FEATURE_NORMAL | FEATURE_EMISSION_MASK
+                    | FEATURE_SUBSURFACE_COLOR_BASE | FEATURE_EMISSION_COLOR_BASE);
 
             // The first material-wide rule owns every geometry use of this material.
             MutableCompiledOverride materialWide = null;
@@ -227,7 +232,7 @@ public final class RtMaterialRegistry {
                             desc = materialWide.rule.apply(desc);
                         }
                         variants[index(profile, topology, emitting)] = tables.add(desc, entry.average(),
-                                entry, entry.albedoFootprint(), PRIMARY_COVERAGE_CUTOFF,
+                                entry, entry.uniformEmissionFootprint(), PRIMARY_COVERAGE_CUTOFF,
                                 topology == MaterialTopology.SURFACE);
                     }
                 }
@@ -247,7 +252,7 @@ public final class RtMaterialRegistry {
                                     dielectricIor, defaultEmissionLuminance);
                             RtMaterialDesc desc = compiled.rule.apply(base);
                             overrideVariants[index(profile, topology, emitting)] = tables.add(desc,
-                                    entry.average(), entry, entry.albedoFootprint(), PRIMARY_COVERAGE_CUTOFF,
+                                    entry.average(), entry, entry.uniformEmissionFootprint(), PRIMARY_COVERAGE_CUTOFF,
                                     topology == MaterialTopology.SURFACE);
                         }
                     }
@@ -262,7 +267,8 @@ public final class RtMaterialRegistry {
         Set<RtMaterialOverrides.Rule> runtimeMatchedOverrides = new HashSet<>();
         for (ResourceId material : standaloneAssets) {
             RtMaterialPageCompiler.Entry entry = entries.get(material);
-            int features = entry.features() & (FEATURE_SPEC | FEATURE_NORMAL);
+            int features = entry.features() & (FEATURE_SPEC | FEATURE_NORMAL
+                    | FEATURE_SUBSURFACE_COLOR_BASE | FEATURE_EMISSION_COLOR_BASE);
             RtMaterialDesc desc = compileRuntimeTextureDesc(features, false, entry.emissionSummary(),
                     defaultEmissionLuminance);
             for (RtMaterialOverrides.Rule rule : overrides.rules()) {
@@ -886,8 +892,8 @@ public final class RtMaterialRegistry {
     /**
      * Compile-time transmittance through a translucent surface, in ACEScg, as 8:8:8.
      *
-     * <p>Beer-Lambert absorption matching the water medium in {@code world.rgen}: a per-channel extinction
-     * derived from how dark the whole-texture average is, scaled by its average alpha (how much of the
+     * <p>Beer-Lambert absorption derived from how dark the whole-texture average is, scaled by its average
+     * alpha (how much of the
      * texture is colorant versus see-through frame), so saturated panes darken transmitted light
      * non-linearly. The neutral term is not alpha-scaled; clear glass has a low natural alpha,
      * and folding it into the alpha-scaled term would crush exactly the clear-glass case it covers.

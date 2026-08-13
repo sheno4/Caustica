@@ -44,6 +44,23 @@ final class RtOpenPbrShaderContractTest {
     }
 
     @Test
+    void closestHitConsumesDeclaredCanonicalColors() throws IOException {
+        String common = Files.readString(SHADERS.resolve("world/world_common.slang"));
+        String hit = Files.readString(SHADERS.resolve("world/closest_hit.slang"));
+
+        assertTrue(common.contains("MATERIAL_FEATURE_SUBSURFACE_COLOR_BASE = 8u;"));
+        assertTrue(common.contains("MATERIAL_FEATURE_EMISSION_COLOR_BASE = 16u;"));
+        assertTrue(hit.contains("surface.subsurfaceColor = float3(0.8);"));
+        assertTrue(hit.contains("surface.emissionColor = float3(1.0);"));
+        assertTrue(hit.contains("surface.subsurfaceColor = surface.baseColor;"));
+        assertTrue(hit.contains("surface.emissionColor = surface.baseColor;"));
+        assertTrue(hit.contains("material.subsurfaceColor = surface.subsurfaceColor;"));
+        assertTrue(hit.contains("material.emissionColor = surface.emissionColor;"));
+        assertFalse(hit.contains("LabPBR"));
+        assertFalse(hit.contains("source adapter"));
+    }
+
+    @Test
     void distantNeeOwnsContinuousBsdfEmitterVisibilityWithoutBiasingGgx() throws IOException {
         String math = Files.readString(SHADERS.resolve("world/math.slang"));
         String indirect = Files.readString(SHADERS.resolve("world/indirect_core.slang"));

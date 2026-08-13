@@ -149,6 +149,8 @@ struct DecodedSurface {
     float specularIor;
     float emissionLuminance;  // cd/m²
     float subsurfaceWeight;
+    float3 subsurfaceColor;
+    float3 emissionColor;
 };
 
 float4 samplePageSurface0(uint page, float2 uv, float lod) {
@@ -174,6 +176,8 @@ DecodedSurface evaluateMaterial(SurfaceMaterial mat, float2 atlasUv, float lod, 
     surface.specularIor = mat.specularIor;
     surface.emissionLuminance = stateEmission;
     surface.subsurfaceWeight = 0.0;
+    surface.subsurfaceColor = float3(0.8);
+    surface.emissionColor = float3(1.0);
 
     float2 localUv = clamp((atlasUv - mat.baseColorUv.xy) * mat.baseColorUv.zw,
             float2(0.0, 0.0), float2(1.0, 1.0));
@@ -187,9 +191,9 @@ DecodedSurface evaluateMaterial(SurfaceMaterial mat, float2 atlasUv, float lod, 
             surface.specularRoughness = surface0.r;
             surface.baseMetalness = surface0.g;
             surface.emissionLuminance = surface0.b;
-            // The source adapter's subsurface channel maps to OpenPBR subsurface_weight. In thin-walled
-            // mode the engine splits it into diffuse reflection and transmission using the authored
-            // anisotropy; it is separate from the translucent dielectric selected by transmission_weight.
+            // Canonical subsurface_weight is separate from the translucent dielectric selected by
+            // transmission_weight. Thin-walled closure evaluation splits it into reflection and
+            // transmission using subsurface_scatter_anisotropy.
             surface.subsurfaceWeight = surface0.a;
             surface.specularIor = surfaceIorFromPage(surface1.a);
             // The source format's RGB reflectance is conductor base_color only. A dielectric's scalar
@@ -200,6 +204,12 @@ DecodedSurface evaluateMaterial(SurfaceMaterial mat, float2 atlasUv, float lod, 
         } else {
             surface.emissionLuminance = surface0.b * stateEmission;
         }
+    }
+    if ((mat.features & MATERIAL_FEATURE_SUBSURFACE_COLOR_BASE) != 0u) {
+        surface.subsurfaceColor = surface.baseColor;
+    }
+    if ((mat.features & MATERIAL_FEATURE_EMISSION_COLOR_BASE) != 0u) {
+        surface.emissionColor = surface.baseColor;
     }
     surface.emissionLuminance *= surfaceEmissionLuminance(mat);
     if ((mat.features & MATERIAL_FEATURE_NORMAL) != 0u) {
@@ -227,16 +237,9 @@ MaterialInput buildMaterialInput(DecodedSurface surface, SurfaceMaterial mat, bo
     material.transmissionWeight = dielectric ? mat.transmissionWeight : 0.0;
     material.transmissionColor = float3(1.0);
     material.subsurfaceWeight = dielectric ? 0.0 : surface.subsurfaceWeight;
-    // The source adapter maps an authored LabPBR subsurface channel to an albedo-coloured OpenPBR sheet.
-    // With no authored subsurface value, retain OpenPBR's independent 0.8 default for a procedural
-    // implementation that chooses to turn the weight on.
-    material.subsurfaceColor = surface.subsurfaceWeight > 0.0
-            ? surface.baseColor : float3(0.8);
+    material.subsurfaceColor = surface.subsurfaceColor;
     material.subsurfaceScatterAnisotropy = 0.0;
-    // The source adapter defines textured emission as glowing in the decoded base colour. That policy is
-    // applied here, before a registered surface may replace emission_color independently.
-    //
-    material.emissionColor = surface.baseColor;
+    material.emissionColor = surface.emissionColor;
     material.emissionLuminance = max(surface.emissionLuminance, 0.0);
     return material;
 }

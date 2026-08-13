@@ -78,6 +78,7 @@ final class MaterialCatalogTest {
                 @Override public void close() { image.close(); }
             };
         }, MaterialUv.IDENTITY, false, false, false,
+                OpenPbrColorBinding.PARAMETER_DEFAULT, OpenPbrColorBinding.PARAMETER_DEFAULT,
                 OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR);
     }
 

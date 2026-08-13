@@ -13,6 +13,7 @@ import dev.comfyfluffy.caustica.engine.material.MaterialTextureAsset;
 import dev.comfyfluffy.caustica.engine.material.MaterialTextureKind;
 import dev.comfyfluffy.caustica.engine.material.MaterialUv;
 import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialDefaults;
+import dev.comfyfluffy.caustica.engine.material.OpenPbrColorBinding;
 import dev.comfyfluffy.caustica.minecraft.MinecraftProvidersExtension;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialCatalogBuilder;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialLookup;
@@ -65,9 +66,12 @@ final class EndPortalMaterialIntegrationTest {
                 () -> {
                     throw new AssertionError("catalog construction must not open the image");
                 }, MaterialUv.IDENTITY, false, false, false,
+                OpenPbrColorBinding.BASE_COLOR, OpenPbrColorBinding.BASE_COLOR,
                 OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR);
         MaterialCatalog catalog = new MaterialCatalog(List.of(), List.of(portalAsset), 16, 15000.0f);
         assertSame(portalAsset, catalog.standalone().getFirst());
+        assertEquals(OpenPbrColorBinding.BASE_COLOR, portalAsset.subsurfaceColorBinding());
+        assertEquals(OpenPbrColorBinding.BASE_COLOR, portalAsset.emissionColorBinding());
 
         RtMaterialOverrides overrides = RtMaterialOverrides.from(sink.rules, registry::surfaceIndex);
         RtMaterialOverrides.Rule compiledRule = overrides.rules().getFirst();

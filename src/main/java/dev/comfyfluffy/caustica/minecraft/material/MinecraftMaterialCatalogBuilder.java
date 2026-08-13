@@ -12,6 +12,7 @@ import dev.comfyfluffy.caustica.engine.material.MaterialImageSource;
 import dev.comfyfluffy.caustica.engine.material.MaterialTextureAsset;
 import dev.comfyfluffy.caustica.engine.material.MaterialTextureKind;
 import dev.comfyfluffy.caustica.engine.material.MaterialUv;
+import dev.comfyfluffy.caustica.engine.material.OpenPbrColorBinding;
 import dev.comfyfluffy.caustica.mixin.SpriteContentsAccessor;
 import dev.comfyfluffy.caustica.mixin.TextureAtlasAccessor;
 import net.minecraft.client.Minecraft;
@@ -59,6 +60,7 @@ public final class MinecraftMaterialCatalogBuilder {
                             inverseExtent(sprite.getU1() - sprite.getU0()),
                             inverseExtent(sprite.getV1() - sprite.getV0())),
                     spec.isPresent(), normal.isPresent(), spec.isPresent() || inferEmission,
+                    OpenPbrColorBinding.BASE_COLOR, OpenPbrColorBinding.BASE_COLOR,
                     MinecraftMaterialClassifier.dielectricIor(material)));
         }
 
@@ -92,6 +94,7 @@ public final class MinecraftMaterialCatalogBuilder {
                         albedo.width(), albedo.height(),
                         new MinecraftMaterialTextureSource(albedoSource, specular, normalMap, false),
                         MaterialUv.IDENTITY, spec.isPresent(), normal.isPresent(), spec.isPresent(),
+                        OpenPbrColorBinding.BASE_COLOR, OpenPbrColorBinding.BASE_COLOR,
                         MinecraftMaterialClassifier.dielectricIor(material)));
             } catch (Throwable throwable) {
                 CausticaMod.LOGGER.warn("RT entity material albedo load failed for {}", albedoLocation, throwable);

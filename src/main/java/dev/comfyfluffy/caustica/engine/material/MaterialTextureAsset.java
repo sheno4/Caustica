@@ -12,12 +12,16 @@ public record MaterialTextureAsset(ResourceId material, MaterialTextureKind kind
                                    boolean surfaceParameters,
                                    boolean normalMap,
                                    boolean emissionMask,
+                                   OpenPbrColorBinding subsurfaceColorBinding,
+                                   OpenPbrColorBinding emissionColorBinding,
                                    float dielectricIor) {
     public MaterialTextureAsset {
         Objects.requireNonNull(material, "material");
         Objects.requireNonNull(kind, "kind");
         Objects.requireNonNull(texture, "texture");
         Objects.requireNonNull(albedoUv, "albedoUv");
+        Objects.requireNonNull(subsurfaceColorBinding, "subsurfaceColorBinding");
+        Objects.requireNonNull(emissionColorBinding, "emissionColorBinding");
         if (width <= 0 || height <= 0) throw new IllegalArgumentException("material dimensions must be positive");
         if (!Float.isFinite(dielectricIor) || dielectricIor <= 0.0f) {
             throw new IllegalArgumentException("dielectricIor must be positive");

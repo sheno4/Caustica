@@ -9,6 +9,7 @@ import dev.comfyfluffy.caustica.engine.material.MaterialTextureAsset;
 import dev.comfyfluffy.caustica.engine.material.MaterialTextureKind;
 import dev.comfyfluffy.caustica.engine.material.MaterialUv;
 import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialDefaults;
+import dev.comfyfluffy.caustica.engine.material.OpenPbrColorBinding;
 import dev.comfyfluffy.caustica.engine.material.OpenPbrTextureTexel;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.pipeline.RtPipeline;
@@ -45,7 +46,7 @@ public final class RtMaterialPageCompiler {
                         RtMaterialDesc.EmissionSummary emissionSummary, EmissionFootprint emissionFootprint,
                         float averageR, float averageG, float averageB, float averageA,
                         RtMaterialDesc.EmissionSummary uniformEmissionSummary,
-                        EmissionFootprint albedoFootprint) {
+                        EmissionFootprint uniformEmissionFootprint) {
         public float[] average() {
             return new float[]{averageR, averageG, averageB, averageA};
         }
@@ -61,8 +62,8 @@ public final class RtMaterialPageCompiler {
     }
 
     record AlbedoStats(float averageR, float averageG, float averageB, float averageA,
-                       RtMaterialDesc.EmissionSummary uniformSummary,
-                       EmissionFootprint footprint) {
+                       RtMaterialDesc.EmissionSummary uniformEmissionSummary,
+                       EmissionFootprint uniformEmissionFootprint) {
         private static final AlbedoStats NEUTRAL = new AlbedoStats(1.0f, 1.0f, 1.0f, 0.0f,
                 RtMaterialDesc.EmissionSummary.NONE, null);
     }
@@ -83,6 +84,12 @@ public final class RtMaterialPageCompiler {
             if (asset.surfaceParameters()) value |= RtMaterialRegistry.FEATURE_SPEC;
             if (asset.normalMap()) value |= RtMaterialRegistry.FEATURE_NORMAL;
             if (asset.emissionMask()) value |= RtMaterialRegistry.FEATURE_EMISSION_MASK;
+            if (asset.subsurfaceColorBinding() == OpenPbrColorBinding.BASE_COLOR) {
+                value |= RtMaterialRegistry.FEATURE_SUBSURFACE_COLOR_BASE;
+            }
+            if (asset.emissionColorBinding() == OpenPbrColorBinding.BASE_COLOR) {
+                value |= RtMaterialRegistry.FEATURE_EMISSION_COLOR_BASE;
+            }
             features = value;
         }
 
@@ -95,7 +102,9 @@ public final class RtMaterialPageCompiler {
         }
 
         boolean requiresPage() {
-            return features != 0 || asset.kind() == MaterialTextureKind.STANDALONE;
+            int textureFeatures = RtMaterialRegistry.FEATURE_SPEC
+                    | RtMaterialRegistry.FEATURE_NORMAL | RtMaterialRegistry.FEATURE_EMISSION_MASK;
+            return (features & textureFeatures) != 0 || asset.kind() == MaterialTextureKind.STANDALONE;
         }
     }
 
@@ -235,7 +244,7 @@ public final class RtMaterialPageCompiler {
                 1.0f, 1.0f, 1.0f, 0.0f, RtMaterialDesc.EmissionSummary.NONE, null);
         for (Candidate candidate : candidates) {
             entries.put(candidate.asset.material(), candidate.page >= 0
-                    ? compiledEntry(candidate, pageSize) : fallbackFor(candidate.asset.albedoUv(), candidate.stats));
+                    ? compiledEntry(candidate, pageSize) : fallbackFor(candidate));
         }
 
         long bytesPerBundle = 0L;
@@ -277,15 +286,19 @@ public final class RtMaterialPageCompiler {
                 candidate.width() / (float) pageSize, candidate.height() / (float) pageSize,
                 uv.u(), uv.v(), uv.inverseDu(), uv.inverseDv(), candidate.emissionSummary,
                 candidate.emissionFootprint, stats.averageR(), stats.averageG(), stats.averageB(), stats.averageA(),
-                stats.uniformSummary(), stats.footprint());
+                stats.uniformEmissionSummary(), stats.uniformEmissionFootprint());
     }
 
-    private Entry fallbackFor(MaterialUv uv, AlbedoStats stats) {
-        return new Entry(0, fallback.pageIndex(), 0,
+    private Entry fallbackFor(Candidate candidate) {
+        MaterialUv uv = candidate.asset.albedoUv();
+        AlbedoStats stats = candidate.stats;
+        int colorBindings = candidate.features & (RtMaterialRegistry.FEATURE_SUBSURFACE_COLOR_BASE
+                | RtMaterialRegistry.FEATURE_EMISSION_COLOR_BASE);
+        return new Entry(colorBindings, fallback.pageIndex(), 0,
                 fallback.materialU, fallback.materialV, fallback.materialDu, fallback.materialDv,
                 uv.u(), uv.v(), uv.inverseDu(), uv.inverseDv(), RtMaterialDesc.EmissionSummary.NONE, null,
                 stats.averageR(), stats.averageG(), stats.averageB(), stats.averageA(),
-                stats.uniformSummary(), stats.footprint());
+                stats.uniformEmissionSummary(), stats.uniformEmissionFootprint());
     }
 
     private record Decoded(List<RtMaterialTextureData.Level> levels,
@@ -317,7 +330,11 @@ public final class RtMaterialPageCompiler {
             float[] surface1 = new float[surface0.length];
             float[] linearAlbedo = new float[surface0.length];
             float[] authoredEmission = candidate.asset.emissionMask() ? new float[width * height] : null;
-            StatsAccumulator stats = new StatsAccumulator(width, height, footprintResolution);
+            float[] emissionColor = authoredEmission != null ? new float[surface0.length] : null;
+            boolean emissionUsesBaseColor = candidate.asset.emissionColorBinding()
+                    == OpenPbrColorBinding.BASE_COLOR;
+            StatsAccumulator stats = new StatsAccumulator(width, height, footprintResolution,
+                    candidate.asset.emissionColorBinding());
             OpenPbrTextureTexel texel = new OpenPbrTextureTexel();
             for (int y = 0; y < height; y++) {
                 for (int x = 0; x < width; x++) {
@@ -332,6 +349,12 @@ public final class RtMaterialPageCompiler {
                     linearAlbedo[i + 1] = ag;
                     linearAlbedo[i + 2] = ab;
                     linearAlbedo[i + 3] = aa;
+                    if (emissionColor != null) {
+                        emissionColor[i] = emissionUsesBaseColor ? ar : 1.0f;
+                        emissionColor[i + 1] = emissionUsesBaseColor ? ag : 1.0f;
+                        emissionColor[i + 2] = emissionUsesBaseColor ? ab : 1.0f;
+                        emissionColor[i + 3] = aa;
+                    }
                     texel.reset();
                     texture.readOpenPbr(x, y, texel);
                     surface0[i] = texel.specularRoughness;
@@ -351,8 +374,8 @@ public final class RtMaterialPageCompiler {
             RtMaterialDesc.EmissionSummary emissionSummary = RtMaterialDesc.EmissionSummary.NONE;
             EmissionFootprint footprint = null;
             if (authoredEmission != null) {
-                emissionSummary = summarizeEmission(linearAlbedo, authoredEmission);
-                footprint = emissionFootprint(linearAlbedo, authoredEmission, width, height,
+                emissionSummary = summarizeEmission(emissionColor, authoredEmission);
+                footprint = emissionFootprint(emissionColor, authoredEmission, width, height,
                         footprintResolution);
             }
             int maxLod = maxLodFor(width, height);
@@ -364,7 +387,8 @@ public final class RtMaterialPageCompiler {
 
     static AlbedoStats scanAlbedo(MaterialTextureAsset asset, int footprintResolution) throws Exception {
         try (MaterialTextureImage image = asset.texture().open()) {
-            StatsAccumulator stats = new StatsAccumulator(asset.width(), asset.height(), footprintResolution);
+            StatsAccumulator stats = new StatsAccumulator(asset.width(), asset.height(), footprintResolution,
+                    asset.emissionColorBinding());
             for (int y = 0; y < asset.height(); y++) {
                 for (int x = 0; x < asset.width(); x++) {
                     stats.add(x, y, sample(image, x, y, asset.width(), asset.height()));
@@ -378,6 +402,7 @@ public final class RtMaterialPageCompiler {
         private final int width;
         private final int height;
         private final EmissionFootprint.Builder footprint;
+        private final OpenPbrColorBinding emissionColor;
         private long sr;
         private long sg;
         private long sb;
@@ -387,9 +412,11 @@ public final class RtMaterialPageCompiler {
         private double lb;
         private int covered;
 
-        StatsAccumulator(int width, int height, int footprintResolution) {
+        StatsAccumulator(int width, int height, int footprintResolution,
+                         OpenPbrColorBinding emissionColor) {
             this.width = width;
             this.height = height;
+            this.emissionColor = emissionColor;
             footprint = new EmissionFootprint.Builder(footprintResolution, width, height);
         }
 
@@ -403,9 +430,12 @@ public final class RtMaterialPageCompiler {
             sb += b;
             sa += a;
             float coverage = a / 255.0f;
-            float pr = RtMaterialTextureData.srgbToLinear(r) * coverage;
-            float pg = RtMaterialTextureData.srgbToLinear(g) * coverage;
-            float pb = RtMaterialTextureData.srgbToLinear(b) * coverage;
+            float pr = (emissionColor == OpenPbrColorBinding.BASE_COLOR
+                    ? RtMaterialTextureData.srgbToLinear(r) : 1.0f) * coverage;
+            float pg = (emissionColor == OpenPbrColorBinding.BASE_COLOR
+                    ? RtMaterialTextureData.srgbToLinear(g) : 1.0f) * coverage;
+            float pb = (emissionColor == OpenPbrColorBinding.BASE_COLOR
+                    ? RtMaterialTextureData.srgbToLinear(b) : 1.0f) * coverage;
             lr += pr;
             lg += pg;
             lb += pb;

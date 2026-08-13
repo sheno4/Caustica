@@ -7,8 +7,8 @@ module world_common;
 __exported import caustica_color;
 
 // Read-only device pointer with explicit std430 layout. The layout parameter is LOAD-BEARING: a bare
-// Ptr<T> gets Slang's "natural" layout (no vec4 16-byte alignment → e.g. WorldPush.sunDir lands at 200
-// instead of the Java writer's 208, silently reading garbage) and additionally requires the
+// Ptr<T> gets Slang's "natural" layout (no vec4 16-byte alignment can shift reflected vector fields
+// away from the Java writer's offsets, silently reading garbage) and additionally requires the
 // scalarBlockLayout device feature. Keep std430 unless RtDeviceBringup explicitly enables that feature;
 // this alias is the single layout switch and generated Java serialization stays in lock-step.
 public typealias ConstPtr<T> = Ptr<T, Access.Read, AddressSpace.Device, Std430DataLayout>;
@@ -131,7 +131,7 @@ public struct Payload {
     //   miss — float3 sky radiance, full fp32
     //
     // The miss case is the entire reason these are hand-packed. Sky is in absolute photometric units and
-    // the sun disc alone is ~3.6e5 cd/m², well past half's 65504 ceiling — a
+    // a bright environment emitter can exceed 3.6e5 cd/m², well past half's 65504 ceiling — a
     // half3 could not carry it without first normalising by the frame's exposure, which made a storage
     // format's limitation into a dependency on the exposure controller. A hit has no sky and a miss has
     // neither albedo nor normal, so reinterpreting the same twelve bytes buys the range for free and keeps
@@ -262,7 +262,7 @@ public float3 bindingShadowTint(MaterialBinding binding) {
 
 // Closest-hit-only surface parameters, shared by every binding that names them. The uniform half of the
 // authored OpenPBR Surface subset: everything that varies per texel lives in the canonical pages `page`
-// names instead. Source-format data has already been decoded, so nothing here is LabPBR-shaped.
+// names instead. Source-format data has already been decoded, so nothing here is source-shaped.
 // materialUv maps sprite-local UV into the packed page, while baseColorUv maps the source atlas rectangle
 // back to sprite-local UV.
 public struct SurfaceMaterial {
@@ -285,6 +285,8 @@ public struct SurfaceMaterial {
 public static const uint MATERIAL_FEATURE_SPEC = 1u;
 public static const uint MATERIAL_FEATURE_NORMAL = 2u;
 public static const uint MATERIAL_FEATURE_EMISSION_MASK = 4u;
+public static const uint MATERIAL_FEATURE_SUBSURFACE_COLOR_BASE = 8u;
+public static const uint MATERIAL_FEATURE_EMISSION_COLOR_BASE = 16u;
 // Final HDR emitting-surface luminance (look-package baseline or absolute JSON cd/m² override), baked in Java
 // at material-compile time (RtMaterialRegistry) and packed here as a 16-bit fraction of the max — every
 // emissive material carries a value (0 for non-emissive), not just resource-pack-overridden ones, so the
