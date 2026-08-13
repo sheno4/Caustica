@@ -1396,7 +1396,7 @@ public final class RtTerrain {
             return;
         }
         lightSections.put(g.slotIndex(), MinecraftTerrainLightAdapter.describe(g.slotIndex(),
-                g.originX() >> 4, g.originY() >> 4, g.originZ() >> 4, g.metadata()));
+                g.originX(), g.originY(), g.originZ(), g.metadata()));
     }
 
     private void markLightHierarchyDirty() {

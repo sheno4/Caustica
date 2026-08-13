@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.rt.light;
 
+import dev.comfyfluffy.caustica.engine.light.FiniteLight;
 import dev.comfyfluffy.caustica.engine.light.LightDescriptor;
 import org.junit.jupiter.api.Test;
 
@@ -9,9 +10,8 @@ final class RtLightSceneTest {
     @Test
     void distantRecordCarriesNormalizedDirectionIntegratedLuxAndSelectionMetric() {
         float[] record = new float[RtRetainedLightSceneBuilder.GPU_FLOATS_PER_LIGHT];
-        RtRetainedLightSceneBuilder.encode(record, 0, new LightDescriptor.Distant(9,
-                0, 3, 4, 100_000, 90_000, 80_000, Math.PI / 3.0),
-                100, 64, -10, 2.0);
+        RtRetainedLightSceneBuilder.encodeDistant(record, 0, new LightDescriptor.Distant(9,
+                0, 3, 4, 100_000, 90_000, 80_000, Math.PI / 3.0));
 
         assertEquals(3, Float.floatToRawIntBits(record[3]));
         assertEquals(0.6f, record[5], 1.0e-6f);
@@ -33,9 +33,9 @@ final class RtLightSceneTest {
     @Test
     void spotlightRecordPropagatesPhysicalScaleAndRebasesOnlyPosition() {
         float[] record = new float[RtRetainedLightSceneBuilder.GPU_FLOATS_PER_LIGHT];
-        RtRetainedLightSceneBuilder.encode(record, 0, new LightDescriptor.Spot(7,
-                105, 66, -12, 0, 0, -2,
-                24, Math.PI / 3.0, 100, 80, 60), 100, 64, -10, 2.0);
+        RtRetainedLightSceneBuilder.encodeFinite(record, 0, FiniteLight.from(
+                new LightDescriptor.Spot(7, 105, 66, -12, 0, 0, -2,
+                        24, Math.PI / 3.0, 100, 80, 60), 2.0), 100, 64, -10, 2.0);
 
         assertEquals(5f, record[0]);
         assertEquals(2f, record[1]);

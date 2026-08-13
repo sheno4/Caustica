@@ -20,7 +20,7 @@ final class MinecraftTerrainLightAdapterTest {
         record[17] = 11.0f;
         record[18] = 12.0f;
 
-        var batch = MinecraftTerrainLightAdapter.describe(4, 2, 3, 5, record);
+        var batch = MinecraftTerrainLightAdapter.describe(4, 32, 48, 80, record);
         LightDescriptor.Rectangle light = (LightDescriptor.Rectangle) batch.lights().getFirst();
 
         assertEquals(32.0, light.positionX());

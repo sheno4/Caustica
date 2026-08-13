@@ -36,19 +36,19 @@ public final class RtRetainedLightSceneBuilder {
     static Data buildFinite(List<? extends LightDescriptor.Finite> descriptors,
                             double rebaseX, double rebaseY, double rebaseZ,
                             double metersPerWorldUnit, BooleanSupplier cancelled) {
-        ArrayList<LightDescriptor.Finite> active = new ArrayList<>(descriptors.size());
+        // Canonicalize once. Deriving photometry costs a cross product, square roots and validation per
+        // light, and the BVH, the power filter and the record encoding all want the same answer.
+        ArrayList<FiniteLight> active = new ArrayList<>(descriptors.size());
         for (int i = 0; i < descriptors.size(); i++) {
             if ((i & 255) == 0) checkCancelled(cancelled);
-            LightDescriptor.Finite descriptor = descriptors.get(i);
-            if (FiniteLight.from(descriptor, metersPerWorldUnit).luminousPowerLumens() > 0.0) {
-                active.add(descriptor);
-            }
+            FiniteLight light = FiniteLight.from(descriptors.get(i), metersPerWorldUnit);
+            if (light.luminousPowerLumens() > 0.0) active.add(light);
         }
-        LightBvh.Data bvh = LightBvh.build(active, metersPerWorldUnit, cancelled);
+        LightBvh.Data bvh = LightBvh.build(active, cancelled);
         float[] lights = new float[Math.multiplyExact(active.size(), GPU_FLOATS_PER_LIGHT)];
         for (int i = 0; i < active.size(); i++) {
             if ((i & 255) == 0) checkCancelled(cancelled);
-            encode(lights, i * GPU_FLOATS_PER_LIGHT, active.get(i),
+            encodeFinite(lights, i * GPU_FLOATS_PER_LIGHT, active.get(i),
                     rebaseX, rebaseY, rebaseZ, metersPerWorldUnit);
         }
         float[] nodes = new float[Math.multiplyExact(bvh.nodes().size(), GPU_FLOATS_PER_NODE)];
@@ -61,12 +61,11 @@ public final class RtRetainedLightSceneBuilder {
                 rebaseX, rebaseY, rebaseZ, metersPerWorldUnit);
     }
 
-    static void encode(float[] target, int offset, LightDescriptor descriptor,
-                       double rebaseX, double rebaseY, double rebaseZ,
-                       double metersPerWorldUnit) {
-        switch (descriptor) {
+    static void encodeFinite(float[] target, int offset, FiniteLight canonical,
+                             double rebaseX, double rebaseY, double rebaseZ,
+                             double metersPerWorldUnit) {
+        switch (canonical.descriptor()) {
             case LightDescriptor.Rectangle light -> {
-                FiniteLight canonical = FiniteLight.from(light, metersPerWorldUnit);
                 putPosition(target, offset, light, rebaseX, rebaseY, rebaseZ);
                 target[offset + 3] = Float.intBitsToFloat(0);
                 put3(target, offset + 4, light.halfUx(), light.halfUy(), light.halfUz());
@@ -78,20 +77,16 @@ public final class RtRetainedLightSceneBuilder {
                         + crossZ * light.normalZ() < 0.0 ? -1.0f : 1.0f;
                 put3(target, offset + 12, light.radianceRedCdM2(), light.radianceGreenCdM2(),
                         light.radianceBlueCdM2());
-                target[offset + 15] = (float) canonical.luminousPowerLumens();
             }
             case LightDescriptor.Point light -> {
-                FiniteLight canonical = FiniteLight.from(light, metersPerWorldUnit);
                 putPosition(target, offset, light, rebaseX, rebaseY, rebaseZ);
                 target[offset + 3] = Float.intBitsToFloat(1);
                 target[offset + 7] = (float) (light.rangeMeters() / metersPerWorldUnit);
                 target[offset + 11] = -1.0f;
                 put3(target, offset + 12, light.intensityRedCandela(), light.intensityGreenCandela(),
                         light.intensityBlueCandela());
-                target[offset + 15] = (float) canonical.luminousPowerLumens();
             }
             case LightDescriptor.Spot light -> {
-                FiniteLight canonical = FiniteLight.from(light, metersPerWorldUnit);
                 putPosition(target, offset, light, rebaseX, rebaseY, rebaseZ);
                 target[offset + 3] = Float.intBitsToFloat(2);
                 double length = Math.sqrt(light.directionX() * light.directionX()
@@ -103,20 +98,22 @@ public final class RtRetainedLightSceneBuilder {
                 target[offset + 11] = (float) Math.cos(light.outerHalfAngleRadians());
                 put3(target, offset + 12, light.intensityRedCandela(), light.intensityGreenCandela(),
                         light.intensityBlueCandela());
-                target[offset + 15] = (float) canonical.luminousPowerLumens();
-            }
-            case LightDescriptor.Distant light -> {
-                DistantLight canonical = DistantLight.from(light);
-                target[offset + 3] = Float.intBitsToFloat(3);
-                put3(target, offset + 4, canonical.directionX(), canonical.directionY(),
-                        canonical.directionZ());
-                target[offset + 11] = (float) Math.cos(light.angularRadiusRadians());
-                put3(target, offset + 12, light.illuminanceRedLux(), light.illuminanceGreenLux(),
-                        light.illuminanceBlueLux());
-                target[offset + 15] = luminance(light.illuminanceRedLux(),
-                        light.illuminanceGreenLux(), light.illuminanceBlueLux());
             }
         }
+        target[offset + 15] = (float) canonical.luminousPowerLumens();
+    }
+
+    /** A distant source has no position and no world scale: direction, lux and a cone are the record. */
+    static void encodeDistant(float[] target, int offset, LightDescriptor.Distant light) {
+        DistantLight canonical = DistantLight.from(light);
+        target[offset + 3] = Float.intBitsToFloat(3);
+        put3(target, offset + 4, canonical.directionX(), canonical.directionY(),
+                canonical.directionZ());
+        target[offset + 11] = (float) Math.cos(light.angularRadiusRadians());
+        put3(target, offset + 12, light.illuminanceRedLux(), light.illuminanceGreenLux(),
+                light.illuminanceBlueLux());
+        target[offset + 15] = luminance(light.illuminanceRedLux(),
+                light.illuminanceGreenLux(), light.illuminanceBlueLux());
     }
 
     private static void encodeNode(float[] target, int offset, LightBvh.Node node,
@@ -128,7 +125,7 @@ public final class RtRetainedLightSceneBuilder {
         put3(target, offset + 4, bounds.maxX() - rebaseX, bounds.maxY() - rebaseY,
                 bounds.maxZ() - rebaseZ);
         target[offset + 7] = Float.intBitsToFloat(node.right());
-        target[offset + 8] = (float) node.luminousPowerLumens();
+        target[offset + 8] = (float) node.peakLuminousIntensityCandela();
         target[offset + 9] = Float.intBitsToFloat(node.lightIndex());
     }
 

@@ -2,10 +2,19 @@ package dev.comfyfluffy.caustica.engine.light;
 
 import java.util.Objects;
 
-/** Canonical finite-light metadata consumed by engine-owned spatial light structures. */
+/**
+ * Canonical finite-light metadata consumed by engine-owned spatial light structures.
+ *
+ * <p>Both photometric quantities are carried because they answer different questions.
+ * {@code luminousPowerLumens} is the emitter's total output and is what a subtree's energy sums to;
+ * {@code peakLuminousIntensityCandela} divided by squared metres is the peak illuminance the emitter can
+ * deliver, which is the only scale on which the light-selection proposal can compare a rectangle, a
+ * point, a spot and a distant source.
+ */
 public record FiniteLight(LightDescriptor.Finite descriptor, LightBvh.Aabb bounds,
                           LightBvh.OrientationCone orientation,
-                          double luminousPowerLumens) {
+                          double luminousPowerLumens,
+                          double peakLuminousIntensityCandela) {
     // ACEScg/AP1 luminance coefficients. This is the same Y used by the transport shaders.
     private static final double LUMA_R = 0.27222872;
     private static final double LUMA_G = 0.67408177;
@@ -18,6 +27,9 @@ public record FiniteLight(LightDescriptor.Finite descriptor, LightBvh.Aabb bound
         if (!Double.isFinite(luminousPowerLumens) || luminousPowerLumens < 0.0) {
             throw new IllegalArgumentException("Light power must be finite and non-negative");
         }
+        if (!Double.isFinite(peakLuminousIntensityCandela) || peakLuminousIntensityCandela < 0.0) {
+            throw new IllegalArgumentException("Light intensity must be finite and non-negative");
+        }
     }
 
     public static FiniteLight from(LightDescriptor.Finite descriptor, double metersPerWorldUnit) {
@@ -27,10 +39,12 @@ public record FiniteLight(LightDescriptor.Finite descriptor, LightBvh.Aabb bound
         }
         requireFinitePosition(descriptor);
 
+        // Only a rectangle's photometry depends on the world scale: its power comes from an area
+        // measured in scene units. Point and spot intensities are already absolute.
         return switch (descriptor) {
             case LightDescriptor.Rectangle rectangle -> rectangle(rectangle, metersPerWorldUnit);
-            case LightDescriptor.Point point -> point(point, metersPerWorldUnit);
-            case LightDescriptor.Spot spot -> spot(spot, metersPerWorldUnit);
+            case LightDescriptor.Point point -> point(point);
+            case LightDescriptor.Spot spot -> spot(spot);
         };
     }
 
@@ -67,14 +81,16 @@ public record FiniteLight(LightDescriptor.Finite descriptor, LightBvh.Aabb bound
                 light.positionZ(), extentX, extentY, extentZ);
         double luminance = luminance(light.radianceRedCdM2(), light.radianceGreenCdM2(),
                 light.radianceBlueCdM2());
-        // A Lambertian emitter's luminous exitance is pi times its luminance.
-        double power = Math.PI * luminance * areaWorldUnitsSquared
+        // A Lambertian emitter radiates its luminance times its metric area straight along the normal,
+        // and its luminous exitance is pi times its luminance.
+        double peakIntensity = luminance * areaWorldUnitsSquared
                 * metersPerWorldUnit * metersPerWorldUnit;
         return new FiniteLight(light, bounds,
-                new LightBvh.OrientationCone(normal[0], normal[1], normal[2], 0.0), power);
+                new LightBvh.OrientationCone(normal[0], normal[1], normal[2], 0.0),
+                Math.PI * peakIntensity, peakIntensity);
     }
 
-    private static FiniteLight point(LightDescriptor.Point light, double metersPerWorldUnit) {
+    private static FiniteLight point(LightDescriptor.Point light) {
         requireFinite(light.rangeMeters(), light.intensityRedCandela(),
                 light.intensityGreenCandela(), light.intensityBlueCandela());
         if (!(light.rangeMeters() > 0.0)) {
@@ -84,12 +100,13 @@ public record FiniteLight(LightDescriptor.Finite descriptor, LightBvh.Aabb bound
                 light.intensityBlueCandela());
         LightBvh.Aabb bounds = LightBvh.Aabb.point(light.positionX(), light.positionY(),
                 light.positionZ());
-        double power = 4.0 * Math.PI * luminance(light.intensityRedCandela(),
+        double intensity = luminance(light.intensityRedCandela(),
                 light.intensityGreenCandela(), light.intensityBlueCandela());
-        return new FiniteLight(light, bounds, LightBvh.OrientationCone.omnidirectional(), power);
+        return new FiniteLight(light, bounds, LightBvh.OrientationCone.omnidirectional(),
+                4.0 * Math.PI * intensity, intensity);
     }
 
-    private static FiniteLight spot(LightDescriptor.Spot light, double metersPerWorldUnit) {
+    private static FiniteLight spot(LightDescriptor.Spot light) {
         requireFinite(light.directionX(), light.directionY(), light.directionZ(),
                 light.rangeMeters(), light.outerHalfAngleRadians(),
                 light.intensityRedCandela(), light.intensityGreenCandela(),
@@ -108,11 +125,11 @@ public record FiniteLight(LightDescriptor.Finite descriptor, LightBvh.Aabb bound
         LightBvh.Aabb bounds = LightBvh.Aabb.point(light.positionX(), light.positionY(),
                 light.positionZ());
         double solidAngle = 2.0 * Math.PI * (1.0 - Math.cos(light.outerHalfAngleRadians()));
-        double power = solidAngle * luminance(light.intensityRedCandela(),
+        double intensity = luminance(light.intensityRedCandela(),
                 light.intensityGreenCandela(), light.intensityBlueCandela());
         return new FiniteLight(light, bounds,
                 new LightBvh.OrientationCone(direction[0], direction[1], direction[2],
-                        light.outerHalfAngleRadians()), power);
+                        light.outerHalfAngleRadians()), solidAngle * intensity, intensity);
     }
 
     private static double luminance(double red, double green, double blue) {

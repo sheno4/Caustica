@@ -111,13 +111,38 @@ public float3 evalSampleContrib(float3 sp, float3 lnrm, float3 le, float area, f
     return contrib;
 }
 
+// Fraction of the stratum proposal driven by the importance estimate below. The remainder is spread
+// uniformly over the strata that hold a light, which bounds every stratum's probability from below by
+// (1 - this) / populated. The floor is load-bearing, not caution: the strata are bounded by completely
+// different structures — a world-sized emitter cluster against a 100 klx delta source — so no single
+// estimate ranks them reliably, and a stratum driven toward zero probability shows up as fireflies at
+// enormous weights rather than as a visibly wrong image.
+static const float STRATUM_IMPORTANCE_SHARE = 0.75;
+
+// Illuminance in lux that the node's subtree can be expected to deliver to the shading point.
+//
+// Peak intensity rather than emitted power is what makes rectangles, points and spots comparable on one
+// scale, and makes the result directly comparable to a distant light's illuminance metric.
+//
+// Distance is measured to the node's CENTRE, not to the nearest point on its bounds. The nearest point
+// is the conservative upper bound, but it is zero for every node that contains the shading point, and
+// in a Morton-ordered tree sibling bounds overlap heavily, so near the root both children usually
+// contain it. A metric that collapses there ranks the two by intensity alone and hands the candidates
+// to whichever subtree is brightest in total rather than whichever is close — under inverse-square
+// falloff that is worse than sampling uniformly, and it starves exactly the emitters whose direct-hit
+// emission this estimator has taken responsibility for. It also penalises a near cluster for being
+// large while a distant one still gets to use its real distance, which inverts the two outright.
+//
+// The clamp is half the node's own bounding-sphere radius: a shading point at the centre of a cluster
+// really is about a cluster-radius away from its lights, and the clamp is what keeps a world-sized root
+// bounded instead of diverging.
 float finiteNodeImportance(GpuLightNode node, float3 hitPosRelative,
         float metersPerWorldUnit) {
-    float3 closest = clamp(hitPosRelative, node.boundsMin, node.boundsMax);
-    float3 delta = hitPosRelative - closest;
-    float distanceMeters2 = max(dot(delta, delta)
-            * metersPerWorldUnit * metersPerWorldUnit, 1.0e-6);
-    return max(0.0, node.luminousPowerLumens) / (4.0 * PI * distanceMeters2);
+    float3 radius = 0.5 * (node.boundsMax - node.boundsMin);
+    float3 delta = hitPosRelative - (node.boundsMin + radius);
+    float distance2 = max(dot(delta, delta), 0.25 * dot(radius, radius));
+    return max(0.0, node.peakIntensityCandela)
+            / max(distance2 * metersPerWorldUnit * metersPerWorldUnit, 1.0e-6);
 }
 
 float rootImportance(uint64_t nodeAddress, int rootIndex, float3 hitPosRelative,
@@ -152,52 +177,88 @@ bool traverseFinite(uint64_t lightAddress, uint64_t nodeAddress, int rootIndex,
     return false;
 }
 
-bool selectSceneLight(float3 hitPos, inout uint proposalSeed, out GpuLight light,
-        out float3 segmentRebase, out float metersPerWorldUnit, out float sourcePdf) {
+// Stratum probabilities for one shading point. Every field depends on the point alone, so this is built
+// once per vertex and shared by all of that vertex's RIS candidates.
+struct LightStrata {
+    float retainedProbability;
+    float frameProbability;
+    float distantProbability;
+    float distantWeightSum;
+    bool populated;
+};
+
+LightStrata lightStrata(float3 hitPos) {
+    LightStrata strata;
+    strata.retainedProbability = 0.0;
+    strata.frameProbability = 0.0;
+    strata.distantProbability = 0.0;
+    strata.distantWeightSum = 0.0;
+
     float retainedWeight = rootImportance(pc.retainedLightNodeAddr,
             worldPush.retainedLightInfo.x, hitPos - worldPush.retainedLightTransform.xyz,
             worldPush.retainedLightTransform.w);
     float frameWeight = rootImportance(pc.frameLightNodeAddr, worldPush.frameLightInfo.x,
             hitPos, worldPush.frameMetersPerWorldUnit);
-    float distantWeight = 0.0;
     if (pc.frameLightAddr != 0) {
         for (int i = 0; i < worldPush.frameLightInfo.w; i++) {
             GpuLight distant = ConstPtr<GpuLight>(pc.frameLightAddr)[
                     uint(worldPush.frameLightInfo.z + i)];
-            distantWeight += max(0.0, distant.selectionMetric);
+            strata.distantWeightSum += max(0.0, distant.selectionMetric);
         }
     }
-    float totalWeight = retainedWeight + frameWeight + distantWeight;
-    if (!(totalWeight > 0.0)) return false;
+    float totalWeight = retainedWeight + frameWeight + strata.distantWeightSum;
+    strata.populated = totalWeight > 0.0;
+    if (!strata.populated) return strata;
 
-    float choice = rndf(proposalSeed) * totalWeight;
-    if (choice < retainedWeight) {
+    // A stratum's weight is zero exactly when it holds no samplable light: every record survives the
+    // build only with positive intensity, and the distance term is finite. So counting positive weights
+    // counts populated strata, and the floor is never spent on an empty one.
+    float populatedCount = (retainedWeight > 0.0 ? 1.0 : 0.0) + (frameWeight > 0.0 ? 1.0 : 0.0)
+            + (strata.distantWeightSum > 0.0 ? 1.0 : 0.0);
+    float floorShare = (1.0 - STRATUM_IMPORTANCE_SHARE) / populatedCount;
+    float scale = STRATUM_IMPORTANCE_SHARE / totalWeight;
+    strata.retainedProbability = retainedWeight > 0.0 ? retainedWeight * scale + floorShare : 0.0;
+    strata.frameProbability = frameWeight > 0.0 ? frameWeight * scale + floorShare : 0.0;
+    strata.distantProbability = strata.distantWeightSum > 0.0
+            ? strata.distantWeightSum * scale + floorShare : 0.0;
+    return strata;
+}
+
+bool selectSceneLight(LightStrata strata, float3 hitPos, inout uint proposalSeed, out GpuLight light,
+        out float3 segmentRebase, out float metersPerWorldUnit, out float sourcePdf) {
+    float choice = rndf(proposalSeed);
+    if (choice < strata.retainedProbability) {
         segmentRebase = worldPush.retainedLightTransform.xyz;
         metersPerWorldUnit = worldPush.retainedLightTransform.w;
         return traverseFinite(pc.retainedLightAddr, pc.retainedLightNodeAddr,
                 worldPush.retainedLightInfo.x, hitPos - segmentRebase, metersPerWorldUnit,
-                retainedWeight / totalWeight, proposalSeed, light, sourcePdf);
+                strata.retainedProbability, proposalSeed, light, sourcePdf);
     }
-    choice -= retainedWeight;
-    if (choice < frameWeight) {
+    choice -= strata.retainedProbability;
+    if (choice < strata.frameProbability) {
         segmentRebase = float3(0.0);
         metersPerWorldUnit = worldPush.frameMetersPerWorldUnit;
         return traverseFinite(pc.frameLightAddr, pc.frameLightNodeAddr,
                 worldPush.frameLightInfo.x, hitPos, metersPerWorldUnit,
-                frameWeight / totalWeight, proposalSeed, light, sourcePdf);
+                strata.frameProbability, proposalSeed, light, sourcePdf);
     }
-    choice -= frameWeight;
+    choice -= strata.frameProbability;
+    if (!(strata.distantProbability > 0.0)) return false;
+    // Inside the distant stratum the proposal stays proportional to illuminance. These are a handful of
+    // delta sources whose metric is the exact quantity the estimator wants, so there is nothing here for
+    // a floor to protect against. Rescale the leftover probability into weight space to walk them.
+    float target = choice * (strata.distantWeightSum / strata.distantProbability);
     for (int i = 0; i < worldPush.frameLightInfo.w; i++) {
         GpuLight distant = ConstPtr<GpuLight>(pc.frameLightAddr)[uint(worldPush.frameLightInfo.z + i)];
         float weight = max(0.0, distant.selectionMetric);
-        if (choice < weight || i == worldPush.frameLightInfo.w - 1) {
+        if (target < weight || i == worldPush.frameLightInfo.w - 1) {
             light = distant;
             segmentRebase = float3(0.0);
             metersPerWorldUnit = worldPush.frameMetersPerWorldUnit;
-            sourcePdf = weight / totalWeight;
+            sourcePdf = strata.distantProbability * weight / strata.distantWeightSum;
             return sourcePdf > 0.0;
         }
-        choice -= weight;
+        target -= weight;
     }
     return false;
 }
@@ -207,12 +268,14 @@ public Reservoir risInitial(float3 hitPos, float3 v, SurfaceClosure surface,
     Reservoir r = resEmpty();
     uint candidateCount = worldPush.risCandidates;
     r.M = float(candidateCount);
+    LightStrata strata = lightStrata(hitPos);
+    if (!strata.populated) return r;
     for (uint c = 0u; c < candidateCount; c++) {
         GpuLight light;
         float3 segmentRebase;
         float metersPerWorldUnit;
         float sourcePdf;
-        if (!selectSceneLight(hitPos, proposalSeed, light, segmentRebase,
+        if (!selectSceneLight(strata, hitPos, proposalSeed, light, segmentRebase,
                 metersPerWorldUnit, sourcePdf)) continue;
 
         float3 samplePos = light.pos + segmentRebase;

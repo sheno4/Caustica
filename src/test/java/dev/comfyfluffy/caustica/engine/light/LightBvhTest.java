@@ -12,12 +12,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 final class LightBvhTest {
     @Test
     void nodesMatchRecursiveCpuReference() {
-        List<LightDescriptor.Finite> descriptors = List.of(
+        List<FiniteLight> descriptors = List.of(
                 rectangle(1, -8, 1, 0, 0, 1),
                 rectangle(2, 7, 0, 1, 0, 2),
                 rectangle(3, 0, 9, 0, 0, -3),
                 rectangle(4, 1, -6, -1, 0, 0));
-        LightBvh.Data bvh = LightBvh.build(descriptors, 1.0, () -> false);
+        LightBvh.Data bvh = LightBvh.build(descriptors, () -> false);
 
         assertEquals(7, bvh.nodes().size());
         Set<Integer> leaves = new HashSet<>();
@@ -52,19 +52,24 @@ final class LightBvhTest {
             FiniteLight light = bvh.lights().get(node.lightIndex());
             assertEquals(light.bounds(), node.bounds());
             assertEquals(light.luminousPowerLumens(), node.luminousPowerLumens(), 0.0);
-            return new Reference(light.bounds(), light.luminousPowerLumens(), light.orientation());
+            assertEquals(light.peakLuminousIntensityCandela(),
+                    node.peakLuminousIntensityCandela(), 0.0);
+            return new Reference(light.bounds(), light.luminousPowerLumens(),
+                    light.peakLuminousIntensityCandela(), light.orientation());
         }
         Reference left = reference(bvh, node.left(), leaves);
         Reference right = reference(bvh, node.right(), leaves);
         assertEquals(left.bounds.union(right.bounds), node.bounds());
         assertEquals(left.power + right.power, node.luminousPowerLumens(), 1.0e-12);
+        assertEquals(left.intensity + right.intensity, node.peakLuminousIntensityCandela(), 1.0e-12);
         assertTrue(node.orientation().contains(left.orientation, 1.0e-10));
         assertTrue(node.orientation().contains(right.orientation, 1.0e-10));
-        return new Reference(node.bounds(), node.luminousPowerLumens(), node.orientation());
+        return new Reference(node.bounds(), node.luminousPowerLumens(),
+                node.peakLuminousIntensityCandela(), node.orientation());
     }
 
-    private static LightDescriptor.Rectangle rectangle(long key, double x, double y,
-                                                       double nx, double ny, double nz) {
+    private static FiniteLight rectangle(long key, double x, double y,
+                                         double nx, double ny, double nz) {
         double normalLength = Math.sqrt(nx * nx + ny * ny + nz * nz);
         nx /= normalLength;
         ny /= normalLength;
@@ -79,11 +84,11 @@ final class LightBvhTest {
         double vx = ny * uz - nz * uy;
         double vy = nz * ux - nx * uz;
         double vz = nx * uy - ny * ux;
-        return new LightDescriptor.Rectangle(key, x, y, 0,
-                ux, uy, uz, vx, vy, vz, nx, ny, nz, 1, 1, 1);
+        return FiniteLight.from(new LightDescriptor.Rectangle(key, x, y, 0,
+                ux, uy, uz, vx, vy, vz, nx, ny, nz, 1, 1, 1), 1.0);
     }
 
-    private record Reference(LightBvh.Aabb bounds, double power,
+    private record Reference(LightBvh.Aabb bounds, double power, double intensity,
                              LightBvh.OrientationCone orientation) {
     }
 }

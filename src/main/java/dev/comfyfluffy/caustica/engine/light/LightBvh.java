@@ -2,7 +2,6 @@ package dev.comfyfluffy.caustica.engine.light;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.CancellationException;
 import java.util.function.BooleanSupplier;
@@ -12,43 +11,39 @@ public final class LightBvh {
     private LightBvh() {
     }
 
-    public static Data build(List<? extends LightDescriptor.Finite> descriptors,
-                             double metersPerWorldUnit, BooleanSupplier cancelled) {
-        FiniteLight[] lights = new FiniteLight[descriptors.size()];
-        for (int i = 0; i < lights.length; i++) {
-            if ((i & 255) == 0) checkCancelled(cancelled);
-            lights[i] = FiniteLight.from(descriptors.get(i), metersPerWorldUnit);
-        }
-        if (lights.length == 0) return Data.EMPTY;
+    public static Data build(List<FiniteLight> lights, BooleanSupplier cancelled) {
+        if (lights.isEmpty()) return Data.EMPTY;
 
-        Aabb centroidBounds = Aabb.point(lights[0].descriptor().positionX(),
-                lights[0].descriptor().positionY(), lights[0].descriptor().positionZ());
-        for (int i = 1; i < lights.length; i++) {
+        Aabb centroidBounds = Aabb.point(lights.get(0).descriptor().positionX(),
+                lights.get(0).descriptor().positionY(), lights.get(0).descriptor().positionZ());
+        for (int i = 1; i < lights.size(); i++) {
             if ((i & 255) == 0) checkCancelled(cancelled);
-            LightDescriptor.Finite light = lights[i].descriptor();
+            LightDescriptor.Finite light = lights.get(i).descriptor();
             centroidBounds = centroidBounds.include(light.positionX(), light.positionY(),
                     light.positionZ());
         }
-        Integer[] order = new Integer[lights.length];
-        for (int i = 0; i < order.length; i++) order[i] = i;
-        Aabb finalCentroidBounds = centroidBounds;
-        Arrays.sort(order, Comparator.comparingLong((Integer index) -> mortonKey(
-                lights[index].descriptor(), finalCentroidBounds))
-                .thenComparingInt(Integer::intValue));
+        // Decorate-sort: the Morton key occupies the high 30 bits and the light index the low 32, so one
+        // primitive sort yields Morton order with a stable index tiebreak and computes each key once.
+        long[] order = new long[lights.size()];
+        for (int i = 0; i < order.length; i++) {
+            if ((i & 255) == 0) checkCancelled(cancelled);
+            order[i] = (mortonKey(lights.get(i).descriptor(), centroidBounds) << 32) | i;
+        }
+        Arrays.sort(order);
 
         ArrayList<Node> nodes = new ArrayList<>(Math.subtractExact(
-                Math.multiplyExact(lights.length, 2), 1));
+                Math.multiplyExact(lights.size(), 2), 1));
         int root = buildRange(lights, order, 0, order.length, nodes, cancelled);
         int maxDepth = depth(nodes, root);
-        return new Data(List.of(lights), List.copyOf(nodes), root, maxDepth);
+        return new Data(List.copyOf(lights), List.copyOf(nodes), root, maxDepth);
     }
 
-    private static int buildRange(FiniteLight[] lights, Integer[] order, int first, int end,
+    private static int buildRange(List<FiniteLight> lights, long[] order, int first, int end,
                                   ArrayList<Node> nodes, BooleanSupplier cancelled) {
         checkCancelled(cancelled);
         if (end - first == 1) {
-            int lightIndex = order[first];
-            FiniteLight light = lights[lightIndex];
+            int lightIndex = (int) order[first];
+            FiniteLight light = lights.get(lightIndex);
             int nodeIndex = nodes.size();
             nodes.add(Node.leaf(lightIndex, light));
             return nodeIndex;
@@ -68,26 +63,26 @@ public final class LightBvh {
         return node.isLeaf() ? 1 : 1 + Math.max(depth(nodes, node.left()), depth(nodes, node.right()));
     }
 
+    /** 10 bits per axis, so the interleaved key fits above a 32-bit index in one long. */
     private static long mortonKey(LightDescriptor.Finite light, Aabb bounds) {
-        int x = quantize(light.positionX(), bounds.minX(), bounds.maxX());
-        int y = quantize(light.positionY(), bounds.minY(), bounds.maxY());
-        int z = quantize(light.positionZ(), bounds.minZ(), bounds.maxZ());
-        return spread3(x) | (spread3(y) << 1) | (spread3(z) << 2);
+        long x = spread3(quantize(light.positionX(), bounds.minX(), bounds.maxX()));
+        long y = spread3(quantize(light.positionY(), bounds.minY(), bounds.maxY()));
+        long z = spread3(quantize(light.positionZ(), bounds.minZ(), bounds.maxZ()));
+        return x | (y << 1) | (z << 2);
     }
 
     private static int quantize(double value, double min, double max) {
         if (!(max > min)) return 0;
         double unit = Math.clamp((value - min) / (max - min), 0.0, 1.0);
-        return (int) Math.round(unit * 0x1fffff);
+        return (int) Math.round(unit * 0x3ff);
     }
 
     private static long spread3(int value) {
-        long x = Integer.toUnsignedLong(value) & 0x1fffffL;
-        x = (x | x << 32) & 0x1f00000000ffffL;
-        x = (x | x << 16) & 0x1f0000ff0000ffL;
-        x = (x | x << 8) & 0x100f00f00f00f00fL;
-        x = (x | x << 4) & 0x10c30c30c30c30c3L;
-        return (x | x << 2) & 0x1249249249249249L;
+        long x = value & 0x3ffL;
+        x = (x | x << 16) & 0xff0000ffL;
+        x = (x | x << 8) & 0x0300f00fL;
+        x = (x | x << 4) & 0x030c30c3L;
+        return (x | x << 2) & 0x09249249L;
     }
 
     private static void checkCancelled(BooleanSupplier cancelled) {
@@ -208,16 +203,22 @@ public final class LightBvh {
         }
     }
 
+    /**
+     * Summed peak intensity is an upper bound on what the subtree can deliver along any one direction —
+     * its lights are neither co-located nor aligned — which is what an importance estimate wants.
+     */
     public record Node(int left, int right, int lightIndex, Aabb bounds,
-                       double luminousPowerLumens, OrientationCone orientation) {
+                       double luminousPowerLumens, double peakLuminousIntensityCandela,
+                       OrientationCone orientation) {
         static Node leaf(int lightIndex, FiniteLight light) {
             return new Node(-1, -1, lightIndex, light.bounds(), light.luminousPowerLumens(),
-                    light.orientation());
+                    light.peakLuminousIntensityCandela(), light.orientation());
         }
 
         static Node branch(int left, int right, Node a, Node b) {
             return new Node(left, right, -1, a.bounds.union(b.bounds),
                     a.luminousPowerLumens + b.luminousPowerLumens,
+                    a.peakLuminousIntensityCandela + b.peakLuminousIntensityCandela,
                     OrientationCone.union(a.orientation, b.orientation));
         }
 

@@ -16,8 +16,47 @@ final class FiniteLightTest {
         assertEquals(2.5, light.bounds().maxY());
         assertEquals(Math.PI * 2.0 * 0.25 * 10.0,
                 light.luminousPowerLumens(), 1.0e-6);
+        assertEquals(2.0 * 0.25 * 10.0, light.peakLuminousIntensityCandela(), 1.0e-6);
         assertEquals(1.0, light.orientation().axisZ(), 0.0);
         assertEquals(0.0, light.orientation().halfAngleRadians(), 0.0);
+    }
+
+    /**
+     * The proposal ranks every shape by peak intensity over squared distance, so each shape's intensity
+     * must be the illuminance it actually delivers along its brightest direction at one metre. Getting
+     * this wrong does not bias the estimator; it silently mis-ranks whole classes of light against each
+     * other and shows up only as noise.
+     */
+    @Test
+    void peakIntensityIsPowerDividedByEachShapeEmittedSolidAngle() {
+        FiniteLight rectangle = FiniteLight.from(new LightDescriptor.Rectangle(1, 0, 0, 0,
+                1, 0, 0, 0, 1, 0, 0, 0, 1, 3, 3, 3), 1.0);
+        assertEquals(rectangle.luminousPowerLumens() / Math.PI,
+                rectangle.peakLuminousIntensityCandela(), 1.0e-9);
+
+        FiniteLight point = FiniteLight.from(new LightDescriptor.Point(2, 0, 0, 0,
+                5, 3, 3, 3), 1.0);
+        assertEquals(point.luminousPowerLumens() / (4.0 * Math.PI),
+                point.peakLuminousIntensityCandela(), 1.0e-9);
+
+        double halfAngle = Math.PI / 5.0;
+        FiniteLight spot = FiniteLight.from(new LightDescriptor.Spot(3, 0, 0, 0,
+                0, 0, 1, 5, halfAngle, 3, 3, 3), 1.0);
+        double solidAngle = 2.0 * Math.PI * (1.0 - Math.cos(halfAngle));
+        assertEquals(spot.luminousPowerLumens() / solidAngle,
+                spot.peakLuminousIntensityCandela(), 1.0e-9);
+    }
+
+    @Test
+    void onlyRectanglePhotometryDependsOnWorldScale() {
+        var point = new LightDescriptor.Point(1, 0, 0, 0, 5, 3, 3, 3);
+        assertEquals(FiniteLight.from(point, 1.0).peakLuminousIntensityCandela(),
+                FiniteLight.from(point, 4.0).peakLuminousIntensityCandela(), 0.0);
+
+        var rectangle = new LightDescriptor.Rectangle(2, 0, 0, 0,
+                1, 0, 0, 0, 1, 0, 0, 0, 1, 3, 3, 3);
+        assertEquals(16.0 * FiniteLight.from(rectangle, 1.0).peakLuminousIntensityCandela(),
+                FiniteLight.from(rectangle, 4.0).peakLuminousIntensityCandela(), 1.0e-9);
     }
 
     @Test

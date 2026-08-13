@@ -1,6 +1,5 @@
 package dev.comfyfluffy.caustica.rt.light;
 
-import dev.comfyfluffy.caustica.engine.light.DistantLight;
 import dev.comfyfluffy.caustica.engine.light.LightDescriptor;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
@@ -31,7 +30,6 @@ public final class RtLightScene {
             switch (descriptor) {
                 case LightDescriptor.Finite light -> finite.add(light);
                 case LightDescriptor.Distant light -> {
-                    DistantLight canonical = DistantLight.from(light);
                     if (luminance(light.illuminanceRedLux(), light.illuminanceGreenLux(),
                             light.illuminanceBlueLux()) > 0.0) distant.add(light);
                 }
@@ -58,9 +56,9 @@ public final class RtLightScene {
                 RtRetainedLightSceneBuilder.GPU_FLOATS_PER_LIGHT)];
         System.arraycopy(finiteData.packedLights(), 0, lights, 0, finiteData.packedLights().length);
         for (int i = 0; i < distant.size(); i++) {
-            RtRetainedLightSceneBuilder.encode(lights,
+            RtRetainedLightSceneBuilder.encodeDistant(lights,
                     (finiteCount + i) * RtRetainedLightSceneBuilder.GPU_FLOATS_PER_LIGHT,
-                    distant.get(i), originX, originY, originZ, metersPerWorldUnit);
+                    distant.get(i));
         }
         MemoryUtil.memFloatBuffer(slot.buffer.mapped, lights.length).put(lights);
         if (finiteData.packedNodes().length > 0) {

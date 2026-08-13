@@ -93,12 +93,16 @@ public struct GpuLight {
 
 // Source-neutral 48-byte finite-light BVH node. Leaves have lightIndex >= 0; branches have two
 // non-negative child indices. Bounds and positions use the same segment-relative scene coordinates.
+//
+// peakIntensityCandela is the summed peak luminous intensity of the subtree, not its emitted power: it
+// is what the proposal divides by squared distance to reach lux, which is the one scale on which a
+// rectangle, a point, a spot and a distant light can be compared.
 public struct GpuLightNode {
     public float3 boundsMin;
     public int left;
     public float3 boundsMax;
     public int right;
-    public float luminousPowerLumens;
+    public float peakIntensityCandela;
     public int lightIndex;
     public uint2 reserved;
 };

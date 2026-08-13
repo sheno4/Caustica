@@ -30,7 +30,7 @@ final class RtRetainedLightSceneBuilderTest {
         LightDescriptor.Rectangle zero = rectangle(2, 0, 20);
         LightDescriptor.Rectangle last = rectangle(3, 4, 30);
         RtRetainedLightSceneBuilder.Data data = RtRetainedLightSceneBuilder.build(List.of(
-                new RetainedLightBatch(0, 0, 0, 0, List.of(first, zero, last))),
+                new RetainedLightBatch(0, List.of(first, zero, last))),
                 8, 0, 0, 2.0, () -> false);
 
         assertEquals(2, data.lightCount());
@@ -51,23 +51,31 @@ final class RtRetainedLightSceneBuilderTest {
         assertTrue(seen[0] && seen[1]);
     }
 
+    /**
+     * The node's photometric lane is peak intensity, not emitted power: the shader divides it by squared
+     * distance to reach lux and compares the result against a distant light's illuminance, so shipping
+     * power here would rank every area emitter against every delta source by a factor of pi.
+     */
     @Test
-    void nodeEncodingCarriesRelativeBoundsPowerAndTreeLinks() {
+    void nodeEncodingCarriesRelativeBoundsPeakIntensityAndTreeLinks() {
         RtRetainedLightSceneBuilder.Data data = RtRetainedLightSceneBuilder.build(List.of(
-                new RetainedLightBatch(0, 0, 0, 0,
+                new RetainedLightBatch(0,
                         List.of(rectangle(1, 1, 10), rectangle(2, 3, 20)))),
                 8, 0, 0, 1.0, () -> false);
         int rootOffset = data.rootNodeIndex() * RtRetainedLightSceneBuilder.GPU_FLOATS_PER_NODE;
         float[] nodes = data.packedNodes();
+        LightBvh.Node root = data.lightBvh().nodes().get(data.rootNodeIndex());
         assertTrue(Float.floatToRawIntBits(nodes[rootOffset + 3]) >= 0);
         assertTrue(Float.floatToRawIntBits(nodes[rootOffset + 7]) >= 0);
         assertEquals(-1, Float.floatToRawIntBits(nodes[rootOffset + 9]));
-        assertEquals(data.lightBvh().totalLuminousPowerLumens(), nodes[rootOffset + 8], 1.0e-5);
+        assertEquals(root.peakLuminousIntensityCandela(), nodes[rootOffset + 8], 1.0e-5);
+        assertEquals(data.lightBvh().totalLuminousPowerLumens(),
+                Math.PI * nodes[rootOffset + 8], 1.0e-5);
     }
 
     @Test
     void rebaseChangesCoordinatesButNotPhysicalPower() {
-        List<RetainedLightBatch> batches = List.of(new RetainedLightBatch(0, 0, 0, 0,
+        List<RetainedLightBatch> batches = List.of(new RetainedLightBatch(0,
                 List.of(rectangle(1, 1, 20))));
         var oldGeneration = RtRetainedLightSceneBuilder.build(batches, 16, 0, 0, 1.0, () -> false);
         var newGeneration = RtRetainedLightSceneBuilder.build(batches, 32, 0, 0, 1.0, () -> false);
@@ -77,7 +85,7 @@ final class RtRetainedLightSceneBuilderTest {
 
     @Test
     void supersededBuildStopsCooperatively() {
-        List<RetainedLightBatch> batches = List.of(new RetainedLightBatch(0, 0, 0, 0,
+        List<RetainedLightBatch> batches = List.of(new RetainedLightBatch(0,
                 List.of(rectangle(1, 1, 0))));
         assertThrows(CancellationException.class,
                 () -> RtRetainedLightSceneBuilder.build(batches, 0, 0, 0, 1.0, () -> true));

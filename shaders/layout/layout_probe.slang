@@ -48,7 +48,7 @@ void main(uint3 id : SV_DispatchThreadID) {
                 + surfaceMaterialLayoutProbe[0].values[0].specularRoughness
                 + exposureStateLayoutProbe[0].values[0].previous
                 + gpuLightLayoutProbe[0].values[0].selectionMetric
-                + gpuLightNodeLayoutProbe[0].values[0].luminousPowerLumens
+                + gpuLightNodeLayoutProbe[0].values[0].peakIntensityCandela
                 + float(pushConstantsLayoutProbe.frameIndex);
     }
 }

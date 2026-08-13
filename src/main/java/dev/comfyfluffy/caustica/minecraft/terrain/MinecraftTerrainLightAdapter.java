@@ -12,12 +12,10 @@ final class MinecraftTerrainLightAdapter {
     private MinecraftTerrainLightAdapter() {
     }
 
-    static RetainedLightBatch describe(int slot, int cellX, int cellY, int cellZ, float[] records) {
+    static RetainedLightBatch describe(int slot, double originX, double originY, double originZ,
+                                       float[] records) {
         int lightCount = records.length / RtLightCollector.FLOATS_PER_LIGHT;
         ArrayList<LightDescriptor.Finite> descriptors = new ArrayList<>(lightCount);
-        double originX = cellX * 16.0;
-        double originY = cellY * 16.0;
-        double originZ = cellZ * 16.0;
         for (int source = 0; source < records.length;
              source += RtLightCollector.FLOATS_PER_LIGHT) {
             long localIndex = source / RtLightCollector.FLOATS_PER_LIGHT;
@@ -46,6 +44,6 @@ final class MinecraftTerrainLightAdapter {
                     ux, uy, uz, vx, vy, vz, nx, ny, nz,
                     records[source + 16], records[source + 17], records[source + 18]));
         }
-        return new RetainedLightBatch(slot, cellX, cellY, cellZ, descriptors);
+        return new RetainedLightBatch(slot, descriptors);
     }
 }
