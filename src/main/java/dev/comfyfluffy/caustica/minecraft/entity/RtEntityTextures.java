@@ -35,10 +35,10 @@ import java.util.WeakHashMap;
  * until the array exhausts and everything falls back to slot 0.
  *
  * <p>The view is obtained through the <b>public</b> {@code RenderType.prepare()} → {@link
- * PreparedRenderType#textures()} API (a list of {@code Texture(name, GpuTextureView, sampler)}): the
- * primary sampler is {@code "Sampler0"} ({@code "Sampler1"}/{@code "Sampler2"} are the overlay/lightmap
- * the prepared list prepends). Resolution is cached per {@code RenderType} (they are stable singletons),
- * so the prepare() cost is paid once per distinct texture.
+ * PreparedRenderType#textures()} API (a list of {@code Texture(name, GpuTextureView, sampler)}), keyed by
+ * the sampler {@link #materialSampler} names — normally {@code "Sampler0"} ({@code "Sampler1"}/{@code
+ * "Sampler2"} are the overlay/lightmap the prepared list prepends). Resolution is cached per {@code
+ * RenderType} (they are stable singletons), so the prepare() cost is paid once per distinct texture.
  */
 public final class RtEntityTextures {
     /** Bindless array capacity (slot 0 reserved as a fallback texture). {@code -Dcaustica.rt.maxEntityTextures}. */
@@ -210,6 +210,17 @@ public final class RtEntityTextures {
         return Math.min(capacity, maxTextures());
     }
 
+    /**
+     * The sampler carrying {@code renderType}'s own material texture. Almost every render type binds it as
+     * {@code Sampler0}, but the two end-portal pipelines bind the end-sky backdrop there and their portal
+     * texture as {@code Sampler1} — picking {@code Sampler0} for them would texture and classify the portal
+     * as sky. This mapping stays in the Minecraft adapter; the material registry sees only a resource id.
+     */
+    private static String materialSampler(RenderType renderType) {
+        return renderType == RenderTypes.endPortal() || renderType == RenderTypes.endGateway()
+                ? "Sampler1" : "Sampler0";
+    }
+
     /** Recover the resource identifier used to select {@code renderType}'s material, or null. The
      *  {@code RenderSetup.TextureBinding} class is package-private, so {@code location()} is reflective. */
     private Identifier textureLocation(RenderType renderType) {
@@ -221,12 +232,7 @@ public final class RtEntityTextures {
             // mixed in at runtime); RenderType is non-final so its cast is fine directly.
             Object setup = ((RenderTypeAccessor) renderType).caustica$state();
             Map<String, ?> textures = ((RenderSetupAccessor) setup).caustica$textures();
-            Object binding = textures.get("Sampler0");
-            // The portal pipeline uses Sampler1 as its authored material texture and has no Sampler0.
-            // This mapping stays in the Minecraft adapter; the material registry sees only its resource id.
-            if (binding == null && renderType == RenderTypes.endPortal()) {
-                binding = textures.get("Sampler1");
-            }
+            Object binding = textures.get(materialSampler(renderType));
             if (binding == null) {
                 locationCache.put(renderType, null);
                 return null;
@@ -262,11 +268,12 @@ public final class RtEntityTextures {
         long handle = 0L;
         try {
             PreparedRenderType prepared = renderType.prepare();
+            String wanted = materialSampler(renderType);
             GpuTextureView chosen = null;
             GpuTextureView firstNonAux = null;
             for (PreparedRenderType.Texture t : prepared.textures()) {
                 String name = t.name();
-                if ("Sampler0".equals(name)) {
+                if (wanted.equals(name)) {
                     chosen = t.textureView();
                     break;
                 }
