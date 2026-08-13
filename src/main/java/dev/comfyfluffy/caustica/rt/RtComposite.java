@@ -638,6 +638,8 @@ public final class RtComposite {
                 CausticaMod.LOGGER.info("RT composite active: {}x{}, RT output replaces the world target", width, height);
             }
             return true;
+        } catch (ProviderManager.SceneSourceUnavailableException unavailable) {
+            return false;
         } catch (Throwable t) {
             ctx.gpuExecutor().throwIfFailed();
             failed = true;

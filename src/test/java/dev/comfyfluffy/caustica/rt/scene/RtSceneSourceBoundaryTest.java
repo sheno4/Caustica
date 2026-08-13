@@ -66,6 +66,11 @@ final class RtSceneSourceBoundaryTest {
                 "the push-ring slot must not retain a token until graphics submission succeeds");
         assertFalse(composite.substring(0, execute).contains("selectedPushSlot.graphicsUse.mark"),
                 "a failed recording must leave the reserved push-ring slot reusable");
+        int isolatedSourceFailure = composite.indexOf(
+                "catch (ProviderManager.SceneSourceUnavailableException unavailable)");
+        int globalFailure = composite.indexOf("failed = true", isolatedSourceFailure);
+        assertTrue(isolatedSourceFailure >= 0 && isolatedSourceFailure < globalFailure,
+                "an optimized source failure must fall back without disabling the renderer");
 
         String runtime = Files.readString(JAVA.resolve("rt/RtRuntime.java"));
         int stop = runtime.indexOf("ProviderManager.INSTANCE.stopProviders()");

@@ -107,7 +107,7 @@ public final class ProviderManager {
             return null;
         }
         RtSceneSource.Retained retained = invokeSceneSource(entry, "retained scene",
-                entry.source()::retainedScene);
+                entry.source()::retainedScene, null);
         return retained != null ? new PrimaryScene(entry.id(), retained) : null;
     }
 
@@ -117,14 +117,18 @@ public final class ProviderManager {
                                                   RtGeometryAbi.TablePrefix geometryTable,
                                                   RtSceneSource.Camera camera) {
         SceneSourceEntry entry = requireSceneSource(selected.provider());
-        return invokeSceneSource(entry, "frame geometry",
-                () -> entry.source().beginFrame(ctx, selected.retained(), baseInstances, geometryTable, camera));
+        RtSceneSource.Frame frame = invokeSceneSource(entry, "frame geometry",
+                () -> entry.source().beginFrame(ctx, selected.retained(), baseInstances, geometryTable, camera), null);
+        if (frame == null) {
+            throw new SceneSourceUnavailableException(selected.provider());
+        }
+        return frame;
     }
 
     public int bindlessTextureCapacity() {
         SceneSourceEntry entry = primarySceneSource();
         return entry != null
-                ? invokeSceneSource(entry, "bindless texture capacity", entry.source()::bindlessTextureCapacity)
+                ? invokeSceneSource(entry, "bindless texture capacity", entry.source()::bindlessTextureCapacity, 1)
                 : 1;
     }
 
@@ -134,7 +138,7 @@ public final class ProviderManager {
             invokeSceneSource(entry, "bindless texture reset", () -> {
                 entry.source().resetBindlessTextures(capacity);
                 return null;
-            });
+            }, null);
         }
     }
 
@@ -144,7 +148,7 @@ public final class ProviderManager {
             invokeSceneSource(entry, "bindless texture upload", () -> {
                 entry.source().uploadPendingTextures(pipeline, sampler);
                 return null;
-            });
+            }, null);
         }
     }
 
@@ -334,12 +338,12 @@ public final class ProviderManager {
     private SceneSourceEntry requireSceneSource(ResourceId id) {
         SceneSourceEntry entry = primarySceneSource();
         if (entry == null || !entry.id().equals(id)) {
-            throw new IllegalStateException("optimized scene source is no longer active: " + id);
+            throw new SceneSourceUnavailableException(id);
         }
         return entry;
     }
 
-    private <T> T invokeSceneSource(SceneSourceEntry entry, String operation, Supplier<T> action) {
+    private <T> T invokeSceneSource(SceneSourceEntry entry, String operation, Supplier<T> action, T fallback) {
         try {
             return action.get();
         } catch (Throwable failure) {
@@ -347,13 +351,17 @@ public final class ProviderManager {
             CausticaMod.LOGGER.error("Caustica scene provider {} failed during {} and was disabled",
                     entry.id(), operation, failure);
             stopOne("scene", entry.provider(), entry.key(), SceneProvider::stop);
-            if (failure instanceof RuntimeException runtime) {
-                throw runtime;
-            }
             if (failure instanceof Error error) {
                 throw error;
             }
-            throw new RuntimeException(failure);
+            return fallback;
+        }
+    }
+
+    /** The selected optimized source disappeared while the current frame was being assembled. */
+    public static final class SceneSourceUnavailableException extends RuntimeException {
+        SceneSourceUnavailableException(ResourceId provider) {
+            super("optimized scene source is unavailable: " + provider);
         }
     }
 

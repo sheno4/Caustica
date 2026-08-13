@@ -540,12 +540,14 @@ final class ProviderManagerTest {
         ProviderManager.PrimaryScene selected = manager.primaryScene();
         source.failFrame = true;
 
-        assertThrows(IllegalStateException.class, () -> manager.beginPrimaryFrame(selected, null,
+        assertThrows(ProviderManager.SceneSourceUnavailableException.class,
+                () -> manager.beginPrimaryFrame(selected, null,
                 List.of(), source.retained.geometryTable(),
                 new RtSceneSource.Camera(0, 0, 0, new Matrix4f(), new Matrix4f())));
 
         assertEquals(1, source.stops.get());
         assertNull(manager.primaryScene());
+        assertEquals(1, manager.bindlessTextureCapacity());
     }
 
     private static SceneProvider counting(AtomicInteger shutdowns, Runnable update) {
