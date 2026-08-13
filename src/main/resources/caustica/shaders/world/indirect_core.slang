@@ -44,6 +44,8 @@ public float3 tracePath<TC : IComposition, TTrace : IRadianceTrace>(TC.Surfaces 
     bool frameLightsPresent = (worldPush.frameLightInfo.y > 0 || worldPush.frameLightInfo.w > 0)
             && pc.frameLightAddr != 0;
     bool risOn = worldPush.risCandidates > 0u && (retainedLightsPresent || frameLightsPresent);
+    bool distantNeeOn = worldPush.risCandidates > 0u && worldPush.frameLightInfo.w > 0
+            && pc.frameLightAddr != 0;
     bool linkedEmitterNeeOn = worldPush.risCandidates > 0u
             && worldPush.retainedLightInfo.z > 0 && retainedLightsPresent;
     uint proposalSeed = pix.x * 1973u + pix.y * 9277u + 26699u
@@ -167,11 +169,13 @@ public float3 tracePath<TC : IComposition, TTrace : IRadianceTrace>(TC.Surfaces 
         // A transmitted bounce leaves through the far side, so the origin follows the direction rather
         // than the normal.
         ro = hitPos + (dot(n, rd) >= 0.0 ? n : -n) * SURF_BIAS;
-        // A diffuse bounce is covered by the direct-light estimator, so it must not also see a visible
-        // distant emitter in the sky implementation.
-        showEnvironmentEmitter = (sample.eventFlags & EVENT_DIFFUSE) == 0u;
+        // Distant sources sampled by NEE must not also appear as environment dressing on a continuous
+        // BSDF continuation. Camera rays and dielectric delta events retain their explicit visibility,
+        // while disabling distant NEE restores environment emitters for every ordinary continuation.
+        bool diffuseEvent = (sample.eventFlags & EVENT_DIFFUSE) != 0u;
+        showEnvironmentEmitter = !distantNeeOn;
         rayConeSpread = max(rayConeSpread,
-                showEnvironmentEmitter ? rough * RAY_CONE_GLOSSY_SPREAD_SCALE : RAY_CONE_DIFFUSE_SPREAD);
+                diffuseEvent ? RAY_CONE_DIFFUSE_SPREAD : rough * RAY_CONE_GLOSSY_SPREAD_SCALE);
 
         if (bounce >= rrStart) {
             float q = clamp(max(throughput.r, max(throughput.g, throughput.b)), 0.02, 1.0);

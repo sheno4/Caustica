@@ -43,6 +43,18 @@ final class RtOpenPbrShaderContractTest {
         assertFalse(lighting.contains("closure.transmission"));
     }
 
+    @Test
+    void distantNeeOwnsContinuousBsdfEmitterVisibilityWithoutBiasingGgx() throws IOException {
+        String math = Files.readString(SHADERS.resolve("world/math.slang"));
+        String indirect = Files.readString(SHADERS.resolve("world/indirect_core.slang"));
+
+        assertTrue(math.contains("return a2 / (PI * d * d);"));
+        assertFalse(math.contains("PI * d * d +"));
+        assertTrue(indirect.contains("bool distantNeeOn = worldPush.risCandidates > 0u"));
+        assertTrue(indirect.contains("showEnvironmentEmitter = !distantNeeOn;"));
+        assertTrue(indirect.contains("diffuseEvent ? RAY_CONE_DIFFUSE_SPREAD"));
+    }
+
     private static int occurrences(String text, String needle) {
         int count = 0;
         for (int index = text.indexOf(needle); index >= 0;

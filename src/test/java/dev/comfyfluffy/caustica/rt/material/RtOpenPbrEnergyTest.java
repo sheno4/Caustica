@@ -282,7 +282,7 @@ final class RtOpenPbrEnergyTest {
     private static double ggxD(double normalHalf, double alpha) {
         double alphaSquared = alpha * alpha;
         double denominator = normalHalf * normalHalf * (alphaSquared - 1.0) + 1.0;
-        return alphaSquared / (PI * denominator * denominator + 1.0e-7);
+        return alphaSquared / (PI * denominator * denominator);
     }
 
     private static double ggxG1(double normalDirection, double alpha) {

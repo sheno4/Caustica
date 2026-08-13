@@ -8,19 +8,12 @@ import world_core;
 
 public float luminance(float3 c) { return dot(c, ACESCG_LUMA); }
 
-// GGX normal distribution.
-// NOTE: the 1e-7 denominator guard is not merely a divide-by-zero epsilon, and it is load-bearing. At
-// the lobe peak d == a2, so the guard dominates PI*d*d until a2 >> 1.8e-4, i.e. rough >> 0.116; every
-// smoother material has its NEE highlight peak truncated. That truncation is what keeps the sun from
-// being counted twice: a specular continuation sets showEnvironmentEmitter, so its ray may hit the
-// sun disc in world.rmiss while NEE is also adding a sun term for the same lobe, with no MIS weighting
-// between them. Removing the guard restores the physical peak AND the double count, and makes the
-// single-sample sun estimator explode wherever the lobe is tighter than the disc (~0.0047 rad). The
-// real fix is MIS (or a disc-aware specular light sample), not an epsilon edit — left as-is.
+// GGX normal distribution. SurfaceClosure clamps alpha above zero, so the physical denominator remains
+// finite even at the lobe peak; adding an absolute epsilon here would flatten smooth OpenPBR highlights.
 public float ggxD(float ndh, float alpha) {
     float a2 = alpha * alpha;
     float d = ndh * ndh * (a2 - 1.0) + 1.0;
-    return a2 / (PI * d * d + 1.0e-7);
+    return a2 / (PI * d * d);
 }
 
 // Smith GGX masking term for one direction (separable form; G2 = G1(v) * G1(l)).
