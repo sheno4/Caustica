@@ -57,10 +57,15 @@ final class RtSceneSourceBoundaryTest {
         int upload = composite.indexOf("ProviderManager.INSTANCE.uploadPendingTextures");
         int blas = composite.indexOf("RtAccel.recordBlasBuilds", upload);
         int execute = composite.indexOf("submission.execute(cmd)");
+        int markPush = composite.indexOf("framePushSlot.graphicsUse.mark", execute);
         int markSource = composite.indexOf("sourceFrame.markGraphicsUse", execute);
         assertTrue(upload >= 0 && upload < blas, "source textures must publish before BLAS/TLAS recording");
         assertTrue(execute >= 0 && execute < markSource,
                 "source lifetimes must attach only after graphics submission succeeds");
+        assertTrue(execute < markPush,
+                "the push-ring slot must not retain a token until graphics submission succeeds");
+        assertFalse(composite.substring(0, execute).contains("selectedPushSlot.graphicsUse.mark"),
+                "a failed recording must leave the reserved push-ring slot reusable");
 
         String runtime = Files.readString(JAVA.resolve("rt/RtRuntime.java"));
         int stop = runtime.indexOf("ProviderManager.INSTANCE.stopProviders()");

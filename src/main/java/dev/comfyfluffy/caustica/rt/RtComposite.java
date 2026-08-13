@@ -1254,6 +1254,7 @@ public final class RtComposite {
         RtSceneSource.Frame sourceFrame = null;
         RtSceneGeometryManager.FrameGeometry providerGeometry = null;
         RtLightScene.Frame frameLights = null;
+        PushSlot framePushSlot = null;
         VkCommandBuffer cmd = submission.beginTransientCommandBuffer();
         RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_COMMAND_BUFFER, cmd.address(), "composite command buffer");
         int debugView = debugView();
@@ -1278,7 +1279,7 @@ public final class RtComposite {
             pushSlot = (pushSlot + 1) % PUSH_RING;
             PushSlot selectedPushSlot = pushRing[pushSlot];
             graphicsUseWaiter.await(selectedPushSlot.graphicsUse);
-            selectedPushSlot.graphicsUse.mark(graphicsUse);
+            framePushSlot = selectedPushSlot;
             GpuBuffer pushBuf = selectedPushSlot.buffer;
             ByteBuffer push = MemoryUtil.memByteBuffer(pushBuf.mapped, WORLD_PUSH_SIZE);
             frameInvViewProj.set(frameProjection).mul(frameViewRotation).invert();
@@ -1504,6 +1505,7 @@ public final class RtComposite {
         submission.execute(cmd);
         // Do not attach a merely reserved token: failed recording may never signal it. Once execute succeeds,
         // every owner in this frame's manifest is protected through the final overlay consumer.
+        framePushSlot.graphicsUse.mark(graphicsUse);
         sourceFrame.markGraphicsUse(graphicsUse);
         sceneGeometry.markGraphicsUse(providerGeometry, ctx, graphicsUse);
         lightScene.markGraphicsUse(frameLights, graphicsUse);
