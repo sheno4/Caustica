@@ -284,7 +284,7 @@ public final class RtRetainedLightScene {
                     leR, leG, leB, lights[record + 15]);
             dumped++;
         }
-        CausticaMod.LOGGER.info("RT light dump: {} lights within {} blocks", dumped, (int) radius);
+        CausticaMod.LOGGER.info("RT light dump: {} lights within {} world units", dumped, (int) radius);
     }
 
     private void publishEmpty(GpuContext ctx, long requestId) {

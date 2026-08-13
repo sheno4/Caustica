@@ -21,7 +21,7 @@ import world_common;
 // Binding 2 is deliberately unbound. Set 0 is stable, so the guide bindings remain at 3 through 8.
 
 // Canonical material pages. Source formats are decoded into these by RtMaterialPageCompiler, so the channels
-// below are OpenPBR parameters, not LabPBR bytes. Every channel is a unorm8.
+// below are OpenPBR parameters, not source-format bytes. Every channel is a unorm8.
 //
 //   surface0 — specular_roughness (perceptual r), base_metalness, emission mask, subsurface_weight
 //   normal   — tangent-space normal xy; z is reconstructed. b unused, a authored height (unused)

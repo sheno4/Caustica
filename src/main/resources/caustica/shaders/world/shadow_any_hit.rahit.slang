@@ -1,5 +1,5 @@
 // Shadow-ray any-hit: coverage, then transmittance. Shadow traversal skips closest-hit entirely, so every
-// material that should pass or tint sunlight does that work here and then ignores the hit so traversal
+// material that should pass or tint light does that work here and then ignores the hit so traversal
 // continues. The payload's albedo view is the accumulated transmittance and hitT the nearest crossing.
 //
 // Coverage is resolved deterministically on this ray type: a shadow ray is a visibility answer, not a

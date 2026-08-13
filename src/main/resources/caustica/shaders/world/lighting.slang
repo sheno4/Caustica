@@ -343,7 +343,8 @@ public float3 shadeReservoir<TSurfaces : ISurfaceDispatch>(TSurfaces surfaces, R
         float3 vis = shadow.transmittance;
         if (hasExtinction) {
             vis *= shadow.boundaryHitT > 0.0
-                    ? exp(-currentMedium.extinction * shadow.boundaryHitT) : float3(0.0);
+                    ? exp(-currentMedium.extinction * shadow.boundaryHitT)
+                    : unboundedMediumTransmittance(currentMedium.extinction);
         }
         if (boundaryLighting && shadow.boundaryHitT > 0.0) {
             MediumLightingInput input;

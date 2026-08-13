@@ -40,7 +40,8 @@ final class RendererVocabularyFirewallTest {
             Map.entry("rt/pipeline/RtHdrCompositePipeline.java", List.of("vanilla UI overlay")),
             Map.entry("rt/RtOpenExrWriter.java", List.of("Minecraft is running")),
             Map.entry("rt/geometry/RtSceneGeometryManager.java", List.of(
-                    "host terrain", "until it is migrated")));
+                    "host terrain", "until it is migrated")),
+            Map.entry("rt/light/RtRetainedLightScene.java", List.of("within {} blocks")));
 
     @Test
     void rendererUsesProducerNeutralTermsAtRetiredBoundaries() throws IOException {

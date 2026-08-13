@@ -10,11 +10,12 @@ import java.util.List;
 import java.util.Locale;
 import java.util.regex.Pattern;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class RendererShaderNeutralityTest {
     private static final Pattern PRODUCER_VOCABULARY = Pattern.compile(
-            "\\b(minecraft|vanilla|overworld|biome|block|terrain|entity|lava|glowstone|section)\\b",
+            "\\b(minecraft|vanilla|overworld|biome|block|terrain|entity|lava|glowstone|section|labpbr|sun|moon)\\b",
             Pattern.CASE_INSENSITIVE);
     private static final List<String> REMOVED_IDENTIFIERS = List.of(
             "DIMENSION_ULTRAWARM",
@@ -96,14 +97,30 @@ final class RendererShaderNeutralityTest {
         Path world = Path.of("src", "main", "resources", "caustica", "shaders", "world");
         String closestHit = Files.readString(world.resolve("closest_hit.slang"));
         String lighting = Files.readString(world.resolve("lighting.slang"));
+        String medium = Files.readString(world.resolve("medium.slang"));
 
         assertTrue(closestHit.contains(
                 "payloadSetPacked(payload, materialFlags, sqrt(closure.alphaRoughness)"));
         assertTrue(lighting.contains("hasExtinction || boundaryLighting"));
         assertTrue(lighting.contains("exp(-currentMedium.extinction * shadow.boundaryHitT)"));
         assertTrue(lighting.contains("exp(-currentMedium.extinction * mediumDistance)"));
-        assertTrue(lighting.contains("? exp(-currentMedium.extinction * shadow.boundaryHitT)"
-                + " : float3(0.0)"));
+        assertTrue(lighting.contains("unboundedMediumTransmittance(currentMedium.extinction)"));
+        assertTrue(medium.contains("extinction.x > 0.0 ? 0.0 : 1.0"));
+    }
+
+    @Test
+    void directLightBeerLambertUsesOnlyTheCurrentMediumSegmentPerChannel() {
+        double[] extinction = {Math.log(2.0), 0.0, Math.log(4.0)};
+
+        assertEquals(0.125, beerLambert(extinction[0], 3.0), 1.0e-12,
+                "a finite light inside the medium uses its full distance");
+        assertEquals(0.5, beerLambert(extinction[0], 1.0), 1.0e-12,
+                "a light beyond the boundary uses only the boundary distance");
+        assertEquals(1.0 / 16.0, beerLambert(extinction[2], 2.0), 1.0e-12);
+        assertEquals(0.0, unboundedBeerLambert(extinction[0]), 0.0);
+        assertEquals(1.0, unboundedBeerLambert(extinction[1]), 0.0,
+                "an unbounded path preserves a channel with zero extinction");
+        assertEquals(0.0, unboundedBeerLambert(extinction[2]), 0.0);
     }
 
     @Test
@@ -125,5 +142,13 @@ final class RendererShaderNeutralityTest {
         assertTrue(source.contains("- input.lightDirection * input.boundaryDistance"));
         assertTrue(source.contains("maximumStep / max(length(step), 1.0e-5)"));
         assertTrue(source.contains("bounded firefly variance"));
+    }
+
+    private static double beerLambert(double extinction, double distance) {
+        return Math.exp(-extinction * distance);
+    }
+
+    private static double unboundedBeerLambert(double extinction) {
+        return extinction > 0.0 ? 0.0 : 1.0;
     }
 }

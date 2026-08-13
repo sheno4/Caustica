@@ -91,7 +91,7 @@ public static const float RAY_CONE_DIFFUSE_SPREAD = 0.25;
 public static const float RAY_CONE_GLOSSY_SPREAD_SCALE = 0.35;
 
 // Stored roughness is perceptual (see payloadRoughness), so these are perceptual thresholds.
-public static const float MIRROR_ROUGHNESS_MAX = 0.02; // LabPBR perceptual smoothness >= 0.98
+public static const float MIRROR_ROUGHNESS_MAX = 0.02;
 // Above this the specular lobe is too broad for a single mirrored reprojection to describe, so the
 // reflection MV is left at zero and RR falls back to the ordinary MV.
 public static const float SPEC_MOTION_ROUGHNESS_MAX = 0.5; // perceptual smoothness <= 0.5

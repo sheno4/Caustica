@@ -687,12 +687,8 @@ final class RtTerrainMesher {
      * arrive in groups of 4 (one quad) via the bulk {@code addVertex}; we keep position + atlas UV,
      * compute a geometric normal (sign is irrelevant — the closest-hit flips it toward the viewer), and
      * emit two triangles like {@link QuadCapture}. Coords are already section-local (FluidRenderer uses
-     * {@code pos & 15}). The cardinal-lit vertex colour is dropped — albedo comes from the atlas in the
-     * hit shader, same as blocks. Tint is left white (biome water tint is a deferred item).
-     *
-     * <p>Water faces are tagged in the per-prim {@code tint.w} slot ({@code 1.0} = water) so the path
-     * tracer treats them as a smooth dielectric (Fresnel reflection + refraction + Beer–Lambert
-     * absorption). Lava keeps {@code tint.w == 0.0} and stays an opaque emitter.
+     * {@code pos & 15}). Albedo comes from the atlas; RGB primitive tint carries the fluid source colour.
+     * Topology and appearance come from the resolved named material rather than a primitive semantic bit.
      */
     private static final class FluidCapture implements VertexConsumer, FluidRenderer.Output {
         SectionMesh cur;     // set before each section

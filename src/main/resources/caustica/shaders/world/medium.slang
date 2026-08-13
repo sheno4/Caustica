@@ -33,6 +33,13 @@ public Medium airMedium() {
     return medium;
 }
 
+/** Beer-Lambert transmittance for an unbounded path, evaluated per channel to avoid 0 * infinity. */
+public float3 unboundedMediumTransmittance(float3 extinction) {
+    return float3(extinction.x > 0.0 ? 0.0 : 1.0,
+            extinction.y > 0.0 ? 0.0 : 1.0,
+            extinction.z > 0.0 ? 0.0 : 1.0);
+}
+
 public MediumStack makeMediumStack(Medium start) {
     MediumStack stack;
     stack.current = start;
