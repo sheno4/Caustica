@@ -27,6 +27,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.ToIntFunction;
 import java.util.function.Supplier;
 
 public final class ProviderManager {
@@ -41,6 +42,7 @@ public final class ProviderManager {
     private final Map<ResourceId, LightProvider> lights;
     private final Map<ResourceId, MaterialSource> materials;
     private List<LightDescriptor> frameLights = List.of();
+    private Set<ResourceId> namedMaterials = Set.of();
 
     ProviderManager(Map<ResourceId, SceneProvider> scenes, Map<ResourceId, LightProvider> lights,
                     Map<ResourceId, MaterialSource> materials) {
@@ -173,6 +175,14 @@ public final class ProviderManager {
             };
             try {
                 entry.getValue().submitGeometry(stagingSink);
+                for (TriangleMesh mesh : stagedMeshes.values()) {
+                    for (TriangleMesh.MaterialRange range : mesh.materials()) {
+                        if (!namedMaterials.contains(range.material().id())) {
+                            throw new IllegalArgumentException("geometry references unsubmitted material "
+                                    + range.material().id());
+                        }
+                    }
+                }
                 for (StagedInstance instance : stagedInstances.values()) {
                     if (!stagedMeshes.containsKey(instance.meshKey)) {
                         throw new IllegalArgumentException("geometry instance references unsubmitted mesh "
@@ -209,6 +219,14 @@ public final class ProviderManager {
      * publish a partial contribution; other sources remain active and retain their registration order.
      */
     public MaterialContributions collectMaterials() {
+        return collectMaterials(CausticaApi.registry()::surfaceIndex);
+    }
+
+    /**
+     * Collect material sources transactionally and validate every shader implementation name before its
+     * contribution becomes visible. Geometry linkage later uses the exact successfully published set.
+     */
+    public MaterialContributions collectMaterials(ToIntFunction<ResourceId> surfaceIndex) {
         List<MaterialDefinition> definitions = new ArrayList<>();
         Set<ResourceId> definedMaterials = new HashSet<>();
         List<MaterialRule> result = new ArrayList<>();
@@ -233,8 +251,19 @@ public final class ProviderManager {
                 });
                 Set<ResourceId> stagedIds = new HashSet<>();
                 for (MaterialDefinition definition : stagedDefinitions) {
+                    if (definition.surface() != null && surfaceIndex.applyAsInt(definition.surface()) < 0) {
+                        throw new IllegalStateException("material definition " + definition.id()
+                                + " references unregistered surface " + definition.surface());
+                    }
                     if (definedMaterials.contains(definition.id()) || !stagedIds.add(definition.id())) {
                         throw new IllegalStateException("duplicate material definition " + definition.id());
+                    }
+                }
+                for (MaterialRule rule : staged) {
+                    ResourceId surface = rule.parameters().surface();
+                    if (surface != null && surfaceIndex.applyAsInt(surface) < 0) {
+                        throw new IllegalStateException("material rule " + rule.id()
+                                + " references unregistered surface " + surface);
                     }
                 }
                 definedMaterials.addAll(stagedIds);
@@ -246,6 +275,7 @@ public final class ProviderManager {
                 stopOne("material", entry, key, MaterialSource::stop);
             }
         }
+        namedMaterials = Set.copyOf(definedMaterials);
         return new MaterialContributions(definitions, result);
     }
 
@@ -259,6 +289,7 @@ public final class ProviderManager {
     /** Stop every provider before session GPU work is drained. No GPU owner is released in this phase. */
     public void stopProviders() {
         frameLights = List.of();
+        namedMaterials = Set.of();
         stopRemaining("scene", scenes(), SceneProvider::stop);
         stopRemaining("light", lights(), LightProvider::stop);
         stopRemaining("material", materials(), MaterialSource::stop);

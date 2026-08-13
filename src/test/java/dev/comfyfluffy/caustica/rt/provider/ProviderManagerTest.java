@@ -299,8 +299,11 @@ final class ProviderManagerTest {
         scenes.put(id("failing_geometry"), failing);
         scenes.put(id("first_geometry"), first);
         scenes.put(id("second_geometry"), second);
-        ProviderManager manager = new ProviderManager(scenes, Map.of(), Map.of());
+        ProviderManager manager = new ProviderManager(scenes, Map.of(),
+                Map.of(id("geometry_materials"), defining("geometry")));
         Map<ResourceId, List<String>> submitted = new LinkedHashMap<>();
+
+        manager.collectMaterials(ignored -> 0);
 
         manager.submitGeometry(provider -> new SceneGeometrySink() {
             @Override
@@ -347,8 +350,8 @@ final class ProviderManagerTest {
         materials.put(id("healthy"), healthy);
         ProviderManager manager = new ProviderManager(Map.of(), Map.of(), materials);
 
-        assertEquals(List.of(retained), manager.collectMaterials().rules());
-        assertEquals(List.of(retained), manager.collectMaterials().rules());
+        assertEquals(List.of(retained), manager.collectMaterials(ignored -> 0).rules());
+        assertEquals(List.of(retained), manager.collectMaterials(ignored -> 0).rules());
         assertEquals(1, failingStops.get());
     }
 
@@ -378,8 +381,118 @@ final class ProviderManagerTest {
         materials.put(id("duplicate"), duplicate);
         ProviderManager manager = new ProviderManager(Map.of(), Map.of(), materials);
 
-        assertEquals(List.of(shared), manager.collectMaterials().definitions());
+        assertEquals(List.of(shared), manager.collectMaterials(ignored -> 0).definitions());
         assertEquals(1, duplicateStops.get());
+    }
+
+    @Test
+    void unknownSurfaceDisablesOnlyItsMaterialSource() {
+        AtomicInteger invalidStops = new AtomicInteger();
+        MaterialDefinition invalid = new MaterialDefinition(new MaterialHandle(id("invalid")),
+                1.0f, 1.0f, 1.0f, 1.0f, 0.0f, 1.5f, 0.0f,
+                MaterialTopology.SURFACE, id("missing_surface"));
+        MaterialSource broken = new MaterialSource() {
+            @Override
+            public void submitMaterials(dev.comfyfluffy.caustica.api.provider.MaterialSink sink) {
+                sink.define(invalid);
+            }
+
+            @Override
+            public void stop() {
+                invalidStops.incrementAndGet();
+            }
+        };
+        MaterialDefinition healthy = definition("healthy");
+        Map<ResourceId, MaterialSource> sources = new LinkedHashMap<>();
+        sources.put(id("broken"), broken);
+        sources.put(id("healthy"), sink -> sink.define(healthy));
+        ProviderManager manager = new ProviderManager(Map.of(), Map.of(), sources);
+
+        ProviderManager.MaterialContributions contributions = manager.collectMaterials(surface -> -1);
+
+        assertEquals(List.of(healthy), contributions.definitions());
+        assertEquals(1, invalidStops.get());
+    }
+
+    @Test
+    void unknownRuleSurfaceDisablesOnlyItsMaterialSource() {
+        AtomicInteger invalidStops = new AtomicInteger();
+        MaterialRule invalid = new MaterialRule(id("invalid_rule"),
+                new MaterialRule.Match(id("source"), null),
+                new MaterialRule.Parameters(null, null, null, null, null, id("missing_surface")));
+        MaterialSource broken = new MaterialSource() {
+            @Override
+            public void submitMaterials(dev.comfyfluffy.caustica.api.provider.MaterialSink sink) {
+                sink.submit(invalid);
+            }
+
+            @Override
+            public void stop() {
+                invalidStops.incrementAndGet();
+            }
+        };
+        MaterialRule healthy = rule("healthy_rule");
+        Map<ResourceId, MaterialSource> sources = new LinkedHashMap<>();
+        sources.put(id("broken"), broken);
+        sources.put(id("healthy"), sink -> sink.submit(healthy));
+        ProviderManager manager = new ProviderManager(Map.of(), Map.of(), sources);
+
+        ProviderManager.MaterialContributions contributions = manager.collectMaterials(surface -> -1);
+
+        assertEquals(List.of(healthy), contributions.rules());
+        assertEquals(1, invalidStops.get());
+    }
+
+    @Test
+    void unresolvedGeometryMaterialDisablesOnlyTheOffendingSceneBeforePublication() {
+        TriangleMesh missing = triangle("missing");
+        TriangleMesh healthy = triangle("healthy");
+        AtomicInteger brokenStops = new AtomicInteger();
+        SceneProvider broken = new SceneProvider() {
+            @Override
+            public void submitGeometry(SceneGeometrySink sink) {
+                sink.retainMesh(1, missing);
+                sink.instance(2, 1, GeometryTransform.translation(0, 0, 0));
+            }
+
+            @Override
+            public void stop() {
+                brokenStops.incrementAndGet();
+            }
+        };
+        Map<ResourceId, SceneProvider> scenes = new LinkedHashMap<>();
+        scenes.put(id("broken_geometry"), broken);
+        scenes.put(id("healthy_geometry"), geometryProvider(healthy));
+        ProviderManager manager = new ProviderManager(scenes, Map.of(),
+                Map.of(id("materials"), defining("healthy")));
+        List<ResourceId> published = new ArrayList<>();
+
+        manager.collectMaterials(ignored -> 0);
+        manager.submitGeometry(provider -> new SceneGeometrySink() {
+            @Override
+            public void retainMesh(long key, TriangleMesh mesh) {
+                published.add(provider);
+            }
+
+            @Override
+            public void instance(long key, long meshKey, GeometryTransform transform) {
+            }
+        });
+
+        assertEquals(List.of(id("healthy_geometry")), published);
+        assertEquals(1, brokenStops.get());
+        published.clear();
+        manager.submitGeometry(provider -> new SceneGeometrySink() {
+            @Override
+            public void retainMesh(long key, TriangleMesh mesh) {
+                published.add(provider);
+            }
+
+            @Override
+            public void instance(long key, long meshKey, GeometryTransform transform) {
+            }
+        });
+        assertEquals(List.of(id("healthy_geometry")), published);
     }
 
     @Test
@@ -478,9 +591,17 @@ final class ProviderManagerTest {
     }
 
     private static TriangleMesh triangle() {
+        return triangle("geometry");
+    }
+
+    private static TriangleMesh triangle(String material) {
         return new TriangleMesh(new float[]{0, 0, 0, 1, 0, 0, 0, 1, 0}, new float[6],
                 new int[]{0, 1, 2}, List.of(new TriangleMesh.MaterialRange(0, 1,
-                MaterialHandle.of("test", "geometry"))));
+                MaterialHandle.of("test", material))));
+    }
+
+    private static MaterialSource defining(String path) {
+        return sink -> sink.define(definition(path));
     }
 
     private static MaterialDefinition definition(String path) {
