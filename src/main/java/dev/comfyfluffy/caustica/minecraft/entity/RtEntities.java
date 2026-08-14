@@ -160,8 +160,9 @@ public final class RtEntities {
     // Each per-entity ring slot owns one persistent AS. Timeline completion guards cursor reuse,
     // mapped writes, refits, rebuilds, and destruction.
     private static final int ENTITY_SLOT_RING = KEEP_FRAMES;
-    // Periodic rebuild bounds BVH-quality degradation from repeated refits of a deforming entity.
-    private static final int REFIT_REBUILD_INTERVAL = 120;
+    // Bounds BVH-quality degradation from repeated refits of a deforming entity: counts refits actually
+    // performed, not frames, so an entity that stops deforming never approaches the limit.
+    private static final int REFIT_COUNT_REBUILD_LIMIT = 120;
 
     // Treat per-vertex displacements as rigid when every vertex agrees within this tolerance, avoiding a
     // transient disp buffer for plain whole-entity translation.
@@ -1790,7 +1791,7 @@ public final class RtEntities {
                 && java.util.Arrays.equals(slot.classTris, classTris)
                 && sameIndexTopology(slot, indices);
         RtAccel.RefitDecision decision = RtAccel.refitDecision(refitEnabled, slot.accel != null, slot.updatable,
-                sameTopology, slot.updatesSinceBuild, REFIT_REBUILD_INTERVAL);
+                sameTopology, slot.updatesSinceBuild, REFIT_COUNT_REBUILD_LIMIT);
         if (decision == RtAccel.RefitDecision.REFIT) {
             RtFrameStats.FRAME.count("refits", 1);
             long required = slot.updateScratchSize;

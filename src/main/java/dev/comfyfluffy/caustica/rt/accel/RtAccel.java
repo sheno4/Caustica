@@ -712,15 +712,15 @@ public final class RtAccel {
      * ALLOW_UPDATE); {@code hasAccel} is false only on a slot's first build. {@code sameTopology} stands
      * in for a source-declared topology version (plan §4, not yet public API): today it is an exact
      * structural comparison against the slot's last BUILD, done by the caller. {@code updatesSinceBuild}
-     * vs. {@code refitRebuildInterval} bounds BVH quality loss accumulated across repeated refits — it
+     * vs. {@code refitCountLimit} bounds BVH quality loss accumulated across repeated refits — it
      * counts refits, not frames, so a slot that stops updating never approaches the limit.
      */
     public static RefitDecision refitDecision(boolean refitEnabled, boolean hasAccel, boolean slotIsUpdatable,
-                                              boolean sameTopology, int updatesSinceBuild, int refitRebuildInterval) {
+                                              boolean sameTopology, int updatesSinceBuild, int refitCountLimit) {
         if (!refitEnabled || !hasAccel || !slotIsUpdatable || !sameTopology) {
             return RefitDecision.BUILD;
         }
-        return updatesSinceBuild < refitRebuildInterval ? RefitDecision.REFIT : RefitDecision.BUILD;
+        return updatesSinceBuild < refitCountLimit ? RefitDecision.REFIT : RefitDecision.BUILD;
     }
 
     /** Reclaim a transient BLAS: destroy its AS handle, then its backing and scratch buffers. */
