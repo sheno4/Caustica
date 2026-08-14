@@ -706,14 +706,16 @@ public final class RtAccel {
     }
 
     /**
-     * Refit-vs-rebuild policy for one persistent updatable BLAS slot, evaluated per update
-     * (see {@code docs/RETAINED_GEOMETRY_PLAN.md} §5.1). {@code refitEnabled} and {@code slotIsUpdatable}
-     * gate whether UPDATE is available at all (config off, or the slot's current AS was built without
-     * ALLOW_UPDATE); {@code hasAccel} is false only on a slot's first build. {@code sameTopology} stands
-     * in for a source-declared topology version (plan §4, not yet public API): today it is an exact
-     * structural comparison against the slot's last BUILD, done by the caller. {@code updatesSinceBuild}
-     * vs. {@code refitCountLimit} bounds BVH quality loss accumulated across repeated refits — it
-     * counts refits, not frames, so a slot that stops updating never approaches the limit.
+     * Refit-vs-rebuild policy for one persistent updatable BLAS slot, evaluated per update.
+     * {@code refitEnabled} and {@code slotIsUpdatable} gate whether UPDATE is available at all (config
+     * off, or the slot's current AS was built without ALLOW_UPDATE); {@code hasAccel} is false only on
+     * a slot's first build. {@code sameTopology} is the caller's own judgement of whether this update's
+     * vertex/index data is compatible with the slot's last BUILD for MODE_UPDATE — an exact comparison
+     * is safe here, but any cheaper equivalence the caller can establish is equally valid, since UPDATE
+     * against incompatible topology is undefined behavior this function cannot itself detect.
+     * {@code updatesSinceBuild} vs. {@code refitCountLimit} bounds BVH quality loss accumulated across
+     * repeated refits — it counts refits, not frames, so a slot that stops updating never approaches
+     * the limit.
      */
     public static RefitDecision refitDecision(boolean refitEnabled, boolean hasAccel, boolean slotIsUpdatable,
                                               boolean sameTopology, int updatesSinceBuild, int refitCountLimit) {
