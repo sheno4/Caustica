@@ -53,6 +53,7 @@ import static org.lwjgl.vulkan.KHRRayTracingPositionFetch.VK_BUILD_ACCELERATION_
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_COPY_ACCELERATION_STRUCTURE_MODE_COMPACT_KHR;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_GEOMETRY_NO_DUPLICATE_ANY_HIT_INVOCATION_BIT_KHR;
@@ -267,6 +268,9 @@ public final class RtAccel {
         // {@code update} = this recorded op is an in-place UPDATE rather than a full BUILD.
         private final boolean updatable;
         private final boolean update;
+        // PREFER_FAST_BUILD instead of PREFER_FAST_TRACE. Only meaningful alongside externalClassSplit;
+        // every other path leaves this false (PREFER_FAST_TRACE).
+        private final boolean fastBuild;
         // Retained packed multi-geometry split: one geometry per SBT class, in the fixed packed
         // order { opaque, masked, transmissive } (see SBT_CLASSES). Class 0 (opaque) is flagged
         // VK_GEOMETRY_OPAQUE_BIT. The fixed geometry indices are also SBT class indices: radiance rays use
@@ -282,12 +286,12 @@ public final class RtAccel {
         private PreparedBlas(RtAccel accel, GpuBuffer scratch, GpuBuffer externalBacking, long vertexAddr, long indexAddr,
                              int maxVertex, int triangleCount, boolean opaque, String label, boolean updatable, boolean update) {
             this(accel, scratch, externalBacking, vertexAddr, indexAddr, maxVertex, triangleCount, opaque, label,
-                    updatable, update, false, null, false, null, null);
+                    updatable, update, false, false, null, false, null, null);
         }
 
         private PreparedBlas(RtAccel accel, GpuBuffer scratch, GpuBuffer externalBacking, long vertexAddr, long indexAddr,
                              int maxVertex, int triangleCount, boolean opaque, String label, boolean updatable, boolean update,
-                             boolean retainedSplit, int[] retainedClassTriangles,
+                             boolean fastBuild, boolean retainedSplit, int[] retainedClassTriangles,
                              boolean externalClassSplit, int[] externalClassTriangles,
                              OpacityMicromap opacityMicromap) {
             this.accel = accel;
@@ -301,6 +305,7 @@ public final class RtAccel {
             this.label = label;
             this.updatable = updatable;
             this.update = update;
+            this.fastBuild = fastBuild;
             this.retainedSplit = retainedSplit;
             this.retainedClassTriangles = retainedClassTriangles;
             this.externalClassSplit = externalClassSplit;
@@ -316,17 +321,25 @@ public final class RtAccel {
                 total += t;
             }
             return new PreparedBlas(accel, scratch, externalBacking, vertexAddr, indexAddr, maxVertex,
-                    total, false, label, false, false, true, retainedClassTriangles, false, null, opacityMicromap);
+                    total, false, label, false, false, false, true, retainedClassTriangles, false, null, opacityMicromap);
         }
 
         static PreparedBlas externalClassified(RtAccel accel, GpuBuffer scratch, GpuBuffer externalBacking,
                                                long vertexAddr, long indexAddr, int maxVertex,
                                                int[] classTriangles, String label,
                                                boolean updatable, boolean update) {
+            return externalClassified(accel, scratch, externalBacking, vertexAddr, indexAddr, maxVertex,
+                    classTriangles, label, updatable, update, false);
+        }
+
+        static PreparedBlas externalClassified(RtAccel accel, GpuBuffer scratch, GpuBuffer externalBacking,
+                                               long vertexAddr, long indexAddr, int maxVertex,
+                                               int[] classTriangles, String label,
+                                               boolean updatable, boolean update, boolean fastBuild) {
             int total = 0;
             for (int triangles : classTriangles) total += triangles;
             return new PreparedBlas(accel, scratch, externalBacking, vertexAddr, indexAddr, maxVertex,
-                    total, false, label, updatable, update, false, null, true, classTriangles, null);
+                    total, false, label, updatable, update, fastBuild, false, null, true, classTriangles, null);
         }
 
         public boolean requestsCompaction() {
@@ -573,18 +586,29 @@ public final class RtAccel {
     /** Caller-owned classified BLAS with packed indices in fixed {@link #SBT_CLASSES} order. */
     public static PreparedBlas prepareTransientBlas(GpuContext ctx, long vertexAddr, int vertexCount,
                                                     long indexAddr, int[] classTriangles, String label) {
+        return prepareTransientBlas(ctx, vertexAddr, vertexCount, indexAddr, classTriangles, label, false);
+    }
+
+    /**
+     * Caller-owned classified BLAS with packed indices in fixed {@link #SBT_CLASSES} order. {@code fastBuild}
+     * selects PREFER_FAST_BUILD instead of PREFER_FAST_TRACE, for geometry rebuilt from scratch every frame
+     * (e.g. particles) where build latency dominates over trace quality.
+     */
+    public static PreparedBlas prepareTransientBlas(GpuContext ctx, long vertexAddr, int vertexCount,
+                                                    long indexAddr, int[] classTriangles, String label,
+                                                    boolean fastBuild) {
         requireClassTriangles(classTriangles);
         VkDevice vk = ctx.vk();
         String debugLabel = labelOr(label, "classified BLAS");
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkAccelerationStructureBuildSizesInfoKHR sizes = queryClassifiedBlasSizes(vk, stack, vertexAddr,
-                    indexAddr, vertexCount, classTriangles, false);
+                    indexAddr, vertexCount, classTriangles, false, fastBuild);
             GpuBuffer backing = ctx.createBuffer(sizes.accelerationStructureSize(),
                     VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, false, debugLabel + " backing");
             GpuBuffer scratch = createScratchBuffer(ctx, sizes.buildScratchSize(), debugLabel + " build scratch");
             RtAccel accel = createBlasOn(ctx, stack, backing, sizes.accelerationStructureSize(), false, debugLabel);
             return PreparedBlas.externalClassified(accel, scratch, backing, vertexAddr, indexAddr,
-                    vertexCount - 1, classTriangles.clone(), debugLabel, false, false);
+                    vertexCount - 1, classTriangles.clone(), debugLabel, false, false, fastBuild);
         }
     }
 
@@ -718,11 +742,20 @@ public final class RtAccel {
     }
 
     private static int buildFlags(boolean allowUpdate) {
+        return buildFlags(allowUpdate, false);
+    }
+
+    private static int buildFlags(boolean allowUpdate, boolean fastBuild) {
         // ALLOW_DATA_ACCESS lets the closest-hit read vertex positions from the BLAS via
         // gl_HitTriangleVertexPositionsEXT (VK_KHR_ray_tracing_position_fetch) for the normal-map TBN.
         // Applied to every BLAS and the refit path, so the build/UPDATE flags stay
         // identical (a refit invariant) — this is the single shared flag source.
-        return VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR
+        // PREFER_FAST_BUILD and PREFER_FAST_TRACE are mutually exclusive quality hints; fastBuild is for
+        // geometry that is rebuilt from scratch every frame and never traced across many frames, where
+        // build latency dominates over trace quality.
+        int trace = fastBuild ? VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_BUILD_BIT_KHR
+                : VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+        return trace
                 | VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_DATA_ACCESS_BIT_KHR
                 | (allowUpdate ? VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR : 0);
     }
@@ -805,11 +838,23 @@ public final class RtAccel {
                                                                                      int vertexCount,
                                                                                      int[] classTriangles,
                                                                                      boolean allowUpdate) {
+        return queryClassifiedBlasSizes(vk, stack, vertexAddr, indexAddr, vertexCount, classTriangles,
+                allowUpdate, false);
+    }
+
+    private static VkAccelerationStructureBuildSizesInfoKHR queryClassifiedBlasSizes(VkDevice vk,
+                                                                                     MemoryStack stack,
+                                                                                     long vertexAddr,
+                                                                                     long indexAddr,
+                                                                                     int vertexCount,
+                                                                                     int[] classTriangles,
+                                                                                     boolean allowUpdate,
+                                                                                     boolean fastBuild) {
         VkAccelerationStructureGeometryKHR.Buffer geometries = classifiedGeometries(stack, vertexAddr,
                 indexAddr, vertexCount);
         VkAccelerationStructureBuildGeometryInfoKHR.Buffer build = VkAccelerationStructureBuildGeometryInfoKHR.calloc(1, stack);
         build.get(0).sType$Default().type(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR)
-                .flags(buildFlags(allowUpdate)).mode(VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR)
+                .flags(buildFlags(allowUpdate, fastBuild)).mode(VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR)
                 .geometryCount(geometries.capacity()).pGeometries(geometries);
         java.nio.IntBuffer maxPrims = stack.mallocInt(SBT_CLASSES);
         maxPrims.put(classTriangles).flip();
@@ -1178,7 +1223,7 @@ public final class RtAccel {
                 b.indexAddr, b.maxVertex + 1);
         VkAccelerationStructureBuildGeometryInfoKHR.Buffer build = VkAccelerationStructureBuildGeometryInfoKHR.calloc(1, stack);
         build.get(0).sType$Default().type(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR)
-                .flags(buildFlags(b.updatable))
+                .flags(buildFlags(b.updatable, b.fastBuild))
                 .mode(b.update ? VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR
                         : VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR)
                 .geometryCount(geometries.capacity()).pGeometries(geometries)

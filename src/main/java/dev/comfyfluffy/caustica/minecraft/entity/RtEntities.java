@@ -1591,9 +1591,10 @@ public final class RtEntities {
         long uvAddr = Math.addExact(geometry.deviceAddress, layout.uvOffset);
         long primAddr = Math.addExact(geometry.deviceAddress, layout.primOffset);
 
+        // Rebuilt from scratch every frame and never refit, so build latency matters more than trace
+        // quality: PREFER_FAST_BUILD instead of the PREFER_FAST_TRACE every other BLAS in this file uses.
         RtAccel.PreparedBlas blas = RtAccel.prepareTransientBlas(ctx, positionAddr, vertCount, indexAddr,
-                packed.classTris(),
-                "particle BLAS");
+                packed.classTris(), "particle BLAS", true);
         build.blas.add(blas);
         build.pooledBlas.add(blas);
 
