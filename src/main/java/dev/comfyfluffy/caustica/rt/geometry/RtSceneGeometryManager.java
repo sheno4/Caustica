@@ -159,17 +159,17 @@ public final class RtSceneGeometryManager {
             Map.Entry<MeshKey, ResidentMesh> entry = iterator.next();
             MeshKey key = entry.getKey();
             ResidentMesh resident = entry.getValue();
-            boolean replaced = capture.retains.containsKey(key);
-            boolean orphaned = !replaced
-                    && (capture.releases.contains(key) || !liveProviders.contains(key.provider()));
-            if (replaced || orphaned) {
-                ctx.gpuExecutor().retireAfterGraphics(resident.graphicsUse, resident::destroy);
-                iterator.remove();
-            } else if (resident.materialEpoch != materialEpoch) {
-                repack.add(Map.entry(key, resident.source));
-                ctx.gpuExecutor().retireAfterGraphics(resident.graphicsUse, resident::destroy);
-                iterator.remove();
+            ReconcileAction action = reconcileAction(capture.retains.containsKey(key),
+                    capture.releases.contains(key), liveProviders.contains(key.provider()),
+                    resident.materialEpoch != materialEpoch);
+            if (action == ReconcileAction.KEEP) {
+                continue;
             }
+            if (action == ReconcileAction.REPACK) {
+                repack.add(Map.entry(key, resident.source));
+            }
+            ctx.gpuExecutor().retireAfterGraphics(resident.graphicsUse, resident::destroy);
+            iterator.remove();
         }
         for (Map.Entry<MeshKey, TriangleMesh> entry : capture.retains.entrySet()) {
             residents.put(entry.getKey(), upload(ctx, entry.getKey(), entry.getValue()));
@@ -177,6 +177,37 @@ public final class RtSceneGeometryManager {
         for (Map.Entry<MeshKey, TriangleMesh> entry : repack) {
             residents.put(entry.getKey(), upload(ctx, entry.getKey(), entry.getValue()));
         }
+    }
+
+    enum ReconcileAction {
+        /** Stays resident unchanged. */
+        KEEP,
+        /** Destroyed; a fresh upload from {@code capture.retains} takes the same key this frame. */
+        REPLACE,
+        /** Destroyed and not replaced: explicitly released, or its provider is no longer live. */
+        RELEASE,
+        /** Destroyed and re-uploaded from its own stored source (material epoch invalidation only). */
+        REPACK
+    }
+
+    /**
+     * Precedence, most to least authoritative: a retain this frame always replaces (even if the same
+     * key was also released this frame — a contradictory pair of calls resolves as "replace"); absent
+     * a retain, an explicit release or a dead provider drops the mesh; absent either of those, a stale
+     * material epoch repacks in place; otherwise the mesh is untouched.
+     */
+    static ReconcileAction reconcileAction(boolean retainedThisFrame, boolean releasedThisFrame,
+                                           boolean providerLive, boolean materialStale) {
+        if (retainedThisFrame) {
+            return ReconcileAction.REPLACE;
+        }
+        if (releasedThisFrame || !providerLive) {
+            return ReconcileAction.RELEASE;
+        }
+        if (materialStale) {
+            return ReconcileAction.REPACK;
+        }
+        return ReconcileAction.KEEP;
     }
 
     private ResidentMesh upload(GpuContext ctx, MeshKey key, TriangleMesh mesh) {
