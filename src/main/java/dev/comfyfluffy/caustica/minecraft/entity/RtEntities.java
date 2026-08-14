@@ -1786,12 +1786,12 @@ public final class RtEntities {
         }
         int storage = org.lwjgl.vulkan.VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
         boolean refitEnabled = CausticaConfig.Rt.Entities.REFIT_ENABLED.value();
-        boolean canUpdate = refitEnabled && slot.accel != null && slot.updatable
-                && slot.vertCount == vertCount && slot.triCount == triCount
+        boolean sameTopology = slot.vertCount == vertCount && slot.triCount == triCount
                 && java.util.Arrays.equals(slot.classTris, classTris)
-                && sameIndexTopology(slot, indices)
-                && slot.updatesSinceBuild < REFIT_REBUILD_INTERVAL;
-        if (canUpdate) {
+                && sameIndexTopology(slot, indices);
+        RtAccel.RefitDecision decision = RtAccel.refitDecision(refitEnabled, slot.accel != null, slot.updatable,
+                sameTopology, slot.updatesSinceBuild, REFIT_REBUILD_INTERVAL);
+        if (decision == RtAccel.RefitDecision.REFIT) {
             RtFrameStats.FRAME.count("refits", 1);
             long required = slot.updateScratchSize;
             if (slot.updateScratch == null || slot.updateScratch.size < required) {

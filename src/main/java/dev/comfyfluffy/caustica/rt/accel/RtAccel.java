@@ -697,6 +697,32 @@ public final class RtAccel {
                 classTriangles.clone(), labelOr(label, "classified BLAS refit"), true, true);
     }
 
+    /** Refit-vs-rebuild outcome for one persistent updatable BLAS slot; see {@link #refitDecision}. */
+    public enum RefitDecision {
+        /** In-place UPDATE via {@link #refitUpdate}. */
+        REFIT,
+        /** A fresh BUILD via {@link #prepareUpdatableBlasBuild}, replacing the slot's AS. */
+        BUILD
+    }
+
+    /**
+     * Refit-vs-rebuild policy for one persistent updatable BLAS slot, evaluated per update
+     * (see {@code docs/RETAINED_GEOMETRY_PLAN.md} §5.1). {@code refitEnabled} and {@code slotIsUpdatable}
+     * gate whether UPDATE is available at all (config off, or the slot's current AS was built without
+     * ALLOW_UPDATE); {@code hasAccel} is false only on a slot's first build. {@code sameTopology} stands
+     * in for a source-declared topology version (plan §4, not yet public API): today it is an exact
+     * structural comparison against the slot's last BUILD, done by the caller. {@code updatesSinceBuild}
+     * vs. {@code refitRebuildInterval} bounds BVH quality loss accumulated across repeated refits — it
+     * counts refits, not frames, so a slot that stops updating never approaches the limit.
+     */
+    public static RefitDecision refitDecision(boolean refitEnabled, boolean hasAccel, boolean slotIsUpdatable,
+                                              boolean sameTopology, int updatesSinceBuild, int refitRebuildInterval) {
+        if (!refitEnabled || !hasAccel || !slotIsUpdatable || !sameTopology) {
+            return RefitDecision.BUILD;
+        }
+        return updatesSinceBuild < refitRebuildInterval ? RefitDecision.REFIT : RefitDecision.BUILD;
+    }
+
     /** Reclaim a transient BLAS: destroy its AS handle, then its backing and scratch buffers. */
     public static void releaseTransientBlas(PreparedBlas blas) {
         blas.accel.destroy(); // ownsBacking == false → destroys only the AS handle, not the backing buffer
