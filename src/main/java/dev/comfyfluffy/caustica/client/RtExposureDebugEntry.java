@@ -2,8 +2,8 @@ package dev.comfyfluffy.caustica.client;
 
 import dev.comfyfluffy.caustica.rt.RtComposite;
 import dev.comfyfluffy.caustica.rt.pipeline.RtExposure;
+import dev.comfyfluffy.caustica.mixin.DebugScreenEntriesAccessor;
 import net.minecraft.client.gui.components.debug.DebugScreenDisplayer;
-import net.minecraft.client.gui.components.debug.DebugScreenEntries;
 import net.minecraft.client.gui.components.debug.DebugScreenEntry;
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.level.Level;
@@ -18,7 +18,7 @@ import org.jspecify.annotations.Nullable;
  * <p>{@code RtExposure.debugSummaryLine()} owns the displayed controller values.
  */
 public final class RtExposureDebugEntry implements DebugScreenEntry {
-    public static final Identifier ID = DebugScreenEntries.register(
+    public static final Identifier ID = DebugScreenEntriesAccessor.caustica$register(
             Identifier.fromNamespaceAndPath("caustica", "rt_exposure"), new RtExposureDebugEntry());
 
     @Override

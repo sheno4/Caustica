@@ -6,15 +6,32 @@ import dev.comfyfluffy.caustica.build.GenerateShaderRecords
 import dev.comfyfluffy.caustica.build.GenerateRtBindings
 
 plugins {
-	id "fabric-loom" version "${loom_version}"
+	id "fabric-loom" version "${loom_version}" apply false
+	id "net.neoforged.moddev" version "${neogradle_version}" apply false
 	id "maven-publish"
 }
 
+def loader = (findProperty("loader") ?: "fabric").toString().toLowerCase(Locale.ROOT)
+if (!(loader in ["fabric", "neoforge"])) {
+	throw new GradleException("Unknown loader '${loader}'. Expected 'fabric' or 'neoforge'.")
+}
+apply plugin: loader == "fabric" ? "fabric-loom" : "net.neoforged.moddev"
+
 version = project.mod_version
 group = project.maven_group
+java.toolchain.languageVersion = JavaLanguageVersion.of(25)
+
+def buildRoot = providers.gradleProperty("buildRoot").orElse("build").get()
+layout.buildDirectory = layout.projectDirectory.dir(buildRoot)
 
 base {
 	archivesName = project.archives_base_name
+}
+
+// Classify the shippable artifact, not the compile output. Under Loom that is remapJar — `jar` holds
+// unremapped dev classes and must keep its own classifier so the two cannot be confused.
+tasks.named("jar") {
+	archiveClassifier = loader
 }
 
 repositories {
@@ -22,61 +39,110 @@ repositories {
 		name = "Fabric"
 		url = "https://maven.fabricmc.net/"
 	}
+	maven {
+		name = "NeoForge"
+		url = "https://maven.neoforged.net/releases"
+	}
 	mavenCentral()
 }
 
-loom {
-	runs {
-		client {
-			client()
-			setConfigName("Fabric Client")
-			ideConfigGenerated = true
-			runDir = "run"
-			// java.lang.foreign restricted methods (FFM bindings to amd_fidelityfx_vk.dll)
-			vmArg "--enable-native-access=ALL-UNNAMED"
+sourceSets.main.java.srcDir("src/${loader}/java")
+sourceSets.main.resources.srcDir("src/${loader}/resources")
 
-            // NVIDIA NGX (DLSS) allocates ~1MB on the stack during init, which overflows Java's default 1MB thread stack.
-            // pass -Xss here directly so the main render thread is resized before the VM parses JAVA_TOOL_OPTIONS.
-            vmArg "-Xss16m"
+// The renderer only attaches to the Vulkan backend, so every dev client run needs these.
+def CLIENT_PROGRAM_ARGUMENTS = ["--renderDebugLabels", "--graphicsBackend", "VULKAN"]
 
-            // NixOS fix: Gradle forks drop the dev-shell's LD_LIBRARY_PATH.
-            // We manually add the driver path so NGX can successfully dlopen libnvidia-ngx.so.1.
-            if (file("/run/opengl-driver/lib").exists()) {
-                def inherited = System.getenv("LD_LIBRARY_PATH")
-                environmentVariable "LD_LIBRARY_PATH",
-                        inherited ? "/run/opengl-driver/lib:${inherited}" : "/run/opengl-driver/lib"
-            }
+// Heap and GC tuning for dev client runs only. These belong on the run configuration rather than
+// JAVA_TOOL_OPTIONS, which every forked JVM inherits — including NeoForge's JDK 21 tooling JVM, which
+// rejects newer flags and fails the run before the game starts.
+def CLIENT_JVM_ARGUMENTS = ["-Xmx8G", "-XX:+UseStringDeduplication", "-XX:+UseZGC"]
+
+if (loader == "fabric") {
+	loom {
+		runs {
+			client {
+				client()
+				setConfigName("Fabric Client")
+				ideConfigGenerated = true
+				runDir = "run"
+				vmArg "--enable-native-access=ALL-UNNAMED"
+				vmArg "-Xss16m"
+				CLIENT_JVM_ARGUMENTS.each { vmArg it }
+				programArgs CLIENT_PROGRAM_ARGUMENTS
+				if (file("/run/opengl-driver/lib").exists()) {
+					def inherited = System.getenv("LD_LIBRARY_PATH")
+					environmentVariable "LD_LIBRARY_PATH",
+							inherited ? "/run/opengl-driver/lib:${inherited}" : "/run/opengl-driver/lib"
+				}
+			}
+			server {
+				server()
+				setConfigName("Fabric Server")
+				ideConfigGenerated = true
+				runDir = "run"
+			}
 		}
-
-		server {
-			server()
-			setConfigName("Fabric Server")
-			ideConfigGenerated = true
-			runDir = "run"
+	}
+} else {
+	neoForge {
+		version = project.neoforge_version
+		runs {
+			client {
+				client()
+				jvmArgument "--enable-native-access=ALL-UNNAMED"
+				jvmArgument "-Xss16m"
+				CLIENT_JVM_ARGUMENTS.each { jvmArgument it }
+				// devlaunch reads the main class from the first program argument, so Gradle's --args
+				// cannot carry these; the run configuration owns them for both loaders instead.
+				programArguments.addAll(CLIENT_PROGRAM_ARGUMENTS)
+			}
+			server {
+				server()
+			}
+		}
+		mods {
+			caustica {
+				sourceSet(sourceSets.main)
+			}
+		}
+		unitTest {
+			enable()
+			testedMod = mods.caustica
 		}
 	}
 }
 
 dependencies {
-	minecraft "com.mojang:minecraft:${project.minecraft_version}"
-	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
-	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+	if (loader == "fabric") {
+		minecraft "com.mojang:minecraft:${project.minecraft_version}"
+		implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+		implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+	}
 	testImplementation platform("org.junit:junit-bom:5.12.2")
 	testImplementation "org.junit.jupiter:junit-jupiter"
 	testRuntimeOnly "org.junit.platform:junit-platform-launcher"
 
 	// Layered TOML config (config/caustica.toml) — NightConfig, the same library NeoForge's
 	// ModConfigSpec is built on.
-	include implementation("com.electronwill.night-config:core:3.8.3")
-	include implementation("com.electronwill.night-config:toml:3.8.3")
+	def nightConfigCore = implementation("com.electronwill.night-config:core:3.8.3")
+	def nightConfigToml = implementation("com.electronwill.night-config:toml:3.8.3")
+	if (loader == "fabric") {
+		include nightConfigCore
+		include nightConfigToml
+	}
 
 }
 
 processResources {
 	inputs.property "version", project.version
+	inputs.property "neoforge_version", project.neoforge_version
 
 	filesMatching("fabric.mod.json") {
 		expand "version": inputs.properties.version
+	}
+	filesMatching("META-INF/neoforge.mods.toml") {
+		expand "version": inputs.properties.version,
+				"neoforge_version": inputs.properties.neoforge_version
 	}
 }
 
@@ -256,7 +322,11 @@ def slangRuntimeVersion = project.property("slang_runtime_version").toString()
 def slangRuntimeGenRoot = layout.buildDirectory.dir("generated/slang-runtime")
 def slangRuntimeInputRoot = providers.gradleProperty("slangRuntimeInputRoot").map { file(it) }
 def slangShimConfig = (findProperty("slangShimConfig") ?: "release").toString().toLowerCase(java.util.Locale.ROOT)
-def slangShimOutDir = layout.buildDirectory.dir("native/slang_shim/${slangShimConfig}").get().asFile
+// The shim is produced outside Gradle, so -PbuildRoot must not move where we look for it. Mirrors
+// ngxShimInputRoot.
+def slangShimInputRoot = file(findProperty("slangShimInputRoot")
+		?: layout.buildDirectory.dir("native/slang_shim").get().asFile)
+def slangShimOutDir = new File(slangShimInputRoot, slangShimConfig)
 def currentSlangPlatform = {
 	def os = org.gradle.internal.os.OperatingSystem.current()
 	def arch = System.getProperty("os.arch", "").toLowerCase(java.util.Locale.ROOT)
@@ -422,14 +492,16 @@ sourceSets.main.resources.srcDir(files(slangRuntimeGenRoot).builtBy(bundleSlangR
 
 tasks.named("test", Test) {
 	dependsOn(bundleSlangRuntime)
+	workingDir project.projectDir
 	jvmArgs "--enable-native-access=ALL-UNNAMED"
 	doFirst {
+		workingDir project.projectDir
 		def slangRuntimeDir = new File(slangRuntimeGenRoot.get().asFile,
 				"caustica/natives/slang/${slangRuntimeVersion}/${currentSlangPlatform}").absolutePath
 		systemProperty "caustica.test.slangRuntimeDir", slangRuntimeDir
 		systemProperty "caustica.test.slangVersion", slangRuntimeVersion
 		systemProperty "caustica.test.spirvVal", resolveVulkanTool("spirv-val")
-		// SlangRuntime normally locates its extracted natives through FabricLoader's game directory,
+		// SlangRuntime normally locates its extracted natives through the active loader's game directory,
 		// which does not exist under plain JUnit. The same override players can use to point at a local
 		// Slang build lets tests exercise the real runtime path (session creation, module search paths)
 		// instead of only the lower-level SlangLibrary calls.
@@ -457,8 +529,8 @@ def normalizeNgxVendorConfig = { String config ->
 }
 def ngxVendorConfig = normalizeNgxVendorConfig(
 		(findProperty("ngxVendorConfig") ?: (isRunClientInvocation ? "dev" : "rel")).toString())
-def ngxNativeRoot = layout.buildDirectory.dir("native/ngx_shim").get().asFile
-def ngxShimOutDir = new File(ngxNativeRoot, ngxShimConfig)
+def ngxShimInputRoot = file(findProperty("ngxShimInputRoot") ?: layout.buildDirectory.dir("native/ngx_shim").get().asFile)
+def ngxShimOutDir = new File(ngxShimInputRoot, ngxShimConfig)
 def currentNgxPlatform = {
 	def os = org.gradle.internal.os.OperatingSystem.current()
 	def arch = System.getProperty("os.arch", "").toLowerCase(java.util.Locale.ROOT)
@@ -580,6 +652,15 @@ def bundleNgxNatives = tasks.register("bundleNgxNatives") {
 				}
 			}
 			into ngxNativeGenRoot
+		}
+		selectedNgxNativePlatforms.each { platform ->
+			def featureNames = fileTree(platform.vendorRoot(dlssSdkRoot, ngxVendorConfig)) {
+				include platform.vendorIncludes
+			}.files.collect { it.name }.unique().sort()
+			def featureIndex = new File(ngxNativeGenRoot.get().asFile,
+					"caustica/natives/${platform.name}/features.list")
+			featureIndex.parentFile.mkdirs()
+			featureIndex.text = featureNames.join("\n") + (featureNames.empty ? "" : "\n")
 		}
 	}
 }

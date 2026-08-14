@@ -37,11 +37,10 @@ changes while the renderer is being built.
 
 ## Installation
 
-1. Install Fabric Loader for Minecraft `26.2`.
-2. Install Fabric API.
-3. Put the Caustica jar in your Minecraft `mods` folder.
-4. Launch the game with the Vulkan graphics backend.
-5. Open Video Settings to adjust Caustica's renderer options.
+1. Install either Fabric Loader (with Fabric API) or NeoForge for Minecraft `26.2`.
+2. Download the Caustica jar matching that loader and put it in your Minecraft `mods` folder.
+3. Launch the game with the Vulkan graphics backend.
+4. Open Video Settings to adjust Caustica's renderer options.
 
 ## Usage Notes
 

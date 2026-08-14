@@ -2,8 +2,7 @@ package dev.comfyfluffy.caustica.ngx;
 
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
-
-import net.fabricmc.loader.api.FabricLoader;
+import dev.comfyfluffy.caustica.platform.CausticaPlatform;
 
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VK10;
@@ -12,6 +11,8 @@ import org.lwjgl.vulkan.VkInstance;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
@@ -128,7 +129,7 @@ public final class NgxRuntime {
 
         lib = NgxLibrary.load(shim);
 
-        Path dataPath = FabricLoader.getInstance().getGameDir().resolve("caustica-ngx");
+        Path dataPath = CausticaPlatform.current().gameDir().resolve("caustica-ngx");
         try {
             Files.createDirectories(dataPath);
         } catch (Exception e) {
@@ -176,7 +177,7 @@ public final class NgxRuntime {
         if (natives.stream().noneMatch(nativeFile -> nativeFile.name().equals(PLATFORM_NATIVES.shimName()))) {
             return null;
         }
-        Path dir = FabricLoader.getInstance().getGameDir().resolve("caustica-ngx")
+        Path dir = CausticaPlatform.current().gameDir().resolve("caustica-ngx")
                 .resolve("natives").resolve(PLATFORM_NATIVES.platformDir()).resolve(bundleHash(natives));
         try {
             Files.createDirectories(dir);
@@ -248,22 +249,21 @@ public final class NgxRuntime {
 
     private static List<String> bundledFeatureLibraryNames() {
         List<String> names = new ArrayList<>();
-        FabricLoader.getInstance().getModContainer("caustica").ifPresent(container -> {
-            String nativeDir = "caustica/natives/" + PLATFORM_NATIVES.platformDir();
-            for (Path root : container.getRootPaths()) {
-                Path dir = root.resolve(nativeDir);
-                if (!Files.isDirectory(dir)) {
-                    continue;
-                }
-                try (Stream<Path> files = Files.list(dir)) {
-                    files.map(path -> path.getFileName().toString())
-                            .filter(PLATFORM_NATIVES::isFeatureLibrary)
-                            .forEach(names::add);
-                } catch (IOException e) {
-                    CausticaMod.LOGGER.warn("Could not list bundled NGX natives in {}", dir, e);
-                }
+        String resource = PLATFORM_NATIVES.resourceDir() + "features.list";
+        try (InputStream input = NgxRuntime.class.getResourceAsStream(resource)) {
+            if (input == null) {
+                return names;
             }
-        });
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(input, StandardCharsets.UTF_8))) {
+                reader.lines()
+                        .map(String::trim)
+                        .filter(name -> !name.isEmpty())
+                        .filter(PLATFORM_NATIVES::isFeatureLibrary)
+                        .forEach(names::add);
+            }
+        } catch (IOException e) {
+            CausticaMod.LOGGER.warn("Could not read bundled NGX feature index {}", resource, e);
+        }
         return names;
     }
 

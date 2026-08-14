@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.engine;
 
+import dev.comfyfluffy.caustica.SourceRoots;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
@@ -13,22 +14,20 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 final class EngineImportFirewallTest {
     @Test
     void engineSourcesDoNotImportHostOrRendererImplementations() throws IOException {
-        Path engineSources = Path.of("src", "main", "java", "dev", "comfyfluffy", "caustica", "engine")
-                .toAbsolutePath().normalize();
-        assertTrue(Files.isDirectory(engineSources), "engine source package is missing: " + engineSources);
+        List<Path> engineSources = SourceRoots.javaSources("engine");
+        assertTrue(!engineSources.isEmpty(), "engine source package is missing");
 
         List<String> violations = new ArrayList<>();
-        try (var paths = Files.walk(engineSources)) {
-            for (Path source : paths.filter(path -> path.toString().endsWith(".java")).toList()) {
-                List<String> lines = Files.readAllLines(source);
-                for (int line = 0; line < lines.size(); line++) {
-                    String text = lines.get(line);
-                    if (text.contains("net.minecraft.") || text.contains("net.fabricmc.")
-                            || text.contains("com.mojang.")
-                            || text.contains("dev.comfyfluffy.caustica.minecraft.")
-                            || text.contains("dev.comfyfluffy.caustica.rt.")) {
-                        violations.add(engineSources.relativize(source) + ":" + (line + 1) + ": " + text);
-                    }
+        for (Path source : engineSources) {
+            List<String> lines = Files.readAllLines(source);
+            for (int line = 0; line < lines.size(); line++) {
+                String text = lines.get(line);
+                if (text.contains("net.minecraft.") || text.contains("net.fabricmc.")
+                        || text.contains("net.neoforged.")
+                        || text.contains("com.mojang.")
+                        || text.contains("dev.comfyfluffy.caustica.minecraft.")
+                        || text.contains("dev.comfyfluffy.caustica.rt.")) {
+                    violations.add(source.getFileName() + ":" + (line + 1) + ": " + text);
                 }
             }
         }

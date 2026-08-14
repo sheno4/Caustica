@@ -13,7 +13,7 @@ final class RtDeviceBoundaryFirewallTest {
     private static final List<String> SOURCES = List.of(
             "RtDeviceBringup.java", "RtHdr.java", "VulkanDiagnostics.java");
     private static final List<String> HOST_MARKERS = List.of(
-            "com.mojang", "net.minecraft", "net.fabricmc", "dev.comfyfluffy.caustica.minecraft",
+            "com.mojang", "net.minecraft", "net.fabricmc", "net.neoforged", "dev.comfyfluffy.caustica.minecraft",
             "dev.comfyfluffy.caustica.mixin", "VulkanPhysicalDevice", "VulkanDevice", "VulkanUtils",
             "injection.invoke.arg.Args", "Minecraft", "Vanilla", "vanilla", "Blaze3D", "Fabric", "Mojang");
 

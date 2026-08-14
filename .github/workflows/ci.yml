@@ -209,7 +209,7 @@ jobs:
           if-no-files-found: error
 
   package:
-    name: Build bundled mod jar
+    name: Build bundled mod jars
     runs-on: ubuntu-latest
     needs:
       - native-windows
@@ -277,23 +277,39 @@ jobs:
           path: build/slang-runtime-input
           merge-multiple: true
 
-      - name: Build bundled jar
+      - name: Build Fabric jar
         env:
           DLSS_SDK: ${{ github.workspace }}/${{ env.DLSS_SDK_PATH }}
         run: >
           bash ./gradlew build
+          -Ploader=fabric
+          -PbuildRoot=build/fabric
           -PngxPlatforms=windows-x64,linux-x64
           -PngxVendorConfig=${{ env.NGX_VENDOR_CONFIG }}
           -PngxShimConfig=${{ env.NGX_SHIM_CONFIG }}
+          -PngxShimInputRoot=build/native/ngx_shim
           -PslangPlatforms=windows-x64,linux-x64
           -PslangRuntimeInputRoot=build/slang-runtime-input
 
-      - name: Upload bundled jar
+      - name: Build NeoForge jar
+        env:
+          DLSS_SDK: ${{ github.workspace }}/${{ env.DLSS_SDK_PATH }}
+        run: >
+          bash ./gradlew build
+          -Ploader=neoforge
+          -PbuildRoot=build/neoforge
+          -PngxPlatforms=windows-x64,linux-x64
+          -PngxVendorConfig=${{ env.NGX_VENDOR_CONFIG }}
+          -PngxShimConfig=${{ env.NGX_SHIM_CONFIG }}
+          -PngxShimInputRoot=build/native/ngx_shim
+          -PslangPlatforms=windows-x64,linux-x64
+          -PslangRuntimeInputRoot=build/slang-runtime-input
+
+      - name: Upload bundled jars
         uses: actions/upload-artifact@v4
         with:
-          name: caustica-bundled-jar
+          name: caustica-bundled-jars
           path: |
-            build/libs/*.jar
-            !build/libs/*-sources.jar
-            !build/libs/*-dev.jar
+            build/fabric/libs/*-fabric.jar
+            build/neoforge/libs/*-neoforge.jar
           if-no-files-found: error

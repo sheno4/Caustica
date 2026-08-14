@@ -7,6 +7,7 @@
 		"BlockModelRenderStateMixin",
 		"BlockModelResolverMixin",
 		"CommandEncoderAccessor",
+		"DebugScreenEntriesAccessor",
 		"GameRendererMixin",
 		"GpuDeviceAccessor",
 		"GlxMixin",

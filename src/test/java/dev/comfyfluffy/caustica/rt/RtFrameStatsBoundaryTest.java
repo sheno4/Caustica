@@ -45,6 +45,7 @@ final class RtFrameStatsBoundaryTest {
         List<String> violations = Files.readAllLines(source).stream()
                 .filter(line -> line.startsWith("import "))
                 .filter(line -> line.contains("net.fabricmc.")
+                        || line.contains("net.neoforged.")
                         || line.contains("net.minecraft.")
                         || line.contains("dev.comfyfluffy.caustica.minecraft."))
                 .toList();

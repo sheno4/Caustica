@@ -8,13 +8,9 @@ import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialProfile;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialClassifier;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialLookup;
 import dev.comfyfluffy.caustica.minecraft.provider.MinecraftMaterialSource;
-import dev.comfyfluffy.caustica.rt.RtComposite;
 import dev.comfyfluffy.caustica.rt.GpuContext;
-import dev.comfyfluffy.caustica.rt.RtDebugLabels;
-import dev.comfyfluffy.caustica.rt.RtDeviceBringup;
 import dev.comfyfluffy.caustica.rt.RtFrameStats;
 import dev.comfyfluffy.caustica.rt.accel.RtAccel;
-import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
 import dev.comfyfluffy.caustica.rt.material.RtMaterialAbi;
 import dev.comfyfluffy.caustica.rt.material.RtMaterialRegistry;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
@@ -28,10 +24,6 @@ import it.unimi.dsi.fastutil.longs.LongIterator;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import it.unimi.dsi.fastutil.longs.LongSet;
 import it.unimi.dsi.fastutil.objects.ObjectIterator;
-import net.fabricmc.fabric.api.client.renderer.v1.Renderer;
-import net.fabricmc.fabric.api.client.renderer.v1.mesh.MutableQuadView;
-import net.fabricmc.fabric.api.client.renderer.v1.mesh.QuadEmitter;
-import net.fabricmc.fabric.api.client.renderer.v1.sprite.SpriteFinder;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.color.block.BlockColors;
 import net.minecraft.client.color.block.BlockTintSource;
@@ -44,7 +36,8 @@ import net.minecraft.client.renderer.block.FluidStateModelSet;
 import net.minecraft.client.renderer.chunk.ChunkSectionLayer;
 import net.minecraft.client.renderer.block.dispatch.BlockStateModel;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
-import net.minecraft.client.model.geom.builders.UVPair;
+import net.minecraft.client.renderer.block.dispatch.BlockStateModelPart;
+import net.minecraft.client.resources.model.geometry.BakedQuad;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.SectionPos;
@@ -55,7 +48,6 @@ import net.minecraft.world.level.block.RenderShape;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.material.FluidState;
 import net.minecraft.world.phys.Vec3;
-import org.lwjgl.system.MemoryUtil;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -65,20 +57,19 @@ final class RtTerrainMesher {
      * Reusable per-worker-thread meshing state. The mesh + captures are reset between tasks so their
      * backing arrays amortize across sections instead of re-growing per task. Everything the result carries out —
      * {@link PackedSection}, OMM data — is copied out of this state before the job returns, so reuse on
-     * the next task cannot corrupt a queued result. The Fabric block emitter is also thread-confined and
-     * reused; the fluid renderer stays per-task because it captures the dispatch context's model set.
+     * the next task cannot corrupt a queued result. The fluid renderer stays per-task because it captures
+     * the dispatch context's model set.
      */
     static final class WorkerTessState {
         final QuadCapture capture = new QuadCapture();
-        final QuadEmitter blockEmitter = Renderer.get().quadEmitter(capture::putFabric);
         final RandomSource blockRandom = RandomSource.createThreadLocalInstance(0L);
+        final List<BlockStateModelPart> modelParts = new ArrayList<>();
         final FluidCapture fluidCapture = new FluidCapture();
         final SectionMesh mesh = new SectionMesh();
         final BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
 
-        void reset(BlockColors blockColors, SpriteFinder blockSpriteFinder) {
+        void reset(BlockColors blockColors) {
             capture.blockColors = blockColors;
-            capture.spriteFinder = blockSpriteFinder;
             capture.discardBlock(); // defensive: a prior job's throw could leave buffered quads
             fluidCapture.reset();
             mesh.reset();
@@ -95,16 +86,16 @@ final class RtTerrainMesher {
      * Returns the mesh (possibly empty — caller checks {@code idx}).
      */
     static CpuSection buildCpuSection(BlockAndTintGetter region, BlockStateModelSet modelSet,
-                                              QuadEmitter blockEmitter, RandomSource blockRandom,
+                                              RandomSource blockRandom, List<BlockStateModelPart> modelParts,
                                               QuadCapture capture,
-                                              FluidRenderer fluidRenderer, FluidCapture fluidCapture,
+                                              FluidStateModelSet fluidModels, FluidCapture fluidCapture,
                                               SectionMesh mesh, BlockPos.MutableBlockPos m,
                                               RtMaterialRegistry.Snapshot materials,
                                               int scx, int scy, int scz) {
         capture.materials = materials;
         fluidCapture.materials = materials;
-        tessellate(region, modelSet, blockEmitter, blockRandom, capture,
-                fluidRenderer, fluidCapture, mesh, m, scx, scy, scz);
+        tessellate(region, modelSet, blockRandom, modelParts, capture,
+                fluidModels, fluidCapture, mesh, m, scx, scy, scz);
         if (mesh.isEmpty()) {
             return new CpuSection(null, null);
         }
@@ -187,8 +178,8 @@ final class RtTerrainMesher {
     }
 
     private static void tessellate(BlockAndTintGetter region, BlockStateModelSet modelSet,
-                                   QuadEmitter blockEmitter, RandomSource blockRandom, QuadCapture capture,
-                                   FluidRenderer fluidRenderer, FluidCapture fluidCapture,
+                                   RandomSource blockRandom, List<BlockStateModelPart> modelParts,
+                                   QuadCapture capture, FluidStateModelSet fluidModels, FluidCapture fluidCapture,
                                    SectionMesh mesh, BlockPos.MutableBlockPos m, int scx, int scy, int scz) {
         int sox = scx << 4, soy = scy << 4, soz = scz << 4;
         capture.cur = mesh;
@@ -213,7 +204,7 @@ final class RtTerrainMesher {
                         // Minecraft selects the named transmissive fluid material; lava stays the
                         // adapter's opaque emitter fallback.
                         fluidCapture.water = fluid.is(FluidTags.WATER);
-                        RtFluidMesher.tesselate(region, m, fluidCapture, fluidRenderer.fluidModels, state, fluid);
+                        RtFluidMesher.tesselate(region, m, fluidCapture, fluidModels, state, fluid);
                     }
                     if (state.getRenderShape() != RenderShape.MODEL) {
                         continue;
@@ -229,7 +220,20 @@ final class RtTerrainMesher {
                     capture.originY = ly + (float) offset.y;
                     capture.originZ = lz + (float) offset.z;
                     blockRandom.setSeed(state.getSeed(m));
-                    model.emitQuads(blockEmitter, region, m, state, blockRandom, capture.cullTest);
+                    modelParts.clear();
+                    model.collectParts(blockRandom, modelParts);
+                    for (BlockStateModelPart part : modelParts) {
+                        for (BakedQuad quad : part.getQuads(null)) {
+                            capture.putVanilla(quad);
+                        }
+                        for (Direction direction : Direction.values()) {
+                            if (!capture.isCulled(direction)) {
+                                for (BakedQuad quad : part.getQuads(direction)) {
+                                    capture.putVanilla(quad);
+                                }
+                            }
+                        }
+                    }
                     capture.flushBlock(); // resolve coplanar ties (grass overlay / cross faces), then emit
                 }
             }
@@ -388,22 +392,20 @@ final class RtTerrainMesher {
         }
     }
 
-    /** Captures final Fabric model quads into the current section's mesh. */
+    /** Captures vanilla baked model quads into the current section's mesh. */
     private static final class QuadCapture {
         SectionMesh cur; // set before each block model emission
         RtMaterialRegistry.Snapshot materials;
-        SpriteFinder spriteFinder;
 
         // Per-block context for biome tint, set before each model emission. We resolve it straight from
-        // BlockColors and combine it with the Fabric quad's authored color before raster lighting, so the
-        // path tracer receives unlit albedo rather than vanilla AO + directional shading.
+        // BlockColors resolves biome tint before raster lighting, so the path tracer receives unlit albedo
+        // rather than vanilla AO + directional shading.
         BlockColors blockColors;
         BlockAndTintGetter view;
         BlockState state;
         BlockPos pos;
         float originX, originY, originZ;
         private final BlockPos.MutableBlockPos cullPos = new BlockPos.MutableBlockPos();
-        private final java.util.function.Predicate<Direction> cullTest = this::isCulled;
 
         // Coplanar-resolution: vanilla emits coincident quads that tie on depth in the BVH and flicker —
         // a block face's opaque base + its tinted cutout overlay (grass/snowy sides), and a cross model's
@@ -419,14 +421,14 @@ final class RtTerrainMesher {
         private int pendingCount;
         private int[] gidScratch = new int[0];
 
-        /** Capture a final Fabric Renderer API quad before raster AO/directional lighting is applied. */
-        private void putFabric(MutableQuadView quad) {
+        /** Capture a vanilla baked quad before raster AO/directional lighting is applied. */
+        private void putVanilla(BakedQuad quad) {
             PendingQuad q = acquire();
             for (int i = 0; i < 4; i++) {
-                q.x[i] = quad.x(i) + originX;
-                q.y[i] = quad.y(i) + originY;
-                q.z[i] = quad.z(i) + originZ;
-                q.uv[i] = UVPair.pack(quad.u(i), quad.v(i));
+                q.x[i] = quad.position(i).x() + originX;
+                q.y[i] = quad.position(i).y() + originY;
+                q.z[i] = quad.position(i).z() + originZ;
+                q.uv[i] = quad.packedUV(i);
             }
 
             float ex1 = q.x[1] - q.x[0], ey1 = q.y[1] - q.y[0], ez1 = q.z[1] - q.z[0];
@@ -436,23 +438,14 @@ final class RtTerrainMesher {
             if (len > 1.0e-6f) { nx /= len; ny /= len; nz /= len; }
             q.nx = nx; q.ny = ny; q.nz = nz;
 
-            ChunkSectionLayer layer = quad.chunkLayer();
+            ChunkSectionLayer layer = quad.materialInfo().layer();
             q.cutout = layer != ChunkSectionLayer.SOLID;
             q.translucent = layer == ChunkSectionLayer.TRANSLUCENT;
 
-            // Fabric colors are authored albedo. Continuity uses them for already-resolved overlay tint;
-            // ordinary biome-tinted quads retain tintIndex and are multiplied by the world tint below.
-            int sr = 0, sg = 0, sb = 0;
-            for (int i = 0; i < 4; i++) {
-                int color = quad.color(i);
-                sr += (color >> 16) & 0xFF;
-                sg += (color >> 8) & 0xFF;
-                sb += color & 0xFF;
-            }
-            float tr = sr / 1020f;
-            float tg = sg / 1020f;
-            float tb = sb / 1020f;
-            int tintIndex = quad.tintIndex();
+            float tr = 1f;
+            float tg = 1f;
+            float tb = 1f;
+            int tintIndex = quad.materialInfo().tintIndex();
             q.tinted = tintIndex >= 0;
             if (tintIndex >= 0 && blockColors != null && state != null) {
                 BlockTintSource src = blockColors.getTintSource(state, tintIndex);
@@ -465,8 +458,9 @@ final class RtTerrainMesher {
             }
             q.tr = tr; q.tg = tg; q.tb = tb;
 
-            q.emission = quad.emissive() ? 1f : (state != null ? state.getLightEmission() / 15f : 0f);
-            TextureAtlasSprite sprite = spriteFinder.find(quad);
+            q.emission = Math.max(quad.materialInfo().lightEmission(),
+                    state != null ? state.getLightEmission() : 0) / 15f;
+            TextureAtlasSprite sprite = quad.materialInfo().sprite();
             q.sprite = sprite;
             var classification = MinecraftMaterialClassifier.classify(state);
             int materialId = materials.resolve(MinecraftMaterialLookup.material(sprite),
@@ -480,7 +474,7 @@ final class RtTerrainMesher {
             q.materialId = needsMaskedCoverage ? materials.withCutoutCoverage(materialId) : materialId;
         }
 
-        /** Fabric's cull predicate returns true when the nominal face should be discarded. */
+        /** Returns true when vanilla's nominal face should be discarded. */
         private boolean isCulled(Direction direction) {
             if (direction == null) {
                 return false;
@@ -658,8 +652,7 @@ final class RtTerrainMesher {
         TextureAtlasSprite sprite;
     }
 
-    /** Append one triangle's 3 corner UVs (6 floats) from packed UVPairs. UVPair packs u in the high 32
-     *  bits, v in the low 32 (atlas-space, no sprite remap needed). */
+    /** Append one triangle's 3 corner UVs (6 floats) from packed atlas-space UVs. */
     private static void addTriUv(Geom g, long pa, long pb, long pc) {
         FloatArrayList c = g.cornerUv;
         c.add(Float.intBitsToFloat((int) (pa >>> 32)));

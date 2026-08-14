@@ -12,11 +12,11 @@ import dev.comfyfluffy.caustica.api.Slot;
 import dev.comfyfluffy.caustica.api.Slots;
 import dev.comfyfluffy.caustica.api.pass.PassShaderCompiler;
 import dev.comfyfluffy.caustica.builtin.BuiltinExtension;
+import dev.comfyfluffy.caustica.platform.CausticaPlatform;
 import dev.comfyfluffy.caustica.rt.RtFrameStats;
 import dev.comfyfluffy.caustica.rt.RtComposite;
-import net.fabricmc.loader.api.FabricLoader;
 
-/** Fabric discovery, config paths, and Minecraft provider installation for the public renderer API. */
+/** Loader-neutral extension discovery, config paths, and Minecraft provider installation. */
 public final class MinecraftApiBootstrap {
     private MinecraftApiBootstrap() {
     }
@@ -25,8 +25,7 @@ public final class MinecraftApiBootstrap {
         CausticaRegistry registry = new CausticaRegistry();
         new BuiltinExtension().register(registry);
         new MinecraftProvidersExtension().register(registry);
-        for (CausticaExtension extension : FabricLoader.getInstance()
-                .getEntrypoints(CausticaApi.ENTRYPOINT, CausticaExtension.class)) {
+        for (CausticaExtension extension : CausticaPlatform.current().extensions()) {
             try {
                 extension.register(registry);
             } catch (RuntimeException e) {
@@ -36,14 +35,14 @@ public final class MinecraftApiBootstrap {
         }
         applyPersistedSelection(registry, Slots.SKY, CausticaConfig.Rt.Composition.SKY.get(),
                 MinecraftProvidersExtension.ID);
-        var shaderCache = FabricLoader.getInstance().getGameDir().resolve("caustica-shaders");
+        var shaderCache = CausticaPlatform.current().gameDir().resolve("caustica-shaders");
         PassShaderCompiler.defaultCacheRoot(shaderCache.resolve("passes"));
         RtComposite.configureShaderCacheRoot(shaderCache.resolve("sources"));
-        RtFrameStats.configureOutputDirectory(FabricLoader.getInstance().getGameDir()
+        RtFrameStats.configureOutputDirectory(CausticaPlatform.current().gameDir()
                 .resolve("rt-frame-stats"));
         RtFrameStats.configureFrameMetrics(MinecraftFrameMetrics.schema());
         CausticaOptions options = CausticaOptions.load(
-                FabricLoader.getInstance().getConfigDir().resolve("caustica-options.toml"),
+                CausticaPlatform.current().configDir().resolve("caustica-options.toml"),
                 registry.features());
         CausticaApi.initialize(registry, options);
         CausticaMod.LOGGER.info("Caustica extension API {} initialized with {} feature(s)",

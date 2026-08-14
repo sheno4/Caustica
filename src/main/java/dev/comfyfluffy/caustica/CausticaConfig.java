@@ -4,11 +4,11 @@ import com.electronwill.nightconfig.core.CommentedConfig;
 import com.electronwill.nightconfig.core.file.CommentedFileConfig;
 import com.electronwill.nightconfig.core.file.FileNotFoundAction;
 import com.electronwill.nightconfig.toml.TomlFormat;
+import dev.comfyfluffy.caustica.platform.CausticaPlatform;
 import java.lang.invoke.MethodHandles;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
-import net.fabricmc.loader.api.FabricLoader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -121,11 +121,7 @@ public final class CausticaConfig {
     }
 
     private static Path resolveConfigPath() {
-        try {
-            return FabricLoader.getInstance().getConfigDir().resolve("caustica.toml");
-        } catch (Throwable t) {
-            return Path.of("config", "caustica.toml");
-        }
+        return CausticaPlatform.current().configDir().resolve("caustica.toml");
     }
 
     private static CommentedFileConfig loadFile(Path path) {

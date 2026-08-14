@@ -15,9 +15,11 @@ The code is divided by responsibility:
   geometry/material/light records and no Minecraft types.
 - `engine/*` contains host-neutral frame, light, material and scene records and algorithms.
 - `rt/*` owns Vulkan resources, acceleration structures, canonical material compilation, world-shader
-  composition and path tracing. Import-firewall tests keep Minecraft, Fabric and Mojang types out.
+  composition and path tracing. Import-firewall tests keep Minecraft, loader, and Mojang types out.
 - `minecraft/*` owns block/chunk/entity/resource-pack acquisition, Minecraft material decoding and
   photometric calibration, and the optimized terrain/entity adapter.
+- `platform/*` is the small loader seam for paths and extension discovery; `src/fabric` and `src/neoforge`
+  contain only entrypoints and APIs that cannot be shared.
 - `builtin/*` supplies the reference sky and surface through the same registry used by extensions.
 
 Minecraft is therefore a source of geometry, lights, materials and frame state. It is not a semantic mode

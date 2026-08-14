@@ -3,6 +3,7 @@ package dev.comfyfluffy.caustica.client;
 import com.mojang.blaze3d.pipeline.RenderTarget;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.rt.RtComposite;
+import dev.comfyfluffy.caustica.rt.RtRuntime;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
 
@@ -119,6 +120,14 @@ public final class VanillaRenderController {
 	/** Runtime work switch for per-frame RT work; mirrors {@link RtComposite#enabled()}. */
 	public static boolean rtRuntimeWorkRequested() {
 		return RtComposite.enabled();
+	}
+
+	/**
+	 * Whether extraction work can be dropped because RT owns the world. Shared by the extraction-skipping
+	 * mixins, including the loader-specific ones whose injection points differ.
+	 */
+	public static boolean rtOwnsWorldRendering() {
+		return RtRuntime.active() && INSTANCE.replacedVanillaWorldLastFrame();
 	}
 
 	public void markRtCompositeResult(boolean success) {

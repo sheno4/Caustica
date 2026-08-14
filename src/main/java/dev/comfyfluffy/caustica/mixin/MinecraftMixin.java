@@ -4,6 +4,8 @@ import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vulkan.VulkanDevice;
 
 import dev.comfyfluffy.caustica.rt.RtReflex;
+import dev.comfyfluffy.caustica.rt.RtRuntime;
+import dev.comfyfluffy.caustica.minecraft.MinecraftFrameAdapter;
 import dev.comfyfluffy.caustica.minecraft.MinecraftUiOverlay;
 
 import net.minecraft.client.Minecraft;
@@ -31,6 +33,14 @@ public abstract class MinecraftMixin {
 	@Inject(method = "close", at = @At("HEAD"))
 	private void caustica$destroyUiOverlayBeforeRendererShutdown(CallbackInfo ci) {
 		MinecraftUiOverlay.destroy();
+		RtRuntime.INSTANCE.shutdown();
+	}
+
+	// Client-tick cadence, matching where the runtime tick has always run. runTick's HEAD would raise this
+	// to frame rate and place session/resize work ahead of the Reflex sleep below.
+	@Inject(method = "tick", at = @At("HEAD"))
+	private void caustica$tickRuntime(CallbackInfo ci) {
+		MinecraftFrameAdapter.INSTANCE.tickRuntime((Minecraft) (Object) this);
 	}
 
 	@Inject(method = "runTick", at = @At("HEAD"))

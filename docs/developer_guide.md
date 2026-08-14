@@ -31,11 +31,23 @@ cmake -S native/slang_shim -B build/cmake/slang_shim -G "Visual Studio 17 2022" 
 cmake --build build/cmake/slang_shim --config Release
 ```
 
-4. Run the client:
+5. Run the Fabric client:
 
 ```powershell
-$env:JAVA_TOOL_OPTIONS = "-Xmx8G -XX:+UseCompactObjectHeaders -XX:+AlwaysPreTouch -XX:+UseStringDeduplication -XX:+UseZGC"
-.\gradlew.bat runClient --args="--renderDebugLabels --graphicsBackend VULKAN"
+.\gradlew.bat --no-daemon -Ploader=fabric -PoptimizedClientJvm=true runClient --args="--renderDebugLabels --graphicsBackend VULKAN"
+```
+
+NeoForge uses the same shared sources and has its own run configuration:
+
+```powershell
+.\gradlew.bat --no-daemon -Ploader=neoforge -PoptimizedClientJvm=true runClient --args="--renderDebugLabels --graphicsBackend VULKAN"
+```
+
+The `runClient.ps1` helper defaults to Fabric. Pass `neoforge` to select the
+NeoForge run configuration:
+
+```powershell
+.\runClient.ps1 neoforge
 ```
 
 ## Linux
@@ -77,14 +89,17 @@ Gradle bundles NGX natives and the Slang shared-library compiler runtime for the
 current host platform by default:
 
 ```bash
-./gradlew build
+./gradlew -Ploader=fabric build
 ```
+
+Select NeoForge with `-Ploader=neoforge`. The build emits a loader-specific
+classifier (`-fabric` or `-neoforge`) so both jars can be installed side by side.
 
 Release builds that already have both platform shims available can request a
 cross-platform native bundle:
 
 ```bash
-./gradlew build -PngxPlatforms=windows-x64,linux-x64
+./gradlew -Ploader=fabric build -PngxPlatforms=windows-x64,linux-x64
 ```
 
 Cross-platform Slang packaging accepts prepared runtime directories produced by
@@ -92,7 +107,7 @@ CI. Each platform directory contains `causticaslang`, the matching Slang shared
 libraries, and the Slang standard module:
 
 ```bash
-./gradlew build \
+./gradlew -Ploader=fabric build \
   -PslangPlatforms=windows-x64,linux-x64 \
   -PslangRuntimeInputRoot=build/slang-runtime-input
 ```
@@ -125,5 +140,5 @@ Validate the Java FFM boundary and the engine/pack specialization path with:
 Run the Vulkan RT/DLSS-RR client with:
 
 ```bash
-JAVA_TOOL_OPTIONS='-Xmx8G -XX:+UseCompactObjectHeaders -XX:+AlwaysPreTouch -XX:+UseStringDeduplication -XX:+UseZGC' nvidia-offload ./gradlew runClient --args='--renderDebugLabels --graphicsBackend VULKAN'
+nvidia-offload ./gradlew --no-daemon -Ploader=fabric -PoptimizedClientJvm=true runClient --args='--renderDebugLabels --graphicsBackend VULKAN'
 ```

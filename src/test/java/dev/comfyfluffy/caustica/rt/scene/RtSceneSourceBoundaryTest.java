@@ -35,6 +35,7 @@ final class RtSceneSourceBoundaryTest {
         String lower = content.toLowerCase(Locale.ROOT);
         assertFalse(lower.contains("net.minecraft"), source.toString());
         assertFalse(lower.contains("net.fabricmc"), source.toString());
+        assertFalse(lower.contains("net.neoforged"), source.toString());
         assertFalse(lower.contains("rt.terrain"), source.toString());
         assertFalse(lower.contains("rt.entity"), source.toString());
         assertFalse(lower.matches("(?s).*\\b(minecraft|terrain|entity|section|block)\\b.*"), source.toString());

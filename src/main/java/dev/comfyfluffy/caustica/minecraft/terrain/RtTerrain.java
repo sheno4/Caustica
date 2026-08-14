@@ -30,16 +30,13 @@ import it.unimi.dsi.fastutil.longs.LongArrayList;
 import it.unimi.dsi.fastutil.longs.LongIterator;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import it.unimi.dsi.fastutil.longs.LongSet;
-import net.fabricmc.fabric.api.client.renderer.v1.sprite.SpriteFinder;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.color.block.BlockColors;
 import net.minecraft.client.color.block.BlockTintSource;
 import net.minecraft.client.multiplayer.ClientChunkCache;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.renderer.block.BlockAndTintGetter;
-import net.minecraft.client.renderer.block.BlockQuadOutput;
 import net.minecraft.client.renderer.block.BlockStateModelSet;
-import net.minecraft.client.renderer.block.FluidRenderer;
 import net.minecraft.client.renderer.block.FluidStateModelSet;
 import net.minecraft.client.renderer.chunk.ChunkSectionLayer;
 import net.minecraft.client.renderer.block.dispatch.BlockStateModel;
@@ -47,7 +44,6 @@ import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.client.resources.model.geometry.BakedQuad;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.SectionPos;
-import net.minecraft.data.AtlasIds;
 import net.minecraft.tags.FluidTags;
 import net.minecraft.world.level.block.RenderShape;
 import net.minecraft.world.level.block.state.BlockState;
@@ -74,8 +70,8 @@ import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrainMesher.WorkerTessStat
  * Residency follows vanilla because a section is only "desired" when its
  * chunk is loaded ({@code hasChunk}), so chunk load/unload drives build/free without any mixin.
  *
- * <p>Geometry comes from the Fabric Renderer API model path (correct shapes, neighbour cull, biome
- * tint, alpha cutout, and model quad transforms). Vertices are section-local (f32-exact); each TLAS
+ * <p>Geometry comes from vanilla's baked model path (correct shapes, neighbour cull, biome tint, alpha
+ * cutout, and model quad transforms). Vertices are section-local (f32-exact); each TLAS
  * instance carries a
  * translation {@code sectionOrigin − rebaseOrigin} (rebase = player block at the last rebuild, so
  * transforms stay small at any world coordinate) and an {@code instanceCustomIndex} into the retained
@@ -165,9 +161,9 @@ public final class RtTerrain {
     private volatile long terrainEpoch = 1L;
     private long buildToken;
     private long dirtyGroupSeq;
-    // Full-residency invalidation requested off the render thread. Wired to Fabric's
-    // InvalidateRenderStateCallback = vanilla LevelExtractor.allChanged() (dimension change via setLevel,
-    // render-distance change, F3+A). Consumed in tick(), where the RT context is available.
+    // Full-residency invalidation requested off the render thread by the vanilla LevelExtractor hook
+    // (dimension change via setLevel, render-distance change, F3+A). Consumed in tick(), where the RT
+    // context is available.
     private volatile boolean fullClearRequested;
     private volatile boolean dirtyPending;
     private boolean noWorldClearApplied;
@@ -292,7 +288,7 @@ public final class RtTerrain {
 
     /**
      * Request a full residency clear, applied on the next {@link #tick} (render thread, where the RT
-     * context is available). Wired to Fabric's {@code InvalidateRenderStateCallback} — vanilla's
+     * context is available). Wired to vanilla's
      * {@link net.minecraft.client.renderer.extract.LevelExtractor#allChanged()}, which fires on a
      * dimension change (via {@code setLevel}), a render-distance change, and F3+A. Thread-safe.
      */
@@ -317,8 +313,8 @@ public final class RtTerrain {
             return; // resource reload gap: keep old work dormant until the new epoch requests a full clear
         }
 
-        // Full clear on an explicit invalidation — vanilla's LevelExtractor.allChanged() via the Fabric
-        // InvalidateRenderStateCallback. That fires on a dimension switch (setLevel → allChanged),
+        // Full clear on an explicit invalidation — vanilla's LevelExtractor.allChanged(). That fires on a
+        // dimension switch (setLevel → allChanged),
         // render-distance change, and F3+A. Without it, End→Overworld keeps the old dimension's geometry:
         // residency is keyed by raw section coords (no world identity), so the same coords stay resident
         // and are never rebuilt for the new world.
@@ -813,7 +809,7 @@ public final class RtTerrain {
         Minecraft mc = Minecraft.getInstance();
         return new DispatchContext(ctx, level,
                 mc.getModelManager().getBlockStateModelSet(), mc.getModelManager().getFluidStateModelSet(),
-                mc.getBlockColors(), mc.getAtlasManager().getAtlasOrThrow(AtlasIds.BLOCKS).spriteFinder());
+                mc.getBlockColors());
     }
 
     /**
@@ -1016,11 +1012,10 @@ public final class RtTerrain {
                         return;
                     }
                     WorkerTessState ws = WORKER_TESS.get(); // thread-confined; reset per task, arrays amortized
-                    ws.reset(dispatch.blockColors(), dispatch.blockSpriteFinder());
-                    FluidRenderer fluidRenderer = new FluidRenderer(dispatch.fluidModelSet());
-                    CpuSection cpu = buildCpuSection(region, dispatch.modelSet(), ws.blockEmitter, ws.blockRandom,
-                            ws.capture,
-                            fluidRenderer, ws.fluidCapture, ws.mesh, ws.pos, materialSnapshot, sx, sy, sz);
+                    ws.reset(dispatch.blockColors());
+                    CpuSection cpu = buildCpuSection(region, dispatch.modelSet(), ws.blockRandom, ws.modelParts,
+                            ws.capture, dispatch.fluidModelSet(), ws.fluidCapture, ws.mesh, ws.pos,
+                            materialSnapshot, sx, sy, sz);
                     if (!isTaskCurrent(task)) {
                         completeTask(task, null, null, null);
                         return;
@@ -1280,8 +1275,7 @@ public final class RtTerrain {
 
     /** Per-tick render-thread snapshot dependencies shared by reextract + missing dispatch. */
     private record DispatchContext(GpuContext ctx, ClientLevel level, BlockStateModelSet modelSet,
-                                   FluidStateModelSet fluidModelSet, BlockColors blockColors,
-                                   SpriteFinder blockSpriteFinder) {
+                                   FluidStateModelSet fluidModelSet, BlockColors blockColors) {
     }
 
     private record DirtyEvent(long groupId, LongArrayList keys) {

@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.rt.provider;
 
+import dev.comfyfluffy.caustica.SourceRoots;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
@@ -13,22 +14,20 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 final class ProviderPackageImportFirewallTest {
     @Test
     void genericProviderRuntimeDoesNotContainMinecraftAdapters() throws IOException {
-        Path sources = Path.of("src", "main", "java", "dev", "comfyfluffy", "caustica",
-                "rt", "provider").toAbsolutePath().normalize();
-        assertTrue(Files.isDirectory(sources), "provider runtime package is missing: " + sources);
+        List<Path> sources = SourceRoots.javaSources("rt", "provider");
+        assertTrue(!sources.isEmpty(), "provider runtime package is missing");
 
         List<String> violations = new ArrayList<>();
-        try (var paths = Files.walk(sources)) {
-            for (Path source : paths.filter(path -> path.toString().endsWith(".java")).toList()) {
-                if (source.getFileName().toString().startsWith("Minecraft")) {
-                    violations.add(sources.relativize(source) + ": Minecraft adapter class");
-                }
-                for (String line : Files.readAllLines(source)) {
-                    if (line.startsWith("import ") && (line.contains("net.minecraft.")
-                            || line.contains("net.fabricmc.")
-                            || line.contains("dev.comfyfluffy.caustica.minecraft."))) {
-                        violations.add(sources.relativize(source) + ": " + line);
-                    }
+        for (Path source : sources) {
+            if (source.getFileName().toString().startsWith("Minecraft")) {
+                violations.add(source.getFileName() + ": Minecraft adapter class");
+            }
+            for (String line : Files.readAllLines(source)) {
+                if (line.startsWith("import ") && (line.contains("net.minecraft.")
+                        || line.contains("net.fabricmc.")
+                        || line.contains("net.neoforged.")
+                        || line.contains("dev.comfyfluffy.caustica.minecraft."))) {
+                    violations.add(source.getFileName() + ": " + line);
                 }
             }
         }

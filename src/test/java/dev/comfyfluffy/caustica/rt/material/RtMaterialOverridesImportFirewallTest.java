@@ -15,7 +15,7 @@ final class RtMaterialOverridesImportFirewallTest {
                 "RtMaterialOverrides.java").toAbsolutePath().normalize();
         String text = Files.readString(source);
 
-        for (String forbidden : new String[]{"net.minecraft.", "net.fabricmc.", "com.mojang.",
+        for (String forbidden : new String[]{"net.minecraft.", "net.fabricmc.", "net.neoforged.", "com.mojang.",
                 "dev.comfyfluffy.caustica.mixin.", "dev.comfyfluffy.caustica.minecraft."}) {
             assertFalse(text.contains(forbidden),
                     () -> source + " crossed the host import firewall with " + forbidden);

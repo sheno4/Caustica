@@ -1,12 +1,12 @@
 package dev.comfyfluffy.caustica.slang;
 
+import dev.comfyfluffy.caustica.platform.CausticaPlatform;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 
-import net.fabricmc.loader.api.FabricLoader;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -159,7 +159,7 @@ public final class SlangRuntime {
             throw new IllegalStateException("Bundled Slang runtime manifest identity mismatch");
         }
 
-        Path directory = FabricLoader.getInstance().getGameDir().resolve("caustica-slang")
+        Path directory = CausticaPlatform.current().gameDir().resolve("caustica-slang")
                 .resolve(version).resolve(platform.resourceName()).resolve(manifest.bundleSha256());
         try {
             Files.createDirectories(directory);

@@ -16,6 +16,20 @@ All public names use the host-neutral `ResourceId`. UI text uses `DisplayText.li
 `FeatureBuilder.sceneProvider`, `lightProvider` or `materialSource` registration, not to the provider
 implementation.
 
+## Loader registration
+
+On Fabric, expose the extension through the `caustica` entrypoint in `fabric.mod.json`:
+
+```json
+"entrypoints": {
+  "caustica": ["example.caustica.CrystalExtension"]
+}
+```
+
+On NeoForge, expose the same implementation through Java's `ServiceLoader` by listing its binary class
+name in `META-INF/services/dev.comfyfluffy.caustica.api.CausticaExtension`. The extension implementation
+and all provider code remain loader-neutral.
+
 ## A compile-valid Java feature
 
 The following feature registers a named procedural material, retained triangle geometry and a spot light.

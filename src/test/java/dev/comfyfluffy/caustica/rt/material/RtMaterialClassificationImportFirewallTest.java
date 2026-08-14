@@ -25,7 +25,7 @@ final class RtMaterialClassificationImportFirewallTest {
 
         for (String renderer : new String[]{"RtMaterialRegistry.java", "RtMaterialPageCompiler.java"}) {
             String text = Files.readString(MATERIAL_SOURCES.resolve(renderer));
-            for (String forbidden : List.of("net.minecraft.", "net.fabricmc.", "com.mojang.",
+            for (String forbidden : List.of("net.minecraft.", "net.fabricmc.", "net.neoforged.", "com.mojang.",
                     "dev.comfyfluffy.caustica.minecraft.", "TextureAtlasSprite", "NativeImage",
                     "Identifier", "SpriteContentsAccessor", "TextureAtlasAccessor",
                     "labPbrSpecular", "labPbrNormal", "inferEmissionMask", "RtLabPbr",

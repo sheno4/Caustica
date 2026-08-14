@@ -3,6 +3,7 @@ package dev.comfyfluffy.caustica.mixin;
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import dev.comfyfluffy.caustica.client.VanillaRenderController;
+import dev.comfyfluffy.caustica.client.CausticaClientBootstrap;
 import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
 import dev.comfyfluffy.caustica.rt.RtRuntime;
 import net.minecraft.client.Camera;
@@ -11,16 +12,12 @@ import net.minecraft.client.SectionUpdateTracker;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.particle.ParticleEngine;
 import net.minecraft.client.renderer.WeatherEffectRenderer;
-import net.minecraft.client.renderer.blockentity.BlockEntityRenderDispatcher;
-import net.minecraft.client.renderer.blockentity.state.BlockEntityRenderState;
 import net.minecraft.client.renderer.culling.Frustum;
 import net.minecraft.client.renderer.extract.LevelExtractor;
-import net.minecraft.client.renderer.feature.ModelFeatureRenderer;
 import net.minecraft.client.renderer.state.level.LevelRenderState;
 import net.minecraft.client.renderer.state.level.ParticlesRenderState;
 import net.minecraft.client.renderer.state.level.WeatherRenderState;
 import net.minecraft.core.BlockPos;
-import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.phys.Vec3;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -44,6 +41,11 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  */
 @Mixin(LevelExtractor.class)
 public class LevelExtractorMixin {
+    @Inject(method = "allChanged", at = @At("HEAD"))
+    private void caustica$invalidateRenderState(CallbackInfo ci) {
+        CausticaClientBootstrap.invalidateRenderState();
+    }
+
     @Inject(method = "blockChanged(Lnet/minecraft/core/BlockPos;I)V", at = @At("HEAD"))
     private void caustica$rtBlockChanged(BlockPos pos, int updateFlags, CallbackInfo ci) {
         if (RtRuntime.hasSession()) {
@@ -89,34 +91,9 @@ public class LevelExtractorMixin {
     @Inject(method = "extractVisibleEntities", at = @At("HEAD"), cancellable = true)
     private void caustica$skipVanillaEntityExtraction(Camera camera, Frustum frustum, DeltaTracker deltaTracker,
             LevelRenderState output, CallbackInfo ci) {
-        if (caustica$rtOwnsWorldRendering()) {
+        if (VanillaRenderController.rtOwnsWorldRendering()) {
             ci.cancel();
         }
-    }
-
-    /**
-     * Skip vanilla's block-entity render-state build while RT owns the world, for the same reason as
-     * {@link #caustica$skipVanillaEntityExtraction}: {@code RtEntities} drives
-     * {@code BlockEntityRenderDispatcher} itself.
-     *
-     * <p>Wrapped at the extraction call rather than cancelled at the method head because the same method
-     * owns the only prune of {@code ClientLevel.getGloballyRenderedBlockEntities()} — its loop is what
-     * drops removed block entities from that set. Both call sites already treat a null state as "nothing
-     * to render", so the walk keeps running and only the per-block-entity work disappears.</p>
-     */
-    @WrapOperation(method = "extractVisibleBlockEntities",
-            at = @At(value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/blockentity/BlockEntityRenderDispatcher;"
-                            + "tryExtractRenderState(Lnet/minecraft/world/level/block/entity/BlockEntity;F"
-                            + "Lnet/minecraft/client/renderer/feature/ModelFeatureRenderer$CrumblingOverlay;Z)"
-                            + "Lnet/minecraft/client/renderer/blockentity/state/BlockEntityRenderState;"))
-    private BlockEntityRenderState caustica$skipVanillaBlockEntityExtraction(
-            BlockEntityRenderDispatcher dispatcher, BlockEntity blockEntity, float partialTicks,
-            ModelFeatureRenderer.CrumblingOverlay breakProgress, boolean isGloballyRendered,
-            Operation<BlockEntityRenderState> original) {
-        return caustica$rtOwnsWorldRendering()
-                ? null
-                : original.call(dispatcher, blockEntity, partialTicks, breakProgress, isGloballyRendered);
     }
 
     /**
@@ -137,7 +114,7 @@ public class LevelExtractorMixin {
                             + "Lnet/minecraft/client/Camera;F)V"))
     private void caustica$skipVanillaParticleExtraction(ParticleEngine engine, ParticlesRenderState particles,
             Frustum frustum, Camera camera, float partialTick, Operation<Void> original) {
-        if (!caustica$rtOwnsWorldRendering()) {
+        if (!VanillaRenderController.rtOwnsWorldRendering()) {
             original.call(engine, particles, frustum, camera, partialTick);
         }
     }
@@ -156,12 +133,9 @@ public class LevelExtractorMixin {
                             + "Lnet/minecraft/client/renderer/state/level/WeatherRenderState;)V"))
     private void caustica$skipVanillaWeatherExtraction(WeatherEffectRenderer renderer, ClientLevel level,
             float partialTicks, Vec3 cameraPos, WeatherRenderState state, Operation<Void> original) {
-        if (!caustica$rtOwnsWorldRendering()) {
+        if (!VanillaRenderController.rtOwnsWorldRendering()) {
             original.call(renderer, level, partialTicks, cameraPos, state);
         }
     }
 
-    private static boolean caustica$rtOwnsWorldRendering() {
-        return RtRuntime.active() && VanillaRenderController.INSTANCE.replacedVanillaWorldLastFrame();
-    }
 }

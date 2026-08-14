@@ -29,7 +29,7 @@ final class RtRetainedLightSceneBoundaryTest {
             Path source = lightSource(file);
             assertTrue(Files.isRegularFile(source), "retained-light source is missing: " + source);
             String text = Files.readString(source);
-            for (String forbidden : List.of("net.minecraft.", "net.fabricmc.",
+            for (String forbidden : List.of("net.minecraft.", "net.fabricmc.", "net.neoforged.",
                     "dev.comfyfluffy.caustica.minecraft.",
                     "dev.comfyfluffy.caustica.rt.terrain.")) {
                 assertFalse(text.contains(forbidden),

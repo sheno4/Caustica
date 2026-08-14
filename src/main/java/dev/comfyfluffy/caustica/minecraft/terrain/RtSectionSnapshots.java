@@ -179,14 +179,12 @@ final class RtSectionSnapshots {
             return level.getBlockTint(pos, resolver);
         }
 
-        @Override
         public boolean hasBiomes() {
-            return level.hasBiomes();
+            return true;
         }
 
-        @Override
         public Holder<Biome> getBiomeFabric(BlockPos pos) {
-            return level.getBiomeFabric(pos);
+            return level.getBiomeManager().getBiome(pos);
         }
 
         @Override

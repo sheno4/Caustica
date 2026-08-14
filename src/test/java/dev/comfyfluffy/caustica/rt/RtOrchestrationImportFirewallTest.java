@@ -40,6 +40,7 @@ final class RtOrchestrationImportFirewallTest {
         return line.contains("com.mojang.")
                 || line.contains("net.minecraft.")
                 || line.contains("net.fabricmc.")
+                || line.contains("net.neoforged.")
                 || line.contains("dev.comfyfluffy.caustica.client.")
                 || line.contains("dev.comfyfluffy.caustica.mixin.")
                 || line.contains("dev.comfyfluffy.caustica.minecraft.");
