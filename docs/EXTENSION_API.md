@@ -10,6 +10,8 @@ Status: current API at `CausticaApi.VERSION`. This document uses exact current J
 - A **slot** selects one implementation. The only current slot is `Slots.SKY`.
 - A **surface** is a registered implementation selected per material, not a slot candidate.
 - A **surface modifier** is one member of an ordered generated dispatch applied to receiver geometry.
+- A **runtime activation** decides whether a feature's activation factories run always or only when the feature
+  owns a selected slot. It is separate from shader-program composition.
 
 All public names use the host-neutral `ResourceId`. UI text uses `DisplayText.literal(...)` or
 `DisplayText.translatable(...)`; it never exposes a host text type. Provider identity belongs to the
@@ -43,6 +45,7 @@ import dev.comfyfluffy.caustica.api.CausticaRegistry;
 import dev.comfyfluffy.caustica.api.DisplayText;
 import dev.comfyfluffy.caustica.api.FeatureCategory;
 import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.api.RuntimeActivation;
 import dev.comfyfluffy.caustica.api.ShaderSource;
 import dev.comfyfluffy.caustica.api.provider.GeometryTransform;
 import dev.comfyfluffy.caustica.api.provider.LightProvider;
@@ -70,11 +73,12 @@ public final class ExampleExtension implements CausticaExtension {
                 .title(DisplayText.literal("Crystal proof"))
                 .description(DisplayText.translatable("feature.example.crystal.description"))
                 .category(FeatureCategory.GEOMETRY)
+                .runtimeActivation(RuntimeActivation.ALWAYS)
                 .shaderSource(ShaderSource.classpath("/example/caustica/shaders", "surface"))
                 .surface(SURFACE, "example_crystal_surface", "CrystalSurface")
-                .sceneProvider(SCENE, new CrystalScene())
-                .lightProvider(LIGHTS, new CrystalLight())
-                .materialSource(MATERIALS, (MaterialSource) sink ->
+                .sceneProvider(SCENE, CrystalScene::new)
+                .lightProvider(LIGHTS, CrystalLight::new)
+                .materialSource(MATERIALS, () -> (MaterialSource) sink ->
                         sink.define(new MaterialDefinition(
                                 new MaterialHandle(MATERIAL),
                                 0.35f, 0.65f, 1.0f,
@@ -87,15 +91,20 @@ public final class ExampleExtension implements CausticaExtension {
         private static final long MESH = 1L;
         private static final long INSTANCE = 1L;
 
+        private boolean meshRetained;
+
         @Override
         public void submitGeometry(dev.comfyfluffy.caustica.api.provider.SceneGeometrySink sink) {
-            TriangleMesh mesh = new TriangleMesh(
-                    new float[]{0, 0, 0, 1, 0, 0, 0, 1, 0},
-                    new float[]{0, 0, 1, 0, 0, 1},
-                    new int[]{0, 1, 2},
-                    List.of(new TriangleMesh.MaterialRange(
-                            0, 1, new MaterialHandle(MATERIAL))));
-            sink.retainMesh(MESH, mesh);
+            if (!meshRetained) {
+                TriangleMesh mesh = new TriangleMesh(
+                        new float[]{0, 0, 0, 1, 0, 0, 0, 1, 0},
+                        new float[]{0, 0, 1, 0, 0, 1},
+                        new int[]{0, 1, 2},
+                        List.of(new TriangleMesh.MaterialRange(
+                                0, 1, new MaterialHandle(MATERIAL))));
+                sink.retainMesh(MESH, mesh);
+                meshRetained = true;
+            }
             sink.instance(INSTANCE, MESH, GeometryTransform.translation(0.0, 80.0, 0.0));
         }
     }
@@ -170,20 +179,27 @@ behavior uses the same registered surface selected by the material.
 default void update() {}
 default void prepareFrame() {}
 default void submitGeometry(SceneGeometrySink sink) {}
-default void invalidate() {}
-default void onResourceReload() {}
+default void onWorldChanged() {}
+default void onResourcePackClosing() {}
+default void onResourcePackApplied() {}
 default void stop() {}
 default void shutdown() {}
 ```
 
-`submitGeometry` is a complete desired retained snapshot for that provider. Keys are stable only within
-the provider. Call `retainMesh(meshKey, mesh)` before any `instance(instanceKey, meshKey, transform)` that
-references it. Material ranges are contiguous triangle spans and cover the whole mesh. Positions are
-mesh-local floats; translation remains double precision in `GeometryTransform` until renderer rebasing.
+Keys are stable only within the provider. `retainMesh(meshKey, mesh)` declares a mesh's current data —
+call it only when the mesh is new or its data actually changed, never on every frame; the engine no
+longer diffs mesh bytes to find out, so an unnecessary call pays a real re-upload and BLAS rebuild.
+`releaseMesh(meshKey)` retires a mesh explicitly. `instance(instanceKey, meshKey, transform)` declares one
+placement of an already-retained mesh and must be called every frame the instance should be visible;
+omitting an instance this frame just excludes it from this frame's scene, it does not release the mesh.
+Material ranges are contiguous triangle spans and cover the whole mesh. Positions are mesh-local floats;
+translation remains double precision in `GeometryTransform` until renderer rebasing.
 
-Omitting a prior mesh or instance retires it after its last graphics use. The engine clones submitted
-arrays, uploads geometry, builds BLAS, writes canonical geometry records and inserts instances into the
-TLAS. Minecraft's rounded block clouds use exactly this contract.
+A mesh also survives its provider only as long as the provider stays live: the engine releases every mesh
+still retained by a provider that stopped (failure or session end) without releasing them itself. The
+engine clones submitted arrays, uploads geometry, builds BLAS, writes canonical geometry records and
+inserts instances into the TLAS. Minecraft's rounded block clouds use exactly this contract — they retain
+their four cloud meshes once and then submit only per-cell instances every frame.
 
 Minecraft terrain and animated entities use an internal optimized `RtSceneSource` implemented by their
 registered scene provider. That seam is not public extension API; it exists to retain asynchronous chunk
@@ -332,15 +348,30 @@ resource kind. Set 0 remains engine-owned and set 1 is the bindless texture arra
 Use `passResourceModule(moduleName)` for a module containing global shader resources. The generated
 non-generic anchor imports it so Slang composition types remain valid.
 
+Register a pass with its stable id, stage and factory, for example
+`renderPass(MY_PASS, RenderStage.BEFORE_TRACE, MyPass::new)`. Its `onResourcePackClosing`,
+`onResourcePackApplied` and `onWorldChanged` callbacks have the same epoch meaning as provider callbacks.
+
 ## Lifecycle and failure isolation
+
+Features register factories, not live render passes or providers. Each factory creates one
+runtime-activation-scoped instance after RT is requested; `destroy`/`shutdown` ends that instance before the
+next activation can create a replacement. Use `runtimeActivation(RuntimeActivation.ALWAYS)` for host bridges
+that must run for every session. `SELECTED_SLOT` is the default and constructs runtime contributions only
+when the feature owns a currently selected slot. Surface and surface-modifier owners still participate in
+program composition regardless of this choice. Selecting a different slot owner replaces its child runtime
+activation only after its candidate program is ready, while the parent render session and process-scoped
+programs remain available.
 
 Provider callbacks are transactional. Staging completes and validates before a geometry, light or
 material snapshot becomes visible. An exception disables only that provider and invokes `stop`.
 
-- `onResourceReload` invalidates host/resource-derived state.
+- `onResourcePackClosing` drops references to the old pack before host images are destroyed;
+  `onResourcePackApplied` observes the replacement pack after it becomes active.
+- `onWorldChanged` invalidates scene state when a render session enters or leaves a world.
 - `stop` stops production before outstanding GPU work is drained.
 - `shutdown` releases provider-owned state after GPU idle.
-- Scene providers additionally receive `update`, `prepareFrame` and `invalidate`.
+- Scene providers additionally receive `update` and `prepareFrame`.
 
 Material bindings and named-material resolutions are epoch-local. Do not cache integer IDs across reloads.
 Retain `ResourceId` / `MaterialHandle` and resolve within the frame or resource snapshot supplied by the

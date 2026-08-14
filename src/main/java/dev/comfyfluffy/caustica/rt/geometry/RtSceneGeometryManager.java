@@ -14,8 +14,10 @@ import org.lwjgl.system.MemoryUtil;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
 import static org.lwjgl.vulkan.VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
@@ -23,6 +25,10 @@ import static org.lwjgl.vulkan.VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
 /**
  * Owns retained provider mesh uploads, BLASes, geometry records, and their exact graphics lifetime.
  * Caller-supplied retained geometry occupies a prefix before provider-owned geometry records.
+ *
+ * <p>Residency is explicit: a mesh stays uploaded across frames once retained, until it is released,
+ * replaced by a new {@code retainMesh} call, or its owning provider stops. Nothing here compares mesh
+ * bytes frame to frame.
  */
 public final class RtSceneGeometryManager {
     private static final int TABLE_RING = 4;
@@ -49,16 +55,17 @@ public final class RtSceneGeometryManager {
 
     public FrameGeometry finishFrame(GpuContext ctx, Capture capture,
                                      List<RtAccel.Instance> retainedInstances,
-                                     RtGeometryAbi.TablePrefix retainedTable, SceneOrigin origin) {
+                                     RtGeometryAbi.TablePrefix retainedTable, SceneOrigin origin,
+                                     Set<ResourceId> liveProviders) {
+        reconcile(ctx, capture, liveProviders);
         LinkedHashMap<MeshKey, Integer> recordIndices = new LinkedHashMap<>();
         for (DesiredInstance instance : capture.instances.values()) {
             MeshKey meshKey = new MeshKey(instance.provider, instance.meshKey);
-            if (!capture.meshes.containsKey(meshKey)) {
-                throw new IllegalArgumentException("geometry instance references an unsubmitted mesh " + meshKey);
+            if (!residents.containsKey(meshKey)) {
+                throw new IllegalArgumentException("geometry instance references an unretained mesh " + meshKey);
             }
             recordIndices.putIfAbsent(meshKey, retainedTable.recordCount() + recordIndices.size());
         }
-        reconcile(ctx, capture.meshes, recordIndices.keySet());
         List<RtAccel.PreparedBlas> builds = new ArrayList<>();
         List<BuildUse> buildUses = new ArrayList<>();
         for (MeshKey key : recordIndices.keySet()) {
@@ -139,21 +146,36 @@ public final class RtSceneGeometryManager {
         }
     }
 
-    private void reconcile(GpuContext ctx, Map<MeshKey, TriangleMesh> desired, java.util.Set<MeshKey> used) {
+    /**
+     * Applies this frame's explicit release/retain declarations, plus two engine-owned invalidations:
+     * a mesh whose provider is no longer live is a safety net against a provider that stopped without
+     * releasing its own meshes; a mesh with a stale {@code materialEpoch} is repacked from its own
+     * stored source rather than requiring the provider to resubmit unrelated mesh data.
+     */
+    private void reconcile(GpuContext ctx, Capture capture, Set<ResourceId> liveProviders) {
+        List<Map.Entry<MeshKey, TriangleMesh>> repack = new ArrayList<>();
         var iterator = residents.entrySet().iterator();
         while (iterator.hasNext()) {
             Map.Entry<MeshKey, ResidentMesh> entry = iterator.next();
-            TriangleMesh mesh = desired.get(entry.getKey());
+            MeshKey key = entry.getKey();
             ResidentMesh resident = entry.getValue();
-            if (mesh == null || !mesh.equals(resident.source) || resident.materialEpoch != materialEpoch) {
+            boolean replaced = capture.retains.containsKey(key);
+            boolean orphaned = !replaced
+                    && (capture.releases.contains(key) || !liveProviders.contains(key.provider()));
+            if (replaced || orphaned) {
+                ctx.gpuExecutor().retireAfterGraphics(resident.graphicsUse, resident::destroy);
+                iterator.remove();
+            } else if (resident.materialEpoch != materialEpoch) {
+                repack.add(Map.entry(key, resident.source));
                 ctx.gpuExecutor().retireAfterGraphics(resident.graphicsUse, resident::destroy);
                 iterator.remove();
             }
         }
-        for (MeshKey key : used) {
-            if (!residents.containsKey(key)) {
-                residents.put(key, upload(ctx, key, desired.get(key)));
-            }
+        for (Map.Entry<MeshKey, TriangleMesh> entry : capture.retains.entrySet()) {
+            residents.put(entry.getKey(), upload(ctx, entry.getKey(), entry.getValue()));
+        }
+        for (Map.Entry<MeshKey, TriangleMesh> entry : repack) {
+            residents.put(entry.getKey(), upload(ctx, entry.getKey(), entry.getValue()));
         }
     }
 
@@ -208,7 +230,8 @@ public final class RtSceneGeometryManager {
     }
 
     public final class Capture {
-        private final Map<MeshKey, TriangleMesh> meshes = new LinkedHashMap<>();
+        private final Map<MeshKey, TriangleMesh> retains = new LinkedHashMap<>();
+        private final Set<MeshKey> releases = new LinkedHashSet<>();
         private final Map<InstanceKey, DesiredInstance> instances = new LinkedHashMap<>();
 
         public SceneGeometrySink sink(ResourceId provider) {
@@ -216,8 +239,16 @@ public final class RtSceneGeometryManager {
                 @Override
                 public void retainMesh(long key, TriangleMesh mesh) {
                     MeshKey scoped = new MeshKey(provider, key);
-                    if (meshes.putIfAbsent(scoped, mesh) != null) {
+                    if (retains.putIfAbsent(scoped, mesh) != null) {
                         throw new IllegalArgumentException("duplicate retained mesh key " + scoped);
+                    }
+                }
+
+                @Override
+                public void releaseMesh(long key) {
+                    MeshKey scoped = new MeshKey(provider, key);
+                    if (!releases.add(scoped)) {
+                        throw new IllegalArgumentException("duplicate released mesh key " + scoped);
                     }
                 }
 

@@ -1215,7 +1215,7 @@ public final class RtComposite {
             RtSceneGeometryManager.Capture geometryCapture = sceneGeometry.beginCapture();
             ProviderManager.INSTANCE.submitGeometry(geometryCapture::sink);
             providerGeometry = sceneGeometry.finishFrame(ctx, geometryCapture, retained.instances(),
-                    retained.geometryTable(), sceneOrigin);
+                    retained.geometryTable(), sceneOrigin, ProviderManager.INSTANCE.activeSceneProviderIds());
             RtSceneSource.Frame frame = ProviderManager.INSTANCE.beginPrimaryFrame(primaryScene, ctx,
                     providerGeometry.instances(), providerGeometry.tablePrefix(),
                     new RtSceneSource.Camera(snapshot.cameraX(), snapshot.cameraY(), snapshot.cameraZ(),

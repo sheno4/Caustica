@@ -23,6 +23,7 @@ public final class MinecraftCloudSceneProvider implements SceneProvider {
     private int centerCellX;
     private int centerCellZ;
     private boolean visible;
+    private boolean meshesRetained;
 
     @Override
     public void prepareFrame() {
@@ -41,8 +42,13 @@ public final class MinecraftCloudSceneProvider implements SceneProvider {
         if (!visible) {
             return;
         }
-        for (int variant = 0; variant < MESHES.length; variant++) {
-            sink.retainMesh(variant, MESHES[variant]);
+        // The cloud meshes never change, so they are retained once per provider instance rather than
+        // resubmitted every frame; a stale copy from a prior instance (if any) is replaced, not compared.
+        if (!meshesRetained) {
+            for (int variant = 0; variant < MESHES.length; variant++) {
+                sink.retainMesh(variant, MESHES[variant]);
+            }
+            meshesRetained = true;
         }
         for (int dz = -RADIUS; dz <= RADIUS; dz++) {
             for (int dx = -RADIUS; dx <= RADIUS; dx++) {

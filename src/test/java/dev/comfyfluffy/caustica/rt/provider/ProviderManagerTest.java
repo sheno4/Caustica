@@ -312,6 +312,11 @@ final class ProviderManagerTest {
             }
 
             @Override
+            public void releaseMesh(long key) {
+                submitted.computeIfAbsent(provider, ignored -> new ArrayList<>()).add("release:" + key);
+            }
+
+            @Override
             public void instance(long key, long meshKey, GeometryTransform transform) {
                 submitted.computeIfAbsent(provider, ignored -> new ArrayList<>()).add("instance:" + key);
             }
@@ -475,6 +480,10 @@ final class ProviderManagerTest {
             }
 
             @Override
+            public void releaseMesh(long key) {
+            }
+
+            @Override
             public void instance(long key, long meshKey, GeometryTransform transform) {
             }
         });
@@ -486,6 +495,10 @@ final class ProviderManagerTest {
             @Override
             public void retainMesh(long key, TriangleMesh mesh) {
                 published.add(provider);
+            }
+
+            @Override
+            public void releaseMesh(long key) {
             }
 
             @Override

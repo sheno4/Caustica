@@ -178,13 +178,21 @@ public final class ProviderManager {
             if (failed.contains(key) || stoppedThisSession.contains(key)) {
                 continue;
             }
-            Map<Long, TriangleMesh> stagedMeshes = new java.util.LinkedHashMap<>();
+            Map<Long, TriangleMesh> stagedRetains = new java.util.LinkedHashMap<>();
+            Set<Long> stagedReleases = new java.util.LinkedHashSet<>();
             Map<Long, StagedInstance> stagedInstances = new java.util.LinkedHashMap<>();
             SceneGeometrySink stagingSink = new SceneGeometrySink() {
                 @Override
                 public void retainMesh(long meshKey, TriangleMesh mesh) {
-                    if (stagedMeshes.putIfAbsent(meshKey, mesh) != null) {
+                    if (stagedRetains.putIfAbsent(meshKey, mesh) != null) {
                         throw new IllegalArgumentException("duplicate retained mesh key " + meshKey);
+                    }
+                }
+
+                @Override
+                public void releaseMesh(long meshKey) {
+                    if (!stagedReleases.add(meshKey)) {
+                        throw new IllegalArgumentException("duplicate released mesh key " + meshKey);
                     }
                 }
 
@@ -198,7 +206,7 @@ public final class ProviderManager {
             };
             try {
                 entry.getValue().submitGeometry(stagingSink);
-                for (TriangleMesh mesh : stagedMeshes.values()) {
+                for (TriangleMesh mesh : stagedRetains.values()) {
                     for (TriangleMesh.MaterialRange range : mesh.materials()) {
                         if (!namedMaterials.contains(range.material().id())) {
                             throw new IllegalArgumentException("geometry references unsubmitted material "
@@ -206,14 +214,11 @@ public final class ProviderManager {
                         }
                     }
                 }
-                for (StagedInstance instance : stagedInstances.values()) {
-                    if (!stagedMeshes.containsKey(instance.meshKey)) {
-                        throw new IllegalArgumentException("geometry instance references unsubmitted mesh "
-                                + instance.meshKey);
-                    }
-                }
+                // An instance may reference a mesh retained on an earlier frame, so there is nothing further
+                // to validate here; RtSceneGeometryManager checks the instance's mesh key against residency.
                 SceneGeometrySink sink = sinkFactory.apply(entry.getKey());
-                stagedMeshes.forEach(sink::retainMesh);
+                stagedReleases.forEach(sink::releaseMesh);
+                stagedRetains.forEach(sink::retainMesh);
                 stagedInstances.forEach((instanceKey, instance) ->
                         sink.instance(instanceKey, instance.meshKey, instance.transform));
             } catch (Throwable t) {
@@ -338,6 +343,21 @@ public final class ProviderManager {
         materials = Map.of();
         frameLights = List.of();
         namedMaterials = Set.of();
+    }
+
+    /**
+     * Scene providers currently eligible for callbacks. The generic geometry manager uses this as a
+     * safety net to release meshes belonging to a provider that stopped without releasing them itself.
+     */
+    public Set<ResourceId> activeSceneProviderIds() {
+        Set<ResourceId> active = new HashSet<>();
+        for (ResourceId id : scenes().keySet()) {
+            ProviderKey key = new ProviderKey("scene", id);
+            if (!failed.contains(key) && !stoppedThisSession.contains(key)) {
+                active.add(id);
+            }
+        }
+        return active;
     }
 
     private Map<ResourceId, SceneProvider> scenes() {
