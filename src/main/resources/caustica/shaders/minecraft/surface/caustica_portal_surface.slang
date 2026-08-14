@@ -2,7 +2,6 @@ module caustica_portal_surface;
 
 import caustica_surface;
 import caustica_types;
-import caustica_medium;
 
 float portalHash(float2 cell) {
     float3 p = frac(float3(cell.x, cell.y, cell.x) * 0.1031);
@@ -12,7 +11,7 @@ float portalHash(float2 cell) {
 
 /** Procedural, world-pinned emissive surface used by Minecraft's end-portal material adapter. */
 public struct PortalSurface : ISurfaceModel {
-    public void evaluateSurface(SurfaceInput input, inout MaterialInput material) {
+    public override void evaluateSurface(SurfaceInput input, inout MaterialInput material) {
         float2 world = input.proceduralPosition.xz;
         float2 field = world * 0.45;
         float2 cell = floor(field);
@@ -36,15 +35,4 @@ public struct PortalSurface : ISurfaceModel {
         material.emissionLuminance = 24.0 + 160.0 * stars;
     }
 
-    public float3 evaluateResponse(float3 radiance, SurfaceClosure surface) {
-        return radiance;
-    }
-
-    public MediumProperties evaluateMedium(MediumInput input) {
-        return referenceMedium(input);
-    }
-
-    public float3 evaluateMediumLighting(MediumLightingInput input) {
-        return float3(1.0);
-    }
 };

@@ -10,11 +10,7 @@ import caustica_surface;
 [[vk::binding(0, 3)]] Sampler2D brokenTexture;
 
 public struct BrokenSurface : ISurfaceModel {
-    public void evaluateSurface(SurfaceInput input, inout MaterialInput material) {
+    public override void evaluateSurface(SurfaceInput input, inout MaterialInput material) {
         material.baseColor = brokenTexture.SampleLevel(input.textureCoordinate, 0.0).rgb;
-    }
-
-    public float3 evaluateResponse(float3 radiance, SurfaceClosure surface) {
-        return radiance;
     }
 };

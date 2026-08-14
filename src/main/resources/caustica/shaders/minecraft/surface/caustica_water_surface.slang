@@ -108,7 +108,7 @@ float2 backsolveCausticSurface(float2 initialSurface, float2 receiver, float t,
 }
 
 public struct WaterSurface : ISurfaceModel {
-    public void evaluateSurface(SurfaceInput input, inout MaterialInput material) {
+    public override void evaluateSurface(SurfaceInput input, inout MaterialInput material) {
         if ((input.surfaceFlags & SURFACE_ANIMATION_ENABLED) == 0u
                 || abs(input.geometricNormal.y) < 0.5) return;
         float2 domain = input.proceduralPosition.xz;
@@ -129,11 +129,7 @@ public struct WaterSurface : ISurfaceModel {
                 * normalize(float3(-previousGradient.x, 1.0, -previousGradient.y));
     }
 
-    public float3 evaluateResponse(float3 radiance, SurfaceClosure surface) {
-        return radiance;
-    }
-
-    public MediumProperties evaluateMedium(MediumInput input) {
+    public override MediumProperties evaluateMedium(MediumInput input) {
         MediumProperties properties;
         properties.extinction = MEDIUM_ABSORB_FLOOR
                 + MEDIUM_DENSITY * (float3(1.0) - clamp(input.sourceColor, 0.0, 1.0));
@@ -143,7 +139,7 @@ public struct WaterSurface : ISurfaceModel {
         return properties;
     }
 
-    public float3 evaluateMediumLighting(MediumLightingInput input) {
+    public override float3 evaluateMediumLighting(MediumLightingInput input) {
         if ((input.surfaceFlags & SURFACE_ANIMATION_ENABLED) == 0u) return float3(1.0);
         float fade = smoothstep(0.06, 0.18, input.lightDirection.y);
         if (fade <= 0.0) return float3(1.0);

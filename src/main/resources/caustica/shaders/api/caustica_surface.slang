@@ -17,16 +17,22 @@ public interface ISurfaceModel {
      * material record and its texture pages, so an implementation overrides only what it owns — an
      * animated normal, a procedurally computed emission — and leaves the rest alone.
      */
-    public void evaluateSurface(SurfaceInput input, inout MaterialInput material);
+    public void evaluateSurface(SurfaceInput input, inout MaterialInput material) {}
 
-    /** Applied once to a vertex's total shaded contribution. Identity is the reference look. */
-    public float3 evaluateResponse(float3 radiance, SurfaceClosure surface);
+    /** Applied once to a vertex's total shaded contribution. The reference look is identity. */
+    public float3 evaluateResponse(float3 radiance, SurfaceClosure surface) {
+        return radiance;
+    }
 
     /** Describe the interior bounded by this surface when it is transmissive. */
-    public MediumProperties evaluateMedium(MediumInput input);
+    public MediumProperties evaluateMedium(MediumInput input) {
+        return referenceMedium(input);
+    }
 
-    /** Multiplicative direct-light response evaluated at a tracked boundary crossing. */
-    public float3 evaluateMediumLighting(MediumLightingInput input);
+    /** Multiplicative direct-light response evaluated at a tracked boundary crossing. Neutral by default. */
+    public float3 evaluateMediumLighting(MediumLightingInput input) {
+        return float3(1.0);
+    }
 };
 
 /**
