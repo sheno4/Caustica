@@ -8,7 +8,12 @@ public interface LightProvider {
     default void submitLights(LightSink sink) {
     }
 
-    default void onResourceReload() {
+    /** Called while the current resource pack is being detached. */
+    default void onResourcePackClosing() {
+    }
+
+    /** Called after a replacement resource pack becomes active. */
+    default void onResourcePackApplied() {
     }
 
     /**

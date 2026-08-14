@@ -12,6 +12,7 @@ import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
 import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftVulkanBackend;
 import dev.comfyfluffy.caustica.minecraft.provider.MinecraftMaterialSource;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.LoadingOverlay;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.renderer.BiomeColors;
 import net.minecraft.client.renderer.texture.TextureAtlas;
@@ -42,6 +43,10 @@ public final class MinecraftFrameAdapter {
         MinecraftVulkanBackend.installCurrent();
         ClientLevel level = client.level;
         long currentSceneId = identify(level);
+        RtRuntime.INSTANCE.observeWorld(level, currentSceneId);
+        if (!(client.gui.overlay() instanceof LoadingOverlay)) {
+            RtRuntime.INSTANCE.observeResourcePackAvailable();
+        }
         var target = client.gameRenderer.mainRenderTarget();
         boolean startupSceneReady = level != null && client.player != null
                 && RtTerrain.isSectionReady(client.player.blockPosition());
@@ -69,7 +74,11 @@ public final class MinecraftFrameAdapter {
         FrameSnapshot.CameraMedium cameraMedium = submerged
                 ? new FrameSnapshot.CameraMedium(new MaterialHandle(MinecraftMaterialSource.WATER),
                 new FrameSnapshot.LinearRgb(medium[0], medium[1], medium[2])) : null;
-        MinecraftDamageModifierPass.INSTANCE.capture(level);
+        MinecraftDamageModifierPass damagePass = RtRuntime.INSTANCE.renderPass(
+                MinecraftDamageModifierPass.ID, MinecraftDamageModifierPass.class);
+        if (damagePass != null) {
+            damagePass.capture(level);
+        }
         return new FrameSnapshot(projection, viewRotation, cameraX, cameraY, cameraZ,
                 cameraMedium, CausticaConfig.Rt.Composite.WATER_WAVES.value(),
                 System.nanoTime() / 1.0e9, METERS_PER_WORLD_UNIT, identify(level));

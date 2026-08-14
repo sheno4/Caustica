@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.api;
 
-import dev.comfyfluffy.caustica.api.pass.CausticaRenderPass;
+import dev.comfyfluffy.caustica.api.pass.RenderPassRegistration;
 import dev.comfyfluffy.caustica.api.provider.LightProvider;
 import dev.comfyfluffy.caustica.api.provider.MaterialSource;
 import dev.comfyfluffy.caustica.api.provider.ProviderRegistration;
@@ -12,12 +12,12 @@ import java.util.Objects;
 import java.util.Set;
 
 public record Feature(ResourceId id, DisplayText title, DisplayText description, FeatureCategory category,
-                      ShaderSource shaderSource, Map<Slot, Binding> bindings,
+                      ShaderSource shaderSource, RuntimeActivation runtimeActivation, Map<Slot, Binding> bindings,
                       List<SurfaceImplementation> surfaces,
                       List<SurfaceModifierImplementation> surfaceModifiers,
                       List<Option<?>> options,
                       List<String> optionGroups,
-                      List<CausticaRenderPass> renderPasses,
+                      List<RenderPassRegistration> renderPasses,
                       List<ProviderRegistration<SceneProvider>> sceneProviders,
                       List<ProviderRegistration<LightProvider>> lightProviders,
                       List<ProviderRegistration<MaterialSource>> materialSources,
@@ -27,6 +27,7 @@ public record Feature(ResourceId id, DisplayText title, DisplayText description,
         Objects.requireNonNull(title, "title");
         Objects.requireNonNull(description, "description");
         Objects.requireNonNull(category, "category");
+        Objects.requireNonNull(runtimeActivation, "runtimeActivation");
         bindings = Map.copyOf(bindings);
         surfaces = List.copyOf(surfaces);
         surfaceModifiers = List.copyOf(surfaceModifiers);

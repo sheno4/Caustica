@@ -3,10 +3,14 @@ package dev.comfyfluffy.caustica.api;
 import dev.comfyfluffy.caustica.api.DisplayText;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.api.provider.SceneProvider;
+import dev.comfyfluffy.caustica.api.pass.RenderStage;
+import dev.comfyfluffy.caustica.api.pass.CausticaRenderPass;
+import dev.comfyfluffy.caustica.api.pass.PassFrame;
 import dev.comfyfluffy.caustica.builtin.BuiltinExtension;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -27,8 +31,7 @@ final class CausticaRegistryTest {
         assertEquals("BuiltinSurface", selection.surfaces().get(0).type());
         assertEquals(0, registry.surfaceIndex(BuiltinExtension.BUILTIN_SURFACE));
         assertEquals(-1, registry.surfaceIndex(ResourceId.of("nope", "nope")));
-        assertTrue(registry.renderPasses().containsKey(
-                ResourceId.of("caustica", "bloom")));
+        assertTrue(registry.renderPassIds().contains(ResourceId.of("caustica", "bloom")));
     }
 
     @Test
@@ -104,20 +107,20 @@ final class CausticaRegistryTest {
         assertThrows(IllegalStateException.class,
                 () -> optionBuilder.option(Option.bool("enabled", false)));
 
-        var bloom = registry.renderPasses().get(
-                ResourceId.of("caustica", "bloom"));
+        ResourceId bloom = ResourceId.of("caustica", "bloom");
         assertThrows(IllegalStateException.class, () -> registry.feature(
                         ResourceId.of("test", "duplicate_pass"))
-                .renderPass(bloom).register());
+                .renderPass(bloom, RenderStage.AFTER_RECONSTRUCTION,
+                        () -> pass(bloom, RenderStage.AFTER_RECONSTRUCTION)).register());
 
         SceneProvider duplicateScene = new SceneProvider() {
         };
         ResourceId sceneId = ResourceId.of("test", "scene");
         registry.feature(ResourceId.of("test", "scene_owner"))
-                .sceneProvider(sceneId, duplicateScene).register();
+                .sceneProvider(sceneId, () -> duplicateScene).register();
         assertThrows(IllegalStateException.class, () -> registry.feature(
                         ResourceId.of("test", "duplicate_scene"))
-                .sceneProvider(sceneId, duplicateScene).register());
+                .sceneProvider(sceneId, () -> duplicateScene).register());
     }
 
     @Test
@@ -140,9 +143,87 @@ final class CausticaRegistryTest {
                 .register());
     }
 
+    @Test
+    void runtimeFactoriesFollowRuntimeActivationRatherThanProgramClosure() {
+        CausticaRegistry registry = builtins();
+        AtomicInteger selectedFactories = new AtomicInteger();
+        AtomicInteger alwaysFactories = new AtomicInteger();
+        ResourceId selectedId = ResourceId.of("test", "optional_sky");
+        ResourceId selectedPass = ResourceId.of("test", "optional_pass");
+        ResourceId alwaysProvider = ResourceId.of("test", "always_scene");
+        registry.feature(selectedId)
+                .shaderSource(ShaderSource.classpath("/test/shaders"))
+                .bind(Slots.SKY, "test_sky", "TestSky")
+                .renderPass(selectedPass, RenderStage.LOOK, () -> {
+                    selectedFactories.incrementAndGet();
+                    return pass(selectedPass, RenderStage.LOOK);
+                })
+                .register();
+        registry.feature(ResourceId.of("test", "always"))
+                .runtimeActivation(RuntimeActivation.ALWAYS)
+                .sceneProvider(alwaysProvider, () -> {
+                    alwaysFactories.incrementAndGet();
+                    return new SceneProvider() {
+                    };
+                })
+                .register();
+
+        CausticaRegistry.RuntimeContributions defaultRuntime = registry.createRuntimeContributions();
+        assertFalse(defaultRuntime.renderPasses().containsKey(selectedPass));
+        assertTrue(defaultRuntime.sceneProviders().containsKey(alwaysProvider));
+        assertEquals(0, selectedFactories.get());
+        assertEquals(1, alwaysFactories.get());
+        assertEquals(BuiltinExtension.ID, defaultRuntime.selectedSlots().get(Slots.SKY));
+
+        registry.select(Slots.SKY, selectedId);
+        CausticaRegistry.RuntimeContributions selectedRuntime = registry.createRuntimeContributions();
+        assertTrue(selectedRuntime.renderPasses().containsKey(selectedPass));
+        assertEquals(selectedId, selectedRuntime.selectedSlots().get(Slots.SKY));
+        assertEquals(1, selectedFactories.get());
+        assertEquals(2, alwaysFactories.get());
+    }
+
+    @Test
+    void runtimeFactoriesMustProduceTheirDeclaredPassIdentityAndStage() {
+        CausticaRegistry nullPassRegistry = builtins();
+        ResourceId nullPass = ResourceId.of("test", "null_pass");
+        nullPassRegistry.feature(ResourceId.of("test", "null_pass_owner"))
+                .runtimeActivation(RuntimeActivation.ALWAYS)
+                .renderPass(nullPass, RenderStage.LOOK, () -> null)
+                .register();
+        assertThrows(NullPointerException.class, nullPassRegistry::createRuntimeContributions);
+
+        CausticaRegistry wrongStageRegistry = builtins();
+        ResourceId wrongStagePass = ResourceId.of("test", "wrong_stage_pass");
+        wrongStageRegistry.feature(ResourceId.of("test", "wrong_stage_owner"))
+                .runtimeActivation(RuntimeActivation.ALWAYS)
+                .renderPass(wrongStagePass, RenderStage.LOOK,
+                        () -> pass(wrongStagePass, RenderStage.OVERLAY))
+                .register();
+        assertThrows(IllegalStateException.class, wrongStageRegistry::createRuntimeContributions);
+    }
+
     private static CausticaRegistry builtins() {
         CausticaRegistry registry = new CausticaRegistry();
         new BuiltinExtension().register(registry);
         return registry;
+    }
+
+    private static CausticaRenderPass pass(ResourceId id, RenderStage stage) {
+        return new CausticaRenderPass() {
+            @Override
+            public ResourceId id() {
+                return id;
+            }
+
+            @Override
+            public RenderStage stage() {
+                return stage;
+            }
+
+            @Override
+            public void record(PassFrame frame) {
+            }
+        };
     }
 }

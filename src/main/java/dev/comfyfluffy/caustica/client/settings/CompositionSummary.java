@@ -1,7 +1,7 @@
 package dev.comfyfluffy.caustica.client.settings;
 
 import dev.comfyfluffy.caustica.api.CausticaRegistry;
-import dev.comfyfluffy.caustica.api.pass.CausticaRenderPass;
+import dev.comfyfluffy.caustica.api.pass.RenderPassRegistration;
 import dev.comfyfluffy.caustica.api.pass.RenderStage;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import net.minecraft.network.chat.Component;
@@ -31,7 +31,8 @@ public record CompositionSummary(List<Lane> lanes, List<ProviderRow> providers) 
     }
 
     public static CompositionSummary of(CausticaRegistry registry) {
-        List<CausticaRenderPass> passes = List.copyOf(registry.renderPasses().values());
+        List<RenderPassRegistration> passes = registry.features().values().stream()
+                .flatMap(feature -> feature.renderPasses().stream()).toList();
         List<Lane> lanes = new ArrayList<>();
         for (RenderStage stage : RenderStage.values()) {
             lanes.add(new Lane(stageTitle(stage), passesIn(passes, stage), false));
@@ -41,16 +42,16 @@ public record CompositionSummary(List<Lane> lanes, List<ProviderRow> providers) 
         }
         List<ProviderRow> providers = List.of(
                 new ProviderRow(Component.translatable("caustica.summary.providers.scene"),
-                        List.copyOf(registry.sceneProviders().keySet())),
+                        registry.sceneProviderIds()),
                 new ProviderRow(Component.translatable("caustica.summary.providers.light"),
-                        List.copyOf(registry.lightProviders().keySet())),
+                        registry.lightProviderIds()),
                 new ProviderRow(Component.translatable("caustica.summary.providers.material"),
-                        List.copyOf(registry.materialSources().keySet())));
+                        registry.materialSourceIds()));
         return new CompositionSummary(List.copyOf(lanes), providers);
     }
 
-    private static List<ResourceId> passesIn(List<CausticaRenderPass> passes, RenderStage stage) {
-        return passes.stream().filter(pass -> pass.stage() == stage).map(CausticaRenderPass::id).toList();
+    private static List<ResourceId> passesIn(List<RenderPassRegistration> passes, RenderStage stage) {
+        return passes.stream().filter(pass -> pass.stage() == stage).map(RenderPassRegistration::id).toList();
     }
 
     /**

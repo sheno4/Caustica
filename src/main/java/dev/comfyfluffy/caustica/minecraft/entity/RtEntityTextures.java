@@ -189,7 +189,12 @@ public final class RtEntityTextures {
         pending.clear();
     }
 
-    /** Drop the registry (call when the world pipeline / bindless set is recreated, or textures reload). */
+    /** Populate a replacement descriptor set without changing any geometry-visible texture slot. */
+    public void rebindAll(RtPipeline pipeline, long sampler) {
+        viewSlotCache.forEach((view, slot) -> pipeline.setBaseColorTexture(slot, view, sampler));
+    }
+
+    /** Drop the registry when texture identities or the bindless capacity change. */
     public void reset() {
         reset(maxTextures());
     }

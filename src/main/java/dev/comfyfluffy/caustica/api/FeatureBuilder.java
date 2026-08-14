@@ -1,6 +1,8 @@
 package dev.comfyfluffy.caustica.api;
 
 import dev.comfyfluffy.caustica.api.pass.CausticaRenderPass;
+import dev.comfyfluffy.caustica.api.pass.RenderPassRegistration;
+import dev.comfyfluffy.caustica.api.pass.RenderStage;
 import dev.comfyfluffy.caustica.api.provider.LightProvider;
 import dev.comfyfluffy.caustica.api.provider.MaterialSource;
 import dev.comfyfluffy.caustica.api.provider.ProviderRegistration;
@@ -19,12 +21,13 @@ public final class FeatureBuilder {
     private DisplayText description = DisplayText.EMPTY;
     private FeatureCategory category = FeatureCategory.GENERAL;
     private ShaderSource shaderSource;
+    private RuntimeActivation runtimeActivation = RuntimeActivation.SELECTED_SLOT;
     private final Map<Slot, Feature.Binding> bindings = new LinkedHashMap<>();
     private final List<Feature.SurfaceImplementation> surfaces = new ArrayList<>();
     private final List<Feature.SurfaceModifierImplementation> surfaceModifiers = new ArrayList<>();
     private final List<Option<?>> options = new ArrayList<>();
     private final List<String> optionGroups = new ArrayList<>();
-    private final List<CausticaRenderPass> renderPasses = new ArrayList<>();
+    private final List<RenderPassRegistration> renderPasses = new ArrayList<>();
     private final List<ProviderRegistration<SceneProvider>> sceneProviders = new ArrayList<>();
     private final List<ProviderRegistration<LightProvider>> lightProviders = new ArrayList<>();
     private final List<ProviderRegistration<MaterialSource>> materialSources = new ArrayList<>();
@@ -54,6 +57,12 @@ public final class FeatureBuilder {
 
     public FeatureBuilder shaderSource(ShaderSource shaderSource) {
         this.shaderSource = Objects.requireNonNull(shaderSource, "shaderSource");
+        return this;
+    }
+
+    /** Choose when this feature's runtime-activation contributions are instantiated. */
+    public FeatureBuilder runtimeActivation(RuntimeActivation runtimeActivation) {
+        this.runtimeActivation = Objects.requireNonNull(runtimeActivation, "runtimeActivation");
         return this;
     }
 
@@ -109,17 +118,19 @@ public final class FeatureBuilder {
         return this;
     }
 
-    public FeatureBuilder renderPass(CausticaRenderPass renderPass) {
-        Objects.requireNonNull(renderPass, "renderPass");
-        if (renderPasses.stream().anyMatch(existing -> existing.id().equals(renderPass.id()))) {
-            throw new IllegalStateException(id + " declares duplicate render pass " + renderPass.id());
+    public FeatureBuilder renderPass(ResourceId passId, RenderStage stage,
+                                     RuntimeFactory<? extends CausticaRenderPass> factory) {
+        RenderPassRegistration registration = new RenderPassRegistration(passId, stage, factory);
+        if (renderPasses.stream().anyMatch(existing -> existing.id().equals(passId))) {
+            throw new IllegalStateException(id + " declares duplicate render pass " + passId);
         }
-        renderPasses.add(renderPass);
+        renderPasses.add(registration);
         return this;
     }
 
-    public FeatureBuilder sceneProvider(ResourceId providerId, SceneProvider provider) {
-        ProviderRegistration<SceneProvider> registration = new ProviderRegistration<>(providerId, provider);
+    public FeatureBuilder sceneProvider(ResourceId providerId,
+                                        RuntimeFactory<? extends SceneProvider> factory) {
+        ProviderRegistration<SceneProvider> registration = new ProviderRegistration<>(providerId, factory);
         if (sceneProviders.stream().anyMatch(existing -> existing.id().equals(providerId))) {
             throw new IllegalStateException(id + " declares duplicate scene provider " + providerId);
         }
@@ -137,8 +148,9 @@ public final class FeatureBuilder {
         return this;
     }
 
-    public FeatureBuilder lightProvider(ResourceId providerId, LightProvider provider) {
-        ProviderRegistration<LightProvider> registration = new ProviderRegistration<>(providerId, provider);
+    public FeatureBuilder lightProvider(ResourceId providerId,
+                                        RuntimeFactory<? extends LightProvider> factory) {
+        ProviderRegistration<LightProvider> registration = new ProviderRegistration<>(providerId, factory);
         if (lightProviders.stream().anyMatch(existing -> existing.id().equals(providerId))) {
             throw new IllegalStateException(id + " declares duplicate light provider " + providerId);
         }
@@ -146,8 +158,9 @@ public final class FeatureBuilder {
         return this;
     }
 
-    public FeatureBuilder materialSource(ResourceId sourceId, MaterialSource source) {
-        ProviderRegistration<MaterialSource> registration = new ProviderRegistration<>(sourceId, source);
+    public FeatureBuilder materialSource(ResourceId sourceId,
+                                         RuntimeFactory<? extends MaterialSource> factory) {
+        ProviderRegistration<MaterialSource> registration = new ProviderRegistration<>(sourceId, factory);
         if (materialSources.stream().anyMatch(existing -> existing.id().equals(sourceId))) {
             throw new IllegalStateException(id + " declares duplicate material source " + sourceId);
         }
@@ -178,7 +191,7 @@ public final class FeatureBuilder {
         }
         registered = true;
         DisplayText resolvedTitle = title != null ? title : DisplayText.literal(id.toString());
-        Feature feature = new Feature(id, resolvedTitle, description, category, shaderSource, bindings,
+        Feature feature = new Feature(id, resolvedTitle, description, category, shaderSource, runtimeActivation, bindings,
                 surfaces, surfaceModifiers, options, optionGroups, renderPasses, sceneProviders, lightProviders,
                 materialSources, passResourceModules);
         registry.register(feature);

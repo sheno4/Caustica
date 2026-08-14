@@ -36,12 +36,12 @@ public final class MinecraftSceneProvider implements SceneProvider, RtSceneSourc
     }
 
     @Override
-    public void invalidate() {
+    public void onWorldChanged() {
         RtTerrain.requestFullClear();
     }
 
     @Override
-    public void onResourceReload() {
+    public void onResourcePackClosing() {
         RtEntities.INSTANCE.onResourceReload();
     }
 
@@ -95,6 +95,11 @@ public final class MinecraftSceneProvider implements SceneProvider, RtSceneSourc
     @Override
     public void resetBindlessTextures(int capacity) {
         RtEntityTextures.INSTANCE.reset(capacity);
+    }
+
+    @Override
+    public void rebindTextures(RtPipeline pipeline, long sampler) {
+        RtEntityTextures.INSTANCE.rebindAll(pipeline, sampler);
     }
 
     @Override

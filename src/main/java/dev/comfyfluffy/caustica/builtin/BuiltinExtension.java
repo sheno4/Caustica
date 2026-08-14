@@ -6,8 +6,10 @@ import dev.comfyfluffy.caustica.api.DisplayText;
 import dev.comfyfluffy.caustica.api.FeatureCategory;
 import dev.comfyfluffy.caustica.api.FeatureBuilder;
 import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.api.RuntimeActivation;
 import dev.comfyfluffy.caustica.api.ShaderSource;
 import dev.comfyfluffy.caustica.api.Slots;
+import dev.comfyfluffy.caustica.api.pass.RenderStage;
 
 /** Registers the renderer-owned reference composition without installing any host scene sources. */
 public final class BuiltinExtension implements CausticaExtension {
@@ -22,11 +24,12 @@ public final class BuiltinExtension implements CausticaExtension {
                 .category(FeatureCategory.GENERAL)
                 .shaderSource(ShaderSource.classpath(
                         "/caustica/shaders/builtin", "sky", "surface", "bloom"))
+                .runtimeActivation(RuntimeActivation.ALWAYS)
                 .bind(Slots.SKY, "caustica_builtin_sky", "BuiltinSky")
                 .surface(BUILTIN_SURFACE, "caustica_builtin_surface", "BuiltinSurface")
                 .group(BloomPass.GROUP)
                 .options(BloomPass.OPTIONS)
-                .renderPass(new BloomPass())
+                .renderPass(BloomPass.ID, RenderStage.AFTER_RECONSTRUCTION, BloomPass::new)
                 .register();
         registry.setDefault(Slots.SKY, ID);
     }

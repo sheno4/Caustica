@@ -219,7 +219,7 @@ public final class SkyLutPass implements CausticaRenderPass {
     }
 
     @Override
-    public void invalidate() {
+    public void onResourcePackClosing() {
         baked = false;
     }
 

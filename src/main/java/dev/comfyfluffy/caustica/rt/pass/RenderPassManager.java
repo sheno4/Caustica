@@ -2,6 +2,7 @@ package dev.comfyfluffy.caustica.rt.pass;
 
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.CausticaOptions;
+import dev.comfyfluffy.caustica.api.CausticaRegistry;
 import dev.comfyfluffy.caustica.api.Feature;
 import dev.comfyfluffy.caustica.api.Option;
 import dev.comfyfluffy.caustica.api.OptionValues;
@@ -10,6 +11,7 @@ import dev.comfyfluffy.caustica.api.pass.PassFrame;
 import dev.comfyfluffy.caustica.api.pass.PassSetup;
 import dev.comfyfluffy.caustica.api.pass.RenderStage;
 import dev.comfyfluffy.caustica.rt.GpuContext;
+import dev.comfyfluffy.caustica.rt.RtRuntime;
 import dev.comfyfluffy.caustica.rt.VulkanBarriers;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
@@ -106,28 +108,19 @@ public final class RenderPassManager {
     }
 
     /**
-     * {@code features} is every registered {@link Feature}, not just the ones with render passes: each
-     * pass's owning feature is recovered from it so {@link PassSetup#options()}/{@link PassFrame#options()}
-     * know which feature's option namespace to read. {@code options} is the process-scoped store loaded at
-     * mod init ({@code CausticaApi.options()}) — this manager reads it, it does not own it, since option
-     * values outlive the Vulkan device and have to be readable before one exists. Every reader is a pass
-     * reading its own feature's options; engine code outside a pass has no path to them.
+     * {@code contributions} contains only the render-session instances selected by the runtime closure.
+     * Options remain process-scoped because their values outlive both the device and RT sessions.
      */
-    public static RenderPassManager create(GpuContext ctx, Map<ResourceId, Feature> features,
+    public static RenderPassManager create(GpuContext ctx, CausticaRegistry.RuntimeContributions contributions,
                                            CausticaOptions options) {
-        Map<ResourceId, CausticaRenderPass> registered = new LinkedHashMap<>();
-        Map<ResourceId, Feature> passFeature = new LinkedHashMap<>();
-        for (Feature feature : features.values()) {
-            for (CausticaRenderPass pass : feature.renderPasses()) {
-                registered.put(pass.id(), pass);
-                passFeature.put(pass.id(), feature);
-            }
-        }
-        List<CausticaRenderPass> ordered = orderPasses(registered.values());
-        RenderPassManager manager = new RenderPassManager(ctx, ordered, passFeature, options);
+        List<CausticaRenderPass> ordered = orderPasses(contributions.renderPasses().values());
+        RenderPassManager manager = new RenderPassManager(ctx, ordered, contributions.renderPassFeatures(), options);
         for (CausticaRenderPass pass : ordered) {
             PassSetup setup = manager.new Setup(pass);
             manager.invoke(pass, "create", () -> pass.create(setup));
+        }
+        if (RtRuntime.INSTANCE.hasAppliedResourcePack()) {
+            manager.onResourcePackApplied();
         }
         return manager;
     }
@@ -245,13 +238,33 @@ public final class RenderPassManager {
         }
     }
 
-    /** Tell every active pass its persistent bake state (if any) should be considered stale. */
-    public void invalidate() {
+    /** Tell every active pass that the current resource pack is being detached. */
+    public void onResourcePackClosing() {
         for (CausticaRenderPass pass : ordered) {
             if (disabled.contains(pass)) {
                 continue;
             }
-            invoke(pass, "invalidate", pass::invalidate);
+            invoke(pass, "resource-pack closing", pass::onResourcePackClosing);
+        }
+    }
+
+    /** Tell every active pass that a replacement resource pack is ready. */
+    public void onResourcePackApplied() {
+        for (CausticaRenderPass pass : ordered) {
+            if (disabled.contains(pass)) {
+                continue;
+            }
+            invoke(pass, "resource-pack applied", pass::onResourcePackApplied);
+        }
+    }
+
+    /** Tell every active pass that the render session changed worlds. */
+    public void onWorldChanged() {
+        for (CausticaRenderPass pass : ordered) {
+            if (disabled.contains(pass)) {
+                continue;
+            }
+            invoke(pass, "world changed", pass::onWorldChanged);
         }
     }
 

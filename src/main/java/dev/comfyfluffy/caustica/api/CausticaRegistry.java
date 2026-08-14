@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.api;
 
 import dev.comfyfluffy.caustica.api.pass.CausticaRenderPass;
+import dev.comfyfluffy.caustica.api.pass.RenderPassRegistration;
 import dev.comfyfluffy.caustica.api.provider.LightProvider;
 import dev.comfyfluffy.caustica.api.provider.MaterialSource;
 import dev.comfyfluffy.caustica.api.provider.ProviderRegistration;
@@ -15,10 +16,10 @@ import java.util.Objects;
 
 public final class CausticaRegistry {
     private final Map<ResourceId, Feature> features = new LinkedHashMap<>();
-    private final Map<ResourceId, CausticaRenderPass> renderPasses = new LinkedHashMap<>();
-    private final Map<ResourceId, SceneProvider> sceneProviders = new LinkedHashMap<>();
-    private final Map<ResourceId, LightProvider> lightProviders = new LinkedHashMap<>();
-    private final Map<ResourceId, MaterialSource> materialSources = new LinkedHashMap<>();
+    private final Map<ResourceId, Feature> renderPassOwners = new LinkedHashMap<>();
+    private final Map<ResourceId, Feature> sceneProviderOwners = new LinkedHashMap<>();
+    private final Map<ResourceId, Feature> lightProviderOwners = new LinkedHashMap<>();
+    private final Map<ResourceId, Feature> materialSourceOwners = new LinkedHashMap<>();
     private final Map<Slot, ResourceId> defaults = new LinkedHashMap<>();
     private final Map<Slot, ResourceId> selected = new LinkedHashMap<>();
     /**
@@ -39,14 +40,14 @@ public final class CausticaRegistry {
         if (features.containsKey(feature.id())) {
             throw new IllegalStateException("duplicate feature id " + feature.id());
         }
-        for (CausticaRenderPass renderPass : feature.renderPasses()) {
-            if (renderPasses.containsKey(renderPass.id())) {
+        for (RenderPassRegistration renderPass : feature.renderPasses()) {
+            if (renderPassOwners.containsKey(renderPass.id())) {
                 throw new IllegalStateException("duplicate render pass id " + renderPass.id());
             }
         }
-        requireUnique(sceneProviders, feature.sceneProviders(), "scene provider");
-        requireUnique(lightProviders, feature.lightProviders(), "light provider");
-        requireUnique(materialSources, feature.materialSources(), "material source");
+        requireUnique(sceneProviderOwners, feature.sceneProviders(), "scene provider");
+        requireUnique(lightProviderOwners, feature.lightProviders(), "light provider");
+        requireUnique(materialSourceOwners, feature.materialSources(), "material source");
         for (Feature.SurfaceImplementation surface : feature.surfaces()) {
             if (surfaceIndex(surface.id()) >= 0) {
                 throw new IllegalStateException("duplicate surface implementation id " + surface.id());
@@ -60,15 +61,15 @@ public final class CausticaRegistry {
         features.put(feature.id(), feature);
         surfaces.addAll(feature.surfaces());
         surfaceModifiers.addAll(feature.surfaceModifiers());
-        for (CausticaRenderPass renderPass : feature.renderPasses()) {
-            renderPasses.put(renderPass.id(), renderPass);
+        for (RenderPassRegistration renderPass : feature.renderPasses()) {
+            renderPassOwners.put(renderPass.id(), feature);
         }
         feature.sceneProviders().forEach(registration ->
-                sceneProviders.put(registration.id(), registration.provider()));
+                sceneProviderOwners.put(registration.id(), feature));
         feature.lightProviders().forEach(registration ->
-                lightProviders.put(registration.id(), registration.provider()));
+                lightProviderOwners.put(registration.id(), feature));
         feature.materialSources().forEach(registration ->
-                materialSources.put(registration.id(), registration.provider()));
+                materialSourceOwners.put(registration.id(), feature));
     }
 
     public synchronized void setDefault(Slot slot, ResourceId featureId) {
@@ -154,28 +155,95 @@ public final class CausticaRegistry {
         return -1;
     }
 
-    public synchronized Map<ResourceId, CausticaRenderPass> renderPasses() {
-        return Collections.unmodifiableMap(new LinkedHashMap<>(renderPasses));
+    /** Stable pass identities declared by registered features; no pass instances exist at process scope. */
+    public synchronized List<ResourceId> renderPassIds() {
+        return List.copyOf(renderPassOwners.keySet());
     }
 
-    public synchronized Map<ResourceId, SceneProvider> sceneProviders() {
-        return Collections.unmodifiableMap(new LinkedHashMap<>(sceneProviders));
+    public synchronized List<ResourceId> sceneProviderIds() {
+        return List.copyOf(sceneProviderOwners.keySet());
     }
 
-    public synchronized Map<ResourceId, LightProvider> lightProviders() {
-        return Collections.unmodifiableMap(new LinkedHashMap<>(lightProviders));
+    public synchronized List<ResourceId> lightProviderIds() {
+        return List.copyOf(lightProviderOwners.keySet());
     }
 
-    public synchronized Map<ResourceId, MaterialSource> materialSources() {
-        return Collections.unmodifiableMap(new LinkedHashMap<>(materialSources));
+    public synchronized List<ResourceId> materialSourceIds() {
+        return List.copyOf(materialSourceOwners.keySet());
     }
 
-    private static <T> void requireUnique(Map<ResourceId, T> registered,
+    /** Instantiate the currently active runtime closure for one RT session. */
+    public synchronized RuntimeContributions createRuntimeContributions() {
+        Selection selection = selection();
+        java.util.Set<Feature> selectedFeatures = new java.util.HashSet<>();
+        Map<Slot, ResourceId> selectedSlots = new LinkedHashMap<>();
+        for (Map.Entry<Slot, SelectedBinding> entry : selection.bindings().entrySet()) {
+            SelectedBinding binding = entry.getValue();
+            selectedFeatures.add(binding.feature());
+            selectedSlots.put(entry.getKey(), binding.feature().id());
+        }
+        Map<ResourceId, CausticaRenderPass> passes = new LinkedHashMap<>();
+        Map<ResourceId, Feature> passFeatures = new LinkedHashMap<>();
+        Map<ResourceId, SceneProvider> scenes = new LinkedHashMap<>();
+        Map<ResourceId, LightProvider> lights = new LinkedHashMap<>();
+        Map<ResourceId, MaterialSource> materials = new LinkedHashMap<>();
+        for (Feature feature : features.values()) {
+            if (feature.runtimeActivation() != RuntimeActivation.ALWAYS
+                    && !selectedFeatures.contains(feature)) {
+                continue;
+            }
+            for (RenderPassRegistration registration : feature.renderPasses()) {
+                CausticaRenderPass pass = Objects.requireNonNull(registration.factory().create(),
+                        feature.id() + " created a null render pass for " + registration.id());
+                if (!registration.id().equals(pass.id())) {
+                    throw new IllegalStateException(feature.id() + " created render pass " + pass.id()
+                            + " for registration " + registration.id());
+                }
+                if (registration.stage() != pass.stage()) {
+                    throw new IllegalStateException(feature.id() + " created render pass " + pass.id()
+                            + " at " + pass.stage() + " for registration " + registration.stage());
+                }
+                passes.put(registration.id(), pass);
+                passFeatures.put(registration.id(), feature);
+            }
+            instantiate(scenes, feature.sceneProviders());
+            instantiate(lights, feature.lightProviders());
+            instantiate(materials, feature.materialSources());
+        }
+        return new RuntimeContributions(selectedSlots, passes, passFeatures, scenes, lights, materials);
+    }
+
+    private static <T> void requireUnique(Map<ResourceId, Feature> registered,
                                           Iterable<ProviderRegistration<T>> candidates, String kind) {
         for (ProviderRegistration<T> candidate : candidates) {
             if (registered.containsKey(candidate.id())) {
                 throw new IllegalStateException("duplicate " + kind + " id " + candidate.id());
             }
+        }
+    }
+
+    private static <T> void instantiate(Map<ResourceId, T> target,
+                                        Iterable<ProviderRegistration<T>> registrations) {
+        for (ProviderRegistration<T> registration : registrations) {
+            target.put(registration.id(), Objects.requireNonNull(registration.factory().create(),
+                    "Factory created a null provider for " + registration.id()));
+        }
+    }
+
+    /** Runtime-activation instances selected independently from the program-composition closure. */
+    public record RuntimeContributions(Map<Slot, ResourceId> selectedSlots,
+                                       Map<ResourceId, CausticaRenderPass> renderPasses,
+                                       Map<ResourceId, Feature> renderPassFeatures,
+                                       Map<ResourceId, SceneProvider> sceneProviders,
+                                       Map<ResourceId, LightProvider> lightProviders,
+                                       Map<ResourceId, MaterialSource> materialSources) {
+        public RuntimeContributions {
+            selectedSlots = Collections.unmodifiableMap(new LinkedHashMap<>(selectedSlots));
+            renderPasses = Collections.unmodifiableMap(new LinkedHashMap<>(renderPasses));
+            renderPassFeatures = Collections.unmodifiableMap(new LinkedHashMap<>(renderPassFeatures));
+            sceneProviders = Collections.unmodifiableMap(new LinkedHashMap<>(sceneProviders));
+            lightProviders = Collections.unmodifiableMap(new LinkedHashMap<>(lightProviders));
+            materialSources = Collections.unmodifiableMap(new LinkedHashMap<>(materialSources));
         }
     }
 

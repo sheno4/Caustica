@@ -2,6 +2,10 @@ package dev.comfyfluffy.caustica.rt;
 
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
+import dev.comfyfluffy.caustica.api.CausticaApi;
+import dev.comfyfluffy.caustica.api.CausticaRegistry;
+import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.api.pass.CausticaRenderPass;
 import dev.comfyfluffy.caustica.engine.frame.SceneResources;
 import dev.comfyfluffy.caustica.ngx.NgxRuntime;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg;
@@ -24,12 +28,122 @@ public final class RtRuntime {
     private Session session;
     private boolean frameActive;
     private RtRuntimeHost host;
+    private final RtLifecycleCoordinator lifecycle = new RtLifecycleCoordinator(
+            new RtLifecycleCoordinator.Listener() {
+                @Override
+                public void processStopping() {
+                    RtProgramManager.INSTANCE.resetActive();
+                }
+
+                @Override
+                public void resourcePackReloadStarting(RtLifecycleCoordinator.ResourcePackEpoch pending) {
+                    if (session != null) {
+                        RtComposite.INSTANCE.onResourceReloadStart();
+                    }
+                }
+
+                @Override
+                public void resourcePackApplied(RtLifecycleCoordinator.ResourcePackEpoch epoch) {
+                    if (session != null) {
+                        RtComposite.INSTANCE.onResourcePackApplied();
+                    }
+                }
+
+                @Override
+                public void resourcePackReloadFailed(RtLifecycleCoordinator.ResourcePackEpoch pending,
+                                                     Throwable failure) {
+                    if (session != null) {
+                        RtComposite.INSTANCE.onResourceReloadFailed();
+                        if (lifecycle.resourcePackEpoch() != null) {
+                            RtComposite.INSTANCE.onResourcePackApplied();
+                        }
+                    }
+                }
+
+                @Override
+                public void worldEntered(RtLifecycleCoordinator.WorldEpoch epoch) {
+                    if (session != null) {
+                        session.onWorldChanged();
+                    }
+                }
+
+                @Override
+                public void worldLeaving(RtLifecycleCoordinator.WorldEpoch epoch) {
+                    if (session != null) {
+                        session.onWorldChanged();
+                    }
+                }
+            });
 
     private RtRuntime() {
     }
 
     public void installHost(RtRuntimeHost installedHost) {
         host = installedHost;
+    }
+
+    /** Start process-scoped lifecycle tracking after the host has installed its extensions and options. */
+    public void startProcess() {
+        lifecycle.startProcess();
+    }
+
+    /** Observe a resource pack that is available to the client, including the initial title-screen pack. */
+    public void observeResourcePackAvailable() {
+        lifecycle.observeResourcePackAvailable();
+    }
+
+    /** Begin the host-visible half of a resource-pack reload before its old images are destroyed. */
+    public RtLifecycleCoordinator.ResourcePackEpoch beginResourcePackReload() {
+        return lifecycle.beginResourcePackReload();
+    }
+
+    /** Attach a manual-reload future; its result is applied on the next client tick. */
+    public void trackResourcePackReload(RtLifecycleCoordinator.ResourcePackEpoch pending,
+                                        java.util.concurrent.CompletableFuture<?> future) {
+        lifecycle.trackResourcePackReload(pending, future);
+    }
+
+    /** Reconcile the current level identity at the client-tick boundary. */
+    public void observeWorld(Object levelIdentity, long sceneId) {
+        lifecycle.observeWorld(levelIdentity, sceneId);
+    }
+
+    /** Invalidate render-session world state without changing the host world epoch identity. */
+    public void invalidateWorld() {
+        if (session != null) {
+            session.onWorldChanged();
+        }
+    }
+
+    public RtLifecycleCoordinator lifecycle() {
+        return lifecycle;
+    }
+
+    /** Whether a completed resource pack can be replayed into newly created session instances. */
+    public boolean hasAppliedResourcePack() {
+        return lifecycle.resourcePackEpoch() != null && lifecycle.pendingResourcePackEpoch() == null;
+    }
+
+    /** The live contribution instances for the current runtime activation. */
+    public CausticaRegistry.RuntimeContributions runtimeContributions() {
+        if (session == null) {
+            throw new IllegalStateException("No RT render session is active");
+        }
+        return session.contributions;
+    }
+
+    /** Route host-side capture to the current scoped render pass when it exists. */
+    public <T extends CausticaRenderPass> T renderPass(ResourceId id, Class<T> type) {
+        if (session == null) {
+            return null;
+        }
+        CausticaRenderPass pass = session.contributions.renderPasses().get(id);
+        return type.isInstance(pass) ? type.cast(pass) : null;
+    }
+
+    /** Whether a program's selected-slot closure matches the live runtime activation. */
+    public boolean matchesRuntimeActivation(RtProgramManager.Program program) {
+        return session != null && session.matches(program.key().selection());
     }
 
     public static RtRuntimeHost host() {
@@ -43,7 +157,14 @@ public final class RtRuntime {
     /** Reconcile the requested mode and advance session startup at the client-tick boundary. */
     public void tick(SceneResources sceneResources, boolean startupSceneReady, long sceneId,
                      int displayWidth, int displayHeight, Runnable reconfigureSurface) {
+        lifecycle.drainResourcePackCompletions();
+        CausticaRegistry.Selection selection = CausticaApi.registry().selection();
+        RtProgramManager.INSTANCE.request(selection, RtDeviceBringup.serExtEnabled());
+        RtProgramManager.Program candidate = RtProgramManager.INSTANCE.candidate();
         boolean requested = CausticaConfig.Rt.ENABLED.value();
+        if (requested && session != null && !session.matches(selection) && candidate != null) {
+            rotateRuntimeActivation(reconfigureSurface);
+        }
         if (!requested) {
             if (state == State.STARTING || state == State.ACTIVE) {
                 stop(reconfigureSurface);
@@ -96,21 +217,38 @@ public final class RtRuntime {
         try {
             if (session != null) {
                 state = State.STOPPING;
-                session.close();
+                Session closing = session;
+                session = null;
+                try {
+                    closeRuntimeActivation(closing);
+                } finally {
+                    lifecycle.closeRenderSession(closing.renderSessionEpoch);
+                }
             }
         } finally {
             session = null;
             try {
                 GpuContext context = GpuContext.currentOrNull();
                 if (context != null) {
-                    context.destroy();
+                    try {
+                        lifecycle.closeDevice(context);
+                    } finally {
+                        context.destroy();
+                    }
                 }
             } finally {
                 try {
-                    NgxRuntime.INSTANCE.shutdown();
+                    lifecycle.stopProcess();
                 } finally {
-                    SlangRuntime.INSTANCE.shutdown();
-                    state = State.OFF;
+                    try {
+                        NgxRuntime.INSTANCE.shutdown();
+                    } finally {
+                        try {
+                            SlangRuntime.INSTANCE.shutdown();
+                        } finally {
+                            state = State.OFF;
+                        }
+                    }
                 }
             }
         }
@@ -152,11 +290,53 @@ public final class RtRuntime {
             CausticaMod.LOGGER.warn("RT runtime unavailable: the Vulkan device was not provisioned for ray tracing");
             return;
         }
-        SlangRuntime.INSTANCE.resume();
-        ProviderManager.INSTANCE.beginSession();
-        session = new Session();
-        state = State.STARTING;
-        CausticaMod.LOGGER.info("RT runtime starting; source presentation remains active");
+        RtLifecycleCoordinator.RenderSessionEpoch epoch = lifecycle.beginRenderSession();
+        startRuntimeActivation(epoch);
+    }
+
+    private void startRuntimeActivation(RtLifecycleCoordinator.RenderSessionEpoch renderSessionEpoch) {
+        RtLifecycleCoordinator.RuntimeActivationEpoch activationEpoch = lifecycle.beginRuntimeActivation();
+        CausticaRegistry.RuntimeContributions contributions = null;
+        boolean providersInstalled = false;
+        try {
+            SlangRuntime.INSTANCE.resume();
+            contributions = CausticaApi.registry().createRuntimeContributions();
+            ProviderManager.INSTANCE.beginSession(contributions);
+            providersInstalled = true;
+            session = new Session(renderSessionEpoch, activationEpoch, contributions);
+            if (hasAppliedResourcePack()) {
+                RtComposite.INSTANCE.onResourcePackApplied();
+            }
+            if (lifecycle.worldEpoch() != null) {
+                session.onWorldChanged();
+            }
+            state = State.STARTING;
+            CausticaMod.LOGGER.info("RT runtime starting; source presentation remains active");
+        } catch (Throwable failure) {
+            try {
+                if (session != null) {
+                    session.closeActivation();
+                    session = null;
+                } else if (providersInstalled || contributions != null) {
+                    disposeUnstartedContributions(contributions);
+                }
+            } finally {
+                lifecycle.closeRuntimeActivation(activationEpoch);
+                lifecycle.closeRenderSession(renderSessionEpoch);
+                state = State.FAILED;
+                CausticaMod.LOGGER.error("RT runtime could not create its render session", failure);
+            }
+        }
+    }
+
+    private static void disposeUnstartedContributions(CausticaRegistry.RuntimeContributions contributions) {
+        ProviderManager.INSTANCE.beginSession(contributions);
+        ProviderManager.INSTANCE.stopProviders();
+        ProviderManager.INSTANCE.shutdownResources();
+        ProviderManager.INSTANCE.endSession();
+        for (CausticaRenderPass pass : contributions.renderPasses().values()) {
+            pass.destroy();
+        }
     }
 
     /**
@@ -176,17 +356,78 @@ public final class RtRuntime {
     private void closeSession(Runnable reconfigureSurface, State terminalState) {
         state = State.STOPPING;
         frameActive = false;
+        Session closing = session;
+        session = null;
         try {
             reconfigureSurface.run();
-            session.close();
         } finally {
-            session = null;
-            state = terminalState;
+            try {
+                closeRuntimeActivation(closing);
+            } finally {
+                try {
+                    lifecycle.closeRenderSession(closing.renderSessionEpoch);
+                } finally {
+                    state = terminalState;
+                }
+            }
+        }
+    }
+
+    private void rotateRuntimeActivation(Runnable reconfigureSurface) {
+        state = State.STOPPING;
+        frameActive = false;
+        Session closing = session;
+        session = null;
+        RtLifecycleCoordinator.RenderSessionEpoch renderSessionEpoch = closing.renderSessionEpoch;
+        try {
+            reconfigureSurface.run();
+        } finally {
+            try {
+                closeRuntimeActivation(closing);
+                startRuntimeActivation(renderSessionEpoch);
+            } catch (Throwable failure) {
+                lifecycle.closeRenderSession(renderSessionEpoch);
+                state = State.FAILED;
+                CausticaMod.LOGGER.error("RT runtime could not replace its active runtime closure", failure);
+            }
+        }
+    }
+
+    private void closeRuntimeActivation(Session closing) {
+        try {
+            lifecycle.closeRuntimeActivation(closing.activationEpoch);
+        } finally {
+            closing.closeActivation();
         }
     }
 
     private static final class Session {
+        private final RtLifecycleCoordinator.RenderSessionEpoch renderSessionEpoch;
+        private final RtLifecycleCoordinator.RuntimeActivationEpoch activationEpoch;
+        private final CausticaRegistry.RuntimeContributions contributions;
         private GpuContext context;
+
+        private Session(RtLifecycleCoordinator.RenderSessionEpoch renderSessionEpoch,
+                        RtLifecycleCoordinator.RuntimeActivationEpoch activationEpoch,
+                        CausticaRegistry.RuntimeContributions contributions) {
+            this.renderSessionEpoch = renderSessionEpoch;
+            this.activationEpoch = activationEpoch;
+            this.contributions = contributions;
+        }
+
+        private void onWorldChanged() {
+            ProviderManager.INSTANCE.onWorldChanged();
+            RtComposite.INSTANCE.onWorldChanged();
+        }
+
+        private boolean matches(CausticaRegistry.Selection selection) {
+            for (var entry : selection.bindings().entrySet()) {
+                if (!entry.getValue().feature().id().equals(contributions.selectedSlots().get(entry.getKey()))) {
+                    return false;
+                }
+            }
+            return true;
+        }
 
         boolean tick(SceneResources sceneResources, long sceneId, int displayWidth, int displayHeight,
                      boolean starting) {
@@ -195,6 +436,7 @@ public final class RtRuntime {
                 if (context == null) {
                     return false;
                 }
+                INSTANCE.lifecycle.observeDevice(context);
             }
 
             boolean resourcesReady = RtComposite.INSTANCE.ensureResourcesReady(context, sceneResources);
@@ -216,12 +458,12 @@ public final class RtRuntime {
             return resourcesReady;
         }
 
-        void close() {
+        void closeActivation() {
             host().resetFrameBridge();
             ProviderManager.INSTANCE.stopProviders();
-            SlangRuntime.INSTANCE.requestShutdownWhenIdle();
             if (context == null) {
                 ProviderManager.INSTANCE.shutdownResources();
+                ProviderManager.INSTANCE.endSession();
                 host().destroyUiPresentation();
                 return;
             }
@@ -230,6 +472,7 @@ public final class RtRuntime {
             // every queue before the remaining providers or runtime owners free session GPU resources.
             context.gpuExecutor().drainAndWaitIdle();
             ProviderManager.INSTANCE.shutdownResources();
+            ProviderManager.INSTANCE.endSession();
             host().destroyUiPresentation();
             RtComposite.INSTANCE.destroy();
             host().resetSceneTextures();

@@ -24,6 +24,9 @@ public interface RtSceneSource {
 
     void resetBindlessTextures(int capacity);
 
+    /** Populate a replacement pipeline from the current stable texture-slot mapping. */
+    void rebindTextures(RtPipeline pipeline, long sampler);
+
     void uploadPendingTextures(RtPipeline pipeline, long sampler);
 
     /** Stable retained geometry and source-owned finite-light segment for one renderer frame. */

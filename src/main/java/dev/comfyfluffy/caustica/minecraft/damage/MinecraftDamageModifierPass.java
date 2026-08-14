@@ -22,7 +22,6 @@ import java.util.List;
 
 /** Captures Minecraft block damage and publishes its projected surface-modifier inputs. */
 public final class MinecraftDamageModifierPass implements CausticaRenderPass {
-    public static final MinecraftDamageModifierPass INSTANCE = new MinecraftDamageModifierPass();
     public static final ResourceId ID = ResourceId.of("caustica", "minecraft_damage_modifier");
     public static final ResourceId MODIFIER_ID = ResourceId.of("caustica", "minecraft_damage");
 
@@ -34,7 +33,7 @@ public final class MinecraftDamageModifierPass implements CausticaRenderPass {
     private volatile List<Entry> captured = List.of();
     private GpuBuffer buffer;
 
-    private MinecraftDamageModifierPass() {
+    public MinecraftDamageModifierPass() {
     }
 
     @Override

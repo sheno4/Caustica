@@ -2,6 +2,7 @@ package dev.comfyfluffy.caustica.rt.provider;
 
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.api.CausticaApi;
+import dev.comfyfluffy.caustica.api.CausticaRegistry;
 import dev.comfyfluffy.caustica.api.provider.LightProvider;
 import dev.comfyfluffy.caustica.api.provider.LightSink;
 import dev.comfyfluffy.caustica.engine.light.DistantLight;
@@ -33,14 +34,13 @@ import java.util.function.Supplier;
 public final class ProviderManager {
     public static final ProviderManager INSTANCE = new ProviderManager(null, null, null);
 
-    // Provider failures disable it for the process. Normal session shutdown is tracked separately:
-    // providers are lazy/restartable and receive callbacks again after beginSession().
+    // A provider instance is runtime-activation-scoped. Failures disable it until that activation ends.
     private final Set<ProviderKey> failed = new HashSet<>();
     private final Set<ProviderKey> stoppedThisSession = new HashSet<>();
     private final Set<ProviderKey> shutDownThisSession = new HashSet<>();
-    private final Map<ResourceId, SceneProvider> scenes;
-    private final Map<ResourceId, LightProvider> lights;
-    private final Map<ResourceId, MaterialSource> materials;
+    private Map<ResourceId, SceneProvider> scenes;
+    private Map<ResourceId, LightProvider> lights;
+    private Map<ResourceId, MaterialSource> materials;
     private List<LightDescriptor> frameLights = List.of();
     private Set<ResourceId> namedMaterials = Set.of();
 
@@ -53,8 +53,17 @@ public final class ProviderManager {
 
     /** Begin a new RT session; normally stopped providers become eligible for callbacks again. */
     public void beginSession() {
+        failed.clear();
         stoppedThisSession.clear();
         shutDownThisSession.clear();
+    }
+
+    /** Install the freshly created runtime-activation provider instances before they receive callbacks. */
+    public void beginSession(CausticaRegistry.RuntimeContributions contributions) {
+        scenes = contributions.sceneProviders();
+        lights = contributions.lightProviders();
+        materials = contributions.materialSources();
+        beginSession();
     }
 
     public void updateScenes() {
@@ -142,6 +151,16 @@ public final class ProviderManager {
         }
     }
 
+    public void rebindTextures(RtPipeline pipeline, long sampler) {
+        SceneSourceEntry entry = primarySceneSource();
+        if (entry != null) {
+            invokeSceneSource(entry, "bindless texture rebind", () -> {
+                entry.source().rebindTextures(pipeline, sampler);
+                return null;
+            }, null);
+        }
+    }
+
     public void uploadPendingTextures(RtPipeline pipeline, long sampler) {
         SceneSourceEntry entry = primarySceneSource();
         if (entry != null) {
@@ -208,14 +227,20 @@ public final class ProviderManager {
     private record StagedInstance(long meshKey, GeometryTransform transform) {
     }
 
-    public void invalidateScenes() {
-        invoke("scene", scenes(), SceneProvider::invalidate, SceneProvider::stop);
+    public void onWorldChanged() {
+        invoke("scene", scenes(), SceneProvider::onWorldChanged, SceneProvider::stop);
     }
 
-    public void onResourceReload() {
-        invoke("scene", scenes(), SceneProvider::onResourceReload, SceneProvider::stop);
-        invoke("light", lights(), LightProvider::onResourceReload, LightProvider::stop);
-        invoke("material", materials(), MaterialSource::onResourceReload, MaterialSource::stop);
+    public void onResourcePackClosing() {
+        invoke("scene", scenes(), SceneProvider::onResourcePackClosing, SceneProvider::stop);
+        invoke("light", lights(), LightProvider::onResourcePackClosing, LightProvider::stop);
+        invoke("material", materials(), MaterialSource::onResourcePackClosing, MaterialSource::stop);
+    }
+
+    public void onResourcePackApplied() {
+        invoke("scene", scenes(), SceneProvider::onResourcePackApplied, SceneProvider::stop);
+        invoke("light", lights(), LightProvider::onResourcePackApplied, LightProvider::stop);
+        invoke("material", materials(), MaterialSource::onResourcePackApplied, MaterialSource::stop);
     }
 
     /**
@@ -306,16 +331,25 @@ public final class ProviderManager {
         shutdownStopped("material", materials(), MaterialSource::shutdown);
     }
 
+    /** Drop the render-session instance references after every provider has shut down. */
+    public void endSession() {
+        scenes = Map.of();
+        lights = Map.of();
+        materials = Map.of();
+        frameLights = List.of();
+        namedMaterials = Set.of();
+    }
+
     private Map<ResourceId, SceneProvider> scenes() {
-        return scenes != null ? scenes : CausticaApi.registry().sceneProviders();
+        return scenes != null ? scenes : Map.of();
     }
 
     private Map<ResourceId, LightProvider> lights() {
-        return lights != null ? lights : CausticaApi.registry().lightProviders();
+        return lights != null ? lights : Map.of();
     }
 
     private Map<ResourceId, MaterialSource> materials() {
-        return materials != null ? materials : CausticaApi.registry().materialSources();
+        return materials != null ? materials : Map.of();
     }
 
     private SceneSourceEntry primarySceneSource() {

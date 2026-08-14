@@ -4,8 +4,10 @@ import dev.comfyfluffy.caustica.api.CausticaExtension;
 import dev.comfyfluffy.caustica.api.CausticaRegistry;
 import dev.comfyfluffy.caustica.api.DisplayText;
 import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.api.RuntimeActivation;
 import dev.comfyfluffy.caustica.api.ShaderSource;
 import dev.comfyfluffy.caustica.api.Slots;
+import dev.comfyfluffy.caustica.api.pass.RenderStage;
 import dev.comfyfluffy.caustica.minecraft.overlay.WorldOverlayPass;
 import dev.comfyfluffy.caustica.minecraft.cloud.MinecraftCloudSceneProvider;
 import dev.comfyfluffy.caustica.minecraft.damage.MinecraftDamageModifierPass;
@@ -26,6 +28,7 @@ public final class MinecraftProvidersExtension implements CausticaExtension {
                 .title(DisplayText.literal("Minecraft"))
                 .shaderSource(ShaderSource.classpath(
                         "/caustica/shaders/minecraft", "surface", "sky", "modifier"))
+                .runtimeActivation(RuntimeActivation.ALWAYS)
                 .bind(Slots.SKY, "caustica_minecraft_overworld_sky", "MinecraftOverworldSky")
                 .surface(END_PORTAL_SURFACE, "caustica_portal_surface", "PortalSurface")
                 .surface(WATER_SURFACE, "caustica_water_surface", "WaterSurface")
@@ -35,13 +38,14 @@ public final class MinecraftProvidersExtension implements CausticaExtension {
                 .passResourceModule("caustica_minecraft_damage_bindings")
                 .group(SkyLutPass.GROUP)
                 .options(SkyLutPass.OPTIONS)
-                .renderPass(new SkyLutPass())
-                .renderPass(MinecraftDamageModifierPass.INSTANCE)
-                .renderPass(new WorldOverlayPass())
-                .sceneProvider(MinecraftSceneProvider.ID, new MinecraftSceneProvider())
-                .sceneProvider(MinecraftCloudSceneProvider.ID, new MinecraftCloudSceneProvider())
-                .lightProvider(MinecraftLightProvider.ID, new MinecraftLightProvider())
-                .materialSource(MinecraftMaterialSource.ID, new MinecraftMaterialSource())
+                .renderPass(SkyLutPass.ID, RenderStage.ENVIRONMENT_PREPARE, SkyLutPass::new)
+                .renderPass(MinecraftDamageModifierPass.ID, RenderStage.BEFORE_TRACE,
+                        MinecraftDamageModifierPass::new)
+                .renderPass(WorldOverlayPass.ID, RenderStage.OVERLAY, WorldOverlayPass::new)
+                .sceneProvider(MinecraftSceneProvider.ID, MinecraftSceneProvider::new)
+                .sceneProvider(MinecraftCloudSceneProvider.ID, MinecraftCloudSceneProvider::new)
+                .lightProvider(MinecraftLightProvider.ID, MinecraftLightProvider::new)
+                .materialSource(MinecraftMaterialSource.ID, MinecraftMaterialSource::new)
                 .register();
     }
 }

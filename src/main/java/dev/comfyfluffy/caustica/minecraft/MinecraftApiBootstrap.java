@@ -14,7 +14,7 @@ import dev.comfyfluffy.caustica.api.pass.PassShaderCompiler;
 import dev.comfyfluffy.caustica.builtin.BuiltinExtension;
 import dev.comfyfluffy.caustica.platform.CausticaPlatform;
 import dev.comfyfluffy.caustica.rt.RtFrameStats;
-import dev.comfyfluffy.caustica.rt.RtComposite;
+import dev.comfyfluffy.caustica.rt.RtProgramManager;
 
 /** Loader-neutral extension discovery, config paths, and Minecraft provider installation. */
 public final class MinecraftApiBootstrap {
@@ -37,7 +37,7 @@ public final class MinecraftApiBootstrap {
                 MinecraftProvidersExtension.ID);
         var shaderCache = CausticaPlatform.current().gameDir().resolve("caustica-shaders");
         PassShaderCompiler.defaultCacheRoot(shaderCache.resolve("passes"));
-        RtComposite.configureShaderCacheRoot(shaderCache.resolve("sources"));
+        RtProgramManager.INSTANCE.configureCacheRoot(shaderCache.resolve("sources"));
         RtFrameStats.configureOutputDirectory(CausticaPlatform.current().gameDir()
                 .resolve("rt-frame-stats"));
         RtFrameStats.configureFrameMetrics(MinecraftFrameMetrics.schema());

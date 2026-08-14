@@ -4,7 +4,12 @@ public interface MaterialSource {
     /** Submit this resource epoch's definitions and ordered rules. */
     void submitMaterials(MaterialSink sink);
 
-    default void onResourceReload() {
+    /** Called while the current resource pack is being detached. */
+    default void onResourcePackClosing() {
+    }
+
+    /** Called after a replacement resource pack becomes active. */
+    default void onResourcePackApplied() {
     }
 
     /**

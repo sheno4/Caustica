@@ -11,10 +11,16 @@ public interface SceneProvider {
     default void submitGeometry(SceneGeometrySink sink) {
     }
 
-    default void invalidate() {
+    /** Called whenever this render session enters or leaves a world epoch. */
+    default void onWorldChanged() {
     }
 
-    default void onResourceReload() {
+    /** Called while the current resource pack is being detached. */
+    default void onResourcePackClosing() {
+    }
+
+    /** Called after a replacement resource pack becomes active. */
+    default void onResourcePackApplied() {
     }
 
     /**

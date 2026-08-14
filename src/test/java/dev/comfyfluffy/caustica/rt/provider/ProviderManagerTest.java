@@ -149,7 +149,7 @@ final class ProviderManagerTest {
     }
 
     @Test
-    void aFailedProviderRemainsDisabledAcrossSessions() {
+    void aFailedProviderIsRetriedInTheNextSession() {
         AtomicInteger updates = new AtomicInteger();
         AtomicInteger shutdowns = new AtomicInteger();
         SceneProvider failing = counting(shutdowns, () -> {
@@ -165,12 +165,12 @@ final class ProviderManagerTest {
         manager.updateScenes();
         shutdown(manager);
 
-        assertEquals(1, updates.get());
-        assertEquals(1, shutdowns.get());
+        assertEquals(2, updates.get());
+        assertEquals(2, shutdowns.get());
     }
 
     @Test
-    void aProviderWhoseShutdownFailsRemainsDisabledAcrossSessions() {
+    void aProviderWhoseShutdownFailsIsRetriedInTheNextSession() {
         AtomicInteger updates = new AtomicInteger();
         AtomicInteger shutdowns = new AtomicInteger();
         SceneProvider failing = new SceneProvider() {
@@ -194,8 +194,8 @@ final class ProviderManagerTest {
         manager.updateScenes();
         shutdown(manager);
 
-        assertEquals(1, updates.get());
-        assertEquals(1, shutdowns.get());
+        assertEquals(2, updates.get());
+        assertEquals(2, shutdowns.get());
     }
 
     @Test
@@ -212,7 +212,7 @@ final class ProviderManagerTest {
 
         manager.updateScenes();
         manager.prepareFrame();
-        manager.invalidateScenes();
+        manager.onWorldChanged();
         manager.updateScenes();
 
         assertEquals(1, updates.get());
@@ -506,6 +506,7 @@ final class ProviderManagerTest {
         assertEquals(37, manager.bindlessTextureCapacity());
 
         manager.resetBindlessTextures(64);
+        manager.rebindTextures(null, 81L);
         manager.uploadPendingTextures(null, 91L);
         RtSceneSource.Frame frame = manager.beginPrimaryFrame(selected, null, List.of(),
                 source.retained.geometryTable(),
@@ -514,6 +515,7 @@ final class ProviderManagerTest {
 
         assertSame(source.frame, frame);
         assertEquals(64, source.resetCapacity);
+        assertEquals(81L, source.rebindSampler);
         assertEquals(91L, source.uploadSampler);
         assertEquals(1, source.frameMarks.get());
 
@@ -641,6 +643,7 @@ final class ProviderManagerTest {
         };
         boolean failFrame;
         int resetCapacity;
+        long rebindSampler;
         long uploadSampler;
 
         @Override
@@ -665,6 +668,11 @@ final class ProviderManagerTest {
         @Override
         public void resetBindlessTextures(int capacity) {
             resetCapacity = capacity;
+        }
+
+        @Override
+        public void rebindTextures(RtPipeline pipeline, long sampler) {
+            rebindSampler = sampler;
         }
 
         @Override

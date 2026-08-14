@@ -18,9 +18,9 @@ final class MinecraftProvidersExtensionTest {
         new BuiltinExtension().register(registry);
         new MinecraftProvidersExtension().register(registry);
 
-        assertTrue(registry.renderPasses().containsKey(ResourceId.of("caustica", "sky_lut")));
-        assertTrue(registry.renderPasses().containsKey(ResourceId.of("caustica", "world_overlay")));
-        assertTrue(registry.renderPasses().containsKey(MinecraftDamageModifierPass.ID));
+        assertTrue(registry.renderPassIds().contains(ResourceId.of("caustica", "sky_lut")));
+        assertTrue(registry.renderPassIds().contains(ResourceId.of("caustica", "world_overlay")));
+        assertTrue(registry.renderPassIds().contains(MinecraftDamageModifierPass.ID));
         assertTrue(registry.features().get(MinecraftProvidersExtension.ID).options()
                 .contains(SkyLutPass.SUN_NOON_SOUTH_TILT_DEGREES));
         assertEquals("MinecraftOverworldSky",

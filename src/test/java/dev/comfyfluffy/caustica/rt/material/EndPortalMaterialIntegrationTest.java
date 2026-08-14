@@ -44,7 +44,7 @@ final class EndPortalMaterialIntegrationTest {
     void logicalPortalResourceFlowsThroughSourceCatalogOverrideAndBinding() throws Exception {
         var registry = TestRegistries.withBuiltins();
         assertInstanceOf(MinecraftMaterialSource.class,
-                registry.materialSources().get(MinecraftMaterialSource.ID));
+                registry.createRuntimeContributions().materialSources().get(MinecraftMaterialSource.ID));
 
         int portalSurfaceIndex = registry.surfaceIndex(MinecraftProvidersExtension.END_PORTAL_SURFACE);
         assertTrue(portalSurfaceIndex >= 0);

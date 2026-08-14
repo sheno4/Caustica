@@ -44,12 +44,16 @@ public interface CausticaRenderPass {
     /** Called every frame, in stage/{@link #after()} order, to record this pass's work. */
     void record(PassFrame frame);
 
-    /**
-     * Called when persistent bake state a pass is holding onto (e.g. a "runs once" LUT) should be
-     * considered stale — on a dimension change or a resource reload. A pass with no such state ignores
-     * this; one that has it should redo the bake on its next {@link #record}.
-     */
-    default void invalidate() {
+    /** Called when the active resource pack is being detached from this render session. */
+    default void onResourcePackClosing() {
+    }
+
+    /** Called after a replacement resource pack has become the active pack epoch. */
+    default void onResourcePackApplied() {
+    }
+
+    /** Called whenever this render session enters or leaves a world epoch. */
+    default void onWorldChanged() {
     }
 
     /** Called once, when this pass's feature is deselected or the engine shuts down. */

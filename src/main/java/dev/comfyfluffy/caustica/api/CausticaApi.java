@@ -6,7 +6,7 @@ import java.util.Objects;
 
 /** Process-wide access to the registry and option store installed by the current host adapter. */
 public final class CausticaApi {
-    public static final String VERSION = "0.1.0";
+    public static final String VERSION = "0.2.0";
     public static final String ENTRYPOINT = "caustica";
     private static CausticaRegistry registry;
     private static CausticaOptions options;
