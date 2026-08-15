@@ -6,6 +6,8 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class RtTemporalAlphaRangeTest {
     @Test
@@ -26,6 +28,56 @@ final class RtTemporalAlphaRangeTest {
                 new Frames(new int[][]{{32}}), 1, 1);
         assertEquals(32 / 255.0f, range.texels()[0]);
         assertEquals(range.texels()[0], range.texels()[1]);
+    }
+
+    @Test
+    void staticMixedAlphaUsesEngineOwnedR8AtEveryPossibleCutoff() {
+        assertEquals(RtMaterialPageCompiler.ALPHA_SOURCE_STATIC_PAGE,
+                RtMaterialPageCompiler.alphaSource(1));
+        assertTrue(RtMaterialPageCompiler.requiresSpatialAlpha(0.0f, 51 / 255.0f),
+                "a runtime cutoff of 0.1 needs spatial samples even when max alpha is only 0.2");
+        assertFalse(RtMaterialPageCompiler.requiresSpatialAlpha(51 / 255.0f, 51 / 255.0f));
+        assertFalse(RtMaterialPageCompiler.requiresTemporalRange(1, 0.0f, 1.0f));
+    }
+
+    @Test
+    void animatedMixedAlphaUsesTemporalRangeButUniformOpaqueDoesNotAllocateOne() {
+        assertEquals(RtMaterialPageCompiler.ALPHA_SOURCE_ANIMATED_RANGE,
+                RtMaterialPageCompiler.alphaSource(3));
+        assertTrue(RtMaterialPageCompiler.requiresTemporalRange(3, 0.0f, 1.0f));
+        assertTrue(RtMaterialPageCompiler.requiresTemporalRange(3, 0.0f, 51 / 255.0f),
+                "animated alpha below 0.5 can straddle a runtime cutoff of 0.1");
+        assertFalse(RtMaterialPageCompiler.requiresTemporalRange(3, 0.75f, 0.75f));
+    }
+
+    @Test
+    void animatedColorWithStableMixedAlphaUsesStaticR8Samples() {
+        RtMaterialPageCompiler.TemporalAlpha stable = RtMaterialPageCompiler.scanTemporalAlpha(
+                new Frames(new int[][]{{0, 51}, {0, 51}, {0, 51}}), 2, 1);
+        RtMaterialPageCompiler.TemporalAlpha changing = RtMaterialPageCompiler.scanTemporalAlpha(
+                new Frames(new int[][]{{0, 51}, {51, 0}}), 2, 1);
+
+        assertFalse(RtMaterialPageCompiler.hasTemporalVariation(stable));
+        assertTrue(RtMaterialPageCompiler.hasTemporalVariation(changing));
+    }
+
+    @Test
+    void missingRequiredSpatialPagePublishesUnknownInsteadOfNeutralClassification() {
+        assertEquals(RtMaterialPageCompiler.ALPHA_SOURCE_NONE,
+                RtMaterialPageCompiler.publishedAlphaSource(
+                        RtMaterialPageCompiler.ALPHA_SOURCE_STATIC_PAGE, true, false));
+        assertEquals(RtMaterialPageCompiler.ALPHA_SOURCE_NONE,
+                RtMaterialPageCompiler.publishedAlphaSource(
+                        RtMaterialPageCompiler.ALPHA_SOURCE_ANIMATED_RANGE, true, false));
+        assertEquals(RtMaterialPageCompiler.ALPHA_SOURCE_STATIC_PAGE,
+                RtMaterialPageCompiler.publishedAlphaSource(
+                        RtMaterialPageCompiler.ALPHA_SOURCE_STATIC_PAGE, false, false));
+    }
+
+    @Test
+    void unprovenAlphaStaysUnknown() {
+        assertEquals(RtMaterialPageCompiler.ALPHA_SOURCE_NONE,
+                RtMaterialPageCompiler.alphaSource(0));
     }
 
     private record Frames(int[][] alpha) implements MaterialTextureImage {

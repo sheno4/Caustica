@@ -2,6 +2,7 @@ import world_common;
 
 static const uint PAGE_CAPACITY = 64u;
 [[vk::binding(0, 0)]] Texture2D<float4> temporalAlphaPages[PAGE_CAPACITY];
+[[vk::binding(1, 0)]] Texture2D<float4> staticAlphaPages[PAGE_CAPACITY];
 
 struct OpacityMicromapPush {
     uint64_t indexAddress;
@@ -24,6 +25,8 @@ static const uint OMM_TRANSPARENT = 0u;
 static const uint OMM_OPAQUE = 1u;
 static const uint OMM_UNKNOWN = 3u;
 static const uint OMM_FORMAT_4_STATE = 2u;
+static const uint ALPHA_SOURCE_STATIC_PAGE = 1u;
+static const uint ALPHA_SOURCE_ANIMATED_RANGE = 2u;
 
 uint barycentricsToOmmIndex(float u, float v, uint level) {
     u = clamp(u, 0.0, 1.0);
@@ -72,7 +75,8 @@ uint classifyFootprint(MaterialBinding binding, SurfaceMaterial surface,
             || (bindingFlags(binding) & (BINDING_TRANSMISSIVE | BINDING_TEXTURELESS)) != 0u) {
         return OMM_UNKNOWN;
     }
-    if ((surface.alphaFlags & 1u) == 0u) return OMM_UNKNOWN;
+    uint alphaSource = surface.alphaFlags & 3u;
+    if (alphaSource == 0u) return OMM_UNKNOWN;
     if (!all(isfinite(uv0)) || !all(isfinite(uv1)) || !all(isfinite(uv2))) return OMM_UNKNOWN;
     float2 minUv = min(uv0, min(uv1, uv2));
     float2 maxUv = max(uv0, max(uv1, uv2));
@@ -92,6 +96,32 @@ uint classifyFootprint(MaterialBinding binding, SurfaceMaterial surface,
     float cutoff = bindingCutoff(binding);
     if (minAlpha >= cutoff) return OMM_OPAQUE;
     if (maxAlpha < cutoff) return OMM_TRANSPARENT;
+    if (alphaSource == ALPHA_SOURCE_STATIC_PAGE) {
+        uint page = surface.page & 0xFFFFFFu;
+        if (page >= PAGE_CAPACITY) return OMM_UNKNOWN;
+        uint pageWidth, pageHeight;
+        staticAlphaPages[NonUniformResourceIndex(page)].GetDimensions(pageWidth, pageHeight);
+        float2 extent = surface.materialUv.zw * float2(pageWidth, pageHeight);
+        int2 materialSize = max(int2(round(extent)), int2(1));
+        int2 origin = int2(round(surface.materialUv.xy * float2(pageWidth, pageHeight)));
+        const float eps = 1.0e-3;
+        int2 first = clamp(int2(floor(localMin * materialSize + eps)), int2(0), materialSize);
+        int2 last = clamp(int2(ceil(localMax * materialSize - eps)), int2(0), materialSize);
+        last = max(last, min(first + 1, materialSize));
+        if (any(first >= last)) return OMM_UNKNOWN;
+        bool opaque = true;
+        bool transparent = true;
+        for (int y = first.y; y < last.y; ++y) {
+            for (int x = first.x; x < last.x; ++x) {
+                float alpha = staticAlphaPages[NonUniformResourceIndex(page)]
+                        .Load(int3(origin + int2(x, y), 0)).r;
+                opaque = opaque && alpha >= cutoff;
+                transparent = transparent && alpha < cutoff;
+            }
+        }
+        return opaque ? OMM_OPAQUE : (transparent ? OMM_TRANSPARENT : OMM_UNKNOWN);
+    }
+    if (alphaSource != ALPHA_SOURCE_ANIMATED_RANGE) return OMM_UNKNOWN;
     uint pageWidth, pageHeight;
     temporalAlphaPages[NonUniformResourceIndex(page)].GetDimensions(pageWidth, pageHeight);
     float2 extent = surface.materialUv.zw * float2(pageWidth, pageHeight);

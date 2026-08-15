@@ -19,7 +19,7 @@ import java.nio.ByteBuffer;
 import java.nio.LongBuffer;
 import java.util.List;
 
-/** One RGBA8 canonical material page with an explicitly uploaded semantic mip chain. */
+/** One canonical material page with an explicitly uploaded semantic mip chain. */
 final class RtMaterialPageTexture {
     private final long vma;
     private final VkDevice vk;
@@ -34,6 +34,11 @@ final class RtMaterialPageTexture {
 
     RtMaterialPageTexture(GpuContext ctx, int width, int height, List<byte[]> levels, String label,
                           boolean asyncComputeSampled) {
+        this(ctx, width, height, levels, label, asyncComputeSampled, VK10.VK_FORMAT_R8G8B8A8_UNORM);
+    }
+
+    RtMaterialPageTexture(GpuContext ctx, int width, int height, List<byte[]> levels, String label,
+                          boolean asyncComputeSampled, int format) {
         if (levels.isEmpty()) throw new IllegalArgumentException("Material page has no mip levels");
         this.vma = ctx.vma();
         this.vk = ctx.vk();
@@ -43,7 +48,7 @@ final class RtMaterialPageTexture {
         GpuBuffer staging = null;
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkImageCreateInfo imageInfo = VkImageCreateInfo.calloc(stack).sType$Default()
-                    .imageType(VK10.VK_IMAGE_TYPE_2D).format(VK10.VK_FORMAT_R8G8B8A8_UNORM)
+                    .imageType(VK10.VK_IMAGE_TYPE_2D).format(format)
                     .mipLevels(levels.size()).arrayLayers(1).samples(VK10.VK_SAMPLE_COUNT_1_BIT)
                     .tiling(VK10.VK_IMAGE_TILING_OPTIMAL)
                     .usage(VK10.VK_IMAGE_USAGE_SAMPLED_BIT | VK10.VK_IMAGE_USAGE_TRANSFER_DST_BIT)
@@ -66,7 +71,7 @@ final class RtMaterialPageTexture {
 
             VkImageViewCreateInfo viewInfo = VkImageViewCreateInfo.calloc(stack).sType$Default()
                     .image(createdImage).viewType(VK10.VK_IMAGE_VIEW_TYPE_2D)
-                    .format(VK10.VK_FORMAT_R8G8B8A8_UNORM);
+                    .format(format);
             viewInfo.subresourceRange().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT)
                     .baseMipLevel(0).levelCount(levels.size()).baseArrayLayer(0).layerCount(1);
             LongBuffer viewOut = stack.mallocLong(1);

@@ -53,6 +53,11 @@ final class MinecraftMaterialTextureSource implements MaterialTextureSource {
         }
     }
 
+    @Override
+    public int alphaFrameCount() {
+        return alphaFrames == null ? 1 : alphaFrames.length;
+    }
+
     private static void close(MaterialImage image, Throwable failure) {
         if (image == null) {
             return;

@@ -273,7 +273,8 @@ public struct SurfaceMaterial {
     // surface, which is why it travels with the page reference rather than with the parameters below.
     public uint page;
     public uint packedAlphaRange; // mip-zero temporal min:8 | max:8
-    public uint alphaFlags; // bit0: canonical per-texel temporal alpha range is present
+    // 0 unknown/unproven, 1 immutable static mip-zero alpha page, 2 per-texel temporal min/max page.
+    public uint alphaFlags;
     public float4 materialUv; // packed-page uvMin.xy + uvExtent.xy
     public float4 baseColorUv; // source atlas uvMin.xy + inverse uvExtent.xy
     // OpenPBR names, OpenPBR meanings. specularRoughness is PERCEPTUAL r: the GGX alpha every lobe wants

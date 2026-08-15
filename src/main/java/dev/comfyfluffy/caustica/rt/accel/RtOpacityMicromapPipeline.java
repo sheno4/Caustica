@@ -38,15 +38,21 @@ public final class RtOpacityMicromapPipeline {
         this.pipeline = pipeline;
     }
 
-    public static RtOpacityMicromapPipeline create(GpuContext ctx, long[] temporalAlphaViews) {
+    public static RtOpacityMicromapPipeline create(GpuContext ctx, long[] temporalAlphaViews,
+                                                    long[] staticAlphaViews) {
         if (temporalAlphaViews.length == 0 || temporalAlphaViews.length > PAGE_CAPACITY) return null;
+        if (staticAlphaViews.length != temporalAlphaViews.length) return null;
         VkDevice vk = ctx.vk();
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkDescriptorSetLayoutBinding.Buffer binding = VkDescriptorSetLayoutBinding.calloc(1, stack);
+            VkDescriptorSetLayoutBinding.Buffer binding = VkDescriptorSetLayoutBinding.calloc(2, stack);
             binding.get(0).binding(0).descriptorType(VK10.VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE)
                     .descriptorCount(PAGE_CAPACITY).stageFlags(VK10.VK_SHADER_STAGE_COMPUTE_BIT);
+            binding.get(1).binding(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE)
+                    .descriptorCount(PAGE_CAPACITY).stageFlags(VK10.VK_SHADER_STAGE_COMPUTE_BIT);
             VkDescriptorSetLayoutBindingFlagsCreateInfo flags = VkDescriptorSetLayoutBindingFlagsCreateInfo
-                    .calloc(stack).sType$Default().pBindingFlags(stack.ints(VK12.VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT));
+                    .calloc(stack).sType$Default().pBindingFlags(stack.ints(
+                            VK12.VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT,
+                            VK12.VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT));
             VkDescriptorSetLayoutCreateInfo layoutInfo = VkDescriptorSetLayoutCreateInfo.calloc(stack)
                     .sType$Default().pNext(flags.address()).pBindings(binding);
             LongBuffer out = stack.mallocLong(1);
@@ -55,7 +61,7 @@ public final class RtOpacityMicromapPipeline {
             long descriptorLayout = out.get(0);
 
             VkDescriptorPoolSize.Buffer poolSize = VkDescriptorPoolSize.calloc(1, stack);
-            poolSize.get(0).type(VK10.VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE).descriptorCount(PAGE_CAPACITY);
+            poolSize.get(0).type(VK10.VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE).descriptorCount(PAGE_CAPACITY * 2);
             VkDescriptorPoolCreateInfo poolInfo = VkDescriptorPoolCreateInfo.calloc(stack).sType$Default()
                     .maxSets(1).pPoolSizes(poolSize);
             check(VK10.vkCreateDescriptorPool(vk, poolInfo, null, out),
@@ -74,6 +80,16 @@ public final class RtOpacityMicromapPipeline {
                     .descriptorType(VK10.VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE)
                     .descriptorCount(temporalAlphaViews.length).pImageInfo(images);
             VK10.vkUpdateDescriptorSets(vk, write, null);
+            VkDescriptorImageInfo.Buffer staticAlpha = VkDescriptorImageInfo.calloc(staticAlphaViews.length, stack);
+            for (int i = 0; i < staticAlphaViews.length; i++) {
+                staticAlpha.get(i).imageView(staticAlphaViews[i]).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
+            }
+            VkWriteDescriptorSet.Buffer staticAlphaWrite = VkWriteDescriptorSet.calloc(1, stack);
+            staticAlphaWrite.get(0).sType$Default().dstSet(set).dstBinding(1)
+                    .descriptorType(VK10.VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE)
+                    .descriptorCount(staticAlphaViews.length)
+                    .pImageInfo(staticAlpha);
+            VK10.vkUpdateDescriptorSets(vk, staticAlphaWrite, null);
 
             VkPushConstantRange.Buffer push = VkPushConstantRange.calloc(1, stack);
             push.get(0).stageFlags(VK10.VK_SHADER_STAGE_COMPUTE_BIT).offset(0).size(PUSH_BYTES);

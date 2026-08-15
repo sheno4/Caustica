@@ -521,7 +521,7 @@ public final class RtMaterialRegistry {
         return bindingCoverage(binding.packed0()) == COVERAGE_CUTOUT
                 && bindingBaseColorTextureIndex(binding.packed0()) == SHARED_ATLAS_BASE_COLOR_TEXTURE_INDEX
                 && (flags & (BINDING_TRANSMISSIVE | BINDING_TEXTURELESS)) == 0
-                && (surfaceRecords.get(binding.surface()).alphaFlags() & 1) != 0;
+                && (surfaceRecords.get(binding.surface()).alphaFlags() & 3) != 0;
     }
 
     private static int sbtClassOf(MaterialBindingData binding) {
@@ -832,7 +832,7 @@ public final class RtMaterialRegistry {
         int page = (entry.pageIndex() & PAGE_MASK) | (entry.maxLod() << MAX_LOD_SHIFT);
         int alphaRange = RtMaterialTextureData.unorm8(entry.minAlpha())
                 | (RtMaterialTextureData.unorm8(entry.maxAlpha()) << 8);
-        return new SurfaceMaterialData(packedFeatures, page, alphaRange, entry.spatialAlphaRange() ? 1 : 0,
+        return new SurfaceMaterialData(packedFeatures, page, alphaRange, entry.alphaSource(),
                 new Float4(entry.materialU(), entry.materialV(), entry.materialDu(), entry.materialDv()),
                 new Float4(albedoU, albedoV, albedoInvDu, albedoInvDv),
                 desc.specularRoughness(), desc.baseMetalness(), desc.specularIor(),

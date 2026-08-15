@@ -865,7 +865,8 @@ public final class RtComposite {
         RtMaterialPageCompiler.INSTANCE.prepareAll(ctx, bindlessTextureCapacity, materialCatalog);
         if (RtDeviceBringup.ommEnabled()) {
             opacityMicromapPipeline = RtOpacityMicromapPipeline.create(ctx,
-                    RtMaterialPageCompiler.INSTANCE.temporalAlphaViews());
+                    RtMaterialPageCompiler.INSTANCE.temporalAlphaViews(),
+                    RtMaterialPageCompiler.INSTANCE.staticAlphaViews());
         }
         sceneGeometry.setOpacityMicromapPipeline(opacityMicromapPipeline);
         ProviderManager.INSTANCE.resetBindlessTextures(bindlessTextureCapacity);

@@ -6,4 +6,9 @@ import java.io.IOException;
 @FunctionalInterface
 public interface MaterialTextureSource {
     MaterialTextureImage open() throws IOException;
+
+    /** Exhaustive alpha frames for this epoch, or zero when no conservative temporal claim is available. */
+    default int alphaFrameCount() {
+        return 0;
+    }
 }
