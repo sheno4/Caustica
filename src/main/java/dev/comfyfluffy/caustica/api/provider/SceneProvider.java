@@ -7,8 +7,12 @@ public interface SceneProvider {
     default void prepareFrame() {
     }
 
-    /** Submit this frame's desired retained meshes and world-space instances. */
-    default void submitGeometry(SceneGeometrySink sink) {
+    /** Submit changed retained-geometry groups produced at the update cadence. */
+    default void submitGeometryUpdates(SceneGeometryUpdateContext update) {
+    }
+
+    /** Submit changed retained-geometry groups for this frame. */
+    default void submitGeometry(SceneFrameContext frame) {
     }
 
     /** Called whenever this render session enters or leaves a world epoch. */

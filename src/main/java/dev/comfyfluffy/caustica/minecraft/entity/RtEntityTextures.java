@@ -4,10 +4,11 @@ import com.mojang.blaze3d.textures.GpuTextureView;
 import com.mojang.blaze3d.vulkan.VulkanGpuTextureView;
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
+import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import dev.comfyfluffy.caustica.mixin.RenderSetupAccessor;
 import dev.comfyfluffy.caustica.mixin.RenderTypeAccessor;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialLookup;
-import dev.comfyfluffy.caustica.rt.material.RtMaterialRegistry;
 import dev.comfyfluffy.caustica.rt.pipeline.RtPipeline;
 import com.mojang.blaze3d.platform.NativeImage;
 import net.minecraft.client.Minecraft;
@@ -101,13 +102,6 @@ public final class RtEntityTextures {
         return slotForView(resolveView(renderType));
     }
 
-    /** Canonical binding ID for a full entity texture, or the neutral runtime-texture fallback. */
-    public int materialIdFor(RenderType renderType, boolean stochasticCoverage) {
-        if (!entityPbr()) return RtMaterialRegistry.INSTANCE.runtimeFallbackId(stochasticCoverage);
-        return RtMaterialRegistry.INSTANCE.resolveStandaloneTexture(
-                MinecraftMaterialLookup.logicalTexture(textureLocation(renderType)), stochasticCoverage);
-    }
-
     /**
      * The bindless slot for a texture atlas (block/item atlas used by item + block-model quads), cached
      * per atlas location. The block atlas is pre-seeded to slot 0; other atlases (the item atlas) get
@@ -153,6 +147,17 @@ public final class RtEntityTextures {
                     .register(WHITE_LOCATION, new DynamicTexture(() -> "caustica RT white", image));
         }
         return slotForAtlas(WHITE_LOCATION);
+    }
+
+    /** Stable source identity for the registered white texture used by untextured geometry. */
+    public SceneMesh.AtlasTexture whiteTexture() {
+        whiteSlot();
+        return new SceneMesh.AtlasTexture(ResourceId.of(WHITE_LOCATION.getNamespace(), WHITE_LOCATION.getPath()));
+    }
+
+    public boolean isWhiteTexture(ResourceId texture) {
+        return texture != null && WHITE_LOCATION.getNamespace().equals(texture.namespace())
+                && WHITE_LOCATION.getPath().equals(texture.path());
     }
 
     /**
@@ -228,7 +233,7 @@ public final class RtEntityTextures {
 
     /** Recover the resource identifier used to select {@code renderType}'s material, or null. The
      *  {@code RenderSetup.TextureBinding} class is package-private, so {@code location()} is reflective. */
-    private Identifier textureLocation(RenderType renderType) {
+    Identifier textureLocation(RenderType renderType) {
         if (renderType == null) return null;
         if (locationCache.containsKey(renderType)) return locationCache.get(renderType);
         Identifier result = null;

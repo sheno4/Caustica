@@ -4,7 +4,10 @@ package dev.comfyfluffy.caustica.minecraft.terrain;
 
 import com.mojang.blaze3d.vertex.QuadInstance;
 import com.mojang.blaze3d.vertex.VertexConsumer;
-import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.api.provider.GeometryTransform;
+import dev.comfyfluffy.caustica.api.provider.SceneGeometryKey;
+import dev.comfyfluffy.caustica.api.provider.SceneGeometrySink;
+import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
@@ -12,10 +15,6 @@ import dev.comfyfluffy.caustica.rt.RtComposite;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtDeviceBringup;
 import dev.comfyfluffy.caustica.rt.RtFrameStats;
-import dev.comfyfluffy.caustica.rt.accel.RtAccel;
-import dev.comfyfluffy.caustica.rt.geometry.RtGeometryAbi;
-import dev.comfyfluffy.caustica.rt.geometry.RtPackedGeometry;
-import dev.comfyfluffy.caustica.rt.geometry.RtSceneGeometryManager;
 import dev.comfyfluffy.caustica.rt.light.RetainedLightBatch;
 import dev.comfyfluffy.caustica.rt.light.RtRetainedLightScene;
 import dev.comfyfluffy.caustica.rt.material.RtMaterialRegistry;
@@ -49,6 +48,7 @@ import org.joml.Vector3fc;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -56,7 +56,6 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import static dev.comfyfluffy.caustica.minecraft.terrain.RtTerrainMesher.WORKER_TESS;
 import static dev.comfyfluffy.caustica.minecraft.terrain.RtTerrainMesher.buildCpuSection;
 import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrainMesher.CpuSection;
-import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrainMesher.PackedSection;
 import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrainMesher.WorkerTessState;
 /**
  * Per-section terrain residency synced to vanilla's loaded chunks. A singleton manager
@@ -77,12 +76,11 @@ import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrainMesher.WorkerTessStat
  * copies captured on the render thread and cached persistently across passes — see
  * {@link RtSectionSnapshots}). CPU meshing runs on
  * {@link RtWorkerPool}; snapshotting and publication stay on the render thread, while workers produce
- * immutable packed CPU geometry and opacity-micromap input. The scene manager owns all GPU preparation,
- * publication, and retirement.
+ * immutable scene meshes. The scene manager owns all GPU preparation, publication, and retirement.
  */
 public final class RtTerrain {
-    private static final ResourceId GEOMETRY_SOURCE = ResourceId.of("caustica", "terrain");
-    private static final float[] IDENTITY_TRANSFORM = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
+    private static final long SECTION_DOMAIN = 10L;
+    private static final long DIRTY_GROUP_DOMAIN = 11L;
     // The render thread snapshots and publishes; workers only mesh immutable CPU results. The streaming
     // pass is bounded so render-thread bookkeeping stays flat.
     private static int asyncDispatchPerPass() {
@@ -115,7 +113,7 @@ public final class RtTerrain {
 
     private static final RtTerrain INSTANCE = new RtTerrain();
 
-    private RtSceneGeometryManager geometry;
+    private boolean sceneInitialized;
     // Persistent palette snapshots for tessellation regions (render-thread only); invalidated on dirty
     // sections, column unload/window-leave, and full clears.
     private final RtSectionSnapshots snapshots = new RtSectionSnapshots();
@@ -135,15 +133,16 @@ public final class RtTerrain {
     private final Long2LongOpenHashMap queuedDirtyGroup = new Long2LongOpenHashMap();
     private final LongArrayList reextract = new LongArrayList();
     private final LongOpenHashSet queuedReextract = new LongOpenHashSet();
-    // Published state changes only from the manager's publication acknowledgment. Pending markers keep
+    // Published state changes only from the retained-scene publication acknowledgement. Pending markers keep
     // CPU residency coherent while a queued group waits for manager preparation and atomic application.
     private final Long2ObjectOpenHashMap<PublishedSection> publishedSections = new Long2ObjectOpenHashMap<>();
     private final LongOpenHashSet pendingPublications = new LongOpenHashSet();
     private final LongOpenHashSet pendingDrops = new LongOpenHashSet();
-    private final Long2LongOpenHashMap pendingPublicationRevision = new Long2LongOpenHashMap();
+    private final Long2LongOpenHashMap pendingPublicationToken = new Long2LongOpenHashMap();
     private final LongOpenHashSet removed = new LongOpenHashSet();
     private final ArrayList<SectionResult> prepared = new ArrayList<>();
-    private long publicationRevision;
+    private final ArrayList<PendingGeometryGroup> pendingGeometryGroups = new ArrayList<>();
+    private long nextPublicationToken;
     // Worker bookkeeping. `inFlight` maps a dispatched section key to a monotonic token; a completed
     // task whose token no longer matches is discarded.
     private final Long2LongOpenHashMap inFlight = new Long2LongOpenHashMap();
@@ -220,15 +219,8 @@ public final class RtTerrain {
         queuedDirtyGroup.defaultReturnValue(NO_DIRTY_GROUP);
         inFlight.defaultReturnValue(NO_TESS_TOKEN);
         inFlightDirtyGroup.defaultReturnValue(NO_DIRTY_GROUP);
-        pendingPublicationRevision.defaultReturnValue(Long.MIN_VALUE);
+        pendingPublicationToken.defaultReturnValue(Long.MIN_VALUE);
         lightSlots.defaultReturnValue(-1);
-    }
-
-    /** Attach this producer to the renderer-owned retained scene before it submits any terrain work. */
-    public static void attachGeometry(RtSceneGeometryManager sceneGeometry) {
-        if (INSTANCE.geometry == null) {
-            INSTANCE.geometry = sceneGeometry;
-        }
     }
 
     /**
@@ -238,7 +230,7 @@ public final class RtTerrain {
      * tracing (sky/entities only) instead of a caller falling back to vanilla.
      */
     public static RtTerrain currentOrNull() {
-        return INSTANCE.geometry != null ? INSTANCE : null;
+        return INSTANCE.sceneInitialized ? INSTANCE : null;
     }
 
     public static boolean isSectionReady(BlockPos blockPos) {
@@ -246,7 +238,7 @@ public final class RtTerrain {
         int scy = SectionPos.blockToSectionCoord(blockPos.getY());
         int scz = SectionPos.blockToSectionCoord(blockPos.getZ());
         long key = sectionKey(scx, scy, scz);
-        return INSTANCE.geometry != null && (INSTANCE.isPublished(key) || INSTANCE.empty.contains(key));
+        return INSTANCE.sceneInitialized && (INSTANCE.isPublished(key) || INSTANCE.empty.contains(key));
     }
 
     public RtRetainedLightScene.PublishedState retainedLights() {
@@ -255,6 +247,7 @@ public final class RtTerrain {
 
     /** Per-tick residency update: window sync + dirty drain (plus the streaming fallback, see {@link #frame}). */
     public static void update(GpuContext ctx) {
+        INSTANCE.sceneInitialized = true;
         INSTANCE.tick(ctx);
     }
 
@@ -268,7 +261,7 @@ public final class RtTerrain {
 
     public static void shutdown(GpuContext ctx) {
         INSTANCE.clear(ctx, true);
-        INSTANCE.geometry = null;
+        INSTANCE.sceneInitialized = false;
     }
 
     /**
@@ -313,7 +306,6 @@ public final class RtTerrain {
      * dimension change (via {@code setLevel}), a render-distance change, and F3+A. Thread-safe.
      */
     public static void requestFullClear() {
-        RtTerrainOmm.clearCache();
         INSTANCE.fullClearRequested = true;
     }
 
@@ -1035,14 +1027,11 @@ public final class RtTerrain {
                         completeEmptyTask(task);
                         return;
                     }
-                    PackedSection packed = cpu.packed();
-                    if (packed == null) {
+                    SceneMesh mesh = cpu.mesh();
+                    if (mesh == null) {
                         completeEmptyTask(task);
                     } else {
-                        RtPackedGeometry<float[]> packedGeometry = new RtPackedGeometry<>(packed.positions(),
-                                packed.indices(), packed.uvs(), packed.material(), packed.classTris(),
-                                packed.triBase(), packed.lights());
-                        completeTask(new SectionResult(task, packedGeometry, cpu.opacityMicromap(), null));
+                        completeTask(new SectionResult(task, mesh, cpu.lights(), null));
                     }
                 } catch (Throwable t) {
                     completeTask(task, t);
@@ -1114,7 +1103,7 @@ public final class RtTerrain {
     /**
      * Publish terminal worker/executor results (up to the configured result count per pass). A task
      * whose token no longer matches {@link #inFlight} is stale and discarded instead of entering the
-     * manager submission queue.
+     * retained-scene submission queue.
      */
     private void drainCompletedBuilds(GpuContext ctx, List<SectionResult> prepared, LongOpenHashSet removed,
                                       int resultCap) {
@@ -1258,8 +1247,16 @@ public final class RtTerrain {
         }
     }
 
-    private record SectionResult(SectionTask task, RtPackedGeometry<float[]> geometry,
-                                 RtAccel.OpacityMicromapInput opacityInput, Throwable failure) { }
+    private record SectionResult(SectionTask task, SceneMesh geometry, float[] lights, Throwable failure) { }
+
+    private record PendingGeometryGroup(SceneGeometryKey groupKey, List<SceneGeometrySink.Operation> operations,
+                                        PendingPublication publication) { }
+
+    private record PendingPublication(List<PublishedPut> puts, List<PublishedDrop> drops) { }
+
+    private record PublishedPut(long key, int originX, int originY, int originZ, float[] lights, long token) { }
+
+    private record PublishedDrop(long key, long token) { }
 
     private record PublishedSection(int originX, int originY, int originZ, float[] lights) { }
 
@@ -1271,10 +1268,10 @@ public final class RtTerrain {
 
     private void applyBuildChanges(GpuContext ctx, List<SectionResult> prepared, LongOpenHashSet removed,
                                    boolean rebase, int rbx, int rby, int rbz) {
-        for (SectionResult result : prepared) submitSection(ctx, result);
+        for (SectionResult result : prepared) submitSection(result);
         for (LongIterator it = removed.iterator(); it.hasNext(); ) {
             long key = it.nextLong();
-            submitDrop(ctx, key);
+            submitDrop(key);
         }
         if (rebase) {
             blockX = rbx;
@@ -1285,99 +1282,133 @@ public final class RtTerrain {
     }
 
     private void submitDirtyGroup(GpuContext ctx, DirtyGroup group) {
-        ArrayList<RtSceneGeometryManager.GeometryOperation> operations = new ArrayList<>();
-        for (SectionResult result : group.prepared) appendPut(operations, result);
-        for (LongIterator it = group.removed.iterator(); it.hasNext(); ) appendDrop(operations, it.nextLong());
-        if (!operations.isEmpty()) submitGroup(operations);
+        ArrayList<SceneGeometrySink.Operation> operations = new ArrayList<>();
+        ArrayList<SectionResult> puts = new ArrayList<>();
+        LongArrayList drops = new LongArrayList();
+        for (SectionResult result : group.prepared) appendPut(operations, puts, result);
+        for (LongIterator it = group.removed.iterator(); it.hasNext(); ) appendDrop(operations, drops, it.nextLong());
+        if (!operations.isEmpty()) enqueueGroup(new SceneGeometryKey(DIRTY_GROUP_DOMAIN, group.id), operations, puts, drops);
     }
 
-    private void submitSection(GpuContext ctx, SectionResult result) {
-        ArrayList<RtSceneGeometryManager.GeometryOperation> operations = new ArrayList<>(2);
-        appendPut(operations, result);
-        submitGroup(operations);
+    private void submitSection(SectionResult result) {
+        ArrayList<SceneGeometrySink.Operation> operations = new ArrayList<>(2);
+        ArrayList<SectionResult> puts = new ArrayList<>(1);
+        appendPut(operations, puts, result);
+        enqueueGroup(sectionGeometryKey(result.task().key), operations, puts, new LongArrayList());
     }
 
-    private void submitDrop(GpuContext ctx, long key) {
+    private void submitDrop(long key) {
         if (pendingDrops.contains(key)) return;
-        ArrayList<RtSceneGeometryManager.GeometryOperation> operations = new ArrayList<>(2);
-        appendDrop(operations, key);
-        submitGroup(operations);
+        ArrayList<SceneGeometrySink.Operation> operations = new ArrayList<>(2);
+        LongArrayList drops = new LongArrayList(1);
+        appendDrop(operations, drops, key);
+        enqueueGroup(sectionGeometryKey(key), operations, new ArrayList<>(), drops);
     }
 
-    private void appendPut(List<RtSceneGeometryManager.GeometryOperation> operations, SectionResult result) {
+    private void appendPut(List<SceneGeometrySink.Operation> operations, List<SectionResult> puts, SectionResult result) {
         SectionTask task = result.task();
         long key = task.key;
-        operations.add(new RtSceneGeometryManager.Put(key, new RtSceneGeometryManager.RetainedPayload(result.geometry(),
-                result.opacityInput(), CausticaConfig.Rt.Terrain.BLAS_COMPACTION.value(),
-                RtGeometryAbi.FLAG_RECEIVES_PROJECTED_SURFACE_MODIFIERS)));
-        operations.add(new RtSceneGeometryManager.Place(key, key, IDENTITY_TRANSFORM, 0xff,
-                new SceneOrigin(task.sox, task.soy, task.soz)));
+        SceneGeometryKey geometryKey = sectionGeometryKey(key);
+        operations.add(new SceneGeometrySink.Put(geometryKey, result.geometry()));
+        operations.add(new SceneGeometrySink.Place(geometryKey, geometryKey,
+                GeometryTransform.translation(task.sox, task.soy, task.soz), 0xff));
+        puts.add(result);
     }
 
-    private static void appendDrop(List<RtSceneGeometryManager.GeometryOperation> operations, long key) {
-        operations.add(new RtSceneGeometryManager.Remove(key));
-        operations.add(new RtSceneGeometryManager.Drop(key));
+    private void appendDrop(List<SceneGeometrySink.Operation> operations, LongArrayList drops, long key) {
+        if (pendingDrops.contains(key)) return;
+        SceneGeometryKey geometryKey = sectionGeometryKey(key);
+        operations.add(new SceneGeometrySink.Remove(geometryKey));
+        operations.add(new SceneGeometrySink.Drop(geometryKey));
+        drops.add(key);
     }
 
-    private void submitGroup(List<RtSceneGeometryManager.GeometryOperation> operations) {
-        long revision = ++publicationRevision;
-        for (RtSceneGeometryManager.GeometryOperation operation : operations) {
-            switch (operation) {
-                case RtSceneGeometryManager.Put put -> {
-                    pendingPublicationRevision.put(put.residentKey(), revision);
-                    pendingPublications.add(put.residentKey());
-                    pendingDrops.remove(put.residentKey());
-                }
-                case RtSceneGeometryManager.Drop drop -> {
-                    pendingPublicationRevision.put(drop.residentKey(), revision);
-                    pendingPublications.add(drop.residentKey());
-                    pendingDrops.add(drop.residentKey());
-                }
-                default -> { }
-            }
+    private void enqueueGroup(SceneGeometryKey groupKey, List<SceneGeometrySink.Operation> operations,
+                              List<SectionResult> puts, LongArrayList drops) {
+        for (SectionResult put : puts) {
+            long key = put.task().key;
+            pendingPublications.add(key);
+            pendingDrops.remove(key);
         }
-        geometry.submit(List.of(new RtSceneGeometryManager.GeometryUpdateGroup(
-                new RtSceneGeometryManager.GroupKey(GEOMETRY_SOURCE, revision), revision, operations)),
-                this::acknowledgePublication);
+        for (LongIterator it = drops.iterator(); it.hasNext(); ) {
+            long key = it.nextLong();
+            pendingPublications.add(key);
+            pendingDrops.add(key);
+        }
+        ArrayList<PublishedPut> publicationPuts = new ArrayList<>(puts.size());
+        for (SectionResult put : puts) {
+            SectionTask task = put.task();
+            long token = ++nextPublicationToken;
+            pendingPublicationToken.put(task.key, token);
+            publicationPuts.add(new PublishedPut(task.key, task.sox, task.soy, task.soz, put.lights(), token));
+        }
+        ArrayList<PublishedDrop> publicationDrops = new ArrayList<>(drops.size());
+        for (LongIterator it = drops.iterator(); it.hasNext(); ) {
+            long key = it.nextLong();
+            long token = ++nextPublicationToken;
+            pendingPublicationToken.put(key, token);
+            publicationDrops.add(new PublishedDrop(key, token));
+        }
+        pendingGeometryGroups.add(new PendingGeometryGroup(groupKey, List.copyOf(operations),
+                new PendingPublication(List.copyOf(publicationPuts), List.copyOf(publicationDrops))));
     }
 
-    private void acknowledgePublication(RtSceneGeometryManager.PublicationAck acknowledgement) {
-        if (geometry == null || !acknowledgement.key().source().equals(GEOMETRY_SOURCE)) return;
+    /** Drain completed terrain transactions through the provider-owned retained-scene sink. */
+    public static void submitGeometry(SceneGeometrySink sink) {
+        INSTANCE.submitPendingGeometry(sink);
+    }
+
+    private void submitPendingGeometry(SceneGeometrySink sink) {
+        if (pendingGeometryGroups.isEmpty()) return;
+        LinkedHashMap<SceneGeometryKey, PendingGeometryGroup> latest = new LinkedHashMap<>();
+        for (PendingGeometryGroup group : pendingGeometryGroups) {
+            latest.put(group.groupKey(), group);
+        }
+        pendingGeometryGroups.clear();
+        for (PendingGeometryGroup group : latest.values()) {
+            sink.submit(group.groupKey(), group.operations(), ignored -> acknowledgePublication(group.publication()));
+        }
+    }
+
+    static List<SceneGeometryKey> latestGroupKeys(List<SceneGeometryKey> keys) {
+        LinkedHashMap<SceneGeometryKey, SceneGeometryKey> latest = new LinkedHashMap<>();
+        for (SceneGeometryKey key : keys) latest.put(key, key);
+        return List.copyOf(latest.keySet());
+    }
+
+    private void acknowledgePublication(PendingPublication publication) {
         boolean lightsChanged = false;
-        for (RtSceneGeometryManager.GeometryOperation operation : acknowledgement.operations()) {
-            switch (operation) {
-                case RtSceneGeometryManager.Put put -> {
-                    if (!(put.payload() instanceof RtSceneGeometryManager.RetainedPayload retained)) continue;
-                    float[] lights = (float[]) retained.geometry().metadata();
-                    long key = put.residentKey();
-                    PublishedSection previous = publishedSections.put(key, new PublishedSection(
-                            sectionX(key) << 4, sectionY(key) << 4, sectionZ(key) << 4, lights));
-                    clearPendingPublication(key, acknowledgement.revision());
-                    empty.remove(key);
-                    lightsChanged |= !sameLightRecords(previous == null ? null : previous.lights(), lights);
-                    updateLightSection(key, publishedSections.get(key));
-                }
-                case RtSceneGeometryManager.Drop drop -> {
-                    long key = drop.residentKey();
-                    PublishedSection previous = publishedSections.remove(key);
-                    clearPendingPublication(key, acknowledgement.revision());
-                    lightsChanged |= previous != null && hasLights(previous.lights());
-                    removeLightSection(key);
-                    if (emptyAfterDrop(desired.contains(key))) empty.add(key);
-                    else empty.remove(key);
-                }
-                default -> { }
-            }
+        for (PublishedPut put : publication.puts()) {
+            long key = put.key();
+            float[] lights = put.lights();
+            PublishedSection previous = publishedSections.put(key, new PublishedSection(
+                    put.originX(), put.originY(), put.originZ(), lights));
+            clearPendingPublication(key, put.token());
+            empty.remove(key);
+            lightsChanged |= !sameLightRecords(previous == null ? null : previous.lights(), lights);
+            updateLightSection(key, publishedSections.get(key));
+        }
+        for (PublishedDrop drop : publication.drops()) {
+            long key = drop.key();
+            PublishedSection previous = publishedSections.remove(key);
+            clearPendingPublication(key, drop.token());
+            lightsChanged |= previous != null && hasLights(previous.lights());
+            removeLightSection(key);
+            if (emptyAfterDrop(desired.contains(key))) empty.add(key);
+            else empty.remove(key);
         }
         if (lightsChanged) markLightHierarchyDirty();
     }
 
-    private void clearPendingPublication(long key, long revision) {
-        if (pendingPublicationRevision.get(key) <= revision) {
-            pendingPublicationRevision.remove(key);
-            pendingPublications.remove(key);
-            pendingDrops.remove(key);
-        }
+    private void clearPendingPublication(long key, long token) {
+        if (pendingPublicationToken.get(key) != token) return;
+        pendingPublicationToken.remove(key);
+        pendingPublications.remove(key);
+        pendingDrops.remove(key);
+    }
+
+    private static SceneGeometryKey sectionGeometryKey(long key) {
+        return new SceneGeometryKey(SECTION_DOMAIN, key);
     }
 
     private static boolean hasLights(float[] lights) {
@@ -1463,14 +1494,11 @@ public final class RtTerrain {
         } else {
             retainedLightScene.invalidate(ctx, ctx.gpuExecutor().latestGraphicsUse());
         }
-        if (geometry != null) {
-            geometry.clearSource(ctx, GEOMETRY_SOURCE);
-        }
         cancelAllDirtyGroups();
         publishedSections.clear();
         pendingPublications.clear();
         pendingDrops.clear();
-        pendingPublicationRevision.clear();
+        pendingPublicationToken.clear();
         inFlight.clear();
         inFlightDirtyGroup.clear();
         snapshots.clear();
@@ -1500,6 +1528,8 @@ public final class RtTerrain {
         empty.clear();
         removed.clear();
         prepared.clear();
+        pendingGeometryGroups.clear();
+        nextPublicationToken = 0L;
     }
 
     private static long columnKey(int scx, int scz) {

@@ -1,8 +1,8 @@
 package dev.comfyfluffy.caustica.minecraft.entity;
 
 import com.mojang.blaze3d.vertex.VertexConsumer;
-import dev.comfyfluffy.caustica.rt.accel.RtAccel;
-import dev.comfyfluffy.caustica.rt.material.RtMaterialRegistry;
+import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 import net.minecraft.client.resources.model.geometry.BakedQuad;
@@ -10,7 +10,8 @@ import org.joml.Matrix4f;
 import org.joml.Vector3f;
 import org.joml.Vector3fc;
 
-import java.util.function.IntBinaryOperator;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * A {@link VertexConsumer} that records the posed entity geometry vanilla emits — exactly the same bulk
@@ -18,9 +19,7 @@ import java.util.function.IntBinaryOperator;
  * (4 verts/quad → 2 triangles). {@link RtEntityCollector} drives it by calling
  * {@code model.renderToBuffer(pose, this, …)}.
  *
- * <p>Accumulators use the same layout as terrain's {@code SectionMesh} (positions, indices, atlas UV,
- * per-prim {@code {normal.xyz, reserved}, {tint.rgb, reserved}, {materialId, flags, aux0, aux1}}) so entities
- * share the terrain upload + BLAS path verbatim.
+ * <p>Capture retains source-level positions, indexed UVs, and one neutral shading surface per triangle.
  */
 public final class RtEntityCapture implements VertexConsumer {
     private static final int DEFAULT_VERTEX_CAPACITY = 1024;
@@ -31,33 +30,9 @@ public final class RtEntityCapture implements VertexConsumer {
     final FloatArrayList verts = new FloatArrayList(DEFAULT_VERTEX_CAPACITY * 3);   // 3 floats/vertex (capture-space position)
     final IntArrayList idx = new IntArrayList(indexCapacity(DEFAULT_VERTEX_CAPACITY)); // 3 indices/triangle
     final FloatArrayList uvList = new FloatArrayList(DEFAULT_VERTEX_CAPACITY * 2);  // 2 floats/vertex (entity-texture UV)
-    final FloatArrayList prim = new FloatArrayList(primCapacity(DEFAULT_VERTEX_CAPACITY)); // 12 floats/triangle
-    // One classification per triangle in capture order. The upload path repacks indices + primitive
-    // records into fixed {opaque, masked, transmissive} BLAS geometries while positions/UVs stay shared.
-    // Keeping capture order here preserves glow meshes, parity checks and motion topology.
-    final IntArrayList sbtClasses = new IntArrayList(indexCapacity(DEFAULT_VERTEX_CAPACITY) / 3);
-    private final IntArrayList packedIdx = new IntArrayList(indexCapacity(DEFAULT_VERTEX_CAPACITY));
-    private final FloatArrayList packedPrim = new FloatArrayList(primCapacity(DEFAULT_VERTEX_CAPACITY));
-    private final int[] packedClassTris = new int[RtAccel.SBT_CLASSES];
-
-    // Bindless base-color texture index for the geometry currently being submitted (set by the collector per
-    // submitModel, so body + feature layers get their own texture).
-    int currentBaseColorTextureIndex;
-    // Canonical material binding for this submission, before the base-color texture index is folded in.
-    int currentMaterialId;
-    // Pairs this submission's bindless base-color texture with its material's surface. Defaults to the live
-    // registry; capture itself stays a pure CPU accumulator, so unit tests substitute a resolver that
-    // needs no GPU material table.
-    IntBinaryOperator baseColorMaterialResolver = RtMaterialRegistry.INSTANCE::withBaseColorTextureIndex;
-    // Collectors set the base material and texture independently, so the resolved binding is memoised per
-    // (base, texture) pair: the lookup is paid once per submission, not once per triangle.
-    private int baseColorMemoBase = -1;
-    private int baseColorMemoTextureIndex = -1;
-    private int baseColorMemoMaterial;
-    // Conservative default: unknown submissions retain alpha testing instead of incorrectly becoming
-    // opaque. RtEntityCollector assigns this from the resolved material's binding before every known
-    // submission.
-    int currentSbtClass = RtAccel.CLASS_MASKED;
+    final List<SceneMesh.TriangleSurface> surfaces = new ArrayList<>();
+    SceneMesh.MaterialReference currentMaterial = new SceneMesh.FallbackMaterial(null);
+    SceneMesh.Coverage currentCoverage = SceneMesh.Coverage.CUTOUT;
     // Decal-stacking rank for the current submission (0 = no offset). Set by the collector from
     // SubmitNodeCollector#order(int) — see emitQuad's coincident-layer push.
     int currentOrder;
@@ -75,18 +50,6 @@ public final class RtEntityCapture implements VertexConsumer {
     private final int[] qcol = new int[4];
     private final Vector3f scratch = new Vector3f(); // baked-quad position transform scratch
 
-    /** This submission's binding paired with its bindless base-color texture. */
-    private int baseColorMaterialId() {
-        if (currentMaterialId != baseColorMemoBase
-                || currentBaseColorTextureIndex != baseColorMemoTextureIndex) {
-            baseColorMemoBase = currentMaterialId;
-            baseColorMemoTextureIndex = currentBaseColorTextureIndex;
-            baseColorMemoMaterial = baseColorMaterialResolver.applyAsInt(
-                    currentMaterialId, currentBaseColorTextureIndex);
-        }
-        return baseColorMemoMaterial;
-    }
-
     /** Clear all accumulators for a fresh entity capture. */
     public void reset() {
         reset(0);
@@ -97,15 +60,11 @@ public final class RtEntityCapture implements VertexConsumer {
         verts.clear();
         idx.clear();
         uvList.clear();
-        prim.clear();
-        sbtClasses.clear();
-        packedIdx.clear();
-        packedPrim.clear();
+        surfaces.clear();
         ensureVertexCapacity(expectedVertices);
         n = 0;
-        currentBaseColorTextureIndex = 0;
-        currentMaterialId = 0;
-        currentSbtClass = RtAccel.CLASS_MASKED;
+        currentMaterial = new SceneMesh.FallbackMaterial(null);
+        currentCoverage = SceneMesh.Coverage.CUTOUT;
         currentOrder = 0;
         uvRemap = false;
     }
@@ -117,10 +76,6 @@ public final class RtEntityCapture implements VertexConsumer {
         verts.ensureCapacity(vertexCount * 3);
         idx.ensureCapacity(indexCapacity(vertexCount));
         uvList.ensureCapacity(vertexCount * 2);
-        prim.ensureCapacity(primCapacity(vertexCount));
-        sbtClasses.ensureCapacity(indexCapacity(vertexCount) / 3);
-        packedIdx.ensureCapacity(indexCapacity(vertexCount));
-        packedPrim.ensureCapacity(primCapacity(vertexCount));
     }
 
     /** Reserve room for an upcoming direct-model submission without changing any logical sizes. */
@@ -133,11 +88,6 @@ public final class RtEntityCapture implements VertexConsumer {
     private static int indexCapacity(int vertexCount) {
         int quadCount = (vertexCount + 3) / 4;
         return quadCount * 6;
-    }
-
-    private static int primCapacity(int vertexCount) {
-        int quadCount = (vertexCount + 3) / 4;
-        return quadCount * 24;
     }
 
     /** Remap subsequent {@link #addVertex} (ModelPart) UVs from 0..1 into a sprite's atlas region. */
@@ -156,9 +106,8 @@ public final class RtEntityCapture implements VertexConsumer {
 
     /** Copy the per-submission material/UV state into a second capture used by the parity harness. */
     void copySubmissionStateTo(RtEntityCapture target) {
-        target.currentBaseColorTextureIndex = currentBaseColorTextureIndex;
-        target.currentMaterialId = currentMaterialId;
-        target.currentSbtClass = currentSbtClass;
+        target.currentMaterial = currentMaterial;
+        target.currentCoverage = currentCoverage;
         target.currentOrder = currentOrder;
         target.uvRemap = uvRemap;
         target.uvU0 = uvU0;
@@ -172,7 +121,7 @@ public final class RtEntityCapture implements VertexConsumer {
      * Float comparison uses raw bits because the entity cache hashes raw bits; numeric deltas are included
      * only to localize failures and never relax the pass criterion.
      */
-    void assertSubmissionBitwiseIdentical(int vertStart, int idxStart, int uvStart, int primStart,
+    void assertSubmissionBitwiseIdentical(int vertStart, int idxStart, int uvStart, int surfaceStart,
                                           RtEntityCapture reference, String label) {
         if (n != 0 || reference.n != 0) {
             throw new IllegalStateException(label + " left an incomplete quad: actual=" + n
@@ -184,21 +133,10 @@ public final class RtEntityCapture implements VertexConsumer {
                 reference.idx.elements(), reference.idx.size(), vertStart / 3, label);
         assertFloatRange("uvs", uvList.elements(), uvStart, uvList.size() - uvStart,
                 reference.uvList.elements(), reference.uvList.size(), label);
-        assertFloatRange("primitives", prim.elements(), primStart, prim.size() - primStart,
-                reference.prim.elements(), reference.prim.size(), label);
         int triangleStart = idxStart / 3;
-        int triangleCount = (idx.size() - idxStart) / 3;
-        if (triangleCount != reference.sbtClasses.size()) {
-            throw new IllegalStateException(label + " SBT class size mismatch: actual=" + triangleCount
-                    + ", reference=" + reference.sbtClasses.size());
-        }
-        for (int i = 0; i < triangleCount; i++) {
-            int actual = sbtClasses.getInt(triangleStart + i);
-            int expected = reference.sbtClasses.getInt(i);
-            if (actual != expected) {
-                throw new IllegalStateException(label + " SBT class[" + i + "] mismatch: actual="
-                        + actual + ", reference=" + expected);
-            }
+        List<SceneMesh.TriangleSurface> actualSurfaces = surfaces.subList(surfaceStart, surfaces.size());
+        if (!actualSurfaces.equals(reference.surfaces)) {
+            throw new IllegalStateException(label + " triangle surfaces differ");
         }
     }
 
@@ -242,49 +180,10 @@ public final class RtEntityCapture implements VertexConsumer {
         return idx.isEmpty();
     }
 
-    /**
-     * Repack triangles into the fixed entity BLAS geometry order. PrimitiveIndex restarts at zero for
-     * each Vulkan geometry, so the returned counts also define the triangle bases written to GeometryRecord.
-     */
-    PackedGeometry packGeometry() {
-        int triangleCount = idx.size() / 3;
-        if (sbtClasses.size() != triangleCount || prim.size() != triangleCount * 12) {
-            throw new IllegalStateException("Malformed entity capture: triangles=" + triangleCount
-                    + ", sbtClasses=" + sbtClasses.size() + ", primFloats=" + prim.size());
-        }
-        packedIdx.clear();
-        packedPrim.clear();
-        java.util.Arrays.fill(packedClassTris, 0);
-        packedIdx.ensureCapacity(idx.size());
-        packedPrim.ensureCapacity(prim.size());
-        int[] indices = idx.elements();
-        float[] primitives = prim.elements();
-        for (int cls = 0; cls < RtAccel.SBT_CLASSES; cls++) {
-            for (int tri = 0; tri < triangleCount; tri++) {
-                if (sbtClasses.getInt(tri) != cls) {
-                    continue;
-                }
-                int indexBase = tri * 3;
-                packedIdx.add(indices[indexBase]);
-                packedIdx.add(indices[indexBase + 1]);
-                packedIdx.add(indices[indexBase + 2]);
-                int primBase = tri * 12;
-                for (int lane = 0; lane < 12; lane++) {
-                    packedPrim.add(primitives[primBase + lane]);
-                }
-                packedClassTris[cls]++;
-            }
-        }
-        if (packedIdx.size() != idx.size() || packedPrim.size() != prim.size()) {
-            throw new IllegalStateException("Entity capture contains an invalid SBT class");
-        }
-        return new PackedGeometry(packedIdx, packedPrim, packedClassTris);
-    }
-
-    record PackedGeometry(IntArrayList indices, FloatArrayList primitives, int[] classTris) {
-        int[] copyClassTris() {
-            return classTris.clone();
-        }
+    SceneMesh sceneMesh() {
+        return new SceneMesh(java.util.Arrays.copyOf(verts.elements(), verts.size()),
+                java.util.Arrays.copyOf(idx.elements(), idx.size()), SceneMesh.UvLayout.PER_VERTEX,
+                java.util.Arrays.copyOf(uvList.elements(), uvList.size()), surfaces);
     }
 
     @Override
@@ -308,7 +207,7 @@ public final class RtEntityCapture implements VertexConsumer {
      * Capture a {@link BakedQuad} (held/dropped items via {@code submitItem}, falling blocks via {@code
      * submitBlockModel}) — its 4 positions transformed by {@code pose}, atlas UV from {@code packedUV},
      * a flat {@code color} tint. These quads carry no authored normal, so emitQuad computes a geometric
-     * one. They sample the shared atlas (the capture's {@code currentBaseColorTextureIndex} = 0).
+     * one. Their source material is assigned by the collector before the quad is appended.
      */
     public void addBakedQuad(Matrix4f pose, BakedQuad quad, int color) {
         for (int i = 0; i < 4; i++) {
@@ -414,19 +313,8 @@ public final class RtEntityCapture implements VertexConsumer {
         float tg = ((c >> 8) & 0xFF) * (1f / 255f);
         float tb = (c & 0xFF) * (1f / 255f);
         for (int t = 0; t < 2; t++) { // one {normal+emission, tint, mat} record per triangle
-            prim.add(nx);
-            prim.add(ny);
-            prim.add(nz);
-            prim.add(emission);
-            prim.add(tr);
-            prim.add(tg);
-            prim.add(tb);
-            prim.add(0f); // tint.w unused; base-color selection lives on the material record
-            prim.add(Float.intBitsToFloat(baseColorMaterialId()));
-            prim.add(0f); // flags
-            prim.add(0f); // aux0
-            prim.add(0f); // aux1
-            sbtClasses.add(currentSbtClass);
+            surfaces.add(new SceneMesh.TriangleSurface(currentMaterial, currentCoverage, nx, ny, nz,
+                    emission, tr, tg, tb));
         }
     }
 

@@ -37,6 +37,7 @@ import dev.comfyfluffy.caustica.rt.accel.RtAccel;
 import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
 import dev.comfyfluffy.caustica.rt.accel.GpuImage;
 import dev.comfyfluffy.caustica.rt.geometry.RtGeometryMaterialResolver;
+import dev.comfyfluffy.caustica.rt.geometry.RtGeometryMaterialResolution;
 import dev.comfyfluffy.caustica.rt.geometry.RtSceneGeometryManager;
 import dev.comfyfluffy.caustica.rt.material.RtMaterialPageCompiler;
 import dev.comfyfluffy.caustica.rt.material.RtMaterialOverrides;
@@ -57,6 +58,7 @@ import dev.comfyfluffy.caustica.rt.pipeline.RtPipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtShaderCode;
 import dev.comfyfluffy.caustica.rt.pipeline.RtToneLut;
 import dev.comfyfluffy.caustica.rt.scene.RtSceneSource;
+import dev.comfyfluffy.caustica.api.provider.SceneCamera;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -158,11 +160,32 @@ public final class RtComposite {
     private PushSlot[] pushRing;
     private int pushSlot;
     private final RtLightScene lightScene = new RtLightScene();
-    private final RtSceneGeometryManager sceneGeometry = new RtSceneGeometryManager(handle -> {
-        int bindingId = RtMaterialRegistry.INSTANCE.bindingId(handle.id());
-        return new RtGeometryMaterialResolver.ResolvedMaterial(bindingId,
-                RtMaterialRegistry.INSTANCE.sbtClassFor(bindingId));
-    });
+    private final RtGeometryMaterialResolution.Bindings geometryMaterials = new RtGeometryMaterialResolution.Bindings() {
+        @Override public int named(dev.comfyfluffy.caustica.api.provider.MaterialHandle material) {
+            return RtMaterialRegistry.INSTANCE.bindingId(material.id());
+        }
+        @Override public int catalog(dev.comfyfluffy.caustica.api.ResourceId material,
+                                     dev.comfyfluffy.caustica.api.ResourceId geometry,
+                                     dev.comfyfluffy.caustica.engine.material.MaterialVariant variant) {
+            return RtMaterialRegistry.INSTANCE.requireSnapshot().resolve(material, geometry, variant);
+        }
+        @Override public int atlas(dev.comfyfluffy.caustica.engine.material.AtlasMaterialReference reference) {
+            return RtMaterialRegistry.INSTANCE.resolveAtlasReference(reference, false);
+        }
+        @Override public int standalone(dev.comfyfluffy.caustica.api.ResourceId material) {
+            return RtMaterialRegistry.INSTANCE.resolveStandaloneTexture(material, false);
+        }
+        @Override public int fallback() { return RtMaterialRegistry.INSTANCE.runtimeFallbackId(); }
+        @Override public int withTexture(int binding, dev.comfyfluffy.caustica.api.provider.SceneMesh.TextureReference texture) {
+            return RtMaterialRegistry.INSTANCE.withBaseColorTextureIndex(binding,
+                    ProviderManager.INSTANCE.bindlessTextureSlot(texture));
+        }
+        @Override public int cutout(int binding) { return RtMaterialRegistry.INSTANCE.withCutoutCoverage(binding); }
+        @Override public int stochastic(int binding) { return RtMaterialRegistry.INSTANCE.withStochasticCoverage(binding); }
+        @Override public int sbtClass(int binding) { return RtMaterialRegistry.INSTANCE.sbtClassFor(binding); }
+    };
+    private final RtSceneGeometryManager sceneGeometry = new RtSceneGeometryManager(
+            (material, coverage) -> RtGeometryMaterialResolution.resolve(material, coverage, geometryMaterials));
     private RtDisplayPipeline displayPipeline;
     private RenderPassManager renderPassManager;
     private long renderPassSceneId = Long.MIN_VALUE;
@@ -841,7 +864,6 @@ public final class RtComposite {
         RtMaterialRegistry.INSTANCE.rebuild(ctx, RtMaterialPageCompiler.INSTANCE, materialCatalog,
                 materialOverrides, materials.definitions(), CausticaApi.registry()::surfaceIndex,
                 bindlessTextureCapacity);
-        sceneGeometry.invalidateMaterials();
         materialBindingsReady = true;
         bindPassResources(worldPipeline, program);
         // Texture coordinates and material IDs are one resource epoch. Invalidate retained geometry as
@@ -1151,7 +1173,6 @@ public final class RtComposite {
         // This belongs after the timeline snapshot and before any world push data is written.
         exposure.beginFrame(graphicsUseWaiter);
         pendingGraphicsUse = graphicsUse;
-        RtSceneGeometryManager.FrameGeometry providerGeometry = null;
         RtSceneGeometryManager.FrameUpdate dynamicGeometry = null;
         RtLightScene.Frame frameLights = null;
         PushSlot framePushSlot = null;
@@ -1214,17 +1235,12 @@ public final class RtComposite {
             Float3 proceduralDomainOffset = new Float3(sceneOrigin.wrappedX(proceduralPeriod),
                     sceneOrigin.wrappedY(proceduralPeriod), sceneOrigin.wrappedZ(proceduralPeriod));
 
-            // Rebuild the TLAS from retained and frame-varying instances. Retained BLASes are already
-            // built asynchronously; pending frame BLASes are recorded below before the instance-level TLAS.
-            // All geometry records share one source-neutral index space.
-            RtSceneGeometryManager.Capture geometryCapture = sceneGeometry.beginCapture();
-            ProviderManager.INSTANCE.submitGeometry(geometryCapture::sink);
-            providerGeometry = sceneGeometry.finishFrame(ctx, geometryCapture, sceneOrigin,
-                    ProviderManager.INSTANCE.activeSceneProviderIds());
-            ProviderManager.INSTANCE.submitPrimaryFrame(primaryScene, ctx, sceneGeometry,
-                    new RtSceneSource.Camera(snapshot.cameraX(), snapshot.cameraY(), snapshot.cameraZ(),
-                            frameProjection, frameViewRotation));
-            dynamicGeometry = sceneGeometry.beginUpdate(ctx, providerGeometry);
+            // Providers and host sources submit only retained atomic updates. The manager publishes ready
+            // groups and builds one source-neutral TLAS snapshot from that published scene.
+            ProviderManager.INSTANCE.submitGeometry(ctx, sceneOrigin,
+                    new SceneCamera(snapshot.cameraX(), snapshot.cameraY(), snapshot.cameraZ(),
+                            frameProjection.get(new float[16]), frameViewRotation.get(new float[16])));
+            dynamicGeometry = sceneGeometry.beginUpdate(ctx, sceneOrigin);
             new WorldPushData(
                     frameInvViewProj,
                     new Float3(sceneOrigin.relativeX(snapshot.cameraX()),
@@ -1258,18 +1274,9 @@ public final class RtComposite {
             pushBuf.flush(0L, WORLD_PUSH_SIZE);
             // Upload source textures registered this frame before the trace, preserving descriptor order.
             ProviderManager.INSTANCE.uploadPendingTextures(active, materialTextureSampler(ctx));
-            // Build pending BLASes, then the TLAS that references retained and frame-varying geometry.
-            // Barriers separate each stage; the graphics-use timeline guards resource reuse.
-            boolean blasRecorded;
-            try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("geometry.blasRecord")) {
-                blasRecorded = sceneGeometry.recordBlasBuilds(ctx, cmd, providerGeometry);
-            }
-            if (blasRecorded) {
-                VulkanBarriers.memoryBarrier(cmd, stack); // BLAS writes visible to the TLAS build
-            }
             RtAccel.PreparedTlas frameTlas;
             try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("frame.prepareTlas")) {
-                frameTlas = sceneGeometry.prepareTlas(ctx, providerGeometry, dynamicGeometry, graphicsUse);
+                frameTlas = sceneGeometry.prepareTlas(ctx, dynamicGeometry, graphicsUse);
             }
             active.setTlas(frameTlas.accel.handle, graphicsUse, graphicsUseWaiter);
             currentTlasHandle = frameTlas.accel.handle;
@@ -1403,7 +1410,6 @@ public final class RtComposite {
         // every owner in this frame's manifest is protected through the final overlay consumer.
         framePushSlot.graphicsUse.mark(graphicsUse);
         sceneGeometry.markGraphicsUse(dynamicGeometry, graphicsUse);
-        sceneGeometry.markGraphicsUse(providerGeometry, ctx, graphicsUse);
         lightScene.markGraphicsUse(frameLights, graphicsUse);
         exposure.markStateReadbackUse(graphicsUse);
     }

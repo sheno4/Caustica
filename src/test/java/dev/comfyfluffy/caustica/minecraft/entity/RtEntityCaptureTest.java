@@ -1,9 +1,9 @@
 package dev.comfyfluffy.caustica.minecraft.entity;
 
-import dev.comfyfluffy.caustica.rt.accel.RtAccel;
+import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import org.junit.jupiter.api.Test;
 
-import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 final class RtEntityCaptureTest {
@@ -14,51 +14,27 @@ final class RtEntityCaptureTest {
     private static final float[] V = {0f, 0f, 1f, 1f};
 
     @Test
-    void packsTrianglesIntoFixedSbtClassOrder() {
-        RtEntityCapture capture = capture();
-        addQuad(capture, RtAccel.CLASS_MASKED, 22);
-        addQuad(capture, RtAccel.CLASS_OPAQUE, 11);
-        addQuad(capture, RtAccel.CLASS_MASKED, 33);
+    void capturesOneNeutralSurfaceForEachTriangle() {
+        RtEntityCapture capture = new RtEntityCapture();
+        capture.currentMaterial = new SceneMesh.StandaloneMaterial(ResourceId.of("test", "entity"));
+        capture.currentCoverage = SceneMesh.Coverage.STOCHASTIC;
+        capture.addDirectQuad(X, Y, Z, U, V, 0f, 0f, 1f, -1);
 
-        RtEntityCapture.PackedGeometry packed = capture.packGeometry();
+        SceneMesh mesh = capture.sceneMesh();
 
-        assertArrayEquals(new int[] {2, 4, 0}, packed.classTris());
-        assertArrayEquals(new int[] {
-                4, 5, 6, 4, 6, 7,
-                0, 1, 2, 0, 2, 3,
-                8, 9, 10, 8, 10, 11
-        }, packed.indices().toIntArray());
-        assertMaterialIds(packed, 11, 11, 22, 22, 33, 33);
+        assertEquals(4, mesh.vertexCount());
+        assertEquals(2, mesh.triangleCount());
+        assertEquals(2, mesh.surfaces().size());
+        assertEquals(SceneMesh.Coverage.STOCHASTIC, mesh.surfaces().getFirst().coverage());
+        assertEquals(mesh.surfaces().getFirst(), mesh.surfaces().get(1));
     }
 
     @Test
-    void resetClearsClassMetadata() {
-        RtEntityCapture capture = capture();
-        addQuad(capture, RtAccel.CLASS_OPAQUE, 11);
-
+    void resetClearsCapturedSurfaces() {
+        RtEntityCapture capture = new RtEntityCapture();
+        capture.addDirectQuad(X, Y, Z, U, V, 0f, 0f, 1f, -1);
         capture.reset();
 
-        assertArrayEquals(new int[] {0, 0, 0}, capture.packGeometry().classTris());
-    }
-
-    /** Capture with no GPU material table: keep the base material as-is instead of resolving a variant. */
-    private static RtEntityCapture capture() {
-        RtEntityCapture capture = new RtEntityCapture();
-        capture.baseColorMaterialResolver = (materialId, baseColorTextureIndex) -> materialId;
-        return capture;
-    }
-
-    private static void addQuad(RtEntityCapture capture, int cls, int materialId) {
-        capture.currentSbtClass = cls;
-        capture.currentMaterialId = materialId;
-        capture.addDirectQuad(X, Y, Z, U, V, 0f, 0f, 1f, -1);
-    }
-
-    private static void assertMaterialIds(RtEntityCapture.PackedGeometry packed, int... expected) {
-        assertEquals(expected.length * 12, packed.primitives().size());
-        for (int triangle = 0; triangle < expected.length; triangle++) {
-            int actual = Float.floatToRawIntBits(packed.primitives().getFloat(triangle * 12 + 8));
-            assertEquals(expected[triangle], actual, "material id for packed triangle " + triangle);
-        }
+        assertEquals(0, capture.surfaces.size());
     }
 }

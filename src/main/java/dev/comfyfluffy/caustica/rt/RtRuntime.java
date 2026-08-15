@@ -451,6 +451,10 @@ public final class RtRuntime {
             if (resourcesReady) {
                 RtFrameStats.FRAME.beginIfInactive();
                 ProviderManager.INSTANCE.updateScenes();
+                ProviderManager.PrimaryScene primaryScene = ProviderManager.INSTANCE.primaryScene();
+                if (primaryScene != null) {
+                    ProviderManager.INSTANCE.submitGeometryUpdates(context, primaryScene.retained().origin());
+                }
                 RtComposite.INSTANCE.sceneGeometry().progress(context);
             }
             if (!sceneResources.sceneReady()) {

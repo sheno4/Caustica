@@ -5,7 +5,12 @@ import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.mixin.ParticleEngineAccessor;
 import dev.comfyfluffy.caustica.mixin.ParticleGroupAccessor;
 import dev.comfyfluffy.caustica.minecraft.provider.MinecraftMaterialSource;
+import dev.comfyfluffy.caustica.api.provider.GeometryTransform;
 import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.api.provider.SceneFrameContext;
+import dev.comfyfluffy.caustica.api.provider.SceneGeometrySink;
+import dev.comfyfluffy.caustica.api.provider.SceneGeometryKey;
+import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
@@ -33,15 +38,8 @@ import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.phys.shapes.CollisionContext;
 import org.joml.Matrix4f;
 import org.joml.Quaternionf;
-import org.lwjgl.system.MemoryUtil;
-
 import dev.comfyfluffy.caustica.rt.RtComposite;
-import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtFrameStats;
-import dev.comfyfluffy.caustica.rt.material.RtMaterialRegistry;
-import dev.comfyfluffy.caustica.rt.geometry.RtGeometryAbi;
-import dev.comfyfluffy.caustica.rt.geometry.RtSceneGeometryManager;
-import dev.comfyfluffy.caustica.rt.pipeline.RtPipeline;
 
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
 import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
@@ -51,30 +49,28 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.Iterator;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Queue;
 import java.util.Set;
-import java.util.function.LongConsumer;
 
 /**
  * Dynamic entities as real ray-traced {@code ModelPart} geometry. Each frame, every model entity is
- * re-posed and captured ({@link RtEntityCollector} + {@link RtEntityCapture}) into canonical packed
- * arrays. The engine-owned scene geometry manager owns their resident GPU geometry, acceleration
+ * re-posed and captured ({@link RtEntityCollector} + {@link RtEntityCapture}) into neutral scene meshes.
+ * The engine-owned scene geometry manager owns their resident GPU geometry, acceleration
  * structures, table records, instances, and graphics lifetime. This source retains only Minecraft
  * capture state, block-entity change detection, and stale-entry eviction state.
  * Non-model entities (items/arrows — geometry via submitItem/submitBlockModel, which the collector
  * ignores) are skipped.
  *
- * <p>Per-frame capture is capped by {@code -Dcaustica.rt.maxEntities}. Build class and topology version
- * are declared with each capture so the manager can choose reusable, refit, or rebuilt geometry safely.
+ * <p>Per-frame capture is capped by {@code -Dcaustica.rt.maxEntities}. The geometry manager derives
+ * compatible acceleration updates from retained mesh topology.
  */
 public final class RtEntities {
     public static final RtEntities INSTANCE = new RtEntities();
-    private static final ResourceId ENTITY_GEOMETRY = ResourceId.of("caustica", "entity_geometry");
-    private static final ResourceId BLOCK_ENTITY_GEOMETRY = ResourceId.of("caustica", "block_entity_geometry");
-    private static final ResourceId PARTICLE_GEOMETRY = ResourceId.of("caustica", "particle_geometry");
+    private static final long ENTITY_GEOMETRY = 1L;
+    private static final long BLOCK_ENTITY_GEOMETRY = 2L;
+    private static final long PARTICLE_GEOMETRY = 3L;
     private static final long PARTICLE_KEY = 0L;
     public static boolean enabled() {
         return CausticaConfig.Rt.Entities.ENABLED.value();
@@ -204,8 +200,7 @@ public final class RtEntities {
     private final ArrayDeque<BeCandidate> beCandidatePool = new ArrayDeque<>();
     // (Re)builds recorded so far this frame, reset each beginFrame; gates new BE builds to BE_BUILDS_PER_FRAME.
     private int beBuildsThisFrame;
-    private final Set<RtSceneGeometryManager.GroupKey> pendingDrops = new LinkedHashSet<>();
-    private long nextGeometryRevision;
+    private final Set<SceneGeometryKey> pendingDrops = new java.util.LinkedHashSet<>();
 
     private RtEntities() {
     }
@@ -230,17 +225,9 @@ public final class RtEntities {
     /** Tracks whether a block-entity resident has reached the manager's published snapshot. */
     static final class PublicationState {
         boolean published;
-        boolean putPending;
-        long lastSubmittedRevision;
 
-        void submitted(long revision, boolean includesPut) {
-            lastSubmittedRevision = revision;
-            putPending |= includesPut;
-        }
-
-        void acknowledged(long revision) {
+        void acknowledged() {
             published = true;
-            if (lastSubmittedRevision == revision) putPending = false;
         }
     }
 
@@ -275,37 +262,20 @@ public final class RtEntities {
 
     /** Mutable per-frame build state shared by the entity + block-entity capture passes. */
     private final class FrameBuild {
-        final RtSceneGeometryManager geometry;
+        final SceneGeometrySink geometry;
         final SceneOrigin origin;
-        final RtMaterialRegistry.Snapshot materials;
-        final List<RtSceneGeometryManager.GeometryUpdateGroup> groups = new ArrayList<>();
-        final Map<RtSceneGeometryManager.GroupKey, Acknowledgment> acknowledgments = new HashMap<>();
         int count;        // geometry-table entries / TLAS instances
         int logicalCount; // ordinary entities + block entities + individual particles
 
-        FrameBuild(RtSceneGeometryManager geometry, SceneOrigin origin, RtMaterialRegistry.Snapshot materials) {
+        FrameBuild(SceneGeometrySink geometry, SceneOrigin origin) {
             this.geometry = geometry;
             this.origin = origin;
-            this.materials = materials;
         }
 
-        long submit(ResourceId source, long key, List<RtSceneGeometryManager.GeometryOperation> operations,
-                    LongConsumer acknowledgment) {
-            RtSceneGeometryManager.GroupKey groupKey = new RtSceneGeometryManager.GroupKey(source, key);
-            pendingDrops.remove(groupKey);
-            long revision = ++nextGeometryRevision;
-            groups.add(new RtSceneGeometryManager.GeometryUpdateGroup(groupKey, revision, operations));
-            if (acknowledgment != null) acknowledgments.put(groupKey, new Acknowledgment(revision, acknowledgment));
-            return revision;
-        }
-
-        void flush() {
-            if (groups.isEmpty()) return;
-            geometry.submit(groups, published -> {
-                Acknowledgment acknowledgment = acknowledgments.get(published.key());
-                if (acknowledgment != null && acknowledgment.revision == published.revision()) {
-                    acknowledgment.consumer.accept(published.revision());
-                }
+        void submit(SceneGeometryKey key, List<SceneGeometrySink.Operation> operations, Runnable acknowledgment) {
+            pendingDrops.remove(key);
+            geometry.submit(key, operations, ignored -> {
+                if (acknowledgment != null) acknowledgment.run();
             });
         }
 
@@ -314,17 +284,22 @@ public final class RtEntities {
         }
     }
 
-    private record Acknowledgment(long revision, LongConsumer consumer) { }
-
     /**
      * Capture this frame's model entities, block entities, and particles into independent source groups.
      * Dynamic entity coordinates are local and placed by instances; particles remain captured relative to
      * the authored scene origin with an identity instance.
      */
-    public void beginFrame(GpuContext ctx, RtSceneGeometryManager geometry, SceneOrigin origin,
+    public void submitGeometry(SceneFrameContext frame) {
+        SceneOrigin origin = new SceneOrigin(frame.originX(), frame.originY(), frame.originZ());
+        var camera = frame.camera();
+        beginFrame(frame.geometry(), origin,
+                camera.x(), camera.y(), camera.z(), new Matrix4f().set(camera.projection()),
+                new Matrix4f().set(camera.viewRotation()));
+    }
+
+    private void beginFrame(SceneGeometrySink geometry, SceneOrigin origin,
                            double camX, double camY, double camZ, Matrix4f projection, Matrix4f viewRotation) {
-        RtMaterialRegistry registry = RtMaterialRegistry.INSTANCE;
-        FrameBuild build = new FrameBuild(geometry, origin, registry.requireSnapshot());
+        FrameBuild build = new FrameBuild(geometry, origin);
         int rbx = (int) origin.x();
         int rby = (int) origin.y();
         int rbz = (int) origin.z();
@@ -342,26 +317,19 @@ public final class RtEntities {
         float partial = mc.getDeltaTracker().getGameTimeDeltaPartialTick(false);
         setCamera(camX, camY, camZ, projection, viewRotation);
 
-        var defaultMaterialResolver = capture.baseColorMaterialResolver;
-        capture.baseColorMaterialResolver = (bindingId, textureIndex) ->
-                registry.withBaseColorTextureIndex(build.materials, bindingId, textureIndex);
         try {
             try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("entity.capture")) {
-                captureEntities(ctx, build, mc, level, partial, rbx, rby, rbz);
+                captureEntities(build, mc, level, partial, rbx, rby, rbz);
             }
             try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("entity.blockEntities")) {
-                captureBlockEntities(ctx, build, mc, level, partial, rbx, rby, rbz);
+                captureBlockEntities(build, mc, level, partial, rbx, rby, rbz);
             }
             try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("entity.particles")) {
-                captureParticles(ctx, build, mc, partial, rbx, rby, rbz, projection, viewRotation);
+                captureParticles(build, mc, partial, rbx, rby, rbz, projection, viewRotation);
             }
         } catch (RuntimeException | Error t) {
-            // Quiesce old frames and drop source capture state before propagating the original failure.
-            ctx.waitIdle();
-            shutdown(ctx);
+            shutdown();
             throw t;
-        } finally {
-            capture.baseColorMaterialResolver = defaultMaterialResolver;
         }
         evictStaleAccels(build);
         evictStaleBes(build);
@@ -369,18 +337,15 @@ public final class RtEntities {
     }
 
     private void finishFrame(FrameBuild build) {
-        List<RtSceneGeometryManager.GroupKey> drops = List.copyOf(pendingDrops);
+        List<SceneGeometryKey> drops = List.copyOf(pendingDrops);
         pendingDrops.clear();
-        for (RtSceneGeometryManager.GroupKey key : drops) {
-            build.submit(key.source(), key.key(), List.of(
-                    new RtSceneGeometryManager.Remove(key.key()),
-                    new RtSceneGeometryManager.Drop(key.key())), null);
+        for (SceneGeometryKey key : drops) {
+            build.submit(key, List.of(new SceneGeometrySink.Remove(key), new SceneGeometrySink.Drop(key)), null);
         }
-        build.flush();
     }
 
     /** Capture visible model entities (mobs, items, falling blocks). */
-    private void captureEntities(GpuContext ctx, FrameBuild build, Minecraft mc, ClientLevel level, float partial, int rbx, int rby, int rbz) {
+    private void captureEntities(FrameBuild build, Minecraft mc, ClientLevel level, float partial, int rbx, int rby, int rbz) {
         EntityRenderDispatcher dispatcher = mc.getEntityRenderDispatcher();
         Entity cameraEntity = mc.getCameraEntity();
         // In first person the camera owner's own body must not block the primary camera ray, but it should
@@ -526,7 +491,7 @@ public final class RtEntities {
      * Each particle is extracted into {@link #particleScratch}, funneled through {@link #particleCapture},
      * and merged into one primary-only instance.
      */
-    private void captureParticles(GpuContext ctx, FrameBuild build, Minecraft mc, float partial,
+    private void captureParticles(FrameBuild build, Minecraft mc, float partial,
                                   int rbx, int rby, int rbz, Matrix4f projection, Matrix4f viewRotation) {
         capture.reset();
         int particleLimit = maxParticles();
@@ -545,14 +510,9 @@ public final class RtEntities {
             submitParticles(build);
             return;
         }
-        RtMaterialRegistry registry = RtMaterialRegistry.INSTANCE;
-        // Billboards are thin two-sided scatterers, which their material says with a transmission weight;
-        // every layer shares the Minecraft source's named material and pairs it with its own atlas slot.
-        // The transparent border is absent geometry, so the producer derives cutout coverage from the
-        // named binding captured in this resource epoch.
-        int particleMaterial = build.materials.bindingId(MinecraftMaterialSource.PARTICLE_BILLBOARD);
-        capture.currentMaterialId = registry.withCutoutCoverage(build.materials, particleMaterial);
-        capture.currentSbtClass = registry.sbtClassFor(capture.currentMaterialId);
+        capture.currentMaterial = new SceneMesh.NamedMaterial(
+                new dev.comfyfluffy.caustica.api.provider.MaterialHandle(MinecraftMaterialSource.PARTICLE_BILLBOARD));
+        capture.currentCoverage = SceneMesh.Coverage.CUTOUT;
         // extract() emits camera-relative positions; shift them into rebased space (identity instance).
         Vec3 camPos = cam.position();
         particleCapture.setOffset((float) (camPos.x - rbx), (float) (camPos.y - rby), (float) (camPos.z - rbz));
@@ -577,13 +537,16 @@ public final class RtEntities {
                         continue;
                     }
                     int vb = capture.verts.size(), ib = capture.idx.size();
-                    int ub = capture.uvList.size(), prb = capture.prim.size(), abb = capture.sbtClasses.size();
+                    int ub = capture.uvList.size(), surfaceCount = capture.surfaces.size();
                     int vertBefore = vb / 3;
                     particleScratch.clear();
                     sq.extract(particleScratch, cam, partial);
                     for (SingleQuadParticle.Layer layer : particleScratch.layers()) {
-                        capture.currentBaseColorTextureIndex = RtEntityTextures.INSTANCE.slotForAtlas(
-                                layer.textureAtlasLocation());
+                        RtEntityTextures.INSTANCE.slotForAtlas(layer.textureAtlasLocation());
+                        capture.currentMaterial = new SceneMesh.NamedMaterial(
+                                new dev.comfyfluffy.caustica.api.provider.MaterialHandle(MinecraftMaterialSource.PARTICLE_BILLBOARD),
+                                new SceneMesh.AtlasTexture(ResourceId.of(
+                                        layer.textureAtlasLocation().getNamespace(), layer.textureAtlasLocation().getPath())));
                         particleScratch.buildLayer(layer, particleCapture);
                         particleCapture.flush();
                     }
@@ -597,8 +560,7 @@ public final class RtEntities {
                         capture.verts.size(vb); // off-screen → truncate this particle back out (clean quad boundary)
                         capture.idx.size(ib);
                         capture.uvList.size(ub);
-                        capture.prim.size(prb);
-                        capture.sbtClasses.size(abb);
+                        capture.surfaces.subList(surfaceCount, capture.surfaces.size()).clear();
                         continue;
                     }
                     build.logicalCount++;
@@ -619,18 +581,17 @@ public final class RtEntities {
 
     /** Replaces the one merged particle resident, or removes it when the capture is empty. */
     private void submitParticles(FrameBuild build) {
-        List<RtSceneGeometryManager.GeometryOperation> operations;
+        List<SceneGeometrySink.Operation> operations;
+        SceneGeometryKey particleKey = key(PARTICLE_GEOMETRY, PARTICLE_KEY);
         if (capture.isEmpty()) {
-            operations = List.of(new RtSceneGeometryManager.Remove(PARTICLE_KEY),
-                    new RtSceneGeometryManager.Drop(PARTICLE_KEY));
+            operations = List.of(new SceneGeometrySink.Remove(particleKey),
+                    new SceneGeometrySink.Drop(particleKey));
         } else {
-            RtEntityCapture.PackedGeometry packed = capture.packGeometry();
-            RtSceneGeometryManager.PackedInput input = packedInput(packed, RtSceneGeometryManager.BuildClass.REBUILT);
             operations = List.of(
-                    new RtSceneGeometryManager.Put(PARTICLE_KEY, new RtSceneGeometryManager.IndexedPayload(input)),
-                    new RtSceneGeometryManager.Place(PARTICLE_KEY, PARTICLE_KEY, IDENTITY, PARTICLE_MASK, build.origin));
+                    new SceneGeometrySink.Put(particleKey, capture.sceneMesh()),
+                    new SceneGeometrySink.Place(particleKey, particleKey, transform(IDENTITY, build.origin), PARTICLE_MASK));
         }
-        build.submit(PARTICLE_GEOMETRY, PARTICLE_KEY, operations, null);
+        build.submit(particleKey, operations, null);
     }
 
     /** Average (rebase-space) position of a captured particle's verts — approximates the particle center. */
@@ -657,7 +618,7 @@ public final class RtEntities {
      * their last geometry / pop in over later frames. Captured block-local → placed by a translate-only
      * instance transform; static, so the MV is 0.
      */
-    private void captureBlockEntities(GpuContext ctx, FrameBuild build, Minecraft mc, ClientLevel level, float partial, int rbx, int rby, int rbz) {
+    private void captureBlockEntities(FrameBuild build, Minecraft mc, ClientLevel level, float partial, int rbx, int rby, int rbz) {
         beBuildsThisFrame = 0;
         BlockEntityRenderDispatcher beDispatcher = mc.getBlockEntityRenderDispatcher();
         beDispatcher.prepare(cameraState.pos); // sets the camera for shouldRender / extract
@@ -699,12 +660,12 @@ public final class RtEntities {
             if (build.full() || build.count - firstBlockEntity >= maxBlockEntities()) {
                 break;
             }
-            updateBlockEntity(ctx, build, beDispatcher, candidate.be, partial, now, rbx, rby, rbz);
+            updateBlockEntity(build, beDispatcher, candidate.be, partial, now, rbx, rby, rbz);
         }
     }
 
     /** Re-mesh one block entity; replace its cached resident only if the mesh changed (budgeted); then emit it. */
-    private void updateBlockEntity(GpuContext ctx, FrameBuild build, BlockEntityRenderDispatcher beDispatcher,
+    private void updateBlockEntity(FrameBuild build, BlockEntityRenderDispatcher beDispatcher,
                                    BlockEntity be, float partial, long now, int rbx, int rby, int rbz) {
         capture.reset();
         try {
@@ -755,9 +716,7 @@ public final class RtEntities {
 
     /** Submits a keyed dynamic resident so compatible block-entity mesh updates retain vertex history. */
     private BeEntry buildBe(FrameBuild build, BeEntry entry, BlockEntity be, long hash, float[] transform) {
-        RtEntityCapture.PackedGeometry packed = capture.packGeometry();
         BlockPos p = be.getBlockPos();
-        RtSceneGeometryManager.PackedInput input = packedInput(packed, RtSceneGeometryManager.BuildClass.DEFORMING);
         beBuildsThisFrame++;
 
         BeEntry e = entry != null ? entry : new BeEntry();
@@ -765,15 +724,16 @@ public final class RtEntities {
         e.by = p.getY();
         e.bz = p.getZ();
         e.meshHash = hash;
-        long revision = build.submit(BLOCK_ENTITY_GEOMETRY, p.asLong(), List.of(
-                new RtSceneGeometryManager.Put(p.asLong(), new RtSceneGeometryManager.IndexedPayload(input)),
-                new RtSceneGeometryManager.Place(p.asLong(), p.asLong(), transform, MASK_ALL, build.origin)),
+        long key = p.asLong();
+        SceneGeometryKey geometryKey = key(BLOCK_ENTITY_GEOMETRY, key);
+        build.submit(geometryKey, List.of(
+                new SceneGeometrySink.Put(geometryKey, capture.sceneMesh()),
+                new SceneGeometrySink.Place(geometryKey, geometryKey, transform(transform, build.origin), MASK_ALL)),
                 e.publication::acknowledged);
-        e.publication.submitted(revision, true);
         return e;
     }
 
-    /** FNV-1a hash of the currently captured mesh (positions + indices + per-prim data) for rebuild detection. */
+    /** FNV-1a hash of the currently captured mesh for rebuild detection. */
     private long meshHash() {
         long h = 1469598103934665603L;
         float[] v = capture.verts.elements();
@@ -786,14 +746,8 @@ public final class RtEntities {
         for (int i = 0; i < xn; i++) {
             h = (h ^ (x[i] & 0xffffffffL)) * 1099511628211L;
         }
-        float[] pr = capture.prim.elements();
-        int pn = capture.prim.size();
-        for (int i = 0; i < pn; i++) {
-            h = (h ^ (Float.floatToRawIntBits(pr[i]) & 0xffffffffL)) * 1099511628211L;
-        }
-        int[] classes = capture.sbtClasses.elements();
-        for (int i = 0; i < capture.sbtClasses.size(); i++) {
-            h = (h ^ (classes[i] & 0xffffffffL)) * 1099511628211L;
+        for (SceneMesh.TriangleSurface surface : capture.surfaces) {
+            h = (h ^ surface.hashCode()) * 1099511628211L;
         }
         return h;
     }
@@ -804,18 +758,17 @@ public final class RtEntities {
             return;
         }
         long key = BlockPos.asLong(e.bx, e.by, e.bz);
-        List<RtSceneGeometryManager.GeometryOperation> operations;
+        List<SceneGeometrySink.Operation> operations;
         boolean includesPut = !e.publication.published;
         if (!includesPut) {
-            operations = List.of(new RtSceneGeometryManager.Place(key, key, transform, MASK_ALL, build.origin));
+            SceneGeometryKey geometryKey = key(BLOCK_ENTITY_GEOMETRY, key);
+            operations = List.of(new SceneGeometrySink.Place(geometryKey, geometryKey, transform(transform, build.origin), MASK_ALL));
         } else {
-            RtEntityCapture.PackedGeometry packed = capture.packGeometry();
-            RtSceneGeometryManager.PackedInput input = packedInput(packed, RtSceneGeometryManager.BuildClass.DEFORMING);
-            operations = List.of(new RtSceneGeometryManager.Put(key, new RtSceneGeometryManager.IndexedPayload(input)),
-                    new RtSceneGeometryManager.Place(key, key, transform, MASK_ALL, build.origin));
+            SceneGeometryKey geometryKey = key(BLOCK_ENTITY_GEOMETRY, key);
+            operations = List.of(new SceneGeometrySink.Put(geometryKey, capture.sceneMesh()),
+                    new SceneGeometrySink.Place(geometryKey, geometryKey, transform(transform, build.origin), MASK_ALL));
         }
-        long revision = build.submit(BLOCK_ENTITY_GEOMETRY, key, operations, e.publication::acknowledged);
-        e.publication.submitted(revision, includesPut);
+        build.submit(key(BLOCK_ENTITY_GEOMETRY, key), operations, e.publication::acknowledged);
         build.count++;
         build.logicalCount++;
         RtFrameStats.FRAME.count("blockEntitiesCaptured", 1);
@@ -834,8 +787,9 @@ public final class RtEntities {
                 continue;
             }
             long key = BlockPos.asLong(e.bx, e.by, e.bz);
-            build.submit(BLOCK_ENTITY_GEOMETRY, key, List.of(
-                    new RtSceneGeometryManager.Remove(key), new RtSceneGeometryManager.Drop(key)), null);
+            SceneGeometryKey geometryKey = key(BLOCK_ENTITY_GEOMETRY, key);
+            build.submit(geometryKey, List.of(
+                    new SceneGeometrySink.Remove(geometryKey), new SceneGeometrySink.Drop(geometryKey)), null);
             it.remove();
         }
     }
@@ -844,35 +798,25 @@ public final class RtEntities {
         return new float[] {1, 0, 0, x, 0, 1, 0, y, 0, 0, 1, z};
     }
 
+    private static SceneGeometryKey key(long domain, long value) {
+        return new SceneGeometryKey(domain, value);
+    }
+
+    private static GeometryTransform transform(float[] relative, SceneOrigin origin) {
+        return new GeometryTransform(relative[0], relative[1], relative[2],
+                relative[4], relative[5], relative[6], relative[8], relative[9], relative[10],
+                origin.x() + relative[3], origin.y() + relative[7], origin.z() + relative[11]);
+    }
+
     private void appendCapture(FrameBuild build, int entityId, int mask,
                                float[] instanceTransform) {
-        RtEntityCapture.PackedGeometry packed = capture.packGeometry();
-        RtSceneGeometryManager.PackedInput input = packedInput(packed, RtSceneGeometryManager.BuildClass.DEFORMING);
         EntityState state = entityStates.computeIfAbsent(entityId, unused -> new EntityState());
         state.lastSeen = RtComposite.frameCounter();
-        build.submit(ENTITY_GEOMETRY, entityId, List.of(
-                new RtSceneGeometryManager.Put(entityId, new RtSceneGeometryManager.IndexedPayload(input)),
-                new RtSceneGeometryManager.Place(entityId, entityId, instanceTransform, mask, build.origin)), null);
+        SceneGeometryKey key = key(ENTITY_GEOMETRY, Integer.toUnsignedLong(entityId));
+        build.submit(key, List.of(
+                new SceneGeometrySink.Put(key, capture.sceneMesh()),
+                new SceneGeometrySink.Place(key, key, transform(instanceTransform, build.origin), mask)), null);
         build.count++;
-    }
-
-    private RtSceneGeometryManager.PackedInput packedInput(RtEntityCapture.PackedGeometry packed,
-                                                            RtSceneGeometryManager.BuildClass buildClass) {
-        return new RtSceneGeometryManager.PackedInput(
-                java.util.Arrays.copyOf(capture.verts.elements(), capture.verts.size()),
-                java.util.Arrays.copyOf(packed.indices().elements(), packed.indices().size()),
-                java.util.Arrays.copyOf(capture.uvList.elements(), capture.uvList.size()),
-                java.util.Arrays.copyOf(packed.primitives().elements(), packed.primitives().size()),
-                packed.copyClassTris(), 0, topologyVersion(packed), buildClass,
-                RtGeometryAbi.FLAG_INDEXED_TEXTURE_COORDINATES);
-    }
-
-    private long topologyVersion(RtEntityCapture.PackedGeometry packed) {
-        long hash = 1469598103934665603L;
-        hash = (hash ^ (capture.verts.size() / 3)) * 1099511628211L;
-        for (int i = 0; i < packed.indices().size(); i++) hash = (hash ^ packed.indices().getInt(i)) * 1099511628211L;
-        for (int value : packed.classTris()) hash = (hash ^ value) * 1099511628211L;
-        return hash;
     }
 
     private void evictStaleAccels(FrameBuild build) {
@@ -882,8 +826,9 @@ public final class RtEntities {
             var entry = it.next();
             if (now - entry.getValue().lastSeen < KEEP_FRAMES) continue;
             int id = entry.getIntKey();
-            build.submit(ENTITY_GEOMETRY, id, List.of(
-                    new RtSceneGeometryManager.Remove(id), new RtSceneGeometryManager.Drop(id)), null);
+            SceneGeometryKey key = key(ENTITY_GEOMETRY, Integer.toUnsignedLong(id));
+            build.submit(key, List.of(
+                    new SceneGeometrySink.Remove(key), new SceneGeometrySink.Drop(key)), null);
             it.remove();
         }
     }
@@ -891,15 +836,18 @@ public final class RtEntities {
     /** Remove every source-owned resident when this capture path is disabled. */
     private void clearResidents(FrameBuild build) {
         for (int id : entityStates.keySet()) {
-            build.submit(ENTITY_GEOMETRY, id, List.of(
-                    new RtSceneGeometryManager.Remove(id), new RtSceneGeometryManager.Drop(id)), null);
+            SceneGeometryKey key = key(ENTITY_GEOMETRY, Integer.toUnsignedLong(id));
+            build.submit(key, List.of(
+                    new SceneGeometrySink.Remove(key), new SceneGeometrySink.Drop(key)), null);
         }
-        for (long key : beCache.keySet()) {
-            build.submit(BLOCK_ENTITY_GEOMETRY, key, List.of(
-                    new RtSceneGeometryManager.Remove(key), new RtSceneGeometryManager.Drop(key)), null);
+        for (long value : beCache.keySet()) {
+            SceneGeometryKey key = key(BLOCK_ENTITY_GEOMETRY, value);
+            build.submit(key, List.of(
+                    new SceneGeometrySink.Remove(key), new SceneGeometrySink.Drop(key)), null);
         }
-        build.submit(PARTICLE_GEOMETRY, PARTICLE_KEY, List.of(
-                new RtSceneGeometryManager.Remove(PARTICLE_KEY), new RtSceneGeometryManager.Drop(PARTICLE_KEY)), null);
+        SceneGeometryKey particleKey = key(PARTICLE_GEOMETRY, PARTICLE_KEY);
+        build.submit(particleKey, List.of(
+                new SceneGeometrySink.Remove(particleKey), new SceneGeometrySink.Drop(particleKey)), null);
         entityStates.clear();
         beCache.clear();
     }
@@ -923,19 +871,16 @@ public final class RtEntities {
 
     /** Drop CPU templates that retain resource-pack-owned model trees. */
     public void onResourceReload() {
-        for (int id : entityStates.keySet()) pendingDrops.add(new RtSceneGeometryManager.GroupKey(ENTITY_GEOMETRY, id));
-        for (long key : beCache.keySet()) pendingDrops.add(new RtSceneGeometryManager.GroupKey(BLOCK_ENTITY_GEOMETRY, key));
-        pendingDrops.add(new RtSceneGeometryManager.GroupKey(PARTICLE_GEOMETRY, PARTICLE_KEY));
+        for (int id : entityStates.keySet()) pendingDrops.add(key(ENTITY_GEOMETRY, Integer.toUnsignedLong(id)));
+        for (long value : beCache.keySet()) pendingDrops.add(key(BLOCK_ENTITY_GEOMETRY, value));
+        pendingDrops.add(key(PARTICLE_GEOMETRY, PARTICLE_KEY));
         entityStates.clear();
         beCache.clear();
         collector.clearCaches();
     }
 
     /** Clears this source's published snapshot before entity IDs can be reused by a new world. */
-    public void onWorldChanged(GpuContext ctx, RtSceneGeometryManager geometry) {
-        geometry.clearSource(ctx, ENTITY_GEOMETRY);
-        geometry.clearSource(ctx, BLOCK_ENTITY_GEOMETRY);
-        geometry.clearSource(ctx, PARTICLE_GEOMETRY);
+    public void onWorldChanged() {
         entityStates.clear();
         beCache.clear();
         pendingDrops.clear();
@@ -943,7 +888,7 @@ public final class RtEntities {
     }
 
     /** Clear capture state; the geometry manager owns and tears down all GPU residents. */
-    public void shutdown(GpuContext ctx) {
+    public void shutdown() {
         entityStates.clear();
         beCache.clear();
         glowBatches.clear();

@@ -6,6 +6,8 @@ import com.mojang.blaze3d.pipeline.RenderPipeline;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import dev.comfyfluffy.caustica.CausticaConfig;
+import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import dev.comfyfluffy.caustica.api.provider.MaterialTopology;
 import dev.comfyfluffy.caustica.engine.material.MaterialVariant;
 import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialProfile;
@@ -14,7 +16,6 @@ import dev.comfyfluffy.caustica.mixin.ModelPartAccessor;
 import dev.comfyfluffy.caustica.mixin.RenderSetupAccessor;
 import dev.comfyfluffy.caustica.mixin.RenderTypeAccessor;
 import dev.comfyfluffy.caustica.rt.RtFrameStats;
-import dev.comfyfluffy.caustica.rt.accel.RtAccel;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.font.TextRenderable;
@@ -52,7 +53,6 @@ import org.joml.Matrix4fc;
 import org.joml.Quaternionf;
 import org.joml.Vector3f;
 
-import dev.comfyfluffy.caustica.rt.material.RtMaterialRegistry;
 
 import java.util.List;
 import java.util.ArrayList;
@@ -134,43 +134,22 @@ class RtEntityCollectorBase {
         }
         long materialStart = profileDynamicEntity ? RtFrameStats.FRAME.startStage() : 0L;
         boolean stochasticAlpha = isTranslucent(renderType);
-        // Resolve this submission's texture to a bindless slot; the capture stamps it on every prim.
-        // Block-entity models (chests/signs/beds) texture from an atlas SPRITE: use that atlas + remap
-        // the ModelPart 0..1 UVs into the sprite's region. Mobs use a full texture (sprite == null).
+        // Block-entity models texture from an atlas sprite; mobs use a standalone texture.
         try {
-            capture.currentMaterialId = RtMaterialRegistry.INSTANCE.runtimeFallbackId(stochasticAlpha);
+            capture.currentCoverage = stochasticAlpha ? SceneMesh.Coverage.STOCHASTIC
+                    : hasCutoutDefine(renderType) ? SceneMesh.Coverage.CUTOUT : SceneMesh.Coverage.OPAQUE;
             if (sprite != null) {
                 capture.setUvRemap(sprite.getU0(), sprite.getV0(), sprite.getU1(), sprite.getV1());
-                if (TextureAtlas.LOCATION_BLOCKS.equals(sprite.atlasLocation())) {
-                    // A block entity drawing from the block atlas (rare) → reuse the terrain _s/_n atlases.
-                    capture.currentBaseColorTextureIndex = RtEntityTextures.INSTANCE.slotForAtlas(
-                            sprite.atlasLocation());
-                    setSpriteMaterial(sprite, stochasticAlpha);
-                } else {
-                    // Dedicated block-entity atlas: base color remains atlas-bound, while the immutable
-                    // canonical texels were pack-compiled. Appending the first-seen sprite header only
-                    // records this atlas's UV rectangle; it never mutates an existing material ID.
-                    capture.currentBaseColorTextureIndex = RtEntityTextures.INSTANCE.slotForAtlas(
-                            sprite.atlasLocation());
-                    capture.currentMaterialId = RtEntityTextures.entityPbr()
-                            ? RtMaterialRegistry.INSTANCE.resolveAtlasReference(
-                                    MinecraftMaterialLookup.atlasMaterial(sprite), stochasticAlpha)
-                            : RtMaterialRegistry.INSTANCE.runtimeFallbackId(stochasticAlpha);
-                }
+                RtEntityTextures.INSTANCE.slotForAtlas(sprite.atlasLocation());
+                setSpriteMaterial(sprite, OpenPbrMaterialProfile.ROUGH_DIELECTRIC, false, stochasticAlpha);
             } else {
-                // Mobs use full per-type textures. Their authored _s/_n maps were decoded into canonical
-                // pages during resource-pack load, so capture stores only the stable material ID.
-                capture.currentBaseColorTextureIndex = RtEntityTextures.INSTANCE.slotFor(renderType);
-                capture.currentMaterialId = RtEntityTextures.INSTANCE.materialIdFor(renderType, stochasticAlpha);
+                RtEntityTextures.INSTANCE.slotFor(renderType);
+                capture.currentMaterial = standaloneMaterial(renderType);
                 capture.clearUvRemap();
             }
         } finally {
             RtFrameStats.FRAME.endStage("entity.capture.submit.material", materialStart);
         }
-        if (!stochasticAlpha && hasCutoutDefine(renderType)) {
-            capture.currentMaterialId = RtMaterialRegistry.INSTANCE.withCutoutCoverage(capture.currentMaterialId);
-        }
-        capture.currentSbtClass = RtMaterialRegistry.INSTANCE.sbtClassFor(capture.currentMaterialId);
         // Pose the model from its render state (idempotent re-pose; mirrors what the renderer does for
         // its feature layers), then render the posed parts into the capture. renderToBuffer applies the
         // PoseStack to every vertex/normal, so the capture receives world-/camera-relative geometry.
@@ -192,7 +171,7 @@ class RtEntityCollectorBase {
         int vertStart = capture.verts.size();
         int idxStart = capture.idx.size();
         int uvStart = capture.uvList.size();
-        int primStart = capture.prim.size();
+        int surfaceStart = capture.surfaces.size();
         RtCuboidEmitter.ModelTemplate directTemplate = cuboidEmitter.prepare(model);
         long directCubeCounts = 0L;
         long drawStart = profileDynamicEntity ? RtFrameStats.FRAME.startStage() : 0L;
@@ -228,7 +207,7 @@ class RtEntityCollectorBase {
             long parityStart = profileDynamicEntity ? RtFrameStats.FRAME.startStage() : 0L;
             try {
                 model.renderToBuffer(poseStack, parityCapture, lightCoords, overlayCoords, color);
-                capture.assertSubmissionBitwiseIdentical(vertStart, idxStart, uvStart, primStart,
+                capture.assertSubmissionBitwiseIdentical(vertStart, idxStart, uvStart, surfaceStart,
                         parityCapture, "model " + model.getClass().getName());
                 if (profileDynamicEntity) {
                     RtFrameStats.FRAME.count("entityParityChecks", 1);
@@ -281,12 +260,10 @@ class RtEntityCollectorBase {
         RtFrameStats.FRAME.count("entityBakedVertices", (long) quads * 4L);
     }
 
-    /** Capture one baked quad, resolving its atlas (block vs item) to a bindless slot stamped per-prim. */
+    /** Capture one baked quad with its atlas texture and source-level surface selector. */
     private void addQuad(Matrix4f pose, BakedQuad q, int[] tintLayers) {
         TextureAtlasSprite sprite = q.materialInfo().sprite();
-        capture.currentBaseColorTextureIndex = sprite != null
-                ? RtEntityTextures.INSTANCE.slotForAtlas(sprite.atlasLocation())
-                : 0;
+        if (sprite != null) RtEntityTextures.INSTANCE.slotForAtlas(sprite.atlasLocation());
         // Baked item quads retain the block model's material layer. Mirror terrain's classification so
         // dropped and held translucent block items (glass, ice, etc.) use the thin-dielectric variant
         // instead of the opaque DEFAULT variant. No BlockState reaches submitItem, so the layer is the
@@ -297,10 +274,7 @@ class RtEntityCollectorBase {
         setSpriteMaterial(sprite, transmissive ? OpenPbrMaterialProfile.SMOOTH_DIELECTRIC
                         : OpenPbrMaterialProfile.ROUGH_DIELECTRIC,
                 transmissive, false);
-        if (cutout) {
-            capture.currentMaterialId = RtMaterialRegistry.INSTANCE.withCutoutCoverage(capture.currentMaterialId);
-        }
-        capture.currentSbtClass = RtMaterialRegistry.INSTANCE.sbtClassFor(capture.currentMaterialId);
+        capture.currentCoverage = cutout ? SceneMesh.Coverage.CUTOUT : SceneMesh.Coverage.OPAQUE;
         capture.currentOrder = 0; // baked-quad paths never stack decal layers
         capture.addBakedQuad(pose, q, tintColor(q.materialInfo().tintIndex(), tintLayers));
     }
@@ -312,20 +286,30 @@ class RtEntityCollectorBase {
 
     private void setSpriteMaterial(TextureAtlasSprite sprite, OpenPbrMaterialProfile profile,
                                    boolean transmissive, boolean stochasticAlpha) {
-        if (sprite != null && TextureAtlas.LOCATION_BLOCKS.equals(sprite.atlasLocation())) {
-            int materialId = RtMaterialRegistry.INSTANCE.requireSnapshot()
-                    .resolve(MinecraftMaterialLookup.material(sprite), null,
-                            new MaterialVariant(profile,
-                                    transmissive ? MaterialTopology.MEDIUM_BOUNDARY : MaterialTopology.SURFACE,
-                                    false));
-            capture.currentMaterialId = stochasticAlpha
-                    ? RtMaterialRegistry.INSTANCE.withStochasticCoverage(materialId) : materialId;
-        } else if (sprite != null && RtEntityTextures.entityPbr()) {
-            capture.currentMaterialId = RtMaterialRegistry.INSTANCE.resolveAtlasReference(
-                    MinecraftMaterialLookup.atlasMaterial(sprite), stochasticAlpha);
-        } else {
-            capture.currentMaterialId = RtMaterialRegistry.INSTANCE.runtimeFallbackId(stochasticAlpha);
-        }
+        MaterialVariant variant = new MaterialVariant(profile,
+                transmissive ? MaterialTopology.MEDIUM_BOUNDARY : MaterialTopology.SURFACE, false);
+        capture.currentMaterial = sprite == null ? missingMaterial()
+                : TextureAtlas.LOCATION_BLOCKS.equals(sprite.atlasLocation())
+                ? new SceneMesh.CatalogMaterial(MinecraftMaterialLookup.material(sprite), null, variant,
+                new SceneMesh.AtlasTexture(ResourceId.of(sprite.atlasLocation().getNamespace(), sprite.atlasLocation().getPath())))
+                : RtEntityTextures.entityPbr()
+                ? new SceneMesh.AtlasMaterial(MinecraftMaterialLookup.atlasMaterial(sprite))
+                : new SceneMesh.FallbackMaterial(new SceneMesh.AtlasTexture(
+                        ResourceId.of(sprite.atlasLocation().getNamespace(), sprite.atlasLocation().getPath())));
+        capture.currentCoverage = stochasticAlpha ? SceneMesh.Coverage.STOCHASTIC
+                : SceneMesh.Coverage.OPAQUE;
+    }
+
+    private static SceneMesh.MaterialReference standaloneMaterial(RenderType renderType) {
+        var texture = RtEntityTextures.INSTANCE.textureLocation(renderType);
+        if (texture == null) return missingMaterial();
+        ResourceId logicalTexture = MinecraftMaterialLookup.logicalTexture(texture);
+        return RtEntityTextures.entityPbr() ? new SceneMesh.StandaloneMaterial(logicalTexture)
+                : new SceneMesh.FallbackMaterial(new SceneMesh.StandaloneTexture(logicalTexture));
+    }
+
+    private static SceneMesh.MaterialReference missingMaterial() {
+        return new SceneMesh.FallbackMaterial(null);
     }
 
     /** Whether a render type is alpha-blended (translucent) — its pipeline's color target has a blend
@@ -346,10 +330,7 @@ class RtEntityCollectorBase {
      * True when a render type's pipeline carries the vanilla {@code ALPHA_CUTOUT} shader define — a
      * genuinely masked (alpha-tested) submission, as opposed to blended (stochastic) or fully opaque.
      * Matching the define is more robust than matching pipeline names and also works for mod-provided
-     * RenderPipelines. Callers apply {@link RtMaterialRegistry#withCutoutCoverage} when this is true and
-     * the submission isn't already stochastic — the SBT class then falls out of the resolved binding via
-     * {@link RtMaterialRegistry#sbtClassFor}, so this is the only piece {@code isTranslucent} doesn't
-     * already tell the caller.
+     * RenderPipelines. Together with blend state, it selects the source coverage mode.
      *
      * <p>A submission with no render type to inspect is treated as masked: coverage now has to be asked
      * for, and an unknown submission losing its alpha test shows up as solid quads, while a redundant
@@ -458,12 +439,10 @@ class RtEntityCollectorBase {
         public void acceptRenderable(TextRenderable renderable) {
             RenderType renderType = renderable.renderType(displayMode);
             boolean stochasticAlpha = isTranslucent(renderType);
-            capture.currentBaseColorTextureIndex = RtEntityTextures.INSTANCE.slotFor(renderType);
-            capture.currentMaterialId = RtMaterialRegistry.INSTANCE.runtimeFallbackId(stochasticAlpha);
-            if (!stochasticAlpha && hasCutoutDefine(renderType)) {
-                capture.currentMaterialId = RtMaterialRegistry.INSTANCE.withCutoutCoverage(capture.currentMaterialId);
-            }
-            capture.currentSbtClass = RtMaterialRegistry.INSTANCE.sbtClassFor(capture.currentMaterialId);
+            RtEntityTextures.INSTANCE.slotFor(renderType);
+            capture.currentMaterial = standaloneMaterial(renderType);
+            capture.currentCoverage = stochasticAlpha ? SceneMesh.Coverage.STOCHASTIC
+                    : hasCutoutDefine(renderType) ? SceneMesh.Coverage.CUTOUT : SceneMesh.Coverage.OPAQUE;
             capture.currentOrder = 0;
             capture.clearUvRemap(); // glyph U/V are already atlas-space
             renderable.render(pose, textVertexConsumer, lightCoords, false);
@@ -550,9 +529,8 @@ class RtEntityCollectorBase {
         }
         capture.clearUvRemap();
         capture.currentOrder = 0;
-        capture.currentBaseColorTextureIndex = RtEntityTextures.INSTANCE.whiteSlot();
-        capture.currentMaterialId = RtMaterialRegistry.INSTANCE.runtimeFallbackId(false);
-        capture.currentSbtClass = RtAccel.CLASS_OPAQUE; // fully opaque white texture, no alpha test
+        capture.currentMaterial = new SceneMesh.FallbackMaterial(RtEntityTextures.INSTANCE.whiteTexture());
+        capture.currentCoverage = SceneMesh.Coverage.OPAQUE;
         Matrix4f pose = poseStack.last().pose();
         // Same derivation as LeashFeatureRenderer.prepare: the ribbon's horizontal half-extent is the
         // curve's ground-plane perpendicular, and the attachment offset shifts the whole curve in the
@@ -713,16 +691,12 @@ class RtEntityCollectorBase {
         boolean stochasticAlpha = isTranslucent(renderType);
         // Lines are untextured: bind the white texture so base color is exactly the vertex colour (index 0 is
         // the block atlas, whose (0,0) texel would tint the ribbon arbitrarily).
-        capture.currentBaseColorTextureIndex = lines ? RtEntityTextures.INSTANCE.whiteSlot()
-                : RtEntityTextures.INSTANCE.slotFor(renderType);
-        capture.currentMaterialId = lines
-                ? RtMaterialRegistry.INSTANCE.runtimeFallbackId(false)
-                : RtEntityTextures.INSTANCE.materialIdFor(renderType, stochasticAlpha);
-        if (!lines && !stochasticAlpha && hasCutoutDefine(renderType)) {
-            capture.currentMaterialId = RtMaterialRegistry.INSTANCE.withCutoutCoverage(capture.currentMaterialId);
-        }
-        capture.currentSbtClass = lines ? RtAccel.CLASS_OPAQUE
-                : RtMaterialRegistry.INSTANCE.sbtClassFor(capture.currentMaterialId);
+        if (lines) RtEntityTextures.INSTANCE.whiteSlot(); else RtEntityTextures.INSTANCE.slotFor(renderType);
+        capture.currentMaterial = lines ? new SceneMesh.FallbackMaterial(RtEntityTextures.INSTANCE.whiteTexture())
+                : standaloneMaterial(renderType);
+        capture.currentCoverage = lines ? SceneMesh.Coverage.OPAQUE
+                : stochasticAlpha ? SceneMesh.Coverage.STOCHASTIC
+                : hasCutoutDefine(renderType) ? SceneMesh.Coverage.CUTOUT : SceneMesh.Coverage.OPAQUE;
 
         if (lines) {
             lineVertexConsumer.begin();

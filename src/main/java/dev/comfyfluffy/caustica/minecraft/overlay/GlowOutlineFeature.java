@@ -23,7 +23,7 @@ import dev.comfyfluffy.caustica.minecraft.entity.RtEntities;
  * Entity glow (Glowing-effect) outline — full-res, post-upscale, depth-less. Two passes:
  * <ol>
  *   <li>Re-rasterize this frame's glowing entities (their CPU-side capture positions, already kept around
- *   by {@link RtEntities} for BLAS refit) with a trivial unlit pipeline into a full-res RGBA8 mask
+ *   by {@link RtEntities} alongside retained scene-mesh capture) with a trivial unlit pipeline into a full-res RGBA8 mask
  *   (rgb = the entity's vanilla outline colour, a = coverage) — a mod-owned storage image. The camera
  *   transform mirrors the one {@code world.rgen} used this frame, so the silhouette lands pixel-exact on
  *   the ray-traced entity.</li>

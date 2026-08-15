@@ -3,6 +3,7 @@ package dev.comfyfluffy.caustica.minecraft.terrain;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class RtTerrainLightChangeTest {
@@ -41,8 +42,29 @@ final class RtTerrainLightChangeTest {
     }
 
     @Test
+    void frameDrainKeepsOnlyTheLatestSubmissionForOneGroupKey() {
+        var first = new dev.comfyfluffy.caustica.api.provider.SceneGeometryKey(10, 7);
+        var other = new dev.comfyfluffy.caustica.api.provider.SceneGeometryKey(10, 8);
+        assertEquals(java.util.List.of(first, other), RtTerrain.latestGroupKeys(java.util.List.of(first, other, first)));
+    }
+
+    @Test
     void emptyStateIsAnAcknowledgedDropTransition() {
         assertTrue(RtTerrain.emptyAfterDrop(true));
         assertFalse(RtTerrain.emptyAfterDrop(false));
+    }
+
+    @Test
+    void retainedLightMarksBothSourceTrianglesAndLeavesOthersUnmarked() {
+        var material = dev.comfyfluffy.caustica.api.provider.MaterialHandle.of("test", "emitter");
+        var surface = dev.comfyfluffy.caustica.api.provider.SceneMesh.TriangleSurface.surface(material);
+        var surfaces = new java.util.ArrayList<>(java.util.List.of(surface, surface, surface, surface));
+
+        RtLightCollector.markEmitterInLightScene(surfaces, 0);
+
+        assertTrue(surfaces.get(0).emitterInLightScene());
+        assertTrue(surfaces.get(1).emitterInLightScene());
+        assertFalse(surfaces.get(2).emitterInLightScene());
+        assertFalse(surfaces.get(3).emitterInLightScene());
     }
 }

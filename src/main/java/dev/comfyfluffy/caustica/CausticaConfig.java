@@ -53,7 +53,7 @@ public final class CausticaConfig {
      * {@code CausticaConfigTest} fails the build if a holder is missing.
      */
     static final List<Class<?>> HOLDERS = List.of(
-            Rt.class, Rt.Composite.class, Rt.Terrain.class, Rt.Lights.class, Rt.Omm.class,
+            Rt.class, Rt.Composite.class, Rt.Terrain.class, Rt.Lights.class,
             Rt.Entities.class, Rt.EntityTextures.class, Rt.Overlay.class, Rt.DlssRr.class,
             Rt.Fg.class, Rt.Reflex.class, Rt.Exposure.class, Rt.Tonemap.class, Rt.FrameStats.class,
             Rt.Screenshots.class, Rt.Diagnostics.class, Rt.Hdr.class, Rt.Composition.class,
@@ -712,12 +712,8 @@ public final class CausticaConfig {
                     intAtLeast("caustica.rt.sectionResultsPerTick", "terrain.section-results-per-tick", 32, 0);
             public static final IntSetting MAX_INFLIGHT_SECTIONS =
                     intAtLeast("caustica.rt.maxInflightSections", "terrain.max-inflight-sections", 32, 0);
-            public static final IntSetting SECTION_TABLE_INITIAL_CAPACITY =
-                    intAtLeast("caustica.rt.sectionTableInitialCapacity", "terrain.section-table-initial-capacity", 512, 1);
             public static final IntSetting REBASE_DISTANCE_BLOCKS =
                     intAtLeast("caustica.rt.rebaseDistanceBlocks", "terrain.rebase-distance-blocks", 128, 0);
-            public static final BooleanSetting BLAS_COMPACTION =
-                    bool("caustica.rt.blasCompaction", "terrain.blas-compaction", true);
 
             private Terrain() {
             }
@@ -736,16 +732,6 @@ public final class CausticaConfig {
                     intAtLeast("caustica.rt.lightDumpRadius", "lights.dump-radius", 12, 1);
 
             private Lights() {
-            }
-        }
-
-        public static final class Omm {
-            public static final BooleanSetting ENABLED = bool("caustica.rt.omm", "omm.enabled", true);
-            public static final IntSetting SUBDIVISION =
-                    clampedInt("caustica.rt.ommSubdivision", "omm.subdivision", 4, 0, 6);
-            public static final BooleanSetting STATS = bool("caustica.rt.ommStats", "omm.stats", false);
-
-            private Omm() {
             }
         }
 
@@ -771,9 +757,6 @@ public final class CausticaConfig {
                     intAtLeast("caustica.rt.beViewChunks", "entities.block-entities.view-chunks", 8, 0);
             public static final IntSetting BE_BUILDS_PER_FRAME =
                     intAtLeast("caustica.rt.beBuildsPerFrame", "entities.block-entities.builds-per-frame", 64, 0);
-            public static final BooleanSetting REFIT_ENABLED =
-                    bool("caustica.rt.entityRefit", "entities.refit.enabled", true);
-
             private Entities() {
             }
 

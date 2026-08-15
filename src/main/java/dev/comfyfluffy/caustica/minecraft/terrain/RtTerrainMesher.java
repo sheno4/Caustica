@@ -3,6 +3,8 @@ package dev.comfyfluffy.caustica.minecraft.terrain;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.api.provider.MaterialTopology;
+import dev.comfyfluffy.caustica.api.provider.MaterialHandle;
+import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import dev.comfyfluffy.caustica.engine.material.MaterialVariant;
 import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialProfile;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialClassifier;
@@ -10,7 +12,6 @@ import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialLookup;
 import dev.comfyfluffy.caustica.minecraft.provider.MinecraftMaterialSource;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtFrameStats;
-import dev.comfyfluffy.caustica.rt.accel.RtAccel;
 import dev.comfyfluffy.caustica.rt.material.RtMaterialAbi;
 import dev.comfyfluffy.caustica.rt.material.RtMaterialRegistry;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
@@ -55,10 +56,9 @@ import java.util.List;
 final class RtTerrainMesher {
     /**
      * Reusable per-worker-thread meshing state. The mesh + captures are reset between tasks so their
-     * backing arrays amortize across sections instead of re-growing per task. Everything the result carries out —
-     * {@link PackedSection}, OMM data — is copied out of this state before the job returns, so reuse on
-     * the next task cannot corrupt a queued result. The fluid renderer stays per-task because it captures
-     * the dispatch context's model set.
+     * backing arrays amortize across sections instead of re-growing per task. Each completed mesh is copied
+     * before the next task reuses the accumulators. The fluid renderer stays per-task because it captures the
+     * dispatch context's model set.
      */
     static final class WorkerTessState {
         final QuadCapture capture = new QuadCapture();
@@ -79,10 +79,9 @@ final class RtTerrainMesher {
     static final ThreadLocal<WorkerTessState> WORKER_TESS = ThreadLocal.withInitial(WorkerTessState::new);
 
     /**
-     * Tessellate one section to a section-local CPU mesh and precompute pure-CPU sidecar data such as
-     * the terrain opacity micromap. <b>Pure CPU + snapshot reads only</b> — no Vulkan, no shared mutable
-     * state — so this is the unit a worker thread runs. The task captures one immutable material snapshot
-     * and writes its IDs directly; publication performs no resource lookup or primitive-buffer patch.
+     * Tessellate one section to a section-local CPU mesh and CPU light metadata. <b>Pure CPU + snapshot reads only</b>
+     * — no Vulkan, no shared mutable state — so this is the unit a worker thread runs. The task captures one
+     * immutable material snapshot for light extraction; publication resolves mesh materials for its current epoch.
      * Returns the mesh (possibly empty — caller checks {@code idx}).
      */
     static CpuSection buildCpuSection(BlockAndTintGetter region, BlockStateModelSet modelSet,
@@ -99,24 +98,19 @@ final class RtTerrainMesher {
         if (mesh.isEmpty()) {
             return new CpuSection(null, null);
         }
-        // RIS emitter-NEE light collection — BEFORE packing: it also stamps NEE membership into the prim
-        // records, which packSection then copies out. Only opaque + masked can emit (glass is shaded
+        // RIS emitter-NEE light collection marks matching neutral triangle surfaces before packing.
+        // Only opaque + masked can emit (glass is shaded
         // emission-free, water never emits; lava lives in the opaque class).
         float[] lights = EMPTY_LIGHTS;
         if (CausticaConfig.Rt.Lights.RIS_CANDIDATES.value() > 0) {
             FloatArrayList collected = new FloatArrayList();
             float minFill = CausticaConfig.Rt.Lights.MIN_FILL_RATIO.value();
-            collectLights(collected, mesh.opaque, materials, minFill);
-            collectLights(collected, mesh.masked, materials, minFill);
+            collectLights(collected, mesh.geometry, materials, minFill);
             if (!collected.isEmpty()) {
                 lights = collected.toFloatArray();
             }
         }
-        Geom masked = mesh.maskedOrEmpty();
-        RtAccel.OpacityMicromapInput ommInput =
-                RtTerrainOmm.buildInput(masked.triCount(), masked.cornerUv.elements(),
-                        masked.ommSprites.elements(), masked.ommSprites.size());
-        return new CpuSection(packSection(mesh, lights), ommInput);
+        return new CpuSection(packSection(mesh), lights);
     }
 
     private static final float[] EMPTY_LIGHTS = new float[0];
@@ -124,57 +118,17 @@ final class RtTerrainMesher {
     private static void collectLights(FloatArrayList out, Geom geom,
                                       RtMaterialRegistry.Snapshot materials, float minFillRatio) {
         if (geom != null && !geom.idx.isEmpty()) {
-            RtLightCollector.collectClass(out, geom.verts, geom.prim, geom.cornerUv,
-                    geom.ommSprites.elements(), materials, minFillRatio);
+            RtLightCollector.collectClass(out, geom.verts, geom.prim, geom.surfaces, geom.cornerUv,
+                    geom.lightSprites.elements(), materials, minFillRatio);
         }
     }
 
-    private static PackedSection packSection(SectionMesh mesh, float[] lights) {
-        Geom[] classes = mesh.classes(); // { opaque, masked, transmissive }, indexed by RtAccel.CLASS_*
-        int vertFloats = 0, idxCount = 0, uvFloats = 0, primFloats = 0, triCount = 0;
-        int[] classTris = new int[classes.length];
-        for (int b = 0; b < classes.length; b++) {
-            vertFloats += classes[b].verts.size();
-            idxCount += classes[b].idx.size();
-            uvFloats += classes[b].cornerUv.size();
-            primFloats += classes[b].prim.size();
-            classTris[b] = classes[b].triCount();
-            triCount += classTris[b];
-        }
-        RtMaterialAbi.requireTriangleParity(primFloats, idxCount);
-
-        float[] positions = new float[vertFloats];
-        int[] indices = new int[idxCount];
-        float[] uvs = new float[uvFloats];
-        float[] material = new float[primFloats];
-        int[] triBase = new int[classes.length];
-        int posOff = 0, idxOff = 0, uvOff = 0, matOff = 0, vertBase = 0, triAcc = 0;
-        for (int b = 0; b < classes.length; b++) {
-            Geom geom = classes[b];
-            triBase[b] = triAcc;
-            int vertSize = geom.verts.size();
-            System.arraycopy(geom.verts.elements(), 0, positions, posOff, vertSize);
-            int idxSize = geom.idx.size();
-            int[] gi = geom.idx.elements();
-            if (vertBase == 0) {
-                System.arraycopy(gi, 0, indices, idxOff, idxSize);
-            } else {
-                for (int i = 0; i < idxSize; i++) {
-                    indices[idxOff + i] = gi[i] + vertBase;
-                }
-            }
-            int uvSize = geom.cornerUv.size();
-            System.arraycopy(geom.cornerUv.elements(), 0, uvs, uvOff, uvSize);
-            int matSize = geom.prim.size();
-            System.arraycopy(geom.prim.elements(), 0, material, matOff, matSize);
-            posOff += vertSize;
-            idxOff += idxSize;
-            uvOff += uvSize;
-            matOff += matSize;
-            vertBase += vertSize / 3;
-            triAcc += classTris[b];
-        }
-        return new PackedSection(positions, indices, uvs, material, classTris, triBase, lights);
+    private static SceneMesh packSection(SectionMesh mesh) {
+        Geom geom = mesh.geometry();
+        return new SceneMesh(java.util.Arrays.copyOf(geom.verts.elements(), geom.verts.size()),
+                java.util.Arrays.copyOf(geom.idx.elements(), geom.idx.size()), SceneMesh.UvLayout.PER_TRIANGLE_CORNER,
+                java.util.Arrays.copyOf(geom.cornerUv.elements(), geom.cornerUv.size()), geom.surfaces,
+                java.util.Set.of(SceneMesh.Semantic.RECEIVES_PROJECTED_SURFACE_MODIFIERS));
     }
 
     private static void tessellate(BlockAndTintGetter region, BlockStateModelSet modelSet,
@@ -241,82 +195,24 @@ final class RtTerrainMesher {
     }
 
 
-    /** Pure-CPU worker result: tessellated mesh plus optional opacity micromap input for its cutout class. */
-    record CpuSection(PackedSection packed, RtAccel.OpacityMicromapInput opacityMicromap) {
-    }
-
-    /** Worker-packed terrain payload; native preparation allocates buffers and bulk-copies these arrays.
-     *  {@code lights} = packed section-local RIS light records (possibly empty), CPU-side only. */
-    record PackedSection(float[] positions, int[] indices, float[] uvs, float[] material,
-                         int[] classTris, int[] triBase, float[] lights) {
+    /** Pure-CPU worker result: tessellated mesh and CPU-only light metadata. */
+    record CpuSection(SceneMesh mesh, float[] lights) {
     }
 
 
-    /**
-     * Transient CPU accumulator for one section's quads while tessellating. Split into per-SBT-class
-     * geometry classes so the BLAS can flag opaque blocks {@code VK_GEOMETRY_OPAQUE_BIT}, keep genuinely
-     * masked (alpha-tested) geometry in an any-hit class, and route transmissive geometry (glass, water)
-     * through closest-hit-only records for radiance but any-hit records for shadow tint/pass-through. The
-     * classes are concatenated in {@code RtAccel.CLASS_*} order into the packed section buffers during
-     * preparation, so each geometry's triangles occupy a contiguous range.
-     */
+    /** Transient CPU accumulator for one section's source-order mesh. */
     private static final class SectionMesh {
-        // Conservative worker-side starting capacities. These trade a little transient RAM for avoiding the
-        // repeated grow/copy ladder on normal terrain sections.
-        private static final int OPAQUE_TRI_CAP = 768;
-        private static final int MASKED_TRI_CAP = 256;
-        private static final int TRANSMISSIVE_TRI_CAP = 192; // glass + water share this class now
-        // One geometry per fixed RtAccel SBT class: opaque, masked, transmissive.
-        private static final Geom EMPTY_GEOM = new Geom(0);
-        Geom opaque;
-        Geom masked;
-        Geom transmissive;
-        private final Geom[] classes = new Geom[RtAccel.SBT_CLASSES];
+        final Geom geometry = new Geom(1216);
 
-        Geom[] classes() {
-            classes[RtAccel.CLASS_OPAQUE] = geomOrEmpty(opaque);
-            classes[RtAccel.CLASS_MASKED] = geomOrEmpty(masked);
-            classes[RtAccel.CLASS_TRANSMISSIVE] = geomOrEmpty(transmissive);
-            return classes;
-        }
-
-        Geom maskedOrEmpty() {
-            return geomOrEmpty(masked);
-        }
-
-        Geom opaque() {
-            return opaque != null ? opaque : (opaque = new Geom(OPAQUE_TRI_CAP));
-        }
-
-        Geom masked() {
-            return masked != null ? masked : (masked = new Geom(MASKED_TRI_CAP));
-        }
-
-        Geom transmissive() {
-            return transmissive != null ? transmissive : (transmissive = new Geom(TRANSMISSIVE_TRI_CAP));
-        }
-
-        private static Geom geomOrEmpty(Geom geom) {
-            return geom != null ? geom : EMPTY_GEOM;
-        }
+        Geom geometry() { return geometry; }
 
         boolean isEmpty() {
-            return (opaque == null || opaque.idx.isEmpty())
-                    && (masked == null || masked.idx.isEmpty())
-                    && (transmissive == null || transmissive.idx.isEmpty());
+            return geometry.idx.isEmpty();
         }
 
         /** Empty the classes keeping their backing arrays — the mesh is reused across jobs per worker thread. */
         void reset() {
-            resetGeom(opaque);
-            resetGeom(masked);
-            resetGeom(transmissive);
-        }
-
-        private static void resetGeom(Geom geom) {
-            if (geom != null) {
-                geom.reset();
-            }
+            geometry.reset();
         }
     }
 
@@ -330,8 +226,9 @@ final class RtTerrainMesher {
         final FloatArrayList cornerUv;
         // 12 lanes/triangle: normal float4, tint float4, then Prim's uint material metadata.
         final FloatArrayList prim;
-        // One sprite per triangle for opacity micromap classification.
-        final SpriteList ommSprites;
+        final List<SceneMesh.TriangleSurface> surfaces;
+        // One sprite per triangle for CPU light extraction.
+        final SpriteList lightSprites;
 
         Geom(int triCapacity) {
             int cap = Math.max(2, triCapacity);
@@ -340,7 +237,8 @@ final class RtTerrainMesher {
             idx = new IntArrayList(cap * 3);
             cornerUv = new FloatArrayList(cap * 6);
             prim = new FloatArrayList(cap * 12);
-            ommSprites = new SpriteList(cap);
+            surfaces = new ArrayList<>(cap);
+            lightSprites = new SpriteList(cap);
         }
 
         int triCount() {
@@ -352,7 +250,8 @@ final class RtTerrainMesher {
             idx.clear();
             cornerUv.clear();
             prim.clear();
-            ommSprites.clear();
+            surfaces.clear();
+            lightSprites.clear();
         }
     }
 
@@ -463,9 +362,14 @@ final class RtTerrainMesher {
             TextureAtlasSprite sprite = quad.materialInfo().sprite();
             q.sprite = sprite;
             var classification = MinecraftMaterialClassifier.classify(state);
+            MaterialVariant variant = classification.variant(q.translucent
+                    ? MaterialTopology.MEDIUM_BOUNDARY : MaterialTopology.SURFACE);
+            q.material = new SceneMesh.CatalogMaterial(MinecraftMaterialLookup.material(sprite),
+                    classification.geometry(), variant, new SceneMesh.AtlasTexture(
+                    dev.comfyfluffy.caustica.api.ResourceId.of(sprite.atlasLocation().getNamespace(), sprite.atlasLocation().getPath())));
+            q.coverage = q.cutout && !q.translucent ? SceneMesh.Coverage.CUTOUT : SceneMesh.Coverage.OPAQUE;
             int materialId = materials.resolve(MinecraftMaterialLookup.material(sprite),
-                    classification.geometry(), classification.variant(q.translucent
-                            ? MaterialTopology.MEDIUM_BOUNDARY : MaterialTopology.SURFACE));
+                    classification.geometry(), variant);
             // Genuinely masked: alpha-tested, not merely "non-SOLID" (q.cutout also covers TRANSLUCENT,
             // whose coverage stays OPAQUE — see RtMaterialRegistry.binding). Only this needs the coverage
             // override; solid and translucent quads keep the resolved id's default OPAQUE coverage. The
@@ -598,11 +502,7 @@ final class RtTerrainMesher {
             if (q.translucent) {
                 offset(q, -TRANSLUCENT_INSET);
             }
-            Geom g = switch (materials.sbtClassFor(q.materialId)) {
-                case RtAccel.CLASS_MASKED -> cur.masked();
-                case RtAccel.CLASS_TRANSMISSIVE -> cur.transmissive();
-                default -> cur.opaque();
-            };
+            Geom g = cur.geometry();
             int base = g.verts.size() / 3;
             for (int k = 0; k < 4; k++) {
                 g.verts.add(q.x[k]);
@@ -634,7 +534,9 @@ final class RtTerrainMesher {
                 prim.add(0f); // flags
                 prim.add(0f); // aux0
                 prim.add(0f); // aux1
-                g.ommSprites.add(q.sprite);
+                g.lightSprites.add(q.sprite);
+                g.surfaces.add(new SceneMesh.TriangleSurface(q.material, q.coverage, q.nx, q.ny, q.nz,
+                        q.emission, q.tr, q.tg, q.tb));
             }
         }
     }
@@ -649,6 +551,8 @@ final class RtTerrainMesher {
         boolean tinted; // tintIndex >= 0 — the tinted member of a base+overlay pair
         float tr, tg, tb, emission;
         int materialId;
+        SceneMesh.MaterialReference material;
+        SceneMesh.Coverage coverage;
         TextureAtlasSprite sprite;
     }
 
@@ -713,16 +617,18 @@ final class RtTerrainMesher {
         }
 
         private void emitQuad() {
+            // CPU light extraction still resolves the captured snapshot; SceneMesh retains only the neutral selector.
             int materialId = water
                     ? materials.bindingId(MinecraftMaterialSource.WATER)
                     : materials.resolve(MinecraftMaterialSource.LAVA_MATERIAL, null,
                             new MaterialVariant(OpenPbrMaterialProfile.MEDIUM_ROUGH_DIELECTRIC,
                                     MaterialTopology.SURFACE, true));
-            Geom g = switch (materials.sbtClassFor(materialId)) {
-                case RtAccel.CLASS_MASKED -> cur.masked();
-                case RtAccel.CLASS_TRANSMISSIVE -> cur.transmissive();
-                default -> cur.opaque();
-            };
+            Geom g = cur.geometry();
+            SceneMesh.MaterialReference material = water
+                    ? new SceneMesh.NamedMaterial(new MaterialHandle(MinecraftMaterialSource.WATER))
+                    : new SceneMesh.CatalogMaterial(MinecraftMaterialSource.LAVA_MATERIAL, null,
+                            new MaterialVariant(OpenPbrMaterialProfile.MEDIUM_ROUGH_DIELECTRIC,
+                                    MaterialTopology.SURFACE, true));
             FloatArrayList verts = g.verts;
             IntArrayList idx = g.idx;
             int base = verts.size() / 3;
@@ -782,7 +688,9 @@ final class RtTerrainMesher {
                 prim.add(0f);
                 prim.add(0f);
                 prim.add(0f);
-                g.ommSprites.add(null);
+                g.lightSprites.add(null);
+                g.surfaces.add(new SceneMesh.TriangleSurface(material, SceneMesh.Coverage.OPAQUE,
+                        nx, ny, nz, emission, tr, tg, tb));
             }
         }
 

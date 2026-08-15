@@ -1,11 +1,12 @@
 package dev.comfyfluffy.caustica.rt.provider;
 
 import dev.comfyfluffy.caustica.api.provider.SceneProvider;
+import dev.comfyfluffy.caustica.api.provider.SceneFrameContext;
 import dev.comfyfluffy.caustica.api.provider.SceneGeometrySink;
 import dev.comfyfluffy.caustica.api.provider.GeometryTransform;
+import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import dev.comfyfluffy.caustica.api.provider.MaterialHandle;
 import dev.comfyfluffy.caustica.api.provider.MaterialTopology;
-import dev.comfyfluffy.caustica.api.provider.TriangleMesh;
 import dev.comfyfluffy.caustica.api.provider.LightProvider;
 import dev.comfyfluffy.caustica.engine.light.LightDescriptor;
 import dev.comfyfluffy.caustica.api.provider.MaterialRule;
@@ -26,11 +27,13 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class ProviderManagerTest {
     @Test
@@ -283,50 +286,6 @@ final class ProviderManagerTest {
     }
 
     @Test
-    void geometryCollectionIsTransactionalAndProviderScoped() {
-        TriangleMesh mesh = triangle();
-        SceneProvider failing = new SceneProvider() {
-            @Override
-            public void submitGeometry(SceneGeometrySink sink) {
-                sink.retainMesh(1, mesh);
-                throw new IllegalStateException("expected");
-            }
-        };
-        SceneProvider first = geometryProvider(mesh);
-        SceneProvider second = geometryProvider(mesh);
-        Map<ResourceId, SceneProvider> scenes = new LinkedHashMap<>();
-        scenes.put(id("failing_geometry"), failing);
-        scenes.put(id("first_geometry"), first);
-        scenes.put(id("second_geometry"), second);
-        ProviderManager manager = new ProviderManager(scenes, Map.of(),
-                Map.of(id("geometry_materials"), defining("geometry")));
-        Map<ResourceId, List<String>> submitted = new LinkedHashMap<>();
-
-        manager.collectMaterials(ignored -> 0);
-
-        manager.submitGeometry(provider -> new SceneGeometrySink() {
-            @Override
-            public void retainMesh(long key, TriangleMesh value) {
-                submitted.computeIfAbsent(provider, ignored -> new ArrayList<>()).add("mesh:" + key);
-            }
-
-            @Override
-            public void releaseMesh(long key) {
-                submitted.computeIfAbsent(provider, ignored -> new ArrayList<>()).add("release:" + key);
-            }
-
-            @Override
-            public void instance(long key, long meshKey, GeometryTransform transform) {
-                submitted.computeIfAbsent(provider, ignored -> new ArrayList<>()).add("instance:" + key);
-            }
-        });
-
-        assertEquals(Map.of(
-                id("first_geometry"), List.of("mesh:1", "instance:2"),
-                id("second_geometry"), List.of("mesh:1", "instance:2")), submitted);
-    }
-
-    @Test
     void materialCollectionIsTransactionalAndIsolatesFailingSources() {
         MaterialRule discarded = rule("discarded");
         MaterialRule retained = rule("retained");
@@ -448,92 +407,6 @@ final class ProviderManagerTest {
     }
 
     @Test
-    void unresolvedGeometryMaterialDisablesOnlyTheOffendingSceneBeforePublication() {
-        TriangleMesh missing = triangle("missing");
-        TriangleMesh healthy = triangle("healthy");
-        AtomicInteger brokenStops = new AtomicInteger();
-        SceneProvider broken = new SceneProvider() {
-            @Override
-            public void submitGeometry(SceneGeometrySink sink) {
-                sink.retainMesh(1, missing);
-                sink.instance(2, 1, GeometryTransform.translation(0, 0, 0));
-            }
-
-            @Override
-            public void stop() {
-                brokenStops.incrementAndGet();
-            }
-        };
-        Map<ResourceId, SceneProvider> scenes = new LinkedHashMap<>();
-        scenes.put(id("broken_geometry"), broken);
-        scenes.put(id("healthy_geometry"), geometryProvider(healthy));
-        ProviderManager manager = new ProviderManager(scenes, Map.of(),
-                Map.of(id("materials"), defining("healthy")));
-        List<ResourceId> published = new ArrayList<>();
-
-        manager.collectMaterials(ignored -> 0);
-        manager.submitGeometry(provider -> new SceneGeometrySink() {
-            @Override
-            public void retainMesh(long key, TriangleMesh mesh) {
-                published.add(provider);
-            }
-
-            @Override
-            public void releaseMesh(long key) {
-            }
-
-            @Override
-            public void instance(long key, long meshKey, GeometryTransform transform) {
-            }
-        });
-
-        assertEquals(List.of(id("healthy_geometry")), published);
-        assertEquals(1, brokenStops.get());
-        published.clear();
-        manager.submitGeometry(provider -> new SceneGeometrySink() {
-            @Override
-            public void retainMesh(long key, TriangleMesh mesh) {
-                published.add(provider);
-            }
-
-            @Override
-            public void releaseMesh(long key) {
-            }
-
-            @Override
-            public void instance(long key, long meshKey, GeometryTransform transform) {
-            }
-        });
-        assertEquals(List.of(id("healthy_geometry")), published);
-    }
-
-    @Test
-    void sceneSourceSelectionDelegatesCaptureWithoutExposingFrameProducts() {
-        PrimarySceneProvider source = new PrimarySceneProvider();
-        ProviderManager manager = manager("primary", source);
-
-        ProviderManager.PrimaryScene selected = manager.primaryScene();
-        assertEquals(id("primary"), selected.provider());
-        assertSame(source.retained, selected.retained());
-        assertEquals(37, manager.bindlessTextureCapacity());
-
-        manager.resetBindlessTextures(64);
-        manager.rebindTextures(null, 81L);
-        manager.uploadPendingTextures(null, 91L);
-        manager.submitPrimaryFrame(selected, null, null,
-                new RtSceneSource.Camera(1, 2, 3, new Matrix4f(), new Matrix4f()));
-
-        assertEquals(64, source.resetCapacity);
-        assertEquals(81L, source.rebindSampler);
-        assertEquals(91L, source.uploadSampler);
-        assertEquals(1, source.frameSubmissions.get());
-
-        manager.stopProviders();
-        assertNull(manager.primaryScene());
-        assertEquals(1, manager.bindlessTextureCapacity());
-    }
-
-    @Test
     void rejectsMultipleActivePrimarySceneSources() {
         Map<ResourceId, SceneProvider> scenes = new LinkedHashMap<>();
         scenes.put(id("first_primary"), new PrimarySceneProvider());
@@ -542,22 +415,6 @@ final class ProviderManagerTest {
 
         assertThrows(IllegalStateException.class, manager::primaryScene);
         assertThrows(IllegalStateException.class, manager::bindlessTextureCapacity);
-    }
-
-    @Test
-    void failingPrimaryFrameStopsAndDisablesItsProvider() {
-        PrimarySceneProvider source = new PrimarySceneProvider();
-        ProviderManager manager = manager("failing_primary", source);
-        ProviderManager.PrimaryScene selected = manager.primaryScene();
-        source.failFrame = true;
-
-        assertThrows(ProviderManager.SceneSourceUnavailableException.class,
-                () -> manager.submitPrimaryFrame(selected, null, null,
-                new RtSceneSource.Camera(0, 0, 0, new Matrix4f(), new Matrix4f())));
-
-        assertEquals(1, source.stops.get());
-        assertNull(manager.primaryScene());
-        assertEquals(1, manager.bindlessTextureCapacity());
     }
 
     private static SceneProvider counting(AtomicInteger shutdowns, Runnable update) {
@@ -579,6 +436,225 @@ final class ProviderManagerTest {
         manager.shutdownResources();
     }
 
+    @Test
+    void failingGeometryCallbackForwardsNothingAndDisablesOnlyThatProvider() {
+        AtomicInteger failingStops = new AtomicInteger();
+        AtomicInteger healthyCalls = new AtomicInteger();
+        SceneProvider failing = new SceneProvider() {
+            @Override
+            public void submitGeometry(SceneFrameContext frame) {
+                SceneGeometrySink sink = frame.geometry();
+                sink.submit(1, List.of(new SceneGeometrySink.Drop(1)));
+                throw new IllegalStateException("expected");
+            }
+
+            @Override
+            public void stop() {
+                failingStops.incrementAndGet();
+            }
+        };
+        SceneProvider healthy = new SceneProvider() {
+            @Override
+            public void submitGeometry(SceneFrameContext frame) {
+                SceneGeometrySink sink = frame.geometry();
+                healthyCalls.incrementAndGet();
+                sink.submit(2, List.of(new SceneGeometrySink.Drop(2)));
+            }
+        };
+        Map<ResourceId, SceneProvider> scenes = new LinkedHashMap<>();
+        scenes.put(id("broken"), failing);
+        scenes.put(id("healthy"), healthy);
+        ProviderManager manager = new ProviderManager(scenes, Map.of(), Map.of());
+        List<RtSceneGeometryManager.GeometryUpdateGroup> forwarded = new ArrayList<>();
+
+        manager.submitGeometry(null, SceneOrigin.ZERO, (updates, ignored) -> forwarded.addAll(updates));
+        manager.submitGeometry(null, SceneOrigin.ZERO, (updates, ignored) -> forwarded.addAll(updates));
+
+        assertEquals(List.of(id("healthy"), id("healthy")), forwarded.stream()
+                .map(update -> update.key().source()).toList());
+        assertEquals(1, failingStops.get());
+        assertEquals(2, healthyCalls.get());
+    }
+
+    @Test
+    void invalidGeometryMaterialDisablesOnlyItsProviderBeforeForwarding() {
+        AtomicInteger brokenStops = new AtomicInteger();
+        SceneProvider broken = new SceneProvider() {
+            @Override
+            public void submitGeometry(SceneFrameContext frame) {
+                SceneGeometrySink sink = frame.geometry();
+                sink.submit(1, List.of(new SceneGeometrySink.Put(1, triangle("missing"))));
+            }
+
+            @Override
+            public void stop() {
+                brokenStops.incrementAndGet();
+            }
+        };
+        SceneProvider healthy = new SceneProvider() {
+            @Override
+            public void submitGeometry(SceneFrameContext frame) {
+                SceneGeometrySink sink = frame.geometry();
+                sink.submit(2, List.of(new SceneGeometrySink.Drop(2)));
+            }
+        };
+        Map<ResourceId, SceneProvider> scenes = new LinkedHashMap<>();
+        scenes.put(id("broken"), broken);
+        scenes.put(id("healthy"), healthy);
+        ProviderManager manager = new ProviderManager(scenes, Map.of(),
+                Map.of(id("materials"), defining("healthy")));
+        manager.collectMaterials(ignored -> 0);
+        List<RtSceneGeometryManager.GeometryUpdateGroup> forwarded = new ArrayList<>();
+
+        manager.submitGeometry(null, SceneOrigin.ZERO, (updates, ignored) -> forwarded.addAll(updates));
+
+        assertEquals(List.of(id("healthy")), forwarded.stream().map(update -> update.key().source()).toList());
+        assertEquals(1, brokenStops.get());
+    }
+
+    @Test
+    void catalogGeometryDoesNotRequireAPublicMaterialDefinition() {
+        SceneProvider terrain = new SceneProvider() {
+            @Override
+            public void submitGeometry(SceneFrameContext frame) {
+                frame.geometry().submit(1, List.of(new SceneGeometrySink.Put(1, catalogTriangle())));
+            }
+        };
+        ProviderManager manager = manager("terrain", terrain);
+        List<RtSceneGeometryManager.GeometryUpdateGroup> forwarded = new ArrayList<>();
+
+        manager.submitGeometry(null, SceneOrigin.ZERO, (updates, ignored) -> forwarded.addAll(updates));
+
+        assertEquals(1, forwarded.size());
+        assertEquals(id("terrain"), forwarded.getFirst().key().source());
+    }
+
+    @Test
+    void updateCadenceForwardsTerrainGroupsBeforeAnyFrameSubmission() {
+        AtomicInteger frameSubmissions = new AtomicInteger();
+        AtomicInteger publications = new AtomicInteger();
+        SceneProvider terrain = new SceneProvider() {
+            @Override
+            public void submitGeometryUpdates(dev.comfyfluffy.caustica.api.provider.SceneGeometryUpdateContext update) {
+                update.geometry().submit(1, List.of(new SceneGeometrySink.Drop(1)), ignored -> publications.incrementAndGet());
+            }
+
+            @Override
+            public void submitGeometry(SceneFrameContext frame) {
+                frameSubmissions.incrementAndGet();
+            }
+        };
+        ProviderManager manager = manager("terrain", terrain);
+        RtSceneGeometryManager sceneGeometry = new RtSceneGeometryManager((material, coverage) -> null);
+        manager.bindSceneGeometry(sceneGeometry);
+
+        manager.submitGeometryUpdates(null, SceneOrigin.ZERO);
+        sceneGeometry.progress(null);
+        sceneGeometry.progress(null);
+
+        assertEquals(1, publications.get());
+        assertEquals(0, frameSubmissions.get());
+    }
+
+    @Test
+    void geometryGroupsReceiveMonotonicRevisionsAndRebasedPlacements() {
+        SceneOrigin origin = new SceneOrigin(30_000_000, 64, -30_000_000);
+        SceneProvider provider = new SceneProvider() {
+            @Override
+            public void submitGeometry(SceneFrameContext frame) {
+                SceneGeometrySink sink = frame.geometry();
+                sink.submit(7, List.of(new SceneGeometrySink.Place(9, 3,
+                        GeometryTransform.translation(30_000_000.25, 65.5, -29_999_999.75), 0x3f)));
+            }
+        };
+        ProviderManager manager = manager("geometry", provider);
+        List<RtSceneGeometryManager.GeometryUpdateGroup> forwarded = new ArrayList<>();
+
+        manager.submitGeometry(null, origin, (updates, ignored) -> forwarded.addAll(updates));
+        manager.submitGeometry(null, origin, (updates, ignored) -> forwarded.addAll(updates));
+
+        assertEquals(List.of(1L, 2L), forwarded.stream().map(RtSceneGeometryManager.GeometryUpdateGroup::revision).toList());
+        RtSceneGeometryManager.Place place = (RtSceneGeometryManager.Place) forwarded.getFirst().operations().getFirst();
+        assertEquals(origin, place.origin());
+        assertEquals(0.25f, place.transform()[3]);
+        assertEquals(1.5f, place.transform()[7]);
+        assertEquals(0.25f, place.transform()[11]);
+        assertEquals(0x3f, place.mask());
+    }
+
+    @Test
+    void unpublishedCloudMovementKeepsMeshAndPlacementInOneProviderGroup() {
+        AtomicInteger cell = new AtomicInteger();
+        SceneProvider cloud = new SceneProvider() {
+            private boolean meshesPublished;
+
+            @Override
+            public void submitGeometry(SceneFrameContext frame) {
+                List<SceneGeometrySink.Operation> operations = new ArrayList<>();
+                if (!meshesPublished) operations.add(new SceneGeometrySink.Put(0, triangle("cloud")));
+                operations.add(new SceneGeometrySink.Place(7, 0,
+                        GeometryTransform.translation(cell.get() * 128.0, 192.0, 0.0)));
+                frame.geometry().submit(0, operations, ignored -> meshesPublished = true);
+            }
+        };
+        ProviderManager manager = new ProviderManager(Map.of(id("cloud"), cloud), Map.of(),
+                Map.of(id("materials"), defining("cloud")));
+        manager.collectMaterials(ignored -> 0);
+        List<RtSceneGeometryManager.GeometryUpdateGroup> forwarded = new ArrayList<>();
+
+        manager.submitGeometry(null, SceneOrigin.ZERO, (updates, ignored) -> forwarded.addAll(updates));
+        cell.incrementAndGet();
+        manager.submitGeometry(null, SceneOrigin.ZERO, (updates, ignored) -> forwarded.addAll(updates));
+
+        assertEquals(List.of(1L, 2L), forwarded.stream().map(RtSceneGeometryManager.GeometryUpdateGroup::revision).toList());
+        for (RtSceneGeometryManager.GeometryUpdateGroup update : forwarded) {
+            assertTrue(update.operations().stream().anyMatch(RtSceneGeometryManager.Put.class::isInstance));
+            assertTrue(update.operations().stream().anyMatch(RtSceneGeometryManager.Place.class::isInstance));
+        }
+    }
+
+    @Test
+    void asynchronousGeometryFailureDisablesOnlyItsSource() {
+        AtomicInteger brokenStops = new AtomicInteger();
+        SceneProvider broken = new SceneProvider() {
+            @Override
+            public void submitGeometry(SceneFrameContext frame) {
+                SceneGeometrySink sink = frame.geometry();
+                sink.submit(1, List.of(new SceneGeometrySink.Drop(1)));
+            }
+
+            @Override
+            public void stop() {
+                brokenStops.incrementAndGet();
+            }
+        };
+        AtomicInteger healthySubmits = new AtomicInteger();
+        SceneProvider healthy = new SceneProvider() {
+            @Override
+            public void submitGeometry(SceneFrameContext frame) {
+                SceneGeometrySink sink = frame.geometry();
+                healthySubmits.incrementAndGet();
+                sink.submit(2, List.of(new SceneGeometrySink.Drop(2)));
+            }
+        };
+        Map<ResourceId, SceneProvider> scenes = new LinkedHashMap<>();
+        scenes.put(id("broken"), broken);
+        scenes.put(id("healthy"), healthy);
+        ProviderManager manager = new ProviderManager(scenes, Map.of(), Map.of());
+        AtomicReference<java.util.function.Consumer<Throwable>> failure = new AtomicReference<>();
+
+        manager.submitGeometry(null, SceneOrigin.ZERO, (updates, handler) -> {
+            if (updates.getFirst().key().source().equals(id("broken"))) failure.set(handler);
+        });
+        assertTrue(failure.get() != null);
+        failure.get().accept(new IllegalStateException("expected"));
+        manager.submitGeometry(null, SceneOrigin.ZERO, (updates, ignored) -> assertEquals(id("healthy"),
+                updates.getFirst().key().source()));
+
+        assertEquals(1, brokenStops.get());
+        assertEquals(2, healthySubmits.get());
+    }
+
     private static ProviderManager manager(String path, SceneProvider provider) {
         return new ProviderManager(Map.of(id(path), provider), Map.of(), Map.of());
     }
@@ -592,26 +668,6 @@ final class ProviderManagerTest {
                 new MaterialRule.Parameters(null, null, null, null, null, null));
     }
 
-    private static SceneProvider geometryProvider(TriangleMesh mesh) {
-        return new SceneProvider() {
-            @Override
-            public void submitGeometry(SceneGeometrySink sink) {
-                sink.retainMesh(1, mesh);
-                sink.instance(2, 1, GeometryTransform.translation(0, 0, 0));
-            }
-        };
-    }
-
-    private static TriangleMesh triangle() {
-        return triangle("geometry");
-    }
-
-    private static TriangleMesh triangle(String material) {
-        return new TriangleMesh(new float[]{0, 0, 0, 1, 0, 0, 0, 1, 0}, new float[6],
-                new int[]{0, 1, 2}, List.of(new TriangleMesh.MaterialRange(0, 1,
-                MaterialHandle.of("test", material))));
-    }
-
     private static MaterialSource defining(String path) {
         return sink -> sink.define(definition(path));
     }
@@ -621,13 +677,27 @@ final class ProviderManagerTest {
                 1.0f, 0.0f, 1.5f, 0.0f, MaterialTopology.SURFACE, null);
     }
 
+    private static SceneMesh triangle(String material) {
+        return new SceneMesh(new float[]{0, 0, 0, 1, 0, 0, 0, 1, 0}, new int[]{0, 1, 2},
+                SceneMesh.UvLayout.PER_VERTEX, new float[6], List.of(
+                SceneMesh.TriangleSurface.surface(MaterialHandle.of("test", material))));
+    }
+
+    private static SceneMesh catalogTriangle() {
+        return new SceneMesh(new float[]{0, 0, 0, 1, 0, 0, 0, 1, 0}, new int[]{0, 1, 2},
+                SceneMesh.UvLayout.PER_VERTEX, new float[6], List.of(new SceneMesh.TriangleSurface(
+                new SceneMesh.CatalogMaterial(ResourceId.of("minecraft", "stone"), null,
+                        new dev.comfyfluffy.caustica.engine.material.MaterialVariant(
+                                dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialProfile.ROUGH_DIELECTRIC,
+                                MaterialTopology.SURFACE, false)),
+                SceneMesh.Coverage.OPAQUE, Float.NaN, Float.NaN, Float.NaN, 0, 1, 1, 1)));
+    }
+
     private static final class PrimarySceneProvider implements SceneProvider, RtSceneSource {
         final AtomicInteger stops = new AtomicInteger();
-        final AtomicInteger frameSubmissions = new AtomicInteger();
         final Retained retained = new Retained(SceneOrigin.ZERO,
                 new RetainedLights(0, 0, -1, 0, 0,
                         0, 0, 0, 1, 0));
-        boolean failFrame;
         int resetCapacity;
         long rebindSampler;
         long uploadSampler;
@@ -635,14 +705,6 @@ final class ProviderManagerTest {
         @Override
         public Retained retainedScene() {
             return retained;
-        }
-
-        @Override
-        public void submitFrame(GpuContext ctx, Retained retained, RtSceneGeometryManager geometry, Camera camera) {
-            if (failFrame) {
-                throw new IllegalStateException("expected");
-            }
-            frameSubmissions.incrementAndGet();
         }
 
         @Override

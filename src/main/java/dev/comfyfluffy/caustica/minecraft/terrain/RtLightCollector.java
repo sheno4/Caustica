@@ -1,10 +1,13 @@
 package dev.comfyfluffy.caustica.minecraft.terrain;
 
 import dev.comfyfluffy.caustica.engine.material.EmissionFootprint;
+import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import dev.comfyfluffy.caustica.rt.material.RtMaterialDesc;
 import dev.comfyfluffy.caustica.rt.material.RtMaterialRegistry;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
+
+import java.util.List;
 
 /**
  * RIS emitter-NEE light collection. Enumerates a section's emissive terrain quads into a
@@ -29,8 +32,8 @@ import net.minecraft.client.renderer.texture.TextureAtlasSprite;
  * approximation), so total power equals the quad's true emissive integral: the rectangle contains every
  * emissive sample, hence {@code Le_rect * rectArea == quadArea * mean(albedo*mask)}.
  *
- * <p><b>Membership.</b> A scene-linked quad gets {@code Prim.flags} bit 0 set on both triangles, so
- * the raygen can gate its direct-hit emission term. Emitters too weak or too sparse (fill-ratio
+ * <p><b>Membership.</b> A scene-linked quad marks both neutral triangle surfaces, so the renderer can
+ * gate its direct-hit emission term. Emitters too weak or too sparse (fill-ratio
  * gate) stay excluded and are always-gathered on path hits — bit-identical to the no-NEE path.
  */
 final class RtLightCollector {
@@ -39,9 +42,6 @@ final class RtLightCollector {
 
     /** Floats per packed light record — see {@link #append} for the 5-vec4 layout. */
     static final int FLOATS_PER_LIGHT = 20;
-
-    /** {@code Prim.flags} bit 0: this emissive quad has a linked retained light (NEE membership). */
-    static final int PRIM_FLAG_IN_LIGHT_SCENE = 1;
 
     /** Block-light levels below this are non-emissive (smallest real level is 1/15). */
     private static final float EMISSION_EPS = 0.5f / 255f;
@@ -61,16 +61,16 @@ final class RtLightCollector {
      * cd/m². Expressing it relative to the configured baseline keeps material brightness and sampling
      * eligibility independent.
      */
-    private static final int PRIM_FLOATS = 12; // Prim lanes per triangle
-    private static final int PRIM_FLAGS_LANE = 9;
+    private static final int PRIM_FLOATS = 12; // CPU material/light lanes per triangle
 
     /**
      * Collect one geometry class's emissive quads into {@code out} (packed light records,
-     * section-local) and stamp NEE membership into the class's prim records in place. Only the opaque
+     * section-local) and mark matching neutral triangle surfaces. Only the opaque
      * and masked classes can emit: glass is shaded with zero emission and water never emits (lava lives
      * in the opaque class).
      */
     static void collectClass(FloatArrayList out, FloatArrayList verts, FloatArrayList prim,
+                              List<SceneMesh.TriangleSurface> surfaces,
                               FloatArrayList cornerUv, TextureAtlasSprite[] sprites,
                               RtMaterialRegistry.Snapshot materials, float minFillRatio) {
         int quads = prim.size() / (2 * PRIM_FLOATS);
@@ -259,9 +259,13 @@ final class RtLightCollector {
                     packHalf2(uvHvU, uvHvV),
                     leR, leG, leB, packHalf2(uvCu, uvCv));
 
-            p[pb + PRIM_FLAGS_LANE] = Float.intBitsToFloat(PRIM_FLAG_IN_LIGHT_SCENE);
-            p[pb + PRIM_FLOATS + PRIM_FLAGS_LANE] = Float.intBitsToFloat(PRIM_FLAG_IN_LIGHT_SCENE);
+            markEmitterInLightScene(surfaces, 2 * k);
         }
+    }
+
+    static void markEmitterInLightScene(List<SceneMesh.TriangleSurface> surfaces, int firstTriangle) {
+        surfaces.set(firstTriangle, surfaces.get(firstTriangle).withEmitterInLightScene());
+        surfaces.set(firstTriangle + 1, surfaces.get(firstTriangle + 1).withEmitterInLightScene());
     }
 
     /** Bilinear corner interpolation localized into the sprite rect (shared by U and V lanes). */

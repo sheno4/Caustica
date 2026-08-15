@@ -46,7 +46,8 @@ final class RtSceneSourceBoundaryTest {
         assertFalse(content.contains("geometryTableAddress"), source.toString());
         assertFalse(content.contains("MotionInput"), source.toString());
         assertFalse(content.contains("RtSceneGeometryManager.FrameUpdate"), source.toString());
-        assertTrue(content.contains("RtSceneGeometryManager geometry"), source.toString());
+        assertFalse(content.contains("RtSceneGeometryManager"), source.toString());
+        assertTrue(content.contains("bindlessTextureSlot"), source.toString());
     }
 
     @Test
@@ -69,6 +70,10 @@ final class RtSceneSourceBoundaryTest {
         assertTrue(provider.contains("implements SceneProvider, RtSceneSource"));
         assertTrue(provider.contains("RtWorkerPool.INSTANCE.shutdown()"));
         assertFalse(provider.contains("RtComposite.INSTANCE"), provider);
+        assertFalse(provider.contains("RtSceneGeometryManager"), provider);
+        assertFalse(provider.contains("PackedInput"), provider);
+        assertFalse(provider.contains("RetainedPayload"), provider);
+        assertFalse(provider.contains("RtAccel"), provider);
 
         String runtime = Files.readString(JAVA.resolve("rt/RtRuntime.java"));
         assertTrue(runtime.contains("host().resetSceneTextures()"));
@@ -79,10 +84,12 @@ final class RtSceneSourceBoundaryTest {
     void frameLifetimeAndUploadOrderingRemainExplicit() throws IOException {
         String composite = Files.readString(JAVA.resolve("rt/RtComposite.java"));
         int upload = composite.indexOf("ProviderManager.INSTANCE.uploadPendingTextures");
-        int blas = composite.indexOf("sceneGeometry.recordBlasBuilds", upload);
+        int tlas = composite.indexOf("sceneGeometry.prepareTlas", upload);
         int execute = composite.indexOf("submission.execute(cmd)");
         int markPush = composite.indexOf("framePushSlot.graphicsUse.mark", execute);
-        assertTrue(upload >= 0 && upload < blas, "source textures must publish before BLAS/TLAS recording");
+        assertTrue(upload >= 0 && upload < tlas, "source textures must publish before TLAS recording");
+        assertFalse(composite.contains("recordBlasBuilds"),
+                "frame assembly must not own provider BLAS recording");
         assertTrue(execute < markPush,
                 "the push-ring slot must not retain a token until graphics submission succeeds");
         assertFalse(composite.substring(0, execute).contains("selectedPushSlot.graphicsUse.mark"),
@@ -99,5 +106,10 @@ final class RtSceneSourceBoundaryTest {
         int shutdown = runtime.indexOf("ProviderManager.INSTANCE.shutdownResources()", drain);
         assertTrue(stop >= 0 && stop < drain && drain < shutdown,
                 "source work must stop before GPU drain and release after idle");
+        int update = runtime.indexOf("ProviderManager.INSTANCE.updateScenes()");
+        int startupGeometry = runtime.indexOf("ProviderManager.INSTANCE.submitGeometryUpdates", update);
+        int geometryProgress = runtime.indexOf("RtComposite.INSTANCE.sceneGeometry().progress", startupGeometry);
+        assertTrue(update >= 0 && update < startupGeometry && startupGeometry < geometryProgress,
+                "startup must submit update-cadence geometry before polling retained publication");
     }
 }

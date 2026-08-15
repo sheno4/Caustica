@@ -51,12 +51,14 @@ final class GeometryShaderAbiTest {
     void everyGeometryTableWriterDeclaresItsTextureCoordinateMode() throws IOException {
         Path java = Path.of("src", "main", "java", "dev", "comfyfluffy", "caustica")
                 .toAbsolutePath().normalize();
-        String geometryManager = Files.readString(java.resolve("rt/geometry/RtSceneGeometryManager.java"));
+        String meshPacking = Files.readString(java.resolve("rt/geometry/RtGeometryMeshPacking.java"));
 
-        assertTrue(geometryManager.contains("RtGeometryAbi.FLAG_INDEXED_TEXTURE_COORDINATES"));
-        assertTrue(geometryManager.contains("RtGeometryAbi.FLAG_TRIANGLE_CORNER_TEXTURE_COORDINATES"));
-        assertTrue(Files.readString(java.resolve("minecraft/terrain/RtTerrain.java"))
-                .contains("RtGeometryAbi.FLAG_RECEIVES_PROJECTED_SURFACE_MODIFIERS"));
+        assertTrue(meshPacking.contains("RtGeometryAbi.FLAG_INDEXED_TEXTURE_COORDINATES"));
+        assertTrue(meshPacking.contains("RtGeometryAbi.FLAG_TRIANGLE_CORNER_TEXTURE_COORDINATES"));
+        assertTrue(Files.readString(java.resolve("minecraft/terrain/RtTerrainMesher.java"))
+                .contains("SceneMesh.UvLayout.PER_TRIANGLE_CORNER"));
+        assertTrue(Files.readString(java.resolve("minecraft/terrain/RtTerrainMesher.java"))
+                .contains("SceneMesh.Semantic.RECEIVES_PROJECTED_SURFACE_MODIFIERS"));
     }
 
     @Test
@@ -72,6 +74,12 @@ final class GeometryShaderAbiTest {
                 "triangle-corner geometry must publish its transform-derived motion");
         assertFalse(closestHit.contains("payload.motionPrev = half3(0.0h, 0.0h, 0.0h);"),
                 "triangle-corner geometry must not discard transform motion");
+        assertTrue(closestHit.contains("ConstPtr<uint> indices = ConstPtr<uint>(g.indexAddress);"),
+                "triangle-corner geometry must index previous vertex positions through the retained index buffer");
+        assertTrue(closestHit.contains("float4(previousLocal, 1.0)"),
+                "triangle-corner geometry must interpolate previous positions before applying instance history");
+        assertTrue(closestHit.contains("float3x3 objectToWorld = (float3x3)ObjectToWorld3x4();"),
+                "both UV encodings must transform geometric normals for placed meshes");
     }
 
     @Test

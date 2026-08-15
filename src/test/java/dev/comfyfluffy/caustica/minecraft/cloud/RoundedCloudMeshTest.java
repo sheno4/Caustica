@@ -1,20 +1,24 @@
 package dev.comfyfluffy.caustica.minecraft.cloud;
 
 import dev.comfyfluffy.caustica.api.provider.MaterialHandle;
-import dev.comfyfluffy.caustica.api.provider.TriangleMesh;
+import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class RoundedCloudMeshTest {
     @Test
     void generatedCloudIsDeterministicAndActuallyRounded() {
         MaterialHandle material = MaterialHandle.of("test", "cloud");
-        TriangleMesh first = RoundedCloudMesh.generate(42L, material);
-        TriangleMesh second = RoundedCloudMesh.generate(42L, material);
+        SceneMesh first = RoundedCloudMesh.generate(42L, material);
+        SceneMesh second = RoundedCloudMesh.generate(42L, material);
 
-        assertEquals(first, second);
+        assertArrayEquals(first.positions(), second.positions());
+        assertArrayEquals(first.indices(), second.indices());
         assertEquals(6 * 18, first.triangleCount());
         float[] positions = first.positions();
         int[] indices = first.indices();
@@ -47,5 +51,50 @@ final class RoundedCloudMeshTest {
             foundRoundedNormal |= anx > 0.05f && any > 0.05f && anz > 0.05f;
         }
         assertTrue(foundRoundedNormal, "corner tessellation must contain genuinely curved normals");
+    }
+
+    @Test
+    void retainedCloudStatePublishesInitialMeshesAndFinalPreAckWindowOnly() {
+        MinecraftCloudSceneProvider.RetainedState state = new MinecraftCloudSceneProvider.RetainedState();
+        var first = state.visible(java.util.Set.of(1L, 2L));
+        var second = state.visible(java.util.Set.of(2L, 3L));
+        var finalWindow = state.visible(java.util.Set.of(3L, 4L));
+
+        assertTrue(first.putMeshes());
+        assertTrue(second.putMeshes());
+        assertTrue(finalWindow.putMeshes());
+        assertEquals(java.util.Set.of(2L, 3L), finalWindow.previous());
+        assertEquals(java.util.Set.of(3L, 4L), finalWindow.desired());
+        assertEquals(java.util.Set.of(3L, 4L), state.desiredInstances());
+        assertFalse(state.publishedMeshes());
+        assertNull(state.visible(java.util.Set.of(3L, 4L)));
+    }
+
+    @Test
+    void invisibleBeforePublicationDropsTheDesiredWindowAndVisibleAgainRePutsMeshes() {
+        MinecraftCloudSceneProvider.RetainedState state = new MinecraftCloudSceneProvider.RetainedState();
+        var initial = state.visible(java.util.Set.of(1L, 2L));
+        var hidden = state.hidden();
+        var visibleAgain = state.visible(java.util.Set.of(2L, 3L));
+
+        assertTrue(initial.putMeshes());
+        assertFalse(hidden.meshes());
+        assertEquals(java.util.Set.of(1L, 2L), hidden.previous());
+        assertEquals(java.util.Set.of(), hidden.desired());
+        assertTrue(visibleAgain.putMeshes());
+        assertEquals(java.util.Set.of(), visibleAgain.previous());
+    }
+
+    @Test
+    void visibleAgainAfterAQueuedDropRePutsPublishedMeshes() {
+        MinecraftCloudSceneProvider.RetainedState state = new MinecraftCloudSceneProvider.RetainedState();
+        var initial = state.visible(java.util.Set.of(1L));
+        state.acknowledge(initial);
+        var hidden = state.hidden();
+        var visibleAgain = state.visible(java.util.Set.of(2L));
+
+        assertTrue(state.publishedMeshes());
+        assertFalse(hidden.meshes());
+        assertTrue(visibleAgain.putMeshes());
     }
 }

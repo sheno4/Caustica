@@ -410,7 +410,8 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
     Prim pr = ConstPtr<Prim>(g.primitiveAddress)[pid];
     MaterialBinding binding = loadBinding(pr.materialId);
     SurfaceMaterial mat = loadSurfaceMaterial(binding);
-    float3 geometricNormal = normalize(pr.normal.xyz);
+    float3x3 objectToWorld = (float3x3)ObjectToWorld3x4();
+    float3 geometricNormal = normalize(mul(objectToWorld, pr.normal.xyz));
     float3 tint = pr.tint.rgb;
 
     bool entering = dot(WorldRayDirection(), geometricNormal) < 0.0;
@@ -425,10 +426,22 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
     float3 tp1 = HitTriangleVertexPosition(1);
     float3 tp2 = HitTriangleVertexPosition(2);
     float3 currentLocal = bary.x * tp0 + bary.y * tp1 + bary.z * tp2;
+    ConstPtr<uint> indices = ConstPtr<uint>(g.indexAddress);
+    uint i0 = indices[3u * pid + 0u];
+    uint i1 = indices[3u * pid + 1u];
+    uint i2 = indices[3u * pid + 2u];
+    float3 previousLocal = currentLocal;
+    if (g.previousPositionAddress != 0) {
+        ConstPtr<float> previousPositions = ConstPtr<float>(g.previousPositionAddress);
+        float3 previous0 = float3(previousPositions[3u * i0], previousPositions[3u * i0 + 1u], previousPositions[3u * i0 + 2u]);
+        float3 previous1 = float3(previousPositions[3u * i1], previousPositions[3u * i1 + 1u], previousPositions[3u * i1 + 2u]);
+        float3 previous2 = float3(previousPositions[3u * i2], previousPositions[3u * i2 + 1u], previousPositions[3u * i2 + 2u]);
+        previousLocal = bary.x * previous0 + bary.y * previous1 + bary.z * previous2;
+    }
     InstanceHistory history = ConstPtr<InstanceHistory>(pc.instanceHistoryAddr)[InstanceID()];
-    float3 previousWorld = float3(dot(history.row0, float4(currentLocal, 1.0)),
-            dot(history.row1, float4(currentLocal, 1.0)),
-            dot(history.row2, float4(currentLocal, 1.0)));
+    float3 previousWorld = float3(dot(history.row0, float4(previousLocal, 1.0)),
+            dot(history.row1, float4(previousLocal, 1.0)),
+            dot(history.row2, float4(previousLocal, 1.0)));
     float3 motionPrev = mul(ObjectToWorld3x4(), float4(currentLocal, 1.0)) - previousWorld;
     bool textureless = (bindingFlags(binding) & BINDING_TEXTURELESS) != 0u;
     // The material record names the shared bindless base-color texture, so geometry carries no texture index.
@@ -437,7 +450,7 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
     if (!textureless) {
         textureLod = rayConeTextureLod(rayCone,
                 texSizePx(baseColorTextures[NonUniformResourceIndex(textureIndex)]),
-                tp0, tp1, tp2, uv0, uv1, uv2);
+                mul(objectToWorld, tp0), mul(objectToWorld, tp1), mul(objectToWorld, tp2), uv0, uv1, uv2);
     }
 
     float3 vdir = -WorldRayDirection();
@@ -475,7 +488,8 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
     }
 
     DecodedSurface surface = evaluateMaterial(mat, uv, textureLod, albedo, geometricNormal,
-            tp0, tp1, tp2, uv0, uv1, uv2, vdir, transmissive ? 0.0 : stateEmission);
+            mul(objectToWorld, tp0), mul(objectToWorld, tp1), mul(objectToWorld, tp2), uv0, uv1, uv2,
+            vdir, transmissive ? 0.0 : stateEmission);
 
     MaterialInput material = buildMaterialInput(surface, mat, transmissive);
     float3 hitPos = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();

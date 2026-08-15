@@ -1,96 +1,100 @@
 package dev.comfyfluffy.caustica.rt.geometry;
 
-import dev.comfyfluffy.caustica.api.provider.TriangleMesh;
+import dev.comfyfluffy.caustica.api.provider.SceneMesh;
+import dev.comfyfluffy.caustica.rt.accel.RtAccel;
 
-import java.util.Arrays;
-
-/** Converts a public mesh into the renderer's three SBT-class index/primitive streams. */
-public final class RtGeometryMeshPacking {
+/** Converts neutral scene meshes into the renderer's three SBT-class streams. */
+final class RtGeometryMeshPacking {
     private static final int PRIMITIVE_FLOATS = 12;
 
     private RtGeometryMeshPacking() {
     }
 
-    public static PackedMesh pack(TriangleMesh mesh, RtGeometryMaterialResolver resolver) {
-        int triangleCount = mesh.triangleCount();
-        int[] materialIds = new int[triangleCount];
-        int[] classes = new int[triangleCount];
-        for (TriangleMesh.MaterialRange range : mesh.materials()) {
-            RtGeometryMaterialResolver.ResolvedMaterial material = resolver.resolve(range.material());
-            int end = range.firstTriangle() + range.triangleCount();
-            Arrays.fill(materialIds, range.firstTriangle(), end, material.bindingId());
-            Arrays.fill(classes, range.firstTriangle(), end, material.sbtClass());
-        }
-
+    static PackedMesh pack(SceneMesh mesh, RtGeometryMaterialResolver resolver) {
         float[] positions = mesh.positions();
-        float[] texCoords = mesh.texCoords();
         int[] sourceIndices = mesh.indices();
-        int[] packedIndices = new int[sourceIndices.length];
+        float[] sourceUvs = mesh.textureCoordinates();
+        int triangleCount = mesh.triangleCount();
+        int[] indices = new int[sourceIndices.length];
+        float[] uvs = mesh.uvLayout() == SceneMesh.UvLayout.PER_VERTEX ? sourceUvs : new float[sourceUvs.length];
         float[] primitives = new float[triangleCount * PRIMITIVE_FLOATS];
-        int[] classTris = new int[3];
-        int outputTriangle = 0;
-        for (int sbtClass = 0; sbtClass < classTris.length; sbtClass++) {
+        int[] classes = new int[RtAccel.SBT_CLASSES];
+        int[] materialIds = new int[triangleCount];
+        int[] surfaceClasses = new int[triangleCount];
+        for (int triangle = 0; triangle < triangleCount; triangle++) {
+            SceneMesh.TriangleSurface surface = mesh.surfaces().get(triangle);
+            RtGeometryMaterialResolver.ResolvedMaterial resolved = resolver.resolve(surface.material(), surface.coverage());
+            materialIds[triangle] = resolved.bindingId();
+            surfaceClasses[triangle] = surface.coverage() == SceneMesh.Coverage.OPAQUE
+                    ? resolved.sbtClass() : RtAccel.CLASS_MASKED;
+        }
+        int output = 0;
+        for (int targetClass = 0; targetClass < classes.length; targetClass++) {
             for (int triangle = 0; triangle < triangleCount; triangle++) {
-                if (classes[triangle] != sbtClass) {
-                    continue;
+                SceneMesh.TriangleSurface surface = mesh.surfaces().get(triangle);
+                if (surfaceClasses[triangle] != targetClass) continue;
+                int inputIndex = triangle * 3;
+                int outputIndex = output * 3;
+                indices[outputIndex] = sourceIndices[inputIndex];
+                indices[outputIndex + 1] = sourceIndices[inputIndex + 1];
+                indices[outputIndex + 2] = sourceIndices[inputIndex + 2];
+                if (mesh.uvLayout() == SceneMesh.UvLayout.PER_TRIANGLE_CORNER) {
+                    System.arraycopy(sourceUvs, triangle * 6, uvs, output * 6, 6);
                 }
-                int source = triangle * 3;
-                int output = outputTriangle * 3;
-                int i0 = sourceIndices[source];
-                int i1 = sourceIndices[source + 1];
-                int i2 = sourceIndices[source + 2];
-                packedIndices[output] = i0;
-                packedIndices[output + 1] = i1;
-                packedIndices[output + 2] = i2;
-                writePrimitive(primitives, outputTriangle * PRIMITIVE_FLOATS,
-                        positions, i0, i1, i2, materialIds[triangle]);
-                outputTriangle++;
-                classTris[sbtClass]++;
+                writeSurfacePrimitive(primitives, output * PRIMITIVE_FLOATS, positions, sourceIndices, inputIndex,
+                        surface, materialIds[triangle]);
+                output++;
+                classes[targetClass]++;
             }
         }
-        return new PackedMesh(positions, texCoords, packedIndices, primitives, classTris);
+        int flags = mesh.uvLayout() == SceneMesh.UvLayout.PER_TRIANGLE_CORNER
+                ? RtGeometryAbi.FLAG_TRIANGLE_CORNER_TEXTURE_COORDINATES
+                : RtGeometryAbi.FLAG_INDEXED_TEXTURE_COORDINATES;
+        if (mesh.semantics().contains(SceneMesh.Semantic.RECEIVES_PROJECTED_SURFACE_MODIFIERS)) {
+            flags |= RtGeometryAbi.FLAG_RECEIVES_PROJECTED_SURFACE_MODIFIERS;
+        }
+        return new PackedMesh(positions, uvs, indices, primitives, classes, flags);
     }
 
-    private static void writePrimitive(float[] output, int offset, float[] positions,
-                                       int i0, int i1, int i2, int materialId) {
-        int a = i0 * 3;
-        int b = i1 * 3;
-        int c = i2 * 3;
-        float abx = positions[b] - positions[a];
-        float aby = positions[b + 1] - positions[a + 1];
-        float abz = positions[b + 2] - positions[a + 2];
-        float acx = positions[c] - positions[a];
-        float acy = positions[c + 1] - positions[a + 1];
-        float acz = positions[c + 2] - positions[a + 2];
-        float nx = aby * acz - abz * acy;
-        float ny = abz * acx - abx * acz;
-        float nz = abx * acy - aby * acx;
-        float length = (float) Math.sqrt(nx * nx + ny * ny + nz * nz);
-        if (!Float.isFinite(length) || length <= 1.0e-8f) {
-            throw new IllegalArgumentException("geometry mesh contains a degenerate triangle");
+    private static void writeSurfacePrimitive(float[] output, int offset, float[] positions, int[] indices,
+                                              int indexOffset, SceneMesh.TriangleSurface surface, int materialId) {
+        float nx = surface.normalX();
+        float ny = surface.normalY();
+        float nz = surface.normalZ();
+        if (Float.isNaN(nx)) {
+            int a = indices[indexOffset] * 3;
+            int b = indices[indexOffset + 1] * 3;
+            int c = indices[indexOffset + 2] * 3;
+            float abx = positions[b] - positions[a];
+            float aby = positions[b + 1] - positions[a + 1];
+            float abz = positions[b + 2] - positions[a + 2];
+            float acx = positions[c] - positions[a];
+            float acy = positions[c + 1] - positions[a + 1];
+            float acz = positions[c + 2] - positions[a + 2];
+            nx = aby * acz - abz * acy;
+            ny = abz * acx - abx * acz;
+            nz = abx * acy - aby * acx;
+            float length = (float) Math.sqrt(nx * nx + ny * ny + nz * nz);
+            if (length <= 1.0e-8f) throw new IllegalArgumentException("scene mesh contains a degenerate triangle");
+            nx /= length;
+            ny /= length;
+            nz /= length;
         }
-        output[offset] = nx / length;
-        output[offset + 1] = ny / length;
-        output[offset + 2] = nz / length;
-        output[offset + 3] = 0f;
-        output[offset + 4] = 1f;
-        output[offset + 5] = 1f;
-        output[offset + 6] = 1f;
+        output[offset] = nx;
+        output[offset + 1] = ny;
+        output[offset + 2] = nz;
+        output[offset + 3] = surface.emission();
+        output[offset + 4] = surface.tintR();
+        output[offset + 5] = surface.tintG();
+        output[offset + 6] = surface.tintB();
         output[offset + 7] = 0f;
         output[offset + 8] = Float.intBitsToFloat(materialId);
-        output[offset + 9] = 0f;
+        output[offset + 9] = Float.intBitsToFloat(surface.emitterInLightScene() ? 1 : 0);
         output[offset + 10] = 0f;
         output[offset + 11] = 0f;
     }
 
-    public record PackedMesh(float[] positions, float[] texCoords, int[] indices,
-                             float[] primitives, int[] classTris) {
-        public int vertexCount() {
-            return positions.length / 3;
-        }
-
-        public int triangleCount() {
-            return indices.length / 3;
-        }
+    record PackedMesh(float[] positions, float[] textureCoordinates, int[] indices,
+                      float[] primitives, int[] classTriangles, int flags) {
     }
 }

@@ -1,11 +1,11 @@
 package dev.comfyfluffy.caustica.minecraft.cloud;
 
 import dev.comfyfluffy.caustica.api.provider.MaterialHandle;
-import dev.comfyfluffy.caustica.api.provider.TriangleMesh;
+import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 
-import java.util.List;
+import java.util.Collections;
 import java.util.SplittableRandom;
 
 /** Deterministic tessellation of a low block-shaped cloud as one closed rounded cuboid. */
@@ -15,7 +15,7 @@ public final class RoundedCloudMesh {
     private RoundedCloudMesh() {
     }
 
-    public static TriangleMesh generate(long seed, MaterialHandle material) {
+    public static SceneMesh generate(long seed, MaterialHandle material) {
         Builder builder = new Builder();
         SplittableRandom random = new SplittableRandom(seed);
         float halfX = snapped(random.nextDouble(18.0, 27.0));
@@ -23,9 +23,9 @@ public final class RoundedCloudMesh {
         float halfZ = snapped(random.nextDouble(8.0, 15.0));
         builder.roundedBox(0f, 0f, 0f, halfX, halfY, halfZ, Math.min(3f, halfY - 0.5f));
         int triangles = builder.indices.size() / 3;
-        return new TriangleMesh(builder.positions.toFloatArray(), builder.texCoords.toFloatArray(),
-                builder.indices.toIntArray(), List.of(new TriangleMesh.MaterialRange(0, triangles,
-                material)));
+        return new SceneMesh(builder.positions.toFloatArray(), builder.indices.toIntArray(),
+                SceneMesh.UvLayout.PER_VERTEX, builder.texCoords.toFloatArray(),
+                Collections.nCopies(triangles, SceneMesh.TriangleSurface.surface(material)));
     }
 
     private static float snapped(double value) {

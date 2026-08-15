@@ -19,6 +19,12 @@ final class RtTerrainGeometryOwnershipTest {
         for (String forbidden : List.of(
                 "RtRetainedGeometryScene",
                 "RtRetainedGeometryBuilds",
+                "RtSceneGeometryManager",
+                "PackedInput",
+                "RetainedPayload",
+                "RtPackedGeometry",
+                "RtAccel.OpacityMicromap",
+                "RtTerrainOmm",
                 "RtRetainedGeometryCoordinator",
                 "acquirePackedCoordinator",
                 "releasePackedCoordinator",

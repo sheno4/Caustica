@@ -1,18 +1,19 @@
 package dev.comfyfluffy.caustica.minecraft.provider;
 
 import dev.comfyfluffy.caustica.api.provider.SceneProvider;
+import dev.comfyfluffy.caustica.api.provider.SceneFrameContext;
+import dev.comfyfluffy.caustica.api.provider.SceneGeometryUpdateContext;
+import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.minecraft.entity.RtEntities;
 import dev.comfyfluffy.caustica.minecraft.entity.RtEntityTextures;
-import dev.comfyfluffy.caustica.rt.geometry.RtGeometryAbi;
-import dev.comfyfluffy.caustica.rt.geometry.RtSceneGeometryManager;
 import dev.comfyfluffy.caustica.rt.pipeline.RtPipeline;
-import dev.comfyfluffy.caustica.rt.provider.ProviderManager;
 import dev.comfyfluffy.caustica.rt.scene.RtSceneSource;
 import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
 import dev.comfyfluffy.caustica.minecraft.terrain.RtWorkerPool;
+import net.minecraft.resources.Identifier;
 
 public final class MinecraftSceneProvider implements SceneProvider, RtSceneSource {
     public static final ResourceId ID = ResourceId.of("caustica", "minecraft_scene");
@@ -21,7 +22,6 @@ public final class MinecraftSceneProvider implements SceneProvider, RtSceneSourc
     public void update() {
         GpuContext ctx = GpuContext.currentOrNull();
         if (ctx != null) {
-            RtTerrain.attachGeometry(ProviderManager.INSTANCE.sceneGeometry());
             RtTerrain.update(ctx);
         }
     }
@@ -30,7 +30,6 @@ public final class MinecraftSceneProvider implements SceneProvider, RtSceneSourc
     public void prepareFrame() {
         GpuContext ctx = GpuContext.currentOrNull();
         if (ctx != null) {
-            RtTerrain.attachGeometry(ProviderManager.INSTANCE.sceneGeometry());
             RtTerrain.frame(ctx);
         }
     }
@@ -39,7 +38,7 @@ public final class MinecraftSceneProvider implements SceneProvider, RtSceneSourc
     public void onWorldChanged() {
         GpuContext ctx = GpuContext.currentOrNull();
         if (ctx != null) {
-            RtEntities.INSTANCE.onWorldChanged(ctx, ProviderManager.INSTANCE.sceneGeometry());
+            RtEntities.INSTANCE.onWorldChanged();
         }
         RtTerrain.requestFullClear();
     }
@@ -59,7 +58,7 @@ public final class MinecraftSceneProvider implements SceneProvider, RtSceneSourc
         GpuContext ctx = GpuContext.currentOrNull();
         if (ctx != null) {
             RtTerrain.shutdown(ctx);
-            RtEntities.INSTANCE.shutdown(ctx);
+            RtEntities.INSTANCE.shutdown();
         }
     }
 
@@ -82,11 +81,13 @@ public final class MinecraftSceneProvider implements SceneProvider, RtSceneSourc
     }
 
     @Override
-    public void submitFrame(GpuContext ctx, Retained retained, RtSceneGeometryManager geometry, Camera camera) {
-        SceneOrigin origin = retained.origin();
-        RtEntities.INSTANCE.beginFrame(ctx, geometry,
-                origin,
-                camera.x(), camera.y(), camera.z(), camera.projection(), camera.viewRotation());
+    public void submitGeometry(SceneFrameContext frame) {
+        RtEntities.INSTANCE.submitGeometry(frame);
+    }
+
+    @Override
+    public void submitGeometryUpdates(SceneGeometryUpdateContext update) {
+        RtTerrain.submitGeometry(update.geometry());
     }
 
     @Override
@@ -107,5 +108,21 @@ public final class MinecraftSceneProvider implements SceneProvider, RtSceneSourc
     @Override
     public void uploadPendingTextures(RtPipeline pipeline, long sampler) {
         RtEntityTextures.INSTANCE.uploadPending(pipeline, sampler);
+    }
+
+    @Override
+    public int bindlessTextureSlot(SceneMesh.TextureReference texture) {
+        return switch (texture) {
+            case SceneMesh.AtlasTexture atlas -> RtEntityTextures.INSTANCE.isWhiteTexture(atlas.atlas())
+                    ? RtEntityTextures.INSTANCE.whiteSlot()
+                    : RtEntityTextures.INSTANCE.slotForAtlas(identifier(atlas.atlas()));
+            case SceneMesh.StandaloneTexture standalone -> RtEntityTextures.INSTANCE.slotForAtlas(
+                    Identifier.fromNamespaceAndPath(standalone.texture().namespace(),
+                            "textures/" + standalone.texture().path() + ".png"));
+        };
+    }
+
+    private static Identifier identifier(dev.comfyfluffy.caustica.api.ResourceId id) {
+        return Identifier.fromNamespaceAndPath(id.namespace(), id.path());
     }
 }

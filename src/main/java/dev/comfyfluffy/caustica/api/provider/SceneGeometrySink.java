@@ -1,19 +1,52 @@
 package dev.comfyfluffy.caustica.api.provider;
 
-/**
- * Explicit retention for one provider's geometry. Keys are stable and local to that provider.
- *
- * <p>{@code retainMesh} declares a mesh's current data; call it only when the mesh is new or its
- * data actually changed, never on every frame. Comparing whether it changed is the caller's job:
- * only the source can tell cheaply, and the engine no longer diffs mesh bytes to find out.
- * {@code instance} declares one placement of an already-retained mesh and is called every frame the
- * instance should be visible. Omitting an instance this frame simply excludes it from this frame's
- * scene; the mesh itself stays resident until {@code releaseMesh} or the provider stops.
- */
+/** Source-local atomic retained-geometry updates. Keys are stable only within one scene provider. */
 public interface SceneGeometrySink {
-    void retainMesh(long key, TriangleMesh mesh);
+    /** Submit one atomic group. Independent group keys may become visible independently. */
+    default void submit(long groupKey, java.util.List<Operation> operations) {
+        submit(SceneGeometryKey.of(groupKey), operations);
+    }
 
-    void releaseMesh(long key);
+    default void submit(SceneGeometryKey groupKey, java.util.List<Operation> operations) {
+        submit(groupKey, operations, ignored -> { });
+    }
 
-    void instance(long key, long meshKey, GeometryTransform transform);
+    default void submit(long groupKey, java.util.List<Operation> operations,
+                        java.util.function.Consumer<Publication> onPublished) {
+        submit(SceneGeometryKey.of(groupKey), operations, onPublished);
+    }
+
+    /** Submit one atomic group and observe when the group becomes visible in the retained scene. */
+    void submit(SceneGeometryKey groupKey, java.util.List<Operation> operations,
+                java.util.function.Consumer<Publication> onPublished);
+
+    /** One source-local atomic group that became visible in the retained scene. */
+    record Publication(SceneGeometryKey groupKey) { }
+
+    sealed interface Operation permits Put, Drop, Place, Remove { }
+
+    /** Retain or replace mesh data. The renderer selects and schedules its acceleration update. */
+    record Put(SceneGeometryKey residentKey, SceneMesh mesh) implements Operation {
+        public Put(long residentKey, SceneMesh mesh) { this(SceneGeometryKey.of(residentKey), mesh); }
+    }
+
+    /** Remove a retained mesh. */
+    record Drop(SceneGeometryKey residentKey) implements Operation {
+        public Drop(long residentKey) { this(SceneGeometryKey.of(residentKey)); }
+    }
+
+    /** Add or replace one world-space placement of a retained mesh. */
+    record Place(SceneGeometryKey instanceKey, SceneGeometryKey residentKey, GeometryTransform transform, int mask) implements Operation {
+        public Place(long instanceKey, long residentKey, GeometryTransform transform, int mask) {
+            this(SceneGeometryKey.of(instanceKey), SceneGeometryKey.of(residentKey), transform, mask);
+        }
+        public Place(long instanceKey, long residentKey, GeometryTransform transform) {
+            this(instanceKey, residentKey, transform, 0xff);
+        }
+    }
+
+    /** Remove one placement. Omitted placements remain published. */
+    record Remove(SceneGeometryKey instanceKey) implements Operation {
+        public Remove(long instanceKey) { this(SceneGeometryKey.of(instanceKey)); }
+    }
 }

@@ -14,19 +14,23 @@ import dev.comfyfluffy.caustica.api.provider.MaterialDefinition;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.api.provider.SceneProvider;
 import dev.comfyfluffy.caustica.api.provider.SceneGeometrySink;
-import dev.comfyfluffy.caustica.api.provider.GeometryTransform;
-import dev.comfyfluffy.caustica.api.provider.TriangleMesh;
+import dev.comfyfluffy.caustica.api.provider.SceneMesh;
+import dev.comfyfluffy.caustica.api.provider.SceneFrameContext;
+import dev.comfyfluffy.caustica.api.provider.SceneGeometryUpdateContext;
+import dev.comfyfluffy.caustica.api.provider.SceneCamera;
+import dev.comfyfluffy.caustica.api.provider.SceneGeometryKey;
+import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.geometry.RtSceneGeometryManager;
 import dev.comfyfluffy.caustica.rt.pipeline.RtPipeline;
 import dev.comfyfluffy.caustica.rt.scene.RtSceneSource;
 import java.util.HashSet;
+import java.util.HashMap;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Consumer;
-import java.util.function.Function;
 import java.util.function.ToIntFunction;
 import java.util.function.Supplier;
 
@@ -43,6 +47,7 @@ public final class ProviderManager {
     private List<LightDescriptor> frameLights = List.of();
     private Set<ResourceId> namedMaterials = Set.of();
     private RtSceneGeometryManager sceneGeometry;
+    private final Map<GeometryGroupKey, Long> geometryRevisions = new HashMap<>();
 
     ProviderManager(Map<ResourceId, SceneProvider> scenes, Map<ResourceId, LightProvider> lights,
                     Map<ResourceId, MaterialSource> materials) {
@@ -56,6 +61,7 @@ public final class ProviderManager {
         failed.clear();
         stoppedThisSession.clear();
         shutDownThisSession.clear();
+        geometryRevisions.clear();
     }
 
     /** Install the freshly created runtime-activation provider instances before they receive callbacks. */
@@ -131,19 +137,6 @@ public final class ProviderManager {
         return sceneGeometry;
     }
 
-    /** Submit CPU-captured frame geometry before renderer-owned frame assembly begins. */
-    public void submitPrimaryFrame(PrimaryScene selected, GpuContext ctx, RtSceneGeometryManager geometry,
-                                   RtSceneSource.Camera camera) {
-        SceneSourceEntry entry = requireSceneSource(selected.provider());
-        Boolean submitted = invokeSceneSource(entry, "frame capture", () -> {
-            entry.source().submitFrame(ctx, selected.retained(), geometry, camera);
-            return Boolean.TRUE;
-        }, Boolean.FALSE);
-        if (!submitted) {
-            throw new SceneSourceUnavailableException(selected.provider());
-        }
-    }
-
     public int bindlessTextureCapacity() {
         SceneSourceEntry entry = primarySceneSource();
         return entry != null
@@ -181,72 +174,150 @@ public final class ProviderManager {
         }
     }
 
-    /** Collect each scene source transactionally into its provider-scoped geometry sink. */
-    public void submitGeometry(Function<ResourceId, SceneGeometrySink> sinkFactory) {
+    /** Resolve a source-owned texture identity without exposing source texture tables to geometry producers. */
+    public int bindlessTextureSlot(SceneMesh.TextureReference texture) {
+        if (texture == null) return 0;
+        SceneSourceEntry entry = primarySceneSource();
+        return entry != null ? invokeSceneSource(entry, "bindless texture slot",
+                () -> entry.source().bindlessTextureSlot(texture), 0) : 0;
+    }
+
+    /** Collect each scene source transactionally into source-qualified retained-geometry groups. */
+    public void submitGeometry(GpuContext ctx, SceneOrigin origin) {
+        submitGeometry(ctx, origin, SceneCamera.IDENTITY);
+    }
+
+    /** Collect each scene source transactionally into source-qualified retained-geometry groups. */
+    public void submitGeometry(GpuContext ctx, SceneOrigin origin, SceneCamera camera) {
+        submitGeometry(ctx, origin, (provider, sink) -> provider.submitGeometry(new SceneFrameContext(sink,
+                origin.x(), origin.y(), origin.z(), camera)), (updates, acknowledgment, failureHandler) ->
+                sceneGeometry().submit(updates, acknowledgment, failureHandler));
+    }
+
+    /** Collect update-cadence retained geometry before the first render frame can become active. */
+    public void submitGeometryUpdates(GpuContext ctx, SceneOrigin origin) {
+        submitGeometry(ctx, origin, (provider, sink) -> provider.submitGeometryUpdates(new SceneGeometryUpdateContext(sink,
+                origin.x(), origin.y(), origin.z())), (updates, acknowledgment, failureHandler) ->
+                sceneGeometry().submit(updates, acknowledgment, failureHandler));
+    }
+
+    void submitGeometryUpdates(GpuContext ctx, SceneOrigin origin, GeometrySubmitter submitter) {
+        submitGeometry(ctx, origin, (provider, sink) -> provider.submitGeometryUpdates(new SceneGeometryUpdateContext(sink,
+                origin.x(), origin.y(), origin.z())), (updates, acknowledgment, failureHandler) ->
+                submitter.submit(updates, failureHandler));
+    }
+
+    void submitGeometry(GpuContext ctx, SceneOrigin origin, GeometrySubmitter submitter) {
+        submitGeometry(ctx, origin, (provider, sink) -> provider.submitGeometry(new SceneFrameContext(sink,
+                origin.x(), origin.y(), origin.z(), SceneCamera.IDENTITY)),
+                (updates, acknowledgment, failureHandler) -> submitter.submit(updates, failureHandler));
+    }
+
+    private void submitGeometry(GpuContext ctx, SceneOrigin origin, GeometryCollector collector,
+                                GeometrySubmission submitter) {
         for (Map.Entry<ResourceId, SceneProvider> entry : scenes().entrySet()) {
             ProviderKey key = new ProviderKey("scene", entry.getKey());
             if (failed.contains(key) || stoppedThisSession.contains(key)) {
                 continue;
             }
-            Map<Long, TriangleMesh> stagedRetains = new java.util.LinkedHashMap<>();
-            Set<Long> stagedReleases = new java.util.LinkedHashSet<>();
-            Map<Long, StagedInstance> stagedInstances = new java.util.LinkedHashMap<>();
+            Map<SceneGeometryKey, StagedGeometryGroup> stagedGroups = new java.util.LinkedHashMap<>();
             SceneGeometrySink stagingSink = new SceneGeometrySink() {
                 @Override
-                public void retainMesh(long meshKey, TriangleMesh mesh) {
-                    if (stagedRetains.putIfAbsent(meshKey, mesh) != null) {
-                        throw new IllegalArgumentException("duplicate retained mesh key " + meshKey);
-                    }
-                }
-
-                @Override
-                public void releaseMesh(long meshKey) {
-                    if (!stagedReleases.add(meshKey)) {
-                        throw new IllegalArgumentException("duplicate released mesh key " + meshKey);
-                    }
-                }
-
-                @Override
-                public void instance(long instanceKey, long meshKey,
-                                     GeometryTransform transform) {
-                    if (stagedInstances.putIfAbsent(instanceKey, new StagedInstance(meshKey, transform)) != null) {
-                        throw new IllegalArgumentException("duplicate geometry instance key " + instanceKey);
+                public void submit(SceneGeometryKey groupKey, List<SceneGeometrySink.Operation> operations,
+                                   Consumer<SceneGeometrySink.Publication> onPublished) {
+                    StagedGeometryGroup group = new StagedGeometryGroup(groupKey, operations, onPublished);
+                    if (stagedGroups.putIfAbsent(groupKey, group) != null) {
+                        throw new IllegalArgumentException("duplicate geometry group key " + groupKey);
                     }
                 }
             };
             try {
-                entry.getValue().submitGeometry(stagingSink);
-                for (TriangleMesh mesh : stagedRetains.values()) {
-                    for (TriangleMesh.MaterialRange range : mesh.materials()) {
-                        if (!namedMaterials.contains(range.material().id())) {
-                            throw new IllegalArgumentException("geometry references unsubmitted material "
-                                    + range.material().id());
-                        }
-                    }
+                collector.collect(entry.getValue(), stagingSink);
+                List<RtSceneGeometryManager.GeometryUpdateGroup> updates = new ArrayList<>(stagedGroups.size());
+                Map<SubmittedGeometryGroupKey, PublishedGeometryGroup> publishedGroups = new HashMap<>();
+                for (StagedGeometryGroup group : stagedGroups.values()) {
+                    RtSceneGeometryManager.GeometryUpdateGroup update = toUpdate(entry.getKey(), group.groupKey(),
+                            group.operations(), origin);
+                    updates.add(update);
+                    publishedGroups.put(new SubmittedGeometryGroupKey(update.key(), update.revision()),
+                            new PublishedGeometryGroup(group.groupKey(), group.onPublished()));
                 }
-                // An instance may reference a mesh retained on an earlier frame, so there is nothing further
-                // to validate here; RtSceneGeometryManager checks the instance's mesh key against residency.
-                SceneGeometrySink sink = sinkFactory.apply(entry.getKey());
-                stagedReleases.forEach(sink::releaseMesh);
-                stagedRetains.forEach(sink::retainMesh);
-                stagedInstances.forEach((instanceKey, instance) ->
-                        sink.instance(instanceKey, instance.meshKey, instance.transform));
+                submitter.submit(updates, acknowledgement -> {
+                    PublishedGeometryGroup group = publishedGroups.remove(new SubmittedGeometryGroupKey(
+                            acknowledgement.key(), acknowledgement.revision()));
+                    if (group == null) {
+                        return;
+                    }
+                    try {
+                        group.onPublished().accept(new SceneGeometrySink.Publication(group.groupKey()));
+                    } catch (Throwable t) {
+                        failSceneGeometry(ctx, entry, key, t);
+                    }
+                }, failure -> failSceneGeometry(ctx, entry, key, failure));
             } catch (Throwable t) {
-                failed.add(key);
-                CausticaMod.LOGGER.error("Caustica scene provider {} failed and was disabled", entry.getKey(), t);
-                stopOne("scene", entry, key, SceneProvider::stop);
+                failSceneGeometry(ctx, entry, key, t);
             }
         }
     }
 
-    private record StagedInstance(long meshKey, GeometryTransform transform) {
+    private void failSceneGeometry(GpuContext ctx, Map.Entry<ResourceId, SceneProvider> entry,
+                                   ProviderKey key, Throwable failure) {
+        if (!failed.add(key)) {
+            return;
+        }
+        CausticaMod.LOGGER.error("Caustica scene provider {} failed and was disabled", entry.getKey(), failure);
+        stopOne("scene", entry, key, SceneProvider::stop);
+    }
+
+    private RtSceneGeometryManager.GeometryUpdateGroup toUpdate(ResourceId source, SceneGeometryKey groupKey,
+                                                                 List<SceneGeometrySink.Operation> operations,
+                                                                 SceneOrigin origin) {
+        ArrayList<RtSceneGeometryManager.GeometryOperation> converted = new ArrayList<>(operations.size());
+        for (SceneGeometrySink.Operation operation : operations) {
+            switch (operation) {
+                case SceneGeometrySink.Put put -> {
+                    validateMeshMaterials(put.mesh());
+                    converted.add(new RtSceneGeometryManager.Put(put.residentKey(),
+                            new RtSceneGeometryManager.ProviderPayload(put.mesh())));
+                }
+                case SceneGeometrySink.Drop drop ->
+                    converted.add(new RtSceneGeometryManager.Drop(drop.residentKey()));
+                case SceneGeometrySink.Place place -> converted.add(new RtSceneGeometryManager.Place(
+                        place.instanceKey(), place.residentKey(),
+                        place.transform().relativeTo(origin.x(), origin.y(), origin.z()), place.mask(), origin));
+                case SceneGeometrySink.Remove remove ->
+                    converted.add(new RtSceneGeometryManager.Remove(remove.instanceKey()));
+            }
+        }
+        GeometryGroupKey revisionKey = new GeometryGroupKey(source, groupKey);
+        long revision = geometryRevisions.merge(revisionKey, 1L, Math::addExact);
+        return new RtSceneGeometryManager.GeometryUpdateGroup(new RtSceneGeometryManager.GroupKey(source, groupKey),
+                revision, converted);
+    }
+
+    private void validateMeshMaterials(SceneMesh mesh) {
+        for (SceneMesh.TriangleSurface surface : mesh.surfaces()) {
+            if (surface.material() instanceof SceneMesh.NamedMaterial named
+                    && !namedMaterials.contains(named.material().id())) {
+                throw new IllegalArgumentException("geometry references unsubmitted material " + named.material().id());
+            }
+        }
+    }
+
+    private void clearSceneGeometry(GpuContext ctx, ResourceId source) {
+        geometryRevisions.keySet().removeIf(key -> key.source.equals(source));
+        if (sceneGeometry != null && ctx != null) {
+            sceneGeometry.clearSource(ctx, source);
+        }
     }
 
     public void onWorldChanged() {
+        clearAllSceneGeometry();
         invoke("scene", scenes(), SceneProvider::onWorldChanged, SceneProvider::stop);
     }
 
     public void onResourcePackClosing() {
+        clearAllSceneGeometry();
         invoke("scene", scenes(), SceneProvider::onResourcePackClosing, SceneProvider::stop);
         invoke("light", lights(), LightProvider::onResourcePackClosing, LightProvider::stop);
         invoke("material", materials(), MaterialSource::onResourcePackClosing, MaterialSource::stop);
@@ -355,19 +426,9 @@ public final class ProviderManager {
         namedMaterials = Set.of();
     }
 
-    /**
-     * Scene providers currently eligible for callbacks. The generic geometry manager uses this as a
-     * safety net to release meshes belonging to a provider that stopped without releasing them itself.
-     */
-    public Set<ResourceId> activeSceneProviderIds() {
-        Set<ResourceId> active = new HashSet<>();
-        for (ResourceId id : scenes().keySet()) {
-            ProviderKey key = new ProviderKey("scene", id);
-            if (!failed.contains(key) && !stoppedThisSession.contains(key)) {
-                active.add(id);
-            }
-        }
-        return active;
+    private void clearAllSceneGeometry() {
+        GpuContext ctx = GpuContext.currentOrNull();
+        for (ResourceId source : scenes().keySet()) clearSceneGeometry(ctx, source);
     }
 
     private Map<ResourceId, SceneProvider> scenes() {
@@ -459,6 +520,9 @@ public final class ProviderManager {
         if (!stoppedThisSession.add(key)) {
             return;
         }
+        if (kind.equals("scene")) {
+            clearSceneGeometry(GpuContext.currentOrNull(), entry.getKey());
+        }
         try {
             action.accept(entry.getValue());
         } catch (Throwable t) {
@@ -483,6 +547,40 @@ public final class ProviderManager {
     }
 
     private record ProviderKey(String kind, ResourceId id) {
+    }
+
+    private record GeometryGroupKey(ResourceId source, SceneGeometryKey key) {
+    }
+
+    @FunctionalInterface
+    interface GeometrySubmitter {
+        void submit(List<RtSceneGeometryManager.GeometryUpdateGroup> updates, Consumer<Throwable> failureHandler);
+    }
+
+    @FunctionalInterface
+    private interface GeometrySubmission {
+        void submit(List<RtSceneGeometryManager.GeometryUpdateGroup> updates,
+                    Consumer<RtSceneGeometryManager.PublicationAck> acknowledgment,
+                    Consumer<Throwable> failureHandler);
+    }
+
+    @FunctionalInterface
+    private interface GeometryCollector {
+        void collect(SceneProvider provider, SceneGeometrySink sink);
+    }
+
+    private record StagedGeometryGroup(SceneGeometryKey groupKey, List<SceneGeometrySink.Operation> operations,
+                                       Consumer<SceneGeometrySink.Publication> onPublished) {
+        private StagedGeometryGroup {
+            operations = List.copyOf(operations);
+            onPublished = java.util.Objects.requireNonNull(onPublished, "onPublished");
+        }
+    }
+
+    private record SubmittedGeometryGroupKey(RtSceneGeometryManager.GroupKey key, long revision) {
+    }
+
+    private record PublishedGeometryGroup(SceneGeometryKey groupKey, Consumer<SceneGeometrySink.Publication> onPublished) {
     }
 
     private record SceneSourceEntry(ResourceId id, Map.Entry<ResourceId, SceneProvider> provider,
