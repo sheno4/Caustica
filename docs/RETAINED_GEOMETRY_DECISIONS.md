@@ -63,8 +63,12 @@ The async command order is classification, a compute-write-to-micromap-read barr
 micromap-write-to-acceleration-read barrier, BLAS build, optional compacted-size query, and optional compact copy.
 Only the final build or compact-copy token may publish. Material tables and temporal pages are valid on the
 reserved executor queue; animated pages use concurrent sharing when its family differs from graphics. Resource
-reload cancels geometry and drains accepted executor work
-before destroying an epoch's classifier, descriptors, tables, or pages.
+reload asks the material epoch owner to close provider sources, drains accepted executor work, destroys the world
+pipeline's descriptor references, then detaches and destroys the epoch classifier, tables, pages, and sampler-owned
+bindings. The owner keeps the material sampler across pack epochs and destroys it at session teardown. Publishing
+an epoch explicitly tells frame orchestration to clear retained geometry and gate one trace.
+Growing the provider bindless reserve starts the same epoch boundary: retained source work is invalidated before
+the executor drain, then pipeline descriptors and epoch tables are destroyed in that order and rebuilt together.
 
 A compactable candidate has two executor phases: BUILD writes the compacted-size query, then COMPACT copies into
 the exactly sized resident allocation. The group remains unpublished between them and marks only the compact-copy

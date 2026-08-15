@@ -12,10 +12,16 @@ final class RtOpacityMicromapLifetimeTest {
     void reloadCancelsThenDrainsBeforeDestroyingEpochResources() throws Exception {
         String composite = Files.readString(Path.of("src/main/java/dev/comfyfluffy/caustica/rt/RtComposite.java"));
         int reload = composite.indexOf("public void onResourceReloadStart()");
-        int cancel = composite.indexOf("ProviderManager.INSTANCE.onResourcePackClosing()", reload);
+        int cancel = composite.indexOf("materialEpoch.beginReload()", reload);
         int drain = composite.indexOf("ctx.gpuExecutor().drainAndWaitIdle()", cancel);
-        int destroy = composite.indexOf("destroyOpacityMicromapPipeline()", drain);
-        assertTrue(reload >= 0 && reload < cancel && cancel < drain && drain < destroy);
+        int descriptors = composite.indexOf("worldPipeline.destroy()", drain);
+        int destroy = composite.indexOf("materialEpoch.destroyPublishedEpoch()", descriptors);
+        String epoch = Files.readString(Path.of(
+                "src/main/java/dev/comfyfluffy/caustica/rt/material/RtMaterialEpoch.java"));
+        int providerClose = epoch.indexOf("ProviderManager.INSTANCE.onResourcePackClosing()",
+                epoch.indexOf("public void beginReload()"));
+        assertTrue(reload >= 0 && reload < cancel && cancel < drain && drain < descriptors
+                && descriptors < destroy && providerClose >= 0);
     }
 
     @Test

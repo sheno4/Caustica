@@ -484,10 +484,10 @@ public final class RtRuntime {
             // Scene producers and CPU workers are stopped. Drain the shared per-device submitter and wait
             // every queue before the remaining providers or runtime owners free session GPU resources.
             context.gpuExecutor().drainAndWaitIdle();
+            RtComposite.INSTANCE.destroy();
             ProviderManager.INSTANCE.shutdownResources();
             ProviderManager.INSTANCE.endSession();
             host().destroyUiPresentation();
-            RtComposite.INSTANCE.destroy();
             host().resetSceneTextures();
             RtDlssFg.INSTANCE.destroy();
             RtFramePresenter.INSTANCE.destroy(context.vk());

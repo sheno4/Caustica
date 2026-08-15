@@ -7,7 +7,6 @@ import dev.comfyfluffy.caustica.api.pass.RenderStage;
 import dev.comfyfluffy.caustica.engine.frame.FrameSnapshot;
 import dev.comfyfluffy.caustica.engine.frame.SceneResources;
 import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
-import dev.comfyfluffy.caustica.engine.material.MaterialCatalog;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushConstantsData;
 import dev.comfyfluffy.caustica.rt.light.RtLightScene;
@@ -34,15 +33,11 @@ import org.lwjgl.vulkan.VkMemoryBarrier2;
 import org.lwjgl.vulkan.VkSamplerCreateInfo;
 
 import dev.comfyfluffy.caustica.rt.accel.RtAccel;
-import dev.comfyfluffy.caustica.rt.accel.RtOpacityMicromapPipeline;
 import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
 import dev.comfyfluffy.caustica.rt.accel.GpuImage;
-import dev.comfyfluffy.caustica.rt.geometry.RtGeometryMaterialResolver;
 import dev.comfyfluffy.caustica.rt.geometry.RtGeometryMaterialResolution;
 import dev.comfyfluffy.caustica.rt.geometry.RtSceneGeometryManager;
-import dev.comfyfluffy.caustica.rt.material.RtMaterialPageCompiler;
-import dev.comfyfluffy.caustica.rt.material.RtMaterialOverrides;
-import dev.comfyfluffy.caustica.rt.material.RtMaterialRegistry;
+import dev.comfyfluffy.caustica.rt.material.RtMaterialEpoch;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDebugPresentPipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDisplayPipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg;
@@ -137,18 +132,7 @@ public final class RtComposite {
 
     private final RtProgramManager programManager = RtProgramManager.INSTANCE;
     private RtPipeline worldPipeline;
-    // Set at the start of a host resource reload: a reload recreates the shared base-color atlas and source
-    // textures. We tear down the world pipeline there (drops all descriptor references) and rebuild it once
-    // the new atlas is in place — detected by the view handle changing away from
-    // boundBaseColorAtlasView to a fresh non-zero value (deferred free keeps the old handle live for a few
-    // frames, so "handle != 0" alone isn't enough to tell old from new).
-    private volatile boolean reloadRebindRequested;
-    // The shared base-color atlas view currently bound into bindless index zero.
-    private long boundBaseColorAtlasView;
-    private long baseColorAtlasView;
-    private int bindlessTextureCapacity;
-    // True after base-color textures and canonical material pages are bound for the live world pipeline.
-    private boolean materialBindingsReady;
+    private final RtMaterialEpoch materialEpoch = new RtMaterialEpoch();
     // The RenderPassManager world-resource generation currently written into the world pipeline's set 2.
     private int boundWorldResourceGeneration = -1;
     // Set when a new material epoch is published. The first composite returns to source rasterization so the next
@@ -161,33 +145,9 @@ public final class RtComposite {
     private PushSlot[] pushRing;
     private int pushSlot;
     private final RtLightScene lightScene = new RtLightScene();
-    private final RtGeometryMaterialResolution.Bindings geometryMaterials = new RtGeometryMaterialResolution.Bindings() {
-        @Override public int named(dev.comfyfluffy.caustica.api.provider.MaterialHandle material) {
-            return RtMaterialRegistry.INSTANCE.bindingId(material.id());
-        }
-        @Override public int catalog(dev.comfyfluffy.caustica.api.ResourceId material,
-                                     dev.comfyfluffy.caustica.api.ResourceId geometry,
-                                     dev.comfyfluffy.caustica.engine.material.MaterialVariant variant) {
-            return RtMaterialRegistry.INSTANCE.requireSnapshot().resolve(material, geometry, variant);
-        }
-        @Override public int atlas(dev.comfyfluffy.caustica.engine.material.AtlasMaterialReference reference) {
-            return RtMaterialRegistry.INSTANCE.resolveAtlasReference(reference, false);
-        }
-        @Override public int standalone(dev.comfyfluffy.caustica.api.ResourceId material) {
-            return RtMaterialRegistry.INSTANCE.resolveStandaloneTexture(material, false);
-        }
-        @Override public int fallback() { return RtMaterialRegistry.INSTANCE.runtimeFallbackId(); }
-        @Override public int withTexture(int binding, dev.comfyfluffy.caustica.api.provider.SceneMesh.TextureReference texture) {
-            return RtMaterialRegistry.INSTANCE.withBaseColorTextureIndex(binding,
-                    ProviderManager.INSTANCE.bindlessTextureSlot(texture));
-        }
-        @Override public int cutout(int binding) { return RtMaterialRegistry.INSTANCE.withCutoutCoverage(binding); }
-        @Override public int stochastic(int binding) { return RtMaterialRegistry.INSTANCE.withStochasticCoverage(binding); }
-        @Override public int sbtClass(int binding) { return RtMaterialRegistry.INSTANCE.sbtClassFor(binding); }
-    };
     private final RtSceneGeometryManager sceneGeometry = new RtSceneGeometryManager(
-            (material, coverage) -> RtGeometryMaterialResolution.resolve(material, coverage, geometryMaterials));
-    private RtOpacityMicromapPipeline opacityMicromapPipeline;
+            (material, coverage) -> RtGeometryMaterialResolution.resolve(
+                    material, coverage, materialEpoch.geometryBindings()));
     private RtDisplayPipeline displayPipeline;
     private RenderPassManager renderPassManager;
     private long renderPassSceneId = Long.MIN_VALUE;
@@ -294,7 +254,6 @@ public final class RtComposite {
     private boolean mvHasPrev;
     private float previousProceduralTime;
     private boolean proceduralTimeValid;
-    private long materialTextureSampler;
     private boolean failed;
     private boolean loggedActive;
 
@@ -312,6 +271,7 @@ public final class RtComposite {
     private RtGpuExecutor.GraphicsUse pendingGraphicsUse;
 
     private RtComposite() {
+        materialEpoch.attachSceneGeometry(sceneGeometry);
     }
 
     /** This frame's TLAS handle (0 if none built yet), for host overlay occlusion queries. */
@@ -463,19 +423,16 @@ public final class RtComposite {
         // false once so the scene source can apply the matching full clear. Keep source rasterization alive for that
         // bring-up frame; otherwise it is suppressed before composite() discovers it must fall back and the
         // host permanently latches the resulting missing replacement frame.
-        if (worldPipeline == null || !materialBindingsReady) {
+        if (worldPipeline == null || !materialEpoch.bindingsReady()) {
             return true;
         }
         if (materialEpochTraceGate) {
             return true;
         }
-        if (ProviderManager.INSTANCE.bindlessTextureCapacity() > bindlessTextureCapacity) {
+        if (ProviderManager.INSTANCE.bindlessTextureCapacity() > materialEpoch.bindlessTextureCapacity()) {
             return true;
         }
-        if (reloadRebindRequested) {
-            long atlas = baseColorAtlasView;
-            return atlas == 0L || atlas == boundBaseColorAtlasView;
-        }
+        if (materialEpoch.waitingForReplacementAtlas()) return true;
         return false;
     }
 
@@ -629,7 +586,6 @@ public final class RtComposite {
                 materialEpochTraceGate = false;
                 return false;
             }
-            refreshMaterialBindingsIfNeeded(ctx);
             updateMotion(snapshot);
             recordFrame(ctx, active, nativeColorImage, snapshot, primaryScene);
             if (!loggedActive) {
@@ -697,12 +653,7 @@ public final class RtComposite {
         if (lookLut == null) {
             lookLut = RtToneLut.loadResource(ctx, LOOK.lmtResource());
         }
-        if (reloadRebindRequested) {
-            long atlas = baseColorAtlasView;
-            if (atlas == 0L || atlas == boundBaseColorAtlasView) {
-                return false;
-            }
-        }
+        if (materialEpoch.waitingForReplacementAtlas()) return false;
         ensureOutput(ctx, width, height);
         debugPresentPipeline.setImages(displayImage.view, gNormal.view, gAlbedo.view, gDepth.view,
                 gMotion.view, gSpecAlbedo.view, gSpecMotion.view, rrOutput.view, exposure.image().view,
@@ -720,14 +671,14 @@ public final class RtComposite {
      * deliberately not built at the menu — only once a world is entered.
      */
     public boolean ensureResourcesReady(GpuContext ctx, SceneResources sceneResources) {
-        baseColorAtlasView = sceneResources.baseColorAtlasView();
-        if (failed || reloadRebindRequested) {
+        materialEpoch.observeBaseColorAtlas(sceneResources.baseColorAtlasView());
+        if (failed || materialEpoch.reloadPending()) {
             return false;
         }
         if (worldPipeline != null) {
             return true;
         }
-        if (!sceneResources.sceneReady() || baseColorAtlasView == 0L) {
+        if (!sceneResources.sceneReady() || !materialEpoch.atlasReady()) {
             return false;
         }
         try {
@@ -756,8 +707,7 @@ public final class RtComposite {
                 return null;
             }
             ensureRenderPassManager(ctx);
-            bindlessTextureCapacity = ProviderManager.INSTANCE.bindlessTextureCapacity();
-            worldPipeline = createWorldPipeline(ctx, program, bindlessTextureCapacity);
+            int bindlessTextureCapacity = ProviderManager.INSTANCE.bindlessTextureCapacity();
             // Per-frame world data lives in this BDA ring; the pipeline pushes its address and hot fields.
             if (pushRing == null) {
                 pushRing = new PushSlot[PUSH_RING];
@@ -766,15 +716,35 @@ public final class RtComposite {
                             VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true, "rt world push " + i));
                 }
             }
-            if (output != null) {
-                worldPipeline.setStorageImage(output.view);
-                bindGuideImages();
+            RtProgramManager.Program selectedProgram = program;
+            RtPipeline createdPipeline = null;
+            try {
+                createdPipeline = createWorldPipeline(ctx, selectedProgram, bindlessTextureCapacity);
+                if (output != null) {
+                    createdPipeline.setStorageImage(output.view);
+                    bindGuideImages(createdPipeline);
+                }
+                materialEpoch.publish(ctx, createdPipeline, bindlessTextureCapacity);
+                bindPassResources(createdPipeline, selectedProgram);
+                invalidateRetainedMaterialState();
+            } catch (Throwable failure) {
+                try {
+                    if (createdPipeline != null) createdPipeline.destroy();
+                } catch (Throwable descriptorFailure) {
+                    failure.addSuppressed(descriptorFailure);
+                } finally {
+                    try {
+                        materialEpoch.destroyPublishedEpoch();
+                    } catch (Throwable epochFailure) {
+                        failure.addSuppressed(epochFailure);
+                    }
+                }
+                throw failure;
             }
-            bindWorldTextures(ctx, program);
+            worldPipeline = createdPipeline;
             if (program != programManager.active()) {
                 programManager.activate(program);
             }
-            reloadRebindRequested = false;
         }
         // The TLAS is rebuilt and bound per frame because frame-varying source geometry animates
         // the instance set every frame.
@@ -798,107 +768,48 @@ public final class RtComposite {
     }
 
     private void refreshPipelineShapeIfNeeded(GpuContext ctx) {
-        if (worldPipeline == null || reloadRebindRequested) {
+        if (worldPipeline == null || materialEpoch.reloadPending()) {
             return;
         }
         RtProgramManager.Program candidate = programManager.candidate();
-        if (candidate != null && candidate != programManager.active()) {
-            replaceWorldProgram(ctx, candidate);
-            return;
-        }
         int desiredBindlessCapacity = ProviderManager.INSTANCE.bindlessTextureCapacity();
-        if (desiredBindlessCapacity <= bindlessTextureCapacity) {
+        boolean programChange = candidate != null && candidate != programManager.active();
+        if (desiredBindlessCapacity > materialEpoch.bindlessTextureCapacity()) {
+            invalidateRetainedMaterialState();
+            ctx.gpuExecutor().drainAndWaitIdle();
+            try {
+                worldPipeline.destroy();
+            } finally {
+                worldPipeline = null;
+                materialEpoch.destroyPublishedEpoch();
+            }
             return;
         }
-        ctx.waitIdle();
-        worldPipeline.destroy();
-        worldPipeline = null;
-        bindlessTextureCapacity = 0;
-        materialBindingsReady = false;
+        if (programChange) {
+            replaceWorldProgram(ctx, candidate);
+        }
     }
 
     private void replaceWorldProgram(GpuContext ctx, RtProgramManager.Program candidate) {
         RtPipeline replacement = null;
         try {
-            replacement = createWorldPipeline(ctx, candidate, bindlessTextureCapacity);
+            replacement = createWorldPipeline(ctx, candidate, materialEpoch.bindlessTextureCapacity());
             if (output != null) {
                 replacement.setStorageImage(output.view);
                 bindGuideImages(replacement);
             }
-            if (materialBindingsReady) {
-                bindCurrentResourcePack(ctx, replacement, candidate);
-            }
+            materialEpoch.bindCurrent(ctx, replacement);
+            bindPassResources(replacement, candidate);
             ctx.waitIdle();
             RtPipeline previous = worldPipeline;
             worldPipeline = replacement;
             replacement = null;
-            programManager.activate(candidate);
             previous.destroy();
+            programManager.activate(candidate);
         } catch (Throwable failure) {
-            if (replacement != null) {
-                replacement.destroy();
-            }
+            if (replacement != null) replacement.destroy();
             programManager.reject(candidate, failure);
         }
-    }
-
-    /**
-     * Resolve and bind every world-pipeline texture: the shared base-color atlas at bindless index zero
-     * and the canonical material page bundles at their reserved bindless indices. Shared by first creation and
-     * the post-reload rebind. Resets the source bindless registry, recreates material pages, builds
-     * the shared material registry, and invalidates old-epoch geometry before tracing resumes.
-     */
-    private void bindWorldTextures(GpuContext ctx, RtProgramManager.Program program) {
-        long sampler = materialTextureSampler(ctx);
-        long atlasView = baseColorAtlasView;
-        boundBaseColorAtlasView = atlasView;
-        // Bindless base-color texture index zero is the fallback, so unresolved geometry samples
-        // something defined rather than an unbound (partially-bound) descriptor.
-        if (opacityMicromapPipeline != null) {
-            throw new IllegalStateException("Previous opacity micromap material epoch is still active");
-        }
-        RtMaterialPageCompiler.INSTANCE.reset();
-        ProviderManager.MaterialContributions materials = ProviderManager.INSTANCE.collectMaterials();
-        RtMaterialOverrides materialOverrides = RtMaterialOverrides.from(
-                materials.rules(), CausticaApi.registry()::surfaceIndex);
-        MaterialCatalog materialCatalog = RtRuntime.host().materialCatalog(materials.rules());
-        RtMaterialPageCompiler.INSTANCE.prepareAll(ctx, bindlessTextureCapacity, materialCatalog);
-        if (RtDeviceBringup.ommEnabled()) {
-            opacityMicromapPipeline = RtOpacityMicromapPipeline.create(ctx,
-                    RtMaterialPageCompiler.INSTANCE.temporalAlphaViews(),
-                    RtMaterialPageCompiler.INSTANCE.staticAlphaViews());
-        }
-        sceneGeometry.setOpacityMicromapPipeline(opacityMicromapPipeline);
-        ProviderManager.INSTANCE.resetBindlessTextures(bindlessTextureCapacity);
-        worldPipeline.setBaseColorTexture(0, atlasView, sampler);
-        RtMaterialPageCompiler.INSTANCE.bindPages(worldPipeline, sampler);
-        RtMaterialRegistry.INSTANCE.rebuild(ctx, RtMaterialPageCompiler.INSTANCE, materialCatalog,
-                materialOverrides, materials.definitions(), CausticaApi.registry()::surfaceIndex,
-                bindlessTextureCapacity);
-        materialBindingsReady = true;
-        bindPassResources(worldPipeline, program);
-        // Texture coordinates and material IDs are one resource epoch. Invalidate retained geometry as
-        // a unit rather than displaying old records against the new texture and material tables.
-        ProviderManager.INSTANCE.onWorldChanged();
-        materialEpochTraceGate = true;
-    }
-
-    private void destroyOpacityMicromapPipeline() {
-        sceneGeometry.setOpacityMicromapPipeline(null);
-        if (opacityMicromapPipeline != null) {
-            opacityMicromapPipeline.destroy();
-            opacityMicromapPipeline = null;
-        }
-    }
-
-    /** Bind the already-published pack epoch into a replacement program without rebuilding materials. */
-    private void bindCurrentResourcePack(GpuContext ctx, RtPipeline pipeline,
-                                         RtProgramManager.Program program) {
-        long sampler = materialTextureSampler(ctx);
-        pipeline.setBaseColorTexture(0, boundBaseColorAtlasView, sampler);
-        RtMaterialPageCompiler.INSTANCE.bindPages(pipeline, sampler);
-        ProviderManager.INSTANCE.rebindTextures(pipeline, sampler);
-        bindPassResources(pipeline, program);
     }
 
     /**
@@ -944,13 +855,11 @@ public final class RtComposite {
         bindPassResources(worldPipeline, programManager.active());
     }
 
-    private void refreshMaterialBindingsIfNeeded(GpuContext ctx) {
-        if (worldPipeline == null || reloadRebindRequested) {
-            return;
-        }
-        if (!materialBindingsReady) {
-            bindWorldTextures(ctx, programManager.active());
-        }
+    private void invalidateRetainedMaterialState() {
+        // Texture coordinates and material IDs are one epoch. The source clear and one-frame trace gate
+        // prevent old retained primitive IDs from being interpreted through the replacement tables.
+        ProviderManager.INSTANCE.onWorldChanged();
+        materialEpochTraceGate = true;
     }
 
     /**
@@ -963,10 +872,11 @@ public final class RtComposite {
      * atlas is ready (gated in {@link #composite}). The new material epoch clears retained geometry before trace.
      */
     public void onResourceReloadStart() {
-        reloadRebindRequested = true;
-        materialBindingsReady = false;
-        ProviderManager.INSTANCE.onResourcePackClosing();
         GpuContext ctx = GpuContext.currentOrNull();
+        if (ctx == null && (worldPipeline != null || materialEpoch.hasPublishedResources())) {
+            throw new IllegalStateException("Live RT material resources have no current GPU context");
+        }
+        materialEpoch.beginReload();
         if (ctx != null) {
             ctx.gpuExecutor().drainAndWaitIdle();
             if (renderPassManager != null) {
@@ -975,10 +885,8 @@ public final class RtComposite {
             if (worldPipeline != null) {
                 worldPipeline.destroy();
                 worldPipeline = null;
-                bindlessTextureCapacity = 0;
             }
-            destroyOpacityMicromapPipeline();
-            RtMaterialRegistry.INSTANCE.destroy();
+            materialEpoch.destroyPublishedEpoch();
         }
     }
 
@@ -988,7 +896,7 @@ public final class RtComposite {
      * them against the still-current host resources.
      */
     public void onResourceReloadFailed() {
-        reloadRebindRequested = false;
+        materialEpoch.reloadFailed();
     }
 
     /** Notify runtime-activation-scoped passes after the host has published the replacement pack epoch. */
@@ -996,7 +904,7 @@ public final class RtComposite {
         if (renderPassManager != null) {
             renderPassManager.onResourcePackApplied();
         }
-        ProviderManager.INSTANCE.onResourcePackApplied();
+        materialEpoch.resourcePackApplied();
     }
 
     /** Reset world-scoped pass state when the active render session changes worlds. */
@@ -1229,7 +1137,7 @@ public final class RtComposite {
             Float3 cameraMedium = new Float3(0.0f, 0.0f, 0.0f);
             FrameSnapshot.CameraMedium frameMedium = snapshot.cameraMedium();
             if (frameMedium != null) {
-                RtMaterialRegistry.Snapshot materialSnapshot = RtMaterialRegistry.INSTANCE.requireSnapshot();
+                var materialSnapshot = materialEpoch.snapshot();
                 int materialId = materialSnapshot.bindingId(frameMedium.material().id());
                 var material = materialSnapshot.material(materialId);
                 flags |= 0b01 | (material.surfaceImplementation() << 8);
@@ -1293,7 +1201,7 @@ public final class RtComposite {
             ).write(push);
             pushBuf.flush(0L, WORLD_PUSH_SIZE);
             // Upload source textures registered this frame before the trace, preserving descriptor order.
-            ProviderManager.INSTANCE.uploadPendingTextures(active, materialTextureSampler(ctx));
+            materialEpoch.uploadPendingTextures(ctx, active);
             RtAccel.PreparedTlas frameTlas;
             try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("frame.prepareTlas")) {
                 frameTlas = sceneGeometry.prepareTlas(ctx, dynamicGeometry, graphicsUse);
@@ -1313,8 +1221,8 @@ public final class RtComposite {
             ByteBuffer pushConstants = stack.malloc(WorldPushConstantsData.BYTE_SIZE);
             new WorldPushConstantsData(pushBuf.deviceAddress, sceneGeometry.geometryTableAddress(dynamicGeometry),
                     sceneGeometry.instanceHistoryAddress(dynamicGeometry),
-                    RtMaterialRegistry.INSTANCE.bindingTableAddress(),
-                    RtMaterialRegistry.INSTANCE.surfaceTableAddress(),
+                    materialEpoch.bindingTableAddress(),
+                    materialEpoch.surfaceTableAddress(),
                     retainedLights.lightAddress(), retainedLights.nodeAddress(),
                     frameLights.lightAddress(), frameLights.nodeAddress(),
                     continuationQueue.deviceAddress,
@@ -1525,12 +1433,8 @@ public final class RtComposite {
             worldPipeline.destroy();
             worldPipeline = null;
         }
-        destroyOpacityMicromapPipeline();
-        RtMaterialPageCompiler.INSTANCE.reset();
-        bindlessTextureCapacity = 0;
-        materialBindingsReady = false;
         materialEpochTraceGate = false;
-        RtMaterialRegistry.INSTANCE.destroy();
+        materialEpoch.destroy();
         if (pushRing != null) {
             for (PushSlot slot : pushRing) {
                 if (slot != null) {
@@ -1539,15 +1443,6 @@ public final class RtComposite {
             }
             pushRing = null;
         }
-        if (materialTextureSampler != 0L) {
-            GpuContext ctx = GpuContext.currentOrNull();
-            if (ctx != null) {
-                VK10.vkDestroySampler(ctx.vk(), materialTextureSampler, null);
-            }
-            materialTextureSampler = 0L;
-        }
-        reloadRebindRequested = false;
-        boundBaseColorAtlasView = 0L;
         boundWorldResourceGeneration = -1;
         displayW = -1;
         displayH = -1;
@@ -1564,28 +1459,6 @@ public final class RtComposite {
         currentTlasHandle = 0L;
         pendingGraphicsUse = null;
         hdrWrittenThisFrame = false;
-    }
-
-    private long materialTextureSampler(GpuContext ctx) {
-        if (materialTextureSampler == 0L) {
-            try (MemoryStack stack = MemoryStack.stackPush()) {
-                VkSamplerCreateInfo sci = VkSamplerCreateInfo.calloc(stack).sType$Default()
-                        .magFilter(VK10.VK_FILTER_NEAREST).minFilter(VK10.VK_FILTER_NEAREST)
-                        .mipmapMode(VK10.VK_SAMPLER_MIPMAP_MODE_LINEAR)
-                        .addressModeU(VK10.VK_SAMPLER_ADDRESS_MODE_REPEAT)
-                        .addressModeV(VK10.VK_SAMPLER_ADDRESS_MODE_REPEAT)
-                        .addressModeW(VK10.VK_SAMPLER_ADDRESS_MODE_REPEAT)
-                        .minLod(0f).maxLod(16f);
-                LongBuffer p = stack.mallocLong(1);
-                if (VK10.vkCreateSampler(ctx.vk(), sci, null, p) != VK10.VK_SUCCESS) {
-                    throw new IllegalStateException("vkCreateSampler(material textures) failed");
-                }
-                materialTextureSampler = p.get(0);
-                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_SAMPLER, materialTextureSampler,
-                        "material texture sampler");
-            }
-        }
-        return materialTextureSampler;
     }
 
     private static VkImageCopy.Buffer copyRegion(MemoryStack stack, int width, int height) {

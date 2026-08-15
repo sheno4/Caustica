@@ -83,7 +83,7 @@ final class RtSceneSourceBoundaryTest {
     @Test
     void frameLifetimeAndUploadOrderingRemainExplicit() throws IOException {
         String composite = Files.readString(JAVA.resolve("rt/RtComposite.java"));
-        int upload = composite.indexOf("ProviderManager.INSTANCE.uploadPendingTextures");
+        int upload = composite.indexOf("materialEpoch.uploadPendingTextures");
         int tlas = composite.indexOf("sceneGeometry.prepareTlas", upload);
         int execute = composite.indexOf("submission.execute(cmd)");
         int markPush = composite.indexOf("framePushSlot.graphicsUse.mark", execute);
@@ -103,9 +103,10 @@ final class RtSceneSourceBoundaryTest {
         String runtime = Files.readString(JAVA.resolve("rt/RtRuntime.java"));
         int stop = runtime.indexOf("ProviderManager.INSTANCE.stopProviders()");
         int drain = runtime.indexOf("context.gpuExecutor().drainAndWaitIdle()", stop);
-        int shutdown = runtime.indexOf("ProviderManager.INSTANCE.shutdownResources()", drain);
-        assertTrue(stop >= 0 && stop < drain && drain < shutdown,
-                "source work must stop before GPU drain and release after idle");
+        int compositeDestroy = runtime.indexOf("RtComposite.INSTANCE.destroy()", drain);
+        int shutdown = runtime.indexOf("ProviderManager.INSTANCE.shutdownResources()", compositeDestroy);
+        assertTrue(stop >= 0 && stop < drain && drain < compositeDestroy && compositeDestroy < shutdown,
+                "world descriptors must be destroyed after idle and before provider GPU textures");
         int update = runtime.indexOf("ProviderManager.INSTANCE.updateScenes()");
         int startupGeometry = runtime.indexOf("ProviderManager.INSTANCE.submitGeometryUpdates", update);
         int geometryProgress = runtime.indexOf("RtComposite.INSTANCE.sceneGeometry().progress", startupGeometry);
