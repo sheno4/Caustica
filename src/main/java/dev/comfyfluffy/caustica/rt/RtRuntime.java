@@ -301,6 +301,7 @@ public final class RtRuntime {
         try {
             SlangRuntime.INSTANCE.resume();
             contributions = CausticaApi.registry().createRuntimeContributions();
+            ProviderManager.INSTANCE.bindSceneGeometry(RtComposite.INSTANCE.sceneGeometry());
             ProviderManager.INSTANCE.beginSession(contributions);
             providersInstalled = true;
             session = new Session(renderSessionEpoch, activationEpoch, contributions);

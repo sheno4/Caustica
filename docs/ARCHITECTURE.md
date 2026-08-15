@@ -17,7 +17,7 @@ The code is divided by responsibility:
 - `rt/*` owns Vulkan resources, acceleration structures, canonical material compilation, world-shader
   composition and path tracing. Import-firewall tests keep Minecraft, loader, and Mojang types out.
 - `minecraft/*` owns block/chunk/entity/resource-pack acquisition, Minecraft material decoding and
-  photometric calibration, and the optimized terrain/entity adapter.
+  photometric calibration, and the terrain/entity capture adapter.
 - `platform/*` is the small loader seam for paths and extension discovery; `src/fabric` and `src/neoforge`
   contain only entrypoints and APIs that cannot be shared.
 - `builtin/*` supplies the reference sky and surface through the same registry used by extensions.
@@ -44,7 +44,7 @@ For each resource epoch:
 For each frame:
 
 1. providers prepare and submit complete geometry/light snapshots;
-2. retained provider meshes and the optimized source are rebased into one geometry-record index space;
+2. retained provider meshes and the primary scene source are rebased into one geometry-record index space;
 3. retained, frame-varying and distant light segments become one sampling distribution;
 4. BLAS work completes before the TLAS build;
 5. the world pipeline traces, reconstruction runs, scene-referred render passes chain, and the display
@@ -59,19 +59,20 @@ that provider, and leaves other providers and the active renderer running.
 
 The public geometry boundary is `SceneProvider.submitGeometry(SceneGeometrySink)`. Providers retain
 immutable indexed `TriangleMesh` values under provider-local keys and submit double-precision
-`GeometryTransform` instances. Omitted meshes and instances retire after their last submitted frame.
-The engine owns upload, BLAS creation, rebasing, canonical geometry records, TLAS insertion and lifetime.
+`GeometryTransform` instances. Instances are frame declarations and disappear when omitted; retained meshes
+remain resident until explicitly released, replaced under the same key, or their provider stops. The engine
+owns upload, BLAS creation, rebasing, canonical geometry records, TLAS insertion and lifetime.
 
 Minecraft's rounded clouds are the proof consumer. `MinecraftCloudSceneProvider` generates deterministic
 closed rounded-cuboid meshes, references the named `caustica:cloud` material and submits them through the
 ordinary retained-geometry API.
 
-Minecraft terrain and animated entities remain an intentional optimized seam. The registered
-`MinecraftSceneProvider` also implements the internal, host-neutral `RtSceneSource` contract so chunk
-meshing, retained terrain BLAS, entity refit, bindless host textures and asynchronous publication keep
-their existing performance properties. These adapters live under `minecraft/*`; they merge into the
-same geometry table and TLAS as public provider geometry. They are not a second public extension API and
-the renderer contains no block, chunk or entity types.
+Minecraft terrain and animated entities use the internal, host-neutral `RtSceneSource` environment and
+CPU-capture contract. The renderer injects its geometry manager through `ProviderManager`; sources submit
+canonical captures and retain source-specific cancellation, meshing and texture discovery, while the
+manager owns every GPU geometry buffer, BLAS operation, record, instance and retirement. These adapters
+live under `minecraft/*`, use the same geometry table and TLAS as public provider geometry, and are not a
+second public extension API. The renderer contains no block, chunk or entity types.
 
 ## Lights
 
@@ -182,8 +183,8 @@ global shader parameters directly.
 
 ## Current limitations
 
-- The optimized Minecraft terrain/entity `RtSceneSource` path is not yet expressed by the public retained
-  mesh API; it is the remaining performance-oriented adapter seam.
+- Minecraft terrain/entity capture is an internal adapter over the engine-owned retained geometry manager;
+  it is not yet expressed by the public retained mesh API.
 - Provider geometry is triangle-mesh based. There is no public volume-density source contract, so rounded
   clouds are geometry rather than participating volumes.
 - The OpenPBR subset omits coat, fuzz, thin film, dispersion, anisotropic specular, displacement and a full

@@ -14,9 +14,8 @@ import dev.comfyfluffy.caustica.api.provider.MaterialDefinition;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.rt.GpuContext;
-import dev.comfyfluffy.caustica.rt.RtGpuExecutor.GraphicsUse;
-import dev.comfyfluffy.caustica.rt.accel.RtAccel;
 import dev.comfyfluffy.caustica.rt.geometry.RtGeometryAbi;
+import dev.comfyfluffy.caustica.rt.geometry.RtSceneGeometryManager;
 import dev.comfyfluffy.caustica.rt.pipeline.RtPipeline;
 import dev.comfyfluffy.caustica.rt.scene.RtSceneSource;
 import org.joml.Matrix4f;
@@ -509,28 +508,25 @@ final class ProviderManagerTest {
     }
 
     @Test
-    void optimizedSceneSelectionDelegatesWithoutCopyingFrameProducts() {
-        OptimizedProvider source = new OptimizedProvider();
-        ProviderManager manager = manager("optimized", source);
+    void sceneSourceSelectionDelegatesCaptureWithoutExposingFrameProducts() {
+        PrimarySceneProvider source = new PrimarySceneProvider();
+        ProviderManager manager = manager("primary", source);
 
         ProviderManager.PrimaryScene selected = manager.primaryScene();
-        assertEquals(id("optimized"), selected.provider());
+        assertEquals(id("primary"), selected.provider());
         assertSame(source.retained, selected.retained());
         assertEquals(37, manager.bindlessTextureCapacity());
 
         manager.resetBindlessTextures(64);
         manager.rebindTextures(null, 81L);
         manager.uploadPendingTextures(null, 91L);
-        RtSceneSource.Frame frame = manager.beginPrimaryFrame(selected, null, List.of(),
-                source.retained.geometryTable(),
+        manager.submitPrimaryFrame(selected, null, null,
                 new RtSceneSource.Camera(1, 2, 3, new Matrix4f(), new Matrix4f()));
-        frame.markGraphicsUse(null);
 
-        assertSame(source.frame, frame);
         assertEquals(64, source.resetCapacity);
         assertEquals(81L, source.rebindSampler);
         assertEquals(91L, source.uploadSampler);
-        assertEquals(1, source.frameMarks.get());
+        assertEquals(1, source.frameSubmissions.get());
 
         manager.stopProviders();
         assertNull(manager.primaryScene());
@@ -538,10 +534,10 @@ final class ProviderManagerTest {
     }
 
     @Test
-    void rejectsMultipleActiveOptimizedSceneSources() {
+    void rejectsMultipleActivePrimarySceneSources() {
         Map<ResourceId, SceneProvider> scenes = new LinkedHashMap<>();
-        scenes.put(id("first_optimized"), new OptimizedProvider());
-        scenes.put(id("second_optimized"), new OptimizedProvider());
+        scenes.put(id("first_primary"), new PrimarySceneProvider());
+        scenes.put(id("second_primary"), new PrimarySceneProvider());
         ProviderManager manager = new ProviderManager(scenes, Map.of(), Map.of());
 
         assertThrows(IllegalStateException.class, manager::primaryScene);
@@ -549,15 +545,14 @@ final class ProviderManagerTest {
     }
 
     @Test
-    void failingOptimizedFrameStopsAndDisablesItsProvider() {
-        OptimizedProvider source = new OptimizedProvider();
-        ProviderManager manager = manager("failing_optimized", source);
+    void failingPrimaryFrameStopsAndDisablesItsProvider() {
+        PrimarySceneProvider source = new PrimarySceneProvider();
+        ProviderManager manager = manager("failing_primary", source);
         ProviderManager.PrimaryScene selected = manager.primaryScene();
         source.failFrame = true;
 
         assertThrows(ProviderManager.SceneSourceUnavailableException.class,
-                () -> manager.beginPrimaryFrame(selected, null,
-                List.of(), source.retained.geometryTable(),
+                () -> manager.submitPrimaryFrame(selected, null, null,
                 new RtSceneSource.Camera(0, 0, 0, new Matrix4f(), new Matrix4f())));
 
         assertEquals(1, source.stops.get());
@@ -626,34 +621,12 @@ final class ProviderManagerTest {
                 1.0f, 0.0f, 1.5f, 0.0f, MaterialTopology.SURFACE, null);
     }
 
-    private static final class OptimizedProvider implements SceneProvider, RtSceneSource {
+    private static final class PrimarySceneProvider implements SceneProvider, RtSceneSource {
         final AtomicInteger stops = new AtomicInteger();
-        final AtomicInteger frameMarks = new AtomicInteger();
-        final Retained retained = new Retained(SceneOrigin.ZERO, List.of(),
-                new RtGeometryAbi.TablePrefix(1L, 0),
+        final AtomicInteger frameSubmissions = new AtomicInteger();
+        final Retained retained = new Retained(SceneOrigin.ZERO,
                 new RetainedLights(0, 0, -1, 0, 0,
                         0, 0, 0, 1, 0));
-        final Frame frame = new Frame() {
-            @Override
-            public List<RtAccel.Instance> dynamicInstances() {
-                return List.of();
-            }
-
-            @Override
-            public List<RtAccel.PreparedBlas> blasBuilds() {
-                return List.of();
-            }
-
-            @Override
-            public long geometryTableAddress() {
-                return 1L;
-            }
-
-            @Override
-            public void markGraphicsUse(GraphicsUse graphicsUse) {
-                frameMarks.incrementAndGet();
-            }
-        };
         boolean failFrame;
         int resetCapacity;
         long rebindSampler;
@@ -665,12 +638,12 @@ final class ProviderManagerTest {
         }
 
         @Override
-        public Frame beginFrame(GpuContext ctx, Retained retained, List<RtAccel.Instance> baseInstances,
-                                RtGeometryAbi.TablePrefix geometryTable, Camera camera) {
+        public void submitFrame(GpuContext ctx, Retained retained, RtSceneGeometryManager.DynamicFrame geometry,
+                                Camera camera) {
             if (failFrame) {
                 throw new IllegalStateException("expected");
             }
-            return frame;
+            frameSubmissions.incrementAndGet();
         }
 
         @Override

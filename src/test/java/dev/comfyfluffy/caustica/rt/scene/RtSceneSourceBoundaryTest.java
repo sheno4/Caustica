@@ -29,7 +29,7 @@ final class RtSceneSourceBoundaryTest {
     }
 
     @Test
-    void optimizedSceneContractIsHostNeutral() throws IOException {
+    void sceneSourceContractIsHostNeutral() throws IOException {
         Path source = JAVA.resolve("rt/scene/RtSceneSource.java");
         String content = Files.readString(source);
         String lower = content.toLowerCase(Locale.ROOT);
@@ -39,13 +39,36 @@ final class RtSceneSourceBoundaryTest {
         assertFalse(lower.contains("rt.terrain"), source.toString());
         assertFalse(lower.contains("rt.entity"), source.toString());
         assertFalse(lower.matches("(?s).*\\b(minecraft|terrain|entity|section|block)\\b.*"), source.toString());
+        assertFalse(content.contains("PreparedBlas"), source.toString());
+        assertFalse(content.contains("GraphicsUse"), source.toString());
+        assertFalse(content.contains("RtAccel"), source.toString());
+        assertFalse(content.contains("GpuBuffer"), source.toString());
+        assertFalse(content.contains("geometryTableAddress"), source.toString());
+        assertFalse(content.contains("MotionInput"), source.toString());
     }
 
     @Test
-    void minecraftProviderOwnsTheOptimizedAdapterAndWorkerStop() throws IOException {
+    void dynamicFrameDoesNotExposeRawRecordsOrInstances() throws NoSuchMethodException {
+        var dynamic = dev.comfyfluffy.caustica.rt.geometry.RtSceneGeometryManager.DynamicFrame.class;
+        assertFalse(java.lang.reflect.Modifier.isPublic(dynamic.getDeclaredMethod("appendRecord", long.class,
+                long.class, long.class, long.class, float.class, float.class, float.class, int.class,
+                int[].class, int.class).getModifiers()));
+        assertFalse(java.lang.reflect.Modifier.isPublic(dynamic.getDeclaredMethod("appendInstance", float[].class,
+                long.class, int.class, int.class).getModifiers()));
+        assertFalse(java.util.Arrays.stream(dynamic.getMethods())
+                .anyMatch(method -> method.getName().equals("instances") || method.getName().equals("blasBuilds")
+                        || method.getName().equals("uploadMotion") || method.getName().equals("geometryTableAddress")));
+        assertFalse(java.util.Arrays.stream(dev.comfyfluffy.caustica.rt.geometry.RtSceneGeometryManager.MotionInput.class
+                        .getMethods())
+                .anyMatch(method -> method.getName().equals("address")));
+    }
+
+    @Test
+    void minecraftProviderOwnsThePrimarySceneAdapterAndWorkerStop() throws IOException {
         String provider = Files.readString(JAVA.resolve("minecraft/provider/MinecraftSceneProvider.java"));
         assertTrue(provider.contains("implements SceneProvider, RtSceneSource"));
         assertTrue(provider.contains("RtWorkerPool.INSTANCE.shutdown()"));
+        assertFalse(provider.contains("RtComposite.INSTANCE"), provider);
 
         String runtime = Files.readString(JAVA.resolve("rt/RtRuntime.java"));
         assertTrue(runtime.contains("host().resetSceneTextures()"));
@@ -56,13 +79,10 @@ final class RtSceneSourceBoundaryTest {
     void frameLifetimeAndUploadOrderingRemainExplicit() throws IOException {
         String composite = Files.readString(JAVA.resolve("rt/RtComposite.java"));
         int upload = composite.indexOf("ProviderManager.INSTANCE.uploadPendingTextures");
-        int blas = composite.indexOf("RtAccel.recordBlasBuilds", upload);
+        int blas = composite.indexOf("sceneGeometry.recordBlasBuilds", upload);
         int execute = composite.indexOf("submission.execute(cmd)");
         int markPush = composite.indexOf("framePushSlot.graphicsUse.mark", execute);
-        int markSource = composite.indexOf("sourceFrame.markGraphicsUse", execute);
         assertTrue(upload >= 0 && upload < blas, "source textures must publish before BLAS/TLAS recording");
-        assertTrue(execute >= 0 && execute < markSource,
-                "source lifetimes must attach only after graphics submission succeeds");
         assertTrue(execute < markPush,
                 "the push-ring slot must not retain a token until graphics submission succeeds");
         assertFalse(composite.substring(0, execute).contains("selectedPushSlot.graphicsUse.mark"),
@@ -71,7 +91,7 @@ final class RtSceneSourceBoundaryTest {
                 "catch (ProviderManager.SceneSourceUnavailableException unavailable)");
         int globalFailure = composite.indexOf("failed = true", isolatedSourceFailure);
         assertTrue(isolatedSourceFailure >= 0 && isolatedSourceFailure < globalFailure,
-                "an optimized source failure must fall back without disabling the renderer");
+                "a scene-source failure must fall back without disabling the renderer");
 
         String runtime = Files.readString(JAVA.resolve("rt/RtRuntime.java"));
         int stop = runtime.indexOf("ProviderManager.INSTANCE.stopProviders()");

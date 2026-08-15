@@ -17,8 +17,7 @@ import dev.comfyfluffy.caustica.api.provider.SceneGeometrySink;
 import dev.comfyfluffy.caustica.api.provider.GeometryTransform;
 import dev.comfyfluffy.caustica.api.provider.TriangleMesh;
 import dev.comfyfluffy.caustica.rt.GpuContext;
-import dev.comfyfluffy.caustica.rt.accel.RtAccel;
-import dev.comfyfluffy.caustica.rt.geometry.RtGeometryAbi;
+import dev.comfyfluffy.caustica.rt.geometry.RtSceneGeometryManager;
 import dev.comfyfluffy.caustica.rt.pipeline.RtPipeline;
 import dev.comfyfluffy.caustica.rt.scene.RtSceneSource;
 import java.util.HashSet;
@@ -43,6 +42,7 @@ public final class ProviderManager {
     private Map<ResourceId, MaterialSource> materials;
     private List<LightDescriptor> frameLights = List.of();
     private Set<ResourceId> namedMaterials = Set.of();
+    private RtSceneGeometryManager sceneGeometry;
 
     ProviderManager(Map<ResourceId, SceneProvider> scenes, Map<ResourceId, LightProvider> lights,
                     Map<ResourceId, MaterialSource> materials) {
@@ -109,7 +109,7 @@ public final class ProviderManager {
         return frameLights;
     }
 
-    /** Select the single active optimized scene source and snapshot its retained frame state. */
+    /** Select the single active primary scene source and snapshot its retained environment state. */
     public PrimaryScene primaryScene() {
         SceneSourceEntry entry = primarySceneSource();
         if (entry == null) {
@@ -120,18 +120,29 @@ public final class ProviderManager {
         return retained != null ? new PrimaryScene(entry.id(), retained) : null;
     }
 
-    /** Append the selected source's frame-varying geometry to the renderer-assembled base table. */
-    public RtSceneSource.Frame beginPrimaryFrame(PrimaryScene selected, GpuContext ctx,
-                                                  List<RtAccel.Instance> baseInstances,
-                                                  RtGeometryAbi.TablePrefix geometryTable,
-                                                  RtSceneSource.Camera camera) {
+    /** Bind the renderer-owned geometry coordinator for source lifecycle callbacks. */
+    public void bindSceneGeometry(RtSceneGeometryManager geometry) {
+        sceneGeometry = geometry;
+    }
+
+    /** Renderer-owned geometry coordinator injected into host scene providers. */
+    public RtSceneGeometryManager sceneGeometry() {
+        if (sceneGeometry == null) throw new IllegalStateException("scene geometry is not bound");
+        return sceneGeometry;
+    }
+
+    /** Append CPU-captured frame geometry to the renderer-assembled dynamic suffix. */
+    public void submitPrimaryFrame(PrimaryScene selected, GpuContext ctx,
+                                   RtSceneGeometryManager.DynamicFrame geometry,
+                                   RtSceneSource.Camera camera) {
         SceneSourceEntry entry = requireSceneSource(selected.provider());
-        RtSceneSource.Frame frame = invokeSceneSource(entry, "frame geometry",
-                () -> entry.source().beginFrame(ctx, selected.retained(), baseInstances, geometryTable, camera), null);
-        if (frame == null) {
+        Boolean submitted = invokeSceneSource(entry, "frame capture", () -> {
+            entry.source().submitFrame(ctx, selected.retained(), geometry, camera);
+            return Boolean.TRUE;
+        }, Boolean.FALSE);
+        if (!submitted) {
             throw new SceneSourceUnavailableException(selected.provider());
         }
-        return frame;
     }
 
     public int bindlessTextureCapacity() {
@@ -381,7 +392,7 @@ public final class ProviderManager {
                 continue;
             }
             if (selected != null) {
-                throw new IllegalStateException("multiple optimized scene sources are active: "
+                throw new IllegalStateException("multiple primary scene sources are active: "
                         + selected.id() + " and " + entry.getKey());
             }
             selected = new SceneSourceEntry(entry.getKey(), entry, key, source);
@@ -412,10 +423,10 @@ public final class ProviderManager {
         }
     }
 
-    /** The selected optimized source disappeared while the current frame was being assembled. */
+    /** The selected primary scene source disappeared while the current frame was being assembled. */
     public static final class SceneSourceUnavailableException extends RuntimeException {
         SceneSourceUnavailableException(ResourceId provider) {
-            super("optimized scene source is unavailable: " + provider);
+            super("primary scene source is unavailable: " + provider);
         }
     }
 

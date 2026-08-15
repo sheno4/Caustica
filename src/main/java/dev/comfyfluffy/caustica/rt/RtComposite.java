@@ -294,6 +294,11 @@ public final class RtComposite {
         return currentTlasHandle;
     }
 
+    /** Renderer-owned geometry coordinator shared by every active scene producer. */
+    public RtSceneGeometryManager sceneGeometry() {
+        return sceneGeometry;
+    }
+
     public boolean hasFailed() {
         return this.failed;
     }
@@ -1146,8 +1151,8 @@ public final class RtComposite {
         // This belongs after the timeline snapshot and before any world push data is written.
         exposure.beginFrame(graphicsUseWaiter);
         pendingGraphicsUse = graphicsUse;
-        RtSceneSource.Frame sourceFrame = null;
         RtSceneGeometryManager.FrameGeometry providerGeometry = null;
+        RtSceneGeometryManager.DynamicFrame dynamicGeometry = null;
         RtLightScene.Frame frameLights = null;
         PushSlot framePushSlot = null;
         VkCommandBuffer cmd = submission.beginTransientCommandBuffer();
@@ -1214,13 +1219,13 @@ public final class RtComposite {
             // All geometry records share one source-neutral index space.
             RtSceneGeometryManager.Capture geometryCapture = sceneGeometry.beginCapture();
             ProviderManager.INSTANCE.submitGeometry(geometryCapture::sink);
-            providerGeometry = sceneGeometry.finishFrame(ctx, geometryCapture, retained.instances(),
-                    retained.geometryTable(), sceneOrigin, ProviderManager.INSTANCE.activeSceneProviderIds());
-            RtSceneSource.Frame frame = ProviderManager.INSTANCE.beginPrimaryFrame(primaryScene, ctx,
-                    providerGeometry.instances(), providerGeometry.tablePrefix(),
+            providerGeometry = sceneGeometry.finishFrame(ctx, geometryCapture, sceneOrigin,
+                    ProviderManager.INSTANCE.activeSceneProviderIds());
+            dynamicGeometry = sceneGeometry.beginDynamicFrame(ctx, providerGeometry);
+            ProviderManager.INSTANCE.submitPrimaryFrame(primaryScene, ctx, dynamicGeometry,
                     new RtSceneSource.Camera(snapshot.cameraX(), snapshot.cameraY(), snapshot.cameraZ(),
                             frameProjection, frameViewRotation));
-            sourceFrame = frame;
+            sceneGeometry.finishDynamicFrame(dynamicGeometry);
             new WorldPushData(
                     frameInvViewProj,
                     new Float3(sceneOrigin.relativeX(snapshot.cameraX()),
@@ -1256,20 +1261,16 @@ public final class RtComposite {
             ProviderManager.INSTANCE.uploadPendingTextures(active, materialTextureSampler(ctx));
             // Build pending BLASes, then the TLAS that references retained and frame-varying geometry.
             // Barriers separate each stage; the graphics-use timeline guards resource reuse.
-            if (!providerGeometry.blasBuilds().isEmpty() || !frame.blasBuilds().isEmpty()) {
-                try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("geometry.blasRecord")) {
-                    if (!providerGeometry.blasBuilds().isEmpty()) {
-                        RtAccel.recordBlasBuilds(ctx, cmd, providerGeometry.blasBuilds());
-                    }
-                    if (!frame.blasBuilds().isEmpty()) {
-                        RtAccel.recordBlasBuilds(ctx, cmd, frame.blasBuilds());
-                    }
-                }
+            boolean blasRecorded;
+            try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("geometry.blasRecord")) {
+                blasRecorded = sceneGeometry.recordBlasBuilds(ctx, cmd, providerGeometry, dynamicGeometry);
+            }
+            if (blasRecorded) {
                 VulkanBarriers.memoryBarrier(cmd, stack); // BLAS writes visible to the TLAS build
             }
             RtAccel.PreparedTlas frameTlas;
             try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("frame.prepareTlas")) {
-                frameTlas = sceneGeometry.prepareTlas(ctx, providerGeometry, frame.dynamicInstances(), graphicsUse);
+                frameTlas = sceneGeometry.prepareTlas(ctx, providerGeometry, dynamicGeometry, graphicsUse);
             }
             active.setTlas(frameTlas.accel.handle, graphicsUse, graphicsUseWaiter);
             currentTlasHandle = frameTlas.accel.handle;
@@ -1284,7 +1285,7 @@ public final class RtComposite {
             // WorldPush at all, and the RIS light buffers are read from world.rgen's hot inner loop, so
             // none of them should cost an extra BDA dereference to find.
             ByteBuffer pushConstants = stack.malloc(WorldPushConstantsData.BYTE_SIZE);
-            new WorldPushConstantsData(pushBuf.deviceAddress, frame.geometryTableAddress(),
+            new WorldPushConstantsData(pushBuf.deviceAddress, sceneGeometry.geometryTableAddress(dynamicGeometry),
                     RtMaterialRegistry.INSTANCE.bindingTableAddress(),
                     RtMaterialRegistry.INSTANCE.surfaceTableAddress(),
                     retainedLights.lightAddress(), retainedLights.nodeAddress(),
@@ -1401,7 +1402,7 @@ public final class RtComposite {
         // Do not attach a merely reserved token: failed recording may never signal it. Once execute succeeds,
         // every owner in this frame's manifest is protected through the final overlay consumer.
         framePushSlot.graphicsUse.mark(graphicsUse);
-        sourceFrame.markGraphicsUse(graphicsUse);
+        sceneGeometry.markGraphicsUse(dynamicGeometry, graphicsUse);
         sceneGeometry.markGraphicsUse(providerGeometry, ctx, graphicsUse);
         lightScene.markGraphicsUse(frameLights, graphicsUse);
         exposure.markStateReadbackUse(graphicsUse);

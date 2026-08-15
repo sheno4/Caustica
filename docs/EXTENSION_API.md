@@ -201,10 +201,10 @@ engine clones submitted arrays, uploads geometry, builds BLAS, writes canonical 
 inserts instances into the TLAS. Minecraft's rounded block clouds use exactly this contract — they retain
 their four cloud meshes once and then submit only per-cell instances every frame.
 
-Minecraft terrain and animated entities use an internal optimized `RtSceneSource` implemented by their
-registered scene provider. That seam is not public extension API; it exists to retain asynchronous chunk
-meshing, entity refit and bindless host texture behavior while still merging into the same geometry table
-and TLAS.
+Minecraft terrain and animated entities use an internal `RtSceneSource` implemented by their registered
+scene provider. That seam is not public extension API; it supplies environment state, bindless host
+textures and CPU capture while the injected geometry manager retains asynchronous chunk meshing, entity
+refit and the same geometry table and TLAS ownership.
 
 ## Light providers
 

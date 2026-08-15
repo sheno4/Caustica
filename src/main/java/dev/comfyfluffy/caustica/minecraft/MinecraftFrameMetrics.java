@@ -30,24 +30,17 @@ public final class MinecraftFrameMetrics {
             detail("entity.capture.rigidReuse.equal"),
             detail("entity.capture.rigidReuse.yaw"),
             detail("entity.capture.rigidReuse.shade"),
-            detail("entity.capture.append.alloc"),
-            detail("entity.capture.append.copy"),
-            detail("entity.capture.append.blas"),
             accounted("entity.blockEntities"),
             accounted("entity.particles"),
             accounted("entity.uploadFlush")), List.of(
             "sectionsSnapshotted", "sectionCopies", "terrainBuildsCompleted",
             "terrainMaterialEpochRejects", "entitiesCaptured", "blockEntitiesCaptured",
-            "particlesCaptured", "refits", "entityReuse", "entityRigidFitSuccesses",
-            "entityRigidFitFailures", "vmaBufferCreates", "entityModelSubmissions", "entityCuboids",
+            "particlesCaptured", "entityReuse", "entityRigidFitSuccesses",
+            "entityRigidFitFailures", "entityModelSubmissions", "entityCuboids",
             "entityModelQuads", "entityModelVertices", "entityBakedQuads", "entityBakedVertices",
             "entityDirectSubmissions", "entityDirectFallbacks", "entityDirectQuads", "entityDirectVertices",
             "entitySpecializedCuboids", "entityGenericCuboids", "entityParityChecks",
-            "entityVmaBufferCreates", "entityGeometryBufferReuses", "entityScratchBufferReuses",
-            "entityUploadBytes", "entityMotionUploadBytes", "entityPackedBytes", "entityPackedPaddingBytes",
-            "entityRetainedGeometryBytes", "entityFrameListsWaits", "entityTableWaits", "entitySlotWaits",
-            "entityGraphicsWaitNanos", "entityMotionFlushes", "geometryTableFlushes",
-            "entityBlockEntityRetirements", "entitySlotRetirements", "entityTableRetirements"));
+            "entityMotionUploadBytes", "geometryTableFlushes"));
 
     private MinecraftFrameMetrics() {
     }

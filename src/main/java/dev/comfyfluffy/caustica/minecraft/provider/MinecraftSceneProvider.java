@@ -4,17 +4,15 @@ import dev.comfyfluffy.caustica.api.provider.SceneProvider;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.rt.GpuContext;
-import dev.comfyfluffy.caustica.rt.RtGpuExecutor.GraphicsUse;
-import dev.comfyfluffy.caustica.rt.accel.RtAccel;
 import dev.comfyfluffy.caustica.minecraft.entity.RtEntities;
 import dev.comfyfluffy.caustica.minecraft.entity.RtEntityTextures;
 import dev.comfyfluffy.caustica.rt.geometry.RtGeometryAbi;
+import dev.comfyfluffy.caustica.rt.geometry.RtSceneGeometryManager;
 import dev.comfyfluffy.caustica.rt.pipeline.RtPipeline;
+import dev.comfyfluffy.caustica.rt.provider.ProviderManager;
 import dev.comfyfluffy.caustica.rt.scene.RtSceneSource;
 import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
 import dev.comfyfluffy.caustica.minecraft.terrain.RtWorkerPool;
-
-import java.util.List;
 
 public final class MinecraftSceneProvider implements SceneProvider, RtSceneSource {
     public static final ResourceId ID = ResourceId.of("caustica", "minecraft_scene");
@@ -23,6 +21,7 @@ public final class MinecraftSceneProvider implements SceneProvider, RtSceneSourc
     public void update() {
         GpuContext ctx = GpuContext.currentOrNull();
         if (ctx != null) {
+            RtTerrain.attachGeometry(ProviderManager.INSTANCE.sceneGeometry());
             RtTerrain.update(ctx);
         }
     }
@@ -31,6 +30,7 @@ public final class MinecraftSceneProvider implements SceneProvider, RtSceneSourc
     public void prepareFrame() {
         GpuContext ctx = GpuContext.currentOrNull();
         if (ctx != null) {
+            RtTerrain.attachGeometry(ProviderManager.INSTANCE.sceneGeometry());
             RtTerrain.frame(ctx);
         }
     }
@@ -55,7 +55,8 @@ public final class MinecraftSceneProvider implements SceneProvider, RtSceneSourc
         GpuContext ctx = GpuContext.currentOrNull();
         if (ctx != null) {
             RtTerrain.shutdown(ctx);
-            RtEntities.INSTANCE.shutdown();
+            ProviderManager.INSTANCE.sceneGeometry().releasePackedCoordinator();
+            RtEntities.INSTANCE.shutdown(ctx);
         }
     }
 
@@ -74,17 +75,16 @@ public final class MinecraftSceneProvider implements SceneProvider, RtSceneSourc
                 published.rebaseY() - terrain.blockY,
                 published.rebaseZ() - terrain.blockZ,
                 published.metersPerWorldUnit(), published.generation());
-        return new Retained(origin, terrain.staticInstances(), terrain.geometryTablePrefix(), lights);
+        return new Retained(origin, lights);
     }
 
     @Override
-    public Frame beginFrame(GpuContext ctx, Retained retained, List<RtAccel.Instance> baseInstances,
-                            RtGeometryAbi.TablePrefix geometryTable, Camera camera) {
+    public void submitFrame(GpuContext ctx, Retained retained, RtSceneGeometryManager.DynamicFrame geometry,
+                            Camera camera) {
         SceneOrigin origin = retained.origin();
-        RtEntities.FrameEntities entities = RtEntities.INSTANCE.beginFrame(ctx, baseInstances, geometryTable,
+        RtEntities.INSTANCE.beginFrame(ctx, geometry,
                 (int) origin.x(), (int) origin.y(), (int) origin.z(),
                 camera.x(), camera.y(), camera.z(), camera.projection(), camera.viewRotation());
-        return new MinecraftFrame(entities);
     }
 
     @Override
@@ -105,27 +105,5 @@ public final class MinecraftSceneProvider implements SceneProvider, RtSceneSourc
     @Override
     public void uploadPendingTextures(RtPipeline pipeline, long sampler) {
         RtEntityTextures.INSTANCE.uploadPending(pipeline, sampler);
-    }
-
-    private record MinecraftFrame(RtEntities.FrameEntities entities) implements Frame {
-        @Override
-        public List<RtAccel.Instance> dynamicInstances() {
-            return entities.dynamicInstances();
-        }
-
-        @Override
-        public List<RtAccel.PreparedBlas> blasBuilds() {
-            return entities.blas();
-        }
-
-        @Override
-        public long geometryTableAddress() {
-            return entities.geometryTableAddress();
-        }
-
-        @Override
-        public void markGraphicsUse(GraphicsUse graphicsUse) {
-            RtEntities.INSTANCE.markGraphicsUse(entities, graphicsUse);
-        }
     }
 }

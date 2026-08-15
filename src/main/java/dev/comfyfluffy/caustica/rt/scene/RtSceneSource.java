@@ -2,23 +2,20 @@ package dev.comfyfluffy.caustica.rt.scene;
 
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.rt.GpuContext;
-import dev.comfyfluffy.caustica.rt.RtGpuExecutor.GraphicsUse;
-import dev.comfyfluffy.caustica.rt.accel.RtAccel;
-import dev.comfyfluffy.caustica.rt.geometry.RtGeometryAbi;
+import dev.comfyfluffy.caustica.rt.geometry.RtSceneGeometryManager;
 import dev.comfyfluffy.caustica.rt.pipeline.RtPipeline;
 import org.joml.Matrix4f;
 
-import java.util.List;
 import java.util.Objects;
 
-/** Optimized GPU-scene seam implemented by a registered scene provider. */
+/** Host-neutral environment and capture seam implemented by one registered scene provider. */
 public interface RtSceneSource {
     /** The currently publishable retained scene, or {@code null} while the source is not ready. */
     Retained retainedScene();
 
-    /** Append frame-varying geometry to the retained/provider table assembled by the renderer. */
-    Frame beginFrame(GpuContext ctx, Retained retained, List<RtAccel.Instance> baseInstances,
-                     RtGeometryAbi.TablePrefix geometryTable, Camera camera);
+    /** Submit CPU-captured frame geometry into the renderer-owned dynamic suffix. */
+    void submitFrame(GpuContext ctx, Retained retained, RtSceneGeometryManager.DynamicFrame geometry,
+                     Camera camera);
 
     int bindlessTextureCapacity();
 
@@ -29,13 +26,10 @@ public interface RtSceneSource {
 
     void uploadPendingTextures(RtPipeline pipeline, long sampler);
 
-    /** Stable retained geometry and source-owned finite-light segment for one renderer frame. */
-    record Retained(SceneOrigin origin, List<RtAccel.Instance> instances,
-                    RtGeometryAbi.TablePrefix geometryTable, RetainedLights retainedLights) {
+    /** Source-owned scene origin and finite-light segment for one renderer frame. */
+    record Retained(SceneOrigin origin, RetainedLights retainedLights) {
         public Retained {
             Objects.requireNonNull(origin, "origin");
-            Objects.requireNonNull(instances, "instances");
-            Objects.requireNonNull(geometryTable, "geometryTable");
             Objects.requireNonNull(retainedLights, "retainedLights");
         }
     }
@@ -53,16 +47,5 @@ public interface RtSceneSource {
                           int finiteLightCount, int linkedEmitterCount,
                           float rebaseOffsetX, float rebaseOffsetY, float rebaseOffsetZ,
                           float metersPerWorldUnit, long generation) {
-    }
-
-    /** Frame-varying geometry plus the source-owned lifetime manifest for a submitted frame. */
-    interface Frame {
-        List<RtAccel.Instance> dynamicInstances();
-
-        List<RtAccel.PreparedBlas> blasBuilds();
-
-        long geometryTableAddress();
-
-        void markGraphicsUse(GraphicsUse graphicsUse);
     }
 }

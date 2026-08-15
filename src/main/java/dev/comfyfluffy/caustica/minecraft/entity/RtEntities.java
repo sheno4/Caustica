@@ -36,20 +36,13 @@ import org.lwjgl.system.MemoryUtil;
 import dev.comfyfluffy.caustica.rt.RtComposite;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtFrameStats;
-import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
-import dev.comfyfluffy.caustica.rt.RtGpuExecutor.GraphicsUse;
-import dev.comfyfluffy.caustica.rt.RtGpuExecutor.GraphicsUseWaiter;
-import dev.comfyfluffy.caustica.rt.RtGpuExecutor.TrackedGraphicsUse;
-import dev.comfyfluffy.caustica.rt.accel.RtAccel;
 import dev.comfyfluffy.caustica.rt.material.RtMaterialRegistry;
-import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
 import dev.comfyfluffy.caustica.rt.geometry.RtGeometryAbi;
+import dev.comfyfluffy.caustica.rt.geometry.RtSceneGeometryManager;
 import dev.comfyfluffy.caustica.rt.pipeline.RtPipeline;
 
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
 import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
-import it.unimi.dsi.fastutil.ints.IntArrayList;
-import it.unimi.dsi.fastutil.longs.LongArrayList;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -62,19 +55,15 @@ import java.util.Queue;
 
 /**
  * Dynamic entities as real ray-traced {@code ModelPart} geometry. Each frame, every model entity is
- * re-posed and captured ({@link RtEntityCollector} + {@link RtEntityCapture}) into a mesh in terrain's
- * vertex layout, uploaded, and given a per-entity BLAS built inline in the composite's frame command
- * buffer. One TLAS instance per entity places entity-local geometry at {@code anchor - rebase}. Its
- * instance custom index names a record in the frame geometry table after the retained-geometry prefix.
- * The record gives the hit shader each entity's per-triangle data, motion-vector displacement, and the base needed
- * to map each BLAS geometry's local primitive index into the packed index/primitive arrays.
+ * re-posed and captured ({@link RtEntityCollector} + {@link RtEntityCapture}) into canonical packed
+ * arrays. The engine-owned scene geometry manager owns their resident GPU geometry, acceleration
+ * structures, table records, instances, and graphics lifetime. This source retains only Minecraft
+ * capture state, semantic change detection, motion inputs, and rigid-fitting references.
  * Non-model entities (items/arrows — geometry via submitItem/submitBlockModel, which the collector
  * ignores) are skipped.
  *
- * <p>Per-frame cost is real (per-entity capture + buffer uploads + a BLAS build); capped by {@code
- * -Dcaustica.rt.maxEntities}. Changed-entity geometry and refit scratch reuse the existing per-entity
- * graphics-timeline-guarded ring; motion uploads suballocate from a guarded per-frame-slot arena. Other
- * transient allocations use VMA directly.
+ * <p>Per-frame capture is capped by {@code -Dcaustica.rt.maxEntities}. Build class and topology version
+ * are declared with each capture so the manager can choose reusable, refit, or rebuilt geometry safely.
  */
 public final class RtEntities {
     public static final RtEntities INSTANCE = new RtEntities();
@@ -129,8 +118,8 @@ public final class RtEntities {
         return CausticaConfig.Rt.Entities.BE_VIEW_CHUNKS.value();
     }
 
-    // Block entities keep a cached mesh + BLAS keyed by BlockPos. Each frame the BE is re-meshed (cheap)
-    // and its mesh hashed; the expensive BLAS is rebuilt ONLY when the mesh actually changed — so static
+    // Block entities keep a keyed cached mesh. Each frame the BE is re-meshed (cheap) and its mesh hashed;
+    // the manager replaces GPU geometry only when it changed, so static
     // BEs cost no GPU work while animating ones (chest lid, spawner, …) rebuild every frame. New/changed
     // rebuilds are capped per frame so a burst of newly loaded chunks can't stall (over-budget BEs keep
     // their last geometry / pop in over later frames, like terrain's worker dispatch budget).
@@ -138,16 +127,8 @@ public final class RtEntities {
         return CausticaConfig.Rt.Entities.BE_BUILDS_PER_FRAME.value();
     }
 
-    private static final int TABLE_ENTRY_BYTES = RtGeometryAbi.RECORD_BYTES;
-    // Fixed-size geometry-table ring. Timeline completion guards host writes; ring depth avoids routine waits.
-    private static final int TABLE_RING = 6;
-    // Stale-cache eviction horizon and default reusable-resource ring depth.
-    // Graphics timeline completion guards GPU reuse and destruction.
+    // Stale-cache eviction horizon.
     private static final int KEEP_FRAMES = 4;
-    private static final int FRAME_LIST_RING = KEEP_FRAMES;
-    // Refit entity BLAS: persistent per-entity AS, updated in place while its indexed topology is stable.
-    // Block entities always use the pooled-BUILD path.
-    //
     // Rigid reuse: when this frame's capture is a rigid transform (translation and/or yaw) of the mesh the
     // entity's AS was last built from, reference that AS with the fitted TLAS instance transform and skip
     // the mesh upload + refit entirely — still mobs, item frames/armor stands, and spinning/bobbing
@@ -157,24 +138,14 @@ public final class RtEntities {
     // Well below a texel (1/16 block) and DLSS-RR jitter; float pose math noise is ~1e-5.
     private static final float RIGID_FIT_EPS = 2.0e-3f;
 
-    // Each per-entity ring slot owns one persistent AS. Timeline completion guards cursor reuse,
-    // mapped writes, refits, rebuilds, and destruction.
-    private static final int ENTITY_SLOT_RING = KEEP_FRAMES;
-    // Bounds BVH-quality degradation from repeated refits of a deforming entity: counts refits actually
-    // performed, not frames, so an entity that stops deforming never approaches the limit.
-    private static final int REFIT_COUNT_REBUILD_LIMIT = 120;
 
     // Treat per-vertex displacements as rigid when every vertex agrees within this tolerance, avoiding a
     // transient disp buffer for plain whole-entity translation.
     private static final float RIGID_DISP_EPS = 1.0e-5f;
-    private static final long MOTION_PAGE_BYTES = 1L << 20;
-    private static final long MOTION_ALIGNMENT = 16L;
-    private static final int MOTION_UNUSED_RETIRE_CYCLES = 16;
-    private static final int TRANSIENT_BUFFER_LIST_CAPACITY = 8;
     // Identity 3x4 row-major. Particles are already captured in rebased space; dynamic entities use a
     // translate/yaw instance transform because their geometry is captured around the entity anchor.
     private static final float[] IDENTITY = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
-    private static final Motion NO_MOTION = new Motion(0L, 0f, 0f, 0f);
+    private static final Motion NO_MOTION = new Motion(null, 0, 0f, 0f, 0f);
 
     // Reusable capture pipeline (single-threaded on the render thread).
     private final RtEntityCollector collector = new RtEntityCollector();
@@ -207,12 +178,6 @@ public final class RtEntities {
             this.rbz = rbz;
         }
     }
-
-    private TableSlot[] tableRing;
-    private int tableCapacity;
-    private int tableSlot;
-
-    private final FrameLists[] frameLists = new FrameLists[FRAME_LIST_RING];
 
     // Previous frame's captured entity-local vertex positions + its interpolated world anchor, keyed by
     // entity id. Maps are swapped/reused each frame: entries not seen this frame fall out, while visible
@@ -266,10 +231,8 @@ public final class RtEntities {
         float anchorX, anchorY, anchorZ;
     }
 
-    private long retainedGeometryBytes;
-
-    // Persistent per-entity acceleration structures, keyed by entity id, for refit.
-    private final Int2ObjectOpenHashMap<EntityAccel> entityAccels = new Int2ObjectOpenHashMap<>(entityMapCapacity());
+    // CPU capture state for engine-owned deforming residents.
+    private final Int2ObjectOpenHashMap<EntityState> entityStates = new Int2ObjectOpenHashMap<>(entityMapCapacity());
 
     // Persistent per-block-entity geometry, keyed by BlockPos.asLong(). Built once and reused every frame.
     private final Map<Long, BeEntry> beCache = new HashMap<>();
@@ -277,90 +240,33 @@ public final class RtEntities {
     private final ArrayDeque<BeCandidate> beCandidatePool = new ArrayDeque<>();
     // (Re)builds recorded so far this frame, reset each beginFrame; gates new BE builds to BE_BUILDS_PER_FRAME.
     private int beBuildsThisFrame;
+    private RtSceneGeometryManager.DynamicFrame activeGeometry;
 
     private RtEntities() {
-        for (int i = 0; i < frameLists.length; i++) {
-            frameLists[i] = new FrameLists();
-        }
     }
 
     /**
      * Cached block-entity geometry. The mesh is captured in <b>block-local</b> space (identity submit pose),
      * so it is rebase-independent — only the per-frame TLAS instance transform ({@code blockPos − rebase})
-     * changes, exactly like a terrain section. The BLAS + mesh buffers are this entry's own VMA allocations
-     * and persist until the BE is evicted (out of window / unloaded) or rebuilt (its mesh changed);
-     * {@code idx/uv/prim} are read by the hit shader every frame via the geometry table, so they must stay
-     * alive while traced.
+     * changes, exactly like a terrain section. The manager retains the keyed resident until it is evicted
+     * (out of window / unloaded) or replaced because its captured mesh changed.
      */
     private static final class BeEntry {
-        RtAccel accel;
-        GpuBuffer backing;                        // this entry's own AS backing
-        GpuBuffer geometry;                       // packed positions / indices / UVs / primitive data
-        long indexAddr, uvAddr, primAddr;
-        int[] classTris;
         int bx, by, bz;                          // block position (drives the per-frame instance transform)
         long meshHash;                           // hash of the captured mesh — rebuild only when it changes
         long lastSeen;                           // last frame this BE was in the scan window — for eviction
         float[] prevVerts;                       // block-local verts at this build, for the per-vertex MV diff
-        final TrackedGraphicsUse graphicsUse = new TrackedGraphicsUse();
     }
 
-    /** One persistent updatable AS in an entity's ring, including its indexed-topology snapshot. */
-    private static final class EntitySlot {
-        EntityAccel owner;
-        RtAccel accel;
-        GpuBuffer backing;
-        GpuBuffer geometry;
-        GpuBuffer updateScratch;
-        boolean updatable;
-        int vertCount = -1;
-        int triCount = -1;
-        int[] classTris;
-        int[] indices;
-        int indexCount;
-        long updateScratchSize;
-        int updatesSinceBuild;
-        final TrackedGraphicsUse graphicsUse = new TrackedGraphicsUse();
-    }
-
-    /** A per-entity ring of {@link EntitySlot}s, cycled one-per-frame so a refit never writes an AS still
-     *  in flight, plus the last frame the entity was captured (drives eviction). Also holds the rigid-reuse
-     *  reference: the entity-local mesh contents of the most recently written AS and the
-     *  cache-owned shading buffers the geometry table points at on reuse frames. */
-    private static final class EntityAccel {
-        final EntitySlot[] ring = new EntitySlot[ENTITY_SLOT_RING];
-        int cursor;
+    /** CPU-only capture state for one entity; the manager owns its opaque resident reference. */
+    private static final class EntityState {
         long lastSeen;
-        // Rigid-reuse reference (refAccel == null → no reusable build yet). refVerts are the exact
-        // positions the AS was last built/refit from; a frame whose capture is a rigid transform of them
-        // reuses the AS through the TLAS instance transform. Reuse frames only READ the AS, so referencing
-        // the last-written ring slot while it is in flight is safe.
-        RtAccel refAccel;
-        EntitySlot refSlot;
+        RtSceneGeometryManager.DeformingReference reference;
         float[] refVerts;
         int refVertCount = -1;
         int refIdxCount = -1;
         long refShadeHash;                      // rotation-invariant uv+prim hash (catches tint/sprite swaps)
-        long refIndexAddr, refUvAddr, refPrimAddr;
-        int[] refClassTris;
         long retryYawFitAfter;
-    }
-
-    /** This frame's retained and dynamic instance segments, BLAS builds, and unified geometry-table address. */
-    public record FrameEntities(List<RtAccel.Instance> baseInstances, List<RtAccel.Instance> dynamicInstances,
-                                List<RtAccel.PreparedBlas> blas, long geometryTableAddress, FrameUse use) {
-    }
-
-    private record FrameUse(FrameLists lists, TableSlot table) {
-    }
-
-    private static final class TableSlot {
-        final GpuBuffer buffer;
-        final TrackedGraphicsUse graphicsUse = new TrackedGraphicsUse();
-
-        TableSlot(GpuBuffer buffer) {
-            this.buffer = buffer;
-        }
     }
 
     /** One glowing entity's body mesh (rebased-space positions, copied out of {@link #capture} before the
@@ -375,131 +281,7 @@ public final class RtEntities {
     public record NameTagEntity(Component text, float x, float y, float z) {
     }
 
-    private record Motion(long dispAddr, float rigidX, float rigidY, float rigidZ) {
-    }
-
-    private static final class MotionSlice {
-        long mapped;
-        long deviceAddress;
-
-        MotionSlice set(GpuBuffer buffer, long offset) {
-            this.mapped = buffer.mapped + offset;
-            this.deviceAddress = buffer.deviceAddress + offset;
-            return this;
-        }
-    }
-
-    /** Host-visible storage pages owned by one frame-list slot and reused after its graphics token completes. */
-    private static final class MotionArena {
-        private final ArrayList<GpuBuffer> pages = new ArrayList<>();
-        private final IntArrayList lastUsedCycles = new IntArrayList();
-        private final LongArrayList dirtyEnds = new LongArrayList();
-        private final MotionSlice slice = new MotionSlice();
-        private int pageIndex;
-        private long offset;
-        private int cycle;
-
-        void reset() {
-            cycle++;
-            for (int i = pages.size() - 1; i >= 0; i--) {
-                if (cycle - lastUsedCycles.getInt(i) >= MOTION_UNUSED_RETIRE_CYCLES) {
-                    pages.remove(i).destroy();
-                    lastUsedCycles.removeInt(i);
-                    dirtyEnds.removeLong(i);
-                }
-            }
-            pageIndex = 0;
-            offset = 0L;
-            for (int i = 0; i < dirtyEnds.size(); i++) {
-                dirtyEnds.set(i, 0L);
-            }
-        }
-
-        MotionSlice allocate(GpuContext ctx, long bytes) {
-            long size = Math.max(bytes, MOTION_ALIGNMENT);
-            while (true) {
-                if (pageIndex == pages.size()) {
-                    long capacity = Math.max(MOTION_PAGE_BYTES, size);
-                    pages.add(ctx.createBuffer(capacity,
-                            org.lwjgl.vulkan.VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true,
-                            "entity motion arena"));
-                    lastUsedCycles.add(cycle);
-                    dirtyEnds.add(0L);
-                    RtFrameStats.FRAME.count("vmaBufferCreates", 1);
-                    RtFrameStats.FRAME.count("entityVmaBufferCreates", 1);
-                }
-                GpuBuffer page = pages.get(pageIndex);
-                long aligned = alignUp(offset, MOTION_ALIGNMENT);
-                if (size <= page.size - aligned) {
-                    lastUsedCycles.set(pageIndex, cycle);
-                    offset = Math.addExact(aligned, size);
-                    dirtyEnds.set(pageIndex, Math.max(dirtyEnds.getLong(pageIndex), offset));
-                    return slice.set(page, aligned);
-                }
-                pageIndex++;
-                offset = 0L;
-            }
-        }
-
-        /** Publish all sequential displacement writes with one VMA flush per used page. */
-        void flushWrites() {
-            for (int i = 0; i < dirtyEnds.size(); i++) {
-                long bytes = dirtyEnds.getLong(i);
-                if (bytes == 0L) {
-                    continue;
-                }
-                pages.get(i).flush(0L, bytes);
-                RtFrameStats.FRAME.count("entityMotionFlushes", 1);
-            }
-        }
-
-        void destroy() {
-            for (GpuBuffer page : pages) {
-                page.destroy();
-            }
-            pages.clear();
-            lastUsedCycles.clear();
-            dirtyEnds.clear();
-        }
-    }
-
-    private static long alignUp(long value, long alignment) {
-        return Math.addExact(value, alignment - 1L) & -alignment;
-    }
-
-    private record EntityGeometryLayout(long positionOffset, long indexOffset,
-                                        long uvOffset, long primOffset,
-                                        long logicalBytes, long totalBytes) {
-        private static final long REGION_ALIGNMENT = 16L;
-
-        static EntityGeometryLayout create(int positionFloats, int indexInts, int uvFloats, int primFloats) {
-            long positionBytes = Math.multiplyExact((long) positionFloats, Float.BYTES);
-            long indexBytes = Math.multiplyExact((long) indexInts, Integer.BYTES);
-            long uvBytes = Math.multiplyExact((long) uvFloats, Float.BYTES);
-            long primBytes = Math.multiplyExact((long) primFloats, Float.BYTES);
-            long indexOffset = alignUp(positionBytes);
-            long uvOffset = alignUp(Math.addExact(indexOffset, indexBytes));
-            long primOffset = alignUp(Math.addExact(uvOffset, uvBytes));
-            long totalBytes = alignUp(Math.addExact(primOffset, primBytes));
-            long logicalBytes = Math.addExact(Math.addExact(positionBytes, indexBytes),
-                    Math.addExact(uvBytes, primBytes));
-            return new EntityGeometryLayout(0L, indexOffset, uvOffset, primOffset,
-                    logicalBytes, totalBytes);
-        }
-
-        private static long alignUp(long value) {
-            return Math.addExact(value, REGION_ALIGNMENT - 1L) & -REGION_ALIGNMENT;
-        }
-
-        EntityGeometryLayout shifted(long baseOffset) {
-            if (baseOffset < 0L || baseOffset >= REGION_ALIGNMENT) {
-                throw new IllegalArgumentException("Invalid entity geometry base offset: " + baseOffset);
-            }
-            return new EntityGeometryLayout(
-                    Math.addExact(positionOffset, baseOffset),
-                    Math.addExact(indexOffset, baseOffset), Math.addExact(uvOffset, baseOffset),
-                    Math.addExact(primOffset, baseOffset), logicalBytes, Math.addExact(totalBytes, baseOffset));
-        }
+    private record Motion(float[] displacement, int displacementCount, float rigidX, float rigidY, float rigidZ) {
     }
 
     private static final class BeCandidate {
@@ -519,84 +301,16 @@ public final class RtEntities {
         return byDistance != 0 ? byDistance : Long.compare(a.posKey, b.posKey);
     };
 
-    /** Reused per-frame lists; one slot is retired before it can be selected again. */
-    private static final class FrameLists {
-        final ArrayList<RtAccel.Instance> instances = new ArrayList<>(entityListCapacity());
-        final ArrayList<RtAccel.PreparedBlas> blas = new ArrayList<>(entityListCapacity());
-        final ArrayList<RtAccel.PreparedBlas> pooledBlas = new ArrayList<>(entityListCapacity());
-        final ArrayList<GpuBuffer> blasScratch = new ArrayList<>(entityListCapacity());
-        final ArrayList<GpuBuffer> buffers = new ArrayList<>(TRANSIENT_BUFFER_LIST_CAPACITY);
-        final MotionArena motion = new MotionArena();
-        final ArrayList<EntitySlot> usedEntitySlots = new ArrayList<>(entityListCapacity());
-        final ArrayList<BeEntry> usedBlockEntities = new ArrayList<>();
-        final TrackedGraphicsUse graphicsUse = new TrackedGraphicsUse();
-
-        void reset() {
-            instances.clear();
-            blas.clear();
-            pooledBlas.clear();
-            blasScratch.clear();
-            buffers.clear();
-            usedEntitySlots.clear();
-            usedBlockEntities.clear();
-            motion.reset();
-        }
-
-        void releaseDeferred() {
-            for (RtAccel.PreparedBlas b : pooledBlas) {
-                RtAccel.releaseTransientBlas(b);
-            }
-            for (GpuBuffer s : blasScratch) {
-                s.destroy();
-            }
-            for (GpuBuffer buf : buffers) {
-                buf.destroy();
-            }
-            instances.clear();
-            blas.clear();
-            pooledBlas.clear();
-            blasScratch.clear();
-            buffers.clear();
-            usedEntitySlots.clear();
-            usedBlockEntities.clear();
-        }
-
-        void destroyPersistent() {
-            motion.destroy();
-        }
-    }
-
     /** Mutable per-frame build state shared by the entity + block-entity capture passes. */
     private final class FrameBuild {
-        final List<RtAccel.Instance> base;
-        FrameLists lists;
-        List<RtAccel.Instance> instances;
-        List<RtAccel.PreparedBlas> blas;        // all BLAS BUILD and UPDATE operations recorded this frame
-        List<RtAccel.PreparedBlas> pooledBlas;  // transient one-shot entity BLAS ops → releaseTransientBlas
-        List<GpuBuffer> blasScratch;             // transient full-BUILD scratch → destroy() (AS persists)
-        List<GpuBuffer> buffers;                 // transient motion/particle buffers → destroy()
-        MotionArena motion;                     // suballocated entity/BE/particle displacement uploads
-        long tableBase;
-        long geometryTableAddress;
-        TableSlot table;
-        final RtGeometryAbi.TablePrefix retainedTable;
+        final RtSceneGeometryManager.DynamicFrame geometry;
         final RtMaterialRegistry.Snapshot materials;
         int count;        // geometry-table entries / TLAS instances
         int logicalCount; // ordinary entities + block entities + individual particles
 
-        final GraphicsUseWaiter graphicsUseWaiter;
-
-        FrameBuild(List<RtAccel.Instance> base, RtGeometryAbi.TablePrefix retainedTable,
-                   RtMaterialRegistry.Snapshot materials,
-                   RtGpuExecutor gpuExecutor) {
-            this.base = base;
-            this.retainedTable = retainedTable;
+        FrameBuild(RtSceneGeometryManager.DynamicFrame geometry, RtMaterialRegistry.Snapshot materials) {
+            this.geometry = geometry;
             this.materials = materials;
-            this.graphicsUseWaiter = gpuExecutor.graphicsUseWaiter();
-        }
-
-        int geometryIndex() {
-            return RtGeometryAbi.checkedIndex(retainedTable.recordCount(), count);
         }
 
         boolean full() {
@@ -605,24 +319,25 @@ public final class RtEntities {
     }
 
     /**
-     * Capture this frame's model entities + block entities into per-object meshes/BLAS and merge them
-     * with the terrain static instances. The caller (RtComposite) records the returned BLAS builds
-     * before the TLAS build and pushes the geometry-table address. Dynamic entity coordinates are local and placed by TLAS instances;
-     * particles remain captured rebase-relative with an identity instance.
+     * Capture this frame's model entities, block entities, and particles into the manager-owned dynamic
+     * suffix. Dynamic entity coordinates are local and placed by instances; particles remain captured
+     * rebase-relative with an identity instance.
      */
-    public FrameEntities beginFrame(GpuContext ctx, List<RtAccel.Instance> base,
-                                    RtGeometryAbi.TablePrefix retainedTable, int rbx, int rby, int rbz,
-                                    double camX, double camY, double camZ, Matrix4f projection, Matrix4f viewRotation) {
+    public void beginFrame(GpuContext ctx, RtSceneGeometryManager.DynamicFrame geometry,
+                           int rbx, int rby, int rbz,
+                           double camX, double camY, double camZ, Matrix4f projection, Matrix4f viewRotation) {
         RtMaterialRegistry registry = RtMaterialRegistry.INSTANCE;
-        FrameBuild build = new FrameBuild(base, retainedTable, registry.requireSnapshot(), ctx.gpuExecutor());
-        beginBuildIfNeeded(ctx, build);
+        FrameBuild build = new FrameBuild(geometry, registry.requireSnapshot());
+        activeGeometry = geometry;
         if (!enabled()) {
-            return finishFrame(build);
+            finishFrame(build);
+            return;
         }
         Minecraft mc = Minecraft.getInstance();
         ClientLevel level = mc.level;
         if (level == null) {
-            return finishFrame(build);
+            finishFrame(build);
+            return;
         }
         float partial = mc.getDeltaTracker().getGameTimeDeltaPartialTick(false);
         setCamera(camX, camY, camZ, projection, viewRotation);
@@ -641,47 +356,21 @@ public final class RtEntities {
                 captureParticles(ctx, build, mc, partial, rbx, rby, rbz, projection, viewRotation);
             }
         } catch (RuntimeException | Error t) {
-            // A partially recorded frame may already have installed unbuilt BLAS into persistent slots.
-            // Quiesce old frames and drop the entity cache before propagating the original failure.
+            // Quiesce old frames and drop source capture state before propagating the original failure.
             ctx.waitIdle();
-            shutdown();
+            shutdown(ctx);
             throw t;
         } finally {
             capture.baseColorMaterialResolver = defaultMaterialResolver;
         }
         evictStaleAccels(ctx);
         evictStaleBes(ctx);
-        RtFrameStats.FRAME.count("entityRetainedGeometryBytes", retainedGeometryBytes);
-
-        return finishFrame(build);
+        finishFrame(build);
     }
 
-    private FrameEntities finishFrame(FrameBuild build) {
+    private void finishFrame(FrameBuild build) {
         try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("entity.uploadFlush")) {
-            build.motion.flushWrites();
-            int recordCount = build.retainedTable.recordCount() + build.count;
-            if (recordCount != 0) {
-                build.table.buffer.flush(0L, (long) recordCount * TABLE_ENTRY_BYTES);
-                RtFrameStats.FRAME.count("geometryTableFlushes", 1);
-            }
-        }
-        return new FrameEntities(build.base, build.instances, build.blas, build.geometryTableAddress,
-                new FrameUse(build.lists, build.table));
-    }
-
-    /** Associate every resource returned for a successfully enqueued frame with its graphics completion. */
-    public void markGraphicsUse(FrameEntities frame, GraphicsUse graphicsUse) {
-        if (frame == null || frame.use == null) {
-            return;
-        }
-        FrameLists lists = frame.use.lists;
-        lists.graphicsUse.mark(graphicsUse);
-        frame.use.table.graphicsUse.mark(graphicsUse);
-        for (EntitySlot slot : lists.usedEntitySlots) {
-            slot.graphicsUse.mark(graphicsUse);
-        }
-        for (BeEntry entry : lists.usedBlockEntities) {
-            entry.graphicsUse.mark(graphicsUse);
+            if (build.count != 0) RtFrameStats.FRAME.count("geometryTableFlushes", 1);
         }
     }
 
@@ -780,7 +469,7 @@ public final class RtEntities {
             Motion motion;
             long motionStart = RtFrameStats.FRAME.startStage();
             try {
-                motion = uploadVertexMotion(ctx, build, capture.verts, prev, ix, iy, iz);
+                motion = captureVertexMotion(capture.verts, prev, ix, iy, iz);
             } finally {
                 RtFrameStats.FRAME.endStage("entity.capture.motion", motionStart);
             }
@@ -858,13 +547,13 @@ public final class RtEntities {
     }
 
     /**
-     * Upload this entity's world-space motion-vector displacement. Captures are entity-local, so the delta
+     * Capture this entity's world-space motion-vector displacement. Captures are entity-local, so the delta
      * is {@code (anchorCur + vertexCur) - (anchorPrev + vertexPrev)}. If every vertex agrees,
      * store it as a rigid vector in the geometry-table entry; otherwise write a per-vertex {@code vec4}
-     * buffer directly.
+     * array for the geometry manager to upload with the submitted mesh.
      */
-    private Motion uploadVertexMotion(GpuContext ctx, FrameBuild build, FloatArrayList cur,
-                                      EntityPrev prev, float anchorX, float anchorY, float anchorZ) {
+    private Motion captureVertexMotion(FloatArrayList cur, EntityPrev prev,
+                                       float anchorX, float anchorY, float anchorZ) {
         if (prev == null || prev.size != cur.size()) {
             return NO_MOTION;
         }
@@ -894,22 +583,18 @@ public final class RtEntities {
             }
         }
         if (rigid) {
-            return new Motion(0L, dx0, dy0, dz0);
+            return new Motion(null, 0, dx0, dy0, dz0);
         }
 
-        beginBuildIfNeeded(ctx, build);
         long bytes = (long) vc * 4L * Float.BYTES;
-        MotionSlice disp = build.motion.allocate(ctx, bytes);
-        long out = disp.mapped;
+        float[] displacement = new float[vc * 4];
         for (int i = 0; i < vc; i++) {
-            MemoryUtil.memPutFloat(out, (curVerts[i * 3] - prevVerts[i * 3]) + sx);
-            MemoryUtil.memPutFloat(out + 4, (curVerts[i * 3 + 1] - prevVerts[i * 3 + 1]) + sy);
-            MemoryUtil.memPutFloat(out + 8, (curVerts[i * 3 + 2] - prevVerts[i * 3 + 2]) + sz);
-            MemoryUtil.memPutFloat(out + 12, 0f);
-            out += 16;
+            displacement[i * 4] = (curVerts[i * 3] - prevVerts[i * 3]) + sx;
+            displacement[i * 4 + 1] = (curVerts[i * 3 + 1] - prevVerts[i * 3 + 1]) + sy;
+            displacement[i * 4 + 2] = (curVerts[i * 3 + 2] - prevVerts[i * 3 + 2]) + sz;
         }
         RtFrameStats.FRAME.count("entityMotionUploadBytes", bytes);
-        return new Motion(disp.deviceAddress, 0f, 0f, 0f);
+        return new Motion(displacement, displacement.length, 0f, 0f, 0f);
     }
 
     private static EntityPrev storeEntityPrev(EntityPrev prev, FloatArrayList cur,
@@ -941,7 +626,7 @@ public final class RtEntities {
     }
 
     /**
-     * Capture this frame's billboard particles as ONE combined mesh + BLAS (cutout, camera-only receiver),
+     * Capture this frame's billboard particles as one combined rebuilt mesh (cutout, camera-only receiver),
      * with per-particle motion vectors. We iterate the LIVE {@code Particle} objects (via accessor mixins)
      * rather than the public packed render state, because only the live objects carry stable identity —
      * needed to diff each particle's center against last frame for the MV. Each particle is extracted into
@@ -1046,8 +731,7 @@ public final class RtEntities {
         if (capture.isEmpty()) {
             return;
         }
-        long dispAddr = uploadDisp(ctx, build, particleDisp);
-        appendCapture(ctx, build, new Motion(dispAddr, 0f, 0f, 0f),
+        appendCapture(ctx, build, new Motion(particleDisp.elements(), particleDisp.size(), 0f, 0f, 0f),
                 -1, PARTICLE_MASK, IDENTITY); // one combined mesh, per-particle MV
     }
 
@@ -1092,8 +776,8 @@ public final class RtEntities {
     }
 
     /**
-     * Capture block entities (chests, signs, …). Each BE keeps a cached mesh + BLAS keyed by BlockPos.
-     * Every frame the BE is re-meshed (cheap) and its mesh hashed; the expensive BLAS is rebuilt only when
+     * Capture block entities (chests, signs, …). Each BE keeps a cached mesh keyed by BlockPos.
+     * Every frame the BE is re-meshed (cheap) and its mesh hashed; the manager replaces its resident only when
      * the mesh actually changed — so static BEs cost no GPU work while animating ones (chest lid, spawner,
      * …) rebuild every frame and stay smooth. New/changed rebuilds are capped at {@link
      * #BE_BUILDS_PER_FRAME} per frame so a burst of newly loaded chunks can't stall; over-budget BEs keep
@@ -1146,7 +830,7 @@ public final class RtEntities {
         }
     }
 
-    /** Re-mesh one block entity; rebuild its cached BLAS only if the mesh changed (budgeted); then emit it. */
+    /** Re-mesh one block entity; replace its cached resident only if the mesh changed (budgeted); then emit it. */
     private void updateBlockEntity(GpuContext ctx, FrameBuild build, BlockEntityRenderDispatcher beDispatcher,
                                    BlockEntity be, float partial, long now, int rbx, int rby, int rbz) {
         capture.reset();
@@ -1189,61 +873,22 @@ public final class RtEntities {
             if (entry != null && entry.prevVerts != null && entry.prevVerts.length == capture.verts.size()) {
                 disp = buildDisp(capture.verts.elements(), capture.verts.size(), entry.prevVerts, 0f, 0f, 0f);
             }
-            BeEntry rebuilt = buildBe(ctx, build, be, hash);
+            BeEntry rebuilt = buildBe(build, be, hash);
             rebuilt.lastSeen = now;
-            if (entry != null) {
-                retireBe(ctx, entry);
-            }
             beCache.put(key, rebuilt);
             entry = rebuilt;
         }
         emitBe(ctx, build, entry, disp, rbx, rby, rbz);
     }
 
-    /** Upload the already-captured BE mesh to fresh buffers and build its BLAS (block-local). */
-    private BeEntry buildBe(GpuContext ctx, FrameBuild build, BlockEntity be, long hash) {
-        beginBuildIfNeeded(ctx, build);
-        int asInput = org.lwjgl.vulkan.KHRAccelerationStructure.VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
-        int storage = org.lwjgl.vulkan.VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-        int vertCount = capture.verts.size() / 3;
+    /** Replaces the manager-owned cached resident for this block-local mesh. */
+    private BeEntry buildBe(FrameBuild build, BlockEntity be, long hash) {
         RtEntityCapture.PackedGeometry packed = capture.packGeometry();
-        int idxCount = packed.indices().size();
-        EntityGeometryLayout layout = EntityGeometryLayout.create(capture.verts.size(), idxCount,
-                capture.uvList.size(), packed.primitives().size());
         BlockPos p = be.getBlockPos();
-        String label = "block entity " + p.getX() + "," + p.getY() + "," + p.getZ();
-        long required = Math.addExact(layout.totalBytes, EntityGeometryLayout.REGION_ALIGNMENT - 1L);
-        GpuBuffer geometry = allocBuffer(ctx, required, asInput | storage, true, label + " geometry");
-        layout = layout.shifted((-geometry.deviceAddress) & (EntityGeometryLayout.REGION_ALIGNMENT - 1L));
-        MemoryUtil.memFloatBuffer(geometry.mapped + layout.positionOffset, capture.verts.size())
-                .put(capture.verts.elements(), 0, capture.verts.size());
-        MemoryUtil.memIntBuffer(geometry.mapped + layout.indexOffset, idxCount)
-                .put(packed.indices().elements(), 0, idxCount);
-        MemoryUtil.memFloatBuffer(geometry.mapped + layout.uvOffset, capture.uvList.size())
-                .put(capture.uvList.elements(), 0, capture.uvList.size());
-        MemoryUtil.memFloatBuffer(geometry.mapped + layout.primOffset, packed.primitives().size())
-                .put(packed.primitives().elements(), 0, packed.primitives().size());
-        geometry.flush(layout.positionOffset, layout.totalBytes - layout.positionOffset);
-
-        long positionAddr = Math.addExact(geometry.deviceAddress, layout.positionOffset);
-        long indexAddr = Math.addExact(geometry.deviceAddress, layout.indexOffset);
-        long uvAddr = Math.addExact(geometry.deviceAddress, layout.uvOffset);
-        long primAddr = Math.addExact(geometry.deviceAddress, layout.primOffset);
-        // The cached mesh is replaced rather than updated in place, so build without ALLOW_UPDATE.
-        RtAccel.PersistentBuild pb = RtAccel.preparePersistentBlasBuild(ctx, positionAddr, vertCount,
-                indexAddr, packed.classTris(), label + " BLAS");
-        build.blas.add(pb.op());
-        build.blasScratch.add(pb.scratch());
+        build.geometry.replaceCached(p.asLong(), packedInput(packed, RtSceneGeometryManager.BuildClass.STATIC));
         beBuildsThisFrame++;
 
         BeEntry e = new BeEntry();
-        e.accel = pb.accel();
-        e.backing = pb.backing();
-        e.geometry = geometry;
-        e.indexAddr = indexAddr;
-        e.uvAddr = uvAddr;
-        e.primAddr = primAddr;
-        e.classTris = packed.copyClassTris();
         e.bx = p.getX();
         e.by = p.getY();
         e.bz = p.getZ();
@@ -1283,32 +928,16 @@ public final class RtEntities {
         if (build.full()) {
             return;
         }
-        beginBuildIfNeeded(ctx, build);
         // disp is non-null only for a BE whose mesh changed this frame (chest lid / spawner); a static BE
-        // passes null ⇒ dispAddr 0 ⇒ no MV. The disp buffer is a per-frame transient, so a BE that stops
+        // passes null ⇒ no per-vertex motion. The manager-owned transient buffer is released with this frame,
         // animating reverts to MV 0 next frame.
-        long dispAddr = uploadDisp(ctx, build, disp);
-        writeTableEntry(build, e.primAddr, e.indexAddr, e.uvAddr, dispAddr, 0f, 0f, 0f, e.classTris);
         // Block-local mesh placed by a translate-only instance transform (blockPos − rebase), like terrain.
         float[] xform = {1, 0, 0, e.bx - rbx, 0, 1, 0, e.by - rby, 0, 0, 1, e.bz - rbz};
-        build.instances.add(new RtAccel.Instance(xform, e.accel.deviceAddress,
-                build.geometryIndex()));
+        build.geometry.appendCached(BlockPos.asLong(e.bx, e.by, e.bz),
+                build.geometry.motion(disp, disp == null ? 0 : disp.length, 0f, 0f, 0f), xform, MASK_ALL);
         build.count++;
-        build.lists.usedBlockEntities.add(e);
         build.logicalCount++;
         RtFrameStats.FRAME.count("blockEntitiesCaptured", 1);
-    }
-
-    /** Retire a cached block entity's persistent AS + mesh buffers once its exact last graphics use completes. */
-    private static void retireBe(GpuContext ctx, BeEntry e) {
-        RtAccel accel = e.accel;
-        GpuBuffer backing = e.backing;
-        GpuBuffer geometry = e.geometry;
-        ctx.gpuExecutor().retireAfterGraphics(e.graphicsUse, () -> {
-            RtAccel.destroyCallerOwnedAccel(accel, backing);
-            geometry.destroy();
-        });
-        RtFrameStats.FRAME.count("entityBlockEntityRetirements", 1);
     }
 
     /** Drop cached block entities not seen (in window) within the last KEEP_FRAMES frames — unloaded/out of view. */
@@ -1323,63 +952,9 @@ public final class RtEntities {
             if (now - e.lastSeen < KEEP_FRAMES) {
                 continue;
             }
-            retireBe(ctx, e);
+            activeGeometry.releaseCached(BlockPos.asLong(e.bx, e.by, e.bz));
             it.remove();
         }
-    }
-
-    // Vulkan requires buffer size > 0; a few zero-length captures (empty entity mesh, etc.) can otherwise
-    // reach allocBuffer() with minSize == 0.
-    private static final long MIN_BUFFER_SIZE = 256;
-
-    /** Allocate one of this frame's ~6-per-entity VMA buffers (mesh/BLAS scratch), counted for RtFrameStats. */
-    private GpuBuffer allocBuffer(GpuContext ctx, long minSize, int usage, boolean hostVisible, String label) {
-        RtFrameStats.FRAME.count("vmaBufferCreates", 1);
-        return ctx.createBuffer(Math.max(minSize, MIN_BUFFER_SIZE), usage, hostVisible, label);
-    }
-
-    private GpuBuffer allocAlignedBuffer(GpuContext ctx, long minSize, int usage, boolean hostVisible,
-                                        String label, long addressAlignment) {
-        RtFrameStats.FRAME.count("vmaBufferCreates", 1);
-        return ctx.createAlignedBuffer(Math.max(minSize, MIN_BUFFER_SIZE), usage, hostVisible, label,
-                addressAlignment);
-    }
-
-    /** Lazily initialise this frame's build (instance list seeded with terrain, fresh free-lists, table ring slot). */
-    private void beginBuildIfNeeded(GpuContext ctx, FrameBuild build) {
-        if (build.instances != null) {
-            return;
-        }
-        FrameLists lists = frameLists[(int) (RtComposite.frameCounter() % frameLists.length)];
-        awaitGraphicsUse(build, lists.graphicsUse, "entityFrameListsWaits");
-        lists.releaseDeferred();
-        lists.reset();
-        build.lists = lists;
-        build.instances = lists.instances;
-        build.blas = lists.blas;
-        build.pooledBlas = lists.pooledBlas;
-        build.blasScratch = lists.blasScratch;
-        build.buffers = lists.buffers;
-        build.motion = lists.motion;
-        ensureResources(ctx, build.retainedTable.recordCount());
-        tableSlot = (tableSlot + 1) % TABLE_RING;
-        build.table = tableRing[tableSlot];
-        awaitGraphicsUse(build, build.table.graphicsUse, "entityTableWaits");
-        build.tableBase = build.table.buffer.mapped;
-        build.geometryTableAddress = build.table.buffer.deviceAddress;
-        long retainedBytes = (long) build.retainedTable.recordCount() * TABLE_ENTRY_BYTES;
-        if (retainedBytes != 0L) {
-            MemoryUtil.memCopy(build.retainedTable.mappedAddress(), build.tableBase, retainedBytes);
-        }
-    }
-
-    private static void awaitGraphicsUse(FrameBuild build, TrackedGraphicsUse graphicsUse, String counter) {
-        long started = System.nanoTime();
-        if (!build.graphicsUseWaiter.await(graphicsUse)) {
-            return;
-        }
-        RtFrameStats.FRAME.count(counter, 1);
-        RtFrameStats.FRAME.count("entityGraphicsWaitNanos", System.nanoTime() - started);
     }
 
     /**
@@ -1395,8 +970,8 @@ public final class RtEntities {
      */
     private boolean appendRigidReuse(GpuContext ctx, FrameBuild build, Motion motion, int entityId, int mask,
                                      float placeX, float placeY, float placeZ) {
-        EntityAccel ea = entityAccels.get(entityId);
-        if (ea == null || ea.refAccel == null
+        EntityState ea = entityStates.get(entityId);
+        if (ea == null || ea.reference == null
                 || ea.refVertCount != capture.verts.size() / 3 || ea.refIdxCount != capture.idx.size()) {
             return false;
         }
@@ -1437,17 +1012,9 @@ public final class RtEntities {
         } finally {
             RtFrameStats.FRAME.endStage("entity.capture.rigidReuse.shade", shadeStart);
         }
-        beginBuildIfNeeded(ctx, build);
         ea.lastSeen = RtComposite.frameCounter();
-        if (ea.refSlot == null) {
-            throw new IllegalStateException("Rigid entity reuse lost its owning slot");
-        }
-        build.lists.usedEntitySlots.add(ea.refSlot);
-        writeTableEntry(build, ea.refPrimAddr, ea.refIndexAddr, ea.refUvAddr,
-                motion.dispAddr, motion.rigidX, motion.rigidY, motion.rigidZ, ea.refClassTris);
-        build.instances.add(new RtAccel.Instance(placeTransform(localTransform, placeX, placeY, placeZ),
-                ea.refAccel.deviceAddress,
-                build.geometryIndex(), mask));
+        build.geometry.appendDeformingReference(ea.reference, motionInput(build, motion),
+                placeTransform(localTransform, placeX, placeY, placeZ), mask);
         build.count++;
         RtFrameStats.FRAME.count("entityReuse", 1);
         return true;
@@ -1549,389 +1116,62 @@ public final class RtEntities {
         return h;
     }
 
-    /**
-     * Upload the current {@link #capture} as a per-object mesh + BLAS, add its instance + geom-table entry.
-     * {@code entityId} ≥ 0 → refit path (persistent updatable AS keyed by id); {@code < 0} (refit disabled)
-     * → transient one-shot full BUILD. Used by the animated-entity pass; block entities use {@link #buildBe}.
-     */
-    private void appendCapture(GpuContext ctx, FrameBuild build, float[] disp, int entityId, int mask) {
-        beginBuildIfNeeded(ctx, build);
-        appendCapture(ctx, build, new Motion(uploadDisp(ctx, build, disp), 0f, 0f, 0f),
-                entityId, mask, IDENTITY);
-    }
-
     private void appendCapture(GpuContext ctx, FrameBuild build, Motion motion, int entityId, int mask,
                                float[] instanceTransform) {
-        beginBuildIfNeeded(ctx, build);
-        if (entityId >= 0) {
-            appendPackedEntity(ctx, build, motion, entityId, mask, instanceTransform);
-            return;
-        }
-        int asInput = org.lwjgl.vulkan.KHRAccelerationStructure.VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
-        int storage = org.lwjgl.vulkan.VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-        int vertCount = capture.verts.size() / 3;
         RtEntityCapture.PackedGeometry packed = capture.packGeometry();
-        int idxCount = packed.indices().size();
-        EntityGeometryLayout layout = EntityGeometryLayout.create(capture.verts.size(), idxCount,
-                capture.uvList.size(), packed.primitives().size());
-        long required = Math.addExact(layout.totalBytes, EntityGeometryLayout.REGION_ALIGNMENT - 1L);
-        GpuBuffer geometry = allocBuffer(ctx, required, asInput | storage, true, "particle geometry");
-        layout = layout.shifted((-geometry.deviceAddress) & (EntityGeometryLayout.REGION_ALIGNMENT - 1L));
-        MemoryUtil.memFloatBuffer(geometry.mapped + layout.positionOffset, capture.verts.size())
-                .put(capture.verts.elements(), 0, capture.verts.size());
-        MemoryUtil.memIntBuffer(geometry.mapped + layout.indexOffset, idxCount)
-                .put(packed.indices().elements(), 0, idxCount);
-        MemoryUtil.memFloatBuffer(geometry.mapped + layout.uvOffset, capture.uvList.size())
-                .put(capture.uvList.elements(), 0, capture.uvList.size());
-        MemoryUtil.memFloatBuffer(geometry.mapped + layout.primOffset, packed.primitives().size())
-                .put(packed.primitives().elements(), 0, packed.primitives().size());
-        geometry.flush(layout.positionOffset, layout.totalBytes - layout.positionOffset);
-
-        long positionAddr = Math.addExact(geometry.deviceAddress, layout.positionOffset);
-        long indexAddr = Math.addExact(geometry.deviceAddress, layout.indexOffset);
-        long uvAddr = Math.addExact(geometry.deviceAddress, layout.uvOffset);
-        long primAddr = Math.addExact(geometry.deviceAddress, layout.primOffset);
-
-        // Rebuilt from scratch every frame and never refit, so build latency matters more than trace
-        // quality: PREFER_FAST_BUILD instead of the PREFER_FAST_TRACE every other BLAS in this file uses.
-        RtAccel.PreparedBlas blas = RtAccel.prepareTransientBlas(ctx, positionAddr, vertCount, indexAddr,
-                packed.classTris(), "particle BLAS", true);
-        build.blas.add(blas);
-        build.pooledBlas.add(blas);
-
-        writeTableEntry(build, primAddr, indexAddr, uvAddr, motion.dispAddr,
-                motion.rigidX, motion.rigidY, motion.rigidZ, packed.classTris());
-
-        build.instances.add(new RtAccel.Instance(instanceTransform, blas.accel.deviceAddress,
-                build.geometryIndex(), mask));
-        build.buffers.add(geometry);
+        RtSceneGeometryManager.PackedInput input = packedInput(packed,
+                entityId < 0 ? RtSceneGeometryManager.BuildClass.REBUILT : RtSceneGeometryManager.BuildClass.DEFORMING);
+        RtSceneGeometryManager.MotionInput motionInput = motionInput(build, motion);
+        if (entityId < 0) {
+            build.geometry.appendRebuilt(input, motionInput, instanceTransform, mask);
+        } else {
+            EntityState state = entityStates.computeIfAbsent(entityId, unused -> new EntityState());
+            state.lastSeen = RtComposite.frameCounter();
+            state.reference = build.geometry.appendDeforming(entityId, input, motionInput, instanceTransform, mask,
+                    CausticaConfig.Rt.Entities.REFIT_ENABLED.value());
+            int size = capture.verts.size();
+            if (state.refVerts == null || state.refVerts.length < size) state.refVerts = new float[size];
+            System.arraycopy(capture.verts.elements(), 0, state.refVerts, 0, size);
+            state.refVertCount = size / 3;
+            state.refIdxCount = packed.indices().size();
+            state.refShadeHash = shadeHash();
+        }
         build.count++;
     }
 
-    /** Pack one changed entity's four logical geometry regions into its retired ring slot's backing. */
-    private void appendPackedEntity(GpuContext ctx, FrameBuild build, Motion motion, int entityId,
-                                    int mask, float[] instanceTransform) {
-        int asInput = org.lwjgl.vulkan.KHRAccelerationStructure.VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
-        int storage = org.lwjgl.vulkan.VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-        int vertCount = capture.verts.size() / 3;
-        RtEntityCapture.PackedGeometry packed = capture.packGeometry();
-        int idxCount = packed.indices().size();
-        EntityGeometryLayout layout = EntityGeometryLayout.create(capture.verts.size(), idxCount,
-                capture.uvList.size(), packed.primitives().size());
-
-        EntitySlot slot;
-        GpuBuffer geometry;
-        long allocStart = RtFrameStats.FRAME.startStage();
-        try {
-            slot = selectEntityBuildSlot(ctx, build, entityId);
-            build.lists.usedEntitySlots.add(slot);
-            long required = Math.addExact(layout.totalBytes, EntityGeometryLayout.REGION_ALIGNMENT - 1L);
-            geometry = slot.geometry;
-            if (geometry == null || geometry.size < required) {
-                GpuBuffer old = geometry;
-                long capacity = old == null ? required : growCapacity(old.size, required);
-                geometry = allocBuffer(ctx, capacity, asInput | storage, true, "entity geometry");
-                slot.geometry = geometry;
-                retainedGeometryBytes = Math.addExact(retainedGeometryBytes, geometry.size);
-                RtFrameStats.FRAME.count("entityVmaBufferCreates", 1);
-                if (old != null) {
-                    retainedGeometryBytes = Math.subtractExact(retainedGeometryBytes, old.size);
-                    old.destroy();
-                }
-            } else {
-                RtFrameStats.FRAME.count("entityGeometryBufferReuses", 1);
-            }
-            layout = layout.shifted((-geometry.deviceAddress) & (EntityGeometryLayout.REGION_ALIGNMENT - 1L));
-        } finally {
-            RtFrameStats.FRAME.endStage("entity.capture.append.alloc", allocStart);
-        }
-
-        long copyStart = RtFrameStats.FRAME.startStage();
-        try {
-            MemoryUtil.memFloatBuffer(geometry.mapped + layout.positionOffset, capture.verts.size())
-                    .put(capture.verts.elements(), 0, capture.verts.size());
-            MemoryUtil.memIntBuffer(geometry.mapped + layout.indexOffset, idxCount)
-                    .put(packed.indices().elements(), 0, idxCount);
-            MemoryUtil.memFloatBuffer(geometry.mapped + layout.uvOffset, capture.uvList.size())
-                    .put(capture.uvList.elements(), 0, capture.uvList.size());
-            MemoryUtil.memFloatBuffer(geometry.mapped + layout.primOffset, packed.primitives().size())
-                    .put(packed.primitives().elements(), 0, packed.primitives().size());
-            geometry.flush(layout.positionOffset, layout.totalBytes - layout.positionOffset);
-            RtFrameStats.FRAME.count("entityUploadBytes", layout.logicalBytes);
-            RtFrameStats.FRAME.count("entityPackedBytes", layout.totalBytes);
-            RtFrameStats.FRAME.count("entityPackedPaddingBytes", layout.totalBytes - layout.logicalBytes);
-        } finally {
-            RtFrameStats.FRAME.endStage("entity.capture.append.copy", copyStart);
-        }
-
-        long positionAddr = Math.addExact(geometry.deviceAddress, layout.positionOffset);
-        long indexAddr = Math.addExact(geometry.deviceAddress, layout.indexOffset);
-        long uvAddr = Math.addExact(geometry.deviceAddress, layout.uvOffset);
-        long primAddr = Math.addExact(geometry.deviceAddress, layout.primOffset);
-        RtAccel accel;
-        long blasStart = RtFrameStats.FRAME.startStage();
-        try {
-            accel = refitOrBuild(ctx, build, slot, positionAddr, indexAddr, vertCount,
-                    packed.indices(), packed.classTris());
-        } finally {
-            RtFrameStats.FRAME.endStage("entity.capture.append.blas", blasStart);
-        }
-
-        writeTableEntry(build, primAddr, indexAddr, uvAddr, motion.dispAddr,
-                motion.rigidX, motion.rigidY, motion.rigidZ, packed.classTris());
-        build.instances.add(new RtAccel.Instance(instanceTransform, accel.deviceAddress,
-                build.geometryIndex(), mask));
-
-        EntityAccel ea = slot.owner;
-        clearRefGeometry(ea);
-        ea.refAccel = accel;
-        ea.refSlot = slot;
-        ea.refIndexAddr = indexAddr;
-        ea.refUvAddr = uvAddr;
-        ea.refPrimAddr = primAddr;
-        ea.refClassTris = packed.copyClassTris();
-        int size = capture.verts.size();
-        if (ea.refVerts == null || ea.refVerts.length < size) {
-            ea.refVerts = new float[size];
-        }
-        System.arraycopy(capture.verts.elements(), 0, ea.refVerts, 0, size);
-        ea.refVertCount = vertCount;
-        ea.refIdxCount = idxCount;
-        ea.refShadeHash = shadeHash();
-        build.count++;
-    }
-
-    /** Clear the latest rigid-reuse view; the backing remains owned by its retired ring slot. */
-    private void clearRefGeometry(EntityAccel ea) {
-        ea.refAccel = null;
-        ea.refSlot = null;
-        ea.refIndexAddr = 0L;
-        ea.refUvAddr = 0L;
-        ea.refPrimAddr = 0L;
-        ea.refClassTris = null;
-    }
-
-    private static long growCapacity(long current, long required) {
-        long grown = current <= Long.MAX_VALUE - current / 2L ? current + current / 2L : Long.MAX_VALUE;
-        return Math.max(required, grown);
-    }
-
-    /** Upload a per-vertex displacement array into this frame slot's motion arena; returns 0 if null. */
-    private long uploadDisp(GpuContext ctx, FrameBuild build, float[] disp) {
-        if (disp == null) {
-            return 0L;
-        }
-        beginBuildIfNeeded(ctx, build);
-        MotionSlice slice = build.motion.allocate(ctx, (long) disp.length * Float.BYTES);
-        MemoryUtil.memFloatBuffer(slice.mapped, disp.length).put(disp, 0, disp.length);
-        return slice.deviceAddress;
-    }
-
-    /** Upload a reusable primitive list without first copying its backing into a right-sized array. */
-    private long uploadDisp(GpuContext ctx, FrameBuild build, FloatArrayList disp) {
-        int size = disp.size();
-        if (size == 0) {
-            return 0L;
-        }
-        beginBuildIfNeeded(ctx, build);
-        MotionSlice slice = build.motion.allocate(ctx, (long) size * Float.BYTES);
-        MemoryUtil.memFloatBuffer(slice.mapped, size).put(disp.elements(), 0, size);
-        return slice.deviceAddress;
-    }
-
-    /** Write one geometry record, including bases for the three packed BLAS geometries. */
-    private void writeTableEntry(FrameBuild build, long primAddr, long idxAddr, long uvAddr, long dispAddr,
-                                 float rigidX, float rigidY, float rigidZ, int[] classTris) {
-        if (classTris == null || classTris.length != RtAccel.SBT_CLASSES) {
-            throw new IllegalArgumentException("Missing entity BLAS SBT class counts");
-        }
-        long entry = build.tableBase + (long) build.geometryIndex() * TABLE_ENTRY_BYTES;
-        RtGeometryAbi.writeRecord(entry, primAddr, idxAddr, uvAddr, dispAddr, rigidX, rigidY, rigidZ,
-                0, classTris[RtAccel.CLASS_OPAQUE],
-                classTris[RtAccel.CLASS_OPAQUE] + classTris[RtAccel.CLASS_MASKED],
+    private RtSceneGeometryManager.PackedInput packedInput(RtEntityCapture.PackedGeometry packed,
+                                                            RtSceneGeometryManager.BuildClass buildClass) {
+        return new RtSceneGeometryManager.PackedInput(
+                java.util.Arrays.copyOf(capture.verts.elements(), capture.verts.size()),
+                java.util.Arrays.copyOf(packed.indices().elements(), packed.indices().size()),
+                java.util.Arrays.copyOf(capture.uvList.elements(), capture.uvList.size()),
+                java.util.Arrays.copyOf(packed.primitives().elements(), packed.primitives().size()),
+                packed.copyClassTris(), 0, topologyVersion(packed), buildClass,
                 RtGeometryAbi.FLAG_INDEXED_TEXTURE_COORDINATES);
     }
 
-    /** Select the next per-entity slot, waiting on its exact last graphics use before mutable reuse. */
-    private EntitySlot selectEntityBuildSlot(GpuContext ctx, FrameBuild build, int entityId) {
-        EntityAccel ea = entityAccels.get(entityId);
-        if (ea == null) {
-            ea = new EntityAccel();
-            entityAccels.put(entityId, ea);
-        }
-        ea.lastSeen = RtComposite.frameCounter();
-        int s = ea.cursor;
-        ea.cursor = (ea.cursor + 1) % ENTITY_SLOT_RING;
-        EntitySlot slot = ea.ring[s];
-        if (slot == null) {
-            slot = new EntitySlot();
-            slot.owner = ea;
-            ea.ring[s] = slot;
-        } else {
-            awaitGraphicsUse(build, slot.graphicsUse, "entitySlotWaits");
-        }
-        return slot;
+    private long topologyVersion(RtEntityCapture.PackedGeometry packed) {
+        long hash = 1469598103934665603L;
+        hash = (hash ^ (capture.verts.size() / 3)) * 1099511628211L;
+        for (int i = 0; i < packed.indices().size(); i++) hash = (hash ^ packed.indices().getInt(i)) * 1099511628211L;
+        for (int value : packed.classTris()) hash = (hash ^ value) * 1099511628211L;
+        return hash;
     }
 
-    /**
-     * Update or rebuild this entity's persistent acceleration structure in an already-retired ring slot.
-     * UPDATE is legal only when every indexed-topology value matches the slot's original BUILD. A topology
-     * change or the periodic quality interval replaces the AS with a full BUILD.
-     */
-    private RtAccel refitOrBuild(GpuContext ctx, FrameBuild build, EntitySlot slot,
-                                 long positionAddr, long indexAddr,
-                                 int vertCount, IntArrayList indices, int[] classTris) {
-        int triCount = 0;
-        for (int classTriCount : classTris) {
-            triCount += classTriCount;
-        }
-        int storage = org.lwjgl.vulkan.VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-        boolean refitEnabled = CausticaConfig.Rt.Entities.REFIT_ENABLED.value();
-        boolean sameTopology = slot.vertCount == vertCount && slot.triCount == triCount
-                && java.util.Arrays.equals(slot.classTris, classTris)
-                && sameIndexTopology(slot, indices);
-        RtAccel.RefitDecision decision = RtAccel.refitDecision(refitEnabled, slot.accel != null, slot.updatable,
-                sameTopology, slot.updatesSinceBuild, REFIT_COUNT_REBUILD_LIMIT);
-        if (decision == RtAccel.RefitDecision.REFIT) {
-            RtFrameStats.FRAME.count("refits", 1);
-            long required = slot.updateScratchSize;
-            if (slot.updateScratch == null || slot.updateScratch.size < required) {
-                if (slot.updateScratch != null) {
-                    slot.updateScratch.destroy();
-                }
-                slot.updateScratch = allocAlignedBuffer(ctx, required, storage, false, "entity refit scratch",
-                        ctx.accelerationStructureScratchAlignment());
-                RtFrameStats.FRAME.count("entityVmaBufferCreates", 1);
-            } else {
-                RtFrameStats.FRAME.count("entityScratchBufferReuses", 1);
-            }
-            build.blas.add(RtAccel.refitUpdate(slot.accel, slot.updateScratch,
-                    positionAddr, indexAddr, vertCount, classTris,
-                    "entity BLAS refit"));
-            slot.updatesSinceBuild++;
-            return slot.accel;
-        }
-        // (Re)build: the selected ring slot's exact prior graphics use has completed, so replace its old AS.
-        if (slot.accel != null) {
-            RtAccel.destroyCallerOwnedAccel(slot.accel, slot.backing);
-            slot.accel = null;
-            slot.backing = null;
-        }
-        if (!refitEnabled && slot.updateScratch != null) {
-            slot.updateScratch.destroy();
-            slot.updateScratch = null;
-        }
-        RtFrameStats.FRAME.count("entityVmaBufferCreates", 2); // persistent AS backing + transient build scratch
-        if (refitEnabled) {
-            RtAccel.UpdatableBuild ub = RtAccel.prepareUpdatableBlasBuild(ctx, positionAddr, vertCount,
-                    indexAddr, classTris, "entity BLAS");
-            slot.accel = ub.accel();
-            slot.backing = ub.backing();
-            slot.updateScratchSize = ub.updateScratchSize();
-            build.blas.add(ub.op());
-            build.blasScratch.add(ub.scratch());
-        } else {
-            RtAccel.PersistentBuild pb = RtAccel.preparePersistentBlasBuild(ctx, positionAddr, vertCount,
-                    indexAddr, classTris, "entity BLAS");
-            slot.accel = pb.accel();
-            slot.backing = pb.backing();
-            slot.updateScratchSize = 0L;
-            build.blas.add(pb.op());
-            build.blasScratch.add(pb.scratch());
-        }
-        slot.updatable = refitEnabled;
-        slot.vertCount = vertCount;
-        slot.triCount = triCount;
-        slot.classTris = classTris.clone();
-        rememberIndexTopology(slot, indices);
-        slot.updatesSinceBuild = 0;
-        return slot.accel;
+    private RtSceneGeometryManager.MotionInput motionInput(FrameBuild build, Motion motion) {
+        return build.geometry.motion(motion.displacement, motion.displacementCount,
+                motion.rigidX, motion.rigidY, motion.rigidZ);
     }
 
-    private static boolean sameIndexTopology(EntitySlot slot, IntArrayList indices) {
-        int count = indices.size();
-        if (slot.indices == null || slot.indexCount != count) {
-            return false;
-        }
-        int[] current = indices.elements();
-        for (int i = 0; i < count; i++) {
-            if (slot.indices[i] != current[i]) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private static void rememberIndexTopology(EntitySlot slot, IntArrayList indices) {
-        int count = indices.size();
-        if (slot.indices == null || slot.indices.length < count) {
-            slot.indices = new int[count];
-        }
-        System.arraycopy(indices.elements(), 0, slot.indices, 0, count);
-        slot.indexCount = count;
-    }
-
-    /** Retire persistent AS for entities not captured within the last KEEP_FRAMES frames. */
     private void evictStaleAccels(GpuContext ctx) {
-        if (entityAccels.isEmpty()) {
-            return;
-        }
         long now = RtComposite.frameCounter();
-        var it = entityAccels.values().iterator();
+        var it = entityStates.int2ObjectEntrySet().iterator();
         while (it.hasNext()) {
-            EntityAccel ea = it.next();
-            if (now - ea.lastSeen < KEEP_FRAMES) {
-                continue;
-            }
-            for (EntitySlot slot : ea.ring) {
-                if (slot != null) {
-                    retireEntitySlot(ctx, slot);
-                }
-            }
-            clearRefGeometry(ea);
+            var entry = it.next();
+            if (now - entry.getValue().lastSeen < KEEP_FRAMES) continue;
+            activeGeometry.releaseDeforming(entry.getIntKey());
             it.remove();
         }
-    }
-
-    private void destroyEntitySlot(EntitySlot slot) {
-        if (slot.accel != null) {
-            RtAccel.destroyCallerOwnedAccel(slot.accel, slot.backing);
-            slot.accel = null;
-            slot.backing = null;
-        }
-        if (slot.geometry != null) {
-            retainedGeometryBytes = Math.subtractExact(retainedGeometryBytes, slot.geometry.size);
-            slot.geometry.destroy();
-            slot.geometry = null;
-        }
-        if (slot.updateScratch != null) {
-            slot.updateScratch.destroy();
-            slot.updateScratch = null;
-        }
-        slot.indices = null;
-        slot.indexCount = 0;
-    }
-
-    /** Detach a stale slot immediately and destroy its GPU owners after their exact last use completes. */
-    private void retireEntitySlot(GpuContext ctx, EntitySlot slot) {
-        RtAccel accel = slot.accel;
-        GpuBuffer backing = slot.backing;
-        GpuBuffer geometry = slot.geometry;
-        GpuBuffer scratch = slot.updateScratch;
-        long geometryBytes = geometry == null ? 0L : geometry.size;
-        retainedGeometryBytes = Math.subtractExact(retainedGeometryBytes, geometryBytes);
-        slot.accel = null;
-        slot.backing = null;
-        slot.geometry = null;
-        slot.updateScratch = null;
-        slot.indices = null;
-        slot.indexCount = 0;
-        ctx.gpuExecutor().retireAfterGraphics(slot.graphicsUse, () -> {
-            if (accel != null) RtAccel.destroyCallerOwnedAccel(accel, backing);
-            if (geometry != null) geometry.destroy();
-            if (scratch != null) scratch.destroy();
-        });
-        RtFrameStats.FRAME.count("entitySlotRetirements", 1);
     }
 
     private void setCamera(double camX, double camY, double camZ, Matrix4f projection, Matrix4f viewRotation) {
@@ -1951,62 +1191,28 @@ public final class RtEntities {
         cameraState.initialized = true;
     }
 
-    private void ensureResources(GpuContext ctx, int retainedRecords) {
-        int requiredCapacity = Math.max(1,
-                RtGeometryAbi.checkedRecordCount(retainedRecords, maxEntities()));
-        if (tableRing != null && tableCapacity >= requiredCapacity) {
-            return;
-        }
-        if (tableRing != null) {
-            for (TableSlot old : tableRing) {
-                ctx.gpuExecutor().retireAfterGraphics(old.graphicsUse, old.buffer::destroy);
-                RtFrameStats.FRAME.count("entityTableRetirements", 1);
-            }
-            tableRing = null;
-            tableCapacity = 0;
-        }
-        int storage = org.lwjgl.vulkan.VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-        tableRing = new TableSlot[TABLE_RING];
-        for (int i = 0; i < TABLE_RING; i++) {
-            tableRing[i] = new TableSlot(ctx.createBuffer((long) requiredCapacity * TABLE_ENTRY_BYTES,
-                    storage, true, "entity geometry table ring " + i));
-        }
-        tableCapacity = requiredCapacity;
-    }
-
     /** Drop CPU templates that retain resource-pack-owned model trees. */
     public void onResourceReload() {
+        // Material invalidation retires manager-owned residents on the next frame. Drop every opaque
+        // reference and source-side mesh hash now so no old material epoch can be reused meanwhile.
+        entityStates.clear();
+        beCache.clear();
+        prevVerts.clear();
+        curVerts.clear();
+        particlePrev.clear();
+        particleCur.clear();
+        particleDisp.clear();
         collector.clearCaches();
     }
 
-    /** Free the geometry-table ring and entity resources (teardown; caller has idled the device). */
-    public void shutdown() {
-        for (FrameLists lists : frameLists) {
-            lists.releaseDeferred();
-            lists.destroyPersistent();
-            lists.graphicsUse.clear();
+    /** Clear capture state; the geometry manager owns and tears down all GPU residents. */
+    public void shutdown(GpuContext ctx) {
+        if (activeGeometry != null) {
+            for (int id : entityStates.keySet()) activeGeometry.releaseDeforming(id);
+            for (long key : beCache.keySet()) activeGeometry.releaseCached(key);
         }
-        for (EntityAccel ea : entityAccels.values()) {
-            for (EntitySlot slot : ea.ring) {
-                if (slot != null) {
-                    destroyEntitySlot(slot);
-                }
-            }
-            clearRefGeometry(ea);
-        }
-        entityAccels.clear();
-        for (BeEntry e : beCache.values()) {
-            RtAccel.destroyCallerOwnedAccel(e.accel, e.backing);
-            e.geometry.destroy();
-        }
+        entityStates.clear();
         beCache.clear();
-        if (tableRing != null) {
-            for (TableSlot slot : tableRing) {
-                slot.buffer.destroy();
-            }
-            tableRing = null;
-            tableCapacity = 0;
-        }
         prevVerts.clear();
         curVerts.clear();
         particlePrev.clear();
@@ -2017,7 +1223,7 @@ public final class RtEntities {
         resetPoseStack(blockEntityPoseStack);
         beCandidates.clear();
         beCandidatePool.clear();
-        retainedGeometryBytes = 0L;
+        activeGeometry = null;
         collector.clearCaches();
     }
 }
