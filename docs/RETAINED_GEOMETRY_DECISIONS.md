@@ -48,8 +48,9 @@ animated textures whose alpha is stable at every texel use renderer-owned immuta
 textures with per-texel temporal alpha variation use dedicated RG8 pages whose texels contain minimum and maximum
 alpha across every exhaustive animation frame. Uniform alpha needs no spatial allocation. Opaque bindings ignore
 either spatial source, and inputs without a provable epoch source remain
-unknown. OpenPBR, static alpha, and temporal-range channels allocate independently, with neutral descriptor views
-for absent channels. Uniform assets allocate no alpha page, and only animated cutout-capable assets with actual
+unknown. Sampled OpenPBR channels, static alpha, and temporal-range channels allocate independently, with neutral
+descriptor views for absent channels. Base-color semantic bindings remain material flags but do not allocate the
+three OpenPBR images. Uniform assets allocate no alpha page, and only animated cutout-capable assets with actual
 temporal alpha variation provision a one-mip temporal image.
 
 One compute invocation owns every packed output word for a triangle. It subdivides the triangle barycentrically,

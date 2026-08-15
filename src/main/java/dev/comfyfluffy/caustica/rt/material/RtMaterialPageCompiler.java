@@ -6,7 +6,6 @@ import dev.comfyfluffy.caustica.engine.material.EmissionFootprint;
 import dev.comfyfluffy.caustica.engine.material.MaterialCatalog;
 import dev.comfyfluffy.caustica.engine.material.MaterialTextureImage;
 import dev.comfyfluffy.caustica.engine.material.MaterialTextureAsset;
-import dev.comfyfluffy.caustica.engine.material.MaterialTextureKind;
 import dev.comfyfluffy.caustica.engine.material.MaterialUv;
 import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialDefaults;
 import dev.comfyfluffy.caustica.engine.material.OpenPbrColorBinding;
@@ -16,7 +15,6 @@ import dev.comfyfluffy.caustica.rt.pipeline.RtPipeline;
 
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -33,6 +31,8 @@ public final class RtMaterialPageCompiler {
     public static final int ALPHA_SOURCE_NONE = 0;
     public static final int ALPHA_SOURCE_STATIC_PAGE = 1;
     public static final int ALPHA_SOURCE_ANIMATED_RANGE = 2;
+    private static final int MATERIAL_TEXTURE_FEATURES = RtMaterialRegistry.FEATURE_SPEC
+            | RtMaterialRegistry.FEATURE_NORMAL | RtMaterialRegistry.FEATURE_EMISSION_MASK;
 
     private final Map<ResourceId, Entry> entries = new HashMap<>();
     private final List<Page> pages = new ArrayList<>();
@@ -72,6 +72,24 @@ public final class RtMaterialPageCompiler {
             if (surface1 != null) surface1.destroy();
             if (staticAlpha != null) staticAlpha.destroy();
             if (temporalAlpha != null) temporalAlpha.destroy();
+        }
+    }
+
+    static final class OwnedResources<T> {
+        private final List<T> resources = new ArrayList<>();
+
+        T own(T resource) {
+            if (resource != null) resources.add(resource);
+            return resource;
+        }
+
+        void transfer() {
+            resources.clear();
+        }
+
+        void destroy(java.util.function.Consumer<T> destroyer) {
+            for (int i = resources.size() - 1; i >= 0; i--) destroyer.accept(resources.get(i));
+            resources.clear();
         }
     }
 
@@ -124,44 +142,8 @@ public final class RtMaterialPageCompiler {
             return asset.height();
         }
 
-        boolean requiresPage() {
-            return features != 0 || asset.kind() == MaterialTextureKind.STANDALONE
-                    || needsStaticAlpha || needsAlphaRange;
-        }
-    }
-
-    private static final class LayoutPage {
-        final int size;
-        int x;
-        int y;
-        int rowHeight;
-        boolean hasPbr;
-        boolean hasAlphaRange;
-        boolean hasStaticAlpha;
-
-        LayoutPage(int size, boolean reserveFallback) {
-            this.size = size;
-            if (reserveFallback) y = align(1 + 2 * GUTTER, PACK_ALIGNMENT);
-        }
-
-        boolean place(Candidate candidate) {
-            int cellWidth = align(candidate.width() + 2 * GUTTER, PACK_ALIGNMENT);
-            int cellHeight = align(candidate.height() + 2 * GUTTER, PACK_ALIGNMENT);
-            if (cellWidth > size || cellHeight > size) return false;
-            if (x + cellWidth > size) {
-                x = 0;
-                y += rowHeight;
-                rowHeight = 0;
-            }
-            if (y + cellHeight > size) return false;
-            candidate.x = x + GUTTER;
-            candidate.y = y + GUTTER;
-            hasPbr |= candidate.features != 0;
-            hasAlphaRange |= candidate.needsAlphaRange;
-            hasStaticAlpha |= candidate.needsStaticAlpha;
-            x += cellWidth;
-            rowHeight = Math.max(rowHeight, cellHeight);
-            return true;
+        int pageChannels() {
+            return RtMaterialPageCompiler.pageChannels(features, needsStaticAlpha, needsAlphaRange);
         }
     }
 
@@ -186,61 +168,46 @@ public final class RtMaterialPageCompiler {
         List<Candidate> candidates = new ArrayList<>(catalog.atlasAssets().size() + catalog.standalone().size());
         catalog.atlasAssets().forEach(asset -> candidates.add(new Candidate(asset)));
         catalog.standalone().forEach(asset -> candidates.add(new Candidate(asset)));
-        candidates.parallelStream().forEach(candidate -> prepareAlpha(candidate, footprintResolution));
-        List<Candidate> paged = candidates.stream().filter(Candidate::requiresPage).collect(java.util.stream.Collectors.toCollection(ArrayList::new));
-
-        int largest = 1 + 2 * GUTTER;
-        for (Candidate candidate : paged) {
-            largest = Math.max(largest, Math.max(candidate.width(), candidate.height()) + 2 * GUTTER);
+        candidates.parallelStream().filter(candidate -> eligibleForPageCompilation(candidate.asset))
+                .forEach(candidate -> prepareAlpha(candidate, footprintResolution));
+        List<RtMaterialPagePlanner.Input> inputs = new ArrayList<>(candidates.size());
+        for (int i = 0; i < candidates.size(); i++) {
+            Candidate candidate = candidates.get(i);
+            inputs.add(new RtMaterialPagePlanner.Input(i, candidate.asset.material().toString(),
+                    candidate.width(), candidate.height(), candidate.pageChannels()));
         }
-
-        int pageSize = paged.isEmpty() ? 32 : Math.max(DEFAULT_PAGE_SIZE, nextPowerOfTwo(largest));
-        if (pageSize > MAX_PAGE_SIZE) {
-            CausticaMod.LOGGER.warn("RT material asset exceeds canonical page limit ({} > {}); oversized maps use neutral fallback",
-                    pageSize, MAX_PAGE_SIZE);
-            pageSize = MAX_PAGE_SIZE;
-            paged.removeIf(candidate -> candidate.width() + 2 * GUTTER > MAX_PAGE_SIZE
-                    || candidate.height() + 2 * GUTTER > MAX_PAGE_SIZE);
-            if (paged.isEmpty()) pageSize = 32;
+        RtMaterialPagePlanner.Plan plan = RtMaterialPagePlanner.plan(inputs, DEFAULT_PAGE_SIZE,
+                MAX_PAGE_SIZE, GUTTER, PACK_ALIGNMENT);
+        if (plan.rejectedOversizedInput()) {
+            CausticaMod.LOGGER.warn("RT material asset exceeds canonical page limit {}; oversized maps use neutral fallback",
+                    MAX_PAGE_SIZE);
         }
+        int pageSize = plan.pageSize();
         compiledPageSize = pageSize;
-        paged.sort(Comparator.<Candidate>comparingInt(Candidate::height).reversed()
-                .thenComparing(Comparator.comparingInt(Candidate::width).reversed())
-                .thenComparing(candidate -> candidate.asset.material().toString()));
-
-        List<LayoutPage> layouts = new ArrayList<>();
-        layouts.add(new LayoutPage(pageSize, true));
-        for (Candidate candidate : paged) {
-            boolean placed = false;
-            for (int i = 0; i < layouts.size(); i++) {
-                if (layouts.get(i).place(candidate)) {
-                    candidate.page = i;
-                    placed = true;
-                    break;
-                }
-            }
-            if (!placed) {
-                LayoutPage page = new LayoutPage(pageSize, false);
-                if (!page.place(candidate)) continue;
-                candidate.page = layouts.size();
-                layouts.add(page);
-            }
+        for (RtMaterialPagePlanner.Placement placement : plan.placements()) {
+            Candidate candidate = candidates.get(placement.inputIndex());
+            candidate.page = placement.pageIndex();
+            candidate.x = placement.x();
+            candidate.y = placement.y();
         }
-        if (layouts.size() > materialPageCapacity) {
-            throw new IllegalStateException("RT material pages require " + layouts.size()
+        if (plan.layouts().size() > materialPageCapacity) {
+            throw new IllegalStateException("RT material pages require " + plan.layouts().size()
                     + " descriptor slots but capacity is " + materialPageCapacity);
         }
 
         int mipCount = Integer.numberOfTrailingZeros(pageSize) + 1;
-        PagePixels[] pagePixels = new PagePixels[layouts.size()];
-        for (int pageIndex = 0; pageIndex < layouts.size(); pageIndex++) {
-            LayoutPage layout = layouts.get(pageIndex);
-            pagePixels[pageIndex] = new PagePixels(pageSize, mipCount, layout.hasPbr,
-                    layout.hasStaticAlpha, layout.hasAlphaRange);
+        PagePixels[] pagePixels = new PagePixels[plan.layouts().size()];
+        for (int pageIndex = 0; pageIndex < plan.layouts().size(); pageIndex++) {
+            RtMaterialPagePlanner.Layout layout = plan.layouts().get(pageIndex);
+            pagePixels[pageIndex] = new PagePixels(pageSize, mipCount,
+                    layout.has(RtMaterialPagePlanner.CHANNEL_MATERIAL),
+                    layout.has(RtMaterialPagePlanner.CHANNEL_STATIC_ALPHA),
+                    layout.has(RtMaterialPagePlanner.CHANNEL_TEMPORAL_ALPHA));
         }
-        paged.parallelStream().filter(candidate -> candidate.page >= 0).forEach(candidate -> {
+        List<Candidate> paged = candidates.stream().filter(candidate -> candidate.page >= 0).toList();
+        paged.parallelStream().forEach(candidate -> {
             try {
-                if (candidate.features != 0 || candidate.asset.kind() == MaterialTextureKind.STANDALONE) {
+                if ((candidate.features & MATERIAL_TEXTURE_FEATURES) != 0) {
                     Decoded decoded = decode(candidate, footprintResolution);
                     candidate.emissionSummary = decoded.emissionSummary();
                     candidate.emissionFootprint = decoded.emissionFootprint();
@@ -260,28 +227,41 @@ public final class RtMaterialPageCompiler {
                 candidate.page = -1;
             }
         });
-        candidates.parallelStream().filter(candidate -> candidate.page < 0 && !candidate.statsPrepared).forEach(candidate -> {
+        candidates.parallelStream().filter(candidate -> candidate.page < 0 && !candidate.statsPrepared
+                && eligibleForPageCompilation(candidate.asset)).forEach(candidate -> {
             try {
                 candidate.stats = scanAlbedo(candidate.asset, footprintResolution);
             } catch (Throwable t) {
                 warnOnce("RT material image scan failed for " + candidate.asset.material(), t);
             }
         });
-        for (int pageIndex = 0; pageIndex < layouts.size(); pageIndex++) {
+        for (int pageIndex = 0; pageIndex < plan.layouts().size(); pageIndex++) {
             PagePixels pixels = pagePixels[pageIndex];
-            pages.add(new Page(
-                    pixels.surface0 == null ? null : new RtMaterialPageTexture(ctx, pageSize, pageSize, pixels.surface0,
-                            "material surface0 page " + pageIndex),
-                    pixels.normal == null ? null : new RtMaterialPageTexture(ctx, pageSize, pageSize, pixels.normal,
-                            "material normal page " + pageIndex),
-                    pixels.surface1 == null ? null : new RtMaterialPageTexture(ctx, pageSize, pageSize, pixels.surface1,
-                            "material surface1 page " + pageIndex),
-                    pixels.staticAlpha == null ? null : new RtMaterialPageTexture(ctx, pageSize, pageSize,
-                            pixels.staticAlpha, "material static alpha page " + pageIndex, true,
-                            org.lwjgl.vulkan.VK10.VK_FORMAT_R8_UNORM),
-                    pixels.temporalAlpha == null ? null : new RtMaterialPageTexture(ctx, pageSize, pageSize, pixels.temporalAlpha,
-                            "material temporal alpha page " + pageIndex, true, org.lwjgl.vulkan.VK10.VK_FORMAT_R8G8_UNORM),
-                    pageIndex));
+            OwnedResources<RtMaterialPageTexture> owned = new OwnedResources<>();
+            try {
+                RtMaterialPageTexture surface0 = owned.own(pixels.surface0 == null ? null
+                        : new RtMaterialPageTexture(ctx, pageSize, pageSize, pixels.surface0,
+                        "material surface0 page " + pageIndex));
+                RtMaterialPageTexture normal = owned.own(pixels.normal == null ? null
+                        : new RtMaterialPageTexture(ctx, pageSize, pageSize, pixels.normal,
+                        "material normal page " + pageIndex));
+                RtMaterialPageTexture surface1 = owned.own(pixels.surface1 == null ? null
+                        : new RtMaterialPageTexture(ctx, pageSize, pageSize, pixels.surface1,
+                        "material surface1 page " + pageIndex));
+                RtMaterialPageTexture staticAlpha = owned.own(pixels.staticAlpha == null ? null
+                        : new RtMaterialPageTexture(ctx, pageSize, pageSize, pixels.staticAlpha,
+                        "material static alpha page " + pageIndex, true,
+                        org.lwjgl.vulkan.VK10.VK_FORMAT_R8_UNORM));
+                RtMaterialPageTexture temporalAlpha = owned.own(pixels.temporalAlpha == null ? null
+                        : new RtMaterialPageTexture(ctx, pageSize, pageSize, pixels.temporalAlpha,
+                        "material temporal alpha page " + pageIndex, true,
+                        org.lwjgl.vulkan.VK10.VK_FORMAT_R8G8_UNORM));
+                pages.add(new Page(surface0, normal, surface1, staticAlpha, temporalAlpha, pageIndex));
+                owned.transfer();
+            } catch (Throwable failure) {
+                owned.destroy(RtMaterialPageTexture::destroy);
+                throw failure;
+            }
         }
         neutralSurface0 = neutral(ctx, 255, 0, 0, 0, "material neutral surface0", false);
         neutralNormal = neutral(ctx, 128, 128, 0, 0, "material neutral normal", false);
@@ -334,6 +314,18 @@ public final class RtMaterialPageCompiler {
                                                   String label, boolean asyncShared) {
         return new RtMaterialPageTexture(ctx, 1, 1, List.of(new byte[]{(byte) r, (byte) g, (byte) b, (byte) a}),
                 label, asyncShared);
+    }
+
+    static int pageChannels(int features, boolean staticAlpha, boolean temporalAlpha) {
+        int channels = (features & MATERIAL_TEXTURE_FEATURES) != 0
+                ? RtMaterialPagePlanner.CHANNEL_MATERIAL : 0;
+        if (staticAlpha) channels |= RtMaterialPagePlanner.CHANNEL_STATIC_ALPHA;
+        if (temporalAlpha) channels |= RtMaterialPagePlanner.CHANNEL_TEMPORAL_ALPHA;
+        return channels;
+    }
+
+    static boolean eligibleForPageCompilation(MaterialTextureAsset asset) {
+        return RtMaterialPagePlanner.eligible(asset.width(), asset.height(), MAX_PAGE_SIZE, GUTTER);
     }
 
     public int pageSize() {
@@ -627,7 +619,7 @@ public final class RtMaterialPageCompiler {
         }
     }
 
-    private static final class PagePixels {
+    static final class PagePixels {
         final List<byte[]> surface0;
         final List<byte[]> normal;
         final List<byte[]> surface1;
@@ -635,11 +627,12 @@ public final class RtMaterialPageCompiler {
         final List<byte[]> temporalAlpha;
         final int pageSize;
 
-        PagePixels(int pageSize, int mipCount, boolean pbr, boolean staticAlphaPresent, boolean alphaRange) {
+        PagePixels(int pageSize, int mipCount, boolean materialChannels,
+                   boolean staticAlphaPresent, boolean alphaRange) {
             this.pageSize = pageSize;
-            surface0 = pbr ? allocate(pageSize, mipCount, 255, 0, 0, 0) : null;
-            normal = pbr ? allocate(pageSize, mipCount, 128, 128, 0, 0) : null;
-            surface1 = pbr ? allocate(pageSize, mipCount, 255, 255, 255,
+            surface0 = materialChannels ? allocate(pageSize, mipCount, 255, 0, 0, 0) : null;
+            normal = materialChannels ? allocate(pageSize, mipCount, 128, 128, 0, 0) : null;
+            surface1 = materialChannels ? allocate(pageSize, mipCount, 255, 255, 255,
                     RtMaterialTextureData.unorm8(encodeIor(OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR)))
                     : null;
             staticAlpha = staticAlphaPresent ? allocateR(pageSize, 0) : null;
@@ -808,15 +801,6 @@ public final class RtMaterialPageCompiler {
 
     private static int blue(int argb) {
         return argb & 255;
-    }
-
-    private static int nextPowerOfTwo(int value) {
-        if (value <= 1) return 1;
-        return 1 << (32 - Integer.numberOfLeadingZeros(value - 1));
-    }
-
-    private static int align(int value, int alignment) {
-        return (value + alignment - 1) & -alignment;
     }
 
     private synchronized void warnOnce(String message, Throwable throwable) {

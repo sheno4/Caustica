@@ -13,11 +13,12 @@ import org.junit.jupiter.api.Test;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class RtMaterialPageCompilerImageLifetimeTest {
     @Test
-    void compilerClosesEachOwnedImageViewAfterScanningWithoutCopyingItsBackingPixels() throws Exception {
+    void baseColorOnlyStandaloneKeepsScannedStatsWithoutMaterialPageChannels() throws Exception {
         int[] pixels = {0xFF204060};
         AtomicInteger closes = new AtomicInteger();
         MaterialTextureAsset asset = new MaterialTextureAsset(ResourceId.of("test", "owned"),
@@ -35,6 +36,9 @@ final class RtMaterialPageCompilerImageLifetimeTest {
 
         RtMaterialPageCompiler.AlbedoStats stats = RtMaterialPageCompiler.scanAlbedo(asset, 16);
 
+        assertEquals(0, RtMaterialPageCompiler.pageChannels(0, false, false));
+        assertEquals(MaterialTextureKind.STANDALONE, asset.kind());
+        assertEquals(MaterialUv.IDENTITY, asset.albedoUv());
         assertEquals(1, closes.get());
         assertEquals(0x20 / 255.0f, stats.averageR(), 1.0e-6f);
         assertEquals(0x40 / 255.0f, stats.averageG(), 1.0e-6f);
@@ -66,5 +70,20 @@ final class RtMaterialPageCompilerImageLifetimeTest {
 
         assertThrows(IllegalStateException.class, () -> RtMaterialPageCompiler.scanAlbedo(asset, 16));
         assertEquals(1, closes.get());
+    }
+
+    @Test
+    void oversizedAssetIsRejectedBeforeOpeningItsImage() {
+        AtomicInteger opens = new AtomicInteger();
+        MaterialTextureAsset asset = new MaterialTextureAsset(ResourceId.of("test", "oversized"),
+                MaterialTextureKind.STANDALONE, 8192, 1, () -> {
+            opens.incrementAndGet();
+            throw new AssertionError("oversized image must not be opened");
+        }, MaterialUv.IDENTITY, false, false, false,
+                OpenPbrColorBinding.PARAMETER_DEFAULT, OpenPbrColorBinding.PARAMETER_DEFAULT,
+                OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR);
+
+        assertFalse(RtMaterialPageCompiler.eligibleForPageCompilation(asset));
+        assertEquals(0, opens.get());
     }
 }
