@@ -17,8 +17,7 @@ final class RtRetainedGeometryOwnershipTest {
         Path java = Path.of("src", "main", "java", "dev", "comfyfluffy", "caustica")
                 .toAbsolutePath().normalize();
         List<Path> owners = List.of(java.resolve("rt/geometry/RtPackedGeometry.java"),
-                java.resolve("rt/geometry/RtRetainedGeometryBuilds.java"),
-                java.resolve("rt/geometry/RtRetainedGeometryScene.java"));
+                java.resolve("rt/geometry/RtRetainedGeometryBuilds.java"));
         for (Path owner : owners) {
             String content = Files.readString(owner);
             String lower = content.toLowerCase(Locale.ROOT);

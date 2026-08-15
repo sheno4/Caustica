@@ -45,22 +45,22 @@ final class RtSceneSourceBoundaryTest {
         assertFalse(content.contains("GpuBuffer"), source.toString());
         assertFalse(content.contains("geometryTableAddress"), source.toString());
         assertFalse(content.contains("MotionInput"), source.toString());
+        assertFalse(content.contains("RtSceneGeometryManager.FrameUpdate"), source.toString());
+        assertTrue(content.contains("RtSceneGeometryManager geometry"), source.toString());
     }
 
     @Test
-    void dynamicFrameDoesNotExposeRawRecordsOrInstances() throws NoSuchMethodException {
-        var dynamic = dev.comfyfluffy.caustica.rt.geometry.RtSceneGeometryManager.DynamicFrame.class;
-        assertFalse(java.lang.reflect.Modifier.isPublic(dynamic.getDeclaredMethod("appendRecord", long.class,
-                long.class, long.class, long.class, float.class, float.class, float.class, int.class,
-                int[].class, int.class).getModifiers()));
-        assertFalse(java.lang.reflect.Modifier.isPublic(dynamic.getDeclaredMethod("appendInstance", float[].class,
-                long.class, int.class, int.class).getModifiers()));
-        assertFalse(java.util.Arrays.stream(dynamic.getMethods())
+    void updateDoesNotExposeRawRecordsOrInstances() throws ReflectiveOperationException {
+        var update = dev.comfyfluffy.caustica.rt.geometry.RtSceneGeometryManager.FrameUpdate.class;
+        assertFalse(java.lang.reflect.Modifier.isPublic(update.getDeclaredMethod("appendRecord", long.class,
+                long.class, long.class, long.class, int.class, int[].class, int.class).getModifiers()));
+        assertFalse(java.lang.reflect.Modifier.isPublic(update.getDeclaredMethod("appendInstance", float[].class,
+                long.class, int.class, int.class,
+                Class.forName("dev.comfyfluffy.caustica.rt.geometry.RtSceneGeometryManager$InstanceKey"),
+                boolean.class).getModifiers()));
+        assertFalse(java.util.Arrays.stream(update.getMethods())
                 .anyMatch(method -> method.getName().equals("instances") || method.getName().equals("blasBuilds")
                         || method.getName().equals("uploadMotion") || method.getName().equals("geometryTableAddress")));
-        assertFalse(java.util.Arrays.stream(dev.comfyfluffy.caustica.rt.geometry.RtSceneGeometryManager.MotionInput.class
-                        .getMethods())
-                .anyMatch(method -> method.getName().equals("address")));
     }
 
     @Test

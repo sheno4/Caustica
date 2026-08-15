@@ -120,20 +120,19 @@ public final class ProviderManager {
         return retained != null ? new PrimaryScene(entry.id(), retained) : null;
     }
 
-    /** Bind the renderer-owned geometry coordinator for source lifecycle callbacks. */
+    /** Bind the renderer-owned geometry manager for source lifecycle callbacks. */
     public void bindSceneGeometry(RtSceneGeometryManager geometry) {
         sceneGeometry = geometry;
     }
 
-    /** Renderer-owned geometry coordinator injected into host scene providers. */
+    /** Renderer-owned geometry manager injected into host scene providers. */
     public RtSceneGeometryManager sceneGeometry() {
         if (sceneGeometry == null) throw new IllegalStateException("scene geometry is not bound");
         return sceneGeometry;
     }
 
-    /** Append CPU-captured frame geometry to the renderer-assembled dynamic suffix. */
-    public void submitPrimaryFrame(PrimaryScene selected, GpuContext ctx,
-                                   RtSceneGeometryManager.DynamicFrame geometry,
+    /** Submit CPU-captured frame geometry before renderer-owned frame assembly begins. */
+    public void submitPrimaryFrame(PrimaryScene selected, GpuContext ctx, RtSceneGeometryManager geometry,
                                    RtSceneSource.Camera camera) {
         SceneSourceEntry entry = requireSceneSource(selected.provider());
         Boolean submitted = invokeSceneSource(entry, "frame capture", () -> {

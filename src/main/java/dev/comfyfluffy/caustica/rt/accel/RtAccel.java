@@ -264,10 +264,10 @@ public final class RtAccel {
         private final int triangleCount;
         private final boolean opaque;
         private final String label;
-        // Refit support. {@code updatable} = built with ALLOW_UPDATE;
-        // {@code update} = this recorded op is an in-place UPDATE rather than a full BUILD.
+        // UPDATE support. {@code updatable} = built with ALLOW_UPDATE; {@code update} selects MODE_UPDATE.
         private final boolean updatable;
         private final boolean update;
+        private final RtAccel updateSource;
         // PREFER_FAST_BUILD instead of PREFER_FAST_TRACE. Only meaningful alongside externalClassSplit;
         // every other path leaves this false (PREFER_FAST_TRACE).
         private final boolean fastBuild;
@@ -286,12 +286,12 @@ public final class RtAccel {
         private PreparedBlas(RtAccel accel, GpuBuffer scratch, GpuBuffer externalBacking, long vertexAddr, long indexAddr,
                              int maxVertex, int triangleCount, boolean opaque, String label, boolean updatable, boolean update) {
             this(accel, scratch, externalBacking, vertexAddr, indexAddr, maxVertex, triangleCount, opaque, label,
-                    updatable, update, false, false, null, false, null, null);
+                    updatable, update, null, false, false, null, false, null, null);
         }
 
         private PreparedBlas(RtAccel accel, GpuBuffer scratch, GpuBuffer externalBacking, long vertexAddr, long indexAddr,
                              int maxVertex, int triangleCount, boolean opaque, String label, boolean updatable, boolean update,
-                             boolean fastBuild, boolean retainedSplit, int[] retainedClassTriangles,
+                             RtAccel updateSource, boolean fastBuild, boolean retainedSplit, int[] retainedClassTriangles,
                              boolean externalClassSplit, int[] externalClassTriangles,
                              OpacityMicromap opacityMicromap) {
             this.accel = accel;
@@ -305,6 +305,7 @@ public final class RtAccel {
             this.label = label;
             this.updatable = updatable;
             this.update = update;
+            this.updateSource = updateSource;
             this.fastBuild = fastBuild;
             this.retainedSplit = retainedSplit;
             this.retainedClassTriangles = retainedClassTriangles;
@@ -321,7 +322,7 @@ public final class RtAccel {
                 total += t;
             }
             return new PreparedBlas(accel, scratch, externalBacking, vertexAddr, indexAddr, maxVertex,
-                    total, false, label, false, false, false, true, retainedClassTriangles, false, null, opacityMicromap);
+                    total, false, label, false, false, null, false, true, retainedClassTriangles, false, null, opacityMicromap);
         }
 
         static PreparedBlas externalClassified(RtAccel accel, GpuBuffer scratch, GpuBuffer externalBacking,
@@ -336,14 +337,28 @@ public final class RtAccel {
                                                long vertexAddr, long indexAddr, int maxVertex,
                                                int[] classTriangles, String label,
                                                boolean updatable, boolean update, boolean fastBuild) {
+            return externalClassified(accel, scratch, externalBacking, vertexAddr, indexAddr, maxVertex,
+                    classTriangles, label, updatable, update, null, fastBuild);
+        }
+
+        static PreparedBlas externalClassified(RtAccel accel, GpuBuffer scratch, GpuBuffer externalBacking,
+                                               long vertexAddr, long indexAddr, int maxVertex,
+                                               int[] classTriangles, String label,
+                                               boolean updatable, boolean update, RtAccel updateSource,
+                                               boolean fastBuild) {
             int total = 0;
             for (int triangles : classTriangles) total += triangles;
             return new PreparedBlas(accel, scratch, externalBacking, vertexAddr, indexAddr, maxVertex,
-                    total, false, label, updatable, update, fastBuild, false, null, true, classTriangles, null);
+                    total, false, label, updatable, update, updateSource, fastBuild, false, null, true, classTriangles, null);
         }
 
         public boolean requestsCompaction() {
             return accel.compactionQueryPool != 0L;
+        }
+
+        /** Caller-owned backing retained with a prepared persistent candidate, if any. */
+        public GpuBuffer externalBacking() {
+            return externalBacking;
         }
 
         private void freeTransientBuildResources() {
@@ -397,7 +412,7 @@ public final class RtAccel {
         String debugLabel = labelOr(label, "BLAS");
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkAccelerationStructureBuildSizesInfoKHR sizes = queryBlasSizes(vk, stack, positions, indices, vertexCount, indexCount, opaque, false);
-            GpuBuffer backing = ctx.createBuffer(sizes.accelerationStructureSize(), VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, false,
+            GpuBuffer backing = ctx.createAsyncBuffer(sizes.accelerationStructureSize(), VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, false,
                     debugLabel + " backing");
             GpuBuffer scratch = createScratchBuffer(ctx, sizes.buildScratchSize(), debugLabel + " build scratch");
             RtAccel accel = createBlasOn(ctx, stack, backing, sizes.accelerationStructureSize(), true, debugLabel);
@@ -603,7 +618,7 @@ public final class RtAccel {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkAccelerationStructureBuildSizesInfoKHR sizes = queryClassifiedBlasSizes(vk, stack, vertexAddr,
                     indexAddr, vertexCount, classTriangles, false, fastBuild);
-            GpuBuffer backing = ctx.createBuffer(sizes.accelerationStructureSize(),
+            GpuBuffer backing = ctx.createAsyncBuffer(sizes.accelerationStructureSize(),
                     VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, false, debugLabel + " backing");
             GpuBuffer scratch = createScratchBuffer(ctx, sizes.buildScratchSize(), debugLabel + " build scratch");
             RtAccel accel = createBlasOn(ctx, stack, backing, sizes.accelerationStructureSize(), false, debugLabel);
@@ -635,7 +650,7 @@ public final class RtAccel {
             VkAccelerationStructureBuildSizesInfoKHR sizes = queryClassifiedBlasSizes(vk, stack, vertexAddr,
                     indexAddr, vertexCount, classTriangles, true);
             long accelSize = sizes.accelerationStructureSize();
-            GpuBuffer backing = ctx.createBuffer(accelSize,
+            GpuBuffer backing = ctx.createAsyncBuffer(accelSize,
                     VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, false, debugLabel + " backing");
             GpuBuffer scratch = createScratchBuffer(ctx, sizes.buildScratchSize(), debugLabel + " build scratch");
             RtAccel accel = createBlasOn(ctx, stack, backing, accelSize, false, debugLabel);
@@ -667,7 +682,7 @@ public final class RtAccel {
                     vertexCount, indexCount, opaque, true);
             long accelSize = sizes.accelerationStructureSize();
             long updateScratch = sizes.updateScratchSize();
-            GpuBuffer backing = ctx.createBuffer(accelSize, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, false,
+            GpuBuffer backing = ctx.createAsyncBuffer(accelSize, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, false,
                     debugLabel + " backing");
             GpuBuffer scratch = createScratchBuffer(ctx, sizes.buildScratchSize(), debugLabel + " build scratch");
             RtAccel accel = createBlasOn(ctx, stack, backing, accelSize, false, debugLabel);
@@ -695,6 +710,29 @@ public final class RtAccel {
         requireClassTriangles(classTriangles);
         return PreparedBlas.externalClassified(accel, scratch, null, vertexAddr, indexAddr, vertexCount - 1,
                 classTriangles.clone(), labelOr(label, "classified BLAS refit"), true, true);
+    }
+
+    /**
+     * Prepares an UPDATE into a fresh non-aliasing destination BLAS. The source must have been built
+     * with ALLOW_UPDATE using the same classified topology and build flags.
+     */
+    public static UpdatableBuild prepareOutOfPlaceUpdate(GpuContext ctx, RtAccel source,
+                                                         long vertexAddr, int vertexCount, long indexAddr,
+                                                         int[] classTriangles, String label) {
+        requireClassTriangles(classTriangles);
+        String debugLabel = labelOr(label, "classified BLAS update");
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            VkAccelerationStructureBuildSizesInfoKHR sizes = queryClassifiedBlasSizes(ctx.vk(), stack, vertexAddr,
+                    indexAddr, vertexCount, classTriangles, true);
+            long accelSize = sizes.accelerationStructureSize();
+            GpuBuffer backing = ctx.createAsyncBuffer(accelSize, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR,
+                    false, debugLabel + " backing");
+            GpuBuffer scratch = createScratchBuffer(ctx, sizes.updateScratchSize(), debugLabel + " scratch");
+            RtAccel destination = createBlasOn(ctx, stack, backing, accelSize, false, debugLabel);
+            PreparedBlas op = PreparedBlas.externalClassified(destination, scratch, backing, vertexAddr, indexAddr,
+                    vertexCount - 1, classTriangles.clone(), debugLabel, true, true, source, false);
+            return new UpdatableBuild(op, destination, backing, scratch, sizes.updateScratchSize());
+        }
     }
 
     /** Refit-vs-rebuild outcome for one persistent updatable BLAS slot; see {@link #refitDecision}. */
@@ -1233,9 +1271,7 @@ public final class RtAccel {
                 .geometryCount(1).pGeometries(geom)
                 .dstAccelerationStructure(b.accel.handle);
         if (b.update) {
-            // In-place refit: the existing (off-queue) AS is both source and destination. The flags +
-            // topology (primitiveCount/maxVertex) must match its original ALLOW_UPDATE build.
-            build.get(0).srcAccelerationStructure(b.accel.handle);
+            build.get(0).srcAccelerationStructure((b.updateSource == null ? b.accel : b.updateSource).handle);
         }
         build.get(0).scratchData().deviceAddress(scratchAddress(ctx, b.scratch));
         VkAccelerationStructureBuildRangeInfoKHR.Buffer range = VkAccelerationStructureBuildRangeInfoKHR.calloc(1, stack);
@@ -1244,7 +1280,7 @@ public final class RtAccel {
         vkCmdBuildAccelerationStructuresKHR(cmd, build, ppRange);
     }
 
-    /** Record the fixed classified geometries as one BUILD or in-place UPDATE. */
+    /** Record the fixed classified geometries as one BUILD or UPDATE. */
     private static void recordClassifiedBlasBuild(GpuContext ctx, VkCommandBuffer cmd, MemoryStack stack,
                                                   PreparedBlas b) {
         VkAccelerationStructureGeometryKHR.Buffer geometries = classifiedGeometries(stack, b.vertexAddr,
@@ -1257,7 +1293,7 @@ public final class RtAccel {
                 .geometryCount(geometries.capacity()).pGeometries(geometries)
                 .dstAccelerationStructure(b.accel.handle);
         if (b.update) {
-            build.get(0).srcAccelerationStructure(b.accel.handle);
+            build.get(0).srcAccelerationStructure((b.updateSource == null ? b.accel : b.updateSource).handle);
         }
         build.get(0).scratchData().deviceAddress(scratchAddress(ctx, b.scratch));
         VkAccelerationStructureBuildRangeInfoKHR.Buffer ranges = classifiedBuildRanges(stack,

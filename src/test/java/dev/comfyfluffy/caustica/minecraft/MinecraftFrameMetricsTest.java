@@ -20,11 +20,11 @@ final class MinecraftFrameMetricsTest {
             "caustica", "minecraft").toAbsolutePath().normalize();
 
     @Test
-    void schemaIncludesNewTerrainAndGeometryTableMetrics() {
+    void schemaIncludesCurrentTerrainAndEntityMetrics() {
         MetricSchema schema = MinecraftFrameMetrics.schema();
         assertTrue(schema.stages().stream().anyMatch(stage -> stage.name().equals("terrain.lightScenePublish")));
-        assertTrue(schema.counters().contains("geometryTableFlushes"));
-        assertFalse(schema.counters().contains("entityTableFlushes"));
+        assertTrue(schema.counters().contains("terrainMaterialEpochRejects"));
+        assertTrue(schema.counters().contains("entitiesCaptured"));
     }
 
     @Test

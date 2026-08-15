@@ -31,23 +31,25 @@ final class RtSceneGeometryManagerPackedInputTest {
     }
 
     @Test
-    void materialInvalidationGenerationRejectsOldDeformingReference() {
-        long current = 11L;
-        assertTrue(RtSceneGeometryManager.referenceIsCurrent(current, current));
-        long invalidated = RtSceneGeometryManager.nextDynamicResidentGeneration(current);
-        assertFalse(RtSceneGeometryManager.referenceIsCurrent(current, invalidated));
-    }
-
-    @Test
-    void releasedDeformingOwnerRejectsItsReferenceWithinTheSameMaterialGeneration() {
-        assertTrue(RtSceneGeometryManager.deformingReferenceIsCurrent(11L, 11L, true));
-        assertFalse(RtSceneGeometryManager.deformingReferenceIsCurrent(11L, 11L, false));
-    }
-
-    @Test
     void vertexCountIsPartOfDeformingRefitTopology() {
         assertTrue(RtSceneGeometryManager.deformingTopologyMatches(7L, 3, 7L, 3));
         assertFalse(RtSceneGeometryManager.deformingTopologyMatches(7L, 3, 7L, 4));
+    }
+
+    @Test
+    void topologyMismatchResetsIndexedMotionHistory() {
+        assertTrue(RtSceneGeometryManager.indexedMotionCompatible(
+                RtSceneGeometryManager.BuildClass.DEFORMING, true, 7L, 3, 7L, 3));
+        assertTrue(RtSceneGeometryManager.indexedMotionCompatible(
+                RtSceneGeometryManager.BuildClass.STATIC, true, 7L, 3, 7L, 3));
+        assertFalse(RtSceneGeometryManager.indexedMotionCompatible(
+                RtSceneGeometryManager.BuildClass.DEFORMING, true, 7L, 3, 8L, 3));
+        assertFalse(RtSceneGeometryManager.indexedMotionCompatible(
+                RtSceneGeometryManager.BuildClass.DEFORMING, true, 7L, 3, 7L, 4));
+        assertFalse(RtSceneGeometryManager.indexedMotionCompatible(
+                RtSceneGeometryManager.BuildClass.REBUILT, true, 7L, 3, 7L, 3));
+        assertFalse(RtSceneGeometryManager.indexedMotionCompatible(
+                RtSceneGeometryManager.BuildClass.STATIC, false, 7L, 3, 7L, 3));
     }
 
     private static RtSceneGeometryManager.PackedInput input(int[] indices, int[] classes) {

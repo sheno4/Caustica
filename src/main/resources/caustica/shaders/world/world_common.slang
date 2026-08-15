@@ -23,6 +23,7 @@ public typealias DevicePtr<T> = Ptr<T, Access.ReadWrite, AddressSpace.Device, St
 public struct WorldPushConstants {
     public uint64_t worldPushAddr;
     public uint64_t geometryTableAddr;
+    public uint64_t instanceHistoryAddr;
     public uint64_t materialTableAddr;   // MaterialBinding[], indexed by Prim.materialId
     public uint64_t materialSurfaceAddr; // SurfaceMaterial[], indexed by MaterialBinding.surface
     public uint64_t retainedLightAddr;
@@ -319,9 +320,7 @@ public float surfaceIorFromPage(float encoded) {
     return (1.0 + amplitude) / (1.0 - amplitude);
 }
 
-// One record for every distinct geometry stream referenced by a TLAS instance. Immutable instances may
-// share one record when they reference the same mesh; dynamic geometry uses one record per instance for
-// motion state. PrimitiveIndex restarts at zero for each BLAS geometry, so hit shaders add
+// One record for every TLAS instance. PrimitiveIndex restarts at zero for each BLAS geometry, so hit shaders add
 // triangleBase[GeometryIndex()]. Texture-coordinate storage is selected explicitly by flags rather than
 // inferred from whether an otherwise optional address happens to be zero.
 public static const uint GEOMETRY_TRIANGLE_CORNER_TEXTURE_COORDINATES = 0u;
@@ -333,10 +332,18 @@ public struct GeometryRecord {
     public uint64_t primitiveAddress;
     public uint64_t indexAddress;
     public uint64_t textureCoordinateAddress;
-    public uint64_t motionAddress;
-    public float4 rigidMotion;
+    public uint64_t previousPositionAddress;
+    public uint64_t reserved0;
+    public uint64_t reserved1;
     public uint triangleBase[3];
     public uint flags;
+};
+
+/** Previous object-to-world transform in the current frame's rebased coordinate system. */
+public struct InstanceHistory {
+    public float4 row0;
+    public float4 row1;
+    public float4 row2;
 };
 
 // packHalf2x16 equivalent (Slang core module has no GLSL pack builtin; f32tof16 returns the half

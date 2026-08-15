@@ -21,4 +21,28 @@ final class RtTerrainLightChangeTest {
         assertFalse(RtTerrain.sameLightRecords(original, null));
         assertFalse(RtTerrain.sameLightRecords(null, original));
     }
+
+    @Test
+    void pendingPublicationRemainsEligibleForDirtyRebuildAndEviction() {
+        assertTrue(RtTerrain.canRebuildSection(false, true, false));
+        assertTrue(RtTerrain.canRebuildSection(true, false, false));
+        assertTrue(RtTerrain.canRebuildSection(false, false, true));
+        assertFalse(RtTerrain.canRebuildSection(false, false, false));
+        assertTrue(RtTerrain.requiresDrop(false, true));
+        assertTrue(RtTerrain.requiresDrop(true, false));
+        assertFalse(RtTerrain.requiresDrop(false, false));
+    }
+
+    @Test
+    void cancelledDirtyMemberNeverBecomesSingletonPublication() {
+        assertTrue(RtTerrain.discardsCancelledDirtyGroup(1L, false));
+        assertFalse(RtTerrain.discardsCancelledDirtyGroup(1L, true));
+        assertFalse(RtTerrain.discardsCancelledDirtyGroup(0L, false));
+    }
+
+    @Test
+    void emptyStateIsAnAcknowledgedDropTransition() {
+        assertTrue(RtTerrain.emptyAfterDrop(true));
+        assertFalse(RtTerrain.emptyAfterDrop(false));
+    }
 }

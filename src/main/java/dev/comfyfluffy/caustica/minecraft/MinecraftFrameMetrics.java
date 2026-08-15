@@ -25,22 +25,14 @@ public final class MinecraftFrameMetrics {
             detail("entity.capture.submit.bakedQuads"),
             detail("entity.capture.submit.metrics"),
             detail("entity.capture.submit.parity"),
-            detail("entity.capture.motion"),
-            detail("entity.capture.rigidReuse"),
-            detail("entity.capture.rigidReuse.equal"),
-            detail("entity.capture.rigidReuse.yaw"),
-            detail("entity.capture.rigidReuse.shade"),
             accounted("entity.blockEntities"),
-            accounted("entity.particles"),
-            accounted("entity.uploadFlush")), List.of(
-            "sectionsSnapshotted", "sectionCopies", "terrainBuildsCompleted",
+            accounted("entity.particles")), List.of(
+            "sectionsSnapshotted", "sectionCopies",
             "terrainMaterialEpochRejects", "entitiesCaptured", "blockEntitiesCaptured",
-            "particlesCaptured", "entityReuse", "entityRigidFitSuccesses",
-            "entityRigidFitFailures", "entityModelSubmissions", "entityCuboids",
+            "particlesCaptured", "entityModelSubmissions", "entityCuboids",
             "entityModelQuads", "entityModelVertices", "entityBakedQuads", "entityBakedVertices",
             "entityDirectSubmissions", "entityDirectFallbacks", "entityDirectQuads", "entityDirectVertices",
-            "entitySpecializedCuboids", "entityGenericCuboids", "entityParityChecks",
-            "entityMotionUploadBytes", "geometryTableFlushes"));
+            "entitySpecializedCuboids", "entityGenericCuboids", "entityParityChecks"));
 
     private MinecraftFrameMetrics() {
     }

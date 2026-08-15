@@ -21,15 +21,15 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.function.IntSupplier;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
 import static org.lwjgl.vulkan.VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
 
 /**
  * Owns retained provider mesh uploads, BLASes, geometry records, and their exact graphics lifetime.
- * Caller-supplied retained geometry occupies a prefix before provider-owned geometry records.
- *
  * <p>Residency is explicit: a mesh stays uploaded across frames once retained, until it is released,
  * replaced by a new {@code retainMesh} call, or its owning provider stops. Nothing here compares mesh
  * bytes frame to frame.
@@ -37,6 +37,7 @@ import static org.lwjgl.vulkan.VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
 public final class RtSceneGeometryManager {
     private static final int TABLE_RING = 4;
     private static final long MIN_BUFFER_BYTES = 256L;
+    private static final int HISTORY_BYTES = 3 * 4 * Float.BYTES;
 
     /** Immutable build policy selected by the producer when it submits a mesh update. */
     public enum BuildClass {
@@ -47,37 +48,79 @@ public final class RtSceneGeometryManager {
 
     private final RtGeometryMaterialResolver materialResolver;
     private final RtAccel.TlasRing tlasRing = new RtAccel.TlasRing();
-    private RtRetainedGeometryCoordinator<?> packedGeometry;
     private final Map<MeshKey, ResidentMesh> residents = new LinkedHashMap<>();
-    /** Keyed residents used by in-engine captures rather than public providers. */
-    private final Map<Long, DynamicResident> cachedResidents = new HashMap<>();
-    private final Map<Long, DeformingResident> deformingResidents = new HashMap<>();
+    private final GroupScheduler groupScheduler = new GroupScheduler();
+    private final ConcurrentLinkedQueue<TerminalGroup> terminalGroups = new ConcurrentLinkedQueue<>();
+    private final Map<InstanceKey, InstanceState> instanceStates = new HashMap<>();
+    private final FailureLatch groupFailures = new FailureLatch();
     private final TableSlot[] tables = new TableSlot[TABLE_RING];
     private int tableCursor;
     private long materialEpoch;
-    private long dynamicResidentGeneration;
-    private boolean dynamicMaterialsInvalid;
 
     public RtSceneGeometryManager(RtGeometryMaterialResolver materialResolver) {
         this.materialResolver = materialResolver;
     }
 
-    /**
-     * Registers the one packed retained stream that contributes to this scene's geometry index space.
-     * The stream remains engine-owned even when a producer supplies its packed candidates asynchronously.
-     */
-    @SuppressWarnings("unchecked")
-    public synchronized <M> RtRetainedGeometryCoordinator<M> acquirePackedCoordinator(
-            IntSupplier initialCapacity, int geometrySemanticFlags) {
-        if (packedGeometry == null) {
-            packedGeometry = new RtRetainedGeometryCoordinator<>(initialCapacity, geometrySemanticFlags);
+    /** Stable owner identity for one independently published retained-geometry group. */
+    public record GroupKey(ResourceId source, long key) { }
+
+    /** Engine input selected by the manager's preparation path. */
+    public sealed interface GeometryPayload permits IndexedPayload, RetainedPayload { }
+    /** Indexed dynamic geometry. Its arrays must remain unchanged after submission. */
+    public record IndexedPayload(PackedInput input) implements GeometryPayload { }
+    /** Retained packed geometry with optional opacity-micromap build input. */
+    public record RetainedPayload(RtPackedGeometry<?> geometry, RtAccel.OpacityMicromapInput opacityInput,
+                                  boolean compactBlas, int semanticFlags) implements GeometryPayload {
+        public RetainedPayload(RtPackedGeometry<?> geometry, RtAccel.OpacityMicromapInput opacityInput,
+                               boolean compactBlas) {
+            this(geometry, opacityInput, compactBlas, 0);
         }
-        return (RtRetainedGeometryCoordinator<M>) packedGeometry;
     }
 
-    /** Detach an idle packed stream at renderer-session teardown. */
-    public synchronized void releasePackedCoordinator() {
-        packedGeometry = null;
+    /** Immutable operation belonging to one atomic geometry group. */
+    public sealed interface GeometryOperation permits Put, Drop, Place, Remove { }
+    public record Put(long residentKey, GeometryPayload payload) implements GeometryOperation { }
+    public record Drop(long residentKey) implements GeometryOperation { }
+    public record Place(long instanceKey, long residentKey, float[] transform, int mask, SceneOrigin origin)
+            implements GeometryOperation {
+        public Place(long instanceKey, long residentKey, float[] transform, int mask) {
+            this(instanceKey, residentKey, transform, mask, SceneOrigin.ZERO);
+        }
+        public Place { transform = transform.clone(); }
+        @Override public float[] transform() { return transform.clone(); }
+    }
+    public record Remove(long instanceKey) implements GeometryOperation { }
+
+    /** A sealed source submission. A group either replaces its whole published snapshot or remains unchanged. */
+    public record GeometryUpdateGroup(GroupKey key, long revision, List<GeometryOperation> operations) {
+        public GeometryUpdateGroup { operations = List.copyOf(operations); }
+    }
+
+    /** Accept independent source groups; a new revision replaces a queued but not running revision. */
+    public void submit(List<GeometryUpdateGroup> updates) {
+        submit(updates, null);
+    }
+
+    /** One completed atomic group publication, including the exact final operations applied to the global maps. */
+    public record PublicationAck(GroupKey key, long revision, List<GeometryOperation> operations) { }
+
+    /** Optionally receives one render-thread acknowledgment after each successfully applied atomic barrier. */
+    public void submit(List<GeometryUpdateGroup> updates, Consumer<PublicationAck> acknowledgment) {
+        for (GeometryUpdateGroup update : updates) groupScheduler.submit(update, acknowledgment);
+    }
+
+    /**
+     * Removes one source's published snapshot and cancels all of its pending candidate groups.
+     * Candidate allocations, and any BLAS read by a cancelled update, remain owned by its terminal
+     * completion and are retired only after that completion.
+     */
+    public void clearSource(GpuContext ctx, ResourceId source) {
+        Set<GroupResident> retired = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        retired.addAll(groupScheduler.clearSource(source));
+        instanceStates.entrySet().removeIf(entry -> entry.getKey().provider.equals(source));
+        for (GroupResident resident : retired) {
+            ctx.gpuExecutor().retireAfterGraphics(resident.graphicsUse(), resident::destroy);
+        }
     }
 
     public Capture beginCapture() {
@@ -86,45 +129,40 @@ public final class RtSceneGeometryManager {
 
     public void invalidateMaterials() {
         materialEpoch++;
-        dynamicMaterialsInvalid = true;
     }
 
     public FrameGeometry finishFrame(GpuContext ctx, Capture capture, SceneOrigin origin,
                                      Set<ResourceId> liveProviders) {
         reconcile(ctx, capture, liveProviders);
-        reconcileDynamicMaterials(ctx);
-        RtRetainedGeometryCoordinator<?> packed = packedGeometry;
-        int packedRecords = packed == null || !packed.ready() ? 0 : packed.tablePrefix().recordCount();
-        LinkedHashMap<MeshKey, Integer> recordIndices = new LinkedHashMap<>();
+        LinkedHashMap<InstanceKey, Integer> recordIndices = new LinkedHashMap<>();
         for (DesiredInstance instance : capture.instances.values()) {
             MeshKey meshKey = new MeshKey(instance.provider, instance.meshKey);
             if (!residents.containsKey(meshKey)) {
                 throw new IllegalArgumentException("geometry instance references an unretained mesh " + meshKey);
             }
-            recordIndices.putIfAbsent(meshKey, packedRecords + recordIndices.size());
+            recordIndices.put(instance.key, recordIndices.size());
         }
         List<RtAccel.PreparedBlas> builds = new ArrayList<>();
         List<BuildUse> buildUses = new ArrayList<>();
-        for (MeshKey key : recordIndices.keySet()) {
-            ResidentMesh resident = residents.get(key);
+        List<ResidentMesh> pendingBuildResidents = new ArrayList<>();
+        for (DesiredInstance instance : capture.instances.values()) {
+            ResidentMesh resident = residents.get(new MeshKey(instance.provider, instance.meshKey));
             if (resident.pendingBuild != null) {
-                builds.add(resident.pendingBuild);
-                buildUses.add(new BuildUse(resident, resident.pendingBuild, resident.scratch));
+                pendingBuildResidents.add(resident);
             }
         }
-        int recordCount = RtGeometryAbi.checkedRecordCount(packedRecords, recordIndices.size());
-        TableSlot table = selectTable(ctx, recordCount);
-        if (packedRecords != 0) {
-            RtGeometryAbi.TablePrefix packedTable = packed.tablePrefix();
-            MemoryUtil.memCopy(packedTable.mappedAddress(), table.buffer.mapped,
-                    (long) packedRecords * RtGeometryAbi.RECORD_BYTES);
+        for (ResidentMesh resident : uniqueByIdentity(pendingBuildResidents)) {
+            builds.add(resident.pendingBuild);
+            buildUses.add(new BuildUse(resident, resident.pendingBuild, resident.scratch));
         }
-        for (Map.Entry<MeshKey, Integer> entry : recordIndices.entrySet()) {
-            ResidentMesh resident = residents.get(entry.getKey());
+        int recordCount = RtGeometryAbi.checkedRecordCount(0, recordIndices.size());
+        TableSlot table = selectTable(ctx, recordCount);
+        for (DesiredInstance instance : capture.instances.values()) {
+            ResidentMesh resident = residents.get(new MeshKey(instance.provider, instance.meshKey));
             int[] classes = resident.packed.classTris();
-            long address = table.buffer.mapped + (long) entry.getValue() * RtGeometryAbi.RECORD_BYTES;
+            long address = table.buffer.mapped + (long) recordIndices.get(instance.key) * RtGeometryAbi.RECORD_BYTES;
             RtGeometryAbi.writeRecord(address, resident.primitives.deviceAddress, resident.indices.deviceAddress,
-                    resident.texCoords.deviceAddress, 0L, 0f, 0f, 0f,
+                    resident.texCoords.deviceAddress, 0L,
                     0, classes[0], classes[0] + classes[1],
                     RtGeometryAbi.FLAG_INDEXED_TEXTURE_COORDINATES);
         }
@@ -132,24 +170,39 @@ public final class RtSceneGeometryManager {
             table.buffer.flush(0L, (long) recordCount * RtGeometryAbi.RECORD_BYTES);
         }
 
-        List<RtAccel.Instance> instances = new ArrayList<>(
-                (packed == null || !packed.ready() ? 0 : packed.instances().size()) + capture.instances.size());
-        if (packed != null && packed.ready()) {
-            instances.addAll(packed.instances());
-        }
+        List<RtAccel.Instance> instances = new ArrayList<>(capture.instances.size());
         List<ResidentMesh> usedMeshes = new ArrayList<>(recordIndices.size());
-        for (Map.Entry<MeshKey, Integer> entry : recordIndices.entrySet()) {
-            usedMeshes.add(residents.get(entry.getKey()));
+        for (DesiredInstance instance : capture.instances.values()) {
+            usedMeshes.add(residents.get(new MeshKey(instance.provider, instance.meshKey)));
         }
         for (DesiredInstance instance : capture.instances.values()) {
             MeshKey meshKey = new MeshKey(instance.provider, instance.meshKey);
             ResidentMesh resident = residents.get(meshKey);
-            instances.add(new RtAccel.Instance(instance.transform.relativeTo(
-                    origin.x(), origin.y(), origin.z()), resident.accel.deviceAddress,
-                    recordIndices.get(meshKey)));
+            float[] transform = instance.transform.relativeTo(origin.x(), origin.y(), origin.z());
+            instances.add(new RtAccel.Instance(transform, resident.accel.deviceAddress,
+                    recordIndices.get(instance.key)));
         }
-        return new FrameGeometry(List.copyOf(instances), new RtGeometryAbi.TablePrefix(table.buffer.mapped, recordCount),
+        for (DesiredInstance instance : capture.instances.values()) {
+            int record = recordIndices.get(instance.key);
+            RtAccel.Instance placed = instances.stream().filter(candidate -> candidate.customIndex() == record)
+                    .findFirst().orElseThrow();
+            writeHistory(table, record, previousTransform(instance.key, placed.transform3x4(), origin));
+            instanceStates.put(instance.key, new InstanceState(placed.transform3x4().clone(), origin));
+        }
+        if (recordCount != 0) {
+            table.history.flush(0L, (long) recordCount * HISTORY_BYTES);
+        }
+        return new FrameGeometry(List.copyOf(instances), new RtGeometryAbi.TablePrefix(table.buffer.mapped, recordCount), origin,
                 List.copyOf(builds), new FrameUse(table, List.copyOf(usedMeshes), List.copyOf(buildUses)));
+    }
+
+    static <T> List<T> uniqueByIdentity(Iterable<T> values) {
+        Set<T> seen = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        ArrayList<T> result = new ArrayList<>();
+        for (T value : values) {
+            if (seen.add(value)) result.add(value);
+        }
+        return result;
     }
 
     public void markGraphicsUse(FrameGeometry frame, GpuContext ctx, GraphicsUse graphicsUse) {
@@ -167,51 +220,80 @@ public final class RtSceneGeometryManager {
     }
 
     /** Records every manager-owned BLAS operation needed before the frame TLAS. */
-    public boolean recordBlasBuilds(GpuContext ctx, VkCommandBuffer commandBuffer,
-                                    FrameGeometry frame, DynamicFrame dynamic) {
-        if (frame.blasBuilds.isEmpty() && dynamic.blasBuilds.isEmpty()) return false;
+    public boolean recordBlasBuilds(GpuContext ctx, VkCommandBuffer commandBuffer, FrameGeometry frame) {
+        if (frame.blasBuilds.isEmpty()) return false;
         RtAccel.recordBlasBuilds(ctx, commandBuffer, frame.blasBuilds);
-        RtAccel.recordBlasBuilds(ctx, commandBuffer, dynamic.blasBuilds);
         return true;
     }
 
     /** Build-ready TLAS view over every manager-owned instance segment. */
     public RtAccel.PreparedTlas prepareTlas(GpuContext ctx, FrameGeometry frame,
-                                            DynamicFrame dynamic, GraphicsUse graphicsUse) {
-        return RtAccel.prepareTlas(ctx, frame.instances, dynamic.instances, tlasRing, graphicsUse);
+                                            FrameUpdate update, GraphicsUse graphicsUse) {
+        return RtAccel.prepareTlas(ctx, frame.instances, update.instances, tlasRing, graphicsUse);
     }
 
-    /** Opens the manager-owned dynamic suffix of this frame's one geometry table and instance stream. */
-    public DynamicFrame beginDynamicFrame(GpuContext ctx, FrameGeometry frame) {
-        reconcileDynamicMaterials(ctx);
-        return new DynamicFrame(ctx, frame);
+    /**
+     * Advances retained geometry independently of frame assembly so startup can publish terrain before
+     * the first RT frame is eligible to trace it.
+     */
+    public void progress(GpuContext ctx) {
+        publishTerminalGroups(ctx);
+        groupFailures.throwIfPresent();
+        startGroupCandidates(ctx);
     }
 
-    /** Completes the manager-owned dynamic table suffix before renderer submission. */
-    public void finishDynamicFrame(DynamicFrame frame) {
-        frame.finish();
+    /** Publishes completed group barriers and appends the resulting retained scene after provider geometry. */
+    public FrameUpdate beginUpdate(GpuContext ctx, FrameGeometry frame) {
+        progress(ctx);
+        FrameUpdate update = new FrameUpdate(ctx, frame);
+        appendPublishedGroups(update);
+        update.finish();
+        return update;
     }
 
-    /** Associates all dynamic resources with the graphics submission that traces them. */
-    public void markGraphicsUse(DynamicFrame frame, GraphicsUse graphicsUse) {
-        frame.markGraphicsUse(graphicsUse);
+    /** Associates all resources published by an update with the graphics submission that traces them. */
+    public void markGraphicsUse(FrameUpdate update, GraphicsUse graphicsUse) {
+        update.markGraphicsUse(graphicsUse);
     }
 
     /** Teardown after the device is idle. */
     public void shutdown() {
+        Set<PreparedGroup> destroyedGroups = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        Set<GroupResident> destroyedCancelledSources = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        TerminalGroup terminal;
+        while ((terminal = terminalGroups.poll()) != null) {
+            terminal.applyRetainedCompletions();
+            destroyPreparedGroupAfterDeviceIdle(terminal.prepared, destroyedGroups);
+            destroyCancelledSourcesAfterDeviceIdle(terminal.prepared, destroyedCancelledSources);
+        }
+        groupScheduler.destroyAfterDeviceIdle(destroyedGroups, (prepared, destroyed) -> {
+            destroyPreparedGroupAfterDeviceIdle(prepared, destroyed);
+            destroyCancelledSourcesAfterDeviceIdle(prepared, destroyedCancelledSources);
+        });
         tlasRing.destroy();
         for (ResidentMesh mesh : residents.values()) {
             mesh.destroy();
         }
         residents.clear();
-        for (DynamicResident resident : cachedResidents.values()) resident.destroy();
-        cachedResidents.clear();
-        for (DeformingResident resident : deformingResidents.values()) resident.destroy();
-        deformingResidents.clear();
+        instanceStates.clear();
         for (int i = 0; i < tables.length; i++) {
             if (tables[i] != null) {
                 tables[i].buffer.destroy();
+                tables[i].history.destroy();
                 tables[i] = null;
+            }
+        }
+    }
+
+    private void destroyPreparedGroupAfterDeviceIdle(PreparedGroup prepared, Set<PreparedGroup> destroyed) {
+        if (!destroyed.add(prepared)) return;
+        for (GroupCandidate candidate : prepared.candidates) candidate.destroyAfterDeviceIdle();
+    }
+
+    private void destroyCancelledSourcesAfterDeviceIdle(PreparedGroup prepared, Set<GroupResident> destroyed) {
+        for (GroupCandidate candidate : prepared.candidates) {
+            if (candidate.retireSourceAfterTerminal && destroyed.add(candidate.source)) {
+                candidate.source.destroy();
             }
         }
     }
@@ -249,18 +331,171 @@ public final class RtSceneGeometryManager {
         }
     }
 
-    private void reconcileDynamicMaterials(GpuContext ctx) {
-        if (!dynamicMaterialsInvalid) return;
-        dynamicMaterialsInvalid = false;
-        dynamicResidentGeneration = nextDynamicResidentGeneration(dynamicResidentGeneration);
-        for (DynamicResident resident : cachedResidents.values()) {
-            ctx.gpuExecutor().retireAfterGraphics(resident.graphicsUse, resident::destroy);
+    private void startGroupCandidates(GpuContext ctx) {
+        for (GroupRun run : groupScheduler.startable()) {
+            PreparedGroup prepared = run.prepared;
+            try {
+                prepareGroupCandidates(ctx, prepared);
+            } catch (Throwable failure) {
+                terminalGroups.add(new TerminalGroup(run.key, prepared, failure, null));
+            }
         }
-        cachedResidents.clear();
-        for (DeformingResident resident : deformingResidents.values()) {
-            resident.retire(ctx);
+    }
+
+    private void prepareGroupCandidates(GpuContext ctx, PreparedGroup prepared) {
+        ArrayList<GroupCandidate> candidates = new ArrayList<>();
+        try {
+        for (Map.Entry<Long, GeometryPayload> entry : prepared.diff.puts.entrySet()) {
+            GroupResident source = groupScheduler.publishedResident(new ResidentId(prepared.key.source(), entry.getKey()));
+            if (entry.getValue() instanceof RetainedPayload retained) {
+                RetainedGroupResident candidate = new RetainedGroupResident(RtRetainedGeometryBuilds.prepare(ctx,
+                        retained.geometry(), retained.opacityInput(), retained.compactBlas(), entry.getKey(),
+                        0, 0, 0), retained.semanticFlags());
+                candidates.add(new GroupCandidate(entry.getKey(), candidate, source, null, true));
+                continue;
+            }
+            IndexedPayload indexed = (IndexedPayload) entry.getValue();
+            DynamicResident candidate = new DynamicResident();
+            PackedInput input = indexed.input();
+            writeDynamic(ctx, candidate, input);
+            candidate.topologyVersion = input.topologyVersion;
+            candidate.vertexCount = input.positions.length / 3;
+            RtAccel.PreparedBlas operation;
+            DynamicResident dynamicSource = source instanceof DynamicResident resident ? resident : null;
+            boolean previousIndexed = dynamicSource != null;
+            long previousTopologyVersion = previousIndexed ? dynamicSource.topologyVersion : Long.MIN_VALUE;
+            int previousVertexCount = previousIndexed ? dynamicSource.vertexCount : -1;
+            boolean retainPreviousPositions = indexedMotionCompatible(input.buildClass(), previousIndexed,
+                    previousTopologyVersion, previousVertexCount,
+                    candidate.topologyVersion, candidate.vertexCount);
+            if (input.buildClass() == BuildClass.DEFORMING && dynamicSource != null && dynamicSource.updatable
+                    && dynamicSource.updatesSinceBuild < 120
+                    && retainPreviousPositions) {
+                RtAccel.UpdatableBuild update = RtAccel.prepareOutOfPlaceUpdate(ctx, dynamicSource.accel,
+                        candidate.positionAddress, candidate.vertexCount, candidate.indexAddress,
+                        candidate.classTriangles, "scene group BLAS update");
+                candidate.accel = update.accel();
+                candidate.backing = update.backing();
+                candidate.updatable = true;
+                candidate.updatesSinceBuild = dynamicSource.updatesSinceBuild + 1;
+                operation = update.op();
+            } else if (input.buildClass() == BuildClass.DEFORMING) {
+                RtAccel.UpdatableBuild build = RtAccel.prepareUpdatableBlasBuild(ctx, candidate.positionAddress,
+                        candidate.vertexCount, candidate.indexAddress, candidate.classTriangles, "scene group BLAS");
+                candidate.accel = build.accel();
+                candidate.backing = build.backing();
+                candidate.updatable = true;
+                operation = build.op();
+            } else if (input.buildClass() == BuildClass.STATIC) {
+                RtAccel.PersistentBuild build = RtAccel.preparePersistentBlasBuild(ctx, candidate.positionAddress,
+                        candidate.vertexCount, candidate.indexAddress, candidate.classTriangles, "scene group BLAS");
+                candidate.accel = build.accel();
+                candidate.backing = build.backing();
+                operation = build.op();
+            } else {
+                RtAccel.PreparedBlas build = RtAccel.prepareTransientBlas(ctx, candidate.positionAddress,
+                        candidate.vertexCount, candidate.indexAddress, candidate.classTriangles,
+                        "scene group rebuilt BLAS", true);
+                candidate.accel = build.accel;
+                candidate.backing = build.externalBacking();
+                operation = build;
+            }
+            candidates.add(new GroupCandidate(entry.getKey(), candidate, source, operation, !retainPreviousPositions));
         }
-        deformingResidents.clear();
+        } catch (Throwable failure) {
+            for (GroupCandidate candidate : candidates) {
+                candidate.releaseUnsubmittedScratch();
+                candidate.destroyUnpublished(ctx);
+            }
+            throw failure;
+        }
+        prepared.candidates = List.copyOf(candidates);
+        if (candidates.isEmpty()) {
+            terminalGroups.add(new TerminalGroup(prepared.key, prepared, null, null));
+            return;
+        }
+        AtomicInteger remaining = new AtomicInteger(candidates.size());
+        List<CandidateTerminal> terminals = java.util.Collections.synchronizedList(new ArrayList<>());
+        java.util.concurrent.atomic.AtomicReference<Throwable> failure = new java.util.concurrent.atomic.AtomicReference<>();
+        for (GroupCandidate candidate : candidates) {
+            candidate.submit(ctx, () -> prepared.barrier.cancelled, terminal -> {
+                terminals.add(terminal);
+                if (terminal.failure != null) failure.compareAndSet(null, terminal.failure);
+                if (remaining.decrementAndGet() == 0) {
+                    terminalGroups.add(new TerminalGroup(prepared.key, prepared, failure.get(), List.copyOf(terminals)));
+                }
+            });
+        }
+    }
+
+    private void publishTerminalGroups(GpuContext ctx) {
+        TerminalGroup terminal;
+        while ((terminal = terminalGroups.poll()) != null) {
+            terminal.applyRetainedCompletions();
+            boolean cancelled = groupScheduler.cancelled(terminal.prepared.barrier);
+            if (!groupScheduler.running(terminal.prepared.barrier) || cancelled || terminal.failure != null) {
+                terminal.prepared.destroyCandidates(ctx);
+                retireCancelledSources(ctx, terminal.prepared);
+                groupScheduler.complete(terminal.prepared.barrier, false);
+                if (!cancelled && terminal.failure != null) groupFailures.record(terminal.failure);
+                continue;
+            }
+            for (CandidateTerminal candidate : terminal.candidates) {
+                if (candidate.build != null) ctx.gpuExecutor().markPublished(candidate.build);
+            }
+            for (GroupCandidate candidate : terminal.prepared.candidates) {
+                ResidentId residentId = new ResidentId(terminal.prepared.key.source(), candidate.key);
+                GroupResident previous = groupScheduler.putPublishedResident(residentId, candidate.resident);
+                if (previous != null && !candidate.resetMotion) {
+                    GroupResident superseded = groupScheduler.putPreviousResident(residentId, previous);
+                    if (superseded != null) ctx.gpuExecutor().retireAfterGraphics(superseded.graphicsUse(), superseded::destroy);
+                }
+                else if (previous != null) ctx.gpuExecutor().retireAfterGraphics(previous.graphicsUse(), previous::destroy);
+            }
+            for (long drop : terminal.prepared.diff.drops) {
+                GroupResident previous = groupScheduler.removePublishedResident(
+                        new ResidentId(terminal.prepared.key.source(), drop));
+                if (previous != null) ctx.gpuExecutor().retireAfterGraphics(previous.graphicsUse(), previous::destroy);
+            }
+            for (Map.Entry<Long, Placement> placement : terminal.prepared.diff.placements.entrySet()) {
+                groupScheduler.putPublishedPlacement(new InstanceId(terminal.prepared.key.source(), placement.getKey()),
+                        placement.getValue());
+            }
+            for (long remove : terminal.prepared.diff.removes) {
+                groupScheduler.removePublishedPlacement(new InstanceId(terminal.prepared.key.source(), remove));
+                instanceStates.remove(new InstanceKey(terminal.prepared.key.source(), remove));
+            }
+            groupScheduler.complete(terminal.prepared.barrier, true);
+            if (terminal.prepared.barrier.acknowledgment != null) {
+                terminal.prepared.barrier.acknowledgment.accept(new PublicationAck(terminal.prepared.key,
+                        terminal.prepared.revision, terminal.prepared.barrier.operations()));
+            }
+        }
+    }
+
+    private void appendPublishedGroups(FrameUpdate update) {
+        for (Map.Entry<InstanceId, Placement> placementEntry : groupScheduler.publishedPlacements()) {
+            Placement placement = placementEntry.getValue();
+            InstanceId instanceId = placementEntry.getKey();
+            ResidentId residentId = new ResidentId(instanceId.source, placement.residentKey);
+            GroupResident resident = groupScheduler.publishedResident(residentId);
+            if (resident == null) continue;
+            GroupResident previous = groupScheduler.previousResident(residentId);
+            resident.append(update, placement.transformFor(update.base.origin), placement.mask,
+                    new InstanceKey(instanceId.source, instanceId.key), previous, previous == null);
+            if (previous != null) update.historyUses.add(previous);
+        }
+        for (GroupResident previous : groupScheduler.previousResidents()) update.historyRetire.add(previous);
+        groupScheduler.clearPreviousResidents();
+    }
+
+    private void retireCancelledSources(GpuContext ctx, PreparedGroup prepared) {
+        Set<GroupResident> retired = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        for (GroupCandidate candidate : prepared.candidates) {
+            if (candidate.retireSourceAfterTerminal && retired.add(candidate.source)) {
+                ctx.gpuExecutor().retireAfterGraphics(candidate.source.graphicsUse(), candidate.source::destroy);
+            }
+        }
     }
 
     enum ReconcileAction {
@@ -338,7 +573,9 @@ public final class RtSceneGeometryManager {
                 table.buffer.destroy();
             }
             table = new TableSlot(ctx.createBuffer(bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true,
-                    "scene geometry table"));
+                    "scene geometry table"), ctx.createBuffer(Math.max(MIN_BUFFER_BYTES,
+                    (bytes / RtGeometryAbi.RECORD_BYTES) * HISTORY_BYTES), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                    true, "scene instance history"));
             tables[selected] = table;
         }
         return table;
@@ -370,7 +607,7 @@ public final class RtSceneGeometryManager {
                 @Override
                 public void instance(long key, long meshKey, GeometryTransform transform) {
                     InstanceKey scoped = new InstanceKey(provider, key);
-                    if (instances.putIfAbsent(scoped, new DesiredInstance(provider, meshKey, transform)) != null) {
+                    if (instances.putIfAbsent(scoped, new DesiredInstance(scoped, provider, meshKey, transform)) != null) {
                         throw new IllegalArgumentException("duplicate geometry instance key " + scoped);
                     }
                 }
@@ -378,7 +615,7 @@ public final class RtSceneGeometryManager {
         }
     }
 
-    public record FrameGeometry(List<RtAccel.Instance> instances, RtGeometryAbi.TablePrefix tablePrefix,
+    public record FrameGeometry(List<RtAccel.Instance> instances, RtGeometryAbi.TablePrefix tablePrefix, SceneOrigin origin,
                                 List<RtAccel.PreparedBlas> blasBuilds, FrameUse use) {
     }
 
@@ -389,247 +626,81 @@ public final class RtSceneGeometryManager {
     }
 
     /**
-     * Mutable engine-owned suffix for geometry captured after retained residents. Sources provide record
-     * contents and instances; allocation, record indexing, flushing, and table lifetime stay here.
+     * Engine-owned geometry segment appended after provider records. Group residents supply every record
+     * and instance; allocation, indexing, flushing, and table lifetime remain private to the manager.
      */
-    public final class DynamicFrame {
+    public final class FrameUpdate {
         private final GpuContext ctx;
         private final FrameGeometry base;
         private final ArrayList<RtAccel.Instance> instances = new ArrayList<>();
-        private final ArrayList<RtAccel.PreparedBlas> blasBuilds = new ArrayList<>();
-        private final ArrayList<RtAccel.PreparedBlas> transientBlas = new ArrayList<>();
-        private final ArrayList<GpuBuffer> transientBuffers = new ArrayList<>();
-        private final ArrayList<DynamicResident> persistentUses = new ArrayList<>();
-        private final ArrayList<PendingBuild> persistentBuilds = new ArrayList<>();
+        private final ArrayList<GroupResident> persistentUses = new ArrayList<>();
+        private final Set<GroupResident> historyUses = new LinkedHashSet<>();
+        private final Set<GroupResident> historyRetire = new LinkedHashSet<>();
         private int count;
 
-        private DynamicFrame(GpuContext ctx, FrameGeometry base) {
+        private FrameUpdate(GpuContext ctx, FrameGeometry base) {
             this.ctx = ctx;
             this.base = base;
         }
 
         private int appendRecord(long primitiveAddress, long indexAddress, long textureCoordinateAddress,
-                                 long motionAddress, float rigidX, float rigidY, float rigidZ,
+                                 long previousPositionAddress,
                                  int triangleBase, int[] classTriangles, int semanticFlags) {
             if (classTriangles == null || classTriangles.length != RtAccel.SBT_CLASSES) {
                 throw new IllegalArgumentException("missing acceleration-structure class counts");
             }
+            return appendRawRecord(primitiveAddress, indexAddress, textureCoordinateAddress, previousPositionAddress,
+                    triangleBase, classTriangles[0], triangleBase + classTriangles[0] + classTriangles[1],
+                    semanticFlags);
+        }
+
+        private int appendRawRecord(long primitiveAddress, long indexAddress, long textureCoordinateAddress,
+                                    long previousPositionAddress, int triangleBase0, int triangleBase1,
+                                    int triangleBase2, int semanticFlags) {
             int record = RtGeometryAbi.checkedIndex(base.tablePrefix.recordCount(), count);
             ensureDynamicCapacity(record + 1);
             long address = base.use.table.buffer.mapped + (long) record * RtGeometryAbi.RECORD_BYTES;
             RtGeometryAbi.writeRecord(address, primitiveAddress, indexAddress, textureCoordinateAddress,
-                    motionAddress, rigidX, rigidY, rigidZ, triangleBase, classTriangles[0],
-                    classTriangles[0] + classTriangles[1], semanticFlags);
+                    previousPositionAddress, triangleBase0, triangleBase1, triangleBase2, semanticFlags);
             count++;
             return record;
         }
 
-        private void appendInstance(float[] transform, long accelAddress, int record, int mask) {
+        private void appendInstance(float[] transform, long accelAddress, int record, int mask, InstanceKey key,
+                                    boolean resetMotion) {
             instances.add(new RtAccel.Instance(transform, accelAddress, record, mask));
+            writeHistory(base.use.table, record, resetMotion ? transform : previousTransform(key, transform, base.origin));
+            if (key != null) instanceStates.put(key, new InstanceState(transform.clone(), base.origin));
         }
 
-        /** Captures one frame's source-provided motion data without exposing its GPU address. */
-        public MotionInput motion(float[] values, int count, float rigidX, float rigidY, float rigidZ) {
-            if (count == 0) return new MotionInput(0L, rigidX, rigidY, rigidZ);
-            GpuBuffer buffer = ctx.createBuffer(Math.max(MIN_BUFFER_BYTES, (long) count * Float.BYTES),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true, "scene motion");
-            MemoryUtil.memFloatBuffer(buffer.mapped, count).put(values, 0, count);
-            buffer.flush(0L, (long) count * Float.BYTES);
-            transientBuffers.add(buffer);
-            return new MotionInput(buffer.deviceAddress, rigidX, rigidY, rigidZ);
-        }
-
-        /**
-         * Uploads and builds a mesh declared {@link BuildClass#REBUILT}, then appends its one-frame
-         * record and instance. The manager owns every resulting resource through graphics completion.
-         */
-        public void appendRebuilt(PackedInput input, MotionInput motion, float[] transform, int mask) {
-            if (input.buildClass != BuildClass.REBUILT) {
-                throw new IllegalArgumentException("one-frame submission requires REBUILT build class");
-            }
-            PackedLayout layout = PackedLayout.create(input.positions.length, input.indices.length,
-                    input.textureCoordinates.length, input.primitives.length);
-            int usage = VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR
-                    | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-            GpuBuffer geometry = ctx.createBuffer(Math.max(MIN_BUFFER_BYTES, layout.totalBytes + 15L), usage,
-                    true, "scene rebuilt geometry");
-            layout = layout.shifted((-geometry.deviceAddress) & 15L);
-            MemoryUtil.memFloatBuffer(geometry.mapped + layout.positionOffset, input.positions.length)
-                    .put(input.positions);
-            MemoryUtil.memIntBuffer(geometry.mapped + layout.indexOffset, input.indices.length)
-                    .put(input.indices);
-            MemoryUtil.memFloatBuffer(geometry.mapped + layout.textureCoordinateOffset, input.textureCoordinates.length)
-                    .put(input.textureCoordinates);
-            MemoryUtil.memFloatBuffer(geometry.mapped + layout.primitiveOffset, input.primitives.length)
-                    .put(input.primitives);
-            geometry.flush(layout.positionOffset, layout.totalBytes - layout.positionOffset);
-            RtAccel.PreparedBlas blas = RtAccel.prepareTransientBlas(ctx,
-                    geometry.deviceAddress + layout.positionOffset, input.positions.length / 3,
-                    geometry.deviceAddress + layout.indexOffset, input.classTriangles,
-                    "scene rebuilt BLAS", true);
-            int record = appendRecord(geometry.deviceAddress + layout.primitiveOffset,
-                    geometry.deviceAddress + layout.indexOffset, geometry.deviceAddress + layout.textureCoordinateOffset,
-                    motion.address, motion.rigidX, motion.rigidY, motion.rigidZ, input.triangleBase,
-                    input.classTriangles, input.semanticFlags);
-            appendInstance(transform, blas.accel.deviceAddress, record, mask);
-            blasBuilds.add(blas);
-            transientBlas.add(blas);
-            transientBuffers.add(geometry);
-        }
-
-        /**
-         * Replaces a keyed static resident. The key is source-owned identity only; allocation, BLAS
-         * construction and old-resource retirement remain in this manager.
-         */
-        public void replaceCached(long key, PackedInput input) {
-            if (input.buildClass != BuildClass.STATIC) {
-                throw new IllegalArgumentException("cached resident requires STATIC build class");
-            }
-            DynamicResident old = cachedResidents.put(key, uploadDynamic(ctx, input, "scene cached " + key,
-                    false));
-            if (old != null) {
-                ctx.gpuExecutor().retireAfterGraphics(old.graphicsUse, old::destroy);
-            }
-        }
-
-        /** Appends one instance of a cached replacement resident to the manager-owned suffix. */
-        public void appendCached(long key, MotionInput motion, float[] transform, int mask) {
-            DynamicResident resident = cachedResidents.get(key);
-            if (resident == null) throw new IllegalArgumentException("unknown cached resident " + key);
-            appendResident(resident, motion, transform, mask);
-        }
-
-        /** Releases a cached resident against its exact final graphics use. */
-        public void releaseCached(long key) {
-            DynamicResident resident = cachedResidents.remove(key);
-            if (resident != null) ctx.gpuExecutor().retireAfterGraphics(resident.graphicsUse, resident::destroy);
-        }
-
-        /**
-         * Uploads a deforming resident into the manager-owned in-flight ring. Topology version is the
-         * producer's declaration that indexed topology is unchanged; all refit policy and GPU state are
-         * internal to the manager.
-         */
-        public DeformingReference appendDeforming(long key, PackedInput input, MotionInput motion,
-                                                  float[] transform, int mask, boolean refitEnabled) {
-            if (input.buildClass != BuildClass.DEFORMING) {
-                throw new IllegalArgumentException("persistent animated resident requires DEFORMING build class");
-            }
-            DeformingResident owner = deformingResidents.computeIfAbsent(key, unused -> new DeformingResident());
-            DynamicResident slot = owner.next(ctx);
-            writeDynamic(ctx, slot, input);
-            boolean sameTopology = deformingTopologyMatches(slot.topologyVersion, slot.vertexCount,
-                    input.topologyVersion, input.positions.length / 3);
-            RtAccel.RefitDecision decision = RtAccel.refitDecision(refitEnabled, slot.accel != null,
-                    slot.updatable, sameTopology, slot.updatesSinceBuild, 120);
-            if (decision == RtAccel.RefitDecision.REFIT) {
-                if (slot.updateScratch == null || slot.updateScratch.size < slot.updateScratchSize) {
-                    if (slot.updateScratch != null) slot.updateScratch.destroy();
-                    slot.updateScratch = ctx.createAlignedBuffer(Math.max(MIN_BUFFER_BYTES, slot.updateScratchSize),
-                            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, false, "scene deforming refit scratch",
-                            ctx.accelerationStructureScratchAlignment());
-                }
-                RtAccel.PreparedBlas op = RtAccel.refitUpdate(slot.accel, slot.updateScratch,
-                        slot.positionAddress, slot.indexAddress, input.positions.length / 3, input.classTriangles,
-                        "scene deforming BLAS refit");
-                blasBuilds.add(op);
-                slot.updatesSinceBuild++;
-            } else {
-                slot.destroyAccel();
-                if (!refitEnabled && slot.updateScratch != null) {
-                    slot.updateScratch.destroy();
-                    slot.updateScratch = null;
-                }
-                if (refitEnabled) {
-                    RtAccel.UpdatableBuild build = RtAccel.prepareUpdatableBlasBuild(ctx, slot.positionAddress,
-                            input.positions.length / 3, slot.indexAddress, input.classTriangles,
-                            "scene deforming BLAS");
-                    slot.accel = build.accel();
-                    slot.backing = build.backing();
-                    slot.updateScratchSize = build.updateScratchSize();
-                    slot.updatable = true;
-                    blasBuilds.add(build.op());
-                    persistentBuilds.add(new PendingBuild(slot, build.op(), build.scratch()));
-                } else {
-                    RtAccel.PersistentBuild build = RtAccel.preparePersistentBlasBuild(ctx, slot.positionAddress,
-                            input.positions.length / 3, slot.indexAddress, input.classTriangles,
-                            "scene deforming BLAS");
-                    slot.accel = build.accel();
-                    slot.backing = build.backing();
-                    slot.updateScratchSize = 0L;
-                    slot.updatable = false;
-                    blasBuilds.add(build.op());
-                    persistentBuilds.add(new PendingBuild(slot, build.op(), build.scratch()));
-                }
-                slot.topologyVersion = input.topologyVersion;
-                slot.vertexCount = input.positions.length / 3;
-                slot.updatesSinceBuild = 0;
-            }
-            appendResident(slot, motion, transform, mask);
-            return new DeformingReference(key, owner, slot, dynamicResidentGeneration);
-        }
-
-        /** Reuses a manager-owned animated resident without exposing its GPU handles. */
-        public void appendDeformingReference(DeformingReference reference, MotionInput motion,
-                                             float[] transform, int mask) {
-            if (!deformingReferenceIsCurrent(reference.generation, dynamicResidentGeneration,
-                    deformingResidents.get(reference.key) == reference.owner)) {
-                throw new IllegalArgumentException("deforming resident reference is no longer live");
-            }
-            appendResident(reference.slot, motion, transform, mask);
-        }
-
-        /** Retires every ring slot for a stale animated identity. */
-        public void releaseDeforming(long key) {
-            DeformingResident resident = deformingResidents.remove(key);
-            if (resident != null) resident.retire(ctx);
-        }
-
-        private void appendResident(DynamicResident resident, MotionInput motion, float[] transform, int mask) {
-            if (resident.pendingBuild != null && !persistentBuilds.stream()
-                    .anyMatch(build -> build.operation == resident.pendingBuild)) {
-                blasBuilds.add(resident.pendingBuild);
-                persistentBuilds.add(new PendingBuild(resident, resident.pendingBuild, resident.pendingScratch));
-            }
+        private void appendResident(DynamicResident resident, float[] transform, int mask, InstanceKey key,
+                                    long previousPositionAddress, boolean resetMotion) {
             int record = appendRecord(resident.primitiveAddress, resident.indexAddress, resident.textureCoordinateAddress,
-                    motion.address, motion.rigidX, motion.rigidY, motion.rigidZ, 0, resident.classTriangles,
+                    previousPositionAddress, 0, resident.classTriangles,
                     resident.semanticFlags);
-            appendInstance(transform, resident.accel.deviceAddress, record, mask);
+            appendInstance(transform, resident.accel.deviceAddress, record, mask, key, resetMotion);
             persistentUses.add(resident);
         }
 
-        /** Retire one-frame rebuilt resources after the graphics submission that traces them. */
         private void markGraphicsUse(GraphicsUse graphicsUse) {
-            if (transientBlas.isEmpty() && transientBuffers.isEmpty()
-                    && persistentUses.isEmpty() && persistentBuilds.isEmpty()) {
+            if (persistentUses.isEmpty() && historyUses.isEmpty() && historyRetire.isEmpty()) {
                 return;
             }
-            List<RtAccel.PreparedBlas> blas = List.copyOf(transientBlas);
-            List<GpuBuffer> buffers = List.copyOf(transientBuffers);
-            transientBlas.clear();
-            transientBuffers.clear();
-            if (!blas.isEmpty() || !buffers.isEmpty()) {
-                ctx.gpuExecutor().retireAfterGraphics(graphicsUse, () -> {
-                    for (RtAccel.PreparedBlas build : blas) RtAccel.releaseTransientBlas(build);
-                    for (GpuBuffer buffer : buffers) buffer.destroy();
-                });
-            }
-            for (DynamicResident resident : persistentUses) resident.graphicsUse.mark(graphicsUse);
-            for (PendingBuild build : persistentBuilds) {
-                if (build.owner.pendingBuild == build.operation) {
-                    build.owner.pendingBuild = null;
-                    build.owner.pendingScratch = null;
-                }
-                ctx.gpuExecutor().retireAfterGraphics(graphicsUse, build.scratch::destroy);
+            for (GroupResident resident : persistentUses) resident.graphicsUse().mark(graphicsUse);
+            for (GroupResident resident : historyUses) resident.graphicsUse().mark(graphicsUse);
+            for (GroupResident resident : historyRetire) {
+                ctx.gpuExecutor().retireAfterGraphics(graphicsUse, resident::destroy);
             }
             persistentUses.clear();
-            persistentBuilds.clear();
+            historyUses.clear();
+            historyRetire.clear();
         }
 
         private void finish() {
             int records = RtGeometryAbi.checkedRecordCount(base.tablePrefix.recordCount(), count);
             if (records != 0) {
                 base.use.table.buffer.flush(0L, (long) records * RtGeometryAbi.RECORD_BYTES);
+                base.use.table.history.flush(0L, (long) records * HISTORY_BYTES);
             }
         }
 
@@ -642,42 +713,21 @@ public final class RtSceneGeometryManager {
             long grown = Math.max(required, table.buffer.size + table.buffer.size / 2L);
             GpuBuffer replacement = ctx.createBuffer(grown, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true,
                     "scene geometry table");
+            GpuBuffer historyReplacement = ctx.createBuffer(Math.max(MIN_BUFFER_BYTES,
+                    (grown / RtGeometryAbi.RECORD_BYTES) * HISTORY_BYTES), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                    true, "scene instance history");
             int existing = RtGeometryAbi.checkedRecordCount(base.tablePrefix.recordCount(), count);
             if (existing != 0) {
                 MemoryUtil.memCopy(table.buffer.mapped, replacement.mapped,
                         (long) existing * RtGeometryAbi.RECORD_BYTES);
+                MemoryUtil.memCopy(table.history.mapped, historyReplacement.mapped,
+                        (long) existing * HISTORY_BYTES);
             }
             table.buffer.destroy();
+            table.history.destroy();
             table.buffer = replacement;
+            table.history = historyReplacement;
         }
-    }
-
-    /** Opaque source-held reference to a specific manager-owned deforming ring slot. */
-    public static final class DeformingReference {
-        private final long key;
-        private final DeformingResident owner;
-        private final DynamicResident slot;
-        private final long generation;
-
-        private DeformingReference(long key, DeformingResident owner, DynamicResident slot, long generation) {
-            this.key = key;
-            this.owner = owner;
-            this.slot = slot;
-            this.generation = generation;
-        }
-    }
-
-    static long nextDynamicResidentGeneration(long generation) {
-        return Math.incrementExact(generation);
-    }
-
-    static boolean referenceIsCurrent(long referenceGeneration, long residentGeneration) {
-        return referenceGeneration == residentGeneration;
-    }
-
-    static boolean deformingReferenceIsCurrent(long referenceGeneration, long residentGeneration,
-                                                boolean ownerIsCurrent) {
-        return ownerIsCurrent && referenceIsCurrent(referenceGeneration, residentGeneration);
     }
 
     static boolean deformingTopologyMatches(long previousVersion, int previousVertexCount,
@@ -685,32 +735,43 @@ public final class RtSceneGeometryManager {
         return previousVersion == incomingVersion && previousVertexCount == incomingVertexCount;
     }
 
-    /** Geometry-table address used only by renderer orchestration after the dynamic frame is finished. */
-    public long geometryTableAddress(DynamicFrame frame) {
+    static boolean indexedMotionCompatible(BuildClass buildClass, boolean previousIndexed,
+                                           long previousVersion, int previousVertexCount,
+                                           long incomingVersion, int incomingVertexCount) {
+        return buildClass != BuildClass.REBUILT && previousIndexed
+                && deformingTopologyMatches(previousVersion, previousVertexCount,
+                incomingVersion, incomingVertexCount);
+    }
+
+    /** Geometry-table address used only by renderer orchestration after the frame update is finished. */
+    public long geometryTableAddress(FrameUpdate frame) {
         return frame.base.use.table.buffer.deviceAddress;
     }
 
-    private DynamicResident uploadDynamic(GpuContext ctx, PackedInput input, String label, boolean updatable) {
-        DynamicResident resident = new DynamicResident();
-        writeDynamic(ctx, resident, input);
-        if (updatable) {
-            RtAccel.UpdatableBuild build = RtAccel.prepareUpdatableBlasBuild(ctx, resident.positionAddress,
-                    input.positions.length / 3, resident.indexAddress, input.classTriangles, label + " BLAS");
-            resident.accel = build.accel();
-            resident.backing = build.backing();
-            resident.pendingBuild = build.op();
-            resident.pendingScratch = build.scratch();
-            resident.updateScratchSize = build.updateScratchSize();
-            resident.updatable = true;
-        } else {
-            RtAccel.PersistentBuild build = RtAccel.preparePersistentBlasBuild(ctx, resident.positionAddress,
-                    input.positions.length / 3, resident.indexAddress, input.classTriangles, label + " BLAS");
-            resident.accel = build.accel();
-            resident.backing = build.backing();
-            resident.pendingBuild = build.op();
-            resident.pendingScratch = build.scratch();
+    /** Per-instance transform history table used by hit shaders alongside the geometry table. */
+    public long instanceHistoryAddress(FrameUpdate frame) {
+        return frame.base.use.table.history.deviceAddress;
+    }
+
+    private static void writeHistory(TableSlot table, int index, float[] transform) {
+        long address = table.history.mapped + (long) index * HISTORY_BYTES;
+        for (int row = 0; row < 3; row++) {
+            for (int column = 0; column < 4; column++) {
+                MemoryUtil.memPutFloat(address + (long) (row * 4 + column) * Float.BYTES,
+                        transform[row * 4 + column]);
+            }
         }
-        return resident;
+    }
+
+    private float[] previousTransform(InstanceKey key, float[] current, SceneOrigin currentOrigin) {
+        if (key == null) return current;
+        InstanceState previous = instanceStates.get(key);
+        if (previous == null) return current;
+        float[] transform = previous.transform.clone();
+        transform[3] += (float) (previous.origin.x() - currentOrigin.x());
+        transform[7] += (float) (previous.origin.y() - currentOrigin.y());
+        transform[11] += (float) (previous.origin.z() - currentOrigin.z());
+        return transform;
     }
 
     private void writeDynamic(GpuContext ctx, DynamicResident resident, PackedInput input) {
@@ -720,7 +781,7 @@ public final class RtSceneGeometryManager {
         int usage = VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
         if (resident.geometry == null || resident.geometry.size < required) {
             GpuBuffer previous = resident.geometry;
-            resident.geometry = ctx.createBuffer(required, usage, true, "scene dynamic geometry");
+            resident.geometry = ctx.createAsyncBuffer(required, usage, true, "scene dynamic geometry");
             if (previous != null) previous.destroy();
         }
         layout = layout.shifted((-resident.geometry.deviceAddress) & 15L);
@@ -772,21 +833,6 @@ public final class RtSceneGeometryManager {
         }
     }
 
-    /** Opaque motion input interpreted by the engine-owned geometry ABI. */
-    public static final class MotionInput {
-        private final long address;
-        private final float rigidX;
-        private final float rigidY;
-        private final float rigidZ;
-
-        private MotionInput(long address, float rigidX, float rigidY, float rigidZ) {
-            this.address = address;
-            this.rigidX = rigidX;
-            this.rigidY = rigidY;
-            this.rigidZ = rigidZ;
-        }
-    }
-
     private record PackedLayout(long positionOffset, long indexOffset, long textureCoordinateOffset,
                                 long primitiveOffset, long totalBytes) {
         static PackedLayout create(int positionFloats, int indexInts, int textureCoordinateFloats, int primitiveFloats) {
@@ -814,19 +860,27 @@ public final class RtSceneGeometryManager {
     private record InstanceKey(ResourceId provider, long key) {
     }
 
-    private record DesiredInstance(ResourceId provider, long meshKey, GeometryTransform transform) {
+    private record InstanceState(float[] transform, SceneOrigin origin) {
     }
 
-    private record PendingBuild(DynamicResident owner, RtAccel.PreparedBlas operation, GpuBuffer scratch) {
+    private record DesiredInstance(InstanceKey key, ResourceId provider, long meshKey, GeometryTransform transform) {
     }
 
-    /** One engine-owned GPU resident used by cached or deforming scene captures. */
-    private static final class DynamicResident {
+    /** Private common lifetime for every resident published through an atomic group. */
+    private interface GroupResident {
+        TrackedGraphicsUse graphicsUse();
+
+        void append(FrameUpdate update, float[] transform, int mask, InstanceKey key, GroupResident previous,
+                    boolean resetVertexMotion);
+
+        void destroy();
+    }
+
+    /** One engine-owned GPU resident for indexed scene captures. */
+    private static final class DynamicResident implements GroupResident {
         GpuBuffer geometry;
         RtAccel accel;
         GpuBuffer backing;
-        GpuBuffer updateScratch;
-        long updateScratchSize;
         long positionAddress;
         long indexAddress;
         long textureCoordinateAddress;
@@ -837,9 +891,20 @@ public final class RtSceneGeometryManager {
         int vertexCount = -1;
         boolean updatable;
         int updatesSinceBuild;
-        RtAccel.PreparedBlas pendingBuild;
-        GpuBuffer pendingScratch;
         final TrackedGraphicsUse graphicsUse = new TrackedGraphicsUse();
+
+        @Override
+        public TrackedGraphicsUse graphicsUse() {
+            return graphicsUse;
+        }
+
+        @Override
+        public void append(FrameUpdate update, float[] transform, int mask, InstanceKey key, GroupResident previous,
+                           boolean resetVertexMotion) {
+            DynamicResident previousDynamic = previous instanceof DynamicResident resident ? resident : null;
+            update.appendResident(this, transform, mask, key,
+                    previousDynamic == null ? 0L : previousDynamic.positionAddress, resetVertexMotion);
+        }
 
         void destroyAccel() {
             if (accel != null) RtAccel.destroyCallerOwnedAccel(accel, backing);
@@ -847,47 +912,469 @@ public final class RtSceneGeometryManager {
             backing = null;
         }
 
-        void destroy() {
+        @Override
+        public void destroy() {
             destroyAccel();
             if (geometry != null) geometry.destroy();
-            if (updateScratch != null) updateScratch.destroy();
-            if (pendingScratch != null) pendingScratch.destroy();
             geometry = null;
-            updateScratch = null;
-            pendingScratch = null;
-            pendingBuild = null;
         }
     }
 
-    /** The manager's fixed in-flight ring for one animated identity. */
-    private static final class DeformingResident {
-        private static final int RING_SIZE = 4;
-        final DynamicResident[] ring = new DynamicResident[RING_SIZE];
-        int cursor;
+    /** Published retained packed geometry retains only resources needed by tracing and shading. */
+    private static final class RetainedGroupResident implements GroupResident {
+        private RtRetainedGeometryBuilds.Prepared<?> prepared;
+        private final int semanticFlags;
+        private final TrackedGraphicsUse graphicsUse = new TrackedGraphicsUse();
 
-        DynamicResident next(GpuContext ctx) {
-            int index = cursor;
-            cursor = (cursor + 1) % ring.length;
-            DynamicResident slot = ring[index];
-            if (slot == null) {
-                slot = new DynamicResident();
-                ring[index] = slot;
+        RetainedGroupResident(RtRetainedGeometryBuilds.Prepared<?> prepared, int semanticFlags) {
+            this.prepared = prepared;
+            this.semanticFlags = semanticFlags | RtGeometryAbi.FLAG_TRIANGLE_CORNER_TEXTURE_COORDINATES;
+        }
+
+        void complete(RtRetainedGeometryBuilds.Prepared<?> terminal) {
+            prepared = terminal;
+        }
+
+        @Override
+        public TrackedGraphicsUse graphicsUse() {
+            return graphicsUse;
+        }
+
+        @Override
+        public void append(FrameUpdate update, float[] transform, int mask, InstanceKey key, GroupResident previous,
+                           boolean resetVertexMotion) {
+            int[] bases = prepared.triangleBases();
+            int record = update.appendRawRecord(prepared.primitives().deviceAddress, 0L,
+                    prepared.textureCoordinates().deviceAddress, 0L, bases[0], bases[1], bases[2], semanticFlags);
+            update.appendInstance(transform, prepared.blas().accel.deviceAddress, record, mask, key, false);
+            update.persistentUses.add(this);
+        }
+
+        @Override
+        public void destroy() {
+            prepared.blas().accel.destroy();
+            prepared.primitives().destroy();
+            prepared.textureCoordinates().destroy();
+        }
+    }
+
+    /** Source-qualified identity remains stable even when a source regroups its atomic updates. */
+    private record ResidentId(ResourceId source, long key) { }
+    private record InstanceId(ResourceId source, long key) { }
+
+    /** Payload-level delta captured by one atomic barrier. */
+    static final class GroupDiff {
+        final Map<Long, GeometryPayload> puts;
+        final Set<Long> drops;
+        final Map<Long, Placement> placements;
+        final Set<Long> removes;
+
+        private GroupDiff(Map<Long, GeometryPayload> puts, Set<Long> drops, Map<Long, Placement> placements,
+                          Set<Long> removes) {
+            this.puts = puts;
+            this.drops = drops;
+            this.placements = placements;
+            this.removes = removes;
+        }
+    }
+
+    /** Prepared, but not yet published, candidate set for one independently atomic source group. */
+    static final class PreparedGroup {
+        final GroupKey key;
+        final long revision;
+        final Barrier barrier;
+        final GroupDiff diff;
+        List<GroupCandidate> candidates = List.of();
+
+        PreparedGroup(Barrier barrier) {
+            this.key = barrier.key;
+            this.revision = barrier.revision;
+            this.barrier = barrier;
+            this.diff = barrier.diff;
+        }
+
+        void destroyCandidates(GpuContext ctx) {
+            for (GroupCandidate candidate : candidates) candidate.destroyUnpublished(ctx);
+        }
+    }
+
+    private static final class GroupCandidate {
+        final long key;
+        final GroupResident resident;
+        final GroupResident source;
+        final RtAccel.PreparedBlas operation;
+        final boolean resetMotion;
+        boolean retainedTerminal;
+        boolean retireSourceAfterTerminal;
+
+        GroupCandidate(long key, GroupResident resident, GroupResident source, RtAccel.PreparedBlas operation,
+                       boolean resetMotion) {
+            this.key = key;
+            this.resident = resident;
+            this.source = source;
+            this.operation = operation;
+            this.resetMotion = resetMotion;
+        }
+
+        void submit(GpuContext ctx, java.util.function.BooleanSupplier cancelled,
+                    java.util.function.Consumer<CandidateTerminal> completion) {
+            try {
+                if (resident instanceof RetainedGroupResident retained) {
+                    RtRetainedGeometryBuilds.submit(ctx, retained.prepared, cancelled, terminal -> {
+                        completion.accept(new CandidateTerminal(this, terminal.build(), terminal.failure(),
+                                terminal.prepared()));
+                    });
+                    return;
+                }
+                Runnable completedBuild = () -> RtAccel.freeBlasScratch(List.of(operation));
+                java.util.function.BiConsumer<dev.comfyfluffy.caustica.rt.RtGpuExecutor.Build, Throwable> finished =
+                        (build, failure) -> {
+                            if (failure != null) RtAccel.freeBlasScratch(List.of(operation));
+                            completion.accept(new CandidateTerminal(this, build, failure, null));
+                        };
+                if (source == null) {
+                    ctx.gpuExecutor().submit(cancelled, command -> RtAccel.recordBlasBuilds(ctx, command,
+                            List.of(operation)), completedBuild, finished);
+                } else {
+                    ctx.gpuExecutor().submitAfterGraphics(source.graphicsUse(), cancelled,
+                            command -> RtAccel.recordBlasBuilds(ctx, command, List.of(operation)), completedBuild, finished);
+                }
+            } catch (Throwable failure) {
+                releaseUnsubmittedScratch();
+                completion.accept(new CandidateTerminal(this, null, failure, null));
+            }
+        }
+
+        void releaseUnsubmittedScratch() {
+            if (operation != null) RtAccel.freeBlasScratch(List.of(operation));
+        }
+
+        void completeRetained(RtRetainedGeometryBuilds.Prepared<?> prepared) {
+            if (resident instanceof RetainedGroupResident retained && prepared != null) {
+                retained.complete(prepared);
+                retainedTerminal = true;
+            }
+        }
+
+        void destroyUnpublished(GpuContext ctx) {
+            if (resident instanceof RetainedGroupResident retained) {
+                if (retainedTerminal) {
+                    ctx.gpuExecutor().retireUnpublished(retained::destroy);
+                } else {
+                    ctx.gpuExecutor().retireUnpublished(() -> RtRetainedGeometryBuilds.destroy(retained.prepared));
+                }
             } else {
-                ctx.gpuExecutor().graphicsUseWaiter().await(slot.graphicsUse);
-            }
-            return slot;
-        }
-
-        void retire(GpuContext ctx) {
-            for (DynamicResident slot : ring) {
-                if (slot != null) ctx.gpuExecutor().retireAfterGraphics(slot.graphicsUse, slot::destroy);
+                ctx.gpuExecutor().retireUnpublished(resident::destroy);
             }
         }
 
-        void destroy() {
-            for (DynamicResident slot : ring) if (slot != null) slot.destroy();
+        void destroyAfterDeviceIdle() {
+            if (resident instanceof RetainedGroupResident retained && !retainedTerminal) {
+                RtRetainedGeometryBuilds.destroy(retained.prepared);
+            } else {
+                resident.destroy();
+            }
+        }
+
+        void deferSourceRetirement() {
+            if (source != null) retireSourceAfterTerminal = true;
         }
     }
+
+    private record CandidateTerminal(GroupCandidate candidate, dev.comfyfluffy.caustica.rt.RtGpuExecutor.Build build,
+                                     Throwable failure, RtRetainedGeometryBuilds.Prepared<?> retainedPrepared) { }
+
+    static record TerminalGroup(GroupKey key, PreparedGroup prepared, Throwable failure,
+                                List<CandidateTerminal> candidates) {
+        TerminalGroup {
+            candidates = candidates == null ? List.of() : List.copyOf(candidates);
+        }
+
+        void applyRetainedCompletions() {
+            for (CandidateTerminal terminal : candidates) {
+                if (terminal.failure == null) terminal.candidate.completeRetained(terminal.retainedPrepared);
+            }
+        }
+    }
+
+    static final class Placement {
+        final long residentKey;
+        final float[] transform;
+        final int mask;
+        final SceneOrigin origin;
+
+        Placement(long residentKey, float[] transform, int mask, SceneOrigin origin) {
+            this.residentKey = residentKey;
+            this.transform = transform.clone();
+            this.mask = mask;
+            this.origin = origin;
+        }
+
+        Placement(long residentKey, float[] transform, int mask) {
+            this(residentKey, transform, mask, SceneOrigin.ZERO);
+        }
+
+        float[] transformFor(SceneOrigin targetOrigin) {
+            float[] result = transform.clone();
+            result[3] += (float) (origin.x() - targetOrigin.x());
+            result[7] += (float) (origin.y() - targetOrigin.y());
+            result[11] += (float) (origin.z() - targetOrigin.z());
+            return result;
+        }
+    }
+
+    /** Keeps asynchronous group failures visible to the render thread after their resources are released. */
+    static final class FailureLatch {
+        private Throwable failure;
+
+        void record(Throwable candidate) {
+            if (failure == null) {
+                failure = candidate;
+            } else if (failure != candidate) {
+                failure.addSuppressed(candidate);
+            }
+        }
+
+        void throwIfPresent() {
+            if (failure != null) {
+                throw new IllegalStateException("retained geometry group build failed", failure);
+            }
+        }
+    }
+
+    /** Global resident ownership with transient group barriers and conflict reservations. */
+    static final class GroupScheduler {
+        private final Map<ResidentId, GroupResident> publishedResidents = new LinkedHashMap<>();
+        private final Map<InstanceId, Placement> publishedPlacements = new LinkedHashMap<>();
+        private final Map<ResidentId, GroupResident> previousResidents = new LinkedHashMap<>();
+        private final List<Barrier> pending = new ArrayList<>();
+        private final Set<ResidentId> reservedResidents = new LinkedHashSet<>();
+        private final Set<InstanceId> reservedInstances = new LinkedHashSet<>();
+        private final Set<Barrier> running = new LinkedHashSet<>();
+
+        void submit(GeometryUpdateGroup update) {
+            submit(update, null);
+        }
+
+        void submit(GeometryUpdateGroup update, Consumer<PublicationAck> acknowledgment) {
+            Map<Long, GeometryPayload> puts = new LinkedHashMap<>();
+            Set<Long> drops = new LinkedHashSet<>();
+            Map<Long, Placement> places = new LinkedHashMap<>();
+            Set<Long> removes = new LinkedHashSet<>();
+            for (GeometryOperation operation : update.operations) {
+                switch (operation) {
+                    case Put put -> {
+                        puts.put(put.residentKey, put.payload); drops.remove(put.residentKey);
+                    }
+                    case Drop drop -> {
+                        puts.remove(drop.residentKey); drops.add(drop.residentKey);
+                    }
+                    case Place place -> {
+                        Placement value = new Placement(place.residentKey, place.transform, place.mask, place.origin);
+                        places.put(place.instanceKey, value); removes.remove(place.instanceKey);
+                    }
+                    case Remove remove -> {
+                        places.remove(remove.instanceKey); removes.add(remove.instanceKey);
+                    }
+                }
+            }
+            Barrier barrier = new Barrier(update.key, update.revision,
+                    new GroupDiff(Map.copyOf(puts), Set.copyOf(drops), Map.copyOf(places), Set.copyOf(removes)),
+                    acknowledgment);
+            mergePending(barrier);
+        }
+
+        private void mergePending(Barrier barrier) {
+            ArrayList<Barrier> merged = new ArrayList<>();
+            boolean changed;
+            do {
+                changed = false;
+                for (Barrier other : pending) {
+                    if (!merged.contains(other) && (other.key.equals(barrier.key) || other.overlaps(barrier))) {
+                        barrier = other.merge(barrier);
+                        merged.add(other);
+                        changed = true;
+                    }
+                }
+            } while (changed);
+            validateBarrier(barrier);
+            pending.removeAll(merged);
+            pending.add(barrier);
+        }
+
+        private void validateBarrier(Barrier barrier) {
+            for (Placement placement : barrier.diff.placements.values()) {
+                ResidentId target = new ResidentId(barrier.key.source, placement.residentKey);
+                if (barrier.diff.drops.contains(placement.residentKey)
+                        || (!publishedResidents.containsKey(target) && !barrier.diff.puts.containsKey(placement.residentKey))) {
+                    throw new IllegalArgumentException("geometry placement references a resident absent from its final barrier state "
+                            + placement.residentKey);
+                }
+            }
+            for (long drop : barrier.diff.drops) {
+                for (Map.Entry<InstanceId, Placement> published : publishedPlacements.entrySet()) {
+                    if (!published.getKey().source.equals(barrier.key.source) || published.getValue().residentKey != drop) continue;
+                    Placement replacement = barrier.diff.placements.get(published.getKey().key);
+                    if (!barrier.diff.removes.contains(published.getKey().key)
+                            && (replacement == null || replacement.residentKey == drop)) {
+                        throw new IllegalArgumentException("geometry drop leaves a published placement referencing resident " + drop);
+                    }
+                }
+            }
+        }
+
+        List<GroupRun> startable() {
+            List<GroupRun> result = new ArrayList<>();
+            for (int i = 0; i < pending.size(); ) {
+                Barrier barrier = pending.get(i);
+                if (reservedResidents.stream().anyMatch(barrier.residents::contains)
+                        || reservedInstances.stream().anyMatch(barrier.instances::contains)) {
+                    i++; continue;
+                }
+                try {
+                    validateBarrier(barrier);
+                } catch (IllegalArgumentException invalid) {
+                    pending.remove(i);
+                    throw invalid;
+                }
+                pending.remove(i);
+                reservedResidents.addAll(barrier.residents);
+                reservedInstances.addAll(barrier.instances);
+                running.add(barrier);
+                PreparedGroup prepared = new PreparedGroup(barrier);
+                barrier.prepared = prepared;
+                result.add(new GroupRun(barrier.key, prepared));
+            }
+            return result;
+        }
+
+        boolean running(Barrier barrier) { return running.contains(barrier); }
+        boolean cancelled(Barrier barrier) { return barrier.cancelled; }
+
+        List<GroupResident> clearSource(ResourceId source) {
+            pending.removeIf(barrier -> barrier.key.source.equals(source));
+            Set<GroupResident> deferred = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+            for (Barrier barrier : running) {
+                if (!barrier.key.source.equals(source)) continue;
+                barrier.cancelled = true;
+                if (barrier.prepared != null) {
+                    for (GroupCandidate candidate : barrier.prepared.candidates) {
+                        if (candidate.source != null) {
+                            candidate.deferSourceRetirement();
+                            deferred.add(candidate.source);
+                        }
+                    }
+                }
+            }
+            ArrayList<GroupResident> retired = new ArrayList<>();
+            var residents = publishedResidents.entrySet().iterator();
+            while (residents.hasNext()) {
+                Map.Entry<ResidentId, GroupResident> entry = residents.next();
+                if (entry.getKey().source.equals(source)) {
+                    retired.add(entry.getValue());
+                    residents.remove();
+                }
+            }
+            publishedPlacements.entrySet().removeIf(entry -> entry.getKey().source.equals(source));
+            var previous = previousResidents.entrySet().iterator();
+            while (previous.hasNext()) {
+                Map.Entry<ResidentId, GroupResident> entry = previous.next();
+                if (entry.getKey().source.equals(source)) {
+                    retired.add(entry.getValue());
+                    previous.remove();
+                }
+            }
+            retired.removeIf(deferred::contains);
+            return retired;
+        }
+
+        void complete(Barrier barrier, boolean success) {
+            if (!running.remove(barrier)) return;
+            reservedResidents.removeAll(barrier.residents);
+            reservedInstances.removeAll(barrier.instances);
+        }
+
+        GroupResident publishedResident(ResidentId id) { return publishedResidents.get(id); }
+        GroupResident putPublishedResident(ResidentId id, GroupResident resident) { return publishedResidents.put(id, resident); }
+        GroupResident removePublishedResident(ResidentId id) { return publishedResidents.remove(id); }
+        GroupResident putPreviousResident(ResidentId id, GroupResident resident) { return previousResidents.put(id, resident); }
+        GroupResident previousResident(ResidentId id) { return previousResidents.get(id); }
+        java.util.Collection<GroupResident> previousResidents() { return List.copyOf(previousResidents.values()); }
+        void clearPreviousResidents() { previousResidents.clear(); }
+        void putPublishedPlacement(InstanceId id, Placement placement) { publishedPlacements.put(id, placement); }
+        void removePublishedPlacement(InstanceId id) { publishedPlacements.remove(id); }
+        Set<Map.Entry<InstanceId, Placement>> publishedPlacements() { return Set.copyOf(publishedPlacements.entrySet()); }
+
+        void destroyAfterDeviceIdle(Set<PreparedGroup> destroyed,
+                                    java.util.function.BiConsumer<PreparedGroup, Set<PreparedGroup>> destroyPrepared) {
+            for (Barrier barrier : running) {
+                if (barrier.prepared != null) destroyPrepared.accept(barrier.prepared, destroyed);
+            }
+            for (GroupResident resident : publishedResidents.values()) resident.destroy();
+            for (GroupResident resident : previousResidents.values()) resident.destroy();
+            publishedResidents.clear();
+            publishedPlacements.clear();
+            previousResidents.clear();
+            pending.clear();
+            reservedResidents.clear();
+            reservedInstances.clear();
+            running.clear();
+        }
+
+    }
+
+    private static final class Barrier {
+        final GroupKey key;
+        final long revision;
+        final GroupDiff diff;
+        final Set<ResidentId> residents;
+        final Set<InstanceId> instances;
+        final Consumer<PublicationAck> acknowledgment;
+        PreparedGroup prepared;
+        boolean cancelled;
+
+        Barrier(GroupKey key, long revision, GroupDiff diff, Consumer<PublicationAck> acknowledgment) {
+            this.key = key; this.revision = revision; this.diff = diff; this.acknowledgment = acknowledgment;
+            residents = new LinkedHashSet<>();
+            diff.puts.keySet().forEach(value -> residents.add(new ResidentId(key.source, value)));
+            diff.drops.forEach(value -> residents.add(new ResidentId(key.source, value)));
+            diff.placements.values().forEach(value -> residents.add(new ResidentId(key.source, value.residentKey)));
+            instances = new LinkedHashSet<>();
+            diff.placements.keySet().forEach(value -> instances.add(new InstanceId(key.source, value)));
+            diff.removes.forEach(value -> instances.add(new InstanceId(key.source, value)));
+        }
+
+        boolean overlaps(Barrier other) {
+            return residents.stream().anyMatch(other.residents::contains) || instances.stream().anyMatch(other.instances::contains);
+        }
+
+        Barrier merge(Barrier newer) {
+            if (!key.source.equals(newer.key.source)) throw new IllegalArgumentException("cannot merge different sources");
+            Map<Long, GeometryPayload> puts = new LinkedHashMap<>(diff.puts);
+            Set<Long> drops = new LinkedHashSet<>(diff.drops);
+            newer.diff.puts.forEach((id, payload) -> { puts.put(id, payload); drops.remove(id); });
+            newer.diff.drops.forEach(id -> { puts.remove(id); drops.add(id); });
+            Map<Long, Placement> places = new LinkedHashMap<>(diff.placements);
+            Set<Long> removes = new LinkedHashSet<>(diff.removes);
+            newer.diff.placements.forEach((id, placement) -> { places.put(id, placement); removes.remove(id); });
+            newer.diff.removes.forEach(id -> { places.remove(id); removes.add(id); });
+            return new Barrier(newer.key, newer.revision,
+                    new GroupDiff(Map.copyOf(puts), Set.copyOf(drops), Map.copyOf(places), Set.copyOf(removes)),
+                    newer.acknowledgment != null ? newer.acknowledgment : acknowledgment);
+        }
+
+        List<GeometryOperation> operations() {
+            ArrayList<GeometryOperation> result = new ArrayList<>();
+            diff.puts.forEach((id, payload) -> result.add(new Put(id, payload)));
+            diff.drops.forEach(id -> result.add(new Drop(id)));
+            diff.placements.forEach((id, placement) -> result.add(new Place(id, placement.residentKey,
+                    placement.transform, placement.mask, placement.origin)));
+            diff.removes.forEach(id -> result.add(new Remove(id)));
+            return List.copyOf(result);
+        }
+    }
+
+    static record GroupRun(GroupKey key, PreparedGroup prepared) { }
 
     public static final class ResidentMesh {
         final TriangleMesh source;
@@ -934,10 +1421,12 @@ public final class RtSceneGeometryManager {
 
     public static final class TableSlot {
         GpuBuffer buffer;
+        GpuBuffer history;
         final TrackedGraphicsUse graphicsUse = new TrackedGraphicsUse();
 
-        TableSlot(GpuBuffer buffer) {
+        TableSlot(GpuBuffer buffer, GpuBuffer history) {
             this.buffer = buffer;
+            this.history = history;
         }
     }
 }

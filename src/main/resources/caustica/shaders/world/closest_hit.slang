@@ -357,13 +357,22 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
                 ? mat.baseColorUv.xyz * bt709ToAcesCg(srgbToLinear(pr.tint.rgb))
                 : bt709ToAcesCg(opticalColor709);
 
-        float3 motionPrev;
-        if (g.motionAddress != 0) {
-            ConstPtr<float4> motion = ConstPtr<float4>(g.motionAddress);
-            motionPrev = bary.x * motion[i0].xyz + bary.y * motion[i1].xyz + bary.z * motion[i2].xyz;
-        } else {
-            motionPrev = g.rigidMotion.xyz;
+        float3 currentLocal = bary.x * HitTriangleVertexPosition(0)
+                + bary.y * HitTriangleVertexPosition(1) + bary.z * HitTriangleVertexPosition(2);
+        float3 previousLocal = currentLocal;
+        if (g.previousPositionAddress != 0) {
+            ConstPtr<float> previousPositions = ConstPtr<float>(g.previousPositionAddress);
+            float3 previous0 = float3(previousPositions[3u * i0], previousPositions[3u * i0 + 1u], previousPositions[3u * i0 + 2u]);
+            float3 previous1 = float3(previousPositions[3u * i1], previousPositions[3u * i1 + 1u], previousPositions[3u * i1 + 2u]);
+            float3 previous2 = float3(previousPositions[3u * i2], previousPositions[3u * i2 + 1u], previousPositions[3u * i2 + 2u]);
+            previousLocal = bary.x * previous0 + bary.y * previous1 + bary.z * previous2;
         }
+        InstanceHistory history = ConstPtr<InstanceHistory>(pc.instanceHistoryAddr)[InstanceID()];
+        float3 previousWorld = float3(dot(history.row0, float4(previousLocal, 1.0)),
+                dot(history.row1, float4(previousLocal, 1.0)),
+                dot(history.row2, float4(previousLocal, 1.0)));
+        float3 currentWorld = mul(ObjectToWorld3x4(), float4(currentLocal, 1.0));
+        float3 motionPrev = currentWorld - previousWorld;
 
         // Checked before the material pages are sampled and the implementation runs: a guide walking
         // through foliage or a blended surface pays for neither. A dielectric is a crossing already, so
@@ -415,6 +424,12 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
     float3 tp0 = HitTriangleVertexPosition(0);
     float3 tp1 = HitTriangleVertexPosition(1);
     float3 tp2 = HitTriangleVertexPosition(2);
+    float3 currentLocal = bary.x * tp0 + bary.y * tp1 + bary.z * tp2;
+    InstanceHistory history = ConstPtr<InstanceHistory>(pc.instanceHistoryAddr)[InstanceID()];
+    float3 previousWorld = float3(dot(history.row0, float4(currentLocal, 1.0)),
+            dot(history.row1, float4(currentLocal, 1.0)),
+            dot(history.row2, float4(currentLocal, 1.0)));
+    float3 motionPrev = mul(ObjectToWorld3x4(), float4(currentLocal, 1.0)) - previousWorld;
     bool textureless = (bindingFlags(binding) & BINDING_TEXTURELESS) != 0u;
     // The material record names the shared bindless base-color texture, so geometry carries no texture index.
     uint textureIndex = bindingBaseColorTextureIndex(binding);
@@ -453,7 +468,7 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
     // foliage pays for neither.
     if (!transmissive && guideCoverageCrossing(payload, baseColorTexel.a)) {
         payload.hitT = RayTCurrent();
-        payload.motionPrev = half3(0.0h, 0.0h, 0.0h);
+        payload.motionPrev = half3(motionPrev);
         payloadSetCoverageCrossing(payload,
                 lerp(float3(1.0), albedo, baseColorTexel.a), geometricNormal);
         return;
@@ -474,7 +489,7 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
     }
 
     writeHitPayload(payload, material, surfaceImpl, transmissive ? PAYLOAD_TRANSMISSIVE : 0u,
-            entering, float3(0.0), transmissive ? 0.0 : material.emissionLuminance);
+            entering, motionPrev, transmissive ? 0.0 : material.emissionLuminance);
     // RIS emitter-NEE membership: raygen gates this emitter's direct-hit emission term (RIS covers it).
     if (!transmissive && (pr.flags & PRIM_EMITTER_IN_LIGHT_SCENE) != 0u) {
         payload.flags |= PAYLOAD_EMITTER_IN_LIST;

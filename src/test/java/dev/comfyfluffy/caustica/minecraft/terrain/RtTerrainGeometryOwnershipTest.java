@@ -19,11 +19,25 @@ final class RtTerrainGeometryOwnershipTest {
         for (String forbidden : List.of(
                 "RtRetainedGeometryScene",
                 "RtRetainedGeometryBuilds",
+                "RtRetainedGeometryCoordinator",
+                "acquirePackedCoordinator",
+                "releasePackedCoordinator",
+                "Prepared<",
+                "Completion<",
+                "Resident<",
+                "RtGpuExecutor",
                 "GpuBuffer",
                 "RtAccel.prepare",
                 "RtAccel.refit",
                 "RtGeometryAbi.writeRecord",
-                "markPublished(")) {
+                "markPublished(",
+                "retireUnpublished(",
+                "geometry.prepare(",
+                "geometry.publish(",
+                "geometry.ensureEmpty(",
+                "geometry.destroy(",
+                "geometry.clearAsync(",
+                "geometry.publishBatch(")) {
             assertFalse(source.contains(forbidden), "terrain retains GPU geometry ownership through " + forbidden);
         }
     }

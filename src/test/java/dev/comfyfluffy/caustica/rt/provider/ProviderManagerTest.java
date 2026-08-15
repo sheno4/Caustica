@@ -638,8 +638,7 @@ final class ProviderManagerTest {
         }
 
         @Override
-        public void submitFrame(GpuContext ctx, Retained retained, RtSceneGeometryManager.DynamicFrame geometry,
-                                Camera camera) {
+        public void submitFrame(GpuContext ctx, Retained retained, RtSceneGeometryManager geometry, Camera camera) {
             if (failFrame) {
                 throw new IllegalStateException("expected");
             }

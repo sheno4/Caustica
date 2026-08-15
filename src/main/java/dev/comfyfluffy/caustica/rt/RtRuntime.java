@@ -182,7 +182,14 @@ public final class RtRuntime {
         }
 
         boolean starting = state == State.STARTING;
-        boolean sessionReady = session.tick(sceneResources, sceneId, displayWidth, displayHeight, starting);
+        boolean sessionReady;
+        try {
+            sessionReady = session.tick(sceneResources, sceneId, displayWidth, displayHeight, starting);
+        } catch (Throwable failure) {
+            CausticaMod.LOGGER.error("RT runtime scene work failed; source presentation remains active", failure);
+            fail(reconfigureSurface);
+            return;
+        }
         if (RtComposite.INSTANCE.hasFailed()) {
             fail(reconfigureSurface);
             return;
@@ -444,6 +451,7 @@ public final class RtRuntime {
             if (resourcesReady) {
                 RtFrameStats.FRAME.beginIfInactive();
                 ProviderManager.INSTANCE.updateScenes();
+                RtComposite.INSTANCE.sceneGeometry().progress(context);
             }
             if (!sceneResources.sceneReady()) {
                 return false;

@@ -294,7 +294,7 @@ public final class RtComposite {
         return currentTlasHandle;
     }
 
-    /** Renderer-owned geometry coordinator shared by every active scene producer. */
+    /** Renderer-owned geometry manager shared by every active scene producer. */
     public RtSceneGeometryManager sceneGeometry() {
         return sceneGeometry;
     }
@@ -1152,7 +1152,7 @@ public final class RtComposite {
         exposure.beginFrame(graphicsUseWaiter);
         pendingGraphicsUse = graphicsUse;
         RtSceneGeometryManager.FrameGeometry providerGeometry = null;
-        RtSceneGeometryManager.DynamicFrame dynamicGeometry = null;
+        RtSceneGeometryManager.FrameUpdate dynamicGeometry = null;
         RtLightScene.Frame frameLights = null;
         PushSlot framePushSlot = null;
         VkCommandBuffer cmd = submission.beginTransientCommandBuffer();
@@ -1221,11 +1221,10 @@ public final class RtComposite {
             ProviderManager.INSTANCE.submitGeometry(geometryCapture::sink);
             providerGeometry = sceneGeometry.finishFrame(ctx, geometryCapture, sceneOrigin,
                     ProviderManager.INSTANCE.activeSceneProviderIds());
-            dynamicGeometry = sceneGeometry.beginDynamicFrame(ctx, providerGeometry);
-            ProviderManager.INSTANCE.submitPrimaryFrame(primaryScene, ctx, dynamicGeometry,
+            ProviderManager.INSTANCE.submitPrimaryFrame(primaryScene, ctx, sceneGeometry,
                     new RtSceneSource.Camera(snapshot.cameraX(), snapshot.cameraY(), snapshot.cameraZ(),
                             frameProjection, frameViewRotation));
-            sceneGeometry.finishDynamicFrame(dynamicGeometry);
+            dynamicGeometry = sceneGeometry.beginUpdate(ctx, providerGeometry);
             new WorldPushData(
                     frameInvViewProj,
                     new Float3(sceneOrigin.relativeX(snapshot.cameraX()),
@@ -1263,7 +1262,7 @@ public final class RtComposite {
             // Barriers separate each stage; the graphics-use timeline guards resource reuse.
             boolean blasRecorded;
             try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("geometry.blasRecord")) {
-                blasRecorded = sceneGeometry.recordBlasBuilds(ctx, cmd, providerGeometry, dynamicGeometry);
+                blasRecorded = sceneGeometry.recordBlasBuilds(ctx, cmd, providerGeometry);
             }
             if (blasRecorded) {
                 VulkanBarriers.memoryBarrier(cmd, stack); // BLAS writes visible to the TLAS build
@@ -1286,6 +1285,7 @@ public final class RtComposite {
             // none of them should cost an extra BDA dereference to find.
             ByteBuffer pushConstants = stack.malloc(WorldPushConstantsData.BYTE_SIZE);
             new WorldPushConstantsData(pushBuf.deviceAddress, sceneGeometry.geometryTableAddress(dynamicGeometry),
+                    sceneGeometry.instanceHistoryAddress(dynamicGeometry),
                     RtMaterialRegistry.INSTANCE.bindingTableAddress(),
                     RtMaterialRegistry.INSTANCE.surfaceTableAddress(),
                     retainedLights.lightAddress(), retainedLights.nodeAddress(),

@@ -67,18 +67,17 @@ final class RtMaterialLayoutTest {
 
     @Test
     void reflectedWorldPushConstantsIncludeLightBuffersAndFrameIndex() {
-        // 9 uint64_t addresses (world/geometry/binding/surface, 4 light-scene buffers, path queue)
-        // + frameIndex plus four bytes of reflected trailing struct padding.
-        assertEquals(80, WorldPushConstantsData.BYTE_SIZE);
+        // 10 uint64_t addresses, including the parallel per-instance history table, plus frameIndex.
+        assertEquals(88, WorldPushConstantsData.BYTE_SIZE);
         ByteBuffer data = ByteBuffer.allocateDirect(WorldPushConstantsData.BYTE_SIZE)
                 .order(ByteOrder.nativeOrder());
-        new WorldPushConstantsData(1L, 2L, 3L, 4L, 5L, 6L, 7L, 8L, 9L, 10).write(data);
-        assertEquals(3L, data.getLong(16));  // materialTableAddr
-        assertEquals(4L, data.getLong(24));  // materialSurfaceAddr
-        assertEquals(5L, data.getLong(32));  // retainedLightAddr
-        assertEquals(8L, data.getLong(56));  // frameLightNodeAddr
-        assertEquals(9L, data.getLong(64));  // pathQueueAddr
-        assertEquals(10, data.getInt(72));   // frameIndex
-        assertEquals(0, data.getInt(76));    // reflected trailing padding is deterministically zeroed
+        new WorldPushConstantsData(1L, 2L, 3L, 4L, 5L, 6L, 7L, 8L, 9L, 10L, 11).write(data);
+        assertEquals(3L, data.getLong(16));  // instanceHistoryAddr
+        assertEquals(4L, data.getLong(24));  // materialTableAddr
+        assertEquals(5L, data.getLong(32));  // materialSurfaceAddr
+        assertEquals(9L, data.getLong(64));  // frameLightNodeAddr
+        assertEquals(10L, data.getLong(72)); // pathQueueAddr
+        assertEquals(11, data.getInt(80));   // frameIndex
+        assertEquals(0, data.getInt(84));    // reflected trailing padding is deterministically zeroed
     }
 }

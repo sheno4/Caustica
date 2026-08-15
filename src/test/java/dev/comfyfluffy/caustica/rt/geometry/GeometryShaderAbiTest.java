@@ -51,15 +51,27 @@ final class GeometryShaderAbiTest {
     void everyGeometryTableWriterDeclaresItsTextureCoordinateMode() throws IOException {
         Path java = Path.of("src", "main", "java", "dev", "comfyfluffy", "caustica")
                 .toAbsolutePath().normalize();
-        String indexedWriters = read(List.of(java.resolve("rt/geometry/RtSceneGeometryManager.java"),
-                java.resolve("minecraft/entity/RtEntities.java")));
-        String directWriter = Files.readString(java.resolve("rt/geometry/RtRetainedGeometryScene.java"));
+        String geometryManager = Files.readString(java.resolve("rt/geometry/RtSceneGeometryManager.java"));
 
-        assertTrue(indexedWriters.contains("RtGeometryAbi.FLAG_INDEXED_TEXTURE_COORDINATES"));
-        assertTrue(directWriter.contains("RtGeometryAbi.FLAG_TRIANGLE_CORNER_TEXTURE_COORDINATES"));
-        assertTrue(directWriter.contains("geometrySemanticFlags"));
+        assertTrue(geometryManager.contains("RtGeometryAbi.FLAG_INDEXED_TEXTURE_COORDINATES"));
+        assertTrue(geometryManager.contains("RtGeometryAbi.FLAG_TRIANGLE_CORNER_TEXTURE_COORDINATES"));
         assertTrue(Files.readString(java.resolve("minecraft/terrain/RtTerrain.java"))
                 .contains("RtGeometryAbi.FLAG_RECEIVES_PROJECTED_SURFACE_MODIFIERS"));
+    }
+
+    @Test
+    void hitShadersDeriveMotionFromTheCurrentAndPreviousInstanceTransforms() throws IOException {
+        String closestHit = Files.readString(Path.of("src", "main", "resources", "caustica", "shaders",
+                "world", "closest_hit.slang"));
+
+        assertTrue(closestHit.contains("mul(ObjectToWorld3x4(), float4(currentLocal, 1.0))"),
+                "current motion position must include the instance translation");
+        assertTrue(closestHit.contains("InstanceHistory history = ConstPtr<InstanceHistory>(pc.instanceHistoryAddr)[InstanceID()]"),
+                "both geometry encodings need the per-instance previous transform");
+        assertTrue(closestHit.contains("entering, motionPrev, transmissive ? 0.0 : material.emissionLuminance)"),
+                "triangle-corner geometry must publish its transform-derived motion");
+        assertFalse(closestHit.contains("payload.motionPrev = half3(0.0h, 0.0h, 0.0h);"),
+                "triangle-corner geometry must not discard transform motion");
     }
 
     @Test

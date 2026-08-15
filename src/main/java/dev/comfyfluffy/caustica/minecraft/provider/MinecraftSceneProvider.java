@@ -37,6 +37,10 @@ public final class MinecraftSceneProvider implements SceneProvider, RtSceneSourc
 
     @Override
     public void onWorldChanged() {
+        GpuContext ctx = GpuContext.currentOrNull();
+        if (ctx != null) {
+            RtEntities.INSTANCE.onWorldChanged(ctx, ProviderManager.INSTANCE.sceneGeometry());
+        }
         RtTerrain.requestFullClear();
     }
 
@@ -55,7 +59,6 @@ public final class MinecraftSceneProvider implements SceneProvider, RtSceneSourc
         GpuContext ctx = GpuContext.currentOrNull();
         if (ctx != null) {
             RtTerrain.shutdown(ctx);
-            ProviderManager.INSTANCE.sceneGeometry().releasePackedCoordinator();
             RtEntities.INSTANCE.shutdown(ctx);
         }
     }
@@ -79,11 +82,10 @@ public final class MinecraftSceneProvider implements SceneProvider, RtSceneSourc
     }
 
     @Override
-    public void submitFrame(GpuContext ctx, Retained retained, RtSceneGeometryManager.DynamicFrame geometry,
-                            Camera camera) {
+    public void submitFrame(GpuContext ctx, Retained retained, RtSceneGeometryManager geometry, Camera camera) {
         SceneOrigin origin = retained.origin();
         RtEntities.INSTANCE.beginFrame(ctx, geometry,
-                (int) origin.x(), (int) origin.y(), (int) origin.z(),
+                origin,
                 camera.x(), camera.y(), camera.z(), camera.projection(), camera.viewRotation());
     }
 

@@ -13,9 +13,8 @@ public interface RtSceneSource {
     /** The currently publishable retained scene, or {@code null} while the source is not ready. */
     Retained retainedScene();
 
-    /** Submit CPU-captured frame geometry into the renderer-owned dynamic suffix. */
-    void submitFrame(GpuContext ctx, Retained retained, RtSceneGeometryManager.DynamicFrame geometry,
-                     Camera camera);
+    /** Submit CPU-captured frame geometry to the renderer-owned asynchronous geometry manager. */
+    void submitFrame(GpuContext ctx, Retained retained, RtSceneGeometryManager geometry, Camera camera);
 
     int bindlessTextureCapacity();
 

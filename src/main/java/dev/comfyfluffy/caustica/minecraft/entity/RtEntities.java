@@ -5,6 +5,8 @@ import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.mixin.ParticleEngineAccessor;
 import dev.comfyfluffy.caustica.mixin.ParticleGroupAccessor;
 import dev.comfyfluffy.caustica.minecraft.provider.MinecraftMaterialSource;
+import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -49,16 +51,19 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.Iterator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Queue;
+import java.util.Set;
+import java.util.function.LongConsumer;
 
 /**
  * Dynamic entities as real ray-traced {@code ModelPart} geometry. Each frame, every model entity is
  * re-posed and captured ({@link RtEntityCollector} + {@link RtEntityCapture}) into canonical packed
  * arrays. The engine-owned scene geometry manager owns their resident GPU geometry, acceleration
  * structures, table records, instances, and graphics lifetime. This source retains only Minecraft
- * capture state, semantic change detection, motion inputs, and rigid-fitting references.
+ * capture state, block-entity change detection, and stale-entry eviction state.
  * Non-model entities (items/arrows — geometry via submitItem/submitBlockModel, which the collector
  * ignores) are skipped.
  *
@@ -67,6 +72,10 @@ import java.util.Queue;
  */
 public final class RtEntities {
     public static final RtEntities INSTANCE = new RtEntities();
+    private static final ResourceId ENTITY_GEOMETRY = ResourceId.of("caustica", "entity_geometry");
+    private static final ResourceId BLOCK_ENTITY_GEOMETRY = ResourceId.of("caustica", "block_entity_geometry");
+    private static final ResourceId PARTICLE_GEOMETRY = ResourceId.of("caustica", "particle_geometry");
+    private static final long PARTICLE_KEY = 0L;
     public static boolean enabled() {
         return CausticaConfig.Rt.Entities.ENABLED.value();
     }
@@ -129,23 +138,10 @@ public final class RtEntities {
 
     // Stale-cache eviction horizon.
     private static final int KEEP_FRAMES = 4;
-    // Rigid reuse: when this frame's capture is a rigid transform (translation and/or yaw) of the mesh the
-    // entity's AS was last built from, reference that AS with the fitted TLAS instance transform and skip
-    // the mesh upload + refit entirely — still mobs, item frames/armor stands, and spinning/bobbing
-    // dropped items become table-entry + instance writes only.
 
-    // Max per-axis residual (blocks) for a capture to count as a rigid transform of the reference mesh.
-    // Well below a texel (1/16 block) and DLSS-RR jitter; float pose math noise is ~1e-5.
-    private static final float RIGID_FIT_EPS = 2.0e-3f;
-
-
-    // Treat per-vertex displacements as rigid when every vertex agrees within this tolerance, avoiding a
-    // transient disp buffer for plain whole-entity translation.
-    private static final float RIGID_DISP_EPS = 1.0e-5f;
-    // Identity 3x4 row-major. Particles are already captured in rebased space; dynamic entities use a
-    // translate/yaw instance transform because their geometry is captured around the entity anchor.
+    // Identity 3x4 row-major. Particles are captured in rebased space while ordinary entity geometry is
+    // captured around its anchor and placed by a translation instance transform.
     private static final float[] IDENTITY = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
-    private static final Motion NO_MOTION = new Motion(null, 0, 0f, 0f, 0f);
 
     // Reusable capture pipeline (single-threaded on the render thread).
     private final RtEntityCollector collector = new RtEntityCollector();
@@ -153,37 +149,12 @@ public final class RtEntities {
     private final PoseStack entityPoseStack = new PoseStack();
     private final PoseStack blockEntityPoseStack = new PoseStack();
     private CameraRenderState cameraState;
-    // Particle capture: a VertexConsumer adapter that funnels MC's billboard quads into `capture` (the
-    // shared entity mesh). We extract each live particle into `particleScratch`, accumulate per-vertex
-    // motion-vector displacements in `particleDisp`, and key the previous-frame center off particle
-    // identity in `particlePrev` (rebuilt each frame → prunes dead particles).
+    // Particle capture funnels MC billboard quads into the shared entity mesh. Rebuilt particle topology
+    // has no stable vertex correspondence, so the scene manager resets its object-motion history.
     private final RtParticleCapture particleCapture = new RtParticleCapture(capture);
     private final QuadParticleRenderState particleScratch = new QuadParticleRenderState();
-    private final FloatArrayList particleDisp = new FloatArrayList();
-    private IdentityHashMap<Particle, ParticlePrev> particlePrev = new IdentityHashMap<>();
-    private IdentityHashMap<Particle, ParticlePrev> particleCur = new IdentityHashMap<>();
     private final float[] particleCenterScratch = new float[3];
 
-    /** Previous frame's particle center (rebase-space) + that frame's rebase origin, for the MV diff. */
-    private static final class ParticlePrev {
-        float cx, cy, cz;
-        int rbx, rby, rbz;
-
-        void set(float cx, float cy, float cz, int rbx, int rby, int rbz) {
-            this.cx = cx;
-            this.cy = cy;
-            this.cz = cz;
-            this.rbx = rbx;
-            this.rby = rby;
-            this.rbz = rbz;
-        }
-    }
-
-    // Previous frame's captured entity-local vertex positions + its interpolated world anchor, keyed by
-    // entity id. Maps are swapped/reused each frame: entries not seen this frame fall out, while visible
-    // entities keep their float[] backing to avoid steady-state allocation churn.
-    private Int2ObjectOpenHashMap<EntityPrev> prevVerts = new Int2ObjectOpenHashMap<>(entityMapCapacity());
-    private Int2ObjectOpenHashMap<EntityPrev> curVerts = new Int2ObjectOpenHashMap<>(entityMapCapacity());
 
     // This frame's glowing entities (see GlowEntity) + the camera-relative offset (camera pos - rebase
     // origin) their positions are captured against, for GlowOutlineFeature's raster pass. Rebuilt every frame.
@@ -224,23 +195,17 @@ public final class RtEntities {
         return cameraState.orientation;
     }
 
-    /** Last frame's posed mesh for one entity: local vertex positions + its interpolated world anchor. */
-    private static final class EntityPrev {
-        float[] verts = new float[0];
-        int size;
-        float anchorX, anchorY, anchorZ;
-    }
-
-    // CPU capture state for engine-owned deforming residents.
+    // CPU capture state for engine-owned dynamic residents.
     private final Int2ObjectOpenHashMap<EntityState> entityStates = new Int2ObjectOpenHashMap<>(entityMapCapacity());
 
-    // Persistent per-block-entity geometry, keyed by BlockPos.asLong(). Built once and reused every frame.
+    // Persistent per-block-entity geometry, keyed by BlockPos.asLong().
     private final Map<Long, BeEntry> beCache = new HashMap<>();
     private final List<BeCandidate> beCandidates = new ArrayList<>();
     private final ArrayDeque<BeCandidate> beCandidatePool = new ArrayDeque<>();
     // (Re)builds recorded so far this frame, reset each beginFrame; gates new BE builds to BE_BUILDS_PER_FRAME.
     private int beBuildsThisFrame;
-    private RtSceneGeometryManager.DynamicFrame activeGeometry;
+    private final Set<RtSceneGeometryManager.GroupKey> pendingDrops = new LinkedHashSet<>();
+    private long nextGeometryRevision;
 
     private RtEntities() {
     }
@@ -248,25 +213,35 @@ public final class RtEntities {
     /**
      * Cached block-entity geometry. The mesh is captured in <b>block-local</b> space (identity submit pose),
      * so it is rebase-independent — only the per-frame TLAS instance transform ({@code blockPos − rebase})
-     * changes, exactly like a terrain section. The manager retains the keyed resident until it is evicted
-     * (out of window / unloaded) or replaced because its captured mesh changed.
+     * changes, exactly like a terrain section.
      */
     private static final class BeEntry {
         int bx, by, bz;                          // block position (drives the per-frame instance transform)
         long meshHash;                           // hash of the captured mesh — rebuild only when it changes
         long lastSeen;                           // last frame this BE was in the scan window — for eviction
-        float[] prevVerts;                       // block-local verts at this build, for the per-vertex MV diff
+        final PublicationState publication = new PublicationState();
     }
 
-    /** CPU-only capture state for one entity; the manager owns its opaque resident reference. */
+    /** CPU-only capture state for one entity; the manager owns its resident. */
     private static final class EntityState {
         long lastSeen;
-        RtSceneGeometryManager.DeformingReference reference;
-        float[] refVerts;
-        int refVertCount = -1;
-        int refIdxCount = -1;
-        long refShadeHash;                      // rotation-invariant uv+prim hash (catches tint/sprite swaps)
-        long retryYawFitAfter;
+    }
+
+    /** Tracks whether a block-entity resident has reached the manager's published snapshot. */
+    static final class PublicationState {
+        boolean published;
+        boolean putPending;
+        long lastSubmittedRevision;
+
+        void submitted(long revision, boolean includesPut) {
+            lastSubmittedRevision = revision;
+            putPending |= includesPut;
+        }
+
+        void acknowledged(long revision) {
+            published = true;
+            if (lastSubmittedRevision == revision) putPending = false;
+        }
     }
 
     /** One glowing entity's body mesh (rebased-space positions, copied out of {@link #capture} before the
@@ -279,9 +254,6 @@ public final class RtEntities {
      *  convention as entity capture — see {@link RtEntities#glowCamOffsetX()} for the camera-relative
      *  offset needed to finish the transform to camera-relative space). */
     public record NameTagEntity(Component text, float x, float y, float z) {
-    }
-
-    private record Motion(float[] displacement, int displacementCount, float rigidX, float rigidY, float rigidZ) {
     }
 
     private static final class BeCandidate {
@@ -303,14 +275,38 @@ public final class RtEntities {
 
     /** Mutable per-frame build state shared by the entity + block-entity capture passes. */
     private final class FrameBuild {
-        final RtSceneGeometryManager.DynamicFrame geometry;
+        final RtSceneGeometryManager geometry;
+        final SceneOrigin origin;
         final RtMaterialRegistry.Snapshot materials;
+        final List<RtSceneGeometryManager.GeometryUpdateGroup> groups = new ArrayList<>();
+        final Map<RtSceneGeometryManager.GroupKey, Acknowledgment> acknowledgments = new HashMap<>();
         int count;        // geometry-table entries / TLAS instances
         int logicalCount; // ordinary entities + block entities + individual particles
 
-        FrameBuild(RtSceneGeometryManager.DynamicFrame geometry, RtMaterialRegistry.Snapshot materials) {
+        FrameBuild(RtSceneGeometryManager geometry, SceneOrigin origin, RtMaterialRegistry.Snapshot materials) {
             this.geometry = geometry;
+            this.origin = origin;
             this.materials = materials;
+        }
+
+        long submit(ResourceId source, long key, List<RtSceneGeometryManager.GeometryOperation> operations,
+                    LongConsumer acknowledgment) {
+            RtSceneGeometryManager.GroupKey groupKey = new RtSceneGeometryManager.GroupKey(source, key);
+            pendingDrops.remove(groupKey);
+            long revision = ++nextGeometryRevision;
+            groups.add(new RtSceneGeometryManager.GeometryUpdateGroup(groupKey, revision, operations));
+            if (acknowledgment != null) acknowledgments.put(groupKey, new Acknowledgment(revision, acknowledgment));
+            return revision;
+        }
+
+        void flush() {
+            if (groups.isEmpty()) return;
+            geometry.submit(groups, published -> {
+                Acknowledgment acknowledgment = acknowledgments.get(published.key());
+                if (acknowledgment != null && acknowledgment.revision == published.revision()) {
+                    acknowledgment.consumer.accept(published.revision());
+                }
+            });
         }
 
         boolean full() {
@@ -318,18 +314,22 @@ public final class RtEntities {
         }
     }
 
+    private record Acknowledgment(long revision, LongConsumer consumer) { }
+
     /**
-     * Capture this frame's model entities, block entities, and particles into the manager-owned dynamic
-     * suffix. Dynamic entity coordinates are local and placed by instances; particles remain captured
-     * rebase-relative with an identity instance.
+     * Capture this frame's model entities, block entities, and particles into independent source groups.
+     * Dynamic entity coordinates are local and placed by instances; particles remain captured relative to
+     * the authored scene origin with an identity instance.
      */
-    public void beginFrame(GpuContext ctx, RtSceneGeometryManager.DynamicFrame geometry,
-                           int rbx, int rby, int rbz,
+    public void beginFrame(GpuContext ctx, RtSceneGeometryManager geometry, SceneOrigin origin,
                            double camX, double camY, double camZ, Matrix4f projection, Matrix4f viewRotation) {
         RtMaterialRegistry registry = RtMaterialRegistry.INSTANCE;
-        FrameBuild build = new FrameBuild(geometry, registry.requireSnapshot());
-        activeGeometry = geometry;
+        FrameBuild build = new FrameBuild(geometry, origin, registry.requireSnapshot());
+        int rbx = (int) origin.x();
+        int rby = (int) origin.y();
+        int rbz = (int) origin.z();
         if (!enabled()) {
+            clearResidents(build);
             finishFrame(build);
             return;
         }
@@ -363,18 +363,23 @@ public final class RtEntities {
         } finally {
             capture.baseColorMaterialResolver = defaultMaterialResolver;
         }
-        evictStaleAccels(ctx);
-        evictStaleBes(ctx);
+        evictStaleAccels(build);
+        evictStaleBes(build);
         finishFrame(build);
     }
 
     private void finishFrame(FrameBuild build) {
-        try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("entity.uploadFlush")) {
-            if (build.count != 0) RtFrameStats.FRAME.count("geometryTableFlushes", 1);
+        List<RtSceneGeometryManager.GroupKey> drops = List.copyOf(pendingDrops);
+        pendingDrops.clear();
+        for (RtSceneGeometryManager.GroupKey key : drops) {
+            build.submit(key.source(), key.key(), List.of(
+                    new RtSceneGeometryManager.Remove(key.key()),
+                    new RtSceneGeometryManager.Drop(key.key())), null);
         }
+        build.flush();
     }
 
-    /** Capture animated entities (mobs, items, falling blocks) with per-object motion-vector displacement. */
+    /** Capture visible model entities (mobs, items, falling blocks). */
     private void captureEntities(GpuContext ctx, FrameBuild build, Minecraft mc, ClientLevel level, float partial, int rbx, int rby, int rbz) {
         EntityRenderDispatcher dispatcher = mc.getEntityRenderDispatcher();
         Entity cameraEntity = mc.getCameraEntity();
@@ -382,7 +387,6 @@ public final class RtEntities {
         // still appear in reflections / shadows / GI (so the player sees themselves in water as others would).
         // In F5 third person it renders fully, like any other entity.
         boolean firstPerson = mc.options.getCameraType().isFirstPerson();
-        curVerts.clear();
         glowBatches.clear();
         nameTagBatches.clear();
         boolean glow = glowEnabled();
@@ -405,8 +409,7 @@ public final class RtEntities {
             float iy;
             float iz;
             int id = entity.getId();
-            EntityPrev prev = prevVerts.get(id);
-            capture.reset(prev != null ? prev.size / 3 : 0);
+            capture.reset();
             try {
                 EntityRenderState state;
                 long extractStart = RtFrameStats.FRAME.startStage();
@@ -423,11 +426,8 @@ public final class RtEntities {
                 // extractEntity already ran EntityRenderer.extractNameTags (shouldShowName, crosshair-look,
                 // distance cutoff, the attachment point) as a normal part of building the render state — no
                 // need to reimplement any of that here, just read the result. Name tags billboard to face
-                // the camera every frame (see NameTagFeature), so — unlike glow, whose mesh is captured
-                // straight into the SAME rigid entity mesh used for the BLAS — they are never mixed into
-                // `capture`: doing so would make every frame's mesh a non-rigid transform of the last
-                // whenever the camera turns, defeating rigid-reuse/motion-vector fitting for every
-                // name-tagged entity. WorldOverlayPass renders them in a completely separate raster pass.
+                // the camera every frame, so their camera-facing geometry belongs to the separate
+                // WorldOverlayPass raster path rather than this mesh capture.
                 if (nameTags && !firstPersonSelf && state.nameTag != null) {
                     captureNameTag(level, state, ix, iy, iz, rbx, rby, rbz);
                 }
@@ -464,36 +464,11 @@ public final class RtEntities {
                             ix - rbx, iy - rby, iz - rbz), capture.idx.toIntArray(), glowColor));
                 }
             }
-            // Motion vs last frame's posed mesh. New/topology-changed entities get one frame of camera-only
-            // MV; rigid translation is packed into the table, deformation gets a disp buffer.
-            Motion motion;
-            long motionStart = RtFrameStats.FRAME.startStage();
-            try {
-                motion = captureVertexMotion(capture.verts, prev, ix, iy, iz);
-            } finally {
-                RtFrameStats.FRAME.endStage("entity.capture.motion", motionStart);
-            }
-            curVerts.put(id, storeEntityPrev(prev, capture.verts, ix, iy, iz));
-            // Rigid reuse first: a pose that is a rigid transform of the entity's last-built mesh
-            // re-references that AS through the instance transform — no upload, no refit.
-            boolean reused;
-            long reuseStart = RtFrameStats.FRAME.startStage();
-            try {
-                reused = appendRigidReuse(ctx, build, motion, id, mask, ix - rbx, iy - rby, iz - rbz);
-            } finally {
-                RtFrameStats.FRAME.endStage("entity.capture.rigidReuse", reuseStart);
-            }
-            if (!reused) {
-                appendCapture(ctx, build, motion, id, mask,
-                        translationTransform(ix - rbx, iy - rby, iz - rbz));
-            }
+            appendCapture(build, id, mask, translationTransform(ix - rbx, iy - rby, iz - rbz));
             build.logicalCount++;
             RtFrameStats.FRAME.count("entitiesCaptured", 1);
             capturedThisFrame++;
         }
-        Int2ObjectOpenHashMap<EntityPrev> oldPrev = prevVerts;
-        prevVerts = curVerts;
-        curVerts = oldPrev;
     }
 
     private static void resetPoseStack(PoseStack poseStack) {
@@ -547,114 +522,29 @@ public final class RtEntities {
     }
 
     /**
-     * Capture this entity's world-space motion-vector displacement. Captures are entity-local, so the delta
-     * is {@code (anchorCur + vertexCur) - (anchorPrev + vertexPrev)}. If every vertex agrees,
-     * store it as a rigid vector in the geometry-table entry; otherwise write a per-vertex {@code vec4}
-     * array for the geometry manager to upload with the submitted mesh.
-     */
-    private Motion captureVertexMotion(FloatArrayList cur, EntityPrev prev,
-                                       float anchorX, float anchorY, float anchorZ) {
-        if (prev == null || prev.size != cur.size()) {
-            return NO_MOTION;
-        }
-        float[] curVerts = cur.elements();
-        float[] prevVerts = prev.verts;
-        float sx = anchorX - prev.anchorX;
-        float sy = anchorY - prev.anchorY;
-        float sz = anchorZ - prev.anchorZ;
-        int vc = cur.size() / 3;
-        if (vc == 0) {
-            return NO_MOTION;
-        }
-
-        float dx0 = (curVerts[0] - prevVerts[0]) + sx;
-        float dy0 = (curVerts[1] - prevVerts[1]) + sy;
-        float dz0 = (curVerts[2] - prevVerts[2]) + sz;
-        boolean rigid = true;
-        for (int i = 1; i < vc; i++) {
-            float dx = (curVerts[i * 3]     - prevVerts[i * 3])     + sx;
-            float dy = (curVerts[i * 3 + 1] - prevVerts[i * 3 + 1]) + sy;
-            float dz = (curVerts[i * 3 + 2] - prevVerts[i * 3 + 2]) + sz;
-            if (Math.abs(dx - dx0) > RIGID_DISP_EPS
-                    || Math.abs(dy - dy0) > RIGID_DISP_EPS
-                    || Math.abs(dz - dz0) > RIGID_DISP_EPS) {
-                rigid = false;
-                break;
-            }
-        }
-        if (rigid) {
-            return new Motion(null, 0, dx0, dy0, dz0);
-        }
-
-        long bytes = (long) vc * 4L * Float.BYTES;
-        float[] displacement = new float[vc * 4];
-        for (int i = 0; i < vc; i++) {
-            displacement[i * 4] = (curVerts[i * 3] - prevVerts[i * 3]) + sx;
-            displacement[i * 4 + 1] = (curVerts[i * 3 + 1] - prevVerts[i * 3 + 1]) + sy;
-            displacement[i * 4 + 2] = (curVerts[i * 3 + 2] - prevVerts[i * 3 + 2]) + sz;
-        }
-        RtFrameStats.FRAME.count("entityMotionUploadBytes", bytes);
-        return new Motion(displacement, displacement.length, 0f, 0f, 0f);
-    }
-
-    private static EntityPrev storeEntityPrev(EntityPrev prev, FloatArrayList cur,
-                                              float anchorX, float anchorY, float anchorZ) {
-        EntityPrev out = prev != null ? prev : new EntityPrev();
-        int size = cur.size();
-        if (out.verts.length < size) {
-            out.verts = new float[size];
-        }
-        System.arraycopy(cur.elements(), 0, out.verts, 0, size);
-        out.size = size;
-        out.anchorX = anchorX;
-        out.anchorY = anchorY;
-        out.anchorZ = anchorZ;
-        return out;
-    }
-
-    /** Core per-vertex disp builder: {@code (cur − prev) + rebaseShift}, packed vec4/vertex (w = 0). */
-    private static float[] buildDisp(float[] cur, int curSize, float[] prev, float sx, float sy, float sz) {
-        int vc = curSize / 3;
-        float[] d = new float[vc * 4];
-        for (int i = 0; i < vc; i++) {
-            d[i * 4]     = (cur[i * 3]     - prev[i * 3])     + sx;
-            d[i * 4 + 1] = (cur[i * 3 + 1] - prev[i * 3 + 1]) + sy;
-            d[i * 4 + 2] = (cur[i * 3 + 2] - prev[i * 3 + 2]) + sz;
-            d[i * 4 + 3] = 0f;
-        }
-        return d;
-    }
-
-    /**
-     * Capture this frame's billboard particles as one combined rebuilt mesh (cutout, camera-only receiver),
-     * with per-particle motion vectors. We iterate the LIVE {@code Particle} objects (via accessor mixins)
-     * rather than the public packed render state, because only the live objects carry stable identity —
-     * needed to diff each particle's center against last frame for the MV. Each particle is extracted into
-     * {@link #particleScratch} (its billboard quad), funneled through {@link #particleCapture} into the
-     * shared {@code capture}, and its quad center cached by identity in {@link #particlePrev}. Per-layer
-     * base-color texture index comes from the layer's atlas via the bindless registry. One
-     * instance with mask {@link #PARTICLE_MASK} (primary-ray only).
+     * Capture this frame's billboard particles as one combined rebuilt mesh (cutout, camera-only receiver).
+     * Each particle is extracted into {@link #particleScratch}, funneled through {@link #particleCapture},
+     * and merged into one primary-only instance.
      */
     private void captureParticles(GpuContext ctx, FrameBuild build, Minecraft mc, float partial,
                                   int rbx, int rby, int rbz, Matrix4f projection, Matrix4f viewRotation) {
+        capture.reset();
         int particleLimit = maxParticles();
         if (!particlesEnabled() || particleLimit == 0 || build.full()) {
-            particlePrev.clear();
-            particleCur.clear();
+            submitParticles(build);
             return;
         }
         Camera cam = mc.gameRenderer.mainCamera();
         if (cam == null) {
+            submitParticles(build);
             return;
         }
         Map<ParticleRenderType, ParticleGroup<?>> groups =
                 ((ParticleEngineAccessor) mc.particleEngine).caustica$getParticleGroups();
         if (groups == null || groups.isEmpty()) {
-            particlePrev.clear();
-            particleCur.clear();
+            submitParticles(build);
             return;
         }
-        capture.reset();
         RtMaterialRegistry registry = RtMaterialRegistry.INSTANCE;
         // Billboards are thin two-sided scatterers, which their material says with a transmission weight;
         // every layer shares the Minecraft source's named material and pairs it with its own atlas slot.
@@ -663,7 +553,6 @@ public final class RtEntities {
         int particleMaterial = build.materials.bindingId(MinecraftMaterialSource.PARTICLE_BILLBOARD);
         capture.currentMaterialId = registry.withCutoutCoverage(build.materials, particleMaterial);
         capture.currentSbtClass = registry.sbtClassFor(capture.currentMaterialId);
-        particleDisp.clear();
         // extract() emits camera-relative positions; shift them into rebased space (identity instance).
         Vec3 camPos = cam.position();
         particleCapture.setOffset((float) (camPos.x - rbx), (float) (camPos.y - rby), (float) (camPos.z - rbz));
@@ -672,8 +561,6 @@ public final class RtEntities {
         // which intersect the frustum.
         Frustum frustum = new Frustum(viewRotation, projection);
         frustum.prepare(camPos.x, camPos.y, camPos.z);
-        IdentityHashMap<Particle, ParticlePrev> cur = particleCur;
-        cur.clear();
         int particlesCaptured = 0;
         try {
             particleGroups:
@@ -714,25 +601,36 @@ public final class RtEntities {
                         capture.sbtClasses.size(abb);
                         continue;
                     }
-                    appendParticleMv(p, particleCenterScratch, vertBefore, vertAfter, rbx, rby, rbz, cur);
                     build.logicalCount++;
                     particlesCaptured++;
                 }
             }
         } catch (Throwable t) {
             capture.reset();
-            particleDisp.clear();
             throw new RuntimeException("RT particle capture failed", t); // propagate to composite() (see entity path)
         }
         RtFrameStats.FRAME.count("particlesCaptured", particlesCaptured);
-        IdentityHashMap<Particle, ParticlePrev> oldPrev = particlePrev;
-        particlePrev = cur;
-        particleCur = oldPrev;
         if (capture.isEmpty()) {
+            submitParticles(build);
             return;
         }
-        appendCapture(ctx, build, new Motion(particleDisp.elements(), particleDisp.size(), 0f, 0f, 0f),
-                -1, PARTICLE_MASK, IDENTITY); // one combined mesh, per-particle MV
+        submitParticles(build);
+    }
+
+    /** Replaces the one merged particle resident, or removes it when the capture is empty. */
+    private void submitParticles(FrameBuild build) {
+        List<RtSceneGeometryManager.GeometryOperation> operations;
+        if (capture.isEmpty()) {
+            operations = List.of(new RtSceneGeometryManager.Remove(PARTICLE_KEY),
+                    new RtSceneGeometryManager.Drop(PARTICLE_KEY));
+        } else {
+            RtEntityCapture.PackedGeometry packed = capture.packGeometry();
+            RtSceneGeometryManager.PackedInput input = packedInput(packed, RtSceneGeometryManager.BuildClass.REBUILT);
+            operations = List.of(
+                    new RtSceneGeometryManager.Put(PARTICLE_KEY, new RtSceneGeometryManager.IndexedPayload(input)),
+                    new RtSceneGeometryManager.Place(PARTICLE_KEY, PARTICLE_KEY, IDENTITY, PARTICLE_MASK, build.origin));
+        }
+        build.submit(PARTICLE_GEOMETRY, PARTICLE_KEY, operations, null);
     }
 
     /** Average (rebase-space) position of a captured particle's verts — approximates the particle center. */
@@ -748,31 +646,6 @@ public final class RtEntities {
         out[0] = cx / vc;
         out[1] = cy / vc;
         out[2] = cz / vc;
-    }
-
-    /**
-     * Compute one particle's motion-vector displacement (its quad center vs. last frame's, keyed by
-     * identity) and write it for each of the particle's vertices into {@link #particleDisp}. All four
-     * billboard verts share the center displacement (per-particle-rigid MV).
-     */
-    private void appendParticleMv(Particle p, float[] center, int vertBefore, int vertAfter,
-                                  int rbx, int rby, int rbz, IdentityHashMap<Particle, ParticlePrev> cur) {
-        ParticlePrev prev = particlePrev.remove(p);
-        // World displacement = (curCenter − prevCenter) + (rebaseCur − rebasePrev). New particle ⇒ 0 (no MV).
-        float dx = prev == null ? 0f : (center[0] - prev.cx) + (rbx - prev.rbx);
-        float dy = prev == null ? 0f : (center[1] - prev.cy) + (rby - prev.rby);
-        float dz = prev == null ? 0f : (center[2] - prev.cz) + (rbz - prev.rbz);
-        for (int i = vertBefore; i < vertAfter; i++) {
-            particleDisp.add(dx);
-            particleDisp.add(dy);
-            particleDisp.add(dz);
-            particleDisp.add(0f);
-        }
-        if (prev == null) {
-            prev = new ParticlePrev();
-        }
-        prev.set(center[0], center[1], center[2], rbx, rby, rbz);
-        cur.put(p, prev);
     }
 
     /**
@@ -858,43 +731,45 @@ public final class RtEntities {
             entry.lastSeen = now;
         }
         long hash = meshHash();
-        float[] disp = null; // static unless the mesh changed this frame (chest lid / spawner animation)
+        float[] transform = {1, 0, 0, be.getBlockPos().getX() - rbx, 0, 1, 0, be.getBlockPos().getY() - rby,
+                0, 0, 1, be.getBlockPos().getZ() - rbz};
         if (entry == null || entry.meshHash != hash) {
             // Geometry changed (or new BE) → rebuild, but only within this frame's budget. Over budget: keep
             // showing the previous geometry; a brand-new BE simply pops in over the next frames.
             if (beBuildsThisFrame >= beBuildsPerFrame()) {
                 if (entry != null) {
-                    emitBe(ctx, build, entry, null, rbx, rby, rbz); // over budget: keep last geometry, no MV
+                    emitBe(build, entry, transform);
                 }
                 return;
             }
-            // Per-vertex MV from the previous build's block-local mesh (same vertex count ⇒ pairable).
-            // The BE itself doesn't move, so the world displacement is the pure local delta.
-            if (entry != null && entry.prevVerts != null && entry.prevVerts.length == capture.verts.size()) {
-                disp = buildDisp(capture.verts.elements(), capture.verts.size(), entry.prevVerts, 0f, 0f, 0f);
-            }
-            BeEntry rebuilt = buildBe(build, be, hash);
+            BeEntry rebuilt = buildBe(build, entry, be, hash, transform);
             rebuilt.lastSeen = now;
             beCache.put(key, rebuilt);
-            entry = rebuilt;
+            build.count++;
+            build.logicalCount++;
+            RtFrameStats.FRAME.count("blockEntitiesCaptured", 1);
+            return;
         }
-        emitBe(ctx, build, entry, disp, rbx, rby, rbz);
+        emitBe(build, entry, transform);
     }
 
-    /** Replaces the manager-owned cached resident for this block-local mesh. */
-    private BeEntry buildBe(FrameBuild build, BlockEntity be, long hash) {
+    /** Submits a keyed dynamic resident so compatible block-entity mesh updates retain vertex history. */
+    private BeEntry buildBe(FrameBuild build, BeEntry entry, BlockEntity be, long hash, float[] transform) {
         RtEntityCapture.PackedGeometry packed = capture.packGeometry();
         BlockPos p = be.getBlockPos();
-        build.geometry.replaceCached(p.asLong(), packedInput(packed, RtSceneGeometryManager.BuildClass.STATIC));
+        RtSceneGeometryManager.PackedInput input = packedInput(packed, RtSceneGeometryManager.BuildClass.DEFORMING);
         beBuildsThisFrame++;
 
-        BeEntry e = new BeEntry();
+        BeEntry e = entry != null ? entry : new BeEntry();
         e.bx = p.getX();
         e.by = p.getY();
         e.bz = p.getZ();
         e.meshHash = hash;
-        // Retain this build's block-local verts so the next rebuild can diff against them for the MV.
-        e.prevVerts = java.util.Arrays.copyOf(capture.verts.elements(), capture.verts.size());
+        long revision = build.submit(BLOCK_ENTITY_GEOMETRY, p.asLong(), List.of(
+                new RtSceneGeometryManager.Put(p.asLong(), new RtSceneGeometryManager.IndexedPayload(input)),
+                new RtSceneGeometryManager.Place(p.asLong(), p.asLong(), transform, MASK_ALL, build.origin)),
+                e.publication::acknowledged);
+        e.publication.submitted(revision, true);
         return e;
     }
 
@@ -923,25 +798,31 @@ public final class RtEntities {
         return h;
     }
 
-    /** Emit a cached block entity into this frame: its geometry-table entry + a TLAS instance (no GPU build). */
-    private void emitBe(GpuContext ctx, FrameBuild build, BeEntry e, float[] disp, int rbx, int rby, int rbz) {
+    /** Emits an unchanged block entity through its manager-owned dynamic resident. */
+    private void emitBe(FrameBuild build, BeEntry e, float[] transform) {
         if (build.full()) {
             return;
         }
-        // disp is non-null only for a BE whose mesh changed this frame (chest lid / spawner); a static BE
-        // passes null ⇒ no per-vertex motion. The manager-owned transient buffer is released with this frame,
-        // animating reverts to MV 0 next frame.
-        // Block-local mesh placed by a translate-only instance transform (blockPos − rebase), like terrain.
-        float[] xform = {1, 0, 0, e.bx - rbx, 0, 1, 0, e.by - rby, 0, 0, 1, e.bz - rbz};
-        build.geometry.appendCached(BlockPos.asLong(e.bx, e.by, e.bz),
-                build.geometry.motion(disp, disp == null ? 0 : disp.length, 0f, 0f, 0f), xform, MASK_ALL);
+        long key = BlockPos.asLong(e.bx, e.by, e.bz);
+        List<RtSceneGeometryManager.GeometryOperation> operations;
+        boolean includesPut = !e.publication.published;
+        if (!includesPut) {
+            operations = List.of(new RtSceneGeometryManager.Place(key, key, transform, MASK_ALL, build.origin));
+        } else {
+            RtEntityCapture.PackedGeometry packed = capture.packGeometry();
+            RtSceneGeometryManager.PackedInput input = packedInput(packed, RtSceneGeometryManager.BuildClass.DEFORMING);
+            operations = List.of(new RtSceneGeometryManager.Put(key, new RtSceneGeometryManager.IndexedPayload(input)),
+                    new RtSceneGeometryManager.Place(key, key, transform, MASK_ALL, build.origin));
+        }
+        long revision = build.submit(BLOCK_ENTITY_GEOMETRY, key, operations, e.publication::acknowledged);
+        e.publication.submitted(revision, includesPut);
         build.count++;
         build.logicalCount++;
         RtFrameStats.FRAME.count("blockEntitiesCaptured", 1);
     }
 
     /** Drop cached block entities not seen (in window) within the last KEEP_FRAMES frames — unloaded/out of view. */
-    private void evictStaleBes(GpuContext ctx) {
+    private void evictStaleBes(FrameBuild build) {
         if (beCache.isEmpty()) {
             return;
         }
@@ -952,190 +833,26 @@ public final class RtEntities {
             if (now - e.lastSeen < KEEP_FRAMES) {
                 continue;
             }
-            activeGeometry.releaseCached(BlockPos.asLong(e.bx, e.by, e.bz));
+            long key = BlockPos.asLong(e.bx, e.by, e.bz);
+            build.submit(BLOCK_ENTITY_GEOMETRY, key, List.of(
+                    new RtSceneGeometryManager.Remove(key), new RtSceneGeometryManager.Drop(key)), null);
             it.remove();
         }
-    }
-
-    /**
-     * Rigid-reuse fast path: if the current local-space {@link #capture} is identical to, or a rigid yaw
-     * transform of, the mesh this entity's AS was last built from, emit a geometry-table entry pointing at
-     * the cached shading buffers and a TLAS instance carrying the fitted transform over the cached AS —
-     * skipping the 4 mesh uploads and the BLAS refit. Covers still mobs, item frames, armor stands, and
-     * spinning/bobbing dropped items. The hit shader rotates prim normals / TBN by the instance transform,
-     * so rotated instances shade correctly. Motion vectors are untouched: {@code motion} was already
-     * computed against last frame's capture (a rotating pose gets its per-vertex disp buffer as usual).
-     * Returns false (caller takes the full path) when there is no reusable AS, the topology changed, the
-     * pose is non-rigid (animation), or the shading data changed under identical topology.
-     */
-    private boolean appendRigidReuse(GpuContext ctx, FrameBuild build, Motion motion, int entityId, int mask,
-                                     float placeX, float placeY, float placeZ) {
-        EntityState ea = entityStates.get(entityId);
-        if (ea == null || ea.reference == null
-                || ea.refVertCount != capture.verts.size() / 3 || ea.refIdxCount != capture.idx.size()) {
-            return false;
-        }
-        long equalStart = RtFrameStats.FRAME.startStage();
-        boolean equal;
-        try {
-            equal = positionsBitwiseEqual(ea.refVerts, capture.verts.elements(), ea.refVertCount * 3);
-        } finally {
-            RtFrameStats.FRAME.endStage("entity.capture.rigidReuse.equal", equalStart);
-        }
-        float[] localTransform = IDENTITY;
-        if (!equal) {
-            long now = RtComposite.frameCounter();
-            if (now < ea.retryYawFitAfter) {
-                return false;
-            }
-            long yawStart = RtFrameStats.FRAME.startStage();
-            try {
-                localTransform = fitYawTransform(ea.refVerts, capture.verts.elements(), ea.refVertCount);
-            } finally {
-                RtFrameStats.FRAME.endStage("entity.capture.rigidReuse.yaw", yawStart);
-            }
-            if (localTransform == null) {
-                RtFrameStats.FRAME.count("entityRigidFitFailures", 1);
-                ea.retryYawFitAfter = now + 8L;
-                return false;
-            }
-            RtFrameStats.FRAME.count("entityRigidFitSuccesses", 1);
-            ea.retryYawFitAfter = 0L;
-        }
-        // Same topology + rigid pose, but tint/sprite/material lanes may still have changed (dyed sheep,
-        // item frame content swap that kept counts). Compare the rotation-invariant shading hash.
-        long shadeStart = RtFrameStats.FRAME.startStage();
-        try {
-            if (shadeHash() != ea.refShadeHash) {
-                return false;
-            }
-        } finally {
-            RtFrameStats.FRAME.endStage("entity.capture.rigidReuse.shade", shadeStart);
-        }
-        ea.lastSeen = RtComposite.frameCounter();
-        build.geometry.appendDeformingReference(ea.reference, motionInput(build, motion),
-                placeTransform(localTransform, placeX, placeY, placeZ), mask);
-        build.count++;
-        RtFrameStats.FRAME.count("entityReuse", 1);
-        return true;
-    }
-
-    /**
-     * Fit {@code cur ≈ R_yaw·ref + t} in entity-local space. Exact local equality is handled before this
-     * method; this slower centroid/yaw fit covers dropped-item spin and minecarts. Pitch/roll and skeletal
-     * deformation take the full path.
-     */
-    private static float[] fitYawTransform(float[] ref, float[] cur, int vc) {
-        // Centroid-align, then the least-squares rotation angle about Y for
-        // x' = x·cos + z·sin, z' = −x·sin + z·cos is atan2(Σ(cx·rz − cz·rx), Σ(cx·rx + cz·rz)).
-        float crx = 0f, cry = 0f, crz = 0f, ccx = 0f, ccy = 0f, ccz = 0f;
-        for (int i = 0; i < vc; i++) {
-            crx += ref[i * 3];
-            cry += ref[i * 3 + 1];
-            crz += ref[i * 3 + 2];
-            ccx += cur[i * 3];
-            ccy += cur[i * 3 + 1];
-            ccz += cur[i * 3 + 2];
-        }
-        float inv = 1f / vc;
-        crx *= inv; cry *= inv; crz *= inv;
-        ccx *= inv; ccy *= inv; ccz *= inv;
-        double a = 0.0, b = 0.0;
-        for (int i = 0; i < vc; i++) {
-            float rx = ref[i * 3] - crx, rz = ref[i * 3 + 2] - crz;
-            float cx = cur[i * 3] - ccx, cz = cur[i * 3 + 2] - ccz;
-            a += (double) cx * rx + (double) cz * rz;
-            b += (double) cx * rz - (double) cz * rx;
-        }
-        float cos = (float) Math.cos(Math.atan2(b, a));
-        float sin = (float) Math.sin(Math.atan2(b, a));
-        for (int i = 0; i < vc; i++) {
-            float rx = ref[i * 3] - crx, ry = ref[i * 3 + 1] - cry, rz = ref[i * 3 + 2] - crz;
-            float ex = (rx * cos + rz * sin) - (cur[i * 3] - ccx);
-            float ey = ry - (cur[i * 3 + 1] - ccy);
-            float ez = (-rx * sin + rz * cos) - (cur[i * 3 + 2] - ccz);
-            if (Math.abs(ex) > RIGID_FIT_EPS || Math.abs(ey) > RIGID_FIT_EPS || Math.abs(ez) > RIGID_FIT_EPS) {
-                return null;
-            }
-        }
-        // p_out = R·(p − cr) + cc  ⇒  t = cc − R·cr.
-        float rcx = crx * cos + crz * sin;
-        float rcz = -crx * sin + crz * cos;
-        return new float[] {
-                cos, 0, sin, ccx - rcx,
-                0,   1, 0,   ccy - cry,
-                -sin, 0, cos, ccz - rcz};
-    }
-
-    private static boolean positionsBitwiseEqual(float[] a, float[] b, int size) {
-        for (int i = 0; i < size; i++) {
-            if (Float.floatToRawIntBits(a[i]) != Float.floatToRawIntBits(b[i])) {
-                return false;
-            }
-        }
-        return true;
     }
 
     private static float[] translationTransform(float x, float y, float z) {
         return new float[] {1, 0, 0, x, 0, 1, 0, y, 0, 0, 1, z};
     }
 
-    private static float[] placeTransform(float[] local, float x, float y, float z) {
-        if (local == IDENTITY) {
-            return translationTransform(x, y, z);
-        }
-        return new float[] {
-                local[0], local[1], local[2], local[3] + x,
-                local[4], local[5], local[6], local[7] + y,
-                local[8], local[9], local[10], local[11] + z};
-    }
-
-    /**
-     * FNV-1a over the capture's shading data that must match for AS reuse: UVs plus each prim record's
-     * emission/tint/material lanes. Prim NORMALS are deliberately excluded — they rotate with the pose,
-     * and the hit shader re-rotates the cached ones via the instance transform.
-     */
-    private long shadeHash() {
-        long h = 1469598103934665603L;
-        float[] uv = capture.uvList.elements();
-        int un = capture.uvList.size();
-        for (int i = 0; i < un; i++) {
-            h = (h ^ (Float.floatToRawIntBits(uv[i]) & 0xffffffffL)) * 1099511628211L;
-        }
-        float[] pr = capture.prim.elements();
-        int pn = capture.prim.size();
-        for (int base = 0; base < pn; base += 12) {
-            for (int k = 3; k < 12; k++) { // skip normal.xyz (0..2); keep emission(3), tint(4..7), mat(8..11)
-                h = (h ^ (Float.floatToRawIntBits(pr[base + k]) & 0xffffffffL)) * 1099511628211L;
-            }
-        }
-        int[] classes = capture.sbtClasses.elements();
-        for (int i = 0; i < capture.sbtClasses.size(); i++) {
-            h = (h ^ (classes[i] & 0xffffffffL)) * 1099511628211L;
-        }
-        return h;
-    }
-
-    private void appendCapture(GpuContext ctx, FrameBuild build, Motion motion, int entityId, int mask,
+    private void appendCapture(FrameBuild build, int entityId, int mask,
                                float[] instanceTransform) {
         RtEntityCapture.PackedGeometry packed = capture.packGeometry();
-        RtSceneGeometryManager.PackedInput input = packedInput(packed,
-                entityId < 0 ? RtSceneGeometryManager.BuildClass.REBUILT : RtSceneGeometryManager.BuildClass.DEFORMING);
-        RtSceneGeometryManager.MotionInput motionInput = motionInput(build, motion);
-        if (entityId < 0) {
-            build.geometry.appendRebuilt(input, motionInput, instanceTransform, mask);
-        } else {
-            EntityState state = entityStates.computeIfAbsent(entityId, unused -> new EntityState());
-            state.lastSeen = RtComposite.frameCounter();
-            state.reference = build.geometry.appendDeforming(entityId, input, motionInput, instanceTransform, mask,
-                    CausticaConfig.Rt.Entities.REFIT_ENABLED.value());
-            int size = capture.verts.size();
-            if (state.refVerts == null || state.refVerts.length < size) state.refVerts = new float[size];
-            System.arraycopy(capture.verts.elements(), 0, state.refVerts, 0, size);
-            state.refVertCount = size / 3;
-            state.refIdxCount = packed.indices().size();
-            state.refShadeHash = shadeHash();
-        }
+        RtSceneGeometryManager.PackedInput input = packedInput(packed, RtSceneGeometryManager.BuildClass.DEFORMING);
+        EntityState state = entityStates.computeIfAbsent(entityId, unused -> new EntityState());
+        state.lastSeen = RtComposite.frameCounter();
+        build.submit(ENTITY_GEOMETRY, entityId, List.of(
+                new RtSceneGeometryManager.Put(entityId, new RtSceneGeometryManager.IndexedPayload(input)),
+                new RtSceneGeometryManager.Place(entityId, entityId, instanceTransform, mask, build.origin)), null);
         build.count++;
     }
 
@@ -1158,20 +875,33 @@ public final class RtEntities {
         return hash;
     }
 
-    private RtSceneGeometryManager.MotionInput motionInput(FrameBuild build, Motion motion) {
-        return build.geometry.motion(motion.displacement, motion.displacementCount,
-                motion.rigidX, motion.rigidY, motion.rigidZ);
-    }
-
-    private void evictStaleAccels(GpuContext ctx) {
+    private void evictStaleAccels(FrameBuild build) {
         long now = RtComposite.frameCounter();
         var it = entityStates.int2ObjectEntrySet().iterator();
         while (it.hasNext()) {
             var entry = it.next();
             if (now - entry.getValue().lastSeen < KEEP_FRAMES) continue;
-            activeGeometry.releaseDeforming(entry.getIntKey());
+            int id = entry.getIntKey();
+            build.submit(ENTITY_GEOMETRY, id, List.of(
+                    new RtSceneGeometryManager.Remove(id), new RtSceneGeometryManager.Drop(id)), null);
             it.remove();
         }
+    }
+
+    /** Remove every source-owned resident when this capture path is disabled. */
+    private void clearResidents(FrameBuild build) {
+        for (int id : entityStates.keySet()) {
+            build.submit(ENTITY_GEOMETRY, id, List.of(
+                    new RtSceneGeometryManager.Remove(id), new RtSceneGeometryManager.Drop(id)), null);
+        }
+        for (long key : beCache.keySet()) {
+            build.submit(BLOCK_ENTITY_GEOMETRY, key, List.of(
+                    new RtSceneGeometryManager.Remove(key), new RtSceneGeometryManager.Drop(key)), null);
+        }
+        build.submit(PARTICLE_GEOMETRY, PARTICLE_KEY, List.of(
+                new RtSceneGeometryManager.Remove(PARTICLE_KEY), new RtSceneGeometryManager.Drop(PARTICLE_KEY)), null);
+        entityStates.clear();
+        beCache.clear();
     }
 
     private void setCamera(double camX, double camY, double camZ, Matrix4f projection, Matrix4f viewRotation) {
@@ -1193,37 +923,35 @@ public final class RtEntities {
 
     /** Drop CPU templates that retain resource-pack-owned model trees. */
     public void onResourceReload() {
-        // Material invalidation retires manager-owned residents on the next frame. Drop every opaque
-        // reference and source-side mesh hash now so no old material epoch can be reused meanwhile.
+        for (int id : entityStates.keySet()) pendingDrops.add(new RtSceneGeometryManager.GroupKey(ENTITY_GEOMETRY, id));
+        for (long key : beCache.keySet()) pendingDrops.add(new RtSceneGeometryManager.GroupKey(BLOCK_ENTITY_GEOMETRY, key));
+        pendingDrops.add(new RtSceneGeometryManager.GroupKey(PARTICLE_GEOMETRY, PARTICLE_KEY));
         entityStates.clear();
         beCache.clear();
-        prevVerts.clear();
-        curVerts.clear();
-        particlePrev.clear();
-        particleCur.clear();
-        particleDisp.clear();
+        collector.clearCaches();
+    }
+
+    /** Clears this source's published snapshot before entity IDs can be reused by a new world. */
+    public void onWorldChanged(GpuContext ctx, RtSceneGeometryManager geometry) {
+        geometry.clearSource(ctx, ENTITY_GEOMETRY);
+        geometry.clearSource(ctx, BLOCK_ENTITY_GEOMETRY);
+        geometry.clearSource(ctx, PARTICLE_GEOMETRY);
+        entityStates.clear();
+        beCache.clear();
+        pendingDrops.clear();
         collector.clearCaches();
     }
 
     /** Clear capture state; the geometry manager owns and tears down all GPU residents. */
     public void shutdown(GpuContext ctx) {
-        if (activeGeometry != null) {
-            for (int id : entityStates.keySet()) activeGeometry.releaseDeforming(id);
-            for (long key : beCache.keySet()) activeGeometry.releaseCached(key);
-        }
         entityStates.clear();
         beCache.clear();
-        prevVerts.clear();
-        curVerts.clear();
-        particlePrev.clear();
-        particleCur.clear();
-        particleDisp.clear();
         glowBatches.clear();
         nameTagBatches.clear();
         resetPoseStack(blockEntityPoseStack);
         beCandidates.clear();
         beCandidatePool.clear();
-        activeGeometry = null;
+        pendingDrops.clear();
         collector.clearCaches();
     }
 }

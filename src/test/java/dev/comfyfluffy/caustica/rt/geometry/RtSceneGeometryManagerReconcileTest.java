@@ -2,12 +2,15 @@ package dev.comfyfluffy.caustica.rt.geometry;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+
 import static dev.comfyfluffy.caustica.rt.geometry.RtSceneGeometryManager.ReconcileAction.KEEP;
 import static dev.comfyfluffy.caustica.rt.geometry.RtSceneGeometryManager.ReconcileAction.REPACK;
 import static dev.comfyfluffy.caustica.rt.geometry.RtSceneGeometryManager.ReconcileAction.RELEASE;
 import static dev.comfyfluffy.caustica.rt.geometry.RtSceneGeometryManager.ReconcileAction.REPLACE;
 import static dev.comfyfluffy.caustica.rt.geometry.RtSceneGeometryManager.reconcileAction;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 
 final class RtSceneGeometryManagerReconcileTest {
     @Test
@@ -40,5 +43,18 @@ final class RtSceneGeometryManagerReconcileTest {
     @Test
     void staleMaterialEpochRepacksOnlyWhenOtherwiseUntouched() {
         assertEquals(REPACK, reconcileAction(false, false, true, true));
+    }
+
+    @Test
+    void sharedMeshHasOnePendingBuildUseRegardlessOfInstanceCount() {
+        Object sharedCloudMesh = new Object();
+        Object otherMesh = new Object();
+
+        List<Object> unique = RtSceneGeometryManager.uniqueByIdentity(List.of(
+                sharedCloudMesh, sharedCloudMesh, otherMesh, sharedCloudMesh));
+
+        assertEquals(2, unique.size());
+        assertSame(sharedCloudMesh, unique.getFirst());
+        assertSame(otherMesh, unique.get(1));
     }
 }
