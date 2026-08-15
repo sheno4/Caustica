@@ -191,6 +191,14 @@ public final class GpuContext {
         return vk;
     }
 
+    public int graphicsQueueFamilyIndex() {
+        return graphicsQueue.familyIndex();
+    }
+
+    public int computeQueueFamilyIndex() {
+        return computeQueue.familyIndex();
+    }
+
     public long vma() {
         return vma;
     }

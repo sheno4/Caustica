@@ -1,15 +1,19 @@
 package dev.comfyfluffy.caustica.rt.geometry;
 
 import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import dev.comfyfluffy.caustica.api.provider.SceneGeometryKey;
 import dev.comfyfluffy.caustica.api.provider.SceneGeometrySink;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.rt.GpuContext;
+import dev.comfyfluffy.caustica.rt.RtDeviceBringup;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor.GraphicsUse;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor.TrackedGraphicsUse;
 import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
 import dev.comfyfluffy.caustica.rt.accel.RtAccel;
+import dev.comfyfluffy.caustica.rt.accel.RtOpacityMicromapPipeline;
+import dev.comfyfluffy.caustica.rt.material.RtMaterialRegistry;
 import org.lwjgl.system.MemoryUtil;
 
 import java.util.ArrayList;
@@ -42,9 +46,16 @@ public final class RtSceneGeometryManager {
     private final FailureLatch groupFailures = new FailureLatch();
     private final TableSlot[] tables = new TableSlot[TABLE_RING];
     private int tableCursor;
+    private RtOpacityMicromapPipeline opacityMicromapPipeline;
+    private boolean loggedOpacityMicromapBuild;
 
     public RtSceneGeometryManager(RtGeometryMaterialResolver materialResolver) {
         this.materialResolver = materialResolver;
+    }
+
+    /** Installs the immutable classifier resources for the current material epoch. */
+    public void setOpacityMicromapPipeline(RtOpacityMicromapPipeline pipeline) {
+        opacityMicromapPipeline = pipeline;
     }
 
     /** Stable owner identity for one independently published retained-geometry group. */
@@ -216,7 +227,38 @@ public final class RtSceneGeometryManager {
             boolean retainPreviousPositions = previousIndexed && dynamicSource.topology != null
                     && dynamicSource.topology.matches(candidate.topology);
             boolean minimizeMemory = provider.buildOptions().minimizeMemory();
-            if (!minimizeMemory && dynamicSource != null && dynamicSource.updatable
+            boolean opacityAcceleration = provider.buildOptions().opacityAcceleration()
+                    && RtDeviceBringup.ommEnabled() && opacityMicromapPipeline != null
+                    && candidate.classTriangles[RtAccel.CLASS_MASKED] > 0
+                    && hasEligibleOpacityBinding(input);
+            if (opacityAcceleration) {
+                int subdivisionLevel = Math.min(4, Math.max(0,
+                        RtDeviceBringup.maxOpacity4StateSubdivisionLevel()));
+                int microTriangles = 1 << (subdivisionLevel * 2);
+                int bytesPerTriangle = Math.max(1, (microTriangles * 2 + 7) >>> 3);
+                int maskedBase = candidate.classTriangles[RtAccel.CLASS_OPAQUE];
+                RtOpacityMicromapPipeline classifier = opacityMicromapPipeline;
+                RtAccel.OpacityMicromapGpuInput opacityInput = new RtAccel.OpacityMicromapGpuInput(
+                        candidate.classTriangles[RtAccel.CLASS_MASKED], subdivisionLevel, bytesPerTriangle,
+                        (command, dataAddress, triangleAddress, dataStride) -> classifier.record(command,
+                                candidate.indexAddress, candidate.textureCoordinateAddress,
+                                candidate.primitiveAddress, RtMaterialRegistry.INSTANCE.bindingTableAddress(),
+                                RtMaterialRegistry.INSTANCE.surfaceTableAddress(), dataAddress, triangleAddress,
+                                maskedBase, candidate.classTriangles[RtAccel.CLASS_MASKED], candidate.semanticFlags,
+                                subdivisionLevel, dataStride));
+                if (!loggedOpacityMicromapBuild) {
+                    loggedOpacityMicromapBuild = true;
+                    CausticaMod.LOGGER.info("RT opacity micromap build active: maskedTriangles={}, subdivisionLevel={}, compact={}",
+                            candidate.classTriangles[RtAccel.CLASS_MASKED], subdivisionLevel, minimizeMemory);
+                }
+                RtAccel.CompactableBuild build = RtAccel.prepareOpacityMicromapBlasBuild(ctx,
+                        candidate.positionAddress, candidate.vertexCount, candidate.indexAddress,
+                        candidate.classTriangles, opacityInput, minimizeMemory, "scene group BLAS");
+                candidate.accel = build.accel();
+                candidate.backing = build.backing();
+                candidate.updatable = false;
+                operation = build.op();
+            } else if (!minimizeMemory && dynamicSource != null && dynamicSource.updatable
                     && dynamicSource.updatesSinceBuild < 120
                     && retainPreviousPositions) {
                 RtAccel.UpdatableBuild update = RtAccel.prepareOutOfPlaceUpdate(ctx, dynamicSource.accel,
@@ -281,6 +323,16 @@ public final class RtSceneGeometryManager {
 
     boolean providerTopologyMatches(SceneMesh first, SceneMesh second) {
         return Topology.of(providerInput(first)).matches(Topology.of(providerInput(second)));
+    }
+
+    private static boolean hasEligibleOpacityBinding(PackedInput input) {
+        int first = input.classTriangles[RtAccel.CLASS_OPAQUE];
+        int end = first + input.classTriangles[RtAccel.CLASS_MASKED];
+        for (int triangle = first; triangle < end; triangle++) {
+            int materialId = Float.floatToRawIntBits(input.primitives[triangle * 12 + 8]);
+            if (RtMaterialRegistry.INSTANCE.opacityMicromapEligible(materialId)) return true;
+        }
+        return false;
     }
 
     private void publishTerminalGroups(GpuContext ctx) {
@@ -771,7 +823,14 @@ public final class RtSceneGeometryManager {
                                 completion.accept(new CandidateTerminal(this, build, failure));
                             } else {
                                 publicationState.completeBuild();
-                                submitCompaction(ctx, cancelled, completion);
+                                if (cancelled.getAsBoolean()) {
+                                    publicationState.fail();
+                                    completion.accept(new CandidateTerminal(this, build,
+                                            new java.util.concurrent.CancellationException(
+                                                    "geometry group cancelled before BLAS compaction")));
+                                } else {
+                                    submitCompaction(ctx, cancelled, completion);
+                                }
                             }
                         };
                 if (source == null) {

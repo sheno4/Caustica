@@ -26,9 +26,14 @@ public interface SceneGeometrySink {
     sealed interface Operation permits Put, Drop, Place, Remove { }
 
     /** Engine build preferences for one retained mesh. */
-    record BuildOptions(boolean minimizeMemory) {
-        public static final BuildOptions DEFAULT = new BuildOptions(false);
-        public static final BuildOptions MINIMIZE_MEMORY = new BuildOptions(true);
+    record BuildOptions(boolean minimizeMemory, boolean opacityAcceleration) {
+        public static final BuildOptions DEFAULT = new BuildOptions(false, false);
+        public static final BuildOptions MINIMIZE_MEMORY = new BuildOptions(true, false);
+        public static final BuildOptions MINIMIZE_MEMORY_AND_ACCELERATE_OPACITY = new BuildOptions(true, true);
+
+        public BuildOptions(boolean minimizeMemory) {
+            this(minimizeMemory, false);
+        }
     }
 
     /** Retain or replace mesh data. The renderer selects and schedules its acceleration update. */

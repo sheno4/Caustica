@@ -32,6 +32,10 @@ final class MinecraftMaterialImage implements MaterialImage {
         return image.getPixel(x, y);
     }
 
+    int rawArgb(int x, int y) {
+        return image.getPixel(x, y);
+    }
+
     @Override
     public void close() {
         if (owned) image.close();

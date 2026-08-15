@@ -144,6 +144,7 @@ public final class RtMaterialRegistry {
     // Host mirror of the uploaded binding table, and its content index. Every binding — compiled or
     // appended — is interned here, so deriving a variant twice by different routes yields one ID.
     private final List<MaterialBindingData> bindingRecords = new ArrayList<>();
+    private final List<SurfaceMaterialData> surfaceRecords = new ArrayList<>();
     private final Map<MaterialBindingData, Integer> bindingIds = new HashMap<>();
     private int runtimeFallbackId;
     private int bindingCapacity;
@@ -370,6 +371,8 @@ public final class RtMaterialRegistry {
         atlasReferenceIds.clear();
         bindingRecords.clear();
         bindingRecords.addAll(tables.bindings);
+        surfaceRecords.clear();
+        surfaceRecords.addAll(tables.surfaces);
         bindingIds.clear();
         for (int i = 0; i < bindingRecords.size(); i++) {
             bindingIds.put(bindingRecords.get(i), i);
@@ -408,7 +411,7 @@ public final class RtMaterialRegistry {
         if (byteSize > Integer.MAX_VALUE) {
             throw new IllegalStateException("RT " + label + " exceeds mapped-buffer limit: " + byteSize);
         }
-        return ctx.createBuffer(byteSize, VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true, label);
+        return ctx.createAsyncBuffer(byteSize, VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true, label);
     }
 
     private static <T> void writeRecords(GpuBuffer table, List<T> records, int stride,
@@ -511,6 +514,16 @@ public final class RtMaterialRegistry {
         return sbtClassOf(bindingRecords.get(bindingId));
     }
 
+    /** Whether the binding's sampled alpha is represented by the current canonical temporal-range pages. */
+    public boolean opacityMicromapEligible(int bindingId) {
+        MaterialBindingData binding = bindingRecords.get(bindingId);
+        int flags = bindingFlags(binding.packed0());
+        return bindingCoverage(binding.packed0()) == COVERAGE_CUTOUT
+                && bindingBaseColorTextureIndex(binding.packed0()) == SHARED_ATLAS_BASE_COLOR_TEXTURE_INDEX
+                && (flags & (BINDING_TRANSMISSIVE | BINDING_TEXTURELESS)) == 0
+                && (surfaceRecords.get(binding.surface()).alphaFlags() & 1) != 0;
+    }
+
     private static int sbtClassOf(MaterialBindingData binding) {
         if (bindingCoverage(binding.packed0()) != COVERAGE_OPAQUE) return RtAccel.CLASS_MASKED;
         int flags = bindingFlags(binding.packed0());
@@ -578,6 +591,7 @@ public final class RtMaterialRegistry {
         surface.write(MemoryUtil.memByteBuffer(surfaceTable.mapped + offset, SurfaceMaterialData.BYTE_SIZE)
                 .order(ByteOrder.nativeOrder()));
         surfaceTable.flush(offset, SurfaceMaterialData.BYTE_SIZE);
+        surfaceRecords.add(surface);
         int id = intern(binding(surfaceId, template.desc(), transparentWhiteAverage(),
                 SHARED_ATLAS_BASE_COLOR_TEXTURE_INDEX, RUNTIME_TEXTURE_COVERAGE_CUTOFF));
         atlasReferenceIds.put(reference, id);
@@ -614,6 +628,7 @@ public final class RtMaterialRegistry {
         runtimeTemplates = Map.of();
         atlasReferenceIds.clear();
         bindingRecords.clear();
+        surfaceRecords.clear();
         bindingIds.clear();
         runtimeFallbackId = 0;
         bindingCapacity = 0;
@@ -815,7 +830,9 @@ public final class RtMaterialRegistry {
                 * (EMISSION_LUMINANCE_MASK / MAX_EMISSION_LUMINANCE));
         int packedFeatures = desc.features() | (luminance << EMISSION_LUMINANCE_SHIFT);
         int page = (entry.pageIndex() & PAGE_MASK) | (entry.maxLod() << MAX_LOD_SHIFT);
-        return new SurfaceMaterialData(packedFeatures, page,
+        int alphaRange = RtMaterialTextureData.unorm8(entry.minAlpha())
+                | (RtMaterialTextureData.unorm8(entry.maxAlpha()) << 8);
+        return new SurfaceMaterialData(packedFeatures, page, alphaRange, entry.spatialAlphaRange() ? 1 : 0,
                 new Float4(entry.materialU(), entry.materialV(), entry.materialDu(), entry.materialDv()),
                 new Float4(albedoU, albedoV, albedoInvDu, albedoInvDv),
                 desc.specularRoughness(), desc.baseMetalness(), desc.specularIor(),
@@ -823,7 +840,8 @@ public final class RtMaterialRegistry {
     }
 
     private static SurfaceMaterialData surfaceDefinition(RtMaterialDesc desc, MaterialDefinition definition) {
-        return new SurfaceMaterialData(0, 0, new Float4(0.0f, 0.0f, 0.0f, 0.0f),
+        return new SurfaceMaterialData(0, 0, 0xFFFF, 0,
+                new Float4(0.0f, 0.0f, 0.0f, 0.0f),
                 new Float4(definition.baseColorR(), definition.baseColorG(), definition.baseColorB(), 1.0f),
                 desc.specularRoughness(), desc.baseMetalness(), desc.specularIor(), desc.transmissionWeight());
     }

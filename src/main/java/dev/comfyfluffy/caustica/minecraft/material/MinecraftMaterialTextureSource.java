@@ -12,13 +12,23 @@ final class MinecraftMaterialTextureSource implements MaterialTextureSource {
     private final MaterialImageSource specular;
     private final MaterialImageSource normal;
     private final boolean inferEmission;
+    private final int[] alphaFrames;
+    private final int alphaFrameRowSize;
 
     MinecraftMaterialTextureSource(MaterialImageSource albedo, MaterialImageSource specular,
                                    MaterialImageSource normal, boolean inferEmission) {
+        this(albedo, specular, normal, inferEmission, null, 1);
+    }
+
+    MinecraftMaterialTextureSource(MaterialImageSource albedo, MaterialImageSource specular,
+                                   MaterialImageSource normal, boolean inferEmission,
+                                   int[] alphaFrames, int alphaFrameRowSize) {
         this.albedo = albedo;
         this.specular = specular;
         this.normal = normal;
         this.inferEmission = inferEmission;
+        this.alphaFrames = alphaFrames == null ? null : alphaFrames.clone();
+        this.alphaFrameRowSize = alphaFrameRowSize;
     }
 
     @Override
@@ -28,7 +38,7 @@ final class MinecraftMaterialTextureSource implements MaterialTextureSource {
             a = albedo.open();
             s = specular == null ? null : specular.open();
             n = normal == null ? null : normal.open();
-            return new Image(a, s, n, inferEmission);
+            return new Image(a, s, n, inferEmission, alphaFrames, alphaFrameRowSize);
         } catch (Throwable failure) {
             close(n, failure);
             close(s, failure);
@@ -55,7 +65,8 @@ final class MinecraftMaterialTextureSource implements MaterialTextureSource {
     }
 
     private record Image(MaterialImage albedo, MaterialImage specular, MaterialImage normal,
-                         boolean inferEmission) implements MaterialTextureImage {
+                         boolean inferEmission, int[] alphaFrames,
+                         int alphaFrameRowSize) implements MaterialTextureImage {
         @Override
         public int width() {
             return albedo.width();
@@ -69,6 +80,23 @@ final class MinecraftMaterialTextureSource implements MaterialTextureSource {
         @Override
         public int albedoArgb(int x, int y) {
             return albedo.argb(x, y);
+        }
+
+        @Override
+        public int alphaFrameCount() {
+            return alphaFrames == null ? 1 : alphaFrames.length;
+        }
+
+        @Override
+        public int alphaArgb(int frameIndex, int x, int y) {
+            if (alphaFrames == null) {
+                if (frameIndex != 0) throw new IndexOutOfBoundsException(frameIndex);
+                return albedoArgb(x, y);
+            }
+            int frame = alphaFrames[frameIndex];
+            int frameX = frame % alphaFrameRowSize * width();
+            int frameY = frame / alphaFrameRowSize * height();
+            return ((MinecraftMaterialImage) albedo).rawArgb(frameX + x, frameY + y);
         }
 
         @Override

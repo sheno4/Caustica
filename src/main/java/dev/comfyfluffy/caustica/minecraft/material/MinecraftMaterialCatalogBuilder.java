@@ -49,13 +49,18 @@ public final class MinecraftMaterialCatalogBuilder {
             Optional<Resource> spec = resource(sibling(name, "_s.png"));
             Optional<Resource> normal = resource(sibling(name, "_n.png"));
             NativeImage original = ((SpriteContentsAccessor) sprite.contents()).caustica$originalImage();
+            int[] alphaFrames = exhaustiveAlphaFrames(sprite.contents().getUniqueFrames().toIntArray(),
+                    original.getWidth(), original.getHeight(),
+                    sprite.contents().width(), sprite.contents().height());
             MaterialImageSource albedo = borrowed(original, sprite.contents().width(), sprite.contents().height());
             MaterialImageSource specular = spec.map(value -> resourceImage(value, true)).orElse(null);
             MaterialImageSource normalMap = normal.map(value -> resourceImage(value, true)).orElse(null);
             boolean inferEmission = spec.isEmpty() && emissions.permits(material);
             blocks.add(new MaterialTextureAsset(material, MaterialTextureKind.SHARED_ATLAS,
                     sprite.contents().width(), sprite.contents().height(),
-                    new MinecraftMaterialTextureSource(albedo, specular, normalMap, inferEmission),
+                    new MinecraftMaterialTextureSource(albedo, specular, normalMap, inferEmission,
+                            alphaFrames,
+                            Math.max(1, original.getWidth() / sprite.contents().width())),
                     new MaterialUv(sprite.getU0(), sprite.getV0(),
                             inverseExtent(sprite.getU1() - sprite.getU0()),
                             inverseExtent(sprite.getV1() - sprite.getV0())),
@@ -174,6 +179,25 @@ public final class MinecraftMaterialCatalogBuilder {
 
     private static float inverseExtent(float extent) {
         return 1.0f / extent;
+    }
+
+    static int[] exhaustiveAlphaFrames(int[] uniqueFrames, int rawWidth, int rawHeight,
+                                       int frameWidth, int frameHeight) {
+        if (frameWidth <= 0 || frameHeight <= 0 || rawWidth < frameWidth || rawHeight < frameHeight) {
+            throw new IllegalArgumentException("Invalid animation sheet dimensions");
+        }
+        int columns = rawWidth / frameWidth;
+        int rows = rawHeight / frameHeight;
+        int frameSlots = Math.multiplyExact(columns, rows);
+        boolean invalidMetadata = java.util.Arrays.stream(uniqueFrames)
+                .anyMatch(frame -> frame < 0 || frame >= frameSlots);
+        if (invalidMetadata) {
+            return java.util.stream.IntStream.range(0, frameSlots).toArray();
+        }
+        int[] valid = java.util.Arrays.stream(uniqueFrames)
+                .distinct()
+                .toArray();
+        return valid.length == 0 ? new int[]{0} : valid;
     }
 
     private record NeutralImage(int width, int height) implements MaterialImage {

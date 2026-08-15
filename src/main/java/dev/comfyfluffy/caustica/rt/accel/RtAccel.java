@@ -73,6 +73,8 @@ import static org.lwjgl.vulkan.KHRAccelerationStructure.vkGetAccelerationStructu
 import static org.lwjgl.vulkan.KHRSynchronization2.VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
 import static org.lwjgl.vulkan.KHRSynchronization2.VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
 import static org.lwjgl.vulkan.KHRSynchronization2.VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+import static org.lwjgl.vulkan.KHRSynchronization2.VK_ACCESS_2_SHADER_WRITE_BIT_KHR;
+import static org.lwjgl.vulkan.KHRSynchronization2.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT_KHR;
 import static org.lwjgl.vulkan.KHRSynchronization2.vkCmdPipelineBarrier2KHR;
 
 /**
@@ -161,6 +163,29 @@ public final class RtAccel {
                                        int bytesPerTriangle) {
     }
 
+    @FunctionalInterface
+    public interface OpacityMicromapEncoder {
+        void record(VkCommandBuffer command, long dataAddress, long triangleAddress, int dataStride);
+    }
+
+    /** Device-generated opacity input. One encoder invocation owns each triangle's padded data block. */
+    public record OpacityMicromapGpuInput(int triangleCount, int subdivisionLevel, int bytesPerTriangle,
+                                          OpacityMicromapEncoder encoder) {
+        public OpacityMicromapGpuInput {
+            if (triangleCount <= 0 || subdivisionLevel < 0 || subdivisionLevel > 4 || bytesPerTriangle <= 0) {
+                throw new IllegalArgumentException("invalid GPU opacity micromap input");
+            }
+            java.util.Objects.requireNonNull(encoder, "encoder");
+            if ((long) triangleCount * ((bytesPerTriangle + 3) & -4) > 0xFFFF_FFFFL) {
+                throw new IllegalArgumentException("opacity micromap data offsets exceed uint32");
+            }
+        }
+
+        int dataStride() {
+            return (bytesPerTriangle + 3) & -4;
+        }
+    }
+
     /** Pack {@code VkMicromapTriangleEXT[]} records into plain bytes so workers can prepare them off-thread. */
     public static byte[] opacityMicromapTriangles(int triangleCount, int subdivisionLevel, int bytesPerTriangle) {
         byte[] triangles = new byte[triangleCount * VkMicromapTriangleEXT.SIZEOF];
@@ -198,11 +223,13 @@ public final class RtAccel {
         final int triangleCount;
         final int subdivisionLevel;
         final int bytesPerTriangle;
+        final OpacityMicromapEncoder encoder;
+        final int dataStride;
         boolean destroyed;
 
         OpacityMicromap(VkDevice vk, long handle, GpuBuffer backing, GpuBuffer data, GpuBuffer triangles,
                         GpuBuffer scratch, long scratchAddress, long dataAddress, long triangleArrayAddress, int triangleCount,
-                        int subdivisionLevel, int bytesPerTriangle) {
+                        int subdivisionLevel, int bytesPerTriangle, OpacityMicromapEncoder encoder, int dataStride) {
             this.vk = vk;
             this.handle = handle;
             this.backing = backing;
@@ -215,6 +242,8 @@ public final class RtAccel {
             this.triangleCount = triangleCount;
             this.subdivisionLevel = subdivisionLevel;
             this.bytesPerTriangle = bytesPerTriangle;
+            this.encoder = encoder;
+            this.dataStride = dataStride;
         }
 
         void freeBuildInputs() {
@@ -561,7 +590,55 @@ public final class RtAccel {
             scratch = createScratchBuffer(ctx, sizes.buildScratchSize(), label + " build scratch");
             long scratchAddress = scratchAddress(ctx, scratch);
             return new OpacityMicromap(vk, handle, backing, data, triangles, scratch, scratchAddress,
-                    dataAddress, triangleArrayAddress, input.triangleCount(), input.subdivisionLevel(), input.bytesPerTriangle());
+                    dataAddress, triangleArrayAddress, input.triangleCount(), input.subdivisionLevel(),
+                    input.bytesPerTriangle(), null, input.bytesPerTriangle());
+        } catch (Throwable t) {
+            if (handle != 0L) vkDestroyMicromapEXT(vk, handle, null);
+            if (scratch != null) scratch.destroy();
+            if (backing != null) backing.destroy();
+            if (triangles != null) triangles.destroy();
+            if (data != null) data.destroy();
+            throw t;
+        }
+    }
+
+    private static OpacityMicromap prepareOpacityMicromap(GpuContext ctx, OpacityMicromapGpuInput input,
+                                                          String blasLabel) {
+        if (input == null) return null;
+        VkDevice vk = ctx.vk();
+        String label = blasLabel + " opacity micromap";
+        int inputUsage = VK_BUFFER_USAGE_MICROMAP_BUILD_INPUT_READ_ONLY_BIT_EXT
+                | VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        GpuBuffer data = null;
+        GpuBuffer triangles = null;
+        GpuBuffer backing = null;
+        GpuBuffer scratch = null;
+        long handle = 0L;
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            int dataStride = input.dataStride();
+            data = ctx.createAsyncAlignedBuffer((long) input.triangleCount() * dataStride,
+                    inputUsage, false, label + " data", MICROMAP_INPUT_ADDRESS_ALIGNMENT);
+            triangles = ctx.createAsyncAlignedBuffer((long) input.triangleCount() * VkMicromapTriangleEXT.SIZEOF,
+                    inputUsage, false, label + " triangles", MICROMAP_INPUT_ADDRESS_ALIGNMENT);
+            long dataAddress = data.deviceAddress;
+            long triangleAddress = triangles.deviceAddress;
+            VkMicromapUsageEXT.Buffer usage = micromapUsage(stack, input.triangleCount(), input.subdivisionLevel());
+            VkMicromapBuildInfoEXT build = micromapBuildInfo(stack, dataAddress, 0L, triangleAddress, 0L, usage);
+            VkMicromapBuildSizesInfoEXT sizes = VkMicromapBuildSizesInfoEXT.calloc(stack).sType$Default();
+            vkGetMicromapBuildSizesEXT(vk, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, build, sizes);
+            backing = ctx.createAsyncBuffer(sizes.micromapSize(), VK_BUFFER_USAGE_MICROMAP_STORAGE_BIT_EXT,
+                    false, label + " backing");
+            VkMicromapCreateInfoEXT create = VkMicromapCreateInfoEXT.calloc(stack).sType$Default()
+                    .buffer(backing.handle).offset(0).size(sizes.micromapSize())
+                    .type(VK_MICROMAP_TYPE_OPACITY_MICROMAP_EXT);
+            java.nio.LongBuffer output = stack.mallocLong(1);
+            GpuContext.check(vkCreateMicromapEXT(vk, create, null, output), "vkCreateMicromapEXT");
+            handle = output.get(0);
+            RtDebugLabels.nameMicromap(ctx, handle, label);
+            scratch = createScratchBuffer(ctx, sizes.buildScratchSize(), label + " build scratch");
+            return new OpacityMicromap(vk, handle, backing, data, triangles, scratch,
+                    scratchAddress(ctx, scratch), dataAddress, triangleAddress, input.triangleCount(),
+                    input.subdivisionLevel(), input.bytesPerTriangle(), input.encoder(), dataStride);
         } catch (Throwable t) {
             if (handle != 0L) vkDestroyMicromapEXT(vk, handle, null);
             if (scratch != null) scratch.destroy();
@@ -675,6 +752,49 @@ public final class RtAccel {
             if (scratch != null) scratch.destroy();
             if (backing != null) backing.destroy();
             throw t;
+        }
+    }
+
+    /** Fresh immutable classified BUILD with GPU-generated opacity data for the masked geometry. */
+    public static CompactableBuild prepareOpacityMicromapBlasBuild(
+            GpuContext ctx, long vertexAddr, int vertexCount, long indexAddr, int[] classTriangles,
+            OpacityMicromapGpuInput opacityInput, boolean compact, String label) {
+        requireClassTriangles(classTriangles);
+        if (opacityInput.triangleCount() != classTriangles[CLASS_MASKED]) {
+            throw new IllegalArgumentException("opacity triangle count must match the masked geometry");
+        }
+        VkDevice vk = ctx.vk();
+        String debugLabel = labelOr(label, "opacity micromap BLAS");
+        OpacityMicromap opacity = null;
+        GpuBuffer backing = null;
+        GpuBuffer scratch = null;
+        RtAccel accel = null;
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            opacity = prepareOpacityMicromap(ctx, opacityInput, debugLabel);
+            VkAccelerationStructureBuildSizesInfoKHR sizes = queryRetainedBlasSizes(vk, stack,
+                    vertexAddr, indexAddr, vertexCount, classTriangles, opacity, compact);
+            backing = ctx.createAsyncBuffer(sizes.accelerationStructureSize(),
+                    VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, false, debugLabel + " backing");
+            scratch = createScratchBuffer(ctx, sizes.buildScratchSize(), debugLabel + " build scratch");
+            accel = createBlasOn(ctx, stack, backing, sizes.accelerationStructureSize(), false,
+                    debugLabel, opacity);
+            if (compact) {
+                VkQueryPoolCreateInfo queryInfo = VkQueryPoolCreateInfo.calloc(stack).sType$Default()
+                        .queryType(VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR).queryCount(1);
+                java.nio.LongBuffer query = stack.mallocLong(1);
+                GpuContext.check(VK10.vkCreateQueryPool(vk, queryInfo, null, query),
+                        "vkCreateQueryPool(opacity micromap BLAS compacted size)");
+                accel.compactionQueryPool = query.get(0);
+            }
+            PreparedBlas operation = PreparedBlas.retained(accel, scratch, backing, vertexAddr, indexAddr,
+                    vertexCount - 1, classTriangles.clone(), opacity, debugLabel);
+            return new CompactableBuild(operation, accel, backing, scratch);
+        } catch (Throwable failure) {
+            if (accel != null) accel.destroy();
+            else if (opacity != null) opacity.destroy();
+            if (scratch != null) scratch.destroy();
+            if (backing != null) backing.destroy();
+            throw failure;
         }
     }
 
@@ -1065,6 +1185,27 @@ public final class RtAccel {
         return sizes;
     }
 
+    private static VkAccelerationStructureBuildSizesInfoKHR queryRetainedBlasSizes(
+            VkDevice vk, MemoryStack stack, long vertexAddress, long indexAddress, int vertexCount,
+            int[] classTris, OpacityMicromap opacityMicromap, boolean compact) {
+        VkAccelerationStructureGeometryKHR.Buffer geom = retainedGeometries(stack, vertexAddress, indexAddress,
+                vertexCount, classTris, opacityMicromap);
+        VkAccelerationStructureBuildGeometryInfoKHR.Buffer build = VkAccelerationStructureBuildGeometryInfoKHR
+                .calloc(1, stack);
+        build.sType$Default().type(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR)
+                .flags(buildFlags(false) | (compact ? VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR : 0))
+                .mode(VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR).geometryCount(geom.capacity())
+                .pGeometries(geom);
+        java.nio.IntBuffer maxPrimitives = stack.mallocInt(geom.capacity());
+        for (int triangles : classTris) maxPrimitives.put(triangles);
+        maxPrimitives.flip();
+        VkAccelerationStructureBuildSizesInfoKHR sizes = VkAccelerationStructureBuildSizesInfoKHR.calloc(stack)
+                .sType$Default();
+        vkGetAccelerationStructureBuildSizesKHR(vk, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+                build.get(0), maxPrimitives, sizes);
+        return sizes;
+    }
+
     /**
      * A TLAS instance: a 3x4 row-major transform, the device address of its BLAS, the 24-bit
      * {@code instanceCustomIndex} the hit shaders read, the 8-bit visibility {@code mask} (ANDed with the
@@ -1375,6 +1516,11 @@ public final class RtAccel {
             VK10.vkCmdResetQueryPool(cmd, b.accel.compactionQueryPool, 0, 1);
         }
         if (b.opacityMicromap != null) {
+            if (b.opacityMicromap.encoder != null) {
+                b.opacityMicromap.encoder.record(cmd, b.opacityMicromap.dataAddress,
+                        b.opacityMicromap.triangleArrayAddress, b.opacityMicromap.dataStride);
+                opacityClassificationBarrier(cmd, stack);
+            }
             recordMicromapBuild(cmd, stack, b.opacityMicromap);
             micromapBuildBarrier(cmd, stack);
         }
@@ -1415,6 +1561,16 @@ public final class RtAccel {
                 .dstAccessMask(VK_ACCESS_2_MICROMAP_READ_BIT_EXT);
         VkDependencyInfo dep = VkDependencyInfo.calloc(stack).sType$Default().pMemoryBarriers(barrier);
         vkCmdPipelineBarrier2KHR(cmd, dep);
+    }
+
+    private static void opacityClassificationBarrier(VkCommandBuffer cmd, MemoryStack stack) {
+        VkMemoryBarrier2.Buffer barrier = VkMemoryBarrier2.calloc(1, stack);
+        barrier.get(0).sType$Default()
+                .srcStageMask(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT_KHR)
+                .srcAccessMask(VK_ACCESS_2_SHADER_WRITE_BIT_KHR)
+                .dstStageMask(VK_PIPELINE_STAGE_2_MICROMAP_BUILD_BIT_EXT)
+                .dstAccessMask(VK_ACCESS_2_MICROMAP_READ_BIT_EXT);
+        vkCmdPipelineBarrier2KHR(cmd, VkDependencyInfo.calloc(stack).sType$Default().pMemoryBarriers(barrier));
     }
 
     private static void accelerationStructureBuildBarrier(VkCommandBuffer cmd, MemoryStack stack) {

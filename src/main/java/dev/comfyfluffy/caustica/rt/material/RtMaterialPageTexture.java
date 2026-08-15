@@ -29,6 +29,11 @@ final class RtMaterialPageTexture {
     private boolean destroyed;
 
     RtMaterialPageTexture(GpuContext ctx, int width, int height, List<byte[]> levels, String label) {
+        this(ctx, width, height, levels, label, false);
+    }
+
+    RtMaterialPageTexture(GpuContext ctx, int width, int height, List<byte[]> levels, String label,
+                          boolean asyncComputeSampled) {
         if (levels.isEmpty()) throw new IllegalArgumentException("Material page has no mip levels");
         this.vma = ctx.vma();
         this.vk = ctx.vk();
@@ -44,6 +49,10 @@ final class RtMaterialPageTexture {
                     .usage(VK10.VK_IMAGE_USAGE_SAMPLED_BIT | VK10.VK_IMAGE_USAGE_TRANSFER_DST_BIT)
                     .sharingMode(VK10.VK_SHARING_MODE_EXCLUSIVE)
                     .initialLayout(VK10.VK_IMAGE_LAYOUT_UNDEFINED);
+            if (asyncComputeSampled && ctx.graphicsQueueFamilyIndex() != ctx.computeQueueFamilyIndex()) {
+                imageInfo.sharingMode(VK10.VK_SHARING_MODE_CONCURRENT)
+                        .pQueueFamilyIndices(stack.ints(ctx.graphicsQueueFamilyIndex(), ctx.computeQueueFamilyIndex()));
+            }
             imageInfo.extent().set(width, height, 1);
             VmaAllocationCreateInfo allocationInfo = VmaAllocationCreateInfo.calloc(stack)
                     .usage(Vma.VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE);

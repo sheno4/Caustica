@@ -34,6 +34,7 @@ public final class RtMaterialPageCompiler {
     private final Map<ResourceId, Entry> entries = new HashMap<>();
     private final List<Page> pages = new ArrayList<>();
     private Entry fallback;
+    private int compiledPageSize;
     private boolean loggedFailure;
 
     private RtMaterialPageCompiler() {
@@ -45,6 +46,8 @@ public final class RtMaterialPageCompiler {
                         float albedoU, float albedoV, float albedoInvDu, float albedoInvDv,
                         RtMaterialDesc.EmissionSummary emissionSummary, EmissionFootprint emissionFootprint,
                         float averageR, float averageG, float averageB, float averageA,
+                        float minAlpha, float maxAlpha,
+                        boolean spatialAlphaRange,
                         RtMaterialDesc.EmissionSummary uniformEmissionSummary,
                         EmissionFootprint uniformEmissionFootprint) {
         public float[] average() {
@@ -53,11 +56,12 @@ public final class RtMaterialPageCompiler {
     }
 
     private record Page(RtMaterialPageTexture surface0, RtMaterialPageTexture normal,
-                        RtMaterialPageTexture surface1, int index) {
+                        RtMaterialPageTexture surface1, RtMaterialPageTexture temporalAlpha, int index) {
         void destroy() {
             surface0.destroy();
             normal.destroy();
             surface1.destroy();
+            temporalAlpha.destroy();
         }
     }
 
@@ -77,6 +81,8 @@ public final class RtMaterialPageCompiler {
         RtMaterialDesc.EmissionSummary emissionSummary = RtMaterialDesc.EmissionSummary.NONE;
         EmissionFootprint emissionFootprint;
         AlbedoStats stats = AlbedoStats.NEUTRAL;
+        float minAlpha;
+        float maxAlpha = 1.0f;
 
         Candidate(MaterialTextureAsset asset) {
             this.asset = asset;
@@ -102,9 +108,7 @@ public final class RtMaterialPageCompiler {
         }
 
         boolean requiresPage() {
-            int textureFeatures = RtMaterialRegistry.FEATURE_SPEC
-                    | RtMaterialRegistry.FEATURE_NORMAL | RtMaterialRegistry.FEATURE_EMISSION_MASK;
-            return (features & textureFeatures) != 0 || asset.kind() == MaterialTextureKind.STANDALONE;
+            return true;
         }
     }
 
@@ -143,6 +147,7 @@ public final class RtMaterialPageCompiler {
         fallback = null;
         for (Page page : pages) page.destroy();
         pages.clear();
+        compiledPageSize = 0;
     }
 
     /** Compile, pack, mip, upload, and publish one immutable host catalog. */
@@ -173,6 +178,7 @@ public final class RtMaterialPageCompiler {
                     || candidate.height() + 2 * GUTTER > MAX_PAGE_SIZE);
             if (paged.isEmpty()) pageSize = 32;
         }
+        compiledPageSize = pageSize;
         paged.sort(Comparator.<Candidate>comparingInt(Candidate::height).reversed()
                 .thenComparing(Comparator.comparingInt(Candidate::width).reversed())
                 .thenComparing(candidate -> candidate.asset.material().toString()));
@@ -212,7 +218,10 @@ public final class RtMaterialPageCompiler {
                 candidate.emissionSummary = decoded.emissionSummary();
                 candidate.emissionFootprint = decoded.emissionFootprint();
                 candidate.stats = decoded.stats();
+                candidate.minAlpha = decoded.minAlpha();
+                candidate.maxAlpha = decoded.maxAlpha();
                 pagePixels[candidate.page].write(candidate, decoded.levels());
+                pagePixels[candidate.page].writeTemporalAlpha(candidate, decoded.temporalAlpha());
             } catch (Throwable t) {
                 warnOnce("RT canonical material decode failed for " + candidate.asset.material(), t);
                 candidate.page = -1;
@@ -234,6 +243,8 @@ public final class RtMaterialPageCompiler {
                             "material normal page " + pageIndex),
                     new RtMaterialPageTexture(ctx, pageSize, pageSize, pixels.surface1,
                             "material surface1 page " + pageIndex),
+                    new RtMaterialPageTexture(ctx, pageSize, pageSize, pixels.temporalAlpha,
+                            "material temporal alpha page " + pageIndex, true),
                     pageIndex));
         }
 
@@ -241,7 +252,9 @@ public final class RtMaterialPageCompiler {
         fallback = new Entry(0, 0, 0, fallbackUv, fallbackUv,
                 1.0f / pageSize, 1.0f / pageSize, 0, 0, 1, 1,
                 RtMaterialDesc.EmissionSummary.NONE, null,
-                1.0f, 1.0f, 1.0f, 0.0f, RtMaterialDesc.EmissionSummary.NONE, null);
+                1.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f,
+                false,
+                RtMaterialDesc.EmissionSummary.NONE, null);
         for (Candidate candidate : candidates) {
             entries.put(candidate.asset.material(), candidate.page >= 0
                     ? compiledEntry(candidate, pageSize) : fallbackFor(candidate));
@@ -256,7 +269,7 @@ public final class RtMaterialPageCompiler {
         CausticaMod.LOGGER.info("RT canonical material pages: atlasAssets={}, standaloneAssets={}, surface={}, normal={}, emissionMasks={}, pages={}, size={}x{}, validLod<={}, gpuMiB={}",
                 catalog.atlasAssets().size(), catalog.standalone().size(), specCount, normalCount,
                 emissionMaskCount, pages.size(), pageSize, pageSize, MAX_VALID_LOD,
-                String.format(java.util.Locale.ROOT, "%.2f", bytesPerBundle * pages.size() * 3.0 / (1024.0 * 1024.0)));
+                String.format(java.util.Locale.ROOT, "%.2f", bytesPerBundle * pages.size() * 4.0 / (1024.0 * 1024.0)));
     }
 
     public void bindPages(RtPipeline pipeline, long sampler) {
@@ -264,6 +277,16 @@ public final class RtMaterialPageCompiler {
             pipeline.setMaterialPage(page.index(), page.surface0().view(), page.normal().view(),
                     page.surface1().view(), sampler);
         }
+    }
+
+    public long[] temporalAlphaViews() {
+        long[] views = new long[pages.size()];
+        for (Page page : pages) views[page.index()] = page.temporalAlpha().view();
+        return views;
+    }
+
+    public int pageSize() {
+        return compiledPageSize;
     }
 
     public Entry entry(ResourceId material) {
@@ -286,6 +309,8 @@ public final class RtMaterialPageCompiler {
                 candidate.width() / (float) pageSize, candidate.height() / (float) pageSize,
                 uv.u(), uv.v(), uv.inverseDu(), uv.inverseDv(), candidate.emissionSummary,
                 candidate.emissionFootprint, stats.averageR(), stats.averageG(), stats.averageB(), stats.averageA(),
+                candidate.minAlpha, candidate.maxAlpha,
+                true,
                 stats.uniformEmissionSummary(), stats.uniformEmissionFootprint());
     }
 
@@ -298,12 +323,15 @@ public final class RtMaterialPageCompiler {
                 fallback.materialU, fallback.materialV, fallback.materialDu, fallback.materialDv,
                 uv.u(), uv.v(), uv.inverseDu(), uv.inverseDv(), RtMaterialDesc.EmissionSummary.NONE, null,
                 stats.averageR(), stats.averageG(), stats.averageB(), stats.averageA(),
+                candidate.minAlpha, candidate.maxAlpha,
+                false,
                 stats.uniformEmissionSummary(), stats.uniformEmissionFootprint());
     }
 
     private record Decoded(List<RtMaterialTextureData.Level> levels,
                            RtMaterialDesc.EmissionSummary emissionSummary,
-                           EmissionFootprint emissionFootprint, AlbedoStats stats) {
+                           EmissionFootprint emissionFootprint, AlbedoStats stats,
+                           float[] temporalAlpha, float minAlpha, float maxAlpha) {
     }
 
     private static EmissionFootprint emissionFootprint(float[] linearAlbedo, float[] mask,
@@ -329,6 +357,8 @@ public final class RtMaterialPageCompiler {
             float[] normal = new float[surface0.length];
             float[] surface1 = new float[surface0.length];
             float[] linearAlbedo = new float[surface0.length];
+            TemporalAlpha temporal = scanTemporalAlpha(texture, width, height);
+            float[] temporalAlpha = temporal.texels();
             float[] authoredEmission = candidate.asset.emissionMask() ? new float[width * height] : null;
             float[] emissionColor = authoredEmission != null ? new float[surface0.length] : null;
             boolean emissionUsesBaseColor = candidate.asset.emissionColorBinding()
@@ -381,8 +411,36 @@ public final class RtMaterialPageCompiler {
             int maxLod = maxLodFor(width, height);
             return new Decoded(RtMaterialTextureData.mipChain(new RtMaterialTextureData.Level(width, height,
                     surface0, normal, surface1), maxLod), emissionSummary, footprint,
-                    stats.finish());
+                    stats.finish(), temporalAlpha, temporal.minAlpha(), temporal.maxAlpha());
         }
+    }
+
+    record TemporalAlpha(float[] texels, float minAlpha, float maxAlpha) { }
+
+    static TemporalAlpha scanTemporalAlpha(MaterialTextureImage texture, int width, int height) {
+        if (texture.alphaFrameCount() <= 0) {
+            throw new IllegalArgumentException("Material texture has no alpha frames");
+        }
+        float[] texels = new float[width * height * 4];
+        int materialMin = 255;
+        int materialMax = 0;
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                int min = 255;
+                int max = 0;
+                for (int frame = 0; frame < texture.alphaFrameCount(); frame++) {
+                    int value = alpha(texture.alphaArgb(frame, x, y));
+                    min = Math.min(min, value);
+                    max = Math.max(max, value);
+                }
+                int index = (y * width + x) * 4;
+                texels[index] = min / 255.0f;
+                texels[index + 1] = max / 255.0f;
+                materialMin = Math.min(materialMin, min);
+                materialMax = Math.max(materialMax, max);
+            }
+        }
+        return new TemporalAlpha(texels, materialMin / 255.0f, materialMax / 255.0f);
     }
 
     static AlbedoStats scanAlbedo(MaterialTextureAsset asset, int footprintResolution) throws Exception {
@@ -460,6 +518,7 @@ public final class RtMaterialPageCompiler {
         final List<byte[]> surface0;
         final List<byte[]> normal;
         final List<byte[]> surface1;
+        final List<byte[]> temporalAlpha;
         final int pageSize;
 
         PagePixels(int pageSize, int mipCount) {
@@ -468,6 +527,7 @@ public final class RtMaterialPageCompiler {
             normal = allocate(pageSize, mipCount, 128, 128, 0, 0);
             surface1 = allocate(pageSize, mipCount, 255, 255, 255,
                     RtMaterialTextureData.unorm8(encodeIor(OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR)));
+            temporalAlpha = allocate(pageSize, mipCount, 0, 255, 0, 0);
         }
 
         void writeFallback() {
@@ -484,6 +544,11 @@ public final class RtMaterialPageCompiler {
                 blit(normal.get(mip), width, cx, cy, gutter, level.width(), level.height(), level.normal());
                 blit(surface1.get(mip), width, cx, cy, gutter, level.width(), level.height(), level.surface1());
             }
+        }
+
+        void writeTemporalAlpha(Candidate candidate, float[] values) {
+            blit(temporalAlpha.get(0), pageSize, candidate.x, candidate.y, GUTTER,
+                    candidate.width(), candidate.height(), values);
         }
 
         private static List<byte[]> allocate(int size, int mipCount, int r, int g, int b, int a) {

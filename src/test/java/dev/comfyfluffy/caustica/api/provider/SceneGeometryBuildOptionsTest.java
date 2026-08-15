@@ -15,6 +15,7 @@ final class SceneGeometryBuildOptionsTest {
 
         assertSame(SceneGeometrySink.BuildOptions.DEFAULT, put.buildOptions());
         assertFalse(put.buildOptions().minimizeMemory());
+        assertFalse(put.buildOptions().opacityAcceleration());
     }
 
     @Test
@@ -23,6 +24,15 @@ final class SceneGeometryBuildOptionsTest {
                 SceneGeometrySink.BuildOptions.MINIMIZE_MEMORY);
 
         assertTrue(put.buildOptions().minimizeMemory());
+        assertFalse(put.buildOptions().opacityAcceleration());
+    }
+
+    @Test
+    void opacityAccelerationIsAnIndependentEnginePreference() {
+        SceneGeometrySink.BuildOptions options =
+                SceneGeometrySink.BuildOptions.MINIMIZE_MEMORY_AND_ACCELERATE_OPACITY;
+        assertTrue(options.minimizeMemory());
+        assertTrue(options.opacityAcceleration());
     }
 
     private static SceneMesh triangle() {

@@ -74,6 +74,8 @@ final class MaterialCatalogTest {
                 @Override public int width() { return image.width(); }
                 @Override public int height() { return image.height(); }
                 @Override public int albedoArgb(int x, int y) { return image.argb(x, y); }
+                @Override public int alphaFrameCount() { return 1; }
+                @Override public int alphaArgb(int frame, int x, int y) { return image.argb(x, y); }
                 @Override public void readOpenPbr(int x, int y, OpenPbrTextureTexel out) { }
                 @Override public void close() { image.close(); }
             };

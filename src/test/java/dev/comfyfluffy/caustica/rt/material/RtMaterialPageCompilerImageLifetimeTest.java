@@ -25,6 +25,8 @@ final class RtMaterialPageCompilerImageLifetimeTest {
             @Override public int width() { return 1; }
             @Override public int height() { return 1; }
             @Override public int albedoArgb(int x, int y) { return pixels[0]; }
+            @Override public int alphaFrameCount() { return 1; }
+            @Override public int alphaArgb(int frame, int x, int y) { return pixels[0]; }
             @Override public void readOpenPbr(int x, int y, OpenPbrTextureTexel out) { }
             @Override public void close() { closes.incrementAndGet(); }
         }, MaterialUv.IDENTITY, false, false, false,
@@ -54,6 +56,8 @@ final class RtMaterialPageCompilerImageLifetimeTest {
             @Override public int width() { return 1; }
             @Override public int height() { return 1; }
             @Override public int albedoArgb(int x, int y) { throw new IllegalStateException("broken image"); }
+            @Override public int alphaFrameCount() { return 1; }
+            @Override public int alphaArgb(int frame, int x, int y) { return albedoArgb(x, y); }
             @Override public void readOpenPbr(int x, int y, OpenPbrTextureTexel out) { }
             @Override public void close() { closes.incrementAndGet(); }
         }, MaterialUv.IDENTITY, false, false, false,

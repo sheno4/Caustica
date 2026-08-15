@@ -17,12 +17,13 @@ final class RtTerrainBuildOptionsTest {
     @Test
     void terrainRequestsMemoryOptimizationAndFrameCadenceSourcesKeepTheDefault() throws IOException {
         String terrain = Files.readString(ROOT.resolve("terrain/RtTerrain.java"));
-        assertTrue(terrain.contains("SceneGeometrySink.BuildOptions.MINIMIZE_MEMORY"));
+        assertTrue(terrain.contains("SceneGeometrySink.BuildOptions.MINIMIZE_MEMORY_AND_ACCELERATE_OPACITY"));
 
         for (String source : List.of("entity/RtEntities.java", "cloud/MinecraftCloudSceneProvider.java")) {
             String text = Files.readString(ROOT.resolve(source));
             assertTrue(text.contains("new SceneGeometrySink.Put("), source);
             assertFalse(text.contains("BuildOptions.MINIMIZE_MEMORY"), source);
+            assertFalse(text.contains("ACCELERATE_OPACITY"), source);
         }
     }
 }

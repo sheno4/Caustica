@@ -28,10 +28,39 @@ resolves source material and texture identities, selects either an out-of-place 
 and periodically rebuilds compatible residents. TLAS assembly remains on the graphics path. Placement-only groups
 change instances without rebuilding a BLAS.
 
-Each `Put` carries build preferences. The default keeps an update-capable resident and permits compatible
-out-of-place refits. The memory-minimizing preference selects an immutable build followed by an asynchronous
-compacted copy; terrain uses it, while entities, block entities, particles, clouds, and public providers retain the
-default unless they opt in per geometry. The renderer does not infer policy from source identity.
+Each `Put` carries independent memory-minimization and opacity-acceleration preferences. Both default off. The
+default keeps an update-capable resident and permits compatible out-of-place refits. Memory minimization selects
+an immutable build followed by an asynchronous compacted copy. Opacity acceleration selects a fresh immutable
+build even when compatible motion history exists. Terrain requests both preferences; other built-in and public
+providers retain the default unless they opt in per geometry. The renderer does not infer policy from source
+identity.
+
+## Opacity micromaps
+
+Opacity micromaps are renderer-owned and apply only to final `CUTOUT` bindings. Classification runs after mesh
+packing and material resolution, over the class-sorted triangle order, actual indexed or per-corner texture
+coordinates, and the resolved binding's texture slot and cutoff. Stochastic coverage, transmissive surfaces,
+textureless definitions, and bindings whose base texture was replaced with a provider texture remain unknown.
+Unsupported devices use the ordinary cutout any-hit path; that fallback does not change compaction policy.
+
+The material epoch stores a mip-zero temporal alpha range for every canonical texel. Each texel contains the
+minimum and maximum alpha across every unique animation frame; static textures have equal bounds. The material
+record also stores the whole-material range as a fast path. Classification never samples a current animation
+frame and never rebuilds per frame. Inputs without an immutable spatial range remain unknown.
+Every catalog texture currently receives a complete four-image canonical page bundle so the temporal-alpha page
+has the same stable material coordinates even when the other three OpenPBR images are neutral.
+
+One compute invocation owns every packed output word for a triangle. It subdivides the triangle barycentrically,
+maps each microtriangle's three UV corners, and scans every mip-zero texel in the conservative footprint. A
+microtriangle is fully opaque only when every texel's temporal minimum passes the resolved cutoff, and fully
+transparent only when every temporal maximum fails it; all other, non-finite, wrapped-across-a-seam, or unsupported
+footprints are unknown. The classifier implements the same nearest, repeat, mip-zero sampling contract as any-hit.
+
+The async command order is classification, a compute-write-to-micromap-read barrier, micromap build, a
+micromap-write-to-acceleration-read barrier, BLAS build, optional compacted-size query, and optional compact copy.
+Only the final build or compact-copy token may publish. The material tables and temporal pages are shared with the
+graphics and reserved compute queue families. Resource reload cancels geometry and drains accepted executor work
+before destroying an epoch's classifier, descriptors, tables, or pages.
 
 A compactable candidate has two executor phases: BUILD writes the compacted-size query, then COMPACT copies into
 the exactly sized resident allocation. The group remains unpublished between them and marks only the compact-copy

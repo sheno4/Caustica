@@ -34,6 +34,7 @@ import org.lwjgl.vulkan.VkMemoryBarrier2;
 import org.lwjgl.vulkan.VkSamplerCreateInfo;
 
 import dev.comfyfluffy.caustica.rt.accel.RtAccel;
+import dev.comfyfluffy.caustica.rt.accel.RtOpacityMicromapPipeline;
 import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
 import dev.comfyfluffy.caustica.rt.accel.GpuImage;
 import dev.comfyfluffy.caustica.rt.geometry.RtGeometryMaterialResolver;
@@ -186,6 +187,7 @@ public final class RtComposite {
     };
     private final RtSceneGeometryManager sceneGeometry = new RtSceneGeometryManager(
             (material, coverage) -> RtGeometryMaterialResolution.resolve(material, coverage, geometryMaterials));
+    private RtOpacityMicromapPipeline opacityMicromapPipeline;
     private RtDisplayPipeline displayPipeline;
     private RenderPassManager renderPassManager;
     private long renderPassSceneId = Long.MIN_VALUE;
@@ -852,12 +854,20 @@ public final class RtComposite {
         boundBaseColorAtlasView = atlasView;
         // Bindless base-color texture index zero is the fallback, so unresolved geometry samples
         // something defined rather than an unbound (partially-bound) descriptor.
+        if (opacityMicromapPipeline != null) {
+            throw new IllegalStateException("Previous opacity micromap material epoch is still active");
+        }
         RtMaterialPageCompiler.INSTANCE.reset();
         ProviderManager.MaterialContributions materials = ProviderManager.INSTANCE.collectMaterials();
         RtMaterialOverrides materialOverrides = RtMaterialOverrides.from(
                 materials.rules(), CausticaApi.registry()::surfaceIndex);
         MaterialCatalog materialCatalog = RtRuntime.host().materialCatalog(materials.rules());
         RtMaterialPageCompiler.INSTANCE.prepareAll(ctx, bindlessTextureCapacity, materialCatalog);
+        if (RtDeviceBringup.ommEnabled()) {
+            opacityMicromapPipeline = RtOpacityMicromapPipeline.create(ctx,
+                    RtMaterialPageCompiler.INSTANCE.temporalAlphaViews());
+        }
+        sceneGeometry.setOpacityMicromapPipeline(opacityMicromapPipeline);
         ProviderManager.INSTANCE.resetBindlessTextures(bindlessTextureCapacity);
         worldPipeline.setBaseColorTexture(0, atlasView, sampler);
         RtMaterialPageCompiler.INSTANCE.bindPages(worldPipeline, sampler);
@@ -870,6 +880,14 @@ public final class RtComposite {
         // a unit rather than displaying old records against the new texture and material tables.
         ProviderManager.INSTANCE.onWorldChanged();
         materialEpochTraceGate = true;
+    }
+
+    private void destroyOpacityMicromapPipeline() {
+        sceneGeometry.setOpacityMicromapPipeline(null);
+        if (opacityMicromapPipeline != null) {
+            opacityMicromapPipeline.destroy();
+            opacityMicromapPipeline = null;
+        }
     }
 
     /** Bind the already-published pack epoch into a replacement program without rebuilding materials. */
@@ -949,7 +967,7 @@ public final class RtComposite {
         ProviderManager.INSTANCE.onResourcePackClosing();
         GpuContext ctx = GpuContext.currentOrNull();
         if (ctx != null) {
-            ctx.waitIdle();
+            ctx.gpuExecutor().drainAndWaitIdle();
             if (renderPassManager != null) {
                 renderPassManager.onResourcePackClosing();
             }
@@ -958,6 +976,7 @@ public final class RtComposite {
                 worldPipeline = null;
                 bindlessTextureCapacity = 0;
             }
+            destroyOpacityMicromapPipeline();
             RtMaterialRegistry.INSTANCE.destroy();
         }
     }
@@ -1505,6 +1524,7 @@ public final class RtComposite {
             worldPipeline.destroy();
             worldPipeline = null;
         }
+        destroyOpacityMicromapPipeline();
         RtMaterialPageCompiler.INSTANCE.reset();
         bindlessTextureCapacity = 0;
         materialBindingsReady = false;

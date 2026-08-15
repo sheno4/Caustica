@@ -222,6 +222,14 @@ public final class RtDeviceBringup {
                         rtPipeline, asBuild, traceRays);
                 return;
             }
+            if (ommEnabled() && (caps.vkCreateMicromapEXT == 0L || caps.vkCmdBuildMicromapsEXT == 0L
+                    || caps.vkGetMicromapBuildSizesEXT == 0L || caps.vkDestroyMicromapEXT == 0L)) {
+                Capabilities old = capabilities;
+                capabilities = new Capabilities(old.rayTracing(), old.shaderExecutionReordering(), false,
+                        old.lowLatency(), old.presentIds(), old.wideLines(), old.maxLineWidth(),
+                        old.overlayMsaaSamples());
+                CausticaMod.LOGGER.error("Opacity micromap extension was enabled but its entry points are incomplete");
+            }
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 VkPhysicalDeviceAccelerationStructurePropertiesKHR asProps =
                         VkPhysicalDeviceAccelerationStructurePropertiesKHR.calloc(stack).sType$Default();
