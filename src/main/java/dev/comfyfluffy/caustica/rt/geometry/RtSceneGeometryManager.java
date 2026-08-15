@@ -3,6 +3,7 @@ package dev.comfyfluffy.caustica.rt.geometry;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import dev.comfyfluffy.caustica.api.provider.SceneGeometryKey;
+import dev.comfyfluffy.caustica.api.provider.SceneGeometrySink;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor.GraphicsUse;
@@ -53,7 +54,9 @@ public final class RtSceneGeometryManager {
 
     /** Public mesh data packed into the renderer format when its atomic update starts. */
     public sealed interface GeometryPayload permits ProviderPayload { }
-    public record ProviderPayload(SceneMesh mesh) implements GeometryPayload { }
+    public record ProviderPayload(SceneMesh mesh, SceneGeometrySink.BuildOptions buildOptions) implements GeometryPayload {
+        public ProviderPayload(SceneMesh mesh) { this(mesh, SceneGeometrySink.BuildOptions.DEFAULT); }
+    }
 
     /** Immutable operation belonging to one atomic geometry group. */
     public sealed interface GeometryOperation permits Put, Drop, Place, Remove { }
@@ -196,11 +199,13 @@ public final class RtSceneGeometryManager {
 
     private void prepareGroupCandidates(GpuContext ctx, PreparedGroup prepared) {
         ArrayList<GroupCandidate> candidates = new ArrayList<>();
+        DynamicResident preparingCandidate = null;
         try {
         for (Map.Entry<SceneGeometryKey, GeometryPayload> entry : prepared.diff.puts.entrySet()) {
             GroupResident source = groupScheduler.publishedResident(new ResidentId(prepared.key.source(), entry.getKey()));
             ProviderPayload provider = (ProviderPayload) entry.getValue();
             DynamicResident candidate = new DynamicResident();
+            preparingCandidate = candidate;
             PackedInput input = providerInput(provider.mesh());
             writeDynamic(ctx, candidate, input);
             candidate.vertexCount = input.positions.length / 3;
@@ -210,7 +215,8 @@ public final class RtSceneGeometryManager {
             boolean previousIndexed = dynamicSource != null;
             boolean retainPreviousPositions = previousIndexed && dynamicSource.topology != null
                     && dynamicSource.topology.matches(candidate.topology);
-            if (dynamicSource != null && dynamicSource.updatable
+            boolean minimizeMemory = provider.buildOptions().minimizeMemory();
+            if (!minimizeMemory && dynamicSource != null && dynamicSource.updatable
                     && dynamicSource.updatesSinceBuild < 120
                     && retainPreviousPositions) {
                 RtAccel.UpdatableBuild update = RtAccel.prepareOutOfPlaceUpdate(ctx, dynamicSource.accel,
@@ -221,17 +227,27 @@ public final class RtSceneGeometryManager {
                 candidate.updatable = true;
                 candidate.updatesSinceBuild = dynamicSource.updatesSinceBuild + 1;
                 operation = update.op();
-            } else {
+            } else if (!minimizeMemory) {
                 RtAccel.UpdatableBuild build = RtAccel.prepareUpdatableBlasBuild(ctx, candidate.positionAddress,
                         candidate.vertexCount, candidate.indexAddress, candidate.classTriangles, "scene group BLAS");
                 candidate.accel = build.accel();
                 candidate.backing = build.backing();
                 candidate.updatable = true;
                 operation = build.op();
+            } else {
+                RtAccel.CompactableBuild build = RtAccel.prepareCompactableBlasBuild(ctx,
+                        candidate.positionAddress, candidate.vertexCount, candidate.indexAddress,
+                        candidate.classTriangles, "scene group BLAS");
+                candidate.accel = build.accel();
+                candidate.backing = build.backing();
+                candidate.updatable = false;
+                operation = build.op();
             }
             candidates.add(new GroupCandidate(entry.getKey(), candidate, source, operation, !retainPreviousPositions));
+            preparingCandidate = null;
         }
         } catch (Throwable failure) {
+            if (preparingCandidate != null) preparingCandidate.destroy();
             for (GroupCandidate candidate : candidates) {
                 candidate.releaseUnsubmittedScratch();
                 candidate.destroyUnpublished(ctx);
@@ -271,15 +287,20 @@ public final class RtSceneGeometryManager {
         TerminalGroup terminal;
         while ((terminal = terminalGroups.poll()) != null) {
             boolean cancelled = groupScheduler.cancelled(terminal.prepared.barrier);
-            if (!groupScheduler.running(terminal.prepared.barrier) || cancelled || terminal.failure != null) {
+            Throwable terminalFailure = terminal.failure;
+            if (terminalFailure == null && terminal.prepared.candidates.stream()
+                    .anyMatch(candidate -> !candidate.publicationState.publishable())) {
+                terminalFailure = new IllegalStateException("geometry candidate reached publication before terminal build phase");
+            }
+            if (!groupScheduler.running(terminal.prepared.barrier) || cancelled || terminalFailure != null) {
                 terminal.prepared.destroyCandidates(ctx);
                 retireCancelledSources(ctx, terminal.prepared);
                 groupScheduler.complete(terminal.prepared.barrier, false);
-                if (!cancelled && terminal.failure != null) {
+                if (!cancelled && terminalFailure != null) {
                     if (terminal.prepared.barrier.failureHandler != null) {
-                        terminal.prepared.barrier.failureHandler.accept(terminal.failure);
+                        terminal.prepared.barrier.failureHandler.accept(terminalFailure);
                     } else {
-                        groupFailures.record(terminal.failure);
+                        groupFailures.record(terminalFailure);
                     }
                 }
                 continue;
@@ -725,6 +746,7 @@ public final class RtSceneGeometryManager {
         final RtAccel.PreparedBlas operation;
         final boolean resetMotion;
         boolean retireSourceAfterTerminal;
+        final CompactionPublicationState publicationState;
 
         GroupCandidate(SceneGeometryKey key, GroupResident resident, GroupResident source, RtAccel.PreparedBlas operation,
                        boolean resetMotion) {
@@ -733,6 +755,7 @@ public final class RtSceneGeometryManager {
             this.source = source;
             this.operation = operation;
             this.resetMotion = resetMotion;
+            this.publicationState = new CompactionPublicationState(operation.requestsCompaction());
         }
 
         void submit(GpuContext ctx, java.util.function.BooleanSupplier cancelled,
@@ -742,7 +765,14 @@ public final class RtSceneGeometryManager {
                 java.util.function.BiConsumer<dev.comfyfluffy.caustica.rt.RtGpuExecutor.Build, Throwable> finished =
                         (build, failure) -> {
                             if (failure != null) RtAccel.freeBlasScratch(List.of(operation));
-                            completion.accept(new CandidateTerminal(this, build, failure));
+                            if (failure != null || !operation.requestsCompaction()) {
+                                if (failure != null) publicationState.fail();
+                                else publicationState.completeBuild();
+                                completion.accept(new CandidateTerminal(this, build, failure));
+                            } else {
+                                publicationState.completeBuild();
+                                submitCompaction(ctx, cancelled, completion);
+                            }
                         };
                 if (source == null) {
                     ctx.gpuExecutor().submit(cancelled, command -> RtAccel.recordBlasBuilds(ctx, command,
@@ -755,6 +785,50 @@ public final class RtSceneGeometryManager {
                 releaseUnsubmittedScratch();
                 completion.accept(new CandidateTerminal(this, null, failure));
             }
+        }
+
+        private void submitCompaction(GpuContext ctx, java.util.function.BooleanSupplier cancelled,
+                                      java.util.function.Consumer<CandidateTerminal> completion) {
+            RtAccel.PreparedBlasCompaction compaction;
+            try {
+                compaction = RtAccel.prepareBlasCompaction(ctx, operation);
+            } catch (Throwable failure) {
+                publicationState.fail();
+                completion.accept(new CandidateTerminal(this, null, failure));
+                return;
+            }
+            try {
+                ctx.gpuExecutor().submit(cancelled,
+                        command -> RtAccel.recordBlasCompaction(ctx, command, compaction),
+                        () -> completeCompaction(compaction),
+                        (build, failure) -> {
+                            if (failure != null) failCompaction(compaction, failure);
+                            completion.accept(new CandidateTerminal(this, build, failure));
+                        });
+            } catch (Throwable failure) {
+                failCompaction(compaction, failure);
+                completion.accept(new CandidateTerminal(this, null, failure));
+            }
+        }
+
+        private void completeCompaction(RtAccel.PreparedBlasCompaction compaction) {
+            RtAccel.finishBlasCompaction(compaction);
+            DynamicResident dynamic = (DynamicResident) resident;
+            dynamic.accel = compaction.compactedAccel();
+            dynamic.backing = compaction.compactedBacking();
+            publicationState.completeCompaction();
+        }
+
+        private void failCompaction(RtAccel.PreparedBlasCompaction compaction, Throwable failure) {
+            try {
+                RtAccel.destroyBlasCompaction(compaction);
+            } catch (Throwable cleanupFailure) {
+                failure.addSuppressed(cleanupFailure);
+            }
+            DynamicResident dynamic = (DynamicResident) resident;
+            dynamic.accel = null;
+            dynamic.backing = null;
+            publicationState.fail();
         }
 
         void releaseUnsubmittedScratch() {
@@ -771,6 +845,47 @@ public final class RtSceneGeometryManager {
 
         void deferSourceRetirement() {
             if (source != null) retireSourceAfterTerminal = true;
+        }
+    }
+
+    static final class CompactionPublicationState {
+        enum Phase { BUILD, COMPACT, TERMINAL }
+
+        private final boolean compactionRequested;
+        private Phase phase = Phase.BUILD;
+        private boolean publishable;
+
+        CompactionPublicationState(boolean compactionRequested) {
+            this.compactionRequested = compactionRequested;
+        }
+
+        void completeBuild() {
+            require(Phase.BUILD);
+            if (compactionRequested) {
+                phase = Phase.COMPACT;
+            } else {
+                phase = Phase.TERMINAL;
+                publishable = true;
+            }
+        }
+
+        void completeCompaction() {
+            require(Phase.COMPACT);
+            phase = Phase.TERMINAL;
+            publishable = true;
+        }
+
+        void fail() {
+            if (phase == Phase.TERMINAL) return;
+            phase = Phase.TERMINAL;
+            publishable = false;
+        }
+
+        Phase phase() { return phase; }
+        boolean publishable() { return publishable; }
+
+        private void require(Phase expected) {
+            if (phase != expected) throw new IllegalStateException("expected " + expected + " but was " + phase);
         }
     }
 

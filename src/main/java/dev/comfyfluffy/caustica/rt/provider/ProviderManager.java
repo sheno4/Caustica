@@ -278,7 +278,7 @@ public final class ProviderManager {
                 case SceneGeometrySink.Put put -> {
                     validateMeshMaterials(put.mesh());
                     converted.add(new RtSceneGeometryManager.Put(put.residentKey(),
-                            new RtSceneGeometryManager.ProviderPayload(put.mesh())));
+                            new RtSceneGeometryManager.ProviderPayload(put.mesh(), put.buildOptions())));
                 }
                 case SceneGeometrySink.Drop drop ->
                     converted.add(new RtSceneGeometryManager.Drop(drop.residentKey()));

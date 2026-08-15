@@ -28,6 +28,16 @@ resolves source material and texture identities, selects either an out-of-place 
 and periodically rebuilds compatible residents. TLAS assembly remains on the graphics path. Placement-only groups
 change instances without rebuilding a BLAS.
 
+Each `Put` carries build preferences. The default keeps an update-capable resident and permits compatible
+out-of-place refits. The memory-minimizing preference selects an immutable build followed by an asynchronous
+compacted copy; terrain uses it, while entities, block entities, particles, clouds, and public providers retain the
+default unless they opt in per geometry. The renderer does not infer policy from source identity.
+
+A compactable candidate has two executor phases: BUILD writes the compacted-size query, then COMPACT copies into
+the exactly sized resident allocation. The group remains unpublished between them and marks only the compact-copy
+completion for graphics visibility. UPDATE results never enter this path. Build, query, allocation, cancellation,
+or copy failure destroys every unpublished acceleration allocation and leaves the published snapshot unchanged.
+
 Compatible deforming geometry updates create a fresh destination BLAS and refit from the published BLAS
 after its exact last graphics use. The manager publishes it on a later frame and retires the old BLAS after
 that frame's graphics use. This permits one frame of delay without a mutable BLAS ring or a build backlog.

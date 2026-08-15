@@ -25,9 +25,29 @@ public interface SceneGeometrySink {
 
     sealed interface Operation permits Put, Drop, Place, Remove { }
 
+    /** Engine build preferences for one retained mesh. */
+    record BuildOptions(boolean minimizeMemory) {
+        public static final BuildOptions DEFAULT = new BuildOptions(false);
+        public static final BuildOptions MINIMIZE_MEMORY = new BuildOptions(true);
+    }
+
     /** Retain or replace mesh data. The renderer selects and schedules its acceleration update. */
-    record Put(SceneGeometryKey residentKey, SceneMesh mesh) implements Operation {
-        public Put(long residentKey, SceneMesh mesh) { this(SceneGeometryKey.of(residentKey), mesh); }
+    record Put(SceneGeometryKey residentKey, SceneMesh mesh, BuildOptions buildOptions) implements Operation {
+        public Put {
+            java.util.Objects.requireNonNull(buildOptions, "buildOptions");
+        }
+
+        public Put(SceneGeometryKey residentKey, SceneMesh mesh) {
+            this(residentKey, mesh, BuildOptions.DEFAULT);
+        }
+
+        public Put(long residentKey, SceneMesh mesh) {
+            this(SceneGeometryKey.of(residentKey), mesh, BuildOptions.DEFAULT);
+        }
+
+        public Put(long residentKey, SceneMesh mesh, BuildOptions buildOptions) {
+            this(SceneGeometryKey.of(residentKey), mesh, buildOptions);
+        }
     }
 
     /** Remove a retained mesh. */

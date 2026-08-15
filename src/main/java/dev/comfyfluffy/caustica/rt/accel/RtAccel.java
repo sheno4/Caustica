@@ -401,8 +401,13 @@ public final class RtAccel {
     public record PersistentBuild(PreparedBlas op, RtAccel accel, GpuBuffer backing, GpuBuffer scratch) {
     }
 
-    /** Source and destination of the second, compact-copy phase of a retained BLAS build. */
-    public record PreparedBlasCompaction(PreparedBlas source, PreparedBlas compacted) {
+    /** Immutable classified build whose source allocation is replaced by a compact copy before publication. */
+    public record CompactableBuild(PreparedBlas op, RtAccel accel, GpuBuffer backing, GpuBuffer scratch) {
+    }
+
+    /** Explicit source and destination ownership for the second phase of a compactable BLAS build. */
+    public record PreparedBlasCompaction(PreparedBlas source, RtAccel compactedAccel,
+                                         GpuBuffer compactedBacking) {
     }
 
     /** Allocate a BLAS (AS + backing + scratch) and query sizes, deferring the build to {@link #recordBlasBuilds}. */
@@ -475,8 +480,8 @@ public final class RtAccel {
      * Called only after the compute timeline confirms the build/query submission completed.
      */
     public static PreparedBlasCompaction prepareBlasCompaction(GpuContext ctx, PreparedBlas source) {
-        if (!source.retainedSplit || source.accel.compactionQueryPool == 0L) {
-            throw new IllegalArgumentException("retained BLAS has no pending compaction query");
+        if ((!source.retainedSplit && !source.externalClassSplit) || source.accel.compactionQueryPool == 0L) {
+            throw new IllegalArgumentException("BLAS has no pending compaction query");
         }
         long compactedSize;
         try (MemoryStack stack = MemoryStack.stackPush()) {
@@ -498,14 +503,11 @@ public final class RtAccel {
             backing = ctx.createAsyncBuffer(compactedSize,
                     VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, false,
                     source.label + " compacted backing");
-            compactedAccel = createBlasOn(ctx, stack, backing, compactedSize, true,
+            compactedAccel = createBlasOn(ctx, stack, backing, compactedSize, false,
                     source.label + " compacted");
             OpacityMicromap opacityMicromap = source.accel.detachOpacityMicromap();
             compactedAccel.opacityMicromap = opacityMicromap;
-            PreparedBlas compacted = PreparedBlas.retained(compactedAccel, source.scratch, null,
-                    source.vertexAddr, source.indexAddr, source.maxVertex, source.retainedClassTriangles,
-                    opacityMicromap, source.label);
-            return new PreparedBlasCompaction(source, compacted);
+            return new PreparedBlasCompaction(source, compactedAccel, backing);
         } catch (Throwable t) {
             if (compactedAccel != null) {
                 compactedAccel.destroy();
@@ -639,6 +641,41 @@ public final class RtAccel {
                                                              long indexAddr, int[] classTriangles, String label) {
         PreparedBlas op = prepareTransientBlas(ctx, vertexAddr, vertexCount, indexAddr, classTriangles, label);
         return new PersistentBuild(op, op.accel, op.externalBacking, op.scratch);
+    }
+
+    /** Prepare an immutable classified BLAS that writes a compacted-size query after its BUILD. */
+    public static CompactableBuild prepareCompactableBlasBuild(GpuContext ctx, long vertexAddr, int vertexCount,
+                                                               long indexAddr, int[] classTriangles, String label) {
+        requireClassTriangles(classTriangles);
+        VkDevice vk = ctx.vk();
+        String debugLabel = labelOr(label, "compactable classified BLAS");
+        GpuBuffer backing = null;
+        GpuBuffer scratch = null;
+        RtAccel accel = null;
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            VkAccelerationStructureBuildSizesInfoKHR sizes = queryClassifiedBlasSizes(vk, stack, vertexAddr,
+                    indexAddr, vertexCount, classTriangles, false, false, true);
+            backing = ctx.createAsyncBuffer(sizes.accelerationStructureSize(),
+                    VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, false, debugLabel + " backing");
+            scratch = createScratchBuffer(ctx, sizes.buildScratchSize(), debugLabel + " build scratch");
+            accel = createBlasOn(ctx, stack, backing, sizes.accelerationStructureSize(), false, debugLabel);
+            VkQueryPoolCreateInfo queryCi = VkQueryPoolCreateInfo.calloc(stack).sType$Default()
+                    .queryType(VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR).queryCount(1);
+            java.nio.LongBuffer pQueryPool = stack.mallocLong(1);
+            GpuContext.check(VK10.vkCreateQueryPool(vk, queryCi, null, pQueryPool),
+                    "vkCreateQueryPool(BLAS compacted size)");
+            accel.compactionQueryPool = pQueryPool.get(0);
+            RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_QUERY_POOL, accel.compactionQueryPool,
+                    debugLabel + " compacted-size query");
+            PreparedBlas op = PreparedBlas.externalClassified(accel, scratch, backing, vertexAddr, indexAddr,
+                    vertexCount - 1, classTriangles.clone(), debugLabel, false, false);
+            return new CompactableBuild(op, accel, backing, scratch);
+        } catch (Throwable t) {
+            if (accel != null) accel.destroy();
+            if (scratch != null) scratch.destroy();
+            if (backing != null) backing.destroy();
+            throw t;
+        }
     }
 
     public static UpdatableBuild prepareUpdatableBlasBuild(GpuContext ctx, long vertexAddr, int vertexCount,
@@ -905,7 +942,7 @@ public final class RtAccel {
                                                                                      int[] classTriangles,
                                                                                      boolean allowUpdate) {
         return queryClassifiedBlasSizes(vk, stack, vertexAddr, indexAddr, vertexCount, classTriangles,
-                allowUpdate, false);
+                allowUpdate, false, false);
     }
 
     private static VkAccelerationStructureBuildSizesInfoKHR queryClassifiedBlasSizes(VkDevice vk,
@@ -916,11 +953,25 @@ public final class RtAccel {
                                                                                      int[] classTriangles,
                                                                                      boolean allowUpdate,
                                                                                      boolean fastBuild) {
+        return queryClassifiedBlasSizes(vk, stack, vertexAddr, indexAddr, vertexCount, classTriangles,
+                allowUpdate, fastBuild, false);
+    }
+
+    private static VkAccelerationStructureBuildSizesInfoKHR queryClassifiedBlasSizes(VkDevice vk,
+                                                                                     MemoryStack stack,
+                                                                                     long vertexAddr,
+                                                                                     long indexAddr,
+                                                                                     int vertexCount,
+                                                                                     int[] classTriangles,
+                                                                                     boolean allowUpdate,
+                                                                                     boolean fastBuild,
+                                                                                     boolean allowCompaction) {
         VkAccelerationStructureGeometryKHR.Buffer geometries = classifiedGeometries(stack, vertexAddr,
                 indexAddr, vertexCount);
         VkAccelerationStructureBuildGeometryInfoKHR.Buffer build = VkAccelerationStructureBuildGeometryInfoKHR.calloc(1, stack);
         build.get(0).sType$Default().type(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR)
-                .flags(buildFlags(allowUpdate, fastBuild)).mode(VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR)
+                .flags(buildFlags(allowUpdate, fastBuild)
+                        | (allowCompaction ? VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR : 0))
                 .geometryCount(geometries.capacity()).pGeometries(geometries);
         java.nio.IntBuffer maxPrims = stack.mallocInt(SBT_CLASSES);
         maxPrims.put(classTriangles).flip();
@@ -1213,12 +1264,12 @@ public final class RtAccel {
                                             PreparedBlasCompaction compaction) {
         try (MemoryStack stack = MemoryStack.stackPush();
              RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd,
-                     compaction.source.label + " compact")) {
+                    compaction.source.label + " compact")) {
             accelerationStructureBuildBarrier(cmd, stack);
             VkCopyAccelerationStructureInfoKHR copy = VkCopyAccelerationStructureInfoKHR.calloc(stack)
                     .sType$Default()
                     .src(compaction.source.accel.handle)
-                    .dst(compaction.compacted.accel.handle)
+                    .dst(compaction.compactedAccel.handle)
                     .mode(VK_COPY_ACCELERATION_STRUCTURE_MODE_COMPACT_KHR);
             vkCmdCopyAccelerationStructureKHR(cmd, copy);
         }
@@ -1226,13 +1277,19 @@ public final class RtAccel {
 
     /** Release the uncompacted source after the compact copy reaches timeline completion. */
     public static void finishBlasCompaction(PreparedBlasCompaction compaction) {
-        compaction.source.accel.destroy();
+        destroyPreparedAccel(compaction.source);
     }
 
     /** Release both AS allocations after a failed compact-copy phase. Geometry buffers remain caller-owned. */
     public static void destroyBlasCompaction(PreparedBlasCompaction compaction) {
-        compaction.compacted.accel.destroy();
-        compaction.source.accel.destroy();
+        compaction.compactedAccel.destroy();
+        compaction.compactedBacking.destroy();
+        destroyPreparedAccel(compaction.source);
+    }
+
+    private static void destroyPreparedAccel(PreparedBlas prepared) {
+        prepared.accel.destroy();
+        if (prepared.externalBacking != null) prepared.externalBacking.destroy();
     }
 
     private static void recordTlasBuildRaw(GpuContext ctx, VkCommandBuffer cmd, PreparedTlas tlas) {
@@ -1283,11 +1340,14 @@ public final class RtAccel {
     /** Record the fixed classified geometries as one BUILD or UPDATE. */
     private static void recordClassifiedBlasBuild(GpuContext ctx, VkCommandBuffer cmd, MemoryStack stack,
                                                   PreparedBlas b) {
+        boolean compact = b.requestsCompaction();
+        if (compact) VK10.vkCmdResetQueryPool(cmd, b.accel.compactionQueryPool, 0, 1);
         VkAccelerationStructureGeometryKHR.Buffer geometries = classifiedGeometries(stack, b.vertexAddr,
                 b.indexAddr, b.maxVertex + 1);
         VkAccelerationStructureBuildGeometryInfoKHR.Buffer build = VkAccelerationStructureBuildGeometryInfoKHR.calloc(1, stack);
         build.get(0).sType$Default().type(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR)
-                .flags(buildFlags(b.updatable, b.fastBuild))
+                .flags(buildFlags(b.updatable, b.fastBuild)
+                        | (compact ? VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR : 0))
                 .mode(b.update ? VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR
                         : VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR)
                 .geometryCount(geometries.capacity()).pGeometries(geometries)
@@ -1300,6 +1360,12 @@ public final class RtAccel {
                 b.externalClassTriangles);
         PointerBuffer ppRanges = stack.mallocPointer(1).put(0, ranges.address());
         vkCmdBuildAccelerationStructuresKHR(cmd, build, ppRanges);
+        if (compact) {
+            accelerationStructureBuildBarrier(cmd, stack);
+            vkCmdWriteAccelerationStructuresPropertiesKHR(cmd, stack.longs(b.accel.handle),
+                    VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR,
+                    b.accel.compactionQueryPool, 0);
+        }
     }
 
     /** Record a retained packed multi-geometry BUILD. Retained replacements allocate a new BLAS, so no UPDATE branch. */

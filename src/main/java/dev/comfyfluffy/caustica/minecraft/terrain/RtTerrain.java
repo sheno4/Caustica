@@ -1309,7 +1309,8 @@ public final class RtTerrain {
         SectionTask task = result.task();
         long key = task.key;
         SceneGeometryKey geometryKey = sectionGeometryKey(key);
-        operations.add(new SceneGeometrySink.Put(geometryKey, result.geometry()));
+        operations.add(new SceneGeometrySink.Put(geometryKey, result.geometry(),
+                SceneGeometrySink.BuildOptions.MINIMIZE_MEMORY));
         operations.add(new SceneGeometrySink.Place(geometryKey, geometryKey,
                 GeometryTransform.translation(task.sox, task.soy, task.soz), 0xff));
         puts.add(result);
