@@ -185,6 +185,9 @@ public final class RtTerrain {
     // When the last streaming pass ran on a render frame — the tick fallback watches this (see
     // STREAM_FALLBACK_AFTER_NANOS).
     private long lastFrameStreamNanos;
+    // Unused capacity from the current render frame's early completion drain. The frame geometry
+    // submission consumes it once after dispatch, allowing fast worker results into the same submission.
+    private final LateCompletionBudget lateCompletionBudget = new LateCompletionBudget();
 
     private boolean isPublished(long key) {
         return publishedSections.containsKey(key);
@@ -257,8 +260,15 @@ public final class RtTerrain {
      * and dispatch immutable snapshots to workers, bounded by configured per-pass counts.
      */
     public static void frame(GpuContext ctx) {
+        INSTANCE.lateCompletionBudget.reset();
         RtFrameStats.FRAME.max("terrainPendingGeometryGroups", INSTANCE.pendingGeometryGroups.size());
         if (RtMaterialRegistry.INSTANCE.isReady()) INSTANCE.frameStream(ctx);
+    }
+
+    /** Poll fast worker completions once more, then drain all ready terrain groups into this frame. */
+    public static void submitFrameGeometry(GpuContext ctx, SceneGeometrySink sink) {
+        INSTANCE.finishFrameStream(ctx);
+        INSTANCE.submitPendingGeometry(sink);
     }
 
     public static void shutdown(GpuContext ctx) {
@@ -372,7 +382,8 @@ public final class RtTerrain {
         // streamed recently — loading screen, no world rendering — drive it from here with the bigger
         // bounded fallback pass so the world still fills.
         if (System.nanoTime() - lastFrameStreamNanos > STREAM_FALLBACK_AFTER_NANOS) {
-            stream(ctx);
+            lateCompletionBudget.reset();
+            stream(ctx, completionResultsPerPass());
         }
     }
 
@@ -383,7 +394,26 @@ public final class RtTerrain {
             return;
         }
         lastFrameStreamNanos = System.nanoTime();
-        stream(ctx);
+        int completionCap = completionResultsPerPass();
+        lateCompletionBudget.arm(completionCap, stream(ctx, completionCap));
+    }
+
+    static final class LateCompletionBudget {
+        private int remaining;
+
+        void arm(int cap, int consumed) {
+            remaining = cap - consumed;
+        }
+
+        int consume() {
+            int result = remaining;
+            remaining = 0;
+            return result;
+        }
+
+        void reset() {
+            remaining = 0;
+        }
     }
 
     /**
@@ -391,18 +421,18 @@ public final class RtTerrain {
      * new section snapshots to the worker pool. Per-pass result and dispatch caps bound render-thread
      * work. Skips silently when there is nothing to do (no stats row).
      */
-    private void stream(GpuContext ctx) {
+    private int stream(GpuContext ctx, int completionCap) {
         Minecraft mc = Minecraft.getInstance();
         ClientLevel level = mc.level;
         if (level == null || mc.player == null) {
-            return;
+            return 0;
         }
         if (reextract.isEmpty() && missing.isEmpty()
                 && completedBuilds.isEmpty()
                 && !retainedLightScene.hasCompletions()
                 && !lightHierarchyDirty
                 && removed.isEmpty() && prepared.isEmpty()) {
-            return;
+            return 0;
         }
         int pbx = mc.player.getBlockX();
         int pby = mc.player.getBlockY();
@@ -411,9 +441,10 @@ public final class RtTerrain {
 
         ClientChunkCache chunkSource = level.getChunkSource();
 
+        int drained;
         // Drain completed CPU builds first — publication is visible fill progress, so it gets priority.
         try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("terrain.drainCompletion")) {
-            drainCompletedBuilds(ctx, prepared, removed, completionResultsPerPass());
+            drained = drainCompletedBuilds(ctx, prepared, removed, completionCap);
         }
 
         if (!removed.isEmpty() || !prepared.isEmpty()) {
@@ -452,6 +483,33 @@ public final class RtTerrain {
 
         flushLightHierarchyUpdate(ctx);
 
+        return drained;
+    }
+
+    private void finishFrameStream(GpuContext ctx) {
+        int completionBudget = lateCompletionBudget.consume();
+        if (completionBudget == 0 || !RtMaterialRegistry.INSTANCE.isReady()) {
+            return;
+        }
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.level == null || mc.player == null) {
+            return;
+        }
+        try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("terrain.drainCompletion")) {
+            drainCompletedBuilds(ctx, prepared, removed, completionBudget);
+        }
+        if (removed.isEmpty() && prepared.isEmpty()) {
+            return;
+        }
+        int pbx = mc.player.getBlockX();
+        int pby = mc.player.getBlockY();
+        int pbz = mc.player.getBlockZ();
+        try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("terrain.publish")) {
+            applyBuildChanges(ctx, prepared, removed, shouldRebase(pbx, pby, pbz), pbx, pby, pbz);
+            removed.clear();
+            prepared.clear();
+        }
+        flushLightHierarchyUpdate(ctx);
     }
 
     private void syncDesiredWindow(ClientChunkCache chunkSource, int pcx, int psy, int pcz,
@@ -1111,8 +1169,8 @@ public final class RtTerrain {
      * whose token no longer matches {@link #inFlight} is stale and discarded instead of entering the
      * retained-scene submission queue.
      */
-    private void drainCompletedBuilds(GpuContext ctx, List<SectionResult> prepared, LongOpenHashSet removed,
-                                      int resultCap) {
+    private int drainCompletedBuilds(GpuContext ctx, List<SectionResult> prepared, LongOpenHashSet removed,
+                                     int resultCap) {
         int remaining = resultCap;
         while (remaining > 0) {
             SectionResult result = completedBuilds.poll();
@@ -1172,6 +1230,7 @@ public final class RtTerrain {
                 }
             }
         }
+        return resultCap - remaining;
     }
 
     private void completeDirtyGroupMember(GpuContext ctx, DirtyGroup group) {
@@ -1574,6 +1633,7 @@ public final class RtTerrain {
         prepared.clear();
         pendingGeometryGroups.clear();
         nextPublicationToken = 0L;
+        lateCompletionBudget.reset();
     }
 
     private static long columnKey(int scx, int scz) {

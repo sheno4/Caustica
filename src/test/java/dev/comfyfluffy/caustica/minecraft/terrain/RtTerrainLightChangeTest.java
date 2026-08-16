@@ -49,6 +49,22 @@ final class RtTerrainLightChangeTest {
     }
 
     @Test
+    void lateDrainBudgetIsBoundedOneShotAndDoesNotCarryAcrossReset() {
+        RtTerrain.LateCompletionBudget budget = new RtTerrain.LateCompletionBudget();
+
+        budget.arm(8, 3);
+        assertEquals(5, budget.consume());
+        assertEquals(0, budget.consume());
+
+        budget.arm(8, 2);
+        budget.reset();
+        assertEquals(0, budget.consume());
+
+        budget.arm(8, 8);
+        assertEquals(0, budget.consume());
+    }
+
+    @Test
     void emptyStateIsAnAcknowledgedDropTransition() {
         assertTrue(RtTerrain.emptyAfterDrop(true));
         assertFalse(RtTerrain.emptyAfterDrop(false));

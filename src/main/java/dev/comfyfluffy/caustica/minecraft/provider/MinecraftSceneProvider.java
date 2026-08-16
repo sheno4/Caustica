@@ -20,7 +20,8 @@ import java.util.function.Consumer;
 
 public final class MinecraftSceneProvider implements SceneProvider, RtSceneSource {
     public static final ResourceId ID = ResourceId.of("caustica", "minecraft_scene");
-    private static final Consumer<SceneGeometrySink> TERRAIN_GEOMETRY = RtTerrain::submitGeometry;
+    private static final Consumer<SceneGeometrySink> TERRAIN_GEOMETRY =
+            sink -> RtTerrain.submitFrameGeometry(GpuContext.currentOrNull(), sink);
     private static final Consumer<SceneFrameContext> ENTITY_GEOMETRY = RtEntities.INSTANCE::submitGeometry;
 
     @Override
