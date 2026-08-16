@@ -4,18 +4,41 @@ import java.util.Objects;
 
 /** A stable, host-neutral resource name shared by every public engine registry. */
 public record ResourceId(String namespace, String path) implements Comparable<ResourceId> {
-    private static final String NAMESPACE_PATTERN = "[a-z0-9_.-]+";
-    private static final String PATH_PATTERN = "[a-z0-9/._-]+";
-
     public ResourceId {
         Objects.requireNonNull(namespace, "namespace");
         Objects.requireNonNull(path, "path");
-        if (!namespace.matches(NAMESPACE_PATTERN)) {
+        if (!validNamespace(namespace)) {
             throw new IllegalArgumentException("invalid resource namespace: " + namespace);
         }
-        if (!path.matches(PATH_PATTERN)) {
+        if (!validPath(path)) {
             throw new IllegalArgumentException("invalid resource path: " + path);
         }
+    }
+
+    private static boolean validNamespace(String value) {
+        if (value.isEmpty()) return false;
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+                    || c == '_' || c == '.' || c == '-') {
+                continue;
+            }
+            return false;
+        }
+        return true;
+    }
+
+    private static boolean validPath(String value) {
+        if (value.isEmpty()) return false;
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+                    || c == '/' || c == '_' || c == '.' || c == '-') {
+                continue;
+            }
+            return false;
+        }
+        return true;
     }
 
     public static ResourceId of(String namespace, String path) {
