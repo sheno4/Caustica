@@ -12,6 +12,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -125,6 +126,163 @@ final class RtSceneGeometryGroupSchedulerTest {
     }
 
     @Test
+    void disjointRevisionsOfTheSameGroupSerialize() {
+        RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
+        scheduler.submit(group(FIRST, 1L, new RtSceneGeometryManager.Put(1, payload())));
+        RtSceneGeometryManager.PreparedGroup first = scheduler.startable().getFirst().prepared();
+        scheduler.submit(group(FIRST, 2L, new RtSceneGeometryManager.Put(2, payload())));
+
+        assertEquals(List.of(), scheduler.startable());
+        scheduler.complete(first.barrier, true);
+        assertEquals(2L, scheduler.startable().getFirst().prepared().revision);
+    }
+
+    @Test
+    void placementRetargetMaintainsStableForwardAndReverseLinks() {
+        RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
+        RtSceneGeometryManager.ResidentId firstResident = resident(SOURCE, 10);
+        RtSceneGeometryManager.ResidentId secondResident = resident(SOURCE, 20);
+        RtSceneGeometryManager.InstanceId instance = instance(SOURCE, 3);
+        scheduler.putPublishedResident(firstResident, new FakeResident(), false);
+        scheduler.putPublishedResident(secondResident, new FakeResident(), false);
+        scheduler.putPublishedPlacement(instance,
+                new RtSceneGeometryManager.Placement(SceneGeometryKey.of(10), identity(), 0xff));
+        RtSceneGeometryManager.PublishedPlacement published = scheduler.publishedPlacement(instance);
+
+        scheduler.putPublishedPlacement(instance,
+                new RtSceneGeometryManager.Placement(SceneGeometryKey.of(20), identity(), 0xff));
+
+        assertSame(published, scheduler.publishedPlacement(instance));
+        assertEquals(0, scheduler.publishedSlot(firstResident).placements.size());
+        assertEquals(1, scheduler.publishedSlot(secondResident).placements.size());
+        assertSame(scheduler.publishedSlot(secondResident), published.resident);
+        scheduler.assertPublishedIndexConsistent();
+
+        scheduler.removePublishedPlacement(instance);
+        assertNull(scheduler.publishedPlacement(instance));
+        assertEquals(0, scheduler.publishedSlot(secondResident).placements.size());
+        scheduler.assertPublishedIndexConsistent();
+    }
+
+    @Test
+    void dropRequiresEveryMemberToBeRemovedOrRetargeted() {
+        RtSceneGeometryManager.GroupScheduler survivor = publishedPair();
+        assertThrows(IllegalArgumentException.class, () -> survivor.submit(group(FIRST,
+                new RtSceneGeometryManager.Drop(10))));
+
+        RtSceneGeometryManager.GroupScheduler removed = publishedPair();
+        removed.submit(group(FIRST, new RtSceneGeometryManager.Drop(10), new RtSceneGeometryManager.Remove(3)));
+        assertEquals(1, removed.startable().size());
+
+        RtSceneGeometryManager.GroupScheduler retargeted = publishedPair();
+        retargeted.putPublishedResident(resident(SOURCE, 20), new FakeResident(), false);
+        retargeted.submit(group(FIRST, new RtSceneGeometryManager.Drop(10),
+                new RtSceneGeometryManager.Place(3, 20, identity(), 0xff)));
+        assertEquals(1, retargeted.startable().size());
+    }
+
+    @Test
+    void queuedBarrierIsRevalidatedAfterRunningBarrierChangesPublishedState() {
+        RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
+        RtSceneGeometryManager.ResidentId resident = resident(SOURCE, 10);
+        scheduler.putPublishedResident(resident, new FakeResident(), false);
+        scheduler.submit(group(FIRST, new RtSceneGeometryManager.Drop(10)));
+        RtSceneGeometryManager.PreparedGroup dropping = scheduler.startable().getFirst().prepared();
+        scheduler.submit(group(SECOND, new RtSceneGeometryManager.Place(3, 10, identity(), 0xff)));
+
+        scheduler.removePublishedResident(resident);
+        scheduler.complete(dropping.barrier, true);
+
+        assertThrows(IllegalArgumentException.class, scheduler::startable);
+    }
+
+    @Test
+    void queuedDropIsRevalidatedAfterRunningPlacementPublishes() {
+        RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
+        RtSceneGeometryManager.ResidentId resident = resident(SOURCE, 10);
+        RtSceneGeometryManager.InstanceId instance = instance(SOURCE, 3);
+        RtSceneGeometryManager.Placement placement =
+                new RtSceneGeometryManager.Placement(SceneGeometryKey.of(10), identity(), 0xff);
+        scheduler.putPublishedResident(resident, new FakeResident(), false);
+        scheduler.submit(group(FIRST, new RtSceneGeometryManager.Place(3, 10, identity(), 0xff)));
+        RtSceneGeometryManager.PreparedGroup placing = scheduler.startable().getFirst().prepared();
+        scheduler.submit(group(SECOND, new RtSceneGeometryManager.Drop(10)));
+
+        scheduler.putPublishedPlacement(instance, placement);
+        scheduler.complete(placing.barrier, true);
+
+        assertThrows(IllegalArgumentException.class, scheduler::startable);
+    }
+
+    @Test
+    void compatibleDoubleReplacementKeepsOnlyTheImmediatePreviousResident() {
+        RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
+        RtSceneGeometryManager.ResidentId id = resident(SOURCE, 10);
+        FakeResident first = new FakeResident();
+        FakeResident second = new FakeResident();
+        FakeResident third = new FakeResident();
+        scheduler.putPublishedResident(id, first, false);
+
+        assertEquals(List.of(), scheduler.putPublishedResident(id, second, true));
+        assertSame(first, scheduler.publishedSlot(id).previous);
+        assertEquals(List.of(first), scheduler.putPublishedResident(id, third, true));
+        assertSame(second, scheduler.publishedSlot(id).previous);
+        assertSame(third, scheduler.publishedSlot(id).current);
+
+        AtomicReference<RtSceneGeometryManager.GroupResident> drained = new AtomicReference<>();
+        scheduler.drainPreviousResidents(drained::set);
+        assertSame(second, drained.get());
+        assertNull(scheduler.publishedSlot(id).previous);
+    }
+
+    @Test
+    void incompatibleReplacementRetiresCurrentAndOutstandingPrevious() {
+        RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
+        RtSceneGeometryManager.ResidentId id = resident(SOURCE, 10);
+        FakeResident first = new FakeResident();
+        FakeResident second = new FakeResident();
+        FakeResident third = new FakeResident();
+        scheduler.putPublishedResident(id, first, false);
+        scheduler.putPublishedResident(id, second, true);
+
+        assertEquals(List.of(second, first), scheduler.putPublishedResident(id, third, false));
+        assertNull(scheduler.publishedSlot(id).previous);
+        assertSame(third, scheduler.publishedSlot(id).current);
+    }
+
+    @Test
+    void clearSourceIsIsolatedAndDestroyReleasesRemainingResidentsOnce() {
+        ResourceId otherSource = ResourceId.of("test", "other");
+        RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
+        FakeResident sourceCurrent = new FakeResident();
+        FakeResident sourcePrevious = new FakeResident();
+        FakeResident other = new FakeResident();
+        RtSceneGeometryManager.ResidentId sourceId = resident(SOURCE, 10);
+        RtSceneGeometryManager.ResidentId otherId = resident(otherSource, 10);
+        scheduler.putPublishedResident(sourceId, sourcePrevious, false);
+        scheduler.putPublishedResident(sourceId, sourceCurrent, true);
+        scheduler.putPublishedResident(otherId, other, false);
+        scheduler.putPublishedPlacement(instance(SOURCE, 3),
+                new RtSceneGeometryManager.Placement(SceneGeometryKey.of(10), identity(), 0xff));
+        scheduler.putPublishedPlacement(instance(otherSource, 3),
+                new RtSceneGeometryManager.Placement(SceneGeometryKey.of(10), identity(), 0xff));
+
+        List<RtSceneGeometryManager.GroupResident> cleared = scheduler.clearSource(SOURCE);
+
+        assertTrue(cleared.contains(sourceCurrent));
+        assertTrue(cleared.contains(sourcePrevious));
+        assertNull(scheduler.publishedSlot(sourceId));
+        assertTrue(scheduler.publishedSlot(otherId) != null);
+        scheduler.assertPublishedIndexConsistent();
+
+        scheduler.destroyAfterDeviceIdle(java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>()),
+                (prepared, destroyed) -> { });
+        assertEquals(1, other.destroyCount);
+        assertEquals(0, sourceCurrent.destroyCount);
+        assertEquals(0, sourcePrevious.destroyCount);
+    }
+
+    @Test
     void placementCannotDependOnUnpublishedResident() {
         RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
         assertThrows(IllegalArgumentException.class, () -> scheduler.submit(
@@ -161,6 +319,20 @@ final class RtSceneGeometryGroupSchedulerTest {
         assertEquals(0, scheduler.startable().size());
         scheduler.complete(running.barrier, false);
         assertEquals(1, scheduler.startable().size());
+    }
+
+    @Test
+    void clearingSourceKeepsRunningGroupKeyReservedUntilTerminal() {
+        RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
+        scheduler.submit(group(FIRST, new RtSceneGeometryManager.Put(10, payload())));
+        RtSceneGeometryManager.PreparedGroup running = scheduler.startable().getFirst().prepared();
+
+        scheduler.clearSource(SOURCE);
+        scheduler.submit(group(FIRST, new RtSceneGeometryManager.Put(20, payload())));
+
+        assertEquals(List.of(), scheduler.startable());
+        scheduler.complete(running.barrier, false);
+        assertEquals(FIRST, scheduler.startable().getFirst().key());
     }
 
     @Test
@@ -226,6 +398,44 @@ final class RtSceneGeometryGroupSchedulerTest {
                 SceneMesh.UvLayout.PER_VERTEX, new float[] {0, 0, 1, 0, 0, 1},
                 List.of(SceneMesh.TriangleSurface.surface(new MaterialHandle(ResourceId.of("test", "surface")))));
         return new RtSceneGeometryManager.ProviderPayload(mesh);
+    }
+
+    private static RtSceneGeometryManager.GroupScheduler publishedPair() {
+        RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
+        scheduler.putPublishedResident(resident(SOURCE, 10), new FakeResident(), false);
+        scheduler.putPublishedPlacement(instance(SOURCE, 3),
+                new RtSceneGeometryManager.Placement(SceneGeometryKey.of(10), identity(), 0xff));
+        return scheduler;
+    }
+
+    private static RtSceneGeometryManager.ResidentId resident(ResourceId source, long key) {
+        return new RtSceneGeometryManager.ResidentId(source, SceneGeometryKey.of(key));
+    }
+
+    private static RtSceneGeometryManager.InstanceId instance(ResourceId source, long key) {
+        return new RtSceneGeometryManager.InstanceId(source, SceneGeometryKey.of(key));
+    }
+
+    private static final class FakeResident implements RtSceneGeometryManager.GroupResident {
+        private final dev.comfyfluffy.caustica.rt.RtGpuExecutor.TrackedGraphicsUse graphicsUse =
+                new dev.comfyfluffy.caustica.rt.RtGpuExecutor.TrackedGraphicsUse();
+        int destroyCount;
+
+        @Override
+        public dev.comfyfluffy.caustica.rt.RtGpuExecutor.TrackedGraphicsUse graphicsUse() {
+            return graphicsUse;
+        }
+
+        @Override
+        public void append(RtSceneGeometryManager.FrameUpdate update, float[] transform, int mask,
+                           RtSceneGeometryManager.InstanceKey key, RtSceneGeometryManager.GroupResident previous,
+                           boolean resetTransformMotion) {
+        }
+
+        @Override
+        public void destroy() {
+            destroyCount++;
+        }
     }
 
     private static float[] identity() {

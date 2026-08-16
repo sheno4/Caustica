@@ -168,8 +168,9 @@ public final class RtSceneGeometryManager {
     /** Publishes completed groups and snapshots their geometry for this frame. */
     public FrameUpdate beginUpdate(GpuContext ctx, SceneOrigin origin) {
         progress(ctx);
-        TableSlot table = selectTable(ctx, 0);
-        FrameUpdate update = new FrameUpdate(ctx, table, origin);
+        int placementCount = groupScheduler.publishedPlacementCount();
+        TableSlot table = selectTable(ctx, placementCount);
+        FrameUpdate update = new FrameUpdate(ctx, table, origin, placementCount);
         try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("geometry.snapshotAppend")) {
             appendPublishedGroups(update);
             update.finish();
@@ -393,20 +394,13 @@ public final class RtSceneGeometryManager {
             }
             for (GroupCandidate candidate : terminal.prepared.candidates) {
                 ResidentId residentId = new ResidentId(terminal.prepared.key.source(), candidate.key);
-                GroupResident previous = groupScheduler.putPublishedResident(residentId, candidate.resident);
-                if (previous != null && !candidate.resetMotion) {
-                    GroupResident superseded = groupScheduler.putPreviousResident(residentId, previous);
-                    if (superseded != null) ctx.gpuExecutor().retireAfterGraphics(superseded.graphicsUse(), superseded::destroy);
+                for (GroupResident retired : groupScheduler.putPublishedResident(
+                        residentId, candidate.resident, !candidate.resetMotion)) {
+                    ctx.gpuExecutor().retireAfterGraphics(retired.graphicsUse(), retired::destroy);
                 }
-                else if (previous != null) ctx.gpuExecutor().retireAfterGraphics(previous.graphicsUse(), previous::destroy);
             }
             RtFrameStats.FRAME.count("geometryGroupsPublished", 1);
             RtFrameStats.FRAME.count("geometryPutsPublished", terminal.prepared.candidates.size());
-            for (SceneGeometryKey drop : terminal.prepared.diff.drops) {
-                GroupResident previous = groupScheduler.removePublishedResident(
-                        new ResidentId(terminal.prepared.key.source(), drop));
-                if (previous != null) ctx.gpuExecutor().retireAfterGraphics(previous.graphicsUse(), previous::destroy);
-            }
             for (Map.Entry<SceneGeometryKey, Placement> placement : terminal.prepared.diff.placements.entrySet()) {
                 groupScheduler.putPublishedPlacement(new InstanceId(terminal.prepared.key.source(), placement.getKey()),
                         placement.getValue());
@@ -414,6 +408,12 @@ public final class RtSceneGeometryManager {
             for (SceneGeometryKey remove : terminal.prepared.diff.removes) {
                 groupScheduler.removePublishedPlacement(new InstanceId(terminal.prepared.key.source(), remove));
                 instanceStates.remove(new InstanceKey(terminal.prepared.key.source(), remove));
+            }
+            for (SceneGeometryKey drop : terminal.prepared.diff.drops) {
+                for (GroupResident retired : groupScheduler.removePublishedResident(
+                        new ResidentId(terminal.prepared.key.source(), drop))) {
+                    ctx.gpuExecutor().retireAfterGraphics(retired.graphicsUse(), retired::destroy);
+                }
             }
             groupScheduler.complete(terminal.prepared.barrier, true);
             if (terminal.prepared.barrier.acknowledgment != null) {
@@ -424,20 +424,14 @@ public final class RtSceneGeometryManager {
     }
 
     private void appendPublishedGroups(FrameUpdate update) {
-        for (Map.Entry<InstanceId, Placement> placementEntry : groupScheduler.publishedPlacements()) {
-            Placement placement = placementEntry.getValue();
-            InstanceId instanceId = placementEntry.getKey();
-            ResidentId residentId = new ResidentId(instanceId.source, placement.residentKey);
-            GroupResident resident = groupScheduler.publishedResident(residentId);
-            if (resident == null) continue;
-            GroupResident previous = groupScheduler.previousResident(residentId);
-            InstanceKey key = new InstanceKey(instanceId.source, instanceId.key);
-            resident.append(update, placement.transformFor(update.origin), placement.mask, key, previous,
-                    resetTransformMotion(instanceStates.containsKey(key)));
-            if (previous != null) update.historyUses.add(previous);
+        for (PublishedPlacement published : groupScheduler.publishedPlacements()) {
+            PublishedResidentSlot slot = published.resident;
+            Placement placement = published.placement;
+            slot.current.append(update, placement.transformFor(update.origin), placement.mask, published.historyKey,
+                    slot.previous, resetTransformMotion(instanceStates.containsKey(published.historyKey)));
+            if (slot.previous != null) update.historyUses.add(slot.previous);
         }
-        for (GroupResident previous : groupScheduler.previousResidents()) update.historyRetire.add(previous);
-        groupScheduler.clearPreviousResidents();
+        groupScheduler.drainPreviousResidents(update.historyRetire::add);
     }
 
     private void retireCancelledSources(GpuContext ctx, PreparedGroup prepared) {
@@ -475,16 +469,18 @@ public final class RtSceneGeometryManager {
         private final GpuContext ctx;
         private final TableSlot table;
         private final SceneOrigin origin;
-        private final ArrayList<RtAccel.Instance> instances = new ArrayList<>();
-        private final ArrayList<GroupResident> persistentUses = new ArrayList<>();
+        private final ArrayList<RtAccel.Instance> instances;
+        private final ArrayList<GroupResident> persistentUses;
         private final Set<GroupResident> historyUses = new LinkedHashSet<>();
         private final Set<GroupResident> historyRetire = new LinkedHashSet<>();
         private int count;
 
-        private FrameUpdate(GpuContext ctx, TableSlot table, SceneOrigin origin) {
+        private FrameUpdate(GpuContext ctx, TableSlot table, SceneOrigin origin, int placementCount) {
             this.ctx = ctx;
             this.table = table;
             this.origin = origin;
+            this.instances = new ArrayList<>(placementCount);
+            this.persistentUses = new ArrayList<>(placementCount);
         }
 
         private int appendRecord(long primitiveAddress, long indexAddress, long textureCoordinateAddress,
@@ -724,14 +720,14 @@ public final class RtSceneGeometryManager {
         }
     }
 
-    private record InstanceKey(ResourceId provider, SceneGeometryKey key) {
+    record InstanceKey(ResourceId provider, SceneGeometryKey key) {
     }
 
     private record InstanceState(float[] transform, SceneOrigin origin) {
     }
 
     /** Private common lifetime for every resident published through an atomic group. */
-    private interface GroupResident {
+    interface GroupResident {
         TrackedGraphicsUse graphicsUse();
 
         void append(FrameUpdate update, float[] transform, int mask, InstanceKey key, GroupResident previous,
@@ -785,8 +781,34 @@ public final class RtSceneGeometryManager {
     }
 
     /** Source-qualified identity remains stable even when a source regroups its atomic updates. */
-    private record ResidentId(ResourceId source, SceneGeometryKey key) { }
-    private record InstanceId(ResourceId source, SceneGeometryKey key) { }
+    record ResidentId(ResourceId source, SceneGeometryKey key) { }
+    record InstanceId(ResourceId source, SceneGeometryKey key) { }
+
+    static final class PublishedResidentSlot {
+        final ResidentId id;
+        final Set<PublishedPlacement> placements = new LinkedHashSet<>();
+        GroupResident current;
+        GroupResident previous;
+
+        PublishedResidentSlot(ResidentId id, GroupResident current) {
+            this.id = id;
+            this.current = current;
+        }
+    }
+
+    static final class PublishedPlacement {
+        final InstanceId id;
+        final InstanceKey historyKey;
+        Placement placement;
+        PublishedResidentSlot resident;
+
+        PublishedPlacement(InstanceId id, Placement placement, PublishedResidentSlot resident) {
+            this.id = id;
+            this.historyKey = new InstanceKey(id.source, id.key);
+            this.placement = placement;
+            this.resident = resident;
+        }
+    }
 
     /** Payload-level delta captured by one atomic barrier. */
     static final class GroupDiff {
@@ -1086,12 +1108,12 @@ public final class RtSceneGeometryManager {
 
     /** Global resident ownership with transient group barriers and conflict reservations. */
     static final class GroupScheduler {
-        private final Map<ResidentId, GroupResident> publishedResidents = new LinkedHashMap<>();
-        private final Map<InstanceId, Placement> publishedPlacements = new LinkedHashMap<>();
-        private final Map<ResidentId, GroupResident> previousResidents = new LinkedHashMap<>();
+        private final Map<ResidentId, PublishedResidentSlot> publishedResidents = new LinkedHashMap<>();
+        private final Map<InstanceId, PublishedPlacement> publishedPlacements = new LinkedHashMap<>();
         private final Map<GroupKey, Barrier> pending = new LinkedHashMap<>();
         private final Set<ResidentId> reservedResidents = new LinkedHashSet<>();
         private final Set<InstanceId> reservedInstances = new LinkedHashSet<>();
+        private final Set<GroupKey> reservedGroups = new LinkedHashSet<>();
         private final Set<Barrier> running = new LinkedHashSet<>();
         private final Map<GroupKey, Long> latestAccepted = new HashMap<>();
 
@@ -1193,11 +1215,11 @@ public final class RtSceneGeometryManager {
                     }
                 }
                 for (SceneGeometryKey drop : barrier.diff.drops) {
-                    for (Map.Entry<InstanceId, Placement> published : publishedPlacements.entrySet()) {
-                        if (!published.getKey().source.equals(barrier.key.source)
-                                || !published.getValue().residentKey.equals(drop)) continue;
-                        Placement replacement = barrier.diff.placements.get(published.getKey().key);
-                        if (!barrier.diff.removes.contains(published.getKey().key)
+                    PublishedResidentSlot slot = publishedResidents.get(new ResidentId(barrier.key.source, drop));
+                    if (slot == null) continue;
+                    for (PublishedPlacement published : slot.placements) {
+                        Placement replacement = barrier.diff.placements.get(published.id.key);
+                        if (!barrier.diff.removes.contains(published.id.key)
                                 && (replacement == null || replacement.residentKey.equals(drop))) {
                             throw new IllegalArgumentException(
                                     "geometry drop leaves a published placement referencing resident " + drop);
@@ -1214,7 +1236,8 @@ public final class RtSceneGeometryManager {
             var iterator = pending.values().iterator();
             while (iterator.hasNext()) {
                 Barrier barrier = iterator.next();
-                if (intersects(barrier.residents, reservedResidents)
+                if (reservedGroups.contains(barrier.key)
+                        || intersects(barrier.residents, reservedResidents)
                         || intersects(barrier.instances, reservedInstances)) {
                     continue;
                 }
@@ -1227,6 +1250,7 @@ public final class RtSceneGeometryManager {
                 iterator.remove();
                 reservedResidents.addAll(barrier.residents);
                 reservedInstances.addAll(barrier.instances);
+                reservedGroups.add(barrier.key);
                 running.add(barrier);
                 PreparedGroup prepared = new PreparedGroup(barrier);
                 barrier.prepared = prepared;
@@ -1268,21 +1292,21 @@ public final class RtSceneGeometryManager {
                 }
             }
             ArrayList<GroupResident> retired = new ArrayList<>();
-            var residents = publishedResidents.entrySet().iterator();
-            while (residents.hasNext()) {
-                Map.Entry<ResidentId, GroupResident> entry = residents.next();
-                if (entry.getKey().source.equals(source)) {
-                    retired.add(entry.getValue());
-                    residents.remove();
+            var placements = publishedPlacements.values().iterator();
+            while (placements.hasNext()) {
+                PublishedPlacement placement = placements.next();
+                if (placement.id.source.equals(source)) {
+                    placement.resident.placements.remove(placement);
+                    placements.remove();
                 }
             }
-            publishedPlacements.entrySet().removeIf(entry -> entry.getKey().source.equals(source));
-            var previous = previousResidents.entrySet().iterator();
-            while (previous.hasNext()) {
-                Map.Entry<ResidentId, GroupResident> entry = previous.next();
-                if (entry.getKey().source.equals(source)) {
-                    retired.add(entry.getValue());
-                    previous.remove();
+            var residents = publishedResidents.values().iterator();
+            while (residents.hasNext()) {
+                PublishedResidentSlot slot = residents.next();
+                if (slot.id.source.equals(source)) {
+                    retired.add(slot.current);
+                    if (slot.previous != null) retired.add(slot.previous);
+                    residents.remove();
                 }
             }
             retired.removeIf(deferred::contains);
@@ -1293,32 +1317,122 @@ public final class RtSceneGeometryManager {
             if (!running.remove(barrier)) return;
             reservedResidents.removeAll(barrier.residents);
             reservedInstances.removeAll(barrier.instances);
+            reservedGroups.remove(barrier.key);
         }
 
-        GroupResident publishedResident(ResidentId id) { return publishedResidents.get(id); }
-        GroupResident putPublishedResident(ResidentId id, GroupResident resident) { return publishedResidents.put(id, resident); }
-        GroupResident removePublishedResident(ResidentId id) { return publishedResidents.remove(id); }
-        GroupResident putPreviousResident(ResidentId id, GroupResident resident) { return previousResidents.put(id, resident); }
-        GroupResident previousResident(ResidentId id) { return previousResidents.get(id); }
-        java.util.Collection<GroupResident> previousResidents() { return List.copyOf(previousResidents.values()); }
-        void clearPreviousResidents() { previousResidents.clear(); }
-        void putPublishedPlacement(InstanceId id, Placement placement) { publishedPlacements.put(id, placement); }
-        void removePublishedPlacement(InstanceId id) { publishedPlacements.remove(id); }
-        Set<Map.Entry<InstanceId, Placement>> publishedPlacements() { return Set.copyOf(publishedPlacements.entrySet()); }
+        GroupResident publishedResident(ResidentId id) {
+            PublishedResidentSlot slot = publishedResidents.get(id);
+            return slot == null ? null : slot.current;
+        }
+
+        List<GroupResident> putPublishedResident(ResidentId id, GroupResident resident, boolean retainPrevious) {
+            PublishedResidentSlot slot = publishedResidents.get(id);
+            if (slot == null) {
+                publishedResidents.put(id, new PublishedResidentSlot(id, resident));
+                return List.of();
+            }
+            if (retainPrevious) {
+                GroupResident retired = slot.previous;
+                slot.previous = slot.current;
+                slot.current = resident;
+                return retired == null ? List.of() : List.of(retired);
+            } else {
+                GroupResident current = slot.current;
+                GroupResident previous = slot.previous;
+                slot.previous = null;
+                slot.current = resident;
+                return previous == null ? List.of(current) : List.of(current, previous);
+            }
+        }
+
+        List<GroupResident> removePublishedResident(ResidentId id) {
+            PublishedResidentSlot slot = publishedResidents.get(id);
+            if (slot == null) return List.of();
+            if (!slot.placements.isEmpty()) {
+                throw new IllegalStateException("published resident still has placements " + id);
+            }
+            publishedResidents.remove(id);
+            return slot.previous == null ? List.of(slot.current) : List.of(slot.current, slot.previous);
+        }
+
+        void putPublishedPlacement(InstanceId id, Placement placement) {
+            PublishedResidentSlot target = publishedResidents.get(new ResidentId(id.source, placement.residentKey));
+            if (target == null) throw new IllegalStateException("published placement target is absent " + id);
+            PublishedPlacement published = publishedPlacements.get(id);
+            if (published == null) {
+                published = new PublishedPlacement(id, placement, target);
+                publishedPlacements.put(id, published);
+                target.placements.add(published);
+                return;
+            }
+            if (published.resident != target) {
+                published.resident.placements.remove(published);
+                target.placements.add(published);
+                published.resident = target;
+            }
+            published.placement = placement;
+        }
+
+        void removePublishedPlacement(InstanceId id) {
+            PublishedPlacement published = publishedPlacements.remove(id);
+            if (published != null) published.resident.placements.remove(published);
+        }
+
+        java.util.Collection<PublishedPlacement> publishedPlacements() { return publishedPlacements.values(); }
+
+        void drainPreviousResidents(Consumer<GroupResident> consumer) {
+            for (PublishedResidentSlot slot : publishedResidents.values()) {
+                if (slot.previous == null) continue;
+                consumer.accept(slot.previous);
+                slot.previous = null;
+            }
+        }
+
+        PublishedResidentSlot publishedSlot(ResidentId id) { return publishedResidents.get(id); }
+        PublishedPlacement publishedPlacement(InstanceId id) { return publishedPlacements.get(id); }
+
+        /** Full index audit for focused tests; production mutation paths maintain these links directly. */
+        void assertPublishedIndexConsistent() {
+            for (Map.Entry<ResidentId, PublishedResidentSlot> entry : publishedResidents.entrySet()) {
+                if (!entry.getKey().equals(entry.getValue().id)) {
+                    throw new IllegalStateException("inconsistent published resident index");
+                }
+            }
+            for (Map.Entry<InstanceId, PublishedPlacement> entry : publishedPlacements.entrySet()) {
+                PublishedPlacement placement = entry.getValue();
+                if (!entry.getKey().equals(placement.id)
+                        || !placement.id.source.equals(placement.resident.id.source)
+                        || !placement.placement.residentKey.equals(placement.resident.id.key)
+                        || publishedResidents.get(placement.resident.id) != placement.resident
+                        || !placement.resident.placements.contains(placement)) {
+                    throw new IllegalStateException("inconsistent published placement index");
+                }
+            }
+            for (PublishedResidentSlot slot : publishedResidents.values()) {
+                for (PublishedPlacement placement : slot.placements) {
+                    if (placement.resident != slot || publishedPlacements.get(placement.id) != placement) {
+                        throw new IllegalStateException("inconsistent resident placement membership");
+                    }
+                }
+            }
+        }
 
         void destroyAfterDeviceIdle(Set<PreparedGroup> destroyed,
                                     java.util.function.BiConsumer<PreparedGroup, Set<PreparedGroup>> destroyPrepared) {
             for (Barrier barrier : running) {
                 if (barrier.prepared != null) destroyPrepared.accept(barrier.prepared, destroyed);
             }
-            for (GroupResident resident : publishedResidents.values()) resident.destroy();
-            for (GroupResident resident : previousResidents.values()) resident.destroy();
+            Set<GroupResident> destroyedResidents = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+            for (PublishedResidentSlot slot : publishedResidents.values()) {
+                if (destroyedResidents.add(slot.current)) slot.current.destroy();
+                if (slot.previous != null && destroyedResidents.add(slot.previous)) slot.previous.destroy();
+            }
             publishedResidents.clear();
             publishedPlacements.clear();
-            previousResidents.clear();
             pending.clear();
             reservedResidents.clear();
             reservedInstances.clear();
+            reservedGroups.clear();
             running.clear();
             latestAccepted.clear();
         }
