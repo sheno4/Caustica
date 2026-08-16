@@ -20,7 +20,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.BindGroupLayouts;
 import net.minecraft.client.renderer.RenderPipelines;
 
-import dev.comfyfluffy.caustica.rt.RtComposite;
+import dev.comfyfluffy.caustica.rt.RtFramePresenter;
 import dev.comfyfluffy.caustica.rt.RtRuntime;
 
 /**
@@ -191,7 +191,7 @@ public final class MinecraftUiOverlay {
             usedThisFrame = false;
             return;
         }
-        if (RtComposite.INSTANCE.isHdrPresentActive()) {
+        if (RtFramePresenter.INSTANCE.isHdrPresentActive()) {
             // HDR path composites the overlay over the PQ HDR image at present; leave usedThisFrame set so
             // presentHdr can consume it. Do NOT composite over the SDR main target (it isn't presented).
             return;

@@ -82,7 +82,7 @@ final class RtSceneSourceBoundaryTest {
 
     @Test
     void frameLifetimeAndUploadOrderingRemainExplicit() throws IOException {
-        String composite = Files.readString(JAVA.resolve("rt/RtComposite.java"));
+        String composite = Files.readString(JAVA.resolve("rt/RtFrameRenderer.java"));
         int upload = composite.indexOf("materialEpoch.uploadPendingTextures");
         int tlas = composite.indexOf("sceneGeometry.prepareTlas", upload);
         int execute = composite.indexOf("submission.execute(cmd)");

@@ -10,16 +10,16 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class RtMaterialEpochBoundaryTest {
-    private static final Path COMPOSITE = Path.of(
-            "src/main/java/dev/comfyfluffy/caustica/rt/RtComposite.java");
+    private static final Path WORLD_RESOURCES = Path.of(
+            "src/main/java/dev/comfyfluffy/caustica/rt/RtWorldResources.java");
 
     @Test
-    void compositeDelegatesMaterialEpochOwnershipThroughOneBoundary() throws Exception {
-        String source = Files.readString(COMPOSITE);
+    void worldResourcesOwnMaterialEpochThroughOneBoundary() throws Exception {
+        String source = Files.readString(WORLD_RESOURCES);
 
-        assertTrue(source.contains("private final RtMaterialEpoch materialEpoch"));
+        assertTrue(source.contains("final RtMaterialEpoch materialEpoch"));
         assertTrue(source.contains("materialEpoch.publish("));
-        assertTrue(source.contains("materialEpoch.bindCurrent(ctx, replacement)"));
+        assertTrue(source.contains("materialEpoch.bindCurrent(context, replacement)"));
         assertFalse(source.contains("RtMaterialPageCompiler"));
         assertFalse(source.contains("RtMaterialRegistry"));
         assertFalse(source.contains("RtOpacityMicromapPipeline"));
@@ -49,9 +49,9 @@ final class RtMaterialEpochBoundaryTest {
 
     @Test
     void reloadWithoutContextRejectsLiveResourcesBeforeChangingState() throws Exception {
-        String source = Files.readString(COMPOSITE);
-        int reload = source.indexOf("public void onResourceReloadStart()");
-        int context = source.indexOf("GpuContext.currentOrNull()", reload);
+        String source = Files.readString(WORLD_RESOURCES);
+        int reload = source.indexOf("void beginReload(");
+        int context = source.indexOf("context == null", reload);
         int rejectLive = source.indexOf("materialEpoch.hasPublishedResources()", context);
         int begin = source.indexOf("materialEpoch.beginReload()", rejectLive);
 
@@ -60,12 +60,12 @@ final class RtMaterialEpochBoundaryTest {
 
     @Test
     void capacityGrowthInvalidatesAndDrainsBeforeDestroyingTheEpoch() throws Exception {
-        String source = Files.readString(COMPOSITE);
-        int refresh = source.indexOf("private void refreshPipelineShapeIfNeeded");
-        int growth = source.indexOf("desiredBindlessCapacity > materialEpoch.bindlessTextureCapacity()", refresh);
-        int invalidate = source.indexOf("invalidateRetainedMaterialState()", growth);
-        int drain = source.indexOf("ctx.gpuExecutor().drainAndWaitIdle()", invalidate);
-        int pipeline = source.indexOf("worldPipeline.destroy()", drain);
+        String source = Files.readString(WORLD_RESOURCES);
+        int refresh = source.indexOf("void refreshShape(");
+        int growth = source.indexOf("desiredCapacity > materialEpoch.bindlessTextureCapacity()", refresh);
+        int invalidate = source.indexOf("invalidateMaterialBindings()", growth);
+        int drain = source.indexOf("context.gpuExecutor().drainAndWaitIdle()", invalidate);
+        int pipeline = source.indexOf("pipeline.destroy()", drain);
         int epoch = source.indexOf("materialEpoch.destroyPublishedEpoch()", pipeline);
 
         assertTrue(refresh >= 0 && refresh < growth && growth < invalidate && invalidate < drain
@@ -74,23 +74,23 @@ final class RtMaterialEpochBoundaryTest {
 
     @Test
     void capacityRebuildSelectsPendingProgramAndDesiredProviderCapacity() throws Exception {
-        String source = Files.readString(COMPOSITE);
-        int ensure = source.indexOf("private RtPipeline ensureWorld");
+        String source = Files.readString(WORLD_RESOURCES);
+        int ensure = source.indexOf("RtPipeline ensureWorld");
         int candidate = source.indexOf("RtProgramManager.Program program = programManager.candidate()", ensure);
         int capacity = source.indexOf(
-                "int bindlessTextureCapacity = ProviderManager.INSTANCE.bindlessTextureCapacity()", candidate);
-        int create = source.indexOf("createWorldPipeline(ctx, selectedProgram, bindlessTextureCapacity)", capacity);
-        int publish = source.indexOf("materialEpoch.publish(ctx, createdPipeline, bindlessTextureCapacity)", create);
+                "int bindlessCapacity = ProviderManager.INSTANCE.bindlessTextureCapacity()", candidate);
+        int create = source.indexOf("createPipeline(context, program, bindlessCapacity)", capacity);
+        int publish = source.indexOf("materialEpoch.publish(context, created, bindlessCapacity)", create);
 
         assertTrue(ensure >= 0 && ensure < candidate && candidate < capacity && capacity < create && create < publish);
     }
 
     @Test
     void failedInitialAssemblyDestroysDescriptorsBeforeEpochEvenWhenDescriptorDestroyFails() throws Exception {
-        String source = Files.readString(COMPOSITE);
-        int ensure = source.indexOf("private RtPipeline ensureWorld");
+        String source = Files.readString(WORLD_RESOURCES);
+        int ensure = source.indexOf("RtPipeline ensureWorld");
         int failure = source.indexOf("catch (Throwable failure)", ensure);
-        int pipeline = source.indexOf("createdPipeline.destroy()", failure);
+        int pipeline = source.indexOf("created.destroy()", failure);
         int cleanupFinally = source.indexOf("finally", pipeline);
         int epoch = source.indexOf("materialEpoch.destroyPublishedEpoch()", cleanupFinally);
 

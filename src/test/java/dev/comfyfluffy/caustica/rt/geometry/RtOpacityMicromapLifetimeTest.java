@@ -10,11 +10,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 final class RtOpacityMicromapLifetimeTest {
     @Test
     void reloadCancelsThenDrainsBeforeDestroyingEpochResources() throws Exception {
-        String composite = Files.readString(Path.of("src/main/java/dev/comfyfluffy/caustica/rt/RtComposite.java"));
-        int reload = composite.indexOf("public void onResourceReloadStart()");
+        String composite = Files.readString(Path.of("src/main/java/dev/comfyfluffy/caustica/rt/RtWorldResources.java"));
+        int reload = composite.indexOf("void beginReload(");
         int cancel = composite.indexOf("materialEpoch.beginReload()", reload);
-        int drain = composite.indexOf("ctx.gpuExecutor().drainAndWaitIdle()", cancel);
-        int descriptors = composite.indexOf("worldPipeline.destroy()", drain);
+        int drain = composite.indexOf("context.gpuExecutor().drainAndWaitIdle()", cancel);
+        int descriptors = composite.indexOf("pipeline.destroy()", drain);
         int destroy = composite.indexOf("materialEpoch.destroyPublishedEpoch()", descriptors);
         String epoch = Files.readString(Path.of(
                 "src/main/java/dev/comfyfluffy/caustica/rt/material/RtMaterialEpoch.java"));

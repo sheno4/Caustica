@@ -26,15 +26,15 @@ final class RtProgramEpochBoundaryTest {
 
     @Test
     void programReplacementReusesThePublishedResourcePackEpoch() throws IOException {
-        String composite = Files.readString(RT.resolve("RtComposite.java"));
-        String replacement = methodBody(composite, "private void replaceWorldProgram", "private void bindPassResources");
+        String world = Files.readString(RT.resolve("RtWorldResources.java"));
+        String replacement = methodBody(world, "private void replaceProgram", "private void bindPassResources");
 
         assertTrue(replacement.contains("materialEpoch.bindCurrent"));
         assertFalse(replacement.contains("materialEpoch.publish"));
         assertFalse(replacement.contains("RtMaterialRegistry.INSTANCE.rebuild"));
         assertFalse(replacement.contains("ProviderManager.INSTANCE.invalidateScenes"));
         assertFalse(replacement.contains("resetBindlessTextures"));
-        assertTrue(replacement.indexOf("worldPipeline = replacement")
+        assertTrue(replacement.indexOf("pipeline = replacement")
                 < replacement.indexOf("programManager.activate(candidate)"));
 
         String epoch = Files.readString(RT.resolve("material/RtMaterialEpoch.java"));

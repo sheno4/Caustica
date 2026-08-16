@@ -13,7 +13,10 @@ final class RtOrchestrationImportFirewallTest {
     private static final List<String> SOURCES = List.of(
             "rt/GpuContext.java",
             "rt/RtGpuExecutor.java",
+            "rt/RtFrameResources.java",
+            "rt/RtFrameRenderer.java",
             "rt/RtFramePresenter.java",
+            "rt/RtWorldResources.java",
             "rt/RtRuntime.java",
             "rt/RtComposite.java",
             "rt/pass/RenderPassManager.java",

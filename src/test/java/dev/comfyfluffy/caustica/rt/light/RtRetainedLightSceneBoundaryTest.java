@@ -59,7 +59,7 @@ final class RtRetainedLightSceneBoundaryTest {
     @Test
     void transientSlotLifetimeStartsOnlyAfterSuccessfulSubmission() throws IOException {
         Path composite = Path.of("src", "main", "java", "dev", "comfyfluffy", "caustica",
-                "rt", "RtComposite.java").toAbsolutePath().normalize();
+                "rt", "RtFrameRenderer.java").toAbsolutePath().normalize();
         String source = Files.readString(composite);
         int execute = source.indexOf("submission.execute(cmd);");
         int mark = source.indexOf("lightScene.markGraphicsUse(frameLights, graphicsUse);", execute);

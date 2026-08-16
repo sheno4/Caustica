@@ -11,6 +11,7 @@ import dev.comfyfluffy.caustica.client.WorldRenderScaler;
 import dev.comfyfluffy.caustica.minecraft.MinecraftFrameAdapter;
 import dev.comfyfluffy.caustica.minecraft.MinecraftUiOverlay;
 import dev.comfyfluffy.caustica.rt.RtComposite;
+import dev.comfyfluffy.caustica.rt.RtFramePresenter;
 import dev.comfyfluffy.caustica.rt.RtReflex;
 import dev.comfyfluffy.caustica.rt.RtRuntime;
 import net.minecraft.client.DeltaTracker;
@@ -195,7 +196,7 @@ public abstract class GameRendererMixin {
 		// Hand/screen effects, world overlays and GUI are carried by the optional DLSSG UI resource.
         long mainImage = this.mainRenderTarget.getColorTexture() instanceof VulkanGpuTexture texture
                 ? texture.vkImage() : 0L;
-        RtComposite.INSTANCE.captureFgHudless(mainImage, this.mainRenderTarget.width, this.mainRenderTarget.height,
+        RtFramePresenter.INSTANCE.captureHudless(mainImage, this.mainRenderTarget.width, this.mainRenderTarget.height,
                 MinecraftFrameAdapter.INSTANCE.captureUiPresentation());
 		MinecraftUiOverlay.compositeIfUsed();
 	}
