@@ -4,8 +4,10 @@ import org.junit.jupiter.api.Test;
 
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.TreeSet;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -85,18 +87,48 @@ final class ResourceIdTest {
     }
 
     @Test
-    void recordValueHashAndCollectionsRemainStructural() {
+    void equalityRemainsARecordValueContract() {
         ResourceId first = ResourceId.of("test", "same/path");
-        ResourceId equal = new ResourceId("test", "same/path");
-        ResourceId different = ResourceId.of("test", "other/path");
+        ResourceId second = new ResourceId("test", "same/path");
+        ResourceId third = ResourceId.parse("test:same/path");
 
-        assertEquals(first, equal);
-        assertEquals(first.hashCode(), equal.hashCode());
-        assertNotEquals(first, different);
-        assertTrue(new HashSet<>(java.util.List.of(first)).contains(equal));
+        assertTrue(first.equals(first));
+        assertTrue(first.equals(second));
+        assertTrue(second.equals(first));
+        assertTrue(second.equals(third));
+        assertTrue(first.equals(third));
+        assertFalse(first.equals(null));
+        assertFalse(first.equals("test:same/path"));
+        assertNotEquals(first, ResourceId.of("other", "same/path"));
+        assertNotEquals(first, ResourceId.of("test", "other/path"));
+    }
+
+    @Test
+    void hashCodeMatchesTheJdkRecordFoldIncludingSignedOverflow() {
+        ResourceId ordinary = ResourceId.of("test", "same/path");
+        assertEquals(31 * ordinary.namespace().hashCode() + ordinary.path().hashCode(), ordinary.hashCode());
+
+        ResourceId overflow = ResourceId.of("zzzzzzzzzzzzzzzz", "aaaaaaaaaaaaaaaaaaaa");
+        int expected = 31 * overflow.namespace().hashCode() + overflow.path().hashCode();
+        assertTrue(expected < 0);
+        assertEquals(expected, overflow.hashCode());
+        assertEquals(ordinary.hashCode(), ResourceId.parse("test:same/path").hashCode());
+    }
+
+    @Test
+    void hashCollectionsDeduplicateAndReplaceEqualIds() {
+        ResourceId first = ResourceId.of("test", "same/path");
+        ResourceId equal = ResourceId.parse("test:same/path");
+        HashSet<ResourceId> set = new HashSet<>();
+        assertTrue(set.add(first));
+        assertFalse(set.add(equal));
+        assertEquals(1, set.size());
+
         HashMap<ResourceId, Integer> map = new HashMap<>();
         map.put(first, 7);
-        assertEquals(7, map.get(equal));
+        assertEquals(7, map.put(equal, 9));
+        assertEquals(1, map.size());
+        assertEquals(9, map.get(first));
     }
 
     @Test
@@ -109,6 +141,13 @@ final class ResourceIdTest {
         assertTrue(extension.compareTo(laterNamespace) < 0);
         assertEquals(0, prefix.compareTo(ResourceId.parse("a:b")));
         assertEquals("a:b", prefix.toString());
+
+        TreeSet<ResourceId> sorted = new TreeSet<>();
+        sorted.add(laterNamespace);
+        sorted.add(extension);
+        sorted.add(prefix);
+        sorted.add(ResourceId.parse("a:b"));
+        assertEquals(java.util.List.of(prefix, extension, laterNamespace), java.util.List.copyOf(sorted));
     }
 
     private static boolean lowerAscii(char c) {

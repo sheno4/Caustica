@@ -69,6 +69,17 @@ public record ResourceId(String namespace, String path) implements Comparable<Re
     }
 
     @Override
+    public final boolean equals(Object other) {
+        return this == other || other instanceof ResourceId id
+                && path.equals(id.path) && namespace.equals(id.namespace);
+    }
+
+    @Override
+    public final int hashCode() {
+        return 31 * namespace.hashCode() + path.hashCode();
+    }
+
+    @Override
     public int compareTo(ResourceId other) {
         return toString().compareTo(other.toString());
     }
