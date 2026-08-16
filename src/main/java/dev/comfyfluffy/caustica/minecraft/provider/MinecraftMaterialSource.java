@@ -28,6 +28,7 @@ public final class MinecraftMaterialSource implements MaterialSource {
     public static final ResourceId ID = ResourceId.of("caustica", "minecraft_materials");
     public static final ResourceId CLOUD = ResourceId.of("caustica", "cloud");
     public static final ResourceId WATER = ResourceId.of("minecraft", "water");
+    public static final ResourceId END_PORTAL = ResourceId.of("minecraft", "end_portal");
     public static final ResourceId LAVA_MATERIAL = ResourceId.of("minecraft", "block/lava_still");
     public static final ResourceId PARTICLE_BILLBOARD =
             ResourceId.of("caustica", "minecraft_particle_billboard");
@@ -38,6 +39,7 @@ public final class MinecraftMaterialSource implements MaterialSource {
         sink.define(new MaterialDefinition(new MaterialHandle(CLOUD), 0.82f, 0.86f, 0.9f,
                 0.92f, 0.0f, 1.33f, 0.0f, MaterialTopology.SURFACE, null));
         sink.define(waterDefinition());
+        sink.define(endPortalDefinition());
         sink.define(particleBillboardDefinition());
         Map<Identifier, Resource> resources = Minecraft.getInstance().getResourceManager().listResources(
                 "materials", id -> id.getPath().endsWith(".json"));
@@ -69,6 +71,12 @@ public final class MinecraftMaterialSource implements MaterialSource {
     static MaterialDefinition particleBillboardDefinition() {
         return new MaterialDefinition(new MaterialHandle(PARTICLE_BILLBOARD), 1.0f, 1.0f, 1.0f,
                 1.0f, 0.0f, 1.0f, 0.5f, MaterialTopology.SURFACE, null);
+    }
+
+    static MaterialDefinition endPortalDefinition() {
+        return new MaterialDefinition(new MaterialHandle(END_PORTAL), 0.002f, 0.001f, 0.006f,
+                0.42f, 0.0f, 1.35f, 0.0f, MaterialTopology.SURFACE,
+                MinecraftProvidersExtension.END_PORTAL_SURFACE);
     }
 
     public static MaterialRule parse(JsonObject root, Identifier source) {

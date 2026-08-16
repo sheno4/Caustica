@@ -52,16 +52,10 @@ public final class RtEntityCapture implements VertexConsumer {
 
     /** Clear all accumulators for a fresh entity capture. */
     public void reset() {
-        reset(0);
-    }
-
-    /** Clear and pre-size for a known previous topology to avoid add() growth during capture. */
-    public void reset(int expectedVertices) {
         verts.clear();
         idx.clear();
         uvList.clear();
         surfaces.clear();
-        ensureVertexCapacity(expectedVertices);
         n = 0;
         currentMaterial = new SceneMesh.FallbackMaterial(null);
         currentCoverage = SceneMesh.Coverage.CUTOUT;
@@ -102,78 +96,6 @@ public final class RtEntityCapture implements VertexConsumer {
     /** Use ModelPart UVs as-is (full-texture models). */
     public void clearUvRemap() {
         uvRemap = false;
-    }
-
-    /** Copy the per-submission material/UV state into a second capture used by the parity harness. */
-    void copySubmissionStateTo(RtEntityCapture target) {
-        target.currentMaterial = currentMaterial;
-        target.currentCoverage = currentCoverage;
-        target.currentOrder = currentOrder;
-        target.uvRemap = uvRemap;
-        target.uvU0 = uvU0;
-        target.uvV0 = uvV0;
-        target.uvDU = uvDU;
-        target.uvDV = uvDV;
-    }
-
-    /**
-     * Require one submission appended to this capture to exactly match a standalone reference capture.
-     * Float comparison uses raw bits because the entity cache hashes raw bits; numeric deltas are included
-     * only to localize failures and never relax the pass criterion.
-     */
-    void assertSubmissionBitwiseIdentical(int vertStart, int idxStart, int uvStart, int surfaceStart,
-                                          RtEntityCapture reference, String label) {
-        if (n != 0 || reference.n != 0) {
-            throw new IllegalStateException(label + " left an incomplete quad: actual=" + n
-                    + ", reference=" + reference.n);
-        }
-        assertFloatRange("positions", verts.elements(), vertStart, verts.size() - vertStart,
-                reference.verts.elements(), reference.verts.size(), label);
-        assertIndexRange(idx.elements(), idxStart, idx.size() - idxStart,
-                reference.idx.elements(), reference.idx.size(), vertStart / 3, label);
-        assertFloatRange("uvs", uvList.elements(), uvStart, uvList.size() - uvStart,
-                reference.uvList.elements(), reference.uvList.size(), label);
-        int triangleStart = idxStart / 3;
-        List<SceneMesh.TriangleSurface> actualSurfaces = surfaces.subList(surfaceStart, surfaces.size());
-        if (!actualSurfaces.equals(reference.surfaces)) {
-            throw new IllegalStateException(label + " triangle surfaces differ");
-        }
-    }
-
-    private static void assertFloatRange(String component, float[] actual, int actualStart, int actualSize,
-                                         float[] reference, int referenceSize, String label) {
-        if (actualSize != referenceSize) {
-            throw new IllegalStateException(label + " " + component + " size mismatch: actual="
-                    + actualSize + ", reference=" + referenceSize);
-        }
-        for (int i = 0; i < actualSize; i++) {
-            float a = actual[actualStart + i];
-            float b = reference[i];
-            int ab = Float.floatToRawIntBits(a);
-            int bb = Float.floatToRawIntBits(b);
-            if (ab != bb) {
-                throw new IllegalStateException(label + " " + component + '[' + i + "] mismatch: actual="
-                        + a + " (0x" + Integer.toHexString(ab) + "), reference=" + b + " (0x"
-                        + Integer.toHexString(bb) + "), delta=" + (a - b));
-            }
-        }
-    }
-
-    private static void assertIndexRange(int[] actual, int actualStart, int actualSize,
-                                         int[] reference, int referenceSize, int referenceBaseVertex,
-                                         String label) {
-        if (actualSize != referenceSize) {
-            throw new IllegalStateException(label + " indices size mismatch: actual="
-                    + actualSize + ", reference=" + referenceSize);
-        }
-        for (int i = 0; i < actualSize; i++) {
-            int expected = reference[i] + referenceBaseVertex;
-            if (actual[actualStart + i] != expected) {
-                throw new IllegalStateException(label + " indices[" + i + "] mismatch: actual="
-                        + actual[actualStart + i] + ", reference=" + expected
-                        + " (local " + reference[i] + ")");
-            }
-        }
     }
 
     public boolean isEmpty() {

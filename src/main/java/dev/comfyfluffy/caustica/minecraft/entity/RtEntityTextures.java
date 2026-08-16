@@ -2,7 +2,6 @@ package dev.comfyfluffy.caustica.minecraft.entity;
 
 import com.mojang.blaze3d.textures.GpuTextureView;
 import com.mojang.blaze3d.vulkan.VulkanGpuTextureView;
-import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.api.provider.SceneMesh;
@@ -14,7 +13,6 @@ import com.mojang.blaze3d.platform.NativeImage;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.rendertype.PreparedRenderType;
 import net.minecraft.client.renderer.rendertype.RenderType;
-import net.minecraft.client.renderer.rendertype.RenderTypes;
 import net.minecraft.client.renderer.texture.DynamicTexture;
 import net.minecraft.client.renderer.texture.TextureAtlas;
 import net.minecraft.resources.Identifier;
@@ -37,20 +35,13 @@ import java.util.WeakHashMap;
  *
  * <p>The view is obtained through the <b>public</b> {@code RenderType.prepare()} → {@link
  * PreparedRenderType#textures()} API (a list of {@code Texture(name, GpuTextureView, sampler)}), keyed by
- * the sampler {@link #materialSampler} names — normally {@code "Sampler0"} ({@code "Sampler1"}/{@code
- * "Sampler2"} are the overlay/lightmap the prepared list prepends). Resolution is cached per {@code
+ * the material sampler named {@code "Sampler0"} ({@code "Sampler1"}/{@code "Sampler2"} are auxiliary
+ * bindings). Resolution is cached per {@code
  * RenderType} (they are stable singletons), so the prepare() cost is paid once per distinct texture.
  */
 public final class RtEntityTextures {
-    /** Bindless array capacity (slot 0 reserved as a fallback texture). {@code -Dcaustica.rt.maxEntityTextures}. */
-    public static int maxTextures() {
-        return CausticaConfig.Rt.EntityTextures.MAX_TEXTURES.value();
-    }
-
-    /** Enable pack-compiled entity materials; disabled entities use the canonical neutral header. */
-    public static boolean entityPbr() {
-        return CausticaConfig.Rt.EntityTextures.PBR.value();
-    }
+    /** Bindless array capacity, including slot 0 reserved for the block-atlas fallback. */
+    public static final int BINDLESS_CAPACITY = 256;
 
     public static final RtEntityTextures INSTANCE = new RtEntityTextures();
 
@@ -71,9 +62,8 @@ public final class RtEntityTextures {
     // file). Seeded with the block atlas = slot 0 (also the fallback). Items use a separate item atlas.
     private final Map<Identifier, Integer> atlasSlotCache = new HashMap<>();
     private final List<Pending> pending = new ArrayList<>(); // base-color texture indices awaiting upload
-    // Descriptor array capacity of the currently alive world pipeline. A higher config value applies after
-    // reset/recreate; a lower value stops allocating new slots immediately without invalidating old ones.
-    private int capacity = maxTextures();
+    // Descriptor array capacity of the currently alive world pipeline.
+    private int capacity = BINDLESS_CAPACITY;
     private int nextSlot = 1;
     private boolean loggedFailure;
     private boolean loggedMaterialFailure;
@@ -174,7 +164,7 @@ public final class RtEntityTextures {
         if (cached != null) {
             return cached;
         }
-        if (nextSlot >= slotLimit()) {
+        if (nextSlot >= capacity) {
             return 0;
         }
         int slot = nextSlot++;
@@ -199,14 +189,14 @@ public final class RtEntityTextures {
         viewSlotCache.forEach((view, slot) -> pipeline.setBaseColorTexture(slot, view, sampler));
     }
 
-    /** Drop the registry when texture identities or the bindless capacity change. */
+    /** Drop the registry when texture identities change. */
     public void reset() {
-        reset(maxTextures());
+        reset(BINDLESS_CAPACITY);
     }
 
     /** Drop the registry for a pipeline whose bindless descriptor arrays have this capacity. */
     public void reset(int descriptorCapacity) {
-        capacity = Math.max(1, descriptorCapacity);
+        capacity = descriptorCapacity;
         viewCache.clear();
         locationCache.clear();
         viewSlotCache.clear();
@@ -214,21 +204,6 @@ public final class RtEntityTextures {
         atlasSlotCache.put(TextureAtlas.LOCATION_BLOCKS, 0); // block atlas = the slot-0 fallback
         pending.clear();
         nextSlot = 1;
-    }
-
-    private int slotLimit() {
-        return Math.min(capacity, maxTextures());
-    }
-
-    /**
-     * The sampler carrying {@code renderType}'s own material texture. Almost every render type binds it as
-     * {@code Sampler0}, but the two end-portal pipelines bind the end-sky backdrop there and their portal
-     * texture as {@code Sampler1} — picking {@code Sampler0} for them would texture and classify the portal
-     * as sky. This mapping stays in the Minecraft adapter; the material registry sees only a resource id.
-     */
-    private static String materialSampler(RenderType renderType) {
-        return renderType == RenderTypes.endPortal() || renderType == RenderTypes.endGateway()
-                ? "Sampler1" : "Sampler0";
     }
 
     /** Recover the resource identifier used to select {@code renderType}'s material, or null. The
@@ -242,7 +217,7 @@ public final class RtEntityTextures {
             // mixed in at runtime); RenderType is non-final so its cast is fine directly.
             Object setup = ((RenderTypeAccessor) renderType).caustica$state();
             Map<String, ?> textures = ((RenderSetupAccessor) setup).caustica$textures();
-            Object binding = textures.get(materialSampler(renderType));
+            Object binding = textures.get("Sampler0");
             if (binding == null) {
                 locationCache.put(renderType, null);
                 return null;
@@ -278,7 +253,7 @@ public final class RtEntityTextures {
         long handle = 0L;
         try {
             PreparedRenderType prepared = renderType.prepare();
-            String wanted = materialSampler(renderType);
+            String wanted = "Sampler0";
             GpuTextureView chosen = null;
             GpuTextureView firstNonAux = null;
             for (PreparedRenderType.Texture t : prepared.textures()) {

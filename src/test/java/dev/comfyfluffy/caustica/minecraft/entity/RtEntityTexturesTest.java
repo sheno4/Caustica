@@ -55,7 +55,7 @@ final class RtEntityTexturesTest {
             Field texturesField = RenderSetup.class.getDeclaredField("textures");
             assertTrue(texturesField.trySetAccessible(), "RenderSetup.textures must be readable");
             Object binding = ((Map<?, ?>) texturesField.get(setup)).get("Sampler0");
-            Method location = binding.getClass().getMethod("location");
+            var location = binding.getClass().getMethod("location");
             assertTrue(location.trySetAccessible(), "TextureBinding.location() must be callable");
             return (Identifier) location.invoke(binding);
         } catch (ReflectiveOperationException exception) {

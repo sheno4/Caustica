@@ -54,7 +54,7 @@ public final class CausticaConfig {
      */
     static final List<Class<?>> HOLDERS = List.of(
             Rt.class, Rt.Composite.class, Rt.Terrain.class, Rt.Lights.class,
-            Rt.Entities.class, Rt.EntityTextures.class, Rt.Overlay.class, Rt.DlssRr.class,
+            Rt.Entities.class, Rt.Overlay.class, Rt.DlssRr.class,
             Rt.Fg.class, Rt.Reflex.class, Rt.Exposure.class, Rt.Tonemap.class, Rt.FrameStats.class,
             Rt.Screenshots.class, Rt.Diagnostics.class, Rt.Hdr.class, Rt.Composition.class,
             Ngx.class, Slang.class);
@@ -744,9 +744,6 @@ public final class CausticaConfig {
                     bool("caustica.rt.glow", "entities.glow.enabled", true).inGroup("entities");
             public static final BooleanSetting NAME_TAGS_ENABLED =
                     bool("caustica.rt.nameTags", "entities.name-tags.enabled", true);
-            /** Debug-only: render each model submission twice and require bitwise-identical CPU captures. */
-            public static final BooleanSetting CAPTURE_PARITY =
-                    bool("caustica.rt.entityCaptureParity", "entities.debug.capture-parity", false);
             public static final IntSetting MAX_ORDINARY_ENTITIES =
                     intAtLeast("caustica.rt.maxOrdinaryEntities", "entities.max-ordinary-entities", 1024, 0);
             public static final IntSetting MAX_BLOCK_ENTITIES =
@@ -772,15 +769,6 @@ public final class CausticaConfig {
             public static int entityMapCapacity() {
                 // Fastutil expected-size constructors apply their own load-factor headroom.
                 return Math.max(16, MAX_ORDINARY_ENTITIES.value());
-            }
-        }
-
-        public static final class EntityTextures {
-            public static final IntSetting MAX_TEXTURES =
-                    intAtLeast("caustica.rt.maxEntityTextures", "entities.textures.max-textures", 256, 1);
-            public static final BooleanSetting PBR = bool("caustica.rt.entityPbr", "entities.textures.pbr", true);
-
-            private EntityTextures() {
             }
         }
 

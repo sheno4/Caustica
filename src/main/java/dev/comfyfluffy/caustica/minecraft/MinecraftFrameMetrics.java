@@ -24,7 +24,6 @@ public final class MinecraftFrameMetrics {
             detail("entity.capture.submit.modelDraw.fallback"),
             detail("entity.capture.submit.bakedQuads"),
             detail("entity.capture.submit.metrics"),
-            detail("entity.capture.submit.parity"),
             accounted("entity.blockEntities"),
             accounted("entity.particles")), List.of(
             "sectionsSnapshotted", "sectionCopies",
@@ -32,7 +31,7 @@ public final class MinecraftFrameMetrics {
             "particlesCaptured", "entityModelSubmissions", "entityCuboids",
             "entityModelQuads", "entityModelVertices", "entityBakedQuads", "entityBakedVertices",
             "entityDirectSubmissions", "entityDirectFallbacks", "entityDirectQuads", "entityDirectVertices",
-            "entitySpecializedCuboids", "entityGenericCuboids", "entityParityChecks"));
+            "entitySpecializedCuboids", "entityGenericCuboids"));
 
     private MinecraftFrameMetrics() {
     }

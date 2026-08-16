@@ -106,7 +106,7 @@ final class RtMaterialOverridesTest {
         RtMaterialDesc applied = rule.apply(base);
         assertEquals(RtMaterialRegistry.TRANSPORT_MEDIUM_BOUNDARY, applied.transport());
         assertEquals(MinecraftMaterialClassifier.WATER_IOR, applied.specularIor());
-        assertEquals(3, applied.surfaceImplementation());
+        assertEquals(2, applied.surfaceImplementation());
         assertEquals(1.0f, applied.transmissionWeight());
     }
 

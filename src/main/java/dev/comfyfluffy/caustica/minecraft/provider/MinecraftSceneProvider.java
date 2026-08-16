@@ -92,7 +92,7 @@ public final class MinecraftSceneProvider implements SceneProvider, RtSceneSourc
 
     @Override
     public int bindlessTextureCapacity() {
-        return RtEntityTextures.maxTextures();
+        return RtEntityTextures.BINDLESS_CAPACITY;
     }
 
     @Override

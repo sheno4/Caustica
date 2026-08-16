@@ -5,13 +5,14 @@ import com.mojang.blaze3d.pipeline.ColorTargetState;
 import com.mojang.blaze3d.pipeline.RenderPipeline;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
-import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.api.provider.MaterialHandle;
 import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import dev.comfyfluffy.caustica.api.provider.MaterialTopology;
 import dev.comfyfluffy.caustica.engine.material.MaterialVariant;
 import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialProfile;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialLookup;
+import dev.comfyfluffy.caustica.minecraft.provider.MinecraftMaterialSource;
 import dev.comfyfluffy.caustica.mixin.ModelPartAccessor;
 import dev.comfyfluffy.caustica.mixin.RenderSetupAccessor;
 import dev.comfyfluffy.caustica.mixin.RenderTypeAccessor;
@@ -72,10 +73,11 @@ class RtEntityCollectorBase {
     private static final float LEASH_WIDTH = 0.05f;
     // Shared all-zero UV quad for untextured geometry (leash/line ribbons on the white slot).
     private static final float[] ZERO_UV = new float[4];
+    private static final SceneMesh.NamedMaterial END_PORTAL_MATERIAL = new SceneMesh.NamedMaterial(
+            new MaterialHandle(MinecraftMaterialSource.END_PORTAL));
 
     private RtEntityCapture capture;
     private boolean profileDynamicEntity;
-    private final RtEntityCapture parityCapture = new RtEntityCapture();
     private final RtCuboidEmitter cuboidEmitter = new RtCuboidEmitter();
     // Set by order(int) for the very next submitModel call (banner/shield pattern-layer stacking), then
     // consumed. Baked-quad paths (addQuad) don't use ordering and always reset the capture's order to 0.
@@ -143,8 +145,8 @@ class RtEntityCollectorBase {
                 RtEntityTextures.INSTANCE.slotForAtlas(sprite.atlasLocation());
                 setSpriteMaterial(sprite, OpenPbrMaterialProfile.ROUGH_DIELECTRIC, false, stochasticAlpha);
             } else {
-                RtEntityTextures.INSTANCE.slotFor(renderType);
-                capture.currentMaterial = standaloneMaterial(renderType);
+                setStandaloneMaterial(renderType);
+                if (isEndPortal(renderType)) capture.currentCoverage = SceneMesh.Coverage.OPAQUE;
                 capture.clearUvRemap();
             }
         } finally {
@@ -170,8 +172,6 @@ class RtEntityCollectorBase {
         int color = tintedColor == 0 ? -1 : tintedColor; // vanilla uses 0 as the no-tint sentinel in some submit paths
         int vertStart = capture.verts.size();
         int idxStart = capture.idx.size();
-        int uvStart = capture.uvList.size();
-        int surfaceStart = capture.surfaces.size();
         RtCuboidEmitter.ModelTemplate directTemplate = cuboidEmitter.prepare(model);
         long directCubeCounts = 0L;
         long drawStart = profileDynamicEntity ? RtFrameStats.FRAME.startStage() : 0L;
@@ -198,22 +198,6 @@ class RtEntityCollectorBase {
                 RtFrameStats.FRAME.count("entityDirectQuads", addedQuads);
                 RtFrameStats.FRAME.count("entitySpecializedCuboids", directCubeCounts >>> 32);
                 RtFrameStats.FRAME.count("entityGenericCuboids", directCubeCounts & 0xffffffffL);
-            }
-        }
-
-        if (CausticaConfig.Rt.Entities.CAPTURE_PARITY.value()) {
-            parityCapture.reset(addedVertices);
-            capture.copySubmissionStateTo(parityCapture);
-            long parityStart = profileDynamicEntity ? RtFrameStats.FRAME.startStage() : 0L;
-            try {
-                model.renderToBuffer(poseStack, parityCapture, lightCoords, overlayCoords, color);
-                capture.assertSubmissionBitwiseIdentical(vertStart, idxStart, uvStart, surfaceStart,
-                        parityCapture, "model " + model.getClass().getName());
-                if (profileDynamicEntity) {
-                    RtFrameStats.FRAME.count("entityParityChecks", 1);
-                }
-            } finally {
-                RtFrameStats.FRAME.endStage("entity.capture.submit.parity", parityStart);
             }
         }
     }
@@ -292,20 +276,27 @@ class RtEntityCollectorBase {
                 : TextureAtlas.LOCATION_BLOCKS.equals(sprite.atlasLocation())
                 ? new SceneMesh.CatalogMaterial(MinecraftMaterialLookup.material(sprite), null, variant,
                 new SceneMesh.AtlasTexture(ResourceId.of(sprite.atlasLocation().getNamespace(), sprite.atlasLocation().getPath())))
-                : RtEntityTextures.entityPbr()
-                ? new SceneMesh.AtlasMaterial(MinecraftMaterialLookup.atlasMaterial(sprite))
-                : new SceneMesh.FallbackMaterial(new SceneMesh.AtlasTexture(
-                        ResourceId.of(sprite.atlasLocation().getNamespace(), sprite.atlasLocation().getPath())));
+                : new SceneMesh.AtlasMaterial(MinecraftMaterialLookup.atlasMaterial(sprite));
         capture.currentCoverage = stochasticAlpha ? SceneMesh.Coverage.STOCHASTIC
                 : SceneMesh.Coverage.OPAQUE;
     }
 
     private static SceneMesh.MaterialReference standaloneMaterial(RenderType renderType) {
+        if (isEndPortal(renderType)) return END_PORTAL_MATERIAL;
         var texture = RtEntityTextures.INSTANCE.textureLocation(renderType);
         if (texture == null) return missingMaterial();
         ResourceId logicalTexture = MinecraftMaterialLookup.logicalTexture(texture);
-        return RtEntityTextures.entityPbr() ? new SceneMesh.StandaloneMaterial(logicalTexture)
-                : new SceneMesh.FallbackMaterial(new SceneMesh.StandaloneTexture(logicalTexture));
+        return new SceneMesh.StandaloneMaterial(logicalTexture);
+    }
+
+    private void setStandaloneMaterial(RenderType renderType) {
+        SceneMesh.MaterialReference material = standaloneMaterial(renderType);
+        if (material.texture() != null) RtEntityTextures.INSTANCE.slotFor(renderType);
+        capture.currentMaterial = material;
+    }
+
+    private static boolean isEndPortal(RenderType renderType) {
+        return renderType == RenderTypes.endPortal() || renderType == RenderTypes.endGateway();
     }
 
     private static SceneMesh.MaterialReference missingMaterial() {
@@ -439,8 +430,7 @@ class RtEntityCollectorBase {
         public void acceptRenderable(TextRenderable renderable) {
             RenderType renderType = renderable.renderType(displayMode);
             boolean stochasticAlpha = isTranslucent(renderType);
-            RtEntityTextures.INSTANCE.slotFor(renderType);
-            capture.currentMaterial = standaloneMaterial(renderType);
+            setStandaloneMaterial(renderType);
             capture.currentCoverage = stochasticAlpha ? SceneMesh.Coverage.STOCHASTIC
                     : hasCutoutDefine(renderType) ? SceneMesh.Coverage.CUTOUT : SceneMesh.Coverage.OPAQUE;
             capture.currentOrder = 0;
@@ -691,10 +681,14 @@ class RtEntityCollectorBase {
         boolean stochasticAlpha = isTranslucent(renderType);
         // Lines are untextured: bind the white texture so base color is exactly the vertex colour (index 0 is
         // the block atlas, whose (0,0) texel would tint the ribbon arbitrarily).
-        if (lines) RtEntityTextures.INSTANCE.whiteSlot(); else RtEntityTextures.INSTANCE.slotFor(renderType);
-        capture.currentMaterial = lines ? new SceneMesh.FallbackMaterial(RtEntityTextures.INSTANCE.whiteTexture())
-                : standaloneMaterial(renderType);
+        if (lines) {
+            RtEntityTextures.INSTANCE.whiteSlot();
+            capture.currentMaterial = new SceneMesh.FallbackMaterial(RtEntityTextures.INSTANCE.whiteTexture());
+        } else {
+            setStandaloneMaterial(renderType);
+        }
         capture.currentCoverage = lines ? SceneMesh.Coverage.OPAQUE
+                : isEndPortal(renderType) ? SceneMesh.Coverage.OPAQUE
                 : stochasticAlpha ? SceneMesh.Coverage.STOCHASTIC
                 : hasCutoutDefine(renderType) ? SceneMesh.Coverage.CUTOUT : SceneMesh.Coverage.OPAQUE;
 
