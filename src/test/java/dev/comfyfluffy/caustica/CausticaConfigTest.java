@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -13,6 +14,17 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class CausticaConfigTest {
+    @Test
+    void entityCaptureAndTextureInternalsAreNotConfigurationSettings() {
+        CausticaConfig.ensureRegistered();
+        Set<String> paths = CausticaConfig.settings().stream()
+                .map(CausticaConfig.RuntimeSetting::tomlPath)
+                .collect(java.util.stream.Collectors.toSet());
+
+        assertFalse(paths.contains("entities.debug.capture-parity"));
+        assertTrue(paths.stream().noneMatch(path -> path.startsWith("entities.textures.")));
+    }
+
     @Test
     void invalidPeakNitsFallsBackToDefault() {
         CausticaConfig.IntSetting setting = CausticaConfig.Rt.Hdr.PEAK_NITS;

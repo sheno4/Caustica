@@ -10,12 +10,12 @@ final class MaterialRuleTest {
     @Test
     void carriesOnlyStableNamesAndOpenPbrParameters() {
         MaterialRule rule = new MaterialRule(id("rule"),
-                new MaterialRule.Match(ResourceId.parse("minecraft:entity/end_portal/end_portal"), null),
+                new MaterialRule.Match(ResourceId.parse("minecraft:block/amethyst_block"), null),
                 new MaterialRule.Parameters(0.2f, 0.0f, 1.5f, 0.0f, 24.0f,
-                        ResourceId.parse("caustica:end_portal")));
+                        ResourceId.parse("test:crystal")));
 
-        assertEquals(ResourceId.parse("caustica:end_portal"), rule.parameters().surface());
-        assertEquals(ResourceId.parse("minecraft:entity/end_portal/end_portal"), rule.match().material());
+        assertEquals(ResourceId.parse("test:crystal"), rule.parameters().surface());
+        assertEquals(ResourceId.parse("minecraft:block/amethyst_block"), rule.match().material());
     }
 
     @Test

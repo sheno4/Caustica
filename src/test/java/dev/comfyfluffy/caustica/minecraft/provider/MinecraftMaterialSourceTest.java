@@ -37,4 +37,14 @@ final class MinecraftMaterialSourceTest {
         assertEquals(0.5f, material.transmissionWeight());
         org.junit.jupiter.api.Assertions.assertNull(material.surface());
     }
+
+    @Test
+    void namedEndPortalMaterialSelectsTheProceduralSurface() {
+        MaterialDefinition material = MinecraftMaterialSource.endPortalDefinition();
+
+        assertEquals(MinecraftMaterialSource.END_PORTAL, material.handle().id());
+        assertEquals(MaterialTopology.SURFACE, material.topology());
+        assertEquals(0.0f, material.transmissionWeight());
+        assertEquals(MinecraftProvidersExtension.END_PORTAL_SURFACE, material.surface());
+    }
 }

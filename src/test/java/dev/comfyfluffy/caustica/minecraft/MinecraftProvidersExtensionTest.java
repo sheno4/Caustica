@@ -37,5 +37,9 @@ final class MinecraftProvidersExtensionTest {
                 .anyMatch(surface -> surface.id().equals(MinecraftProvidersExtension.WATER_SURFACE)
                         && surface.module().equals("caustica_water_surface")
                         && surface.type().equals("WaterSurface")));
+        assertTrue(registry.surfaces().stream()
+                .anyMatch(surface -> surface.id().equals(MinecraftProvidersExtension.END_PORTAL_SURFACE)
+                        && surface.module().equals("caustica_portal_surface")
+                        && surface.type().equals("PortalSurface")));
     }
 }

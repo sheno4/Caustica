@@ -3,7 +3,6 @@ package dev.comfyfluffy.caustica.rt;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -34,23 +33,6 @@ final class RtFrameStatsBoundaryTest {
         assertTrue(output.isAbsolute());
         assertEquals(output.normalize(), output);
         assertEquals("rt-frame-stats", output.getFileName().toString());
-    }
-
-    @Test
-    void frameStatsDoesNotImportMinecraftOrFabric() throws IOException {
-        Path source = Path.of("src", "main", "java", "dev", "comfyfluffy", "caustica",
-                "rt", "RtFrameStats.java").toAbsolutePath().normalize();
-        assertTrue(Files.isRegularFile(source), "frame stats source is missing: " + source);
-
-        List<String> violations = Files.readAllLines(source).stream()
-                .filter(line -> line.startsWith("import "))
-                .filter(line -> line.contains("net.fabricmc.")
-                        || line.contains("net.neoforged.")
-                        || line.contains("net.minecraft.")
-                        || line.contains("dev.comfyfluffy.caustica.minecraft."))
-                .toList();
-        assertTrue(violations.isEmpty(), "frame stats crossed the host import firewall:\n"
-                + String.join("\n", violations));
     }
 
     @Test

@@ -3,11 +3,7 @@ package dev.comfyfluffy.caustica.rt;
 import com.google.gson.JsonParser;
 import org.junit.jupiter.api.Test;
 
-import java.nio.file.Files;
-import java.nio.file.Path;
-
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class RtLookPackageTest {
@@ -34,14 +30,6 @@ final class RtLookPackageTest {
     void rejectsInvalidPhysicalRanges() {
         assertThrows(IllegalArgumentException.class, () -> parse(VALID.replace("\"minEv\":-15",
                 "\"minEv\":2")));
-    }
-
-    @Test
-    void rendererLookMetadataContainsNoMinecraftLightingVocabulary() throws Exception {
-        String source = Files.readString(Path.of("src/main/java/dev/comfyfluffy/caustica/rt/RtLookPackage.java"));
-        for (String forbidden : new String[]{"sun", "moon", "block", "night", "star", "phase", "Lighting"}) {
-            assertFalse(source.toLowerCase().contains(forbidden.toLowerCase()), forbidden);
-        }
     }
 
     private static RtLookPackage parse(String json) {

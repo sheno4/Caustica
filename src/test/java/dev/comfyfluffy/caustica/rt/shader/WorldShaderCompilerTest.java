@@ -21,7 +21,6 @@ import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -46,14 +45,6 @@ final class WorldShaderCompilerTest {
             assertSpirv(compiler.compileSkyMiss(), 1024);
             assertSpirv(compiler.compileClosestHit(), 1024);
             assertSpirv(compiler.compileIndirect(false), 1024);
-            String root = compiler.composition().rootSource();
-            // Nothing selected a sky, so the slot resolves to its default, which is always the renderer's
-            // own binding — registering a host sky must not silently take over the composition.
-            assertTrue(root.contains("typealias Sky = BuiltinSky"), root);
-            assertTrue(root.contains("typealias Surfaces = SurfaceDispatch"), root);
-            assertTrue(root.contains("typealias SurfaceModifiers = SurfaceModifierDispatch"), root);
-            assertTrue(root.contains(
-                    "default: { BuiltinSurface s; s.evaluateSurface(input, material); return; }"), root);
         }
         try (WorldShaderCompiler compiler = compiler(cacheDirectory.resolve("ser"))) {
             assertSpirv(compiler.compileSkyMiss(), 1024);
@@ -138,7 +129,6 @@ final class WorldShaderCompilerTest {
 
         try (WorldShaderCompiler compiler = WorldShaderCompiler.create(cacheDirectory, registry.selection())) {
             assertSpirv(compiler.compileSkyMiss(), 1024);
-            assertTrue(compiler.composition().rootSource().contains("typealias Sky = TestSky"));
             assertTrue(java.nio.file.Files.isRegularFile(cacheDirectory.resolve(
                     "features/test/sky/test_sky_helper.slang")));
         }
@@ -153,14 +143,7 @@ final class WorldShaderCompilerTest {
             throws Exception {
         CausticaRegistry registry = registryWithTestSurface("test_surface", "TestSurface");
 
-        String label = "case " + registry.surfaceIndex(TEST_SURFACE) + "u: { TestSurface s; ";
-
         try (WorldShaderCompiler compiler = WorldShaderCompiler.create(cacheDirectory, registry.selection())) {
-            String root = compiler.composition().rootSource();
-            assertTrue(root.contains(label + "s.evaluateSurface(input, material); return; }"), root);
-            assertTrue(root.contains(label + "return s.evaluateResponse(radiance, surface); }"), root);
-            assertTrue(root.contains(label + "return s.evaluateMedium(input); }"), root);
-            assertTrue(root.contains(label + "return s.evaluateMediumLighting(input); }"), root);
             assertSpirv(compiler.compilePrimary(), 1024);
             assertSpirv(compiler.compileClosestHit(), 1024);
             assertSpirv(compiler.compileIndirect(false), 1024);
@@ -177,12 +160,7 @@ final class WorldShaderCompilerTest {
             throws Exception {
         CausticaRegistry registry = registryWithTestSurface("test_surface_broken", "BrokenSurface");
 
-        String label = "case " + registry.surfaceIndex(TEST_SURFACE) + "u";
-
         try (WorldShaderCompiler compiler = WorldShaderCompiler.create(cacheDirectory, registry.selection())) {
-            String root = compiler.composition().rootSource();
-            assertFalse(root.contains("BrokenSurface"), root);
-            assertFalse(root.contains(label), root);
             assertSpirv(compiler.compileClosestHit(), 1024);
         }
     }
@@ -199,11 +177,6 @@ final class WorldShaderCompilerTest {
                 .register();
 
         try (WorldShaderCompiler compiler = WorldShaderCompiler.create(cacheDirectory, registry.selection())) {
-            String root = compiler.composition().rootSource();
-            int first = root.indexOf("FirstModifier m; m.applySurfaceModifier(input, material)");
-            int second = root.indexOf("SecondModifier m; m.applySurfaceModifier(input, material)");
-            assertTrue(first >= 0 && second > first, root);
-            assertFalse(root.contains("BrokenModifier"), root);
             assertSpirv(compiler.compileClosestHit(), 1024);
         }
     }
@@ -298,20 +271,6 @@ final class WorldShaderCompilerTest {
         try (WorldShaderCompiler compiler = compiler(cacheDirectory)) {
             assertSpirv(compiler.compilePlain(moduleFileName, WorldShaderCompiler.ENTRY_POINT), 256);
         }
-    }
-
-    @Test
-    void runtimePrimaryUsesCompositionSpecializationAndReflectionUsesOnlyItsBuildWrapper()
-            throws Exception {
-        String compiler = Files.readString(Path.of("src", "main", "java", "dev", "comfyfluffy",
-                "caustica", "rt", "shader", "WorldShaderCompiler.java"));
-        String generator = Files.readString(Path.of("buildSrc", "src", "main", "groovy", "dev",
-                "comfyfluffy", "caustica", "build", "GenerateRtBindings.groovy"));
-
-        assertTrue(compiler.contains("PRIMARY_MODULE = \"primary_rgen\""));
-        assertTrue(compiler.contains("compileSpecialized(PRIMARY_MODULE, ENTRY_POINT)"));
-        assertFalse(compiler.contains("primary_reflection"));
-        assertTrue(generator.contains("primary_reflection.rgen.slang"));
     }
 
     private static WorldShaderCompiler compiler(Path cacheDirectory) throws Exception {

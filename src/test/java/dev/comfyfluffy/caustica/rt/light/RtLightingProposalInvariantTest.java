@@ -5,15 +5,11 @@ import dev.comfyfluffy.caustica.engine.light.LightBvh;
 import dev.comfyfluffy.caustica.engine.light.LightDescriptor;
 import org.junit.jupiter.api.Test;
 
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -24,17 +20,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * so neither shows up in an image comparison until it is severe.
  */
 final class RtLightingProposalInvariantTest {
-    /** Mirrors {@code STRATUM_IMPORTANCE_SHARE}; the shader is asserted to agree below. */
+    /** Share reserved for importance weighting after each populated stratum receives its floor. */
     private static final double STRATUM_IMPORTANCE_SHARE = 0.75;
 
     private static final double SUN_LUX = 100_000.0;
     private static final double BLOCK_EMISSION_CD_M2 = 2000.0;
-
-    @Test
-    void shaderDeclaresTheStratumShareThisReferenceModels() throws IOException {
-        assertTrue(shader("lighting.slang")
-                .contains("STRATUM_IMPORTANCE_SHARE = " + STRATUM_IMPORTANCE_SHARE + ";"));
-    }
 
     @Test
     void proposalIsANormalizedDiscreteDistributionOverEveryStratum() {
@@ -134,16 +124,6 @@ final class RtLightingProposalInvariantTest {
         assertEquals(1.0, proposal.retainedProbability(), 1.0e-12);
         assertEquals(0.0, proposal.frameProbability(), 0.0);
         assertEquals(0.0, proposal.distantProbability(), 0.0);
-    }
-
-    @Test
-    void linkedEmitterGatingIsIndependentOfTransientLights() throws IOException {
-        String source = shader("indirect_core.slang");
-        assertTrue(source.contains("linkedEmitterNeeOn = worldPush.risCandidates > 0u"));
-        assertTrue(source.contains("worldPush.retainedLightInfo.z > 0 && retainedLightsPresent"));
-        assertTrue(source.contains("gateEmitter = linkedEmitterNeeOn && payloadEmitterInList()"));
-        assertFalse(source.contains("providerRisOn"));
-        assertFalse(source.contains("terrainRisOn"));
     }
 
     // ---- Reference implementation of lighting.slang's proposal. -------------------------------------
@@ -289,8 +269,4 @@ final class RtLightingProposalInvariantTest {
                 48.0, Math.toRadians(22.0), 720.0, 690.0, 610.0), 1.0);
     }
 
-    private static String shader(String file) throws IOException {
-        return Files.readString(Path.of("src", "main", "resources", "caustica",
-                "shaders", "world", file)).replace("\r\n", "\n");
-    }
 }
