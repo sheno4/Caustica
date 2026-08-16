@@ -34,4 +34,13 @@ final class MinecraftSceneProviderTest {
 
         assertEquals(List.of("terrain", "entities"), order);
     }
+
+    @Test
+    void providerStopInvalidatesEntityProfilingBeforeStoppingWorkers() {
+        List<String> order = new ArrayList<>();
+
+        MinecraftSceneProvider.stopSources(() -> order.add("entities"), () -> order.add("workers"));
+
+        assertEquals(List.of("entities", "workers"), order);
+    }
 }

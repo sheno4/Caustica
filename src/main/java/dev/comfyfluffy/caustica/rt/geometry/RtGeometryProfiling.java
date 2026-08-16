@@ -9,6 +9,7 @@ import jdk.jfr.Name;
 import jdk.jfr.StackTrace;
 
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.function.LongConsumer;
 
 /** Low-overhead CPU telemetry for retained geometry moving from extraction to frame visibility. */
 public final class RtGeometryProfiling {
@@ -43,6 +44,7 @@ public final class RtGeometryProfiling {
     private static final EventType BUILD_READY_EVENT = EventType.getEventType(GeometryBuildReadyLatencyEvent.class);
     private static final EventType COMMAND_RECORD_EVENT = EventType.getEventType(BlasCommandRecordEvent.class);
     private static final ConcurrentLinkedQueue<ExtractionStamp> PUBLISHED = new ConcurrentLinkedQueue<>();
+    private static final ConcurrentLinkedQueue<LongConsumer> PUBLICATION_VISIBLE = new ConcurrentLinkedQueue<>();
 
     private RtGeometryProfiling() {
     }
@@ -69,10 +71,18 @@ public final class RtGeometryProfiling {
         while ((stamp = PUBLISHED.poll()) != null) {
             recordVisible(stamp);
         }
+        long frame = RtFrameStats.frameSerial();
+        LongConsumer action;
+        while ((action = PUBLICATION_VISIBLE.poll()) != null) action.accept(frame);
+    }
+
+    public static void afterPublicationVisible(LongConsumer action) {
+        if (action != null) PUBLICATION_VISIBLE.add(action);
     }
 
     public static void resetPublications() {
         PUBLISHED.clear();
+        PUBLICATION_VISIBLE.clear();
     }
 
     private static void recordVisible(ExtractionStamp stamp) {

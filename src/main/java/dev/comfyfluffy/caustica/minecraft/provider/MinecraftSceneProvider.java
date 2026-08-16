@@ -55,7 +55,12 @@ public final class MinecraftSceneProvider implements SceneProvider, RtSceneSourc
 
     @Override
     public void stop() {
-        RtWorkerPool.INSTANCE.shutdown();
+        stopSources(RtEntities.INSTANCE::onSourceStopped, RtWorkerPool.INSTANCE::shutdown);
+    }
+
+    static void stopSources(Runnable stopEntities, Runnable stopWorkers) {
+        stopEntities.run();
+        stopWorkers.run();
     }
 
     @Override

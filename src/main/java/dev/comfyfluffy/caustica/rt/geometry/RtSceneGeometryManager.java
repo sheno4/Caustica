@@ -1180,8 +1180,13 @@ public final class RtSceneGeometryManager {
                 return;
             }
             Barrier barrier = barrier(update, acknowledgment, failureHandler);
-            mergePending(pending, barrier);
+            Barrier queued = pending.get(barrier.key);
+            Barrier merged = validateMerged(queued, barrier);
+            pending.remove(barrier.key);
+            pending.put(barrier.key, merged);
             latestAccepted.put(update.key, update.revision);
+            recordAccepted(barrier);
+            recordAcceptedCoalescing(queued, barrier);
         }
 
         private static Barrier barrier(GeometryUpdateGroup update, Consumer<PublicationAck> acknowledgment,
@@ -1232,6 +1237,11 @@ public final class RtSceneGeometryManager {
                 return;
             }
             LinkedHashMap<GroupKey, Barrier> stagedPending = LinkedHashMap.newLinkedHashMap(updates.size());
+            boolean profiling = RtFrameStats.enabled();
+            int acceptedGroups = 0;
+            int acceptedPuts = 0;
+            int coalescedGroups = 0;
+            int coalescedPuts = 0;
             for (GeometryUpdateGroup update : updates) {
                 Barrier staged = stagedPending.get(update.key);
                 Long previous = staged != null ? Long.valueOf(staged.revision) : latestAccepted.get(update.key);
@@ -1241,18 +1251,46 @@ public final class RtSceneGeometryManager {
                 Barrier next = barrier(update, acknowledgment, failureHandler);
                 Barrier queued = staged != null ? staged : pending.get(update.key);
                 Barrier merged = validateMerged(queued, next);
+                if (profiling) {
+                    acceptedGroups++;
+                    acceptedPuts += next.diff.puts.size();
+                    if (queued != null) {
+                        coalescedGroups++;
+                        coalescedPuts += supersededPutCount(queued, next);
+                    }
+                }
                 stagedPending.remove(update.key);
                 stagedPending.put(update.key, merged);
             }
             pending.keySet().removeAll(stagedPending.keySet());
             pending.putAll(stagedPending);
             stagedPending.forEach((key, barrier) -> latestAccepted.put(key, barrier.revision));
+            if (profiling) {
+                RtFrameStats.FRAME.count("geometryGroupsAccepted", acceptedGroups);
+                RtFrameStats.FRAME.count("geometryPutsAccepted", acceptedPuts);
+                RtFrameStats.FRAME.count("geometryGroupRevisionsCoalesced", coalescedGroups);
+                RtFrameStats.FRAME.count("geometryPutRevisionsCoalesced", coalescedPuts);
+            }
         }
 
-        private void mergePending(Map<GroupKey, Barrier> target, Barrier barrier) {
-            Barrier merged = validateMerged(target.get(barrier.key), barrier);
-            target.remove(barrier.key);
-            target.put(barrier.key, merged);
+        private static void recordAccepted(Barrier barrier) {
+            if (!RtFrameStats.enabled()) return;
+            RtFrameStats.FRAME.count("geometryGroupsAccepted", 1);
+            RtFrameStats.FRAME.count("geometryPutsAccepted", barrier.diff.puts.size());
+        }
+
+        private static void recordAcceptedCoalescing(Barrier queued, Barrier next) {
+            if (queued == null || !RtFrameStats.enabled()) return;
+            RtFrameStats.FRAME.count("geometryGroupRevisionsCoalesced", 1);
+            RtFrameStats.FRAME.count("geometryPutRevisionsCoalesced", supersededPutCount(queued, next));
+        }
+
+        private static int supersededPutCount(Barrier queued, Barrier next) {
+            int puts = 0;
+            for (SceneGeometryKey resident : queued.diff.puts.keySet()) {
+                if (next.diff.puts.containsKey(resident) || next.diff.drops.contains(resident)) puts++;
+            }
+            return puts;
         }
 
         private Barrier validateMerged(Barrier queued, Barrier next) {
@@ -1321,6 +1359,9 @@ public final class RtSceneGeometryManager {
                 running.add(barrier);
                 PreparedGroup prepared = new PreparedGroup(barrier);
                 barrier.prepared = prepared;
+                if (RtFrameStats.enabled()) {
+                    RtFrameStats.FRAME.count("geometryPutsStarted", barrier.diff.puts.size());
+                }
                 result.add(new GroupRun(barrier.key, prepared));
             }
             return result;

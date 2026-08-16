@@ -46,6 +46,11 @@ final class RtFrameStatsBoundaryTest {
         assertTrue(schema.counters().contains("geometryTrianglesSubmitted"));
         assertTrue(schema.counters().contains("geometryInstancesVisible"));
         assertTrue(schema.counters().contains("geometryPlacementFreshnessApplied"));
+        assertTrue(schema.counters().contains("geometryGroupsAccepted"));
+        assertTrue(schema.counters().contains("geometryPutsAccepted"));
+        assertTrue(schema.counters().contains("geometryGroupRevisionsCoalesced"));
+        assertTrue(schema.counters().contains("geometryPutRevisionsCoalesced"));
+        assertTrue(schema.counters().contains("geometryPutsStarted"));
     }
 
     @Test

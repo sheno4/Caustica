@@ -227,6 +227,22 @@ public final class RtEntities {
         long lastSeen;
         long meshHash;
         boolean initialSubmitted;
+        long profiledMeshVersion;
+        long visibleMeshVersion;
+        long meshVisibilityCount;
+        long meshRevisionsSkippedBetweenVisibility;
+        long meshVisibilityIntervalFramesTotal;
+        long meshVisibilityIntervalFramesMax;
+        long initialUnavailableFrames;
+        long priorPoseLastRenderedAgeFramesTotal;
+        long priorPoseLastRenderedAgeFramesMax;
+        long lastMeshVisibilityFrame = -1L;
+        long visibleMeshSourceFrame = -1L;
+        long pendingVisibleMeshVersion;
+        long pendingVisibleMeshSourceFrame;
+        long meshVisibilityToken;
+        long pendingMeshVisibilityToken;
+        boolean meshVisibilityQueued;
         final PublicationState publication = new PublicationState();
 
         EntityState(UUID identity) {
@@ -246,6 +262,61 @@ public final class RtEntities {
             if (initialSubmitted) return false;
             meshSubmitted(capturedMeshHash);
             return true;
+        }
+
+        long profileMeshSubmission() {
+            return ++profiledMeshVersion;
+        }
+
+        void meshPublicationAccepted(long version, long sourceFrame, long token) {
+            if (token != meshVisibilityToken) return;
+            pendingVisibleMeshVersion = version;
+            pendingVisibleMeshSourceFrame = sourceFrame;
+            if (!meshVisibilityQueued) {
+                meshVisibilityQueued = true;
+                pendingMeshVisibilityToken = token;
+                RtGeometryProfiling.afterPublicationVisible(frame -> meshFrameVisible(frame, token));
+            }
+        }
+
+        void invalidateMeshVisibility() {
+            meshVisibilityToken++;
+            meshVisibilityQueued = false;
+        }
+
+        void meshFrameVisible(long frame, long token) {
+            if (!meshVisibilityQueued || token != meshVisibilityToken || token != pendingMeshVisibilityToken) return;
+            meshVisibilityQueued = false;
+            long version = pendingVisibleMeshVersion;
+            long sourceFrame = pendingVisibleMeshSourceFrame;
+            RtFrameStats.FRAME.count("entityMeshVisibilitySamples", 1);
+            if (meshVisibilityCount == 0L) {
+                long unavailable = Math.max(0L, frame - sourceFrame);
+                initialUnavailableFrames = unavailable;
+                RtFrameStats.FRAME.count("entityMeshInitialUnavailableFramesTotal", unavailable);
+                RtFrameStats.FRAME.count("entityMeshInitialUnavailableFramesSamples", 1);
+                RtFrameStats.FRAME.max("entityMeshInitialUnavailableFramesMax", unavailable);
+            } else {
+                long skipped = Math.max(0L, version - visibleMeshVersion - 1L);
+                long interval = Math.max(0L, frame - lastMeshVisibilityFrame);
+                long priorPoseAge = Math.max(0L, frame - visibleMeshSourceFrame - 1L);
+                meshRevisionsSkippedBetweenVisibility += skipped;
+                meshVisibilityIntervalFramesTotal += interval;
+                meshVisibilityIntervalFramesMax = Math.max(meshVisibilityIntervalFramesMax, interval);
+                priorPoseLastRenderedAgeFramesTotal += priorPoseAge;
+                priorPoseLastRenderedAgeFramesMax = Math.max(priorPoseLastRenderedAgeFramesMax, priorPoseAge);
+                RtFrameStats.FRAME.count("entityMeshRevisionsSkippedBetweenVisibility", skipped);
+                RtFrameStats.FRAME.count("entityMeshVisibilityIntervalFramesTotal", interval);
+                RtFrameStats.FRAME.count("entityMeshVisibilityIntervalFramesSamples", 1);
+                RtFrameStats.FRAME.max("entityMeshVisibilityIntervalFramesMax", interval);
+                RtFrameStats.FRAME.count("entityMeshPriorPoseLastRenderedAgeFramesTotal", priorPoseAge);
+                RtFrameStats.FRAME.count("entityMeshPriorPoseLastRenderedAgeFramesSamples", 1);
+                RtFrameStats.FRAME.max("entityMeshPriorPoseLastRenderedAgeFramesMax", priorPoseAge);
+            }
+            visibleMeshVersion = version;
+            visibleMeshSourceFrame = sourceFrame;
+            lastMeshVisibilityFrame = frame;
+            meshVisibilityCount++;
         }
     }
 
@@ -383,7 +454,7 @@ public final class RtEntities {
         pendingDrops.clear();
         for (SceneGeometryKey key : drops) {
             if (key.domain() == ENTITY_GEOMETRY) {
-                submitEntityRemoval(build, key);
+                submitEntityRemoval(build, key, null);
             } else {
                 build.submit(key, List.of(new SceneGeometrySink.Remove(key), new SceneGeometrySink.Drop(key)), null);
             }
@@ -875,7 +946,7 @@ public final class RtEntities {
         SceneGeometryKey key = key(ENTITY_GEOMETRY, Integer.toUnsignedLong(entityId));
         EntityState state = entityStates.get(entityId);
         if (state != null && !state.identity.equals(identity)) {
-            submitEntityRemoval(build, key);
+            submitEntityRemoval(build, key, state);
             state = null;
         }
         if (state == null) {
@@ -889,8 +960,21 @@ public final class RtEntities {
         if (!state.publication.published) {
             RtFrameStats.FRAME.count("entityPlacementFreshnessDeferred", 1);
             if (state.beginInitialSubmission(capturedMeshHash)) {
-                build.submit(key, List.of(new SceneGeometrySink.Put(key, capture.sceneMesh()),
-                        new SceneGeometrySink.Place(key, key, transform, mask)), state.publication::acknowledged);
+                EntityState submitted = state;
+                List<SceneGeometrySink.Operation> operations = List.of(
+                        new SceneGeometrySink.Put(key, capture.sceneMesh()),
+                        new SceneGeometrySink.Place(key, key, transform, mask));
+                if (RtFrameStats.enabled()) {
+                    long version = state.profileMeshSubmission();
+                    long sourceFrame = RtFrameStats.frameSerial();
+                    long visibilityToken = state.meshVisibilityToken;
+                    build.submit(key, operations, () -> {
+                        submitted.publication.acknowledged();
+                        submitted.meshPublicationAccepted(version, sourceFrame, visibilityToken);
+                    });
+                } else {
+                    build.submit(key, operations, submitted.publication::acknowledged);
+                }
             }
         } else {
             RtFrameStats.FRAME.count("entityPlacementFreshnessEligible", 1);
@@ -899,7 +983,16 @@ public final class RtEntities {
             if (state.requiresPut(capturedMeshHash)) {
                 state.meshSubmitted(capturedMeshHash);
                 RtFrameStats.FRAME.count("entityMeshOnlyUpdates", 1);
-                build.submit(key, List.of(new SceneGeometrySink.Put(key, capture.sceneMesh())), null);
+                if (RtFrameStats.enabled()) {
+                    long version = state.profileMeshSubmission();
+                    long sourceFrame = RtFrameStats.frameSerial();
+                    long visibilityToken = state.meshVisibilityToken;
+                    EntityState submitted = state;
+                    build.submit(key, List.of(new SceneGeometrySink.Put(key, capture.sceneMesh())),
+                            () -> submitted.meshPublicationAccepted(version, sourceFrame, visibilityToken));
+                } else {
+                    build.submit(key, List.of(new SceneGeometrySink.Put(key, capture.sceneMesh())), null);
+                }
             }
         }
         build.count++;
@@ -913,21 +1006,23 @@ public final class RtEntities {
             if (now - entry.getValue().lastSeen < KEEP_FRAMES) continue;
             int id = entry.getIntKey();
             SceneGeometryKey key = key(ENTITY_GEOMETRY, Integer.toUnsignedLong(id));
-            submitEntityRemoval(build, key);
+            submitEntityRemoval(build, key, entry.getValue());
             it.remove();
         }
     }
 
-    private void submitEntityRemoval(FrameBuild build, SceneGeometryKey key) {
+    private void submitEntityRemoval(FrameBuild build, SceneGeometryKey key, EntityState retiring) {
         build.submit(key(ENTITY_LIFECYCLE, key.value()), List.of(
-                new SceneGeometrySink.Remove(key), new SceneGeometrySink.Drop(key)), null);
+                new SceneGeometrySink.Remove(key), new SceneGeometrySink.Drop(key)),
+                retiring != null ? retiring::invalidateMeshVisibility : null);
     }
 
     /** Remove every source-owned resident when this capture path is disabled. */
     private void clearResidents(FrameBuild build) {
+        entityStates.values().forEach(EntityState::invalidateMeshVisibility);
         for (int id : entityStates.keySet()) {
             SceneGeometryKey key = key(ENTITY_GEOMETRY, Integer.toUnsignedLong(id));
-            submitEntityRemoval(build, key);
+            submitEntityRemoval(build, key, null);
         }
         for (long value : beCache.keySet()) {
             SceneGeometryKey key = key(BLOCK_ENTITY_GEOMETRY, value);
@@ -960,6 +1055,7 @@ public final class RtEntities {
 
     /** Drop CPU templates that retain resource-pack-owned model trees. */
     public void onResourceReload() {
+        entityStates.values().forEach(EntityState::invalidateMeshVisibility);
         for (int id : entityStates.keySet()) pendingDrops.add(key(ENTITY_GEOMETRY, Integer.toUnsignedLong(id)));
         for (long value : beCache.keySet()) pendingDrops.add(key(BLOCK_ENTITY_GEOMETRY, value));
         pendingDrops.add(key(PARTICLE_GEOMETRY, PARTICLE_KEY));
@@ -968,8 +1064,14 @@ public final class RtEntities {
         collector.clearCaches();
     }
 
+    /** Prevent deferred profiling callbacks from outliving this provider's retained-scene ownership. */
+    public void onSourceStopped() {
+        entityStates.values().forEach(EntityState::invalidateMeshVisibility);
+    }
+
     /** Clears this source's published snapshot before entity IDs can be reused by a new world. */
     public void onWorldChanged() {
+        entityStates.values().forEach(EntityState::invalidateMeshVisibility);
         entityStates.clear();
         beCache.clear();
         pendingDrops.clear();
@@ -978,6 +1080,7 @@ public final class RtEntities {
 
     /** Clear capture state; the geometry manager owns and tears down all GPU residents. */
     public void shutdown() {
+        entityStates.values().forEach(EntityState::invalidateMeshVisibility);
         entityStates.clear();
         beCache.clear();
         glowBatches.clear();

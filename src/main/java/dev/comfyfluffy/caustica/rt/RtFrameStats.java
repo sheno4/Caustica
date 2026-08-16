@@ -55,6 +55,8 @@ public final class RtFrameStats {
             new StageMetric("frame.debugPresent", true),
             new StageMetric("frame.copyOutput", true)), List.of(
             "geometryGroupsSubmitted", "geometryPutsSubmitted", "geometryTrianglesSubmitted",
+            "geometryGroupsAccepted", "geometryPutsAccepted",
+            "geometryGroupRevisionsCoalesced", "geometryPutRevisionsCoalesced", "geometryPutsStarted",
             "geometryBlasCandidates", "geometryGroupsPublished", "geometryPutsPublished",
             "geometryInstancesVisible", "geometryPendingGroups", "geometryRunningGroups",
             "geometryTerminalGroups", "geometryPublishedResidents", "geometryPublishedPlacements",
@@ -351,7 +353,8 @@ public final class RtFrameStats {
             counters[index] = Math.max(counters[index], value);
         }
 
-        long counterValue(String counterName) {
+        /** Returns the current frame's accumulated value for a configured counter. */
+        public long counterValue(String counterName) {
             return counters[indexOf(counterIndices, counterName)];
         }
 

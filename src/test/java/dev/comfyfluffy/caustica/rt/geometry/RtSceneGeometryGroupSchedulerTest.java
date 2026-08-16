@@ -1,10 +1,12 @@
 package dev.comfyfluffy.caustica.rt.geometry;
 
+import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.api.provider.MaterialHandle;
 import dev.comfyfluffy.caustica.api.provider.SceneGeometryKey;
 import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
+import dev.comfyfluffy.caustica.rt.RtFrameStats;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -62,6 +64,31 @@ final class RtSceneGeometryGroupSchedulerTest {
         scheduler.submit(group(FIRST, 1L, new RtSceneGeometryManager.Drop(20)));
 
         assertEquals(2L, scheduler.startable().getFirst().prepared().revision);
+    }
+
+    @Test
+    void staleAndRejectedRevisionsDoNotIncrementAcceptedTelemetry() {
+        boolean previous = CausticaConfig.Rt.FrameStats.ENABLED.value();
+        CausticaConfig.Rt.FrameStats.ENABLED.set(true);
+        RtFrameStats.FRAME.begin();
+        try {
+            RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
+            scheduler.submit(group(FIRST, 2L, new RtSceneGeometryManager.Put(10, payload())));
+
+            assertEquals(1L, RtFrameStats.FRAME.counterValue("geometryGroupsAccepted"));
+            assertEquals(1L, RtFrameStats.FRAME.counterValue("geometryPutsAccepted"));
+
+            scheduler.submit(group(FIRST, 1L, new RtSceneGeometryManager.Put(20, payload())));
+            assertThrows(IllegalArgumentException.class, () -> scheduler.submit(
+                    group(SECOND, new RtSceneGeometryManager.Place(3, 30, identity(), 0xff))));
+
+            assertEquals(1L, RtFrameStats.FRAME.counterValue("geometryGroupsAccepted"));
+            assertEquals(1L, RtFrameStats.FRAME.counterValue("geometryPutsAccepted"));
+        } finally {
+            CausticaConfig.Rt.FrameStats.ENABLED.set(false);
+            RtFrameStats.FRAME.end();
+            CausticaConfig.Rt.FrameStats.ENABLED.set(previous);
+        }
     }
 
     @Test
@@ -462,6 +489,31 @@ final class RtSceneGeometryGroupSchedulerTest {
         assertEquals(List.of(), scheduler.startable());
         scheduler.submit(group(FIRST, new RtSceneGeometryManager.Put(10, payload())));
         assertEquals(1, scheduler.startable().size(), "the rejected batch must not advance accepted revisions");
+    }
+
+    @Test
+    void rejectedBatchDoesNotCommitEarlierPutToDropCoalescing() {
+        RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
+        scheduler.submit(group(FIRST, 1L, new RtSceneGeometryManager.Put(10, payload())));
+
+        assertThrows(IllegalArgumentException.class, () -> scheduler.submitAll(List.of(
+                group(FIRST, 2L, new RtSceneGeometryManager.Drop(10)),
+                group(SECOND, new RtSceneGeometryManager.Place(3, 20, identity(), 0xff))), null, null));
+
+        RtSceneGeometryManager.PreparedGroup prepared = scheduler.startable().getFirst().prepared();
+        assertTrue(prepared.diff.puts.containsKey(SceneGeometryKey.of(10)));
+        assertTrue(prepared.diff.drops.isEmpty());
+    }
+
+    @Test
+    void acceptedPutToDropRevisionRemovesTheQueuedPut() {
+        RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
+        scheduler.submit(group(FIRST, 1L, new RtSceneGeometryManager.Put(10, payload())));
+        scheduler.submit(group(FIRST, 2L, new RtSceneGeometryManager.Drop(10)));
+
+        RtSceneGeometryManager.PreparedGroup prepared = scheduler.startable().getFirst().prepared();
+        assertTrue(prepared.diff.puts.isEmpty());
+        assertTrue(prepared.diff.drops.contains(SceneGeometryKey.of(10)));
     }
 
     @Test
