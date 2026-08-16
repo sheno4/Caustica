@@ -3,6 +3,7 @@ package dev.comfyfluffy.caustica.minecraft.provider;
 import dev.comfyfluffy.caustica.api.provider.SceneProvider;
 import dev.comfyfluffy.caustica.api.provider.SceneFrameContext;
 import dev.comfyfluffy.caustica.api.provider.SceneGeometryUpdateContext;
+import dev.comfyfluffy.caustica.api.provider.SceneGeometrySink;
 import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
@@ -15,8 +16,12 @@ import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
 import dev.comfyfluffy.caustica.minecraft.terrain.RtWorkerPool;
 import net.minecraft.resources.Identifier;
 
+import java.util.function.Consumer;
+
 public final class MinecraftSceneProvider implements SceneProvider, RtSceneSource {
     public static final ResourceId ID = ResourceId.of("caustica", "minecraft_scene");
+    private static final Consumer<SceneGeometrySink> TERRAIN_GEOMETRY = RtTerrain::submitGeometry;
+    private static final Consumer<SceneFrameContext> ENTITY_GEOMETRY = RtEntities.INSTANCE::submitGeometry;
 
     @Override
     public void update() {
@@ -82,7 +87,15 @@ public final class MinecraftSceneProvider implements SceneProvider, RtSceneSourc
 
     @Override
     public void submitGeometry(SceneFrameContext frame) {
-        RtEntities.INSTANCE.submitGeometry(frame);
+        submitFrameGeometry(frame, TERRAIN_GEOMETRY, ENTITY_GEOMETRY);
+    }
+
+    static void submitFrameGeometry(SceneFrameContext frame, Consumer<SceneGeometrySink> terrain,
+                                    Consumer<SceneFrameContext> entities) {
+        // prepareFrame produces terrain groups immediately before this callback. Drain them through the
+        // same frame sink so the manager can start their BLAS work before assembling this frame's TLAS.
+        terrain.accept(frame.geometry());
+        entities.accept(frame);
     }
 
     @Override
