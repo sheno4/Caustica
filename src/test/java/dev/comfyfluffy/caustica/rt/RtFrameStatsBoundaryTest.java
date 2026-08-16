@@ -45,6 +45,7 @@ final class RtFrameStatsBoundaryTest {
                 .allMatch(RtFrameStats.StageMetric::contributesToAccountedTime));
         assertTrue(schema.counters().contains("geometryTrianglesSubmitted"));
         assertTrue(schema.counters().contains("geometryInstancesVisible"));
+        assertTrue(schema.counters().contains("geometryPlacementFreshnessApplied"));
     }
 
     @Test

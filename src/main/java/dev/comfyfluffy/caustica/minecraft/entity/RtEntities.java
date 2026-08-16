@@ -54,13 +54,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.Queue;
 import java.util.Set;
+import java.util.UUID;
 
 /**
  * Dynamic entities as real ray-traced {@code ModelPart} geometry. Each frame, every model entity is
  * re-posed and captured ({@link RtEntityCollector} + {@link RtEntityCapture}) into neutral scene meshes.
  * The engine-owned scene geometry manager owns their resident GPU geometry, acceleration
  * structures, table records, instances, and graphics lifetime. This source retains only Minecraft
- * capture state, block-entity change detection, and stale-entry eviction state.
+ * capture state, mesh change detection, and stale-entry eviction state.
  * Non-model entities (items/arrows — geometry via submitItem/submitBlockModel, which the collector
  * ignores) are skipped.
  *
@@ -72,6 +73,8 @@ public final class RtEntities {
     private static final long ENTITY_GEOMETRY = 1L;
     private static final long BLOCK_ENTITY_GEOMETRY = 2L;
     private static final long PARTICLE_GEOMETRY = 3L;
+    private static final long ENTITY_TRANSFORM = 4L;
+    private static final long ENTITY_LIFECYCLE = 5L;
     private static final long PARTICLE_KEY = 0L;
     public static boolean enabled() {
         return CausticaConfig.Rt.Entities.ENABLED.value();
@@ -219,11 +222,34 @@ public final class RtEntities {
     }
 
     /** CPU-only capture state for one entity; the manager owns its resident. */
-    private static final class EntityState {
+    static final class EntityState {
+        final UUID identity;
         long lastSeen;
+        long meshHash;
+        boolean initialSubmitted;
+        final PublicationState publication = new PublicationState();
+
+        EntityState(UUID identity) {
+            this.identity = identity;
+        }
+
+        boolean requiresPut(long capturedMeshHash) {
+            return meshHash != capturedMeshHash;
+        }
+
+        void meshSubmitted(long capturedMeshHash) {
+            meshHash = capturedMeshHash;
+            initialSubmitted = true;
+        }
+
+        boolean beginInitialSubmission(long capturedMeshHash) {
+            if (initialSubmitted) return false;
+            meshSubmitted(capturedMeshHash);
+            return true;
+        }
     }
 
-    /** Tracks whether a block-entity resident has reached the manager's published snapshot. */
+    /** Tracks whether a captured resident has reached the manager's published snapshot. */
     static final class PublicationState {
         boolean published;
 
@@ -276,13 +302,19 @@ public final class RtEntities {
         void submit(SceneGeometryKey key, List<SceneGeometrySink.Operation> operations, Runnable acknowledgment) {
             pendingDrops.remove(key);
             int putCount = 0;
+            int transformCount = 0;
             for (SceneGeometrySink.Operation operation : operations) {
                 if (operation instanceof SceneGeometrySink.Put) {
                     putCount++;
+                } else if (operation instanceof SceneGeometrySink.Transform) {
+                    transformCount++;
                 }
             }
-            RtGeometryProfiling.ExtractionStamp extraction = putCount == 0 ? null
-                    : RtGeometryProfiling.extraction(sourceKind(key), putCount);
+            int sampleCount = putCount + transformCount;
+            RtGeometryProfiling.SourceKind kind = transformCount == 0
+                    ? sourceKind(key) : RtGeometryProfiling.SourceKind.ENTITY_PLACEMENT;
+            RtGeometryProfiling.ExtractionStamp extraction = sampleCount == 0 ? null
+                    : RtGeometryProfiling.extraction(kind, sampleCount);
             geometry.submit(key, operations, ignored -> {
                 RtGeometryProfiling.published(extraction);
                 if (acknowledgment != null) acknowledgment.run();
@@ -350,7 +382,11 @@ public final class RtEntities {
         List<SceneGeometryKey> drops = List.copyOf(pendingDrops);
         pendingDrops.clear();
         for (SceneGeometryKey key : drops) {
-            build.submit(key, List.of(new SceneGeometrySink.Remove(key), new SceneGeometrySink.Drop(key)), null);
+            if (key.domain() == ENTITY_GEOMETRY) {
+                submitEntityRemoval(build, key);
+            } else {
+                build.submit(key, List.of(new SceneGeometrySink.Remove(key), new SceneGeometrySink.Drop(key)), null);
+            }
         }
     }
 
@@ -439,7 +475,8 @@ public final class RtEntities {
                             ix - rbx, iy - rby, iz - rbz), capture.idx.toIntArray(), glowColor));
                 }
             }
-            appendCapture(build, id, mask, translationTransform(ix - rbx, iy - rby, iz - rbz));
+            appendCapture(build, id, entity.getUUID(), mask,
+                    translationTransform(ix - rbx, iy - rby, iz - rbz));
             build.logicalCount++;
             RtFrameStats.FRAME.count("entitiesCaptured", 1);
             capturedThisFrame++;
@@ -743,7 +780,7 @@ public final class RtEntities {
         return e;
     }
 
-    /** FNV-1a hash of the currently captured mesh for rebuild detection. */
+    /** FNV-1a hash of every manager-visible field in the currently captured mesh. */
     private long meshHash() {
         long h = 1469598103934665603L;
         float[] v = capture.verts.elements();
@@ -755,6 +792,11 @@ public final class RtEntities {
         int xn = capture.idx.size();
         for (int i = 0; i < xn; i++) {
             h = (h ^ (x[i] & 0xffffffffL)) * 1099511628211L;
+        }
+        float[] uv = capture.uvList.elements();
+        int uvn = capture.uvList.size();
+        for (int i = 0; i < uvn; i++) {
+            h = (h ^ (Float.floatToRawIntBits(uv[i]) & 0xffffffffL)) * 1099511628211L;
         }
         for (SceneMesh.TriangleSurface surface : capture.surfaces) {
             h = (h ^ surface.hashCode()) * 1099511628211L;
@@ -828,14 +870,38 @@ public final class RtEntities {
                 origin.x() + relative[3], origin.y() + relative[7], origin.z() + relative[11]);
     }
 
-    private void appendCapture(FrameBuild build, int entityId, int mask,
+    private void appendCapture(FrameBuild build, int entityId, UUID identity, int mask,
                                float[] instanceTransform) {
-        EntityState state = entityStates.computeIfAbsent(entityId, unused -> new EntityState());
-        state.lastSeen = RtComposite.frameCounter();
         SceneGeometryKey key = key(ENTITY_GEOMETRY, Integer.toUnsignedLong(entityId));
-        build.submit(key, List.of(
-                new SceneGeometrySink.Put(key, capture.sceneMesh()),
-                new SceneGeometrySink.Place(key, key, transform(instanceTransform, build.origin), mask)), null);
+        EntityState state = entityStates.get(entityId);
+        if (state != null && !state.identity.equals(identity)) {
+            submitEntityRemoval(build, key);
+            state = null;
+        }
+        if (state == null) {
+            state = new EntityState(identity);
+            entityStates.put(entityId, state);
+        }
+        state.lastSeen = RtComposite.frameCounter();
+        pendingDrops.remove(key);
+        GeometryTransform transform = transform(instanceTransform, build.origin);
+        long capturedMeshHash = meshHash();
+        if (!state.publication.published) {
+            RtFrameStats.FRAME.count("entityPlacementFreshnessDeferred", 1);
+            if (state.beginInitialSubmission(capturedMeshHash)) {
+                build.submit(key, List.of(new SceneGeometrySink.Put(key, capture.sceneMesh()),
+                        new SceneGeometrySink.Place(key, key, transform, mask)), state.publication::acknowledged);
+            }
+        } else {
+            RtFrameStats.FRAME.count("entityPlacementFreshnessEligible", 1);
+            build.submit(key(ENTITY_TRANSFORM, Integer.toUnsignedLong(entityId)),
+                    List.of(new SceneGeometrySink.Transform(key, transform, mask)), null);
+            if (state.requiresPut(capturedMeshHash)) {
+                state.meshSubmitted(capturedMeshHash);
+                RtFrameStats.FRAME.count("entityMeshOnlyUpdates", 1);
+                build.submit(key, List.of(new SceneGeometrySink.Put(key, capture.sceneMesh())), null);
+            }
+        }
         build.count++;
     }
 
@@ -847,18 +913,21 @@ public final class RtEntities {
             if (now - entry.getValue().lastSeen < KEEP_FRAMES) continue;
             int id = entry.getIntKey();
             SceneGeometryKey key = key(ENTITY_GEOMETRY, Integer.toUnsignedLong(id));
-            build.submit(key, List.of(
-                    new SceneGeometrySink.Remove(key), new SceneGeometrySink.Drop(key)), null);
+            submitEntityRemoval(build, key);
             it.remove();
         }
+    }
+
+    private void submitEntityRemoval(FrameBuild build, SceneGeometryKey key) {
+        build.submit(key(ENTITY_LIFECYCLE, key.value()), List.of(
+                new SceneGeometrySink.Remove(key), new SceneGeometrySink.Drop(key)), null);
     }
 
     /** Remove every source-owned resident when this capture path is disabled. */
     private void clearResidents(FrameBuild build) {
         for (int id : entityStates.keySet()) {
             SceneGeometryKey key = key(ENTITY_GEOMETRY, Integer.toUnsignedLong(id));
-            build.submit(key, List.of(
-                    new SceneGeometrySink.Remove(key), new SceneGeometrySink.Drop(key)), null);
+            submitEntityRemoval(build, key);
         }
         for (long value : beCache.keySet()) {
             SceneGeometryKey key = key(BLOCK_ENTITY_GEOMETRY, value);

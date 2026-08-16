@@ -15,6 +15,8 @@ final class MinecraftFrameMetricsTest {
         assertTrue(schema.counters().contains("terrainPendingToSubmitMicrosMax"));
         assertTrue(schema.counters().contains("terrainSubmitToPublicationMicrosMax"));
         assertTrue(schema.counters().contains("entityExtractionToVisibleFramesMax"));
+        assertTrue(schema.counters().contains("entityPlacementExtractionToVisibleFramesMax"));
+        assertTrue(schema.counters().contains("entityPlacementFreshnessEligible"));
         assertTrue(schema.counters().contains("entitiesCaptured"));
     }
 

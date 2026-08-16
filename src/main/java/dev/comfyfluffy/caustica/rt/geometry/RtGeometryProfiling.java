@@ -14,6 +14,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 public final class RtGeometryProfiling {
     public enum SourceKind {
         TERRAIN("terrainDispatch"), TERRAIN_READY("terrainReady"), ENTITY("entity"),
+        ENTITY_PLACEMENT("entityPlacement"),
         BLOCK_ENTITY("blockEntity"), PARTICLE("particle");
 
         final String metricPrefix;

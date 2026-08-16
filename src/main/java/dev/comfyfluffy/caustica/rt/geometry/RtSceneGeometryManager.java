@@ -41,7 +41,7 @@ public final class RtSceneGeometryManager {
 
     private final RtGeometryMaterialResolver materialResolver;
     private final RtAccel.TlasRing tlasRing = new RtAccel.TlasRing();
-    private final GroupScheduler groupScheduler = new GroupScheduler();
+    private final GroupScheduler groupScheduler;
     private final ConcurrentLinkedQueue<TerminalGroup> terminalGroups = new ConcurrentLinkedQueue<>();
     private final Map<InstanceKey, InstanceState> instanceStates = new HashMap<>();
     private final FailureLatch groupFailures = new FailureLatch();
@@ -51,7 +51,12 @@ public final class RtSceneGeometryManager {
     private boolean loggedOpacityMicromapBuild;
 
     public RtSceneGeometryManager(RtGeometryMaterialResolver materialResolver) {
+        this(materialResolver, new GroupScheduler());
+    }
+
+    RtSceneGeometryManager(RtGeometryMaterialResolver materialResolver, GroupScheduler groupScheduler) {
         this.materialResolver = materialResolver;
+        this.groupScheduler = groupScheduler;
     }
 
     /** Installs the immutable classifier resources for the current material epoch. */
@@ -71,7 +76,7 @@ public final class RtSceneGeometryManager {
     }
 
     /** Immutable operation belonging to one atomic geometry group. */
-    public sealed interface GeometryOperation permits Put, Drop, Place, Remove { }
+    public sealed interface GeometryOperation permits Put, Drop, Place, UpdatePlacement, Remove { }
     public record Put(SceneGeometryKey residentKey, GeometryPayload payload) implements GeometryOperation {
         public Put(long residentKey, GeometryPayload payload) { this(SceneGeometryKey.of(residentKey), payload); }
     }
@@ -87,6 +92,14 @@ public final class RtSceneGeometryManager {
             this(SceneGeometryKey.of(instanceKey), SceneGeometryKey.of(residentKey), transform, mask, SceneOrigin.ZERO);
         }
         public Place { transform = transform.clone(); }
+        @Override public float[] transform() { return transform.clone(); }
+    }
+    public record UpdatePlacement(SceneGeometryKey instanceKey, float[] transform, int mask, SceneOrigin origin)
+            implements GeometryOperation {
+        public UpdatePlacement(long instanceKey, float[] transform, int mask) {
+            this(SceneGeometryKey.of(instanceKey), transform, mask, SceneOrigin.ZERO);
+        }
+        public UpdatePlacement { transform = transform.clone(); }
         @Override public float[] transform() { return transform.clone(); }
     }
     public record Remove(SceneGeometryKey instanceKey) implements GeometryOperation {
@@ -167,7 +180,7 @@ public final class RtSceneGeometryManager {
 
     /** Publishes completed groups and snapshots their geometry for this frame. */
     public FrameUpdate beginUpdate(GpuContext ctx, SceneOrigin origin) {
-        progress(ctx);
+        publishReadyForFrame(ctx);
         int placementCount = groupScheduler.publishedPlacementCount();
         TableSlot table = selectTable(ctx, placementCount);
         FrameUpdate update = new FrameUpdate(ctx, table, origin, placementCount);
@@ -180,6 +193,14 @@ public final class RtSceneGeometryManager {
         RtFrameStats.FRAME.set("geometryPublishedPlacements", groupScheduler.publishedPlacementCount());
         RtGeometryProfiling.frameVisible();
         return update;
+    }
+
+    void publishReadyForFrame(GpuContext ctx) {
+        progress(ctx);
+        try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("geometry.publishTerminal")) {
+            publishTerminalGroups(ctx);
+        }
+        groupFailures.throwIfPresent();
     }
 
     /** Associates all resources published by an update with the graphics submission that traces them. */
@@ -404,6 +425,12 @@ public final class RtSceneGeometryManager {
             for (Map.Entry<SceneGeometryKey, Placement> placement : terminal.prepared.diff.placements.entrySet()) {
                 groupScheduler.putPublishedPlacement(new InstanceId(terminal.prepared.key.source(), placement.getKey()),
                         placement.getValue());
+            }
+            for (Map.Entry<SceneGeometryKey, PlacementUpdate> update
+                    : terminal.prepared.diff.placementUpdates.entrySet()) {
+                groupScheduler.updatePublishedPlacement(new InstanceId(terminal.prepared.key.source(), update.getKey()),
+                        update.getValue());
+                RtFrameStats.FRAME.count("geometryPlacementFreshnessApplied", 1);
             }
             for (SceneGeometryKey remove : terminal.prepared.diff.removes) {
                 groupScheduler.removePublishedPlacement(new InstanceId(terminal.prepared.key.source(), remove));
@@ -815,13 +842,17 @@ public final class RtSceneGeometryManager {
         final Map<SceneGeometryKey, GeometryPayload> puts;
         final Set<SceneGeometryKey> drops;
         final Map<SceneGeometryKey, Placement> placements;
+        final Map<SceneGeometryKey, PlacementUpdate> placementUpdates;
         final Set<SceneGeometryKey> removes;
 
         private GroupDiff(Map<SceneGeometryKey, GeometryPayload> puts, Set<SceneGeometryKey> drops,
-                          Map<SceneGeometryKey, Placement> placements, Set<SceneGeometryKey> removes) {
+                          Map<SceneGeometryKey, Placement> placements,
+                          Map<SceneGeometryKey, PlacementUpdate> placementUpdates,
+                          Set<SceneGeometryKey> removes) {
             this.puts = puts;
             this.drops = drops;
             this.placements = placements;
+            this.placementUpdates = placementUpdates;
             this.removes = removes;
         }
     }
@@ -1085,6 +1116,22 @@ public final class RtSceneGeometryManager {
             result[11] += (float) (origin.z() - targetOrigin.z());
             return result;
         }
+
+        Placement updated(PlacementUpdate update) {
+            return new Placement(residentKey, update.transform, update.mask, update.origin);
+        }
+    }
+
+    static final class PlacementUpdate {
+        final float[] transform;
+        final int mask;
+        final SceneOrigin origin;
+
+        PlacementUpdate(float[] transform, int mask, SceneOrigin origin) {
+            this.transform = transform.clone();
+            this.mask = mask;
+            this.origin = origin;
+        }
     }
 
     /** Keeps asynchronous group failures visible to the render thread after their resources are released. */
@@ -1142,6 +1189,7 @@ public final class RtSceneGeometryManager {
             Map<SceneGeometryKey, GeometryPayload> puts = new LinkedHashMap<>();
             Set<SceneGeometryKey> drops = new LinkedHashSet<>();
             Map<SceneGeometryKey, Placement> places = new LinkedHashMap<>();
+            Map<SceneGeometryKey, PlacementUpdate> placementUpdates = new LinkedHashMap<>();
             Set<SceneGeometryKey> removes = new LinkedHashSet<>();
             for (GeometryOperation operation : update.operations) {
                 switch (operation) {
@@ -1153,15 +1201,26 @@ public final class RtSceneGeometryManager {
                     }
                     case Place place -> {
                         Placement value = new Placement(place.residentKey, place.transform, place.mask, place.origin);
-                        places.put(place.instanceKey, value); removes.remove(place.instanceKey);
+                        places.put(place.instanceKey, value); placementUpdates.remove(place.instanceKey);
+                        removes.remove(place.instanceKey);
+                    }
+                    case UpdatePlacement transformUpdate -> {
+                        Placement placed = places.get(transformUpdate.instanceKey);
+                        PlacementUpdate value = new PlacementUpdate(
+                                transformUpdate.transform, transformUpdate.mask, transformUpdate.origin);
+                        if (placed != null) places.put(transformUpdate.instanceKey, placed.updated(value));
+                        else placementUpdates.put(transformUpdate.instanceKey, value);
+                        removes.remove(transformUpdate.instanceKey);
                     }
                     case Remove remove -> {
-                        places.remove(remove.instanceKey); removes.add(remove.instanceKey);
+                        places.remove(remove.instanceKey); placementUpdates.remove(remove.instanceKey);
+                        removes.add(remove.instanceKey);
                     }
                 }
             }
             return new Barrier(update.key, update.revision,
-                    new GroupDiff(Map.copyOf(puts), Set.copyOf(drops), Map.copyOf(places), Set.copyOf(removes)),
+                    new GroupDiff(Map.copyOf(puts), Set.copyOf(drops), Map.copyOf(places),
+                            Map.copyOf(placementUpdates), Set.copyOf(removes)),
                     acknowledgment, failureHandler);
         }
 
@@ -1213,6 +1272,13 @@ public final class RtSceneGeometryManager {
                         throw new IllegalArgumentException(
                                 "geometry placement references a resident absent from its final barrier state "
                                         + placement.residentKey);
+                    }
+                }
+                for (SceneGeometryKey instance : barrier.diff.placementUpdates.keySet()) {
+                    if (!publishedPlacements.containsKey(new InstanceId(barrier.key.source, instance))
+                            && !barrier.diff.placements.containsKey(instance)) {
+                        throw new IllegalArgumentException(
+                                "geometry transform references an unpublished placement " + instance);
                     }
                 }
                 for (SceneGeometryKey drop : barrier.diff.drops) {
@@ -1383,6 +1449,12 @@ public final class RtSceneGeometryManager {
             if (published != null) published.resident.placements.remove(published);
         }
 
+        void updatePublishedPlacement(InstanceId id, PlacementUpdate update) {
+            PublishedPlacement published = publishedPlacements.get(id);
+            if (published == null) throw new IllegalStateException("published placement is absent " + id);
+            published.placement = published.placement.updated(update);
+        }
+
         java.util.Collection<PublishedPlacement> publishedPlacements() { return publishedPlacements.values(); }
 
         void drainPreviousResidents(Consumer<GroupResident> consumer) {
@@ -1474,6 +1546,7 @@ public final class RtSceneGeometryManager {
             diff.placements.values().forEach(value -> residents.add(new ResidentId(key.source, value.residentKey)));
             instances = new LinkedHashSet<>();
             diff.placements.keySet().forEach(value -> instances.add(new InstanceId(key.source, value)));
+            diff.placementUpdates.keySet().forEach(value -> instances.add(new InstanceId(key.source, value)));
             diff.removes.forEach(value -> instances.add(new InstanceId(key.source, value)));
         }
 
@@ -1484,11 +1557,23 @@ public final class RtSceneGeometryManager {
             newer.diff.puts.forEach((id, payload) -> { puts.put(id, payload); drops.remove(id); });
             newer.diff.drops.forEach(id -> { puts.remove(id); drops.add(id); });
             Map<SceneGeometryKey, Placement> places = new LinkedHashMap<>(diff.placements);
+            Map<SceneGeometryKey, PlacementUpdate> placementUpdates = new LinkedHashMap<>(diff.placementUpdates);
             Set<SceneGeometryKey> removes = new LinkedHashSet<>(diff.removes);
-            newer.diff.placements.forEach((id, placement) -> { places.put(id, placement); removes.remove(id); });
-            newer.diff.removes.forEach(id -> { places.remove(id); removes.add(id); });
+            newer.diff.placements.forEach((id, placement) -> {
+                places.put(id, placement); placementUpdates.remove(id); removes.remove(id);
+            });
+            newer.diff.placementUpdates.forEach((id, update) -> {
+                Placement placed = places.get(id);
+                if (placed != null) places.put(id, placed.updated(update));
+                else placementUpdates.put(id, update);
+                removes.remove(id);
+            });
+            newer.diff.removes.forEach(id -> {
+                places.remove(id); placementUpdates.remove(id); removes.add(id);
+            });
             return new Barrier(newer.key, newer.revision,
-                    new GroupDiff(Map.copyOf(puts), Set.copyOf(drops), Map.copyOf(places), Set.copyOf(removes)),
+                    new GroupDiff(Map.copyOf(puts), Set.copyOf(drops), Map.copyOf(places),
+                            Map.copyOf(placementUpdates), Set.copyOf(removes)),
                     newer.acknowledgment != null ? newer.acknowledgment : acknowledgment,
                     newer.failureHandler != null ? newer.failureHandler : failureHandler);
         }
@@ -1499,6 +1584,8 @@ public final class RtSceneGeometryManager {
             diff.drops.forEach(id -> result.add(new Drop(id)));
             diff.placements.forEach((id, placement) -> result.add(new Place(id, placement.residentKey,
                     placement.transform, placement.mask, placement.origin)));
+            diff.placementUpdates.forEach((id, update) -> result.add(new UpdatePlacement(
+                    id, update.transform, update.mask, update.origin)));
             diff.removes.forEach(id -> result.add(new Remove(id)));
             return List.copyOf(result);
         }

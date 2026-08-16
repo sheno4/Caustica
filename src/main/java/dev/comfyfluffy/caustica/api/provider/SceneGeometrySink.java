@@ -23,7 +23,7 @@ public interface SceneGeometrySink {
     /** One source-local atomic group that became visible in the retained scene. */
     record Publication(SceneGeometryKey groupKey) { }
 
-    sealed interface Operation permits Put, Drop, Place, Remove { }
+    sealed interface Operation permits Put, Drop, Place, Transform, Remove { }
 
     /** Engine build preferences for one retained mesh. */
     record BuildOptions(boolean minimizeMemory, boolean opacityAcceleration) {
@@ -69,6 +69,9 @@ public interface SceneGeometrySink {
             this(instanceKey, residentKey, transform, 0xff);
         }
     }
+
+    /** Update the transform and mask of an existing placement without changing its retained mesh target. */
+    record Transform(SceneGeometryKey instanceKey, GeometryTransform transform, int mask) implements Operation { }
 
     /** Remove one placement. Omitted placements remain published. */
     record Remove(SceneGeometryKey instanceKey) implements Operation {

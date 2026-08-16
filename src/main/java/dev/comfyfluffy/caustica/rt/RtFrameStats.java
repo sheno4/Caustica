@@ -57,7 +57,8 @@ public final class RtFrameStats {
             "geometryGroupsSubmitted", "geometryPutsSubmitted", "geometryTrianglesSubmitted",
             "geometryBlasCandidates", "geometryGroupsPublished", "geometryPutsPublished",
             "geometryInstancesVisible", "geometryPendingGroups", "geometryRunningGroups",
-            "geometryTerminalGroups", "geometryPublishedResidents", "geometryPublishedPlacements"));
+            "geometryTerminalGroups", "geometryPublishedResidents", "geometryPublishedPlacements",
+            "geometryPlacementFreshnessApplied"));
 
     // Per-frame GC deltas help distinguish JVM pauses from uninstrumented render work when a hitch's
     // unaccounted time is large. The host appends its own producer metrics during bootstrap.

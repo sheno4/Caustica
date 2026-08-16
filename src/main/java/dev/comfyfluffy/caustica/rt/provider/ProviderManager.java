@@ -290,6 +290,9 @@ public final class ProviderManager {
                 case SceneGeometrySink.Place place -> converted.add(new RtSceneGeometryManager.Place(
                         place.instanceKey(), place.residentKey(),
                         place.transform().relativeTo(origin.x(), origin.y(), origin.z()), place.mask(), origin));
+                case SceneGeometrySink.Transform transform -> converted.add(new RtSceneGeometryManager.UpdatePlacement(
+                        transform.instanceKey(), transform.transform().relativeTo(
+                                origin.x(), origin.y(), origin.z()), transform.mask(), origin));
                 case SceneGeometrySink.Remove remove ->
                     converted.add(new RtSceneGeometryManager.Remove(remove.instanceKey()));
             }

@@ -3,6 +3,7 @@ package dev.comfyfluffy.caustica.rt.provider;
 import dev.comfyfluffy.caustica.api.provider.SceneProvider;
 import dev.comfyfluffy.caustica.api.provider.SceneFrameContext;
 import dev.comfyfluffy.caustica.api.provider.SceneGeometrySink;
+import dev.comfyfluffy.caustica.api.provider.SceneGeometryKey;
 import dev.comfyfluffy.caustica.api.provider.GeometryTransform;
 import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import dev.comfyfluffy.caustica.api.provider.MaterialHandle;
@@ -563,8 +564,11 @@ final class ProviderManagerTest {
             @Override
             public void submitGeometry(SceneFrameContext frame) {
                 SceneGeometrySink sink = frame.geometry();
-                sink.submit(7, List.of(new SceneGeometrySink.Place(9, 3,
-                        GeometryTransform.translation(30_000_000.25, 65.5, -29_999_999.75), 0x3f)));
+                sink.submit(7, List.of(
+                        new SceneGeometrySink.Place(9, 3,
+                                GeometryTransform.translation(30_000_000.25, 65.5, -29_999_999.75), 0x3f),
+                        new SceneGeometrySink.Transform(SceneGeometryKey.of(9),
+                                GeometryTransform.translation(30_000_001.25, 66.5, -29_999_998.75), 0x7f)));
             }
         };
         ProviderManager manager = manager("geometry", provider);
@@ -580,6 +584,13 @@ final class ProviderManagerTest {
         assertEquals(1.5f, place.transform()[7]);
         assertEquals(0.25f, place.transform()[11]);
         assertEquals(0x3f, place.mask());
+        RtSceneGeometryManager.UpdatePlacement transform =
+                (RtSceneGeometryManager.UpdatePlacement) forwarded.getFirst().operations().get(1);
+        assertEquals(origin, transform.origin());
+        assertEquals(1.25f, transform.transform()[3]);
+        assertEquals(2.5f, transform.transform()[7]);
+        assertEquals(1.25f, transform.transform()[11]);
+        assertEquals(0x7f, transform.mask());
     }
 
     @Test
