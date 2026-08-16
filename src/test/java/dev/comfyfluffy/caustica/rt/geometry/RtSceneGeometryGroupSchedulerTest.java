@@ -226,6 +226,7 @@ final class RtSceneGeometryGroupSchedulerTest {
         assertEquals(List.of(), scheduler.putPublishedResident(id, second, true));
         assertSame(first, scheduler.publishedSlot(id).previous);
         assertEquals(List.of(first), scheduler.putPublishedResident(id, third, true));
+        assertEquals(1, scheduler.previousResidentSlotCount());
         assertSame(second, scheduler.publishedSlot(id).previous);
         assertSame(third, scheduler.publishedSlot(id).current);
 
@@ -233,6 +234,7 @@ final class RtSceneGeometryGroupSchedulerTest {
         scheduler.drainPreviousResidents(drained::set);
         assertSame(second, drained.get());
         assertNull(scheduler.publishedSlot(id).previous);
+        assertEquals(0, scheduler.previousResidentSlotCount());
     }
 
     @Test
@@ -248,6 +250,20 @@ final class RtSceneGeometryGroupSchedulerTest {
         assertEquals(List.of(second, first), scheduler.putPublishedResident(id, third, false));
         assertNull(scheduler.publishedSlot(id).previous);
         assertSame(third, scheduler.publishedSlot(id).current);
+        assertEquals(0, scheduler.previousResidentSlotCount());
+    }
+
+    @Test
+    void droppingResidentRemovesItsPendingPreviousSlot() {
+        RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
+        RtSceneGeometryManager.ResidentId id = resident(SOURCE, 10);
+        FakeResident first = new FakeResident();
+        FakeResident second = new FakeResident();
+        scheduler.putPublishedResident(id, first, false);
+        scheduler.putPublishedResident(id, second, true);
+
+        assertEquals(List.of(second, first), scheduler.removePublishedResident(id));
+        assertEquals(0, scheduler.previousResidentSlotCount());
     }
 
     @Test
@@ -273,6 +289,7 @@ final class RtSceneGeometryGroupSchedulerTest {
         assertTrue(cleared.contains(sourcePrevious));
         assertNull(scheduler.publishedSlot(sourceId));
         assertTrue(scheduler.publishedSlot(otherId) != null);
+        assertEquals(0, scheduler.previousResidentSlotCount());
         scheduler.assertPublishedIndexConsistent();
 
         scheduler.destroyAfterDeviceIdle(java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>()),

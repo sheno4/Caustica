@@ -1110,6 +1110,7 @@ public final class RtSceneGeometryManager {
     static final class GroupScheduler {
         private final Map<ResidentId, PublishedResidentSlot> publishedResidents = new LinkedHashMap<>();
         private final Map<InstanceId, PublishedPlacement> publishedPlacements = new LinkedHashMap<>();
+        private final Set<PublishedResidentSlot> previousResidentSlots = new LinkedHashSet<>();
         private final Map<GroupKey, Barrier> pending = new LinkedHashMap<>();
         private final Set<ResidentId> reservedResidents = new LinkedHashSet<>();
         private final Set<InstanceId> reservedInstances = new LinkedHashSet<>();
@@ -1306,6 +1307,7 @@ public final class RtSceneGeometryManager {
                 if (slot.id.source.equals(source)) {
                     retired.add(slot.current);
                     if (slot.previous != null) retired.add(slot.previous);
+                    previousResidentSlots.remove(slot);
                     residents.remove();
                 }
             }
@@ -1335,12 +1337,14 @@ public final class RtSceneGeometryManager {
                 GroupResident retired = slot.previous;
                 slot.previous = slot.current;
                 slot.current = resident;
+                previousResidentSlots.add(slot);
                 return retired == null ? List.of() : List.of(retired);
             } else {
                 GroupResident current = slot.current;
                 GroupResident previous = slot.previous;
                 slot.previous = null;
                 slot.current = resident;
+                previousResidentSlots.remove(slot);
                 return previous == null ? List.of(current) : List.of(current, previous);
             }
         }
@@ -1352,6 +1356,7 @@ public final class RtSceneGeometryManager {
                 throw new IllegalStateException("published resident still has placements " + id);
             }
             publishedResidents.remove(id);
+            previousResidentSlots.remove(slot);
             return slot.previous == null ? List.of(slot.current) : List.of(slot.current, slot.previous);
         }
 
@@ -1381,21 +1386,29 @@ public final class RtSceneGeometryManager {
         java.util.Collection<PublishedPlacement> publishedPlacements() { return publishedPlacements.values(); }
 
         void drainPreviousResidents(Consumer<GroupResident> consumer) {
-            for (PublishedResidentSlot slot : publishedResidents.values()) {
-                if (slot.previous == null) continue;
+            for (PublishedResidentSlot slot : previousResidentSlots) {
                 consumer.accept(slot.previous);
                 slot.previous = null;
             }
+            previousResidentSlots.clear();
         }
 
         PublishedResidentSlot publishedSlot(ResidentId id) { return publishedResidents.get(id); }
         PublishedPlacement publishedPlacement(InstanceId id) { return publishedPlacements.get(id); }
+        int previousResidentSlotCount() { return previousResidentSlots.size(); }
 
         /** Full index audit for focused tests; production mutation paths maintain these links directly. */
         void assertPublishedIndexConsistent() {
             for (Map.Entry<ResidentId, PublishedResidentSlot> entry : publishedResidents.entrySet()) {
-                if (!entry.getKey().equals(entry.getValue().id)) {
+                PublishedResidentSlot slot = entry.getValue();
+                if (!entry.getKey().equals(slot.id)
+                        || (slot.previous != null) != previousResidentSlots.contains(slot)) {
                     throw new IllegalStateException("inconsistent published resident index");
+                }
+            }
+            for (PublishedResidentSlot slot : previousResidentSlots) {
+                if (slot.previous == null || publishedResidents.get(slot.id) != slot) {
+                    throw new IllegalStateException("inconsistent previous resident index");
                 }
             }
             for (Map.Entry<InstanceId, PublishedPlacement> entry : publishedPlacements.entrySet()) {
@@ -1429,6 +1442,7 @@ public final class RtSceneGeometryManager {
             }
             publishedResidents.clear();
             publishedPlacements.clear();
+            previousResidentSlots.clear();
             pending.clear();
             reservedResidents.clear();
             reservedInstances.clear();
