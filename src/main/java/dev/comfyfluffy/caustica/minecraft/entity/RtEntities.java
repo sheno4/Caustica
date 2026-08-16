@@ -234,8 +234,8 @@ public final class RtEntities {
         long meshVisibilityIntervalFramesTotal;
         long meshVisibilityIntervalFramesMax;
         long initialUnavailableFrames;
-        long priorPoseLastRenderedAgeFramesTotal;
-        long priorPoseLastRenderedAgeFramesMax;
+        long priorRevisionInterveningFramesAtReplacementTotal;
+        long priorRevisionInterveningFramesAtReplacementMax;
         long lastMeshVisibilityFrame = -1L;
         long visibleMeshSourceFrame = -1L;
         long pendingVisibleMeshVersion;
@@ -299,19 +299,22 @@ public final class RtEntities {
             } else {
                 long skipped = Math.max(0L, version - visibleMeshVersion - 1L);
                 long interval = Math.max(0L, frame - lastMeshVisibilityFrame);
-                long priorPoseAge = Math.max(0L, frame - visibleMeshSourceFrame - 1L);
+                long interveningFrames = Math.max(0L, frame - visibleMeshSourceFrame - 1L);
                 meshRevisionsSkippedBetweenVisibility += skipped;
                 meshVisibilityIntervalFramesTotal += interval;
                 meshVisibilityIntervalFramesMax = Math.max(meshVisibilityIntervalFramesMax, interval);
-                priorPoseLastRenderedAgeFramesTotal += priorPoseAge;
-                priorPoseLastRenderedAgeFramesMax = Math.max(priorPoseLastRenderedAgeFramesMax, priorPoseAge);
+                priorRevisionInterveningFramesAtReplacementTotal += interveningFrames;
+                priorRevisionInterveningFramesAtReplacementMax = Math.max(
+                        priorRevisionInterveningFramesAtReplacementMax, interveningFrames);
                 RtFrameStats.FRAME.count("entityMeshRevisionsSkippedBetweenVisibility", skipped);
                 RtFrameStats.FRAME.count("entityMeshVisibilityIntervalFramesTotal", interval);
                 RtFrameStats.FRAME.count("entityMeshVisibilityIntervalFramesSamples", 1);
                 RtFrameStats.FRAME.max("entityMeshVisibilityIntervalFramesMax", interval);
-                RtFrameStats.FRAME.count("entityMeshPriorPoseLastRenderedAgeFramesTotal", priorPoseAge);
-                RtFrameStats.FRAME.count("entityMeshPriorPoseLastRenderedAgeFramesSamples", 1);
-                RtFrameStats.FRAME.max("entityMeshPriorPoseLastRenderedAgeFramesMax", priorPoseAge);
+                RtFrameStats.FRAME.count("entityMeshPriorRevisionInterveningFramesAtReplacementTotal",
+                        interveningFrames);
+                RtFrameStats.FRAME.count("entityMeshPriorRevisionInterveningFramesAtReplacementSamples", 1);
+                RtFrameStats.FRAME.max("entityMeshPriorRevisionInterveningFramesAtReplacementMax",
+                        interveningFrames);
             }
             visibleMeshVersion = version;
             visibleMeshSourceFrame = sourceFrame;

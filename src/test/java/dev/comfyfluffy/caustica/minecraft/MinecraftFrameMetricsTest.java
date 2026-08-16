@@ -20,7 +20,7 @@ final class MinecraftFrameMetricsTest {
         assertTrue(schema.counters().contains("entityMeshRevisionsSkippedBetweenVisibility"));
         assertTrue(schema.counters().contains("entityMeshVisibilityIntervalFramesMax"));
         assertTrue(schema.counters().contains("entityMeshInitialUnavailableFramesMax"));
-        assertTrue(schema.counters().contains("entityMeshPriorPoseLastRenderedAgeFramesMax"));
+        assertTrue(schema.counters().contains("entityMeshPriorRevisionInterveningFramesAtReplacementMax"));
         assertTrue(schema.counters().contains("entitiesCaptured"));
     }
 

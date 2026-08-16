@@ -43,6 +43,7 @@ public final class RtSceneGeometryManager {
     private final RtAccel.TlasRing tlasRing = new RtAccel.TlasRing();
     private final GroupScheduler groupScheduler;
     private final ConcurrentLinkedQueue<TerminalGroup> terminalGroups = new ConcurrentLinkedQueue<>();
+    private final FramePublicationGate framePublicationGate = new FramePublicationGate();
     private final Map<InstanceKey, InstanceState> instanceStates = new HashMap<>();
     private final FailureLatch groupFailures = new FailureLatch();
     private final TableSlot[] tables = new TableSlot[TABLE_RING];
@@ -148,6 +149,7 @@ public final class RtSceneGeometryManager {
      * completion and are retired only after that completion.
      */
     public void clearSource(GpuContext ctx, ResourceId source) {
+        framePublicationGate.clearSource(source);
         Set<GroupResident> retired = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
         retired.addAll(groupScheduler.clearSource(source));
         instanceStates.entrySet().removeIf(entry -> entry.getKey().provider.equals(source));
@@ -192,7 +194,12 @@ public final class RtSceneGeometryManager {
         RtFrameStats.FRAME.set("geometryPublishedResidents", groupScheduler.publishedResidentCount());
         RtFrameStats.FRAME.set("geometryPublishedPlacements", groupScheduler.publishedPlacementCount());
         RtGeometryProfiling.frameVisible();
+        completeFramePublicationBoundary();
         return update;
+    }
+
+    void completeFramePublicationBoundary() {
+        framePublicationGate.frameCompleted();
     }
 
     void publishReadyForFrame(GpuContext ctx) {
@@ -211,6 +218,7 @@ public final class RtSceneGeometryManager {
     /** Teardown after the device is idle. */
     public void shutdown() {
         RtGeometryProfiling.resetPublications();
+        framePublicationGate.clear();
         Set<PreparedGroup> destroyedGroups = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
         Set<GroupResident> destroyedCancelledSources = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
         TerminalGroup terminal;
@@ -337,7 +345,9 @@ public final class RtSceneGeometryManager {
                 candidate.updatable = false;
                 operation = build.op();
             }
-            candidates.add(new GroupCandidate(entry.getKey(), candidate, source, operation, !retainPreviousPositions));
+            candidates.add(new GroupCandidate(
+                    new ResidentId(prepared.key.source(), entry.getKey()), candidate, source, operation,
+                    !retainPreviousPositions));
             RtFrameStats.FRAME.count("geometryBlasCandidates", 1);
             preparingCandidate = null;
         }
@@ -389,65 +399,86 @@ public final class RtSceneGeometryManager {
     }
 
     private void publishTerminalGroups(GpuContext ctx) {
-        TerminalGroup terminal;
-        while ((terminal = terminalGroups.poll()) != null) {
-            boolean cancelled = groupScheduler.cancelled(terminal.prepared.barrier);
-            Throwable terminalFailure = terminal.failure;
-            if (terminalFailure == null && terminal.prepared.candidates.stream()
-                    .anyMatch(candidate -> !candidate.publicationState.publishable())) {
-                terminalFailure = new IllegalStateException("geometry candidate reached publication before terminal build phase");
-            }
-            if (!groupScheduler.running(terminal.prepared.barrier) || cancelled || terminalFailure != null) {
-                terminal.prepared.destroyCandidates(ctx);
-                retireCancelledSources(ctx, terminal.prepared);
-                groupScheduler.complete(terminal.prepared.barrier, false);
-                if (!cancelled && terminalFailure != null) {
-                    if (terminal.prepared.barrier.failureHandler != null) {
-                        terminal.prepared.barrier.failureHandler.accept(terminalFailure);
-                    } else {
-                        groupFailures.record(terminalFailure);
+        int available = terminalGroups.size();
+        ArrayList<TerminalGroup> deferred = null;
+        try {
+            for (int i = 0; i < available; i++) {
+                TerminalGroup terminal = terminalGroups.poll();
+                if (terminal == null) break;
+                boolean cancelled = groupScheduler.cancelled(terminal.prepared.barrier);
+                Throwable terminalFailure = terminal.failure;
+                if (terminalFailure == null && terminal.prepared.candidates.stream()
+                        .anyMatch(candidate -> !candidate.publicationState.publishable())) {
+                    terminalFailure = new IllegalStateException(
+                            "geometry candidate reached publication before terminal build phase");
+                }
+                boolean running = groupScheduler.running(terminal.prepared.barrier);
+                boolean residentBlocked = running && !cancelled && terminalFailure == null
+                        && framePublicationGate.blocks(terminal.prepared.candidates);
+                if (deferSuccessfulTerminal(running, cancelled, terminalFailure, residentBlocked)) {
+                    if (deferred == null) deferred = new ArrayList<>();
+                    deferred.add(terminal);
+                    continue;
+                }
+                if (!running || cancelled || terminalFailure != null) {
+                    terminal.prepared.destroyCandidates(ctx);
+                    retireCancelledSources(ctx, terminal.prepared);
+                    groupScheduler.complete(terminal.prepared.barrier, false);
+                    if (!cancelled && terminalFailure != null) {
+                        if (terminal.prepared.barrier.failureHandler != null) {
+                            terminal.prepared.barrier.failureHandler.accept(terminalFailure);
+                        } else {
+                            groupFailures.record(terminalFailure);
+                        }
+                    }
+                    continue;
+                }
+                for (CandidateTerminal candidate : terminal.candidates) {
+                    if (candidate.build != null) ctx.gpuExecutor().markPublished(candidate.build);
+                }
+                for (GroupCandidate candidate : terminal.prepared.candidates) {
+                    for (GroupResident retired : groupScheduler.putPublishedResident(
+                            candidate.id, candidate.resident, !candidate.resetMotion)) {
+                        ctx.gpuExecutor().retireAfterGraphics(retired.graphicsUse(), retired::destroy);
                     }
                 }
-                continue;
-            }
-            for (CandidateTerminal candidate : terminal.candidates) {
-                if (candidate.build != null) ctx.gpuExecutor().markPublished(candidate.build);
-            }
-            for (GroupCandidate candidate : terminal.prepared.candidates) {
-                ResidentId residentId = new ResidentId(terminal.prepared.key.source(), candidate.key);
-                for (GroupResident retired : groupScheduler.putPublishedResident(
-                        residentId, candidate.resident, !candidate.resetMotion)) {
-                    ctx.gpuExecutor().retireAfterGraphics(retired.graphicsUse(), retired::destroy);
+                RtFrameStats.FRAME.count("geometryGroupsPublished", 1);
+                RtFrameStats.FRAME.count("geometryPutsPublished", terminal.prepared.candidates.size());
+                for (Map.Entry<SceneGeometryKey, Placement> placement : terminal.prepared.diff.placements.entrySet()) {
+                    groupScheduler.putPublishedPlacement(
+                            new InstanceId(terminal.prepared.key.source(), placement.getKey()), placement.getValue());
+                }
+                for (Map.Entry<SceneGeometryKey, PlacementUpdate> update
+                        : terminal.prepared.diff.placementUpdates.entrySet()) {
+                    groupScheduler.updatePublishedPlacement(
+                            new InstanceId(terminal.prepared.key.source(), update.getKey()), update.getValue());
+                    RtFrameStats.FRAME.count("geometryPlacementFreshnessApplied", 1);
+                }
+                for (SceneGeometryKey remove : terminal.prepared.diff.removes) {
+                    groupScheduler.removePublishedPlacement(new InstanceId(terminal.prepared.key.source(), remove));
+                    instanceStates.remove(new InstanceKey(terminal.prepared.key.source(), remove));
+                }
+                for (SceneGeometryKey drop : terminal.prepared.diff.drops) {
+                    for (GroupResident retired : groupScheduler.removePublishedResident(
+                            new ResidentId(terminal.prepared.key.source(), drop))) {
+                        ctx.gpuExecutor().retireAfterGraphics(retired.graphicsUse(), retired::destroy);
+                    }
+                }
+                framePublicationGate.published(terminal.prepared.candidates);
+                groupScheduler.complete(terminal.prepared.barrier, true);
+                if (terminal.prepared.barrier.acknowledgment != null) {
+                    terminal.prepared.barrier.acknowledgment.accept(new PublicationAck(terminal.prepared.key,
+                            terminal.prepared.revision, terminal.prepared.barrier.operations()));
                 }
             }
-            RtFrameStats.FRAME.count("geometryGroupsPublished", 1);
-            RtFrameStats.FRAME.count("geometryPutsPublished", terminal.prepared.candidates.size());
-            for (Map.Entry<SceneGeometryKey, Placement> placement : terminal.prepared.diff.placements.entrySet()) {
-                groupScheduler.putPublishedPlacement(new InstanceId(terminal.prepared.key.source(), placement.getKey()),
-                        placement.getValue());
-            }
-            for (Map.Entry<SceneGeometryKey, PlacementUpdate> update
-                    : terminal.prepared.diff.placementUpdates.entrySet()) {
-                groupScheduler.updatePublishedPlacement(new InstanceId(terminal.prepared.key.source(), update.getKey()),
-                        update.getValue());
-                RtFrameStats.FRAME.count("geometryPlacementFreshnessApplied", 1);
-            }
-            for (SceneGeometryKey remove : terminal.prepared.diff.removes) {
-                groupScheduler.removePublishedPlacement(new InstanceId(terminal.prepared.key.source(), remove));
-                instanceStates.remove(new InstanceKey(terminal.prepared.key.source(), remove));
-            }
-            for (SceneGeometryKey drop : terminal.prepared.diff.drops) {
-                for (GroupResident retired : groupScheduler.removePublishedResident(
-                        new ResidentId(terminal.prepared.key.source(), drop))) {
-                    ctx.gpuExecutor().retireAfterGraphics(retired.graphicsUse(), retired::destroy);
-                }
-            }
-            groupScheduler.complete(terminal.prepared.barrier, true);
-            if (terminal.prepared.barrier.acknowledgment != null) {
-                terminal.prepared.barrier.acknowledgment.accept(new PublicationAck(terminal.prepared.key,
-                        terminal.prepared.revision, terminal.prepared.barrier.operations()));
-            }
+        } finally {
+            if (deferred != null) terminalGroups.addAll(deferred);
         }
+    }
+
+    static boolean deferSuccessfulTerminal(boolean running, boolean cancelled, Throwable failure,
+                                            boolean residentBlocked) {
+        return running && !cancelled && failure == null && residentBlocked;
     }
 
     private void appendPublishedGroups(FrameUpdate update) {
@@ -807,6 +838,47 @@ public final class RtSceneGeometryManager {
         }
     }
 
+    /** Prevents a resident from being replaced twice before a completed frame can snapshot it. */
+    static final class FramePublicationGate {
+        private final Set<ResidentId> publishedSinceFrame = new LinkedHashSet<>();
+        private boolean active;
+
+        boolean blocks(List<GroupCandidate> candidates) {
+            if (!active) return false;
+            for (GroupCandidate candidate : candidates) {
+                if (publishedSinceFrame.contains(candidate.id)) return true;
+            }
+            return false;
+        }
+
+        void published(List<GroupCandidate> candidates) {
+            if (!active) return;
+            for (GroupCandidate candidate : candidates) publishedSinceFrame.add(candidate.id);
+        }
+
+        boolean blocks(ResidentId resident) {
+            return active && publishedSinceFrame.contains(resident);
+        }
+
+        void published(ResidentId resident) {
+            if (active) publishedSinceFrame.add(resident);
+        }
+
+        void frameCompleted() {
+            active = true;
+            publishedSinceFrame.clear();
+        }
+
+        void clearSource(ResourceId source) {
+            publishedSinceFrame.removeIf(resident -> resident.source.equals(source));
+        }
+
+        void clear() {
+            active = false;
+            publishedSinceFrame.clear();
+        }
+    }
+
     /** Source-qualified identity remains stable even when a source regroups its atomic updates. */
     record ResidentId(ResourceId source, SceneGeometryKey key) { }
     record InstanceId(ResourceId source, SceneGeometryKey key) { }
@@ -878,7 +950,7 @@ public final class RtSceneGeometryManager {
     }
 
     private static final class GroupCandidate {
-        final SceneGeometryKey key;
+        final ResidentId id;
         final GroupResident resident;
         final GroupResident source;
         final RtAccel.PreparedBlas operation;
@@ -886,9 +958,9 @@ public final class RtSceneGeometryManager {
         boolean retireSourceAfterTerminal;
         final CompactionPublicationState publicationState;
 
-        GroupCandidate(SceneGeometryKey key, GroupResident resident, GroupResident source, RtAccel.PreparedBlas operation,
+        GroupCandidate(ResidentId id, GroupResident resident, GroupResident source, RtAccel.PreparedBlas operation,
                        boolean resetMotion) {
-            this.key = key;
+            this.id = id;
             this.resident = resident;
             this.source = source;
             this.operation = operation;

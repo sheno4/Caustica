@@ -174,7 +174,7 @@ final class RtEntitiesPublicationStateTest {
     }
 
     @Test
-    void successfulFrameVisibilityTracksSkippedRevisionsIntervalAndPriorPoseAge() {
+    void successfulFrameVisibilityTracksSkippedRevisionsIntervalAndPriorRevisionLongevity() {
         RtEntities.EntityState state = state();
         state.visibleMeshVersion = 1L;
         state.meshVisibilityCount = 1L;
@@ -190,8 +190,26 @@ final class RtEntitiesPublicationStateTest {
         assertEquals(2L, state.meshRevisionsSkippedBetweenVisibility);
         assertEquals(4L, state.meshVisibilityIntervalFramesTotal);
         assertEquals(4L, state.meshVisibilityIntervalFramesMax);
-        assertEquals(5L, state.priorPoseLastRenderedAgeFramesTotal);
-        assertEquals(5L, state.priorPoseLastRenderedAgeFramesMax);
+        assertEquals(5L, state.priorRevisionInterveningFramesAtReplacementTotal);
+        assertEquals(5L, state.priorRevisionInterveningFramesAtReplacementMax);
+    }
+
+    @Test
+    void adjacentOneFramePublicationsHaveOneInterveningFrameFromThePriorSourceRevision() {
+        RtEntities.EntityState state = state();
+        state.visibleMeshVersion = 1L;
+        state.meshVisibilityCount = 1L;
+        state.lastMeshVisibilityFrame = 101L;
+        state.visibleMeshSourceFrame = 100L;
+        state.pendingVisibleMeshVersion = 2L;
+        state.pendingVisibleMeshSourceFrame = 101L;
+        state.pendingMeshVisibilityToken = state.meshVisibilityToken;
+        state.meshVisibilityQueued = true;
+
+        state.meshFrameVisible(102L, state.meshVisibilityToken);
+
+        assertEquals(1L, state.priorRevisionInterveningFramesAtReplacementTotal);
+        assertEquals(1L, state.priorRevisionInterveningFramesAtReplacementMax);
     }
 
     private static RtEntities.EntityState state() {

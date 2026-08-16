@@ -58,6 +58,104 @@ final class RtSceneGeometryGroupSchedulerTest {
     }
 
     @Test
+    void framePublicationGateDoesNotThrottleLoadingProgressBeforeACompletedFrame() {
+        RtSceneGeometryManager.FramePublicationGate gate = new RtSceneGeometryManager.FramePublicationGate();
+        RtSceneGeometryManager.ResidentId id = resident(SOURCE, 10);
+
+        assertTrue(!gate.blocks(id));
+        gate.published(id);
+        assertTrue(!gate.blocks(id));
+        gate.published(id);
+        assertTrue(!gate.blocks(id));
+    }
+
+    @Test
+    void framePublicationGateAllowsOneReplacementPerResidentAndIndependentResidents() {
+        RtSceneGeometryManager.FramePublicationGate gate = new RtSceneGeometryManager.FramePublicationGate();
+        RtSceneGeometryManager.ResidentId first = resident(SOURCE, 10);
+        RtSceneGeometryManager.ResidentId second = resident(SOURCE, 20);
+        gate.frameCompleted();
+
+        assertTrue(!gate.blocks(first));
+        gate.published(first);
+        assertTrue(gate.blocks(first));
+        assertTrue(!gate.blocks(second));
+
+        gate.frameCompleted();
+        assertTrue(!gate.blocks(first));
+    }
+
+    @Test
+    void sourceClearReleasesOnlyItsResidentPublicationMarks() {
+        ResourceId otherSource = ResourceId.of("test", "other");
+        RtSceneGeometryManager.FramePublicationGate gate = new RtSceneGeometryManager.FramePublicationGate();
+        RtSceneGeometryManager.ResidentId first = resident(SOURCE, 10);
+        RtSceneGeometryManager.ResidentId second = resident(otherSource, 10);
+        gate.frameCompleted();
+        gate.published(first);
+        gate.published(second);
+
+        gate.clearSource(SOURCE);
+
+        assertTrue(!gate.blocks(first));
+        assertTrue(gate.blocks(second));
+    }
+
+    @Test
+    void clearingPublicationGateRestoresLoadingModeUntilAnotherFrameCompletes() {
+        RtSceneGeometryManager.FramePublicationGate gate = new RtSceneGeometryManager.FramePublicationGate();
+        RtSceneGeometryManager.ResidentId id = resident(SOURCE, 10);
+        gate.frameCompleted();
+        gate.published(id);
+        assertTrue(gate.blocks(id));
+
+        gate.clear();
+        gate.published(id);
+        assertTrue(!gate.blocks(id));
+
+        gate.frameCompleted();
+        gate.published(id);
+        assertTrue(gate.blocks(id));
+    }
+
+    @Test
+    void failedCancelledAndNonRunningTerminalsBypassResidentDeferral() {
+        RuntimeException failure = new RuntimeException("failed");
+
+        assertTrue(!RtSceneGeometryManager.deferSuccessfulTerminal(true, false, failure, true));
+        assertTrue(!RtSceneGeometryManager.deferSuccessfulTerminal(true, true, null, true));
+        assertTrue(!RtSceneGeometryManager.deferSuccessfulTerminal(false, false, null, true));
+        assertTrue(RtSceneGeometryManager.deferSuccessfulTerminal(true, false, null, true));
+    }
+
+    @Test
+    void residentGateKeepsHistoryAtTheLastSnapshottedReplacement() {
+        RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
+        RtSceneGeometryManager.FramePublicationGate gate = new RtSceneGeometryManager.FramePublicationGate();
+        RtSceneGeometryManager.ResidentId id = resident(SOURCE, 10);
+        FakeResident original = new FakeResident();
+        FakeResident first = new FakeResident();
+        FakeResident second = new FakeResident();
+        scheduler.putPublishedResident(id, original, false);
+        gate.frameCompleted();
+
+        assertTrue(!gate.blocks(id));
+        scheduler.putPublishedResident(id, first, true);
+        gate.published(id);
+
+        assertTrue(gate.blocks(id));
+        assertSame(first, scheduler.publishedSlot(id).current);
+        assertSame(original, scheduler.publishedSlot(id).previous);
+
+        scheduler.drainPreviousResidents(retired -> assertSame(original, retired));
+        gate.frameCompleted();
+        assertTrue(!gate.blocks(id));
+        scheduler.putPublishedResident(id, second, true);
+        assertSame(second, scheduler.publishedSlot(id).current);
+        assertSame(first, scheduler.publishedSlot(id).previous);
+    }
+
+    @Test
     void staleRevisionCannotReplaceANewerAcceptedGroup() {
         RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
         scheduler.submit(group(FIRST, 2L, new RtSceneGeometryManager.Drop(10)));
@@ -556,6 +654,23 @@ final class RtSceneGeometryGroupSchedulerTest {
     }
 
     @Test
+    void frameLateDrainProcessesAPutPreparationFailureWithoutPublication() {
+        RuntimeException cause = new RuntimeException("material packing failed");
+        RtSceneGeometryManager manager = new RtSceneGeometryManager((material, coverage) -> {
+            throw cause;
+        });
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        AtomicReference<RtSceneGeometryManager.PublicationAck> published = new AtomicReference<>();
+        manager.submit(List.of(group(FIRST, new RtSceneGeometryManager.Put(10, payload()))),
+                published::set, failure::set);
+
+        manager.publishReadyForFrame(null);
+
+        assertSame(cause, failure.get());
+        assertNull(published.get());
+    }
+
+    @Test
     void progressPublishesAGroupWithoutFrameAssembly() {
         RtSceneGeometryManager manager = new RtSceneGeometryManager((material, coverage) -> null);
         AtomicReference<RtSceneGeometryManager.PublicationAck> published = new AtomicReference<>();
@@ -574,6 +689,7 @@ final class RtSceneGeometryGroupSchedulerTest {
     void transformSubmittedBeforeBeginUpdatePublishesInItsFramePreparationPass() {
         RtSceneGeometryManager.GroupScheduler scheduler = publishedPair();
         RtSceneGeometryManager manager = new RtSceneGeometryManager((material, coverage) -> null, scheduler);
+        manager.completeFramePublicationBoundary();
         List<Long> published = new java.util.ArrayList<>();
         manager.submit(List.of(group(TRANSFORM, updatePlacement(3, 24f))),
                 acknowledgment -> published.add(acknowledgment.revision()));
@@ -607,6 +723,7 @@ final class RtSceneGeometryGroupSchedulerTest {
     void framePreparationDoesNotStartReplacementUnblockedByLifecycleRemoval() {
         RtSceneGeometryManager.GroupScheduler scheduler = publishedPair();
         RtSceneGeometryManager manager = new RtSceneGeometryManager((material, coverage) -> null, scheduler);
+        manager.completeFramePublicationBoundary();
         List<RtSceneGeometryManager.GroupKey> published = new java.util.ArrayList<>();
         manager.submit(List.of(
                 group(LIFECYCLE, new RtSceneGeometryManager.Remove(3)),
