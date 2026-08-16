@@ -38,7 +38,7 @@ import static org.lwjgl.vulkan.KHRSynchronization2.VK_PIPELINE_STAGE_2_RAY_TRACI
  * queue-synchronization rule while sharing the logical device with graphics work.
  */
 public final class RtGpuExecutor {
-    private static final int MAX_BUILD_BATCH = 32;
+    private static final int MAX_BUILD_BATCH = 128;
     private static final Job STOP = new Job(null, null, null, null, null, 0L);
     private static final long BUILD_READ_STAGES =
             VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR

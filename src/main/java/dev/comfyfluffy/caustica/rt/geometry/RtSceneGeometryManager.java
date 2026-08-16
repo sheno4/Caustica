@@ -1013,7 +1013,7 @@ public final class RtSceneGeometryManager {
         private final Map<ResidentId, GroupResident> publishedResidents = new LinkedHashMap<>();
         private final Map<InstanceId, Placement> publishedPlacements = new LinkedHashMap<>();
         private final Map<ResidentId, GroupResident> previousResidents = new LinkedHashMap<>();
-        private final List<Barrier> pending = new ArrayList<>();
+        private final Map<GroupKey, Barrier> pending = new LinkedHashMap<>();
         private final Set<ResidentId> reservedResidents = new LinkedHashSet<>();
         private final Set<InstanceId> reservedInstances = new LinkedHashSet<>();
         private final Set<Barrier> running = new LinkedHashSet<>();
@@ -1033,7 +1033,13 @@ public final class RtSceneGeometryManager {
             if (previous != null && update.revision <= previous) {
                 return;
             }
+            Barrier barrier = barrier(update, acknowledgment, failureHandler);
+            mergePending(pending, barrier);
             latestAccepted.put(update.key, update.revision);
+        }
+
+        private static Barrier barrier(GeometryUpdateGroup update, Consumer<PublicationAck> acknowledgment,
+                                       Consumer<Throwable> failureHandler) {
             Map<SceneGeometryKey, GeometryPayload> puts = new LinkedHashMap<>();
             Set<SceneGeometryKey> drops = new LinkedHashSet<>();
             Map<SceneGeometryKey, Placement> places = new LinkedHashMap<>();
@@ -1055,48 +1061,46 @@ public final class RtSceneGeometryManager {
                     }
                 }
             }
-            Barrier barrier = new Barrier(update.key, update.revision,
+            return new Barrier(update.key, update.revision,
                     new GroupDiff(Map.copyOf(puts), Set.copyOf(drops), Map.copyOf(places), Set.copyOf(removes)),
                     acknowledgment, failureHandler);
-            mergePending(barrier);
         }
 
         void submitAll(List<GeometryUpdateGroup> updates, Consumer<PublicationAck> acknowledgment,
                        Consumer<Throwable> failureHandler) {
-            GroupScheduler preview = copyForValidation();
-            for (GeometryUpdateGroup update : updates) preview.submit(update, acknowledgment, failureHandler);
-            for (GeometryUpdateGroup update : updates) submit(update, acknowledgment, failureHandler);
-        }
-
-        private GroupScheduler copyForValidation() {
-            GroupScheduler copy = new GroupScheduler();
-            copy.publishedResidents.putAll(publishedResidents);
-            copy.publishedPlacements.putAll(publishedPlacements);
-            copy.previousResidents.putAll(previousResidents);
-            copy.pending.addAll(pending);
-            copy.reservedResidents.addAll(reservedResidents);
-            copy.reservedInstances.addAll(reservedInstances);
-            copy.running.addAll(running);
-            copy.latestAccepted.putAll(latestAccepted);
-            return copy;
-        }
-
-        private void mergePending(Barrier barrier) {
-            ArrayList<Barrier> merged = new ArrayList<>();
-            boolean changed;
-            do {
-                changed = false;
-                for (Barrier other : pending) {
-                    if (!merged.contains(other) && other.key.equals(barrier.key)) {
-                        barrier = other.merge(barrier);
-                        merged.add(other);
-                        changed = true;
-                    }
+            if (updates.isEmpty()) return;
+            if (updates.size() == 1) {
+                submit(updates.getFirst(), acknowledgment, failureHandler);
+                return;
+            }
+            LinkedHashMap<GroupKey, Barrier> stagedPending = LinkedHashMap.newLinkedHashMap(updates.size());
+            for (GeometryUpdateGroup update : updates) {
+                Barrier staged = stagedPending.get(update.key);
+                Long previous = staged != null ? Long.valueOf(staged.revision) : latestAccepted.get(update.key);
+                if (previous != null && update.revision <= previous) {
+                    continue;
                 }
-            } while (changed);
-            validateBarrier(barrier);
-            pending.removeAll(merged);
-            pending.add(barrier);
+                Barrier next = barrier(update, acknowledgment, failureHandler);
+                Barrier queued = staged != null ? staged : pending.get(update.key);
+                Barrier merged = validateMerged(queued, next);
+                stagedPending.remove(update.key);
+                stagedPending.put(update.key, merged);
+            }
+            pending.keySet().removeAll(stagedPending.keySet());
+            pending.putAll(stagedPending);
+            stagedPending.forEach((key, barrier) -> latestAccepted.put(key, barrier.revision));
+        }
+
+        private void mergePending(Map<GroupKey, Barrier> target, Barrier barrier) {
+            Barrier merged = validateMerged(target.get(barrier.key), barrier);
+            target.remove(barrier.key);
+            target.put(barrier.key, merged);
+        }
+
+        private Barrier validateMerged(Barrier queued, Barrier next) {
+            Barrier merged = queued != null ? queued.merge(next) : next;
+            validateBarrier(merged);
+            return merged;
         }
 
         private void validateBarrier(Barrier barrier) {
@@ -1122,19 +1126,20 @@ public final class RtSceneGeometryManager {
 
         List<GroupRun> startable() {
             List<GroupRun> result = new ArrayList<>();
-            for (int i = 0; i < pending.size(); ) {
-                Barrier barrier = pending.get(i);
-                if (reservedResidents.stream().anyMatch(barrier.residents::contains)
-                        || reservedInstances.stream().anyMatch(barrier.instances::contains)) {
-                    i++; continue;
+            var iterator = pending.values().iterator();
+            while (iterator.hasNext()) {
+                Barrier barrier = iterator.next();
+                if (intersects(barrier.residents, reservedResidents)
+                        || intersects(barrier.instances, reservedInstances)) {
+                    continue;
                 }
                 try {
                     validateBarrier(barrier);
                 } catch (IllegalArgumentException invalid) {
-                    pending.remove(i);
+                    iterator.remove();
                     throw invalid;
                 }
-                pending.remove(i);
+                iterator.remove();
                 reservedResidents.addAll(barrier.residents);
                 reservedInstances.addAll(barrier.instances);
                 running.add(barrier);
@@ -1145,11 +1150,20 @@ public final class RtSceneGeometryManager {
             return result;
         }
 
+        private static <T> boolean intersects(Set<T> first, Set<T> second) {
+            Set<T> smaller = first.size() <= second.size() ? first : second;
+            Set<T> larger = smaller == first ? second : first;
+            for (T value : smaller) {
+                if (larger.contains(value)) return true;
+            }
+            return false;
+        }
+
         boolean running(Barrier barrier) { return running.contains(barrier); }
         boolean cancelled(Barrier barrier) { return barrier.cancelled; }
 
         List<GroupResident> clearSource(ResourceId source) {
-            pending.removeIf(barrier -> barrier.key.source.equals(source));
+            pending.keySet().removeIf(key -> key.source.equals(source));
             latestAccepted.keySet().removeIf(key -> key.source.equals(source));
             Set<GroupResident> deferred = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
             for (Barrier barrier : running) {
@@ -1244,10 +1258,6 @@ public final class RtSceneGeometryManager {
             instances = new LinkedHashSet<>();
             diff.placements.keySet().forEach(value -> instances.add(new InstanceId(key.source, value)));
             diff.removes.forEach(value -> instances.add(new InstanceId(key.source, value)));
-        }
-
-        boolean overlaps(Barrier other) {
-            return residents.stream().anyMatch(other.residents::contains) || instances.stream().anyMatch(other.instances::contains);
         }
 
         Barrier merge(Barrier newer) {

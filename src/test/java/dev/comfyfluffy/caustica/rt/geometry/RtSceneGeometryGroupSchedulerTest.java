@@ -129,6 +129,10 @@ final class RtSceneGeometryGroupSchedulerTest {
         RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
         assertThrows(IllegalArgumentException.class, () -> scheduler.submit(
                 group(FIRST, new RtSceneGeometryManager.Place(3, 2, identity(), 0xff))));
+
+        scheduler.submit(group(FIRST, new RtSceneGeometryManager.Put(2, payload()),
+                new RtSceneGeometryManager.Place(3, 2, identity(), 0xff)));
+        assertEquals(1, scheduler.startable().size(), "a rejected group must not advance its accepted revision");
     }
 
     @Test
@@ -140,6 +144,8 @@ final class RtSceneGeometryGroupSchedulerTest {
                 group(SECOND, new RtSceneGeometryManager.Place(3, 20, identity(), 0xff))), null, null));
 
         assertEquals(List.of(), scheduler.startable());
+        scheduler.submit(group(FIRST, new RtSceneGeometryManager.Put(10, payload())));
+        assertEquals(1, scheduler.startable().size(), "the rejected batch must not advance accepted revisions");
     }
 
     @Test
