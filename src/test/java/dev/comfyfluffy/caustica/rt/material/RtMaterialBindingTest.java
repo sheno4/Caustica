@@ -65,13 +65,6 @@ final class RtMaterialBindingTest {
     }
 
     @Test
-    void staleMaterialEpochIsRejectedBeforeBindingDerivation() {
-        RtMaterialRegistry.requireSameEpoch(12L, 12L);
-        org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException.class,
-                () -> RtMaterialRegistry.requireSameEpoch(12L, 13L));
-    }
-
-    @Test
     void coverageCutoffSurvivesQuantisation() {
         // The two cutoffs terrain and entity materials compile with. An 8-bit unorm must land close enough
         // that no texel changes side of the alpha test — sprite alpha is itself 8-bit.

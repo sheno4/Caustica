@@ -44,9 +44,9 @@ import java.util.Set;
  * rather than a cloned material, and bindings are interned on content: the same triple is one ID however
  * it was reached.
  *
- * <p>Workers read an immutable {@link Snapshot}; shared-atlas surfaces may append into
- * pre-reserved table slots because their stitched UV rectangles only become available during capture.
- * Published records never mutate.
+ * <p>Workers read an immutable {@link Snapshot}. Live binding interning is render-thread-only;
+ * shared-atlas surfaces append into pre-reserved table slots because their stitched UV rectangles only
+ * become available during capture. Published records never mutate.
  */
 public final class RtMaterialRegistry {
     public static final RtMaterialRegistry INSTANCE = new RtMaterialRegistry();
@@ -201,19 +201,24 @@ public final class RtMaterialRegistry {
                 transparentWhiteAverage(), fallbackEntry, null, RUNTIME_TEXTURE_COVERAGE_CUTOFF);
         Map<ResourceId, int[]> ids = new HashMap<>();
         List<MutableCompiledOverride> compiledOverrides = new ArrayList<>();
+        Map<ResourceId, List<MutableCompiledOverride>> compiledOverridesByMaterial = new HashMap<>();
         for (RtMaterialOverrides.Rule rule : overrides.rules()) {
-            compiledOverrides.add(new MutableCompiledOverride(rule));
+            MutableCompiledOverride compiled = new MutableCompiledOverride(rule);
+            compiledOverrides.add(compiled);
+            compiledOverridesByMaterial.computeIfAbsent(rule.material(), ignored -> new ArrayList<>()).add(compiled);
         }
         for (ResourceId material : atlasAssets) {
             RtMaterialPageCompiler.Entry entry = entries.get(material);
             int baseFeatures = entry.features()
                     & (FEATURE_SPEC | FEATURE_NORMAL | FEATURE_EMISSION_MASK
                     | FEATURE_SUBSURFACE_COLOR_BASE | FEATURE_EMISSION_COLOR_BASE);
+            List<MutableCompiledOverride> materialOverrides = compiledOverridesByMaterial.getOrDefault(
+                    material, List.of());
 
             // The first material-wide rule owns every geometry use of this material.
             MutableCompiledOverride materialWide = null;
-            for (MutableCompiledOverride compiled : compiledOverrides) {
-                if (compiled.rule.geometry() == null && compiled.rule.matchesMaterial(material)) {
+            for (MutableCompiledOverride compiled : materialOverrides) {
+                if (compiled.rule.geometry() == null) {
                     materialWide = compiled;
                     compiled.matchedMaterial = true;
                     break;
@@ -240,8 +245,8 @@ public final class RtMaterialRegistry {
             }
             ids.put(material, variants);
 
-            for (MutableCompiledOverride compiled : compiledOverrides) {
-                if (compiled.rule.geometry() == null || !compiled.rule.matchesMaterial(material)) continue;
+            for (MutableCompiledOverride compiled : materialOverrides) {
+                if (compiled.rule.geometry() == null) continue;
                 int[] overrideVariants = new int[profileVariants];
                 for (OpenPbrMaterialProfile profile : TEXTURE_PROFILES) {
                     for (MaterialTopology topology : MaterialTopology.values()) {
@@ -272,8 +277,9 @@ public final class RtMaterialRegistry {
                     | FEATURE_SUBSURFACE_COLOR_BASE | FEATURE_EMISSION_COLOR_BASE);
             RtMaterialDesc desc = compileRuntimeTextureDesc(features, false, entry.emissionSummary(),
                     defaultEmissionLuminance);
-            for (RtMaterialOverrides.Rule rule : overrides.rules()) {
-                if (!rule.matches(material, null)) continue;
+            for (MutableCompiledOverride compiled : compiledOverridesByMaterial.getOrDefault(material, List.of())) {
+                RtMaterialOverrides.Rule rule = compiled.rule;
+                if (rule.geometry() != null) continue;
                 desc = rule.apply(desc);
                 runtimeMatchedOverrides.add(rule);
                 break;
@@ -303,8 +309,10 @@ public final class RtMaterialRegistry {
                     definition.specularRoughness(), definition.baseMetalness(), definition.specularIor(),
                     definition.transmissionWeight(), RtMaterialDesc.EmissionSource.NONE, 0.0f,
                     RtMaterialDesc.EmissionSummary.NONE, surfaceImplementation);
-            for (RtMaterialOverrides.Rule rule : overrides.rules()) {
-                if (!rule.matches(definition.id(), null)) continue;
+            for (MutableCompiledOverride compiled : compiledOverridesByMaterial.getOrDefault(
+                    definition.id(), List.of())) {
+                RtMaterialOverrides.Rule rule = compiled.rule;
+                if (rule.geometry() != null) continue;
                 desc = rule.apply(desc);
                 runtimeMatchedOverrides.add(rule);
                 break;
@@ -343,7 +351,7 @@ public final class RtMaterialRegistry {
         long epoch = ++nextEpoch;
         List<RtMaterialDesc> descriptions = tables.descriptions;
         List<EmissionFootprint> footprints = tables.footprints;
-        List<CompiledOverride> frozenOverrides = compiledOverrides.stream()
+        List<CompiledOverrideLookup.Entry> frozenOverrides = compiledOverrides.stream()
                 .filter(value -> !value.ids.isEmpty())
                 .map(MutableCompiledOverride::freeze).toList();
         long matchedOverrideRules = 0;
@@ -363,7 +371,8 @@ public final class RtMaterialRegistry {
         Snapshot next = new Snapshot(epoch, Collections.unmodifiableMap(ids), fallbackVariants,
                 defaultEmissionLuminance, catalog.emissionFootprintResolution(),
                 Collections.unmodifiableMap(new HashMap<>(nextNamedMaterialIds)),
-                List.copyOf(descriptions), Collections.unmodifiableList(new ArrayList<>(footprints)), frozenOverrides,
+                List.copyOf(descriptions), Collections.unmodifiableList(new ArrayList<>(footprints)),
+                CompiledOverrideLookup.of(frozenOverrides),
                 tables.cutoutVariants.toIntArray(), sbtClasses);
         runtimeTextureIds = Collections.unmodifiableMap(nextRuntimeTextureIds);
         namedMaterialIds = Collections.unmodifiableMap(nextNamedMaterialIds);
@@ -474,7 +483,7 @@ public final class RtMaterialRegistry {
      * decides presence with white noise whatever cutoff the material compiled, so this overrides the
      * coverage axis and leaves everything else — surface, base-color texture, transmittance — alone.
      */
-    public synchronized int withStochasticCoverage(int bindingId) {
+    public int withStochasticCoverage(int bindingId) {
         MaterialBindingData base = bindingRecords.get(bindingId);
         return intern(new MaterialBindingData(
                 packBinding0(bindingBaseColorTextureIndex(base.packed0()), COVERAGE_STOCHASTIC,
@@ -489,18 +498,12 @@ public final class RtMaterialRegistry {
      * to get the alpha-tested variant instead. Cheap: coverage lives in the separately-interned
      * {@code MaterialBindingData}, so this never touches the precompiled surface/profile-variant table.
      */
-    public synchronized int withCutoutCoverage(int bindingId) {
+    public int withCutoutCoverage(int bindingId) {
         MaterialBindingData base = bindingRecords.get(bindingId);
         return intern(new MaterialBindingData(
                 packBinding0(bindingBaseColorTextureIndex(base.packed0()), COVERAGE_CUTOUT,
                         bindingFlags(base.packed0()), bindingSurfaceImpl(base.packed0())),
                 base.surface(), base.shadowTint(), base.packed1()));
-    }
-
-    /** Derive cutout coverage only while {@code materials} is still the published resource epoch. */
-    public synchronized int withCutoutCoverage(Snapshot materials, int bindingId) {
-        requireCurrent(materials);
-        return withCutoutCoverage(bindingId);
     }
 
     /**
@@ -534,16 +537,9 @@ public final class RtMaterialRegistry {
      * The binding pairing {@code bindingId}'s surface with a bindless base-color texture. Supplying a
      * texture replaces a named definition's uniform base color while preserving its other parameters.
      */
-    public synchronized int withBaseColorTextureIndex(int bindingId, int baseColorTextureIndex) {
+    public int withBaseColorTextureIndex(int bindingId, int baseColorTextureIndex) {
         MaterialBindingData base = bindingRecords.get(bindingId);
         return intern(baseColorTextureBinding(base, baseColorTextureIndex));
-    }
-
-    /** Pair a binding with a producer texture only while {@code materials} remains the current epoch. */
-    public synchronized int withBaseColorTextureIndex(Snapshot materials, int bindingId,
-                                                       int baseColorTextureIndex) {
-        requireCurrent(materials);
-        return withBaseColorTextureIndex(bindingId, baseColorTextureIndex);
     }
 
     static MaterialBindingData baseColorTextureBinding(MaterialBindingData base, int baseColorTextureIndex) {
@@ -554,17 +550,6 @@ public final class RtMaterialRegistry {
                 base.surface(), base.shadowTint(), base.packed1());
     }
 
-    private void requireCurrent(Snapshot materials) {
-        Snapshot current = snapshot;
-        requireSameEpoch(materials.epoch(), current != null ? current.epoch() : 0L);
-    }
-
-    static void requireSameEpoch(long capturedEpoch, long currentEpoch) {
-        if (capturedEpoch != currentEpoch) {
-            throw new IllegalStateException("Material snapshot is not the current resource epoch");
-        }
-    }
-
     /** Resolve a standalone texture to its pack-compiled binding ID. */
     public int resolveStandaloneTexture(ResourceId material, boolean stochasticCoverage) {
         int id = material != null ? runtimeTextureIds.getOrDefault(material, runtimeFallbackId)
@@ -573,8 +558,7 @@ public final class RtMaterialRegistry {
     }
 
     /** Resolve a host atlas reference, appending its stitched UV surface on first use. */
-    public synchronized int resolveAtlasReference(AtlasMaterialReference reference,
-                                                  boolean stochasticCoverage) {
+    public int resolveAtlasReference(AtlasMaterialReference reference, boolean stochasticCoverage) {
         if (reference == null) return runtimeFallbackId(stochasticCoverage);
         Integer current = atlasReferenceIds.get(reference);
         if (current != null) return stochasticCoverage ? withStochasticCoverage(current) : current;
@@ -602,7 +586,9 @@ public final class RtMaterialRegistry {
      * The ID of a binding with this exact content, appending it to the uploaded table on first use.
      * Content keying is what makes bindings cheap: a surface reached through a different base-color texture and
      * then a different coverage mode lands on the same ID as the reverse order, so the variant product
-     * never multiplies.
+     * never multiplies. The render thread writes and flushes a new record before packing geometry that can
+     * reference its ID; in-flight frames can reference only earlier immutable records. The table allocation
+     * and device address therefore remain fixed for the whole material epoch.
      */
     private int intern(MaterialBindingData binding) {
         Integer current = bindingIds.get(binding);
@@ -940,12 +926,43 @@ public final class RtMaterialRegistry {
             this.rule = rule;
         }
 
-        CompiledOverride freeze() {
-            return new CompiledOverride(rule, Collections.unmodifiableMap(new HashMap<>(ids)));
+        CompiledOverrideLookup.Entry freeze() {
+            int[] variants = ids.get(rule.material());
+            if (variants == null || rule.geometry() == null) {
+                throw new IllegalStateException("Compiled override is missing its material variants");
+            }
+            return new CompiledOverrideLookup.Entry(rule.material(), rule.geometry(), variants);
         }
     }
 
-    private record CompiledOverride(RtMaterialOverrides.Rule rule, Map<ResourceId, int[]> ids) {
+    /** First-authored geometry-rule lookup without a linear scan over unrelated material rules. */
+    static final class CompiledOverrideLookup {
+        private final Map<ResourceId, Map<ResourceId, int[]>> materials;
+
+        private CompiledOverrideLookup(Map<ResourceId, Map<ResourceId, int[]>> materials) {
+            this.materials = materials;
+        }
+
+        static CompiledOverrideLookup of(List<Entry> entries) {
+            if (entries.isEmpty()) return new CompiledOverrideLookup(Map.of());
+            Map<ResourceId, Map<ResourceId, int[]>> mutable = new HashMap<>();
+            for (Entry entry : entries) {
+                mutable.computeIfAbsent(entry.material, ignored -> new HashMap<>())
+                        .putIfAbsent(entry.geometry, entry.variants);
+            }
+            Map<ResourceId, Map<ResourceId, int[]>> frozen = HashMap.newHashMap(mutable.size());
+            mutable.forEach((material, geometry) ->
+                    frozen.put(material, Collections.unmodifiableMap(new HashMap<>(geometry))));
+            return new CompiledOverrideLookup(Collections.unmodifiableMap(frozen));
+        }
+
+        int[] resolve(ResourceId material, ResourceId geometry) {
+            Map<ResourceId, int[]> entries = materials.get(material);
+            return entries != null && geometry != null ? entries.get(geometry) : null;
+        }
+
+        record Entry(ResourceId material, ResourceId geometry, int[] variants) {
+        }
     }
 
     /** Read-only lookup captured once by a geometry-build task. */
@@ -958,7 +975,7 @@ public final class RtMaterialRegistry {
         private final Map<ResourceId, Integer> namedMaterialIds;
         private final List<RtMaterialDesc> descriptions;
         private final List<EmissionFootprint> footprints;
-        private final List<CompiledOverride> overrides;
+        private final CompiledOverrideLookup overrides;
         private final int[] cutoutVariants;
         private final byte[] sbtClasses;
 
@@ -967,7 +984,7 @@ public final class RtMaterialRegistry {
                          int emissionFootprintResolution,
                          Map<ResourceId, Integer> namedMaterialIds,
                          List<RtMaterialDesc> descriptions,
-                         List<EmissionFootprint> footprints, List<CompiledOverride> overrides,
+                         List<EmissionFootprint> footprints, CompiledOverrideLookup overrides,
                          int[] cutoutVariants, byte[] sbtClasses) {
             this.epoch = epoch;
             this.ids = ids;
@@ -1032,11 +1049,8 @@ public final class RtMaterialRegistry {
         public int resolve(ResourceId material, ResourceId geometry, MaterialVariant materialVariant) {
             int variant = index(materialVariant.profile(), materialVariant.topology(),
                     materialVariant.emitting());
-            for (CompiledOverride override : overrides) {
-                if (!override.rule.matches(material, geometry)) continue;
-                int[] variants = override.ids.get(material);
-                if (variants != null) return variants[variant];
-            }
+            int[] override = overrides.resolve(material, geometry);
+            if (override != null) return override[variant];
             int[] variants = ids.get(material);
             return variants != null ? variants[variant] : fallbackVariants[variant];
         }

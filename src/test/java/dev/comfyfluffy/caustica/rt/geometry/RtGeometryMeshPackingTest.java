@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
@@ -36,6 +37,31 @@ final class RtGeometryMeshPackingTest {
         assertEquals(7, Float.floatToRawIntBits(packed.primitives()[8]));
         assertEquals(8, Float.floatToRawIntBits(packed.primitives()[20]));
         assertEquals(9, Float.floatToRawIntBits(packed.primitives()[32]));
+    }
+
+    @Test
+    void resolvesEqualMaterialCoveragePairsOnlyOnce() {
+        MaterialHandle material = MaterialHandle.of("test", "shared");
+        SceneMesh mesh = new SceneMesh(
+                new float[]{0, 0, 0, 1, 0, 0, 0, 1, 0},
+                new int[]{0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2},
+                SceneMesh.UvLayout.PER_VERTEX, new float[6],
+                List.of(surface(material, SceneMesh.Coverage.OPAQUE),
+                        surface(material, SceneMesh.Coverage.OPAQUE),
+                        surface(material, SceneMesh.Coverage.CUTOUT),
+                        surface(material, SceneMesh.Coverage.CUTOUT)));
+        AtomicInteger resolutions = new AtomicInteger();
+
+        RtGeometryMeshPacking.PackedMesh packed = RtGeometryMeshPacking.pack(mesh, (reference, coverage) -> {
+            resolutions.incrementAndGet();
+            return new RtGeometryMaterialResolver.ResolvedMaterial(7 + coverage.ordinal(), 0);
+        });
+
+        assertEquals(2, resolutions.get());
+        assertEquals(7, Float.floatToRawIntBits(packed.primitives()[8]));
+        assertEquals(7, Float.floatToRawIntBits(packed.primitives()[20]));
+        assertEquals(8, Float.floatToRawIntBits(packed.primitives()[32]));
+        assertEquals(8, Float.floatToRawIntBits(packed.primitives()[44]));
     }
 
     @Test

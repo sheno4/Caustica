@@ -3,9 +3,13 @@ package dev.comfyfluffy.caustica.rt.geometry;
 import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import dev.comfyfluffy.caustica.rt.accel.RtAccel;
 
+import java.util.HashMap;
+import java.util.Map;
+
 /** Converts neutral scene meshes into the renderer's three SBT-class streams. */
 final class RtGeometryMeshPacking {
     private static final int PRIMITIVE_FLOATS = 12;
+    private static final int COVERAGE_MODES = SceneMesh.Coverage.values().length;
 
     private RtGeometryMeshPacking() {
     }
@@ -21,9 +25,18 @@ final class RtGeometryMeshPacking {
         int[] classes = new int[RtAccel.SBT_CLASSES];
         int[] materialIds = new int[triangleCount];
         int[] surfaceClasses = new int[triangleCount];
+        Map<SceneMesh.MaterialReference, RtGeometryMaterialResolver.ResolvedMaterial[]> resolvedMaterials =
+                new HashMap<>();
         for (int triangle = 0; triangle < triangleCount; triangle++) {
             SceneMesh.TriangleSurface surface = mesh.surfaces().get(triangle);
-            RtGeometryMaterialResolver.ResolvedMaterial resolved = resolver.resolve(surface.material(), surface.coverage());
+            RtGeometryMaterialResolver.ResolvedMaterial[] coverageVariants = resolvedMaterials.computeIfAbsent(
+                    surface.material(), ignored -> new RtGeometryMaterialResolver.ResolvedMaterial[COVERAGE_MODES]);
+            int coverage = surface.coverage().ordinal();
+            RtGeometryMaterialResolver.ResolvedMaterial resolved = coverageVariants[coverage];
+            if (resolved == null) {
+                resolved = resolver.resolve(surface.material(), surface.coverage());
+                coverageVariants[coverage] = resolved;
+            }
             materialIds[triangle] = resolved.bindingId();
             surfaceClasses[triangle] = surface.coverage() == SceneMesh.Coverage.OPAQUE
                     ? resolved.sbtClass() : RtAccel.CLASS_MASKED;

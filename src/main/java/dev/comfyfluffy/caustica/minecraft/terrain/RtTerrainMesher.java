@@ -5,6 +5,8 @@ import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.api.provider.MaterialTopology;
 import dev.comfyfluffy.caustica.api.provider.MaterialHandle;
 import dev.comfyfluffy.caustica.api.provider.SceneMesh;
+import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.engine.material.MaterialClassification;
 import dev.comfyfluffy.caustica.engine.material.MaterialVariant;
 import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialProfile;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialClassifier;
@@ -51,7 +53,10 @@ import net.minecraft.world.level.material.FluidState;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Map;
 
 final class RtTerrainMesher {
     /**
@@ -70,7 +75,7 @@ final class RtTerrainMesher {
 
         void reset(BlockColors blockColors) {
             capture.blockColors = blockColors;
-            capture.discardBlock(); // defensive: a prior job's throw could leave buffered quads
+            capture.reset();
             fluidCapture.reset();
             mesh.reset();
         }
@@ -317,6 +322,9 @@ final class RtTerrainMesher {
         private static final float COINCIDENT_EPS = 1.0e-4f; // verts this close are "the same" point
         private static final int RESOLVE_CAP = 128;          // skip the O(n^2) resolve for pathological blocks
         private final List<PendingQuad> pending = new ArrayList<>(8);
+        private final Map<BlockState, MaterialClassification> classifications = new IdentityHashMap<>();
+        private final Map<TextureAtlasSprite, SpriteMaterial> spriteMaterials = new IdentityHashMap<>();
+        private final Map<SceneMesh.CatalogMaterial, ResolvedCatalogMaterial> catalogMaterials = new HashMap<>();
         private int pendingCount;
         private int[] gidScratch = new int[0];
 
@@ -361,21 +369,30 @@ final class RtTerrainMesher {
                     state != null ? state.getLightEmission() : 0) / 15f;
             TextureAtlasSprite sprite = quad.materialInfo().sprite();
             q.sprite = sprite;
-            var classification = MinecraftMaterialClassifier.classify(state);
+            MaterialClassification classification = classifications.computeIfAbsent(
+                    state, MinecraftMaterialClassifier::classify);
             MaterialVariant variant = classification.variant(q.translucent
                     ? MaterialTopology.MEDIUM_BOUNDARY : MaterialTopology.SURFACE);
-            q.material = new SceneMesh.CatalogMaterial(MinecraftMaterialLookup.material(sprite),
-                    classification.geometry(), variant, new SceneMesh.AtlasTexture(
-                    dev.comfyfluffy.caustica.api.ResourceId.of(sprite.atlasLocation().getNamespace(), sprite.atlasLocation().getPath())));
+            SpriteMaterial spriteMaterial = spriteMaterials.computeIfAbsent(sprite, current ->
+                    new SpriteMaterial(MinecraftMaterialLookup.material(current), new SceneMesh.AtlasTexture(
+                            ResourceId.of(current.atlasLocation().getNamespace(), current.atlasLocation().getPath()))));
+            SceneMesh.CatalogMaterial candidate = new SceneMesh.CatalogMaterial(spriteMaterial.material,
+                    classification.geometry(), variant, spriteMaterial.texture);
+            ResolvedCatalogMaterial resolved = catalogMaterials.get(candidate);
+            if (resolved == null) {
+                resolved = new ResolvedCatalogMaterial(candidate, materials.resolve(spriteMaterial.material,
+                        classification.geometry(), variant));
+                catalogMaterials.put(candidate, resolved);
+            }
+            q.material = resolved.material;
             q.coverage = q.cutout && !q.translucent ? SceneMesh.Coverage.CUTOUT : SceneMesh.Coverage.OPAQUE;
-            int materialId = materials.resolve(MinecraftMaterialLookup.material(sprite),
-                    classification.geometry(), variant);
             // Genuinely masked: alpha-tested, not merely "non-SOLID" (q.cutout also covers TRANSLUCENT,
             // whose coverage stays OPAQUE — see RtMaterialRegistry.binding). Only this needs the coverage
             // override; solid and translucent quads keep the resolved id's default OPAQUE coverage. The
             // sibling is compiled into the snapshot, so this stays a pure read on the worker thread.
             boolean needsMaskedCoverage = q.cutout && !q.translucent;
-            q.materialId = needsMaskedCoverage ? materials.withCutoutCoverage(materialId) : materialId;
+            q.materialId = needsMaskedCoverage
+                    ? materials.withCutoutCoverage(resolved.bindingId) : resolved.bindingId;
         }
 
         /** Returns true when vanilla's nominal face should be discarded. */
@@ -395,9 +412,23 @@ final class RtTerrainMesher {
             return pending.get(pendingCount++);
         }
 
-        /** Drop the current block's buffered quads without emitting (a meshing throw left them partial). */
+        /** Reset the current section while retaining reusable backing storage. */
+        void reset() {
+            discardBlock();
+            classifications.clear();
+            spriteMaterials.clear();
+            catalogMaterials.clear();
+        }
+
+        /** Drop the current block's buffered quads without emitting. */
         void discardBlock() {
             pendingCount = 0;
+        }
+
+        private record SpriteMaterial(ResourceId material, SceneMesh.AtlasTexture texture) {
+        }
+
+        private record ResolvedCatalogMaterial(SceneMesh.CatalogMaterial material, int bindingId) {
         }
 
         /** Resolve coplanar ties among the current block's quads, then emit them into the section classes. */
