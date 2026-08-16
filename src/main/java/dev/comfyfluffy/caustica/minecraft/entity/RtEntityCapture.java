@@ -234,10 +234,10 @@ public final class RtEntityCapture implements VertexConsumer {
         float tr = ((c >> 16) & 0xFF) * (1f / 255f);
         float tg = ((c >> 8) & 0xFF) * (1f / 255f);
         float tb = (c & 0xFF) * (1f / 255f);
-        for (int t = 0; t < 2; t++) { // one {normal+emission, tint, mat} record per triangle
-            surfaces.add(new SceneMesh.TriangleSurface(currentMaterial, currentCoverage, nx, ny, nz,
-                    emission, tr, tg, tb));
-        }
+        SceneMesh.TriangleSurface surface = new SceneMesh.TriangleSurface(
+                currentMaterial, currentCoverage, nx, ny, nz, emission, tr, tg, tb);
+        surfaces.add(surface);
+        surfaces.add(surface);
     }
 
     private static int positionIndex(int[] corners, int vertex) {

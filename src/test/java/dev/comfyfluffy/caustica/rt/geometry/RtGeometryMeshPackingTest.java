@@ -65,6 +65,28 @@ final class RtGeometryMeshPackingTest {
     }
 
     @Test
+    void sharedSurfacePairHasTheSameHashContributionAndPackingAsEqualDistinctValues() {
+        MaterialHandle material = MaterialHandle.of("test", "shared-pair");
+        SceneMesh.TriangleSurface surface = surface(material, SceneMesh.Coverage.CUTOUT);
+        SceneMesh shared = quadMesh(List.of(surface, surface));
+        SceneMesh distinct = quadMesh(List.of(surface(material, SceneMesh.Coverage.CUTOUT),
+                surface(material, SceneMesh.Coverage.CUTOUT)));
+        RtGeometryMaterialResolver resolver = (reference, coverage) ->
+                new RtGeometryMaterialResolver.ResolvedMaterial(7, 0);
+
+        RtGeometryMeshPacking.PackedMesh sharedPacked = RtGeometryMeshPacking.pack(shared, resolver);
+        RtGeometryMeshPacking.PackedMesh distinctPacked = RtGeometryMeshPacking.pack(distinct, resolver);
+
+        assertEquals(surfaceHashContribution(shared.surfaces()), surfaceHashContribution(distinct.surfaces()));
+        assertArrayEquals(sharedPacked.positions(), distinctPacked.positions());
+        assertArrayEquals(sharedPacked.textureCoordinates(), distinctPacked.textureCoordinates());
+        assertArrayEquals(sharedPacked.indices(), distinctPacked.indices());
+        assertArrayEquals(sharedPacked.primitives(), distinctPacked.primitives());
+        assertArrayEquals(sharedPacked.classTriangles(), distinctPacked.classTriangles());
+        assertEquals(sharedPacked.flags(), distinctPacked.flags());
+    }
+
+    @Test
     void coverageClassChangeChangesManagerTopologyCompatibility() {
         MaterialHandle material = MaterialHandle.of("test", "material");
         RtSceneGeometryManager manager = new RtSceneGeometryManager((reference, coverage) ->
@@ -135,6 +157,19 @@ final class RtGeometryMeshPackingTest {
     private static SceneMesh mesh(MaterialHandle material, SceneMesh.Coverage coverage) {
         return new SceneMesh(new float[]{0, 0, 0, 1, 0, 0, 0, 1, 0}, new int[]{0, 1, 2},
                 SceneMesh.UvLayout.PER_VERTEX, new float[6], List.of(surface(material, coverage)));
+    }
+
+    private static SceneMesh quadMesh(List<SceneMesh.TriangleSurface> surfaces) {
+        return new SceneMesh(new float[]{0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0},
+                new int[]{0, 1, 2, 0, 2, 3}, SceneMesh.UvLayout.PER_VERTEX, new float[8], surfaces);
+    }
+
+    private static long surfaceHashContribution(List<SceneMesh.TriangleSurface> surfaces) {
+        long hash = 1469598103934665603L;
+        for (SceneMesh.TriangleSurface surface : surfaces) {
+            hash = (hash ^ surface.hashCode()) * 1099511628211L;
+        }
+        return hash;
     }
 
     private static SceneMesh.TriangleSurface surface(MaterialHandle material, SceneMesh.Coverage coverage) {
