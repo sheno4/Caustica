@@ -372,6 +372,7 @@ final class RtFrameRenderer {
         if (pendingGraphicsUse != null) {
             throw new IllegalStateException("Previous RT graphics use was never completed");
         }
+        RtFrameStats.beginRenderFrame();
         RtFrameStats.FRAME.beginIfInactive();
         RtFramePresenter.INSTANCE.beginFrame();
         frameSnapshot = null;

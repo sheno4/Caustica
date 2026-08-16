@@ -21,6 +21,7 @@ import dev.comfyfluffy.caustica.api.provider.SceneCamera;
 import dev.comfyfluffy.caustica.api.provider.SceneGeometryKey;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.rt.GpuContext;
+import dev.comfyfluffy.caustica.rt.RtFrameStats;
 import dev.comfyfluffy.caustica.rt.geometry.RtSceneGeometryManager;
 import dev.comfyfluffy.caustica.rt.pipeline.RtPipeline;
 import dev.comfyfluffy.caustica.rt.scene.RtSceneSource;
@@ -232,15 +233,19 @@ public final class ProviderManager {
                 }
             };
             try {
-                collector.collect(entry.getValue(), stagingSink);
+                try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("geometry.providerCollect")) {
+                    collector.collect(entry.getValue(), stagingSink);
+                }
                 List<RtSceneGeometryManager.GeometryUpdateGroup> updates = new ArrayList<>(stagedGroups.size());
                 Map<SubmittedGeometryGroupKey, PublishedGeometryGroup> publishedGroups = new HashMap<>();
-                for (StagedGeometryGroup group : stagedGroups.values()) {
-                    RtSceneGeometryManager.GeometryUpdateGroup update = toUpdate(entry.getKey(), group.groupKey(),
-                            group.operations(), origin);
-                    updates.add(update);
-                    publishedGroups.put(new SubmittedGeometryGroupKey(update.key(), update.revision()),
-                            new PublishedGeometryGroup(group.groupKey(), group.onPublished()));
+                try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("geometry.providerConvert")) {
+                    for (StagedGeometryGroup group : stagedGroups.values()) {
+                        RtSceneGeometryManager.GeometryUpdateGroup update = toUpdate(entry.getKey(), group.groupKey(),
+                                group.operations(), origin);
+                        updates.add(update);
+                        publishedGroups.put(new SubmittedGeometryGroupKey(update.key(), update.revision()),
+                                new PublishedGeometryGroup(group.groupKey(), group.onPublished()));
+                    }
                 }
                 submitter.submit(updates, acknowledgement -> {
                     PublishedGeometryGroup group = publishedGroups.remove(new SubmittedGeometryGroupKey(

@@ -31,7 +31,25 @@ public final class MinecraftFrameMetrics {
             "particlesCaptured", "entityModelSubmissions", "entityCuboids",
             "entityModelQuads", "entityModelVertices", "entityBakedQuads", "entityBakedVertices",
             "entityDirectSubmissions", "entityDirectFallbacks", "entityDirectQuads", "entityDirectVertices",
-            "entitySpecializedCuboids", "entityGenericCuboids"));
+            "entitySpecializedCuboids", "entityGenericCuboids",
+            "terrainDispatchVisibilitySamples", "terrainDispatchExtractionToVisibleFramesTotal",
+            "terrainDispatchExtractionToVisibleFramesMax", "terrainDispatchExtractionToVisibleMicrosTotal",
+            "terrainDispatchExtractionToVisibleMicrosMax", "terrainReadyVisibilitySamples",
+            "terrainReadyExtractionToVisibleFramesTotal", "terrainReadyExtractionToVisibleFramesMax",
+            "terrainReadyExtractionToVisibleMicrosTotal", "terrainReadyExtractionToVisibleMicrosMax",
+            "terrainWorkerToPendingSamples",
+            "terrainWorkerToPendingMicrosTotal", "terrainWorkerToPendingMicrosMax",
+            "terrainPendingToSubmitSamples", "terrainPendingToSubmitMicrosTotal",
+            "terrainPendingToSubmitMicrosMax", "terrainSubmitToPublicationSamples",
+            "terrainSubmitToPublicationMicrosTotal", "terrainSubmitToPublicationMicrosMax",
+            "terrainPendingGeometryGroups", "entityVisibilitySamples",
+            "entityExtractionToVisibleFramesTotal", "entityExtractionToVisibleFramesMax",
+            "entityExtractionToVisibleMicrosTotal", "entityExtractionToVisibleMicrosMax",
+            "blockEntityVisibilitySamples", "blockEntityExtractionToVisibleFramesTotal",
+            "blockEntityExtractionToVisibleFramesMax", "blockEntityExtractionToVisibleMicrosTotal",
+            "blockEntityExtractionToVisibleMicrosMax", "particleVisibilitySamples",
+            "particleExtractionToVisibleFramesTotal", "particleExtractionToVisibleFramesMax",
+            "particleExtractionToVisibleMicrosTotal", "particleExtractionToVisibleMicrosMax"));
 
     private MinecraftFrameMetrics() {
     }

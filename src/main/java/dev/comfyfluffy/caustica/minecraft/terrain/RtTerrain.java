@@ -15,6 +15,7 @@ import dev.comfyfluffy.caustica.rt.RtComposite;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtDeviceBringup;
 import dev.comfyfluffy.caustica.rt.RtFrameStats;
+import dev.comfyfluffy.caustica.rt.geometry.RtGeometryProfiling;
 import dev.comfyfluffy.caustica.rt.light.RetainedLightBatch;
 import dev.comfyfluffy.caustica.rt.light.RtRetainedLightScene;
 import dev.comfyfluffy.caustica.rt.material.RtMaterialRegistry;
@@ -256,6 +257,7 @@ public final class RtTerrain {
      * and dispatch immutable snapshots to workers, bounded by configured per-pass counts.
      */
     public static void frame(GpuContext ctx) {
+        RtFrameStats.FRAME.max("terrainPendingGeometryGroups", INSTANCE.pendingGeometryGroups.size());
         if (RtMaterialRegistry.INSTANCE.isReady()) INSTANCE.frameStream(ctx);
     }
 
@@ -1009,7 +1011,8 @@ public final class RtTerrain {
         }
         RtMaterialRegistry.Snapshot materialSnapshot = RtMaterialRegistry.INSTANCE.requireSnapshot();
         SectionTask task = new SectionTask(key, token, sx << 4, sy << 4, sz << 4, dirtyGroup,
-                terrainEpoch, materialSnapshot.epoch());
+                terrainEpoch, materialSnapshot.epoch(),
+                RtGeometryProfiling.extraction(RtGeometryProfiling.SourceKind.TERRAIN, 1));
         beginActiveTask();
         try {
             RtWorkerPool.INSTANCE.submit(() -> {
@@ -1060,7 +1063,10 @@ public final class RtTerrain {
 
     private void completeTask(SectionResult result) {
         try {
-            if (isTaskCurrent(result.task())) completedBuilds.add(result);
+            if (isTaskCurrent(result.task())) {
+                completedBuilds.add(result.withWorkerCompletion(System.nanoTime(),
+                        RtGeometryProfiling.extraction(RtGeometryProfiling.SourceKind.TERRAIN_READY, 1)));
+            }
         } finally {
             finishActiveTask();
         }
@@ -1234,8 +1240,10 @@ public final class RtTerrain {
         final long dirtyGroup;
         final long terrainEpoch;
         final long materialEpoch;
+        final RtGeometryProfiling.ExtractionStamp extractionStamp;
         SectionTask(long key, long token, int sox, int soy, int soz, long dirtyGroup,
-                    long terrainEpoch, long materialEpoch) {
+                    long terrainEpoch, long materialEpoch,
+                    RtGeometryProfiling.ExtractionStamp extractionStamp) {
             this.key = key;
             this.token = token;
             this.sox = sox;
@@ -1244,17 +1252,30 @@ public final class RtTerrain {
             this.dirtyGroup = dirtyGroup;
             this.terrainEpoch = terrainEpoch;
             this.materialEpoch = materialEpoch;
+            this.extractionStamp = extractionStamp;
         }
     }
 
-    private record SectionResult(SectionTask task, SceneMesh geometry, float[] lights, Throwable failure) { }
+    private record SectionResult(SectionTask task, SceneMesh geometry, float[] lights, Throwable failure,
+                                 long workerCompletedNanos,
+                                 RtGeometryProfiling.ExtractionStamp readyStamp) {
+        SectionResult(SectionTask task, SceneMesh geometry, float[] lights, Throwable failure) {
+            this(task, geometry, lights, failure, 0L, null);
+        }
+
+        SectionResult withWorkerCompletion(long nanos, RtGeometryProfiling.ExtractionStamp stamp) {
+            return new SectionResult(task, geometry, lights, failure, nanos, stamp);
+        }
+    }
 
     private record PendingGeometryGroup(SceneGeometryKey groupKey, List<SceneGeometrySink.Operation> operations,
-                                        PendingPublication publication) { }
+                                        PendingPublication publication, long enqueuedNanos) { }
 
     private record PendingPublication(List<PublishedPut> puts, List<PublishedDrop> drops) { }
 
-    private record PublishedPut(long key, int originX, int originY, int originZ, float[] lights, long token) { }
+    private record PublishedPut(long key, int originX, int originY, int originZ, float[] lights, long token,
+                                RtGeometryProfiling.ExtractionStamp extractionStamp,
+                                RtGeometryProfiling.ExtractionStamp readyStamp, long workerCompletedNanos) { }
 
     private record PublishedDrop(long key, long token) { }
 
@@ -1341,7 +1362,8 @@ public final class RtTerrain {
             SectionTask task = put.task();
             long token = ++nextPublicationToken;
             pendingPublicationToken.put(task.key, token);
-            publicationPuts.add(new PublishedPut(task.key, task.sox, task.soy, task.soz, put.lights(), token));
+            publicationPuts.add(new PublishedPut(task.key, task.sox, task.soy, task.soz, put.lights(), token,
+                    task.extractionStamp, put.readyStamp(), put.workerCompletedNanos()));
         }
         ArrayList<PublishedDrop> publicationDrops = new ArrayList<>(drops.size());
         for (LongIterator it = drops.iterator(); it.hasNext(); ) {
@@ -1350,8 +1372,13 @@ public final class RtTerrain {
             pendingPublicationToken.put(key, token);
             publicationDrops.add(new PublishedDrop(key, token));
         }
+        long enqueuedNanos = System.nanoTime();
+        for (PublishedPut put : publicationPuts) {
+            recordTerrainLatency("terrainWorkerToPending", put.workerCompletedNanos(), enqueuedNanos);
+        }
         pendingGeometryGroups.add(new PendingGeometryGroup(groupKey, List.copyOf(operations),
-                new PendingPublication(List.copyOf(publicationPuts), List.copyOf(publicationDrops))));
+                new PendingPublication(List.copyOf(publicationPuts), List.copyOf(publicationDrops)), enqueuedNanos));
+        RtFrameStats.FRAME.max("terrainPendingGeometryGroups", pendingGeometryGroups.size());
     }
 
     /** Drain completed terrain transactions through the provider-owned retained-scene sink. */
@@ -1367,7 +1394,13 @@ public final class RtTerrain {
         }
         pendingGeometryGroups.clear();
         for (PendingGeometryGroup group : latest.values()) {
-            sink.submit(group.groupKey(), group.operations(), ignored -> acknowledgePublication(group.publication()));
+            long submittedNanos = System.nanoTime();
+            int putCount = group.publication().puts().size();
+            for (int i = 0; i < putCount; i++) {
+                recordTerrainLatency("terrainPendingToSubmit", group.enqueuedNanos(), submittedNanos);
+            }
+            sink.submit(group.groupKey(), group.operations(),
+                    ignored -> acknowledgePublication(group.publication(), submittedNanos));
         }
     }
 
@@ -1377,7 +1410,7 @@ public final class RtTerrain {
         return List.copyOf(latest.keySet());
     }
 
-    private void acknowledgePublication(PendingPublication publication) {
+    private void acknowledgePublication(PendingPublication publication, long submittedNanos) {
         boolean lightsChanged = false;
         for (PublishedPut put : publication.puts()) {
             long key = put.key();
@@ -1385,6 +1418,9 @@ public final class RtTerrain {
             PublishedSection previous = publishedSections.put(key, new PublishedSection(
                     put.originX(), put.originY(), put.originZ(), lights));
             clearPendingPublication(key, put.token());
+            RtGeometryProfiling.published(put.extractionStamp());
+            RtGeometryProfiling.published(put.readyStamp());
+            recordTerrainLatency("terrainSubmitToPublication", submittedNanos, System.nanoTime());
             empty.remove(key);
             lightsChanged |= !sameLightRecords(previous == null ? null : previous.lights(), lights);
             updateLightSection(key, publishedSections.get(key));
@@ -1399,6 +1435,13 @@ public final class RtTerrain {
             else empty.remove(key);
         }
         if (lightsChanged) markLightHierarchyDirty();
+    }
+
+    private static void recordTerrainLatency(String metric, long startNanos, long endNanos) {
+        long micros = Math.max(0L, endNanos - startNanos) / 1_000L;
+        RtFrameStats.FRAME.count(metric + "Samples", 1);
+        RtFrameStats.FRAME.count(metric + "MicrosTotal", micros);
+        RtFrameStats.FRAME.max(metric + "MicrosMax", micros);
     }
 
     private void clearPendingPublication(long key, long token) {

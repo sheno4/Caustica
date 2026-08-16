@@ -11,6 +11,10 @@ final class MinecraftFrameMetricsTest {
         MetricSchema schema = MinecraftFrameMetrics.schema();
         assertTrue(schema.stages().stream().anyMatch(stage -> stage.name().equals("terrain.lightScenePublish")));
         assertTrue(schema.counters().contains("terrainMaterialEpochRejects"));
+        assertTrue(schema.counters().contains("terrainReadyExtractionToVisibleFramesMax"));
+        assertTrue(schema.counters().contains("terrainPendingToSubmitMicrosMax"));
+        assertTrue(schema.counters().contains("terrainSubmitToPublicationMicrosMax"));
+        assertTrue(schema.counters().contains("entityExtractionToVisibleFramesMax"));
         assertTrue(schema.counters().contains("entitiesCaptured"));
     }
 

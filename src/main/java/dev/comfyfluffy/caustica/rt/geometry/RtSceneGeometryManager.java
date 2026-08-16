@@ -8,6 +8,7 @@ import dev.comfyfluffy.caustica.api.provider.SceneGeometrySink;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtDeviceBringup;
+import dev.comfyfluffy.caustica.rt.RtFrameStats;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor.GraphicsUse;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor.TrackedGraphicsUse;
 import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
@@ -113,7 +114,19 @@ public final class RtSceneGeometryManager {
     /** Provider submissions can handle their own asynchronous failure without disabling other sources. */
     public void submit(List<GeometryUpdateGroup> updates, Consumer<PublicationAck> acknowledgment,
                        Consumer<Throwable> failureHandler) {
-        groupScheduler.submitAll(updates, acknowledgment, failureHandler);
+        RtFrameStats.FRAME.count("geometryGroupsSubmitted", updates.size());
+        for (GeometryUpdateGroup update : updates) {
+            for (GeometryOperation operation : update.operations()) {
+                if (operation instanceof Put put) {
+                    RtFrameStats.FRAME.count("geometryPutsSubmitted", 1);
+                    RtFrameStats.FRAME.count("geometryTrianglesSubmitted",
+                            ((ProviderPayload) put.payload()).mesh().triangleCount());
+                }
+            }
+        }
+        try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("geometry.schedulerSubmit")) {
+            groupScheduler.submitAll(updates, acknowledgment, failureHandler);
+        }
     }
 
     /**
@@ -140,9 +153,16 @@ public final class RtSceneGeometryManager {
      * the first RT frame is eligible to trace it.
      */
     public void progress(GpuContext ctx) {
-        publishTerminalGroups(ctx);
+        RtFrameStats.FRAME.max("geometryPendingGroups", groupScheduler.pendingCount());
+        RtFrameStats.FRAME.max("geometryRunningGroups", groupScheduler.runningCount());
+        RtFrameStats.FRAME.max("geometryTerminalGroups", terminalGroups.size());
+        try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("geometry.publishTerminal")) {
+            publishTerminalGroups(ctx);
+        }
         groupFailures.throwIfPresent();
-        startGroupCandidates(ctx);
+        try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("geometry.prepareCandidates")) {
+            startGroupCandidates(ctx);
+        }
     }
 
     /** Publishes completed groups and snapshots their geometry for this frame. */
@@ -150,8 +170,14 @@ public final class RtSceneGeometryManager {
         progress(ctx);
         TableSlot table = selectTable(ctx, 0);
         FrameUpdate update = new FrameUpdate(ctx, table, origin);
-        appendPublishedGroups(update);
-        update.finish();
+        try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("geometry.snapshotAppend")) {
+            appendPublishedGroups(update);
+            update.finish();
+        }
+        RtFrameStats.FRAME.set("geometryInstancesVisible", update.instances.size());
+        RtFrameStats.FRAME.set("geometryPublishedResidents", groupScheduler.publishedResidentCount());
+        RtFrameStats.FRAME.set("geometryPublishedPlacements", groupScheduler.publishedPlacementCount());
+        RtGeometryProfiling.frameVisible();
         return update;
     }
 
@@ -162,6 +188,7 @@ public final class RtSceneGeometryManager {
 
     /** Teardown after the device is idle. */
     public void shutdown() {
+        RtGeometryProfiling.resetPublications();
         Set<PreparedGroup> destroyedGroups = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
         Set<GroupResident> destroyedCancelledSources = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
         TerminalGroup terminal;
@@ -217,7 +244,10 @@ public final class RtSceneGeometryManager {
             ProviderPayload provider = (ProviderPayload) entry.getValue();
             DynamicResident candidate = new DynamicResident();
             preparingCandidate = candidate;
-            PackedInput input = providerInput(provider.mesh());
+            PackedInput input;
+            try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("geometry.packMaterial")) {
+                input = providerInput(provider.mesh());
+            }
             writeDynamic(ctx, candidate, input);
             candidate.vertexCount = input.positions.length / 3;
             candidate.topology = Topology.of(input);
@@ -286,6 +316,7 @@ public final class RtSceneGeometryManager {
                 operation = build.op();
             }
             candidates.add(new GroupCandidate(entry.getKey(), candidate, source, operation, !retainPreviousPositions));
+            RtFrameStats.FRAME.count("geometryBlasCandidates", 1);
             preparingCandidate = null;
         }
         } catch (Throwable failure) {
@@ -369,6 +400,8 @@ public final class RtSceneGeometryManager {
                 }
                 else if (previous != null) ctx.gpuExecutor().retireAfterGraphics(previous.graphicsUse(), previous::destroy);
             }
+            RtFrameStats.FRAME.count("geometryGroupsPublished", 1);
+            RtFrameStats.FRAME.count("geometryPutsPublished", terminal.prepared.candidates.size());
             for (SceneGeometryKey drop : terminal.prepared.diff.drops) {
                 GroupResident previous = groupScheduler.removePublishedResident(
                         new ResidentId(terminal.prepared.key.source(), drop));
@@ -812,6 +845,11 @@ public final class RtSceneGeometryManager {
 
         void submit(GpuContext ctx, java.util.function.BooleanSupplier cancelled,
                     java.util.function.Consumer<CandidateTerminal> completion) {
+            long buildStarted = RtGeometryProfiling.beginBuild();
+            int triangles = buildStarted == 0L ? 0
+                    : triangleCount(((DynamicResident) resident).classTriangles);
+            boolean update = operation.updateMode();
+            boolean compaction = operation.requestsCompaction();
             try {
                 Runnable completedBuild = () -> RtAccel.freeBlasScratch(List.of(operation));
                 java.util.function.BiConsumer<dev.comfyfluffy.caustica.rt.RtGpuExecutor.Build, Throwable> finished =
@@ -820,52 +858,90 @@ public final class RtSceneGeometryManager {
                             if (failure != null || !operation.requestsCompaction()) {
                                 if (failure != null) publicationState.fail();
                                 else publicationState.completeBuild();
+                                RtGeometryProfiling.finishBuild(buildStarted, triangles, update, compaction, failure);
                                 completion.accept(new CandidateTerminal(this, build, failure));
                             } else {
                                 publicationState.completeBuild();
                                 if (cancelled.getAsBoolean()) {
                                     publicationState.fail();
-                                    completion.accept(new CandidateTerminal(this, build,
-                                            new java.util.concurrent.CancellationException(
-                                                    "geometry group cancelled before BLAS compaction")));
+                                    var cancellation = new java.util.concurrent.CancellationException(
+                                            "geometry group cancelled before BLAS compaction");
+                                    RtGeometryProfiling.finishBuild(buildStarted, triangles, update, compaction,
+                                            cancellation);
+                                    completion.accept(new CandidateTerminal(this, build, cancellation));
                                 } else {
-                                    submitCompaction(ctx, cancelled, completion);
+                                    submitCompaction(ctx, cancelled, completion, buildStarted, triangles, update,
+                                            compaction);
                                 }
                             }
                         };
                 if (source == null) {
-                    ctx.gpuExecutor().submit(cancelled, command -> RtAccel.recordBlasBuilds(ctx, command,
-                            List.of(operation)), completedBuild, finished);
+                    ctx.gpuExecutor().submit(cancelled, command -> {
+                        long started = RtGeometryProfiling.beginCommandRecord();
+                        try {
+                            RtAccel.recordBlasBuilds(ctx, command, List.of(operation));
+                        } finally {
+                            RtGeometryProfiling.endCommandRecord(started);
+                        }
+                    }, completedBuild, finished);
                 } else {
                     ctx.gpuExecutor().submitAfterGraphics(source.graphicsUse(), cancelled,
-                            command -> RtAccel.recordBlasBuilds(ctx, command, List.of(operation)), completedBuild, finished);
+                            command -> {
+                                long started = RtGeometryProfiling.beginCommandRecord();
+                                try {
+                                    RtAccel.recordBlasBuilds(ctx, command, List.of(operation));
+                                } finally {
+                                    RtGeometryProfiling.endCommandRecord(started);
+                                }
+                            }, completedBuild, finished);
                 }
             } catch (Throwable failure) {
                 releaseUnsubmittedScratch();
+                RtGeometryProfiling.finishBuild(buildStarted, triangles, update, compaction, failure);
                 completion.accept(new CandidateTerminal(this, null, failure));
             }
         }
 
+        private static int triangleCount(int[] classTriangles) {
+            int total = 0;
+            for (int count : classTriangles) {
+                total += count;
+            }
+            return total;
+        }
+
         private void submitCompaction(GpuContext ctx, java.util.function.BooleanSupplier cancelled,
-                                      java.util.function.Consumer<CandidateTerminal> completion) {
+                                      java.util.function.Consumer<CandidateTerminal> completion,
+                                      long buildStarted, int triangles, boolean update, boolean requestsCompaction) {
             RtAccel.PreparedBlasCompaction compaction;
             try {
                 compaction = RtAccel.prepareBlasCompaction(ctx, operation);
             } catch (Throwable failure) {
                 publicationState.fail();
+                RtGeometryProfiling.finishBuild(buildStarted, triangles, update, requestsCompaction, failure);
                 completion.accept(new CandidateTerminal(this, null, failure));
                 return;
             }
             try {
                 ctx.gpuExecutor().submit(cancelled,
-                        command -> RtAccel.recordBlasCompaction(ctx, command, compaction),
+                        command -> {
+                            long started = RtGeometryProfiling.beginCommandRecord();
+                            try {
+                                RtAccel.recordBlasCompaction(ctx, command, compaction);
+                            } finally {
+                                RtGeometryProfiling.endCommandRecord(started);
+                            }
+                        },
                         () -> completeCompaction(compaction),
                         (build, failure) -> {
                             if (failure != null) failCompaction(compaction, failure);
+                            RtGeometryProfiling.finishBuild(buildStarted, triangles, update, requestsCompaction,
+                                    failure);
                             completion.accept(new CandidateTerminal(this, build, failure));
                         });
             } catch (Throwable failure) {
                 failCompaction(compaction, failure);
+                RtGeometryProfiling.finishBuild(buildStarted, triangles, update, requestsCompaction, failure);
                 completion.accept(new CandidateTerminal(this, null, failure));
             }
         }
@@ -1104,23 +1180,32 @@ public final class RtSceneGeometryManager {
         }
 
         private void validateBarrier(Barrier barrier) {
-            for (Placement placement : barrier.diff.placements.values()) {
-                ResidentId target = new ResidentId(barrier.key.source, placement.residentKey);
-                if (barrier.diff.drops.contains(placement.residentKey)
-                        || (!publishedResidents.containsKey(target) && !barrier.diff.puts.containsKey(placement.residentKey))) {
-                    throw new IllegalArgumentException("geometry placement references a resident absent from its final barrier state "
-                            + placement.residentKey);
-                }
-            }
-            for (SceneGeometryKey drop : barrier.diff.drops) {
-                for (Map.Entry<InstanceId, Placement> published : publishedPlacements.entrySet()) {
-                    if (!published.getKey().source.equals(barrier.key.source) || !published.getValue().residentKey.equals(drop)) continue;
-                    Placement replacement = barrier.diff.placements.get(published.getKey().key);
-                    if (!barrier.diff.removes.contains(published.getKey().key)
-                            && (replacement == null || replacement.residentKey.equals(drop))) {
-                        throw new IllegalArgumentException("geometry drop leaves a published placement referencing resident " + drop);
+            long profilingStart = RtFrameStats.FRAME.startStage();
+            try {
+                for (Placement placement : barrier.diff.placements.values()) {
+                    ResidentId target = new ResidentId(barrier.key.source, placement.residentKey);
+                    if (barrier.diff.drops.contains(placement.residentKey)
+                            || (!publishedResidents.containsKey(target)
+                            && !barrier.diff.puts.containsKey(placement.residentKey))) {
+                        throw new IllegalArgumentException(
+                                "geometry placement references a resident absent from its final barrier state "
+                                        + placement.residentKey);
                     }
                 }
+                for (SceneGeometryKey drop : barrier.diff.drops) {
+                    for (Map.Entry<InstanceId, Placement> published : publishedPlacements.entrySet()) {
+                        if (!published.getKey().source.equals(barrier.key.source)
+                                || !published.getValue().residentKey.equals(drop)) continue;
+                        Placement replacement = barrier.diff.placements.get(published.getKey().key);
+                        if (!barrier.diff.removes.contains(published.getKey().key)
+                                && (replacement == null || replacement.residentKey.equals(drop))) {
+                            throw new IllegalArgumentException(
+                                    "geometry drop leaves a published placement referencing resident " + drop);
+                        }
+                    }
+                }
+            } finally {
+                RtFrameStats.FRAME.endStage("geometry.schedulerValidate", profilingStart);
             }
         }
 
@@ -1161,6 +1246,10 @@ public final class RtSceneGeometryManager {
 
         boolean running(Barrier barrier) { return running.contains(barrier); }
         boolean cancelled(Barrier barrier) { return barrier.cancelled; }
+        int pendingCount() { return pending.size(); }
+        int runningCount() { return running.size(); }
+        int publishedResidentCount() { return publishedResidents.size(); }
+        int publishedPlacementCount() { return publishedPlacements.size(); }
 
         List<GroupResident> clearSource(ResourceId source) {
             pending.keySet().removeIf(key -> key.source.equals(source));

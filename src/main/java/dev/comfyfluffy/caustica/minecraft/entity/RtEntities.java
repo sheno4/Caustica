@@ -40,6 +40,7 @@ import org.joml.Matrix4f;
 import org.joml.Quaternionf;
 import dev.comfyfluffy.caustica.rt.RtComposite;
 import dev.comfyfluffy.caustica.rt.RtFrameStats;
+import dev.comfyfluffy.caustica.rt.geometry.RtGeometryProfiling;
 
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
 import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
@@ -274,7 +275,16 @@ public final class RtEntities {
 
         void submit(SceneGeometryKey key, List<SceneGeometrySink.Operation> operations, Runnable acknowledgment) {
             pendingDrops.remove(key);
+            int putCount = 0;
+            for (SceneGeometrySink.Operation operation : operations) {
+                if (operation instanceof SceneGeometrySink.Put) {
+                    putCount++;
+                }
+            }
+            RtGeometryProfiling.ExtractionStamp extraction = putCount == 0 ? null
+                    : RtGeometryProfiling.extraction(sourceKind(key), putCount);
             geometry.submit(key, operations, ignored -> {
+                RtGeometryProfiling.published(extraction);
                 if (acknowledgment != null) acknowledgment.run();
             });
         }
@@ -800,6 +810,16 @@ public final class RtEntities {
 
     private static SceneGeometryKey key(long domain, long value) {
         return new SceneGeometryKey(domain, value);
+    }
+
+    private static RtGeometryProfiling.SourceKind sourceKind(SceneGeometryKey key) {
+        if (key.domain() == BLOCK_ENTITY_GEOMETRY) {
+            return RtGeometryProfiling.SourceKind.BLOCK_ENTITY;
+        }
+        if (key.domain() == PARTICLE_GEOMETRY) {
+            return RtGeometryProfiling.SourceKind.PARTICLE;
+        }
+        return RtGeometryProfiling.SourceKind.ENTITY;
     }
 
     private static GeometryTransform transform(float[] relative, SceneOrigin origin) {

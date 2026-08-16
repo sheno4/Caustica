@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.rt;
 
+import dev.comfyfluffy.caustica.CausticaConfig;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -38,10 +39,12 @@ final class RtFrameStatsBoundaryTest {
     @Test
     void rendererSchemaOwnsGenericGeometryAndFrameStages() {
         RtFrameStats.MetricSchema schema = RtFrameStats.rendererFrameMetrics();
-        assertTrue(schema.stages().stream().anyMatch(stage -> stage.name().equals("geometry.blasRecord")));
+        assertTrue(schema.stages().stream().anyMatch(stage -> stage.name().equals("geometry.packMaterial")));
+        assertTrue(schema.stages().stream().anyMatch(stage -> stage.name().equals("geometry.schedulerValidate")));
         assertTrue(schema.stages().stream().filter(stage -> stage.name().startsWith("frame."))
                 .allMatch(RtFrameStats.StageMetric::contributesToAccountedTime));
-        assertTrue(schema.counters().isEmpty());
+        assertTrue(schema.counters().contains("geometryTrianglesSubmitted"));
+        assertTrue(schema.counters().contains("geometryInstancesVisible"));
     }
 
     @Test
@@ -77,5 +80,35 @@ final class RtFrameStatsBoundaryTest {
                 new RtFrameStats.StageMetric("next", true)), List.of());
 
         assertEquals(17L, schema.accountedNanos(new long[]{10L, 6L, 7L}));
+    }
+
+    @Test
+    void counterSetAndMaxRetainTheExpectedFrameValue() {
+        boolean previous = CausticaConfig.Rt.FrameStats.ENABLED.value();
+        CausticaConfig.Rt.FrameStats.ENABLED.set(true);
+        try {
+            RtFrameStats.Profile profile = new RtFrameStats.Profile("counter-semantics",
+                    new RtFrameStats.MetricSchema(List.of(), List.of("depth")), false);
+            profile.begin();
+            profile.set("depth", 3);
+            profile.max("depth", 7);
+            profile.max("depth", 5);
+            assertEquals(7L, profile.counterValue("depth"));
+            profile.set("depth", 2);
+            assertEquals(2L, profile.counterValue("depth"));
+        } finally {
+            CausticaConfig.Rt.FrameStats.ENABLED.set(previous);
+        }
+    }
+
+    @Test
+    void renderFrameSerialAdvancesOnlyAtTheExplicitBoundary() {
+        long before = RtFrameStats.frameSerial();
+        RtFrameStats.Profile profile = new RtFrameStats.Profile("serial-boundary",
+                new RtFrameStats.MetricSchema(List.of(), List.of()), false);
+        profile.begin();
+        assertEquals(before, RtFrameStats.frameSerial());
+        RtFrameStats.beginRenderFrame();
+        assertEquals(before + 1L, RtFrameStats.frameSerial());
     }
 }

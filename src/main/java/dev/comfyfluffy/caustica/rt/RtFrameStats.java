@@ -34,7 +34,14 @@ public final class RtFrameStats {
     private static final OutputLocation OUTPUT = new OutputLocation(defaultOutputDirectory());
 
     private static final MetricSchema RENDERER_FRAME_METRICS = new MetricSchema(List.of(
-            new StageMetric("geometry.blasRecord", true),
+            new StageMetric("geometry.providerCollect", false),
+            new StageMetric("geometry.providerConvert", true),
+            new StageMetric("geometry.schedulerSubmit", true),
+            new StageMetric("geometry.schedulerValidate", false),
+            new StageMetric("geometry.publishTerminal", true),
+            new StageMetric("geometry.prepareCandidates", true),
+            new StageMetric("geometry.packMaterial", false),
+            new StageMetric("geometry.snapshotAppend", true),
             new StageMetric("frame.prepareTlas", true),
             new StageMetric("frame.recordTlas", true),
             new StageMetric("frame.skyLut", true),
@@ -46,11 +53,26 @@ public final class RtFrameStats {
             new StageMetric("frame.postChain", true),
             new StageMetric("frame.displayMap", true),
             new StageMetric("frame.debugPresent", true),
-            new StageMetric("frame.copyOutput", true)), List.of());
+            new StageMetric("frame.copyOutput", true)), List.of(
+            "geometryGroupsSubmitted", "geometryPutsSubmitted", "geometryTrianglesSubmitted",
+            "geometryBlasCandidates", "geometryGroupsPublished", "geometryPutsPublished",
+            "geometryInstancesVisible", "geometryPendingGroups", "geometryRunningGroups",
+            "geometryTerminalGroups", "geometryPublishedResidents", "geometryPublishedPlacements"));
 
     // Per-frame GC deltas help distinguish JVM pauses from uninstrumented render work when a hitch's
     // unaccounted time is large. The host appends its own producer metrics during bootstrap.
     public static final Profile FRAME = new Profile("frame", RENDERER_FRAME_METRICS, true);
+    private static volatile long frameSerial;
+
+    /** Monotonic identifier for the frame envelope currently collecting producer and renderer work. */
+    public static long frameSerial() {
+        return frameSerial;
+    }
+
+    /** Advance the serial once at the host render-frame boundary. */
+    public static void beginRenderFrame() {
+        frameSerial++;
+    }
 
     private static final List<GarbageCollectorMXBean> GC_BEANS = ManagementFactory.getGarbageCollectorMXBeans();
 
@@ -309,6 +331,27 @@ public final class RtFrameStats {
                 return;
             }
             counters[indexOf(counterIndices, counterName)] += delta;
+        }
+
+        /** Replace a current-frame counter, typically for an instantaneous queue depth. */
+        public void set(String counterName, long value) {
+            if (!enabled() || !active) {
+                return;
+            }
+            counters[indexOf(counterIndices, counterName)] = value;
+        }
+
+        /** Retain the largest value observed for a current-frame counter. */
+        public void max(String counterName, long value) {
+            if (!enabled() || !active) {
+                return;
+            }
+            int index = indexOf(counterIndices, counterName);
+            counters[index] = Math.max(counters[index], value);
+        }
+
+        long counterValue(String counterName) {
+            return counters[indexOf(counterIndices, counterName)];
         }
 
         /** Finish the current frame: record it into the rolling median and log a hitch line if it's slow. */

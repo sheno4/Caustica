@@ -385,6 +385,11 @@ public final class RtAccel {
             return accel.compactionQueryPool != 0L;
         }
 
+        /** Whether command recording selects acceleration-structure UPDATE rather than BUILD mode. */
+        public boolean updateMode() {
+            return update;
+        }
+
         /** Caller-owned backing retained with a prepared persistent candidate, if any. */
         public GpuBuffer externalBacking() {
             return externalBacking;
