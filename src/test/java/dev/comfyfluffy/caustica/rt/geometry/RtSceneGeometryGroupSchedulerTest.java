@@ -577,6 +577,23 @@ final class RtSceneGeometryGroupSchedulerTest {
     }
 
     @Test
+    void malformedPlacementTransformsAreRejectedBeforeSchedulerAdmission() {
+        RtSceneGeometryManager.GroupScheduler initial = new RtSceneGeometryManager.GroupScheduler();
+        assertThrows(IllegalArgumentException.class, () -> initial.submit(group(FIRST,
+                new RtSceneGeometryManager.Put(2, payload()),
+                new RtSceneGeometryManager.Place(3, 2, new float[11], 0xff))));
+        initial.submit(group(FIRST, new RtSceneGeometryManager.Put(2, payload()),
+                new RtSceneGeometryManager.Place(3, 2, identity(), 0xff)));
+        assertEquals(1, initial.startable().size());
+
+        RtSceneGeometryManager.GroupScheduler update = publishedPair();
+        assertThrows(IllegalArgumentException.class, () -> update.submit(group(TRANSFORM,
+                new RtSceneGeometryManager.UpdatePlacement(3, new float[13], 0xff))));
+        update.submit(group(TRANSFORM, updatePlacement(3, 12f)));
+        assertEquals(1, update.startable().size());
+    }
+
+    @Test
     void invalidBatchDoesNotQueueItsEarlierGroups() {
         RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
 
@@ -760,26 +777,86 @@ final class RtSceneGeometryGroupSchedulerTest {
     }
 
     @Test
-    void placementRebasesItsTranslationFromItsAuthoredOrigin() {
-        RtSceneGeometryManager.Placement placement = new RtSceneGeometryManager.Placement(10,
-                new float[] {1, 0, 0, 4, 0, 1, 0, 5, 0, 0, 1, 6}, 0xff,
-                new SceneOrigin(100, 20, -4));
-        float[] transform = placement.transformFor(new SceneOrigin(90, 30, -10));
-        assertEquals(14f, transform[3]);
-        assertEquals(-5f, transform[7]);
-        assertEquals(12f, transform[11]);
+    void placementHistoryAdvancesOnlyAtFrameSnapshot() {
+        RtSceneGeometryManager.GroupScheduler scheduler = publishedPair();
+        RtSceneGeometryManager.PublishedPlacement published = scheduler.publishedPlacement(instance(SOURCE, 3));
+        RtSceneGeometryManager.Placement original = published.placement;
+        assertNull(published.previousPlacement);
+        assertSame(original, published.historyPlacement());
+        published.completeFrameSnapshot();
+
+        scheduler.updatePublishedPlacement(instance(SOURCE, 3),
+                new RtSceneGeometryManager.PlacementUpdate(translation(12f), 0xff, SceneOrigin.ZERO));
+        scheduler.updatePublishedPlacement(instance(SOURCE, 3),
+                new RtSceneGeometryManager.PlacementUpdate(translation(24f), 0xff, SceneOrigin.ZERO));
+
+        assertSame(original, published.historyPlacement());
+        assertEquals(24f, published.placement.transform[3]);
+        published.completeFrameSnapshot();
+        assertSame(published.placement, published.historyPlacement());
     }
 
     @Test
-    void stablePlacementRetainsTransformHistoryAcrossAnOriginRebase() {
-        float[] previous = {1, 0, 0, 4, 0, 1, 0, 5, 0, 0, 1, 6};
-        float[] rebased = RtSceneGeometryManager.rebasePreviousTransform(previous,
-                new SceneOrigin(100, 20, -4), new SceneOrigin(90, 30, -10));
+    void placementRetargetPreservesLastFrameHistory() {
+        RtSceneGeometryManager.GroupScheduler scheduler = publishedPair();
+        RtSceneGeometryManager.PublishedPlacement published = scheduler.publishedPlacement(instance(SOURCE, 3));
+        published.completeFrameSnapshot();
+        RtSceneGeometryManager.Placement previous = published.placement;
+        scheduler.putPublishedResident(resident(SOURCE, 20), new FakeResident(), false);
 
-        assertTrue(!RtSceneGeometryManager.resetTransformMotion(true));
-        assertEquals(14f, rebased[3]);
-        assertEquals(-5f, rebased[7]);
-        assertEquals(12f, rebased[11]);
+        scheduler.putPublishedPlacement(instance(SOURCE, 3),
+                new RtSceneGeometryManager.Placement(SceneGeometryKey.of(20), translation(12f), 0xff));
+
+        assertSame(published, scheduler.publishedPlacement(instance(SOURCE, 3)));
+        assertSame(previous, published.historyPlacement());
+        assertEquals(resident(SOURCE, 20), published.resident.id);
+    }
+
+    @Test
+    void placementRemovalAndSourceClearResetSnapshotHistory() {
+        RtSceneGeometryManager.GroupScheduler scheduler = publishedPair();
+        RtSceneGeometryManager.PublishedPlacement removed = scheduler.publishedPlacement(instance(SOURCE, 3));
+        removed.completeFrameSnapshot();
+        scheduler.removePublishedPlacement(instance(SOURCE, 3));
+        scheduler.putPublishedPlacement(instance(SOURCE, 3),
+                new RtSceneGeometryManager.Placement(SceneGeometryKey.of(10), translation(12f), 0xff));
+        RtSceneGeometryManager.PublishedPlacement replaced = scheduler.publishedPlacement(instance(SOURCE, 3));
+        assertNull(replaced.previousPlacement);
+        assertSame(replaced.placement, replaced.historyPlacement());
+
+        scheduler.clearSource(SOURCE);
+        scheduler.putPublishedResident(resident(SOURCE, 10), new FakeResident(), false);
+        scheduler.putPublishedPlacement(instance(SOURCE, 3),
+                new RtSceneGeometryManager.Placement(SceneGeometryKey.of(10), translation(24f), 0xff));
+        RtSceneGeometryManager.PublishedPlacement afterClear = scheduler.publishedPlacement(instance(SOURCE, 3));
+        assertNull(afterClear.previousPlacement);
+        assertSame(afterClear.placement, afterClear.historyPlacement());
+    }
+
+    @Test
+    void tableSlotReusesAndResetsItsFrameStaging() {
+        RtSceneGeometryManager.TableSlot table = new RtSceneGeometryManager.TableSlot(null, null);
+        table.beginFrame(4);
+        var instances = table.instances;
+        var persistentUses = table.persistentUses;
+        var historyUses = table.historyUses;
+        var historyRetire = table.historyRetire;
+        FakeResident resident = new FakeResident();
+        instances.append(translation(1f), 0f, 0f, 0f, 10L, 0, 0xff, 0);
+        persistentUses.add(resident);
+        historyUses.add(resident);
+        historyRetire.add(resident);
+
+        table.beginFrame(2);
+
+        assertSame(instances, table.instances);
+        assertSame(persistentUses, table.persistentUses);
+        assertSame(historyUses, table.historyUses);
+        assertSame(historyRetire, table.historyRetire);
+        assertEquals(0, table.instances.size());
+        assertTrue(table.persistentUses.isEmpty());
+        assertTrue(table.historyUses.isEmpty());
+        assertTrue(table.historyRetire.isEmpty());
     }
 
     private static RtSceneGeometryManager.GeometryUpdateGroup group(RtSceneGeometryManager.GroupKey key,
@@ -836,9 +913,9 @@ final class RtSceneGeometryGroupSchedulerTest {
         }
 
         @Override
-        public void append(RtSceneGeometryManager.FrameUpdate update, float[] transform, int mask,
-                           RtSceneGeometryManager.InstanceKey key, RtSceneGeometryManager.GroupResident previous,
-                           boolean resetTransformMotion) {
+        public void append(RtSceneGeometryManager.FrameUpdate update, RtSceneGeometryManager.Placement placement,
+                           RtSceneGeometryManager.PublishedPlacement published,
+                           RtSceneGeometryManager.GroupResident previous) {
         }
 
         @Override

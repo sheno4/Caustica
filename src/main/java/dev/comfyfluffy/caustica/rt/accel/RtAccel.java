@@ -29,6 +29,7 @@ import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor.GraphicsUse;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor.TrackedGraphicsUse;
 
+import java.util.Arrays;
 import java.util.List;
 
 import static org.lwjgl.vulkan.EXTOpacityMicromap.VK_ACCESS_2_MICROMAP_READ_BIT_EXT;
@@ -1228,6 +1229,52 @@ public final class RtAccel {
         }
     }
 
+    /** Reusable structure-of-arrays staging for a frame's dynamic TLAS instances. */
+    public static final class InstanceBatch {
+        private static final int TRANSFORM_FLOATS = 12;
+        float[] transforms = new float[0];
+        long[] blasDeviceAddresses = new long[0];
+        int[] customIndices = new int[0];
+        int[] masks = new int[0];
+        int[] sbtRecordOffsets = new int[0];
+        private int size;
+
+        public void reset(int expectedSize) {
+            ensureCapacity(expectedSize);
+            size = 0;
+        }
+
+        public void append(float[] transform3x4, float translationX, float translationY, float translationZ,
+                           long blasDeviceAddress, int customIndex, int mask, int sbtRecordOffset) {
+            ensureCapacity(size + 1);
+            int transformOffset = size * TRANSFORM_FLOATS;
+            System.arraycopy(transform3x4, 0, transforms, transformOffset, TRANSFORM_FLOATS);
+            transforms[transformOffset + 3] += translationX;
+            transforms[transformOffset + 7] += translationY;
+            transforms[transformOffset + 11] += translationZ;
+            blasDeviceAddresses[size] = blasDeviceAddress;
+            customIndices[size] = customIndex;
+            masks[size] = mask;
+            sbtRecordOffsets[size] = sbtRecordOffset;
+            size++;
+        }
+
+        public int size() {
+            return size;
+        }
+
+        private void ensureCapacity(int required) {
+            int current = blasDeviceAddresses.length;
+            if (required <= current) return;
+            int grown = Math.max(required, Math.max(16, current + current / 2));
+            transforms = Arrays.copyOf(transforms, Math.multiplyExact(grown, TRANSFORM_FLOATS));
+            blasDeviceAddresses = Arrays.copyOf(blasDeviceAddresses, grown);
+            customIndices = Arrays.copyOf(customIndices, grown);
+            masks = Arrays.copyOf(masks, grown);
+            sbtRecordOffsets = Arrays.copyOf(sbtRecordOffsets, grown);
+        }
+    }
+
     /** A build-ready TLAS view over a {@link TlasRing} slot's resources (the ring owns and frees them). */
     public static final class PreparedTlas {
         public final RtAccel accel;
@@ -1293,6 +1340,22 @@ public final class RtAccel {
                                            List<Instance> dynamicInstances, TlasRing ring, GraphicsUse graphicsUse) {
         int baseCount = baseInstances.size();
         int count = Math.addExact(baseCount, dynamicInstances.size());
+        TlasRing.Slot slot = selectTlasSlot(ctx, ring, count);
+        writeTlasInstances(baseInstances, slot.instanceBuffer.mapped, 0);
+        writeTlasInstances(dynamicInstances, slot.instanceBuffer.mapped, baseCount);
+        return finishTlas(slot, count, graphicsUse);
+    }
+
+    /** Fill a TLAS slot directly from reusable dynamic instance staging. */
+    public static PreparedTlas prepareTlas(GpuContext ctx, InstanceBatch instances,
+                                           TlasRing ring, GraphicsUse graphicsUse) {
+        int count = instances.size();
+        TlasRing.Slot slot = selectTlasSlot(ctx, ring, count);
+        writeTlasInstances(instances, slot.instanceBuffer.mapped);
+        return finishTlas(slot, count, graphicsUse);
+    }
+
+    private static TlasRing.Slot selectTlasSlot(GpuContext ctx, TlasRing ring, int count) {
         TlasRing.Slot slot = ring.slots[ring.cursor];
         // Complete the slot's prior graphics use before rewriting, rebuilding, or resizing it.
         if (slot != null) {
@@ -1308,9 +1371,10 @@ public final class RtAccel {
             ring.slots[ring.cursor] = slot;
         }
         ring.cursor = (ring.cursor + 1) % TlasRing.RING;
+        return slot;
+    }
 
-        writeTlasInstances(baseInstances, slot.instanceBuffer.mapped, 0);
-        writeTlasInstances(dynamicInstances, slot.instanceBuffer.mapped, baseCount);
+    private static PreparedTlas finishTlas(TlasRing.Slot slot, int count, GraphicsUse graphicsUse) {
         if (count > 0) {
             slot.instanceBuffer.flush(0L, (long) count * VkAccelerationStructureInstanceKHR.SIZEOF);
         }
@@ -1332,6 +1396,21 @@ public final class RtAccel {
                     .instanceShaderBindingTableRecordOffset(instance.sbtRecordOffset())
                     .flags(VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR)
                     .accelerationStructureReference(instance.blasDeviceAddress());
+        }
+    }
+
+    private static void writeTlasInstances(InstanceBatch instances, long mapped) {
+        int count = instances.size;
+        VkAccelerationStructureInstanceKHR.Buffer records = VkAccelerationStructureInstanceKHR.create(mapped, count);
+        for (int i = 0; i < count; i++) {
+            VkAccelerationStructureInstanceKHR record = records.get(i);
+            record.transform().matrix().put(instances.transforms, i * InstanceBatch.TRANSFORM_FLOATS,
+                    InstanceBatch.TRANSFORM_FLOATS);
+            record.instanceCustomIndex(instances.customIndices[i])
+                    .mask(instances.masks[i])
+                    .instanceShaderBindingTableRecordOffset(instances.sbtRecordOffsets[i])
+                    .flags(VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR)
+                    .accelerationStructureReference(instances.blasDeviceAddresses[i]);
         }
     }
 

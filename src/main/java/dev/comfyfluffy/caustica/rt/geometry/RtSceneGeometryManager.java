@@ -44,7 +44,6 @@ public final class RtSceneGeometryManager {
     private final GroupScheduler groupScheduler;
     private final ConcurrentLinkedQueue<TerminalGroup> terminalGroups = new ConcurrentLinkedQueue<>();
     private final FramePublicationGate framePublicationGate = new FramePublicationGate();
-    private final Map<InstanceKey, InstanceState> instanceStates = new HashMap<>();
     private final FailureLatch groupFailures = new FailureLatch();
     private final TableSlot[] tables = new TableSlot[TABLE_RING];
     private int tableCursor;
@@ -152,7 +151,6 @@ public final class RtSceneGeometryManager {
         framePublicationGate.clearSource(source);
         Set<GroupResident> retired = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
         retired.addAll(groupScheduler.clearSource(source));
-        instanceStates.entrySet().removeIf(entry -> entry.getKey().provider.equals(source));
         for (GroupResident resident : retired) {
             ctx.gpuExecutor().retireAfterGraphics(resident.graphicsUse(), resident::destroy);
         }
@@ -160,7 +158,7 @@ public final class RtSceneGeometryManager {
 
     /** Build-ready TLAS view over the manager's published geometry snapshot. */
     public RtAccel.PreparedTlas prepareTlas(GpuContext ctx, FrameUpdate update, GraphicsUse graphicsUse) {
-        return RtAccel.prepareTlas(ctx, List.of(), update.instances, tlasRing, graphicsUse);
+        return RtAccel.prepareTlas(ctx, update.instances, tlasRing, graphicsUse);
     }
 
     /**
@@ -231,7 +229,6 @@ public final class RtSceneGeometryManager {
             destroyCancelledSourcesAfterDeviceIdle(prepared, destroyedCancelledSources);
         });
         tlasRing.destroy();
-        instanceStates.clear();
         for (int i = 0; i < tables.length; i++) {
             if (tables[i] != null) {
                 tables[i].buffer.destroy();
@@ -456,7 +453,6 @@ public final class RtSceneGeometryManager {
                 }
                 for (SceneGeometryKey remove : terminal.prepared.diff.removes) {
                     groupScheduler.removePublishedPlacement(new InstanceId(terminal.prepared.key.source(), remove));
-                    instanceStates.remove(new InstanceKey(terminal.prepared.key.source(), remove));
                 }
                 for (SceneGeometryKey drop : terminal.prepared.diff.drops) {
                     for (GroupResident retired : groupScheduler.removePublishedResident(
@@ -485,8 +481,7 @@ public final class RtSceneGeometryManager {
         for (PublishedPlacement published : groupScheduler.publishedPlacements()) {
             PublishedResidentSlot slot = published.resident;
             Placement placement = published.placement;
-            slot.current.append(update, placement.transformFor(update.origin), placement.mask, published.historyKey,
-                    slot.previous, resetTransformMotion(instanceStates.containsKey(published.historyKey)));
+            slot.current.append(update, placement, published, slot.previous);
             if (slot.previous != null) update.historyUses.add(slot.previous);
         }
         groupScheduler.drainPreviousResidents(update.historyRetire::add);
@@ -527,18 +522,21 @@ public final class RtSceneGeometryManager {
         private final GpuContext ctx;
         private final TableSlot table;
         private final SceneOrigin origin;
-        private final ArrayList<RtAccel.Instance> instances;
+        private final RtAccel.InstanceBatch instances;
         private final ArrayList<GroupResident> persistentUses;
-        private final Set<GroupResident> historyUses = new LinkedHashSet<>();
-        private final Set<GroupResident> historyRetire = new LinkedHashSet<>();
+        private final Set<GroupResident> historyUses;
+        private final Set<GroupResident> historyRetire;
         private int count;
 
         private FrameUpdate(GpuContext ctx, TableSlot table, SceneOrigin origin, int placementCount) {
             this.ctx = ctx;
             this.table = table;
             this.origin = origin;
-            this.instances = new ArrayList<>(placementCount);
-            this.persistentUses = new ArrayList<>(placementCount);
+            table.beginFrame(placementCount);
+            this.instances = table.instances;
+            this.persistentUses = table.persistentUses;
+            this.historyUses = table.historyUses;
+            this.historyRetire = table.historyRetire;
         }
 
         private int appendRecord(long primitiveAddress, long indexAddress, long textureCoordinateAddress,
@@ -564,19 +562,17 @@ public final class RtSceneGeometryManager {
             return record;
         }
 
-        private void appendInstance(float[] transform, long accelAddress, int record, int mask, InstanceKey key,
-                                    boolean resetMotion) {
-            instances.add(new RtAccel.Instance(transform, accelAddress, record, mask));
-            writeHistory(table, record, resetMotion ? transform : previousTransform(key, transform, origin));
-            if (key != null) instanceStates.put(key, new InstanceState(transform.clone(), origin));
-        }
-
-        private void appendResident(DynamicResident resident, float[] transform, int mask, InstanceKey key,
-                                    long previousPositionAddress, boolean resetMotion) {
+        private void appendResident(DynamicResident resident, Placement placement, PublishedPlacement published,
+                                    long previousPositionAddress) {
             int record = appendRecord(resident.primitiveAddress, resident.indexAddress, resident.textureCoordinateAddress,
                     previousPositionAddress, 0, resident.classTriangles,
                     resident.semanticFlags);
-            appendInstance(transform, resident.accel.deviceAddress, record, mask, key, resetMotion);
+            instances.append(placement.transform,
+                    placement.translationXFor(origin), placement.translationYFor(origin), placement.translationZFor(origin),
+                    resident.accel.deviceAddress, record, placement.mask, 0);
+            Placement history = published.historyPlacement();
+            writeHistory(table.history.mapped + (long) record * HISTORY_BYTES, history, origin);
+            published.completeFrameSnapshot();
             persistentUses.add(resident);
         }
 
@@ -638,33 +634,14 @@ public final class RtSceneGeometryManager {
         return frame.table.history.deviceAddress;
     }
 
-    private static void writeHistory(TableSlot table, int index, float[] transform) {
-        long address = table.history.mapped + (long) index * HISTORY_BYTES;
-        for (int row = 0; row < 3; row++) {
-            for (int column = 0; column < 4; column++) {
-                MemoryUtil.memPutFloat(address + (long) (row * 4 + column) * Float.BYTES,
-                        transform[row * 4 + column]);
-            }
-        }
-    }
-
-    private float[] previousTransform(InstanceKey key, float[] current, SceneOrigin currentOrigin) {
-        if (key == null) return current;
-        InstanceState previous = instanceStates.get(key);
-        if (previous == null) return current;
-        return rebasePreviousTransform(previous.transform, previous.origin, currentOrigin);
-    }
-
-    static boolean resetTransformMotion(boolean hasHistory) {
-        return !hasHistory;
-    }
-
-    static float[] rebasePreviousTransform(float[] previous, SceneOrigin previousOrigin, SceneOrigin currentOrigin) {
-        float[] transform = previous.clone();
-        transform[3] += (float) (previousOrigin.x() - currentOrigin.x());
-        transform[7] += (float) (previousOrigin.y() - currentOrigin.y());
-        transform[11] += (float) (previousOrigin.z() - currentOrigin.z());
-        return transform;
+    static void writeHistory(long address, Placement history, SceneOrigin origin) {
+        MemoryUtil.memCopy(history.transform, address);
+        MemoryUtil.memPutFloat(address + 3L * Float.BYTES,
+                history.transform[3] + history.translationXFor(origin));
+        MemoryUtil.memPutFloat(address + 7L * Float.BYTES,
+                history.transform[7] + history.translationYFor(origin));
+        MemoryUtil.memPutFloat(address + 11L * Float.BYTES,
+                history.transform[11] + history.translationZFor(origin));
     }
 
     private void writeDynamic(GpuContext ctx, DynamicResident resident, PackedInput input) {
@@ -778,18 +755,11 @@ public final class RtSceneGeometryManager {
         }
     }
 
-    record InstanceKey(ResourceId provider, SceneGeometryKey key) {
-    }
-
-    private record InstanceState(float[] transform, SceneOrigin origin) {
-    }
-
     /** Private common lifetime for every resident published through an atomic group. */
     interface GroupResident {
         TrackedGraphicsUse graphicsUse();
 
-        void append(FrameUpdate update, float[] transform, int mask, InstanceKey key, GroupResident previous,
-                    boolean resetTransformMotion);
+        void append(FrameUpdate update, Placement placement, PublishedPlacement published, GroupResident previous);
 
         void destroy();
     }
@@ -817,11 +787,11 @@ public final class RtSceneGeometryManager {
         }
 
         @Override
-        public void append(FrameUpdate update, float[] transform, int mask, InstanceKey key, GroupResident previous,
-                           boolean resetTransformMotion) {
+        public void append(FrameUpdate update, Placement placement, PublishedPlacement published,
+                           GroupResident previous) {
             DynamicResident previousDynamic = previous instanceof DynamicResident resident ? resident : null;
-            update.appendResident(this, transform, mask, key,
-                    previousDynamic == null ? 0L : previousDynamic.positionAddress, resetTransformMotion);
+            update.appendResident(this, placement, published,
+                    previousDynamic == null ? 0L : previousDynamic.positionAddress);
         }
 
         void destroyAccel() {
@@ -897,15 +867,22 @@ public final class RtSceneGeometryManager {
 
     static final class PublishedPlacement {
         final InstanceId id;
-        final InstanceKey historyKey;
         Placement placement;
+        Placement previousPlacement;
         PublishedResidentSlot resident;
 
         PublishedPlacement(InstanceId id, Placement placement, PublishedResidentSlot resident) {
             this.id = id;
-            this.historyKey = new InstanceKey(id.source, id.key);
             this.placement = placement;
             this.resident = resident;
+        }
+
+        Placement historyPlacement() {
+            return previousPlacement != null ? previousPlacement : placement;
+        }
+
+        void completeFrameSnapshot() {
+            previousPlacement = placement;
         }
     }
 
@@ -1167,6 +1144,9 @@ public final class RtSceneGeometryManager {
         final SceneOrigin origin;
 
         Placement(SceneGeometryKey residentKey, float[] transform, int mask, SceneOrigin origin) {
+            if (transform.length != 12) {
+                throw new IllegalArgumentException("geometry transform must contain 12 floats");
+            }
             this.residentKey = residentKey;
             this.transform = transform.clone();
             this.mask = mask;
@@ -1181,12 +1161,16 @@ public final class RtSceneGeometryManager {
             this(residentKey, transform, mask, SceneOrigin.ZERO);
         }
 
-        float[] transformFor(SceneOrigin targetOrigin) {
-            float[] result = transform.clone();
-            result[3] += (float) (origin.x() - targetOrigin.x());
-            result[7] += (float) (origin.y() - targetOrigin.y());
-            result[11] += (float) (origin.z() - targetOrigin.z());
-            return result;
+        float translationXFor(SceneOrigin targetOrigin) {
+            return (float) (origin.x() - targetOrigin.x());
+        }
+
+        float translationYFor(SceneOrigin targetOrigin) {
+            return (float) (origin.y() - targetOrigin.y());
+        }
+
+        float translationZFor(SceneOrigin targetOrigin) {
+            return (float) (origin.z() - targetOrigin.z());
         }
 
         Placement updated(PlacementUpdate update) {
@@ -1200,6 +1184,9 @@ public final class RtSceneGeometryManager {
         final SceneOrigin origin;
 
         PlacementUpdate(float[] transform, int mask, SceneOrigin origin) {
+            if (transform.length != 12) {
+                throw new IllegalArgumentException("geometry transform must contain 12 floats");
+            }
             this.transform = transform.clone();
             this.mask = mask;
             this.origin = origin;
@@ -1709,11 +1696,23 @@ public final class RtSceneGeometryManager {
     public static final class TableSlot {
         GpuBuffer buffer;
         GpuBuffer history;
+        final RtAccel.InstanceBatch instances = new RtAccel.InstanceBatch();
+        final ArrayList<GroupResident> persistentUses = new ArrayList<>();
+        final Set<GroupResident> historyUses = new LinkedHashSet<>();
+        final Set<GroupResident> historyRetire = new LinkedHashSet<>();
         final TrackedGraphicsUse graphicsUse = new TrackedGraphicsUse();
 
         TableSlot(GpuBuffer buffer, GpuBuffer history) {
             this.buffer = buffer;
             this.history = history;
+        }
+
+        void beginFrame(int placementCount) {
+            instances.reset(placementCount);
+            persistentUses.clear();
+            persistentUses.ensureCapacity(placementCount);
+            historyUses.clear();
+            historyRetire.clear();
         }
     }
 }
