@@ -5,12 +5,9 @@ import com.mojang.blaze3d.vulkan.VulkanPhysicalDevice;
 import com.mojang.blaze3d.vulkan.VulkanUtils;
 import com.mojang.blaze3d.vulkan.init.VulkanFeature;
 import com.mojang.blaze3d.vulkan.init.VulkanPNextStruct;
-import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.vulkan.VulkanDiagnostics;
 import org.lwjgl.vulkan.EXTDeviceFault;
-import org.lwjgl.vulkan.NVDeviceDiagnosticsConfig;
-import org.lwjgl.vulkan.VkPhysicalDeviceDiagnosticsConfigFeaturesNV;
 import org.lwjgl.vulkan.VkPhysicalDeviceFaultFeaturesEXT;
 import org.spongepowered.asm.mixin.injection.invoke.arg.Args;
 
@@ -23,59 +20,33 @@ import java.util.Set;
 /** Bridges host device wrappers and checkpoint formatting into raw Vulkan diagnostics. */
 public final class MinecraftVulkanDiagnostics {
     private static boolean faultRequested;
-    private static boolean vendorBinaryRequested;
-    private static boolean nvDiagnosticsRequested;
 
     private MinecraftVulkanDiagnostics() {
     }
 
     public static void addExtensions(Collection<String> extensions, VulkanPhysicalDevice device) {
         VulkanDiagnostics.logStartup(device.vkPhysicalDevice(), startupInfo(device));
-        VulkanDiagnostics.FaultSupport support = device.hasDeviceExtension(
+        faultRequested = device.hasDeviceExtension(
                 EXTDeviceFault.VK_EXT_DEVICE_FAULT_EXTENSION_NAME)
                 ? VulkanDiagnostics.queryDeviceFaultSupport(device.vkPhysicalDevice())
-                : new VulkanDiagnostics.FaultSupport(false, false);
-        boolean heavy = CausticaConfig.Rt.Diagnostics.HEAVY_CRASH_DIAGNOSTICS.value();
-        faultRequested = support.fault();
-        vendorBinaryRequested = faultRequested && support.vendorBinary() && heavy;
-        nvDiagnosticsRequested = heavy
-                && device.hasDeviceExtension(NVDeviceDiagnosticsConfig.VK_NV_DEVICE_DIAGNOSTICS_CONFIG_EXTENSION_NAME)
-                && VulkanDiagnostics.supportsNvDiagnostics(device.vkPhysicalDevice());
-        VulkanDiagnostics.configureDeviceFault(faultRequested, vendorBinaryRequested, nvDiagnosticsRequested);
+                : false;
+        VulkanDiagnostics.configureDeviceFault(faultRequested);
         if (faultRequested) {
             addOnce(extensions, EXTDeviceFault.VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
-            CausticaMod.LOGGER.info("Vulkan device-fault diagnostics requested (vendorBinary={})",
-                    vendorBinaryRequested);
+            CausticaMod.LOGGER.info("Vulkan device-fault diagnostics requested");
         } else {
             CausticaMod.LOGGER.warn("Vulkan device-fault diagnostics unavailable on [{}]", device.deviceName());
-        }
-        if (nvDiagnosticsRequested) {
-            addOnce(extensions, NVDeviceDiagnosticsConfig.VK_NV_DEVICE_DIAGNOSTICS_CONFIG_EXTENSION_NAME);
-            CausticaMod.LOGGER.info("NVIDIA device diagnostics config requested");
         }
     }
 
     @SuppressWarnings("unchecked")
     public static void addFeatures(Args args) {
-        if (!faultRequested && !nvDiagnosticsRequested) return;
+        if (!faultRequested) return;
         Set<VulkanFeature> features = new HashSet<>((Set<VulkanFeature>) args.get(2));
-        if (faultRequested) {
-            VulkanPNextStruct faultStruct = new VulkanPNextStruct(
-                    EXTDeviceFault.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT,
-                    VkPhysicalDeviceFaultFeaturesEXT.SIZEOF);
-            features.add(new VulkanFeature(faultStruct, "deviceFault", VkPhysicalDeviceFaultFeaturesEXT.DEVICEFAULT));
-            if (vendorBinaryRequested) {
-                features.add(new VulkanFeature(faultStruct, "deviceFaultVendorBinary",
-                        VkPhysicalDeviceFaultFeaturesEXT.DEVICEFAULTVENDORBINARY));
-            }
-        }
-        if (nvDiagnosticsRequested) {
-            VulkanPNextStruct configStruct = new VulkanPNextStruct(
-                    NVDeviceDiagnosticsConfig.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DIAGNOSTICS_CONFIG_FEATURES_NV,
-                    VkPhysicalDeviceDiagnosticsConfigFeaturesNV.SIZEOF);
-            features.add(new VulkanFeature(configStruct, "diagnosticsConfig",
-                    VkPhysicalDeviceDiagnosticsConfigFeaturesNV.DIAGNOSTICSCONFIG));
-        }
+        VulkanPNextStruct faultStruct = new VulkanPNextStruct(
+                EXTDeviceFault.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT,
+                VkPhysicalDeviceFaultFeaturesEXT.SIZEOF);
+        features.add(new VulkanFeature(faultStruct, "deviceFault", VkPhysicalDeviceFaultFeaturesEXT.DEVICEFAULT));
         args.set(2, features);
     }
 

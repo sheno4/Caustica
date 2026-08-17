@@ -9,14 +9,11 @@ import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.util.vma.Vma;
 import org.lwjgl.util.vma.VmaBudget;
 import org.lwjgl.vulkan.EXTDeviceFault;
-import org.lwjgl.vulkan.NVDeviceDiagnosticsConfig;
 import org.lwjgl.vulkan.NVDeviceDiagnosticCheckpoints;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VK11;
 import org.lwjgl.vulkan.VK12;
 import org.lwjgl.vulkan.VkDevice;
-import org.lwjgl.vulkan.VkDeviceCreateInfo;
-import org.lwjgl.vulkan.VkDeviceDiagnosticsConfigCreateInfoNV;
 import org.lwjgl.vulkan.VkDeviceFaultAddressInfoEXT;
 import org.lwjgl.vulkan.VkDeviceFaultCountsEXT;
 import org.lwjgl.vulkan.VkDeviceFaultInfoEXT;
@@ -26,21 +23,13 @@ import org.lwjgl.vulkan.VkLayerProperties;
 import org.lwjgl.vulkan.VkPhysicalDeviceFaultFeaturesEXT;
 import org.lwjgl.vulkan.VkPhysicalDeviceFeatures2;
 import org.lwjgl.vulkan.VkPhysicalDeviceMemoryProperties;
-import org.lwjgl.vulkan.VkPhysicalDeviceDiagnosticsConfigFeaturesNV;
 import org.lwjgl.vulkan.VkPhysicalDevice;
 import org.lwjgl.vulkan.VkPhysicalDeviceProperties;
 import org.lwjgl.vulkan.VkQueueFamilyProperties;
 import org.lwjgl.vulkan.VkCheckpointDataNV;
 import org.lwjgl.vulkan.VkQueue;
 
-import java.io.IOException;
 import java.lang.management.ManagementFactory;
-import java.nio.ByteBuffer;
-import java.nio.channels.FileChannel;
-import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
-import java.time.Instant;
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
@@ -53,26 +42,18 @@ import java.util.concurrent.ConcurrentSkipListMap;
 /** Startup Vulkan inventory and best-effort {@code VK_EXT_device_fault} reporting. */
 public final class VulkanDiagnostics {
     private static final int MAX_FAULT_RECORDS = 64;
-    private static final int MAX_BREADCRUMBS = 96;
-    private static final long MAX_VENDOR_BINARY_BYTES = 64L * 1024L * 1024L;
     private static final AtomicBoolean FAULT_REPORTED = new AtomicBoolean();
-    private static final ArrayDeque<String> BREADCRUMBS = new ArrayDeque<>();
     private static final ConcurrentHashMap<String, String> IN_FLIGHT = new ConcurrentHashMap<>();
     private static final ConcurrentSkipListMap<Long, BufferRange> BUFFERS =
             new ConcurrentSkipListMap<>(Long::compareUnsigned);
     private static volatile boolean deviceFaultRequested;
-    private static volatile boolean deviceFaultVendorBinaryRequested;
     private static volatile boolean deviceFaultEnabled;
-    private static volatile boolean nvDiagnosticsRequested;
     private static volatile VkQueue lastCausticaQueue;
     private static volatile String lastCausticaQueueLabel;
     private static int memoryHeapCount;
     private static volatile long allocator;
     private static boolean startupLogged;
     private static boolean instanceLayersLogged;
-
-    public record FaultSupport(boolean fault, boolean vendorBinary) {
-    }
 
     public record StartupInfo(String deviceName, String vendorName, String deviceType,
                               String driverName, String driverInfo, int driverId,
@@ -152,29 +133,13 @@ public final class VulkanDiagnostics {
                 loaderEnvironment.isEmpty() ? "<none>" : loaderEnvironment);
     }
 
-    /** Publishes the optional diagnostics features selected during host device negotiation. */
-    public static void configureDeviceFault(boolean fault, boolean vendorBinary, boolean nvDiagnostics) {
+    /** Publishes whether device-fault reporting was selected during host device negotiation. */
+    public static void configureDeviceFault(boolean fault) {
         deviceFaultRequested = fault;
-        deviceFaultVendorBinaryRequested = fault && vendorBinary;
-        nvDiagnosticsRequested = nvDiagnostics;
     }
 
     public static boolean deviceLossAlreadyReported() {
         return FAULT_REPORTED.get();
-    }
-
-    /** Prepend NVIDIA's diagnostics flags while the host device-creation stack is alive. */
-    public static void attachNvDiagnosticsConfig(VkDeviceCreateInfo deviceCreateInfo, MemoryStack stack) {
-        if (!nvDiagnosticsRequested) {
-            return;
-        }
-        int flags = NVDeviceDiagnosticsConfig.VK_DEVICE_DIAGNOSTICS_CONFIG_ENABLE_SHADER_DEBUG_INFO_BIT_NV
-                | NVDeviceDiagnosticsConfig.VK_DEVICE_DIAGNOSTICS_CONFIG_ENABLE_RESOURCE_TRACKING_BIT_NV
-                | NVDeviceDiagnosticsConfig.VK_DEVICE_DIAGNOSTICS_CONFIG_ENABLE_AUTOMATIC_CHECKPOINTS_BIT_NV
-                | NVDeviceDiagnosticsConfig.VK_DEVICE_DIAGNOSTICS_CONFIG_ENABLE_SHADER_ERROR_REPORTING_BIT_NV;
-        VkDeviceDiagnosticsConfigCreateInfoNV config = VkDeviceDiagnosticsConfigCreateInfoNV.calloc(stack)
-                .sType$Default().flags(flags).pNext(deviceCreateInfo.pNext());
-        deviceCreateInfo.pNext(config.address());
     }
 
     public static void logEnabledExtensions(Collection<String> extensions) {
@@ -190,19 +155,6 @@ public final class VulkanDiagnostics {
             CausticaMod.LOGGER.info("Vulkan device-fault diagnostics {}",
                     deviceFaultEnabled ? "enabled" : "FAILED: entry point missing");
         }
-        if (nvDiagnosticsRequested) {
-            CausticaMod.LOGGER.info("NVIDIA diagnostics config enabled (shader debug, resource tracking, automatic checkpoints, shader errors)");
-        }
-    }
-
-    public static void breadcrumb(String label) {
-        String entry = Instant.now() + " [" + Thread.currentThread().getName() + "] " + label;
-        synchronized (BREADCRUMBS) {
-            if (BREADCRUMBS.size() == MAX_BREADCRUMBS) {
-                BREADCRUMBS.removeFirst();
-            }
-            BREADCRUMBS.addLast(entry);
-        }
     }
 
     public static void setInFlight(String lane, String state) {
@@ -210,7 +162,6 @@ public final class VulkanDiagnostics {
             IN_FLIGHT.remove(lane);
         } else {
             IN_FLIGHT.put(lane, state);
-            breadcrumb(lane + ": " + state);
         }
     }
 
@@ -246,7 +197,6 @@ public final class VulkanDiagnostics {
             return;
         }
 
-        ByteBuffer vendorBinary = null;
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkDeviceFaultCountsEXT counts = VkDeviceFaultCountsEXT.calloc(stack).sType$Default();
             int result = EXTDeviceFault.vkGetDeviceFaultInfoEXT(device, counts, null);
@@ -265,31 +215,21 @@ public final class VulkanDiagnostics {
                     ? null : VkDeviceFaultAddressInfoEXT.calloc(addressCount, stack);
             VkDeviceFaultVendorInfoEXT.Buffer vendors = vendorCount == 0
                     ? null : VkDeviceFaultVendorInfoEXT.calloc(vendorCount, stack);
-            long requestedVendorBytes = deviceFaultVendorBinaryRequested
-                    && counts.vendorBinarySize() <= MAX_VENDOR_BINARY_BYTES ? counts.vendorBinarySize() : 0L;
-            if (counts.vendorBinarySize() > MAX_VENDOR_BINARY_BYTES) {
-                CausticaMod.LOGGER.warn("Skipping oversized Vulkan vendor fault binary: {}", formatBytes(counts.vendorBinarySize()));
-            }
-            if (requestedVendorBytes > 0L) {
-                vendorBinary = MemoryUtil.memAlloc(Math.toIntExact(requestedVendorBytes));
-            }
             VkDeviceFaultInfoEXT info = VkDeviceFaultInfoEXT.calloc(stack).sType$Default();
             MemoryUtil.memPutAddress(info.address() + VkDeviceFaultInfoEXT.PADDRESSINFOS,
                     addresses == null ? 0L : addresses.address());
             MemoryUtil.memPutAddress(info.address() + VkDeviceFaultInfoEXT.PVENDORINFOS,
                     vendors == null ? 0L : vendors.address());
-            MemoryUtil.memPutAddress(info.address() + VkDeviceFaultInfoEXT.PVENDORBINARYDATA,
-                    vendorBinary == null ? 0L : MemoryUtil.memAddress(vendorBinary));
             counts.addressInfoCount(addressCount).vendorInfoCount(vendorCount)
-                    .vendorBinarySize(vendorBinary == null ? 0L : vendorBinary.capacity());
+                    .vendorBinarySize(0L);
 
             result = EXTDeviceFault.vkGetDeviceFaultInfoEXT(device, counts, info);
             if (result != VK10.VK_SUCCESS && result != VK10.VK_INCOMPLETE) {
                 CausticaMod.LOGGER.error("vkGetDeviceFaultInfoEXT(info) failed: {}", result);
                 return;
             }
-            CausticaMod.LOGGER.error("Vulkan device fault: description='{}', addresses={}, vendorRecords={}, vendorBinaryBytes={}",
-                    info.descriptionString(), counts.addressInfoCount(), counts.vendorInfoCount(), counts.vendorBinarySize());
+            CausticaMod.LOGGER.error("Vulkan device fault: description='{}', addresses={}, vendorRecords={}",
+                    info.descriptionString(), counts.addressInfoCount(), counts.vendorInfoCount());
             if (addresses != null) {
                 for (int i = 0; i < Math.min(addressCount, counts.addressInfoCount()); i++) {
                     VkDeviceFaultAddressInfoEXT address = addresses.get(i);
@@ -307,28 +247,13 @@ public final class VulkanDiagnostics {
                             Long.toUnsignedString(vendor.vendorFaultData(), 16));
                 }
             }
-            if (vendorBinary != null && counts.vendorBinarySize() > 0L) {
-                writeVendorBinary(vendorBinary, counts.vendorBinarySize());
-            }
         } catch (Throwable t) {
             CausticaMod.LOGGER.error("Failed to query VK_EXT_device_fault after device loss", t);
-        } finally {
-            if (vendorBinary != null) {
-                MemoryUtil.memFree(vendorBinary);
-            }
         }
     }
 
     private static void logRuntimeSnapshot() {
-        List<String> breadcrumbs;
-        synchronized (BREADCRUMBS) {
-            breadcrumbs = List.copyOf(BREADCRUMBS);
-        }
         CausticaMod.LOGGER.error("Vulkan in-flight state: {}", IN_FLIGHT);
-        CausticaMod.LOGGER.error("Vulkan recent breadcrumbs (oldest to newest, {}):", breadcrumbs.size());
-        for (String breadcrumb : breadcrumbs) {
-            CausticaMod.LOGGER.error("  {}", breadcrumb);
-        }
         long totalBytes = BUFFERS.values().stream().mapToLong(BufferRange::size).sum();
         CausticaMod.LOGGER.error("Caustica live BDA buffers: count={}, bytes={}", BUFFERS.size(), formatBytes(totalBytes));
         long liveAllocator = allocator;
@@ -400,38 +325,12 @@ public final class VulkanDiagnostics {
         return "unresolved (" + nearest + ")";
     }
 
-    private static void writeVendorBinary(ByteBuffer binary, long reportedSize) {
-        int size = (int) Math.min(binary.capacity(), reportedSize);
-        Path path = Path.of("caustica-device-fault-" + Instant.now().toString().replace(':', '-') + ".bin")
-                .toAbsolutePath();
-        ByteBuffer data = binary.duplicate().position(0).limit(size);
-        try (FileChannel channel = FileChannel.open(path, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)) {
-            while (data.hasRemaining()) {
-                channel.write(data);
-            }
-            CausticaMod.LOGGER.error("Wrote Vulkan vendor fault binary ({} bytes) to {}", size, path);
-        } catch (IOException e) {
-            CausticaMod.LOGGER.error("Failed to write Vulkan vendor fault binary to {}", path, e);
-        }
-    }
-
-    public static FaultSupport queryDeviceFaultSupport(VkPhysicalDevice physicalDevice) {
+    public static boolean queryDeviceFaultSupport(VkPhysicalDevice physicalDevice) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkPhysicalDeviceFaultFeaturesEXT fault = VkPhysicalDeviceFaultFeaturesEXT.calloc(stack).sType$Default();
             VkPhysicalDeviceFeatures2 features = VkPhysicalDeviceFeatures2.calloc(stack).sType$Default().pNext(fault.address());
             VK12.vkGetPhysicalDeviceFeatures2(physicalDevice, features);
-            return new FaultSupport(fault.deviceFault(), fault.deviceFaultVendorBinary());
-        }
-    }
-
-    public static boolean supportsNvDiagnostics(VkPhysicalDevice physicalDevice) {
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkPhysicalDeviceDiagnosticsConfigFeaturesNV diagnostics =
-                    VkPhysicalDeviceDiagnosticsConfigFeaturesNV.calloc(stack).sType$Default();
-            VkPhysicalDeviceFeatures2 features = VkPhysicalDeviceFeatures2.calloc(stack).sType$Default()
-                    .pNext(diagnostics.address());
-            VK12.vkGetPhysicalDeviceFeatures2(physicalDevice, features);
-            return diagnostics.diagnosticsConfig();
+            return fault.deviceFault();
         }
     }
 

@@ -470,7 +470,6 @@ public final class RtGpuExecutor {
                     "submitted builds=" + firstValue + ".." + signalValue + " batch=" + batch.size());
             waitTimeline(buildTimeline, signalValue);
             completed = true;
-            VulkanDiagnostics.breadcrumb("async-compute completed buildTimeline=" + signalValue);
         } finally {
             // Never retry a failed host wait while unwinding: propagate its original error. A command
             // buffer is safe to release here only if submission never happened or completion was observed.

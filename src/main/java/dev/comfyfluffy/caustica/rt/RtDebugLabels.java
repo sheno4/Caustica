@@ -1,7 +1,5 @@
 package dev.comfyfluffy.caustica.rt;
 
-import dev.comfyfluffy.caustica.vulkan.VulkanDiagnostics;
-
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import dev.comfyfluffy.caustica.spi.vulkan.DebugMarkers;
@@ -45,7 +43,6 @@ public final class RtDebugLabels {
         if (ctx == null || cmd == null || label == null || label.isBlank()) {
             return Scope.NOOP;
         }
-        VulkanDiagnostics.breadcrumb("record " + label + " cmd=0x" + Long.toUnsignedString(cmd.address(), 16));
         DebugMarkers.Scope scope = ctx.backend().debugMarkers().begin(cmd, PREFIX + label);
         return scope::close;
     }

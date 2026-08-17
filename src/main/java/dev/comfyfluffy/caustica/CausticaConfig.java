@@ -56,7 +56,7 @@ public final class CausticaConfig {
             Rt.class, Rt.Composite.class, Rt.Terrain.class, Rt.Lights.class,
             Rt.Entities.class, Rt.Overlay.class, Rt.DlssRr.class,
             Rt.Fg.class, Rt.Reflex.class, Rt.Exposure.class, Rt.Tonemap.class, Rt.FrameStats.class,
-            Rt.Screenshots.class, Rt.Diagnostics.class, Rt.Hdr.class, Rt.Composition.class,
+            Rt.Screenshots.class, Rt.Hdr.class, Rt.Composition.class,
             Ngx.class, Slang.class);
 
     /**
@@ -954,21 +954,6 @@ public final class CausticaConfig {
                     bool("caustica.rt.screenshots.exr", "screenshots.exr-enabled", false).inGroup("debug");
 
             private Screenshots() {
-            }
-        }
-
-        /** Startup Vulkan inventory + {@code VK_EXT_device_fault} reporting on device loss. See {@code VulkanDiagnostics}. */
-        public static final class Diagnostics {
-            /** Heavy driver-side crash diagnostics: vendor diagnostics-config extensions (shader debug
-             * info, resource tracking, automatic checkpoints, shader error reporting) and the
-             * {@code deviceFaultVendorBinary} feature (vendor-format crash dump on device loss). Off by
-             * default: measured ~10x BLAS build time / -20% fps when enabled. Plain {@code deviceFault}
-             * reporting (fault addresses + vendor records) is always on and unaffected. Turn on only
-             * while chasing a live device-loss crash. */
-            public static final BooleanSetting HEAVY_CRASH_DIAGNOSTICS =
-                    bool("caustica.rt.heavyCrashDiagnostics", "diagnostics.heavy-crash-diagnostics", false);
-
-            private Diagnostics() {
             }
         }
 
