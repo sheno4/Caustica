@@ -70,7 +70,7 @@ public interface SceneGeometrySink {
         }
     }
 
-    /** Update the transform and mask of an existing placement without changing its retained mesh target. */
+    /** Update a published or earlier-accepted placement without changing its retained mesh target. */
     record Transform(SceneGeometryKey instanceKey, GeometryTransform transform, int mask) implements Operation { }
 
     /** Remove one placement. Omitted placements remain published. */

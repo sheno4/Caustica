@@ -243,8 +243,6 @@ public final class RtEntities {
         long meshVisibilityToken;
         long pendingMeshVisibilityToken;
         boolean meshVisibilityQueued;
-        final PublicationState publication = new PublicationState();
-
         EntityState(UUID identity) {
             this.identity = identity;
         }
@@ -960,24 +958,20 @@ public final class RtEntities {
         pendingDrops.remove(key);
         GeometryTransform transform = transform(instanceTransform, build.origin);
         long capturedMeshHash = meshHash();
-        if (!state.publication.published) {
-            RtFrameStats.FRAME.count("entityPlacementFreshnessDeferred", 1);
-            if (state.beginInitialSubmission(capturedMeshHash)) {
-                EntityState submitted = state;
-                List<SceneGeometrySink.Operation> operations = List.of(
-                        new SceneGeometrySink.Put(key, capture.sceneMesh()),
-                        new SceneGeometrySink.Place(key, key, transform, mask));
-                if (RtFrameStats.enabled()) {
-                    long version = state.profileMeshSubmission();
-                    long sourceFrame = RtFrameStats.frameSerial();
-                    long visibilityToken = state.meshVisibilityToken;
-                    build.submit(key, operations, () -> {
-                        submitted.publication.acknowledged();
-                        submitted.meshPublicationAccepted(version, sourceFrame, visibilityToken);
-                    });
-                } else {
-                    build.submit(key, operations, submitted.publication::acknowledged);
-                }
+        if (state.beginInitialSubmission(capturedMeshHash)) {
+            RtFrameStats.FRAME.count("entityPlacementInitialSubmissions", 1);
+            EntityState submitted = state;
+            List<SceneGeometrySink.Operation> operations = List.of(
+                    new SceneGeometrySink.Put(key, capture.sceneMesh()),
+                    new SceneGeometrySink.Place(key, key, transform, mask));
+            if (RtFrameStats.enabled()) {
+                long version = state.profileMeshSubmission();
+                long sourceFrame = RtFrameStats.frameSerial();
+                long visibilityToken = state.meshVisibilityToken;
+                build.submit(key, operations,
+                        () -> submitted.meshPublicationAccepted(version, sourceFrame, visibilityToken));
+            } else {
+                build.submit(key, operations, null);
             }
         } else {
             RtFrameStats.FRAME.count("entityPlacementFreshnessEligible", 1);

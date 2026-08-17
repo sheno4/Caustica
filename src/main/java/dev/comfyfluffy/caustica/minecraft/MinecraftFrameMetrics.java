@@ -48,7 +48,7 @@ public final class MinecraftFrameMetrics {
             "entityPlacementVisibilitySamples", "entityPlacementExtractionToVisibleFramesTotal",
             "entityPlacementExtractionToVisibleFramesMax", "entityPlacementExtractionToVisibleMicrosTotal",
             "entityPlacementExtractionToVisibleMicrosMax",
-            "entityPlacementFreshnessEligible", "entityPlacementFreshnessDeferred", "entityMeshOnlyUpdates",
+            "entityPlacementFreshnessEligible", "entityPlacementInitialSubmissions", "entityMeshOnlyUpdates",
             "entityMeshVisibilitySamples", "entityMeshRevisionsSkippedBetweenVisibility",
             "entityMeshVisibilityIntervalFramesTotal", "entityMeshVisibilityIntervalFramesSamples",
             "entityMeshVisibilityIntervalFramesMax", "entityMeshInitialUnavailableFramesTotal",

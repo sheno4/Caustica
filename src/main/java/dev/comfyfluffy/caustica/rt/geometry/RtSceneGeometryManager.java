@@ -1223,6 +1223,9 @@ public final class RtSceneGeometryManager {
         private final Set<GroupKey> reservedGroups = new LinkedHashSet<>();
         private final Set<Barrier> running = new LinkedHashSet<>();
         private final Map<GroupKey, Long> latestAccepted = new HashMap<>();
+        /** Ordered accepted Place/Remove state lets Transform wait for creation without provider publication flags. */
+        private final Map<InstanceId, ArrayList<PlacementIntent>> placementIntents = new HashMap<>();
+        private long nextAcceptanceOrder;
 
         void submit(GeometryUpdateGroup update) {
             submit(update, null);
@@ -1240,7 +1243,16 @@ public final class RtSceneGeometryManager {
             }
             Barrier barrier = barrier(update, acknowledgment, failureHandler);
             Barrier queued = pending.get(barrier.key);
-            Barrier merged = validateMerged(queued, barrier);
+            Map<InstanceId, List<PlacementIntent>> originalIntents = new HashMap<>();
+            long originalOrder = nextAcceptanceOrder;
+            Barrier merged;
+            try {
+                merged = stageMerged(queued, barrier, originalIntents);
+            } catch (RuntimeException | Error failure) {
+                restorePlacementIntents(originalIntents);
+                nextAcceptanceOrder = originalOrder;
+                throw failure;
+            }
             pending.remove(barrier.key);
             pending.put(barrier.key, merged);
             latestAccepted.put(update.key, update.revision);
@@ -1301,25 +1313,33 @@ public final class RtSceneGeometryManager {
             int acceptedPuts = 0;
             int coalescedGroups = 0;
             int coalescedPuts = 0;
-            for (GeometryUpdateGroup update : updates) {
-                Barrier staged = stagedPending.get(update.key);
-                Long previous = staged != null ? Long.valueOf(staged.revision) : latestAccepted.get(update.key);
-                if (previous != null && update.revision <= previous) {
-                    continue;
-                }
-                Barrier next = barrier(update, acknowledgment, failureHandler);
-                Barrier queued = staged != null ? staged : pending.get(update.key);
-                Barrier merged = validateMerged(queued, next);
-                if (profiling) {
-                    acceptedGroups++;
-                    acceptedPuts += next.diff.puts.size();
-                    if (queued != null) {
-                        coalescedGroups++;
-                        coalescedPuts += supersededPutCount(queued, next);
+            Map<InstanceId, List<PlacementIntent>> originalIntents = new HashMap<>();
+            long originalOrder = nextAcceptanceOrder;
+            try {
+                for (GeometryUpdateGroup update : updates) {
+                    Barrier staged = stagedPending.get(update.key);
+                    Long previous = staged != null ? Long.valueOf(staged.revision) : latestAccepted.get(update.key);
+                    if (previous != null && update.revision <= previous) {
+                        continue;
                     }
+                    Barrier next = barrier(update, acknowledgment, failureHandler);
+                    Barrier queued = staged != null ? staged : pending.get(update.key);
+                    Barrier merged = stageMerged(queued, next, originalIntents);
+                    if (profiling) {
+                        acceptedGroups++;
+                        acceptedPuts += next.diff.puts.size();
+                        if (queued != null) {
+                            coalescedGroups++;
+                            coalescedPuts += supersededPutCount(queued, next);
+                        }
+                    }
+                    stagedPending.remove(update.key);
+                    stagedPending.put(update.key, merged);
                 }
-                stagedPending.remove(update.key);
-                stagedPending.put(update.key, merged);
+            } catch (RuntimeException | Error failure) {
+                restorePlacementIntents(originalIntents);
+                nextAcceptanceOrder = originalOrder;
+                throw failure;
             }
             pending.keySet().removeAll(stagedPending.keySet());
             pending.putAll(stagedPending);
@@ -1352,15 +1372,24 @@ public final class RtSceneGeometryManager {
             return puts;
         }
 
-        private Barrier validateMerged(Barrier queued, Barrier next) {
+        private Barrier stageMerged(Barrier queued, Barrier next,
+                                    Map<InstanceId, List<PlacementIntent>> originalIntents) {
             Barrier merged = queued != null ? queued.merge(next) : next;
-            validateBarrier(merged);
+            snapshotPlacementIntents(originalIntents, queued);
+            snapshotPlacementIntents(originalIntents, merged);
+            unregisterPlacementIntents(queued);
+            merged.acceptanceOrder = ++nextAcceptanceOrder;
+            validateBarrier(merged, true);
+            registerPlacementIntents(merged);
             return merged;
         }
 
-        private void validateBarrier(Barrier barrier) {
+        private BarrierValidation validateBarrier(Barrier barrier, boolean admission) {
             long profilingStart = RtFrameStats.FRAME.startStage();
             try {
+                boolean waiting = false;
+                boolean invalidated = false;
+                Set<InstanceId> promised = null;
                 for (Placement placement : barrier.diff.placements.values()) {
                     ResidentId target = new ResidentId(barrier.key.source, placement.residentKey);
                     if (barrier.diff.drops.contains(placement.residentKey)
@@ -1372,10 +1401,21 @@ public final class RtSceneGeometryManager {
                     }
                 }
                 for (SceneGeometryKey instance : barrier.diff.placementUpdates.keySet()) {
-                    if (!publishedPlacements.containsKey(new InstanceId(barrier.key.source, instance))
-                            && !barrier.diff.placements.containsKey(instance)) {
+                    InstanceId id = new InstanceId(barrier.key.source, instance);
+                    PlacementAvailability availability = placementAvailability(id, barrier.acceptanceOrder);
+                    if (admission && availability == PlacementAvailability.ABSENT) {
                         throw new IllegalArgumentException(
-                                "geometry transform references an unpublished placement " + instance);
+                                "geometry transform references neither a published nor promised placement " + instance);
+                    }
+                    if (admission && availability == PlacementAvailability.PROMISED) {
+                        if (promised == null) promised = new LinkedHashSet<>();
+                        promised.add(id);
+                    } else if (!admission && availability == PlacementAvailability.PROMISED) {
+                        waiting = true;
+                    } else if (!admission && availability == PlacementAvailability.ABSENT) {
+                        if (barrier.promisedPlacementUpdates.contains(id)) invalidated = true;
+                        else throw new IllegalArgumentException(
+                                "geometry transform references an absent placement " + instance);
                     }
                 }
                 for (SceneGeometryKey drop : barrier.diff.drops) {
@@ -1390,9 +1430,80 @@ public final class RtSceneGeometryManager {
                         }
                     }
                 }
+                if (admission) {
+                    barrier.promisedPlacementUpdates = promised == null ? Set.of() : Set.copyOf(promised);
+                }
+                if (invalidated) return BarrierValidation.INVALIDATED;
+                return waiting ? BarrierValidation.WAITING : BarrierValidation.READY;
             } finally {
                 RtFrameStats.FRAME.endStage("geometry.schedulerValidate", profilingStart);
             }
+        }
+
+        private PlacementAvailability placementAvailability(InstanceId id, long beforeOrder) {
+            ArrayList<PlacementIntent> intents = placementIntents.get(id);
+            PlacementIntent latest = null;
+            if (intents != null) {
+                for (PlacementIntent intent : intents) {
+                    if (intent.barrier.acceptanceOrder < beforeOrder) latest = intent;
+                }
+            }
+            if (latest != null) {
+                return latest.present ? PlacementAvailability.PROMISED : PlacementAvailability.ABSENT;
+            }
+            return publishedPlacements.containsKey(id)
+                    ? PlacementAvailability.PUBLISHED : PlacementAvailability.ABSENT;
+        }
+
+        private void snapshotPlacementIntents(Map<InstanceId, List<PlacementIntent>> originals, Barrier barrier) {
+            if (barrier == null) return;
+            for (SceneGeometryKey key : barrier.diff.placements.keySet()) {
+                snapshotPlacementIntents(originals, new InstanceId(barrier.key.source, key));
+            }
+            for (SceneGeometryKey key : barrier.diff.removes) {
+                snapshotPlacementIntents(originals, new InstanceId(barrier.key.source, key));
+            }
+        }
+
+        private void snapshotPlacementIntents(Map<InstanceId, List<PlacementIntent>> originals, InstanceId id) {
+            originals.computeIfAbsent(id, ignored -> {
+                ArrayList<PlacementIntent> current = placementIntents.get(id);
+                return current == null ? List.of() : List.copyOf(current);
+            });
+        }
+
+        private void restorePlacementIntents(Map<InstanceId, List<PlacementIntent>> originals) {
+            originals.forEach((id, intents) -> {
+                if (intents.isEmpty()) placementIntents.remove(id);
+                else placementIntents.put(id, new ArrayList<>(intents));
+            });
+        }
+
+        private void registerPlacementIntents(Barrier barrier) {
+            barrier.diff.placements.keySet().forEach(key -> registerPlacementIntent(
+                    new InstanceId(barrier.key.source, key), barrier, true));
+            barrier.diff.removes.forEach(key -> registerPlacementIntent(
+                    new InstanceId(barrier.key.source, key), barrier, false));
+        }
+
+        private void registerPlacementIntent(InstanceId id, Barrier barrier, boolean present) {
+            placementIntents.computeIfAbsent(id, ignored -> new ArrayList<>())
+                    .add(new PlacementIntent(barrier, present));
+        }
+
+        private void unregisterPlacementIntents(Barrier barrier) {
+            if (barrier == null) return;
+            barrier.diff.placements.keySet().forEach(key -> unregisterPlacementIntent(
+                    new InstanceId(barrier.key.source, key), barrier));
+            barrier.diff.removes.forEach(key -> unregisterPlacementIntent(
+                    new InstanceId(barrier.key.source, key), barrier));
+        }
+
+        private void unregisterPlacementIntent(InstanceId id, Barrier barrier) {
+            ArrayList<PlacementIntent> intents = placementIntents.get(id);
+            if (intents == null) return;
+            intents.removeIf(intent -> intent.barrier == barrier);
+            if (intents.isEmpty()) placementIntents.remove(id);
         }
 
         List<GroupRun> startable() {
@@ -1405,11 +1516,19 @@ public final class RtSceneGeometryManager {
                         || intersects(barrier.instances, reservedInstances)) {
                     continue;
                 }
+                BarrierValidation validation;
                 try {
-                    validateBarrier(barrier);
+                    validation = validateBarrier(barrier, false);
                 } catch (IllegalArgumentException invalid) {
+                    unregisterPlacementIntents(barrier);
                     iterator.remove();
                     throw invalid;
+                }
+                if (validation == BarrierValidation.WAITING) continue;
+                if (validation == BarrierValidation.INVALIDATED) {
+                    unregisterPlacementIntents(barrier);
+                    iterator.remove();
+                    continue;
                 }
                 iterator.remove();
                 reservedResidents.addAll(barrier.residents);
@@ -1443,12 +1562,19 @@ public final class RtSceneGeometryManager {
         int publishedPlacementCount() { return publishedPlacements.size(); }
 
         List<GroupResident> clearSource(ResourceId source) {
-            pending.keySet().removeIf(key -> key.source.equals(source));
+            var pendingIterator = pending.entrySet().iterator();
+            while (pendingIterator.hasNext()) {
+                Barrier barrier = pendingIterator.next().getValue();
+                if (!barrier.key.source.equals(source)) continue;
+                unregisterPlacementIntents(barrier);
+                pendingIterator.remove();
+            }
             latestAccepted.keySet().removeIf(key -> key.source.equals(source));
             Set<GroupResident> deferred = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
             for (Barrier barrier : running) {
                 if (!barrier.key.source.equals(source)) continue;
                 barrier.cancelled = true;
+                unregisterPlacementIntents(barrier);
                 if (barrier.prepared != null) {
                     for (GroupCandidate candidate : barrier.prepared.candidates) {
                         if (candidate.source != null) {
@@ -1483,6 +1609,7 @@ public final class RtSceneGeometryManager {
 
         void complete(Barrier barrier, boolean success) {
             if (!running.remove(barrier)) return;
+            unregisterPlacementIntents(barrier);
             reservedResidents.removeAll(barrier.residents);
             reservedInstances.removeAll(barrier.instances);
             reservedGroups.remove(barrier.key);
@@ -1615,15 +1742,23 @@ public final class RtSceneGeometryManager {
             publishedResidents.clear();
             publishedPlacements.clear();
             previousResidentSlots.clear();
+            placementIntents.clear();
             pending.clear();
             reservedResidents.clear();
             reservedInstances.clear();
             reservedGroups.clear();
             running.clear();
             latestAccepted.clear();
+            nextAcceptanceOrder = 0L;
         }
 
     }
+
+    private enum BarrierValidation { READY, WAITING, INVALIDATED }
+
+    private enum PlacementAvailability { ABSENT, PROMISED, PUBLISHED }
+
+    private record PlacementIntent(Barrier barrier, boolean present) { }
 
     private static final class Barrier {
         final GroupKey key;
@@ -1635,6 +1770,8 @@ public final class RtSceneGeometryManager {
         final Consumer<Throwable> failureHandler;
         PreparedGroup prepared;
         boolean cancelled;
+        long acceptanceOrder;
+        Set<InstanceId> promisedPlacementUpdates = Set.of();
 
         Barrier(GroupKey key, long revision, GroupDiff diff, Consumer<PublicationAck> acknowledgment,
                 Consumer<Throwable> failureHandler) {

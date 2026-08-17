@@ -12,14 +12,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class RtEntitiesPublicationStateTest {
     @Test
-    void successfulPublicationMarksTheResidentPublished() {
-        RtEntities.PublicationState state = new RtEntities.PublicationState();
-        state.acknowledged();
-
-        assertTrue(state.published);
-    }
-
-    @Test
     void submittedMeshHashRemainsStableUntilAnotherMeshIsSubmitted() {
         RtEntities.EntityState state = state();
 
@@ -30,7 +22,7 @@ final class RtEntitiesPublicationStateTest {
     }
 
     @Test
-    void initialResidentIsSubmittedOnlyOnceUntilPublication() {
+    void initialResidentIsSubmittedOnlyOnce() {
         RtEntities.EntityState state = state();
 
         assertTrue(state.beginInitialSubmission(10L));
@@ -40,19 +32,17 @@ final class RtEntitiesPublicationStateTest {
     }
 
     @Test
-    void publishedUnchangedEntitySubmitsOnlyPlacement() {
+    void submittedUnchangedEntityDoesNotRequireAnotherMesh() {
         RtEntities.EntityState state = state();
         state.meshSubmitted(10L);
-        state.publication.acknowledged();
 
         assertFalse(state.requiresPut(10L));
     }
 
     @Test
-    void publishedTopologyChangeRequiresANewMeshSubmission() {
+    void submittedTopologyChangeRequiresANewMeshSubmission() {
         RtEntities.EntityState state = state();
         state.meshSubmitted(10L);
-        state.publication.acknowledged();
 
         assertTrue(state.requiresPut(20L));
         state.meshSubmitted(20L);
