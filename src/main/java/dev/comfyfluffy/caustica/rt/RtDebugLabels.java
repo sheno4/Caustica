@@ -2,7 +2,7 @@ package dev.comfyfluffy.caustica.rt;
 
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkCommandBuffer;
-import dev.comfyfluffy.caustica.rt.backend.DebugMarkers;
+import dev.comfyfluffy.caustica.spi.vulkan.DebugMarkers;
 
 /** Debug labels for renderer-owned raw Vulkan objects. */
 public final class RtDebugLabels {

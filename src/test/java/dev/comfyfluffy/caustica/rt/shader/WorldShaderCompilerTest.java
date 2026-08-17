@@ -87,7 +87,7 @@ final class WorldShaderCompilerTest {
 
     // Slang treats a module as safe to declare globals only if some entry point compiled in this session
     // plain-imported it, so whether a specialized stage compiles must not depend on which stage ran first.
-    // RtComposite compiles indirect BEFORE sky_miss; a session that only ever saw sky_miss first would
+    // The program manager compiles indirect BEFORE sky_miss; a session that only ever saw sky_miss first would
     // hide a missing anchor import in every other stage.
     @ParameterizedTest
     @ValueSource(strings = {"primary", "indirect", "indirect_ser", "closest_hit", "sky_miss"})

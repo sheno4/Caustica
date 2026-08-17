@@ -3,6 +3,7 @@ package dev.comfyfluffy.caustica.rt;
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.api.CausticaApi;
+import dev.comfyfluffy.caustica.api.CausticaRegistry;
 import dev.comfyfluffy.caustica.api.pass.RenderStage;
 import dev.comfyfluffy.caustica.engine.frame.FrameSnapshot;
 import dev.comfyfluffy.caustica.engine.frame.SceneResources;
@@ -27,8 +28,9 @@ import org.lwjgl.vulkan.VkImageMemoryBarrier;
 import org.lwjgl.vulkan.VkMemoryBarrier;
 
 import dev.comfyfluffy.caustica.rt.accel.RtAccel;
-import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
-import dev.comfyfluffy.caustica.rt.accel.GpuImage;
+import dev.comfyfluffy.caustica.rt.accel.TlasBuilder;
+import dev.comfyfluffy.caustica.api.gpu.GpuBuffer;
+import dev.comfyfluffy.caustica.api.gpu.GpuImage;
 import dev.comfyfluffy.caustica.rt.geometry.RtGeometryMaterialResolution;
 import dev.comfyfluffy.caustica.rt.geometry.RtSceneGeometryManager;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDlssRr;
@@ -36,10 +38,10 @@ import dev.comfyfluffy.caustica.rt.pipeline.RtJitter;
 import dev.comfyfluffy.caustica.rt.pipeline.RtExposure;
 import dev.comfyfluffy.caustica.rt.pass.RenderPassManager;
 import dev.comfyfluffy.caustica.rt.provider.ProviderManager;
-import dev.comfyfluffy.caustica.rt.backend.GraphicsSubmission;
+import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
 import dev.comfyfluffy.caustica.rt.pipeline.RtPipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtToneLut;
-import dev.comfyfluffy.caustica.rt.scene.RtSceneSource;
+import dev.comfyfluffy.caustica.spi.host.RendererSceneSource;
 import dev.comfyfluffy.caustica.api.provider.SceneCamera;
 
 import java.io.IOException;
@@ -62,8 +64,6 @@ import java.util.Objects;
  * Pipelines/SBT/descriptors are built once; sized images rebuilt on resize.
  */
 final class RtFrameRenderer {
-    static final RtFrameRenderer INSTANCE = new RtFrameRenderer();
-
     public static boolean enabled() {
         return RtRuntime.frameActive();
     }
@@ -113,7 +113,10 @@ final class RtFrameRenderer {
         return frameCounter;
     }
 
-    private final RtWorldResources worldResources = new RtWorldResources();
+    private final ProviderManager providers;
+    private final RtFramePresenter presenter;
+    private final CausticaRegistry.RuntimeContributions contributions;
+    private final RtWorldResources worldResources;
     // World push data lives in a host-visible BDA ring; only the slot address and a small hot subset are
     // pushed inline (the full generated structure exceeds NVIDIA's 256-byte push-constant ceiling).
     // Exact graphics completion guards host writes; ring depth only avoids routine waits.
@@ -121,10 +124,8 @@ final class RtFrameRenderer {
     private PushSlot[] pushRing;
     private int pushSlot;
     private final RtLightScene lightScene = new RtLightScene();
-    private final RtSceneGeometryManager sceneGeometry = new RtSceneGeometryManager(
-            (material, coverage) -> RtGeometryMaterialResolution.resolve(
-                    material, coverage, worldResources.materialEpoch.geometryBindings()));
-    private final RtFrameResources frameResources = new RtFrameResources();
+    private final RtSceneGeometryManager sceneGeometry;
+    private final RtFrameResources frameResources;
     private RenderPassManager renderPassManager;
     private long renderPassSceneId = Long.MIN_VALUE;
 
@@ -167,13 +168,17 @@ final class RtFrameRenderer {
     private volatile long currentTlasHandle;
     private RtGpuExecutor.GraphicsUse pendingGraphicsUse;
 
-    private RtFrameRenderer() {
+    RtFrameRenderer(RtProgramManager programManager, ProviderManager providers, RtFramePresenter presenter,
+            CausticaRegistry.RuntimeContributions contributions) {
+        this.providers = providers;
+        this.presenter = presenter;
+        this.contributions = contributions;
+        this.worldResources = new RtWorldResources(programManager, providers);
+        this.sceneGeometry = new RtSceneGeometryManager(
+                (material, coverage) -> RtGeometryMaterialResolution.resolve(
+                        material, coverage, worldResources.materialEpoch.geometryBindings()));
+        this.frameResources = new RtFrameResources(presenter);
         worldResources.attachSceneGeometry(sceneGeometry);
-    }
-
-    /** This frame's TLAS handle (0 if none built yet), for host overlay occlusion queries. */
-    public long currentTlasHandle() {
-        return currentTlasHandle;
     }
 
     /** Renderer-owned geometry manager shared by every active scene producer. */
@@ -227,11 +232,11 @@ final class RtFrameRenderer {
             ctx.submitSync(cmd -> recordExrReadback(ctx, cmd, readback, rgbaBytes));
             readback.invalidate();
 
-            float residualExposure = MemoryUtil.memGetFloat(readback.mapped + rgbaBytes);
+            float residualExposure = MemoryUtil.memGetFloat(readback.mapped() + rgbaBytes);
             RtExposure.CaptureMetadata exposureMetadata = frameResources.exposure.captureMetadata(residualExposure);
             short[] exposedRgba = new short[Math.toIntExact(pixelCount * 4L)];
             for (int sample = 0; sample < exposedRgba.length; sample++) {
-                short storedHalf = MemoryUtil.memGetShort(readback.mapped + (long) sample * Short.BYTES);
+                short storedHalf = MemoryUtil.memGetShort(readback.mapped() + (long) sample * Short.BYTES);
                 float value = Float.float16ToFloat(storedHalf);
                 if ((sample & 3) != 3) {
                     value *= residualExposure;
@@ -270,7 +275,7 @@ final class RtFrameRenderer {
                     .dstAccessMask(VK10.VK_ACCESS_TRANSFER_READ_BIT)
                     .srcQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED)
                     .dstQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED)
-                    .image(frameResources.rrOutput.image);
+                    .image(frameResources.rrOutput.image());
             imageBarriers.get(0).subresourceRange().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT)
                     .levelCount(1).layerCount(1);
             imageBarriers.get(1).sType$Default()
@@ -279,7 +284,7 @@ final class RtFrameRenderer {
                     .dstAccessMask(VK10.VK_ACCESS_TRANSFER_READ_BIT)
                     .srcQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED)
                     .dstQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED)
-                    .image(frameResources.exposure.image().image);
+                    .image(frameResources.exposure.image().image());
             imageBarriers.get(1).subresourceRange().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT)
                     .levelCount(1).layerCount(1);
             VK10.vkCmdPipelineBarrier(cmd, VK10.VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
@@ -289,15 +294,15 @@ final class RtFrameRenderer {
             sceneCopy.get(0).bufferOffset(0L);
             sceneCopy.get(0).imageSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).layerCount(1);
             sceneCopy.get(0).imageExtent().set(frameResources.displayW, frameResources.displayH, 1);
-            VK10.vkCmdCopyImageToBuffer(cmd, frameResources.rrOutput.image, VK10.VK_IMAGE_LAYOUT_GENERAL,
-                    readback.handle, sceneCopy);
+            VK10.vkCmdCopyImageToBuffer(cmd, frameResources.rrOutput.image(), VK10.VK_IMAGE_LAYOUT_GENERAL,
+                    readback.handle(), sceneCopy);
 
             VkBufferImageCopy.Buffer exposureCopy = VkBufferImageCopy.calloc(1, stack);
             exposureCopy.get(0).bufferOffset(exposureOffset);
             exposureCopy.get(0).imageSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).layerCount(1);
             exposureCopy.get(0).imageExtent().set(1, 1, 1);
-            VK10.vkCmdCopyImageToBuffer(cmd, frameResources.exposure.image().image, VK10.VK_IMAGE_LAYOUT_GENERAL,
-                    readback.handle, exposureCopy);
+            VK10.vkCmdCopyImageToBuffer(cmd, frameResources.exposure.image().image(), VK10.VK_IMAGE_LAYOUT_GENERAL,
+                    readback.handle(), exposureCopy);
 
             VkMemoryBarrier.Buffer hostBarrier = VkMemoryBarrier.calloc(1, stack);
             hostBarrier.get(0).sType$Default().srcAccessMask(VK10.VK_ACCESS_TRANSFER_WRITE_BIT)
@@ -320,7 +325,7 @@ final class RtFrameRenderer {
         // false once so the scene source can apply the matching full clear. Keep source rasterization alive for that
         // bring-up frame; otherwise it is suppressed before composite() discovers it must fall back and the
         // host permanently latches the resulting missing replacement frame.
-        return worldResources.requiresSourceFallback(ProviderManager.INSTANCE.bindlessTextureCapacity());
+        return worldResources.requiresSourceFallback(providers.bindlessTextureCapacity());
     }
 
     /**
@@ -329,7 +334,7 @@ final class RtFrameRenderer {
      * readiness rather than an additional tick or rendered frame.
      */
     public boolean completeStartupBoundary() {
-        return worldResources.completeStartupBoundary(ProviderManager.INSTANCE.bindlessTextureCapacity());
+        return worldResources.completeStartupBoundary(providers.bindlessTextureCapacity());
     }
 
     /**
@@ -359,10 +364,6 @@ final class RtFrameRenderer {
      * traced with — host overlay raster passes reuse it so their content lands
      * pixel-exact on the RT image. Valid after {@code updateMotion} ran this frame; do not mutate.
      */
-    public Matrix4fc currentViewProjection() {
-        return mvCurProjView;
-    }
-
     /**
      * Invalidate the published presentation snapshot at the start of host rendering. Menu and loading
      * frames do not call {@link #composite()}, so retaining the previous world snapshot would present stale
@@ -374,17 +375,8 @@ final class RtFrameRenderer {
         }
         RtFrameStats.beginRenderFrame();
         RtFrameStats.FRAME.beginIfInactive();
-        RtFramePresenter.INSTANCE.beginFrame();
+        presenter.beginFrame();
         frameSnapshot = null;
-    }
-
-    /** This frame's completion token, valid until {@link #finishGraphicsUse()} signals it. */
-    public RtGpuExecutor.GraphicsUse currentGraphicsUse() {
-        GpuContext context = GpuContext.currentOrNull();
-        if (context != null) {
-            context.backend().assertRenderThread();
-        }
-        return pendingGraphicsUse;
     }
 
     /**
@@ -395,7 +387,7 @@ final class RtFrameRenderer {
      * never reached {@link #ensureRenderPassManager}).
      */
     public void recordOverlayPasses() {
-        if (renderPassManager == null) {
+        if (renderPassManager == null || pendingGraphicsUse == null) {
             return;
         }
         // A pass throwing is already isolated by RenderPassManager (disables that pass, logs, moves on);
@@ -450,9 +442,9 @@ final class RtFrameRenderer {
         ctx.gpuExecutor().throwIfFailed();
         // Providers prepare their frame contributions before the ready gate below. A failing provider is
         // disabled and cleaned up independently, so another provider can continue serving the frame.
-        ProviderManager.INSTANCE.prepareFrame();
+        providers.prepareFrame();
         FrameSnapshot snapshot = frameSnapshot;
-        ProviderManager.PrimaryScene primaryScene = ProviderManager.INSTANCE.primaryScene();
+        ProviderManager.PrimaryScene primaryScene = providers.primaryScene();
         if (primaryScene == null || snapshot == null) {
             // No scene was captured this frame. Skip RT so the present path falls back to the host image.
             return false;
@@ -479,7 +471,7 @@ final class RtFrameRenderer {
         } catch (ProviderManager.SceneSourceUnavailableException unavailable) {
             return false;
         } catch (Throwable t) {
-            RtFramePresenter.INSTANCE.invalidateRenderedFrame();
+            presenter.invalidateRenderedFrame();
             ctx.gpuExecutor().throwIfFailed();
             failed = true;
             CausticaMod.LOGGER.error("RT composite failed; reverting to source rasterization", t);
@@ -565,7 +557,7 @@ final class RtFrameRenderer {
     }
     private void ensureRenderPassManager(GpuContext ctx) throws IOException {
         if (renderPassManager == null) {
-            renderPassManager = RenderPassManager.create(ctx, RtRuntime.INSTANCE.runtimeContributions(),
+            renderPassManager = RenderPassManager.create(ctx, contributions,
                     CausticaApi.options());
         }
     }
@@ -657,9 +649,9 @@ final class RtFrameRenderer {
         VkCommandBuffer cmd = submission.beginTransientCommandBuffer();
         RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_COMMAND_BUFFER, cmd.address(), "composite command buffer");
         int debugView = debugView();
-        RtSceneSource.Retained retained = primaryScene.retained();
+        RendererSceneSource.RetainedScene retained = primaryScene.retained();
         SceneOrigin sceneOrigin = retained.origin();
-        RtSceneSource.RetainedLights retainedLights = retained.retainedLights();
+        RendererSceneSource.RetainedLights retainedLights = retained.retainedLights();
         try (MemoryStack stack = MemoryStack.stackPush(); RtDebugLabels.Scope frameLabel = RtDebugLabels.scope(ctx, cmd, "composite frame")) {
             // RR drives the upscale: trace + jitter at render res, DLSS-RR denoises+upscales to display.
             // A debug view observes this ordinary path; it never changes jitter or disables RR.
@@ -680,7 +672,7 @@ final class RtFrameRenderer {
             graphicsUseWaiter.await(selectedPushSlot.graphicsUse);
             framePushSlot = selectedPushSlot;
             GpuBuffer pushBuf = selectedPushSlot.buffer;
-            ByteBuffer push = MemoryUtil.memByteBuffer(pushBuf.mapped, WORLD_PUSH_SIZE);
+            ByteBuffer push = MemoryUtil.memByteBuffer(pushBuf.mapped(), WORLD_PUSH_SIZE);
             frameInvViewProj.set(frameProjection).mul(frameViewRotation).invert();
             int flags = snapshot.proceduralSurfaceAnimationEnabled() ? 0b10000 : 0;
             int cameraMediumIorTransmission = 0;
@@ -707,7 +699,7 @@ final class RtFrameRenderer {
             // float precision). hitPos.xz (rebased) + anchor reconstructs a world-pinned coordinate, so a
             // pattern stays fixed in the world as the player moves and the rebase origin shifts.
             frameLights = lightScene.prepareFrame(ctx,
-                    ProviderManager.INSTANCE.frameLights(), sceneOrigin.x(), sceneOrigin.y(),
+                    providers.frameLights(), sceneOrigin.x(), sceneOrigin.y(),
                     sceneOrigin.z(), snapshot.metersPerWorldUnit(), graphicsUseWaiter);
             double proceduralPeriod = PROCEDURAL_ANCHOR_MASK + 1.0;
             Float3 proceduralDomainOffset = new Float3(sceneOrigin.wrappedX(proceduralPeriod),
@@ -715,7 +707,7 @@ final class RtFrameRenderer {
 
             // Providers and host sources submit only retained atomic updates. The manager publishes ready
             // groups and builds one source-neutral TLAS snapshot from that published scene.
-            ProviderManager.INSTANCE.submitGeometry(ctx, sceneOrigin,
+            providers.submitGeometry(ctx, sceneOrigin,
                     new SceneCamera(snapshot.cameraX(), snapshot.cameraY(), snapshot.cameraZ(),
                             frameProjection.get(new float[16]), frameViewRotation.get(new float[16])));
             dynamicGeometry = sceneGeometry.beginUpdate(ctx, sceneOrigin);
@@ -752,14 +744,14 @@ final class RtFrameRenderer {
             pushBuf.flush(0L, WORLD_PUSH_SIZE);
             // Upload source textures registered this frame before the trace, preserving descriptor order.
             worldResources.materialEpoch.uploadPendingTextures(ctx, active);
-            RtAccel.PreparedTlas frameTlas;
+            TlasBuilder.Prepared frameTlas;
             try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("frame.prepareTlas")) {
                 frameTlas = sceneGeometry.prepareTlas(ctx, dynamicGeometry, graphicsUse);
             }
             active.setTlas(frameTlas.accel.handle, graphicsUse, graphicsUseWaiter);
             currentTlasHandle = frameTlas.accel.handle;
             try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("frame.recordTlas")) {
-                RtAccel.recordTlasBuild(ctx, cmd, frameTlas);
+                TlasBuilder.record(ctx, cmd, frameTlas);
             }
             VulkanBarriers.memoryBarrier(cmd, stack); // TLAS build visible to the trace
 
@@ -769,15 +761,15 @@ final class RtFrameRenderer {
             // WorldPush at all, and the RIS light buffers are read from world.rgen's hot inner loop, so
             // none of them should cost an extra BDA dereference to find.
             ByteBuffer pushConstants = stack.malloc(WorldPushConstantsData.BYTE_SIZE);
-            new WorldPushConstantsData(pushBuf.deviceAddress, sceneGeometry.geometryTableAddress(dynamicGeometry),
+            new WorldPushConstantsData(pushBuf.deviceAddress(), sceneGeometry.geometryTableAddress(dynamicGeometry),
                     sceneGeometry.instanceHistoryAddress(dynamicGeometry),
                     worldResources.materialEpoch.bindingTableAddress(),
                     worldResources.materialEpoch.surfaceTableAddress(),
                     retainedLights.lightAddress(), retainedLights.nodeAddress(),
                     frameLights.lightAddress(), frameLights.nodeAddress(),
-                    frameResources.continuationQueue.deviceAddress,
+                    frameResources.continuationQueue.deviceAddress(),
                     (int) frameCounter).write(pushConstants);
-            renderPassManager.beginFrame();
+            renderPassManager.beginFrame(graphicsUse, currentTlasHandle, mvCurProjView);
             try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("frame.skyLut")) {
                 renderPassManager.record(RenderStage.ENVIRONMENT_PREPARE, cmd);
             }
@@ -845,8 +837,8 @@ final class RtFrameRenderer {
             // inside each pass's record(). Rebinding here is a no-op unless the set of chained passes
             // changed, and it precedes the descriptor's own bind inside dispatch().
             RtToneLut displayLookLut = frameResources.lookLut;
-            frameResources.displayPipeline.setImages(frameResources.displayImage.view, renderPassManager.sceneColor().view,
-                    frameResources.exposure.image().view, frameResources.hdrDisplayImage.view,
+            frameResources.displayPipeline.setImages(frameResources.displayImage.view(), renderPassManager.sceneColor().view(),
+                    frameResources.exposure.image().view(), frameResources.hdrDisplayImage.view(),
                     frameResources.sdrToneLut.view(), frameResources.sdrToneLut.sampler(), frameResources.hdrToneLut.view(), frameResources.hdrToneLut.sampler(),
                     displayLookLut.view(), displayLookLut.sampler(), graphicsUse, graphicsUseWaiter);
             try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "map RT to display");
@@ -873,7 +865,7 @@ final class RtFrameRenderer {
 
             try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "copy composite to main target");
                  RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.copyOutput")) {
-                VK10.vkCmdCopyImage(cmd, frameResources.displayImage.image, VK10.VK_IMAGE_LAYOUT_GENERAL,
+                VK10.vkCmdCopyImage(cmd, frameResources.displayImage.image(), VK10.VK_IMAGE_LAYOUT_GENERAL,
                         dstImage, VK10.VK_IMAGE_LAYOUT_GENERAL, copyRegion(stack, frameResources.displayW, frameResources.displayH));
             }
             VulkanBarriers.memoryBarrier(cmd, stack);
@@ -882,7 +874,7 @@ final class RtFrameRenderer {
             throw new IllegalStateException("vkEndCommandBuffer(rt composite) failed");
         }
         submission.execute(cmd);
-        RtFramePresenter.INSTANCE.publish(new RtFramePresenter.RenderedFrame(
+        presenter.publish(new RtFramePresenter.RenderedFrame(
                 frameResources.hdrDisplayImage, frameResources.gMotion, frameResources.gDepth,
                 frameResources.renderW, frameResources.renderH, mvCurProjView, mvPushMatrix,
                 CausticaConfig.Rt.Hdr.enabled() && debugView == 0));
@@ -900,7 +892,7 @@ final class RtFrameRenderer {
         sceneGeometry.shutdown();
         lightScene.destroy();
         RtDlssRr.INSTANCE.destroy();
-        RtFramePresenter.INSTANCE.destroyGpuResources();
+        presenter.destroyGpuResources();
         if (renderPassManager != null) {
             renderPassManager.destroy();
             renderPassManager = null;
@@ -939,10 +931,10 @@ final class RtFrameRenderer {
                 .baseArrayLayer(0).layerCount(1);
         region.get(0).dstSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(0)
                 .baseArrayLayer(0).layerCount(1);
-        region.get(0).srcOffsets(1).set(src.width, src.height, 1);
-        region.get(0).dstOffsets(1).set(dst.width, dst.height, 1);
-        VK10.vkCmdBlitImage(cmd, src.image, VK10.VK_IMAGE_LAYOUT_GENERAL,
-                dst.image, VK10.VK_IMAGE_LAYOUT_GENERAL, region, VK10.VK_FILTER_LINEAR);
+        region.get(0).srcOffsets(1).set(src.width(), src.height(), 1);
+        region.get(0).dstOffsets(1).set(dst.width(), dst.height(), 1);
+        VK10.vkCmdBlitImage(cmd, src.image(), VK10.VK_IMAGE_LAYOUT_GENERAL,
+                dst.image(), VK10.VK_IMAGE_LAYOUT_GENERAL, region, VK10.VK_FILTER_LINEAR);
     }
 
 }

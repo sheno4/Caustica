@@ -8,8 +8,8 @@ import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
 import dev.comfyfluffy.caustica.rt.RtSceneUnits;
 import dev.comfyfluffy.caustica.rt.RtLookPackage;
-import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
-import dev.comfyfluffy.caustica.rt.accel.GpuImage;
+import dev.comfyfluffy.caustica.api.gpu.GpuBuffer;
+import dev.comfyfluffy.caustica.api.gpu.GpuImage;
 import dev.comfyfluffy.caustica.rt.gen.ExposureStateData;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
@@ -96,7 +96,7 @@ public final class RtExposure {
         Mode currentMode = mode();
         float pre = preExposure();
         float absolute = pre * residualExposure;
-        if (currentMode != Mode.AUTO || state == null || state.mapped == 0L) {
+        if (currentMode != Mode.AUTO || state == null || state.mapped() == 0L) {
             float ev = manualEv();
             return new CaptureMetadata(pre, residualExposure, absolute, currentMode.configName,
                     Float.NaN, ev, ev);
@@ -168,7 +168,7 @@ public final class RtExposure {
             VkImageSubresourceRange.Buffer range = VkImageSubresourceRange.calloc(1, stack);
             range.get(0).aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT)
                     .baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
-            VK10.vkCmdClearColorImage(cmd, image.image, VK10.VK_IMAGE_LAYOUT_GENERAL, color, range);
+            VK10.vkCmdClearColorImage(cmd, image.image(), VK10.VK_IMAGE_LAYOUT_GENERAL, color, range);
         }
     }
 
@@ -214,14 +214,14 @@ public final class RtExposure {
         if (pipeline == null || histogram == null || state == null) {
             throw new IllegalStateException("RT auto exposure resources not created");
         }
-        pipeline.setResources(traceColor.view, guideDepth.view, guideAlbedo.view,
-                histogram, image.view, state);
+        pipeline.setResources(traceColor.view(), guideDepth.view(), guideAlbedo.view(),
+                histogram, image.view(), state);
         try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "exposure histogram clear")) {
-            VK10.vkCmdFillBuffer(cmd, histogram.handle, 0, histogram.size, 0);
+            VK10.vkCmdFillBuffer(cmd, histogram.handle(), 0, histogram.size(), 0);
         }
         VulkanBarriers.memoryBarrier(cmd, stack);
         AutoConfig config = autoConfig();
-        pipeline.dispatchHistogram(cmd, traceColor.width, traceColor.height, config);
+        pipeline.dispatchHistogram(cmd, traceColor.width(), traceColor.height(), config);
         VulkanBarriers.memoryBarrier(cmd, stack);
         pipeline.dispatchResolve(cmd, config, frameTimeSeconds());
         logDiagnosticsIfDue();
@@ -241,7 +241,7 @@ public final class RtExposure {
                 .dstAccessMask(VK10.VK_ACCESS_TRANSFER_READ_BIT)
                 .srcQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED)
                 .dstQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED)
-                .buffer(state.handle)
+                .buffer(state.handle())
                 .offset(0L)
                 .size(ExposureStateData.BYTE_SIZE);
         VK10.vkCmdPipelineBarrier(cmd, VK10.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
@@ -249,7 +249,7 @@ public final class RtExposure {
 
         VkBufferCopy.Buffer copy = VkBufferCopy.calloc(1, stack)
                 .srcOffset(0L).dstOffset(0L).size(ExposureStateData.BYTE_SIZE);
-        VK10.vkCmdCopyBuffer(cmd, state.handle, pendingStateReadback.buffer.handle, copy);
+        VK10.vkCmdCopyBuffer(cmd, state.handle(), pendingStateReadback.buffer.handle(), copy);
     }
 
     /** Attach the readback copy only after the command buffer has been accepted for frame submission. */
@@ -347,7 +347,7 @@ public final class RtExposure {
     }
 
     private void resetAutoHistory() {
-        if (state == null || state.mapped == 0L) {
+        if (state == null || state.mapped() == 0L) {
             return;
         }
         // Under physical units this seed can be ~15 EV off for an auto-mode daylight scene, since
@@ -443,7 +443,7 @@ public final class RtExposure {
             if (slot.valid && slot.resetSequence == resetSequence) {
                 slot.buffer.invalidate();
                 completedState = ExposureStateData.read(MemoryUtil.memByteBuffer(
-                        slot.buffer.mapped, ExposureStateData.BYTE_SIZE).order(ByteOrder.nativeOrder()));
+                        slot.buffer.mapped(), ExposureStateData.BYTE_SIZE).order(ByteOrder.nativeOrder()));
             }
             pendingStateReadback = slot;
         }
@@ -493,7 +493,7 @@ public final class RtExposure {
     }
 
     private ByteBuffer stateDataBuffer() {
-        return MemoryUtil.memByteBuffer(state.mapped, ExposureStateData.BYTE_SIZE).order(ByteOrder.nativeOrder());
+        return MemoryUtil.memByteBuffer(state.mapped(), ExposureStateData.BYTE_SIZE).order(ByteOrder.nativeOrder());
     }
 
     private ExposureStateData readState() {

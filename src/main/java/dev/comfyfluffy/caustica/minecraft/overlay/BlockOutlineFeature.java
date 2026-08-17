@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.overlay;
 
 import org.joml.Matrix4f;
+import org.joml.Matrix4fc;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.VK10;
@@ -25,13 +26,12 @@ import net.minecraft.world.level.block.state.pattern.BlockInWorld;
 import net.minecraft.world.phys.shapes.VoxelShape;
 
 import dev.comfyfluffy.caustica.CausticaConfig;
-import dev.comfyfluffy.caustica.rt.RtComposite;
-import dev.comfyfluffy.caustica.rt.GpuContext;
-import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.RtDeviceBringup;
-import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
-import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
-import dev.comfyfluffy.caustica.rt.accel.GpuImage;
+import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
+import dev.comfyfluffy.caustica.api.gpu.GpuFrameUse;
+import dev.comfyfluffy.caustica.api.gpu.GpuDebugScope;
+import dev.comfyfluffy.caustica.api.gpu.GpuBuffer;
+import dev.comfyfluffy.caustica.api.gpu.GpuImage;
 import dev.comfyfluffy.caustica.minecraft.entity.RtEntities;
 import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
 
@@ -72,7 +72,7 @@ final class BlockOutlineFeature implements OverlayFeature {
     private static final float LINE_WIDTH_PX_AT_REFERENCE = 2.0f;
     private static final float REFERENCE_HEIGHT = 1080f;
 
-    private GpuContext ctxRef;
+    private GpuDevice device;
     private OverlayPipelines.Pipeline pipeline;
     private OverlayPipelines.AccelStructureSet accelSet;
     private OverlayPipelines.Pipeline compositePipeline;
@@ -86,8 +86,8 @@ final class BlockOutlineFeature implements OverlayFeature {
     private long boundSet;
 
     @Override
-    public boolean prepare(GpuContext ctx, OverlayFramePool pool, RtGpuExecutor.GraphicsUse graphicsUse,
-                           int width, int height) {
+    public boolean prepare(GpuDevice device, OverlayFramePool pool, GpuFrameUse gpuUse,
+                           long tlas, Matrix4fc worldViewProjection, int width, int height) {
         if (!CausticaConfig.Rt.Overlay.BLOCK_OUTLINE_ENABLED.value()) {
             return false;
         }
@@ -95,7 +95,6 @@ final class BlockOutlineFeature implements OverlayFeature {
         if (terrain == null) {
             return false;
         }
-        long tlas = RtComposite.INSTANCE.currentTlasHandle();
         if (tlas == 0L) {
             return false;
         }
@@ -136,14 +135,14 @@ final class BlockOutlineFeature implements OverlayFeature {
             return false;
         }
 
-        ensureResources(ctx, width, height);
+        ensureResources(device, width, height);
         float[] data = verts.toFloatArray();
-        vbo = pool.acquireVertex(ctx, (long) data.length * Float.BYTES, "block outline vbo");
-        MemoryUtil.memFloatBuffer(vbo.mapped, data.length).put(data);
+        vbo = pool.acquireVertex(device, (long) data.length * Float.BYTES, "block outline vbo");
+        MemoryUtil.memFloatBuffer(vbo.mapped(), data.length).put(data);
         vbo.flush(0L, (long) data.length * Float.BYTES);
 
-        viewProj.set(RtComposite.INSTANCE.currentViewProjection());
-        boundSet = accelSet.bind(ctx, tlas, graphicsUse);
+        viewProj.set(worldViewProjection);
+        boundSet = accelSet.bind(device, tlas, gpuUse);
         return true;
     }
 
@@ -178,10 +177,10 @@ final class BlockOutlineFeature implements OverlayFeature {
                 && (itemStack.canBreakBlockInAdventureMode(blockInWorld) || itemStack.canPlaceOnBlockInAdventureMode(blockInWorld));
     }
 
-    private void ensureResources(GpuContext ctx, int width, int height) {
-        this.ctxRef = ctx;
+    private void ensureResources(GpuDevice device, int width, int height) {
+        this.device = device;
         if (pipeline == null) {
-            accelSet = OverlayPipelines.accelStructureSet(ctx, VK10.VK_SHADER_STAGE_FRAGMENT_BIT, "block outline");
+            accelSet = OverlayPipelines.accelStructureSet(device, VK10.VK_SHADER_STAGE_FRAGMENT_BIT, "block outline");
             pipeline = new OverlayPipelines.Spec("block_outline/vertex.vert.spv", "block_outline/fragment.frag.spv")
                     .vertex(OverlayPipelines.VertexFormat.POSITION)
                     .topology(VK10.VK_PRIMITIVE_TOPOLOGY_LINE_LIST)
@@ -195,40 +194,40 @@ final class BlockOutlineFeature implements OverlayFeature {
                     .samples(RtDeviceBringup.overlayMsaaSamples())
                     .push(PUSH_BYTES, VK10.VK_SHADER_STAGE_VERTEX_BIT | VK10.VK_SHADER_STAGE_FRAGMENT_BIT)
                     .descriptorSetLayout(accelSet.layout)
-                    .build(ctx, "block outline");
-            compositeSet = OverlayPipelines.readOnlyImageSet(ctx, VK10.VK_SHADER_STAGE_FRAGMENT_BIT, "block outline composite");
+                    .build(device, "block outline");
+            compositeSet = OverlayPipelines.readOnlyImageSet(device, VK10.VK_SHADER_STAGE_FRAGMENT_BIT, "block outline composite");
             compositePipeline = new OverlayPipelines.Spec("overlay_composite/vertex.vert.spv", "overlay_composite/passthrough.frag.spv")
                     .blend(OverlayPipelines.Blend.ALPHA)
                     .attachment(WorldOverlayPass.TARGET_FORMAT)
                     .descriptorSetLayout(compositeSet.layout)
-                    .build(ctx, "block outline composite");
+                    .build(device, "block outline composite");
         }
-        if (msaaImage == null || msaaImage.width != width || msaaImage.height != height) {
+        if (msaaImage == null || msaaImage.width() != width || msaaImage.height() != height) {
             if (msaaImage != null) {
                 msaaImage.destroy();
             }
-            msaaImage = ctx.createTransientMsaaColorImage(width, height, WorldOverlayPass.TARGET_FORMAT,
+            msaaImage = device.createTransientMsaaColorImage(width, height, WorldOverlayPass.TARGET_FORMAT,
                     RtDeviceBringup.overlayMsaaSamples(), "block outline msaa " + width + "x" + height);
         }
-        if (resolvedMask == null || resolvedMask.width != width || resolvedMask.height != height) {
+        if (resolvedMask == null || resolvedMask.width() != width || resolvedMask.height() != height) {
             if (resolvedMask != null) {
                 resolvedMask.destroy();
             }
-            resolvedMask = ctx.createStorageImage(width, height, WorldOverlayPass.TARGET_FORMAT,
+            resolvedMask = device.createStorageImage(width, height, WorldOverlayPass.TARGET_FORMAT,
                     "block outline resolved mask " + width + "x" + height, VK10.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
         }
-        compositeSet.bind(ctx, resolvedMask.view);
+        compositeSet.bind(device, resolvedMask.view());
     }
 
     @Override
     public void record(VkCommandBuffer cmd, long targetView, int width, int height) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctxRef, cmd, "block outline mask")) {
-                WorldOverlayPass.beginMsaaColorRendering(cmd, stack, msaaImage.view, resolvedMask.view, width, height);
+            try (GpuDebugScope ignored = device.debugScope(cmd, "block outline mask")) {
+                WorldOverlayPass.beginMsaaColorRendering(cmd, stack, msaaImage.view(), resolvedMask.view(), width, height);
                 VK10.vkCmdBindPipeline(cmd, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle);
                 VK10.vkCmdBindDescriptorSets(cmd, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout, 0,
                         stack.longs(boundSet), null);
-                VK10.vkCmdBindVertexBuffers(cmd, 0, stack.longs(vbo.handle), stack.longs(0L));
+                VK10.vkCmdBindVertexBuffers(cmd, 0, stack.longs(vbo.handle()), stack.longs(0L));
                 float desiredWidthPx = LINE_WIDTH_PX_AT_REFERENCE * (height / REFERENCE_HEIGHT);
                 float lineWidth = RtDeviceBringup.wideLinesEnabled()
                         ? Math.min(desiredWidthPx, RtDeviceBringup.maxLineWidth()) : 1.0f;
@@ -247,7 +246,7 @@ final class BlockOutlineFeature implements OverlayFeature {
 
             VulkanCommandEncoder.memoryBarrier(cmd, stack); // resolved mask writes visible to the composite's reads
 
-            try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctxRef, cmd, "block outline composite")) {
+            try (GpuDebugScope ignored = device.debugScope(cmd, "block outline composite")) {
                 WorldOverlayPass.beginColorRendering(cmd, stack, targetView, width, height, false);
                 VK10.vkCmdBindPipeline(cmd, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, compositePipeline.handle);
                 VK10.vkCmdBindDescriptorSets(cmd, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, compositePipeline.layout, 0,
@@ -260,23 +259,23 @@ final class BlockOutlineFeature implements OverlayFeature {
 
     @Override
     public void destroy() {
-        if (ctxRef == null) {
+        if (device == null) {
             return;
         }
         if (pipeline != null) {
-            pipeline.destroy(ctxRef.vk());
+            pipeline.destroy(device.vk());
             pipeline = null;
         }
         if (accelSet != null) {
-            accelSet.destroy(ctxRef.vk());
+            accelSet.destroy(device.vk());
             accelSet = null;
         }
         if (compositePipeline != null) {
-            compositePipeline.destroy(ctxRef.vk());
+            compositePipeline.destroy(device.vk());
             compositePipeline = null;
         }
         if (compositeSet != null) {
-            compositeSet.destroy(ctxRef.vk());
+            compositeSet.destroy(device.vk());
             compositeSet = null;
         }
         if (msaaImage != null) {
@@ -287,6 +286,6 @@ final class BlockOutlineFeature implements OverlayFeature {
             resolvedMask.destroy();
             resolvedMask = null;
         }
-        ctxRef = null;
+        device = null;
     }
 }

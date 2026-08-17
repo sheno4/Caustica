@@ -1,7 +1,10 @@
 package dev.comfyfluffy.caustica.api.pass;
 
 import dev.comfyfluffy.caustica.api.OptionValues;
-import dev.comfyfluffy.caustica.rt.accel.GpuImage;
+import dev.comfyfluffy.caustica.api.gpu.GpuImage;
+import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
+import dev.comfyfluffy.caustica.api.gpu.GpuFrameUse;
+import org.joml.Matrix4fc;
 import org.lwjgl.vulkan.VkCommandBuffer;
 
 /**
@@ -15,6 +18,18 @@ import org.lwjgl.vulkan.VkCommandBuffer;
 public interface PassFrame {
     /** The command buffer currently being recorded. Record compute/graphics/RT work directly onto it. */
     VkCommandBuffer commandBuffer();
+
+    /** GPU services for pass-local resources. */
+    GpuDevice device();
+
+    /** Completion reservation covering every GPU resource referenced by this frame. */
+    GpuFrameUse gpuUse();
+
+    /** World acceleration structure traced by this frame, or zero before one has been published. */
+    long worldTlas();
+
+    /** Current unjittered world view-projection matrix. Do not retain or mutate it. */
+    Matrix4fc worldViewProjection();
 
     long frameIndex();
 

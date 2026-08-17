@@ -4,7 +4,7 @@ import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtRuntime;
-import dev.comfyfluffy.caustica.rt.accel.GpuImage;
+import dev.comfyfluffy.caustica.api.gpu.GpuImage;
 import dev.comfyfluffy.caustica.ngx.NgxLibrary;
 import dev.comfyfluffy.caustica.ngx.NgxRuntime;
 import org.joml.Matrix4fc;
@@ -103,15 +103,15 @@ public final class RtDlssRr {
                 putNgxLeftMultiplyMatrix(worldToView, worldToViewMatrix);
                 putNgxLeftMultiplyMatrix(viewToClip, viewToClipMatrix);
                 rc = lib.evaluateDlssd(cmd, feature,
-                        color.view, color.image, VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
-                        depth.view, depth.image, VK10.VK_FORMAT_R32_SFLOAT,
-                        motion.view, motion.image, VK10.VK_FORMAT_R16G16_SFLOAT,
-                        diffuseAlbedo.view, diffuseAlbedo.image, VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
-                        specularAlbedo.view, specularAlbedo.image, VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
-                        normals.view, normals.image, VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
-                        specularMotion.view, specularMotion.image, VK10.VK_FORMAT_R16G16_SFLOAT,
+                        color.view(), color.image(), VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
+                        depth.view(), depth.image(), VK10.VK_FORMAT_R32_SFLOAT,
+                        motion.view(), motion.image(), VK10.VK_FORMAT_R16G16_SFLOAT,
+                        diffuseAlbedo.view(), diffuseAlbedo.image(), VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
+                        specularAlbedo.view(), specularAlbedo.image(), VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
+                        normals.view(), normals.image(), VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
+                        specularMotion.view(), specularMotion.image(), VK10.VK_FORMAT_R16G16_SFLOAT,
                         0L, 0L, 0,
-                        out.view, out.image, VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
+                        out.view(), out.image(), VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
                         renderWidth, renderHeight, displayWidth, displayHeight,
                         // jitter in render pixels; MVs are already in render-pixel units, so MV scale = 1.
                         jitterX, jitterY, 1.0f, 1.0f, resetHistory ? 1 : 0, frameMs,

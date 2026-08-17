@@ -5,7 +5,7 @@ import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor.GraphicsUse;
-import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
+import dev.comfyfluffy.caustica.api.gpu.GpuBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.VK10;
@@ -182,9 +182,9 @@ public final class RtRetainedLightScene {
             upload = ctx.createUploadBuffer(layout.totalBytes,
                     "retained light scene upload " + requestId);
 
-            long cursor = upload.mapped + layout.lightOffset;
+            long cursor = upload.mapped() + layout.lightOffset;
             MemoryUtil.memFloatBuffer(cursor, data.packedLights().length).put(data.packedLights());
-            cursor = upload.mapped + layout.nodeOffset;
+            cursor = upload.mapped() + layout.nodeOffset;
             MemoryUtil.memFloatBuffer(cursor, data.packedNodes().length).put(data.packedNodes());
             upload.flush();
 
@@ -323,7 +323,7 @@ public final class RtRetainedLightScene {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkBufferCopy.Buffer region = VkBufferCopy.calloc(1, stack);
             region.get(0).srcOffset(0L).dstOffset(0L).size(totalBytes);
-            VK10.vkCmdCopyBuffer(cmd, upload.handle, arena.handle, region);
+            VK10.vkCmdCopyBuffer(cmd, upload.handle(), arena.handle(), region);
         }
     }
 
@@ -357,7 +357,7 @@ public final class RtRetainedLightScene {
         public long nodeAddress() { return address(layout.nodeOffset); }
 
         private long address(long offset) {
-            return arena != null ? arena.deviceAddress + offset : 0L;
+            return arena != null ? arena.deviceAddress() + offset : 0L;
         }
 
         private void retire(GpuContext ctx, GraphicsUse lastGraphicsUse) {

@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.rt;
 
-import dev.comfyfluffy.caustica.rt.backend.GraphicsSubmission;
+import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
 import org.junit.jupiter.api.Test;
 import org.lwjgl.vulkan.VkCommandBuffer;
 
@@ -16,7 +16,7 @@ final class GraphicsSubmissionOrderTest {
     void presentKeepsAcquireExecuteSignalOrder() {
         RecordingSubmission submission = new RecordingSubmission();
 
-        RtFramePresenter.enqueuePresent(submission, null, 11L, 12L);
+        GeneratedFrameQueue.enqueuePresent(submission, null, 11L, 12L);
 
         assertEquals(List.of("wait:11:0:65536", "execute", "signal:12:0:4096"), submission.calls);
     }

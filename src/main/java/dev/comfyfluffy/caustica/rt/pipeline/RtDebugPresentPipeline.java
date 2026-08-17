@@ -26,7 +26,7 @@ import java.nio.LongBuffer;
 
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
-import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
+import dev.comfyfluffy.caustica.api.gpu.GpuBuffer;
 import dev.comfyfluffy.caustica.rt.gen.DebugPresentPushData;
 
 import static dev.comfyfluffy.caustica.rt.GpuContext.check;
@@ -136,7 +136,7 @@ public final class RtDebugPresentPipeline {
                 && boundDepthView == depthView && boundMotionView == motionView
                 && boundSpecAlbedoView == specAlbedoView && boundSpecMotionView == specMotionView
                 && boundSceneView == sceneView && boundExposureView == exposureView
-                && boundExposureStateBuffer == exposureState.handle) {
+                && boundExposureStateBuffer == exposureState.handle()) {
             return;
         }
         try (MemoryStack stack = MemoryStack.stackPush()) {
@@ -150,7 +150,7 @@ public final class RtDebugPresentPipeline {
                         .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).pImageInfo(info);
             }
             VkDescriptorBufferInfo.Buffer stateInfo = VkDescriptorBufferInfo.calloc(1, stack);
-            stateInfo.get(0).buffer(exposureState.handle).offset(0).range(exposureState.size);
+            stateInfo.get(0).buffer(exposureState.handle()).offset(0).range(exposureState.size());
             writes.get(DEBUG_PRESENT_EXPOSURE_STATE).sType$Default().dstSet(descriptorSet)
                     .dstBinding(DEBUG_PRESENT_EXPOSURE_STATE)
                     .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).pBufferInfo(stateInfo);
@@ -165,7 +165,7 @@ public final class RtDebugPresentPipeline {
         boundSpecMotionView = specMotionView;
         boundSceneView = sceneView;
         boundExposureView = exposureView;
-        boundExposureStateBuffer = exposureState.handle;
+        boundExposureStateBuffer = exposureState.handle();
     }
 
     public void dispatch(VkCommandBuffer cmd, int width, int height, int debugView,

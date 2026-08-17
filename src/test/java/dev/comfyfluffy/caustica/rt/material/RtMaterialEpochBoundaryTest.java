@@ -26,6 +26,11 @@ final class RtMaterialEpochBoundaryTest {
         assertEquals(0, state.bindlessTextureCapacity);
         state.reloadFailed();
         assertFalse(state.reloadPending);
+        assertFalse(state.bindingsReady);
+
+        state.published(64);
+        assertTrue(state.bindingsReady,
+                "the next world rebuild republishes materials after the failed reload cleared the destroyed epoch");
     }
 
 }

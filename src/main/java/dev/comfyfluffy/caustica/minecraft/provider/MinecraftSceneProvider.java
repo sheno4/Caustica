@@ -1,24 +1,25 @@
 package dev.comfyfluffy.caustica.minecraft.provider;
 
-import dev.comfyfluffy.caustica.api.provider.SceneProvider;
-import dev.comfyfluffy.caustica.api.provider.SceneFrameContext;
-import dev.comfyfluffy.caustica.api.provider.SceneGeometryUpdateContext;
-import dev.comfyfluffy.caustica.api.provider.SceneGeometrySink;
-import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.api.provider.SceneFrameContext;
+import dev.comfyfluffy.caustica.api.provider.SceneGeometrySink;
+import dev.comfyfluffy.caustica.api.provider.SceneGeometryUpdateContext;
+import dev.comfyfluffy.caustica.api.provider.SceneMesh;
+import dev.comfyfluffy.caustica.api.provider.SceneProvider;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
-import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.minecraft.entity.RtEntities;
 import dev.comfyfluffy.caustica.minecraft.entity.RtEntityTextures;
-import dev.comfyfluffy.caustica.rt.pipeline.RtPipeline;
-import dev.comfyfluffy.caustica.rt.scene.RtSceneSource;
 import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
 import dev.comfyfluffy.caustica.minecraft.terrain.RtWorkerPool;
+import dev.comfyfluffy.caustica.rt.GpuContext;
+import dev.comfyfluffy.caustica.spi.host.BaseColorTextureSink;
+import dev.comfyfluffy.caustica.spi.host.MaterialEpochView;
+import dev.comfyfluffy.caustica.spi.host.RendererSceneSource;
 import net.minecraft.resources.Identifier;
 
 import java.util.function.Consumer;
 
-public final class MinecraftSceneProvider implements SceneProvider, RtSceneSource {
+public final class MinecraftSceneProvider implements SceneProvider, RendererSceneSource {
     public static final ResourceId ID = ResourceId.of("caustica", "minecraft_scene");
     private static final Consumer<SceneGeometrySink> TERRAIN_GEOMETRY = RtTerrain::submitGeometry;
     private static final Consumer<SceneFrameContext> ENTITY_GEOMETRY = RtEntities.INSTANCE::submitGeometry;
@@ -73,7 +74,7 @@ public final class MinecraftSceneProvider implements SceneProvider, RtSceneSourc
     }
 
     @Override
-    public Retained retainedScene() {
+    public RetainedScene retainedScene() {
         RtTerrain terrain = RtTerrain.currentOrNull();
         if (terrain == null) {
             return null;
@@ -87,7 +88,7 @@ public final class MinecraftSceneProvider implements SceneProvider, RtSceneSourc
                 published.rebaseY() - terrain.blockY,
                 published.rebaseZ() - terrain.blockZ,
                 published.metersPerWorldUnit(), published.generation());
-        return new Retained(origin, lights);
+        return new RetainedScene(origin, lights);
     }
 
     @Override
@@ -119,13 +120,23 @@ public final class MinecraftSceneProvider implements SceneProvider, RtSceneSourc
     }
 
     @Override
-    public void rebindTextures(RtPipeline pipeline, long sampler) {
-        RtEntityTextures.INSTANCE.rebindAll(pipeline, sampler);
+    public void rebindTextures(BaseColorTextureSink textures, long sampler) {
+        RtEntityTextures.INSTANCE.rebindAll(textures, sampler);
     }
 
     @Override
-    public void uploadPendingTextures(RtPipeline pipeline, long sampler) {
-        RtEntityTextures.INSTANCE.uploadPending(pipeline, sampler);
+    public void uploadPendingTextures(BaseColorTextureSink textures, long sampler) {
+        RtEntityTextures.INSTANCE.uploadPending(textures, sampler);
+    }
+
+    @Override
+    public void publishMaterials(MaterialEpochView materials) {
+        RtTerrain.publishMaterials(materials);
+    }
+
+    @Override
+    public void clearMaterials() {
+        RtTerrain.clearMaterials();
     }
 
     @Override

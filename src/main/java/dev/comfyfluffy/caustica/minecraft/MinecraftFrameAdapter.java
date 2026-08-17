@@ -5,7 +5,7 @@ import dev.comfyfluffy.caustica.api.provider.MaterialHandle;
 import dev.comfyfluffy.caustica.engine.frame.FrameSnapshot;
 import dev.comfyfluffy.caustica.engine.frame.SceneResources;
 import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
-import dev.comfyfluffy.caustica.rt.RtColor;
+import dev.comfyfluffy.caustica.engine.color.ColorTransforms;
 import dev.comfyfluffy.caustica.rt.RtRuntime;
 import dev.comfyfluffy.caustica.minecraft.damage.MinecraftDamageModifierPass;
 import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
@@ -67,10 +67,10 @@ public final class MinecraftFrameAdapter {
                     && cameraY < cameraBlockPos.getY() + fluid.getHeight(level, cameraBlockPos);
             waterColor = BiomeColors.getAverageWaterColor(level, cameraBlockPos);
         }
-        float[] medium = RtColor.linearBt709ToAcesCg(
-                RtColor.srgbToLinear(((waterColor >> 16) & 0xFF) / 255.0),
-                RtColor.srgbToLinear(((waterColor >> 8) & 0xFF) / 255.0),
-                RtColor.srgbToLinear((waterColor & 0xFF) / 255.0));
+        float[] medium = ColorTransforms.linearBt709ToAcesCg(
+                ColorTransforms.srgbToLinear(((waterColor >> 16) & 0xFF) / 255.0),
+                ColorTransforms.srgbToLinear(((waterColor >> 8) & 0xFF) / 255.0),
+                ColorTransforms.srgbToLinear((waterColor & 0xFF) / 255.0));
         FrameSnapshot.CameraMedium cameraMedium = submerged
                 ? new FrameSnapshot.CameraMedium(new MaterialHandle(MinecraftMaterialSource.WATER),
                 new FrameSnapshot.LinearRgb(medium[0], medium[1], medium[2])) : null;

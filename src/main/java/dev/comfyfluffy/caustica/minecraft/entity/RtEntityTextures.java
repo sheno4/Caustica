@@ -8,7 +8,7 @@ import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import dev.comfyfluffy.caustica.mixin.RenderSetupAccessor;
 import dev.comfyfluffy.caustica.mixin.RenderTypeAccessor;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialLookup;
-import dev.comfyfluffy.caustica.rt.pipeline.RtPipeline;
+import dev.comfyfluffy.caustica.spi.host.BaseColorTextureSink;
 import com.mojang.blaze3d.platform.NativeImage;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.rendertype.PreparedRenderType;
@@ -174,19 +174,19 @@ public final class RtEntityTextures {
     }
 
     /** Write any newly-registered entity textures into the pipeline's bindless set (before the trace). */
-    public void uploadPending(RtPipeline pipeline, long sampler) {
+    public void uploadPending(BaseColorTextureSink textures, long sampler) {
         if (pending.isEmpty()) {
             return;
         }
         for (Pending p : pending) {
-            pipeline.setBaseColorTexture(p.slot(), p.view(), sampler);
+            textures.setBaseColorTexture(p.slot(), p.view(), sampler);
         }
         pending.clear();
     }
 
     /** Populate a replacement descriptor set without changing any geometry-visible texture slot. */
-    public void rebindAll(RtPipeline pipeline, long sampler) {
-        viewSlotCache.forEach((view, slot) -> pipeline.setBaseColorTexture(slot, view, sampler));
+    public void rebindAll(BaseColorTextureSink textures, long sampler) {
+        viewSlotCache.forEach((view, slot) -> textures.setBaseColorTexture(slot, view, sampler));
     }
 
     /** Drop the registry when texture identities change. */

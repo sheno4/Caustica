@@ -9,8 +9,8 @@ import dev.comfyfluffy.caustica.api.OptionValues;
 import dev.comfyfluffy.caustica.api.pass.PassSetup;
 import dev.comfyfluffy.caustica.api.pass.PassShaderCompiler;
 import dev.comfyfluffy.caustica.api.pass.RenderStage;
-import dev.comfyfluffy.caustica.rt.GpuContext;
-import dev.comfyfluffy.caustica.rt.accel.GpuImage;
+import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
+import dev.comfyfluffy.caustica.api.gpu.GpuImage;
 import dev.comfyfluffy.caustica.rt.gen.BloomPushData;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import org.lwjgl.vulkan.VK10;
@@ -66,7 +66,7 @@ public final class BloomPass implements CausticaRenderPass {
     public static final List<Option<?>> OPTIONS =
             List.of(ENABLED, STRENGTH, THRESHOLD_SCENE_LINEAR, SOFT_KNEE_FRACTION, RADIUS, LEVELS);
 
-    private GpuContext ctx;
+    private GpuDevice ctx;
     private long sampler;
     private ComputeDispatch dispatch;
     private GpuImage[] levels = new GpuImage[0];
@@ -83,7 +83,7 @@ public final class BloomPass implements CausticaRenderPass {
 
     @Override
     public void create(PassSetup setup) {
-        ctx = setup.context();
+        ctx = setup.device();
         sampler = ComputeDispatch.createLinearClampSampler(ctx, ID + " sampler");
         try {
             PassShaderCompiler.CompiledProgram compiled = PassShaderCompiler.compile(
@@ -196,8 +196,8 @@ public final class BloomPass implements CausticaRenderPass {
         byte[] pushConstants = new byte[BloomPushData.BYTE_SIZE];
         new BloomPushData(mode, threshold, softKnee, radius, compositeStrength)
                 .write(ByteBuffer.wrap(pushConstants).order(ByteOrder.nativeOrder()));
-        int groupsX = groups(destination.width);
-        int groupsY = groups(destination.height);
+        int groupsX = groups(destination.width());
+        int groupsY = groups(destination.height());
         dispatch.dispatch(frame.commandBuffer(), new GpuImage[]{destination, source, exposure, scene},
                 pushConstants, groupsX, groupsY, 1);
     }

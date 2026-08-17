@@ -38,7 +38,7 @@ import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.phys.shapes.CollisionContext;
 import org.joml.Matrix4f;
 import org.joml.Quaternionf;
-import dev.comfyfluffy.caustica.rt.RtComposite;
+import dev.comfyfluffy.caustica.rt.RtRuntime;
 import dev.comfyfluffy.caustica.rt.RtFrameStats;
 import dev.comfyfluffy.caustica.rt.geometry.RtGeometryProfiling;
 
@@ -730,7 +730,7 @@ public final class RtEntities {
         beBuildsThisFrame = 0;
         BlockEntityRenderDispatcher beDispatcher = mc.getBlockEntityRenderDispatcher();
         beDispatcher.prepare(cameraState.pos); // sets the camera for shouldRender / extract
-        long now = RtComposite.frameCounter();
+        long now = RtRuntime.frameCounter();
         int pcx = rbx >> 4, pcz = rbz >> 4;
         Vec3 cam = cameraState.pos;
         List<BeCandidate> candidates = beCandidates;
@@ -881,7 +881,7 @@ public final class RtEntities {
         if (beCache.isEmpty()) {
             return;
         }
-        long now = RtComposite.frameCounter();
+        long now = RtRuntime.frameCounter();
         Iterator<Map.Entry<Long, BeEntry>> it = beCache.entrySet().iterator();
         while (it.hasNext()) {
             BeEntry e = it.next().getValue();
@@ -932,7 +932,7 @@ public final class RtEntities {
             state = new EntityState(identity);
             entityStates.put(entityId, state);
         }
-        state.lastSeen = RtComposite.frameCounter();
+        state.lastSeen = RtRuntime.frameCounter();
         pendingDrops.remove(key);
         GeometryTransform transform = transform(instanceTransform, build.origin);
         long capturedMeshHash = meshHash();
@@ -974,7 +974,7 @@ public final class RtEntities {
     }
 
     private void evictStaleAccels(FrameBuild build) {
-        long now = RtComposite.frameCounter();
+        long now = RtRuntime.frameCounter();
         var it = entityStates.int2ObjectEntrySet().iterator();
         while (it.hasNext()) {
             var entry = it.next();

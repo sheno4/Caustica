@@ -14,11 +14,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 final class RtMaterialBindingTest {
     @Test
     void bindingFieldsSurviveTheirNeighboursAtFullRange() {
-        int packed = RtMaterialRegistry.packBinding0(0xFFFF, 2, 63, 255);
-        assertEquals(0xFFFF, RtMaterialRegistry.bindingBaseColorTextureIndex(packed));
-        assertEquals(2, RtMaterialRegistry.bindingCoverage(packed));
-        assertEquals(63, RtMaterialRegistry.bindingFlags(packed));
-        assertEquals(255, RtMaterialRegistry.bindingSurfaceImpl(packed));
+        int packed = MaterialBindingAbi.pack(0xFFFF, 2, 63, 255);
+        assertEquals(0xFFFF, MaterialBindingAbi.baseColorTextureIndex(packed));
+        assertEquals(2, MaterialBindingAbi.coverage(packed));
+        assertEquals(63, MaterialBindingAbi.flags(packed));
+        assertEquals(255, MaterialBindingAbi.surfaceImplementation(packed));
         // Pinned literally: the shader decodes this word with its own shifts, so the exact bit positions
         // are the contract, not just the round trip through these helpers.
         assertEquals(0xFFFEFFFF, packed);
@@ -26,39 +26,39 @@ final class RtMaterialBindingTest {
 
     @Test
     void oneFieldNeverBleedsIntoAnother() {
-        int slotOnly = RtMaterialRegistry.packBinding0(0xFFFF, 0, 0, 0);
-        assertEquals(0, RtMaterialRegistry.bindingCoverage(slotOnly));
-        assertEquals(0, RtMaterialRegistry.bindingFlags(slotOnly));
-        assertEquals(0, RtMaterialRegistry.bindingSurfaceImpl(slotOnly));
-        int flagsOnly = RtMaterialRegistry.packBinding0(0, 0, 63, 0);
-        assertEquals(0, RtMaterialRegistry.bindingBaseColorTextureIndex(flagsOnly));
-        assertEquals(0, RtMaterialRegistry.bindingCoverage(flagsOnly));
-        assertEquals(0, RtMaterialRegistry.bindingSurfaceImpl(flagsOnly));
-        int implOnly = RtMaterialRegistry.packBinding0(0, 0, 0, 255);
-        assertEquals(0, RtMaterialRegistry.bindingBaseColorTextureIndex(implOnly));
-        assertEquals(0, RtMaterialRegistry.bindingFlags(implOnly));
+        int slotOnly = MaterialBindingAbi.pack(0xFFFF, 0, 0, 0);
+        assertEquals(0, MaterialBindingAbi.coverage(slotOnly));
+        assertEquals(0, MaterialBindingAbi.flags(slotOnly));
+        assertEquals(0, MaterialBindingAbi.surfaceImplementation(slotOnly));
+        int flagsOnly = MaterialBindingAbi.pack(0, 0, 63, 0);
+        assertEquals(0, MaterialBindingAbi.baseColorTextureIndex(flagsOnly));
+        assertEquals(0, MaterialBindingAbi.coverage(flagsOnly));
+        assertEquals(0, MaterialBindingAbi.surfaceImplementation(flagsOnly));
+        int implOnly = MaterialBindingAbi.pack(0, 0, 0, 255);
+        assertEquals(0, MaterialBindingAbi.baseColorTextureIndex(implOnly));
+        assertEquals(0, MaterialBindingAbi.flags(implOnly));
     }
 
     @Test
     void texturelessDefinitionFlagOccupiesAStableBindingBit() {
-        int packed = RtMaterialRegistry.packBinding0(0, 0,
-                RtMaterialRegistry.BINDING_TEXTURELESS, 0);
-        assertEquals(4, RtMaterialRegistry.bindingFlags(packed));
+        int packed = MaterialBindingAbi.pack(0, 0,
+                MaterialBindingAbi.FLAG_TEXTURELESS, 0);
+        assertEquals(4, MaterialBindingAbi.flags(packed));
         assertEquals(0x00100000, packed);
     }
 
     @Test
     void producerTextureReplacesUniformBaseColorWithoutChangingCoverage() {
-        int flags = RtMaterialRegistry.BINDING_TEXTURELESS | 8;
+        int flags = MaterialBindingAbi.FLAG_TEXTURELESS | 8;
         MaterialBindingData base = new MaterialBindingData(
-                RtMaterialRegistry.packBinding0(0, 2, flags, 7), 11, 0x123456, 19);
+                MaterialBindingAbi.pack(0, 2, flags, 7), 11, 0x123456, 19);
 
         MaterialBindingData textured = RtMaterialRegistry.baseColorTextureBinding(base, 23);
 
-        assertEquals(23, RtMaterialRegistry.bindingBaseColorTextureIndex(textured.packed0()));
-        assertEquals(2, RtMaterialRegistry.bindingCoverage(textured.packed0()));
-        assertEquals(8, RtMaterialRegistry.bindingFlags(textured.packed0()));
-        assertEquals(7, RtMaterialRegistry.bindingSurfaceImpl(textured.packed0()));
+        assertEquals(23, MaterialBindingAbi.baseColorTextureIndex(textured.packed0()));
+        assertEquals(2, MaterialBindingAbi.coverage(textured.packed0()));
+        assertEquals(8, MaterialBindingAbi.flags(textured.packed0()));
+        assertEquals(7, MaterialBindingAbi.surfaceImplementation(textured.packed0()));
         assertEquals(base.surface(), textured.surface());
         assertEquals(base.shadowTint(), textured.shadowTint());
         assertEquals(base.packed1(), textured.packed1());
@@ -69,8 +69,8 @@ final class RtMaterialBindingTest {
         // The two cutoffs terrain and entity materials compile with. An 8-bit unorm must land close enough
         // that no texel changes side of the alpha test — sprite alpha is itself 8-bit.
         for (float cutoff : new float[]{0.5f, 0.1f}) {
-            float decoded = RtMaterialRegistry.unpackCoverageCutoff(
-                    RtMaterialRegistry.packCoverageCutoff(cutoff));
+            float decoded = MaterialBindingAbi.coverageCutoff(
+                    MaterialBindingAbi.packCoverageCutoff(cutoff));
             assertTrue(Math.abs(decoded - cutoff) <= 1.0f / 255.0f,
                     "cutoff " + cutoff + " decoded as " + decoded);
         }

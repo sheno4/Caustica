@@ -15,7 +15,7 @@ final class RtTemporalAlphaRangeTest {
         MaterialTextureImage image = new Frames(new int[][]{
                 {0, 255}, {255, 128}, {64, 128}
         });
-        RtMaterialPageCompiler.TemporalAlpha range = RtMaterialPageCompiler.scanTemporalAlpha(image, 2, 1);
+        MaterialTextureAnalyzer.Alpha range = MaterialTextureAnalyzer.scanAlpha(image, 2, 1);
         assertEquals(0.0f, range.minAlpha());
         assertEquals(1.0f, range.maxAlpha());
         assertArrayEquals(new float[]{0.0f, 1.0f, 0.0f, 0.0f,
@@ -24,7 +24,7 @@ final class RtTemporalAlphaRangeTest {
 
     @Test
     void staticTextureHasIdenticalTemporalBounds() {
-        RtMaterialPageCompiler.TemporalAlpha range = RtMaterialPageCompiler.scanTemporalAlpha(
+        MaterialTextureAnalyzer.Alpha range = MaterialTextureAnalyzer.scanAlpha(
                 new Frames(new int[][]{{32}}), 1, 1);
         assertEquals(32 / 255.0f, range.texels()[0]);
         assertEquals(range.texels()[0], range.texels()[1]);
@@ -52,13 +52,13 @@ final class RtTemporalAlphaRangeTest {
 
     @Test
     void animatedColorWithStableMixedAlphaUsesStaticR8Samples() {
-        RtMaterialPageCompiler.TemporalAlpha stable = RtMaterialPageCompiler.scanTemporalAlpha(
+        MaterialTextureAnalyzer.Alpha stable = MaterialTextureAnalyzer.scanAlpha(
                 new Frames(new int[][]{{0, 51}, {0, 51}, {0, 51}}), 2, 1);
-        RtMaterialPageCompiler.TemporalAlpha changing = RtMaterialPageCompiler.scanTemporalAlpha(
+        MaterialTextureAnalyzer.Alpha changing = MaterialTextureAnalyzer.scanAlpha(
                 new Frames(new int[][]{{0, 51}, {51, 0}}), 2, 1);
 
-        assertFalse(RtMaterialPageCompiler.hasTemporalVariation(stable));
-        assertTrue(RtMaterialPageCompiler.hasTemporalVariation(changing));
+        assertFalse(MaterialTextureAnalyzer.hasTemporalVariation(stable));
+        assertTrue(MaterialTextureAnalyzer.hasTemporalVariation(changing));
     }
 
     @Test

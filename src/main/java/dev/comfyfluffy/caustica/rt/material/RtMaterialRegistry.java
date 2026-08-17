@@ -12,8 +12,8 @@ import dev.comfyfluffy.caustica.engine.material.MaterialVariant;
 import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialDefaults;
 import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialProfile;
 import dev.comfyfluffy.caustica.rt.GpuContext;
-import dev.comfyfluffy.caustica.rt.RtColor;
-import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
+import dev.comfyfluffy.caustica.engine.color.ColorTransforms;
+import dev.comfyfluffy.caustica.api.gpu.GpuBuffer;
 import dev.comfyfluffy.caustica.rt.accel.RtAccel;
 import dev.comfyfluffy.caustica.rt.gen.MaterialBindingData;
 import dev.comfyfluffy.caustica.rt.gen.SurfaceMaterialData;
@@ -44,12 +44,11 @@ import java.util.Set;
  * rather than a cloned material, and bindings are interned on content: the same triple is one ID however
  * it was reached.
  *
- * <p>Workers read an immutable {@link Snapshot}. Live binding interning is render-thread-only;
+ * <p>Workers read an immutable {@link MaterialEpochSnapshot}. Live binding interning is render-thread-only;
  * shared-atlas surfaces append into pre-reserved table slots because their stitched UV rectangles only
  * become available during capture. Published records never mutate.
  */
 public final class RtMaterialRegistry {
-    public static final RtMaterialRegistry INSTANCE = new RtMaterialRegistry();
 
     // Canonical transport/feature values compiled into SurfaceMaterial and MaterialBinding.
     // RtMaterialPageCompiler.Entry.features uses the same bit values, so entry features flow into surfaces
@@ -73,24 +72,15 @@ public final class RtMaterialRegistry {
     public static final int BUILTIN_SURFACE_IMPLEMENTATION = 0;
 
     // Coverage — is the surface present along this ray — mirrored by world_common.slang's COVERAGE_*.
-    private static final int COVERAGE_OPAQUE = 0;
-    private static final int COVERAGE_CUTOUT = 1;
-    private static final int COVERAGE_STOCHASTIC = 2;
+    private static final int COVERAGE_OPAQUE = MaterialBindingAbi.COVERAGE_OPAQUE;
+    private static final int COVERAGE_CUTOUT = MaterialBindingAbi.COVERAGE_CUTOUT;
+    private static final int COVERAGE_STOCHASTIC = MaterialBindingAbi.COVERAGE_STOCHASTIC;
     // Transmittance — how much light passes where the surface is present. Mirrors BINDING_* in Slang.
-    private static final int BINDING_TRANSMISSIVE = 1;
-    static final int BINDING_TEXTURELESS = 4;
+    private static final int BINDING_TRANSMISSIVE = MaterialBindingAbi.FLAG_TRANSMISSIVE;
     // MaterialBinding.packed0 = baseColorTextureIndex:16 | coverageMode:2 | flags:6 | surfaceImpl:8;
     // packed1 = coverageCutoff:8. Mirrored by the bindingBaseColorTextureIndex/bindingCoverage/bindingFlags/
     // bindingSurfaceImpl/bindingCutoff accessors in world_common.slang — the any-hit reads these fields
     // out of one aligned load, so the shifts are ABI.
-    private static final int BASE_COLOR_TEXTURE_INDEX_MASK = 0xFFFF;
-    private static final int COVERAGE_SHIFT = 16;
-    private static final int COVERAGE_MASK = 3;
-    private static final int FLAGS_SHIFT = 18;
-    private static final int FLAGS_MASK = 63;
-    private static final int SURFACE_IMPL_SHIFT = 24;
-    private static final int SURFACE_IMPL_MASK = 255;
-    private static final int CUTOFF_MASK = 255;
 
     // Coverage cutoffs, packed into MaterialBinding.packed1 so no any-hit branches on the producer.
     private static final float PRIMARY_COVERAGE_CUTOFF = 0.5f;
@@ -128,12 +118,9 @@ public final class RtMaterialRegistry {
     private static final int VARIANT_SURFACE = 0;
     private static final int VARIANT_MEDIUM_BOUNDARY = 1;
     // Source adapters map geometry onto this finite set before calling the registry.
-    private static final OpenPbrMaterialProfile[] TEXTURE_PROFILES = {
-            OpenPbrMaterialProfile.ROUGH_DIELECTRIC, OpenPbrMaterialProfile.CONDUCTOR,
-            OpenPbrMaterialProfile.SMOOTH_DIELECTRIC, OpenPbrMaterialProfile.POLISHED_DIELECTRIC,
-            OpenPbrMaterialProfile.MEDIUM_ROUGH_DIELECTRIC};
+    private static final OpenPbrMaterialProfile[] TEXTURE_PROFILES = MaterialRegistryCompiler.TEXTURE_PROFILES;
 
-    private volatile Snapshot snapshot;
+    private volatile MaterialEpochSnapshot snapshot;
     private GpuBuffer bindingTable;
     private GpuBuffer surfaceTable;
     private long nextEpoch;
@@ -154,7 +141,7 @@ public final class RtMaterialRegistry {
     private record RuntimeTemplate(RtMaterialDesc desc, RtMaterialPageCompiler.Entry entry) {
     }
 
-    private RtMaterialRegistry() {
+    RtMaterialRegistry() {
     }
 
     /** Build and atomically publish the registry for the current resource epoch. */
@@ -172,7 +159,7 @@ public final class RtMaterialRegistry {
         catalog.standalone().forEach(asset -> assets.put(asset.material(), asset));
         RtMaterialPageCompiler.Entry fallbackEntry = pageCompiler.entry(null);
 
-        int profileVariants = TEXTURE_PROFILES.length * TOPOLOGY_VARIANTS * EMISSION_VARIANTS;
+        int profileVariants = MaterialRegistryCompiler.variantCount();
         CompiledTables tables = new CompiledTables(2 + profileVariants + atlasAssets.size() * profileVariants);
         tables.add(compileDesc(TRANSPORT_SURFACE, 0, OpenPbrMaterialProfile.ROUGH_DIELECTRIC, false, true,
                 RtMaterialDesc.EmissionSummary.NONE, defaultEmissionLuminance), transparentWhiteAverage(), fallbackEntry, null,
@@ -368,7 +355,7 @@ public final class RtMaterialRegistry {
         for (int i = 0; i < sbtClasses.length; i++) {
             sbtClasses[i] = (byte) sbtClassOf(tables.bindings.get(i));
         }
-        Snapshot next = new Snapshot(epoch, Collections.unmodifiableMap(ids), fallbackVariants,
+        MaterialEpochSnapshot next = new MaterialEpochSnapshot(epoch, Collections.unmodifiableMap(ids), fallbackVariants,
                 defaultEmissionLuminance, catalog.emissionFootprintResolution(),
                 Collections.unmodifiableMap(new HashMap<>(nextNamedMaterialIds)),
                 List.copyOf(descriptions), Collections.unmodifiableList(new ArrayList<>(footprints)),
@@ -425,7 +412,7 @@ public final class RtMaterialRegistry {
 
     private static <T> void writeRecords(GpuBuffer table, List<T> records, int stride,
                                          java.util.function.BiConsumer<T, ByteBuffer> writer) {
-        ByteBuffer mapped = MemoryUtil.memByteBuffer(table.mapped, records.size() * stride)
+        ByteBuffer mapped = MemoryUtil.memByteBuffer(table.mapped(), records.size() * stride)
                 .order(ByteOrder.nativeOrder());
         for (int i = 0; i < records.size(); i++) {
             writer.accept(records.get(i), mapped.slice(i * stride, stride).order(ByteOrder.nativeOrder()));
@@ -433,8 +420,8 @@ public final class RtMaterialRegistry {
         table.flush();
     }
 
-    public Snapshot requireSnapshot() {
-        Snapshot current = snapshot;
+    public MaterialEpochSnapshot requireSnapshot() {
+        MaterialEpochSnapshot current = snapshot;
         if (current == null) throw new IllegalStateException("RT materials are not prepared");
         return current;
     }
@@ -447,7 +434,7 @@ public final class RtMaterialRegistry {
     }
 
     public long epoch() {
-        Snapshot current = snapshot;
+        MaterialEpochSnapshot current = snapshot;
         return current != null ? current.epoch() : 0L;
     }
 
@@ -459,14 +446,14 @@ public final class RtMaterialRegistry {
     public long bindingTableAddress() {
         GpuBuffer current = bindingTable;
         if (current == null) throw new IllegalStateException("RT material binding table is not uploaded");
-        return current.deviceAddress;
+        return current.deviceAddress();
     }
 
     /** Address of the {@code SurfaceMaterial} table, indexed by {@code MaterialBinding.surface}. */
     public long surfaceTableAddress() {
         GpuBuffer current = surfaceTable;
         if (current == null) throw new IllegalStateException("RT surface material table is not uploaded");
-        return current.deviceAddress;
+        return current.deviceAddress();
     }
 
     /** Neutral canonical material used by runtime-only textures. */
@@ -486,8 +473,8 @@ public final class RtMaterialRegistry {
     public int withStochasticCoverage(int bindingId) {
         MaterialBindingData base = bindingRecords.get(bindingId);
         return intern(new MaterialBindingData(
-                packBinding0(bindingBaseColorTextureIndex(base.packed0()), COVERAGE_STOCHASTIC,
-                        bindingFlags(base.packed0()), bindingSurfaceImpl(base.packed0())),
+                MaterialBindingAbi.pack(MaterialBindingAbi.baseColorTextureIndex(base.packed0()), COVERAGE_STOCHASTIC,
+                        MaterialBindingAbi.flags(base.packed0()), MaterialBindingAbi.surfaceImplementation(base.packed0())),
                 base.surface(), base.shadowTint(), base.packed1()));
     }
 
@@ -501,8 +488,8 @@ public final class RtMaterialRegistry {
     public int withCutoutCoverage(int bindingId) {
         MaterialBindingData base = bindingRecords.get(bindingId);
         return intern(new MaterialBindingData(
-                packBinding0(bindingBaseColorTextureIndex(base.packed0()), COVERAGE_CUTOUT,
-                        bindingFlags(base.packed0()), bindingSurfaceImpl(base.packed0())),
+                MaterialBindingAbi.pack(MaterialBindingAbi.baseColorTextureIndex(base.packed0()), COVERAGE_CUTOUT,
+                        MaterialBindingAbi.flags(base.packed0()), MaterialBindingAbi.surfaceImplementation(base.packed0())),
                 base.surface(), base.shadowTint(), base.packed1()));
     }
 
@@ -520,16 +507,16 @@ public final class RtMaterialRegistry {
     /** Whether the binding's sampled alpha is represented by the current canonical temporal-range pages. */
     public boolean opacityMicromapEligible(int bindingId) {
         MaterialBindingData binding = bindingRecords.get(bindingId);
-        int flags = bindingFlags(binding.packed0());
-        return bindingCoverage(binding.packed0()) == COVERAGE_CUTOUT
-                && bindingBaseColorTextureIndex(binding.packed0()) == SHARED_ATLAS_BASE_COLOR_TEXTURE_INDEX
-                && (flags & (BINDING_TRANSMISSIVE | BINDING_TEXTURELESS)) == 0
+        int flags = MaterialBindingAbi.flags(binding.packed0());
+        return MaterialBindingAbi.coverage(binding.packed0()) == COVERAGE_CUTOUT
+                && MaterialBindingAbi.baseColorTextureIndex(binding.packed0()) == SHARED_ATLAS_BASE_COLOR_TEXTURE_INDEX
+                && (flags & (BINDING_TRANSMISSIVE | MaterialBindingAbi.FLAG_TEXTURELESS)) == 0
                 && (surfaceRecords.get(binding.surface()).alphaFlags() & 3) != 0;
     }
 
     private static int sbtClassOf(MaterialBindingData binding) {
-        if (bindingCoverage(binding.packed0()) != COVERAGE_OPAQUE) return RtAccel.CLASS_MASKED;
-        int flags = bindingFlags(binding.packed0());
+        if (MaterialBindingAbi.coverage(binding.packed0()) != COVERAGE_OPAQUE) return RtAccel.CLASS_MASKED;
+        int flags = MaterialBindingAbi.flags(binding.packed0());
         return (flags & BINDING_TRANSMISSIVE) != 0 ? RtAccel.CLASS_TRANSMISSIVE : RtAccel.CLASS_OPAQUE;
     }
 
@@ -543,10 +530,10 @@ public final class RtMaterialRegistry {
     }
 
     static MaterialBindingData baseColorTextureBinding(MaterialBindingData base, int baseColorTextureIndex) {
-        int flags = bindingFlags(base.packed0()) & ~BINDING_TEXTURELESS;
+        int flags = MaterialBindingAbi.flags(base.packed0()) & ~MaterialBindingAbi.FLAG_TEXTURELESS;
         return new MaterialBindingData(
-                packBinding0(baseColorTextureIndex, bindingCoverage(base.packed0()), flags,
-                        bindingSurfaceImpl(base.packed0())),
+                MaterialBindingAbi.pack(baseColorTextureIndex, MaterialBindingAbi.coverage(base.packed0()), flags,
+                        MaterialBindingAbi.surfaceImplementation(base.packed0())),
                 base.surface(), base.shadowTint(), base.packed1());
     }
 
@@ -572,7 +559,7 @@ public final class RtMaterialRegistry {
         SurfaceMaterialData surface = surface(template.desc(), template.entry(),
                 uv.u(), uv.v(), uv.inverseDu(), uv.inverseDv());
         long offset = Math.multiplyExact((long) surfaceId, SurfaceMaterialData.BYTE_SIZE);
-        surface.write(MemoryUtil.memByteBuffer(surfaceTable.mapped + offset, SurfaceMaterialData.BYTE_SIZE)
+        surface.write(MemoryUtil.memByteBuffer(surfaceTable.mapped() + offset, SurfaceMaterialData.BYTE_SIZE)
                 .order(ByteOrder.nativeOrder()));
         surfaceTable.flush(offset, SurfaceMaterialData.BYTE_SIZE);
         surfaceRecords.add(surface);
@@ -598,7 +585,7 @@ public final class RtMaterialRegistry {
         }
         int id = bindingRecords.size();
         long offset = Math.multiplyExact((long) id, MaterialBindingData.BYTE_SIZE);
-        binding.write(MemoryUtil.memByteBuffer(bindingTable.mapped + offset, MaterialBindingData.BYTE_SIZE)
+        binding.write(MemoryUtil.memByteBuffer(bindingTable.mapped() + offset, MaterialBindingData.BYTE_SIZE)
                 .order(ByteOrder.nativeOrder()));
         bindingTable.flush(offset, MaterialBindingData.BYTE_SIZE);
         bindingRecords.add(binding);
@@ -631,27 +618,11 @@ public final class RtMaterialRegistry {
     }
 
     static int index(OpenPbrMaterialProfile profile, MaterialTopology topology, boolean emitting) {
-        int p = -1;
-        for (int i = 0; i < TEXTURE_PROFILES.length; i++) {
-            if (TEXTURE_PROFILES[i].equals(profile)) {
-                p = i;
-                break;
-            }
-        }
-        if (p < 0) throw new IllegalArgumentException("Unsupported texture material profile " + profile);
-        int topologyIndex = switch (topology) {
-            case SURFACE -> VARIANT_SURFACE;
-            case MEDIUM_BOUNDARY -> VARIANT_MEDIUM_BOUNDARY;
-        };
-        return (p * TOPOLOGY_VARIANTS + topologyIndex)
-                * EMISSION_VARIANTS + (emitting ? 1 : 0);
+        return MaterialRegistryCompiler.index(profile, topology, emitting);
     }
 
     static int transport(MaterialTopology topology) {
-        return switch (topology) {
-            case SURFACE -> TRANSPORT_SURFACE;
-            case MEDIUM_BOUNDARY -> TRANSPORT_MEDIUM_BOUNDARY;
-        };
+        return MaterialRegistryCompiler.transport(topology);
     }
 
     /** Texture masks own the summary; otherwise an emitting state uses the full texture. */
@@ -674,55 +645,21 @@ public final class RtMaterialRegistry {
                                               boolean emitting, boolean neutral,
                                               RtMaterialDesc.EmissionSummary emissionSummary,
                                               float dielectricIor, float defaultEmissionLuminance) {
-        float roughness = transport == TRANSPORT_MEDIUM_BOUNDARY
-                ? OpenPbrMaterialDefaults.TRANSMISSIVE_SPECULAR_ROUGHNESS
-                : profile.specularRoughness();
-        float metalness = transport == TRANSPORT_MEDIUM_BOUNDARY ? 0.0f : profile.baseMetalness();
-        // Refractive index is per material, not per topology: different medium boundaries can bend
-        // light by measurably different amounts.
-        float ior = transport == TRANSPORT_MEDIUM_BOUNDARY
-                ? dielectricIor : OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR;
-        float transmission = transport == TRANSPORT_MEDIUM_BOUNDARY ? 1.0f : 0.0f;
-        boolean authored = (features & (FEATURE_SPEC | FEATURE_NORMAL)) != 0;
-        RtMaterialDesc.Source source = neutral ? RtMaterialDesc.Source.NEUTRAL
-                : (authored ? RtMaterialDesc.Source.AUTHORED_TEXTURE : RtMaterialDesc.Source.DERIVED_TEXTURE);
-        RtMaterialDesc.EmissionSource emissionSource;
-        if ((features & FEATURE_SPEC) != 0) {
-            emissionSource = RtMaterialDesc.EmissionSource.AUTHORED_MASK;
-        } else if ((features & FEATURE_EMISSION_MASK) != 0) {
-            emissionSource = RtMaterialDesc.EmissionSource.DERIVED_MASK;
-        } else if (emitting) {
-            emissionSource = RtMaterialDesc.EmissionSource.GEOMETRY_UNIFORM;
-        } else {
-            emissionSource = RtMaterialDesc.EmissionSource.NONE;
-        }
-        float emissionLuminance = emissionSource == RtMaterialDesc.EmissionSource.NONE
-                ? 0.0f : defaultEmissionLuminance;
-        return new RtMaterialDesc(transport, source, features, roughness, metalness, ior, transmission,
-                emissionSource, emissionLuminance, emissionSummary, BUILTIN_SURFACE_IMPLEMENTATION);
+        return MaterialRegistryCompiler.textureDescription(transport, features, profile, emitting, neutral,
+                emissionSummary, dielectricIor, defaultEmissionLuminance);
     }
 
     private static RtMaterialDesc compileRuntimeTextureDesc(int features, boolean neutral,
                                                     RtMaterialDesc.EmissionSummary emissionSummary,
                                                     float defaultEmissionLuminance) {
-        boolean authored = (features & (FEATURE_SPEC | FEATURE_NORMAL)) != 0;
-        RtMaterialDesc.Source source = neutral ? RtMaterialDesc.Source.NEUTRAL
-                : (authored ? RtMaterialDesc.Source.AUTHORED_TEXTURE : RtMaterialDesc.Source.DERIVED_TEXTURE);
-        RtMaterialDesc.EmissionSource emissionSource = (features & FEATURE_SPEC) != 0
-                ? RtMaterialDesc.EmissionSource.AUTHORED_MASK : RtMaterialDesc.EmissionSource.NONE;
-        float emissionLuminance = emissionSource == RtMaterialDesc.EmissionSource.NONE
-                ? 0.0f : defaultEmissionLuminance;
-        return new RtMaterialDesc(TRANSPORT_SURFACE, source, features,
-                OpenPbrMaterialDefaults.RUNTIME_TEXTURE_SPECULAR_ROUGHNESS, 0.0f,
-                OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR, 0.0f,
-                emissionSource, emissionLuminance, emissionSummary,
-                BUILTIN_SURFACE_IMPLEMENTATION);
+        return MaterialRegistryCompiler.runtimeTextureDescription(features, neutral, emissionSummary,
+                defaultEmissionLuminance);
     }
 
     /**
      * The compiled tables under construction during a rebuild. Every compiled surface gets one binding —
      * plus the cutout-coverage sibling a masked geometry source asks for — so
-     * the returned binding ID is what geometry stores and what {@link Snapshot} indexes its descriptions,
+     * the returned binding ID is what geometry stores and what {@link MaterialEpochSnapshot} indexes its descriptions,
      * emission footprints and SBT classes by. Siblings share the base's surface, description and footprint, so they
      * cost sixteen table bytes and two list slots each and keep every parallel array dense.
      */
@@ -766,10 +703,10 @@ public final class RtMaterialRegistry {
             float[] average = {definition.baseColorR(), definition.baseColorG(), definition.baseColorB(), 1.0f};
             MaterialBindingData base = binding(surfaceId, desc, average,
                     SHARED_ATLAS_BASE_COLOR_TEXTURE_INDEX, RUNTIME_TEXTURE_COVERAGE_CUTOFF);
-            int flags = bindingFlags(base.packed0()) | BINDING_TEXTURELESS;
+            int flags = MaterialBindingAbi.flags(base.packed0()) | MaterialBindingAbi.FLAG_TEXTURELESS;
             MaterialBindingData textureless = new MaterialBindingData(
-                    packBinding0(SHARED_ATLAS_BASE_COLOR_TEXTURE_INDEX, COVERAGE_OPAQUE, flags,
-                            bindingSurfaceImpl(base.packed0())),
+                    MaterialBindingAbi.pack(SHARED_ATLAS_BASE_COLOR_TEXTURE_INDEX, COVERAGE_OPAQUE, flags,
+                            MaterialBindingAbi.surfaceImplementation(base.packed0())),
                     base.surface(), base.shadowTint(), base.packed1());
             return append(textureless, desc, null);
         }
@@ -778,8 +715,8 @@ public final class RtMaterialRegistry {
         private int addCutoutSibling(int baseId) {
             MaterialBindingData base = bindings.get(baseId);
             return append(new MaterialBindingData(
-                            packBinding0(bindingBaseColorTextureIndex(base.packed0()), COVERAGE_CUTOUT,
-                                    bindingFlags(base.packed0()), bindingSurfaceImpl(base.packed0())),
+                            MaterialBindingAbi.pack(MaterialBindingAbi.baseColorTextureIndex(base.packed0()), COVERAGE_CUTOUT,
+                                    MaterialBindingAbi.flags(base.packed0()), MaterialBindingAbi.surfaceImplementation(base.packed0())),
                             base.surface(), base.shadowTint(), base.packed1()),
                     descriptions.get(baseId), footprints.get(baseId));
         }
@@ -857,40 +794,8 @@ public final class RtMaterialRegistry {
             }
         }
         return new MaterialBindingData(
-                packBinding0(baseColorTextureIndex, coverage, flags, desc.surfaceImplementation()), surfaceId,
-                shadowTint, packCoverageCutoff(coverageCutoff));
-    }
-
-    static int packBinding0(int baseColorTextureIndex, int coverageMode, int flags, int surfaceImplementation) {
-        return (baseColorTextureIndex & BASE_COLOR_TEXTURE_INDEX_MASK)
-                | ((coverageMode & COVERAGE_MASK) << COVERAGE_SHIFT)
-                | ((flags & FLAGS_MASK) << FLAGS_SHIFT)
-                | ((surfaceImplementation & SURFACE_IMPL_MASK) << SURFACE_IMPL_SHIFT);
-    }
-
-    static int bindingSurfaceImpl(int packed0) {
-        return (packed0 >>> SURFACE_IMPL_SHIFT) & SURFACE_IMPL_MASK;
-    }
-
-    static int bindingBaseColorTextureIndex(int packed0) {
-        return packed0 & BASE_COLOR_TEXTURE_INDEX_MASK;
-    }
-
-    static int bindingCoverage(int packed0) {
-        return (packed0 >>> COVERAGE_SHIFT) & COVERAGE_MASK;
-    }
-
-    static int bindingFlags(int packed0) {
-        return (packed0 >>> FLAGS_SHIFT) & FLAGS_MASK;
-    }
-
-    /** The alpha test threshold as the shader reads it back: an 8-bit unorm of the authored cutoff. */
-    static int packCoverageCutoff(float cutoff) {
-        return Math.round(cutoff * CUTOFF_MASK) & CUTOFF_MASK;
-    }
-
-    static float unpackCoverageCutoff(int packed1) {
-        return (packed1 & CUTOFF_MASK) / (float) CUTOFF_MASK;
+                MaterialBindingAbi.pack(baseColorTextureIndex, coverage, flags, desc.surfaceImplementation()), surfaceId,
+                shadowTint, MaterialBindingAbi.packCoverageCutoff(coverageCutoff));
     }
 
     /**
@@ -903,7 +808,7 @@ public final class RtMaterialRegistry {
      * and folding it into the alpha-scaled term would crush exactly the clear-glass case it covers.
      */
     static int translucentShadowTint(float[] average) {
-        float[] acesCg = RtColor.linearBt709ToAcesCg(average[0], average[1], average[2]);
+        float[] acesCg = ColorTransforms.linearBt709ToAcesCg(average[0], average[1], average[2]);
         int packed = 0;
         for (int channel = 0; channel < 3; channel++) {
             float extinction = Math.max(-(float) Math.log(Math.max(acesCg[channel], 1.0e-3f)), 0.0f);
@@ -965,95 +870,4 @@ public final class RtMaterialRegistry {
         }
     }
 
-    /** Read-only lookup captured once by a geometry-build task. */
-    public static final class Snapshot {
-        private final long epoch;
-        private final Map<ResourceId, int[]> ids;
-        private final int[] fallbackVariants;
-        private final float defaultUniformEmissionLuminanceCdM2;
-        private final int emissionFootprintResolution;
-        private final Map<ResourceId, Integer> namedMaterialIds;
-        private final List<RtMaterialDesc> descriptions;
-        private final List<EmissionFootprint> footprints;
-        private final CompiledOverrideLookup overrides;
-        private final int[] cutoutVariants;
-        private final byte[] sbtClasses;
-
-        private Snapshot(long epoch, Map<ResourceId, int[]> ids, int[] fallbackVariants,
-                         float defaultUniformEmissionLuminanceCdM2,
-                         int emissionFootprintResolution,
-                         Map<ResourceId, Integer> namedMaterialIds,
-                         List<RtMaterialDesc> descriptions,
-                         List<EmissionFootprint> footprints, CompiledOverrideLookup overrides,
-                         int[] cutoutVariants, byte[] sbtClasses) {
-            this.epoch = epoch;
-            this.ids = ids;
-            this.fallbackVariants = fallbackVariants;
-            this.defaultUniformEmissionLuminanceCdM2 = defaultUniformEmissionLuminanceCdM2;
-            this.emissionFootprintResolution = emissionFootprintResolution;
-            this.namedMaterialIds = namedMaterialIds;
-            this.descriptions = descriptions;
-            this.footprints = footprints;
-            this.overrides = overrides;
-            this.cutoutVariants = cutoutVariants;
-            this.sbtClasses = sbtClasses;
-        }
-
-        public long epoch() {
-            return epoch;
-        }
-
-        public float defaultUniformEmissionLuminanceCdM2() {
-            return defaultUniformEmissionLuminanceCdM2;
-        }
-
-        public int emissionFootprintResolution() {
-            return emissionFootprintResolution;
-        }
-
-        /** Resolve a stable name inside this immutable resource epoch. */
-        public int bindingId(ResourceId material) {
-            Integer id = namedMaterialIds.get(material);
-            if (id == null) throw new IllegalArgumentException("No submitted material named " + material);
-            return id;
-        }
-
-        public int materialCount() {
-            return descriptions.size();
-        }
-
-        public RtMaterialDesc material(int materialId) {
-            return descriptions.get(materialId);
-        }
-
-        /** Emission footprint matching this material's shaded emission source, or null when none. */
-        public EmissionFootprint emissionFootprint(int materialId) {
-            return footprints.get(materialId);
-        }
-
-        /**
-         * The snapshot-local equivalent of {@link RtMaterialRegistry#withCutoutCoverage}: the ID resolving
-         * this material with deterministic cutout coverage, precompiled at rebuild so a geometry worker
-         * never interns into the live registry. IDs without a compiled sibling (dielectric/fluid
-         * variants, which no masked producer reaches) map to themselves.
-         */
-        public int withCutoutCoverage(int materialId) {
-            return cutoutVariants[materialId];
-        }
-
-        /** The SBT hit-group class of a snapshot material — see {@link RtMaterialRegistry#sbtClassFor}. */
-        public int sbtClassFor(int materialId) {
-            return sbtClasses[materialId];
-        }
-
-        public int resolve(ResourceId material, ResourceId geometry, MaterialVariant materialVariant) {
-            int variant = index(materialVariant.profile(), materialVariant.topology(),
-                    materialVariant.emitting());
-            int[] override = overrides.resolve(material, geometry);
-            if (override != null) return override[variant];
-            int[] variants = ids.get(material);
-            return variants != null ? variants[variant] : fallbackVariants[variant];
-        }
-
-    }
 }

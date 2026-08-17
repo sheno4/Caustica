@@ -5,6 +5,7 @@ import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.mojang.blaze3d.vulkan.VulkanGpuTextureView;
 
 import org.joml.Matrix4f;
+import org.joml.Matrix4fc;
 import org.joml.Quaternionf;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
@@ -27,11 +28,10 @@ import net.minecraft.client.gui.font.TextRenderable;
 import net.minecraft.client.renderer.entity.EntityRenderer;
 import net.minecraft.util.ARGB;
 
-import dev.comfyfluffy.caustica.rt.RtComposite;
-import dev.comfyfluffy.caustica.rt.GpuContext;
-import dev.comfyfluffy.caustica.rt.RtDebugLabels;
-import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
-import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
+import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
+import dev.comfyfluffy.caustica.api.gpu.GpuFrameUse;
+import dev.comfyfluffy.caustica.api.gpu.GpuDebugScope;
+import dev.comfyfluffy.caustica.api.gpu.GpuBuffer;
 import dev.comfyfluffy.caustica.minecraft.entity.RtEntities;
 
 /**
@@ -67,7 +67,7 @@ final class NameTagFeature implements OverlayFeature {
     // one shared set rewritten per page.
     private static final int MAX_ATLAS_PAGES = 16;
 
-    private GpuContext ctx;
+    private GpuDevice device;
     private OverlayPipelines.Pipeline pipeline;
     private OverlayPipelines.SampledImageSetPool imageSetPool;
     private long sampler;
@@ -96,8 +96,8 @@ final class NameTagFeature implements OverlayFeature {
     }
 
     @Override
-    public boolean prepare(GpuContext ctx, OverlayFramePool pool, RtGpuExecutor.GraphicsUse graphicsUse,
-                           int width, int height) {
+    public boolean prepare(GpuDevice device, OverlayFramePool pool, GpuFrameUse gpuUse,
+                           long worldTlas, Matrix4fc worldViewProjection, int width, int height) {
         if (!RtEntities.nameTagsEnabled()) {
             return false;
         }
@@ -105,7 +105,7 @@ final class NameTagFeature implements OverlayFeature {
         if (tags.isEmpty()) {
             return false;
         }
-        ensureResources(ctx);
+        ensureResources(device);
 
         Font font = Minecraft.getInstance().font;
         Quaternionf billboard = RtEntities.INSTANCE.cameraOrientation();
@@ -129,8 +129,8 @@ final class NameTagFeature implements OverlayFeature {
             if (vertexCount == 0) {
                 continue;
             }
-            GpuBuffer vbo = pool.acquireVertex(ctx, (long) vertexCount * VERTEX_STRIDE, "name tag vbo");
-            ByteBuffer buf = MemoryUtil.memByteBuffer(vbo.mapped, vertexCount * VERTEX_STRIDE).order(ByteOrder.LITTLE_ENDIAN);
+            GpuBuffer vbo = pool.acquireVertex(device, (long) vertexCount * VERTEX_STRIDE, "name tag vbo");
+            ByteBuffer buf = MemoryUtil.memByteBuffer(vbo.mapped(), vertexCount * VERTEX_STRIDE).order(ByteOrder.LITTLE_ENDIAN);
             float[] posUv = b.posUv.elements();
             for (int v = 0; v < vertexCount; v++) {
                 int o = v * 5;
@@ -145,33 +145,33 @@ final class NameTagFeature implements OverlayFeature {
             return false;
         }
 
-        viewProj.set(RtComposite.INSTANCE.currentViewProjection());
+        viewProj.set(worldViewProjection);
         camOffX = RtEntities.INSTANCE.glowCamOffsetX();
         camOffY = RtEntities.INSTANCE.glowCamOffsetY();
         camOffZ = RtEntities.INSTANCE.glowCamOffsetZ();
         return true;
     }
 
-    private void ensureResources(GpuContext ctx) {
-        this.ctx = ctx;
+    private void ensureResources(GpuDevice device) {
+        this.device = device;
         if (pipeline != null) {
             return;
         }
-        imageSetPool = OverlayPipelines.sampledImageSetPool(ctx, VK10.VK_SHADER_STAGE_FRAGMENT_BIT, MAX_ATLAS_PAGES, "name tag");
-        sampler = OverlayPipelines.createNearestClampSampler(ctx, "name tag font atlas");
+        imageSetPool = OverlayPipelines.sampledImageSetPool(device, VK10.VK_SHADER_STAGE_FRAGMENT_BIT, MAX_ATLAS_PAGES, "name tag");
+        sampler = OverlayPipelines.createNearestClampSampler(device, "name tag font atlas");
         pipeline = new OverlayPipelines.Spec("name_tag/vertex.vert.spv", "name_tag/fragment.frag.spv")
                 .vertex(OverlayPipelines.VertexFormat.POSITION_TEX_COLOR)
                 .blend(OverlayPipelines.Blend.ALPHA)
                 .attachment(WorldOverlayPass.TARGET_FORMAT)
                 .push(PUSH_BYTES, VK10.VK_SHADER_STAGE_VERTEX_BIT)
                 .descriptorSetLayout(imageSetPool.layout)
-                .build(ctx, "name tag");
+                .build(device, "name tag");
     }
 
     @Override
     public void record(VkCommandBuffer cmd, long targetView, int width, int height) {
         try (MemoryStack stack = MemoryStack.stackPush();
-             RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "name tags")) {
+             GpuDebugScope ignored = device.debugScope(cmd, "name tags")) {
             WorldOverlayPass.beginColorRendering(cmd, stack, targetView, width, height, false);
             VK10.vkCmdBindPipeline(cmd, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle);
             ByteBuffer push = stack.malloc(PUSH_BYTES);
@@ -180,10 +180,10 @@ final class NameTagFeature implements OverlayFeature {
             VK10.vkCmdPushConstants(cmd, pipeline.layout, VK10.VK_SHADER_STAGE_VERTEX_BIT, 0, push);
             for (DrawPage page : drawPages) {
                 long set = pageSets.computeIfAbsent(page.view,
-                        v -> imageSetPool.allocateAndBind(ctx, vkImageView(v), sampler));
+                        v -> imageSetPool.allocateAndBind(device, vkImageView(v), sampler));
                 VK10.vkCmdBindDescriptorSets(cmd, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout, 0,
                         stack.longs(set), null);
-                VK10.vkCmdBindVertexBuffers(cmd, 0, stack.longs(page.vbo.handle), stack.longs(0L));
+                VK10.vkCmdBindVertexBuffers(cmd, 0, stack.longs(page.vbo.handle()), stack.longs(0L));
                 VK10.vkCmdDraw(cmd, page.vertexCount, 1, 0, 0);
             }
             WorldOverlayPass.endRendering(cmd);
@@ -192,23 +192,23 @@ final class NameTagFeature implements OverlayFeature {
 
     @Override
     public void destroy() {
-        if (ctx == null) {
+        if (device == null) {
             return;
         }
         if (pipeline != null) {
-            pipeline.destroy(ctx.vk());
+            pipeline.destroy(device.vk());
             pipeline = null;
         }
         if (imageSetPool != null) {
-            imageSetPool.destroy(ctx.vk());
+            imageSetPool.destroy(device.vk());
             imageSetPool = null;
         }
         pageSets.clear();
         if (sampler != 0L) {
-            VK10.vkDestroySampler(ctx.vk(), sampler, null);
+            VK10.vkDestroySampler(device.vk(), sampler, null);
             sampler = 0L;
         }
-        ctx = null;
+        device = null;
     }
 
     private static long vkImageView(GpuTextureView view) {

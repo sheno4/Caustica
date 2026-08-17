@@ -24,6 +24,9 @@ import java.nio.LongBuffer;
 
 /** Owns the active immutable resource-pack material epoch and replaces it across reloads. */
 public final class RtMaterialEpoch {
+    private final ProviderManager providers;
+    private final RtMaterialRegistry registry = new RtMaterialRegistry();
+    private final RtMaterialPageCompiler pageCompiler = new RtMaterialPageCompiler();
     static final class LifecycleState {
         boolean bindingsReady;
         volatile boolean reloadPending;
@@ -57,40 +60,40 @@ public final class RtMaterialEpoch {
     private final RtGeometryMaterialResolution.Bindings geometryBindings =
             new RtGeometryMaterialResolution.Bindings() {
                 @Override public int named(MaterialHandle material) {
-                    return RtMaterialRegistry.INSTANCE.bindingId(material.id());
+                    return registry.bindingId(material.id());
                 }
 
                 @Override public int catalog(ResourceId material, ResourceId geometry, MaterialVariant variant) {
-                    return RtMaterialRegistry.INSTANCE.requireSnapshot().resolve(material, geometry, variant);
+                    return registry.requireSnapshot().resolve(material, geometry, variant);
                 }
 
                 @Override public int atlas(AtlasMaterialReference reference) {
-                    return RtMaterialRegistry.INSTANCE.resolveAtlasReference(reference, false);
+                    return registry.resolveAtlasReference(reference, false);
                 }
 
                 @Override public int standalone(ResourceId material) {
-                    return RtMaterialRegistry.INSTANCE.resolveStandaloneTexture(material, false);
+                    return registry.resolveStandaloneTexture(material, false);
                 }
 
                 @Override public int fallback() {
-                    return RtMaterialRegistry.INSTANCE.runtimeFallbackId();
+                    return registry.runtimeFallbackId();
                 }
 
                 @Override public int withTexture(int binding, SceneMesh.TextureReference texture) {
-                    return RtMaterialRegistry.INSTANCE.withBaseColorTextureIndex(binding,
-                            ProviderManager.INSTANCE.bindlessTextureSlot(texture));
+                    return registry.withBaseColorTextureIndex(binding,
+                            providers.bindlessTextureSlot(texture));
                 }
 
                 @Override public int cutout(int binding) {
-                    return RtMaterialRegistry.INSTANCE.withCutoutCoverage(binding);
+                    return registry.withCutoutCoverage(binding);
                 }
 
                 @Override public int stochastic(int binding) {
-                    return RtMaterialRegistry.INSTANCE.withStochasticCoverage(binding);
+                    return registry.withStochasticCoverage(binding);
                 }
 
                 @Override public int sbtClass(int binding) {
-                    return RtMaterialRegistry.INSTANCE.sbtClassFor(binding);
+                    return registry.sbtClassFor(binding);
                 }
             };
 
@@ -101,6 +104,10 @@ public final class RtMaterialEpoch {
     private long boundBaseColorAtlasView;
     private final LifecycleState state = new LifecycleState();
 
+    public RtMaterialEpoch(ProviderManager providers) {
+        this.providers = providers;
+    }
+
     public RtGeometryMaterialResolution.Bindings geometryBindings() {
         return geometryBindings;
     }
@@ -108,6 +115,19 @@ public final class RtMaterialEpoch {
     public void attachSceneGeometry(RtSceneGeometryManager sceneGeometry) {
         if (this.sceneGeometry != null) throw new IllegalStateException("Scene geometry is already attached");
         this.sceneGeometry = sceneGeometry;
+        sceneGeometry.setMaterialTables(new RtSceneGeometryManager.MaterialTables() {
+            @Override public long bindingTableAddress() {
+                return registry.bindingTableAddress();
+            }
+
+            @Override public long surfaceTableAddress() {
+                return registry.surfaceTableAddress();
+            }
+
+            @Override public boolean opacityMicromapEligible(int materialId) {
+                return registry.opacityMicromapEligible(materialId);
+            }
+        });
     }
 
     public void observeBaseColorAtlas(long view) {
@@ -145,23 +165,24 @@ public final class RtMaterialEpoch {
         }
         long epochSampler = sampler(ctx);
         boundBaseColorAtlasView = baseColorAtlasView;
-        RtMaterialPageCompiler.INSTANCE.reset();
-        ProviderManager.MaterialContributions contributions = ProviderManager.INSTANCE.collectMaterials();
+        pageCompiler.reset();
+        ProviderManager.MaterialContributions contributions = providers.collectMaterials();
         RtMaterialOverrides overrides = RtMaterialOverrides.from(
                 contributions.rules(), CausticaApi.registry()::surfaceIndex);
         MaterialCatalog catalog = RtRuntime.host().materialCatalog(contributions.rules());
-        RtMaterialPageCompiler.INSTANCE.prepareAll(ctx, textureCapacity, catalog);
+        pageCompiler.prepareAll(ctx, textureCapacity, catalog);
         if (RtDeviceBringup.ommEnabled()) {
             opacityMicromapPipeline = RtOpacityMicromapPipeline.create(ctx,
-                    RtMaterialPageCompiler.INSTANCE.temporalAlphaViews(),
-                    RtMaterialPageCompiler.INSTANCE.staticAlphaViews());
+                    pageCompiler.temporalAlphaViews(),
+                    pageCompiler.staticAlphaViews());
         }
         sceneGeometry.setOpacityMicromapPipeline(opacityMicromapPipeline);
-        RtMaterialRegistry.INSTANCE.rebuild(ctx, RtMaterialPageCompiler.INSTANCE, catalog, overrides,
+        registry.rebuild(ctx, pageCompiler, catalog, overrides,
                 contributions.definitions(), CausticaApi.registry()::surfaceIndex, textureCapacity);
-        ProviderManager.INSTANCE.resetBindlessTextures(textureCapacity);
+        providers.publishMaterials(registry.requireSnapshot());
+        providers.resetBindlessTextures(textureCapacity);
         pipeline.setBaseColorTexture(0, boundBaseColorAtlasView, epochSampler);
-        RtMaterialPageCompiler.INSTANCE.bindPages(pipeline, epochSampler);
+        pageCompiler.bindPages(pipeline, epochSampler);
         state.published(textureCapacity);
     }
 
@@ -169,30 +190,30 @@ public final class RtMaterialEpoch {
     public void bindCurrent(GpuContext ctx, RtPipeline pipeline) {
         long epochSampler = sampler(ctx);
         pipeline.setBaseColorTexture(0, boundBaseColorAtlasView, epochSampler);
-        RtMaterialPageCompiler.INSTANCE.bindPages(pipeline, epochSampler);
-        ProviderManager.INSTANCE.rebindTextures(pipeline, epochSampler);
+        pageCompiler.bindPages(pipeline, epochSampler);
+        providers.rebindTextures(pipeline, epochSampler);
     }
 
     public void uploadPendingTextures(GpuContext ctx, RtPipeline pipeline) {
-        ProviderManager.INSTANCE.uploadPendingTextures(pipeline, sampler(ctx));
+        providers.uploadPendingTextures(pipeline, sampler(ctx));
     }
 
-    public RtMaterialRegistry.Snapshot snapshot() {
-        return RtMaterialRegistry.INSTANCE.requireSnapshot();
+    public MaterialEpochSnapshot snapshot() {
+        return registry.requireSnapshot();
     }
 
     public long bindingTableAddress() {
-        return RtMaterialRegistry.INSTANCE.bindingTableAddress();
+        return registry.bindingTableAddress();
     }
 
     public long surfaceTableAddress() {
-        return RtMaterialRegistry.INSTANCE.surfaceTableAddress();
+        return registry.surfaceTableAddress();
     }
 
     /** Mark provider resources closing before the caller drains work and destroys descriptor-owning pipelines. */
     public void beginReload() {
         state.beginReload();
-        ProviderManager.INSTANCE.onResourcePackClosing();
+        providers.onResourcePackClosing();
     }
 
     public void reloadFailed() {
@@ -200,18 +221,19 @@ public final class RtMaterialEpoch {
     }
 
     public void resourcePackApplied() {
-        ProviderManager.INSTANCE.onResourcePackApplied();
+        providers.onResourcePackApplied();
     }
 
     /** Detach and destroy epoch resources after world-pipeline descriptor references are gone. */
     public void destroyPublishedEpoch() {
+        providers.clearMaterials();
         if (sceneGeometry != null) sceneGeometry.setOpacityMicromapPipeline(null);
         if (opacityMicromapPipeline != null) {
             opacityMicromapPipeline.destroy();
             opacityMicromapPipeline = null;
         }
-        RtMaterialPageCompiler.INSTANCE.reset();
-        RtMaterialRegistry.INSTANCE.destroy();
+        pageCompiler.reset();
+        registry.destroy();
         state.destroyPublished();
     }
 

@@ -11,14 +11,13 @@ import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
-import dev.comfyfluffy.caustica.rt.RtComposite;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtDeviceBringup;
 import dev.comfyfluffy.caustica.rt.RtFrameStats;
 import dev.comfyfluffy.caustica.rt.geometry.RtGeometryProfiling;
 import dev.comfyfluffy.caustica.rt.light.RetainedLightBatch;
 import dev.comfyfluffy.caustica.rt.light.RtRetainedLightScene;
-import dev.comfyfluffy.caustica.rt.material.RtMaterialRegistry;
+import dev.comfyfluffy.caustica.spi.host.MaterialEpochView;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
 import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
@@ -63,7 +62,7 @@ import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrainMesher.WorkerTessStat
  * keeps a map of resident 16³ sections. The 20 TPS tick maintains the desired window around the player
  * (slid incrementally on section-boundary crossings) and drains dirty events; the actual streaming —
  * snapshot dispatch, completion drain, and publish — runs once per render frame from
- * {@link RtComposite} with count-bounded completion and dispatch passes rather than a per-tick burst.
+ * the RT frame renderer with count-bounded completion and dispatch passes rather than a per-tick burst.
  * Residency follows vanilla because a section is only "desired" when its
  * chunk is loaded ({@code hasChunk}), so chunk load/unload drives build/free without any mixin.
  *
@@ -115,6 +114,7 @@ public final class RtTerrain {
     private static final RtTerrain INSTANCE = new RtTerrain();
 
     private boolean sceneInitialized;
+    private volatile MaterialEpochView materials;
     // Persistent palette snapshots for tessellation regions (render-thread only); invalidated on dirty
     // sections, column unload/window-leave, and full clears.
     private final RtSectionSnapshots snapshots = new RtSectionSnapshots();
@@ -253,12 +253,20 @@ public final class RtTerrain {
     }
 
     /**
-     * Per-render-frame streaming pass, driven by {@link RtComposite#composite}: publish completed builds
+     * Per-render-frame streaming pass driven by the RT frame renderer: publish completed builds
      * and dispatch immutable snapshots to workers, bounded by configured per-pass counts.
      */
     public static void frame(GpuContext ctx) {
         RtFrameStats.FRAME.max("terrainPendingGeometryGroups", INSTANCE.pendingGeometryGroups.size());
-        if (RtMaterialRegistry.INSTANCE.isReady()) INSTANCE.frameStream(ctx);
+        if (INSTANCE.materials != null) INSTANCE.frameStream(ctx);
+    }
+
+    public static void publishMaterials(MaterialEpochView materials) {
+        INSTANCE.materials = materials;
+    }
+
+    public static void clearMaterials() {
+        INSTANCE.materials = null;
     }
 
     public static void shutdown(GpuContext ctx) {
@@ -323,7 +331,7 @@ public final class RtTerrain {
             return;
         }
         noWorldClearApplied = false;
-        if (!RtMaterialRegistry.INSTANCE.isReady()) {
+        if (materials == null) {
             return; // resource reload gap: keep old work dormant until the new epoch requests a full clear
         }
 
@@ -368,7 +376,7 @@ public final class RtTerrain {
                 }
             }
         }
-        // Dispatch/drain/build normally runs per render frame (RtComposite → frame()). If no frame has
+        // Dispatch/drain/build normally runs per render frame. If no frame has
         // streamed recently — loading screen, no world rendering — drive it from here with the bigger
         // bounded fallback pass so the world still fills.
         if (System.nanoTime() - lastFrameStreamNanos > STREAM_FALLBACK_AFTER_NANOS) {
@@ -1009,7 +1017,8 @@ public final class RtTerrain {
         if (dirtyGroup != NO_DIRTY_GROUP && !dirtyGroups.containsKey(dirtyGroup)) {
             dirtyGroup = NO_DIRTY_GROUP;
         }
-        RtMaterialRegistry.Snapshot materialSnapshot = RtMaterialRegistry.INSTANCE.requireSnapshot();
+        MaterialEpochView materialSnapshot = materials;
+        if (materialSnapshot == null) return;
         SectionTask task = new SectionTask(key, token, sx << 4, sy << 4, sz << 4, dirtyGroup,
                 terrainEpoch, materialSnapshot.epoch(),
                 RtGeometryProfiling.extraction(RtGeometryProfiling.SourceKind.TERRAIN, 1));
@@ -1123,7 +1132,7 @@ public final class RtTerrain {
             long expected = inFlight.get(task.key);
             boolean tokenValid = expected == task.token;
             boolean valid = tokenValid && task.terrainEpoch == terrainEpoch
-                    && task.materialEpoch == RtMaterialRegistry.INSTANCE.epoch();
+                    && materials != null && task.materialEpoch == materials.epoch();
             if (!valid) {
                 if (tokenValid) {
                     inFlight.remove(task.key);

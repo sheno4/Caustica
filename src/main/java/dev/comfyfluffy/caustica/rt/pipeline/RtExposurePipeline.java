@@ -25,7 +25,7 @@ import java.nio.LongBuffer;
 
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
-import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
+import dev.comfyfluffy.caustica.api.gpu.GpuBuffer;
 import dev.comfyfluffy.caustica.rt.gen.ExposureHistPushData;
 import dev.comfyfluffy.caustica.rt.gen.ExposureResolvePushData;
 
@@ -138,12 +138,12 @@ final class RtExposurePipeline {
     void setResources(long colorView, long depthView, long albedoView,
                       GpuBuffer histogram, long exposureView, GpuBuffer state) {
         if (boundColorView != colorView || boundDepthView != depthView || boundAlbedoView != albedoView
-                || boundHistogramBufferForHist != histogram.handle) {
+                || boundHistogramBufferForHist != histogram.handle()) {
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 VkDescriptorImageInfo.Buffer colorInfo = VkDescriptorImageInfo.calloc(1, stack);
                 colorInfo.get(0).imageView(colorView).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
                 VkDescriptorBufferInfo.Buffer histInfo = VkDescriptorBufferInfo.calloc(1, stack);
-                histInfo.get(0).buffer(histogram.handle).offset(0).range(histogram.size);
+                histInfo.get(0).buffer(histogram.handle()).offset(0).range(histogram.size());
                 VkDescriptorImageInfo.Buffer depthInfo = VkDescriptorImageInfo.calloc(1, stack);
                 depthInfo.get(0).imageView(depthView).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
                 VkDescriptorImageInfo.Buffer albedoInfo = VkDescriptorImageInfo.calloc(1, stack);
@@ -162,17 +162,17 @@ final class RtExposurePipeline {
             boundColorView = colorView;
             boundDepthView = depthView;
             boundAlbedoView = albedoView;
-            boundHistogramBufferForHist = histogram.handle;
+            boundHistogramBufferForHist = histogram.handle();
         }
-        if (boundHistogramBufferForResolve != histogram.handle || boundExposureView != exposureView
-                || boundStateBuffer != state.handle) {
+        if (boundHistogramBufferForResolve != histogram.handle() || boundExposureView != exposureView
+                || boundStateBuffer != state.handle()) {
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 VkDescriptorBufferInfo.Buffer histInfo = VkDescriptorBufferInfo.calloc(1, stack);
-                histInfo.get(0).buffer(histogram.handle).offset(0).range(histogram.size);
+                histInfo.get(0).buffer(histogram.handle()).offset(0).range(histogram.size());
                 VkDescriptorImageInfo.Buffer exposureInfo = VkDescriptorImageInfo.calloc(1, stack);
                 exposureInfo.get(0).imageView(exposureView).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
                 VkDescriptorBufferInfo.Buffer stateInfo = VkDescriptorBufferInfo.calloc(1, stack);
-                stateInfo.get(0).buffer(state.handle).offset(0).range(state.size);
+                stateInfo.get(0).buffer(state.handle()).offset(0).range(state.size());
                 VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(EXPOSURE_RESOLVE_BINDING_COUNT, stack);
                 writes.get(EXPOSURE_RESOLVE_HIST_BINS).sType$Default().dstSet(resolveDescriptorSet).dstBinding(EXPOSURE_RESOLVE_HIST_BINS)
                         .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).pBufferInfo(histInfo);
@@ -182,9 +182,9 @@ final class RtExposurePipeline {
                         .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).pBufferInfo(stateInfo);
                 VK10.vkUpdateDescriptorSets(ctx.vk(), writes, null);
             }
-            boundHistogramBufferForResolve = histogram.handle;
+            boundHistogramBufferForResolve = histogram.handle();
             boundExposureView = exposureView;
-            boundStateBuffer = state.handle;
+            boundStateBuffer = state.handle();
         }
     }
 

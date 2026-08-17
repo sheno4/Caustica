@@ -7,7 +7,7 @@ import dev.comfyfluffy.caustica.api.pass.PassSetup;
 import dev.comfyfluffy.caustica.api.pass.RenderStage;
 import dev.comfyfluffy.caustica.minecraft.entity.RtEntityTextures;
 import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
-import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
+import dev.comfyfluffy.caustica.api.gpu.GpuBuffer;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.resources.model.ModelBakery;
 import net.minecraft.core.BlockPos;
@@ -48,7 +48,7 @@ public final class MinecraftDamageModifierPass implements CausticaRenderPass {
 
     @Override
     public void create(PassSetup setup) {
-        buffer = setup.context().createBuffer(BUFFER_BYTES,
+        buffer = setup.device().createBuffer(BUFFER_BYTES,
                 VK10.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                 false, ID + " entries");
         setup.publishWorldResource("minecraftDamageModifiers", buffer);
@@ -85,7 +85,7 @@ public final class MinecraftDamageModifierPass implements CausticaRenderPass {
             ByteBuffer data = stack.calloc(BUFFER_BYTES).order(ByteOrder.nativeOrder());
             writeEntries(data, entries, terrain != null ? terrain.blockX : 0,
                     terrain != null ? terrain.blockY : 0, terrain != null ? terrain.blockZ : 0);
-            VK10.vkCmdUpdateBuffer(frame.commandBuffer(), buffer.handle, 0L, data);
+            VK10.vkCmdUpdateBuffer(frame.commandBuffer(), buffer.handle(), 0L, data);
         }
     }
 

@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.rt.backend;
+package dev.comfyfluffy.caustica.spi.vulkan;
 
 import org.lwjgl.vulkan.VkCommandBuffer;
 

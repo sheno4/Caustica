@@ -1,8 +1,8 @@
-package dev.comfyfluffy.caustica.rt.backend;
+package dev.comfyfluffy.caustica.spi.vulkan;
 
 import org.lwjgl.vulkan.VkDevice;
 
-/** Host services required by the renderer's Vulkan orchestration. */
+/** Vulkan host services required by the renderer's device orchestration. */
 public interface VulkanRendererBackend {
     VkDevice device();
 

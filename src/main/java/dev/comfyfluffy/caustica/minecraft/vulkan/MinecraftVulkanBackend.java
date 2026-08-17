@@ -8,10 +8,10 @@ import dev.comfyfluffy.caustica.mixin.CommandEncoderAccessor;
 import dev.comfyfluffy.caustica.mixin.GpuDeviceAccessor;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtDeviceBringup;
-import dev.comfyfluffy.caustica.rt.backend.DebugMarkers;
-import dev.comfyfluffy.caustica.rt.backend.GraphicsSubmission;
-import dev.comfyfluffy.caustica.rt.backend.VulkanQueueRef;
-import dev.comfyfluffy.caustica.rt.backend.VulkanRendererBackend;
+import dev.comfyfluffy.caustica.spi.vulkan.DebugMarkers;
+import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
+import dev.comfyfluffy.caustica.spi.vulkan.VulkanQueueRef;
+import dev.comfyfluffy.caustica.spi.vulkan.VulkanRendererBackend;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkDevice;
 

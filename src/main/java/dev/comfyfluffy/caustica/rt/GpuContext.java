@@ -1,8 +1,10 @@
 package dev.comfyfluffy.caustica.rt;
 
 import dev.comfyfluffy.caustica.CausticaMod;
-import dev.comfyfluffy.caustica.rt.backend.VulkanQueueRef;
-import dev.comfyfluffy.caustica.rt.backend.VulkanRendererBackend;
+import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
+import dev.comfyfluffy.caustica.api.gpu.GpuDebugScope;
+import dev.comfyfluffy.caustica.spi.vulkan.VulkanQueueRef;
+import dev.comfyfluffy.caustica.spi.vulkan.VulkanRendererBackend;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.util.vma.Vma;
@@ -33,8 +35,8 @@ import org.lwjgl.vulkan.VkPhysicalDeviceProperties2;
 import org.lwjgl.vulkan.VkPhysicalDeviceRayTracingPipelinePropertiesKHR;
 import org.lwjgl.vulkan.VkSubmitInfo;
 
-import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
-import dev.comfyfluffy.caustica.rt.accel.GpuImage;
+import dev.comfyfluffy.caustica.api.gpu.GpuBuffer;
+import dev.comfyfluffy.caustica.api.gpu.GpuImage;
 
 import java.nio.LongBuffer;
 import java.util.function.Consumer;
@@ -46,10 +48,10 @@ import static org.lwjgl.vulkan.KHRRayTracingPipeline.VK_STRUCTURE_TYPE_PHYSICAL_
  * lacks the flag), the graphics queue + a transient command pool for synchronous one-shot
  * submits, and the RT pipeline limits (SBT handle size / alignment). Single owner for the
  * plumbing every RT module needs — and, since {@link dev.comfyfluffy.caustica.api.pass.CausticaRenderPass}
- * hands one to every registered pass via {@code PassSetup.context()}, raster passes too.
+ * hands a narrow device view to every registered pass via {@code PassSetup.device()}, raster passes too.
  * Obtained lazily via {@link #get}.
  */
-public final class GpuContext {
+public final class GpuContext implements GpuDevice {
     private static GpuContext instance;
     private static VulkanRendererBackend backend;
 
@@ -187,8 +189,20 @@ public final class GpuContext {
         return host;
     }
 
+    @Override
     public VkDevice vk() {
         return vk;
+    }
+
+    @Override
+    public void nameObject(int objectType, long handle, String label) {
+        RtDebugLabels.name(this, objectType, handle, label);
+    }
+
+    @Override
+    public GpuDebugScope debugScope(VkCommandBuffer commandBuffer, String label) {
+        RtDebugLabels.Scope scope = RtDebugLabels.scope(this, commandBuffer, label);
+        return scope::close;
     }
 
     public int graphicsQueueFamilyIndex() {
@@ -241,6 +255,7 @@ public final class GpuContext {
     }
 
     /** Create a VMA buffer; {@code SHADER_DEVICE_ADDRESS} is always added so it has a device address. */
+    @Override
     public GpuBuffer createBuffer(long size, int usage, boolean hostVisible, String label) {
         return createBuffer(size, usage, hostVisible, label, false,
                 hostVisible ? Vma.VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT : 0, 0L);
@@ -319,8 +334,12 @@ public final class GpuContext {
                 throw new IllegalStateException(label + " device address 0x"
                         + Long.toUnsignedString(address, 16) + " is not aligned to " + addressAlignment);
             }
-            return new GpuBuffer(vma, handle, allocation, address, hostVisible ? info.pMappedData() : 0L,
-                    size, usage, hostVisible, label);
+            VulkanDiagnostics.registerBuffer(address, size, handle, label);
+            long registeredAddress = address;
+            long registeredHandle = handle;
+            return new VmaGpuBuffer(vma, handle, allocation, address, hostVisible ? info.pMappedData() : 0L,
+                    size, usage, hostVisible, label,
+                    () -> VulkanDiagnostics.unregisterBuffer(registeredAddress, registeredHandle));
         } catch (Throwable t) {
             if (handle != 0L) {
                 Vma.vmaDestroyBuffer(vma, handle, allocation);
@@ -335,6 +354,7 @@ public final class GpuContext {
      * preserved for the tonemap seam; the world-target copy stays R8G8B8A8 to match the host LDR target
      * for the vkCmdCopyImage round-trip (copy requires texel-size-compatible formats).
      */
+    @Override
     public GpuImage createStorageImage(int width, int height, int format, String label) {
         return createStorageImage(width, height, format, label, 0);
     }
@@ -345,6 +365,7 @@ public final class GpuContext {
      * dynamic rendering (a plain storage image is invalid as a {@code VkRenderingInfo} colour attachment;
      * see {@code VUID-VkRenderingInfo-colorAttachmentCount-06087}).
      */
+    @Override
     public GpuImage createStorageImage(int width, int height, int format, String label, int extraUsage) {
         int usage = VK10.VK_IMAGE_USAGE_STORAGE_BIT | VK10.VK_IMAGE_USAGE_SAMPLED_BIT
                 | VK10.VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK10.VK_IMAGE_USAGE_TRANSFER_DST_BIT | extraUsage;
@@ -391,7 +412,7 @@ public final class GpuContext {
                         0, null, null, b);
             }
         });
-        return new GpuImage(vma, vk, image, allocation, view, width, height, format, 1, usage, label);
+        return new VmaGpuImage(vma, vk, image, allocation, view, width, height, format, 1, usage, label);
     }
 
     private void requireStorageImageSupport(int width, int height, int format, int usage, String label) {
@@ -479,7 +500,7 @@ public final class GpuContext {
                         0, null, null, b);
             }
         });
-        return new GpuImage(vma, vk, image, allocation, view, width, height, format, 1, usage, label);
+        return new VmaGpuImage(vma, vk, image, allocation, view, width, height, format, 1, usage, label);
     }
 
     /**

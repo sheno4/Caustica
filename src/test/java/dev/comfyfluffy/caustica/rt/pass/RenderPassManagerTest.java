@@ -4,7 +4,7 @@ import dev.comfyfluffy.caustica.api.pass.CausticaRenderPass;
 import dev.comfyfluffy.caustica.api.pass.PassFrame;
 import dev.comfyfluffy.caustica.api.pass.PassSetup;
 import dev.comfyfluffy.caustica.api.pass.RenderStage;
-import dev.comfyfluffy.caustica.rt.accel.GpuImage;
+import dev.comfyfluffy.caustica.api.gpu.GpuImage;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import org.junit.jupiter.api.Test;
 
@@ -18,8 +18,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class RenderPassManagerTest {
-    private static final GpuImage FAKE_IMAGE =
-            new GpuImage(0L, null, 0L, 0L, 0L, 1, 1, 0, 1, 0, "fake");
+    private static final GpuImage FAKE_IMAGE = new FakeImage("fake");
 
     @Test
     void ordersByStageThenTopologicallyWithinAStage() {
@@ -66,7 +65,7 @@ final class RenderPassManagerTest {
     // reconstruction rather than a post target holding last frame's contents.
     @Test
     void anEmptyPostChainLeavesTheSceneAtTheReconstruction() {
-        GpuImage reconstruction = new GpuImage(1L, null, 0L, 0L, 0L, 1, 1, 0, 1, 0, "reconstruction");
+        GpuImage reconstruction = new FakeImage("reconstruction");
         RenderPassManager manager = new RenderPassManager(null, List.of());
         manager.setReconstructedColor(reconstruction);
         manager.setSceneColorTargets(FAKE_IMAGE, FAKE_IMAGE);
@@ -142,6 +141,35 @@ final class RenderPassManagerTest {
 
     private static ResourceId identifierOf(String path) {
         return ResourceId.of("caustica", path);
+    }
+
+    private static final class FakeImage implements GpuImage {
+        private final String label;
+        private boolean destroyed;
+
+        private FakeImage(String label) {
+            this.label = label;
+        }
+
+        @Override public long image() { return 0L; }
+        @Override public long view() { return 0L; }
+        @Override public int width() { return 1; }
+        @Override public int height() { return 1; }
+        @Override public int format() { return 0; }
+        @Override public int mipLevels() { return 1; }
+        @Override public int usage() { return 0; }
+        @Override public String label() { return label; }
+        @Override public boolean isDestroyed() { return destroyed; }
+
+        @Override
+        public void requireNotDestroyed() {
+            if (destroyed) throw new IllegalStateException(label + " was already destroyed");
+        }
+
+        @Override
+        public void destroy() {
+            destroyed = true;
+        }
     }
 
     private static class FakePass implements CausticaRenderPass {

@@ -10,11 +10,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 final class RtSceneGeometryCompactionStateTest {
     @Test
     void providerPayloadPreservesPerGeometryBuildOptions() {
-        RtSceneGeometryManager.ProviderPayload payload = new RtSceneGeometryManager.ProviderPayload(null,
+        GeometryUpdates.ProviderPayload payload = new GeometryUpdates.ProviderPayload(null,
                 SceneGeometrySink.BuildOptions.MINIMIZE_MEMORY);
 
         assertTrue(payload.buildOptions().minimizeMemory());
-        assertFalse(new RtSceneGeometryManager.ProviderPayload(null).buildOptions().minimizeMemory());
+        assertFalse(new GeometryUpdates.ProviderPayload(null).buildOptions().minimizeMemory());
     }
 
     @Test

@@ -19,11 +19,18 @@ import java.util.Map;
  * epoch is destroyed, and a newly published epoch requires a source-frame boundary before it may be traced.
  */
 final class RtWorldResources {
-    private final RtProgramManager programManager = RtProgramManager.INSTANCE;
-    final RtMaterialEpoch materialEpoch = new RtMaterialEpoch();
+    private final RtProgramManager programManager;
+    private final ProviderManager providers;
+    final RtMaterialEpoch materialEpoch;
     RtPipeline pipeline;
     int boundPassResourceGeneration = -1;
     boolean traceGate;
+
+    RtWorldResources(RtProgramManager programManager, ProviderManager providers) {
+        this.programManager = programManager;
+        this.providers = providers;
+        this.materialEpoch = new RtMaterialEpoch(providers);
+    }
 
     void attachSceneGeometry(RtSceneGeometryManager geometry) {
         materialEpoch.attachSceneGeometry(geometry);
@@ -43,7 +50,7 @@ final class RtWorldResources {
     }
 
     void invalidateMaterialBindings() {
-        ProviderManager.INSTANCE.onWorldChanged();
+        providers.onWorldChanged();
         traceGate = true;
     }
 
@@ -67,12 +74,12 @@ final class RtWorldResources {
             return null;
         }
 
-        int bindlessCapacity = ProviderManager.INSTANCE.bindlessTextureCapacity();
+        int bindlessCapacity = providers.bindlessTextureCapacity();
         RtPipeline created = null;
         try {
             created = createPipeline(context, program, bindlessCapacity);
             if (frames.output != null) {
-                created.setStorageImage(frames.output.view);
+                created.setStorageImage(frames.output.view());
                 frames.bindGuideImages(created);
             }
             materialEpoch.publish(context, created, bindlessCapacity);
@@ -106,7 +113,7 @@ final class RtWorldResources {
             return;
         }
         RtProgramManager.Program candidate = programManager.candidate();
-        int desiredCapacity = ProviderManager.INSTANCE.bindlessTextureCapacity();
+        int desiredCapacity = providers.bindlessTextureCapacity();
         if (desiredCapacity > materialEpoch.bindlessTextureCapacity()) {
             invalidateMaterialBindings();
             context.gpuExecutor().drainAndWaitIdle();
@@ -167,7 +174,7 @@ final class RtWorldResources {
         try {
             replacement = createPipeline(context, candidate, materialEpoch.bindlessTextureCapacity());
             if (frames.output != null) {
-                replacement.setStorageImage(frames.output.view);
+                replacement.setStorageImage(frames.output.view());
                 frames.bindGuideImages(replacement);
             }
             materialEpoch.bindCurrent(context, replacement);
@@ -196,7 +203,7 @@ final class RtWorldResources {
             }
             RenderPassManager.WorldResource resource = entry.getValue();
             if (resource.buffer() != null) {
-                target.setPassResourceBuffer(binding.index(), resource.buffer().handle, resource.buffer().size);
+                target.setPassResourceBuffer(binding.index(), resource.buffer().handle(), resource.buffer().size());
             } else {
                 target.setPassResource(binding.index(), resource.view(), resource.sampler());
             }

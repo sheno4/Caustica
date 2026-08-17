@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.client;
 
-import dev.comfyfluffy.caustica.rt.RtComposite;
+import dev.comfyfluffy.caustica.rt.RtRuntime;
 import dev.comfyfluffy.caustica.rt.pipeline.RtExposure;
 import dev.comfyfluffy.caustica.mixin.DebugScreenEntriesAccessor;
 import net.minecraft.client.gui.components.debug.DebugScreenDisplayer;
@@ -24,12 +24,12 @@ public final class RtExposureDebugEntry implements DebugScreenEntry {
     @Override
     public void display(DebugScreenDisplayer displayer, @Nullable Level serverOrClientLevel,
                         @Nullable LevelChunk clientChunk, @Nullable LevelChunk serverChunk) {
-        RtComposite composite = RtComposite.INSTANCE;
-        if (composite.hasFailed()) {
+        RtRuntime runtime = RtRuntime.INSTANCE;
+        if (runtime.rendererFailed()) {
             return; // vanilla is rendering this frame; the exposure state is stale/irrelevant.
         }
-        RtExposure exposure = composite.exposure();
-        if (!exposure.ready()) {
+        RtExposure exposure = runtime.exposureOrNull();
+        if (exposure == null || !exposure.ready()) {
             return; // RT hasn't produced an exposure value yet (no world, or still bringing up).
         }
         String line = exposure.debugSummaryLine();

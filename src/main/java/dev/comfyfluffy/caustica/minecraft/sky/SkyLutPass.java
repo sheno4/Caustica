@@ -10,10 +10,10 @@ import dev.comfyfluffy.caustica.api.pass.PassSetup;
 import dev.comfyfluffy.caustica.api.pass.RenderStage;
 import com.mojang.blaze3d.textures.GpuTextureView;
 import com.mojang.blaze3d.vulkan.VulkanGpuTextureView;
-import dev.comfyfluffy.caustica.rt.GpuContext;
+import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
 import dev.comfyfluffy.caustica.minecraft.MinecraftLightingCalibration;
-import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
-import dev.comfyfluffy.caustica.rt.accel.GpuImage;
+import dev.comfyfluffy.caustica.api.gpu.GpuBuffer;
+import dev.comfyfluffy.caustica.api.gpu.GpuImage;
 import dev.comfyfluffy.caustica.rt.gen.SkyInputsData;
 import dev.comfyfluffy.caustica.api.pass.ComputeDispatch;
 import dev.comfyfluffy.caustica.api.pass.PassShaderCompiler;
@@ -85,7 +85,7 @@ public final class SkyLutPass implements CausticaRenderPass {
     static final List<ComputeDispatch.Binding> SCATTER_BINDINGS = List.of(
             ComputeDispatch.Binding.STORAGE, ComputeDispatch.Binding.SAMPLED, ComputeDispatch.Binding.SAMPLED);
 
-    private GpuContext ctx;
+    private GpuDevice ctx;
     private long sampler;
     /**
      * Point sampling for the celestials atlas only. The LUT sampler above is linear because a baked sky
@@ -134,7 +134,7 @@ public final class SkyLutPass implements CausticaRenderPass {
 
     @Override
     public void create(PassSetup setup) {
-        ctx = setup.context();
+        ctx = setup.device();
         // The pass object outlives a RenderPassManager/GPU-context instance. Force the new manager to
         // observe and publish the host atlas even when Vulkan recycles the same numeric view handle.
         celestialAtlasView = 0L;
@@ -189,7 +189,7 @@ public final class SkyLutPass implements CausticaRenderPass {
         // The sky slot reads every one of these values from this buffer; the bakes below read the same
         // bytes as a push constant. One derivation, two consumers.
         SkyInputsData inputs = skyInputs(state);
-        inputs.write(MemoryUtil.memByteBuffer(skyInputsBuffer.mapped, SkyInputsData.BYTE_SIZE)
+        inputs.write(MemoryUtil.memByteBuffer(skyInputsBuffer.mapped(), SkyInputsData.BYTE_SIZE)
                 .order(ByteOrder.nativeOrder()));
         skyInputsBuffer.flush();
         byte[] push = pushConstants(inputs);
@@ -230,7 +230,7 @@ public final class SkyLutPass implements CausticaRenderPass {
     /**
      * This pass's own snapshot of Minecraft's celestial state, the look package's photometric lighting
      * anchors, and the {@code sky.*} geometry options, gathered fresh every time it's called rather than
-     * shared with anything else. Mirrors what {@code RtComposite.skyPush()} computes for the world push's
+     * shared with anything else. Mirrors what the frame renderer computes for the world push's
      * sky fields — deliberately a second, independent read rather than a shared one; see the class javadoc.
      */
     private static SkyState gatherSkyState(OptionValues options) {
@@ -238,7 +238,7 @@ public final class SkyLutPass implements CausticaRenderPass {
         float partial = mc.getDeltaTracker().getGameTimeDeltaPartialTick(false);
         var probe = mc.gameRenderer.mainCamera().attributeProbe();
         int seaLevel = mc.level != null ? mc.level.getSeaLevel() : 0;
-        // No direct camera-position accessor is reachable from here the way RtComposite reads it (its
+        // No direct camera-position accessor is reachable from here the way the frame renderer reads it (its
         // camY arrives pre-captured off the level-projection mixin hook); the render camera's entity eye
         // height is a close enough independent read for a LUT bake, and it's what "gather it yourself"
         // means for code that isn't in that capture path.

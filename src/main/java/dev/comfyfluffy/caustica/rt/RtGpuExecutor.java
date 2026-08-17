@@ -1,7 +1,8 @@
 package dev.comfyfluffy.caustica.rt;
 
-import dev.comfyfluffy.caustica.rt.backend.GraphicsSubmission;
-import dev.comfyfluffy.caustica.rt.backend.VulkanQueueRef;
+import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
+import dev.comfyfluffy.caustica.api.gpu.GpuFrameUse;
+import dev.comfyfluffy.caustica.spi.vulkan.VulkanQueueRef;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VK10;
@@ -132,7 +133,7 @@ public final class RtGpuExecutor {
             awaitBuildSubmission(waitValue);
             enqueueBuildWait(submission, buildTimeline, waitValue);
         }
-        return new GraphicsUse(nextGraphicsValue.incrementAndGet());
+        return new GraphicsUse(this, nextGraphicsValue.incrementAndGet());
     }
 
     /** Signal the frame token after its final graphics consumer. */
@@ -160,7 +161,7 @@ public final class RtGpuExecutor {
     /** Latest recorded frame token that can reference currently published RT state. */
     public GraphicsUse latestGraphicsUse() {
         assertRenderThread();
-        return new GraphicsUse(latestGraphicsUseValue.get());
+        return new GraphicsUse(this, latestGraphicsUseValue.get());
     }
 
     /** Rethrow a latched executor failure on the calling thread. */
@@ -553,11 +554,24 @@ public final class RtGpuExecutor {
     }
 
     /** Immutable reservation for one graphics frame's completion on the shared RT graphics timeline. */
-    public static final class GraphicsUse {
+    public static final class GraphicsUse implements GpuFrameUse {
+        private final RtGpuExecutor owner;
         private final long value;
 
-        private GraphicsUse(long value) {
+        private GraphicsUse(RtGpuExecutor owner, long value) {
+            this.owner = owner;
             this.value = value;
+        }
+
+        @Override
+        public void awaitCompletion() {
+            owner.assertRenderThread();
+            owner.graphicsUseWaiter().awaitValue(value);
+        }
+
+        @Override
+        public void retire(Runnable cleanup) {
+            owner.retireAfterGraphics(this, cleanup);
         }
     }
 
@@ -595,6 +609,14 @@ public final class RtGpuExecutor {
             if (requiredValue <= completedValue) {
                 return false;
             }
+            checkExecutorFailure();
+            waitTimeline(graphicsTimeline, requiredValue);
+            completedValue = requiredValue;
+            return true;
+        }
+
+        private boolean awaitValue(long requiredValue) {
+            if (requiredValue <= completedValue) return false;
             checkExecutorFailure();
             waitTimeline(graphicsTimeline, requiredValue);
             completedValue = requiredValue;

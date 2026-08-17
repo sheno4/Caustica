@@ -6,10 +6,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
 
-final class RtAccelInstanceBatchTest {
+final class TlasBuilderInstanceBatchTest {
     @Test
     void growthKeepsEveryStructureOfArraysLaneAligned() {
-        RtAccel.InstanceBatch batch = new RtAccel.InstanceBatch();
+        TlasBuilder.InstanceBatch batch = new TlasBuilder.InstanceBatch();
         batch.reset(1);
         float[] initialTransforms = batch.transforms;
         long[] initialAddresses = batch.blasDeviceAddresses;
@@ -38,7 +38,7 @@ final class RtAccelInstanceBatchTest {
 
     @Test
     void resetReusesCapacityAndOverwritesFromRecordZero() {
-        RtAccel.InstanceBatch batch = new RtAccel.InstanceBatch();
+        TlasBuilder.InstanceBatch batch = new TlasBuilder.InstanceBatch();
         batch.reset(20);
         batch.append(transform(1), 0f, 0f, 0f, 11L, 1, 2, 3);
         float[] transforms = batch.transforms;

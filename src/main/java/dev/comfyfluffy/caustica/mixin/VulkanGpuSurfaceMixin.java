@@ -9,7 +9,6 @@ import com.mojang.blaze3d.vulkan.VulkanGpuSurface;
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.rt.RtDeviceBringup;
-import dev.comfyfluffy.caustica.rt.RtFramePresenter;
 import dev.comfyfluffy.caustica.rt.RtHdr;
 import dev.comfyfluffy.caustica.rt.RtReflex;
 import dev.comfyfluffy.caustica.rt.RtRuntime;
@@ -17,7 +16,7 @@ import dev.comfyfluffy.caustica.minecraft.MinecraftFrameAdapter;
 import dev.comfyfluffy.caustica.minecraft.MinecraftUiOverlay;
 import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftVulkanBackend;
 import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
-import dev.comfyfluffy.caustica.rt.backend.GraphicsSubmission;
+import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
 import it.unimi.dsi.fastutil.longs.LongList;
 import net.minecraft.client.Minecraft;
 import org.lwjgl.system.MemoryStack;
@@ -281,7 +280,7 @@ public abstract class VulkanGpuSurfaceMixin {
 	 * Emit PRESENT_START/END markers around the real frame's present and, when
 	 * {@code VK_KHR_present_id} is enabled) chaining a {@code VkPresentIdKHR} onto it so the marker's
 	 * {@code presentID} correlates with this exact present call. The FG-generated extra presents
-	 * ({@link RtFramePresenter}) are deliberately NOT marked/present-id'd — Reflex paces/measures the real
+	 * (RT-generated frames) are deliberately NOT marked/present-id'd — Reflex paces/measures the real
 	 * frame only. No-op passthrough unless Reflex has successfully applied sleep mode for this swapchain.
 	 */
 	@Redirect(method = "present",
@@ -334,29 +333,29 @@ public abstract class VulkanGpuSurfaceMixin {
 		if (this.currentImageIndex < 0) {
 			return;
 		}
-		RtFramePresenter presenter = RtFramePresenter.INSTANCE;
+		RtRuntime runtime = RtRuntime.INSTANCE;
 		long swapchainImage = this.swapchainImages.getLong(this.currentImageIndex);
 		long acquireSem = this.acquireSemaphores[this.currentAcquireSemaphore];
 		long presentSem = this.presentSemaphores[this.currentImageIndex];
-		if (presenter.isHdrPresentActive()) {
+		if (runtime.isHdrPresentActive()) {
 			VulkanCommandEncoder enc = (VulkanCommandEncoder) commandEncoder;
 			GraphicsSubmission submission = MinecraftVulkanBackend.wrap(enc);
 			UiPresentationResources ui = MinecraftFrameAdapter.INSTANCE.captureUiPresentation();
-			presenter.presentHdr(submission, swapchainImage, this.swapchainWidth, this.swapchainHeight,
+			runtime.presentHdr(submission, swapchainImage, this.swapchainWidth, this.swapchainHeight,
 					acquireSem, presentSem, ui);
 			if (ui.populated() && ui.colorView() != 0L) {
 				MinecraftUiOverlay.markConsumed();
 			}
-			caustica$presentGeneratedFramesHdr(submission, presenter, ui);
+			caustica$presentGeneratedFramesHdr(submission, ui);
 			ci.cancel();
 			return;
 		}
 		// Non-RT frame (menu, title panorama, loading screen) on a PQ swapchain: vanilla's raw SDR blit would
 		// misdisplay (SDR bytes reinterpreted as PQ codes). Convert sRGB -> PQ at paper white instead. Falls
 		// through to vanilla SDR if conversion resources aren't ready or the source view is not a Vulkan view.
-		if (presenter.isPqSdrPresentActive()) {
+		if (runtime.isPqSdrPresentActive()) {
 			long sdrView = caustica$vkImageView(textureView);
-			if (sdrView != 0L && presenter.presentSdrToPq(
+			if (sdrView != 0L && runtime.presentSdrToPq(
 					MinecraftVulkanBackend.wrap((VulkanCommandEncoder) commandEncoder), swapchainImage,
 					this.swapchainWidth, this.swapchainHeight, sdrView, acquireSem, presentSem)) {
 				ci.cancel();
@@ -389,14 +388,14 @@ public abstract class VulkanGpuSurfaceMixin {
 	/**
 	 * After Minecraft blits the real frame into its acquired swapchain image, evaluate DLSS Frame Generation
 	 * (but before {@code present()} shows it), present the generated frame(s) into additional swapchain images
-	 * via {@link RtFramePresenter}, so the display order is generated-then-real. Runs only on the normal
+	 * through the RT runtime, so the display order is generated-then-real. Runs only on the normal
 	 * present path — the HDR/PQ present hooks cancel {@code blitFromTexture} at HEAD, so this TAIL is
 	 * skipped there; HDR evaluates frame generation from its PQ backbuffer in the explicit HDR hook.
 	 */
 	@Inject(method = "blitFromTexture", at = @At("TAIL"))
 	private void caustica$presentGeneratedFrames(CommandEncoderBackend commandEncoder, GpuTextureView textureView, CallbackInfo ci) {
 		if (this.currentImageIndex < 0
-				|| !RtFramePresenter.INSTANCE.isActive(Minecraft.getInstance().level != null)) {
+				|| !RtRuntime.INSTANCE.frameGenerationActive(Minecraft.getInstance().level != null)) {
 			return;
 		}
 		long srcImage = textureView.texture() instanceof com.mojang.blaze3d.vulkan.VulkanGpuTexture t ? t.vkImage() : 0L;
@@ -405,7 +404,7 @@ public abstract class VulkanGpuSurfaceMixin {
 			return;
 		}
 		int generatedCount = dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg.INSTANCE.effectiveMultiFrameCount();
-		RtFramePresenter.INSTANCE.prepareExtraFrames(
+		RtRuntime.INSTANCE.prepareGeneratedFrames(
 				MinecraftVulkanBackend.wrap((VulkanCommandEncoder) commandEncoder), this.device.vkDevice(),
 				this.swapchain, this.swapchainImages, this.presentSemaphores,
 				this.swapchainWidth, this.swapchainHeight,
@@ -421,19 +420,19 @@ public abstract class VulkanGpuSurfaceMixin {
 	 * {@code presentHdr} call, but mirrors the defensive {@code srcImage == 0L} check in the SDR path).
 	 */
 	@Unique
-	private void caustica$presentGeneratedFramesHdr(GraphicsSubmission submission, RtFramePresenter presenter,
+	private void caustica$presentGeneratedFramesHdr(GraphicsSubmission submission,
 			UiPresentationResources ui) {
 		if (this.currentImageIndex < 0
-				|| !RtFramePresenter.INSTANCE.isActive(Minecraft.getInstance().level != null)) {
+				|| !RtRuntime.INSTANCE.frameGenerationActive(Minecraft.getInstance().level != null)) {
 			return;
 		}
-		long hdrView = presenter.hdrBackbufferView();
-		long hdrImage = presenter.hdrBackbufferImage();
+		long hdrView = RtRuntime.INSTANCE.hdrBackbufferView();
+		long hdrImage = RtRuntime.INSTANCE.hdrBackbufferImage();
 		if (hdrImage == 0L) {
 			return;
 		}
 		int generatedCount = dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg.INSTANCE.effectiveMultiFrameCount();
-		RtFramePresenter.INSTANCE.prepareExtraFrames(submission, this.device.vkDevice(), this.swapchain, this.swapchainImages,
+		RtRuntime.INSTANCE.prepareGeneratedFrames(submission, this.device.vkDevice(), this.swapchain, this.swapchainImages,
 				this.presentSemaphores, this.swapchainWidth, this.swapchainHeight,
 				hdrView, hdrImage, this.swapchainWidth, this.swapchainHeight, generatedCount, true, ui);
 	}
@@ -443,6 +442,6 @@ public abstract class VulkanGpuSurfaceMixin {
 	// presents the real frame, giving display order generated-then-real.
 	@Inject(method = "present", at = @At("HEAD"))
 	private void caustica$flushGeneratedPresents(CallbackInfo ci) {
-		RtFramePresenter.INSTANCE.flushPendingPresents(this.swapchain, this.presentQueue);
+		RtRuntime.INSTANCE.flushGeneratedPresents(this.swapchain, this.presentQueue);
 	}
 }

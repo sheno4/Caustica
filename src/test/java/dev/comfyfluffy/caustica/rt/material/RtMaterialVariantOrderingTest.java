@@ -31,7 +31,7 @@ final class RtMaterialVariantOrderingTest {
 
     /**
      * A scene source picks a profile from the declared set and the registry must already hold a compiled
-     * variant for it — {@code Snapshot.resolve} runs on geometry workers and cannot intern a new one. A
+     * variant for it — {@code MaterialEpochSnapshot.resolve} runs on geometry workers and cannot intern a new one. A
      * profile that exists but was never compiled throws only once a chunk containing that material meshes,
      * which is far too late.
      */

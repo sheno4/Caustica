@@ -36,11 +36,8 @@ import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.LongBuffer;
 
-import dev.comfyfluffy.caustica.rt.GpuContext;
-import dev.comfyfluffy.caustica.rt.RtDebugLabels;
-import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
-
-import static dev.comfyfluffy.caustica.rt.GpuContext.check;
+import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
+import dev.comfyfluffy.caustica.api.gpu.GpuFrameUse;
 import static dev.comfyfluffy.caustica.rt.pipeline.RtBindings.OVERLAY_IMAGE;
 import static dev.comfyfluffy.caustica.rt.pipeline.RtBindings.OVERLAY_SAMPLER;
 import static dev.comfyfluffy.caustica.rt.pipeline.RtBindings.OVERLAY_TLAS;
@@ -59,6 +56,12 @@ public final class OverlayPipelines {
     private static final String SHADER_DIR = "/caustica/shaders/pipelines/";
 
     private OverlayPipelines() {
+    }
+
+    private static void check(int result, String operation) {
+        if (result != VK10.VK_SUCCESS) {
+            throw new IllegalStateException(operation + " failed: " + result);
+        }
     }
 
     /** Vertex layouts available to overlay passes (one interleaved binding at binding 0). */
@@ -183,7 +186,7 @@ public final class OverlayPipelines {
             return this;
         }
 
-        public Pipeline build(GpuContext ctx, String label) {
+        public Pipeline build(GpuDevice ctx, String label) {
             if (attachmentFormat == 0) {
                 throw new IllegalStateException("overlay pipeline '" + label + "' has no attachment format");
             }
@@ -191,7 +194,7 @@ public final class OverlayPipelines {
         }
     }
 
-    private static Pipeline createGraphics(GpuContext ctx, Spec spec, String label) {
+    private static Pipeline createGraphics(GpuDevice ctx, Spec spec, String label) {
         VkDevice vk = ctx.vk();
         try (MemoryStack stack = MemoryStack.stackPush()) {
             LongBuffer p = stack.mallocLong(1);
@@ -207,7 +210,7 @@ public final class OverlayPipelines {
             }
             check(VK10.vkCreatePipelineLayout(vk, layoutCi, null, p), "vkCreatePipelineLayout(" + label + ")");
             long layout = p.get(0);
-            RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_PIPELINE_LAYOUT, layout, label + " pipeline layout");
+            ctx.nameObject(VK10.VK_OBJECT_TYPE_PIPELINE_LAYOUT, layout, label + " pipeline layout");
 
             long vertModule = loadModule(vk, stack, spec.vertSpv);
             long fragModule = loadModule(vk, stack, spec.fragSpv);
@@ -295,7 +298,7 @@ public final class OverlayPipelines {
             check(VK10.vkCreateGraphicsPipelines(vk, VK10.VK_NULL_HANDLE, gpci, null, pPipeline),
                     "vkCreateGraphicsPipelines(" + label + ")");
             long handle = pPipeline.get(0);
-            RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_PIPELINE, handle, label + " pipeline");
+            ctx.nameObject(VK10.VK_OBJECT_TYPE_PIPELINE, handle, label + " pipeline");
             VK10.vkDestroyShaderModule(vk, vertModule, null);
             VK10.vkDestroyShaderModule(vk, fragModule, null);
             return new Pipeline(layout, handle);
@@ -344,7 +347,7 @@ public final class OverlayPipelines {
         }
 
         /** Point the overlay image binding at {@code view} (GENERAL layout); no-op when already bound. */
-        public void bind(GpuContext ctx, long view) {
+        public void bind(GpuDevice ctx, long view) {
             if (boundView == view) {
                 return;
             }
@@ -365,7 +368,7 @@ public final class OverlayPipelines {
         }
     }
 
-    public static ReadOnlyImageSet readOnlyImageSet(GpuContext ctx, int stageFlags, String label) {
+    public static ReadOnlyImageSet readOnlyImageSet(GpuDevice ctx, int stageFlags, String label) {
         VkDevice vk = ctx.vk();
         try (MemoryStack stack = MemoryStack.stackPush()) {
             LongBuffer p = stack.mallocLong(1);
@@ -375,21 +378,21 @@ public final class OverlayPipelines {
             VkDescriptorSetLayoutCreateInfo dslci = VkDescriptorSetLayoutCreateInfo.calloc(stack).sType$Default().pBindings(binds);
             check(VK10.vkCreateDescriptorSetLayout(vk, dslci, null, p), "vkCreateDescriptorSetLayout(" + label + ")");
             long dsl = p.get(0);
-            RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT, dsl, label + " descriptor set layout");
+            ctx.nameObject(VK10.VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT, dsl, label + " descriptor set layout");
 
             VkDescriptorPoolSize.Buffer poolSizes = VkDescriptorPoolSize.calloc(1, stack);
             poolSizes.get(0).type(VK10.VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE).descriptorCount(1);
             VkDescriptorPoolCreateInfo dpci = VkDescriptorPoolCreateInfo.calloc(stack).sType$Default().maxSets(1).pPoolSizes(poolSizes);
             check(VK10.vkCreateDescriptorPool(vk, dpci, null, p), "vkCreateDescriptorPool(" + label + ")");
             long pool = p.get(0);
-            RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_DESCRIPTOR_POOL, pool, label + " descriptor pool");
+            ctx.nameObject(VK10.VK_OBJECT_TYPE_DESCRIPTOR_POOL, pool, label + " descriptor pool");
 
             VkDescriptorSetAllocateInfo dsai = VkDescriptorSetAllocateInfo.calloc(stack).sType$Default()
                     .descriptorPool(pool).pSetLayouts(stack.longs(dsl));
             LongBuffer pSet = stack.mallocLong(1);
             check(VK10.vkAllocateDescriptorSets(vk, dsai, pSet), "vkAllocateDescriptorSets(" + label + ")");
             long set = pSet.get(0);
-            RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_DESCRIPTOR_SET, set, label + " descriptor set");
+            ctx.nameObject(VK10.VK_OBJECT_TYPE_DESCRIPTOR_SET, set, label + " descriptor set");
             return new ReadOnlyImageSet(dsl, pool, set);
         }
     }
@@ -414,7 +417,7 @@ public final class OverlayPipelines {
         }
 
         /** Point binding 0 at {@code view}, sampled with {@code sampler}; no-op when already bound. */
-        public void bind(GpuContext ctx, long view, long sampler) {
+        public void bind(GpuDevice ctx, long view, long sampler) {
             if (boundView == view) {
                 return;
             }
@@ -435,7 +438,7 @@ public final class OverlayPipelines {
         }
     }
 
-    public static SampledImageSet sampledImageSet(GpuContext ctx, int stageFlags, String label) {
+    public static SampledImageSet sampledImageSet(GpuDevice ctx, int stageFlags, String label) {
         VkDevice vk = ctx.vk();
         try (MemoryStack stack = MemoryStack.stackPush()) {
             LongBuffer p = stack.mallocLong(1);
@@ -445,21 +448,21 @@ public final class OverlayPipelines {
             VkDescriptorSetLayoutCreateInfo dslci = VkDescriptorSetLayoutCreateInfo.calloc(stack).sType$Default().pBindings(binds);
             check(VK10.vkCreateDescriptorSetLayout(vk, dslci, null, p), "vkCreateDescriptorSetLayout(" + label + ")");
             long dsl = p.get(0);
-            RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT, dsl, label + " descriptor set layout");
+            ctx.nameObject(VK10.VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT, dsl, label + " descriptor set layout");
 
             VkDescriptorPoolSize.Buffer poolSizes = VkDescriptorPoolSize.calloc(1, stack);
             poolSizes.get(0).type(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(1);
             VkDescriptorPoolCreateInfo dpci = VkDescriptorPoolCreateInfo.calloc(stack).sType$Default().maxSets(1).pPoolSizes(poolSizes);
             check(VK10.vkCreateDescriptorPool(vk, dpci, null, p), "vkCreateDescriptorPool(" + label + ")");
             long pool = p.get(0);
-            RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_DESCRIPTOR_POOL, pool, label + " descriptor pool");
+            ctx.nameObject(VK10.VK_OBJECT_TYPE_DESCRIPTOR_POOL, pool, label + " descriptor pool");
 
             VkDescriptorSetAllocateInfo dsai = VkDescriptorSetAllocateInfo.calloc(stack).sType$Default()
                     .descriptorPool(pool).pSetLayouts(stack.longs(dsl));
             LongBuffer pSet = stack.mallocLong(1);
             check(VK10.vkAllocateDescriptorSets(vk, dsai, pSet), "vkAllocateDescriptorSets(" + label + ")");
             long set = pSet.get(0);
-            RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_DESCRIPTOR_SET, set, label + " descriptor set");
+            ctx.nameObject(VK10.VK_OBJECT_TYPE_DESCRIPTOR_SET, set, label + " descriptor set");
             return new SampledImageSet(dsl, pool, set);
         }
     }
@@ -488,7 +491,7 @@ public final class OverlayPipelines {
         }
 
         /** Allocate a fresh descriptor set from this pool and write {@code view}/{@code sampler} into it once. */
-        public long allocateAndBind(GpuContext ctx, long view, long sampler) {
+        public long allocateAndBind(GpuDevice ctx, long view, long sampler) {
             VkDevice vk = ctx.vk();
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 VkDescriptorSetAllocateInfo dsai = VkDescriptorSetAllocateInfo.calloc(stack).sType$Default()
@@ -514,7 +517,7 @@ public final class OverlayPipelines {
         }
     }
 
-    public static SampledImageSetPool sampledImageSetPool(GpuContext ctx, int stageFlags, int maxSets, String label) {
+    public static SampledImageSetPool sampledImageSetPool(GpuDevice ctx, int stageFlags, int maxSets, String label) {
         VkDevice vk = ctx.vk();
         try (MemoryStack stack = MemoryStack.stackPush()) {
             LongBuffer p = stack.mallocLong(1);
@@ -524,14 +527,14 @@ public final class OverlayPipelines {
             VkDescriptorSetLayoutCreateInfo dslci = VkDescriptorSetLayoutCreateInfo.calloc(stack).sType$Default().pBindings(binds);
             check(VK10.vkCreateDescriptorSetLayout(vk, dslci, null, p), "vkCreateDescriptorSetLayout(" + label + ")");
             long dsl = p.get(0);
-            RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT, dsl, label + " descriptor set layout");
+            ctx.nameObject(VK10.VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT, dsl, label + " descriptor set layout");
 
             VkDescriptorPoolSize.Buffer poolSizes = VkDescriptorPoolSize.calloc(1, stack);
             poolSizes.get(0).type(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(maxSets);
             VkDescriptorPoolCreateInfo dpci = VkDescriptorPoolCreateInfo.calloc(stack).sType$Default().maxSets(maxSets).pPoolSizes(poolSizes);
             check(VK10.vkCreateDescriptorPool(vk, dpci, null, p), "vkCreateDescriptorPool(" + label + ")");
             long pool = p.get(0);
-            RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_DESCRIPTOR_POOL, pool, label + " descriptor pool");
+            ctx.nameObject(VK10.VK_OBJECT_TYPE_DESCRIPTOR_POOL, pool, label + " descriptor pool");
 
             return new SampledImageSetPool(dsl, pool);
         }
@@ -541,10 +544,10 @@ public final class OverlayPipelines {
      * A ring of descriptor sets each holding one {@code VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR}
      * binding — for overlay passes that issue an inline {@code rayQueryEXT} occlusion test against the
      * world TLAS (e.g. block outline). A ring (not a single set, unlike {@link ReadOnlyImageSet}/
-     * {@link SampledImageSet}) is required because the TLAS handle changes most frames ({@code RtAccel
-     * .TlasRing} cycles it every frame even when it doesn't grow) — rewriting a single set's binding while
+     * {@link SampledImageSet}) is required because the TLAS handle changes most frames
+     * ({@code TlasBuilder.Ring} cycles it every frame even when it doesn't grow) — rewriting a single set's binding while
      * an earlier frame's command buffer referencing that same set may still be executing on the GPU is the
-     * same "descriptor set update while in use" hazard {@code RtPipeline.setTlas} guards against. Exact
+     * same descriptor-update-while-in-use hazard as the world pipeline's rotating TLAS binding. Exact
      * graphics completion protects both rings; their depths only avoid routine host waits.
      */
     public static final class AccelStructureSet {
@@ -552,24 +555,21 @@ public final class OverlayPipelines {
         public final long layout;
         private final long pool;
         private final long[] sets;
-        private final RtGpuExecutor.TrackedGraphicsUse[] uses;
+        private final GpuFrameUse[] uses;
         private int current = -1;
 
         private AccelStructureSet(long layout, long pool, long[] sets) {
             this.layout = layout;
             this.pool = pool;
             this.sets = sets;
-            this.uses = new RtGpuExecutor.TrackedGraphicsUse[sets.length];
-            for (int i = 0; i < uses.length; i++) {
-                uses[i] = new RtGpuExecutor.TrackedGraphicsUse();
-            }
+            this.uses = new GpuFrameUse[sets.length];
         }
 
         /** Wait for the next ring slot's prior use, write {@code tlas}, and return the set for this frame. */
-        public long bind(GpuContext ctx, long tlas, RtGpuExecutor.GraphicsUse graphicsUse) {
+        public long bind(GpuDevice ctx, long tlas, GpuFrameUse gpuUse) {
             current = (current + 1) % RING;
-            RtGpuExecutor.TrackedGraphicsUse slotUse = uses[current];
-            ctx.gpuExecutor().graphicsUseWaiter().await(slotUse);
+            GpuFrameUse previousUse = uses[current];
+            if (previousUse != null) previousUse.awaitCompletion();
             long set = sets[current];
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 VkWriteDescriptorSetAccelerationStructureKHR asWrite = VkWriteDescriptorSetAccelerationStructureKHR.calloc(stack)
@@ -580,7 +580,7 @@ public final class OverlayPipelines {
                         .descriptorCount(1).descriptorType(KHRAccelerationStructure.VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR);
                 VK10.vkUpdateDescriptorSets(ctx.vk(), write, null);
             }
-            slotUse.mark(graphicsUse);
+            uses[current] = gpuUse;
             return set;
         }
 
@@ -590,7 +590,7 @@ public final class OverlayPipelines {
         }
     }
 
-    public static AccelStructureSet accelStructureSet(GpuContext ctx, int stageFlags, String label) {
+    public static AccelStructureSet accelStructureSet(GpuDevice ctx, int stageFlags, String label) {
         VkDevice vk = ctx.vk();
         try (MemoryStack stack = MemoryStack.stackPush()) {
             LongBuffer p = stack.mallocLong(1);
@@ -600,7 +600,7 @@ public final class OverlayPipelines {
             VkDescriptorSetLayoutCreateInfo dslci = VkDescriptorSetLayoutCreateInfo.calloc(stack).sType$Default().pBindings(binds);
             check(VK10.vkCreateDescriptorSetLayout(vk, dslci, null, p), "vkCreateDescriptorSetLayout(" + label + ")");
             long dsl = p.get(0);
-            RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT, dsl, label + " descriptor set layout");
+            ctx.nameObject(VK10.VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT, dsl, label + " descriptor set layout");
 
             int ring = AccelStructureSet.RING;
             VkDescriptorPoolSize.Buffer poolSizes = VkDescriptorPoolSize.calloc(1, stack);
@@ -608,7 +608,7 @@ public final class OverlayPipelines {
             VkDescriptorPoolCreateInfo dpci = VkDescriptorPoolCreateInfo.calloc(stack).sType$Default().maxSets(ring).pPoolSizes(poolSizes);
             check(VK10.vkCreateDescriptorPool(vk, dpci, null, p), "vkCreateDescriptorPool(" + label + ")");
             long pool = p.get(0);
-            RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_DESCRIPTOR_POOL, pool, label + " descriptor pool");
+            ctx.nameObject(VK10.VK_OBJECT_TYPE_DESCRIPTOR_POOL, pool, label + " descriptor pool");
 
             LongBuffer dsls = stack.mallocLong(ring);
             for (int i = 0; i < ring; i++) {
@@ -621,14 +621,14 @@ public final class OverlayPipelines {
             long[] sets = new long[ring];
             for (int i = 0; i < ring; i++) {
                 sets[i] = pSets.get(i);
-                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_DESCRIPTOR_SET, sets[i], label + " descriptor set " + i);
+                ctx.nameObject(VK10.VK_OBJECT_TYPE_DESCRIPTOR_SET, sets[i], label + " descriptor set " + i);
             }
             return new AccelStructureSet(dsl, pool, sets);
         }
     }
 
     /** A shared nearest/clamp sampler, for overlay passes sampling a real texture (e.g. a font atlas). */
-    public static long createNearestClampSampler(GpuContext ctx, String label) {
+    public static long createNearestClampSampler(GpuDevice ctx, String label) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkSamplerCreateInfo sci = VkSamplerCreateInfo.calloc(stack).sType$Default()
                     .magFilter(VK10.VK_FILTER_NEAREST).minFilter(VK10.VK_FILTER_NEAREST)
@@ -639,7 +639,7 @@ public final class OverlayPipelines {
             LongBuffer p = stack.mallocLong(1);
             check(VK10.vkCreateSampler(ctx.vk(), sci, null, p), "vkCreateSampler(" + label + ")");
             long sampler = p.get(0);
-            RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_SAMPLER, sampler, label + " sampler");
+            ctx.nameObject(VK10.VK_OBJECT_TYPE_SAMPLER, sampler, label + " sampler");
             return sampler;
         }
     }

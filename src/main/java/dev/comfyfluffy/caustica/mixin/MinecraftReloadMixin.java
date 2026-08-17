@@ -20,7 +20,7 @@ import java.util.concurrent.CompletableFuture;
  * <p>The no-arg {@code reloadResourcePacks()} is the user-facing entry (F3+T and the pack screen);
  * startup loading uses a private overload, when RT isn't up yet, so it isn't hooked. The actual
  * re-resolve/rebind of every texture handle happens on the next world frame (see
- * {@link RtComposite#onResourceReloadStart()} → {@code ensureWorld}), once the new atlas exists.
+ * the runtime resource-reload boundary, once the new atlas exists.
  */
 @Mixin(Minecraft.class)
 public class MinecraftReloadMixin {

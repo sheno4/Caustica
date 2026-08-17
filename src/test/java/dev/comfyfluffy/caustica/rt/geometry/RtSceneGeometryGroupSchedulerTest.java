@@ -20,39 +20,39 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class RtSceneGeometryGroupSchedulerTest {
     private static final ResourceId SOURCE = ResourceId.of("test", "entity");
-    private static final RtSceneGeometryManager.GroupKey FIRST = new RtSceneGeometryManager.GroupKey(SOURCE, 1L);
-    private static final RtSceneGeometryManager.GroupKey SECOND = new RtSceneGeometryManager.GroupKey(SOURCE, 2L);
-    private static final RtSceneGeometryManager.GroupKey TRANSFORM = new RtSceneGeometryManager.GroupKey(
+    private static final GeometryUpdates.GroupKey FIRST = new GeometryUpdates.GroupKey(SOURCE, 1L);
+    private static final GeometryUpdates.GroupKey SECOND = new GeometryUpdates.GroupKey(SOURCE, 2L);
+    private static final GeometryUpdates.GroupKey TRANSFORM = new GeometryUpdates.GroupKey(
             SOURCE, new SceneGeometryKey(4L, 1L));
-    private static final RtSceneGeometryManager.GroupKey SECOND_TRANSFORM = new RtSceneGeometryManager.GroupKey(
+    private static final GeometryUpdates.GroupKey SECOND_TRANSFORM = new GeometryUpdates.GroupKey(
             SOURCE, new SceneGeometryKey(4L, 2L));
-    private static final RtSceneGeometryManager.GroupKey LIFECYCLE = new RtSceneGeometryManager.GroupKey(
+    private static final GeometryUpdates.GroupKey LIFECYCLE = new GeometryUpdates.GroupKey(
             SOURCE, new SceneGeometryKey(5L, 1L));
 
     @Test
     void overlappingGroupsReserveGlobalResidentOwnership() {
-        RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
-        scheduler.submit(group(FIRST, new RtSceneGeometryManager.Put(10, payload())));
+        GeometryGroupScheduler scheduler = new GeometryGroupScheduler();
+        scheduler.submit(group(FIRST, new GeometryUpdates.Put(10, payload())));
         assertEquals(1, scheduler.startable().size());
-        scheduler.submit(group(SECOND, new RtSceneGeometryManager.Put(10, payload())));
+        scheduler.submit(group(SECOND, new GeometryUpdates.Put(10, payload())));
         assertEquals(0, scheduler.startable().size());
     }
 
     @Test
     void disjointGroupsStartConcurrently() {
-        RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
-        scheduler.submit(group(FIRST, new RtSceneGeometryManager.Put(10, payload())));
-        scheduler.submit(group(SECOND, new RtSceneGeometryManager.Put(20, payload())));
+        GeometryGroupScheduler scheduler = new GeometryGroupScheduler();
+        scheduler.submit(group(FIRST, new GeometryUpdates.Put(10, payload())));
+        scheduler.submit(group(SECOND, new GeometryUpdates.Put(20, payload())));
         assertEquals(2, scheduler.startable().size());
     }
 
     @Test
     void equalValuesInDifferentDomainsOwnIndependentResidents() {
-        RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
+        GeometryGroupScheduler scheduler = new GeometryGroupScheduler();
         SceneGeometryKey entity = new SceneGeometryKey(1, 42);
         SceneGeometryKey terrain = new SceneGeometryKey(2, 42);
-        scheduler.submit(group(FIRST, new RtSceneGeometryManager.Put(entity, payload())));
-        scheduler.submit(group(SECOND, new RtSceneGeometryManager.Put(terrain, payload())));
+        scheduler.submit(group(FIRST, new GeometryUpdates.Put(entity, payload())));
+        scheduler.submit(group(SECOND, new GeometryUpdates.Put(terrain, payload())));
 
         assertEquals(2, scheduler.startable().size());
     }
@@ -130,7 +130,7 @@ final class RtSceneGeometryGroupSchedulerTest {
 
     @Test
     void residentGateKeepsHistoryAtTheLastSnapshottedReplacement() {
-        RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
+        GeometryGroupScheduler scheduler = new GeometryGroupScheduler();
         RtSceneGeometryManager.FramePublicationGate gate = new RtSceneGeometryManager.FramePublicationGate();
         RtSceneGeometryManager.ResidentId id = resident(SOURCE, 10);
         FakeResident original = new FakeResident();
@@ -157,9 +157,9 @@ final class RtSceneGeometryGroupSchedulerTest {
 
     @Test
     void staleRevisionCannotReplaceANewerAcceptedGroup() {
-        RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
-        scheduler.submit(group(FIRST, 2L, new RtSceneGeometryManager.Drop(10)));
-        scheduler.submit(group(FIRST, 1L, new RtSceneGeometryManager.Drop(20)));
+        GeometryGroupScheduler scheduler = new GeometryGroupScheduler();
+        scheduler.submit(group(FIRST, 2L, new GeometryUpdates.Drop(10)));
+        scheduler.submit(group(FIRST, 1L, new GeometryUpdates.Drop(20)));
 
         assertEquals(2L, scheduler.startable().getFirst().prepared().revision);
     }
@@ -170,15 +170,15 @@ final class RtSceneGeometryGroupSchedulerTest {
         CausticaConfig.Rt.FrameStats.ENABLED.set(true);
         RtFrameStats.FRAME.begin();
         try {
-            RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
-            scheduler.submit(group(FIRST, 2L, new RtSceneGeometryManager.Put(10, payload())));
+            GeometryGroupScheduler scheduler = new GeometryGroupScheduler();
+            scheduler.submit(group(FIRST, 2L, new GeometryUpdates.Put(10, payload())));
 
             assertEquals(1L, RtFrameStats.FRAME.counterValue("geometryGroupsAccepted"));
             assertEquals(1L, RtFrameStats.FRAME.counterValue("geometryPutsAccepted"));
 
-            scheduler.submit(group(FIRST, 1L, new RtSceneGeometryManager.Put(20, payload())));
+            scheduler.submit(group(FIRST, 1L, new GeometryUpdates.Put(20, payload())));
             assertThrows(IllegalArgumentException.class, () -> scheduler.submit(
-                    group(SECOND, new RtSceneGeometryManager.Place(3, 30, identity(), 0xff))));
+                    group(SECOND, new GeometryUpdates.Place(3, 30, identity(), 0xff))));
 
             assertEquals(1L, RtFrameStats.FRAME.counterValue("geometryGroupsAccepted"));
             assertEquals(1L, RtFrameStats.FRAME.counterValue("geometryPutsAccepted"));
@@ -191,30 +191,30 @@ final class RtSceneGeometryGroupSchedulerTest {
 
     @Test
     void dependentPlacementMustShareItsResidentGroup() {
-        RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
-        scheduler.submit(group(FIRST, new RtSceneGeometryManager.Put(10, payload())));
+        GeometryGroupScheduler scheduler = new GeometryGroupScheduler();
+        scheduler.submit(group(FIRST, new GeometryUpdates.Put(10, payload())));
         assertThrows(IllegalArgumentException.class, () -> scheduler.submit(
-                group(SECOND, new RtSceneGeometryManager.Place(3, 10, identity(), 0xff))));
+                group(SECOND, new GeometryUpdates.Place(3, 10, identity(), 0xff))));
     }
 
     @Test
     void initialResidentAndPlacementPublishAsOneGroup() {
-        RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
-        scheduler.submit(group(FIRST, new RtSceneGeometryManager.Put(10, payload()),
-                new RtSceneGeometryManager.Place(3, 10, identity(), 0xff)));
+        GeometryGroupScheduler scheduler = new GeometryGroupScheduler();
+        scheduler.submit(group(FIRST, new GeometryUpdates.Put(10, payload()),
+                new GeometryUpdates.Place(3, 10, identity(), 0xff)));
 
         assertEquals(FIRST, scheduler.startable().getFirst().key());
     }
 
     @Test
     void newerUnpublishedInitialGroupRetainsItsResidentDependencies() {
-        RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
-        scheduler.submit(group(FIRST, 1L, new RtSceneGeometryManager.Put(10, payload()),
-                new RtSceneGeometryManager.Place(3, 10, identity(), 0xff)));
+        GeometryGroupScheduler scheduler = new GeometryGroupScheduler();
+        scheduler.submit(group(FIRST, 1L, new GeometryUpdates.Put(10, payload()),
+                new GeometryUpdates.Place(3, 10, identity(), 0xff)));
         float[] moved = identity();
         moved[3] = 128f;
-        scheduler.submit(group(FIRST, 2L, new RtSceneGeometryManager.Put(10, payload()),
-                new RtSceneGeometryManager.Place(3, 10, moved, 0xff)));
+        scheduler.submit(group(FIRST, 2L, new GeometryUpdates.Put(10, payload()),
+                new GeometryUpdates.Place(3, 10, moved, 0xff)));
 
         RtSceneGeometryManager.PreparedGroup prepared = scheduler.startable().getFirst().prepared();
         assertEquals(2L, prepared.revision);
@@ -223,15 +223,15 @@ final class RtSceneGeometryGroupSchedulerTest {
 
     @Test
     void pendingCloudWindowUpdateReplacesTheRunningDesiredInstances() {
-        RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
-        scheduler.submit(group(FIRST, 1L, new RtSceneGeometryManager.Put(10, payload()),
-                new RtSceneGeometryManager.Place(3, 10, identity(), 0xff),
-                new RtSceneGeometryManager.Place(4, 10, identity(), 0xff)));
-        RtSceneGeometryManager.GroupRun running = scheduler.startable().getFirst();
-        scheduler.submit(group(FIRST, 2L, new RtSceneGeometryManager.Put(10, payload()),
-                new RtSceneGeometryManager.Place(4, 10, identity(), 0xff),
-                new RtSceneGeometryManager.Place(5, 10, identity(), 0xff),
-                new RtSceneGeometryManager.Remove(3)));
+        GeometryGroupScheduler scheduler = new GeometryGroupScheduler();
+        scheduler.submit(group(FIRST, 1L, new GeometryUpdates.Put(10, payload()),
+                new GeometryUpdates.Place(3, 10, identity(), 0xff),
+                new GeometryUpdates.Place(4, 10, identity(), 0xff)));
+        GroupRun running = scheduler.startable().getFirst();
+        scheduler.submit(group(FIRST, 2L, new GeometryUpdates.Put(10, payload()),
+                new GeometryUpdates.Place(4, 10, identity(), 0xff),
+                new GeometryUpdates.Place(5, 10, identity(), 0xff),
+                new GeometryUpdates.Remove(3)));
 
         scheduler.complete(running.prepared().barrier, true);
         RtSceneGeometryManager.PreparedGroup finalUpdate = scheduler.startable().getFirst().prepared();
@@ -244,12 +244,12 @@ final class RtSceneGeometryGroupSchedulerTest {
 
     @Test
     void overlappingIndependentGroupsRemainSeparateAndSerialize() {
-        RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
-        scheduler.submit(group(FIRST, new RtSceneGeometryManager.Put(1, payload()),
-                new RtSceneGeometryManager.Put(2, payload())));
-        scheduler.submit(group(SECOND, new RtSceneGeometryManager.Put(1, payload())));
+        GeometryGroupScheduler scheduler = new GeometryGroupScheduler();
+        scheduler.submit(group(FIRST, new GeometryUpdates.Put(1, payload()),
+                new GeometryUpdates.Put(2, payload())));
+        scheduler.submit(group(SECOND, new GeometryUpdates.Put(1, payload())));
 
-        RtSceneGeometryManager.GroupRun first = scheduler.startable().getFirst();
+        GroupRun first = scheduler.startable().getFirst();
         assertEquals(FIRST, first.key());
         assertEquals(List.of(), scheduler.startable());
         scheduler.complete(first.prepared().barrier, true);
@@ -258,10 +258,10 @@ final class RtSceneGeometryGroupSchedulerTest {
 
     @Test
     void disjointRevisionsOfTheSameGroupSerialize() {
-        RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
-        scheduler.submit(group(FIRST, 1L, new RtSceneGeometryManager.Put(1, payload())));
+        GeometryGroupScheduler scheduler = new GeometryGroupScheduler();
+        scheduler.submit(group(FIRST, 1L, new GeometryUpdates.Put(1, payload())));
         RtSceneGeometryManager.PreparedGroup first = scheduler.startable().getFirst().prepared();
-        scheduler.submit(group(FIRST, 2L, new RtSceneGeometryManager.Put(2, payload())));
+        scheduler.submit(group(FIRST, 2L, new GeometryUpdates.Put(2, payload())));
 
         assertEquals(List.of(), scheduler.startable());
         scheduler.complete(first.barrier, true);
@@ -270,7 +270,7 @@ final class RtSceneGeometryGroupSchedulerTest {
 
     @Test
     void placementRetargetMaintainsStableForwardAndReverseLinks() {
-        RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
+        GeometryGroupScheduler scheduler = new GeometryGroupScheduler();
         RtSceneGeometryManager.ResidentId firstResident = resident(SOURCE, 10);
         RtSceneGeometryManager.ResidentId secondResident = resident(SOURCE, 20);
         RtSceneGeometryManager.InstanceId instance = instance(SOURCE, 3);
@@ -297,29 +297,29 @@ final class RtSceneGeometryGroupSchedulerTest {
 
     @Test
     void dropRequiresEveryMemberToBeRemovedOrRetargeted() {
-        RtSceneGeometryManager.GroupScheduler survivor = publishedPair();
+        GeometryGroupScheduler survivor = publishedPair();
         assertThrows(IllegalArgumentException.class, () -> survivor.submit(group(FIRST,
-                new RtSceneGeometryManager.Drop(10))));
+                new GeometryUpdates.Drop(10))));
 
-        RtSceneGeometryManager.GroupScheduler removed = publishedPair();
-        removed.submit(group(FIRST, new RtSceneGeometryManager.Drop(10), new RtSceneGeometryManager.Remove(3)));
+        GeometryGroupScheduler removed = publishedPair();
+        removed.submit(group(FIRST, new GeometryUpdates.Drop(10), new GeometryUpdates.Remove(3)));
         assertEquals(1, removed.startable().size());
 
-        RtSceneGeometryManager.GroupScheduler retargeted = publishedPair();
+        GeometryGroupScheduler retargeted = publishedPair();
         retargeted.putPublishedResident(resident(SOURCE, 20), new FakeResident(), false);
-        retargeted.submit(group(FIRST, new RtSceneGeometryManager.Drop(10),
-                new RtSceneGeometryManager.Place(3, 20, identity(), 0xff)));
+        retargeted.submit(group(FIRST, new GeometryUpdates.Drop(10),
+                new GeometryUpdates.Place(3, 20, identity(), 0xff)));
         assertEquals(1, retargeted.startable().size());
     }
 
     @Test
     void queuedBarrierIsRevalidatedAfterRunningBarrierChangesPublishedState() {
-        RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
+        GeometryGroupScheduler scheduler = new GeometryGroupScheduler();
         RtSceneGeometryManager.ResidentId resident = resident(SOURCE, 10);
         scheduler.putPublishedResident(resident, new FakeResident(), false);
-        scheduler.submit(group(FIRST, new RtSceneGeometryManager.Drop(10)));
+        scheduler.submit(group(FIRST, new GeometryUpdates.Drop(10)));
         RtSceneGeometryManager.PreparedGroup dropping = scheduler.startable().getFirst().prepared();
-        scheduler.submit(group(SECOND, new RtSceneGeometryManager.Place(3, 10, identity(), 0xff)));
+        scheduler.submit(group(SECOND, new GeometryUpdates.Place(3, 10, identity(), 0xff)));
 
         scheduler.removePublishedResident(resident);
         scheduler.complete(dropping.barrier, true);
@@ -329,15 +329,15 @@ final class RtSceneGeometryGroupSchedulerTest {
 
     @Test
     void queuedDropIsRevalidatedAfterRunningPlacementPublishes() {
-        RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
+        GeometryGroupScheduler scheduler = new GeometryGroupScheduler();
         RtSceneGeometryManager.ResidentId resident = resident(SOURCE, 10);
         RtSceneGeometryManager.InstanceId instance = instance(SOURCE, 3);
         RtSceneGeometryManager.Placement placement =
                 new RtSceneGeometryManager.Placement(SceneGeometryKey.of(10), identity(), 0xff);
         scheduler.putPublishedResident(resident, new FakeResident(), false);
-        scheduler.submit(group(FIRST, new RtSceneGeometryManager.Place(3, 10, identity(), 0xff)));
+        scheduler.submit(group(FIRST, new GeometryUpdates.Place(3, 10, identity(), 0xff)));
         RtSceneGeometryManager.PreparedGroup placing = scheduler.startable().getFirst().prepared();
-        scheduler.submit(group(SECOND, new RtSceneGeometryManager.Drop(10)));
+        scheduler.submit(group(SECOND, new GeometryUpdates.Drop(10)));
 
         scheduler.putPublishedPlacement(instance, placement);
         scheduler.complete(placing.barrier, true);
@@ -347,8 +347,8 @@ final class RtSceneGeometryGroupSchedulerTest {
 
     @Test
     void transformFastLaneStartsWhileResidentReplacementIsRunning() {
-        RtSceneGeometryManager.GroupScheduler scheduler = publishedPair();
-        scheduler.submit(group(FIRST, new RtSceneGeometryManager.Put(10, payload())));
+        GeometryGroupScheduler scheduler = publishedPair();
+        scheduler.submit(group(FIRST, new GeometryUpdates.Put(10, payload())));
         assertEquals(FIRST, scheduler.startable().getFirst().key());
         scheduler.submit(group(SECOND, updatePlacement(3, 24f)));
 
@@ -357,7 +357,7 @@ final class RtSceneGeometryGroupSchedulerTest {
 
     @Test
     void transformCannotReferenceAnUnpublishedPlacement() {
-        RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
+        GeometryGroupScheduler scheduler = new GeometryGroupScheduler();
 
         assertThrows(IllegalArgumentException.class,
                 () -> scheduler.submit(group(FIRST, updatePlacement(3, 24f))));
@@ -365,9 +365,9 @@ final class RtSceneGeometryGroupSchedulerTest {
 
     @Test
     void transformQueuesBehindAnAcceptedInitialPlacementAndKeepsTheNewestRevision() {
-        RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
-        scheduler.submit(group(FIRST, new RtSceneGeometryManager.Put(10, payload()),
-                new RtSceneGeometryManager.Place(3, 10, identity(), 0xff)));
+        GeometryGroupScheduler scheduler = new GeometryGroupScheduler();
+        scheduler.submit(group(FIRST, new GeometryUpdates.Put(10, payload()),
+                new GeometryUpdates.Place(3, 10, identity(), 0xff)));
         RtSceneGeometryManager.PreparedGroup initial = scheduler.startable().getFirst().prepared();
 
         scheduler.submit(group(TRANSFORM, 1L, updatePlacement(3, 12f)));
@@ -385,9 +385,9 @@ final class RtSceneGeometryGroupSchedulerTest {
 
     @Test
     void failedInitialPlacementDiscardsItsDependentTransform() {
-        RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
-        scheduler.submit(group(FIRST, new RtSceneGeometryManager.Put(10, payload()),
-                new RtSceneGeometryManager.Place(3, 10, identity(), 0xff)));
+        GeometryGroupScheduler scheduler = new GeometryGroupScheduler();
+        scheduler.submit(group(FIRST, new GeometryUpdates.Put(10, payload()),
+                new GeometryUpdates.Place(3, 10, identity(), 0xff)));
         RtSceneGeometryManager.PreparedGroup initial = scheduler.startable().getFirst().prepared();
         scheduler.submit(group(TRANSFORM, updatePlacement(3, 24f)));
 
@@ -399,25 +399,25 @@ final class RtSceneGeometryGroupSchedulerTest {
 
     @Test
     void oneBatchCanTransformAnEarlierPromisedPlacement() {
-        RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
+        GeometryGroupScheduler scheduler = new GeometryGroupScheduler();
 
         scheduler.submitAll(List.of(
-                group(FIRST, new RtSceneGeometryManager.Put(10, payload()),
-                        new RtSceneGeometryManager.Place(3, 10, identity(), 0xff)),
+                group(FIRST, new GeometryUpdates.Put(10, payload()),
+                        new GeometryUpdates.Place(3, 10, identity(), 0xff)),
                 group(TRANSFORM, updatePlacement(3, 24f))), null, null);
 
-        assertEquals(List.of(FIRST), scheduler.startable().stream().map(RtSceneGeometryManager.GroupRun::key).toList());
+        assertEquals(List.of(FIRST), scheduler.startable().stream().map(GroupRun::key).toList());
         assertEquals(1, scheduler.pendingCount());
     }
 
     @Test
     void rejectedBatchDoesNotLeakAPlacementPromise() {
-        RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
+        GeometryGroupScheduler scheduler = new GeometryGroupScheduler();
 
         assertThrows(IllegalArgumentException.class, () -> scheduler.submitAll(List.of(
-                group(FIRST, new RtSceneGeometryManager.Put(10, payload()),
-                        new RtSceneGeometryManager.Place(3, 10, identity(), 0xff)),
-                group(SECOND, new RtSceneGeometryManager.Place(4, 20, identity(), 0xff))), null, null));
+                group(FIRST, new GeometryUpdates.Put(10, payload()),
+                        new GeometryUpdates.Place(3, 10, identity(), 0xff)),
+                group(SECOND, new GeometryUpdates.Place(4, 20, identity(), 0xff))), null, null));
 
         assertThrows(IllegalArgumentException.class,
                 () -> scheduler.submit(group(TRANSFORM, updatePlacement(3, 24f))));
@@ -426,9 +426,9 @@ final class RtSceneGeometryGroupSchedulerTest {
 
     @Test
     void clearingSourceRemovesRunningAndPendingPlacementPromises() {
-        RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
-        scheduler.submit(group(FIRST, new RtSceneGeometryManager.Put(10, payload()),
-                new RtSceneGeometryManager.Place(3, 10, identity(), 0xff)));
+        GeometryGroupScheduler scheduler = new GeometryGroupScheduler();
+        scheduler.submit(group(FIRST, new GeometryUpdates.Put(10, payload()),
+                new GeometryUpdates.Place(3, 10, identity(), 0xff)));
         scheduler.startable();
         scheduler.submit(group(TRANSFORM, updatePlacement(3, 24f)));
 
@@ -440,8 +440,8 @@ final class RtSceneGeometryGroupSchedulerTest {
 
     @Test
     void transformSubmittedAfterAcceptedRemovalIsRejected() {
-        RtSceneGeometryManager.GroupScheduler scheduler = publishedPair();
-        scheduler.submit(group(FIRST, new RtSceneGeometryManager.Remove(3)));
+        GeometryGroupScheduler scheduler = publishedPair();
+        scheduler.submit(group(FIRST, new GeometryUpdates.Remove(3)));
 
         assertThrows(IllegalArgumentException.class,
                 () -> scheduler.submit(group(SECOND, updatePlacement(3, 24f))));
@@ -449,9 +449,9 @@ final class RtSceneGeometryGroupSchedulerTest {
 
     @Test
     void transformMergedAfterPlaceKeepsTheAtomicTargetAndNewestTransform() {
-        RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
+        GeometryGroupScheduler scheduler = new GeometryGroupScheduler();
         scheduler.putPublishedResident(resident(SOURCE, 10), new FakeResident(), false);
-        scheduler.submit(group(FIRST, 1L, new RtSceneGeometryManager.Place(3, 10, identity(), 0xff)));
+        scheduler.submit(group(FIRST, 1L, new GeometryUpdates.Place(3, 10, identity(), 0xff)));
         scheduler.submit(group(FIRST, 2L, updatePlacement(3, 24f)));
 
         RtSceneGeometryManager.GroupDiff diff = scheduler.startable().getFirst().prepared().diff;
@@ -461,11 +461,11 @@ final class RtSceneGeometryGroupSchedulerTest {
 
     @Test
     void transformRemoveAndPlaceUseSourceOperationOrder() {
-        RtSceneGeometryManager.GroupScheduler scheduler = publishedPair();
+        GeometryGroupScheduler scheduler = publishedPair();
         scheduler.submit(group(FIRST,
                 updatePlacement(3, 8f),
-                new RtSceneGeometryManager.Remove(3),
-                new RtSceneGeometryManager.Place(3, 10, translation(16f), 0x3f),
+                new GeometryUpdates.Remove(3),
+                new GeometryUpdates.Place(3, 10, translation(16f), 0x3f),
                 updatePlacement(3, 24f)));
 
         RtSceneGeometryManager.GroupDiff diff = scheduler.startable().getFirst().prepared().diff;
@@ -477,12 +477,12 @@ final class RtSceneGeometryGroupSchedulerTest {
 
     @Test
     void lateResidentTerminalCannotRollBackFastTransform() {
-        RtSceneGeometryManager.GroupScheduler scheduler = publishedPair();
+        GeometryGroupScheduler scheduler = publishedPair();
         RtSceneGeometryManager.ResidentId resident = resident(SOURCE, 10);
         RtSceneGeometryManager.InstanceId instance = instance(SOURCE, 3);
         RtSceneGeometryManager.PublishedPlacement published = scheduler.publishedPlacement(instance);
         FakeResident replacement = new FakeResident();
-        scheduler.submit(group(FIRST, new RtSceneGeometryManager.Put(10, payload())));
+        scheduler.submit(group(FIRST, new GeometryUpdates.Put(10, payload())));
         RtSceneGeometryManager.PreparedGroup mesh = scheduler.startable().getFirst().prepared();
         scheduler.submit(group(SECOND, updatePlacement(3, 24f)));
         RtSceneGeometryManager.PreparedGroup transform = scheduler.startable().getFirst().prepared();
@@ -500,13 +500,13 @@ final class RtSceneGeometryGroupSchedulerTest {
 
     @Test
     void rapidIdReuseOrdersOldTransformThenLifecycleRemovalThenNewInitial() {
-        RtSceneGeometryManager.GroupScheduler scheduler = publishedPair();
+        GeometryGroupScheduler scheduler = publishedPair();
         scheduler.submit(group(TRANSFORM, updatePlacement(3, 12f)));
         RtSceneGeometryManager.PreparedGroup oldTransform = scheduler.startable().getFirst().prepared();
         scheduler.submit(group(LIFECYCLE,
-                new RtSceneGeometryManager.Remove(3), new RtSceneGeometryManager.Drop(10)));
-        scheduler.submit(group(FIRST, new RtSceneGeometryManager.Put(10, payload()),
-                new RtSceneGeometryManager.Place(3, 10, translation(24f), 0xff)));
+                new GeometryUpdates.Remove(3), new GeometryUpdates.Drop(10)));
+        scheduler.submit(group(FIRST, new GeometryUpdates.Put(10, payload()),
+                new GeometryUpdates.Place(3, 10, translation(24f), 0xff)));
 
         assertEquals(List.of(), scheduler.startable());
         scheduler.complete(oldTransform.barrier, true);
@@ -522,12 +522,12 @@ final class RtSceneGeometryGroupSchedulerTest {
 
     @Test
     void pendingLifecycleRemovalCannotMergeWithReusedIdInitialGroup() {
-        RtSceneGeometryManager.GroupScheduler scheduler = publishedPair();
+        GeometryGroupScheduler scheduler = publishedPair();
         scheduler.submit(group(LIFECYCLE,
-                new RtSceneGeometryManager.Remove(3), new RtSceneGeometryManager.Drop(10)));
+                new GeometryUpdates.Remove(3), new GeometryUpdates.Drop(10)));
         RtSceneGeometryManager.PreparedGroup removal = scheduler.startable().getFirst().prepared();
-        scheduler.submit(group(FIRST, new RtSceneGeometryManager.Put(10, payload()),
-                new RtSceneGeometryManager.Place(3, 10, translation(24f), 0xff)));
+        scheduler.submit(group(FIRST, new GeometryUpdates.Put(10, payload()),
+                new GeometryUpdates.Place(3, 10, translation(24f), 0xff)));
 
         assertEquals(List.of(), scheduler.startable());
         assertTrue(removal.diff.removes.contains(SceneGeometryKey.of(3)));
@@ -540,7 +540,7 @@ final class RtSceneGeometryGroupSchedulerTest {
 
     @Test
     void compatibleDoubleReplacementKeepsOnlyTheImmediatePreviousResident() {
-        RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
+        GeometryGroupScheduler scheduler = new GeometryGroupScheduler();
         RtSceneGeometryManager.ResidentId id = resident(SOURCE, 10);
         FakeResident first = new FakeResident();
         FakeResident second = new FakeResident();
@@ -563,7 +563,7 @@ final class RtSceneGeometryGroupSchedulerTest {
 
     @Test
     void incompatibleReplacementRetiresCurrentAndOutstandingPrevious() {
-        RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
+        GeometryGroupScheduler scheduler = new GeometryGroupScheduler();
         RtSceneGeometryManager.ResidentId id = resident(SOURCE, 10);
         FakeResident first = new FakeResident();
         FakeResident second = new FakeResident();
@@ -579,7 +579,7 @@ final class RtSceneGeometryGroupSchedulerTest {
 
     @Test
     void droppingResidentRemovesItsPendingPreviousSlot() {
-        RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
+        GeometryGroupScheduler scheduler = new GeometryGroupScheduler();
         RtSceneGeometryManager.ResidentId id = resident(SOURCE, 10);
         FakeResident first = new FakeResident();
         FakeResident second = new FakeResident();
@@ -593,7 +593,7 @@ final class RtSceneGeometryGroupSchedulerTest {
     @Test
     void clearSourceIsIsolatedAndDestroyReleasesRemainingResidentsOnce() {
         ResourceId otherSource = ResourceId.of("test", "other");
-        RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
+        GeometryGroupScheduler scheduler = new GeometryGroupScheduler();
         FakeResident sourceCurrent = new FakeResident();
         FakeResident sourcePrevious = new FakeResident();
         FakeResident other = new FakeResident();
@@ -625,53 +625,53 @@ final class RtSceneGeometryGroupSchedulerTest {
 
     @Test
     void placementCannotDependOnUnpublishedResident() {
-        RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
+        GeometryGroupScheduler scheduler = new GeometryGroupScheduler();
         assertThrows(IllegalArgumentException.class, () -> scheduler.submit(
-                group(FIRST, new RtSceneGeometryManager.Place(3, 2, identity(), 0xff))));
+                group(FIRST, new GeometryUpdates.Place(3, 2, identity(), 0xff))));
 
-        scheduler.submit(group(FIRST, new RtSceneGeometryManager.Put(2, payload()),
-                new RtSceneGeometryManager.Place(3, 2, identity(), 0xff)));
+        scheduler.submit(group(FIRST, new GeometryUpdates.Put(2, payload()),
+                new GeometryUpdates.Place(3, 2, identity(), 0xff)));
         assertEquals(1, scheduler.startable().size(), "a rejected group must not advance its accepted revision");
     }
 
     @Test
     void malformedPlacementTransformsAreRejectedBeforeSchedulerAdmission() {
-        RtSceneGeometryManager.GroupScheduler initial = new RtSceneGeometryManager.GroupScheduler();
+        GeometryGroupScheduler initial = new GeometryGroupScheduler();
         assertThrows(IllegalArgumentException.class, () -> initial.submit(group(FIRST,
-                new RtSceneGeometryManager.Put(2, payload()),
-                new RtSceneGeometryManager.Place(3, 2, new float[11], 0xff))));
-        initial.submit(group(FIRST, new RtSceneGeometryManager.Put(2, payload()),
-                new RtSceneGeometryManager.Place(3, 2, identity(), 0xff)));
+                new GeometryUpdates.Put(2, payload()),
+                new GeometryUpdates.Place(3, 2, new float[11], 0xff))));
+        initial.submit(group(FIRST, new GeometryUpdates.Put(2, payload()),
+                new GeometryUpdates.Place(3, 2, identity(), 0xff)));
         assertEquals(1, initial.startable().size());
 
-        RtSceneGeometryManager.GroupScheduler update = publishedPair();
+        GeometryGroupScheduler update = publishedPair();
         assertThrows(IllegalArgumentException.class, () -> update.submit(group(TRANSFORM,
-                new RtSceneGeometryManager.UpdatePlacement(3, new float[13], 0xff))));
+                new GeometryUpdates.UpdatePlacement(3, new float[13], 0xff))));
         update.submit(group(TRANSFORM, updatePlacement(3, 12f)));
         assertEquals(1, update.startable().size());
     }
 
     @Test
     void invalidBatchDoesNotQueueItsEarlierGroups() {
-        RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
+        GeometryGroupScheduler scheduler = new GeometryGroupScheduler();
 
         assertThrows(IllegalArgumentException.class, () -> scheduler.submitAll(List.of(
-                group(FIRST, new RtSceneGeometryManager.Put(10, payload())),
-                group(SECOND, new RtSceneGeometryManager.Place(3, 20, identity(), 0xff))), null, null));
+                group(FIRST, new GeometryUpdates.Put(10, payload())),
+                group(SECOND, new GeometryUpdates.Place(3, 20, identity(), 0xff))), null, null));
 
         assertEquals(List.of(), scheduler.startable());
-        scheduler.submit(group(FIRST, new RtSceneGeometryManager.Put(10, payload())));
+        scheduler.submit(group(FIRST, new GeometryUpdates.Put(10, payload())));
         assertEquals(1, scheduler.startable().size(), "the rejected batch must not advance accepted revisions");
     }
 
     @Test
     void rejectedBatchDoesNotCommitEarlierPutToDropCoalescing() {
-        RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
-        scheduler.submit(group(FIRST, 1L, new RtSceneGeometryManager.Put(10, payload())));
+        GeometryGroupScheduler scheduler = new GeometryGroupScheduler();
+        scheduler.submit(group(FIRST, 1L, new GeometryUpdates.Put(10, payload())));
 
         assertThrows(IllegalArgumentException.class, () -> scheduler.submitAll(List.of(
-                group(FIRST, 2L, new RtSceneGeometryManager.Drop(10)),
-                group(SECOND, new RtSceneGeometryManager.Place(3, 20, identity(), 0xff))), null, null));
+                group(FIRST, 2L, new GeometryUpdates.Drop(10)),
+                group(SECOND, new GeometryUpdates.Place(3, 20, identity(), 0xff))), null, null));
 
         RtSceneGeometryManager.PreparedGroup prepared = scheduler.startable().getFirst().prepared();
         assertTrue(prepared.diff.puts.containsKey(SceneGeometryKey.of(10)));
@@ -680,9 +680,9 @@ final class RtSceneGeometryGroupSchedulerTest {
 
     @Test
     void acceptedPutToDropRevisionRemovesTheQueuedPut() {
-        RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
-        scheduler.submit(group(FIRST, 1L, new RtSceneGeometryManager.Put(10, payload())));
-        scheduler.submit(group(FIRST, 2L, new RtSceneGeometryManager.Drop(10)));
+        GeometryGroupScheduler scheduler = new GeometryGroupScheduler();
+        scheduler.submit(group(FIRST, 1L, new GeometryUpdates.Put(10, payload())));
+        scheduler.submit(group(FIRST, 2L, new GeometryUpdates.Drop(10)));
 
         RtSceneGeometryManager.PreparedGroup prepared = scheduler.startable().getFirst().prepared();
         assertTrue(prepared.diff.puts.isEmpty());
@@ -691,14 +691,14 @@ final class RtSceneGeometryGroupSchedulerTest {
 
     @Test
     void clearingSourceCancelsRunningGroupAndReleasesItsReservationAtTerminal() {
-        RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
-        scheduler.submit(group(FIRST, new RtSceneGeometryManager.Put(10, payload())));
+        GeometryGroupScheduler scheduler = new GeometryGroupScheduler();
+        scheduler.submit(group(FIRST, new GeometryUpdates.Put(10, payload())));
         RtSceneGeometryManager.PreparedGroup running = scheduler.startable().getFirst().prepared();
 
         scheduler.clearSource(SOURCE);
         assertTrue(scheduler.cancelled(running.barrier));
 
-        scheduler.submit(group(SECOND, new RtSceneGeometryManager.Put(10, payload())));
+        scheduler.submit(group(SECOND, new GeometryUpdates.Put(10, payload())));
         assertEquals(0, scheduler.startable().size());
         scheduler.complete(running.barrier, false);
         assertEquals(1, scheduler.startable().size());
@@ -706,12 +706,12 @@ final class RtSceneGeometryGroupSchedulerTest {
 
     @Test
     void clearingSourceKeepsRunningGroupKeyReservedUntilTerminal() {
-        RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
-        scheduler.submit(group(FIRST, new RtSceneGeometryManager.Put(10, payload())));
+        GeometryGroupScheduler scheduler = new GeometryGroupScheduler();
+        scheduler.submit(group(FIRST, new GeometryUpdates.Put(10, payload())));
         RtSceneGeometryManager.PreparedGroup running = scheduler.startable().getFirst().prepared();
 
         scheduler.clearSource(SOURCE);
-        scheduler.submit(group(FIRST, new RtSceneGeometryManager.Put(20, payload())));
+        scheduler.submit(group(FIRST, new GeometryUpdates.Put(20, payload())));
 
         assertEquals(List.of(), scheduler.startable());
         scheduler.complete(running.barrier, false);
@@ -735,8 +735,8 @@ final class RtSceneGeometryGroupSchedulerTest {
             throw cause;
         });
         AtomicReference<Throwable> failure = new AtomicReference<>();
-        AtomicReference<RtSceneGeometryManager.PublicationAck> published = new AtomicReference<>();
-        manager.submit(List.of(group(FIRST, new RtSceneGeometryManager.Put(10, payload()))),
+        AtomicReference<GeometryUpdates.Publication> published = new AtomicReference<>();
+        manager.submit(List.of(group(FIRST, new GeometryUpdates.Put(10, payload()))),
                 published::set, failure::set);
 
         manager.publishReadyForFrame(null);
@@ -748,8 +748,8 @@ final class RtSceneGeometryGroupSchedulerTest {
     @Test
     void progressPublishesAGroupWithoutFrameAssembly() {
         RtSceneGeometryManager manager = new RtSceneGeometryManager((material, coverage) -> null);
-        AtomicReference<RtSceneGeometryManager.PublicationAck> published = new AtomicReference<>();
-        RtSceneGeometryManager.GeometryUpdateGroup update = group(FIRST, new RtSceneGeometryManager.Drop(10));
+        AtomicReference<GeometryUpdates.Publication> published = new AtomicReference<>();
+        GeometryUpdates.Group update = group(FIRST, new GeometryUpdates.Drop(10));
 
         manager.submit(List.of(update), published::set);
         manager.progress(null);
@@ -762,7 +762,7 @@ final class RtSceneGeometryGroupSchedulerTest {
 
     @Test
     void transformSubmittedBeforeBeginUpdatePublishesInItsFramePreparationPass() {
-        RtSceneGeometryManager.GroupScheduler scheduler = publishedPair();
+        GeometryGroupScheduler scheduler = publishedPair();
         RtSceneGeometryManager manager = new RtSceneGeometryManager((material, coverage) -> null, scheduler);
         manager.completeFramePublicationBoundary();
         List<Long> published = new java.util.ArrayList<>();
@@ -778,12 +778,12 @@ final class RtSceneGeometryGroupSchedulerTest {
 
     @Test
     void promisedTransformJoinsInitialPlacementBeforeTheNextFrameSnapshot() {
-        RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
+        GeometryGroupScheduler scheduler = new GeometryGroupScheduler();
         scheduler.putPublishedResident(resident(SOURCE, 10), new FakeResident(), false);
         RtSceneGeometryManager manager = new RtSceneGeometryManager((material, coverage) -> null, scheduler);
-        List<RtSceneGeometryManager.GroupKey> published = new java.util.ArrayList<>();
+        List<GeometryUpdates.GroupKey> published = new java.util.ArrayList<>();
         manager.submit(List.of(group(FIRST,
-                        new RtSceneGeometryManager.Place(3, 10, identity(), 0xff))),
+                        new GeometryUpdates.Place(3, 10, identity(), 0xff))),
                 acknowledgment -> published.add(acknowledgment.key()));
         manager.progress(null);
         manager.submit(List.of(group(TRANSFORM, updatePlacement(3, 24f))),
@@ -797,7 +797,7 @@ final class RtSceneGeometryGroupSchedulerTest {
 
     @Test
     void framePreparationPublishesOlderReadyAndNewerPendingTransformsInOrder() {
-        RtSceneGeometryManager.GroupScheduler scheduler = publishedPair();
+        GeometryGroupScheduler scheduler = publishedPair();
         RtSceneGeometryManager manager = new RtSceneGeometryManager((material, coverage) -> null, scheduler);
         List<Long> published = new java.util.ArrayList<>();
         manager.submit(List.of(group(TRANSFORM, 1L, updatePlacement(3, 12f))),
@@ -815,14 +815,14 @@ final class RtSceneGeometryGroupSchedulerTest {
 
     @Test
     void framePreparationDoesNotStartReplacementUnblockedByLifecycleRemoval() {
-        RtSceneGeometryManager.GroupScheduler scheduler = publishedPair();
+        GeometryGroupScheduler scheduler = publishedPair();
         RtSceneGeometryManager manager = new RtSceneGeometryManager((material, coverage) -> null, scheduler);
         manager.completeFramePublicationBoundary();
-        List<RtSceneGeometryManager.GroupKey> published = new java.util.ArrayList<>();
+        List<GeometryUpdates.GroupKey> published = new java.util.ArrayList<>();
         manager.submit(List.of(
-                group(LIFECYCLE, new RtSceneGeometryManager.Remove(3)),
-                group(FIRST, new RtSceneGeometryManager.Put(10, payload()),
-                        new RtSceneGeometryManager.Place(3, 10, translation(24f), 0xff))),
+                group(LIFECYCLE, new GeometryUpdates.Remove(3)),
+                group(FIRST, new GeometryUpdates.Put(10, payload()),
+                        new GeometryUpdates.Place(3, 10, translation(24f), 0xff))),
                 acknowledgment -> published.add(acknowledgment.key()));
 
         manager.publishReadyForFrame(null);
@@ -835,12 +835,12 @@ final class RtSceneGeometryGroupSchedulerTest {
 
     @Test
     void framePreparationPublishesIndependentTransformsTogether() {
-        RtSceneGeometryManager.GroupScheduler scheduler = publishedPair();
+        GeometryGroupScheduler scheduler = publishedPair();
         scheduler.putPublishedResident(resident(SOURCE, 20), new FakeResident(), false);
         scheduler.putPublishedPlacement(instance(SOURCE, 4),
                 new RtSceneGeometryManager.Placement(SceneGeometryKey.of(20), identity(), 0xff));
         RtSceneGeometryManager manager = new RtSceneGeometryManager((material, coverage) -> null, scheduler);
-        List<RtSceneGeometryManager.GroupKey> published = new java.util.ArrayList<>();
+        List<GeometryUpdates.GroupKey> published = new java.util.ArrayList<>();
         manager.submit(List.of(
                 group(TRANSFORM, updatePlacement(3, 12f)),
                 group(SECOND_TRANSFORM, updatePlacement(4, 24f))),
@@ -855,7 +855,7 @@ final class RtSceneGeometryGroupSchedulerTest {
 
     @Test
     void placementHistoryAdvancesOnlyAtFrameSnapshot() {
-        RtSceneGeometryManager.GroupScheduler scheduler = publishedPair();
+        GeometryGroupScheduler scheduler = publishedPair();
         RtSceneGeometryManager.PublishedPlacement published = scheduler.publishedPlacement(instance(SOURCE, 3));
         RtSceneGeometryManager.Placement original = published.placement;
         assertNull(published.previousPlacement);
@@ -875,7 +875,7 @@ final class RtSceneGeometryGroupSchedulerTest {
 
     @Test
     void placementRetargetPreservesLastFrameHistory() {
-        RtSceneGeometryManager.GroupScheduler scheduler = publishedPair();
+        GeometryGroupScheduler scheduler = publishedPair();
         RtSceneGeometryManager.PublishedPlacement published = scheduler.publishedPlacement(instance(SOURCE, 3));
         published.completeFrameSnapshot();
         RtSceneGeometryManager.Placement previous = published.placement;
@@ -891,7 +891,7 @@ final class RtSceneGeometryGroupSchedulerTest {
 
     @Test
     void placementRemovalAndSourceClearResetSnapshotHistory() {
-        RtSceneGeometryManager.GroupScheduler scheduler = publishedPair();
+        GeometryGroupScheduler scheduler = publishedPair();
         RtSceneGeometryManager.PublishedPlacement removed = scheduler.publishedPlacement(instance(SOURCE, 3));
         removed.completeFrameSnapshot();
         scheduler.removePublishedPlacement(instance(SOURCE, 3));
@@ -936,25 +936,25 @@ final class RtSceneGeometryGroupSchedulerTest {
         assertTrue(table.historyRetire.isEmpty());
     }
 
-    private static RtSceneGeometryManager.GeometryUpdateGroup group(RtSceneGeometryManager.GroupKey key,
-                                                                      RtSceneGeometryManager.GeometryOperation... operations) {
+    private static GeometryUpdates.Group group(GeometryUpdates.GroupKey key,
+                                               GeometryUpdates.GeometryOperation... operations) {
         return group(key, 1L, operations);
     }
 
-    private static RtSceneGeometryManager.GeometryUpdateGroup group(RtSceneGeometryManager.GroupKey key, long revision,
-                                                                      RtSceneGeometryManager.GeometryOperation... operations) {
-        return new RtSceneGeometryManager.GeometryUpdateGroup(key, revision, List.of(operations));
+    private static GeometryUpdates.Group group(GeometryUpdates.GroupKey key, long revision,
+                                               GeometryUpdates.GeometryOperation... operations) {
+        return new GeometryUpdates.Group(key, revision, List.of(operations));
     }
 
-    private static RtSceneGeometryManager.ProviderPayload payload() {
+    private static GeometryUpdates.ProviderPayload payload() {
         SceneMesh mesh = new SceneMesh(new float[] {0, 0, 0, 1, 0, 0, 0, 1, 0}, new int[] {0, 1, 2},
                 SceneMesh.UvLayout.PER_VERTEX, new float[] {0, 0, 1, 0, 0, 1},
                 List.of(SceneMesh.TriangleSurface.surface(new MaterialHandle(ResourceId.of("test", "surface")))));
-        return new RtSceneGeometryManager.ProviderPayload(mesh);
+        return new GeometryUpdates.ProviderPayload(mesh);
     }
 
-    private static RtSceneGeometryManager.GroupScheduler publishedPair() {
-        RtSceneGeometryManager.GroupScheduler scheduler = new RtSceneGeometryManager.GroupScheduler();
+    private static GeometryGroupScheduler publishedPair() {
+        GeometryGroupScheduler scheduler = new GeometryGroupScheduler();
         scheduler.putPublishedResident(resident(SOURCE, 10), new FakeResident(), false);
         scheduler.putPublishedPlacement(instance(SOURCE, 3),
                 new RtSceneGeometryManager.Placement(SceneGeometryKey.of(10), identity(), 0xff));
@@ -969,8 +969,8 @@ final class RtSceneGeometryGroupSchedulerTest {
         return new RtSceneGeometryManager.InstanceId(source, SceneGeometryKey.of(key));
     }
 
-    private static RtSceneGeometryManager.UpdatePlacement updatePlacement(long instance, float x) {
-        return new RtSceneGeometryManager.UpdatePlacement(instance, translation(x), 0xff);
+    private static GeometryUpdates.UpdatePlacement updatePlacement(long instance, float x) {
+        return new GeometryUpdates.UpdatePlacement(instance, translation(x), 0xff);
     }
 
     private static float[] translation(float x) {

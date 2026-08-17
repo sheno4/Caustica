@@ -2,7 +2,6 @@ package dev.comfyfluffy.caustica.client;
 
 import com.mojang.blaze3d.pipeline.RenderTarget;
 import dev.comfyfluffy.caustica.CausticaMod;
-import dev.comfyfluffy.caustica.rt.RtComposite;
 import dev.comfyfluffy.caustica.rt.RtRuntime;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
@@ -32,7 +31,7 @@ public final class VanillaRenderController {
 		this.worldSkipped = false;
 		this.baseReady = false;
 		this.inactiveReason = null;
-		this.rtActive = RtComposite.enabled();
+		this.rtActive = RtRuntime.frameActive();
 
 		if (!Boolean.valueOf(this.rtActive).equals(this.lastLoggedRtActive)) {
 			this.lastLoggedRtActive = this.rtActive;
@@ -117,9 +116,9 @@ public final class VanillaRenderController {
 		return this.rtActive;
 	}
 
-	/** Runtime work switch for per-frame RT work; mirrors {@link RtComposite#enabled()}. */
+	/** Runtime work switch for per-frame RT work. */
 	public static boolean rtRuntimeWorkRequested() {
-		return RtComposite.enabled();
+		return RtRuntime.frameActive();
 	}
 
 	/**
@@ -130,7 +129,7 @@ public final class VanillaRenderController {
 		return RtRuntime.active() && INSTANCE.replacedVanillaWorldLastFrame();
 	}
 
-	public void markRtCompositeResult(boolean success) {
+	public void markRtFrameResult(boolean success) {
 		if (this.worldSkipped && !success) {
 			latchFailure("RT composite did not produce a replacement frame");
 		}
@@ -151,10 +150,10 @@ public final class VanillaRenderController {
 	}
 
 	private String findInactiveReason(RenderTarget mainTarget) {
-		if (this.failureLatched || RtComposite.INSTANCE.hasFailed()) {
+		if (this.failureLatched || RtRuntime.INSTANCE.rendererFailed()) {
 			return "RT composite failure latch is set";
 		}
-		if (!RtComposite.enabled()) {
+		if (!RtRuntime.frameActive()) {
 			return "caustica.rt is false";
 		}
 		if (GpuContext.currentOrNull() == null) {
@@ -163,7 +162,7 @@ public final class VanillaRenderController {
 		if (RtTerrain.currentOrNull() == null) {
 			return "RT terrain is not ready";
 		}
-		if (RtComposite.INSTANCE.requiresSourceWorldFallback()) {
+		if (RtRuntime.INSTANCE.requiresSourceWorldFallback()) {
 			return "RT resources are crossing an epoch boundary";
 		}
 		if (mainTarget == null || mainTarget.getColorTexture() == null || mainTarget.getDepthTexture() == null) {

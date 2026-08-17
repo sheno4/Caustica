@@ -14,9 +14,13 @@ import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtRuntime;
 import dev.comfyfluffy.caustica.rt.VulkanBarriers;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
-import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
-import dev.comfyfluffy.caustica.rt.accel.GpuImage;
+import dev.comfyfluffy.caustica.api.gpu.GpuBuffer;
+import dev.comfyfluffy.caustica.api.gpu.GpuImage;
+import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
+import dev.comfyfluffy.caustica.api.gpu.GpuFrameUse;
 import dev.comfyfluffy.caustica.api.ResourceId;
+import org.joml.Matrix4f;
+import org.joml.Matrix4fc;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VkCommandBuffer;
 
@@ -61,6 +65,9 @@ public final class RenderPassManager {
     private int displayHeight;
     private long frameIndex = -1;
     private Map<String, Object> frameOptionsSnapshot = Map.of();
+    private GpuFrameUse gpuUse;
+    private long worldTlas;
+    private final Matrix4f worldViewProjection = new Matrix4f();
 
     /**
      * A pass-published world resource: exactly one of an owned image, a buffer, or a raw view of an image
@@ -79,7 +86,7 @@ public final class RenderPassManager {
 
         /** The Vulkan image view to bind, whichever image form this resource took. */
         public long view() {
-            return image != null ? image.view : rawImageView;
+            return image != null ? image.view() : rawImageView;
         }
 
         static WorldResource ofImage(GpuImage image, long sampler) {
@@ -170,6 +177,9 @@ public final class RenderPassManager {
      */
     public void beginFrame() {
         frameIndex++;
+        gpuUse = null;
+        worldTlas = 0L;
+        worldViewProjection.identity();
         // Restart the post chain at the reconstruction: participation is decided per frame, inside each
         // pass's record(), so last frame's end state says nothing about this one's.
         sceneColor = reconstructedColor;
@@ -177,6 +187,14 @@ public final class RenderPassManager {
         if (optionsStore != null) {
             frameOptionsSnapshot = optionsStore.snapshot();
         }
+    }
+
+    /** Publish immutable world-frame inputs before any pass records this frame. */
+    public void beginFrame(GpuFrameUse gpuUse, long worldTlas, Matrix4fc worldViewProjection) {
+        beginFrame();
+        this.gpuUse = Objects.requireNonNull(gpuUse, "gpuUse");
+        this.worldTlas = worldTlas;
+        this.worldViewProjection.set(worldViewProjection);
     }
 
     /**
@@ -385,7 +403,7 @@ public final class RenderPassManager {
         }
 
         @Override
-        public GpuContext context() {
+        public GpuContext device() {
             return ctx;
         }
 
@@ -450,6 +468,27 @@ public final class RenderPassManager {
         @Override
         public VkCommandBuffer commandBuffer() {
             return commandBuffer;
+        }
+
+        @Override
+        public GpuDevice device() {
+            return ctx;
+        }
+
+        @Override
+        public GpuFrameUse gpuUse() {
+            if (gpuUse == null) throw new IllegalStateException("GPU frame use is not available");
+            return gpuUse;
+        }
+
+        @Override
+        public long worldTlas() {
+            return worldTlas;
+        }
+
+        @Override
+        public Matrix4fc worldViewProjection() {
+            return worldViewProjection;
         }
 
         @Override

@@ -107,7 +107,7 @@ final class RtGeometryMeshPackingTest {
         RtSceneGeometryManager manager = new RtSceneGeometryManager((reference, coverage) ->
                 new RtGeometryMaterialResolver.ResolvedMaterial(7, 0));
 
-        RtSceneGeometryManager.PackedInput packed = assertDoesNotThrow(() -> manager.providerInput(terrain));
+        SceneMeshPacker.PackedInput packed = assertDoesNotThrow(() -> manager.providerInput(terrain));
         assertEquals(12, packed.textureCoordinates().length);
     }
 
@@ -117,7 +117,7 @@ final class RtGeometryMeshPackingTest {
         RtSceneGeometryManager manager = new RtSceneGeometryManager((reference, coverage) ->
                 new RtGeometryMaterialResolver.ResolvedMaterial(7, 0));
 
-        RtSceneGeometryManager.PackedInput packed = assertDoesNotThrow(() -> manager.providerInput(
+        SceneMeshPacker.PackedInput packed = assertDoesNotThrow(() -> manager.providerInput(
                 mesh(material, SceneMesh.Coverage.OPAQUE)));
         assertEquals(6, packed.textureCoordinates().length);
     }

@@ -12,10 +12,8 @@ import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialProfile;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialClassifier;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialLookup;
 import dev.comfyfluffy.caustica.minecraft.provider.MinecraftMaterialSource;
-import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtFrameStats;
-import dev.comfyfluffy.caustica.rt.material.RtMaterialAbi;
-import dev.comfyfluffy.caustica.rt.material.RtMaterialRegistry;
+import dev.comfyfluffy.caustica.spi.host.MaterialEpochView;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
@@ -94,7 +92,7 @@ final class RtTerrainMesher {
                                               QuadCapture capture,
                                               FluidStateModelSet fluidModels, FluidCapture fluidCapture,
                                               SectionMesh mesh, BlockPos.MutableBlockPos m,
-                                              RtMaterialRegistry.Snapshot materials,
+                                              MaterialEpochView materials,
                                               int scx, int scy, int scz) {
         capture.materials = materials;
         fluidCapture.materials = materials;
@@ -121,7 +119,7 @@ final class RtTerrainMesher {
     private static final float[] EMPTY_LIGHTS = new float[0];
 
     private static void collectLights(FloatArrayList out, Geom geom,
-                                      RtMaterialRegistry.Snapshot materials, float minFillRatio) {
+                                      MaterialEpochView materials, float minFillRatio) {
         if (geom != null && !geom.idx.isEmpty()) {
             RtLightCollector.collectClass(out, geom.verts, geom.prim, geom.surfaces, geom.cornerUv,
                     geom.lightSprites.elements(), materials, minFillRatio);
@@ -299,7 +297,7 @@ final class RtTerrainMesher {
     /** Captures vanilla baked model quads into the current section's mesh. */
     private static final class QuadCapture {
         SectionMesh cur; // set before each block model emission
-        RtMaterialRegistry.Snapshot materials;
+        MaterialEpochView materials;
 
         // Per-block context for biome tint, set before each model emission. We resolve it straight from
         // BlockColors resolves biome tint before raster lighting, so the path tracer receives unlit albedo
@@ -387,7 +385,7 @@ final class RtTerrainMesher {
             q.material = resolved.material;
             q.coverage = q.cutout && !q.translucent ? SceneMesh.Coverage.CUTOUT : SceneMesh.Coverage.OPAQUE;
             // Genuinely masked: alpha-tested, not merely "non-SOLID" (q.cutout also covers TRANSLUCENT,
-            // whose coverage stays OPAQUE — see RtMaterialRegistry.binding). Only this needs the coverage
+            // whose resolved binding stays opaque). Only this needs the coverage
             // override; solid and translucent quads keep the resolved id's default OPAQUE coverage. The
             // sibling is compiled into the snapshot, so this stays a pure read on the worker thread.
             boolean needsMaskedCoverage = q.cutout && !q.translucent;
@@ -620,7 +618,7 @@ final class RtTerrainMesher {
      */
     private static final class FluidCapture implements VertexConsumer, FluidRenderer.Output {
         SectionMesh cur;     // set before each section
-        RtMaterialRegistry.Snapshot materials;
+        MaterialEpochView materials;
         float emission;      // set per fluid block (lava = 1, water = 0)
         boolean water;       // set per fluid block: true for water (dielectric), false for lava
         private int n;

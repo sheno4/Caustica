@@ -2,7 +2,7 @@ package dev.comfyfluffy.caustica.rt.pipeline;
 
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
-import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
+import dev.comfyfluffy.caustica.api.gpu.GpuBuffer;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
@@ -167,12 +167,12 @@ public final class RtToneLut {
 
             int totalBytes = texels.remaining();
             staging = ctx.createUploadBuffer(totalBytes, "tone lut " + label + " upload");
-            ByteBuffer mapped = MemoryUtil.memByteBuffer(staging.mapped, totalBytes);
+            ByteBuffer mapped = MemoryUtil.memByteBuffer(staging.mapped(), totalBytes);
             mapped.put(texels.duplicate());
             staging.flush();
 
             long uploadImage = createdImage;
-            long uploadBuffer = staging.handle;
+            long uploadBuffer = staging.handle();
             ctx.submitSync(cmd -> {
                 try (MemoryStack uploadStack = MemoryStack.stackPush()) {
                     VkImageMemoryBarrier.Buffer toTransfer = VkImageMemoryBarrier.calloc(1, uploadStack);

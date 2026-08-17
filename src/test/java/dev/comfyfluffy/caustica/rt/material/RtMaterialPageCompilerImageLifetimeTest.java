@@ -34,7 +34,7 @@ final class RtMaterialPageCompilerImageLifetimeTest {
                 OpenPbrColorBinding.PARAMETER_DEFAULT, OpenPbrColorBinding.PARAMETER_DEFAULT,
                 OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR);
 
-        RtMaterialPageCompiler.AlbedoStats stats = RtMaterialPageCompiler.scanAlbedo(asset, 16);
+        MaterialTextureAnalyzer.AlbedoStats stats = MaterialTextureAnalyzer.scanAlbedo(asset, 16);
 
         assertEquals(0, RtMaterialPageCompiler.pageChannels(0, false, false));
         assertEquals(MaterialTextureKind.STANDALONE, asset.kind());
@@ -68,7 +68,7 @@ final class RtMaterialPageCompilerImageLifetimeTest {
                 OpenPbrColorBinding.PARAMETER_DEFAULT, OpenPbrColorBinding.PARAMETER_DEFAULT,
                 OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR);
 
-        assertThrows(IllegalStateException.class, () -> RtMaterialPageCompiler.scanAlbedo(asset, 16));
+        assertThrows(IllegalStateException.class, () -> MaterialTextureAnalyzer.scanAlbedo(asset, 16));
         assertEquals(1, closes.get());
     }
 

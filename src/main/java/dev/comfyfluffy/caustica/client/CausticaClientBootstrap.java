@@ -3,7 +3,6 @@ package dev.comfyfluffy.caustica.client;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.minecraft.MinecraftRuntimeHost;
 import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
-import dev.comfyfluffy.caustica.rt.RtComposite;
 import dev.comfyfluffy.caustica.rt.RtRuntime;
 
 /** Shared client initialization and lifecycle hooks used by each loader entrypoint. */
@@ -28,8 +27,8 @@ public final class CausticaClientBootstrap {
         if (RtRuntime.hasSession()) {
             RtRuntime.INSTANCE.invalidateWorld();
         }
-        RtComposite.INSTANCE.resetExposureHistory();
-        RtComposite.INSTANCE.resetFailureLatch();
+        RtRuntime.INSTANCE.resetExposureHistory();
+        RtRuntime.INSTANCE.resetRendererFailure();
         VanillaRenderController.INSTANCE.resetFailureLatch();
     }
 }

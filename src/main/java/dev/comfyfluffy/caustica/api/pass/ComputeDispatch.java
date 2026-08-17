@@ -1,8 +1,7 @@
 package dev.comfyfluffy.caustica.api.pass;
 
-import dev.comfyfluffy.caustica.rt.GpuContext;
-import dev.comfyfluffy.caustica.rt.RtDebugLabels;
-import dev.comfyfluffy.caustica.rt.accel.GpuImage;
+import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
+import dev.comfyfluffy.caustica.api.gpu.GpuImage;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.VK10;
@@ -26,7 +25,6 @@ import java.nio.ByteBuffer;
 import java.nio.LongBuffer;
 import java.util.List;
 
-import static dev.comfyfluffy.caustica.rt.GpuContext.check;
 
 /**
  * Descriptor set / pipeline layout / compute pipeline for one shader, round-robined over
@@ -38,14 +36,14 @@ import static dev.comfyfluffy.caustica.rt.GpuContext.check;
  * <p>Public pass-authoring helper: a compute-only pass (engine-bundled or extension-owned) is free to
  * build against this instead of rolling its own descriptor/pipeline setup, though it never has to — a
  * pass doing graphics work, or wanting something this doesn't offer, is free to write its own directly
- * against {@link dev.comfyfluffy.caustica.rt.GpuContext}.
+ * against the {@link GpuDevice} supplied to a registered pass.
  */
 public final class ComputeDispatch {
     public enum Binding {
         STORAGE, SAMPLED
     }
 
-    private final GpuContext ctx;
+    private final GpuDevice ctx;
     private final List<Binding> bindings;
     private final long descriptorSetLayout;
     private final long descriptorPool;
@@ -57,7 +55,7 @@ public final class ComputeDispatch {
     private int dispatchIndex;
     private boolean destroyed;
 
-    private ComputeDispatch(GpuContext ctx, List<Binding> bindings, long descriptorSetLayout,
+    private ComputeDispatch(GpuDevice ctx, List<Binding> bindings, long descriptorSetLayout,
                             long descriptorPool, long[] descriptorSets, long pipelineLayout, long pipeline,
                             long sampler) {
         this.ctx = ctx;
@@ -71,7 +69,7 @@ public final class ComputeDispatch {
         this.sampler = sampler;
     }
 
-    public static long createLinearClampSampler(GpuContext ctx, String label) {
+    public static long createLinearClampSampler(GpuDevice ctx, String label) {
         return createClampSampler(ctx, label, VK10.VK_FILTER_LINEAR);
     }
 
@@ -80,11 +78,11 @@ public final class ComputeDispatch {
      * magnified many times over blurs authored texels together. Use {@link #createLinearClampSampler} for
      * anything continuous, such as a baked LUT.
      */
-    public static long createNearestClampSampler(GpuContext ctx, String label) {
+    public static long createNearestClampSampler(GpuDevice ctx, String label) {
         return createClampSampler(ctx, label, VK10.VK_FILTER_NEAREST);
     }
 
-    private static long createClampSampler(GpuContext ctx, String label, int filter) {
+    private static long createClampSampler(GpuDevice ctx, String label, int filter) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkSamplerCreateInfo info = VkSamplerCreateInfo.calloc(stack).sType$Default()
                     .magFilter(filter).minFilter(filter)
@@ -95,12 +93,12 @@ public final class ComputeDispatch {
                     .minLod(0.0f).maxLod(0.0f);
             LongBuffer handle = stack.mallocLong(1);
             check(VK10.vkCreateSampler(ctx.vk(), info, null, handle), "vkCreateSampler(" + label + ")");
-            RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_SAMPLER, handle.get(0), label);
+            ctx.nameObject(VK10.VK_OBJECT_TYPE_SAMPLER, handle.get(0), label);
             return handle.get(0);
         }
     }
 
-    public static ComputeDispatch create(GpuContext ctx, String label, byte[] spirv, String entryPoint,
+    public static ComputeDispatch create(GpuDevice ctx, String label, byte[] spirv, String entryPoint,
                                   List<Binding> bindings, int pushConstantBytes, int maxDispatches,
                                   long sampler) {
         VkDevice vk = ctx.vk();
@@ -129,7 +127,7 @@ public final class ComputeDispatch {
             check(VK10.vkCreateDescriptorSetLayout(vk, layoutInfo, null, handle),
                     "vkCreateDescriptorSetLayout(" + label + ")");
             long descriptorSetLayout = handle.get(0);
-            RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT,
+            ctx.nameObject(VK10.VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT,
                     descriptorSetLayout, label + " descriptor set layout");
 
             int poolTypeCount = (storageCount > 0 ? 1 : 0) + (sampledCount > 0 ? 1 : 0);
@@ -185,7 +183,7 @@ public final class ComputeDispatch {
             check(VK10.vkCreateComputePipelines(vk, VK10.VK_NULL_HANDLE, pipelineInfo, null,
                     pipelineHandle), "vkCreateComputePipelines(" + label + ")");
             VK10.vkDestroyShaderModule(vk, module, null);
-            RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_PIPELINE, pipelineHandle.get(0), label);
+            ctx.nameObject(VK10.VK_OBJECT_TYPE_PIPELINE, pipelineHandle.get(0), label);
 
             return new ComputeDispatch(ctx, bindings, descriptorSetLayout, descriptorPool,
                     descriptorSets, pipelineLayout, pipelineHandle.get(0), sampler);
@@ -221,7 +219,7 @@ public final class ComputeDispatch {
     private void updateDescriptorSet(int setIndex, GpuImage[] images) {
         boolean changed = false;
         for (int index = 0; index < images.length; index++) {
-            if (boundViews[setIndex][index] != images[index].view) {
+            if (boundViews[setIndex][index] != images[index].view()) {
                 changed = true;
                 break;
             }
@@ -234,7 +232,7 @@ public final class ComputeDispatch {
             VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(images.length, stack);
             for (int index = 0; index < images.length; index++) {
                 Binding kind = bindings.get(index);
-                infos.get(index).imageView(images[index].view).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
+                infos.get(index).imageView(images[index].view()).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
                 int descriptorType;
                 if (kind == Binding.SAMPLED) {
                     infos.get(index).sampler(sampler);
@@ -245,7 +243,7 @@ public final class ComputeDispatch {
                 writes.get(index).sType$Default().dstSet(descriptorSets[setIndex]).dstBinding(index)
                         .descriptorCount(1).descriptorType(descriptorType)
                         .pImageInfo(VkDescriptorImageInfo.create(infos.address(index), 1));
-                boundViews[setIndex][index] = images[index].view;
+                boundViews[setIndex][index] = images[index].view();
             }
             VK10.vkUpdateDescriptorSets(ctx.vk(), writes, null);
         }
@@ -273,6 +271,12 @@ public final class ComputeDispatch {
             return handle.get(0);
         } finally {
             MemoryUtil.memFree(code);
+        }
+    }
+
+    private static void check(int result, String operation) {
+        if (result != VK10.VK_SUCCESS) {
+            throw new IllegalStateException(operation + " failed: VkResult " + result);
         }
     }
 }

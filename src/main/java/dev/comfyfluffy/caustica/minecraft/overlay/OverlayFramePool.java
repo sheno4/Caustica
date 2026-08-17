@@ -5,9 +5,9 @@ import org.lwjgl.vulkan.VK10;
 import java.util.ArrayList;
 import java.util.List;
 
-import dev.comfyfluffy.caustica.rt.GpuContext;
-import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
-import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
+import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
+import dev.comfyfluffy.caustica.api.gpu.GpuFrameUse;
+import dev.comfyfluffy.caustica.api.gpu.GpuBuffer;
 
 /**
  * Per-frame host-visible vertex/index scratch for overlay passes, shared by every {@link OverlayFeature}.
@@ -22,28 +22,28 @@ public final class OverlayFramePool {
     private final List<GpuBuffer> acquiredThisFrame = new ArrayList<>();
 
     /** A host-visible vertex buffer of at least {@code bytes}, valid for this frame only. */
-    public GpuBuffer acquireVertex(GpuContext ctx, long bytes, String label) {
-        return acquire(ctx, bytes, VK10.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, label);
+    public GpuBuffer acquireVertex(GpuDevice device, long bytes, String label) {
+        return acquire(device, bytes, VK10.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, label);
     }
 
     /** A host-visible index buffer of at least {@code bytes}, valid for this frame only. */
-    public GpuBuffer acquireIndex(GpuContext ctx, long bytes, String label) {
-        return acquire(ctx, bytes, VK10.VK_BUFFER_USAGE_INDEX_BUFFER_BIT, label);
+    public GpuBuffer acquireIndex(GpuDevice device, long bytes, String label) {
+        return acquire(device, bytes, VK10.VK_BUFFER_USAGE_INDEX_BUFFER_BIT, label);
     }
 
-    private GpuBuffer acquire(GpuContext ctx, long bytes, int usage, String label) {
-        GpuBuffer b = ctx.createBuffer(Math.max(bytes, MIN_SIZE), usage, true, label);
+    private GpuBuffer acquire(GpuDevice device, long bytes, int usage, String label) {
+        GpuBuffer b = device.createBuffer(Math.max(bytes, MIN_SIZE), usage, true, label);
         acquiredThisFrame.add(b);
         return b;
     }
 
     /** Retire everything acquired this frame once its overlay commands have completed. */
-    public void endFrame(GpuContext ctx, RtGpuExecutor.GraphicsUse graphicsUse) {
+    public void endFrame(GpuFrameUse gpuUse) {
         if (acquiredThisFrame.isEmpty()) {
             return;
         }
         List<GpuBuffer> retired = List.copyOf(acquiredThisFrame);
-        ctx.gpuExecutor().retireAfterGraphics(graphicsUse, () -> retired.forEach(GpuBuffer::destroy));
+        gpuUse.retire(() -> retired.forEach(GpuBuffer::destroy));
         acquiredThisFrame.clear();
     }
 

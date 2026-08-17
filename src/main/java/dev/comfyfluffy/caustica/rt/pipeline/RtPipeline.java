@@ -33,7 +33,8 @@ import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.RtDeviceBringup;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
 import dev.comfyfluffy.caustica.rt.accel.RtAccel;
-import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
+import dev.comfyfluffy.caustica.api.gpu.GpuBuffer;
+import dev.comfyfluffy.caustica.spi.host.BaseColorTextureSink;
 import dev.comfyfluffy.caustica.rt.shader.WorldShaderCompiler;
 
 import static dev.comfyfluffy.caustica.rt.GpuContext.check;
@@ -61,7 +62,7 @@ import static org.lwjgl.vulkan.KHRRayTracingPipeline.vkGetRayTracingShaderGroupH
  * (for example, a primary environment miss and a shadow-visibility miss) are supported by passing an
  * array; {@code traceRayEXT}'s {@code missIndex} selects among them.
  */
-public final class RtPipeline {
+public final class RtPipeline implements BaseColorTextureSink {
     // A ring of descriptor sets: setTlas waits for the selected slot's exact prior graphics use before
     // rewriting it. Ring depth is only a performance choice that avoids routine host waits.
     private static final int RING = 6;
@@ -422,7 +423,7 @@ public final class RtPipeline {
                     VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR, true,
                     label + " shader binding table", ctx.shaderGroupBaseAlignment());
             for (int g = 0; g < groupCount; g++) {
-                MemoryUtil.memCopy(MemoryUtil.memAddress(handles) + (long) g * handleSize, sbt.mapped + g * stride, handleSize);
+                MemoryUtil.memCopy(MemoryUtil.memAddress(handles) + (long) g * handleSize, sbt.mapped() + g * stride, handleSize);
             }
             sbt.flush();
             return new RtPipeline(ctx, dsl, pool, sets, layout, pipeline, sbt, stride,
@@ -576,6 +577,7 @@ public final class RtPipeline {
     }
 
     /** Append or initialize one base-color texture index. Existing entries remain immutable in flight. */
+    @Override
     public void setBaseColorTexture(int textureIndex, long imageView, long sampler) {
         setBindlessTexture(WORLD_BASE_COLOR_TEXTURES, textureIndex, imageView, sampler);
     }
@@ -635,11 +637,11 @@ public final class RtPipeline {
             // The raygen region must name exactly one record (size == stride), so selecting a pass is a
             // matter of which record it points at.
             VkStridedDeviceAddressRegionKHR raygen = VkStridedDeviceAddressRegionKHR.calloc(stack)
-                    .deviceAddress(sbt.deviceAddress + (long) raygenIndex * sbtStride).stride(sbtStride).size(sbtStride);
+                    .deviceAddress(sbt.deviceAddress() + (long) raygenIndex * sbtStride).stride(sbtStride).size(sbtStride);
             VkStridedDeviceAddressRegionKHR miss = VkStridedDeviceAddressRegionKHR.calloc(stack)
-                    .deviceAddress(sbt.deviceAddress + (long) raygenCount * sbtStride).stride(sbtStride).size((long) missCount * sbtStride);
+                    .deviceAddress(sbt.deviceAddress() + (long) raygenCount * sbtStride).stride(sbtStride).size((long) missCount * sbtStride);
             VkStridedDeviceAddressRegionKHR hit = VkStridedDeviceAddressRegionKHR.calloc(stack)
-                    .deviceAddress(sbt.deviceAddress + (long) (raygenCount + missCount) * sbtStride).stride(sbtStride).size((long) hitGroupCount * sbtStride);
+                    .deviceAddress(sbt.deviceAddress() + (long) (raygenCount + missCount) * sbtStride).stride(sbtStride).size((long) hitGroupCount * sbtStride);
             VkStridedDeviceAddressRegionKHR callable = VkStridedDeviceAddressRegionKHR.calloc(stack);
             vkCmdTraceRaysKHR(cmd, raygen, miss, hit, callable, width, height, 1);
         }

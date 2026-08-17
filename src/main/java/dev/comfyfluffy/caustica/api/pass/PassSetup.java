@@ -1,18 +1,18 @@
 package dev.comfyfluffy.caustica.api.pass;
 
 import dev.comfyfluffy.caustica.api.OptionValues;
-import dev.comfyfluffy.caustica.rt.GpuContext;
-import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
-import dev.comfyfluffy.caustica.rt.accel.GpuImage;
+import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
+import dev.comfyfluffy.caustica.api.gpu.GpuBuffer;
+import dev.comfyfluffy.caustica.api.gpu.GpuImage;
 
 /**
  * Passed to {@link CausticaRenderPass#create} and {@link CausticaRenderPass#resize}. A pass allocates its
- * own {@link GpuImage}/{@link dev.comfyfluffy.caustica.rt.accel.GpuBuffer} resources through
- * {@link #context()} and owns their lifetime — the engine does not track or retire them.
+ * own {@link GpuImage}/{@link GpuBuffer} resources through
+ * {@link #device()} and owns their lifetime — the engine does not track or retire them.
  */
 public interface PassSetup {
-    /** Raw engine context: device, allocator, image/buffer creation, debug labelling. */
-    GpuContext context();
+    /** Supported pass-local Vulkan device and resource-allocation services. */
+    GpuDevice device();
 
     int displayWidth();
 

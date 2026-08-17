@@ -15,7 +15,7 @@ import java.util.List;
  * are not a conflict to resolve, they are a choice to offer — which is why the engine never picks between
  * them and the default is always the built-in, so installing an extension changes nothing until asked.
  *
- * <p>Selecting writes straight to the registry, where {@code RtComposite} already notices the composition
+ * <p>Selecting writes straight to the registry, where the RT runtime notices the composition
  * changed and rebuilds the world pipeline, and mirrors the id into {@code caustica.toml} so it survives a
  * restart. Reverting to the default clears the saved id rather than writing the default's own id, so a slot
  * left alone keeps tracking whatever the built-in default becomes.

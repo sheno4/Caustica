@@ -3,7 +3,7 @@ package dev.comfyfluffy.caustica.rt.light;
 import dev.comfyfluffy.caustica.engine.light.LightDescriptor;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
-import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
+import dev.comfyfluffy.caustica.api.gpu.GpuBuffer;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.VK10;
 
@@ -60,14 +60,14 @@ public final class RtLightScene {
                     (finiteCount + i) * RtRetainedLightSceneBuilder.GPU_FLOATS_PER_LIGHT,
                     distant.get(i));
         }
-        MemoryUtil.memFloatBuffer(slot.buffer.mapped, lights.length).put(lights);
+        MemoryUtil.memFloatBuffer(slot.buffer.mapped(), lights.length).put(lights);
         if (finiteData.packedNodes().length > 0) {
-            MemoryUtil.memFloatBuffer(slot.buffer.mapped + nodeOffset,
+            MemoryUtil.memFloatBuffer(slot.buffer.mapped() + nodeOffset,
                     finiteData.packedNodes().length).put(finiteData.packedNodes());
         }
         slot.buffer.flush(0L, totalBytes);
-        return new Frame(slot.buffer.deviceAddress,
-                finiteData.packedNodes().length > 0 ? slot.buffer.deviceAddress + nodeOffset : 0L,
+        return new Frame(slot.buffer.deviceAddress(),
+                finiteData.packedNodes().length > 0 ? slot.buffer.deviceAddress() + nodeOffset : 0L,
                 finiteData.rootNodeIndex(), finiteCount, finiteCount, distant.size(),
                 (float) metersPerWorldUnit, slot);
     }

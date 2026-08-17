@@ -21,11 +21,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /** Compiles and caches immutable world programs independently of any world or resource-pack epoch. */
-public final class RtProgramManager {
-    public static final RtProgramManager INSTANCE = new RtProgramManager();
-
+final class RtProgramManager {
     private static final AtomicInteger THREAD_ID = new AtomicInteger();
-    private static final ExecutorService BUILD_EXECUTOR = Executors.newSingleThreadExecutor(runnable -> {
+    private final ExecutorService buildExecutor = Executors.newSingleThreadExecutor(runnable -> {
         Thread thread = new Thread(runnable, "Caustica shader build-" + THREAD_ID.incrementAndGet());
         thread.setDaemon(true);
         return thread;
@@ -39,7 +37,7 @@ public final class RtProgramManager {
     private Pending pending;
     private Failed failed;
 
-    private RtProgramManager() {
+    RtProgramManager() {
     }
 
     public synchronized void configureCacheRoot(Path root) {
@@ -71,7 +69,7 @@ public final class RtProgramManager {
         Path root = Objects.requireNonNull(cacheRoot, "shader cache root was not configured by the host");
         AtomicBoolean abandoned = new AtomicBoolean();
         pending = new Pending(key, abandoned, CompletableFuture.supplyAsync(
-                () -> build(root, key, abandoned), BUILD_EXECUTOR));
+                () -> build(root, key, abandoned), buildExecutor));
         CausticaMod.LOGGER.info("Preparing world program candidate off thread");
     }
 
@@ -132,6 +130,14 @@ public final class RtProgramManager {
         failed = null;
         abandonPending();
         requested = null;
+    }
+
+    /** Stop process-scoped compilation work during client shutdown. */
+    synchronized void shutdown() {
+        abandonPending();
+        buildExecutor.shutdownNow();
+        resetActive();
+        cache.clear();
     }
 
     private void pollPending() {

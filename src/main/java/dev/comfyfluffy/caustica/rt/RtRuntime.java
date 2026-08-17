@@ -6,11 +6,22 @@ import dev.comfyfluffy.caustica.api.CausticaApi;
 import dev.comfyfluffy.caustica.api.CausticaRegistry;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.api.pass.CausticaRenderPass;
+import dev.comfyfluffy.caustica.engine.frame.FrameSnapshot;
 import dev.comfyfluffy.caustica.engine.frame.SceneResources;
+import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
 import dev.comfyfluffy.caustica.ngx.NgxRuntime;
+import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
+import dev.comfyfluffy.caustica.spi.host.RuntimeHost;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg;
+import dev.comfyfluffy.caustica.rt.pipeline.RtExposure;
 import dev.comfyfluffy.caustica.rt.provider.ProviderManager;
 import dev.comfyfluffy.caustica.slang.SlangRuntime;
+
+import java.io.IOException;
+import java.nio.file.Path;
+import it.unimi.dsi.fastutil.longs.LongList;
+import org.lwjgl.vulkan.VkDevice;
+import org.lwjgl.vulkan.VkQueue;
 
 /** Owns the live RT session and publishes one immutable rendering mode for each frame. */
 public final class RtRuntime {
@@ -27,25 +38,26 @@ public final class RtRuntime {
     private State state = State.OFF;
     private Session session;
     private boolean frameActive;
-    private RtRuntimeHost host;
+    private RuntimeHost host;
+    private final RtProgramManager programManager = new RtProgramManager();
     private final RtLifecycleCoordinator lifecycle = new RtLifecycleCoordinator(
             new RtLifecycleCoordinator.Listener() {
                 @Override
                 public void processStopping() {
-                    RtProgramManager.INSTANCE.resetActive();
+                    programManager.shutdown();
                 }
 
                 @Override
                 public void resourcePackReloadStarting(RtLifecycleCoordinator.ResourcePackEpoch pending) {
                     if (session != null) {
-                        RtComposite.INSTANCE.onResourceReloadStart();
+                        session.renderer.onResourceReloadStart();
                     }
                 }
 
                 @Override
                 public void resourcePackApplied(RtLifecycleCoordinator.ResourcePackEpoch epoch) {
                     if (session != null) {
-                        RtComposite.INSTANCE.onResourcePackApplied();
+                        session.renderer.onResourcePackApplied();
                     }
                 }
 
@@ -53,9 +65,9 @@ public final class RtRuntime {
                 public void resourcePackReloadFailed(RtLifecycleCoordinator.ResourcePackEpoch pending,
                                                      Throwable failure) {
                     if (session != null) {
-                        RtComposite.INSTANCE.onResourceReloadFailed();
+                        session.renderer.onResourceReloadFailed();
                         if (lifecycle.resourcePackEpoch() != null) {
-                            RtComposite.INSTANCE.onResourcePackApplied();
+                            session.renderer.onResourcePackApplied();
                         }
                     }
                 }
@@ -78,8 +90,13 @@ public final class RtRuntime {
     private RtRuntime() {
     }
 
-    public void installHost(RtRuntimeHost installedHost) {
+    public void installHost(RuntimeHost installedHost) {
         host = installedHost;
+    }
+
+    /** Configure the process shader cache before the first runtime activation. */
+    public void configureShaderCache(Path cacheRoot) {
+        programManager.configureCacheRoot(cacheRoot);
     }
 
     /** Start process-scoped lifecycle tracking after the host has installed its extensions and options. */
@@ -124,14 +141,6 @@ public final class RtRuntime {
         return lifecycle.resourcePackEpoch() != null && lifecycle.pendingResourcePackEpoch() == null;
     }
 
-    /** The live contribution instances for the current runtime activation. */
-    public CausticaRegistry.RuntimeContributions runtimeContributions() {
-        if (session == null) {
-            throw new IllegalStateException("No RT render session is active");
-        }
-        return session.contributions;
-    }
-
     /** Route host-side capture to the current scoped render pass when it exists. */
     public <T extends CausticaRenderPass> T renderPass(ResourceId id, Class<T> type) {
         if (session == null) {
@@ -142,12 +151,117 @@ public final class RtRuntime {
     }
 
     /** Whether a program's selected-slot closure matches the live runtime activation. */
-    public boolean matchesRuntimeActivation(RtProgramManager.Program program) {
+    boolean matchesRuntimeActivation(RtProgramManager.Program program) {
         return session != null && session.matches(program.key().selection());
     }
 
-    public static RtRuntimeHost host() {
-        RtRuntimeHost installedHost = INSTANCE.host;
+    /** Monotonic index of RT composite attempts across runtime activations. */
+    public static long frameCounter() {
+        return RtFrameRenderer.frameCounter();
+    }
+
+    public boolean rendererFailed() {
+        return session != null && session.renderer.hasFailed();
+    }
+
+    public RtExposure exposureOrNull() {
+        return session != null ? session.renderer.exposure() : null;
+    }
+
+    public boolean exportLatestResidualExposureExr(Path outputPath) throws IOException {
+        return session != null && session.renderer.exportLatestResidualExposureExr(outputPath);
+    }
+
+    public boolean requiresSourceWorldFallback() {
+        return session == null || session.renderer.requiresSourceWorldFallback();
+    }
+
+    public void resetExposureHistory() {
+        if (session != null) session.renderer.resetExposureHistory();
+    }
+
+    public void resetRendererFailure() {
+        if (session != null) session.renderer.resetFailureLatch();
+    }
+
+    public void captureFrame(FrameSnapshot snapshot) {
+        if (session != null) session.renderer.captureFrame(snapshot);
+    }
+
+    public void beginFrame() {
+        if (frameActive && session != null) session.renderer.beginFrame();
+    }
+
+    public void recordOverlayPasses() {
+        if (session != null) session.renderer.recordOverlayPasses();
+    }
+
+    public void finishGraphicsUse() {
+        if (session != null) session.renderer.finishGraphicsUse();
+    }
+
+    public void endFrame() {
+        if (session != null) session.renderer.endFrame();
+    }
+
+    public boolean composite(long nativeColorImage, int width, int height) {
+        return session != null && session.renderer.composite(nativeColorImage, width, height);
+    }
+
+    public boolean isHdrPresentActive() {
+        return session != null && session.presenter.isHdrPresentActive();
+    }
+
+    public boolean isPqSdrPresentActive() {
+        return session != null && session.presenter.isPqSdrPresentActive();
+    }
+
+    public boolean presentHdr(GraphicsSubmission submission, long swapchainImage, int width, int height,
+            long acquireSemaphore, long presentSemaphore, UiPresentationResources ui) {
+        if (session == null || !session.presenter.isHdrPresentActive()) return false;
+        session.presenter.presentHdr(submission, swapchainImage, width, height, acquireSemaphore, presentSemaphore, ui);
+        return true;
+    }
+
+    public boolean presentSdrToPq(GraphicsSubmission submission, long swapchainImage, int width, int height,
+            long sourceView, long acquireSemaphore, long presentSemaphore) {
+        return session != null && session.presenter.presentSdrToPq(submission, swapchainImage, width, height,
+                sourceView, acquireSemaphore, presentSemaphore);
+    }
+
+    public boolean frameGenerationActive(boolean sceneAvailable) {
+        return session != null && session.presenter.isActive(sceneAvailable);
+    }
+
+    public long hdrBackbufferView() {
+        return session != null ? session.presenter.hdrBackbufferView() : 0L;
+    }
+
+    public long hdrBackbufferImage() {
+        return session != null ? session.presenter.hdrBackbufferImage() : 0L;
+    }
+
+    public void prepareGeneratedFrames(GraphicsSubmission submission, VkDevice device, long swapchain,
+            LongList swapchainImages, long[] presentSemaphores, int swapWidth, int swapHeight,
+            long backbufferView, long sourceImage, int sourceWidth, int sourceHeight, int generatedCount,
+            boolean hdrBackbuffer, UiPresentationResources ui) {
+        if (session != null) {
+            session.presenter.prepareExtraFrames(submission, device, swapchain, swapchainImages, presentSemaphores,
+                    swapWidth, swapHeight, backbufferView, sourceImage, sourceWidth, sourceHeight, generatedCount,
+                    hdrBackbuffer, ui);
+        }
+    }
+
+    public void flushGeneratedPresents(long swapchain, VkQueue presentQueue) {
+        if (session != null) session.presenter.flushPendingPresents(swapchain, presentQueue);
+    }
+
+    public void captureHudless(long sourceImage, int width, int height, UiPresentationResources ui) {
+        if (session != null) session.presenter.captureHudless(sourceImage, width, height, ui);
+    }
+
+    public static RuntimeHost host() {
+        RuntimeHost installedHost = INSTANCE.host;
         if (installedHost == null) {
             throw new IllegalStateException("RT runtime host is not installed");
         }
@@ -159,8 +273,8 @@ public final class RtRuntime {
                      int displayWidth, int displayHeight, Runnable reconfigureSurface) {
         lifecycle.drainResourcePackCompletions();
         CausticaRegistry.Selection selection = CausticaApi.registry().selection();
-        RtProgramManager.INSTANCE.request(selection, RtDeviceBringup.serExtEnabled());
-        RtProgramManager.Program candidate = RtProgramManager.INSTANCE.candidate();
+        programManager.request(selection, RtDeviceBringup.serExtEnabled());
+        RtProgramManager.Program candidate = programManager.candidate();
         boolean requested = CausticaConfig.Rt.ENABLED.value();
         if (requested && session != null && !session.matches(selection) && candidate != null) {
             rotateRuntimeActivation(reconfigureSurface);
@@ -190,7 +304,7 @@ public final class RtRuntime {
             fail(reconfigureSurface);
             return;
         }
-        if (RtComposite.INSTANCE.hasFailed()) {
+        if (session.renderer.hasFailed()) {
             fail(reconfigureSurface);
             return;
         }
@@ -200,13 +314,13 @@ public final class RtRuntime {
         if (!starting) {
             return;
         }
-        if (!startupSceneReady || !RtComposite.INSTANCE.completeStartupBoundary()) {
+        if (!startupSceneReady || !session.renderer.completeStartupBoundary()) {
             return;
         }
 
         state = State.ACTIVE;
-        RtComposite.INSTANCE.resetExposureHistory();
-        RtComposite.INSTANCE.resetFailureLatch();
+        session.renderer.resetExposureHistory();
+        session.renderer.resetFailureLatch();
         host().resetPresentationFailure();
         if (CausticaConfig.Rt.Hdr.ENABLED.value()) {
             reconfigureSurface.run();
@@ -304,16 +418,17 @@ public final class RtRuntime {
     private void startRuntimeActivation(RtLifecycleCoordinator.RenderSessionEpoch renderSessionEpoch) {
         RtLifecycleCoordinator.RuntimeActivationEpoch activationEpoch = lifecycle.beginRuntimeActivation();
         CausticaRegistry.RuntimeContributions contributions = null;
-        boolean providersInstalled = false;
+        ProviderManager providers = null;
         try {
             SlangRuntime.INSTANCE.resume();
             contributions = CausticaApi.registry().createRuntimeContributions();
-            ProviderManager.INSTANCE.bindSceneGeometry(RtComposite.INSTANCE.sceneGeometry());
-            ProviderManager.INSTANCE.beginSession(contributions);
-            providersInstalled = true;
-            session = new Session(renderSessionEpoch, activationEpoch, contributions);
+            providers = new ProviderManager(contributions);
+            RtFramePresenter presenter = new RtFramePresenter();
+            RtFrameRenderer renderer = new RtFrameRenderer(programManager, providers, presenter, contributions);
+            providers.bindSceneGeometry(renderer.sceneGeometry());
+            session = new Session(renderSessionEpoch, activationEpoch, contributions, providers, renderer, presenter);
             if (hasAppliedResourcePack()) {
-                RtComposite.INSTANCE.onResourcePackApplied();
+                renderer.onResourcePackApplied();
             }
             if (lifecycle.worldEpoch() != null) {
                 session.onWorldChanged();
@@ -325,8 +440,8 @@ public final class RtRuntime {
                 if (session != null) {
                     session.closeActivation();
                     session = null;
-                } else if (providersInstalled || contributions != null) {
-                    disposeUnstartedContributions(contributions);
+                } else if (contributions != null) {
+                    disposeUnstartedContributions(contributions, providers);
                 }
             } finally {
                 lifecycle.closeRuntimeActivation(activationEpoch);
@@ -337,11 +452,12 @@ public final class RtRuntime {
         }
     }
 
-    private static void disposeUnstartedContributions(CausticaRegistry.RuntimeContributions contributions) {
-        ProviderManager.INSTANCE.beginSession(contributions);
-        ProviderManager.INSTANCE.stopProviders();
-        ProviderManager.INSTANCE.shutdownResources();
-        ProviderManager.INSTANCE.endSession();
+    private static void disposeUnstartedContributions(CausticaRegistry.RuntimeContributions contributions,
+            ProviderManager providers) {
+        ProviderManager closing = providers != null ? providers : new ProviderManager(contributions);
+        closing.stopProviders();
+        closing.shutdownResources();
+        closing.endSession();
         for (CausticaRenderPass pass : contributions.renderPasses().values()) {
             pass.destroy();
         }
@@ -413,19 +529,26 @@ public final class RtRuntime {
         private final RtLifecycleCoordinator.RenderSessionEpoch renderSessionEpoch;
         private final RtLifecycleCoordinator.RuntimeActivationEpoch activationEpoch;
         private final CausticaRegistry.RuntimeContributions contributions;
+        private final ProviderManager providers;
+        private final RtFrameRenderer renderer;
+        private final RtFramePresenter presenter;
         private GpuContext context;
 
         private Session(RtLifecycleCoordinator.RenderSessionEpoch renderSessionEpoch,
                         RtLifecycleCoordinator.RuntimeActivationEpoch activationEpoch,
-                        CausticaRegistry.RuntimeContributions contributions) {
+                        CausticaRegistry.RuntimeContributions contributions, ProviderManager providers,
+                        RtFrameRenderer renderer, RtFramePresenter presenter) {
             this.renderSessionEpoch = renderSessionEpoch;
             this.activationEpoch = activationEpoch;
             this.contributions = contributions;
+            this.providers = providers;
+            this.renderer = renderer;
+            this.presenter = presenter;
         }
 
         private void onWorldChanged() {
-            ProviderManager.INSTANCE.onWorldChanged();
-            RtComposite.INSTANCE.onWorldChanged();
+            providers.onWorldChanged();
+            renderer.onWorldChanged();
         }
 
         private boolean matches(CausticaRegistry.Selection selection) {
@@ -447,21 +570,21 @@ public final class RtRuntime {
                 INSTANCE.lifecycle.observeDevice(context);
             }
 
-            boolean resourcesReady = RtComposite.INSTANCE.ensureResourcesReady(context, sceneResources);
+            boolean resourcesReady = renderer.ensureResourcesReady(context, sceneResources);
             if (resourcesReady) {
                 RtFrameStats.FRAME.beginIfInactive();
-                ProviderManager.INSTANCE.updateScenes();
-                ProviderManager.PrimaryScene primaryScene = ProviderManager.INSTANCE.primaryScene();
+                providers.updateScenes();
+                ProviderManager.PrimaryScene primaryScene = providers.primaryScene();
                 if (primaryScene != null) {
-                    ProviderManager.INSTANCE.submitGeometryUpdates(context, primaryScene.retained().origin());
+                    providers.submitGeometryUpdates(context, primaryScene.retained().origin());
                 }
-                RtComposite.INSTANCE.sceneGeometry().progress(context);
+                renderer.sceneGeometry().progress(context);
             }
             if (!sceneResources.sceneReady()) {
                 return false;
             }
             if (starting && (displayWidth <= 0 || displayHeight <= 0
-                    || !RtComposite.INSTANCE.ensurePresentationResourcesReady(
+                    || !renderer.ensurePresentationResourcesReady(
                     context, sceneId, displayWidth, displayHeight))) {
                 return false;
             }
@@ -473,10 +596,10 @@ public final class RtRuntime {
 
         void closeActivation() {
             host().resetFrameBridge();
-            ProviderManager.INSTANCE.stopProviders();
+            providers.stopProviders();
             if (context == null) {
-                ProviderManager.INSTANCE.shutdownResources();
-                ProviderManager.INSTANCE.endSession();
+                providers.shutdownResources();
+                providers.endSession();
                 host().destroyUiPresentation();
                 return;
             }
@@ -484,13 +607,13 @@ public final class RtRuntime {
             // Scene producers and CPU workers are stopped. Drain the shared per-device submitter and wait
             // every queue before the remaining providers or runtime owners free session GPU resources.
             context.gpuExecutor().drainAndWaitIdle();
-            RtComposite.INSTANCE.destroy();
-            ProviderManager.INSTANCE.shutdownResources();
-            ProviderManager.INSTANCE.endSession();
+            renderer.destroy();
+            providers.shutdownResources();
+            providers.endSession();
             host().destroyUiPresentation();
             host().resetSceneTextures();
             RtDlssFg.INSTANCE.destroy();
-            RtFramePresenter.INSTANCE.destroy(context.vk());
+            presenter.destroy(context.vk());
             RtReflex.INSTANCE.destroy(context.vk());
             // GpuContext owns per-device infrastructure and survives RT sessions. Client shutdown destroys it.
             context = null;

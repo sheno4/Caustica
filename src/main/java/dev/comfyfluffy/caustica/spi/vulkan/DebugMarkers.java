@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.rt.backend;
+package dev.comfyfluffy.caustica.spi.vulkan;
 
 import org.lwjgl.vulkan.VkCommandBuffer;
 
@@ -20,8 +20,7 @@ public interface DebugMarkers {
     Scope begin(VkCommandBuffer commandBuffer, String label);
 
     interface Scope extends AutoCloseable {
-        Scope NOOP = () -> {
-        };
+        Scope NOOP = () -> { };
 
         @Override
         void close();

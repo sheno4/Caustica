@@ -1,8 +1,8 @@
 package dev.comfyfluffy.caustica.rt;
 
 import dev.comfyfluffy.caustica.CausticaConfig;
-import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
-import dev.comfyfluffy.caustica.rt.accel.GpuImage;
+import dev.comfyfluffy.caustica.api.gpu.GpuBuffer;
+import dev.comfyfluffy.caustica.api.gpu.GpuImage;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDebugPresentPipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDisplayPipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtExposure;
@@ -16,6 +16,7 @@ import java.io.IOException;
 
 /** Owns images, buffers, LUTs, and pipelines whose validity is tied to the current frame extent. */
 final class RtFrameResources {
+    private final RtFramePresenter presenter;
     private static final long PATH_RECORD_BYTES = 48L;
     RtDisplayPipeline displayPipeline;
     RtDebugPresentPipeline debugPresentPipeline;
@@ -46,16 +47,20 @@ final class RtFrameResources {
     boolean renderSizeRrEnabled;
     int renderSizeRrQuality = Integer.MIN_VALUE;
 
+    RtFrameResources(RtFramePresenter presenter) {
+        this.presenter = presenter;
+    }
+
     void bindGuideImages(RtPipeline pipeline) {
         if (pipeline == null || gNormal == null) {
             return;
         }
-        pipeline.setExtraStorageImage(0, gNormal.view);
-        pipeline.setExtraStorageImage(1, gAlbedo.view);
-        pipeline.setExtraStorageImage(2, gDepth.view);
-        pipeline.setExtraStorageImage(3, gMotion.view);
-        pipeline.setExtraStorageImage(4, gSpecAlbedo.view);
-        pipeline.setExtraStorageImage(5, gSpecMotion.view);
+        pipeline.setExtraStorageImage(0, gNormal.view());
+        pipeline.setExtraStorageImage(1, gAlbedo.view());
+        pipeline.setExtraStorageImage(2, gDepth.view());
+        pipeline.setExtraStorageImage(3, gMotion.view());
+        pipeline.setExtraStorageImage(4, gSpecAlbedo.view());
+        pipeline.setExtraStorageImage(5, gSpecMotion.view());
     }
 
     void ensurePresentationPipelines(GpuContext context, RtLookPackage look) throws IOException {
@@ -101,7 +106,7 @@ final class RtFrameResources {
             return false;
         }
 
-        RtFramePresenter.INSTANCE.invalidateRenderedFrame();
+        presenter.invalidateRenderedFrame();
         context.waitIdle();
         destroySizedImages();
         displayW = width;
@@ -148,11 +153,11 @@ final class RtFrameResources {
         passManager.setExposureImage(exposure.image());
         displayPipeline.invalidateImages();
         if (worldPipeline != null) {
-            worldPipeline.setStorageImage(output.view);
+            worldPipeline.setStorageImage(output.view());
             bindGuideImages(worldPipeline);
         }
-        debugPresentPipeline.setImages(displayImage.view, gNormal.view, gAlbedo.view, gDepth.view,
-                gMotion.view, gSpecAlbedo.view, gSpecMotion.view, rrOutput.view, exposure.image().view,
+        debugPresentPipeline.setImages(displayImage.view(), gNormal.view(), gAlbedo.view(), gDepth.view(),
+                gMotion.view(), gSpecAlbedo.view(), gSpecMotion.view(), rrOutput.view(), exposure.image().view(),
                 exposure.stateBuffer());
         return true;
     }

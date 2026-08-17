@@ -1,9 +1,8 @@
 package dev.comfyfluffy.caustica.minecraft.terrain;
 
-import dev.comfyfluffy.caustica.engine.material.EmissionFootprint;
 import dev.comfyfluffy.caustica.api.provider.SceneMesh;
-import dev.comfyfluffy.caustica.rt.material.RtMaterialDesc;
-import dev.comfyfluffy.caustica.rt.material.RtMaterialRegistry;
+import dev.comfyfluffy.caustica.engine.material.EmissionFootprint;
+import dev.comfyfluffy.caustica.spi.host.MaterialEpochView;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 
@@ -25,7 +24,7 @@ import java.util.List;
  * <p><b>Radiance matches the closest-hit.</b> Per-texel shaded emission is {@code albedo * mask *
  * emissionLuminance}, where the mask source (LabPBR {@code _s} blue channel / heuristic mask x block
  * light / uniform block light) is exactly what {@code world.rchit.evaluateMaterial} resolves, and
- * {@code emissionLuminance} is {@link RtMaterialDesc#emissionLuminance()} — the material-compile-time
+ * {@code emissionLuminance} is the material-epoch luminance — the material-compile-time
  * baseline replaced by any resource-pack override, the single knob shared with the shader. The
  * per-material {@link EmissionFootprint} stores the same premultiplied linear emission color and mask
  * coverage. The light's radiance is the mean over its bounding rectangle (dark texels included — a uniform-rectangle
@@ -72,7 +71,7 @@ final class RtLightCollector {
     static void collectClass(FloatArrayList out, FloatArrayList verts, FloatArrayList prim,
                               List<SceneMesh.TriangleSurface> surfaces,
                               FloatArrayList cornerUv, TextureAtlasSprite[] sprites,
-                              RtMaterialRegistry.Snapshot materials, float minFillRatio) {
+                              MaterialEpochView materials, float minFillRatio) {
         int quads = prim.size() / (2 * PRIM_FLOATS);
         float[] v = verts.elements();
         float[] p = prim.elements();
@@ -80,10 +79,9 @@ final class RtLightCollector {
         for (int k = 0; k < quads; k++) {
             int pb = k * 2 * PRIM_FLOATS;
             int materialId = Float.floatToRawIntBits(p[pb + 8]);
-            RtMaterialDesc desc = materials.material(materialId);
             float leLuminanceEps = 0.001f * materials.defaultUniformEmissionLuminanceCdM2();
-            RtMaterialDesc.EmissionSource source = desc.emissionSource();
-            if (source == RtMaterialDesc.EmissionSource.NONE) {
+            MaterialEpochView.EmissionSource source = materials.emissionSource(materialId);
+            if (source == MaterialEpochView.EmissionSource.NONE) {
                 continue;
             }
 
@@ -97,7 +95,7 @@ final class RtLightCollector {
                 continue;
             }
             EmissionFootprint footprint = materials.emissionFootprint(materialId);
-            if (footprint == null && source != RtMaterialDesc.EmissionSource.GEOMETRY_UNIFORM) {
+            if (footprint == null && source != MaterialEpochView.EmissionSource.GEOMETRY_UNIFORM) {
                 continue; // masked source with no emissive texels
             }
             int scan = footprint != null
@@ -203,14 +201,14 @@ final class RtLightCollector {
             // Rectangle-mean radiance: every emissive sample lies inside the rectangle, so
             // sum/rectSamples preserves the quad's total emissive power at rectArea. emissionLuminance()
             // is the material's final HDR luminance (catalog baseline or absolute JSON override,
-            // baked in RtMaterialRegistry) — the single knob shared with world.rchit's direct-hit shading.
+            // published in the material epoch) — the single knob shared with world.rchit's direct-hit shading.
             // Footprint averages are already linear BT.709; captured vertex/biome tint is still
             // sRGB-encoded. Combine in the authored basis, use its invariant Y for the membership gate,
             // then store the emitter in the scene's linear ACEScg transport basis.
             float tintR = srgbToLinear(p[pb + 4]);
             float tintG = srgbToLinear(p[pb + 5]);
             float tintB = srgbToLinear(p[pb + 6]);
-            float scale = factor * desc.emissionLuminance() / rectSamples;
+            float scale = factor * materials.emissionLuminanceCdM2(materialId) / rectSamples;
             float le709R = sumR * scale * tintR;
             float le709G = sumG * scale * tintG;
             float le709B = sumB * scale * tintB;

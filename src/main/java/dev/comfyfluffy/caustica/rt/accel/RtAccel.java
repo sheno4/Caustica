@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.rt.accel;
 
+import dev.comfyfluffy.caustica.api.gpu.GpuBuffer;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
@@ -11,7 +12,6 @@ import org.lwjgl.vulkan.VkAccelerationStructureBuildSizesInfoKHR;
 import org.lwjgl.vulkan.VkAccelerationStructureCreateInfoKHR;
 import org.lwjgl.vulkan.VkAccelerationStructureDeviceAddressInfoKHR;
 import org.lwjgl.vulkan.VkAccelerationStructureGeometryKHR;
-import org.lwjgl.vulkan.VkAccelerationStructureInstanceKHR;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkCopyAccelerationStructureInfoKHR;
 import org.lwjgl.vulkan.VkDependencyInfo;
@@ -29,7 +29,6 @@ import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor.GraphicsUse;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor.TrackedGraphicsUse;
 
-import java.util.Arrays;
 import java.util.List;
 
 import static org.lwjgl.vulkan.EXTOpacityMicromap.VK_ACCESS_2_MICROMAP_READ_BIT_EXT;
@@ -47,7 +46,6 @@ import static org.lwjgl.vulkan.EXTOpacityMicromap.vkDestroyMicromapEXT;
 import static org.lwjgl.vulkan.EXTOpacityMicromap.vkGetMicromapBuildSizesEXT;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_COMPACTION_BIT_KHR;
 import static org.lwjgl.vulkan.KHRRayTracingPositionFetch.VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_DATA_ACCESS_BIT_KHR;
@@ -59,8 +57,6 @@ import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_COPY_ACCELERATION_STR
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_GEOMETRY_NO_DUPLICATE_ANY_HIT_INVOCATION_BIT_KHR;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_GEOMETRY_OPAQUE_BIT_KHR;
-import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
-import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_GEOMETRY_TYPE_INSTANCES_KHR;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_GEOMETRY_TYPE_TRIANGLES_KHR;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_INDEX_TYPE_NONE_KHR;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_QUERY_TYPE_ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR;
@@ -79,11 +75,10 @@ import static org.lwjgl.vulkan.KHRSynchronization2.VK_PIPELINE_STAGE_2_COMPUTE_S
 import static org.lwjgl.vulkan.KHRSynchronization2.vkCmdPipelineBarrier2KHR;
 
 /**
- * A built acceleration structure (BLAS or TLAS) plus its backing buffer. Build with the static
- * factories; free with {@link #destroy()}. One BLAS per retained geometry batch; one TLAS rebuilt per frame.
+ * A built acceleration structure plus its backing buffer. BLAS factories and lifetime operations remain
+ * here; {@link TlasBuilder} owns frame-level TLAS preparation and reuse.
  */
 public final class RtAccel {
-    private static final long TLAS_INSTANCE_ADDRESS_ALIGNMENT = 16L;
     // vkCmdBuildMicromapsEXT requires both data.deviceAddress and triangleArray.deviceAddress to be
     // multiples of 256 (VUID-vkCmdBuildMicromapsEXT-pInfos-07515).
     private static final long MICROMAP_INPUT_ADDRESS_ALIGNMENT = 256L;
@@ -96,11 +91,11 @@ public final class RtAccel {
 
     private static long scratchAddress(GpuContext ctx, GpuBuffer scratch) {
         long alignment = ctx.accelerationStructureScratchAlignment();
-        if ((scratch.deviceAddress & (alignment - 1L)) != 0L) {
+        if ((scratch.deviceAddress() & (alignment - 1L)) != 0L) {
             throw new IllegalStateException("Scratch device address 0x"
-                    + Long.toUnsignedString(scratch.deviceAddress, 16) + " is not aligned to " + alignment);
+                    + Long.toUnsignedString(scratch.deviceAddress(), 16) + " is not aligned to " + alignment);
         }
-        return scratch.deviceAddress;
+        return scratch.deviceAddress();
     }
 
     public final long handle;
@@ -113,7 +108,7 @@ public final class RtAccel {
     private final VkDevice vk;
     private boolean destroyed;
 
-    private RtAccel(VkDevice vk, long handle, long deviceAddress, GpuBuffer backing) {
+    RtAccel(VkDevice vk, long handle, long deviceAddress, GpuBuffer backing) {
         this(vk, handle, deviceAddress, backing, true);
     }
 
@@ -456,7 +451,7 @@ public final class RtAccel {
                     debugLabel + " backing");
             GpuBuffer scratch = createScratchBuffer(ctx, sizes.buildScratchSize(), debugLabel + " build scratch");
             RtAccel accel = createBlasOn(ctx, stack, backing, sizes.accelerationStructureSize(), true, debugLabel);
-            return new PreparedBlas(accel, scratch, null, positions.deviceAddress, indices.deviceAddress, vertexCount - 1,
+            return new PreparedBlas(accel, scratch, null, positions.deviceAddress(), indices.deviceAddress(), vertexCount - 1,
                     indexCount / 3, opaque, debugLabel, false, false);
         }
     }
@@ -495,7 +490,7 @@ public final class RtAccel {
                 RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_QUERY_POOL, accel.compactionQueryPool,
                         debugLabel + " compacted-size query");
             }
-            return PreparedBlas.retained(accel, scratch, null, positions.deviceAddress, indices.deviceAddress, vertexCount - 1,
+            return PreparedBlas.retained(accel, scratch, null, positions.deviceAddress(), indices.deviceAddress(), vertexCount - 1,
                     classTris, opacityMicromap, debugLabel);
         } catch (Throwable t) {
             if (accel != null) {
@@ -569,13 +564,13 @@ public final class RtAccel {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             data = ctx.createAsyncAlignedBuffer(input.data().length, inputUsage, true, label + " data",
                     MICROMAP_INPUT_ADDRESS_ALIGNMENT);
-            long dataAddress = data.deviceAddress;
-            MemoryUtil.memByteBuffer(data.mapped, input.data().length).put(input.data());
+            long dataAddress = data.deviceAddress();
+            MemoryUtil.memByteBuffer(data.mapped(), input.data().length).put(input.data());
             long triangleBytes = input.triangles().length;
             triangles = ctx.createAsyncAlignedBuffer(triangleBytes, inputUsage, true, label + " triangles",
                     MICROMAP_INPUT_ADDRESS_ALIGNMENT);
-            long triangleArrayAddress = triangles.deviceAddress;
-            MemoryUtil.memByteBuffer(triangles.mapped, input.triangles().length).put(input.triangles());
+            long triangleArrayAddress = triangles.deviceAddress();
+            MemoryUtil.memByteBuffer(triangles.mapped(), input.triangles().length).put(input.triangles());
             data.flush();
             triangles.flush();
 
@@ -587,7 +582,7 @@ public final class RtAccel {
             backing = ctx.createAsyncBuffer(sizes.micromapSize(), VK_BUFFER_USAGE_MICROMAP_STORAGE_BIT_EXT, false,
                     label + " backing");
             VkMicromapCreateInfoEXT ci = VkMicromapCreateInfoEXT.calloc(stack).sType$Default()
-                    .buffer(backing.handle).offset(0).size(sizes.micromapSize()).type(VK_MICROMAP_TYPE_OPACITY_MICROMAP_EXT);
+                    .buffer(backing.handle()).offset(0).size(sizes.micromapSize()).type(VK_MICROMAP_TYPE_OPACITY_MICROMAP_EXT);
             java.nio.LongBuffer pMicromap = stack.mallocLong(1);
             GpuContext.check(vkCreateMicromapEXT(vk, ci, null, pMicromap), "vkCreateMicromapEXT");
             handle = pMicromap.get(0);
@@ -626,8 +621,8 @@ public final class RtAccel {
                     inputUsage, false, label + " data", MICROMAP_INPUT_ADDRESS_ALIGNMENT);
             triangles = ctx.createAsyncAlignedBuffer((long) input.triangleCount() * VkMicromapTriangleEXT.SIZEOF,
                     inputUsage, false, label + " triangles", MICROMAP_INPUT_ADDRESS_ALIGNMENT);
-            long dataAddress = data.deviceAddress;
-            long triangleAddress = triangles.deviceAddress;
+            long dataAddress = data.deviceAddress();
+            long triangleAddress = triangles.deviceAddress();
             VkMicromapUsageEXT.Buffer usage = micromapUsage(stack, input.triangleCount(), input.subdivisionLevel());
             VkMicromapBuildInfoEXT build = micromapBuildInfo(stack, dataAddress, 0L, triangleAddress, 0L, usage);
             VkMicromapBuildSizesInfoEXT sizes = VkMicromapBuildSizesInfoEXT.calloc(stack).sType$Default();
@@ -635,7 +630,7 @@ public final class RtAccel {
             backing = ctx.createAsyncBuffer(sizes.micromapSize(), VK_BUFFER_USAGE_MICROMAP_STORAGE_BIT_EXT,
                     false, label + " backing");
             VkMicromapCreateInfoEXT create = VkMicromapCreateInfoEXT.calloc(stack).sType$Default()
-                    .buffer(backing.handle).offset(0).size(sizes.micromapSize())
+                    .buffer(backing.handle()).offset(0).size(sizes.micromapSize())
                     .type(VK_MICROMAP_TYPE_OPACITY_MICROMAP_EXT);
             java.nio.LongBuffer output = stack.mallocLong(1);
             GpuContext.check(vkCreateMicromapEXT(vk, create, null, output), "vkCreateMicromapEXT");
@@ -662,8 +657,8 @@ public final class RtAccel {
      */
     public static PreparedBlas prepareTransientBlas(GpuContext ctx, GpuBuffer positions, int vertexCount,
                                                     GpuBuffer indices, int indexCount, boolean opaque, String label) {
-        return prepareTransientBlas(ctx, positions.deviceAddress, vertexCount,
-                indices.deviceAddress, indexCount, opaque, label);
+        return prepareTransientBlas(ctx, positions.deviceAddress(), vertexCount,
+                indices.deviceAddress(), indexCount, opaque, label);
     }
 
     /** Address-based variant for transient geometry packed into sub-regions of one owner buffer. */
@@ -831,8 +826,8 @@ public final class RtAccel {
      */
     public static UpdatableBuild prepareUpdatableBlasBuild(GpuContext ctx, GpuBuffer positions, int vertexCount,
                                                            GpuBuffer indices, int indexCount, boolean opaque, String label) {
-        return prepareUpdatableBlasBuild(ctx, positions.deviceAddress, vertexCount,
-                indices.deviceAddress, indexCount, opaque, label);
+        return prepareUpdatableBlasBuild(ctx, positions.deviceAddress(), vertexCount,
+                indices.deviceAddress(), indexCount, opaque, label);
     }
 
     /** Address-based variant for geometry packed into sub-regions of one owner buffer. */
@@ -941,7 +936,7 @@ public final class RtAccel {
 
     private static VkAccelerationStructureBuildSizesInfoKHR queryBlasSizes(VkDevice vk, MemoryStack stack, GpuBuffer positions,
                                                                            GpuBuffer indices, int vertexCount, int indexCount, boolean opaque, boolean allowUpdate) {
-        return queryBlasSizes(vk, stack, positions.deviceAddress, indices.deviceAddress,
+        return queryBlasSizes(vk, stack, positions.deviceAddress(), indices.deviceAddress(),
                 vertexCount, indexCount, opaque, allowUpdate);
     }
 
@@ -998,7 +993,7 @@ public final class RtAccel {
                                         boolean ownsBacking, String label, OpacityMicromap opacityMicromap) {
         VkDevice vk = ctx.vk();
         VkAccelerationStructureCreateInfoKHR ci = VkAccelerationStructureCreateInfoKHR.calloc(stack).sType$Default()
-                .buffer(backing.handle).offset(0).size(accelSize).type(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR);
+                .buffer(backing.handle()).offset(0).size(accelSize).type(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR);
         java.nio.LongBuffer pAs = stack.mallocLong(1);
         GpuContext.check(vkCreateAccelerationStructureKHR(vk, ci, null, pAs), "vkCreateAccelerationStructureKHR");
         long handle = pAs.get(0);
@@ -1174,7 +1169,7 @@ public final class RtAccel {
     private static VkAccelerationStructureBuildSizesInfoKHR queryRetainedBlasSizes(VkDevice vk, MemoryStack stack, GpuBuffer positions,
                                                                                   GpuBuffer indices, int vertexCount, int[] classTris,
                                                                                   OpacityMicromap opacityMicromap, boolean compact) {
-        VkAccelerationStructureGeometryKHR.Buffer geom = retainedGeometries(stack, positions.deviceAddress, indices.deviceAddress,
+        VkAccelerationStructureGeometryKHR.Buffer geom = retainedGeometries(stack, positions.deviceAddress(), indices.deviceAddress(),
                 vertexCount, classTris, opacityMicromap);
         VkAccelerationStructureBuildGeometryInfoKHR.Buffer build = VkAccelerationStructureBuildGeometryInfoKHR.calloc(1, stack);
         build.sType$Default().type(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR)
@@ -1210,254 +1205,6 @@ public final class RtAccel {
         vkGetAccelerationStructureBuildSizesKHR(vk, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
                 build.get(0), maxPrimitives, sizes);
         return sizes;
-    }
-
-    /**
-     * A TLAS instance: a 3x4 row-major transform, the device address of its BLAS, the 24-bit
-     * {@code instanceCustomIndex} the hit shaders read, the 8-bit visibility {@code mask} (ANDed with the
-     * trace cull mask), and the base SBT hit-record offset. Retained and dynamic instances both use offset 0
-     * — they share the same {@link #SBT_CLASSES}-sized record space, so {@code gl_GeometryIndexEXT} alone
-     * selects the class on either producer's BLAS.
-     */
-    public record Instance(float[] transform3x4, long blasDeviceAddress, int customIndex, int mask, int sbtRecordOffset) {
-        public Instance(float[] transform3x4, long blasDeviceAddress, int customIndex) {
-            this(transform3x4, blasDeviceAddress, customIndex, 0xFF, 0);
-        }
-
-        public Instance(float[] transform3x4, long blasDeviceAddress, int customIndex, int mask) {
-            this(transform3x4, blasDeviceAddress, customIndex, mask, 0);
-        }
-    }
-
-    /** Reusable structure-of-arrays staging for a frame's dynamic TLAS instances. */
-    public static final class InstanceBatch {
-        private static final int TRANSFORM_FLOATS = 12;
-        float[] transforms = new float[0];
-        long[] blasDeviceAddresses = new long[0];
-        int[] customIndices = new int[0];
-        int[] masks = new int[0];
-        int[] sbtRecordOffsets = new int[0];
-        private int size;
-
-        public void reset(int expectedSize) {
-            ensureCapacity(expectedSize);
-            size = 0;
-        }
-
-        public void append(float[] transform3x4, float translationX, float translationY, float translationZ,
-                           long blasDeviceAddress, int customIndex, int mask, int sbtRecordOffset) {
-            ensureCapacity(size + 1);
-            int transformOffset = size * TRANSFORM_FLOATS;
-            System.arraycopy(transform3x4, 0, transforms, transformOffset, TRANSFORM_FLOATS);
-            transforms[transformOffset + 3] += translationX;
-            transforms[transformOffset + 7] += translationY;
-            transforms[transformOffset + 11] += translationZ;
-            blasDeviceAddresses[size] = blasDeviceAddress;
-            customIndices[size] = customIndex;
-            masks[size] = mask;
-            sbtRecordOffsets[size] = sbtRecordOffset;
-            size++;
-        }
-
-        public int size() {
-            return size;
-        }
-
-        private void ensureCapacity(int required) {
-            int current = blasDeviceAddresses.length;
-            if (required <= current) return;
-            int grown = Math.max(required, Math.max(16, current + current / 2));
-            transforms = Arrays.copyOf(transforms, Math.multiplyExact(grown, TRANSFORM_FLOATS));
-            blasDeviceAddresses = Arrays.copyOf(blasDeviceAddresses, grown);
-            customIndices = Arrays.copyOf(customIndices, grown);
-            masks = Arrays.copyOf(masks, grown);
-            sbtRecordOffsets = Arrays.copyOf(sbtRecordOffsets, grown);
-        }
-    }
-
-    /** A build-ready TLAS view over a {@link TlasRing} slot's resources (the ring owns and frees them). */
-    public static final class PreparedTlas {
-        public final RtAccel accel;
-        private final GpuBuffer instanceBuffer;
-        private final GpuBuffer scratch;
-        private final int instanceCount;
-        private final String label;
-
-        private PreparedTlas(RtAccel accel, GpuBuffer instanceBuffer, GpuBuffer scratch, int instanceCount,
-                             String label) {
-            this.accel = accel;
-            this.instanceBuffer = instanceBuffer;
-            this.scratch = scratch;
-            this.instanceCount = instanceCount;
-            this.label = label;
-        }
-    }
-
-    /**
-     * Owns {@value #RING} reusable per-frame TLAS slots. Each slot contains a capacity-sized instance
-     * buffer, acceleration structure, and scratch buffer. Graphics timeline completion guards reuse;
-     * instance-count growth recreates the selected slot with a larger capacity.
-     */
-    public static final class TlasRing {
-        private static final int RING = 4;           // depth avoids routine reuse waits
-        private static final float GROWTH = 1.25f;   // capacity headroom on (re)size
-        private static final int MIN_CAPACITY = 1024;
-        private final Slot[] slots = new Slot[RING];
-        private int cursor;
-
-        private static final class Slot {
-            RtAccel accel;
-            GpuBuffer instanceBuffer;
-            GpuBuffer scratch;
-            int capacity;
-            final TrackedGraphicsUse graphicsUse = new TrackedGraphicsUse();
-
-            void destroy() {
-                accel.destroy();
-                instanceBuffer.destroy();
-                scratch.destroy();
-            }
-        }
-
-        /** Free all slots. Teardown-only — the caller guarantees the device is idle. */
-        public void destroy() {
-            for (int i = 0; i < slots.length; i++) {
-                if (slots[i] != null) {
-                    slots[i].destroy();
-                    slots[i] = null;
-                }
-            }
-        }
-    }
-
-    /**
-     * Fill the next ring slot's instance buffer and return it as a build-ready TLAS (the slot's AS is
-     * rebuilt in place — BUILD mode overwrites). Do NOT call {@link PreparedTlas#destroyAll} on the
-     * result: the ring owns the resources.
-     */
-    /** Pack base and dynamic instances as two contiguous ranges without a composite-list get per item. */
-    public static PreparedTlas prepareTlas(GpuContext ctx, List<Instance> baseInstances,
-                                           List<Instance> dynamicInstances, TlasRing ring, GraphicsUse graphicsUse) {
-        int baseCount = baseInstances.size();
-        int count = Math.addExact(baseCount, dynamicInstances.size());
-        TlasRing.Slot slot = selectTlasSlot(ctx, ring, count);
-        writeTlasInstances(baseInstances, slot.instanceBuffer.mapped, 0);
-        writeTlasInstances(dynamicInstances, slot.instanceBuffer.mapped, baseCount);
-        return finishTlas(slot, count, graphicsUse);
-    }
-
-    /** Fill a TLAS slot directly from reusable dynamic instance staging. */
-    public static PreparedTlas prepareTlas(GpuContext ctx, InstanceBatch instances,
-                                           TlasRing ring, GraphicsUse graphicsUse) {
-        int count = instances.size();
-        TlasRing.Slot slot = selectTlasSlot(ctx, ring, count);
-        writeTlasInstances(instances, slot.instanceBuffer.mapped);
-        return finishTlas(slot, count, graphicsUse);
-    }
-
-    private static TlasRing.Slot selectTlasSlot(GpuContext ctx, TlasRing ring, int count) {
-        TlasRing.Slot slot = ring.slots[ring.cursor];
-        // Complete the slot's prior graphics use before rewriting, rebuilding, or resizing it.
-        if (slot != null) {
-            ctx.gpuExecutor().graphicsUseWaiter().await(slot.graphicsUse);
-        }
-        if (slot == null || count > slot.capacity) {
-            // Outgrown (or first use). The slot's previous use is confirmed off all queues by the wait
-            // above, so immediate destroy is safe.
-            if (slot != null) {
-                slot.destroy();
-            }
-            slot = createTlasSlot(ctx, Math.max(TlasRing.MIN_CAPACITY, (int) (count * TlasRing.GROWTH)));
-            ring.slots[ring.cursor] = slot;
-        }
-        ring.cursor = (ring.cursor + 1) % TlasRing.RING;
-        return slot;
-    }
-
-    private static PreparedTlas finishTlas(TlasRing.Slot slot, int count, GraphicsUse graphicsUse) {
-        if (count > 0) {
-            slot.instanceBuffer.flush(0L, (long) count * VkAccelerationStructureInstanceKHR.SIZEOF);
-        }
-        slot.graphicsUse.mark(graphicsUse);
-        return new PreparedTlas(slot.accel, slot.instanceBuffer, slot.scratch, count,
-                "frame TLAS " + count + " instances");
-    }
-
-    // Wrap the mapped Vulkan array in LWJGL structs so its generated accessors own the native ABI/bitfields.
-    private static void writeTlasInstances(List<Instance> instances, long mapped, int firstInstance) {
-        VkAccelerationStructureInstanceKHR.Buffer records = VkAccelerationStructureInstanceKHR.create(
-                mapped + (long) firstInstance * VkAccelerationStructureInstanceKHR.SIZEOF, instances.size());
-        for (int i = 0, count = instances.size(); i < count; i++) {
-            Instance instance = instances.get(i);
-            VkAccelerationStructureInstanceKHR record = records.get(i);
-            record.transform().matrix().put(instance.transform3x4());
-            record.instanceCustomIndex(instance.customIndex())
-                    .mask(instance.mask())
-                    .instanceShaderBindingTableRecordOffset(instance.sbtRecordOffset())
-                    .flags(VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR)
-                    .accelerationStructureReference(instance.blasDeviceAddress());
-        }
-    }
-
-    private static void writeTlasInstances(InstanceBatch instances, long mapped) {
-        int count = instances.size;
-        VkAccelerationStructureInstanceKHR.Buffer records = VkAccelerationStructureInstanceKHR.create(mapped, count);
-        for (int i = 0; i < count; i++) {
-            VkAccelerationStructureInstanceKHR record = records.get(i);
-            record.transform().matrix().put(instances.transforms, i * InstanceBatch.TRANSFORM_FLOATS,
-                    InstanceBatch.TRANSFORM_FLOATS);
-            record.instanceCustomIndex(instances.customIndices[i])
-                    .mask(instances.masks[i])
-                    .instanceShaderBindingTableRecordOffset(instances.sbtRecordOffsets[i])
-                    .flags(VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR)
-                    .accelerationStructureReference(instances.blasDeviceAddresses[i]);
-        }
-    }
-
-    /** Create one ring slot sized for {@code capacity} instances (instance buffer + AS + backing + scratch). */
-    private static TlasRing.Slot createTlasSlot(GpuContext ctx, int capacity) {
-        VkDevice vk = ctx.vk();
-        String label = "TLAS ring slot (" + capacity + " instance capacity)";
-        TlasRing.Slot slot = new TlasRing.Slot();
-        slot.capacity = capacity;
-        slot.instanceBuffer = ctx.createAlignedBuffer((long) VkAccelerationStructureInstanceKHR.SIZEOF * capacity,
-                org.lwjgl.vulkan.KHRAccelerationStructure.VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, true,
-                label + " instance buffer", TLAS_INSTANCE_ADDRESS_ALIGNMENT);
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            // Size the AS + scratch for the slot CAPACITY: build sizes are monotonic in instance count, so
-            // every per-frame build with count ≤ capacity fits the same backing/scratch.
-            VkAccelerationStructureBuildGeometryInfoKHR.Buffer build = tlasBuildInfo(stack, slot.instanceBuffer.deviceAddress);
-            VkAccelerationStructureBuildSizesInfoKHR sizes = VkAccelerationStructureBuildSizesInfoKHR.calloc(stack).sType$Default();
-            vkGetAccelerationStructureBuildSizesKHR(vk, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
-                    build.get(0), stack.ints(capacity), sizes);
-
-            GpuBuffer backing = ctx.createBuffer(sizes.accelerationStructureSize(), VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, false,
-                    label + " backing");
-            VkAccelerationStructureCreateInfoKHR ci = VkAccelerationStructureCreateInfoKHR.calloc(stack).sType$Default()
-                    .buffer(backing.handle).offset(0).size(sizes.accelerationStructureSize()).type(VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR);
-            java.nio.LongBuffer pAs = stack.mallocLong(1);
-            GpuContext.check(vkCreateAccelerationStructureKHR(vk, ci, null, pAs), "vkCreateAccelerationStructureKHR");
-            long handle = pAs.get(0);
-            RtDebugLabels.nameAccelerationStructure(ctx, handle, label);
-            slot.scratch = createScratchBuffer(ctx, sizes.buildScratchSize(), label + " build scratch");
-            VkAccelerationStructureDeviceAddressInfoKHR addrInfo = VkAccelerationStructureDeviceAddressInfoKHR.calloc(stack)
-                    .sType$Default().accelerationStructure(handle);
-            long deviceAddress = vkGetAccelerationStructureDeviceAddressKHR(vk, addrInfo);
-            slot.accel = new RtAccel(vk, handle, deviceAddress, backing);
-        }
-        return slot;
-    }
-
-    private static VkAccelerationStructureBuildGeometryInfoKHR.Buffer tlasBuildInfo(MemoryStack stack, long instanceBufferAddr) {
-        VkAccelerationStructureGeometryKHR.Buffer geom = VkAccelerationStructureGeometryKHR.calloc(1, stack);
-        geom.sType$Default().geometryType(VK_GEOMETRY_TYPE_INSTANCES_KHR).flags(VK_GEOMETRY_OPAQUE_BIT_KHR);
-        geom.geometry().instances().sType$Default().arrayOfPointers(false);
-        geom.geometry().instances().data().deviceAddress(instanceBufferAddr);
-        VkAccelerationStructureBuildGeometryInfoKHR.Buffer build = VkAccelerationStructureBuildGeometryInfoKHR.calloc(1, stack);
-        build.sType$Default().type(VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR)
-                .flags(VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR)
-                .mode(VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR).geometryCount(1).pGeometries(geom);
-        return build;
     }
 
     private static void recordBlasBuildsRaw(GpuContext ctx, VkCommandBuffer cmd, List<PreparedBlas> blas) {
@@ -1515,25 +1262,6 @@ public final class RtAccel {
     private static void destroyPreparedAccel(PreparedBlas prepared) {
         prepared.accel.destroy();
         if (prepared.externalBacking != null) prepared.externalBacking.destroy();
-    }
-
-    private static void recordTlasBuildRaw(GpuContext ctx, VkCommandBuffer cmd, PreparedTlas tlas) {
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkAccelerationStructureBuildGeometryInfoKHR.Buffer build = tlasBuildInfo(stack, tlas.instanceBuffer.deviceAddress);
-            build.get(0).dstAccelerationStructure(tlas.accel.handle);
-            build.get(0).scratchData().deviceAddress(scratchAddress(ctx, tlas.scratch));
-            VkAccelerationStructureBuildRangeInfoKHR.Buffer range = VkAccelerationStructureBuildRangeInfoKHR.calloc(1, stack);
-            range.get(0).primitiveCount(tlas.instanceCount).primitiveOffset(0).firstVertex(0).transformOffset(0);
-            PointerBuffer ppRange = stack.mallocPointer(1).put(0, range.address());
-            vkCmdBuildAccelerationStructuresKHR(cmd, build, ppRange);
-        }
-    }
-
-    /** Record a labelled TLAS build into the command buffer. */
-    public static void recordTlasBuild(GpuContext ctx, VkCommandBuffer cmd, PreparedTlas tlas) {
-        try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, tlas.label + " build")) {
-            recordTlasBuildRaw(ctx, cmd, tlas);
-        }
     }
 
     private static void recordBlasBuild(GpuContext ctx, VkCommandBuffer cmd, MemoryStack stack, PreparedBlas b) {

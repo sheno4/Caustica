@@ -10,8 +10,6 @@ import dev.comfyfluffy.caustica.client.VanillaRenderController;
 import dev.comfyfluffy.caustica.client.WorldRenderScaler;
 import dev.comfyfluffy.caustica.minecraft.MinecraftFrameAdapter;
 import dev.comfyfluffy.caustica.minecraft.MinecraftUiOverlay;
-import dev.comfyfluffy.caustica.rt.RtComposite;
-import dev.comfyfluffy.caustica.rt.RtFramePresenter;
 import dev.comfyfluffy.caustica.rt.RtReflex;
 import dev.comfyfluffy.caustica.rt.RtRuntime;
 import net.minecraft.client.DeltaTracker;
@@ -54,7 +52,7 @@ public abstract class GameRendererMixin {
 		MinecraftUiOverlay.beginFrame();
 		// Clear the stale HDR-present flag every frame: composite() only runs while a level renders, so on
 		// menu frames it would otherwise stay true from the last world frame and present a black HDR image.
-		RtComposite.INSTANCE.beginFrame();
+		RtRuntime.INSTANCE.beginFrame();
 		// Reflex RENDERSUBMIT_START: render-graph recording begins here; RENDERSUBMIT_END is set at
 		// VulkanGpuSurface.present() HEAD (VulkanGpuSurfaceMixin), just before the real present.
 		if (RtReflex.enabled()) {
@@ -69,7 +67,7 @@ public abstract class GameRendererMixin {
 
 	@Inject(method = "render(Lnet/minecraft/client/DeltaTracker;Z)V", at = @At("TAIL"))
 	private void caustica$endRtFrameStats(DeltaTracker deltaTracker, boolean advanceGameTime, CallbackInfo ci) {
-		RtComposite.INSTANCE.endFrame();
+		RtRuntime.INSTANCE.endFrame();
 	}
 
 	@Inject(method = "render(Lnet/minecraft/client/DeltaTracker;Z)V",
@@ -147,7 +145,7 @@ public abstract class GameRendererMixin {
 		}
 
 		var cameraState = this.gameRenderState().levelRenderState.cameraRenderState;
-		RtComposite.INSTANCE.captureFrame(MinecraftFrameAdapter.INSTANCE.capture(
+		RtRuntime.INSTANCE.captureFrame(MinecraftFrameAdapter.INSTANCE.capture(
 				Minecraft.getInstance(), projection, cameraState.viewRotationMatrix,
 				cameraState.pos.x, cameraState.pos.y, cameraState.pos.z));
 		VanillaRenderController.INSTANCE.markProjectionCaptured();
@@ -173,11 +171,11 @@ public abstract class GameRendererMixin {
 		// Fold RT world overlays into the shared transparent UI image before hand/screen effects and the GUI
 		// add their own layers. MinecraftUiOverlay then performs the single final blend to SDR/HDR.
 		try {
-			RtComposite.INSTANCE.recordOverlayPasses();
+			RtRuntime.INSTANCE.recordOverlayPasses();
 		} finally {
 			// The block-outline ray query consumes this frame's TLAS. Signal the shared RT frame token only
 			// after its transient command buffer has been placed later in the same graphics submission.
-			RtComposite.INSTANCE.finishGraphicsUse();
+			RtRuntime.INSTANCE.finishGraphicsUse();
 		}
 	}
 
@@ -196,7 +194,7 @@ public abstract class GameRendererMixin {
 		// Hand/screen effects, world overlays and GUI are carried by the optional DLSSG UI resource.
         long mainImage = this.mainRenderTarget.getColorTexture() instanceof VulkanGpuTexture texture
                 ? texture.vkImage() : 0L;
-        RtFramePresenter.INSTANCE.captureHudless(mainImage, this.mainRenderTarget.width, this.mainRenderTarget.height,
+        RtRuntime.INSTANCE.captureHudless(mainImage, this.mainRenderTarget.width, this.mainRenderTarget.height,
                 MinecraftFrameAdapter.INSTANCE.captureUiPresentation());
 		MinecraftUiOverlay.compositeIfUsed();
 	}

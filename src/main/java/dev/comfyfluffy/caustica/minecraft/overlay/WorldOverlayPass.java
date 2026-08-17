@@ -9,12 +9,11 @@ import dev.comfyfluffy.caustica.api.pass.CausticaRenderPass;
 import dev.comfyfluffy.caustica.api.pass.PassFrame;
 import dev.comfyfluffy.caustica.api.pass.PassSetup;
 import dev.comfyfluffy.caustica.api.pass.RenderStage;
-import dev.comfyfluffy.caustica.rt.RtComposite;
-import dev.comfyfluffy.caustica.rt.GpuContext;
-import dev.comfyfluffy.caustica.rt.RtDebugLabels;
-import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
+import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
+import dev.comfyfluffy.caustica.api.gpu.GpuFrameUse;
+import dev.comfyfluffy.caustica.api.gpu.GpuDebugScope;
 import dev.comfyfluffy.caustica.minecraft.MinecraftUiOverlay;
-import dev.comfyfluffy.caustica.rt.accel.GpuImage;
+import dev.comfyfluffy.caustica.api.gpu.GpuImage;
 import net.minecraft.client.Minecraft;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import org.lwjgl.system.MemoryStack;
@@ -37,8 +36,8 @@ import java.util.List;
  * (nothing thin/crisp survives DLSS-RR, so overlays must not be traced/rastered at render res) and folded
  * into the shared transparent UI image before the hand/screen-effects/GUI layers draw over it. Registered
  * under {@link RenderStage#OVERLAY}, recorded once per frame from {@code GameRendererMixin} at the
- * before-hand seam via {@link RtComposite#recordOverlayPasses}, on its own late transient command buffer —
- * {@code record} cannot fold into {@link RtComposite}'s main frame recording because the world hasn't been
+ * before-hand seam, on its own late transient command buffer —
+ * {@code record} cannot fold into the main frame recording because the world hasn't been
  * upscaled yet at that point.
  *
  * <p>This class owns the questions every overlay feature would otherwise re-answer: which image to
@@ -55,7 +54,7 @@ import java.util.List;
  * mask-resolve before its result reaches {@code overlayImage}; MSAA is the overlay edge-AA mechanism.
  *
  * <p>Like {@code SkyLutPass}, this pass gathers the Minecraft-side state it needs itself rather than
- * having it handed in: {@link RtComposite#currentGraphicsUse()} for the shared TLAS-lifetime completion
+ * having it handed in: the frame's graphics-use token for shared TLAS-lifetime completion
  * token, and {@code Minecraft.getInstance().gameRenderer.mainRenderTarget()} for the post-upscale render
  * target — the same object {@code GameRendererMixin}'s {@code this.mainRenderTarget} field holds at the
  * call site (see {@code MinecraftUiOverlay.java}'s identical read).
@@ -72,7 +71,7 @@ public final class WorldOverlayPass implements CausticaRenderPass {
 
     // Shared world-overlay buffer every feature composites into. uiComposite* blends it into MinecraftUiOverlay's
     // transparent target; MinecraftUiOverlay owns the one final SDR/HDR blend to the real target.
-    private GpuContext ctx;
+    private GpuDevice device;
     private GpuImage overlayImage;
     private OverlayPipelines.Pipeline uiCompositePipeline;
     private OverlayPipelines.ReadOnlyImageSet uiCompositeSet;
@@ -89,9 +88,9 @@ public final class WorldOverlayPass implements CausticaRenderPass {
 
     @Override
     public void create(PassSetup setup) {
-        ctx = setup.context();
+        device = setup.device();
         uiCompositeSet = OverlayPipelines.readOnlyImageSet(
-                ctx, VK10.VK_SHADER_STAGE_FRAGMENT_BIT, "world overlay UI composite");
+                device, VK10.VK_SHADER_STAGE_FRAGMENT_BIT, "world overlay UI composite");
         // PREMULTIPLIED_ALPHA, not ALPHA: overlayImage ends up holding premultiplied content once more
         // than one feature has drawn into it (see Blend.ALPHA's doc) — blending it into the shared UI
         // image with the straight-alpha recipe would double-multiply by alpha.
@@ -100,7 +99,7 @@ public final class WorldOverlayPass implements CausticaRenderPass {
                 .blend(OverlayPipelines.Blend.PREMULTIPLIED_ALPHA)
                 .attachment(TARGET_FORMAT)
                 .descriptorSetLayout(uiCompositeSet.layout)
-                .build(ctx, "world overlay UI composite");
+                .build(device, "world overlay UI composite");
     }
 
     @Override
@@ -108,16 +107,16 @@ public final class WorldOverlayPass implements CausticaRenderPass {
         if (overlayImage != null) {
             overlayImage.destroy();
         }
-        overlayImage = ctx.createStorageImage(displayWidth, displayHeight, TARGET_FORMAT,
+        overlayImage = device.createStorageImage(displayWidth, displayHeight, TARGET_FORMAT,
                 "world overlay " + displayWidth + "x" + displayHeight, VK10.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
-        uiCompositeSet.bind(ctx, overlayImage.view);
+        uiCompositeSet.bind(device, overlayImage.view());
     }
 
     @Override
     public void record(PassFrame frame) {
-        RtGpuExecutor.GraphicsUse graphicsUse = RtComposite.INSTANCE.currentGraphicsUse();
+        GpuFrameUse gpuUse = frame.gpuUse();
         RenderTarget main = Minecraft.getInstance().gameRenderer.mainRenderTarget();
-        if (graphicsUse == null || main == null || main.getColorTexture() == null || !MinecraftUiOverlay.enabled()) {
+        if (main == null || main.getColorTexture() == null || !MinecraftUiOverlay.enabled()) {
             return;
         }
         int width = main.width;
@@ -125,7 +124,8 @@ public final class WorldOverlayPass implements CausticaRenderPass {
         try {
             List<OverlayFeature> ready = new ArrayList<>(features.size());
             for (OverlayFeature f : features) {
-                if (f.prepare(ctx, framePool, graphicsUse, width, height)) {
+                if (f.prepare(device, framePool, gpuUse, frame.worldTlas(), frame.worldViewProjection(),
+                        width, height)) {
                     ready.add(f);
                 }
             }
@@ -140,7 +140,7 @@ public final class WorldOverlayPass implements CausticaRenderPass {
             }
             recordDraws(frame.commandBuffer(), ready, targetView, width, height);
         } finally {
-            framePool.endFrame(ctx, graphicsUse);
+            framePool.endFrame(gpuUse);
         }
     }
 
@@ -148,7 +148,7 @@ public final class WorldOverlayPass implements CausticaRenderPass {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VulkanCommandEncoder.memoryBarrier(cmd, stack); // host vertex writes visible
 
-            long overlayView = overlayImage.view;
+            long overlayView = overlayImage.view();
             beginColorRendering(cmd, stack, overlayView, width, height, true); // clear to transparent once
             endRendering(cmd);
             VulkanCommandEncoder.memoryBarrier(cmd, stack);
@@ -158,7 +158,7 @@ public final class WorldOverlayPass implements CausticaRenderPass {
                 VulkanCommandEncoder.memoryBarrier(cmd, stack); // this feature's writes visible to the next / final composite
             }
 
-            try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "world overlay UI composite")) {
+            try (GpuDebugScope ignored = device.debugScope(cmd, "world overlay UI composite")) {
                 beginColorRendering(cmd, stack, targetView, width, height, false); // LOAD the transparent UI image
                 VK10.vkCmdBindPipeline(cmd, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, uiCompositePipeline.handle);
                 VK10.vkCmdBindDescriptorSets(cmd, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, uiCompositePipeline.layout, 0,
@@ -175,9 +175,9 @@ public final class WorldOverlayPass implements CausticaRenderPass {
         for (OverlayFeature f : features) {
             f.destroy();
         }
-        if (uiCompositePipeline != null && ctx != null) {
-            uiCompositePipeline.destroy(ctx.vk());
-            uiCompositeSet.destroy(ctx.vk());
+        if (uiCompositePipeline != null && device != null) {
+            uiCompositePipeline.destroy(device.vk());
+            uiCompositeSet.destroy(device.vk());
         }
         uiCompositePipeline = null;
         uiCompositeSet = null;

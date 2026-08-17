@@ -18,8 +18,10 @@ import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.geometry.RtGeometryAbi;
 import dev.comfyfluffy.caustica.rt.geometry.RtSceneGeometryManager;
-import dev.comfyfluffy.caustica.rt.pipeline.RtPipeline;
-import dev.comfyfluffy.caustica.rt.scene.RtSceneSource;
+import dev.comfyfluffy.caustica.rt.geometry.GeometryUpdates;
+import dev.comfyfluffy.caustica.spi.host.BaseColorTextureSink;
+import dev.comfyfluffy.caustica.spi.host.MaterialEpochView;
+import dev.comfyfluffy.caustica.spi.host.RendererSceneSource;
 import org.joml.Matrix4f;
 import org.junit.jupiter.api.Test;
 
@@ -466,7 +468,7 @@ final class ProviderManagerTest {
         scenes.put(id("broken"), failing);
         scenes.put(id("healthy"), healthy);
         ProviderManager manager = new ProviderManager(scenes, Map.of(), Map.of());
-        List<RtSceneGeometryManager.GeometryUpdateGroup> forwarded = new ArrayList<>();
+        List<GeometryUpdates.Group> forwarded = new ArrayList<>();
 
         manager.submitGeometry(null, SceneOrigin.ZERO, (updates, ignored) -> forwarded.addAll(updates));
         manager.submitGeometry(null, SceneOrigin.ZERO, (updates, ignored) -> forwarded.addAll(updates));
@@ -505,7 +507,7 @@ final class ProviderManagerTest {
         ProviderManager manager = new ProviderManager(scenes, Map.of(),
                 Map.of(id("materials"), defining("healthy")));
         manager.collectMaterials(ignored -> 0);
-        List<RtSceneGeometryManager.GeometryUpdateGroup> forwarded = new ArrayList<>();
+        List<GeometryUpdates.Group> forwarded = new ArrayList<>();
 
         manager.submitGeometry(null, SceneOrigin.ZERO, (updates, ignored) -> forwarded.addAll(updates));
 
@@ -522,7 +524,7 @@ final class ProviderManagerTest {
             }
         };
         ProviderManager manager = manager("terrain", terrain);
-        List<RtSceneGeometryManager.GeometryUpdateGroup> forwarded = new ArrayList<>();
+        List<GeometryUpdates.Group> forwarded = new ArrayList<>();
 
         manager.submitGeometry(null, SceneOrigin.ZERO, (updates, ignored) -> forwarded.addAll(updates));
 
@@ -572,20 +574,20 @@ final class ProviderManagerTest {
             }
         };
         ProviderManager manager = manager("geometry", provider);
-        List<RtSceneGeometryManager.GeometryUpdateGroup> forwarded = new ArrayList<>();
+        List<GeometryUpdates.Group> forwarded = new ArrayList<>();
 
         manager.submitGeometry(null, origin, (updates, ignored) -> forwarded.addAll(updates));
         manager.submitGeometry(null, origin, (updates, ignored) -> forwarded.addAll(updates));
 
-        assertEquals(List.of(1L, 2L), forwarded.stream().map(RtSceneGeometryManager.GeometryUpdateGroup::revision).toList());
-        RtSceneGeometryManager.Place place = (RtSceneGeometryManager.Place) forwarded.getFirst().operations().getFirst();
+        assertEquals(List.of(1L, 2L), forwarded.stream().map(GeometryUpdates.Group::revision).toList());
+        GeometryUpdates.Place place = (GeometryUpdates.Place) forwarded.getFirst().operations().getFirst();
         assertEquals(origin, place.origin());
         assertEquals(0.25f, place.transform()[3]);
         assertEquals(1.5f, place.transform()[7]);
         assertEquals(0.25f, place.transform()[11]);
         assertEquals(0x3f, place.mask());
-        RtSceneGeometryManager.UpdatePlacement transform =
-                (RtSceneGeometryManager.UpdatePlacement) forwarded.getFirst().operations().get(1);
+        GeometryUpdates.UpdatePlacement transform =
+                (GeometryUpdates.UpdatePlacement) forwarded.getFirst().operations().get(1);
         assertEquals(origin, transform.origin());
         assertEquals(1.25f, transform.transform()[3]);
         assertEquals(2.5f, transform.transform()[7]);
@@ -611,16 +613,16 @@ final class ProviderManagerTest {
         ProviderManager manager = new ProviderManager(Map.of(id("cloud"), cloud), Map.of(),
                 Map.of(id("materials"), defining("cloud")));
         manager.collectMaterials(ignored -> 0);
-        List<RtSceneGeometryManager.GeometryUpdateGroup> forwarded = new ArrayList<>();
+        List<GeometryUpdates.Group> forwarded = new ArrayList<>();
 
         manager.submitGeometry(null, SceneOrigin.ZERO, (updates, ignored) -> forwarded.addAll(updates));
         cell.incrementAndGet();
         manager.submitGeometry(null, SceneOrigin.ZERO, (updates, ignored) -> forwarded.addAll(updates));
 
-        assertEquals(List.of(1L, 2L), forwarded.stream().map(RtSceneGeometryManager.GeometryUpdateGroup::revision).toList());
-        for (RtSceneGeometryManager.GeometryUpdateGroup update : forwarded) {
-            assertTrue(update.operations().stream().anyMatch(RtSceneGeometryManager.Put.class::isInstance));
-            assertTrue(update.operations().stream().anyMatch(RtSceneGeometryManager.Place.class::isInstance));
+        assertEquals(List.of(1L, 2L), forwarded.stream().map(GeometryUpdates.Group::revision).toList());
+        for (GeometryUpdates.Group update : forwarded) {
+            assertTrue(update.operations().stream().anyMatch(GeometryUpdates.Put.class::isInstance));
+            assertTrue(update.operations().stream().anyMatch(GeometryUpdates.Place.class::isInstance));
         }
     }
 
@@ -666,6 +668,31 @@ final class ProviderManagerTest {
         assertEquals(2, healthySubmits.get());
     }
 
+    @Test
+    void materialEpochClearFlowsThroughPrimarySceneSource() {
+        PrimarySceneProvider scene = new PrimarySceneProvider();
+        ProviderManager manager = manager("primary", scene);
+
+        manager.clearMaterials();
+
+        assertEquals(1, scene.materialClears);
+    }
+
+    @Test
+    void textureDescriptorSinkFlowsThroughPrimarySceneSource() {
+        PrimarySceneProvider scene = new PrimarySceneProvider();
+        ProviderManager manager = manager("primary", scene);
+        BaseColorTextureSink textures = (slot, imageView, sampler) -> { };
+
+        manager.rebindTextures(textures, 17L);
+        manager.uploadPendingTextures(textures, 23L);
+
+        assertSame(textures, scene.rebindTextures);
+        assertEquals(17L, scene.rebindSampler);
+        assertSame(textures, scene.uploadTextures);
+        assertEquals(23L, scene.uploadSampler);
+    }
+
     private static ProviderManager manager(String path, SceneProvider provider) {
         return new ProviderManager(Map.of(id(path), provider), Map.of(), Map.of());
     }
@@ -704,17 +731,20 @@ final class ProviderManagerTest {
                 SceneMesh.Coverage.OPAQUE, Float.NaN, Float.NaN, Float.NaN, 0, 1, 1, 1)));
     }
 
-    private static final class PrimarySceneProvider implements SceneProvider, RtSceneSource {
+    private static final class PrimarySceneProvider implements SceneProvider, RendererSceneSource {
         final AtomicInteger stops = new AtomicInteger();
-        final Retained retained = new Retained(SceneOrigin.ZERO,
+        final RetainedScene retained = new RetainedScene(SceneOrigin.ZERO,
                 new RetainedLights(0, 0, -1, 0, 0,
                         0, 0, 0, 1, 0));
         int resetCapacity;
+        BaseColorTextureSink rebindTextures;
+        BaseColorTextureSink uploadTextures;
         long rebindSampler;
         long uploadSampler;
+        int materialClears;
 
         @Override
-        public Retained retainedScene() {
+        public RetainedScene retainedScene() {
             return retained;
         }
 
@@ -729,13 +759,24 @@ final class ProviderManagerTest {
         }
 
         @Override
-        public void rebindTextures(RtPipeline pipeline, long sampler) {
+        public void rebindTextures(BaseColorTextureSink textures, long sampler) {
+            rebindTextures = textures;
             rebindSampler = sampler;
         }
 
         @Override
-        public void uploadPendingTextures(RtPipeline pipeline, long sampler) {
+        public void uploadPendingTextures(BaseColorTextureSink textures, long sampler) {
+            uploadTextures = textures;
             uploadSampler = sampler;
+        }
+
+        @Override
+        public void publishMaterials(MaterialEpochView materials) {
+        }
+
+        @Override
+        public void clearMaterials() {
+            materialClears++;
         }
 
         @Override

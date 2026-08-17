@@ -2,7 +2,7 @@ package dev.comfyfluffy.caustica.rt.material;
 
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
-import dev.comfyfluffy.caustica.rt.accel.GpuBuffer;
+import dev.comfyfluffy.caustica.api.gpu.GpuBuffer;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
@@ -82,7 +82,7 @@ final class RtMaterialPageTexture {
             long totalBytes = 0L;
             for (byte[] level : levels) totalBytes = Math.addExact(totalBytes, level.length);
             staging = ctx.createUploadBuffer(totalBytes, label + " upload");
-            ByteBuffer mapped = MemoryUtil.memByteBuffer(staging.mapped, Math.toIntExact(totalBytes));
+            ByteBuffer mapped = MemoryUtil.memByteBuffer(staging.mapped(), Math.toIntExact(totalBytes));
             long[] offsets = new long[levels.size()];
             int offset = 0;
             for (int i = 0; i < levels.size(); i++) {
@@ -94,7 +94,7 @@ final class RtMaterialPageTexture {
             staging.flush();
 
             long uploadImage = createdImage;
-            long uploadBuffer = staging.handle;
+            long uploadBuffer = staging.handle();
             ctx.submitSync(cmd -> {
                 try (MemoryStack uploadStack = MemoryStack.stackPush()) {
                     VkImageMemoryBarrier.Buffer toTransfer = VkImageMemoryBarrier.calloc(1, uploadStack);

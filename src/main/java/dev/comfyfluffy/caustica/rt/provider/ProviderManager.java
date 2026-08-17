@@ -23,8 +23,10 @@ import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtFrameStats;
 import dev.comfyfluffy.caustica.rt.geometry.RtSceneGeometryManager;
-import dev.comfyfluffy.caustica.rt.pipeline.RtPipeline;
-import dev.comfyfluffy.caustica.rt.scene.RtSceneSource;
+import dev.comfyfluffy.caustica.rt.geometry.GeometryUpdates;
+import dev.comfyfluffy.caustica.spi.host.BaseColorTextureSink;
+import dev.comfyfluffy.caustica.spi.host.MaterialEpochView;
+import dev.comfyfluffy.caustica.spi.host.RendererSceneSource;
 import java.util.HashSet;
 import java.util.HashMap;
 import java.util.ArrayList;
@@ -36,15 +38,13 @@ import java.util.function.ToIntFunction;
 import java.util.function.Supplier;
 
 public final class ProviderManager {
-    public static final ProviderManager INSTANCE = new ProviderManager(null, null, null);
-
     // A provider instance is runtime-activation-scoped. Failures disable it until that activation ends.
     private final Set<ProviderKey> failed = new HashSet<>();
     private final Set<ProviderKey> stoppedThisSession = new HashSet<>();
     private final Set<ProviderKey> shutDownThisSession = new HashSet<>();
-    private Map<ResourceId, SceneProvider> scenes;
-    private Map<ResourceId, LightProvider> lights;
-    private Map<ResourceId, MaterialSource> materials;
+    private final Map<ResourceId, SceneProvider> scenes;
+    private final Map<ResourceId, LightProvider> lights;
+    private final Map<ResourceId, MaterialSource> materials;
     private List<LightDescriptor> frameLights = List.of();
     private Set<ResourceId> namedMaterials = Set.of();
     private RtSceneGeometryManager sceneGeometry;
@@ -57,20 +57,17 @@ public final class ProviderManager {
         this.materials = materials;
     }
 
+    public ProviderManager(CausticaRegistry.RuntimeContributions contributions) {
+        this(contributions.sceneProviders(), contributions.lightProviders(), contributions.materialSources());
+        beginSession();
+    }
+
     /** Begin a new RT session; normally stopped providers become eligible for callbacks again. */
     public void beginSession() {
         failed.clear();
         stoppedThisSession.clear();
         shutDownThisSession.clear();
         geometryRevisions.clear();
-    }
-
-    /** Install the freshly created runtime-activation provider instances before they receive callbacks. */
-    public void beginSession(CausticaRegistry.RuntimeContributions contributions) {
-        scenes = contributions.sceneProviders();
-        lights = contributions.lightProviders();
-        materials = contributions.materialSources();
-        beginSession();
     }
 
     public void updateScenes() {
@@ -122,7 +119,7 @@ public final class ProviderManager {
         if (entry == null) {
             return null;
         }
-        RtSceneSource.Retained retained = invokeSceneSource(entry, "retained scene",
+        RendererSceneSource.RetainedScene retained = invokeSceneSource(entry, "retained scene",
                 entry.source()::retainedScene, null);
         return retained != null ? new PrimaryScene(entry.id(), retained) : null;
     }
@@ -155,21 +152,41 @@ public final class ProviderManager {
         }
     }
 
-    public void rebindTextures(RtPipeline pipeline, long sampler) {
+    public void rebindTextures(BaseColorTextureSink textures, long sampler) {
         SceneSourceEntry entry = primarySceneSource();
         if (entry != null) {
             invokeSceneSource(entry, "bindless texture rebind", () -> {
-                entry.source().rebindTextures(pipeline, sampler);
+                entry.source().rebindTextures(textures, sampler);
                 return null;
             }, null);
         }
     }
 
-    public void uploadPendingTextures(RtPipeline pipeline, long sampler) {
+    public void uploadPendingTextures(BaseColorTextureSink textures, long sampler) {
         SceneSourceEntry entry = primarySceneSource();
         if (entry != null) {
             invokeSceneSource(entry, "bindless texture upload", () -> {
-                entry.source().uploadPendingTextures(pipeline, sampler);
+                entry.source().uploadPendingTextures(textures, sampler);
+                return null;
+            }, null);
+        }
+    }
+
+    public void publishMaterials(MaterialEpochView snapshot) {
+        SceneSourceEntry entry = primarySceneSource();
+        if (entry != null) {
+            invokeSceneSource(entry, "material epoch publication", () -> {
+                entry.source().publishMaterials(snapshot);
+                return null;
+            }, null);
+        }
+    }
+
+    public void clearMaterials() {
+        SceneSourceEntry entry = primarySceneSource();
+        if (entry != null) {
+            invokeSceneSource(entry, "material epoch clear", () -> {
+                entry.source().clearMaterials();
                 return null;
             }, null);
         }
@@ -236,11 +253,11 @@ public final class ProviderManager {
                 try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("geometry.providerCollect")) {
                     collector.collect(entry.getValue(), stagingSink);
                 }
-                List<RtSceneGeometryManager.GeometryUpdateGroup> updates = new ArrayList<>(stagedGroups.size());
+                List<GeometryUpdates.Group> updates = new ArrayList<>(stagedGroups.size());
                 Map<SubmittedGeometryGroupKey, PublishedGeometryGroup> publishedGroups = new HashMap<>();
                 try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("geometry.providerConvert")) {
                     for (StagedGeometryGroup group : stagedGroups.values()) {
-                        RtSceneGeometryManager.GeometryUpdateGroup update = toUpdate(entry.getKey(), group.groupKey(),
+                        GeometryUpdates.Group update = toUpdate(entry.getKey(), group.groupKey(),
                                 group.operations(), origin);
                         updates.add(update);
                         publishedGroups.put(new SubmittedGeometryGroupKey(update.key(), update.revision()),
@@ -274,32 +291,32 @@ public final class ProviderManager {
         stopOne("scene", entry, key, SceneProvider::stop);
     }
 
-    private RtSceneGeometryManager.GeometryUpdateGroup toUpdate(ResourceId source, SceneGeometryKey groupKey,
+    private GeometryUpdates.Group toUpdate(ResourceId source, SceneGeometryKey groupKey,
                                                                  List<SceneGeometrySink.Operation> operations,
                                                                  SceneOrigin origin) {
-        ArrayList<RtSceneGeometryManager.GeometryOperation> converted = new ArrayList<>(operations.size());
+        ArrayList<GeometryUpdates.GeometryOperation> converted = new ArrayList<>(operations.size());
         for (SceneGeometrySink.Operation operation : operations) {
             switch (operation) {
                 case SceneGeometrySink.Put put -> {
                     validateMeshMaterials(put.mesh());
-                    converted.add(new RtSceneGeometryManager.Put(put.residentKey(),
-                            new RtSceneGeometryManager.ProviderPayload(put.mesh(), put.buildOptions())));
+                    converted.add(new GeometryUpdates.Put(put.residentKey(),
+                            new GeometryUpdates.ProviderPayload(put.mesh(), put.buildOptions())));
                 }
                 case SceneGeometrySink.Drop drop ->
-                    converted.add(new RtSceneGeometryManager.Drop(drop.residentKey()));
-                case SceneGeometrySink.Place place -> converted.add(new RtSceneGeometryManager.Place(
+                    converted.add(new GeometryUpdates.Drop(drop.residentKey()));
+                case SceneGeometrySink.Place place -> converted.add(new GeometryUpdates.Place(
                         place.instanceKey(), place.residentKey(),
                         place.transform().relativeTo(origin.x(), origin.y(), origin.z()), place.mask(), origin));
-                case SceneGeometrySink.Transform transform -> converted.add(new RtSceneGeometryManager.UpdatePlacement(
+                case SceneGeometrySink.Transform transform -> converted.add(new GeometryUpdates.UpdatePlacement(
                         transform.instanceKey(), transform.transform().relativeTo(
                                 origin.x(), origin.y(), origin.z()), transform.mask(), origin));
                 case SceneGeometrySink.Remove remove ->
-                    converted.add(new RtSceneGeometryManager.Remove(remove.instanceKey()));
+                    converted.add(new GeometryUpdates.Remove(remove.instanceKey()));
             }
         }
         GeometryGroupKey revisionKey = new GeometryGroupKey(source, groupKey);
         long revision = geometryRevisions.merge(revisionKey, 1L, Math::addExact);
-        return new RtSceneGeometryManager.GeometryUpdateGroup(new RtSceneGeometryManager.GroupKey(source, groupKey),
+        return new GeometryUpdates.Group(new GeometryUpdates.GroupKey(source, groupKey),
                 revision, converted);
     }
 
@@ -326,6 +343,7 @@ public final class ProviderManager {
 
     public void onResourcePackClosing() {
         clearAllSceneGeometry();
+        clearMaterials();
         invoke("scene", scenes(), SceneProvider::onResourcePackClosing, SceneProvider::stop);
         invoke("light", lights(), LightProvider::onResourcePackClosing, LightProvider::stop);
         invoke("material", materials(), MaterialSource::onResourcePackClosing, MaterialSource::stop);
@@ -425,13 +443,11 @@ public final class ProviderManager {
         shutdownStopped("material", materials(), MaterialSource::shutdown);
     }
 
-    /** Drop the render-session instance references after every provider has shut down. */
+    /** Clear session-derived snapshots after every provider has shut down. */
     public void endSession() {
-        scenes = Map.of();
-        lights = Map.of();
-        materials = Map.of();
         frameLights = List.of();
         namedMaterials = Set.of();
+        geometryRevisions.clear();
     }
 
     private void clearAllSceneGeometry() {
@@ -440,15 +456,15 @@ public final class ProviderManager {
     }
 
     private Map<ResourceId, SceneProvider> scenes() {
-        return scenes != null ? scenes : Map.of();
+        return scenes;
     }
 
     private Map<ResourceId, LightProvider> lights() {
-        return lights != null ? lights : Map.of();
+        return lights;
     }
 
     private Map<ResourceId, MaterialSource> materials() {
-        return materials != null ? materials : Map.of();
+        return materials;
     }
 
     private SceneSourceEntry primarySceneSource() {
@@ -456,7 +472,7 @@ public final class ProviderManager {
         for (Map.Entry<ResourceId, SceneProvider> entry : scenes().entrySet()) {
             ProviderKey key = new ProviderKey("scene", entry.getKey());
             if (failed.contains(key) || stoppedThisSession.contains(key)
-                    || !(entry.getValue() instanceof RtSceneSource source)) {
+                    || !(entry.getValue() instanceof RendererSceneSource source)) {
                 continue;
             }
             if (selected != null) {
@@ -562,13 +578,13 @@ public final class ProviderManager {
 
     @FunctionalInterface
     interface GeometrySubmitter {
-        void submit(List<RtSceneGeometryManager.GeometryUpdateGroup> updates, Consumer<Throwable> failureHandler);
+        void submit(List<GeometryUpdates.Group> updates, Consumer<Throwable> failureHandler);
     }
 
     @FunctionalInterface
     private interface GeometrySubmission {
-        void submit(List<RtSceneGeometryManager.GeometryUpdateGroup> updates,
-                    Consumer<RtSceneGeometryManager.PublicationAck> acknowledgment,
+        void submit(List<GeometryUpdates.Group> updates,
+                    Consumer<GeometryUpdates.Publication> acknowledgment,
                     Consumer<Throwable> failureHandler);
     }
 
@@ -585,16 +601,16 @@ public final class ProviderManager {
         }
     }
 
-    private record SubmittedGeometryGroupKey(RtSceneGeometryManager.GroupKey key, long revision) {
+    private record SubmittedGeometryGroupKey(GeometryUpdates.GroupKey key, long revision) {
     }
 
     private record PublishedGeometryGroup(SceneGeometryKey groupKey, Consumer<SceneGeometrySink.Publication> onPublished) {
     }
 
     private record SceneSourceEntry(ResourceId id, Map.Entry<ResourceId, SceneProvider> provider,
-                                    ProviderKey key, RtSceneSource source) {
+                                    ProviderKey key, RendererSceneSource source) {
     }
 
-    public record PrimaryScene(ResourceId provider, RtSceneSource.Retained retained) {
+    public record PrimaryScene(ResourceId provider, RendererSceneSource.RetainedScene retained) {
     }
 }
