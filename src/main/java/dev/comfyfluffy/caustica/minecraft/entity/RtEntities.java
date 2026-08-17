@@ -211,14 +211,12 @@ public final class RtEntities {
 
     /**
      * Cached block-entity geometry. The mesh is captured in <b>block-local</b> space (identity submit pose),
-     * so it is rebase-independent — only the per-frame TLAS instance transform ({@code blockPos − rebase})
-     * changes, exactly like a terrain section.
+     * so the retained world-space placement remains valid across scene-origin rebases.
      */
     private static final class BeEntry {
-        int bx, by, bz;                          // block position (drives the per-frame instance transform)
+        int bx, by, bz;                          // block position used to remove the retained resident
         long meshHash;                           // hash of the captured mesh — rebuild only when it changes
         long lastSeen;                           // last frame this BE was in the scan window — for eviction
-        final PublicationState publication = new PublicationState();
     }
 
     /** CPU-only capture state for one entity; the manager owns its resident. */
@@ -318,15 +316,6 @@ public final class RtEntities {
             visibleMeshSourceFrame = sourceFrame;
             lastMeshVisibilityFrame = frame;
             meshVisibilityCount++;
-        }
-    }
-
-    /** Tracks whether a captured resident has reached the manager's published snapshot. */
-    static final class PublicationState {
-        boolean published;
-
-        void acknowledged() {
-            published = true;
         }
     }
 
@@ -779,13 +768,13 @@ public final class RtEntities {
             if (build.full() || build.count - firstBlockEntity >= maxBlockEntities()) {
                 break;
             }
-            updateBlockEntity(build, beDispatcher, candidate.be, partial, now, rbx, rby, rbz);
+            updateBlockEntity(build, beDispatcher, candidate.be, partial, now);
         }
     }
 
-    /** Re-mesh one block entity; replace its cached resident only if the mesh changed (budgeted); then emit it. */
+    /** Re-mesh one block entity and submit only an initial or changed resident within the update budget. */
     private void updateBlockEntity(FrameBuild build, BlockEntityRenderDispatcher beDispatcher,
-                                   BlockEntity be, float partial, long now, int rbx, int rby, int rbz) {
+                                   BlockEntity be, float partial, long now) {
         capture.reset();
         try {
             BlockEntityRenderState state = beDispatcher.tryExtractRenderState(be, partial, null, false);
@@ -793,7 +782,7 @@ public final class RtEntities {
                 return; // off-screen-only (beacon/end-gateway), distance-culled, or no renderer
             }
             collector.begin(capture, false);
-            // Identity pose ⇒ block-local mesh; world placement is the per-frame instance transform in emitBe.
+            // Identity pose keeps the retained mesh block-local; its initial Place owns the stable world position.
             resetPoseStack(blockEntityPoseStack);
             beDispatcher.submit(state, blockEntityPoseStack, collector, cameraState);
         } catch (Throwable t) {
@@ -811,33 +800,31 @@ public final class RtEntities {
             entry.lastSeen = now;
         }
         long hash = meshHash();
-        float[] transform = {1, 0, 0, be.getBlockPos().getX() - rbx, 0, 1, 0, be.getBlockPos().getY() - rby,
-                0, 0, 1, be.getBlockPos().getZ() - rbz};
         if (entry == null || entry.meshHash != hash) {
             // Geometry changed (or new BE) → rebuild, but only within this frame's budget. Over budget: keep
             // showing the previous geometry; a brand-new BE simply pops in over the next frames.
             if (beBuildsThisFrame >= beBuildsPerFrame()) {
                 if (entry != null) {
-                    emitBe(build, entry, transform);
+                    recordVisibleBlockEntity(build);
                 }
+                RtFrameStats.FRAME.count("blockEntityGeometryDeferred", 1);
                 return;
             }
-            BeEntry rebuilt = buildBe(build, entry, be, hash, transform);
+            BeEntry rebuilt = buildBe(build, entry, be, hash);
             rebuilt.lastSeen = now;
             beCache.put(key, rebuilt);
-            build.count++;
-            build.logicalCount++;
-            RtFrameStats.FRAME.count("blockEntitiesCaptured", 1);
+            recordVisibleBlockEntity(build);
             return;
         }
-        emitBe(build, entry, transform);
+        recordVisibleBlockEntity(build);
     }
 
     /** Submits a keyed dynamic resident so compatible block-entity mesh updates retain vertex history. */
-    private BeEntry buildBe(FrameBuild build, BeEntry entry, BlockEntity be, long hash, float[] transform) {
+    private BeEntry buildBe(FrameBuild build, BeEntry entry, BlockEntity be, long hash) {
         BlockPos p = be.getBlockPos();
         beBuildsThisFrame++;
 
+        boolean initial = entry == null;
         BeEntry e = entry != null ? entry : new BeEntry();
         e.bx = p.getX();
         e.by = p.getY();
@@ -845,11 +832,17 @@ public final class RtEntities {
         e.meshHash = hash;
         long key = p.asLong();
         SceneGeometryKey geometryKey = key(BLOCK_ENTITY_GEOMETRY, key);
-        build.submit(geometryKey, List.of(
-                new SceneGeometrySink.Put(geometryKey, capture.sceneMesh()),
-                new SceneGeometrySink.Place(geometryKey, geometryKey, transform(transform, build.origin), MASK_ALL)),
-                e.publication::acknowledged);
+        build.submit(geometryKey, blockEntityMeshUpdate(geometryKey, capture.sceneMesh(),
+                GeometryTransform.translation(p.getX(), p.getY(), p.getZ()), initial), null);
+        RtFrameStats.FRAME.count("blockEntityGeometrySubmissions", 1);
         return e;
+    }
+
+    static List<SceneGeometrySink.Operation> blockEntityMeshUpdate(SceneGeometryKey key, SceneMesh mesh,
+                                                                   GeometryTransform initialTransform,
+                                                                   boolean initial) {
+        SceneGeometrySink.Put put = new SceneGeometrySink.Put(key, mesh);
+        return initial ? List.of(put, new SceneGeometrySink.Place(key, key, initialTransform, MASK_ALL)) : List.of(put);
     }
 
     /** FNV-1a hash of every manager-visible field in the currently captured mesh. */
@@ -876,23 +869,8 @@ public final class RtEntities {
         return h;
     }
 
-    /** Emits an unchanged block entity through its manager-owned dynamic resident. */
-    private void emitBe(FrameBuild build, BeEntry e, float[] transform) {
-        if (build.full()) {
-            return;
-        }
-        long key = BlockPos.asLong(e.bx, e.by, e.bz);
-        List<SceneGeometrySink.Operation> operations;
-        boolean includesPut = !e.publication.published;
-        if (!includesPut) {
-            SceneGeometryKey geometryKey = key(BLOCK_ENTITY_GEOMETRY, key);
-            operations = List.of(new SceneGeometrySink.Place(geometryKey, geometryKey, transform(transform, build.origin), MASK_ALL));
-        } else {
-            SceneGeometryKey geometryKey = key(BLOCK_ENTITY_GEOMETRY, key);
-            operations = List.of(new SceneGeometrySink.Put(geometryKey, capture.sceneMesh()),
-                    new SceneGeometrySink.Place(geometryKey, geometryKey, transform(transform, build.origin), MASK_ALL));
-        }
-        build.submit(key(BLOCK_ENTITY_GEOMETRY, key), operations, e.publication::acknowledged);
+    /** Counts one selected cached block entity without resubmitting its unchanged retained state. */
+    private static void recordVisibleBlockEntity(FrameBuild build) {
         build.count++;
         build.logicalCount++;
         RtFrameStats.FRAME.count("blockEntitiesCaptured", 1);

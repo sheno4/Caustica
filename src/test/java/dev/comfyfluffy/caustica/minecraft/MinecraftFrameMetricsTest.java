@@ -18,6 +18,8 @@ final class MinecraftFrameMetricsTest {
         assertTrue(schema.counters().contains("entityPlacementExtractionToVisibleFramesMax"));
         assertTrue(schema.counters().contains("entityPlacementFreshnessEligible"));
         assertTrue(schema.counters().contains("entityPlacementInitialSubmissions"));
+        assertTrue(schema.counters().contains("blockEntityGeometrySubmissions"));
+        assertTrue(schema.counters().contains("blockEntityGeometryDeferred"));
         assertTrue(schema.counters().contains("entityMeshRevisionsSkippedBetweenVisibility"));
         assertTrue(schema.counters().contains("entityMeshVisibilityIntervalFramesMax"));
         assertTrue(schema.counters().contains("entityMeshInitialUnavailableFramesMax"));

@@ -28,6 +28,7 @@ public final class MinecraftFrameMetrics {
             accounted("entity.particles")), List.of(
             "sectionsSnapshotted", "sectionCopies",
             "terrainMaterialEpochRejects", "entitiesCaptured", "blockEntitiesCaptured",
+            "blockEntityGeometrySubmissions", "blockEntityGeometryDeferred",
             "particlesCaptured", "entityModelSubmissions", "entityCuboids",
             "entityModelQuads", "entityModelVertices", "entityBakedQuads", "entityBakedVertices",
             "entityDirectSubmissions", "entityDirectFallbacks", "entityDirectQuads", "entityDirectVertices",
