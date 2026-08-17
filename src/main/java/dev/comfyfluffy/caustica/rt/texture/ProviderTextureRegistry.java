@@ -52,7 +52,7 @@ public final class ProviderTextureRegistry implements AutoCloseable {
     private final Set<BorrowedVulkanTexture> borrowedResources =
             Collections.newSetFromMap(new IdentityHashMap<>());
     private final UploadedTexture fallback;
-    private DescriptorWriter descriptors;
+    private final DescriptorWriter descriptors;
     private int nextSlot = 1;
     private boolean closed;
 
@@ -70,17 +70,6 @@ public final class ProviderTextureRegistry implements AutoCloseable {
             fallback.destroy();
             throw failure;
         }
-    }
-
-    /** A one-contribution convenience sink. Multi-contribution providers use {@link #submission}. */
-    public TextureSink sink(ResourceId source) {
-        Objects.requireNonNull(source, "source");
-        return (reference, resource) -> {
-            try (Submission submission = submission(source)) {
-                submission.submit(reference, resource);
-                submission.commit();
-            }
-        };
     }
 
     /** Stage one provider callback so failure cannot mutate shared slots or capacity. */
@@ -242,14 +231,6 @@ public final class ProviderTextureRegistry implements AutoCloseable {
         Entry entry = entries.get(new Key(source, reference));
         if (entry == null) throw new IllegalArgumentException("texture was not submitted: " + source + "/" + reference);
         return entry.slot();
-    }
-
-    /** Populate a replacement descriptor table without changing geometry-visible slots. */
-    public void rebind(DescriptorWriter replacement) {
-        if (closed) throw new IllegalStateException("texture registry is closed");
-        descriptors = Objects.requireNonNull(replacement, "replacement");
-        descriptors.write(0, fallback.imageView(), fallback.imageLayout());
-        entries.values().forEach(entry -> descriptors.write(entry.slot(), entry.imageView(), entry.imageLayout()));
     }
 
     public int size() {

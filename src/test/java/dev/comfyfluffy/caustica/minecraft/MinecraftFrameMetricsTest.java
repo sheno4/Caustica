@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft;
 
-import dev.comfyfluffy.caustica.spi.host.HostTelemetry.MetricSchema;
+import dev.comfyfluffy.caustica.rt.RtTelemetry.MetricSchema;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;

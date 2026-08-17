@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.spi.host;
+package dev.comfyfluffy.caustica.rt;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -8,16 +8,13 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.function.LongConsumer;
 
-/**
- * Telemetry seam shared by the renderer and its first-party host adapter. This is an integration SPI,
- * not part of the third-party extension API. Implementations own persistence, logging, and JFR events.
- */
-public interface HostTelemetry {
+/** Renderer telemetry consumed by the first-party Minecraft integration. */
+public interface RtTelemetry {
     enum GeometrySource {
         TERRAIN, TERRAIN_READY, ENTITY, ENTITY_PLACEMENT, BLOCK_ENTITY, PARTICLE
     }
 
-    /** Opaque extraction sample carried by host geometry until its publication callback runs. */
+    /** Opaque extraction sample carried by Minecraft geometry until its publication callback runs. */
     interface ExtractionStamp {
     }
 
@@ -49,7 +46,7 @@ public interface HostTelemetry {
         }
     }
 
-    /** Immutable stage and counter vocabulary contributed by a host. */
+    /** Immutable stage and counter vocabulary contributed by Minecraft. */
     record MetricSchema(List<StageMetric> stages, List<String> counters) {
         public MetricSchema {
             stages = List.copyOf(stages);
@@ -100,7 +97,7 @@ public interface HostTelemetry {
 
     Frame frame();
 
-    void configure(Path outputDirectory, MetricSchema hostMetrics);
+    void configure(Path outputDirectory, MetricSchema minecraftMetrics);
 
     ExtractionStamp extraction(GeometrySource source, int geometryCount);
 

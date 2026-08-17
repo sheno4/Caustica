@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.client;
 
-import dev.comfyfluffy.caustica.spi.host.RendererRuntimeAccess;
+import dev.comfyfluffy.caustica.rt.RtRuntime;
 import dev.comfyfluffy.caustica.mixin.DebugScreenEntriesAccessor;
 import net.minecraft.client.gui.components.debug.DebugScreenDisplayer;
 import net.minecraft.client.gui.components.debug.DebugScreenEntry;
@@ -23,10 +23,10 @@ public final class RtExposureDebugEntry implements DebugScreenEntry {
     @Override
     public void display(DebugScreenDisplayer displayer, @Nullable Level serverOrClientLevel,
                         @Nullable LevelChunk clientChunk, @Nullable LevelChunk serverChunk) {
-        if (RendererRuntimeAccess.status().rendererFailed()) {
+        if (RtRuntime.INSTANCE.rendererFailed()) {
             return; // vanilla is rendering this frame; the exposure state is stale/irrelevant.
         }
-        String line = RendererRuntimeAccess.diagnostics().exposureSummary();
+        String line = RtRuntime.INSTANCE.exposureSummary();
         if (line != null) {
             displayer.addLine(line);
         }

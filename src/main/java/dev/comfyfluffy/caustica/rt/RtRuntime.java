@@ -9,16 +9,11 @@ import dev.comfyfluffy.caustica.api.pass.CausticaRenderPass;
 import dev.comfyfluffy.caustica.engine.frame.FrameSnapshot;
 import dev.comfyfluffy.caustica.engine.frame.SceneResources;
 import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
+import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.ngx.NgxRuntime;
 import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
 import dev.comfyfluffy.caustica.spi.vulkan.VulkanRendererBackend;
 import dev.comfyfluffy.caustica.spi.host.RuntimeHost;
-import dev.comfyfluffy.caustica.spi.host.HostTelemetry;
-import dev.comfyfluffy.caustica.spi.host.RendererPresentation;
-import dev.comfyfluffy.caustica.spi.host.RendererRuntimeController;
-import dev.comfyfluffy.caustica.spi.host.RendererRuntimeDiagnostics;
-import dev.comfyfluffy.caustica.spi.host.RendererRuntimeStatus;
-import dev.comfyfluffy.caustica.spi.host.ResourceReloadToken;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg;
 import dev.comfyfluffy.caustica.rt.pipeline.RtExposure;
 import dev.comfyfluffy.caustica.rt.provider.ProviderManager;
@@ -31,15 +26,23 @@ import org.lwjgl.vulkan.VkDevice;
 import org.lwjgl.vulkan.VkQueue;
 
 /** Owns the live RT session and publishes one immutable rendering mode for each frame. */
-public final class RtRuntime implements RendererRuntimeController, RendererRuntimeDiagnostics, RendererPresentation {
+public final class RtRuntime {
     public static final RtRuntime INSTANCE = new RtRuntime();
 
-    private enum State {
+    enum State {
         OFF,
         STARTING,
         ACTIVE,
         STOPPING,
         FAILED
+    }
+
+    public enum WorldReplacement {
+        READY,
+        FRAME_INACTIVE,
+        DEVICE_UNAVAILABLE,
+        RENDERER_FAILED,
+        RESOURCE_TRANSITION
     }
 
     private State state = State.OFF;
@@ -97,12 +100,11 @@ public final class RtRuntime implements RendererRuntimeController, RendererRunti
     private RtRuntime() {
     }
 
-    /** First-party host telemetry integration backed by renderer-owned collectors and sinks. */
-    public HostTelemetry hostTelemetry() {
-        return RtHostTelemetry.INSTANCE;
+    /** Renderer telemetry integration backed by renderer-owned collectors and sinks. */
+    public RtTelemetry telemetry() {
+        return RtTelemetryImpl.INSTANCE;
     }
 
-    @Override
     public void installVulkanBackend(VulkanRendererBackend backend) {
         GpuContext.installBackend(backend);
     }
@@ -127,14 +129,14 @@ public final class RtRuntime implements RendererRuntimeController, RendererRunti
     }
 
     /** Begin the host-visible half of a resource-pack reload before its old images are destroyed. */
-    public ResourceReloadToken beginResourcePackReload() {
-        return new ReloadToken(lifecycle.beginResourcePackReload());
+    public long beginResourcePackReload() {
+        return lifecycle.beginResourcePackReload().generation();
     }
 
     /** Attach a manual-reload future; its result is applied on the next client tick. */
-    public void trackResourcePackReload(ResourceReloadToken pending,
+    public void trackResourcePackReload(long generation,
                                         java.util.concurrent.CompletableFuture<?> future) {
-        lifecycle.trackResourcePackReload(((ReloadToken) pending).epoch(), future);
+        lifecycle.trackResourcePackReload(generation, future);
     }
 
     /** Reconcile the current level identity at the client-tick boundary. */
@@ -149,10 +151,6 @@ public final class RtRuntime implements RendererRuntimeController, RendererRunti
         }
     }
 
-    public RtLifecycleCoordinator lifecycle() {
-        return lifecycle;
-    }
-
     /** Whether a completed resource pack can be replayed into newly created session instances. */
     public boolean hasAppliedResourcePack() {
         return lifecycle.resourcePackEpoch() != null && lifecycle.pendingResourcePackEpoch() == null;
@@ -165,11 +163,6 @@ public final class RtRuntime implements RendererRuntimeController, RendererRunti
         }
         CausticaRenderPass pass = session.contributions.renderPasses().get(id);
         return type.isInstance(pass) ? type.cast(pass) : null;
-    }
-
-    /** Whether a program's selected-slot closure matches the live runtime activation. */
-    boolean matchesRuntimeActivation(RtProgramManager.Program program) {
-        return session != null && session.matches(program.key().selection());
     }
 
     /** Monotonic index of RT composite attempts across runtime activations. */
@@ -251,7 +244,6 @@ public final class RtRuntime implements RendererRuntimeController, RendererRunti
         return session != null && session.presenter.isActive(sceneAvailable);
     }
 
-    @Override
     public int generatedFrameCount() {
         return RtDlssFg.INSTANCE.effectiveMultiFrameCount();
     }
@@ -399,31 +391,22 @@ public final class RtRuntime implements RendererRuntimeController, RendererRunti
         }
     }
 
-    @Override
-    public RendererRuntimeStatus status() {
-        RendererRuntimeStatus.WorldReplacement replacement;
+    State state() {
+        return state;
+    }
+
+    public WorldReplacement worldReplacement() {
         boolean failed = rendererFailed();
         if (!frameActive) {
-            replacement = RendererRuntimeStatus.WorldReplacement.FRAME_INACTIVE;
+            return WorldReplacement.FRAME_INACTIVE;
         } else if (failed) {
-            replacement = RendererRuntimeStatus.WorldReplacement.RENDERER_FAILED;
+            return WorldReplacement.RENDERER_FAILED;
         } else if (GpuContext.currentOrNull() == null) {
-            replacement = RendererRuntimeStatus.WorldReplacement.DEVICE_UNAVAILABLE;
+            return WorldReplacement.DEVICE_UNAVAILABLE;
         } else if (requiresSourceWorldFallback()) {
-            replacement = RendererRuntimeStatus.WorldReplacement.RESOURCE_TRANSITION;
-        } else {
-            replacement = RendererRuntimeStatus.WorldReplacement.READY;
+            return WorldReplacement.RESOURCE_TRANSITION;
         }
-        return new RendererRuntimeStatus(
-                RendererRuntimeStatus.State.valueOf(state.name()),
-                frameActive,
-                session != null,
-                failed,
-                replacement,
-                isHdrPresentActive(),
-                isPqSdrPresentActive(),
-                active() && CausticaConfig.Rt.Hdr.ENABLED.value(),
-                frameCounter());
+        return WorldReplacement.READY;
     }
 
     /**
@@ -450,9 +433,6 @@ public final class RtRuntime implements RendererRuntimeController, RendererRunti
     /** PQ belongs to an active RT session; Off and Starting use the host's native SDR swapchain. */
     public static boolean wantsPqSwapchain() {
         return active() && CausticaConfig.Rt.Hdr.ENABLED.value();
-    }
-
-    private record ReloadToken(RtLifecycleCoordinator.ResourcePackEpoch epoch) implements ResourceReloadToken {
     }
 
     private void start() {
@@ -624,8 +604,7 @@ public final class RtRuntime implements RendererRuntimeController, RendererRunti
             boolean resourcesReady = renderer.ensureResourcesReady(context, sceneResources);
             if (resourcesReady) {
                 RtFrameStats.FRAME.beginIfInactive();
-                providers.updateScenes();
-                providers.submitGeometryUpdates(context, dev.comfyfluffy.caustica.engine.scene.SceneOrigin.ZERO);
+                providers.updateScenes(context, SceneOrigin.ZERO);
                 renderer.sceneGeometry().progress(context);
             }
             if (!sceneResources.sceneReady()) {

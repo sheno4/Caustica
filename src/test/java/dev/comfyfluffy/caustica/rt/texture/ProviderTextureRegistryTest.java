@@ -4,6 +4,7 @@ import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.api.gpu.BorrowedVulkanTexture;
 import dev.comfyfluffy.caustica.api.provider.CpuTextureResource;
 import dev.comfyfluffy.caustica.api.provider.SceneMesh;
+import dev.comfyfluffy.caustica.api.provider.TextureResource;
 import org.junit.jupiter.api.Test;
 import org.lwjgl.vulkan.VK10;
 
@@ -34,8 +35,8 @@ final class ProviderTextureRegistryTest {
                 (texture, label) -> uploaded(101L, destroyed),
                 (slot, view, layout) -> writes.add(new Write(slot, view, layout)));
 
-        registry.sink(FIRST).submit(TEXTURE, cpu());
-        registry.sink(SECOND).submit(TEXTURE,
+        submit(registry, FIRST, TEXTURE, cpu());
+        submit(registry, SECOND, TEXTURE,
                 new BorrowedVulkanTexture(202L, VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                         destroyed::incrementAndGet));
 
@@ -46,10 +47,6 @@ final class ProviderTextureRegistryTest {
                 new Write(1, 101L, VK10.VK_IMAGE_LAYOUT_GENERAL),
                 new Write(2, 202L, VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)), writes);
 
-        List<Write> rebound = new ArrayList<>();
-        registry.rebind((slot, view, layout) -> rebound.add(new Write(slot, view, layout)));
-        assertEquals(writes, rebound);
-
         registry.close();
         registry.close();
         assertEquals(3, destroyed.get());
@@ -59,9 +56,9 @@ final class ProviderTextureRegistryTest {
     void rejectsDuplicateAndOverflowingContributions() {
         ProviderTextureRegistry registry = new ProviderTextureRegistry(2,
                 (texture, label) -> uploaded(101L, new AtomicInteger()), (slot, view, layout) -> { });
-        registry.sink(FIRST).submit(TEXTURE, cpu());
-        assertThrows(IllegalArgumentException.class, () -> registry.sink(FIRST).submit(TEXTURE, cpu()));
-        assertThrows(IllegalStateException.class, () -> registry.sink(SECOND).submit(TEXTURE, cpu()));
+        submit(registry, FIRST, TEXTURE, cpu());
+        assertThrows(IllegalArgumentException.class, () -> submit(registry, FIRST, TEXTURE, cpu()));
+        assertThrows(IllegalStateException.class, () -> submit(registry, SECOND, TEXTURE, cpu()));
         registry.close();
     }
 
@@ -74,7 +71,7 @@ final class ProviderTextureRegistryTest {
                     if (slot != 0) throw new IllegalStateException("descriptor failure");
                 });
 
-        assertThrows(IllegalStateException.class, () -> registry.sink(FIRST).submit(TEXTURE, cpu()));
+        assertThrows(IllegalStateException.class, () -> submit(registry, FIRST, TEXTURE, cpu()));
         assertEquals(1, destroyed.get());
         assertEquals(0, registry.size());
         registry.close();
@@ -98,7 +95,7 @@ final class ProviderTextureRegistryTest {
         AtomicBoolean hostMayReleaseView = new AtomicBoolean();
         ProviderTextureRegistry registry = new ProviderTextureRegistry(2,
                 (texture, label) -> uploaded(101L, new AtomicInteger()), (slot, view, layout) -> { });
-        registry.sink(FIRST).submit(TEXTURE,
+        submit(registry, FIRST, TEXTURE,
                 new BorrowedVulkanTexture(202L, VK10.VK_IMAGE_LAYOUT_GENERAL, () -> {
                     assertTrue(gpuDrained.get(), "borrowed view retired before descriptor work drained");
                     hostMayReleaseView.set(true);
@@ -126,7 +123,7 @@ final class ProviderTextureRegistryTest {
 
         assertEquals(2, retired.get());
         assertEquals(0, registry.size());
-        registry.sink(SECOND).submit(TEXTURE, borrowed(203L, retired));
+        submit(registry, SECOND, TEXTURE, borrowed(203L, retired));
         assertEquals(1, registry.requireSlot(SECOND, TEXTURE));
         registry.close();
         assertEquals(3, retired.get());
@@ -147,13 +144,21 @@ final class ProviderTextureRegistryTest {
 
         assertEquals(2, retired.get());
         assertEquals(0, registry.size());
-        registry.sink(SECOND).submit(TEXTURE, borrowed(203L, retired));
+        submit(registry, SECOND, TEXTURE, borrowed(203L, retired));
         assertEquals(1, registry.requireSlot(SECOND, TEXTURE));
         registry.close();
     }
 
     private static CpuTextureResource cpu() {
         return new CpuTextureResource(1, 1, CpuTextureResource.Encoding.SRGB, new byte[] { 1, 2, 3, 4 });
+    }
+
+    private static void submit(ProviderTextureRegistry registry, ResourceId source,
+                               SceneMesh.TextureReference reference, TextureResource resource) {
+        try (ProviderTextureRegistry.Submission submission = registry.submission(source)) {
+            submission.submit(reference, resource);
+            submission.commit();
+        }
     }
 
     private static ProviderTextureRegistry.UploadedTexture uploaded(long view, AtomicInteger destroyed) {

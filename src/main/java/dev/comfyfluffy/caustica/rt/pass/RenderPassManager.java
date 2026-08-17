@@ -32,7 +32,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.TreeSet;
 import java.util.function.BiFunction;
 import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 
@@ -346,61 +345,11 @@ public final class RenderPassManager {
         });
     }
 
-    /** Stage order first, then a topological sort of {@link CausticaRenderPass#after()} within a stage. */
+    /** Stage order first; Java's stable sort preserves registration order within a stage. */
     static List<CausticaRenderPass> orderPasses(java.util.Collection<CausticaRenderPass> passes) {
         List<CausticaRenderPass> byStage = new ArrayList<>(passes);
         byStage.sort(Comparator.comparing(pass -> pass.stage().ordinal()));
-        List<CausticaRenderPass> result = new ArrayList<>();
-        int index = 0;
-        while (index < byStage.size()) {
-            RenderStage stage = byStage.get(index).stage();
-            int end = index;
-            while (end < byStage.size() && byStage.get(end).stage() == stage) {
-                end++;
-            }
-            result.addAll(topoSortStage(byStage.subList(index, end)));
-            index = end;
-        }
-        return result;
-    }
-
-    private static List<CausticaRenderPass> topoSortStage(List<CausticaRenderPass> stagePasses) {
-        Map<ResourceId, CausticaRenderPass> byId = new LinkedHashMap<>();
-        for (CausticaRenderPass pass : stagePasses) {
-            byId.put(pass.id(), pass);
-        }
-        Map<ResourceId, Integer> remainingDeps = new LinkedHashMap<>();
-        Map<ResourceId, List<ResourceId>> dependents = new LinkedHashMap<>();
-        for (CausticaRenderPass pass : stagePasses) {
-            List<ResourceId> afterHere = pass.after().stream().filter(byId::containsKey).toList();
-            remainingDeps.put(pass.id(), afterHere.size());
-            for (ResourceId dependency : afterHere) {
-                dependents.computeIfAbsent(dependency, ignored -> new ArrayList<>()).add(pass.id());
-            }
-        }
-        TreeSet<ResourceId> ready = new TreeSet<>(Comparator.naturalOrder());
-        remainingDeps.forEach((id, count) -> {
-            if (count == 0) {
-                ready.add(id);
-            }
-        });
-        List<CausticaRenderPass> result = new ArrayList<>();
-        while (!ready.isEmpty()) {
-            ResourceId next = ready.pollFirst();
-            result.add(byId.get(next));
-            for (ResourceId dependent : dependents.getOrDefault(next, List.of())) {
-                int left = remainingDeps.merge(dependent, -1, Integer::sum);
-                if (left == 0) {
-                    ready.add(dependent);
-                }
-            }
-        }
-        if (result.size() != stagePasses.size()) {
-            Set<ResourceId> cyclic = new HashSet<>(byId.keySet());
-            result.forEach(pass -> cyclic.remove(pass.id()));
-            throw new IllegalStateException("render pass ordering cycle involving " + cyclic);
-        }
-        return result;
+        return byStage;
     }
 
     private final class Setup implements PassSetup {

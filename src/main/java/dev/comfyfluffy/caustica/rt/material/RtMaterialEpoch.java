@@ -31,22 +31,22 @@ public final class RtMaterialEpoch {
     static final class LifecycleState {
         boolean bindingsReady;
         volatile boolean reloadPending;
-        int bindlessTextureCapacity;
+        boolean publishedResources;
 
         void beginReload() {
             reloadPending = true;
             bindingsReady = false;
         }
 
-        void published(int textureCapacity) {
-            bindlessTextureCapacity = textureCapacity;
+        void published() {
+            publishedResources = true;
             bindingsReady = true;
             reloadPending = false;
         }
 
         void destroyPublished() {
             bindingsReady = false;
-            bindlessTextureCapacity = 0;
+            publishedResources = false;
         }
 
         void reloadFailed() {
@@ -54,7 +54,7 @@ public final class RtMaterialEpoch {
         }
 
         boolean hasPublishedResources() {
-            return bindlessTextureCapacity != 0;
+            return publishedResources;
         }
     }
 
@@ -141,10 +141,6 @@ public final class RtMaterialEpoch {
         return state.reloadPending;
     }
 
-    public int bindlessTextureCapacity() {
-        return state.bindlessTextureCapacity;
-    }
-
     public boolean hasPublishedResources() {
         return state.hasPublishedResources() || opacityMicromapPipeline != null;
     }
@@ -176,15 +172,7 @@ public final class RtMaterialEpoch {
         providers.publishMaterials(registry.requireSnapshot());
         providerSnapshotPublished = true;
         pageCompiler.bindPages(pipeline, epochSampler);
-        state.published(textureCapacity);
-    }
-
-    /** Bind the already-published epoch into a replacement world pipeline. */
-    public void bindCurrent(GpuContext ctx, RtPipeline pipeline) {
-        long epochSampler = sampler(ctx);
-        pageCompiler.bindPages(pipeline, epochSampler);
-        textureRegistry.rebind((slot, view, layout) ->
-                pipeline.setBaseColorTexture(slot, view, layout, epochSampler));
+        state.published();
     }
 
     public int textureSlot(ResourceId source, SceneMesh.TextureReference texture) {

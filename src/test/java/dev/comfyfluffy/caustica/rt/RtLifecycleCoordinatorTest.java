@@ -38,10 +38,10 @@ final class RtLifecycleCoordinatorTest {
 
         RtLifecycleCoordinator.ResourcePackEpoch first = coordinator.beginResourcePackReload();
         CompletableFuture<Void> firstFuture = new CompletableFuture<>();
-        coordinator.trackResourcePackReload(first, firstFuture);
+        coordinator.trackResourcePackReload(first.generation(), firstFuture);
         RtLifecycleCoordinator.ResourcePackEpoch second = coordinator.beginResourcePackReload();
         CompletableFuture<Void> secondFuture = new CompletableFuture<>();
-        coordinator.trackResourcePackReload(second, secondFuture);
+        coordinator.trackResourcePackReload(second.generation(), secondFuture);
         firstFuture.complete(null);
         assertEquals(List.of(), coordinator.drainResourcePackCompletions());
         secondFuture.complete(null);
@@ -60,7 +60,7 @@ final class RtLifecycleCoordinatorTest {
         RtLifecycleCoordinator.ResourcePackEpoch initial = coordinator.observeResourcePackAvailable();
         RtLifecycleCoordinator.ResourcePackEpoch pending = coordinator.beginResourcePackReload();
         CompletableFuture<Void> failed = new CompletableFuture<>();
-        coordinator.trackResourcePackReload(pending, failed);
+        coordinator.trackResourcePackReload(pending.generation(), failed);
         failed.completeExceptionally(new IllegalStateException("reload failed"));
 
         assertEquals(List.of(), coordinator.drainResourcePackCompletions());

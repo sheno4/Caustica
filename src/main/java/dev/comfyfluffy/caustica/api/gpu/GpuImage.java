@@ -13,11 +13,5 @@ public interface GpuImage {
     int width();
     int height();
     int format();
-    int mipLevels();
-    /** Usage flags passed to image creation, including caller-supplied extra bits. */
-    int usage();
-    String label();
-    boolean isDestroyed();
-    void requireNotDestroyed();
     void destroy();
 }

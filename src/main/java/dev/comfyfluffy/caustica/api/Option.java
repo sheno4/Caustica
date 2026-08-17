@@ -4,7 +4,7 @@ import java.util.List;
 import java.util.Objects;
 
 public record Option<T>(String id, Kind kind, T defaultValue, Double minimum, Double maximum,
-                        List<T> choices, Reload reload, Display display) {
+                        List<T> choices, Display display) {
     public enum Kind {
         BOOL,
         RANGE,
@@ -33,7 +33,6 @@ public record Option<T>(String id, Kind kind, T defaultValue, Double minimum, Do
         Objects.requireNonNull(kind, "kind");
         Objects.requireNonNull(defaultValue, "defaultValue");
         Objects.requireNonNull(choices, "choices");
-        Objects.requireNonNull(reload, "reload");
         Objects.requireNonNull(display, "display");
         choices = List.copyOf(choices);
         if (!id.matches("[a-z][a-z0-9_.-]*")) {
@@ -94,7 +93,7 @@ public record Option<T>(String id, Kind kind, T defaultValue, Double minimum, Do
     }
 
     public static Option<Boolean> bool(String id, boolean defaultValue) {
-        return new Option<>(id, Kind.BOOL, defaultValue, null, null, List.of(), Reload.LOOK, Display.NONE);
+        return new Option<>(id, Kind.BOOL, defaultValue, null, null, List.of(), Display.NONE);
     }
 
     public static Option<Float> range(String id, float minimum, float maximum, float defaultValue) {
@@ -102,19 +101,15 @@ public record Option<T>(String id, Kind kind, T defaultValue, Double minimum, Do
             throw new IllegalArgumentException("range default is outside its bounds");
         }
         return new Option<>(id, Kind.RANGE, defaultValue, (double) minimum, (double) maximum,
-                List.of(), Reload.LOOK, Display.NONE);
+                List.of(), Display.NONE);
     }
 
     public static <E extends Enum<E>> Option<E> enumOf(String id, E defaultValue, List<E> choices) {
-        return new Option<>(id, Kind.ENUM, defaultValue, null, null, choices, Reload.LOOK, Display.NONE);
+        return new Option<>(id, Kind.ENUM, defaultValue, null, null, choices, Display.NONE);
     }
 
     public static Option<Integer> color(String id, int defaultRgb) {
-        return new Option<>(id, Kind.COLOR, defaultRgb, null, null, List.of(), Reload.LOOK, Display.NONE);
-    }
-
-    public Option<T> reload(Reload reload) {
-        return new Option<>(id, kind, defaultValue, minimum, maximum, choices, reload, display);
+        return new Option<>(id, Kind.COLOR, defaultRgb, null, null, List.of(), Display.NONE);
     }
 
     /** Places this option in a collapsible group the owning feature declared. */
@@ -150,6 +145,6 @@ public record Option<T>(String id, Kind kind, T defaultValue, Double minimum, Do
     }
 
     private Option<T> withDisplay(Display updated) {
-        return new Option<>(id, kind, defaultValue, minimum, maximum, choices, reload, updated);
+        return new Option<>(id, kind, defaultValue, minimum, maximum, choices, updated);
     }
 }

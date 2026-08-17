@@ -14,50 +14,22 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class RenderPassManagerTest {
-    private static final GpuImage FAKE_IMAGE = new FakeImage("fake");
+    private static final GpuImage FAKE_IMAGE = new FakeImage();
 
     @Test
-    void ordersByStageThenTopologicallyWithinAStage() {
+    void ordersByStageThenRegistrationOrderWithinAStage() {
         FakePass sky = new FakePass("sky_lut", RenderStage.ENVIRONMENT_PREPARE);
         FakePass bloom = new FakePass("bloom", RenderStage.AFTER_RECONSTRUCTION);
         FakePass overlay = new FakePass("overlay", RenderStage.OVERLAY);
-        // Declared out of dependency order on purpose: b depends on a, but a is registered second.
-        FakePass b = new FakePass("b", RenderStage.LOOK, List.of(identifierOf("a")));
-        FakePass a = new FakePass("a", RenderStage.LOOK);
+        FakePass b = new FakePass("b", RenderStage.AFTER_RECONSTRUCTION);
+        FakePass a = new FakePass("a", RenderStage.AFTER_RECONSTRUCTION);
 
         List<CausticaRenderPass> ordered = RenderPassManager.orderPasses(
                 List.of(overlay, b, bloom, a, sky));
 
-        assertEquals(List.of(sky, bloom, a, b, overlay), ordered);
-    }
-
-    @Test
-    void independentPassesInTheSameStageAreOrderedDeterministicallyById() {
-        FakePass z = new FakePass("z", RenderStage.LOOK);
-        FakePass a = new FakePass("a", RenderStage.LOOK);
-
-        assertEquals(List.of(a, z), RenderPassManager.orderPasses(List.of(z, a)));
-    }
-
-    @Test
-    void afterReferencingAnUnknownOrDifferentStagePassIsIgnored() {
-        FakePass onlyOne = new FakePass("only", RenderStage.LOOK, List.of(identifierOf("nonexistent")));
-
-        assertEquals(List.of(onlyOne), RenderPassManager.orderPasses(List.of(onlyOne)));
-    }
-
-    @Test
-    void aCycleInAfterThrows() {
-        FakePass a = new FakePass("a", RenderStage.LOOK, List.of(identifierOf("b")));
-        FakePass b = new FakePass("b", RenderStage.LOOK, List.of(identifierOf("a")));
-
-        IllegalStateException e = assertThrows(IllegalStateException.class,
-                () -> RenderPassManager.orderPasses(List.of(a, b)));
-        assertTrue(e.getMessage().contains("cycle"));
+        assertEquals(List.of(sky, b, bloom, a, overlay), ordered);
     }
 
     // The chain rotation itself needs a real command buffer (each link ends in a barrier), so what is
@@ -65,7 +37,7 @@ final class RenderPassManagerTest {
     // reconstruction rather than a post target holding last frame's contents.
     @Test
     void anEmptyPostChainLeavesTheSceneAtTheReconstruction() {
-        GpuImage reconstruction = new FakeImage("reconstruction");
+        GpuImage reconstruction = new FakeImage();
         RenderPassManager manager = new RenderPassManager(null, List.of());
         manager.setReconstructedColor(reconstruction);
         manager.setSceneColorTargets(FAKE_IMAGE, FAKE_IMAGE);
@@ -144,47 +116,23 @@ final class RenderPassManagerTest {
     }
 
     private static final class FakeImage implements GpuImage {
-        private final String label;
-        private boolean destroyed;
-
-        private FakeImage(String label) {
-            this.label = label;
-        }
-
         @Override public long image() { return 0L; }
         @Override public long view() { return 0L; }
         @Override public int width() { return 1; }
         @Override public int height() { return 1; }
         @Override public int format() { return 0; }
-        @Override public int mipLevels() { return 1; }
-        @Override public int usage() { return 0; }
-        @Override public String label() { return label; }
-        @Override public boolean isDestroyed() { return destroyed; }
-
-        @Override
-        public void requireNotDestroyed() {
-            if (destroyed) throw new IllegalStateException(label + " was already destroyed");
-        }
-
         @Override
         public void destroy() {
-            destroyed = true;
         }
     }
 
     private static class FakePass implements CausticaRenderPass {
         private final ResourceId id;
         private final RenderStage stage;
-        private final List<ResourceId> after;
 
         FakePass(String path, RenderStage stage) {
-            this(path, stage, List.of());
-        }
-
-        FakePass(String path, RenderStage stage, List<ResourceId> after) {
             this.id = identifierOf(path);
             this.stage = stage;
-            this.after = after;
         }
 
         @Override
@@ -195,11 +143,6 @@ final class RenderPassManagerTest {
         @Override
         public RenderStage stage() {
             return stage;
-        }
-
-        @Override
-        public List<ResourceId> after() {
-            return after;
         }
 
         @Override

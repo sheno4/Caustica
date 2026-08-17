@@ -345,7 +345,7 @@ public final class GpuContext implements GpuDevice {
             long registeredAddress = address;
             long registeredHandle = handle;
             return new VmaGpuBuffer(vma, handle, allocation, address, hostVisible ? info.pMappedData() : 0L,
-                    size, usage, hostVisible, label,
+                    size, hostVisible,
                     () -> VulkanDiagnostics.unregisterBuffer(registeredAddress, registeredHandle));
         } catch (Throwable t) {
             if (handle != 0L) {
@@ -419,7 +419,7 @@ public final class GpuContext implements GpuDevice {
                         0, null, null, b);
             }
         });
-        return new VmaGpuImage(vma, vk, image, allocation, view, width, height, format, 1, usage, label);
+        return new VmaGpuImage(vma, vk, image, allocation, view, width, height, format);
     }
 
     private void requireStorageImageSupport(int width, int height, int format, int usage, String label) {
@@ -507,7 +507,7 @@ public final class GpuContext implements GpuDevice {
                         0, null, null, b);
             }
         });
-        return new VmaGpuImage(vma, vk, image, allocation, view, width, height, format, 1, usage, label);
+        return new VmaGpuImage(vma, vk, image, allocation, view, width, height, format);
     }
 
     /**

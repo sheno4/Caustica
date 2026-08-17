@@ -53,8 +53,10 @@ import dev.comfyfluffy.caustica.api.provider.MaterialDefinition;
 import dev.comfyfluffy.caustica.api.provider.MaterialHandle;
 import dev.comfyfluffy.caustica.api.provider.MaterialSource;
 import dev.comfyfluffy.caustica.api.provider.MaterialTopology;
+import dev.comfyfluffy.caustica.api.provider.SceneFrameContext;
+import dev.comfyfluffy.caustica.api.provider.SceneGeometrySink;
+import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import dev.comfyfluffy.caustica.api.provider.SceneProvider;
-import dev.comfyfluffy.caustica.api.provider.TriangleMesh;
 import dev.comfyfluffy.caustica.engine.light.LightDescriptor;
 
 import java.util.List;
@@ -91,21 +93,32 @@ public final class ExampleExtension implements CausticaExtension {
         private static final long MESH = 1L;
         private static final long INSTANCE = 1L;
 
-        private boolean meshRetained;
+        private boolean submitted;
 
         @Override
-        public void submitGeometry(dev.comfyfluffy.caustica.api.provider.SceneGeometrySink sink) {
-            if (!meshRetained) {
-                TriangleMesh mesh = new TriangleMesh(
-                        new float[]{0, 0, 0, 1, 0, 0, 0, 1, 0},
-                        new float[]{0, 0, 1, 0, 0, 1},
-                        new int[]{0, 1, 2},
-                        List.of(new TriangleMesh.MaterialRange(
-                                0, 1, new MaterialHandle(MATERIAL))));
-                sink.retainMesh(MESH, mesh);
-                meshRetained = true;
-            }
-            sink.instance(INSTANCE, MESH, GeometryTransform.translation(0.0, 80.0, 0.0));
+        public void submitGeometry(SceneFrameContext frame) {
+            if (submitted) return;
+            SceneMesh mesh = new SceneMesh(
+                    new float[]{0, 0, 0, 1, 0, 0, 0, 1, 0},
+                    new int[]{0, 1, 2},
+                    SceneMesh.UvLayout.PER_VERTEX,
+                    new float[]{0, 0, 1, 0, 0, 1},
+                    List.of(SceneMesh.TriangleSurface.surface(new MaterialHandle(MATERIAL))));
+            frame.geometry().submit(1L, List.of(
+                    new SceneGeometrySink.Put(MESH, mesh),
+                    new SceneGeometrySink.Place(
+                            INSTANCE, MESH, GeometryTransform.translation(0.0, 80.0, 0.0))));
+            submitted = true;
+        }
+
+        @Override
+        public void onWorldChanged() {
+            submitted = false;
+        }
+
+        @Override
+        public void onResourcePackClosing() {
+            submitted = false;
         }
     }
 
@@ -176,9 +189,12 @@ behavior uses the same registered surface selected by the material.
 `SceneProvider` has these callbacks:
 
 ```java
-default void update() {}
+default void onMaterialEpoch(MaterialSnapshot materials) {}
+default void onMaterialEpochClosing() {}
+default void update(SceneGeometryUpdateContext update) {}
 default void prepareFrame() {}
-default void submitGeometry(SceneGeometrySink sink) {}
+default void submitTextures(TextureSink sink) {}
+default void submitGeometry(SceneFrameContext frame) {}
 default void onWorldChanged() {}
 default void onResourcePackClosing() {}
 default void onResourcePackApplied() {}
@@ -186,30 +202,51 @@ default void stop() {}
 default void shutdown() {}
 ```
 
-Keys are stable only within the provider. `retainMesh(meshKey, mesh)` declares a mesh's current data —
-call it only when the mesh is new or its data actually changed, never on every frame; the engine no
-longer diffs mesh bytes to find out, so an unnecessary call pays a real re-upload and BLAS rebuild.
-`releaseMesh(meshKey)` retires a mesh explicitly. `instance(instanceKey, meshKey, transform)` declares one
-placement of an already-retained mesh and must be called every frame the instance should be visible;
-omitting an instance this frame just excludes it from this frame's scene, it does not release the mesh.
-Material ranges are contiguous triangle spans and cover the whole mesh. Positions are mesh-local floats;
+Geometry group, resident-mesh and placement keys are stable only within the provider. Submit one atomic group
+only when its retained state changes. `Put` retains or replaces a `SceneMesh`; `Place` adds or replaces a
+world-space placement of one retained mesh; `Transform` changes that placement; `Remove` removes it; and `Drop`
+retires mesh data after its placements have been removed. Omitting a previously submitted group means no
+change. Repeating an unchanged `Put` pays a real re-upload and acceleration rebuild because the renderer does
+not diff mesh bytes. `SceneMesh` carries one material surface per triangle. Positions are mesh-local floats;
 translation remains double precision in `GeometryTransform` until renderer rebasing.
 
 A mesh also survives its provider only as long as the provider stays live: the engine releases every mesh
 still retained by a provider that stopped (failure or session end) without releasing them itself. The
 engine clones submitted arrays, uploads geometry, builds BLAS, writes canonical geometry records and
-inserts instances into the TLAS. Minecraft's rounded block clouds use exactly this contract — they retain
-their four cloud meshes once and then submit only per-cell instances every frame.
+inserts placements into the TLAS. Minecraft's rounded block clouds use exactly this contract: they retain
+their four cloud meshes once and publish only changed cell placements.
 
-Minecraft terrain and animated entities use an internal `RtSceneSource` implemented by their registered
-scene provider. That seam is not public extension API; it supplies environment state, bindless host
-textures and CPU capture while the injected geometry manager retains asynchronous chunk meshing, entity
-refit and the same geometry table and TLAS ownership.
+Minecraft terrain and animated entities use this same scene-provider contract. Their asynchronous CPU work
+publishes keyed atomic geometry groups and observes the ordinary publication callback before updating its
+resident state. They contribute textures and receive material semantics through the same supported callbacks
+available to any scene provider; there is no privileged Minecraft scene-source interface.
+
+Geometry submitted from `update(SceneGeometryUpdateContext)` is treated as retained static content and may be
+compacted or receive renderer-selected opacity acceleration. Geometry submitted from `submitGeometry` is treated
+as frame-dynamic content. Providers describe content and lifetime; acceleration policy remains renderer-owned.
+
+`submitTextures(TextureSink)` publishes each source-local texture reference at most once per resource epoch,
+before geometry that references it. `CpuTextureResource` copies immutable RGBA8 pixels. A
+`BorrowedVulkanTexture` is a supported zero-copy option for providers that already own a Vulkan image; keep its
+view and declared layout alive until the renderer invokes its retirement callback. Texture descriptor indices
+are renderer-private and cannot be observed by the provider.
+
+`onMaterialEpoch(MaterialSnapshot)` publishes an immutable, thread-safe semantic snapshot. Workers may retain
+that snapshot until their current jobs finish, but must stop dispatching against it when
+`onMaterialEpochClosing()` runs. `MaterialSnapshot.analyze(...)` returns epoch-cached material analysis without
+allocating or exposing compiled binding and texture indices.
 
 ## Light providers
 
 `LightProvider.submitLights(LightSink)` submits the provider's complete current-frame light snapshot.
 Omitted keys disappear immediately, and duplicate keys within one provider reject that provider snapshot.
+
+`LightProvider.retainedLights()` returns the provider's complete immutable `RetainedLightCollection`. Each
+group has a source-local key and revision. Change the collection generation whenever group membership or a
+group revision changes; unchanged generations are reused in O(1) without traversing or revalidating their
+groups. Keep a group revision unchanged while its light list is unchanged and change it when replacing that
+list. Omitted group keys are removed in the next generation. The renderer qualifies keys by provider identity,
+so independent providers may use the same local key.
 
 Available descriptors and units:
 
@@ -229,7 +266,8 @@ spotlight helmet is `Spot`. These finite and distant records are the public ligh
 `MaterialSource.submitMaterials(MaterialSink)` runs at the resource-epoch boundary. A source may:
 
 - `define(MaterialDefinition)` for a stable named material used by provider geometry;
-- `submit(MaterialRule)` for an ordered override of a host-catalog material and optional geometry key.
+- `submit(MaterialRule)` for an ordered override of a texture material and optional geometry key;
+- `submitAsset(MaterialTextureAsset)` for a neutral texture asset compiled in the same epoch.
 
 Definitions are textureless named values. Their base color is scene-linear ACEScg. A null `surface`
 selects the built-in surface; otherwise it names a registered `ISurfaceModel` implementation.
@@ -265,8 +303,10 @@ The first matching rule owns the material. The host adapter decides how its reso
 Minecraft translates resource-pack JSON and logical texture/block IDs here; those types never cross into
 the engine material API.
 
-Integer material bindings, surface indices, bindless texture indices and compiled pages are private to a
-resource epoch. Geometry retains `MaterialHandle`, never an integer ID.
+Each texture asset owns its source and optional uniform-emission calibration. Independent material sources do
+not negotiate host-wide atlas or luminance policy. Integer material bindings, surface indices, bindless
+texture indices and compiled pages are private to a resource epoch. Geometry retains `MaterialHandle`, never
+an integer ID.
 
 ## OpenPBR Surface 1.1.1 subset
 
@@ -341,9 +381,20 @@ terrain. No block semantics exist in the renderer.
 
 `CausticaRenderPass` owns its Vulkan resources. `create(PassSetup)` allocates and publishes persistent
 state, `resize` handles extent changes, and `record(PassFrame)` records work at its `RenderStage`.
+Passes at the same stage record in registration order.
+`PassSetup.device()` returns the supported `GpuDevice` capability; passes create buffers and images through
+it and destroy what they create after the last referencing frame completes. Frame-provided images are
+renderer-owned and must not be retained across resize or destroyed. `PassFrame.gpuUse()` can retire resources
+after the current frame completes, but must never be awaited while recording that same frame.
+`GpuDevice.rasterCapabilities()` exposes device-compatible wide-line limits and the preferred color sample
+count for pass-local raster pipelines without exposing host device negotiation.
 `PassFrame.sceneColor()` and `sceneColorTarget()` form an ordered scene-referred post chain. World shaders
 consume pass resources published into reflected descriptor set 2; the compiler validates name, binding and
 resource kind. Set 0 remains engine-owned and set 1 is the bindless texture array.
+
+Compiler-generated Java shader records are private ABI serializers owned by their pass or renderer package;
+their generated packages are not extension API. Extension passes should keep semantic inputs in their own
+types and treat any generated serializer they own as an implementation detail.
 
 Use `passResourceModule(moduleName)` for a module containing global shader resources. The generated
 non-generic anchor imports it so Slang composition types remain valid.
@@ -363,8 +414,9 @@ program composition regardless of this choice. Selecting a different slot owner 
 activation only after its candidate program is ready, while the parent render session and process-scoped
 programs remain available.
 
-Provider callbacks are transactional. Staging completes and validates before a geometry, light or
-material snapshot becomes visible. An exception disables only that provider and invokes `stop`.
+Material, texture, geometry and light contributions are isolated per provider. Staging completes and
+validates before a contribution becomes visible; an exception disables only that provider, discards or
+retires its staged resources and invokes `stop`.
 
 - `onResourcePackClosing` drops references to the old pack before host images are destroyed;
   `onResourcePackApplied` observes the replacement pack after it becomes active.
@@ -379,7 +431,7 @@ engine.
 
 ## Landed proof consumers
 
-- rounded block clouds: `SceneProvider`, retained `TriangleMesh`, named material;
+- rounded block clouds: `SceneProvider`, retained `SceneMesh`, named material;
 - spotlight helmet: `LightProvider` and `LightDescriptor.Spot`;
 - sun and moon: ordinary `LightDescriptor.Distant` values;
 - end portal: host material rule selecting a registered procedural surface;

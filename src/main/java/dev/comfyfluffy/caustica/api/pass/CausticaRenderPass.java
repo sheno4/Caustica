@@ -2,8 +2,6 @@ package dev.comfyfluffy.caustica.api.pass;
 
 import dev.comfyfluffy.caustica.api.ResourceId;
 
-import java.util.List;
-
 /**
  * A unit of GPU work the engine records at a fixed {@link RenderStage}. A pass owns its own Vulkan
  * resources and pipelines outright — created in {@link #create}, resized in {@link #resize}, recorded in
@@ -25,14 +23,6 @@ public interface CausticaRenderPass {
 
     RenderStage stage();
 
-    /**
-     * Ids of other passes in the same stage this pass must record after. Ignored for passes in a
-     * different stage — stage order already implies it there. Defaults to no ordering constraint.
-     */
-    default List<ResourceId> after() {
-        return List.of();
-    }
-
     /** Called once, after every pass has been registered and before the first frame. */
     default void create(PassSetup setup) {
     }
@@ -41,7 +31,7 @@ public interface CausticaRenderPass {
     default void resize(PassSetup setup, int displayWidth, int displayHeight) {
     }
 
-    /** Called every frame, in stage/{@link #after()} order, to record this pass's work. */
+    /** Called every frame, in stage and registration order, to record this pass's work. */
     void record(PassFrame frame);
 
     /** Called when the active resource pack is being detached from this render session. */

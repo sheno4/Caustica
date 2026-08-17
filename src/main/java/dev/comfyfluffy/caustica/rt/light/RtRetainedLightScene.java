@@ -47,12 +47,8 @@ public final class RtRetainedLightScene {
         this(new OwnedTaskScheduler());
     }
 
-    public RtRetainedLightScene(TaskScheduler taskScheduler) {
+    RtRetainedLightScene(TaskScheduler taskScheduler) {
         this.taskScheduler = taskScheduler;
-    }
-
-    public PublishedState published() {
-        return published;
     }
 
     /**
@@ -87,12 +83,8 @@ public final class RtRetainedLightScene {
         request(ctx, input);
     }
 
-    public boolean hasCompletions() {
-        return !completions.isEmpty();
-    }
-
     /** True only when no worker/upload owns a generation and no completion is waiting to be published. */
-    public boolean isIdle() {
+    private boolean isIdle() {
         synchronized (taskLock) {
             return activeTasks == 0 && completions.isEmpty();
         }
@@ -118,7 +110,7 @@ public final class RtRetainedLightScene {
     }
 
     /** Publish only fully uploaded, internally coherent worker generations. */
-    public void publishReady(GpuContext ctx) {
+    private void publishReady(GpuContext ctx) {
         Completion completion;
         while ((completion = completions.poll()) != null) {
             if (completion instanceof Failed failed) {
@@ -147,7 +139,7 @@ public final class RtRetainedLightScene {
     }
 
     /** World-reset path only. Normal light changes intentionally retain the published generation. */
-    public void invalidate(GpuContext ctx, GraphicsUse lastGraphicsUse) {
+    private void invalidate(GpuContext ctx, GraphicsUse lastGraphicsUse) {
         cancelPending();
         PublishedState old = published;
         published = PublishedState.EMPTY;
@@ -155,25 +147,12 @@ public final class RtRetainedLightScene {
     }
 
     /** Invalidate the current generation (in-flight build/upload self-discards) and drop any completion. */
-    public void cancelPending() {
+    private void cancelPending() {
         pendingInput = null;
         synchronized (buildLock) {
             latestRequest++;
         }
         discardCompletions();
-    }
-
-    public void awaitIdle() {
-        synchronized (taskLock) {
-            while (activeTasks != 0) {
-                try {
-                    taskLock.wait();
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    throw new IllegalStateException("Interrupted waiting for RT light hierarchy tasks", e);
-                }
-            }
-        }
     }
 
     public void destroyAfterDeviceIdle() {
@@ -284,8 +263,7 @@ public final class RtRetainedLightScene {
         PublishedState next = new PublishedState(uploaded.arena, uploaded.layout,
                 uploaded.data.lightCount(), uploaded.data.rootNodeIndex(),
                 uploaded.data.rebaseX(), uploaded.data.rebaseY(),
-                uploaded.data.rebaseZ(), (float) uploaded.data.metersPerWorldUnit(),
-                uploaded.requestId);
+                uploaded.data.rebaseZ(), (float) uploaded.data.metersPerWorldUnit());
         PublishedState old = published;
         // The executor's host-side timeline wait only proves that the transfer completed. It does not
         // establish device-memory visibility from the async queue to the graphics queue. Publish the
@@ -339,7 +317,7 @@ public final class RtRetainedLightScene {
     private void publishEmpty(GpuContext ctx, long requestId) {
         if (!isLatest(requestId)) return;
         PublishedState old = published;
-        published = PublishedState.empty(requestId);
+        published = PublishedState.empty();
         old.retire(ctx, ctx.gpuExecutor().latestGraphicsUse());
     }
 
@@ -389,13 +367,13 @@ public final class RtRetainedLightScene {
                          double metersPerWorldUnit, DebugFocus debugFocus) { }
 
     public record PublishedState(GpuBuffer arena, Layout layout, int lightCount, int rootNodeIndex,
-                          double rebaseX, double rebaseY, double rebaseZ,
-                          float metersPerWorldUnit, long generation) {
-        private static final PublishedState EMPTY = empty(0L);
+                           double rebaseX, double rebaseY, double rebaseZ,
+                           float metersPerWorldUnit) {
+        private static final PublishedState EMPTY = empty();
 
-        private static PublishedState empty(long generation) {
+        private static PublishedState empty() {
             return new PublishedState(
-                    null, Layout.EMPTY, 0, -1, 0, 0, 0, 1.0f, generation);
+                    null, Layout.EMPTY, 0, -1, 0, 0, 0, 1.0f);
         }
 
         public long lightAddress() { return address(layout.lightOffset); }

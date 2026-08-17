@@ -1,16 +1,15 @@
 package dev.comfyfluffy.caustica.rt;
 
 import dev.comfyfluffy.caustica.rt.geometry.RtGeometryProfiling;
-import dev.comfyfluffy.caustica.spi.host.HostTelemetry;
 
 import java.nio.file.Path;
 import java.util.function.LongConsumer;
 
-/** Renderer-owned implementation of the first-party host telemetry SPI. */
-final class RtHostTelemetry implements HostTelemetry {
-    static final RtHostTelemetry INSTANCE = new RtHostTelemetry();
+/** Renderer-owned telemetry implementation. */
+final class RtTelemetryImpl implements RtTelemetry {
+    static final RtTelemetryImpl INSTANCE = new RtTelemetryImpl();
 
-    private RtHostTelemetry() {
+    private RtTelemetryImpl() {
     }
 
     @Override
@@ -29,9 +28,9 @@ final class RtHostTelemetry implements HostTelemetry {
     }
 
     @Override
-    public void configure(Path outputDirectory, MetricSchema hostMetrics) {
+    public void configure(Path outputDirectory, MetricSchema minecraftMetrics) {
         RtFrameStats.configureOutputDirectory(outputDirectory);
-        RtFrameStats.configureFrameMetrics(hostMetrics);
+        RtFrameStats.configureFrameMetrics(minecraftMetrics);
     }
 
     @Override

@@ -6,7 +6,7 @@ import com.mojang.blaze3d.vulkan.VulkanDevice;
 import com.mojang.blaze3d.vulkan.VulkanQueue;
 import dev.comfyfluffy.caustica.mixin.CommandEncoderAccessor;
 import dev.comfyfluffy.caustica.mixin.GpuDeviceAccessor;
-import dev.comfyfluffy.caustica.spi.host.RendererRuntimeAccess;
+import dev.comfyfluffy.caustica.rt.RtRuntime;
 import dev.comfyfluffy.caustica.spi.vulkan.DebugMarkers;
 import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
 import dev.comfyfluffy.caustica.spi.vulkan.VulkanQueueRef;
@@ -45,7 +45,7 @@ public final class MinecraftVulkanBackend implements VulkanRendererBackend {
             MinecraftDeviceBringup.NegotiatedDevice negotiated = MinecraftDeviceBringup.consume(device.vkDevice());
             if (negotiated != null && negotiated.capabilities().rayTracing()) {
                 current = new MinecraftVulkanBackend(device, negotiated);
-                RendererRuntimeAccess.controller().installVulkanBackend(current);
+                RtRuntime.INSTANCE.installVulkanBackend(current);
             }
         }
     }

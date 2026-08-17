@@ -508,7 +508,6 @@ final class RtFrameRenderer {
             mvHasPrev = false;
             proceduralTimeValid = false;
         }
-        refreshPipelineShapeIfNeeded(ctx);
         return true;
     }
 
@@ -558,10 +557,6 @@ final class RtFrameRenderer {
                     CausticaApi.options());
             renderPassManager.setTextureResolver(worldResources.materialEpoch::textureSlot);
         }
-    }
-
-    private void refreshPipelineShapeIfNeeded(GpuContext ctx) {
-        worldResources.refreshShape(ctx, renderPassManager, frameResources);
     }
 
     private void refreshPassResourcesIfNeeded(GpuContext ctx) {
@@ -831,8 +826,6 @@ final class RtFrameRenderer {
                  RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.postChain")) {
                 renderPassManager.record(RenderStage.AFTER_RECONSTRUCTION, cmd);
             }
-            renderPassManager.record(RenderStage.LOOK, cmd);
-
             // Only now is it known which image the post chain left the scene in: participation is decided
             // inside each pass's record(). Rebinding here is a no-op unless the set of chained passes
             // changed, and it precedes the descriptor's own bind inside dispatch().

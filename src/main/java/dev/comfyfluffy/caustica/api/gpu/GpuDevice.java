@@ -12,9 +12,7 @@ import org.lwjgl.vulkan.VkCommandBuffer;
  */
 public interface GpuDevice {
     /** Generic device limits useful to pass-local raster pipelines. */
-    default GpuRasterCapabilities rasterCapabilities() {
-        return new GpuRasterCapabilities(false, 1.0f, 1);
-    }
+    GpuRasterCapabilities rasterCapabilities();
 
     /** The live Vulkan device used to record and create pass-local Vulkan objects. */
     VkDevice vk();

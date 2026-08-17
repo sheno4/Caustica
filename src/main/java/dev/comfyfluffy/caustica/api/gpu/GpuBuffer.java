@@ -13,12 +13,6 @@ public interface GpuBuffer {
     long mapped();
     /** Allocated capacity in bytes. */
     long size();
-    /** Original usage flags passed to creation, before required renderer usages are added. */
-    int usage();
-    /** Whether this buffer is host-visible and persistently mapped. */
-    boolean hostVisible();
-    boolean isDestroyed();
-    void requireNotDestroyed();
     void destroy();
     /** Flush all host writes; coherent memory treats this as a no-op. */
     void flush();

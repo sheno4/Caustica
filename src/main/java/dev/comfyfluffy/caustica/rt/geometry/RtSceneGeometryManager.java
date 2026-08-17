@@ -59,10 +59,6 @@ public final class RtSceneGeometryManager {
     private RtOpacityMicromapPipeline opacityMicromapPipeline;
     private boolean loggedOpacityMicromapBuild;
 
-    public RtSceneGeometryManager(RtGeometryMaterialResolver materialResolver) {
-        this(ignored -> materialResolver, new GeometryGroupScheduler());
-    }
-
     RtSceneGeometryManager(RtGeometryMaterialResolver materialResolver, GeometryGroupScheduler groupScheduler) {
         this(ignored -> materialResolver, groupScheduler);
     }
@@ -87,16 +83,6 @@ public final class RtSceneGeometryManager {
             throw new IllegalStateException("Material tables are already attached");
         }
         this.materialTables = materialTables;
-    }
-
-    /** Accept independent source groups; a new revision replaces a queued but not running revision. */
-    public void submit(List<Group> updates) {
-        submit(updates, null);
-    }
-
-    /** Optionally receives one render-thread acknowledgment after each successfully applied atomic barrier. */
-    public void submit(List<Group> updates, Consumer<Publication> acknowledgment) {
-        submit(updates, acknowledgment, null);
     }
 
     /** Provider submissions can handle their own asynchronous failure without disabling other sources. */
@@ -258,8 +244,8 @@ public final class RtSceneGeometryManager {
             boolean previousIndexed = dynamicSource != null;
             boolean retainPreviousPositions = previousIndexed && dynamicSource.topology != null
                     && dynamicSource.topology.matches(candidate.topology);
-            boolean minimizeMemory = provider.buildOptions().minimizeMemory();
-            boolean opacityAcceleration = provider.buildOptions().opacityAcceleration()
+            boolean minimizeMemory = provider.buildPolicy() == GeometryUpdates.BuildPolicy.STATIC;
+            boolean opacityAcceleration = minimizeMemory
                     && ctx.backend().capabilities().opacityMicromaps() && opacityMicromapPipeline != null
                     && candidate.classTriangles[RtAccel.CLASS_MASKED] > 0
                     && hasEligibleOpacityBinding(input);
@@ -350,17 +336,8 @@ public final class RtSceneGeometryManager {
         }
     }
 
-    PackedInput providerInput(SceneMesh mesh) {
-        return SceneMeshPacker.pack(mesh, materialResolver.apply(ResourceId.of("caustica", "internal")));
-    }
-
     PackedInput providerInput(ResourceId source, SceneMesh mesh) {
         return SceneMeshPacker.pack(mesh, materialResolver.apply(source));
-    }
-
-    boolean providerTopologyMatches(SceneMesh first, SceneMesh second) {
-        return SceneMeshPacker.topologyMatches(first, second,
-                materialResolver.apply(ResourceId.of("caustica", "internal")));
     }
 
     private boolean hasEligibleOpacityBinding(PackedInput input) {

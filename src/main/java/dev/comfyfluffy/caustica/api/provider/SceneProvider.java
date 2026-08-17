@@ -12,7 +12,8 @@ public interface SceneProvider {
     default void onMaterialEpochClosing() {
     }
 
-    default void update() {
+    /** Produce long-lived retained geometry at host update cadence. The renderer may compact its acceleration data. */
+    default void update(SceneGeometryUpdateContext update) {
     }
 
     default void prepareFrame() {
@@ -22,11 +23,7 @@ public interface SceneProvider {
     default void submitTextures(TextureSink sink) {
     }
 
-    /** Submit changed retained-geometry groups produced at the update cadence. */
-    default void submitGeometryUpdates(SceneGeometryUpdateContext update) {
-    }
-
-    /** Submit changed retained-geometry groups for this frame. */
+    /** Submit frame-cadence retained-geometry changes using the renderer's dynamic acceleration policy. */
     default void submitGeometry(SceneFrameContext frame) {
     }
 

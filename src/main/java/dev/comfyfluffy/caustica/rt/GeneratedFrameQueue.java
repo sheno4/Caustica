@@ -3,7 +3,6 @@ package dev.comfyfluffy.caustica.rt;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.api.gpu.GpuImage;
 import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
-import dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg;
 import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
 import it.unimi.dsi.fastutil.longs.LongList;
 import org.lwjgl.system.MemoryStack;
@@ -26,7 +25,6 @@ import java.nio.LongBuffer;
 /** Owns extra swapchain-image acquisition and the generated-before-real deferred present queue. */
 final class GeneratedFrameQueue {
     private static final long ACQUIRE_TIMEOUT_NS = 5_000_000_000L;
-    private static final long LOG_INTERVAL_NS = 1_000_000_000L;
 
     private long[] acquireSemaphores = new long[0];
     private int acquireCursor;
@@ -34,12 +32,6 @@ final class GeneratedFrameQueue {
     private long[] pendingPresentSem = new long[0];
     private int pendingCount;
     private boolean failed;
-
-    private long logWindowStartNs;
-    private int realFramesInWindow;
-    private int generatedFramesInWindow;
-    private int interpOkInWindow;
-    private int interpFallbackInWindow;
 
     boolean failed() {
         return failed;
@@ -58,11 +50,6 @@ final class GeneratedFrameQueue {
             for (int i = 0; i < generatedCount; i++) {
                 GpuImage interp = generation.interpolate(submission, backbufferView, srcImage,
                         swapW, swapH, i + 1, generatedCount, hdrBackbuffer, ui);
-                if (interp != null) {
-                    interpOkInWindow++;
-                } else {
-                    interpFallbackInWindow++;
-                }
                 long blitSrc = interp != null ? interp.image() : srcImage;
                 int copyW = Math.min(swapW, interp != null ? interp.width() : srcW);
                 int copyH = Math.min(swapH, interp != null ? interp.height() : srcH);
@@ -94,7 +81,6 @@ final class GeneratedFrameQueue {
     }
 
     void flush(long swapchain, VkQueue presentQueue) {
-        int presentedThisFrame = 0;
         if (!failed && pendingCount != 0) {
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 for (int i = 0; i < pendingCount; i++) {
@@ -104,7 +90,6 @@ final class GeneratedFrameQueue {
                     present.pSwapchains(stack.longs(swapchain));
                     present.pImageIndices(stack.ints(pendingImageIndex[i]));
                     KHRSwapchain.vkQueuePresentKHR(presentQueue, present);
-                    presentedThisFrame++;
                 }
             } catch (Throwable error) {
                 failed = true;
@@ -112,9 +97,6 @@ final class GeneratedFrameQueue {
             } finally {
                 pendingCount = 0;
             }
-        }
-        if (RtDlssFg.enabled()) {
-            logPresentRate(presentedThisFrame);
         }
     }
 
@@ -197,11 +179,6 @@ final class GeneratedFrameQueue {
         destroyAcquireSemaphores(device);
         pendingCount = 0;
         failed = false;
-        logWindowStartNs = 0L;
-        realFramesInWindow = 0;
-        generatedFramesInWindow = 0;
-        interpOkInWindow = 0;
-        interpFallbackInWindow = 0;
     }
 
     private void destroyAcquireSemaphores(VkDevice device) {
@@ -214,30 +191,4 @@ final class GeneratedFrameQueue {
         acquireCursor = 0;
     }
 
-    private void logPresentRate(int generatedThisFrame) {
-        realFramesInWindow++;
-        generatedFramesInWindow += generatedThisFrame;
-        long now = System.nanoTime();
-        if (logWindowStartNs == 0L) {
-            logWindowStartNs = now;
-            return;
-        }
-        long elapsed = now - logWindowStartNs;
-        if (elapsed < LOG_INTERVAL_NS) {
-            return;
-        }
-        double seconds = elapsed / 1.0e9;
-        CausticaMod.LOGGER.info(
-                "[FG present-rate] real={} gen={} realFps={} totalPresentFps={} configuredMultiFrameCount={} "
-                        + "interpOk={} interpFallbackDuplicate={}",
-                realFramesInWindow, generatedFramesInWindow,
-                String.format("%.1f", realFramesInWindow / seconds),
-                String.format("%.1f", (realFramesInWindow + generatedFramesInWindow) / seconds),
-                RtDlssFg.INSTANCE.effectiveMultiFrameCount(), interpOkInWindow, interpFallbackInWindow);
-        logWindowStartNs = now;
-        realFramesInWindow = 0;
-        generatedFramesInWindow = 0;
-        interpOkInWindow = 0;
-        interpFallbackInWindow = 0;
-    }
 }

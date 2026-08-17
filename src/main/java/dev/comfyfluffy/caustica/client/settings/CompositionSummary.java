@@ -5,7 +5,6 @@ import dev.comfyfluffy.caustica.api.pass.RenderPassRegistration;
 import dev.comfyfluffy.caustica.api.pass.RenderStage;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import net.minecraft.network.chat.Component;
-import dev.comfyfluffy.caustica.api.ResourceId;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -60,9 +59,10 @@ public record CompositionSummary(List<Lane> lanes, List<ProviderRow> providers) 
      */
     private static List<Component> anchorsAfter(RenderStage stage) {
         return switch (stage) {
-            case BEFORE_TRACE -> List.of(Component.translatable("caustica.summary.anchor.world_trace"));
-            case AFTER_TRACE -> List.of(Component.translatable("caustica.summary.anchor.reconstruction"));
-            case PRESENT -> List.of(Component.translatable("caustica.summary.anchor.swapchain"));
+            case BEFORE_TRACE -> List.of(
+                    Component.translatable("caustica.summary.anchor.world_trace"),
+                    Component.translatable("caustica.summary.anchor.reconstruction"));
+            case OVERLAY -> List.of(Component.translatable("caustica.summary.anchor.swapchain"));
             default -> List.of();
         };
     }

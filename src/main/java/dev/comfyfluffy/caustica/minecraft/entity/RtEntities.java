@@ -379,7 +379,7 @@ public final class RtEntities {
             MinecraftTelemetry.GeometrySource kind = transformCount == 0
                     ? sourceKind(key) : MinecraftTelemetry.GeometrySource.ENTITY_PLACEMENT;
             Object extraction = sampleCount == 0 ? null : telemetry.extraction(kind, sampleCount);
-            geometry.submit(key, operations, ignored -> {
+            geometry.submit(key, operations, () -> {
                 telemetry.published(extraction);
                 if (acknowledgment != null) acknowledgment.run();
             });

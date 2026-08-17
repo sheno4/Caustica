@@ -210,11 +210,10 @@ public final class RtLifecycleCoordinator {
     }
 
     /** Queue a reload result; callers may invoke this from any thread. */
-    public void trackResourcePackReload(ResourcePackEpoch pending, CompletableFuture<?> future) {
-        Objects.requireNonNull(pending, "pending");
+    public void trackResourcePackReload(long generation, CompletableFuture<?> future) {
         Objects.requireNonNull(future, "future");
         future.whenComplete((ignored, failure) -> resourcePackCompletions.add(
-                new ResourcePackCompletion(pending.generation(), failure)));
+                new ResourcePackCompletion(generation, failure)));
     }
 
     /** Apply queued reload completions on the client thread, returning the accepted transitions. */

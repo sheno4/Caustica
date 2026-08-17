@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft;
 
-import dev.comfyfluffy.caustica.spi.host.HostTelemetry;
+import dev.comfyfluffy.caustica.rt.RtTelemetry;
 
 import java.util.Objects;
 import java.util.function.LongConsumer;
@@ -36,15 +36,15 @@ public final class MinecraftTelemetry {
     private MinecraftTelemetry() {
     }
 
-    public static void install(HostTelemetry telemetry) {
-        instrumentation = new HostBridge(Objects.requireNonNull(telemetry, "telemetry"));
+    public static void install(RtTelemetry telemetry) {
+        instrumentation = new RendererBridge(Objects.requireNonNull(telemetry, "telemetry"));
     }
 
     public static Instrumentation current() {
         return instrumentation;
     }
 
-    private record HostBridge(HostTelemetry telemetry) implements Instrumentation {
+    private record RendererBridge(RtTelemetry telemetry) implements Instrumentation {
         @Override public boolean enabled() { return telemetry.enabled(); }
         @Override public long frameSerial() { return telemetry.frameSerial(); }
         @Override public long startStage() { return telemetry.frame().startStage(); }
@@ -55,16 +55,16 @@ public final class MinecraftTelemetry {
         @Override public void max(String name, long value) { telemetry.frame().max(name, value); }
         @Override public Object extraction(GeometrySource source, int geometryCount) {
             return telemetry.extraction(switch (source) {
-                case TERRAIN -> HostTelemetry.GeometrySource.TERRAIN;
-                case TERRAIN_READY -> HostTelemetry.GeometrySource.TERRAIN_READY;
-                case ENTITY -> HostTelemetry.GeometrySource.ENTITY;
-                case ENTITY_PLACEMENT -> HostTelemetry.GeometrySource.ENTITY_PLACEMENT;
-                case BLOCK_ENTITY -> HostTelemetry.GeometrySource.BLOCK_ENTITY;
-                case PARTICLE -> HostTelemetry.GeometrySource.PARTICLE;
+                case TERRAIN -> RtTelemetry.GeometrySource.TERRAIN;
+                case TERRAIN_READY -> RtTelemetry.GeometrySource.TERRAIN_READY;
+                case ENTITY -> RtTelemetry.GeometrySource.ENTITY;
+                case ENTITY_PLACEMENT -> RtTelemetry.GeometrySource.ENTITY_PLACEMENT;
+                case BLOCK_ENTITY -> RtTelemetry.GeometrySource.BLOCK_ENTITY;
+                case PARTICLE -> RtTelemetry.GeometrySource.PARTICLE;
             }, geometryCount);
         }
         @Override public void published(Object stamp) {
-            telemetry.published((HostTelemetry.ExtractionStamp) stamp);
+            telemetry.published((RtTelemetry.ExtractionStamp) stamp);
         }
         @Override public void afterPublicationVisible(LongConsumer action) {
             telemetry.afterPublicationVisible(action);

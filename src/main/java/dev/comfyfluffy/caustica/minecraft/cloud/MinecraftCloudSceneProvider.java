@@ -56,7 +56,7 @@ public final class MinecraftCloudSceneProvider implements SceneProvider {
                 for (int variant = 0; variant < MESHES.length; variant++) {
                     operations.add(new SceneGeometrySink.Drop(variant));
                 }
-                sink.submit(SCENE_GROUP, operations, ignored -> retained.acknowledge(transition));
+                sink.submit(SCENE_GROUP, operations, () -> retained.acknowledge(transition));
             }
             return;
         }
@@ -93,7 +93,7 @@ public final class MinecraftCloudSceneProvider implements SceneProvider {
         for (long instance : transition.previous()) {
             if (!desired.contains(instance)) operations.add(new SceneGeometrySink.Remove(instance));
         }
-        sink.submit(SCENE_GROUP, operations, ignored -> retained.acknowledge(transition));
+        sink.submit(SCENE_GROUP, operations, () -> retained.acknowledge(transition));
     }
 
     @Override

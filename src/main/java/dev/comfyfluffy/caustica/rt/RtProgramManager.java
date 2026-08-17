@@ -86,12 +86,6 @@ final class RtProgramManager {
         return active;
     }
 
-    public synchronized boolean changePending() {
-        pollPending();
-        return requested != null && (active == null || !active.key().equals(requested))
-                && candidate == null && failed == null;
-    }
-
     public synchronized Throwable requestedFailure() {
         pollPending();
         return failed != null && failed.key().equals(requested) ? failed.cause() : null;
@@ -111,32 +105,14 @@ final class RtProgramManager {
                 installed.key().reordered() ? "EXT" : "none");
     }
 
-    /** Reject a candidate that could not be installed while retaining the active program. */
-    public synchronized void reject(Program rejected, Throwable cause) {
-        Objects.requireNonNull(rejected, "rejected");
-        Objects.requireNonNull(cause, "cause");
-        if (rejected.key().equals(requested)) {
-            candidate = null;
-            failed = new Failed(rejected.key(), cause);
-            CausticaMod.LOGGER.error("World program candidate could not be installed; retaining the active program",
-                    cause);
-        }
-    }
-
-    /** Stop tracking live epochs while retaining immutable process-cache entries. */
-    public synchronized void resetActive() {
-        active = null;
-        candidate = null;
-        failed = null;
-        abandonPending();
-        requested = null;
-    }
-
     /** Stop process-scoped compilation work during client shutdown. */
     synchronized void shutdown() {
         abandonPending();
         buildExecutor.shutdownNow();
-        resetActive();
+        active = null;
+        candidate = null;
+        failed = null;
+        requested = null;
         cache.clear();
     }
 

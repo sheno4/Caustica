@@ -3,7 +3,6 @@ package dev.comfyfluffy.caustica.api.provider;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.engine.material.AtlasMaterialReference;
 import dev.comfyfluffy.caustica.engine.material.MaterialVariant;
-import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialProfile;
 
 import java.util.List;
 import java.util.Objects;

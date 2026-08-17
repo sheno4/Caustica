@@ -31,8 +31,4 @@ public record MaterialTextureAsset(ResourceId material, MaterialTextureKind kind
             throw new IllegalArgumentException("uniform emission luminance must be finite and non-negative");
         }
     }
-
-    public boolean sharedAtlas() {
-        return kind == MaterialTextureKind.SHARED_ATLAS;
-    }
 }

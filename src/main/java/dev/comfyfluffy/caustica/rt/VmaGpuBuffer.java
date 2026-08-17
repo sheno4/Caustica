@@ -12,23 +12,19 @@ final class VmaGpuBuffer implements GpuBuffer {
     private final long deviceAddress;
     private final long mapped;
     private final long size;
-    private final int usage;
     private final boolean hostVisible;
-    private final String label;
     private final Runnable beforeDestroy;
     private boolean destroyed;
 
-    VmaGpuBuffer(long vma, long handle, long allocation, long deviceAddress, long mapped, long size, int usage,
-                 boolean hostVisible, String label, Runnable beforeDestroy) {
+    VmaGpuBuffer(long vma, long handle, long allocation, long deviceAddress, long mapped, long size,
+                 boolean hostVisible, Runnable beforeDestroy) {
         this.vma = vma;
         this.handle = handle;
         this.allocation = allocation;
         this.deviceAddress = deviceAddress;
         this.mapped = mapped;
         this.size = size;
-        this.usage = usage;
         this.hostVisible = hostVisible;
-        this.label = Objects.requireNonNull(label, "label");
         this.beforeDestroy = Objects.requireNonNull(beforeDestroy, "beforeDestroy");
     }
 
@@ -36,15 +32,6 @@ final class VmaGpuBuffer implements GpuBuffer {
     @Override public long deviceAddress() { return deviceAddress; }
     @Override public long mapped() { return mapped; }
     @Override public long size() { return size; }
-    @Override public int usage() { return usage; }
-    @Override public boolean hostVisible() { return hostVisible; }
-    @Override public boolean isDestroyed() { return destroyed; }
-
-    @Override
-    public void requireNotDestroyed() {
-        if (destroyed) throw new IllegalStateException(label + " was already destroyed");
-    }
-
     @Override
     public void destroy() {
         if (!destroyed && handle != 0L) {

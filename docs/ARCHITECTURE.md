@@ -5,7 +5,7 @@ Status: current implementation. [EXTENSION_API.md](EXTENSION_API.md) is the conc
 ## Purpose and boundaries
 
 Caustica is a host-neutral Vulkan path tracer with Minecraft as its first scene adapter. The renderer owns
-transport, GPU data structures, resource epochs, shader composition, reconstruction, display mapping and
+transport, GPU data structures, resource-pack epochs, shader composition, reconstruction, display mapping and
 GPU lifetime. It does not classify blocks, inspect Minecraft registries, decode resource packs or assign
 Minecraft lighting values.
 
@@ -14,16 +14,61 @@ The code is divided by responsibility:
 - `api/*` is the public Java registration and provider API. It uses `ResourceId`, `DisplayText`, immutable
   geometry/material/light records and no Minecraft types.
 - `engine/*` contains host-neutral frame, light, material and scene records and algorithms.
+- `spi/host/RuntimeHost` is the reverse callback contract implemented by the first-party application host;
+  `spi/vulkan/*` is the Vulkan backend contract. These are integration types, not supported extension API.
 - `rt/*` owns Vulkan resources, acceleration structures, canonical material compilation, world-shader
-  composition and path tracing. Import-firewall tests keep Minecraft, loader, and Mojang types out.
+  composition and path tracing. It must not depend on Minecraft, loader, or Mojang types.
 - `minecraft/*` owns block/chunk/entity/resource-pack acquisition, Minecraft material decoding and
   photometric calibration, and the terrain/entity capture adapter.
 - `platform/*` is the small loader seam for paths and extension discovery; `src/fabric` and `src/neoforge`
   contain only entrypoints and APIs that cannot be shared.
 - `builtin/*` supplies the reference sky and surface through the same registry used by extensions.
 
+Reflected Java shader records live in the owning implementation package: renderer records under `rt.gen`,
+built-in pass records under `builtin.gen`, and Minecraft pass records beside that adapter under
+`minecraft.*.gen`. Their package placement follows shader ownership and does not expand the public API.
+
 Minecraft is therefore a source of geometry, lights, materials and frame state. It is not a semantic mode
 inside the renderer.
+
+`MinecraftApiBootstrap` is the application composition root. First-party Minecraft, client and mixin hooks
+drive the concrete `RtRuntime` directly. Minecraft scene producers remain behind the public provider API, and
+Minecraft telemetry uses the renderer-owned `RtTelemetry` surface through an application-local adapter.
+
+## Lifecycle and epochs
+
+`RtLifecycleCoordinator` serializes process, Vulkan-device, render-session, runtime-activation, resource-pack
+and world identity transitions on the client thread. Resource-pack reload completion may arrive from a loader
+worker, but publication is queued
+until the next client tick. Initial loading and manual reloads therefore produce the same `ResourcePackEpoch`,
+independently of whether RT is enabled or a world is open. World identity changes produce a separate
+`WorldEpoch`; changing dimensions does not create a resource-pack epoch.
+
+`RtProgramManager` owns process-scoped shader compilation and its immutable cache. The configured composition
+starts compiling from the client tick without waiting for a world. A slot change prepares a candidate program
+while the matching active session keeps rendering. Only after the candidate is ready does the runtime replace
+its selected-slot contributions and converge the world pipeline on the new program. A failed candidate leaves
+the matching active session intact.
+
+`RenderSessionEpoch` begins when RT startup is requested and ends on disable, startup failure or shutdown. It
+does not own compiled programs. Its child `RuntimeActivationEpoch` owns extension factory output: live render
+passes and providers. `ALWAYS` contributions instantiate for every activation; `SELECTED_SLOT` contributions
+instantiate only when their feature owns a selected slot. That runtime closure is separate from the program
+closure, which also includes every surface and surface-modifier owner so material dispatch remains complete.
+Resource-pack closing / applied and world-change callbacks are delivered only to the resulting activation
+instances. A selected-slot change closes and recreates the child activation after its candidate is ready,
+leaving the parent render session and process-scoped compiled programs live.
+
+`RtRuntime` is the process integration root. It owns lifecycle coordination and the process-scoped program
+manager; each runtime activation owns its provider manager, frame renderer and presenter. `GpuContext` owns
+device infrastructure and survives activation rotation. `RtFrameRenderer` records frames and owns motion,
+geometry, lights and TLAS submission state; `RtFrameResources` owns sized images, display resources and
+exposure; `RtWorldResources` owns program, material and resource-pack realization; and the presenter delegates
+generated-frame queuing, frame generation and HDR/SDR presentation to activation-owned components.
+
+Minecraft negotiates Vulkan features before device creation, then transfers immutable capabilities and the
+reserved compute queue into the matching `VulkanRendererBackend`. Renderer feature checks and low-latency state
+are device-scoped through that backend; negotiation state is not a renderer-global capability source.
 
 ## Frame and scene flow
 
@@ -31,20 +76,21 @@ At host bootstrap, `CausticaExtension` implementations register features in `Cau
 `FeatureBuilder`. A feature may bind the sky slot, register surface implementations and ordered surface
 modifiers, install render passes, and register scene, light and material providers.
 
-For each resource epoch:
+For each resource-pack epoch:
 
-1. material sources transactionally submit named `MaterialDefinition`s and ordered `MaterialRule`s;
-2. the host adapter submits a neutral `MaterialCatalog` containing canonical texture sources, emission
-   footprint resolution and its default uniform-emission calibration;
+1. material sources transactionally submit named `MaterialDefinition`s, ordered `MaterialRule`s and neutral
+   texture assets, each carrying its own emission calibration when needed;
+2. the renderer validates and aggregates those contributions into a source-neutral material catalog;
 3. `RtMaterialPageCompiler` builds canonical texture pages and emission footprints;
-4. `RtMaterialRegistry` compiles surfaces and bindings and publishes one immutable snapshot;
+4. `RtMaterialRegistry` compiles surfaces and bindings and publishes one immutable semantic snapshot to every
+   scene provider;
 5. geometry stores stable `MaterialHandle(ResourceId)` names until the snapshot resolves them to private,
    epoch-local binding indices.
 
 For each frame:
 
 1. providers prepare and submit complete geometry/light snapshots;
-2. retained provider meshes and the primary scene source are rebased into one geometry-record index space;
+2. the frame adapter supplies one rebase origin and all provider meshes enter its geometry-record index space;
 3. retained, frame-varying and distant light segments become one sampling distribution;
 4. BLAS work completes before the TLAS build;
 5. the world pipeline traces, reconstruction runs, scene-referred render passes chain, and the display
@@ -52,45 +98,52 @@ For each frame:
 6. successful submission attaches exact graphics-timeline lifetimes to every retained or transient
    resource used by the frame.
 
-Provider failures are isolated per provider. A failed submission publishes no partial snapshot, disables
-that provider, and leaves other providers and the active renderer running.
+Provider failures are isolated per provider. A failed submission publishes no partial contribution, disables
+that provider, retires its staged resources and leaves other providers and the active renderer running.
 
 ## Geometry
 
-The public geometry boundary is `SceneProvider.submitGeometry(SceneGeometrySink)`. Providers retain
-immutable indexed `TriangleMesh` values under provider-local keys and submit double-precision
-`GeometryTransform` instances. Instances are frame declarations and disappear when omitted; retained meshes
-remain resident until explicitly released, replaced under the same key, or their provider stops. The engine
+The public geometry boundary is `SceneProvider.submitGeometry(SceneFrameContext)`. Providers publish atomic,
+source-local groups of `Put`, `Drop`, `Place`, `Transform` and `Remove` operations through the context's
+`SceneGeometrySink`. `Put` retains an immutable indexed `SceneMesh`; `Place` and `Transform` preserve
+double-precision world translation until renderer rebasing. Omitted groups remain unchanged. Meshes and
+placements remain resident until explicitly replaced or removed, or until their provider stops. The engine
 owns upload, BLAS creation, rebasing, canonical geometry records, TLAS insertion and lifetime.
 
 Minecraft's rounded clouds are the proof consumer. `MinecraftCloudSceneProvider` generates deterministic
 closed rounded-cuboid meshes, references the named `caustica:cloud` material and submits them through the
 ordinary retained-geometry API.
 
-Minecraft terrain and animated entities use the internal, host-neutral `RtSceneSource` environment and
-CPU-capture contract. The renderer injects its geometry manager through `ProviderManager`; sources submit
-canonical captures and retain source-specific cancellation, meshing and texture discovery, while the
-manager owns every GPU geometry buffer, BLAS operation, record, instance and retirement. These adapters
-live under `minecraft/*`, use the same geometry table and TLAS as public provider geometry, and are not a
-second public extension API. The renderer contains no block, chunk or entity types.
+Minecraft terrain and animated entities submit immutable meshes and atomic retained updates through the
+same `SceneProvider` API as other providers. They retain source-specific cancellation and CPU meshing,
+while the manager owns every GPU geometry buffer, BLAS operation, record, instance and retirement. Scene
+providers contribute source-local CPU or borrowed Vulkan textures through the public texture API; the renderer
+qualifies their identities and privately owns descriptor slots, uploads and retirement. The renderer contains
+no block, chunk or entity types.
 
 ## Lights
 
 `LightProvider` submits a complete frame snapshot of `LightDescriptor.Rectangle`, `Point`, `Spot` and
-`Distant` records. Finite positions are scene coordinates. Rectangle radiance is cd/m², point and spot
-intensity is candela, and distant normal illuminance is lux. `Distant.direction` points toward the source;
-its angular radius defines the sampled source cone.
+`Distant` records. It may also return an immutable `RetainedLightCollection`; each group has a source-local
+key and revision, and the collection generation changes whenever group membership or a revision changes.
+An unchanged generation is reused without traversing its groups. Omitted retained keys are removed when a
+new generation is collected. Finite positions are scene coordinates. Rectangle radiance is cd/m², point and
+spot intensity is candela, and distant normal illuminance is lux. `Distant.direction` points toward the
+source; its angular radius defines the sampled source cone.
 
-Finite retained lights use a source-owned retained BVH segment. Per-frame finite provider lights use a
+Finite retained lights use a renderer-owned retained BVH segment. Per-frame finite provider lights use a
 transient BVH, and distant lights occupy the distant segment of the same frame light buffer. The shader's
 light-tree sampler selects across retained finite, transient finite and distant segments using their
 canonical selection metrics, then samples the chosen finite hierarchy or distant source. NEE and RIS
 therefore see one light scene; there is no fixed celestial-light branch or legacy light grid.
 
-Minecraft supplies emissive terrain lights through its retained scene, sun and moon as ordinary distant
-descriptors, and the equipped `caustica:spotlight_helmet` as an ordinary spot descriptor. The helmet is
-the light-provider proof: it receives the same visibility, shadow and path-traced lighting treatment as
-any other submitted spot.
+Minecraft supplies emissive terrain lights as ordinary source-qualified retained light groups. The
+activation-owned renderer light scene builds and uploads their hierarchy, publishes GPU addresses and
+retires replaced arenas. Rebase origin, world scale and diagnostic focus come from the current frame, not
+from a light provider.
+Minecraft supplies sun and moon as ordinary distant descriptors and the equipped `caustica:spotlight_helmet`
+as an ordinary spot descriptor. The helmet is the light-provider proof: it receives the same visibility,
+shadow and path-traced lighting treatment as any other submitted spot.
 
 ## Materials and OpenPBR
 
@@ -167,7 +220,8 @@ publishes its current damage entries and crack textures, and `MinecraftDamageMod
 receiver terrain without a renderer-owned block-damage branch.
 
 Minecraft's portal, water and damage Slang modules live under `shaders/minecraft`; the renderer imports
-only generated dispatch interfaces and reflected resources.
+only generated dispatch interfaces and reflected resources. Java records generated from reflected pass
+layouts are likewise emitted beside the pass that owns the layout rather than through `rt.gen`.
 
 ## Render passes and resources
 
@@ -183,8 +237,6 @@ global shader parameters directly.
 
 ## Current limitations
 
-- Minecraft terrain/entity capture is an internal adapter over the engine-owned retained geometry manager;
-  it is not yet expressed by the public retained mesh API.
 - Provider geometry is triangle-mesh based. There is no public volume-density source contract, so rounded
   clouds are geometry rather than participating volumes.
 - The OpenPBR subset omits coat, fuzz, thin film, dispersion, anisotropic specular, displacement and a full

@@ -3,6 +3,7 @@ package dev.comfyfluffy.caustica.rt.provider;
 import dev.comfyfluffy.caustica.api.provider.SceneProvider;
 import dev.comfyfluffy.caustica.api.provider.SceneFrameContext;
 import dev.comfyfluffy.caustica.api.provider.SceneGeometrySink;
+import dev.comfyfluffy.caustica.api.provider.SceneGeometryUpdateContext;
 import dev.comfyfluffy.caustica.api.provider.SceneGeometryKey;
 import dev.comfyfluffy.caustica.api.provider.GeometryTransform;
 import dev.comfyfluffy.caustica.api.provider.SceneMesh;
@@ -46,7 +47,7 @@ final class ProviderManagerTest {
         AtomicInteger healthyCalls = new AtomicInteger();
         SceneProvider failing = new SceneProvider() {
             @Override
-            public void update() {
+            public void update(SceneGeometryUpdateContext ignored) {
                 failedCalls.incrementAndGet();
                 throw new IllegalStateException("expected");
             }
@@ -63,7 +64,7 @@ final class ProviderManagerTest {
         };
         SceneProvider healthy = new SceneProvider() {
             @Override
-            public void update() {
+            public void update(SceneGeometryUpdateContext ignored) {
                 healthyCalls.incrementAndGet();
             }
         };
@@ -72,8 +73,8 @@ final class ProviderManagerTest {
         scenes.put(id("healthy"), healthy);
         ProviderManager manager = new ProviderManager(scenes, Map.of(), Map.of());
 
-        manager.updateScenes();
-        manager.updateScenes();
+        manager.updateScenes(null, SceneOrigin.ZERO);
+        manager.updateScenes(null, SceneOrigin.ZERO);
 
         assertEquals(1, failedCalls.get());
         assertEquals(1, stopCalls.get());
@@ -92,7 +93,7 @@ final class ProviderManagerTest {
         });
         ProviderManager manager = manager("failing", failing);
 
-        manager.updateScenes();
+        manager.updateScenes(null, SceneOrigin.ZERO);
         shutdown(manager);
 
         assertEquals(1, shutdowns.get());
@@ -159,10 +160,10 @@ final class ProviderManagerTest {
         ProviderManager manager = manager("healthy", healthy);
 
         manager.beginSession();
-        manager.updateScenes();
+        manager.updateScenes(null, SceneOrigin.ZERO);
         shutdown(manager);
         manager.beginSession();
-        manager.updateScenes();
+        manager.updateScenes(null, SceneOrigin.ZERO);
         shutdown(manager);
 
         assertEquals(2, updates.get());
@@ -180,10 +181,10 @@ final class ProviderManagerTest {
         ProviderManager manager = manager("failing", failing);
 
         manager.beginSession();
-        manager.updateScenes();
+        manager.updateScenes(null, SceneOrigin.ZERO);
         shutdown(manager);
         manager.beginSession();
-        manager.updateScenes();
+        manager.updateScenes(null, SceneOrigin.ZERO);
         shutdown(manager);
 
         assertEquals(2, updates.get());
@@ -196,7 +197,7 @@ final class ProviderManagerTest {
         AtomicInteger shutdowns = new AtomicInteger();
         SceneProvider failing = new SceneProvider() {
             @Override
-            public void update() {
+            public void update(SceneGeometryUpdateContext ignored) {
                 updates.incrementAndGet();
             }
 
@@ -209,10 +210,10 @@ final class ProviderManagerTest {
         ProviderManager manager = manager("shutdown_failure", failing);
 
         manager.beginSession();
-        manager.updateScenes();
+        manager.updateScenes(null, SceneOrigin.ZERO);
         shutdown(manager);
         manager.beginSession();
-        manager.updateScenes();
+        manager.updateScenes(null, SceneOrigin.ZERO);
         shutdown(manager);
 
         assertEquals(2, updates.get());
@@ -224,17 +225,17 @@ final class ProviderManagerTest {
         AtomicInteger updates = new AtomicInteger();
         SceneProvider failing = new SceneProvider() {
             @Override
-            public void update() {
+            public void update(SceneGeometryUpdateContext ignored) {
                 updates.incrementAndGet();
                 throw new IllegalStateException("expected");
             }
         };
         ProviderManager manager = manager("failing", failing);
 
-        manager.updateScenes();
+        manager.updateScenes(null, SceneOrigin.ZERO);
         manager.prepareFrame();
         manager.onWorldChanged();
-        manager.updateScenes();
+        manager.updateScenes(null, SceneOrigin.ZERO);
 
         assertEquals(1, updates.get());
     }
@@ -591,7 +592,7 @@ final class ProviderManagerTest {
     private static SceneProvider counting(AtomicInteger shutdowns, Runnable update) {
         return new SceneProvider() {
             @Override
-            public void update() {
+            public void update(SceneGeometryUpdateContext ignored) {
                 update.run();
             }
 
@@ -709,7 +710,7 @@ final class ProviderManagerTest {
                 captured.set(frame);
             }
         });
-        manager.bindSceneGeometry(new RtSceneGeometryManager((material, coverage) -> null));
+        manager.bindSceneGeometry(new RtSceneGeometryManager(ignored -> (material, coverage) -> null));
 
         manager.submitGeometry(null, SceneOrigin.ZERO, 42L,
                 dev.comfyfluffy.caustica.api.provider.SceneCamera.IDENTITY);
@@ -723,8 +724,8 @@ final class ProviderManagerTest {
         AtomicInteger publications = new AtomicInteger();
         SceneProvider terrain = new SceneProvider() {
             @Override
-            public void submitGeometryUpdates(dev.comfyfluffy.caustica.api.provider.SceneGeometryUpdateContext update) {
-                update.geometry().submit(1, List.of(new SceneGeometrySink.Drop(1)), ignored -> publications.incrementAndGet());
+            public void update(dev.comfyfluffy.caustica.api.provider.SceneGeometryUpdateContext update) {
+                update.geometry().submit(1, List.of(new SceneGeometrySink.Drop(1)), publications::incrementAndGet);
             }
 
             @Override
@@ -733,15 +734,39 @@ final class ProviderManagerTest {
             }
         };
         ProviderManager manager = manager("terrain", terrain);
-        RtSceneGeometryManager sceneGeometry = new RtSceneGeometryManager((material, coverage) -> null);
+        RtSceneGeometryManager sceneGeometry = new RtSceneGeometryManager(ignored -> (material, coverage) -> null);
         manager.bindSceneGeometry(sceneGeometry);
 
-        manager.submitGeometryUpdates(null, SceneOrigin.ZERO);
+        manager.updateScenes(null, SceneOrigin.ZERO);
         sceneGeometry.progress(null);
         sceneGeometry.progress(null);
 
         assertEquals(1, publications.get());
         assertEquals(0, frameSubmissions.get());
+    }
+
+    @Test
+    void geometryCadenceSelectsRendererBuildPolicy() {
+        SceneProvider provider = new SceneProvider() {
+            @Override
+            public void update(SceneGeometryUpdateContext update) {
+                update.geometry().submit(1, List.of(new SceneGeometrySink.Put(1, catalogTriangle())));
+            }
+
+            @Override
+            public void submitGeometry(SceneFrameContext frame) {
+                frame.geometry().submit(2, List.of(new SceneGeometrySink.Put(2, catalogTriangle())));
+            }
+        };
+        ProviderManager manager = manager("geometry", provider);
+        List<GeometryUpdates.Group> updateCadence = new ArrayList<>();
+        List<GeometryUpdates.Group> frameCadence = new ArrayList<>();
+
+        manager.updateScenes(null, SceneOrigin.ZERO, (updates, ignored) -> updateCadence.addAll(updates));
+        manager.submitGeometry(null, SceneOrigin.ZERO, (updates, ignored) -> frameCadence.addAll(updates));
+
+        assertSame(GeometryUpdates.BuildPolicy.STATIC, buildPolicy(updateCadence.getFirst()));
+        assertSame(GeometryUpdates.BuildPolicy.DYNAMIC, buildPolicy(frameCadence.getFirst()));
     }
 
     @Test
@@ -792,7 +817,7 @@ final class ProviderManagerTest {
                 if (!meshesPublished) operations.add(new SceneGeometrySink.Put(0, triangle("cloud")));
                 operations.add(new SceneGeometrySink.Place(7, 0,
                         GeometryTransform.translation(cell.get() * 128.0, 192.0, 0.0)));
-                frame.geometry().submit(0, operations, ignored -> meshesPublished = true);
+                frame.geometry().submit(0, operations, () -> meshesPublished = true);
             }
         };
         ProviderManager manager = new ProviderManager(Map.of(id("cloud"), cloud), Map.of(),
@@ -972,6 +997,11 @@ final class ProviderManagerTest {
         return new SceneMesh(new float[]{0, 0, 0, 1, 0, 0, 0, 1, 0}, new int[]{0, 1, 2},
                 SceneMesh.UvLayout.PER_VERTEX, new float[6], List.of(
                 SceneMesh.TriangleSurface.surface(MaterialHandle.of("test", material))));
+    }
+
+    private static GeometryUpdates.BuildPolicy buildPolicy(GeometryUpdates.Group group) {
+        GeometryUpdates.Put put = (GeometryUpdates.Put) group.operations().getFirst();
+        return ((GeometryUpdates.ProviderPayload) put.payload()).buildPolicy();
     }
 
     private static SceneMesh catalogTriangle() {

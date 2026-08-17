@@ -437,15 +437,6 @@ public final class RtMaterialRegistry {
         return id;
     }
 
-    public long epoch() {
-        MaterialEpochSnapshot current = snapshot;
-        return current != null ? current.epoch() : 0L;
-    }
-
-    public boolean isReady() {
-        return snapshot != null && bindingTable != null;
-    }
-
     /** Address of the {@code MaterialBinding} table, indexed by the material ID geometry records carry. */
     public long bindingTableAddress() {
         GpuBuffer current = bindingTable;

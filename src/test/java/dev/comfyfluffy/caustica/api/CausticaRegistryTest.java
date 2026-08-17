@@ -154,9 +154,9 @@ final class CausticaRegistryTest {
         registry.feature(selectedId)
                 .shaderSource(ShaderSource.classpath("/test/shaders"))
                 .bind(Slots.SKY, "test_sky", "TestSky")
-                .renderPass(selectedPass, RenderStage.LOOK, () -> {
+                .renderPass(selectedPass, RenderStage.AFTER_RECONSTRUCTION, () -> {
                     selectedFactories.incrementAndGet();
-                    return pass(selectedPass, RenderStage.LOOK);
+                    return pass(selectedPass, RenderStage.AFTER_RECONSTRUCTION);
                 })
                 .register();
         registry.feature(ResourceId.of("test", "always"))
@@ -189,7 +189,7 @@ final class CausticaRegistryTest {
         ResourceId nullPass = ResourceId.of("test", "null_pass");
         nullPassRegistry.feature(ResourceId.of("test", "null_pass_owner"))
                 .runtimeActivation(RuntimeActivation.ALWAYS)
-                .renderPass(nullPass, RenderStage.LOOK, () -> null)
+                .renderPass(nullPass, RenderStage.AFTER_RECONSTRUCTION, () -> null)
                 .register();
         assertThrows(NullPointerException.class, nullPassRegistry::createRuntimeContributions);
 
@@ -197,7 +197,7 @@ final class CausticaRegistryTest {
         ResourceId wrongStagePass = ResourceId.of("test", "wrong_stage_pass");
         wrongStageRegistry.feature(ResourceId.of("test", "wrong_stage_owner"))
                 .runtimeActivation(RuntimeActivation.ALWAYS)
-                .renderPass(wrongStagePass, RenderStage.LOOK,
+                .renderPass(wrongStagePass, RenderStage.AFTER_RECONSTRUCTION,
                         () -> pass(wrongStagePass, RenderStage.OVERLAY))
                 .register();
         assertThrows(IllegalStateException.class, wrongStageRegistry::createRuntimeContributions);

@@ -4,15 +4,11 @@ package dev.comfyfluffy.caustica.api.provider;
 public interface SceneGeometrySink {
     /** Submit one atomic group. Independent group keys may become visible independently. */
     default void submit(long groupKey, java.util.List<Operation> operations) {
-        submit(SceneGeometryKey.of(groupKey), operations);
-    }
-
-    default void submit(SceneGeometryKey groupKey, java.util.List<Operation> operations) {
-        submit(groupKey, operations, ignored -> { });
+        submit(SceneGeometryKey.of(groupKey), operations, () -> { });
     }
 
     default void submit(long groupKey, java.util.List<Operation> operations,
-                        java.util.function.Consumer<Publication> onPublished) {
+                        Runnable onPublished) {
         submit(SceneGeometryKey.of(groupKey), operations, onPublished);
     }
 
@@ -21,40 +17,14 @@ public interface SceneGeometrySink {
      * on the renderer thread. It is discarded if the provider stops or fails before publication.
      */
     void submit(SceneGeometryKey groupKey, java.util.List<Operation> operations,
-                java.util.function.Consumer<Publication> onPublished);
-
-    /** One source-local atomic group that became visible in the retained scene. */
-    record Publication(SceneGeometryKey groupKey) { }
+                Runnable onPublished);
 
     sealed interface Operation permits Put, Drop, Place, Transform, Remove { }
 
-    /** Engine build preferences for one retained mesh. */
-    record BuildOptions(boolean minimizeMemory, boolean opacityAcceleration) {
-        public static final BuildOptions DEFAULT = new BuildOptions(false, false);
-        public static final BuildOptions MINIMIZE_MEMORY = new BuildOptions(true, false);
-        public static final BuildOptions MINIMIZE_MEMORY_AND_ACCELERATE_OPACITY = new BuildOptions(true, true);
-
-        public BuildOptions(boolean minimizeMemory) {
-            this(minimizeMemory, false);
-        }
-    }
-
     /** Retain or replace mesh data. The renderer selects and schedules its acceleration update. */
-    record Put(SceneGeometryKey residentKey, SceneMesh mesh, BuildOptions buildOptions) implements Operation {
-        public Put {
-            java.util.Objects.requireNonNull(buildOptions, "buildOptions");
-        }
-
-        public Put(SceneGeometryKey residentKey, SceneMesh mesh) {
-            this(residentKey, mesh, BuildOptions.DEFAULT);
-        }
-
+    record Put(SceneGeometryKey residentKey, SceneMesh mesh) implements Operation {
         public Put(long residentKey, SceneMesh mesh) {
-            this(SceneGeometryKey.of(residentKey), mesh, BuildOptions.DEFAULT);
-        }
-
-        public Put(long residentKey, SceneMesh mesh, BuildOptions buildOptions) {
-            this(SceneGeometryKey.of(residentKey), mesh, buildOptions);
+            this(SceneGeometryKey.of(residentKey), mesh);
         }
     }
 

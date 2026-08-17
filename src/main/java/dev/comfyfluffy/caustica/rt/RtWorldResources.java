@@ -59,12 +59,6 @@ final class RtWorldResources {
         }
         RtProgramManager.Program program = programManager.candidate();
         if (program == null) {
-            RtProgramManager.Program active = programManager.active();
-            if (active != null && RtRuntime.INSTANCE.matchesRuntimeActivation(active)) {
-                program = active;
-            }
-        }
-        if (program == null) {
             Throwable failure = programManager.requestedFailure();
             if (failure != null) {
                 throw new IllegalStateException("The initial world program failed to compile", failure);
@@ -106,16 +100,6 @@ final class RtWorldResources {
         return pipeline;
     }
 
-    void refreshShape(GpuContext context, RenderPassManager passManager, RtFrameResources frames) {
-        if (pipeline == null || materialEpoch.reloadPending()) {
-            return;
-        }
-        RtProgramManager.Program candidate = programManager.candidate();
-        if (candidate != null && candidate != programManager.active()) {
-            replaceProgram(context, candidate, passManager, frames);
-        }
-    }
-
     void refreshPassResources(GpuContext context, RenderPassManager passManager) {
         if (pipeline == null || passManager.worldResourceGeneration() == boundPassResourceGeneration) {
             return;
@@ -152,37 +136,6 @@ final class RtWorldResources {
             passManager.onResourcePackApplied();
         }
         materialEpoch.resourcePackApplied();
-    }
-
-    private void replaceProgram(GpuContext context, RtProgramManager.Program candidate,
-            RenderPassManager passManager, RtFrameResources frames) {
-        RtPipeline replacement = null;
-        try {
-            replacement = createPipeline(context, candidate, materialEpoch.bindlessTextureCapacity());
-            if (frames.output != null) {
-                replacement.setStorageImage(frames.output.view());
-                frames.bindGuideImages(replacement);
-            }
-            materialEpoch.bindCurrent(context, replacement);
-            bindPassResources(replacement, candidate, passManager);
-            context.waitIdle();
-            RtPipeline previous = pipeline;
-            pipeline = replacement;
-            replacement = null;
-            previous.destroy();
-            programManager.activate(candidate);
-        } catch (Throwable failure) {
-            if (replacement != null) {
-                try {
-                    if (pipeline != null) materialEpoch.bindCurrent(context, pipeline);
-                } catch (Throwable restoreFailure) {
-                    failure.addSuppressed(restoreFailure);
-                } finally {
-                    replacement.destroy();
-                }
-            }
-            programManager.reject(candidate, failure);
-        }
     }
 
     private void bindPassResources(RtPipeline target, RtProgramManager.Program program,

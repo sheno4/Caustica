@@ -19,7 +19,7 @@ final class MinecraftSceneProviderTest {
         SceneGeometrySink sink = new SceneGeometrySink() {
             @Override
             public void submit(SceneGeometryKey groupKey, List<Operation> operations,
-                               java.util.function.Consumer<Publication> onPublished) {
+                               Runnable onPublished) {
             }
         };
         SceneFrameContext frame = new SceneFrameContext(sink, 0, 0, 0, 7L, SceneCamera.IDENTITY);

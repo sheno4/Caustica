@@ -4,14 +4,6 @@ public interface MaterialSource {
     /** Submit this resource epoch's definitions and ordered rules. */
     void submitMaterials(MaterialSink sink);
 
-    /** Called while the current resource pack is being detached. */
-    default void onResourcePackClosing() {
-    }
-
-    /** Called after a replacement resource pack becomes active. */
-    default void onResourcePackApplied() {
-    }
-
     /**
      * Stop producing work for this RT session. This runs before GPU queues are drained; implementations
      * must not destroy resources that may still be referenced by submitted work.

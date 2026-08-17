@@ -7,7 +7,7 @@ import dev.comfyfluffy.caustica.engine.frame.SceneResources;
 import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.engine.color.ColorTransforms;
-import dev.comfyfluffy.caustica.spi.host.RendererRuntimeAccess;
+import dev.comfyfluffy.caustica.rt.RtRuntime;
 import dev.comfyfluffy.caustica.minecraft.damage.MinecraftDamageModifierPass;
 import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
 import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftVulkanBackend;
@@ -42,14 +42,14 @@ public final class MinecraftFrameAdapter {
         MinecraftVulkanBackend.installCurrent();
         ClientLevel level = client.level;
         long currentSceneId = identify(level);
-        RendererRuntimeAccess.controller().observeWorld(level, currentSceneId);
+        RtRuntime.INSTANCE.observeWorld(level, currentSceneId);
         if (!(client.gui.overlay() instanceof LoadingOverlay)) {
-            RendererRuntimeAccess.controller().observeResourcePackAvailable();
+            RtRuntime.INSTANCE.observeResourcePackAvailable();
         }
         var target = client.gameRenderer.mainRenderTarget();
         boolean startupSceneReady = level != null && client.player != null
                 && RtTerrain.isSectionReady(client.player.blockPosition());
-        RendererRuntimeAccess.controller().tick(captureSceneResources(client), startupSceneReady, currentSceneId,
+        RtRuntime.INSTANCE.tick(captureSceneResources(client), startupSceneReady, currentSceneId,
                 target != null ? target.width : 0, target != null ? target.height : 0,
                 client::invalidateSurfaceConfiguration);
     }
@@ -73,7 +73,7 @@ public final class MinecraftFrameAdapter {
         FrameSnapshot.CameraMedium cameraMedium = submerged
                 ? new FrameSnapshot.CameraMedium(new MaterialHandle(MinecraftMaterialSource.WATER),
                 new FrameSnapshot.LinearRgb(medium[0], medium[1], medium[2])) : null;
-        MinecraftDamageModifierPass damagePass = RendererRuntimeAccess.controller().renderPass(
+        MinecraftDamageModifierPass damagePass = RtRuntime.INSTANCE.renderPass(
                 MinecraftDamageModifierPass.ID, MinecraftDamageModifierPass.class);
         if (damagePass != null) {
             damagePass.capture(level);

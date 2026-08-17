@@ -9,8 +9,7 @@ import com.mojang.blaze3d.vulkan.VulkanGpuSurface;
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftHdr;
-import dev.comfyfluffy.caustica.spi.host.RendererPresentation;
-import dev.comfyfluffy.caustica.spi.host.RendererRuntimeAccess;
+import dev.comfyfluffy.caustica.rt.RtRuntime;
 import dev.comfyfluffy.caustica.minecraft.MinecraftFrameAdapter;
 import dev.comfyfluffy.caustica.minecraft.MinecraftUiOverlay;
 import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftVulkanBackend;
@@ -129,7 +128,7 @@ public abstract class VulkanGpuSurfaceMixin {
 		CausticaConfig.Rt.Hdr.setSwapchainPqAvailable(pq != null);
 		this.caustica$colorSpace = 0;
 		CausticaConfig.Rt.Hdr.setSwapchainPqActive(false);
-		if (RendererRuntimeAccess.status().pqSwapchainRequested() && pq != null) {
+		if (RtRuntime.wantsPqSwapchain() && pq != null) {
 			this.caustica$colorSpace = VK_COLOR_SPACE_HDR10_ST2084_EXT;
 			CausticaConfig.Rt.Hdr.setSwapchainPqActive(true);
 			CausticaMod.LOGGER.info("HDR: surface supports PQ (format={}, colorSpace=HDR10_ST2084); "
@@ -168,7 +167,7 @@ public abstract class VulkanGpuSurfaceMixin {
 			VkSurfaceFormatKHR pq = caustica$findPq(formats);
 			VkSurfaceFormatKHR sdr = caustica$findSdr(formats);
 			CausticaConfig.Rt.Hdr.setSwapchainPqAvailable(pq != null);
-			boolean usePq = RendererRuntimeAccess.status().pqSwapchainRequested() && pq != null;
+			boolean usePq = RtRuntime.wantsPqSwapchain() && pq != null;
 			if (!usePq && sdr == null && pq != null) {
 				// Extremely unusual, but safer than destroying the only viable presentation path.
 				CausticaMod.LOGGER.warn("HDR: surface exposes PQ but no compatible native-SDR format; "
@@ -271,7 +270,7 @@ public abstract class VulkanGpuSurfaceMixin {
 		// display ever shows it — even though our vkQueuePresentKHR call itself reports success. FIFO is the
 		// only mode that guarantees every queued present gets its own vblank. Log once per (re)configure so
 		// this is checkable without guessing at the in-game V-Sync setting.
-		if (RendererRuntimeAccess.presentation().frameGenerationActive(Minecraft.getInstance().level != null)) {
+		if (RtRuntime.INSTANCE.frameGenerationActive(Minecraft.getInstance().level != null)) {
 			CausticaMod.LOGGER.info("DLSS-FG: swapchain present mode = {} (FIFO required for generated frames "
 					+ "to actually display; MAILBOX/IMMEDIATE will silently drop them — enable V-Sync if not FIFO)",
 					config.presentMode());
@@ -338,11 +337,11 @@ public abstract class VulkanGpuSurfaceMixin {
 		if (this.currentImageIndex < 0) {
 			return;
 		}
-		RendererPresentation presentation = RendererRuntimeAccess.presentation();
+		RtRuntime presentation = RtRuntime.INSTANCE;
 		long swapchainImage = this.swapchainImages.getLong(this.currentImageIndex);
 		long acquireSem = this.acquireSemaphores[this.currentAcquireSemaphore];
 		long presentSem = this.presentSemaphores[this.currentImageIndex];
-		if (RendererRuntimeAccess.status().hdrPresentation()) {
+		if (RtRuntime.INSTANCE.isHdrPresentActive()) {
 			VulkanCommandEncoder enc = (VulkanCommandEncoder) commandEncoder;
 			GraphicsSubmission submission = MinecraftVulkanBackend.wrap(enc);
 			UiPresentationResources ui = MinecraftFrameAdapter.INSTANCE.captureUiPresentation();
@@ -358,7 +357,7 @@ public abstract class VulkanGpuSurfaceMixin {
 		// Non-RT frame (menu, title panorama, loading screen) on a PQ swapchain: vanilla's raw SDR blit would
 		// misdisplay (SDR bytes reinterpreted as PQ codes). Convert sRGB -> PQ at paper white instead. Falls
 		// through to vanilla SDR if conversion resources aren't ready or the source view is not a Vulkan view.
-		if (RendererRuntimeAccess.status().pqSdrPresentation()) {
+		if (RtRuntime.INSTANCE.isPqSdrPresentActive()) {
 			long sdrView = caustica$vkImageView(textureView);
 			if (sdrView != 0L && presentation.presentSdrToPq(
 					MinecraftVulkanBackend.wrap((VulkanCommandEncoder) commandEncoder), swapchainImage,
@@ -401,7 +400,7 @@ public abstract class VulkanGpuSurfaceMixin {
 	@Inject(method = "blitFromTexture", at = @At("TAIL"))
 	private void caustica$presentGeneratedFrames(CommandEncoderBackend commandEncoder, GpuTextureView textureView, CallbackInfo ci) {
 		if (this.currentImageIndex < 0
-				|| !RendererRuntimeAccess.presentation().frameGenerationActive(Minecraft.getInstance().level != null)) {
+				|| !RtRuntime.INSTANCE.frameGenerationActive(Minecraft.getInstance().level != null)) {
 			return;
 		}
 		long srcImage = textureView.texture() instanceof com.mojang.blaze3d.vulkan.VulkanGpuTexture t ? t.vkImage() : 0L;
@@ -409,7 +408,7 @@ public abstract class VulkanGpuSurfaceMixin {
 		if (srcImage == 0L) {
 			return;
 		}
-		RendererPresentation presentation = RendererRuntimeAccess.presentation();
+		RtRuntime presentation = RtRuntime.INSTANCE;
 		int generatedCount = presentation.generatedFrameCount();
 		presentation.prepareGeneratedFrames(
 				MinecraftVulkanBackend.wrap((VulkanCommandEncoder) commandEncoder), this.device.vkDevice(),
@@ -430,10 +429,10 @@ public abstract class VulkanGpuSurfaceMixin {
 	private void caustica$presentGeneratedFramesHdr(GraphicsSubmission submission,
 			UiPresentationResources ui) {
 		if (this.currentImageIndex < 0
-				|| !RendererRuntimeAccess.presentation().frameGenerationActive(Minecraft.getInstance().level != null)) {
+				|| !RtRuntime.INSTANCE.frameGenerationActive(Minecraft.getInstance().level != null)) {
 			return;
 		}
-		RendererPresentation presentation = RendererRuntimeAccess.presentation();
+		RtRuntime presentation = RtRuntime.INSTANCE;
 		long hdrView = presentation.hdrBackbufferView();
 		long hdrImage = presentation.hdrBackbufferImage();
 		if (hdrImage == 0L) {
@@ -450,6 +449,6 @@ public abstract class VulkanGpuSurfaceMixin {
 	// presents the real frame, giving display order generated-then-real.
 	@Inject(method = "present", at = @At("HEAD"))
 	private void caustica$flushGeneratedPresents(CallbackInfo ci) {
-		RendererRuntimeAccess.presentation().flushGeneratedPresents(this.swapchain, this.presentQueue);
+		RtRuntime.INSTANCE.flushGeneratedPresents(this.swapchain, this.presentQueue);
 	}
 }

@@ -2,9 +2,9 @@ package dev.comfyfluffy.caustica.rt;
 
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
-import dev.comfyfluffy.caustica.spi.host.HostTelemetry.Frame;
-import dev.comfyfluffy.caustica.spi.host.HostTelemetry.MetricSchema;
-import dev.comfyfluffy.caustica.spi.host.HostTelemetry.StageMetric;
+import dev.comfyfluffy.caustica.rt.RtTelemetry.Frame;
+import dev.comfyfluffy.caustica.rt.RtTelemetry.MetricSchema;
+import dev.comfyfluffy.caustica.rt.RtTelemetry.StageMetric;
 import java.io.BufferedWriter;
 import java.io.IOException;
 import java.io.PrintWriter;
@@ -63,7 +63,7 @@ public final class RtFrameStats {
             "geometryPlacementFreshnessApplied"));
 
     // Per-frame GC deltas help distinguish JVM pauses from uninstrumented render work when a hitch's
-    // unaccounted time is large. The host appends its own producer metrics during bootstrap.
+    // unaccounted time is large. Minecraft appends its producer metrics during bootstrap.
     public static final Profile FRAME = new Profile("frame", RENDERER_FRAME_METRICS, true);
     private static volatile long frameSerial;
 
@@ -72,7 +72,7 @@ public final class RtFrameStats {
         return frameSerial;
     }
 
-    /** Advance the serial once at the host render-frame boundary. */
+    /** Advance the serial once at the Minecraft render-frame boundary. */
     public static void beginRenderFrame() {
         frameSerial++;
     }
@@ -104,7 +104,7 @@ public final class RtFrameStats {
     private RtFrameStats() {
     }
 
-    /** Append host frame metrics before the frame profile is first used. */
+    /** Append Minecraft frame metrics before the frame profile is first used. */
     public static void configureFrameMetrics(MetricSchema metrics) {
         FRAME.configureMetrics(metrics);
     }
@@ -160,7 +160,7 @@ public final class RtFrameStats {
     }
 
     /** Renderer-internal scope alias used by instrumentation inside the RT implementation. */
-    public interface Scope extends dev.comfyfluffy.caustica.spi.host.HostTelemetry.Scope {
+    public interface Scope extends RtTelemetry.Scope {
         Scope NOOP = () -> { };
     }
 

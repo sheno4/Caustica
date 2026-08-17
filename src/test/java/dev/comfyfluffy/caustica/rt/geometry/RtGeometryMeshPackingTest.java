@@ -89,12 +89,13 @@ final class RtGeometryMeshPackingTest {
     @Test
     void coverageClassChangeChangesManagerTopologyCompatibility() {
         MaterialHandle material = MaterialHandle.of("test", "material");
-        RtSceneGeometryManager manager = new RtSceneGeometryManager((reference, coverage) ->
-                new RtGeometryMaterialResolver.ResolvedMaterial(7, 0));
+        RtGeometryMaterialResolver resolver = (reference, coverage) ->
+                new RtGeometryMaterialResolver.ResolvedMaterial(7, 0);
         SceneMesh opaque = mesh(material, SceneMesh.Coverage.OPAQUE);
         SceneMesh cutout = mesh(material, SceneMesh.Coverage.CUTOUT);
 
-        assertFalse(manager.providerTopologyMatches(opaque, cutout));
+        assertFalse(SceneMeshPacker.Topology.of(SceneMeshPacker.pack(opaque, resolver)).matches(
+                SceneMeshPacker.Topology.of(SceneMeshPacker.pack(cutout, resolver))));
     }
 
     @Test
@@ -104,21 +105,21 @@ final class RtGeometryMeshPackingTest {
                 new int[]{0, 1, 2, 0, 2, 3}, SceneMesh.UvLayout.PER_TRIANGLE_CORNER,
                 new float[]{0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1},
                 List.of(surface(material, SceneMesh.Coverage.OPAQUE), surface(material, SceneMesh.Coverage.OPAQUE)));
-        RtSceneGeometryManager manager = new RtSceneGeometryManager((reference, coverage) ->
-                new RtGeometryMaterialResolver.ResolvedMaterial(7, 0));
+        RtGeometryMaterialResolver resolver = (reference, coverage) ->
+                new RtGeometryMaterialResolver.ResolvedMaterial(7, 0);
 
-        SceneMeshPacker.PackedInput packed = assertDoesNotThrow(() -> manager.providerInput(terrain));
+        SceneMeshPacker.PackedInput packed = assertDoesNotThrow(() -> SceneMeshPacker.pack(terrain, resolver));
         assertEquals(12, packed.textureCoordinates().length);
     }
 
     @Test
     void managerAcceptsPerVertexUvs() {
         MaterialHandle material = MaterialHandle.of("test", "entity");
-        RtSceneGeometryManager manager = new RtSceneGeometryManager((reference, coverage) ->
-                new RtGeometryMaterialResolver.ResolvedMaterial(7, 0));
+        RtGeometryMaterialResolver resolver = (reference, coverage) ->
+                new RtGeometryMaterialResolver.ResolvedMaterial(7, 0);
 
-        SceneMeshPacker.PackedInput packed = assertDoesNotThrow(() -> manager.providerInput(
-                mesh(material, SceneMesh.Coverage.OPAQUE)));
+        SceneMeshPacker.PackedInput packed = assertDoesNotThrow(() -> SceneMeshPacker.pack(
+                mesh(material, SceneMesh.Coverage.OPAQUE), resolver));
         assertEquals(6, packed.textureCoordinates().length);
     }
 

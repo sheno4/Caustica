@@ -21,8 +21,9 @@ public final class MinecraftSceneProvider implements SceneProvider {
     private static final Consumer<SceneFrameContext> ENTITY_GEOMETRY = RtEntities.INSTANCE::submitGeometry;
 
     @Override
-    public void update() {
+    public void update(SceneGeometryUpdateContext update) {
         RtTerrain.update();
+        RtTerrain.submitGeometry(update.geometry());
     }
 
     @Override
@@ -69,11 +70,6 @@ public final class MinecraftSceneProvider implements SceneProvider {
         // same frame sink so the manager can start their BLAS work before assembling this frame's TLAS.
         terrain.accept(frame.geometry());
         entities.accept(frame);
-    }
-
-    @Override
-    public void submitGeometryUpdates(SceneGeometryUpdateContext update) {
-        RtTerrain.submitGeometry(update.geometry());
     }
 
     @Override

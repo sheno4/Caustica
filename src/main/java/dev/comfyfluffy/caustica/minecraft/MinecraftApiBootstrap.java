@@ -14,7 +14,6 @@ import dev.comfyfluffy.caustica.api.pass.PassShaderCompiler;
 import dev.comfyfluffy.caustica.builtin.BuiltinExtension;
 import dev.comfyfluffy.caustica.platform.CausticaPlatform;
 import dev.comfyfluffy.caustica.rt.RtRuntime;
-import dev.comfyfluffy.caustica.spi.host.RendererRuntimeAccess;
 
 /** Loader-neutral extension discovery, config paths, and Minecraft provider installation. */
 public final class MinecraftApiBootstrap {
@@ -22,9 +21,7 @@ public final class MinecraftApiBootstrap {
     }
 
     public static void initialize() {
-        RendererRuntimeAccess.install(RtRuntime.INSTANCE, RtRuntime.INSTANCE, RtRuntime.INSTANCE,
-                RtRuntime.INSTANCE.hostTelemetry());
-        MinecraftTelemetry.install(RendererRuntimeAccess.telemetry());
+        MinecraftTelemetry.install(RtRuntime.INSTANCE.telemetry());
         CausticaRegistry registry = new CausticaRegistry();
         new BuiltinExtension().register(registry);
         new MinecraftProvidersExtension().register(registry);
@@ -40,8 +37,8 @@ public final class MinecraftApiBootstrap {
                 MinecraftProvidersExtension.ID);
         var shaderCache = CausticaPlatform.current().gameDir().resolve("caustica-shaders");
         PassShaderCompiler.defaultCacheRoot(shaderCache.resolve("passes"));
-        RendererRuntimeAccess.controller().configureShaderCache(shaderCache.resolve("sources"));
-        RendererRuntimeAccess.telemetry().configure(CausticaPlatform.current().gameDir()
+        RtRuntime.INSTANCE.configureShaderCache(shaderCache.resolve("sources"));
+        RtRuntime.INSTANCE.telemetry().configure(CausticaPlatform.current().gameDir()
                 .resolve("rt-frame-stats"), MinecraftFrameMetrics.schema());
         CausticaOptions options = CausticaOptions.load(
                 CausticaPlatform.current().configDir().resolve("caustica-options.toml"),

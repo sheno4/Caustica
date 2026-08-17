@@ -3,7 +3,7 @@ package dev.comfyfluffy.caustica.client;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.minecraft.MinecraftRuntimeHost;
 import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
-import dev.comfyfluffy.caustica.spi.host.RendererRuntimeAccess;
+import dev.comfyfluffy.caustica.rt.RtRuntime;
 
 /** Shared client initialization and lifecycle hooks used by each loader entrypoint. */
 public final class CausticaClientBootstrap {
@@ -12,8 +12,8 @@ public final class CausticaClientBootstrap {
 
     public static void initialize() {
         CausticaMod.LOGGER.info("Caustica client initialized");
-        RendererRuntimeAccess.controller().installHost(MinecraftRuntimeHost.INSTANCE);
-        RendererRuntimeAccess.controller().startProcess();
+        RtRuntime.INSTANCE.installHost(MinecraftRuntimeHost.INSTANCE);
+        RtRuntime.INSTANCE.startProcess();
 
         // Class-init runs DebugScreenEntries.register(...) via its ID field; touching the class here
         // makes the entry discoverable in F3's entry list. Off by default -- the player opts in the
@@ -24,11 +24,11 @@ public final class CausticaClientBootstrap {
 
     public static void invalidateRenderState() {
         RtTerrain.requestFullClear();
-        if (RendererRuntimeAccess.status().sessionPresent()) {
-            RendererRuntimeAccess.controller().invalidateWorld();
+        if (RtRuntime.hasSession()) {
+            RtRuntime.INSTANCE.invalidateWorld();
         }
-        RendererRuntimeAccess.controller().resetExposureHistory();
-        RendererRuntimeAccess.controller().resetRendererFailure();
+        RtRuntime.INSTANCE.resetExposureHistory();
+        RtRuntime.INSTANCE.resetRendererFailure();
         VanillaRenderController.INSTANCE.resetFailureLatch();
     }
 }

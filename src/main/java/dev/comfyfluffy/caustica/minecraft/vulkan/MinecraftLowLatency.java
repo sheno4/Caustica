@@ -2,7 +2,7 @@ package dev.comfyfluffy.caustica.minecraft.vulkan;
 
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
-import dev.comfyfluffy.caustica.spi.host.RendererRuntimeAccess;
+import dev.comfyfluffy.caustica.rt.RtRuntime;
 import dev.comfyfluffy.caustica.spi.vulkan.VulkanDeviceCapabilities;
 import dev.comfyfluffy.caustica.spi.vulkan.VulkanLowLatency;
 import org.lwjgl.system.MemoryStack;
@@ -36,7 +36,7 @@ final class MinecraftLowLatency implements VulkanLowLatency {
 
     @Override
     public boolean active() {
-        return capabilities.lowLatency() && RendererRuntimeAccess.status().active()
+        return capabilities.lowLatency() && RtRuntime.active()
                 && CausticaConfig.Rt.Reflex.ENABLED.value() && !failed;
     }
 

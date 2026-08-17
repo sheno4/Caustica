@@ -1,6 +1,5 @@
 package dev.comfyfluffy.caustica.rt.geometry;
 
-import dev.comfyfluffy.caustica.api.provider.SceneGeometrySink;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -9,12 +8,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class RtSceneGeometryCompactionStateTest {
     @Test
-    void providerPayloadPreservesPerGeometryBuildOptions() {
+    void providerPayloadPreservesInternalBuildPolicy() {
         GeometryUpdates.ProviderPayload payload = new GeometryUpdates.ProviderPayload(null,
-                SceneGeometrySink.BuildOptions.MINIMIZE_MEMORY);
+                GeometryUpdates.BuildPolicy.STATIC);
 
-        assertTrue(payload.buildOptions().minimizeMemory());
-        assertFalse(new GeometryUpdates.ProviderPayload(null).buildOptions().minimizeMemory());
+        assertEquals(GeometryUpdates.BuildPolicy.STATIC, payload.buildPolicy());
+        assertEquals(GeometryUpdates.BuildPolicy.DYNAMIC,
+                new GeometryUpdates.ProviderPayload(null, GeometryUpdates.BuildPolicy.DYNAMIC).buildPolicy());
     }
 
     @Test

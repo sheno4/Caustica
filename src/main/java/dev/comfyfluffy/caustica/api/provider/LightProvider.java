@@ -1,9 +1,6 @@
 package dev.comfyfluffy.caustica.api.provider;
 
 public interface LightProvider {
-    default void prepareFrame() {
-    }
-
     /** Contribute a complete snapshot of this provider's lights for the current frame. */
     default void submitLights(LightSink sink) {
     }
@@ -11,14 +8,6 @@ public interface LightProvider {
     /** Return the current immutable retained finite-light collection. */
     default RetainedLightCollection retainedLights() {
         return RetainedLightCollection.EMPTY;
-    }
-
-    /** Called while the current resource pack is being detached. */
-    default void onResourcePackClosing() {
-    }
-
-    /** Called after a replacement resource pack becomes active. */
-    default void onResourcePackApplied() {
     }
 
     /**

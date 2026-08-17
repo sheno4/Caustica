@@ -8,7 +8,6 @@ import dev.comfyfluffy.caustica.engine.light.LightBvh;
 import dev.comfyfluffy.caustica.engine.light.LightDescriptor;
 
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.CancellationException;
 import java.util.function.BooleanSupplier;
@@ -23,14 +22,10 @@ public final class RtRetainedLightSceneBuilder {
 
     public static Data build(List<RetainedLightBatch> batches, double rebaseX, double rebaseY, double rebaseZ,
                              double metersPerWorldUnit, BooleanSupplier cancelled) {
-        ArrayList<RetainedLightBatch> ordered = new ArrayList<>(batches);
-        ordered.sort(Comparator.comparing((RetainedLightBatch batch) -> batch.source().namespace())
-                .thenComparing(batch -> batch.source().path())
-                .thenComparingLong(RetainedLightBatch::key));
         ArrayList<LightDescriptor.Finite> descriptors = new ArrayList<>();
-        for (int batchIndex = 0; batchIndex < ordered.size(); batchIndex++) {
+        for (int batchIndex = 0; batchIndex < batches.size(); batchIndex++) {
             if ((batchIndex & 255) == 0) checkCancelled(cancelled);
-            for (LightDescriptor.Finite descriptor : ordered.get(batchIndex).lights()) {
+            for (LightDescriptor.Finite descriptor : batches.get(batchIndex).lights()) {
                 descriptors.add(descriptor);
             }
         }

@@ -16,11 +16,6 @@ final class SceneMeshPacker {
                 packed.classTriangles(), packed.flags());
     }
 
-    static boolean topologyMatches(SceneMesh first, SceneMesh second,
-                                   RtGeometryMaterialResolver materialResolver) {
-        return Topology.of(pack(first, materialResolver)).matches(Topology.of(pack(second, materialResolver)));
-    }
-
     /** Renderer-private packed representation of a source-neutral scene mesh. */
     static record PackedInput(float[] positions, int[] indices, float[] textureCoordinates, float[] primitives,
                               int[] classTriangles, int semanticFlags) {

@@ -17,9 +17,8 @@ import dev.comfyfluffy.caustica.api.pass.PassSetup;
  * instead of silently resolving to something else.
  *
  * <p>Whether a view is live or frozen depends on where it came from: {@link PassFrame#options()} is
- * frozen for the whole frame (a value changed mid-frame becomes visible next frame, after the
- * {@link Reload} class it was declared with has taken effect), while {@link PassSetup#options()} and
- * {@code CausticaOptions#options} read whatever is current.
+ * frozen for the whole frame (a value changed mid-frame becomes visible next frame), while
+ * {@link PassSetup#options()} and {@code CausticaOptions#options} read whatever is current.
  */
 public interface OptionValues {
     <T> T get(Option<T> option);
