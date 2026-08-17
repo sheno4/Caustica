@@ -28,9 +28,8 @@ final class GeneratedFrameQueue {
 
     private long[] acquireSemaphores = new long[0];
     private int acquireCursor;
-    private int[] pendingImageIndex = new int[0];
-    private long[] pendingPresentSem = new long[0];
-    private int pendingCount;
+    private int pendingImageIndex = -1;
+    private long pendingPresentSemaphore;
     private boolean failed;
 
     boolean failed() {
@@ -39,63 +38,61 @@ final class GeneratedFrameQueue {
 
     void prepare(GraphicsSubmission submission, VkDevice device, long swapchain,
             LongList swapchainImages, long[] presentSemaphores, int swapW, int swapH,
-            long backbufferView, long srcImage, int srcW, int srcH, int generatedCount,
+            long backbufferView, long srcImage,
             boolean hdrBackbuffer, UiPresentationResources ui, FrameGeneration generation) {
-        pendingCount = 0;
-        if (failed || swapchain == 0L || srcImage == 0L || generatedCount <= 0) {
+        pendingImageIndex = -1;
+        pendingPresentSemaphore = 0L;
+        if (failed || swapchain == 0L || srcImage == 0L) {
             return;
         }
         try {
-            ensureCapacity(device, swapchainImages.size() + 1, generatedCount);
-            for (int i = 0; i < generatedCount; i++) {
-                GpuImage interp = generation.interpolate(submission, backbufferView, srcImage,
-                        swapW, swapH, i + 1, generatedCount, hdrBackbuffer, ui);
-                long blitSrc = interp != null ? interp.image() : srcImage;
-                int copyW = Math.min(swapW, interp != null ? interp.width() : srcW);
-                int copyH = Math.min(swapH, interp != null ? interp.height() : srcH);
-                long acquireSem = acquireSemaphores[acquireCursor];
-                acquireCursor = (acquireCursor + 1) % acquireSemaphores.length;
-
-                int imageIndex;
-                try (MemoryStack stack = MemoryStack.stackPush()) {
-                    IntBuffer pIndex = stack.callocInt(1);
-                    int result = KHRSwapchain.vkAcquireNextImageKHR(
-                            device, swapchain, ACQUIRE_TIMEOUT_NS, acquireSem, 0L, pIndex);
-                    if (result != VK10.VK_SUCCESS && result != 1000001003) {
-                        return;
-                    }
-                    imageIndex = pIndex.get(0);
-                }
-                long presentSem = presentSemaphores[imageIndex];
-                recordBlit(submission, blitSrc, swapchainImages.getLong(imageIndex),
-                        copyW, copyH, acquireSem, presentSem);
-                pendingImageIndex[pendingCount] = imageIndex;
-                pendingPresentSem[pendingCount] = presentSem;
-                pendingCount++;
+            ensureCapacity(device, swapchainImages.size() + 1);
+            GpuImage interpolation = generation.interpolate(submission, backbufferView, srcImage,
+                    swapW, swapH, hdrBackbuffer, ui);
+            if (interpolation == null) {
+                return;
             }
+            long blitSource = interpolation.image();
+            int copyWidth = Math.min(swapW, interpolation.width());
+            int copyHeight = Math.min(swapH, interpolation.height());
+            long acquireSemaphore = acquireSemaphores[acquireCursor];
+            acquireCursor = (acquireCursor + 1) % acquireSemaphores.length;
+
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                IntBuffer imageIndex = stack.callocInt(1);
+                int result = KHRSwapchain.vkAcquireNextImageKHR(
+                        device, swapchain, ACQUIRE_TIMEOUT_NS, acquireSemaphore, 0L, imageIndex);
+                if (result != VK10.VK_SUCCESS && result != 1000001003) {
+                    return;
+                }
+                pendingImageIndex = imageIndex.get(0);
+            }
+            pendingPresentSemaphore = presentSemaphores[pendingImageIndex];
+            recordBlit(submission, blitSource, swapchainImages.getLong(pendingImageIndex),
+                    copyWidth, copyHeight, acquireSemaphore, pendingPresentSemaphore);
         } catch (Throwable error) {
             failed = true;
-            pendingCount = 0;
+            pendingImageIndex = -1;
+            pendingPresentSemaphore = 0L;
             CausticaMod.LOGGER.error("DLSS-FG present-record failed; frame generation disabled", error);
         }
     }
 
     void flush(long swapchain, VkQueue presentQueue) {
-        if (!failed && pendingCount != 0) {
+        if (!failed && pendingImageIndex >= 0) {
             try (MemoryStack stack = MemoryStack.stackPush()) {
-                for (int i = 0; i < pendingCount; i++) {
-                    VkPresentInfoKHR present = VkPresentInfoKHR.calloc(stack).sType$Default();
-                    present.pWaitSemaphores(stack.longs(pendingPresentSem[i]));
-                    present.swapchainCount(1);
-                    present.pSwapchains(stack.longs(swapchain));
-                    present.pImageIndices(stack.ints(pendingImageIndex[i]));
-                    KHRSwapchain.vkQueuePresentKHR(presentQueue, present);
-                }
+                VkPresentInfoKHR present = VkPresentInfoKHR.calloc(stack).sType$Default();
+                present.pWaitSemaphores(stack.longs(pendingPresentSemaphore));
+                present.swapchainCount(1);
+                present.pSwapchains(stack.longs(swapchain));
+                present.pImageIndices(stack.ints(pendingImageIndex));
+                KHRSwapchain.vkQueuePresentKHR(presentQueue, present);
             } catch (Throwable error) {
                 failed = true;
                 CausticaMod.LOGGER.error("DLSS-FG present failed; frame generation disabled", error);
             } finally {
-                pendingCount = 0;
+                pendingImageIndex = -1;
+                pendingPresentSemaphore = 0L;
             }
         }
     }
@@ -152,11 +149,7 @@ final class GeneratedFrameQueue {
         submission.signalSemaphore(presentSemaphore, 0L, 4096L);
     }
 
-    private void ensureCapacity(VkDevice device, int semaphoreCount, int generatedCount) {
-        if (pendingImageIndex.length < generatedCount) {
-            pendingImageIndex = new int[generatedCount];
-            pendingPresentSem = new long[generatedCount];
-        }
+    private void ensureCapacity(VkDevice device, int semaphoreCount) {
         if (acquireSemaphores.length >= semaphoreCount) {
             return;
         }
@@ -177,7 +170,8 @@ final class GeneratedFrameQueue {
 
     void destroy(VkDevice device) {
         destroyAcquireSemaphores(device);
-        pendingCount = 0;
+        pendingImageIndex = -1;
+        pendingPresentSemaphore = 0L;
         failed = false;
     }
 

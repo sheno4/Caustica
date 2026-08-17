@@ -496,16 +496,6 @@ NGX_SHIM_EXPORT int ngxshim_dlssg_available() {
     return available;
 }
 
-// Maximum multi-frame-generation count the driver/DLL supports (1 = 2x only). 0 if unknown.
-NGX_SHIM_EXPORT unsigned int ngxshim_dlssg_multi_frame_count_max() {
-    if (!g_capabilityParams) {
-        return 0;
-    }
-    unsigned int maxCount = 0;
-    NVSDK_NGX_Parameter_GetUI(g_capabilityParams, NVSDK_NGX_DLSSG_Parameter_MultiFrameCountMax, &maxCount);
-    return maxCount;
-}
-
 // Creates a DLSS Frame Generation (DLSSG) feature. Width/Height are the backbuffer (present) size;
 // render size is the upscaled-but-pre-FG size (== backbuffer when no dynamic-res). nativeBackbufferFormat
 // is the VkFormat of the presented swapchain image. Like DLSSD, FG must be created with the shared
@@ -530,7 +520,7 @@ NGX_SHIM_EXPORT void* ngxshim_create_dlssg(VkCommandBuffer cmd,
     createParams.DynamicResolutionScaling = false;
 
     // User Interface Recomposition (UIR): a create-time-only decision (per
-    // nvsdk_ngx_defs_dlssg.h) that must be enabled here for ngxshim_evaluate_dlssg's optional
+    // nvsdk_ngx_defs_dlssg.h) that must be enabled here for ngxshim_evaluate_dlssg_2x's optional
     // HUDless/UI resources to actually be used by the algorithm. Without this, feeding HUDless+UI
     // at eval time with UIR still off produces corrupted/undefined results specifically on fast-
     // changing UI content (confirmed: F3 debug overlay / inventory tooltips visibly warped) rather
@@ -553,13 +543,13 @@ NGX_SHIM_EXPORT void* ngxshim_create_dlssg(VkCommandBuffer cmd,
     return feature;
 }
 
-// Records a DLSS Frame Generation evaluation: generate one interpolated frame (index multiFrameIndex of
-// multiFrameCount) into outputInterp from the final backbuffer + hardware depth + motion vectors. Optional
+// Records a DLSS Frame Generation evaluation: generate one frame halfway between rendered frames into
+// outputInterp from the final backbuffer + hardware depth + motion vectors. Optional
 // resources (hudless, ui, outputReal) are skipped when their view handle is 0. Matrices are 16-float
 // row-major (NGX left-multiply convention) and MUST be jitter-free; pass null to leave a matrix zeroed.
-// depthInverted/colorBuffersHDR/cameraMotionIncluded/reset are 0/1 flags. Each call generates ONE frame;
-// the caller presents generated frame(s) then the real frame with its own pacing.
-NGX_SHIM_EXPORT int ngxshim_evaluate_dlssg(VkCommandBuffer cmd, void* feature,
+// depthInverted/colorBuffersHDR/cameraMotionIncluded/reset are 0/1 flags. The caller presents the generated
+// frame then the real frame with its own pacing.
+NGX_SHIM_EXPORT int ngxshim_evaluate_dlssg_2x(VkCommandBuffer cmd, void* feature,
                                            VkImageView backbufferView, VkImage backbufferImage, int backbufferFormat,
                                            VkImageView depthView, VkImage depthImage, int depthFormat,
                                            VkImageView mvecView, VkImage mvecImage, int mvecFormat,
@@ -569,7 +559,6 @@ NGX_SHIM_EXPORT int ngxshim_evaluate_dlssg(VkCommandBuffer cmd, void* feature,
                                            VkImageView outputRealView, VkImage outputRealImage, int outputRealFormat,
                                            unsigned int width, unsigned int height,
                                            unsigned int mvecDepthWidth, unsigned int mvecDepthHeight,
-                                           unsigned int multiFrameCount, unsigned int multiFrameIndex,
                                            float mvecScaleX, float mvecScaleY,
                                            int depthInverted, int colorBuffersHDR, int cameraMotionIncluded, int reset,
                                            float* cameraViewToClip, float* clipToCameraView,
@@ -600,10 +589,9 @@ NGX_SHIM_EXPORT int ngxshim_evaluate_dlssg(VkCommandBuffer cmd, void* feature,
     eval.pOutputRealFrame = outputRealView ? &outputReal : nullptr;
     eval.pOutputDisableInterpolation = nullptr;
 
-    // Default-construct so the SDK's in-class defaults apply (multiFrameCount=1, etc.), then override.
     NVSDK_NGX_DLSSG_Opt_Eval_Params opt{};
-    opt.multiFrameCount = multiFrameCount;
-    opt.multiFrameIndex = multiFrameIndex;
+    opt.multiFrameCount = 1;
+    opt.multiFrameIndex = 1;
     opt.mvecScale[0] = mvecScaleX;
     opt.mvecScale[1] = mvecScaleY;
     opt.depthInverted = depthInverted != 0;

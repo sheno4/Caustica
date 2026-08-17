@@ -17,10 +17,8 @@ import java.lang.foreign.ValueLayout;
 
 /**
  * DLSS Frame Generation (DLSSG) backend. Shares the NGX instance with DLSS-RR via {@link NgxRuntime};
- * owns only the DLSSG feature handle. This turn provides availability detection and the feature
- * create/destroy lifecycle — the per-frame {@code evaluate} + the multi-present loop that consumes it land
- * with the present-path refactor. Gated by the active RT session, {@code caustica.rt.fg} (default off), and
- * hardware/driver support.
+ * owns the DLSSG feature handle, probes availability, and records one interpolated frame per rendered
+ * frame. Gated by the active RT session, {@code caustica.rt.fg} (default off), and hardware/driver support.
  */
 public final class RtDlssFg {
     public static final RtDlssFg INSTANCE = new RtDlssFg();
@@ -35,7 +33,6 @@ public final class RtDlssFg {
     private boolean failed;
     private boolean probed;
     private boolean available;
-    private int multiFrameCountMax;
 
     private int featureWidth = -1;
     private int featureHeight = -1;
@@ -50,17 +47,6 @@ public final class RtDlssFg {
         return available;
     }
 
-    /** Driver-reported maximum multi-frame-generation count (1 = 2x only); 0 until probed. */
-    public int multiFrameCountMax() {
-        return multiFrameCountMax;
-    }
-
-    /** Requested generated-frame count clamped to the driver maximum (>=1 once available). */
-    public int effectiveMultiFrameCount() {
-        int requested = CausticaConfig.Rt.Fg.MULTI_FRAME_COUNT.value();
-        return multiFrameCountMax > 0 ? Math.clamp(requested, 1, multiFrameCountMax) : requested;
-    }
-
     public boolean isReady() {
         return initialized && !failed && !isNull(feature);
     }
@@ -73,7 +59,7 @@ public final class RtDlssFg {
     }
 
     /**
-     * Probe DLSSG availability once (after NGX is up) and log the result + MFG cap. Safe to call every tick
+     * Probe DLSSG availability once after NGX is up. Safe to call every tick
      * when FG is enabled; no-op after the first successful probe. Needs no command buffer (capability query).
      */
     public void probeAvailabilityOnce() {
@@ -96,8 +82,7 @@ public final class RtDlssFg {
             return;
         }
         available = l.dlssgAvailable();
-        multiFrameCountMax = l.dlssgMultiFrameCountMax();
-        CausticaMod.LOGGER.info("DLSS Frame Generation available: {} (multi-frame max {})", available, multiFrameCountMax);
+        CausticaMod.LOGGER.info("DLSS Frame Generation available: {}", available);
     }
 
     /**
@@ -153,8 +138,8 @@ public final class RtDlssFg {
     }
 
     /**
-     * Record one DLSSG evaluation: generate interpolated frame {@code multiFrameIndex} of
-     * {@code multiFrameCount} from the final {@code backbuffer} + HW {@code depth} + {@code mvec} into
+     * Record one DLSSG evaluation halfway between rendered frames from the final {@code backbuffer},
+     * hardware {@code depth}, and {@code mvec} into
      * {@code outputInterp}. {@code hudless} (the main scene before the combined UI overlay) and {@code ui}
      * (premultiplied combined overlay: RT world overlays, hand/screen effects and GUI) help the driver avoid
      * ghosting/smearing screen-fixed content in the generated frame; both are optional — pass 0 handles
@@ -169,7 +154,7 @@ public final class RtDlssFg {
             long uiView, long uiImage, int uiFormat,
             long outputInterpView, long outputInterpImage, int outputInterpFormat,
             int width, int height, int mvecDepthWidth, int mvecDepthHeight,
-            int multiFrameCount, int multiFrameIndex, float mvScaleX, float mvScaleY,
+            float mvScaleX, float mvScaleY,
             boolean depthInverted, boolean colorBuffersHDR, boolean cameraMotionIncluded, boolean reset,
             Matrix4fc clipToPrevClip, Matrix4fc prevClipToClip) {
         if (!isReady()) {
@@ -187,11 +172,11 @@ public final class RtDlssFg {
                     outputInterpView, outputInterpImage, outputInterpFormat,
                     0L, 0L, 0, // outputReal (skip; MC presents the real frame itself)
                     width, height, mvecDepthWidth, mvecDepthHeight,
-                    multiFrameCount, multiFrameIndex, mvScaleX, mvScaleY,
+                    mvScaleX, mvScaleY,
                     depthInverted ? 1 : 0, colorBuffersHDR ? 1 : 0, cameraMotionIncluded ? 1 : 0, reset ? 1 : 0,
                     MemorySegment.NULL, MemorySegment.NULL, clipToPrev, prevToClip);
             if (NgxRuntime.ngxFailed(rc)) {
-                throw new IllegalStateException("ngxshim_evaluate_dlssg failed: 0x" + Integer.toHexString(rc)
+                throw new IllegalStateException("ngxshim_evaluate_dlssg_2x failed: 0x" + Integer.toHexString(rc)
                         + " last=0x" + Integer.toHexString(lib.lastResult()));
             }
             return true;
@@ -237,7 +222,6 @@ public final class RtDlssFg {
         failed = false;
         probed = false;
         available = false;
-        multiFrameCountMax = 0;
         lib = null;
     }
 

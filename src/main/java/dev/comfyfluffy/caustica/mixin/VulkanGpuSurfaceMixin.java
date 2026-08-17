@@ -324,7 +324,7 @@ public abstract class VulkanGpuSurfaceMixin {
 	 * HDR present path. When the RT renderer has a fresh PQ image and the swapchain is PQ, composite the
 	 * SDR-authored UI and blit the result directly into the swapchain instead of Minecraft's SDR main target.
 	 *
-	 * <p>Because this cancels {@code blitFromTexture} at HEAD, the normal {@code caustica$presentGeneratedFrames}
+	 * <p>Because this cancels {@code blitFromTexture} at HEAD, the normal {@code caustica$prepareGeneratedFrame}
 	 * TAIL inject below never runs on HDR frames — so DLSS-FG's extra-present step is invoked explicitly here,
 	 * right after the real HDR frame is recorded, using the just-composited {@code hdrDisplayImage} (already
 	 * UI-composited by {@code presentHdr}) as the interpolation source instead of the SDR main target.
@@ -350,7 +350,7 @@ public abstract class VulkanGpuSurfaceMixin {
 			if (ui.populated() && ui.colorView() != 0L) {
 				MinecraftUiOverlay.markConsumed();
 			}
-			caustica$presentGeneratedFramesHdr(submission, ui);
+			caustica$prepareGeneratedFrameHdr(submission, ui);
 			ci.cancel();
 			return;
 		}
@@ -392,13 +392,13 @@ public abstract class VulkanGpuSurfaceMixin {
 
 	/**
 	 * After Minecraft blits the real frame into its acquired swapchain image, evaluate DLSS Frame Generation
-	 * (but before {@code present()} shows it), present the generated frame(s) into additional swapchain images
+	 * (but before {@code present()} shows it), present the generated frame into an additional swapchain image
 	 * through the RT runtime, so the display order is generated-then-real. Runs only on the normal
 	 * present path — the HDR/PQ present hooks cancel {@code blitFromTexture} at HEAD, so this TAIL is
 	 * skipped there; HDR evaluates frame generation from its PQ backbuffer in the explicit HDR hook.
 	 */
 	@Inject(method = "blitFromTexture", at = @At("TAIL"))
-	private void caustica$presentGeneratedFrames(CommandEncoderBackend commandEncoder, GpuTextureView textureView, CallbackInfo ci) {
+	private void caustica$prepareGeneratedFrame(CommandEncoderBackend commandEncoder, GpuTextureView textureView, CallbackInfo ci) {
 		if (this.currentImageIndex < 0
 				|| !RtRuntime.INSTANCE.frameGenerationActive(Minecraft.getInstance().level != null)) {
 			return;
@@ -409,24 +409,23 @@ public abstract class VulkanGpuSurfaceMixin {
 			return;
 		}
 		RtRuntime presentation = RtRuntime.INSTANCE;
-		int generatedCount = presentation.generatedFrameCount();
-		presentation.prepareGeneratedFrames(
+		presentation.prepareGeneratedFrame(
 				MinecraftVulkanBackend.wrap((VulkanCommandEncoder) commandEncoder), this.device.vkDevice(),
 				this.swapchain, this.swapchainImages, this.presentSemaphores,
 				this.swapchainWidth, this.swapchainHeight,
-				srcView, srcImage, textureView.getWidth(0), textureView.getHeight(0), generatedCount, false,
+				srcView, srcImage, false,
 				MinecraftFrameAdapter.INSTANCE.captureUiPresentation());
 	}
 
 	/**
-	 * DLSS-FG on the HDR present path: same extra-present mechanism as {@link #caustica$presentGeneratedFrames},
+	 * DLSS-FG on the HDR present path: same extra-present mechanism as {@link #caustica$prepareGeneratedFrame},
 	 * but sourced from the presenter's PQ HDR backbuffer
 	 * since HDR frames never reach that TAIL inject (HEAD cancels {@code blitFromTexture} above). No-op if FG
 	 * isn't active or the HDR backbuffer isn't available (shouldn't happen right after a successful
 	 * {@code presentHdr} call, but mirrors the defensive {@code srcImage == 0L} check in the SDR path).
 	 */
 	@Unique
-	private void caustica$presentGeneratedFramesHdr(GraphicsSubmission submission,
+	private void caustica$prepareGeneratedFrameHdr(GraphicsSubmission submission,
 			UiPresentationResources ui) {
 		if (this.currentImageIndex < 0
 				|| !RtRuntime.INSTANCE.frameGenerationActive(Minecraft.getInstance().level != null)) {
@@ -438,17 +437,16 @@ public abstract class VulkanGpuSurfaceMixin {
 		if (hdrImage == 0L) {
 			return;
 		}
-		int generatedCount = presentation.generatedFrameCount();
-		presentation.prepareGeneratedFrames(submission, this.device.vkDevice(), this.swapchain, this.swapchainImages,
+		presentation.prepareGeneratedFrame(submission, this.device.vkDevice(), this.swapchain, this.swapchainImages,
 				this.presentSemaphores, this.swapchainWidth, this.swapchainHeight,
-				hdrView, hdrImage, this.swapchainWidth, this.swapchainHeight, generatedCount, true, ui);
+				hdrView, hdrImage, true, ui);
 	}
 
-	// Present the FG-generated frame(s) acquired/recorded at blitFromTexture TAIL — at present() HEAD, after
+	// Present the FG-generated frame acquired/recorded at blitFromTexture TAIL — at present() HEAD, after
 	// Minecraft.java's encoder.submit() has flushed (so our present semaphores are signaled) and before MC
 	// presents the real frame, giving display order generated-then-real.
 	@Inject(method = "present", at = @At("HEAD"))
-	private void caustica$flushGeneratedPresents(CallbackInfo ci) {
-		RtRuntime.INSTANCE.flushGeneratedPresents(this.swapchain, this.presentQueue);
+	private void caustica$flushGeneratedPresent(CallbackInfo ci) {
+		RtRuntime.INSTANCE.flushGeneratedPresent(this.swapchain, this.presentQueue);
 	}
 }

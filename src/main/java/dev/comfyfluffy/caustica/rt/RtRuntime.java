@@ -244,10 +244,6 @@ public final class RtRuntime {
         return session != null && session.presenter.isActive(sceneAvailable);
     }
 
-    public int generatedFrameCount() {
-        return RtDlssFg.INSTANCE.effectiveMultiFrameCount();
-    }
-
     public long hdrBackbufferView() {
         return session != null ? session.presenter.hdrBackbufferView() : 0L;
     }
@@ -256,19 +252,19 @@ public final class RtRuntime {
         return session != null ? session.presenter.hdrBackbufferImage() : 0L;
     }
 
-    public void prepareGeneratedFrames(GraphicsSubmission submission, VkDevice device, long swapchain,
+    public void prepareGeneratedFrame(GraphicsSubmission submission, VkDevice device, long swapchain,
             LongList swapchainImages, long[] presentSemaphores, int swapWidth, int swapHeight,
-            long backbufferView, long sourceImage, int sourceWidth, int sourceHeight, int generatedCount,
+            long backbufferView, long sourceImage,
             boolean hdrBackbuffer, UiPresentationResources ui) {
         if (session != null) {
-            session.presenter.prepareExtraFrames(submission, device, swapchain, swapchainImages, presentSemaphores,
-                    swapWidth, swapHeight, backbufferView, sourceImage, sourceWidth, sourceHeight, generatedCount,
+            session.presenter.prepareGeneratedFrame(submission, device, swapchain, swapchainImages, presentSemaphores,
+                    swapWidth, swapHeight, backbufferView, sourceImage,
                     hdrBackbuffer, ui);
         }
     }
 
-    public void flushGeneratedPresents(long swapchain, VkQueue presentQueue) {
-        if (session != null) session.presenter.flushPendingPresents(swapchain, presentQueue);
+    public void flushGeneratedPresent(long swapchain, VkQueue presentQueue) {
+        if (session != null) session.presenter.flushPendingPresent(swapchain, presentQueue);
     }
 
     public void captureHudless(long sourceImage, int width, int height, UiPresentationResources ui) {

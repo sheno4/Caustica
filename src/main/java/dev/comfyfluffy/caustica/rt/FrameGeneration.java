@@ -15,7 +15,7 @@ final class FrameGeneration {
     private RtFramePresenter.RenderedFrame renderedFrame;
     private GpuImage hudlessImage;
     private GpuImage hdrHudlessImage;
-    private GpuImage[] interpolationImages = new GpuImage[0];
+    private GpuImage interpolationImage;
     private int interpolationWidth = -1;
     private int interpolationHeight = -1;
     private int interpolationFormat = Integer.MIN_VALUE;
@@ -83,7 +83,7 @@ final class FrameGeneration {
     }
 
     GpuImage interpolate(GraphicsSubmission submission, long backbufferView, long backbufferImage,
-            int swapWidth, int swapHeight, int index, int count, boolean hdrBackbuffer,
+            int swapWidth, int swapHeight, boolean hdrBackbuffer,
             UiPresentationResources ui) {
         RtFramePresenter.RenderedFrame frame = renderedFrame;
         if (frame == null || frame.depth() == null || frame.motion() == null) {
@@ -95,22 +95,15 @@ final class FrameGeneration {
         }
         int format = hdrBackbuffer
                 ? VK10.VK_FORMAT_R16G16B16A16_SFLOAT : VK10.VK_FORMAT_R8G8B8A8_UNORM;
-        if (index == 1) {
-            if (!ensureFeature(context, swapWidth, swapHeight,
-                    frame.renderWidth(), frame.renderHeight(), format)) {
-                throw new IllegalStateException("DLSSG feature not ready (ensureFeature failed)");
-            }
-            ensureInterpolationImages(context, count, swapWidth, swapHeight, format);
-            matrixScratch.set(frame.currentViewProjection()).invert();
-            clipToPrevious.set(frame.previousViewProjection()).mul(matrixScratch);
-            matrixScratch.set(frame.previousViewProjection()).invert();
-            previousToClip.set(frame.currentViewProjection()).mul(matrixScratch);
+        if (!ensureFeature(context, swapWidth, swapHeight,
+                frame.renderWidth(), frame.renderHeight(), format)) {
+            throw new IllegalStateException("DLSSG feature not ready (ensureFeature failed)");
         }
-        if (index < 1 || index > interpolationImages.length || interpolationImages[index - 1] == null) {
-            throw new IllegalStateException("Frame-generation index " + index
-                    + " out of range for " + interpolationImages.length + " output images");
-        }
-        GpuImage output = interpolationImages[index - 1];
+        ensureInterpolationImage(context, swapWidth, swapHeight, format);
+        matrixScratch.set(frame.currentViewProjection()).invert();
+        clipToPrevious.set(frame.previousViewProjection()).mul(matrixScratch);
+        matrixScratch.set(frame.previousViewProjection()).invert();
+        previousToClip.set(frame.currentViewProjection()).mul(matrixScratch);
         GpuImage hudless = hdrBackbuffer ? hdrHudlessImage : hudlessImage;
         boolean hudlessReady = hudless != null && hudless.width() == swapWidth && hudless.height() == swapHeight;
         int hudlessFormat = hdrBackbuffer
@@ -127,18 +120,18 @@ final class FrameGeneration {
                 hudlessReady ? hudlessFormat : 0,
                 uiReady ? ui.colorView() : 0L, uiReady ? ui.colorImage() : 0L,
                 uiReady ? VK10.VK_FORMAT_R8G8B8A8_UNORM : 0,
-                output.view(), output.image(), format,
-                swapWidth, swapHeight, frame.renderWidth(), frame.renderHeight(), count, index, 1.0f, 1.0f,
+                interpolationImage.view(), interpolationImage.image(), format,
+                swapWidth, swapHeight, frame.renderWidth(), frame.renderHeight(), 1.0f, 1.0f,
                 true, hdrBackbuffer, true, reset, clipToPrevious, previousToClip);
         if (VK10.vkEndCommandBuffer(commandBuffer) != VK10.VK_SUCCESS) {
             throw new IllegalStateException("vkEndCommandBuffer(fg interpolate) failed");
         }
         reset = false;
         if (!evaluated) {
-            throw new IllegalStateException("ngxshim_evaluate_dlssg failed");
+            throw new IllegalStateException("ngxshim_evaluate_dlssg_2x failed");
         }
         submission.execute(commandBuffer);
-        return output;
+        return interpolationImage;
     }
 
     private boolean ensureFeature(GpuContext context, int width, int height,
@@ -152,18 +145,14 @@ final class FrameGeneration {
         return RtDlssFg.INSTANCE.featureReadyFor(width, height, renderWidth, renderHeight, format);
     }
 
-    private void ensureInterpolationImages(GpuContext context, int count, int width, int height, int format) {
-        if (interpolationImages.length == count && interpolationWidth == width
-                && interpolationHeight == height && interpolationFormat == format
-                && (count == 0 || interpolationImages[0] != null)) {
+    private void ensureInterpolationImage(GpuContext context, int width, int height, int format) {
+        if (interpolationImage != null && interpolationWidth == width
+                && interpolationHeight == height && interpolationFormat == format) {
             return;
         }
-        destroyInterpolationImages();
-        interpolationImages = new GpuImage[count];
-        for (int i = 0; i < count; i++) {
-            interpolationImages[i] = context.createStorageImage(
-                    width, height, format, "FG interp " + i + " " + width + "x" + height);
-        }
+        destroyInterpolationImage();
+        interpolationImage = context.createStorageImage(
+                width, height, format, "FG interpolation " + width + "x" + height);
         interpolationWidth = width;
         interpolationHeight = height;
         interpolationFormat = format;
@@ -179,20 +168,18 @@ final class FrameGeneration {
             hdrHudlessImage.destroy();
             hdrHudlessImage = null;
         }
-        destroyInterpolationImages();
+        destroyInterpolationImage();
         interpolationWidth = -1;
         interpolationHeight = -1;
         interpolationFormat = Integer.MIN_VALUE;
         reset = true;
     }
 
-    private void destroyInterpolationImages() {
-        for (GpuImage image : interpolationImages) {
-            if (image != null) {
-                image.destroy();
-            }
+    private void destroyInterpolationImage() {
+        if (interpolationImage != null) {
+            interpolationImage.destroy();
+            interpolationImage = null;
         }
-        interpolationImages = new GpuImage[0];
     }
 
     private static VkImageCopy.Buffer copyRegion(MemoryStack stack, int width, int height) {

@@ -51,16 +51,16 @@ final class RtFramePresenter {
                 && RtDlssFg.INSTANCE.isAvailable() && sceneAvailable;
     }
 
-    public void prepareExtraFrames(GraphicsSubmission submission, VkDevice device, long swapchain,
+    public void prepareGeneratedFrame(GraphicsSubmission submission, VkDevice device, long swapchain,
             LongList swapchainImages, long[] presentSemaphores, int swapWidth, int swapHeight,
-            long backbufferView, long sourceImage, int sourceWidth, int sourceHeight, int generatedCount,
+            long backbufferView, long sourceImage,
             boolean hdrBackbuffer, UiPresentationResources ui) {
         generatedFrames.prepare(submission, device, swapchain, swapchainImages, presentSemaphores,
-                swapWidth, swapHeight, backbufferView, sourceImage, sourceWidth, sourceHeight,
-                generatedCount, hdrBackbuffer, ui, frameGeneration);
+                swapWidth, swapHeight, backbufferView, sourceImage,
+                hdrBackbuffer, ui, frameGeneration);
     }
 
-    public void flushPendingPresents(long swapchain, VkQueue presentQueue) {
+    public void flushPendingPresent(long swapchain, VkQueue presentQueue) {
         generatedFrames.flush(swapchain, presentQueue);
     }
 
@@ -118,13 +118,4 @@ final class RtFramePresenter {
         frameGeneration.captureHudless(sourceImage, width, height, ui);
     }
 
-    public GpuImage fgInterpolate(GraphicsSubmission submission, long backbufferView, long backbufferImage,
-            int swapWidth, int swapHeight, int index, int count, boolean hdrBackbuffer,
-            UiPresentationResources ui) {
-        if (generatedFrames.failed()) {
-            return null;
-        }
-        return frameGeneration.interpolate(submission, backbufferView, backbufferImage,
-                swapWidth, swapHeight, index, count, hdrBackbuffer, ui);
-    }
 }
