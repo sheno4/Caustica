@@ -2,6 +2,9 @@ package dev.comfyfluffy.caustica.rt;
 
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
+import dev.comfyfluffy.caustica.spi.host.HostTelemetry.Frame;
+import dev.comfyfluffy.caustica.spi.host.HostTelemetry.MetricSchema;
+import dev.comfyfluffy.caustica.spi.host.HostTelemetry.StageMetric;
 import java.io.BufferedWriter;
 import java.io.IOException;
 import java.io.PrintWriter;
@@ -10,14 +13,11 @@ import java.lang.management.ManagementFactory;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 
 /**
  * Opt-in render-frame timing and hitch detection. Gated by {@code -Dcaustica.rt.frameStats}; every method
@@ -104,58 +104,6 @@ public final class RtFrameStats {
     private RtFrameStats() {
     }
 
-    /** One timed stage and whether its duration belongs in the frame's accounted-time sum. */
-    public record StageMetric(String name, boolean contributesToAccountedTime) {
-        public StageMetric {
-            requireMetricName(name);
-        }
-    }
-
-    /** Immutable stage/counter vocabulary contributed by the renderer or its host. */
-    public record MetricSchema(List<StageMetric> stages, List<String> counters) {
-        public MetricSchema {
-            stages = List.copyOf(stages);
-            counters = List.copyOf(counters);
-            Set<String> names = new HashSet<>();
-            for (StageMetric stage : stages) {
-                Objects.requireNonNull(stage, "stage metric");
-                if (!names.add(stage.name())) {
-                    throw new IllegalArgumentException("Duplicate RtFrameStats name: " + stage.name());
-                }
-            }
-            for (String counter : counters) {
-                requireMetricName(counter);
-                if (!names.add(counter)) {
-                    throw new IllegalArgumentException("Duplicate RtFrameStats name: " + counter);
-                }
-            }
-        }
-
-        MetricSchema append(MetricSchema extension) {
-            Objects.requireNonNull(extension, "metric schema");
-            ArrayList<StageMetric> combinedStages = new ArrayList<>(stages.size() + extension.stages.size());
-            combinedStages.addAll(stages);
-            combinedStages.addAll(extension.stages);
-            ArrayList<String> combinedCounters = new ArrayList<>(counters.size() + extension.counters.size());
-            combinedCounters.addAll(counters);
-            combinedCounters.addAll(extension.counters);
-            return new MetricSchema(combinedStages, combinedCounters);
-        }
-
-        long accountedNanos(long[] stageNanos) {
-            if (stageNanos.length != stages.size()) {
-                throw new IllegalArgumentException("stage duration count does not match metric schema");
-            }
-            long total = 0L;
-            for (int i = 0; i < stages.size(); i++) {
-                if (stages.get(i).contributesToAccountedTime()) {
-                    total += stageNanos[i];
-                }
-            }
-            return total;
-        }
-    }
-
     /** Append host frame metrics before the frame profile is first used. */
     public static void configureFrameMetrics(MetricSchema metrics) {
         FRAME.configureMetrics(metrics);
@@ -171,13 +119,6 @@ public final class RtFrameStats {
      */
     public static void configureOutputDirectory(Path directory) {
         OUTPUT.configure(directory);
-    }
-
-    private static void requireMetricName(String name) {
-        Objects.requireNonNull(name, "metric name");
-        if (name.isBlank() || name.indexOf(',') >= 0) {
-            throw new IllegalArgumentException("Invalid RtFrameStats name: " + name);
-        }
     }
 
     static Path defaultOutputDirectory() {
@@ -218,15 +159,13 @@ public final class RtFrameStats {
         return CausticaConfig.Rt.FrameStats.ENABLED.value();
     }
 
-    public interface Scope extends AutoCloseable {
-        Scope NOOP = () -> {};
-
-        @Override
-        void close();
+    /** Renderer-internal scope alias used by instrumentation inside the RT implementation. */
+    public interface Scope extends dev.comfyfluffy.caustica.spi.host.HostTelemetry.Scope {
+        Scope NOOP = () -> { };
     }
 
     /** A timed render frame: per-stage nanos + named counters, plus a rolling-median hitch log. */
-    public static final class Profile {
+    public static final class Profile implements Frame {
         private final String name;
         private final MetricSchema baseMetrics;
         private final boolean trackGc;

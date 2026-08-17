@@ -30,11 +30,9 @@ import java.util.Map;
 
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
-import dev.comfyfluffy.caustica.rt.RtDeviceBringup;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
 import dev.comfyfluffy.caustica.rt.accel.RtAccel;
 import dev.comfyfluffy.caustica.api.gpu.GpuBuffer;
-import dev.comfyfluffy.caustica.spi.host.BaseColorTextureSink;
 import dev.comfyfluffy.caustica.rt.shader.WorldShaderCompiler;
 
 import static dev.comfyfluffy.caustica.rt.GpuContext.check;
@@ -62,7 +60,7 @@ import static org.lwjgl.vulkan.KHRRayTracingPipeline.vkGetRayTracingShaderGroupH
  * (for example, a primary environment miss and a shadow-visibility miss) are supported by passing an
  * array; {@code traceRayEXT}'s {@code missIndex} selects among them.
  */
-public final class RtPipeline implements BaseColorTextureSink {
+public final class RtPipeline {
     // A ring of descriptor sets: setTlas waits for the selected slot's exact prior graphics use before
     // rewriting it. Ring depth is only a performance choice that avoids routine host waits.
     private static final int RING = 6;
@@ -387,7 +385,7 @@ public final class RtPipeline implements BaseColorTextureSink {
             // Depth 1: secondary shadow/visibility rays are issued sequentially from raygen (not
             // nested in closest-hit), so each traceRayEXT is depth 1 — no recursion budget needed.
             rtpci.get(0).sType$Default().pStages(stages).pGroups(groups).maxPipelineRayRecursionDepth(1).layout(layout);
-            if (RtDeviceBringup.ommEnabled()) {
+            if (ctx.backend().capabilities().opacityMicromaps()) {
                 rtpci.get(0).flags(VK_PIPELINE_CREATE_RAY_TRACING_OPACITY_MICROMAP_BIT_EXT);
             }
             LongBuffer pPipeline = stack.mallocLong(1);
@@ -577,9 +575,9 @@ public final class RtPipeline implements BaseColorTextureSink {
     }
 
     /** Append or initialize one base-color texture index. Existing entries remain immutable in flight. */
-    @Override
-    public void setBaseColorTexture(int textureIndex, long imageView, long sampler) {
-        setBindlessTexture(WORLD_BASE_COLOR_TEXTURES, textureIndex, imageView, sampler);
+    /** Write one provider texture using the layout declared by its renderer-owned or borrowed resource. */
+    public void setBaseColorTexture(int textureIndex, long imageView, int imageLayout, long sampler) {
+        setBindlessTexture(WORLD_BASE_COLOR_TEXTURES, textureIndex, imageView, imageLayout, sampler);
     }
 
     /** Bind one compact canonical page bundle at a resource-epoch boundary. */
@@ -591,9 +589,13 @@ public final class RtPipeline implements BaseColorTextureSink {
     }
 
     private void setBindlessTexture(int binding, int slot, long imageView, long sampler) {
+        setBindlessTexture(binding, slot, imageView, VK10.VK_IMAGE_LAYOUT_GENERAL, sampler);
+    }
+
+    private void setBindlessTexture(int binding, int slot, long imageView, int imageLayout, long sampler) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkDescriptorImageInfo.Buffer info = VkDescriptorImageInfo.calloc(1, stack);
-            info.get(0).sampler(sampler).imageView(imageView).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
+            info.get(0).sampler(sampler).imageView(imageView).imageLayout(imageLayout);
             VkWriteDescriptorSet.Buffer write = VkWriteDescriptorSet.calloc(1, stack);
             write.get(0).sType$Default().dstSet(bindlessSet).dstBinding(binding).dstArrayElement(slot)
                     .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).pImageInfo(info);

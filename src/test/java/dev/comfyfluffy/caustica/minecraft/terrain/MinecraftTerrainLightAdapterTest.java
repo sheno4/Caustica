@@ -20,7 +20,7 @@ final class MinecraftTerrainLightAdapterTest {
         record[17] = 11.0f;
         record[18] = 12.0f;
 
-        var batch = MinecraftTerrainLightAdapter.describe(4, 32, 48, 80, record);
+        var batch = MinecraftTerrainLightAdapter.describe(4L, 7L, 32, 48, 80, record);
         LightDescriptor.Rectangle light = (LightDescriptor.Rectangle) batch.lights().getFirst();
 
         assertEquals(32.0, light.positionX());
@@ -29,6 +29,8 @@ final class MinecraftTerrainLightAdapterTest {
         assertEquals(0.0, light.normalX(), 0.0);
         assertEquals(0.0, light.normalY(), 0.0);
         assertEquals(-6.0, light.normalZ());
+        assertEquals(4L, batch.key());
+        assertEquals(7L, batch.revision());
         FiniteLight.from(light, MinecraftTerrainLightAdapter.METERS_PER_WORLD_UNIT);
         assertThrows(UnsupportedOperationException.class, () -> batch.lights().add(light));
     }

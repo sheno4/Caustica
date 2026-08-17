@@ -11,6 +11,11 @@ import org.lwjgl.vulkan.VkCommandBuffer;
  * Device discovery, queues, submission, and renderer lifecycle are intentionally outside this API.
  */
 public interface GpuDevice {
+    /** Generic device limits useful to pass-local raster pipelines. */
+    default GpuRasterCapabilities rasterCapabilities() {
+        return new GpuRasterCapabilities(false, 1.0f, 1);
+    }
+
     /** The live Vulkan device used to record and create pass-local Vulkan objects. */
     VkDevice vk();
 

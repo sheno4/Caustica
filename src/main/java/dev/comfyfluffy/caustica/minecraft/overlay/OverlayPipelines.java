@@ -38,9 +38,6 @@ import java.nio.LongBuffer;
 
 import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
 import dev.comfyfluffy.caustica.api.gpu.GpuFrameUse;
-import static dev.comfyfluffy.caustica.rt.pipeline.RtBindings.OVERLAY_IMAGE;
-import static dev.comfyfluffy.caustica.rt.pipeline.RtBindings.OVERLAY_SAMPLER;
-import static dev.comfyfluffy.caustica.rt.pipeline.RtBindings.OVERLAY_TLAS;
 
 /**
  * Shared creation-time boilerplate for the world-overlay raster passes ({@link WorldOverlayPass}). Overlay
@@ -53,6 +50,7 @@ import static dev.comfyfluffy.caustica.rt.pipeline.RtBindings.OVERLAY_TLAS;
  * Blaze3D device bring-up) with one colour attachment, no depth, dynamic viewport/scissor.
  */
 public final class OverlayPipelines {
+    private static final int SINGLE_RESOURCE_BINDING = 0;
     private static final String SHADER_DIR = "/caustica/shaders/pipelines/";
 
     private OverlayPipelines() {
@@ -167,9 +165,8 @@ public final class OverlayPipelines {
             return this;
         }
 
-        /** Rasterization sample count (default {@code VK_SAMPLE_COUNT_1_BIT}) — pass {@link
-         *  dev.comfyfluffy.caustica.rt.RtDeviceBringup#overlayMsaaSamples()} for a multisampled mask pass that gets
-         *  dynamic-rendering-resolved into a single-sample target afterwards. */
+        /** Rasterization sample count (default {@code VK_SAMPLE_COUNT_1_BIT}). A multisampled mask pass
+         * can use the device's preferred color sample count before resolving into a single-sample target. */
         public Spec samples(int sampleCount) {
             this.samples = sampleCount;
             return this;
@@ -274,8 +271,7 @@ public final class OverlayPipelines {
                     .sType$Default().pAttachments(blendAttach);
 
             // Line-topology pipelines get a dynamic line width (vkCmdSetLineWidth) instead of the fixed
-            // 1.0 baked above — real thickness needs the device's wideLines feature (RtDeviceBringup
-            // .wideLinesEnabled/maxLineWidth); callers must clamp their desired width to that max
+            // 1.0 baked above — real thickness needs the device's wide-lines feature; callers clamp to the device max
             // themselves (Vulkan mandates exactly 1.0 without the feature).
             boolean isLineTopology = spec.topology == VK10.VK_PRIMITIVE_TOPOLOGY_LINE_LIST
                     || spec.topology == VK10.VK_PRIMITIVE_TOPOLOGY_LINE_STRIP;
@@ -355,7 +351,7 @@ public final class OverlayPipelines {
                 VkDescriptorImageInfo.Buffer info = VkDescriptorImageInfo.calloc(1, stack);
                 info.get(0).imageView(view).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
                 VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(1, stack);
-                writes.get(0).sType$Default().dstSet(set).dstBinding(OVERLAY_IMAGE)
+                writes.get(0).sType$Default().dstSet(set).dstBinding(SINGLE_RESOURCE_BINDING)
                         .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE).pImageInfo(info);
                 VK10.vkUpdateDescriptorSets(ctx.vk(), writes, null);
             }
@@ -373,7 +369,7 @@ public final class OverlayPipelines {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             LongBuffer p = stack.mallocLong(1);
             VkDescriptorSetLayoutBinding.Buffer binds = VkDescriptorSetLayoutBinding.calloc(1, stack);
-            binds.get(0).binding(OVERLAY_IMAGE).descriptorType(VK10.VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE)
+            binds.get(0).binding(SINGLE_RESOURCE_BINDING).descriptorType(VK10.VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE)
                     .descriptorCount(1).stageFlags(stageFlags);
             VkDescriptorSetLayoutCreateInfo dslci = VkDescriptorSetLayoutCreateInfo.calloc(stack).sType$Default().pBindings(binds);
             check(VK10.vkCreateDescriptorSetLayout(vk, dslci, null, p), "vkCreateDescriptorSetLayout(" + label + ")");
@@ -425,7 +421,7 @@ public final class OverlayPipelines {
                 VkDescriptorImageInfo.Buffer info = VkDescriptorImageInfo.calloc(1, stack);
                 info.get(0).sampler(sampler).imageView(view).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
                 VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(1, stack);
-                writes.get(0).sType$Default().dstSet(set).dstBinding(OVERLAY_SAMPLER)
+                writes.get(0).sType$Default().dstSet(set).dstBinding(SINGLE_RESOURCE_BINDING)
                         .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).pImageInfo(info);
                 VK10.vkUpdateDescriptorSets(ctx.vk(), writes, null);
             }
@@ -443,7 +439,7 @@ public final class OverlayPipelines {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             LongBuffer p = stack.mallocLong(1);
             VkDescriptorSetLayoutBinding.Buffer binds = VkDescriptorSetLayoutBinding.calloc(1, stack);
-            binds.get(0).binding(OVERLAY_SAMPLER).descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+            binds.get(0).binding(SINGLE_RESOURCE_BINDING).descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
                     .descriptorCount(1).stageFlags(stageFlags);
             VkDescriptorSetLayoutCreateInfo dslci = VkDescriptorSetLayoutCreateInfo.calloc(stack).sType$Default().pBindings(binds);
             check(VK10.vkCreateDescriptorSetLayout(vk, dslci, null, p), "vkCreateDescriptorSetLayout(" + label + ")");
@@ -503,7 +499,7 @@ public final class OverlayPipelines {
                 VkDescriptorImageInfo.Buffer info = VkDescriptorImageInfo.calloc(1, stack);
                 info.get(0).sampler(sampler).imageView(view).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
                 VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(1, stack);
-                writes.get(0).sType$Default().dstSet(set).dstBinding(OVERLAY_SAMPLER)
+                writes.get(0).sType$Default().dstSet(set).dstBinding(SINGLE_RESOURCE_BINDING)
                         .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).pImageInfo(info);
                 VK10.vkUpdateDescriptorSets(vk, writes, null);
                 return set;
@@ -522,7 +518,7 @@ public final class OverlayPipelines {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             LongBuffer p = stack.mallocLong(1);
             VkDescriptorSetLayoutBinding.Buffer binds = VkDescriptorSetLayoutBinding.calloc(1, stack);
-            binds.get(0).binding(OVERLAY_SAMPLER).descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+            binds.get(0).binding(SINGLE_RESOURCE_BINDING).descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
                     .descriptorCount(1).stageFlags(stageFlags);
             VkDescriptorSetLayoutCreateInfo dslci = VkDescriptorSetLayoutCreateInfo.calloc(stack).sType$Default().pBindings(binds);
             check(VK10.vkCreateDescriptorSetLayout(vk, dslci, null, p), "vkCreateDescriptorSetLayout(" + label + ")");
@@ -576,7 +572,7 @@ public final class OverlayPipelines {
                         .sType(KHRAccelerationStructure.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR)
                         .pAccelerationStructures(stack.longs(tlas));
                 VkWriteDescriptorSet.Buffer write = VkWriteDescriptorSet.calloc(1, stack);
-                write.get(0).sType$Default().pNext(asWrite.address()).dstSet(set).dstBinding(OVERLAY_TLAS)
+                write.get(0).sType$Default().pNext(asWrite.address()).dstSet(set).dstBinding(SINGLE_RESOURCE_BINDING)
                         .descriptorCount(1).descriptorType(KHRAccelerationStructure.VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR);
                 VK10.vkUpdateDescriptorSets(ctx.vk(), write, null);
             }
@@ -595,7 +591,7 @@ public final class OverlayPipelines {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             LongBuffer p = stack.mallocLong(1);
             VkDescriptorSetLayoutBinding.Buffer binds = VkDescriptorSetLayoutBinding.calloc(1, stack);
-            binds.get(0).binding(OVERLAY_TLAS).descriptorType(KHRAccelerationStructure.VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR)
+            binds.get(0).binding(SINGLE_RESOURCE_BINDING).descriptorType(KHRAccelerationStructure.VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR)
                     .descriptorCount(1).stageFlags(stageFlags);
             VkDescriptorSetLayoutCreateInfo dslci = VkDescriptorSetLayoutCreateInfo.calloc(stack).sType$Default().pBindings(binds);
             check(VK10.vkCreateDescriptorSetLayout(vk, dslci, null, p), "vkCreateDescriptorSetLayout(" + label + ")");

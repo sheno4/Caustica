@@ -11,7 +11,14 @@ import dev.comfyfluffy.caustica.engine.frame.SceneResources;
 import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
 import dev.comfyfluffy.caustica.ngx.NgxRuntime;
 import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
+import dev.comfyfluffy.caustica.spi.vulkan.VulkanRendererBackend;
 import dev.comfyfluffy.caustica.spi.host.RuntimeHost;
+import dev.comfyfluffy.caustica.spi.host.HostTelemetry;
+import dev.comfyfluffy.caustica.spi.host.RendererPresentation;
+import dev.comfyfluffy.caustica.spi.host.RendererRuntimeController;
+import dev.comfyfluffy.caustica.spi.host.RendererRuntimeDiagnostics;
+import dev.comfyfluffy.caustica.spi.host.RendererRuntimeStatus;
+import dev.comfyfluffy.caustica.spi.host.ResourceReloadToken;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg;
 import dev.comfyfluffy.caustica.rt.pipeline.RtExposure;
 import dev.comfyfluffy.caustica.rt.provider.ProviderManager;
@@ -24,10 +31,10 @@ import org.lwjgl.vulkan.VkDevice;
 import org.lwjgl.vulkan.VkQueue;
 
 /** Owns the live RT session and publishes one immutable rendering mode for each frame. */
-public final class RtRuntime {
+public final class RtRuntime implements RendererRuntimeController, RendererRuntimeDiagnostics, RendererPresentation {
     public static final RtRuntime INSTANCE = new RtRuntime();
 
-    public enum State {
+    private enum State {
         OFF,
         STARTING,
         ACTIVE,
@@ -90,6 +97,16 @@ public final class RtRuntime {
     private RtRuntime() {
     }
 
+    /** First-party host telemetry integration backed by renderer-owned collectors and sinks. */
+    public HostTelemetry hostTelemetry() {
+        return RtHostTelemetry.INSTANCE;
+    }
+
+    @Override
+    public void installVulkanBackend(VulkanRendererBackend backend) {
+        GpuContext.installBackend(backend);
+    }
+
     public void installHost(RuntimeHost installedHost) {
         host = installedHost;
     }
@@ -110,14 +127,14 @@ public final class RtRuntime {
     }
 
     /** Begin the host-visible half of a resource-pack reload before its old images are destroyed. */
-    public RtLifecycleCoordinator.ResourcePackEpoch beginResourcePackReload() {
-        return lifecycle.beginResourcePackReload();
+    public ResourceReloadToken beginResourcePackReload() {
+        return new ReloadToken(lifecycle.beginResourcePackReload());
     }
 
     /** Attach a manual-reload future; its result is applied on the next client tick. */
-    public void trackResourcePackReload(RtLifecycleCoordinator.ResourcePackEpoch pending,
+    public void trackResourcePackReload(ResourceReloadToken pending,
                                         java.util.concurrent.CompletableFuture<?> future) {
-        lifecycle.trackResourcePackReload(pending, future);
+        lifecycle.trackResourcePackReload(((ReloadToken) pending).epoch(), future);
     }
 
     /** Reconcile the current level identity at the client-tick boundary. */
@@ -164,8 +181,9 @@ public final class RtRuntime {
         return session != null && session.renderer.hasFailed();
     }
 
-    public RtExposure exposureOrNull() {
-        return session != null ? session.renderer.exposure() : null;
+    public String exposureSummary() {
+        RtExposure exposure = session != null ? session.renderer.exposure() : null;
+        return exposure != null && exposure.ready() ? exposure.debugSummaryLine() : null;
     }
 
     public boolean exportLatestResidualExposureExr(Path outputPath) throws IOException {
@@ -233,6 +251,11 @@ public final class RtRuntime {
         return session != null && session.presenter.isActive(sceneAvailable);
     }
 
+    @Override
+    public int generatedFrameCount() {
+        return RtDlssFg.INSTANCE.effectiveMultiFrameCount();
+    }
+
     public long hdrBackbufferView() {
         return session != null ? session.presenter.hdrBackbufferView() : 0L;
     }
@@ -273,7 +296,8 @@ public final class RtRuntime {
                      int displayWidth, int displayHeight, Runnable reconfigureSurface) {
         lifecycle.drainResourcePackCompletions();
         CausticaRegistry.Selection selection = CausticaApi.registry().selection();
-        programManager.request(selection, RtDeviceBringup.serExtEnabled());
+        VulkanRendererBackend backend = GpuContext.backendOrNull();
+        programManager.request(selection, backend != null && backend.capabilities().shaderExecutionReordering());
         RtProgramManager.Program candidate = programManager.candidate();
         boolean requested = CausticaConfig.Rt.ENABLED.value();
         if (requested && session != null && !session.matches(selection) && candidate != null) {
@@ -375,8 +399,31 @@ public final class RtRuntime {
         }
     }
 
-    public State state() {
-        return state;
+    @Override
+    public RendererRuntimeStatus status() {
+        RendererRuntimeStatus.WorldReplacement replacement;
+        boolean failed = rendererFailed();
+        if (!frameActive) {
+            replacement = RendererRuntimeStatus.WorldReplacement.FRAME_INACTIVE;
+        } else if (failed) {
+            replacement = RendererRuntimeStatus.WorldReplacement.RENDERER_FAILED;
+        } else if (GpuContext.currentOrNull() == null) {
+            replacement = RendererRuntimeStatus.WorldReplacement.DEVICE_UNAVAILABLE;
+        } else if (requiresSourceWorldFallback()) {
+            replacement = RendererRuntimeStatus.WorldReplacement.RESOURCE_TRANSITION;
+        } else {
+            replacement = RendererRuntimeStatus.WorldReplacement.READY;
+        }
+        return new RendererRuntimeStatus(
+                RendererRuntimeStatus.State.valueOf(state.name()),
+                frameActive,
+                session != null,
+                failed,
+                replacement,
+                isHdrPresentActive(),
+                isPqSdrPresentActive(),
+                active() && CausticaConfig.Rt.Hdr.ENABLED.value(),
+                frameCounter());
     }
 
     /**
@@ -405,8 +452,12 @@ public final class RtRuntime {
         return active() && CausticaConfig.Rt.Hdr.ENABLED.value();
     }
 
+    private record ReloadToken(RtLifecycleCoordinator.ResourcePackEpoch epoch) implements ResourceReloadToken {
+    }
+
     private void start() {
-        if (GpuContext.backendOrNull() == null || !GpuContext.backendOrNull().rayTracingProvisioned()) {
+        VulkanRendererBackend backend = GpuContext.backendOrNull();
+        if (backend == null || !backend.capabilities().rayTracing()) {
             state = State.FAILED;
             CausticaMod.LOGGER.warn("RT runtime unavailable: the Vulkan device was not provisioned for ray tracing");
             return;
@@ -574,10 +625,7 @@ public final class RtRuntime {
             if (resourcesReady) {
                 RtFrameStats.FRAME.beginIfInactive();
                 providers.updateScenes();
-                ProviderManager.PrimaryScene primaryScene = providers.primaryScene();
-                if (primaryScene != null) {
-                    providers.submitGeometryUpdates(context, primaryScene.retained().origin());
-                }
+                providers.submitGeometryUpdates(context, dev.comfyfluffy.caustica.engine.scene.SceneOrigin.ZERO);
                 renderer.sceneGeometry().progress(context);
             }
             if (!sceneResources.sceneReady()) {
@@ -611,10 +659,9 @@ public final class RtRuntime {
             providers.shutdownResources();
             providers.endSession();
             host().destroyUiPresentation();
-            host().resetSceneTextures();
             RtDlssFg.INSTANCE.destroy();
             presenter.destroy(context.vk());
-            RtReflex.INSTANCE.destroy(context.vk());
+            context.backend().lowLatency().destroy(context.vk());
             // GpuContext owns per-device infrastructure and survives RT sessions. Client shutdown destroys it.
             context = null;
         }

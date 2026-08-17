@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.engine.frame;
 
 import dev.comfyfluffy.caustica.api.provider.MaterialHandle;
+import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import org.joml.Matrix4f;
 import org.joml.Matrix4fc;
 
@@ -25,6 +26,7 @@ public final class FrameSnapshot {
     private final double cameraX;
     private final double cameraY;
     private final double cameraZ;
+    private final SceneOrigin sceneOrigin;
     private final CameraMedium cameraMedium;
     private final boolean proceduralSurfaceAnimationEnabled;
     private final double timeSeconds;
@@ -33,6 +35,7 @@ public final class FrameSnapshot {
 
     public FrameSnapshot(Matrix4fc projection, Matrix4fc viewRotation,
                          double cameraX, double cameraY, double cameraZ,
+                         SceneOrigin sceneOrigin,
                          CameraMedium cameraMedium, boolean proceduralSurfaceAnimationEnabled,
                          double timeSeconds, double metersPerWorldUnit, long sceneId) {
         this.projection = new Matrix4f(Objects.requireNonNull(projection, "projection"));
@@ -40,6 +43,7 @@ public final class FrameSnapshot {
         this.cameraX = cameraX;
         this.cameraY = cameraY;
         this.cameraZ = cameraZ;
+        this.sceneOrigin = Objects.requireNonNull(sceneOrigin, "sceneOrigin");
         this.cameraMedium = cameraMedium;
         this.proceduralSurfaceAnimationEnabled = proceduralSurfaceAnimationEnabled;
         this.timeSeconds = timeSeconds;
@@ -73,6 +77,11 @@ public final class FrameSnapshot {
 
     public double cameraZ() {
         return cameraZ;
+    }
+
+    /** Host-selected world origin used to keep this frame's GPU coordinates precise. */
+    public SceneOrigin sceneOrigin() {
+        return sceneOrigin;
     }
 
     public CameraMedium cameraMedium() {

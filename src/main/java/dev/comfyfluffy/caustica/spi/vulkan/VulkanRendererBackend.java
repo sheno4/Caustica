@@ -16,5 +16,7 @@ public interface VulkanRendererBackend {
 
     DebugMarkers debugMarkers();
 
-    boolean rayTracingProvisioned();
+    VulkanDeviceCapabilities capabilities();
+
+    VulkanLowLatency lowLatency();
 }

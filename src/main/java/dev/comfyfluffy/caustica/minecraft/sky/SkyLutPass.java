@@ -14,7 +14,7 @@ import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
 import dev.comfyfluffy.caustica.minecraft.MinecraftLightingCalibration;
 import dev.comfyfluffy.caustica.api.gpu.GpuBuffer;
 import dev.comfyfluffy.caustica.api.gpu.GpuImage;
-import dev.comfyfluffy.caustica.rt.gen.SkyInputsData;
+import dev.comfyfluffy.caustica.minecraft.sky.gen.SkyInputsData;
 import dev.comfyfluffy.caustica.api.pass.ComputeDispatch;
 import dev.comfyfluffy.caustica.api.pass.PassShaderCompiler;
 import net.minecraft.client.Minecraft;
@@ -136,7 +136,7 @@ public final class SkyLutPass implements CausticaRenderPass {
     public void create(PassSetup setup) {
         ctx = setup.device();
         // The pass object outlives a RenderPassManager/GPU-context instance. Force the new manager to
-        // observe and publish the host atlas even when Vulkan recycles the same numeric view handle.
+        // observe and publish the Minecraft celestial atlas even when Vulkan recycles the same numeric view handle.
         celestialAtlasView = 0L;
         celestialUvMoonPhase = -1;
         sampler = ComputeDispatch.createLinearClampSampler(ctx, ID + " sampler");

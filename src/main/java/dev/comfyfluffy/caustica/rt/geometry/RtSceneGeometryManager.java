@@ -6,7 +6,6 @@ import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import dev.comfyfluffy.caustica.api.provider.SceneGeometryKey;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.rt.GpuContext;
-import dev.comfyfluffy.caustica.rt.RtDeviceBringup;
 import dev.comfyfluffy.caustica.rt.RtFrameStats;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor.GraphicsUse;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor.TrackedGraphicsUse;
@@ -26,6 +25,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
+import java.util.function.Function;
 
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
 import static org.lwjgl.vulkan.VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
@@ -47,7 +47,7 @@ public final class RtSceneGeometryManager {
     private static final long MIN_BUFFER_BYTES = 256L;
     private static final int HISTORY_BYTES = 3 * 4 * Float.BYTES;
 
-    private final RtGeometryMaterialResolver materialResolver;
+    private final Function<ResourceId, RtGeometryMaterialResolver> materialResolver;
     private MaterialTables materialTables;
     private final TlasBuilder.Ring tlasRing = new TlasBuilder.Ring();
     private final GeometryGroupScheduler groupScheduler;
@@ -60,10 +60,19 @@ public final class RtSceneGeometryManager {
     private boolean loggedOpacityMicromapBuild;
 
     public RtSceneGeometryManager(RtGeometryMaterialResolver materialResolver) {
-        this(materialResolver, new GeometryGroupScheduler());
+        this(ignored -> materialResolver, new GeometryGroupScheduler());
     }
 
     RtSceneGeometryManager(RtGeometryMaterialResolver materialResolver, GeometryGroupScheduler groupScheduler) {
+        this(ignored -> materialResolver, groupScheduler);
+    }
+
+    public RtSceneGeometryManager(Function<ResourceId, RtGeometryMaterialResolver> materialResolver) {
+        this(materialResolver, new GeometryGroupScheduler());
+    }
+
+    private RtSceneGeometryManager(Function<ResourceId, RtGeometryMaterialResolver> materialResolver,
+                                   GeometryGroupScheduler groupScheduler) {
         this.materialResolver = materialResolver;
         this.groupScheduler = groupScheduler;
     }
@@ -239,7 +248,7 @@ public final class RtSceneGeometryManager {
             preparingCandidate = candidate;
             PackedInput input;
             try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("geometry.packMaterial")) {
-                input = providerInput(provider.mesh());
+                input = providerInput(prepared.key.source(), provider.mesh());
             }
             writeDynamic(ctx, candidate, input);
             candidate.vertexCount = input.positions().length / 3;
@@ -251,12 +260,12 @@ public final class RtSceneGeometryManager {
                     && dynamicSource.topology.matches(candidate.topology);
             boolean minimizeMemory = provider.buildOptions().minimizeMemory();
             boolean opacityAcceleration = provider.buildOptions().opacityAcceleration()
-                    && RtDeviceBringup.ommEnabled() && opacityMicromapPipeline != null
+                    && ctx.backend().capabilities().opacityMicromaps() && opacityMicromapPipeline != null
                     && candidate.classTriangles[RtAccel.CLASS_MASKED] > 0
                     && hasEligibleOpacityBinding(input);
             if (opacityAcceleration) {
                 int subdivisionLevel = Math.min(4, Math.max(0,
-                        RtDeviceBringup.maxOpacity4StateSubdivisionLevel()));
+                        ctx.backend().capabilities().maxOpacity4StateSubdivisionLevel()));
                 int microTriangles = 1 << (subdivisionLevel * 2);
                 int bytesPerTriangle = Math.max(1, (microTriangles * 2 + 7) >>> 3);
                 int maskedBase = candidate.classTriangles[RtAccel.CLASS_OPAQUE];
@@ -342,11 +351,16 @@ public final class RtSceneGeometryManager {
     }
 
     PackedInput providerInput(SceneMesh mesh) {
-        return SceneMeshPacker.pack(mesh, materialResolver);
+        return SceneMeshPacker.pack(mesh, materialResolver.apply(ResourceId.of("caustica", "internal")));
+    }
+
+    PackedInput providerInput(ResourceId source, SceneMesh mesh) {
+        return SceneMeshPacker.pack(mesh, materialResolver.apply(source));
     }
 
     boolean providerTopologyMatches(SceneMesh first, SceneMesh second) {
-        return SceneMeshPacker.topologyMatches(first, second, materialResolver);
+        return SceneMeshPacker.topologyMatches(first, second,
+                materialResolver.apply(ResourceId.of("caustica", "internal")));
     }
 
     private boolean hasEligibleOpacityBinding(PackedInput input) {

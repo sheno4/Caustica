@@ -20,6 +20,7 @@ public final class SceneMesh {
     public sealed interface MaterialReference permits NamedMaterial, CatalogMaterial, AtlasMaterial, StandaloneMaterial, FallbackMaterial {
         TextureReference texture();
     }
+    /** Stable texture identity local to the scene provider that submitted this mesh. */
     public sealed interface TextureReference permits AtlasTexture, StandaloneTexture { }
     public record AtlasTexture(ResourceId atlas) implements TextureReference {
         public AtlasTexture { Objects.requireNonNull(atlas, "atlas"); }

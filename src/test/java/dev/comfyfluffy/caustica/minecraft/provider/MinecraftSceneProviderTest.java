@@ -22,7 +22,7 @@ final class MinecraftSceneProviderTest {
                                java.util.function.Consumer<Publication> onPublished) {
             }
         };
-        SceneFrameContext frame = new SceneFrameContext(sink, 0, 0, 0, SceneCamera.IDENTITY);
+        SceneFrameContext frame = new SceneFrameContext(sink, 0, 0, 0, 7L, SceneCamera.IDENTITY);
 
         MinecraftSceneProvider.submitFrameGeometry(frame, geometry -> {
             assertSame(sink, geometry);

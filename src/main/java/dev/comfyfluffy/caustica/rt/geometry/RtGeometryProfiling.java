@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.rt.geometry;
 
 import dev.comfyfluffy.caustica.rt.RtFrameStats;
+import dev.comfyfluffy.caustica.spi.host.HostTelemetry;
 import jdk.jfr.Category;
 import jdk.jfr.Event;
 import jdk.jfr.EventType;
@@ -25,7 +26,7 @@ public final class RtGeometryProfiling {
         }
     }
 
-    public static final class ExtractionStamp {
+    public static final class ExtractionStamp implements HostTelemetry.ExtractionStamp {
         private final SourceKind kind;
         private final long frame;
         private final long nanos;

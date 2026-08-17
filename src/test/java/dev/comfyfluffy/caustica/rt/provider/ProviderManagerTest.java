@@ -9,6 +9,7 @@ import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import dev.comfyfluffy.caustica.api.provider.MaterialHandle;
 import dev.comfyfluffy.caustica.api.provider.MaterialTopology;
 import dev.comfyfluffy.caustica.api.provider.LightProvider;
+import dev.comfyfluffy.caustica.api.provider.RetainedLightCollection;
 import dev.comfyfluffy.caustica.engine.light.LightDescriptor;
 import dev.comfyfluffy.caustica.api.provider.MaterialRule;
 import dev.comfyfluffy.caustica.api.provider.MaterialSource;
@@ -19,9 +20,7 @@ import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.geometry.RtGeometryAbi;
 import dev.comfyfluffy.caustica.rt.geometry.RtSceneGeometryManager;
 import dev.comfyfluffy.caustica.rt.geometry.GeometryUpdates;
-import dev.comfyfluffy.caustica.spi.host.BaseColorTextureSink;
-import dev.comfyfluffy.caustica.spi.host.MaterialEpochView;
-import dev.comfyfluffy.caustica.spi.host.RendererSceneSource;
+import dev.comfyfluffy.caustica.rt.texture.ProviderTextureRegistry;
 import org.joml.Matrix4f;
 import org.junit.jupiter.api.Test;
 
@@ -136,6 +135,23 @@ final class ProviderManagerTest {
     }
 
     @Test
+    void rendererLightWorkerStopsBeforeSceneProducer() {
+        List<String> events = new ArrayList<>();
+        SceneProvider provider = new SceneProvider() {
+            @Override
+            public void stop() {
+                events.add("provider");
+            }
+        };
+        ProviderManager manager = manager("phased", provider);
+        manager.bindRetainedLightStop(() -> events.add("retained-lights"));
+
+        manager.stopProviders();
+
+        assertEquals(List.of("retained-lights", "provider"), events);
+    }
+
+    @Test
     void aNormallyStoppedProviderRunsAgainInTheNextSession() {
         AtomicInteger updates = new AtomicInteger();
         AtomicInteger shutdowns = new AtomicInteger();
@@ -244,6 +260,101 @@ final class ProviderManagerTest {
     }
 
     @Test
+    void retainedLightGroupsAreSourceQualifiedAndReuseUnchangedAggregate() {
+        LightProvider first = retained(7L, 3L, 10.0);
+        LightProvider second = retained(7L, 5L, 20.0);
+        Map<ResourceId, LightProvider> providers = new LinkedHashMap<>();
+        providers.put(id("first"), first);
+        providers.put(id("second"), second);
+        ProviderManager manager = new ProviderManager(Map.of(), providers, Map.of());
+
+        manager.prepareFrame();
+        var initial = manager.retainedLights();
+        manager.prepareFrame();
+
+        assertSame(initial, manager.retainedLights());
+        assertEquals(2, initial.batches().size());
+        assertEquals(id("first"), initial.batches().get(0).source());
+        assertEquals(id("second"), initial.batches().get(1).source());
+        assertEquals(7L, initial.batches().get(0).key());
+    }
+
+    @Test
+    void retainedLightRevisionAndOmissionReplaceOnlyThatProvidersGroups() {
+        AtomicInteger frame = new AtomicInteger();
+        LightProvider changing = new LightProvider() {
+            @Override
+            public RetainedLightCollection retainedLights() {
+                int current = frame.getAndIncrement();
+                return current < 2
+                        ? collection(current + 1L, 1L, current + 1L, point(1L, current + 1.0))
+                        : new RetainedLightCollection(3L, List.of());
+            }
+        };
+        ProviderManager manager = new ProviderManager(Map.of(), Map.of(id("changing"), changing), Map.of());
+
+        manager.prepareFrame();
+        long firstGeneration = manager.retainedLights().generation();
+        manager.prepareFrame();
+        assertTrue(manager.retainedLights().generation() > firstGeneration);
+        assertEquals(2L, manager.retainedLights().batches().getFirst().revision());
+        manager.prepareFrame();
+        assertTrue(manager.retainedLights().isEmpty());
+    }
+
+    @Test
+    void failingRetainedLightProviderCannotPublishPartialGroups() {
+        AtomicInteger stops = new AtomicInteger();
+        LightProvider broken = new LightProvider() {
+            @Override
+            public RetainedLightCollection retainedLights() {
+                return new RetainedLightCollection(1L, List.of(
+                        new RetainedLightCollection.Group(1L, 1L, List.of(point(1L, 1.0))),
+                        new RetainedLightCollection.Group(2L, 1L, List.of(new LightDescriptor.Spot(
+                                2L, 0, 0, 0, 0, 0, 0, 3, 0.5, 1, 1, 1)))));
+            }
+
+            @Override
+            public void stop() {
+                stops.incrementAndGet();
+            }
+        };
+        ProviderManager manager = new ProviderManager(Map.of(), Map.of(id("broken"), broken), Map.of());
+
+        manager.prepareFrame();
+
+        assertTrue(manager.retainedLights().isEmpty());
+        assertEquals(1, stops.get());
+    }
+
+    @Test
+    void unchangedRetainedCollectionSkipsGroupWalkAndLightValidation() {
+        AtomicReference<RetainedLightCollection> collection = new AtomicReference<>(
+                collection(7L, 1L, 3L, point(1L, 2.0)));
+        LightProvider provider = new LightProvider() {
+            @Override
+            public RetainedLightCollection retainedLights() {
+                return collection.get();
+            }
+        };
+        AtomicInteger validations = new AtomicInteger();
+        ProviderManager manager = new ProviderManager(Map.of(), Map.of(id("retained"), provider), Map.of(),
+                ignored -> validations.incrementAndGet());
+
+        manager.prepareFrame();
+        var published = manager.retainedLights();
+        manager.prepareFrame();
+
+        assertEquals(1, validations.get());
+        assertSame(published, manager.retainedLights());
+
+        collection.set(collection(8L, 1L, 4L, point(1L, 3.0)));
+        manager.prepareFrame();
+        assertEquals(2, validations.get());
+        assertEquals(4L, manager.retainedLights().batches().getFirst().revision());
+    }
+
+    @Test
     void invalidProviderDoesNotPublishItsPartialSnapshot() {
         LightProvider invalid = new LightProvider() {
             @Override
@@ -319,6 +430,57 @@ final class ProviderManagerTest {
         assertEquals(List.of(retained), manager.collectMaterials(ignored -> 0).rules());
         assertEquals(List.of(retained), manager.collectMaterials(ignored -> 0).rules());
         assertEquals(1, failingStops.get());
+    }
+
+    @Test
+    void materialSourcesContributeIndependentAssetCalibration() {
+        var atlas = asset("atlas", dev.comfyfluffy.caustica.engine.material.MaterialTextureKind.SHARED_ATLAS,
+                12_000.0f);
+        var standalone = asset("standalone", dev.comfyfluffy.caustica.engine.material.MaterialTextureKind.STANDALONE,
+                24_000.0f);
+        Map<ResourceId, MaterialSource> sources = new LinkedHashMap<>();
+        sources.put(id("minecraft"), sink -> sink.submitAsset(atlas));
+        sources.put(id("gltf"), sink -> sink.submitAsset(standalone));
+
+        ProviderManager.MaterialContributions contributions =
+                new ProviderManager(Map.of(), Map.of(), sources).collectMaterials(ignored -> 0);
+
+        assertEquals(List.of(atlas), contributions.catalog().atlasAssets());
+        assertEquals(List.of(standalone), contributions.catalog().standalone());
+        assertEquals(12_000.0f, contributions.catalog().atlasAssets().getFirst()
+                .uniformEmissionLuminanceCdM2());
+        assertEquals(24_000.0f, contributions.catalog().standalone().getFirst()
+                .uniformEmissionLuminanceCdM2());
+    }
+
+    @Test
+    void duplicateAssetDisablesOnlyTheLaterSourceWithoutPublishingItsOtherAssets() {
+        var shared = asset("shared", dev.comfyfluffy.caustica.engine.material.MaterialTextureKind.SHARED_ATLAS, 1.0f);
+        var discarded = asset("discarded", dev.comfyfluffy.caustica.engine.material.MaterialTextureKind.STANDALONE,
+                2.0f);
+        AtomicInteger duplicateStops = new AtomicInteger();
+        MaterialSource duplicate = new MaterialSource() {
+            @Override
+            public void submitMaterials(dev.comfyfluffy.caustica.api.provider.MaterialSink sink) {
+                sink.submitAsset(discarded);
+                sink.submitAsset(shared);
+            }
+
+            @Override
+            public void stop() {
+                duplicateStops.incrementAndGet();
+            }
+        };
+        Map<ResourceId, MaterialSource> sources = new LinkedHashMap<>();
+        sources.put(id("first"), sink -> sink.submitAsset(shared));
+        sources.put(id("duplicate"), duplicate);
+
+        var catalog = new ProviderManager(Map.of(), Map.of(), sources)
+                .collectMaterials(ignored -> 0).catalog();
+
+        assertEquals(List.of(shared), catalog.atlasAssets());
+        assertTrue(catalog.standalone().isEmpty());
+        assertEquals(1, duplicateStops.get());
     }
 
     @Test
@@ -410,14 +572,20 @@ final class ProviderManagerTest {
     }
 
     @Test
-    void rejectsMultipleActivePrimarySceneSources() {
+    void everySceneProviderCanContributeSourceLocalTextures() {
         Map<ResourceId, SceneProvider> scenes = new LinkedHashMap<>();
-        scenes.put(id("first_primary"), new PrimarySceneProvider());
-        scenes.put(id("second_primary"), new PrimarySceneProvider());
+        scenes.put(id("first_primary"), new TextureSceneProvider());
+        scenes.put(id("second_primary"), new TextureSceneProvider());
         ProviderManager manager = new ProviderManager(scenes, Map.of(), Map.of());
+        AtomicInteger destroyed = new AtomicInteger();
+        ProviderTextureRegistry registry = new ProviderTextureRegistry(4,
+                (texture, label) -> uploaded(100L, destroyed), (slot, imageView, layout) -> { });
 
-        assertThrows(IllegalStateException.class, manager::primaryScene);
-        assertThrows(IllegalStateException.class, manager::bindlessTextureCapacity);
+        manager.bindTextureRegistry(registry);
+
+        assertEquals(2, registry.size());
+        manager.unbindTextureRegistry(registry);
+        registry.close();
     }
 
     private static SceneProvider counting(AtomicInteger shutdowns, Runnable update) {
@@ -530,6 +698,23 @@ final class ProviderManagerTest {
 
         assertEquals(1, forwarded.size());
         assertEquals(id("terrain"), forwarded.getFirst().key().source());
+    }
+
+    @Test
+    void frameIndexFlowsIntoSceneProviderContext() {
+        AtomicReference<SceneFrameContext> captured = new AtomicReference<>();
+        ProviderManager manager = manager("scene", new SceneProvider() {
+            @Override
+            public void submitGeometry(SceneFrameContext frame) {
+                captured.set(frame);
+            }
+        });
+        manager.bindSceneGeometry(new RtSceneGeometryManager((material, coverage) -> null));
+
+        manager.submitGeometry(null, SceneOrigin.ZERO, 42L,
+                dev.comfyfluffy.caustica.api.provider.SceneCamera.IDENTITY);
+
+        assertEquals(42L, captured.get().frameIndex());
     }
 
     @Test
@@ -669,8 +854,8 @@ final class ProviderManagerTest {
     }
 
     @Test
-    void materialEpochClearFlowsThroughPrimarySceneSource() {
-        PrimarySceneProvider scene = new PrimarySceneProvider();
+    void materialEpochClearFlowsThroughSceneProvider() {
+        TextureSceneProvider scene = new TextureSceneProvider();
         ProviderManager manager = manager("primary", scene);
 
         manager.clearMaterials();
@@ -679,18 +864,56 @@ final class ProviderManagerTest {
     }
 
     @Test
-    void textureDescriptorSinkFlowsThroughPrimarySceneSource() {
-        PrimarySceneProvider scene = new PrimarySceneProvider();
+    void textureCollectionFlowsThroughSceneProvider() {
+        TextureSceneProvider scene = new TextureSceneProvider();
         ProviderManager manager = manager("primary", scene);
-        BaseColorTextureSink textures = (slot, imageView, sampler) -> { };
+        AtomicInteger destroyed = new AtomicInteger();
+        ProviderTextureRegistry registry = new ProviderTextureRegistry(3,
+                (texture, label) -> uploaded(100L, destroyed), (slot, imageView, layout) -> { });
 
-        manager.rebindTextures(textures, 17L);
-        manager.uploadPendingTextures(textures, 23L);
+        manager.bindTextureRegistry(registry);
 
-        assertSame(textures, scene.rebindTextures);
-        assertEquals(17L, scene.rebindSampler);
-        assertSame(textures, scene.uploadTextures);
-        assertEquals(23L, scene.uploadSampler);
+        assertEquals(1, scene.textureSubmissions);
+        assertEquals(1, registry.size());
+        manager.unbindTextureRegistry(registry);
+        registry.close();
+    }
+
+    @Test
+    void failedTextureProviderDoesNotConsumeHealthyProviderCapacity() {
+        AtomicInteger failedRetired = new AtomicInteger();
+        AtomicInteger failedStops = new AtomicInteger();
+        SceneProvider broken = new SceneProvider() {
+            @Override
+            public void submitTextures(dev.comfyfluffy.caustica.api.provider.TextureSink textures) {
+                textures.submit(new SceneMesh.StandaloneTexture(id("broken")),
+                        new dev.comfyfluffy.caustica.api.gpu.BorrowedVulkanTexture(301L,
+                                org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_GENERAL, failedRetired::incrementAndGet));
+                throw new IllegalStateException("expected");
+            }
+
+            @Override
+            public void stop() {
+                failedStops.incrementAndGet();
+            }
+        };
+        TextureSceneProvider healthy = new TextureSceneProvider();
+        Map<ResourceId, SceneProvider> scenes = new LinkedHashMap<>();
+        scenes.put(id("broken"), broken);
+        scenes.put(id("healthy"), healthy);
+        ProviderManager manager = new ProviderManager(scenes, Map.of(), Map.of());
+        ProviderTextureRegistry registry = new ProviderTextureRegistry(2,
+                (texture, label) -> uploaded(100L, new AtomicInteger()), (slot, imageView, layout) -> { });
+
+        manager.bindTextureRegistry(registry);
+
+        assertEquals(1, failedRetired.get());
+        assertEquals(1, failedStops.get());
+        assertEquals(1, registry.size());
+        assertEquals(1, registry.requireSlot(id("healthy"),
+                new SceneMesh.StandaloneTexture(id("shared"))));
+        manager.unbindTextureRegistry(registry);
+        registry.close();
     }
 
     private static ProviderManager manager(String path, SceneProvider provider) {
@@ -699,6 +922,25 @@ final class ProviderManagerTest {
 
     private static ResourceId id(String path) {
         return ResourceId.of("test", path);
+    }
+
+    private static LightProvider retained(long key, long revision, double x) {
+        return new LightProvider() {
+            @Override
+            public RetainedLightCollection retainedLights() {
+                return collection(revision, key, revision, point(key, x));
+            }
+        };
+    }
+
+    private static RetainedLightCollection collection(long generation, long key, long revision,
+                                                      LightDescriptor.Finite light) {
+        return new RetainedLightCollection(generation, List.of(
+                new RetainedLightCollection.Group(key, revision, List.of(light))));
+    }
+
+    private static LightDescriptor.Point point(long key, double x) {
+        return new LightDescriptor.Point(key, x, 0.0, 0.0, 3.0, 1.0, 1.0, 1.0);
     }
 
     private static MaterialRule rule(String path) {
@@ -713,6 +955,17 @@ final class ProviderManagerTest {
     private static MaterialDefinition definition(String path) {
         return new MaterialDefinition(new MaterialHandle(id(path)), 1.0f, 1.0f, 1.0f,
                 1.0f, 0.0f, 1.5f, 0.0f, MaterialTopology.SURFACE, null);
+    }
+
+    private static dev.comfyfluffy.caustica.engine.material.MaterialTextureAsset asset(
+            String path, dev.comfyfluffy.caustica.engine.material.MaterialTextureKind kind, float luminance) {
+        return new dev.comfyfluffy.caustica.engine.material.MaterialTextureAsset(id(path), kind, 1, 1,
+                () -> null, dev.comfyfluffy.caustica.engine.material.MaterialUv.IDENTITY,
+                false, false, false,
+                dev.comfyfluffy.caustica.engine.material.OpenPbrColorBinding.PARAMETER_DEFAULT,
+                dev.comfyfluffy.caustica.engine.material.OpenPbrColorBinding.PARAMETER_DEFAULT,
+                dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR,
+                luminance);
     }
 
     private static SceneMesh triangle(String material) {
@@ -731,51 +984,29 @@ final class ProviderManagerTest {
                 SceneMesh.Coverage.OPAQUE, Float.NaN, Float.NaN, Float.NaN, 0, 1, 1, 1)));
     }
 
-    private static final class PrimarySceneProvider implements SceneProvider, RendererSceneSource {
+    private static ProviderTextureRegistry.UploadedTexture uploaded(long view, AtomicInteger destroyed) {
+        return new ProviderTextureRegistry.UploadedTexture() {
+            @Override public long imageView() { return view; }
+            @Override public int imageLayout() { return org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_GENERAL; }
+            @Override public void destroy() { destroyed.incrementAndGet(); }
+        };
+    }
+
+    private static final class TextureSceneProvider implements SceneProvider {
         final AtomicInteger stops = new AtomicInteger();
-        final RetainedScene retained = new RetainedScene(SceneOrigin.ZERO,
-                new RetainedLights(0, 0, -1, 0, 0,
-                        0, 0, 0, 1, 0));
-        int resetCapacity;
-        BaseColorTextureSink rebindTextures;
-        BaseColorTextureSink uploadTextures;
-        long rebindSampler;
-        long uploadSampler;
+        int textureSubmissions;
         int materialClears;
 
         @Override
-        public RetainedScene retainedScene() {
-            return retained;
+        public void submitTextures(dev.comfyfluffy.caustica.api.provider.TextureSink textures) {
+            textureSubmissions++;
+            textures.submit(new SceneMesh.StandaloneTexture(id("shared")),
+                    new dev.comfyfluffy.caustica.api.gpu.BorrowedVulkanTexture(
+                            200L + textureSubmissions, org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_GENERAL, () -> { }));
         }
 
         @Override
-        public int bindlessTextureCapacity() {
-            return 37;
-        }
-
-        @Override
-        public void resetBindlessTextures(int capacity) {
-            resetCapacity = capacity;
-        }
-
-        @Override
-        public void rebindTextures(BaseColorTextureSink textures, long sampler) {
-            rebindTextures = textures;
-            rebindSampler = sampler;
-        }
-
-        @Override
-        public void uploadPendingTextures(BaseColorTextureSink textures, long sampler) {
-            uploadTextures = textures;
-            uploadSampler = sampler;
-        }
-
-        @Override
-        public void publishMaterials(MaterialEpochView materials) {
-        }
-
-        @Override
-        public void clearMaterials() {
+        public void onMaterialEpochClosing() {
             materialClears++;
         }
 

@@ -1,6 +1,8 @@
 package dev.comfyfluffy.caustica.api.pass;
 
 import dev.comfyfluffy.caustica.api.OptionValues;
+import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import dev.comfyfluffy.caustica.api.gpu.GpuImage;
 import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
 import dev.comfyfluffy.caustica.api.gpu.GpuFrameUse;
@@ -32,6 +34,12 @@ public interface PassFrame {
     Matrix4fc worldViewProjection();
 
     long frameIndex();
+
+    /**
+     * Resolve a provider texture for pass-authored shader data. The returned renderer-private index is
+     * valid only for the current resource epoch and must not be retained by a scene provider.
+     */
+    int textureIndex(ResourceId source, SceneMesh.TextureReference texture);
 
     int displayWidth();
 
@@ -70,9 +78,9 @@ public interface PassFrame {
     OptionValues options();
 
     /**
-     * Re-publish a world resource whose handle the host application can change between frames — a
-     * A host atlas is the case this exists for: its {@code GpuTextureView} may be replaced by a resource
-     * reload, and the pass wrapping it has no create/resize call to publish the new one from. Same
+     * Re-publish a world resource whose handle can change between frames. A borrowed image view may be
+     * replaced by a resource reload, and the pass wrapping it has no create/resize call to publish the new
+     * one from. Same
      * contract as {@link PassSetup#publishWorldResource(String, GpuImage, long)} otherwise; the engine
      * picks the new handle up after the pre-trace pass stages and before their world shader is traced.
      */

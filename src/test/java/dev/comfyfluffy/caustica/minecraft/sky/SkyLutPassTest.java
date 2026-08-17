@@ -1,7 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.sky;
 
 import dev.comfyfluffy.caustica.api.ShaderSource;
-import dev.comfyfluffy.caustica.rt.gen.SkyInputsData;
+import dev.comfyfluffy.caustica.minecraft.sky.gen.SkyInputsData;
 import dev.comfyfluffy.caustica.api.pass.ComputeDispatch;
 import dev.comfyfluffy.caustica.api.pass.PassShaderCompiler;
 import dev.comfyfluffy.caustica.api.ResourceId;

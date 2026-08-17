@@ -16,7 +16,10 @@ public interface SceneGeometrySink {
         submit(SceneGeometryKey.of(groupKey), operations, onPublished);
     }
 
-    /** Submit one atomic group and observe when the group becomes visible in the retained scene. */
+    /**
+     * Submit one atomic group and observe when it becomes visible in the retained scene. The callback runs
+     * on the renderer thread. It is discarded if the provider stops or fails before publication.
+     */
     void submit(SceneGeometryKey groupKey, java.util.List<Operation> operations,
                 java.util.function.Consumer<Publication> onPublished);
 

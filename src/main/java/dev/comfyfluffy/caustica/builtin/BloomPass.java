@@ -11,7 +11,7 @@ import dev.comfyfluffy.caustica.api.pass.PassShaderCompiler;
 import dev.comfyfluffy.caustica.api.pass.RenderStage;
 import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
 import dev.comfyfluffy.caustica.api.gpu.GpuImage;
-import dev.comfyfluffy.caustica.rt.gen.BloomPushData;
+import dev.comfyfluffy.caustica.builtin.gen.BloomPushData;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import org.lwjgl.vulkan.VK10;
 

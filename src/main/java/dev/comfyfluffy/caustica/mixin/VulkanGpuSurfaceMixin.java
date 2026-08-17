@@ -8,15 +8,15 @@ import com.mojang.blaze3d.vulkan.VulkanDevice;
 import com.mojang.blaze3d.vulkan.VulkanGpuSurface;
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
-import dev.comfyfluffy.caustica.rt.RtDeviceBringup;
-import dev.comfyfluffy.caustica.rt.RtHdr;
-import dev.comfyfluffy.caustica.rt.RtReflex;
-import dev.comfyfluffy.caustica.rt.RtRuntime;
+import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftHdr;
+import dev.comfyfluffy.caustica.spi.host.RendererPresentation;
+import dev.comfyfluffy.caustica.spi.host.RendererRuntimeAccess;
 import dev.comfyfluffy.caustica.minecraft.MinecraftFrameAdapter;
 import dev.comfyfluffy.caustica.minecraft.MinecraftUiOverlay;
 import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftVulkanBackend;
 import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
 import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
+import dev.comfyfluffy.caustica.spi.vulkan.VulkanLowLatency;
 import it.unimi.dsi.fastutil.longs.LongList;
 import net.minecraft.client.Minecraft;
 import org.lwjgl.system.MemoryStack;
@@ -116,7 +116,7 @@ public abstract class VulkanGpuSurfaceMixin {
 	@Inject(method = "<init>(Lcom/mojang/blaze3d/vulkan/VulkanDevice;J)V", at = @At("TAIL"))
 	private void caustica$logHdrCapabilities(VulkanDevice device, long windowHandle, CallbackInfo ci) {
 		try {
-			RtHdr.logSurfaceCapabilities(this.device.vkDevice().getPhysicalDevice(), this.surface, this.swapchainImageFormat);
+			MinecraftHdr.logSurfaceCapabilities(this.device.vkDevice().getPhysicalDevice(), this.surface, this.swapchainImageFormat);
 		} catch (Throwable t) {
 			// Diagnostics only — never let HDR logging break surface creation.
 		}
@@ -129,7 +129,7 @@ public abstract class VulkanGpuSurfaceMixin {
 		CausticaConfig.Rt.Hdr.setSwapchainPqAvailable(pq != null);
 		this.caustica$colorSpace = 0;
 		CausticaConfig.Rt.Hdr.setSwapchainPqActive(false);
-		if (RtRuntime.wantsPqSwapchain() && pq != null) {
+		if (RendererRuntimeAccess.status().pqSwapchainRequested() && pq != null) {
 			this.caustica$colorSpace = VK_COLOR_SPACE_HDR10_ST2084_EXT;
 			CausticaConfig.Rt.Hdr.setSwapchainPqActive(true);
 			CausticaMod.LOGGER.info("HDR: surface supports PQ (format={}, colorSpace=HDR10_ST2084); "
@@ -168,7 +168,7 @@ public abstract class VulkanGpuSurfaceMixin {
 			VkSurfaceFormatKHR pq = caustica$findPq(formats);
 			VkSurfaceFormatKHR sdr = caustica$findSdr(formats);
 			CausticaConfig.Rt.Hdr.setSwapchainPqAvailable(pq != null);
-			boolean usePq = RtRuntime.wantsPqSwapchain() && pq != null;
+			boolean usePq = RendererRuntimeAccess.status().pqSwapchainRequested() && pq != null;
 			if (!usePq && sdr == null && pq != null) {
 				// Extremely unusual, but safer than destroying the only viable presentation path.
 				CausticaMod.LOGGER.warn("HDR: surface exposes PQ but no compatible native-SDR format; "
@@ -240,7 +240,8 @@ public abstract class VulkanGpuSurfaceMixin {
 					target = "Lorg/lwjgl/vulkan/KHRSwapchain;vkCreateSwapchainKHR(Lorg/lwjgl/vulkan/VkDevice;Lorg/lwjgl/vulkan/VkSwapchainCreateInfoKHR;Lorg/lwjgl/vulkan/VkAllocationCallbacks;Ljava/nio/LongBuffer;)I"))
 	private int caustica$createSwapchainWithReflex(VkDevice device, VkSwapchainCreateInfoKHR pCreateInfo,
 			VkAllocationCallbacks pAllocator, LongBuffer pSwapchain) {
-		if (!RtDeviceBringup.reflexEnabled()) {
+		MinecraftVulkanBackend backend = MinecraftVulkanBackend.current();
+		if (backend == null || !backend.capabilities().lowLatency()) {
 			return KHRSwapchain.vkCreateSwapchainKHR(device, pCreateInfo, pAllocator, pSwapchain);
 		}
 		try (MemoryStack stack = MemoryStack.stackPush()) {
@@ -255,21 +256,22 @@ public abstract class VulkanGpuSurfaceMixin {
 	/**
 	 * Reapply the Reflex sleep-mode config for the configured swapchain. The configuration
 	 * is scoped to a specific swapchain object, so it must be re-called whenever {@code configure()} builds a
-	 * new one (e.g. resize) — {@link RtReflex#applySleepMode} is idempotent (no-op if unchanged), so calling
+	 * new one (e.g. resize); applying unchanged settings is an idempotent no-op.
 	 * it unconditionally here is cheap. No-op when Reflex isn't enabled + device-supported.
 	 */
 	@Inject(method = "configure", at = @At("TAIL"))
 	private void caustica$applySwapchainExtensionState(GpuSurface.Configuration config, CallbackInfo ci) {
 		caustica$applyHdrMetadataIfNeeded();
-		if (RtDeviceBringup.reflexEnabled()) {
-			RtReflex.INSTANCE.applySleepMode(this.device.vkDevice(), this.swapchain);
+		MinecraftVulkanBackend backend = MinecraftVulkanBackend.current();
+		if (backend != null && backend.capabilities().lowLatency()) {
+			backend.lowLatency().applySleepMode(this.device.vkDevice(), this.swapchain);
 		}
 		// DLSS-FG diagnostic: MAILBOX/IMMEDIATE present modes let a later present silently replace/skip an
 		// earlier queued-but-not-yet-scanned-out one, which would drop FG's generated frame before the
 		// display ever shows it — even though our vkQueuePresentKHR call itself reports success. FIFO is the
 		// only mode that guarantees every queued present gets its own vblank. Log once per (re)configure so
 		// this is checkable without guessing at the in-game V-Sync setting.
-		if (dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg.enabled()) {
+		if (RendererRuntimeAccess.presentation().frameGenerationActive(Minecraft.getInstance().level != null)) {
 			CausticaMod.LOGGER.info("DLSS-FG: swapchain present mode = {} (FIFO required for generated frames "
 					+ "to actually display; MAILBOX/IMMEDIATE will silently drop them — enable V-Sync if not FIFO)",
 					config.presentMode());
@@ -287,7 +289,10 @@ public abstract class VulkanGpuSurfaceMixin {
 			at = @At(value = "INVOKE",
 					target = "Lorg/lwjgl/vulkan/KHRSwapchain;vkQueuePresentKHR(Lorg/lwjgl/vulkan/VkQueue;Lorg/lwjgl/vulkan/VkPresentInfoKHR;)I"))
 	private int caustica$presentWithReflex(VkQueue queue, VkPresentInfoKHR presentInfo) {
-		boolean reflexActive = RtReflex.enabled() && this.swapchain == RtReflex.INSTANCE.appliedSwapchain();
+		MinecraftVulkanBackend backend = MinecraftVulkanBackend.current();
+		VulkanLowLatency lowLatency = backend == null ? null : backend.lowLatency();
+		boolean reflexActive = lowLatency != null && lowLatency.active()
+				&& this.swapchain == lowLatency.appliedSwapchain();
 		if (!reflexActive) {
 			return KHRSwapchain.vkQueuePresentKHR(queue, presentInfo);
 		}
@@ -296,11 +301,11 @@ public abstract class VulkanGpuSurfaceMixin {
 		// Minecraft.setScreenAndShow's synchronous redraw when opening a world), so presentID must advance on
 		// every actual vkQueuePresentKHR call, not just once per sleep()/runTick — otherwise a stale, already-
 		// used id gets resent and VUID-VkPresentIdKHR-presentIds-04999 fires.
-		long presentId = RtReflex.INSTANCE.advancePresentId();
-		RtReflex.INSTANCE.marker(vkDevice, this.swapchain, RtReflex.MARKER_RENDERSUBMIT_END, presentId);
-		RtReflex.INSTANCE.marker(vkDevice, this.swapchain, RtReflex.MARKER_PRESENT_START, presentId);
+		long presentId = lowLatency.advancePresentId();
+		lowLatency.marker(vkDevice, this.swapchain, VulkanLowLatency.RENDER_SUBMIT_END, presentId);
+		lowLatency.marker(vkDevice, this.swapchain, VulkanLowLatency.PRESENT_START, presentId);
 		int result;
-		if (RtDeviceBringup.presentIdEnabled()) {
+		if (backend.capabilities().presentIds()) {
 			try (MemoryStack stack = MemoryStack.stackPush()) {
 				VkPresentIdKHR vkPresentId = VkPresentIdKHR.calloc(stack).sType$Default()
 						.pNext(presentInfo.pNext())
@@ -312,7 +317,7 @@ public abstract class VulkanGpuSurfaceMixin {
 		} else {
 			result = KHRSwapchain.vkQueuePresentKHR(queue, presentInfo);
 		}
-		RtReflex.INSTANCE.marker(vkDevice, this.swapchain, RtReflex.MARKER_PRESENT_END, presentId);
+		lowLatency.marker(vkDevice, this.swapchain, VulkanLowLatency.PRESENT_END, presentId);
 		return result;
 	}
 
@@ -333,15 +338,15 @@ public abstract class VulkanGpuSurfaceMixin {
 		if (this.currentImageIndex < 0) {
 			return;
 		}
-		RtRuntime runtime = RtRuntime.INSTANCE;
+		RendererPresentation presentation = RendererRuntimeAccess.presentation();
 		long swapchainImage = this.swapchainImages.getLong(this.currentImageIndex);
 		long acquireSem = this.acquireSemaphores[this.currentAcquireSemaphore];
 		long presentSem = this.presentSemaphores[this.currentImageIndex];
-		if (runtime.isHdrPresentActive()) {
+		if (RendererRuntimeAccess.status().hdrPresentation()) {
 			VulkanCommandEncoder enc = (VulkanCommandEncoder) commandEncoder;
 			GraphicsSubmission submission = MinecraftVulkanBackend.wrap(enc);
 			UiPresentationResources ui = MinecraftFrameAdapter.INSTANCE.captureUiPresentation();
-			runtime.presentHdr(submission, swapchainImage, this.swapchainWidth, this.swapchainHeight,
+			presentation.presentHdr(submission, swapchainImage, this.swapchainWidth, this.swapchainHeight,
 					acquireSem, presentSem, ui);
 			if (ui.populated() && ui.colorView() != 0L) {
 				MinecraftUiOverlay.markConsumed();
@@ -353,9 +358,9 @@ public abstract class VulkanGpuSurfaceMixin {
 		// Non-RT frame (menu, title panorama, loading screen) on a PQ swapchain: vanilla's raw SDR blit would
 		// misdisplay (SDR bytes reinterpreted as PQ codes). Convert sRGB -> PQ at paper white instead. Falls
 		// through to vanilla SDR if conversion resources aren't ready or the source view is not a Vulkan view.
-		if (runtime.isPqSdrPresentActive()) {
+		if (RendererRuntimeAccess.status().pqSdrPresentation()) {
 			long sdrView = caustica$vkImageView(textureView);
-			if (sdrView != 0L && runtime.presentSdrToPq(
+			if (sdrView != 0L && presentation.presentSdrToPq(
 					MinecraftVulkanBackend.wrap((VulkanCommandEncoder) commandEncoder), swapchainImage,
 					this.swapchainWidth, this.swapchainHeight, sdrView, acquireSem, presentSem)) {
 				ci.cancel();
@@ -365,8 +370,9 @@ public abstract class VulkanGpuSurfaceMixin {
 
 	@Unique
 	private void caustica$applyHdrMetadataIfNeeded() {
-		if (this.caustica$colorSpace != VK_COLOR_SPACE_HDR10_ST2084_EXT
-				|| !RtHdr.metadataExtensionEnabled() || this.swapchain == 0L) {
+		MinecraftVulkanBackend backend = MinecraftVulkanBackend.current();
+		if (this.caustica$colorSpace != VK_COLOR_SPACE_HDR10_ST2084_EXT || backend == null
+				|| !backend.capabilities().hdrMetadata() || this.swapchain == 0L) {
 			return;
 		}
 		int peakNits = CausticaConfig.Rt.Hdr.PEAK_NITS.value();
@@ -374,7 +380,7 @@ public abstract class VulkanGpuSurfaceMixin {
 				&& this.caustica$metadataPeakNits == peakNits) {
 			return;
 		}
-		if (RtHdr.applyMasteringMetadata(this.device.vkDevice(), this.swapchain, peakNits)) {
+		if (MinecraftHdr.applyMasteringMetadata(this.device.vkDevice(), this.swapchain, peakNits)) {
 			this.caustica$metadataSwapchain = this.swapchain;
 			this.caustica$metadataPeakNits = peakNits;
 		}
@@ -395,7 +401,7 @@ public abstract class VulkanGpuSurfaceMixin {
 	@Inject(method = "blitFromTexture", at = @At("TAIL"))
 	private void caustica$presentGeneratedFrames(CommandEncoderBackend commandEncoder, GpuTextureView textureView, CallbackInfo ci) {
 		if (this.currentImageIndex < 0
-				|| !RtRuntime.INSTANCE.frameGenerationActive(Minecraft.getInstance().level != null)) {
+				|| !RendererRuntimeAccess.presentation().frameGenerationActive(Minecraft.getInstance().level != null)) {
 			return;
 		}
 		long srcImage = textureView.texture() instanceof com.mojang.blaze3d.vulkan.VulkanGpuTexture t ? t.vkImage() : 0L;
@@ -403,8 +409,9 @@ public abstract class VulkanGpuSurfaceMixin {
 		if (srcImage == 0L) {
 			return;
 		}
-		int generatedCount = dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg.INSTANCE.effectiveMultiFrameCount();
-		RtRuntime.INSTANCE.prepareGeneratedFrames(
+		RendererPresentation presentation = RendererRuntimeAccess.presentation();
+		int generatedCount = presentation.generatedFrameCount();
+		presentation.prepareGeneratedFrames(
 				MinecraftVulkanBackend.wrap((VulkanCommandEncoder) commandEncoder), this.device.vkDevice(),
 				this.swapchain, this.swapchainImages, this.presentSemaphores,
 				this.swapchainWidth, this.swapchainHeight,
@@ -423,16 +430,17 @@ public abstract class VulkanGpuSurfaceMixin {
 	private void caustica$presentGeneratedFramesHdr(GraphicsSubmission submission,
 			UiPresentationResources ui) {
 		if (this.currentImageIndex < 0
-				|| !RtRuntime.INSTANCE.frameGenerationActive(Minecraft.getInstance().level != null)) {
+				|| !RendererRuntimeAccess.presentation().frameGenerationActive(Minecraft.getInstance().level != null)) {
 			return;
 		}
-		long hdrView = RtRuntime.INSTANCE.hdrBackbufferView();
-		long hdrImage = RtRuntime.INSTANCE.hdrBackbufferImage();
+		RendererPresentation presentation = RendererRuntimeAccess.presentation();
+		long hdrView = presentation.hdrBackbufferView();
+		long hdrImage = presentation.hdrBackbufferImage();
 		if (hdrImage == 0L) {
 			return;
 		}
-		int generatedCount = dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg.INSTANCE.effectiveMultiFrameCount();
-		RtRuntime.INSTANCE.prepareGeneratedFrames(submission, this.device.vkDevice(), this.swapchain, this.swapchainImages,
+		int generatedCount = presentation.generatedFrameCount();
+		presentation.prepareGeneratedFrames(submission, this.device.vkDevice(), this.swapchain, this.swapchainImages,
 				this.presentSemaphores, this.swapchainWidth, this.swapchainHeight,
 				hdrView, hdrImage, this.swapchainWidth, this.swapchainHeight, generatedCount, true, ui);
 	}
@@ -442,6 +450,6 @@ public abstract class VulkanGpuSurfaceMixin {
 	// presents the real frame, giving display order generated-then-real.
 	@Inject(method = "present", at = @At("HEAD"))
 	private void caustica$flushGeneratedPresents(CallbackInfo ci) {
-		RtRuntime.INSTANCE.flushGeneratedPresents(this.swapchain, this.presentQueue);
+		RendererRuntimeAccess.presentation().flushGeneratedPresents(this.swapchain, this.presentQueue);
 	}
 }

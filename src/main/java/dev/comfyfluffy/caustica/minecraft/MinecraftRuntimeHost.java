@@ -1,14 +1,9 @@
 package dev.comfyfluffy.caustica.minecraft;
 
-import dev.comfyfluffy.caustica.api.provider.MaterialRule;
 import dev.comfyfluffy.caustica.client.VanillaRenderController;
 import dev.comfyfluffy.caustica.client.WorldRenderScaler;
-import dev.comfyfluffy.caustica.engine.material.MaterialCatalog;
-import dev.comfyfluffy.caustica.minecraft.entity.RtEntityTextures;
-import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialCatalogBuilder;
 import dev.comfyfluffy.caustica.spi.host.RuntimeHost;
 
-import java.util.List;
 
 /** Minecraft lifecycle and material-policy adapter for the host-neutral renderer runtime. */
 public final class MinecraftRuntimeHost implements RuntimeHost {
@@ -32,13 +27,4 @@ public final class MinecraftRuntimeHost implements RuntimeHost {
         MinecraftUiOverlay.destroy();
     }
 
-    @Override
-    public void resetSceneTextures() {
-        RtEntityTextures.INSTANCE.reset();
-    }
-
-    @Override
-    public MaterialCatalog materialCatalog(List<MaterialRule> rules) {
-        return MinecraftMaterialCatalogBuilder.build(rules);
-    }
 }

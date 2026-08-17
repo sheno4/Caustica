@@ -1,10 +1,25 @@
 package dev.comfyfluffy.caustica.api.provider;
 
 public interface SceneProvider {
+    /** Publish the immutable material semantics used by source workers for this resource epoch. */
+    default void onMaterialEpoch(MaterialSnapshot materials) {
+    }
+
+    /**
+     * Stop dispatching work against the closing material epoch. The immutable snapshot remains readable by
+     * already-running jobs, but their results no longer belong to the active epoch and must not be submitted.
+     */
+    default void onMaterialEpochClosing() {
+    }
+
     default void update() {
     }
 
     default void prepareFrame() {
+    }
+
+    /** Submit newly discovered source-local textures before geometry that references them. */
+    default void submitTextures(TextureSink sink) {
     }
 
     /** Submit changed retained-geometry groups produced at the update cadence. */

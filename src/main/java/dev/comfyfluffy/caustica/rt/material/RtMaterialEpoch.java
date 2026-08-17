@@ -9,13 +9,13 @@ import dev.comfyfluffy.caustica.engine.material.MaterialCatalog;
 import dev.comfyfluffy.caustica.engine.material.MaterialVariant;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
-import dev.comfyfluffy.caustica.rt.RtDeviceBringup;
-import dev.comfyfluffy.caustica.rt.RtRuntime;
 import dev.comfyfluffy.caustica.rt.accel.RtOpacityMicromapPipeline;
 import dev.comfyfluffy.caustica.rt.geometry.RtGeometryMaterialResolution;
 import dev.comfyfluffy.caustica.rt.geometry.RtSceneGeometryManager;
 import dev.comfyfluffy.caustica.rt.pipeline.RtPipeline;
 import dev.comfyfluffy.caustica.rt.provider.ProviderManager;
+import dev.comfyfluffy.caustica.rt.texture.ProviderTextureRegistry;
+import dev.comfyfluffy.caustica.rt.texture.UploadedProviderTexture;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkSamplerCreateInfo;
@@ -24,6 +24,7 @@ import java.nio.LongBuffer;
 
 /** Owns the active immutable resource-pack material epoch and replaces it across reloads. */
 public final class RtMaterialEpoch {
+    public static final int TEXTURE_CAPACITY = 256;
     private final ProviderManager providers;
     private final RtMaterialRegistry registry = new RtMaterialRegistry();
     private final RtMaterialPageCompiler pageCompiler = new RtMaterialPageCompiler();
@@ -57,7 +58,8 @@ public final class RtMaterialEpoch {
         }
     }
 
-    private final RtGeometryMaterialResolution.Bindings geometryBindings =
+    private RtGeometryMaterialResolution.Bindings createGeometryBindings(ResourceId source) {
+        return
             new RtGeometryMaterialResolution.Bindings() {
                 @Override public int named(MaterialHandle material) {
                     return registry.bindingId(material.id());
@@ -81,7 +83,7 @@ public final class RtMaterialEpoch {
 
                 @Override public int withTexture(int binding, SceneMesh.TextureReference texture) {
                     return registry.withBaseColorTextureIndex(binding,
-                            providers.bindlessTextureSlot(texture));
+                            textureRegistry.requireSlot(source, texture));
                 }
 
                 @Override public int cutout(int binding) {
@@ -96,20 +98,21 @@ public final class RtMaterialEpoch {
                     return registry.sbtClassFor(binding);
                 }
             };
+    }
 
     private RtSceneGeometryManager sceneGeometry;
     private RtOpacityMicromapPipeline opacityMicromapPipeline;
+    private ProviderTextureRegistry textureRegistry;
     private long sampler;
-    private long baseColorAtlasView;
-    private long boundBaseColorAtlasView;
+    private boolean providerSnapshotPublished;
     private final LifecycleState state = new LifecycleState();
 
     public RtMaterialEpoch(ProviderManager providers) {
         this.providers = providers;
     }
 
-    public RtGeometryMaterialResolution.Bindings geometryBindings() {
-        return geometryBindings;
+    public RtGeometryMaterialResolution.Bindings geometryBindings(ResourceId source) {
+        return createGeometryBindings(source);
     }
 
     public void attachSceneGeometry(RtSceneGeometryManager sceneGeometry) {
@@ -130,10 +133,6 @@ public final class RtMaterialEpoch {
         });
     }
 
-    public void observeBaseColorAtlas(long view) {
-        baseColorAtlasView = view;
-    }
-
     public boolean bindingsReady() {
         return state.bindingsReady;
     }
@@ -146,14 +145,6 @@ public final class RtMaterialEpoch {
         return state.bindlessTextureCapacity;
     }
 
-    public boolean waitingForReplacementAtlas() {
-        return state.reloadPending && (baseColorAtlasView == 0L || baseColorAtlasView == boundBaseColorAtlasView);
-    }
-
-    public boolean atlasReady() {
-        return baseColorAtlasView != 0L;
-    }
-
     public boolean hasPublishedResources() {
         return state.hasPublishedResources() || opacityMicromapPipeline != null;
     }
@@ -164,14 +155,13 @@ public final class RtMaterialEpoch {
             throw new IllegalStateException("Previous opacity micromap material epoch is still active");
         }
         long epochSampler = sampler(ctx);
-        boundBaseColorAtlasView = baseColorAtlasView;
         pageCompiler.reset();
         ProviderManager.MaterialContributions contributions = providers.collectMaterials();
         RtMaterialOverrides overrides = RtMaterialOverrides.from(
                 contributions.rules(), CausticaApi.registry()::surfaceIndex);
-        MaterialCatalog catalog = RtRuntime.host().materialCatalog(contributions.rules());
+        MaterialCatalog catalog = contributions.catalog();
         pageCompiler.prepareAll(ctx, textureCapacity, catalog);
-        if (RtDeviceBringup.ommEnabled()) {
+        if (ctx.backend().capabilities().opacityMicromaps()) {
             opacityMicromapPipeline = RtOpacityMicromapPipeline.create(ctx,
                     pageCompiler.temporalAlphaViews(),
                     pageCompiler.staticAlphaViews());
@@ -179,9 +169,12 @@ public final class RtMaterialEpoch {
         sceneGeometry.setOpacityMicromapPipeline(opacityMicromapPipeline);
         registry.rebuild(ctx, pageCompiler, catalog, overrides,
                 contributions.definitions(), CausticaApi.registry()::surfaceIndex, textureCapacity);
+        textureRegistry = new ProviderTextureRegistry(textureCapacity,
+                (texture, label) -> new UploadedProviderTexture(ctx, texture, label),
+                (slot, view, layout) -> pipeline.setBaseColorTexture(slot, view, layout, epochSampler));
+        providers.bindTextureRegistry(textureRegistry);
         providers.publishMaterials(registry.requireSnapshot());
-        providers.resetBindlessTextures(textureCapacity);
-        pipeline.setBaseColorTexture(0, boundBaseColorAtlasView, epochSampler);
+        providerSnapshotPublished = true;
         pageCompiler.bindPages(pipeline, epochSampler);
         state.published(textureCapacity);
     }
@@ -189,13 +182,15 @@ public final class RtMaterialEpoch {
     /** Bind the already-published epoch into a replacement world pipeline. */
     public void bindCurrent(GpuContext ctx, RtPipeline pipeline) {
         long epochSampler = sampler(ctx);
-        pipeline.setBaseColorTexture(0, boundBaseColorAtlasView, epochSampler);
         pageCompiler.bindPages(pipeline, epochSampler);
-        providers.rebindTextures(pipeline, epochSampler);
+        textureRegistry.rebind((slot, view, layout) ->
+                pipeline.setBaseColorTexture(slot, view, layout, epochSampler));
     }
 
-    public void uploadPendingTextures(GpuContext ctx, RtPipeline pipeline) {
-        providers.uploadPendingTextures(pipeline, sampler(ctx));
+    public int textureSlot(ResourceId source, SceneMesh.TextureReference texture) {
+        if (texture == null) return 0;
+        if (textureRegistry == null) throw new IllegalStateException("provider texture epoch is not published");
+        return textureRegistry.requireSlot(source, texture);
     }
 
     public MaterialEpochSnapshot snapshot() {
@@ -214,6 +209,7 @@ public final class RtMaterialEpoch {
     public void beginReload() {
         state.beginReload();
         providers.onResourcePackClosing();
+        providerSnapshotPublished = false;
     }
 
     public void reloadFailed() {
@@ -226,7 +222,10 @@ public final class RtMaterialEpoch {
 
     /** Detach and destroy epoch resources after world-pipeline descriptor references are gone. */
     public void destroyPublishedEpoch() {
-        providers.clearMaterials();
+        if (providerSnapshotPublished) {
+            providers.clearMaterials();
+            providerSnapshotPublished = false;
+        }
         if (sceneGeometry != null) sceneGeometry.setOpacityMicromapPipeline(null);
         if (opacityMicromapPipeline != null) {
             opacityMicromapPipeline.destroy();
@@ -234,6 +233,11 @@ public final class RtMaterialEpoch {
         }
         pageCompiler.reset();
         registry.destroy();
+        if (textureRegistry != null) {
+            providers.unbindTextureRegistry(textureRegistry);
+            textureRegistry.close();
+            textureRegistry = null;
+        }
         state.destroyPublished();
     }
 
@@ -243,8 +247,6 @@ public final class RtMaterialEpoch {
         if (sampler != 0L && ctx != null) VK10.vkDestroySampler(ctx.vk(), sampler, null);
         sampler = 0L;
         state.reloadFailed();
-        baseColorAtlasView = 0L;
-        boundBaseColorAtlasView = 0L;
     }
 
     private long sampler(GpuContext ctx) {

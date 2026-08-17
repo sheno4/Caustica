@@ -14,6 +14,7 @@ import dev.comfyfluffy.caustica.api.provider.MaterialTopology;
 import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialDefaults;
 import dev.comfyfluffy.caustica.minecraft.MinecraftProvidersExtension;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialClassifier;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialCatalogBuilder;
 import net.minecraft.client.Minecraft;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.packs.resources.Resource;
@@ -58,6 +59,7 @@ public final class MinecraftMaterialSource implements MaterialSource {
         rules.sort(Comparator.comparing((MaterialRule rule) -> rule.match().geometry() == null)
                 .thenComparing(MaterialRule::id));
         rules.forEach(sink::submit);
+        MinecraftMaterialCatalogBuilder.build(rules).forEach(sink::submitAsset);
         CausticaMod.LOGGER.info("RT material source: format={}, rules={}", FORMAT, rules.size());
     }
 

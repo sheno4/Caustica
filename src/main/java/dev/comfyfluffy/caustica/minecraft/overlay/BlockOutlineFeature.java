@@ -26,7 +26,6 @@ import net.minecraft.world.level.block.state.pattern.BlockInWorld;
 import net.minecraft.world.phys.shapes.VoxelShape;
 
 import dev.comfyfluffy.caustica.CausticaConfig;
-import dev.comfyfluffy.caustica.rt.RtDeviceBringup;
 import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
 import dev.comfyfluffy.caustica.api.gpu.GpuFrameUse;
 import dev.comfyfluffy.caustica.api.gpu.GpuDebugScope;
@@ -49,12 +48,11 @@ import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
  * glow-outline and name-tag features.
  *
  * <p>A native {@code LINE_LIST} draw, real width via the device's {@code wideLines} feature +
- * {@code vkCmdSetLineWidth} (see {@link RtDeviceBringup#wideLinesEnabled()}/{@link
- * RtDeviceBringup#maxLineWidth()}) — clamped to whatever the device actually supports (Vulkan mandates
+ * {@code vkCmdSetLineWidth} when the pass device supports wide lines, clamped to the device limit (Vulkan mandates
  * exactly 1.0 without the feature, so this degrades gracefully rather than failing).
  *
  * <p>Edge AA follows {@link GlowOutlineFeature}'s mask/composite split rather than drawing straight onto
- * {@code main}: the line list rasterizes at {@link RtDeviceBringup#overlayMsaaSamples()} into a transient
+ * {@code main}: the line list rasterizes at the device's preferred color sample count into a transient
  * MSAA scratch attachment that dynamic rendering resolve-averages into a single-sample mask, then a tiny
  * composite pass alpha-blends that mask onto {@code main}. Since every line pixel is the same flat colour
  * (rgb = 0,0,0), per-sample coverage averages straight into a fractional alpha with no colour-bleed risk —
@@ -191,7 +189,7 @@ final class BlockOutlineFeature implements OverlayFeature {
                     // leave every resolved pixel's alpha stuck at the clear value (0), invisible outline.
                     .blend(OverlayPipelines.Blend.NONE)
                     .attachment(WorldOverlayPass.TARGET_FORMAT)
-                    .samples(RtDeviceBringup.overlayMsaaSamples())
+                    .samples(device.rasterCapabilities().preferredColorSampleCount())
                     .push(PUSH_BYTES, VK10.VK_SHADER_STAGE_VERTEX_BIT | VK10.VK_SHADER_STAGE_FRAGMENT_BIT)
                     .descriptorSetLayout(accelSet.layout)
                     .build(device, "block outline");
@@ -207,7 +205,8 @@ final class BlockOutlineFeature implements OverlayFeature {
                 msaaImage.destroy();
             }
             msaaImage = device.createTransientMsaaColorImage(width, height, WorldOverlayPass.TARGET_FORMAT,
-                    RtDeviceBringup.overlayMsaaSamples(), "block outline msaa " + width + "x" + height);
+                    device.rasterCapabilities().preferredColorSampleCount(),
+                    "block outline msaa " + width + "x" + height);
         }
         if (resolvedMask == null || resolvedMask.width() != width || resolvedMask.height() != height) {
             if (resolvedMask != null) {
@@ -229,8 +228,8 @@ final class BlockOutlineFeature implements OverlayFeature {
                         stack.longs(boundSet), null);
                 VK10.vkCmdBindVertexBuffers(cmd, 0, stack.longs(vbo.handle()), stack.longs(0L));
                 float desiredWidthPx = LINE_WIDTH_PX_AT_REFERENCE * (height / REFERENCE_HEIGHT);
-                float lineWidth = RtDeviceBringup.wideLinesEnabled()
-                        ? Math.min(desiredWidthPx, RtDeviceBringup.maxLineWidth()) : 1.0f;
+                float lineWidth = device.rasterCapabilities().wideLines()
+                        ? Math.min(desiredWidthPx, device.rasterCapabilities().maxLineWidth()) : 1.0f;
                 VK10.vkCmdSetLineWidth(cmd, lineWidth);
                 ByteBuffer push = stack.malloc(PUSH_BYTES);
                 viewProj.get(0, push);

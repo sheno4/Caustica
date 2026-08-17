@@ -2,6 +2,7 @@ package dev.comfyfluffy.caustica.minecraft.provider;
 
 import dev.comfyfluffy.caustica.api.provider.LightProvider;
 import dev.comfyfluffy.caustica.api.provider.LightSink;
+import dev.comfyfluffy.caustica.api.provider.RetainedLightCollection;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.api.CausticaApi;
 import dev.comfyfluffy.caustica.api.OptionValues;
@@ -10,6 +11,7 @@ import dev.comfyfluffy.caustica.minecraft.sky.SkyLutPass;
 import dev.comfyfluffy.caustica.engine.light.LightDescriptor;
 import dev.comfyfluffy.caustica.minecraft.CausticaItems;
 import dev.comfyfluffy.caustica.minecraft.MinecraftLightingCalibration;
+import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
 import net.minecraft.client.Minecraft;
 import net.minecraft.world.attribute.EnvironmentAttributes;
 import net.minecraft.world.entity.EquipmentSlot;
@@ -62,6 +64,11 @@ public final class MinecraftLightProvider implements LightProvider {
                     48.0, Math.toRadians(22.0),
                     720.0, 690.0, 610.0));
         }
+    }
+
+    @Override
+    public RetainedLightCollection retainedLights() {
+        return RtTerrain.retainedLightSnapshot();
     }
 
     static List<LightDescriptor.Distant> celestialLights(CelestialFrame frame) {

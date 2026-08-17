@@ -5,6 +5,7 @@ import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.mixin.ParticleEngineAccessor;
 import dev.comfyfluffy.caustica.mixin.ParticleGroupAccessor;
 import dev.comfyfluffy.caustica.minecraft.provider.MinecraftMaterialSource;
+import dev.comfyfluffy.caustica.minecraft.MinecraftTelemetry;
 import dev.comfyfluffy.caustica.api.provider.GeometryTransform;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.api.provider.SceneFrameContext;
@@ -38,9 +39,6 @@ import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.phys.shapes.CollisionContext;
 import org.joml.Matrix4f;
 import org.joml.Quaternionf;
-import dev.comfyfluffy.caustica.rt.RtRuntime;
-import dev.comfyfluffy.caustica.rt.RtFrameStats;
-import dev.comfyfluffy.caustica.rt.geometry.RtGeometryProfiling;
 
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
 import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
@@ -264,14 +262,15 @@ public final class RtEntities {
             return ++profiledMeshVersion;
         }
 
-        void meshPublicationAccepted(long version, long sourceFrame, long token) {
+        void meshPublicationAccepted(long version, long sourceFrame, long token,
+                                     MinecraftTelemetry.Instrumentation telemetry) {
             if (token != meshVisibilityToken) return;
             pendingVisibleMeshVersion = version;
             pendingVisibleMeshSourceFrame = sourceFrame;
             if (!meshVisibilityQueued) {
                 meshVisibilityQueued = true;
                 pendingMeshVisibilityToken = token;
-                RtGeometryProfiling.afterPublicationVisible(frame -> meshFrameVisible(frame, token));
+                telemetry.afterPublicationVisible(frame -> meshFrameVisible(frame, token, telemetry));
             }
         }
 
@@ -280,18 +279,18 @@ public final class RtEntities {
             meshVisibilityQueued = false;
         }
 
-        void meshFrameVisible(long frame, long token) {
+        void meshFrameVisible(long frame, long token, MinecraftTelemetry.Instrumentation telemetry) {
             if (!meshVisibilityQueued || token != meshVisibilityToken || token != pendingMeshVisibilityToken) return;
             meshVisibilityQueued = false;
             long version = pendingVisibleMeshVersion;
             long sourceFrame = pendingVisibleMeshSourceFrame;
-            RtFrameStats.FRAME.count("entityMeshVisibilitySamples", 1);
+            telemetry.count("entityMeshVisibilitySamples", 1);
             if (meshVisibilityCount == 0L) {
                 long unavailable = Math.max(0L, frame - sourceFrame);
                 initialUnavailableFrames = unavailable;
-                RtFrameStats.FRAME.count("entityMeshInitialUnavailableFramesTotal", unavailable);
-                RtFrameStats.FRAME.count("entityMeshInitialUnavailableFramesSamples", 1);
-                RtFrameStats.FRAME.max("entityMeshInitialUnavailableFramesMax", unavailable);
+                telemetry.count("entityMeshInitialUnavailableFramesTotal", unavailable);
+                telemetry.count("entityMeshInitialUnavailableFramesSamples", 1);
+                telemetry.max("entityMeshInitialUnavailableFramesMax", unavailable);
             } else {
                 long skipped = Math.max(0L, version - visibleMeshVersion - 1L);
                 long interval = Math.max(0L, frame - lastMeshVisibilityFrame);
@@ -302,14 +301,14 @@ public final class RtEntities {
                 priorRevisionInterveningFramesAtReplacementTotal += interveningFrames;
                 priorRevisionInterveningFramesAtReplacementMax = Math.max(
                         priorRevisionInterveningFramesAtReplacementMax, interveningFrames);
-                RtFrameStats.FRAME.count("entityMeshRevisionsSkippedBetweenVisibility", skipped);
-                RtFrameStats.FRAME.count("entityMeshVisibilityIntervalFramesTotal", interval);
-                RtFrameStats.FRAME.count("entityMeshVisibilityIntervalFramesSamples", 1);
-                RtFrameStats.FRAME.max("entityMeshVisibilityIntervalFramesMax", interval);
-                RtFrameStats.FRAME.count("entityMeshPriorRevisionInterveningFramesAtReplacementTotal",
+                telemetry.count("entityMeshRevisionsSkippedBetweenVisibility", skipped);
+                telemetry.count("entityMeshVisibilityIntervalFramesTotal", interval);
+                telemetry.count("entityMeshVisibilityIntervalFramesSamples", 1);
+                telemetry.max("entityMeshVisibilityIntervalFramesMax", interval);
+                telemetry.count("entityMeshPriorRevisionInterveningFramesAtReplacementTotal",
                         interveningFrames);
-                RtFrameStats.FRAME.count("entityMeshPriorRevisionInterveningFramesAtReplacementSamples", 1);
-                RtFrameStats.FRAME.max("entityMeshPriorRevisionInterveningFramesAtReplacementMax",
+                telemetry.count("entityMeshPriorRevisionInterveningFramesAtReplacementSamples", 1);
+                telemetry.max("entityMeshPriorRevisionInterveningFramesAtReplacementMax",
                         interveningFrames);
             }
             visibleMeshVersion = version;
@@ -352,12 +351,17 @@ public final class RtEntities {
     private final class FrameBuild {
         final SceneGeometrySink geometry;
         final SceneOrigin origin;
+        final long frameIndex;
+        final MinecraftTelemetry.Instrumentation telemetry;
         int count;        // geometry-table entries / TLAS instances
         int logicalCount; // ordinary entities + block entities + individual particles
 
-        FrameBuild(SceneGeometrySink geometry, SceneOrigin origin) {
+        FrameBuild(SceneGeometrySink geometry, SceneOrigin origin, long frameIndex,
+                   MinecraftTelemetry.Instrumentation telemetry) {
             this.geometry = geometry;
             this.origin = origin;
+            this.frameIndex = frameIndex;
+            this.telemetry = telemetry;
         }
 
         void submit(SceneGeometryKey key, List<SceneGeometrySink.Operation> operations, Runnable acknowledgment) {
@@ -372,12 +376,11 @@ public final class RtEntities {
                 }
             }
             int sampleCount = putCount + transformCount;
-            RtGeometryProfiling.SourceKind kind = transformCount == 0
-                    ? sourceKind(key) : RtGeometryProfiling.SourceKind.ENTITY_PLACEMENT;
-            RtGeometryProfiling.ExtractionStamp extraction = sampleCount == 0 ? null
-                    : RtGeometryProfiling.extraction(kind, sampleCount);
+            MinecraftTelemetry.GeometrySource kind = transformCount == 0
+                    ? sourceKind(key) : MinecraftTelemetry.GeometrySource.ENTITY_PLACEMENT;
+            Object extraction = sampleCount == 0 ? null : telemetry.extraction(kind, sampleCount);
             geometry.submit(key, operations, ignored -> {
-                RtGeometryProfiling.published(extraction);
+                telemetry.published(extraction);
                 if (acknowledgment != null) acknowledgment.run();
             });
         }
@@ -397,12 +400,13 @@ public final class RtEntities {
         var camera = frame.camera();
         beginFrame(frame.geometry(), origin,
                 camera.x(), camera.y(), camera.z(), new Matrix4f().set(camera.projection()),
-                new Matrix4f().set(camera.viewRotation()));
+                new Matrix4f().set(camera.viewRotation()), frame.frameIndex());
     }
 
     private void beginFrame(SceneGeometrySink geometry, SceneOrigin origin,
-                           double camX, double camY, double camZ, Matrix4f projection, Matrix4f viewRotation) {
-        FrameBuild build = new FrameBuild(geometry, origin);
+                           double camX, double camY, double camZ, Matrix4f projection, Matrix4f viewRotation,
+                           long frameIndex) {
+        FrameBuild build = new FrameBuild(geometry, origin, frameIndex, MinecraftTelemetry.current());
         int rbx = (int) origin.x();
         int rby = (int) origin.y();
         int rbz = (int) origin.z();
@@ -421,14 +425,23 @@ public final class RtEntities {
         setCamera(camX, camY, camZ, projection, viewRotation);
 
         try {
-            try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("entity.capture")) {
+            long entityStart = build.telemetry.startStage();
+            try {
                 captureEntities(build, mc, level, partial, rbx, rby, rbz);
+            } finally {
+                build.telemetry.endStage("entity.capture", entityStart);
             }
-            try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("entity.blockEntities")) {
+            long blockEntityStart = build.telemetry.startStage();
+            try {
                 captureBlockEntities(build, mc, level, partial, rbx, rby, rbz);
+            } finally {
+                build.telemetry.endStage("entity.blockEntities", blockEntityStart);
             }
-            try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("entity.particles")) {
+            long particleStart = build.telemetry.startStage();
+            try {
                 captureParticles(build, mc, partial, rbx, rby, rbz, projection, viewRotation);
+            } finally {
+                build.telemetry.endStage("entity.particles", particleStart);
             }
         } catch (RuntimeException | Error t) {
             shutdown();
@@ -484,11 +497,11 @@ public final class RtEntities {
             capture.reset();
             try {
                 EntityRenderState state;
-                long extractStart = RtFrameStats.FRAME.startStage();
+                long extractStart = build.telemetry.startStage();
                 try {
                     state = dispatcher.extractEntity(entity, partial);
                 } finally {
-                    RtFrameStats.FRAME.endStage("entity.capture.extract", extractStart);
+                    build.telemetry.endStage("entity.capture.extract", extractStart);
                 }
                 // Derive placement from the extracted state so the submitted pose and TLAS anchor use the
                 // same interpolation result.
@@ -507,11 +520,11 @@ public final class RtEntities {
                 resetPoseStack(entityPoseStack);
                 // Capture around the entity anchor. Per-frame placement moves into the TLAS instance,
                 // so ordinary world translation no longer changes the mesh or its float precision.
-                long submitStart = RtFrameStats.FRAME.startStage();
+                long submitStart = build.telemetry.startStage();
                 try {
                     dispatcher.submit(state, cameraState, 0.0, 0.0, 0.0, entityPoseStack, collector);
                 } finally {
-                    RtFrameStats.FRAME.endStage("entity.capture.submit", submitStart);
+                    build.telemetry.endStage("entity.capture.submit", submitStart);
                 }
             } catch (Throwable t) {
                 // Fail loud instead of skip-and-limp: a capture throw here is almost always our bug, and
@@ -539,7 +552,7 @@ public final class RtEntities {
             appendCapture(build, id, entity.getUUID(), mask,
                     translationTransform(ix - rbx, iy - rby, iz - rbz));
             build.logicalCount++;
-            RtFrameStats.FRAME.count("entitiesCaptured", 1);
+            build.telemetry.count("entitiesCaptured", 1);
             capturedThisFrame++;
         }
     }
@@ -650,7 +663,7 @@ public final class RtEntities {
                     particleScratch.clear();
                     sq.extract(particleScratch, cam, partial);
                     for (SingleQuadParticle.Layer layer : particleScratch.layers()) {
-                        RtEntityTextures.INSTANCE.slotForAtlas(layer.textureAtlasLocation());
+                        RtEntityTextures.INSTANCE.contributeAtlas(layer.textureAtlasLocation());
                         capture.currentMaterial = new SceneMesh.NamedMaterial(
                                 new dev.comfyfluffy.caustica.api.provider.MaterialHandle(MinecraftMaterialSource.PARTICLE_BILLBOARD),
                                 new SceneMesh.AtlasTexture(ResourceId.of(
@@ -679,7 +692,7 @@ public final class RtEntities {
             capture.reset();
             throw new RuntimeException("RT particle capture failed", t); // propagate to composite() (see entity path)
         }
-        RtFrameStats.FRAME.count("particlesCaptured", particlesCaptured);
+        build.telemetry.count("particlesCaptured", particlesCaptured);
         if (capture.isEmpty()) {
             submitParticles(build);
             return;
@@ -730,7 +743,7 @@ public final class RtEntities {
         beBuildsThisFrame = 0;
         BlockEntityRenderDispatcher beDispatcher = mc.getBlockEntityRenderDispatcher();
         beDispatcher.prepare(cameraState.pos); // sets the camera for shouldRender / extract
-        long now = RtRuntime.frameCounter();
+        long now = build.frameIndex;
         int pcx = rbx >> 4, pcz = rbz >> 4;
         Vec3 cam = cameraState.pos;
         List<BeCandidate> candidates = beCandidates;
@@ -807,7 +820,7 @@ public final class RtEntities {
                 if (entry != null) {
                     recordVisibleBlockEntity(build);
                 }
-                RtFrameStats.FRAME.count("blockEntityGeometryDeferred", 1);
+                build.telemetry.count("blockEntityGeometryDeferred", 1);
                 return;
             }
             BeEntry rebuilt = buildBe(build, entry, be, hash);
@@ -834,7 +847,7 @@ public final class RtEntities {
         SceneGeometryKey geometryKey = key(BLOCK_ENTITY_GEOMETRY, key);
         build.submit(geometryKey, blockEntityMeshUpdate(geometryKey, capture.sceneMesh(),
                 GeometryTransform.translation(p.getX(), p.getY(), p.getZ()), initial), null);
-        RtFrameStats.FRAME.count("blockEntityGeometrySubmissions", 1);
+        build.telemetry.count("blockEntityGeometrySubmissions", 1);
         return e;
     }
 
@@ -873,7 +886,7 @@ public final class RtEntities {
     private static void recordVisibleBlockEntity(FrameBuild build) {
         build.count++;
         build.logicalCount++;
-        RtFrameStats.FRAME.count("blockEntitiesCaptured", 1);
+        build.telemetry.count("blockEntitiesCaptured", 1);
     }
 
     /** Drop cached block entities not seen (in window) within the last KEEP_FRAMES frames — unloaded/out of view. */
@@ -881,7 +894,7 @@ public final class RtEntities {
         if (beCache.isEmpty()) {
             return;
         }
-        long now = RtRuntime.frameCounter();
+        long now = build.frameIndex;
         Iterator<Map.Entry<Long, BeEntry>> it = beCache.entrySet().iterator();
         while (it.hasNext()) {
             BeEntry e = it.next().getValue();
@@ -904,14 +917,14 @@ public final class RtEntities {
         return new SceneGeometryKey(domain, value);
     }
 
-    private static RtGeometryProfiling.SourceKind sourceKind(SceneGeometryKey key) {
+    private static MinecraftTelemetry.GeometrySource sourceKind(SceneGeometryKey key) {
         if (key.domain() == BLOCK_ENTITY_GEOMETRY) {
-            return RtGeometryProfiling.SourceKind.BLOCK_ENTITY;
+            return MinecraftTelemetry.GeometrySource.BLOCK_ENTITY;
         }
         if (key.domain() == PARTICLE_GEOMETRY) {
-            return RtGeometryProfiling.SourceKind.PARTICLE;
+            return MinecraftTelemetry.GeometrySource.PARTICLE;
         }
-        return RtGeometryProfiling.SourceKind.ENTITY;
+        return MinecraftTelemetry.GeometrySource.ENTITY;
     }
 
     private static GeometryTransform transform(float[] relative, SceneOrigin origin) {
@@ -932,39 +945,41 @@ public final class RtEntities {
             state = new EntityState(identity);
             entityStates.put(entityId, state);
         }
-        state.lastSeen = RtRuntime.frameCounter();
+        state.lastSeen = build.frameIndex;
         pendingDrops.remove(key);
         GeometryTransform transform = transform(instanceTransform, build.origin);
         long capturedMeshHash = meshHash();
         if (state.beginInitialSubmission(capturedMeshHash)) {
-            RtFrameStats.FRAME.count("entityPlacementInitialSubmissions", 1);
+            build.telemetry.count("entityPlacementInitialSubmissions", 1);
             EntityState submitted = state;
             List<SceneGeometrySink.Operation> operations = List.of(
                     new SceneGeometrySink.Put(key, capture.sceneMesh()),
                     new SceneGeometrySink.Place(key, key, transform, mask));
-            if (RtFrameStats.enabled()) {
+            if (build.telemetry.enabled()) {
                 long version = state.profileMeshSubmission();
-                long sourceFrame = RtFrameStats.frameSerial();
+                long sourceFrame = build.telemetry.frameSerial();
                 long visibilityToken = state.meshVisibilityToken;
+                MinecraftTelemetry.Instrumentation telemetry = build.telemetry;
                 build.submit(key, operations,
-                        () -> submitted.meshPublicationAccepted(version, sourceFrame, visibilityToken));
+                        () -> submitted.meshPublicationAccepted(version, sourceFrame, visibilityToken, telemetry));
             } else {
                 build.submit(key, operations, null);
             }
         } else {
-            RtFrameStats.FRAME.count("entityPlacementFreshnessEligible", 1);
+            build.telemetry.count("entityPlacementFreshnessEligible", 1);
             build.submit(key(ENTITY_TRANSFORM, Integer.toUnsignedLong(entityId)),
                     List.of(new SceneGeometrySink.Transform(key, transform, mask)), null);
             if (state.requiresPut(capturedMeshHash)) {
                 state.meshSubmitted(capturedMeshHash);
-                RtFrameStats.FRAME.count("entityMeshOnlyUpdates", 1);
-                if (RtFrameStats.enabled()) {
+                build.telemetry.count("entityMeshOnlyUpdates", 1);
+                if (build.telemetry.enabled()) {
                     long version = state.profileMeshSubmission();
-                    long sourceFrame = RtFrameStats.frameSerial();
+                    long sourceFrame = build.telemetry.frameSerial();
                     long visibilityToken = state.meshVisibilityToken;
                     EntityState submitted = state;
+                    MinecraftTelemetry.Instrumentation telemetry = build.telemetry;
                     build.submit(key, List.of(new SceneGeometrySink.Put(key, capture.sceneMesh())),
-                            () -> submitted.meshPublicationAccepted(version, sourceFrame, visibilityToken));
+                            () -> submitted.meshPublicationAccepted(version, sourceFrame, visibilityToken, telemetry));
                 } else {
                     build.submit(key, List.of(new SceneGeometrySink.Put(key, capture.sceneMesh())), null);
                 }
@@ -974,7 +989,7 @@ public final class RtEntities {
     }
 
     private void evictStaleAccels(FrameBuild build) {
-        long now = RtRuntime.frameCounter();
+        long now = build.frameIndex;
         var it = entityStates.int2ObjectEntrySet().iterator();
         while (it.hasNext()) {
             var entry = it.next();

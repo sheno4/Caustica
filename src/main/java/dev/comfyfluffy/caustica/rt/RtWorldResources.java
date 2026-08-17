@@ -36,17 +36,15 @@ final class RtWorldResources {
         materialEpoch.attachSceneGeometry(geometry);
     }
 
-    boolean requiresSourceFallback(int desiredBindlessCapacity) {
+    boolean requiresSourceFallback() {
         return pipeline == null
                 || !materialEpoch.bindingsReady()
-                || traceGate
-                || desiredBindlessCapacity > materialEpoch.bindlessTextureCapacity()
-                || materialEpoch.waitingForReplacementAtlas();
+                || traceGate;
     }
 
-    boolean completeStartupBoundary(int desiredBindlessCapacity) {
+    boolean completeStartupBoundary() {
         traceGate = false;
-        return !requiresSourceFallback(desiredBindlessCapacity);
+        return !requiresSourceFallback();
     }
 
     void invalidateMaterialBindings() {
@@ -74,7 +72,7 @@ final class RtWorldResources {
             return null;
         }
 
-        int bindlessCapacity = providers.bindlessTextureCapacity();
+        int bindlessCapacity = RtMaterialEpoch.TEXTURE_CAPACITY;
         RtPipeline created = null;
         try {
             created = createPipeline(context, program, bindlessCapacity);
@@ -113,18 +111,6 @@ final class RtWorldResources {
             return;
         }
         RtProgramManager.Program candidate = programManager.candidate();
-        int desiredCapacity = providers.bindlessTextureCapacity();
-        if (desiredCapacity > materialEpoch.bindlessTextureCapacity()) {
-            invalidateMaterialBindings();
-            context.gpuExecutor().drainAndWaitIdle();
-            try {
-                pipeline.destroy();
-            } finally {
-                pipeline = null;
-                materialEpoch.destroyPublishedEpoch();
-            }
-            return;
-        }
         if (candidate != null && candidate != programManager.active()) {
             replaceProgram(context, candidate, passManager, frames);
         }
@@ -187,7 +173,13 @@ final class RtWorldResources {
             programManager.activate(candidate);
         } catch (Throwable failure) {
             if (replacement != null) {
-                replacement.destroy();
+                try {
+                    if (pipeline != null) materialEpoch.bindCurrent(context, pipeline);
+                } catch (Throwable restoreFailure) {
+                    failure.addSuppressed(restoreFailure);
+                } finally {
+                    replacement.destroy();
+                }
             }
             programManager.reject(candidate, failure);
         }

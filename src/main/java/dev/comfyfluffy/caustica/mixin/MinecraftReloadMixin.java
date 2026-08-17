@@ -1,7 +1,7 @@
 package dev.comfyfluffy.caustica.mixin;
 
-import dev.comfyfluffy.caustica.rt.RtLifecycleCoordinator;
-import dev.comfyfluffy.caustica.rt.RtRuntime;
+import dev.comfyfluffy.caustica.spi.host.RendererRuntimeAccess;
+import dev.comfyfluffy.caustica.spi.host.ResourceReloadToken;
 import net.minecraft.client.Minecraft;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
@@ -25,19 +25,19 @@ import java.util.concurrent.CompletableFuture;
 @Mixin(Minecraft.class)
 public class MinecraftReloadMixin {
     @Unique
-    private RtLifecycleCoordinator.ResourcePackEpoch caustica$pendingResourcePackReload;
+    private ResourceReloadToken caustica$pendingResourcePackReload;
 
     @Inject(method = "reloadResourcePacks()Ljava/util/concurrent/CompletableFuture;", at = @At("HEAD"))
     private void caustica$rtReloadStart(CallbackInfoReturnable<CompletableFuture<Void>> cir) {
-        caustica$pendingResourcePackReload = RtRuntime.INSTANCE.beginResourcePackReload();
+        caustica$pendingResourcePackReload = RendererRuntimeAccess.controller().beginResourcePackReload();
     }
 
     @Inject(method = "reloadResourcePacks()Ljava/util/concurrent/CompletableFuture;", at = @At("RETURN"))
     private void caustica$rtReloadReturned(CallbackInfoReturnable<CompletableFuture<Void>> cir) {
-        RtLifecycleCoordinator.ResourcePackEpoch pending = caustica$pendingResourcePackReload;
+        ResourceReloadToken pending = caustica$pendingResourcePackReload;
         caustica$pendingResourcePackReload = null;
         if (pending != null) {
-            RtRuntime.INSTANCE.trackResourcePackReload(pending, cir.getReturnValue());
+            RendererRuntimeAccess.controller().trackResourcePackReload(pending, cir.getReturnValue());
         }
     }
 }

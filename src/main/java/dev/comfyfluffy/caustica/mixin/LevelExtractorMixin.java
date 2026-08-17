@@ -5,7 +5,7 @@ import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import dev.comfyfluffy.caustica.client.VanillaRenderController;
 import dev.comfyfluffy.caustica.client.CausticaClientBootstrap;
 import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
-import dev.comfyfluffy.caustica.rt.RtRuntime;
+import dev.comfyfluffy.caustica.spi.host.RendererRuntimeAccess;
 import net.minecraft.client.Camera;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.SectionUpdateTracker;
@@ -48,14 +48,14 @@ public class LevelExtractorMixin {
 
     @Inject(method = "blockChanged(Lnet/minecraft/core/BlockPos;I)V", at = @At("HEAD"))
     private void caustica$rtBlockChanged(BlockPos pos, int updateFlags, CallbackInfo ci) {
-        if (RtRuntime.hasSession()) {
+        if (RendererRuntimeAccess.status().sessionPresent()) {
             RtTerrain.markBlocksDirty(pos.getX(), pos.getY(), pos.getZ(), pos.getX(), pos.getY(), pos.getZ());
         }
     }
 
     @Inject(method = "setBlocksDirty(IIIIII)V", at = @At("HEAD"))
     private void caustica$rtBlocksDirty(int minX, int minY, int minZ, int maxX, int maxY, int maxZ, CallbackInfo ci) {
-        if (RtRuntime.hasSession()) {
+        if (RendererRuntimeAccess.status().sessionPresent()) {
             RtTerrain.markBlocksDirty(minX, minY, minZ, maxX, maxY, maxZ);
         }
     }
@@ -78,7 +78,7 @@ public class LevelExtractorMixin {
                             + "Lnet/minecraft/client/SectionUpdateTracker$SectionDirtyState;"))
     private SectionUpdateTracker.SectionDirtyState caustica$hideDirtySectionsFromVanilla(
             SectionUpdateTracker tracker, long sectionNode, Operation<SectionUpdateTracker.SectionDirtyState> original) {
-        return RtRuntime.active() ? null : original.call(tracker, sectionNode);
+        return RendererRuntimeAccess.status().active() ? null : original.call(tracker, sectionNode);
     }
 
     /**

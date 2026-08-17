@@ -1,5 +1,7 @@
 package dev.comfyfluffy.caustica.rt;
 
+import dev.comfyfluffy.caustica.vulkan.VulkanDiagnostics;
+
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.api.CausticaApi;
@@ -10,6 +12,7 @@ import dev.comfyfluffy.caustica.engine.frame.SceneResources;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushConstantsData;
 import dev.comfyfluffy.caustica.rt.light.RtLightScene;
+import dev.comfyfluffy.caustica.rt.light.RtRetainedLightScene;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushData;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushData.Float2;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushData.Float3;
@@ -41,7 +44,6 @@ import dev.comfyfluffy.caustica.rt.provider.ProviderManager;
 import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
 import dev.comfyfluffy.caustica.rt.pipeline.RtPipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtToneLut;
-import dev.comfyfluffy.caustica.spi.host.RendererSceneSource;
 import dev.comfyfluffy.caustica.api.provider.SceneCamera;
 
 import java.io.IOException;
@@ -124,6 +126,7 @@ final class RtFrameRenderer {
     private PushSlot[] pushRing;
     private int pushSlot;
     private final RtLightScene lightScene = new RtLightScene();
+    private final RtRetainedLightScene retainedLightScene = new RtRetainedLightScene();
     private final RtSceneGeometryManager sceneGeometry;
     private final RtFrameResources frameResources;
     private RenderPassManager renderPassManager;
@@ -174,11 +177,12 @@ final class RtFrameRenderer {
         this.presenter = presenter;
         this.contributions = contributions;
         this.worldResources = new RtWorldResources(programManager, providers);
-        this.sceneGeometry = new RtSceneGeometryManager(
+        this.sceneGeometry = new RtSceneGeometryManager(source ->
                 (material, coverage) -> RtGeometryMaterialResolution.resolve(
-                        material, coverage, worldResources.materialEpoch.geometryBindings()));
+                        material, coverage, worldResources.materialEpoch.geometryBindings(source)));
         this.frameResources = new RtFrameResources(presenter);
         worldResources.attachSceneGeometry(sceneGeometry);
+        providers.bindRetainedLightStop(retainedLightScene::stopCpuWork);
     }
 
     /** Renderer-owned geometry manager shared by every active scene producer. */
@@ -315,8 +319,8 @@ final class RtFrameRenderer {
     /**
      * Whether the current frame must retain source rasterization while RT resource state converges.
      *
-     * <p>The composite still runs at the normal seam so it can consume the one-frame epoch gate or observe
-     * the newly uploaded atlas. This prevents the source renderer from being suppressed before a deliberately
+     * <p>The composite still runs at the normal seam so it can consume the one-frame epoch gate. This
+     * prevents the source renderer from being suppressed before a deliberately
      * transient {@link #composite} return. Such a return is not a renderer failure and must not trip the host's
      * permanent safety latch.</p>
      */
@@ -325,7 +329,7 @@ final class RtFrameRenderer {
         // false once so the scene source can apply the matching full clear. Keep source rasterization alive for that
         // bring-up frame; otherwise it is suppressed before composite() discovers it must fall back and the
         // host permanently latches the resulting missing replacement frame.
-        return worldResources.requiresSourceFallback(providers.bindlessTextureCapacity());
+        return worldResources.requiresSourceFallback();
     }
 
     /**
@@ -334,7 +338,7 @@ final class RtFrameRenderer {
      * readiness rather than an additional tick or rendered frame.
      */
     public boolean completeStartupBoundary() {
-        return worldResources.completeStartupBoundary(providers.bindlessTextureCapacity());
+        return worldResources.completeStartupBoundary();
     }
 
     /**
@@ -444,8 +448,7 @@ final class RtFrameRenderer {
         // disabled and cleaned up independently, so another provider can continue serving the frame.
         providers.prepareFrame();
         FrameSnapshot snapshot = frameSnapshot;
-        ProviderManager.PrimaryScene primaryScene = providers.primaryScene();
-        if (primaryScene == null || snapshot == null) {
+        if (snapshot == null) {
             // No scene was captured this frame. Skip RT so the present path falls back to the host image.
             return false;
         }
@@ -462,14 +465,12 @@ final class RtFrameRenderer {
                 return false;
             }
             updateMotion(snapshot);
-            recordFrame(ctx, active, nativeColorImage, snapshot, primaryScene);
+            recordFrame(ctx, active, nativeColorImage, snapshot);
             if (!loggedActive) {
                 loggedActive = true;
                 CausticaMod.LOGGER.info("RT composite active: {}x{}, RT output replaces the world target", width, height);
             }
             return true;
-        } catch (ProviderManager.SceneSourceUnavailableException unavailable) {
-            return false;
         } catch (Throwable t) {
             presenter.invalidateRenderedFrame();
             ctx.gpuExecutor().throwIfFailed();
@@ -503,7 +504,6 @@ final class RtFrameRenderer {
         }
         ensureRenderPassManager(ctx);
         frameResources.ensurePresentationPipelines(ctx, LOOK);
-        if (worldResources.materialEpoch.waitingForReplacementAtlas()) return false;
         if (frameResources.ensureSized(ctx, width, height, renderPassManager, worldResources.pipeline)) {
             mvHasPrev = false;
             proceduralTimeValid = false;
@@ -513,21 +513,18 @@ final class RtFrameRenderer {
     }
 
     /**
-     * Bring the world pipeline and authored texture atlases up before scene tessellation so the immutable
-     * material snapshot is available to the first worker build. Driven ahead of scene-source update. No-op once
-     * the pipeline exists, while a reload rebuild is pending (the reload path rebuilds against the new
-     * atlas), or until we're in a world with the atlas ready. The heavy {@code _s}/{@code _n} atlases are
-     * deliberately not built at the menu — only once a world is entered.
+     * Bring the world pipeline, material pages, and provider texture table up before scene tessellation so
+     * the immutable material snapshot is available to the first worker build. Driven ahead of scene-source
+     * update and deferred until a world exists.
      */
     public boolean ensureResourcesReady(GpuContext ctx, SceneResources sceneResources) {
-        worldResources.materialEpoch.observeBaseColorAtlas(sceneResources.baseColorAtlasView());
         if (failed || worldResources.materialEpoch.reloadPending()) {
             return false;
         }
         if (worldResources.pipeline != null) {
             return true;
         }
-        if (!sceneResources.sceneReady() || !worldResources.materialEpoch.atlasReady()) {
+        if (!sceneResources.sceneReady()) {
             return false;
         }
         try {
@@ -559,6 +556,7 @@ final class RtFrameRenderer {
         if (renderPassManager == null) {
             renderPassManager = RenderPassManager.create(ctx, contributions,
                     CausticaApi.options());
+            renderPassManager.setTextureResolver(worldResources.materialEpoch::textureSlot);
         }
     }
 
@@ -632,7 +630,7 @@ final class RtFrameRenderer {
     }
 
     private void recordFrame(GpuContext ctx, RtPipeline active, long nativeColorImage,
-                             FrameSnapshot snapshot, ProviderManager.PrimaryScene primaryScene) {
+                             FrameSnapshot snapshot) {
         long dstImage = nativeColorImage;
         GraphicsSubmission submission = ctx.backend().createGraphicsSubmission();
         RtGpuExecutor gpuExecutor = ctx.gpuExecutor();
@@ -649,9 +647,12 @@ final class RtFrameRenderer {
         VkCommandBuffer cmd = submission.beginTransientCommandBuffer();
         RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_COMMAND_BUFFER, cmd.address(), "composite command buffer");
         int debugView = debugView();
-        RendererSceneSource.RetainedScene retained = primaryScene.retained();
-        SceneOrigin sceneOrigin = retained.origin();
-        RendererSceneSource.RetainedLights retainedLights = retained.retainedLights();
+        SceneOrigin sceneOrigin = snapshot.sceneOrigin();
+        RtRetainedLightScene.PublishedState retainedLights;
+        try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("terrain.lightScenePublish")) {
+            retainedLights = retainedLightScene.advance(ctx, providers.retainedLights(), sceneOrigin,
+                    snapshot.metersPerWorldUnit(), snapshot.cameraX(), snapshot.cameraY(), snapshot.cameraZ());
+        }
         try (MemoryStack stack = MemoryStack.stackPush(); RtDebugLabels.Scope frameLabel = RtDebugLabels.scope(ctx, cmd, "composite frame")) {
             // RR drives the upscale: trace + jitter at render res, DLSS-RR denoises+upscales to display.
             // A debug view observes this ordinary path; it never changes jitter or disables RR.
@@ -705,9 +706,9 @@ final class RtFrameRenderer {
             Float3 proceduralDomainOffset = new Float3(sceneOrigin.wrappedX(proceduralPeriod),
                     sceneOrigin.wrappedY(proceduralPeriod), sceneOrigin.wrappedZ(proceduralPeriod));
 
-            // Providers and host sources submit only retained atomic updates. The manager publishes ready
-            // groups and builds one source-neutral TLAS snapshot from that published scene.
-            providers.submitGeometry(ctx, sceneOrigin,
+            // Scene providers submit retained atomic updates. The manager publishes ready groups and builds
+            // one source-neutral TLAS snapshot from that published scene.
+            providers.submitGeometry(ctx, sceneOrigin, frameCounter,
                     new SceneCamera(snapshot.cameraX(), snapshot.cameraY(), snapshot.cameraZ(),
                             frameProjection.get(new float[16]), frameViewRotation.get(new float[16])));
             dynamicGeometry = sceneGeometry.beginUpdate(ctx, sceneOrigin);
@@ -728,10 +729,12 @@ final class RtFrameRenderer {
                     time,
                     proceduralDomainOffset,
                     mvCurProjView,
-                    new Float4(retainedLights.rebaseOffsetX(), retainedLights.rebaseOffsetY(),
-                            retainedLights.rebaseOffsetZ(), retainedLights.metersPerWorldUnit()),
-                    new Int4(retainedLights.rootNodeIndex(), retainedLights.finiteLightCount(),
-                            retainedLights.linkedEmitterCount(), 0),
+                    new Float4((float) (retainedLights.rebaseX() - sceneOrigin.x()),
+                            (float) (retainedLights.rebaseY() - sceneOrigin.y()),
+                            (float) (retainedLights.rebaseZ() - sceneOrigin.z()),
+                            retainedLights.metersPerWorldUnit()),
+                    new Int4(retainedLights.rootNodeIndex(), retainedLights.lightCount(),
+                            retainedLights.lightCount(), 0),
                     previousTime,
                     new Int4(frameLights.rootNodeIndex(), frameLights.finiteLightCount(),
                             frameLights.distantFirstLight(), frameLights.distantLightCount()),
@@ -742,8 +745,6 @@ final class RtFrameRenderer {
                     frameResources.exposure.preExposure()
             ).write(push);
             pushBuf.flush(0L, WORLD_PUSH_SIZE);
-            // Upload source textures registered this frame before the trace, preserving descriptor order.
-            worldResources.materialEpoch.uploadPendingTextures(ctx, active);
             TlasBuilder.Prepared frameTlas;
             try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("frame.prepareTlas")) {
                 frameTlas = sceneGeometry.prepareTlas(ctx, dynamicGeometry, graphicsUse);
@@ -775,8 +776,7 @@ final class RtFrameRenderer {
             }
             renderPassManager.record(RenderStage.BEFORE_TRACE, cmd);
             // PassFrame may publish a host-owned resource while recording either pre-trace stage. Resolve
-            // those publications before this command buffer first binds set 2, including on the first
-            // frame where a host atlas becomes available.
+            // those publications before this command buffer first binds set 2.
             refreshPassResourcesIfNeeded(ctx);
 
             try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "world primary trace");
@@ -891,6 +891,7 @@ final class RtFrameRenderer {
         // TLAS ring's slots are no longer in flight and can be freed immediately.
         sceneGeometry.shutdown();
         lightScene.destroy();
+        retainedLightScene.destroyAfterDeviceIdle();
         RtDlssRr.INSTANCE.destroy();
         presenter.destroyGpuResources();
         if (renderPassManager != null) {

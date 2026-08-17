@@ -5,7 +5,6 @@ import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.minecraft.MinecraftLightingCalibration;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.api.provider.MaterialRule;
-import dev.comfyfluffy.caustica.engine.material.MaterialCatalog;
 import dev.comfyfluffy.caustica.engine.material.MaterialEmissionIndex;
 import dev.comfyfluffy.caustica.engine.material.MaterialImage;
 import dev.comfyfluffy.caustica.engine.material.MaterialImageSource;
@@ -31,15 +30,14 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
-/** Builds the renderer's neutral material catalog from Minecraft atlases and resource packs. */
+/** Collects Minecraft material texture assets from atlases and resource packs. */
 public final class MinecraftMaterialCatalogBuilder {
-    private static final int EMISSION_FOOTPRINT_RESOLUTION = 16;
-
     private MinecraftMaterialCatalogBuilder() {
     }
 
-    public static MaterialCatalog build(List<MaterialRule> rules) {
+    public static List<MaterialTextureAsset> build(List<MaterialRule> rules) {
         MaterialEmissionIndex emissions = MinecraftEmissionSemantics.analyze();
+        float uniformEmissionLuminance = MinecraftLightingCalibration.current().blockEmissionLuminanceCdM2();
         List<TextureAtlasSprite> sprites = blockSprites();
         List<MaterialTextureAsset> blocks = new ArrayList<>();
         for (TextureAtlasSprite sprite : sprites) {
@@ -66,18 +64,18 @@ public final class MinecraftMaterialCatalogBuilder {
                             inverseExtent(sprite.getV1() - sprite.getV0())),
                     spec.isPresent(), normal.isPresent(), spec.isPresent() || inferEmission,
                     OpenPbrColorBinding.BASE_COLOR, OpenPbrColorBinding.BASE_COLOR,
-                    MinecraftMaterialClassifier.dielectricIor(material)));
+                    MinecraftMaterialClassifier.dielectricIor(material), uniformEmissionLuminance));
         }
 
         Set<ResourceId> blockNames = new HashSet<>();
         blocks.forEach(asset -> blockNames.add(asset.material()));
-        List<MaterialTextureAsset> standalone = standaloneAssets(blockNames, rules);
-        return new MaterialCatalog(blocks, standalone, EMISSION_FOOTPRINT_RESOLUTION,
-                MinecraftLightingCalibration.current().blockEmissionLuminanceCdM2());
+        blocks.addAll(standaloneAssets(blockNames, rules, uniformEmissionLuminance));
+        return List.copyOf(blocks);
     }
 
     private static List<MaterialTextureAsset> standaloneAssets(Set<ResourceId> blockNames,
-                                                                List<MaterialRule> rules) {
+                                                                List<MaterialRule> rules,
+                                                                float uniformEmissionLuminance) {
         Map<Identifier, Integer> discovered = discoverStandalone(blockNames, rules);
         List<MaterialTextureAsset> result = new ArrayList<>();
         for (Map.Entry<Identifier, Integer> entry : discovered.entrySet()) {
@@ -100,7 +98,7 @@ public final class MinecraftMaterialCatalogBuilder {
                         new MinecraftMaterialTextureSource(albedoSource, specular, normalMap, false),
                         MaterialUv.IDENTITY, spec.isPresent(), normal.isPresent(), spec.isPresent(),
                         OpenPbrColorBinding.BASE_COLOR, OpenPbrColorBinding.BASE_COLOR,
-                        MinecraftMaterialClassifier.dielectricIor(material)));
+                        MinecraftMaterialClassifier.dielectricIor(material), uniformEmissionLuminance));
             } catch (Throwable throwable) {
                 CausticaMod.LOGGER.warn("RT entity material albedo load failed for {}", albedoLocation, throwable);
             }

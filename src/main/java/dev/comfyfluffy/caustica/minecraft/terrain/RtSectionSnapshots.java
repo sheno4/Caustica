@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.terrain;
 
-import dev.comfyfluffy.caustica.rt.RtFrameStats;
+import dev.comfyfluffy.caustica.minecraft.MinecraftTelemetry;
 import it.unimi.dsi.fastutil.longs.Long2ObjectLinkedOpenHashMap;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.renderer.block.BlockAndTintGetter;
@@ -97,7 +97,7 @@ final class RtSectionSnapshots {
         if (section.hasOnlyAir()) {
             return AIR;
         }
-        RtFrameStats.FRAME.count("sectionCopies", 1);
+        MinecraftTelemetry.current().count("sectionCopies", 1);
         return section.getStates().copy();
     }
 

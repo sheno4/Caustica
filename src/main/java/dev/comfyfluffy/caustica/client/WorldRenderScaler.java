@@ -2,12 +2,12 @@ package dev.comfyfluffy.caustica.client;
 
 import com.mojang.blaze3d.pipeline.RenderTarget;
 import com.mojang.blaze3d.vulkan.VulkanGpuTexture;
-import dev.comfyfluffy.caustica.rt.RtRuntime;
+import dev.comfyfluffy.caustica.spi.host.RendererRuntimeAccess;
 
 /**
  * RT composite seam. Brackets vanilla's level-rendering section in {@code GameRenderer.render}: the
  * world renders at full resolution, then the ray-traced composite (DLSS-RR denoise + upscale, see
- * {@link RtRuntime}) runs once at the before-hand seam, before vanilla's pre-GUI depth clear, so the
+ * renderer runtime runs once at the before-hand seam, before vanilla's pre-GUI depth clear, so the
  * hand and HUD draw at native resolution on top.
  *
  * <p>The RT renderer owns reconstruction through DLSS Ray Reconstruction. With
@@ -51,7 +51,7 @@ public final class WorldRenderScaler {
 			}
 			long image = mainTarget.getColorTexture() instanceof VulkanGpuTexture texture ? texture.vkImage() : 0L;
 			boolean success = image != 0L
-                    && RtRuntime.INSTANCE.composite(image, mainTarget.width, mainTarget.height);
+                    && RendererRuntimeAccess.controller().composite(image, mainTarget.width, mainTarget.height);
 			VanillaRenderController.INSTANCE.markRtFrameResult(success);
 		}
 	}

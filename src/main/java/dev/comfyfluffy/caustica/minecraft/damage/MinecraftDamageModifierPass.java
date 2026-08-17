@@ -8,6 +8,8 @@ import dev.comfyfluffy.caustica.api.pass.RenderStage;
 import dev.comfyfluffy.caustica.minecraft.entity.RtEntityTextures;
 import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
 import dev.comfyfluffy.caustica.api.gpu.GpuBuffer;
+import dev.comfyfluffy.caustica.api.provider.SceneMesh;
+import dev.comfyfluffy.caustica.minecraft.provider.MinecraftSceneProvider;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.resources.model.ModelBakery;
 import net.minecraft.core.BlockPos;
@@ -30,7 +32,7 @@ public final class MinecraftDamageModifierPass implements CausticaRenderPass {
     static final int ENTRY_BYTES = 16;
     static final int BUFFER_BYTES = HEADER_BYTES + CAPACITY * ENTRY_BYTES;
 
-    private volatile List<Entry> captured = List.of();
+    private volatile List<CapturedEntry> captured = List.of();
     private GpuBuffer buffer;
 
     public MinecraftDamageModifierPass() {
@@ -54,13 +56,13 @@ public final class MinecraftDamageModifierPass implements CausticaRenderPass {
         setup.publishWorldResource("minecraftDamageModifiers", buffer);
     }
 
-    /** Snapshot the host state before bindless texture uploads for this frame are flushed. */
+    /** Snapshot host damage state before the scene provider publishes this frame's texture contributions. */
     public void capture(ClientLevel level) {
         if (level == null) {
             captured = List.of();
             return;
         }
-        ArrayList<Entry> entries = new ArrayList<>();
+        ArrayList<CapturedEntry> entries = new ArrayList<>();
         for (var damage : level.destructionProgress().long2ObjectEntrySet()) {
             var progresses = damage.getValue();
             if (progresses == null || progresses.isEmpty()) {
@@ -68,19 +70,23 @@ public final class MinecraftDamageModifierPass implements CausticaRenderPass {
             }
             int stage = Mth.clamp(progresses.last().getProgress(), 0, 9);
             BlockPos position = BlockPos.of(damage.getLongKey());
-            int textureIndex = RtEntityTextures.INSTANCE.slotFor(ModelBakery.DESTROY_TYPES.get(stage));
-            entries.add(new Entry(position.getX(), position.getY(), position.getZ(), textureIndex));
+            SceneMesh.TextureReference texture = RtEntityTextures.INSTANCE.contribute(
+                    ModelBakery.DESTROY_TYPES.get(stage));
+            if (texture == null) continue;
+            entries.add(new CapturedEntry(position.getX(), position.getY(), position.getZ(), texture));
             if (entries.size() == CAPACITY) {
                 break;
             }
         }
-        captured = snapshot(entries);
+        captured = List.copyOf(entries);
     }
 
     @Override
     public void record(PassFrame frame) {
         RtTerrain terrain = RtTerrain.currentOrNull();
-        List<Entry> entries = terrain != null ? captured : List.of();
+        List<Entry> entries = terrain != null ? captured.stream().map(entry -> new Entry(
+                entry.worldX(), entry.worldY(), entry.worldZ(),
+                frame.textureIndex(MinecraftSceneProvider.ID, entry.texture()))).toList() : List.of();
         try (MemoryStack stack = MemoryStack.stackPush()) {
             ByteBuffer data = stack.calloc(BUFFER_BYTES).order(ByteOrder.nativeOrder());
             writeEntries(data, entries, terrain != null ? terrain.blockX : 0,
@@ -115,5 +121,8 @@ public final class MinecraftDamageModifierPass implements CausticaRenderPass {
     }
 
     public record Entry(int worldX, int worldY, int worldZ, int baseColorTextureIndex) {
+    }
+
+    private record CapturedEntry(int worldX, int worldY, int worldZ, SceneMesh.TextureReference texture) {
     }
 }

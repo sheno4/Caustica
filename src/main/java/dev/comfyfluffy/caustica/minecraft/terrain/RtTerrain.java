@@ -8,16 +8,12 @@ import dev.comfyfluffy.caustica.api.provider.GeometryTransform;
 import dev.comfyfluffy.caustica.api.provider.SceneGeometryKey;
 import dev.comfyfluffy.caustica.api.provider.SceneGeometrySink;
 import dev.comfyfluffy.caustica.api.provider.SceneMesh;
+import dev.comfyfluffy.caustica.api.provider.RetainedLightCollection;
+import dev.comfyfluffy.caustica.api.provider.MaterialSnapshot;
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
-import dev.comfyfluffy.caustica.rt.GpuContext;
-import dev.comfyfluffy.caustica.rt.RtDeviceBringup;
-import dev.comfyfluffy.caustica.rt.RtFrameStats;
-import dev.comfyfluffy.caustica.rt.geometry.RtGeometryProfiling;
-import dev.comfyfluffy.caustica.rt.light.RetainedLightBatch;
-import dev.comfyfluffy.caustica.rt.light.RtRetainedLightScene;
-import dev.comfyfluffy.caustica.spi.host.MaterialEpochView;
+import dev.comfyfluffy.caustica.minecraft.MinecraftTelemetry;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
 import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
@@ -114,7 +110,7 @@ public final class RtTerrain {
     private static final RtTerrain INSTANCE = new RtTerrain();
 
     private boolean sceneInitialized;
-    private volatile MaterialEpochView materials;
+    private volatile MaterialSnapshot materials;
     // Persistent palette snapshots for tessellation regions (render-thread only); invalidated on dirty
     // sections, column unload/window-leave, and full clears.
     private final RtSectionSnapshots snapshots = new RtSectionSnapshots();
@@ -162,20 +158,17 @@ public final class RtTerrain {
     private volatile boolean fullClearRequested;
     private volatile boolean dirtyPending;
     private boolean noWorldClearApplied;
-    // Frame origin (player block after a distance threshold) for ray offsets and the light hierarchy.
+    // Stable frame origin selected from the player position after a distance threshold.
     public int blockX;
     public int blockY;
     public int blockZ;
-    /** Coalesced asynchronous, atomically published retained finite-light hierarchy. */
-    private final RtRetainedLightScene retainedLightScene =
-            new RtRetainedLightScene(RtWorkerPool.INSTANCE::submit);
     /** Sorted light-only snapshot, updated with section publication instead of rescanning all geometry. */
-    private final TreeMap<Integer, RetainedLightBatch> lightSections = new TreeMap<>();
-    private final Long2IntOpenHashMap lightSlots = new Long2IntOpenHashMap();
-    private final LongArrayList freeLightSlots = new LongArrayList();
-    private int nextLightSlot;
+    private final TreeMap<Long, RetainedLightCollection.Group> lightSections = new TreeMap<>();
+    private long lightGroupRevision;
+    private long retainedLightGeneration;
     private boolean lightHierarchyDirty;
     private long lastLightHierarchyRequestNanos;
+    private RetainedLightCollection retainedLights = RetainedLightCollection.EMPTY;
     private boolean windowValid;
     private int windowPcx;
     private int windowPcz;
@@ -221,7 +214,6 @@ public final class RtTerrain {
         inFlight.defaultReturnValue(NO_TESS_TOKEN);
         inFlightDirtyGroup.defaultReturnValue(NO_DIRTY_GROUP);
         pendingPublicationToken.defaultReturnValue(Long.MIN_VALUE);
-        lightSlots.defaultReturnValue(-1);
     }
 
     /**
@@ -242,26 +234,31 @@ public final class RtTerrain {
         return INSTANCE.sceneInitialized && (INSTANCE.isPublished(key) || INSTANCE.empty.contains(key));
     }
 
-    public RtRetainedLightScene.PublishedState retainedLights() {
-        return retainedLightScene.published();
+    public static RetainedLightCollection retainedLightSnapshot() {
+        return INSTANCE.retainedLights;
+    }
+
+    /** Stable renderer frame origin selected by the terrain streaming window. */
+    public SceneOrigin sceneOrigin() {
+        return new SceneOrigin(blockX, blockY, blockZ);
     }
 
     /** Per-tick residency update: window sync + dirty drain (plus the streaming fallback, see {@link #frame}). */
-    public static void update(GpuContext ctx) {
+    public static void update() {
         INSTANCE.sceneInitialized = true;
-        INSTANCE.tick(ctx);
+        INSTANCE.tick();
     }
 
     /**
      * Per-render-frame streaming pass driven by the RT frame renderer: publish completed builds
      * and dispatch immutable snapshots to workers, bounded by configured per-pass counts.
      */
-    public static void frame(GpuContext ctx) {
-        RtFrameStats.FRAME.max("terrainPendingGeometryGroups", INSTANCE.pendingGeometryGroups.size());
-        if (INSTANCE.materials != null) INSTANCE.frameStream(ctx);
+    public static void frame() {
+        MinecraftTelemetry.current().max("terrainPendingGeometryGroups", INSTANCE.pendingGeometryGroups.size());
+        if (INSTANCE.materials != null) INSTANCE.frameStream();
     }
 
-    public static void publishMaterials(MaterialEpochView materials) {
+    public static void publishMaterials(MaterialSnapshot materials) {
         INSTANCE.materials = materials;
     }
 
@@ -269,8 +266,8 @@ public final class RtTerrain {
         INSTANCE.materials = null;
     }
 
-    public static void shutdown(GpuContext ctx) {
-        INSTANCE.clear(ctx, true);
+    public static void shutdown() {
+        INSTANCE.clear(true);
         INSTANCE.sceneInitialized = false;
     }
 
@@ -310,8 +307,7 @@ public final class RtTerrain {
     }
 
     /**
-     * Request a full residency clear, applied on the next {@link #tick} (render thread, where the RT
-     * context is available). Wired to vanilla's
+     * Request a full residency clear, applied on the next {@link #tick} on the render thread. Wired to vanilla's
      * {@link net.minecraft.client.renderer.extract.LevelExtractor#allChanged()}, which fires on a
      * dimension change (via {@code setLevel}), a render-distance change, and F3+A. Thread-safe.
      */
@@ -319,13 +315,13 @@ public final class RtTerrain {
         INSTANCE.fullClearRequested = true;
     }
 
-    private void tick(GpuContext ctx) {
+    private void tick() {
 
         Minecraft mc = Minecraft.getInstance();
         ClientLevel level = mc.level;
         if (level == null || mc.player == null) {
             if (!noWorldClearApplied) {
-                clear(ctx, false);
+                clear(false);
                 noWorldClearApplied = true;
             }
             return;
@@ -342,7 +338,7 @@ public final class RtTerrain {
         // and are never rebuilt for the new world.
         if (fullClearRequested) {
             fullClearRequested = false;
-            clear(ctx, false);
+            clear(false);
         }
 
         int pbx = mc.player.getBlockX();
@@ -357,12 +353,16 @@ public final class RtTerrain {
         int hiY = maxSecY;
 
         // Evicted geometry lands in `removed` and is consumed by the next streaming pass's build kick.
-        try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("terrain.windowSync")) {
+        long windowSyncStart = MinecraftTelemetry.current().startStage();
+        try {
             syncDesiredWindow(chunkSource, pcx, psy, pcz, r, loY, hiY, removed);
+        } finally {
+            MinecraftTelemetry.current().endStage("terrain.windowSync", windowSyncStart);
         }
 
         // Re-extract edited sections. Drain under a short lock so concurrent block updates are not lost.
-        try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("terrain.dirtyDrain")) {
+        long dirtyDrainStart = MinecraftTelemetry.current().startStage();
+        try {
             drainDirty();
             if (!dirtyDrain.isEmpty()) {
                 for (LongIterator it = dirtyDrain.iterator(); it.hasNext(); ) {
@@ -375,23 +375,25 @@ public final class RtTerrain {
                     handleDirtyEvent(event);
                 }
             }
+        } finally {
+            MinecraftTelemetry.current().endStage("terrain.dirtyDrain", dirtyDrainStart);
         }
         // Dispatch/drain/build normally runs per render frame. If no frame has
         // streamed recently — loading screen, no world rendering — drive it from here with the bigger
         // bounded fallback pass so the world still fills.
         if (System.nanoTime() - lastFrameStreamNanos > STREAM_FALLBACK_AFTER_NANOS) {
-            stream(ctx);
+            stream();
         }
     }
 
     /** The per-render-frame entry point: run one count-bounded streaming pass. */
-    private void frameStream(GpuContext ctx) {
+    private void frameStream() {
         Minecraft mc = Minecraft.getInstance();
         if (mc.level == null || mc.player == null) {
             return;
         }
         lastFrameStreamNanos = System.nanoTime();
-        stream(ctx);
+        stream();
     }
 
     /**
@@ -399,7 +401,7 @@ public final class RtTerrain {
      * new section snapshots to the worker pool. Per-pass result and dispatch caps bound render-thread
      * work. Skips silently when there is nothing to do (no stats row).
      */
-    private void stream(GpuContext ctx) {
+    private void stream() {
         Minecraft mc = Minecraft.getInstance();
         ClientLevel level = mc.level;
         if (level == null || mc.player == null) {
@@ -407,7 +409,6 @@ public final class RtTerrain {
         }
         if (reextract.isEmpty() && missing.isEmpty()
                 && completedBuilds.isEmpty()
-                && !retainedLightScene.hasCompletions()
                 && !lightHierarchyDirty
                 && removed.isEmpty() && prepared.isEmpty()) {
             return;
@@ -420,28 +421,27 @@ public final class RtTerrain {
         ClientChunkCache chunkSource = level.getChunkSource();
 
         // Drain completed CPU builds first — publication is visible fill progress, so it gets priority.
-        try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("terrain.drainCompletion")) {
-            drainCompletedBuilds(ctx, prepared, removed, completionResultsPerPass());
+        long completionStart = MinecraftTelemetry.current().startStage();
+        try {
+            drainCompletedBuilds(prepared, removed, completionResultsPerPass());
+        } finally {
+            MinecraftTelemetry.current().endStage("terrain.drainCompletion", completionStart);
         }
 
         if (!removed.isEmpty() || !prepared.isEmpty()) {
-            try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("terrain.publish")) {
-                applyBuildChanges(ctx, prepared, removed, shouldRebase(pbx, pby, pbz), pbx, pby, pbz);
+            long publishStart = MinecraftTelemetry.current().startStage();
+            try {
+                applyBuildChanges(prepared, removed, shouldRebase(pbx, pby, pbz), pbx, pby, pbz);
                 removed.clear();
                 prepared.clear();
-            }
-        }
-
-        // Publish only a fully uploaded hierarchy. Newer section changes supersede stale worker/upload
-        // results, while the previous complete generation remains active until this atomic swap.
-        if (retainedLightScene.hasCompletions()) {
-            try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("terrain.lightScenePublish")) {
-                retainedLightScene.publishReady(ctx);
+            } finally {
+                MinecraftTelemetry.current().endStage("terrain.publish", publishStart);
             }
         }
 
         // Snapshot and dispatch a bounded number of new worker-owned section builds.
-        try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("terrain.snapshotDispatch")) {
+        long snapshotDispatchStart = MinecraftTelemetry.current().startStage();
+        try {
             DispatchContext dispatch = null;
             int dispatchSlots = Math.min(asyncDispatchPerPass(), Math.max(0, maxInflight() - inFlight.size()));
             if (dispatchSlots > 0 && !reextract.isEmpty()) {
@@ -456,9 +456,11 @@ public final class RtTerrain {
                 }
                 dispatchMissingBuilds(dispatch, chunkSource, dispatchSlots, pcx, psy, pcz);
             }
+        } finally {
+            MinecraftTelemetry.current().endStage("terrain.snapshotDispatch", snapshotDispatchStart);
         }
 
-        flushLightHierarchyUpdate(ctx);
+        flushLightHierarchyUpdate();
 
     }
 
@@ -1010,18 +1012,18 @@ public final class RtTerrain {
 
     /** Snapshot one section and dispatch CPU-only meshing to the worker pool. */
     private void dispatchSectionBuild(DispatchContext dispatch, long key, int sx, int sy, int sz) {
-        RtFrameStats.FRAME.count("sectionsSnapshotted", 1);
+        MinecraftTelemetry.current().count("sectionsSnapshotted", 1);
         RtSectionSnapshots.Region region = snapshots.createRegion(dispatch.level(), sx, sy, sz);
         long token = ++buildToken;
         long dirtyGroup = queuedDirtyGroup.remove(key);
         if (dirtyGroup != NO_DIRTY_GROUP && !dirtyGroups.containsKey(dirtyGroup)) {
             dirtyGroup = NO_DIRTY_GROUP;
         }
-        MaterialEpochView materialSnapshot = materials;
+        MaterialSnapshot materialSnapshot = materials;
         if (materialSnapshot == null) return;
         SectionTask task = new SectionTask(key, token, sx << 4, sy << 4, sz << 4, dirtyGroup,
                 terrainEpoch, materialSnapshot.epoch(),
-                RtGeometryProfiling.extraction(RtGeometryProfiling.SourceKind.TERRAIN, 1));
+                MinecraftTelemetry.current().extraction(MinecraftTelemetry.GeometrySource.TERRAIN, 1));
         beginActiveTask();
         try {
             RtWorkerPool.INSTANCE.submit(() -> {
@@ -1074,7 +1076,7 @@ public final class RtTerrain {
         try {
             if (isTaskCurrent(result.task())) {
                 completedBuilds.add(result.withWorkerCompletion(System.nanoTime(),
-                        RtGeometryProfiling.extraction(RtGeometryProfiling.SourceKind.TERRAIN_READY, 1)));
+                        MinecraftTelemetry.current().extraction(MinecraftTelemetry.GeometrySource.TERRAIN_READY, 1)));
             }
         } finally {
             finishActiveTask();
@@ -1120,7 +1122,7 @@ public final class RtTerrain {
      * whose token no longer matches {@link #inFlight} is stale and discarded instead of entering the
      * retained-scene submission queue.
      */
-    private void drainCompletedBuilds(GpuContext ctx, List<SectionResult> prepared, LongOpenHashSet removed,
+    private void drainCompletedBuilds(List<SectionResult> prepared, LongOpenHashSet removed,
                                       int resultCap) {
         int remaining = resultCap;
         while (remaining > 0) {
@@ -1140,7 +1142,7 @@ public final class RtTerrain {
                     long staleGroup = task.dirtyGroup;
                     if (staleGroup != NO_DIRTY_GROUP) cancelDirtyGroup(staleGroup);
                     enqueueMissingIfNeeded(task.key);
-                    RtFrameStats.FRAME.count("terrainMaterialEpochRejects", 1);
+                    MinecraftTelemetry.current().count("terrainMaterialEpochRejects", 1);
                 }
                 continue;
             }
@@ -1167,7 +1169,7 @@ public final class RtTerrain {
                 } else {
                     group.prepared.add(result);
                 }
-                completeDirtyGroupMember(ctx, group);
+                completeDirtyGroupMember(group);
                 remaining--;
             } else {
                 if (result.geometry() == null) {
@@ -1183,12 +1185,12 @@ public final class RtTerrain {
         }
     }
 
-    private void completeDirtyGroupMember(GpuContext ctx, DirtyGroup group) {
+    private void completeDirtyGroupMember(DirtyGroup group) {
         if (--group.remaining > 0) {
             return;
         }
         dirtyGroups.remove(group.id);
-        submitDirtyGroup(ctx, group);
+        submitDirtyGroup(group);
     }
 
     private void cancelDirtyGroup(long groupId) {
@@ -1249,10 +1251,10 @@ public final class RtTerrain {
         final long dirtyGroup;
         final long terrainEpoch;
         final long materialEpoch;
-        final RtGeometryProfiling.ExtractionStamp extractionStamp;
+        final Object extractionStamp;
         SectionTask(long key, long token, int sox, int soy, int soz, long dirtyGroup,
                     long terrainEpoch, long materialEpoch,
-                    RtGeometryProfiling.ExtractionStamp extractionStamp) {
+                    Object extractionStamp) {
             this.key = key;
             this.token = token;
             this.sox = sox;
@@ -1267,12 +1269,12 @@ public final class RtTerrain {
 
     private record SectionResult(SectionTask task, SceneMesh geometry, float[] lights, Throwable failure,
                                  long workerCompletedNanos,
-                                 RtGeometryProfiling.ExtractionStamp readyStamp) {
+                                 Object readyStamp) {
         SectionResult(SectionTask task, SceneMesh geometry, float[] lights, Throwable failure) {
             this(task, geometry, lights, failure, 0L, null);
         }
 
-        SectionResult withWorkerCompletion(long nanos, RtGeometryProfiling.ExtractionStamp stamp) {
+        SectionResult withWorkerCompletion(long nanos, Object stamp) {
             return new SectionResult(task, geometry, lights, failure, nanos, stamp);
         }
     }
@@ -1283,8 +1285,7 @@ public final class RtTerrain {
     private record PendingPublication(List<PublishedPut> puts, List<PublishedDrop> drops) { }
 
     private record PublishedPut(long key, int originX, int originY, int originZ, float[] lights, long token,
-                                RtGeometryProfiling.ExtractionStamp extractionStamp,
-                                RtGeometryProfiling.ExtractionStamp readyStamp, long workerCompletedNanos) { }
+                                Object extractionStamp, Object readyStamp, long workerCompletedNanos) { }
 
     private record PublishedDrop(long key, long token) { }
 
@@ -1296,7 +1297,7 @@ public final class RtTerrain {
                 || Math.abs(rbz - blockZ) >= rebaseDistanceBlocks();
     }
 
-    private void applyBuildChanges(GpuContext ctx, List<SectionResult> prepared, LongOpenHashSet removed,
+    private void applyBuildChanges(List<SectionResult> prepared, LongOpenHashSet removed,
                                    boolean rebase, int rbx, int rby, int rbz) {
         for (SectionResult result : prepared) submitSection(result);
         for (LongIterator it = removed.iterator(); it.hasNext(); ) {
@@ -1311,7 +1312,7 @@ public final class RtTerrain {
         }
     }
 
-    private void submitDirtyGroup(GpuContext ctx, DirtyGroup group) {
+    private void submitDirtyGroup(DirtyGroup group) {
         ArrayList<SceneGeometrySink.Operation> operations = new ArrayList<>();
         ArrayList<SectionResult> puts = new ArrayList<>();
         LongArrayList drops = new LongArrayList();
@@ -1387,7 +1388,7 @@ public final class RtTerrain {
         }
         pendingGeometryGroups.add(new PendingGeometryGroup(groupKey, List.copyOf(operations),
                 new PendingPublication(List.copyOf(publicationPuts), List.copyOf(publicationDrops)), enqueuedNanos));
-        RtFrameStats.FRAME.max("terrainPendingGeometryGroups", pendingGeometryGroups.size());
+        MinecraftTelemetry.current().max("terrainPendingGeometryGroups", pendingGeometryGroups.size());
     }
 
     /** Drain completed terrain transactions through the provider-owned retained-scene sink. */
@@ -1427,8 +1428,8 @@ public final class RtTerrain {
             PublishedSection previous = publishedSections.put(key, new PublishedSection(
                     put.originX(), put.originY(), put.originZ(), lights));
             clearPendingPublication(key, put.token());
-            RtGeometryProfiling.published(put.extractionStamp());
-            RtGeometryProfiling.published(put.readyStamp());
+            MinecraftTelemetry.current().published(put.extractionStamp());
+            MinecraftTelemetry.current().published(put.readyStamp());
             recordTerrainLatency("terrainSubmitToPublication", submittedNanos, System.nanoTime());
             empty.remove(key);
             lightsChanged |= !sameLightRecords(previous == null ? null : previous.lights(), lights);
@@ -1448,9 +1449,9 @@ public final class RtTerrain {
 
     private static void recordTerrainLatency(String metric, long startNanos, long endNanos) {
         long micros = Math.max(0L, endNanos - startNanos) / 1_000L;
-        RtFrameStats.FRAME.count(metric + "Samples", 1);
-        RtFrameStats.FRAME.count(metric + "MicrosTotal", micros);
-        RtFrameStats.FRAME.max(metric + "MicrosMax", micros);
+        MinecraftTelemetry.current().count(metric + "Samples", 1);
+        MinecraftTelemetry.current().count(metric + "MicrosTotal", micros);
+        MinecraftTelemetry.current().max(metric + "MicrosMax", micros);
     }
 
     private void clearPendingPublication(long key, long token) {
@@ -1479,42 +1480,29 @@ public final class RtTerrain {
             removeLightSection(key);
             return;
         }
-        int slot = lightSlots.get(key);
-        if (slot < 0) {
-            slot = freeLightSlots.isEmpty() ? nextLightSlot++ : (int) freeLightSlots.popLong();
-            lightSlots.put(key, slot);
-        }
-        lightSections.put(slot, MinecraftTerrainLightAdapter.describe(slot,
+        lightSections.put(key, MinecraftTerrainLightAdapter.describe(key, ++lightGroupRevision,
                 section.originX(), section.originY(), section.originZ(), section.lights()));
     }
 
     private void removeLightSection(long key) {
-        int slot = lightSlots.remove(key);
-        if (slot >= 0) {
-            lightSections.remove(slot);
-            freeLightSlots.add(slot);
-        }
+        lightSections.remove(key);
     }
 
     private void markLightHierarchyDirty() {
         lightHierarchyDirty = true;
     }
 
-    /** Snapshot only lit sections once the previous complete generation has published. */
-    private void flushLightHierarchyUpdate(GpuContext ctx) {
-        if (!lightHierarchyDirty || !retainedLightScene.isIdle()) return;
+    /** Publish a new immutable input generation after the edit-coalescing interval. */
+    private void flushLightHierarchyUpdate() {
+        if (!lightHierarchyDirty) return;
         long now = System.nanoTime();
         if (lastLightHierarchyRequestNanos != 0L
                 && now - lastLightHierarchyRequestNanos < LIGHT_HIERARCHY_UPDATE_INTERVAL_NANOS) {
             return;
         }
-        // The manager creates one immutable worker snapshot directly from the sorted values view.
-        var player = Minecraft.getInstance().player;
-        RtRetainedLightScene.DebugFocus debugFocus = player != null
-                ? new RtRetainedLightScene.DebugFocus(player.getX(), player.getY(), player.getZ())
-                : null;
-        retainedLightScene.request(ctx, lightSections.values(), blockX, blockY, blockZ,
-                MinecraftTerrainLightAdapter.METERS_PER_WORLD_UNIT, debugFocus);
+        // Snapshot the sorted values once; unchanged generations are reused by every subsequent frame.
+        retainedLights = new RetainedLightCollection(++retainedLightGeneration,
+                List.copyOf(lightSections.values()));
         lightHierarchyDirty = false;
         lastLightHierarchyRequestNanos = now;
     }
@@ -1522,7 +1510,6 @@ public final class RtTerrain {
     /** Join outstanding CPU meshing tasks and discard their unsubmitted results. */
     private void drainTasksForClear() {
         awaitActiveTasks();
-        retainedLightScene.awaitIdle();
         Throwable failure = null;
         SectionResult result;
         while ((result = completedBuilds.poll()) != null) {
@@ -1538,14 +1525,11 @@ public final class RtTerrain {
     }
 
     /** Full teardown joins CPU work; the scene manager owns all submitted GPU resources. */
-    private void clear(GpuContext ctx, boolean shutdown) {
+    private void clear(boolean shutdown) {
         terrainEpoch++;
-        retainedLightScene.cancelPending();
         if (shutdown) {
             RtWorkerPool.INSTANCE.shutdown();
             drainTasksForClear();
-        } else {
-            retainedLightScene.invalidate(ctx, ctx.gpuExecutor().latestGraphicsUse());
         }
         cancelAllDirtyGroups();
         publishedSections.clear();
@@ -1571,13 +1555,11 @@ public final class RtTerrain {
         reextract.clear();
         queuedReextract.clear();
         windowValid = false;
-        retainedLightScene.destroyAfterDeviceIdle();
         lightSections.clear();
-        lightSlots.clear();
-        freeLightSlots.clear();
-        nextLightSlot = 0;
+        lightGroupRevision = 0L;
         lightHierarchyDirty = false;
         lastLightHierarchyRequestNanos = 0L;
+        retainedLights = new RetainedLightCollection(++retainedLightGeneration, List.of());
         empty.clear();
         removed.clear();
         prepared.clear();

@@ -14,7 +14,8 @@ public record MaterialTextureAsset(ResourceId material, MaterialTextureKind kind
                                    boolean emissionMask,
                                    OpenPbrColorBinding subsurfaceColorBinding,
                                    OpenPbrColorBinding emissionColorBinding,
-                                   float dielectricIor) {
+                                   float dielectricIor,
+                                   float uniformEmissionLuminanceCdM2) {
     public MaterialTextureAsset {
         Objects.requireNonNull(material, "material");
         Objects.requireNonNull(kind, "kind");
@@ -25,6 +26,9 @@ public record MaterialTextureAsset(ResourceId material, MaterialTextureKind kind
         if (width <= 0 || height <= 0) throw new IllegalArgumentException("material dimensions must be positive");
         if (!Float.isFinite(dielectricIor) || dielectricIor <= 0.0f) {
             throw new IllegalArgumentException("dielectricIor must be positive");
+        }
+        if (!Float.isFinite(uniformEmissionLuminanceCdM2) || uniformEmissionLuminanceCdM2 < 0.0f) {
+            throw new IllegalArgumentException("uniform emission luminance must be finite and non-negative");
         }
     }
 

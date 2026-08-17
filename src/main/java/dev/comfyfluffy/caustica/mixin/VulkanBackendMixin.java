@@ -12,8 +12,7 @@ import com.mojang.blaze3d.vulkan.init.VulkanFeature;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftDeviceBringup;
 import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftVulkanDiagnostics;
-import dev.comfyfluffy.caustica.rt.RtDeviceBringup;
-import dev.comfyfluffy.caustica.rt.VulkanDiagnostics;
+import dev.comfyfluffy.caustica.vulkan.VulkanDiagnostics;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VK12;
 import org.lwjgl.vulkan.VkDevice;
@@ -156,7 +155,7 @@ public abstract class VulkanBackendMixin {
 	private void caustica$probeRayTracing(long window, ShaderSource defaultShaderSource, GpuDebugOptions debugOptions,
 			Runnable criticalShaderLoader, CallbackInfoReturnable<GpuDevice> cir, @Local VkDevice device) {
 		VulkanDiagnostics.probe(device);
-		RtDeviceBringup.probe(device);
+		MinecraftDeviceBringup.probe(device);
 	}
 
 	@Inject(

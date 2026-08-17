@@ -8,13 +8,10 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * Deterministically ordered material assets and emission-footprint resolution submitted by one scene
- * adapter for a resource epoch.
+ * Renderer-owned, deterministically ordered aggregation of material texture assets for one resource epoch.
  */
 public record MaterialCatalog(List<MaterialTextureAsset> atlasAssets,
-                              List<MaterialTextureAsset> standalone,
-                              int emissionFootprintResolution,
-                              float defaultUniformEmissionLuminanceCdM2) {
+                              List<MaterialTextureAsset> standalone) {
     public MaterialCatalog {
         atlasAssets = sorted(atlasAssets, MaterialTextureKind.SHARED_ATLAS);
         standalone = sorted(standalone, MaterialTextureKind.STANDALONE);
@@ -24,13 +21,6 @@ public record MaterialCatalog(List<MaterialTextureAsset> atlasAssets,
         }
         for (MaterialTextureAsset asset : standalone) {
             if (!ids.add(asset.material())) throw duplicate(asset.material());
-        }
-        if (emissionFootprintResolution <= 0) {
-            throw new IllegalArgumentException("Emission-footprint resolution must be positive");
-        }
-        if (!Float.isFinite(defaultUniformEmissionLuminanceCdM2)
-                || defaultUniformEmissionLuminanceCdM2 <= 0.0f) {
-            throw new IllegalArgumentException("Default uniform-emission luminance must be positive");
         }
     }
 

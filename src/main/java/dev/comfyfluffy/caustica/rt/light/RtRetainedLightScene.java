@@ -6,24 +6,29 @@ import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor.GraphicsUse;
 import dev.comfyfluffy.caustica.api.gpu.GpuBuffer;
+import dev.comfyfluffy.caustica.engine.light.RetainedLightBatch;
+import dev.comfyfluffy.caustica.engine.light.RetainedLightSnapshot;
+import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkBufferCopy;
 import org.lwjgl.vulkan.VkCommandBuffer;
 
-import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Asynchronous lifecycle for one retained finite-light generation at a time. CPU record packing and
  * BVH construction run on a worker. The render thread
  * only atomically publishes GPU-complete buffers; the worker also allocates/fills staging and device
  * buffers and enqueues the copy on {@link RtGpuExecutor}. The previous complete generation remains
- * shader-visible until that point. This class does not coalesce concurrent requests itself — {@link
- * #request} requires the caller to already be idle (see {@link #isIdle()}); callers own dirty/throttle
- * coalescing in front of it.
+ * shader-visible until that point. Host generations arriving during a build coalesce to the latest
+ * immutable snapshot and start after the in-flight generation reaches a terminal state.
  */
 public final class RtRetainedLightScene {
     private final TaskScheduler taskScheduler;
@@ -32,7 +37,15 @@ public final class RtRetainedLightScene {
     private final ConcurrentLinkedQueue<Completion> completions = new ConcurrentLinkedQueue<>();
     private int activeTasks;
     private volatile long latestRequest;
+    private long sourceGeneration = Long.MIN_VALUE;
+    private SceneOrigin sourceOrigin;
+    private double sourceMetersPerWorldUnit = Double.NaN;
+    private Input pendingInput;
     private PublishedState published = PublishedState.EMPTY;
+
+    public RtRetainedLightScene() {
+        this(new OwnedTaskScheduler());
+    }
 
     public RtRetainedLightScene(TaskScheduler taskScheduler) {
         this.taskScheduler = taskScheduler;
@@ -40,6 +53,38 @@ public final class RtRetainedLightScene {
 
     public PublishedState published() {
         return published;
+    }
+
+    /**
+     * Accept the host's latest immutable input and advance renderer-owned build/upload publication.
+     * Unchanged generations reuse the existing batch snapshot without comparison or copying.
+     */
+    public PublishedState advance(GpuContext ctx, RetainedLightSnapshot snapshot,
+                                  SceneOrigin origin, double metersPerWorldUnit,
+                                  double debugWorldX, double debugWorldY, double debugWorldZ) {
+        publishReady(ctx);
+        if (snapshot.generation() != sourceGeneration || !origin.equals(sourceOrigin)
+                || metersPerWorldUnit != sourceMetersPerWorldUnit) {
+            sourceGeneration = snapshot.generation();
+            sourceOrigin = origin;
+            sourceMetersPerWorldUnit = metersPerWorldUnit;
+            if (snapshot.isEmpty()) {
+                pendingInput = null;
+                invalidate(ctx, ctx.gpuExecutor().latestGraphicsUse());
+            } else {
+                pendingInput = new Input(snapshot.batches(), origin.x(), origin.y(), origin.z(),
+                        metersPerWorldUnit, new DebugFocus(debugWorldX, debugWorldY, debugWorldZ));
+            }
+        }
+        startPending(ctx);
+        return published;
+    }
+
+    private void startPending(GpuContext ctx) {
+        if (pendingInput == null || !isIdle()) return;
+        Input input = pendingInput;
+        pendingInput = null;
+        request(ctx, input);
     }
 
     public boolean hasCompletions() {
@@ -53,19 +98,11 @@ public final class RtRetainedLightScene {
         }
     }
 
-    /**
-     * Start building one hierarchy snapshot. The caller owns coalescing: this manager processes one
-     * generation at a time, so callers must only invoke this while {@link #isIdle()}.
-     */
-    public void request(GpuContext ctx, Collection<RetainedLightBatch> batches,
-                        int rebaseX, int rebaseY, int rebaseZ, double metersPerWorldUnit,
-                        DebugFocus debugFocus) {
+    private void request(GpuContext ctx, Input input) {
         if (!isIdle()) {
             throw new IllegalStateException(
                     "RtRetainedLightScene.request() called while a generation is still in flight");
         }
-        Input input = new Input(List.copyOf(batches), rebaseX, rebaseY, rebaseZ,
-                metersPerWorldUnit, debugFocus);
         long requestId;
         synchronized (buildLock) {
             requestId = ++latestRequest;
@@ -119,6 +156,7 @@ public final class RtRetainedLightScene {
 
     /** Invalidate the current generation (in-flight build/upload self-discards) and drop any completion. */
     public void cancelPending() {
+        pendingInput = null;
         synchronized (buildLock) {
             latestRequest++;
         }
@@ -143,6 +181,15 @@ public final class RtRetainedLightScene {
         PublishedState old = published;
         published = PublishedState.EMPTY;
         old.destroy();
+    }
+
+    /**
+     * Stop renderer-owned CPU light work before the GPU executor takes its stable drain snapshot.
+     * Upload callbacks remain part of that subsequent GPU drain and are released at device idle.
+     */
+    public void stopCpuWork() {
+        cancelPending();
+        taskScheduler.shutdown();
     }
 
     private void runWorker(Request request) {
@@ -213,7 +260,8 @@ public final class RtRetainedLightScene {
         }
     }
 
-    private void finishUpload(long requestId, RtRetainedLightSceneBuilder.Data data, DebugFocus debugFocus,
+    private void finishUpload(long requestId, RtRetainedLightSceneBuilder.Data data,
+                              DebugFocus debugFocus,
                               GpuBuffer upload,
                               GpuBuffer arena, Layout layout,
                               RtGpuExecutor.Build build, Throwable failure) {
@@ -235,8 +283,8 @@ public final class RtRetainedLightScene {
     private void publish(GpuContext ctx, Uploaded uploaded) {
         PublishedState next = new PublishedState(uploaded.arena, uploaded.layout,
                 uploaded.data.lightCount(), uploaded.data.rootNodeIndex(),
-                (int) uploaded.data.rebaseX(), (int) uploaded.data.rebaseY(),
-                (int) uploaded.data.rebaseZ(), (float) uploaded.data.metersPerWorldUnit(),
+                uploaded.data.rebaseX(), uploaded.data.rebaseY(),
+                uploaded.data.rebaseZ(), (float) uploaded.data.metersPerWorldUnit(),
                 uploaded.requestId);
         PublishedState old = published;
         // The executor's host-side timeline wait only proves that the transfer completed. It does not
@@ -260,7 +308,8 @@ public final class RtRetainedLightScene {
         }
     }
 
-    private static void dumpNearbyLights(RtRetainedLightSceneBuilder.Data data, DebugFocus focus) {
+    private static void dumpNearbyLights(RtRetainedLightSceneBuilder.Data data,
+                                         DebugFocus focus) {
         double px = focus.relativeX(data.rebaseX());
         double py = focus.relativeY(data.rebaseY());
         double pz = focus.relativeZ(data.rebaseZ());
@@ -327,24 +376,20 @@ public final class RtRetainedLightScene {
         }
     }
 
-    public record DebugFocus(double worldX, double worldY, double worldZ) {
-        public double relativeX(double rebaseX) { return worldX - rebaseX; }
-        public double relativeY(double rebaseY) { return worldY - rebaseY; }
-        public double relativeZ(double rebaseZ) { return worldZ - rebaseZ; }
-    }
-
-    @FunctionalInterface
     public interface TaskScheduler {
         /** The cancellation callback must run only when an accepted task will never execute. */
         void submit(Runnable task, Runnable cancelled);
+
+        default void shutdown() {
+        }
     }
 
     private record Input(List<RetainedLightBatch> batches,
-                         int rebaseX, int rebaseY, int rebaseZ,
+                         double rebaseX, double rebaseY, double rebaseZ,
                          double metersPerWorldUnit, DebugFocus debugFocus) { }
 
     public record PublishedState(GpuBuffer arena, Layout layout, int lightCount, int rootNodeIndex,
-                          int rebaseX, int rebaseY, int rebaseZ,
+                          double rebaseX, double rebaseY, double rebaseZ,
                           float metersPerWorldUnit, long generation) {
         private static final PublishedState EMPTY = empty(0L);
 
@@ -391,10 +436,58 @@ public final class RtRetainedLightScene {
     private sealed interface Completion permits Failed, Empty, Uploaded { }
     private record Failed(long requestId, Throwable failure) implements Completion { }
     private record Empty(long requestId) implements Completion { }
-    private record Uploaded(long requestId, RtRetainedLightSceneBuilder.Data data, DebugFocus debugFocus,
+    private record Uploaded(long requestId, RtRetainedLightSceneBuilder.Data data,
+                            DebugFocus debugFocus,
                             GpuBuffer arena, Layout layout,
                             RtGpuExecutor.Build build, Throwable failure) implements Completion {
         void destroy() { arena.destroy(); }
     }
     private record Request(long requestId, GpuContext ctx, Input input) { }
+
+    private record DebugFocus(double worldX, double worldY, double worldZ) {
+        double relativeX(double rebaseX) { return worldX - rebaseX; }
+        double relativeY(double rebaseY) { return worldY - rebaseY; }
+        double relativeZ(double rebaseZ) { return worldZ - rebaseZ; }
+    }
+
+    private static final class OwnedTaskScheduler implements TaskScheduler {
+        private final ThreadPoolExecutor executor;
+
+        private OwnedTaskScheduler() {
+            ThreadFactory factory = task -> {
+                Thread thread = new Thread(task, "rt-retained-lights");
+                thread.setDaemon(true);
+                thread.setPriority(Thread.NORM_PRIORITY - 1);
+                return thread;
+            };
+            executor = new ThreadPoolExecutor(1, 1, 30L, TimeUnit.SECONDS,
+                    new LinkedBlockingQueue<>(), factory);
+            executor.allowCoreThreadTimeOut(true);
+        }
+
+        @Override
+        public void submit(Runnable task, Runnable cancelled) {
+            executor.execute(new ScheduledTask(task, cancelled));
+        }
+
+        @Override
+        public void shutdown() {
+            for (Runnable queued : executor.shutdownNow()) {
+                ((ScheduledTask) queued).cancelled.run();
+            }
+            try {
+                executor.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("Interrupted stopping retained-light worker", e);
+            }
+        }
+
+        private record ScheduledTask(Runnable task, Runnable cancelled) implements Runnable {
+            @Override
+            public void run() {
+                task.run();
+            }
+        }
+    }
 }

@@ -6,41 +6,51 @@ import com.mojang.blaze3d.vulkan.VulkanDevice;
 import com.mojang.blaze3d.vulkan.VulkanQueue;
 import dev.comfyfluffy.caustica.mixin.CommandEncoderAccessor;
 import dev.comfyfluffy.caustica.mixin.GpuDeviceAccessor;
-import dev.comfyfluffy.caustica.rt.GpuContext;
-import dev.comfyfluffy.caustica.rt.RtDeviceBringup;
+import dev.comfyfluffy.caustica.spi.host.RendererRuntimeAccess;
 import dev.comfyfluffy.caustica.spi.vulkan.DebugMarkers;
 import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
 import dev.comfyfluffy.caustica.spi.vulkan.VulkanQueueRef;
 import dev.comfyfluffy.caustica.spi.vulkan.VulkanRendererBackend;
+import dev.comfyfluffy.caustica.spi.vulkan.VulkanDeviceCapabilities;
+import dev.comfyfluffy.caustica.spi.vulkan.VulkanLowLatency;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkDevice;
 
 /** Adapts Blaze3D's deferred Vulkan encoder and device wrappers to renderer-owned interfaces. */
 public final class MinecraftVulkanBackend implements VulkanRendererBackend {
+    private static MinecraftVulkanBackend current;
     private final VulkanDevice device;
     private final VulkanQueueRef graphicsQueue;
     private final VulkanQueueRef computeQueue;
     private final DebugMarkers debugMarkers;
+    private final VulkanDeviceCapabilities capabilities;
+    private final VulkanLowLatency lowLatency;
 
-    private MinecraftVulkanBackend(VulkanDevice device) {
+    private MinecraftVulkanBackend(VulkanDevice device, MinecraftDeviceBringup.NegotiatedDevice negotiated) {
         this.device = device;
         VulkanQueue graphics = device.graphicsQueue();
-        VulkanQueue compute = new VulkanQueue(device, RtDeviceBringup.computeQueueFamilyIndex(),
-                RtDeviceBringup.computeQueueIndex());
+        VulkanQueue compute = new VulkanQueue(device, negotiated.computeQueue().familyIndex(),
+                negotiated.computeQueue().queueIndex());
         this.graphicsQueue = new VulkanQueueRef(graphics.vkQueue(), graphics.queueFamilyIndex());
         this.computeQueue = new VulkanQueueRef(compute.vkQueue(), compute.queueFamilyIndex());
         this.debugMarkers = new MinecraftDebugMarkers(device);
+        this.capabilities = negotiated.capabilities();
+        this.lowLatency = new MinecraftLowLatency(capabilities);
     }
 
     public static void installCurrent() {
-        if (GpuContext.backendOrNull() != null) {
-            return;
-        }
+        if (current != null) return;
         Object backend = ((GpuDeviceAccessor) RenderSystem.getDevice()).caustica$getBackend();
-        if (backend instanceof VulkanDevice device && RtDeviceBringup.computeQueueReserved()) {
-            GpuContext.installBackend(new MinecraftVulkanBackend(device));
+        if (backend instanceof VulkanDevice device) {
+            MinecraftDeviceBringup.NegotiatedDevice negotiated = MinecraftDeviceBringup.consume(device.vkDevice());
+            if (negotiated != null && negotiated.capabilities().rayTracing()) {
+                current = new MinecraftVulkanBackend(device, negotiated);
+                RendererRuntimeAccess.controller().installVulkanBackend(current);
+            }
         }
     }
+
+    public static MinecraftVulkanBackend current() { return current; }
 
     public static GraphicsSubmission wrap(VulkanCommandEncoder encoder) {
         return new Submission(encoder);
@@ -79,8 +89,13 @@ public final class MinecraftVulkanBackend implements VulkanRendererBackend {
     }
 
     @Override
-    public boolean rayTracingProvisioned() {
-        return RtDeviceBringup.rtRequested();
+    public VulkanDeviceCapabilities capabilities() {
+        return capabilities;
+    }
+
+    @Override
+    public VulkanLowLatency lowLatency() {
+        return lowLatency;
     }
 
     private record Submission(VulkanCommandEncoder encoder) implements GraphicsSubmission {

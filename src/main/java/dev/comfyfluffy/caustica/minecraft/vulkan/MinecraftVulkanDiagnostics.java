@@ -7,7 +7,7 @@ import com.mojang.blaze3d.vulkan.init.VulkanFeature;
 import com.mojang.blaze3d.vulkan.init.VulkanPNextStruct;
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
-import dev.comfyfluffy.caustica.rt.VulkanDiagnostics;
+import dev.comfyfluffy.caustica.vulkan.VulkanDiagnostics;
 import org.lwjgl.vulkan.EXTDeviceFault;
 import org.lwjgl.vulkan.NVDeviceDiagnosticsConfig;
 import org.lwjgl.vulkan.VkPhysicalDeviceDiagnosticsConfigFeaturesNV;

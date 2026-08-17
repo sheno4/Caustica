@@ -1,5 +1,7 @@
 package dev.comfyfluffy.caustica.rt;
 
+import dev.comfyfluffy.caustica.vulkan.VulkanDiagnostics;
+
 import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
 import dev.comfyfluffy.caustica.api.gpu.GpuFrameUse;
 import dev.comfyfluffy.caustica.spi.vulkan.VulkanQueueRef;

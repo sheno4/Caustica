@@ -1,8 +1,8 @@
 package dev.comfyfluffy.caustica.minecraft.terrain;
 
 import dev.comfyfluffy.caustica.api.provider.SceneMesh;
+import dev.comfyfluffy.caustica.api.provider.MaterialAnalysis;
 import dev.comfyfluffy.caustica.engine.material.EmissionFootprint;
-import dev.comfyfluffy.caustica.spi.host.MaterialEpochView;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 
@@ -24,7 +24,7 @@ import java.util.List;
  * <p><b>Radiance matches the closest-hit.</b> Per-texel shaded emission is {@code albedo * mask *
  * emissionLuminance}, where the mask source (LabPBR {@code _s} blue channel / heuristic mask x block
  * light / uniform block light) is exactly what {@code world.rchit.evaluateMaterial} resolves, and
- * {@code emissionLuminance} is the material-epoch luminance — the material-compile-time
+ * {@code emissionLuminance} is the material snapshot's luminance — the material-compile-time
  * baseline replaced by any resource-pack override, the single knob shared with the shader. The
  * per-material {@link EmissionFootprint} stores the same premultiplied linear emission color and mask
  * coverage. The light's radiance is the mean over its bounding rectangle (dark texels included — a uniform-rectangle
@@ -71,17 +71,17 @@ final class RtLightCollector {
     static void collectClass(FloatArrayList out, FloatArrayList verts, FloatArrayList prim,
                               List<SceneMesh.TriangleSurface> surfaces,
                               FloatArrayList cornerUv, TextureAtlasSprite[] sprites,
-                              MaterialEpochView materials, float minFillRatio) {
+                              MaterialAnalysis[] materialAnalyses, float minFillRatio) {
         int quads = prim.size() / (2 * PRIM_FLOATS);
         float[] v = verts.elements();
         float[] p = prim.elements();
         float[] uv = cornerUv.elements();
         for (int k = 0; k < quads; k++) {
             int pb = k * 2 * PRIM_FLOATS;
-            int materialId = Float.floatToRawIntBits(p[pb + 8]);
-            float leLuminanceEps = 0.001f * materials.defaultUniformEmissionLuminanceCdM2();
-            MaterialEpochView.EmissionSource source = materials.emissionSource(materialId);
-            if (source == MaterialEpochView.EmissionSource.NONE) {
+            MaterialAnalysis material = materialAnalyses[2 * k];
+            float leLuminanceEps = 0.001f * material.emissionLuminanceCdM2();
+            MaterialAnalysis.EmissionSource source = material.emissionSource();
+            if (source == MaterialAnalysis.EmissionSource.NONE) {
                 continue;
             }
 
@@ -94,12 +94,12 @@ final class RtLightCollector {
             if (factor <= EMISSION_EPS) {
                 continue;
             }
-            EmissionFootprint footprint = materials.emissionFootprint(materialId);
-            if (footprint == null && source != MaterialEpochView.EmissionSource.GEOMETRY_UNIFORM) {
+            EmissionFootprint footprint = material.emissionFootprint();
+            if (footprint == null && source != MaterialAnalysis.EmissionSource.GEOMETRY_UNIFORM) {
                 continue; // masked source with no emissive texels
             }
             int scan = footprint != null
-                    ? footprint.resolution() : materials.emissionFootprintResolution();
+                    ? footprint.resolution() : material.emissionFootprintResolution();
 
             // Quad corners: 4 consecutive verts. Parallelogram frame (exact for block faces, the same
             // approximation the barycentric UV map below already makes for irregular model quads).
@@ -208,7 +208,7 @@ final class RtLightCollector {
             float tintR = srgbToLinear(p[pb + 4]);
             float tintG = srgbToLinear(p[pb + 5]);
             float tintB = srgbToLinear(p[pb + 6]);
-            float scale = factor * materials.emissionLuminanceCdM2(materialId) / rectSamples;
+            float scale = factor * material.emissionLuminanceCdM2() / rectSamples;
             float le709R = sumR * scale * tintR;
             float le709G = sumG * scale * tintG;
             float le709B = sumB * scale * tintB;
@@ -250,7 +250,7 @@ final class RtLightCollector {
             append(out,
                     c0x + aC * e01x + bC * e03x, c0y + aC * e01y + bC * e03y, c0z + aC * e01z + bC * e03z,
                     rectArea,
-                    p[pb], p[pb + 1], p[pb + 2], materialId,
+                    p[pb], p[pb + 1], p[pb + 2],
                     0.5f * (aHi - aLo) * e01x, 0.5f * (aHi - aLo) * e01y, 0.5f * (aHi - aLo) * e01z,
                     packHalf2(uvHuU, uvHuV),
                     0.5f * (bHi - bLo) * e03x, 0.5f * (bHi - bLo) * e03y, 0.5f * (bHi - bLo) * e03z,
@@ -286,13 +286,13 @@ final class RtLightCollector {
 
     /**
      * Packed light record, 5 vec4s / 80 B (matches the shader struct):
-     * {@code {pos.xyz, rectArea} {normal.xyz, materialId} {halfU.xyz, packHalf2(uvHu)}
+     * {@code {pos.xyz, rectArea} {normal.xyz, reserved} {halfU.xyz, packHalf2(uvHu)}
      * {halfV.xyz, packHalf2(uvHv)} {Le2020.rgb, packHalf2(uvCenter)}}. Positions/axes section-local
      * here; publish adds the section-origin-minus-rebase offset to pos only.
      */
     private static void append(FloatArrayList out,
                                float px, float py, float pz, float area,
-                               float nx, float ny, float nz, int materialId,
+                               float nx, float ny, float nz,
                                float hux, float huy, float huz, float uvHu,
                                float hvx, float hvy, float hvz, float uvHv,
                                float leR, float leG, float leB, float uvC) {
@@ -303,7 +303,7 @@ final class RtLightCollector {
         out.add(nx);
         out.add(ny);
         out.add(nz);
-        out.add(Float.intBitsToFloat(materialId));
+        out.add(0.0f);
         out.add(hux);
         out.add(huy);
         out.add(huz);

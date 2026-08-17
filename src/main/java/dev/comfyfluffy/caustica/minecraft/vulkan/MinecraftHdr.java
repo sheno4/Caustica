@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.rt;
+package dev.comfyfluffy.caustica.minecraft.vulkan;
 
 import java.nio.IntBuffer;
 
@@ -23,7 +23,7 @@ import dev.comfyfluffy.caustica.CausticaMod;
  * {@code VK_EXT_swapchain_colorspace}. {@code VulkanInstanceMixin} enables it when available; this class
  * then reports the surface formats and selects HDR10/PQ capability from the advertised pairs.
  */
-public final class RtHdr {
+public final class MinecraftHdr {
     // VK_EXT_swapchain_colorspace color-space enum values (not all are in the LWJGL VK10 constants).
     private static final int CS_SRGB_NONLINEAR = 0;
     private static final int CS_DISPLAY_P3_NONLINEAR = 1000104001;
@@ -42,19 +42,8 @@ public final class RtHdr {
     private static final int CS_EXTENDED_SRGB_NONLINEAR = 1000104014;
 
     private static volatile boolean surfaceLogged;
-    private static volatile boolean hdrMetadataExtensionEnabled;
 
-    private RtHdr() {
-    }
-
-    /** Publishes whether device negotiation enabled the function-only metadata extension. */
-    public static void publishMetadataExtension(boolean enabled) {
-        hdrMetadataExtensionEnabled = enabled;
-    }
-
-    /** Whether {@code VK_EXT_hdr_metadata} was included in the device extension list. */
-    public static boolean metadataExtensionEnabled() {
-        return hdrMetadataExtensionEnabled;
+    private MinecraftHdr() {
     }
 
     /**
@@ -66,7 +55,7 @@ public final class RtHdr {
      * truthful than inventing a scene-average value.
      */
     public static boolean applyMasteringMetadata(VkDevice device, long swapchain, int masteringPeakNits) {
-        if (!hdrMetadataExtensionEnabled || swapchain == 0L) {
+        if (swapchain == 0L) {
             return false;
         }
         MasteringMetadata values = masteringMetadata(masteringPeakNits);

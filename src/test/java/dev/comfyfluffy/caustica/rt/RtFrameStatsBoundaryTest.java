@@ -1,5 +1,8 @@
 package dev.comfyfluffy.caustica.rt;
 
+import dev.comfyfluffy.caustica.spi.host.HostTelemetry.MetricSchema;
+import dev.comfyfluffy.caustica.spi.host.HostTelemetry.StageMetric;
+
 import dev.comfyfluffy.caustica.CausticaConfig;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -38,11 +41,11 @@ final class RtFrameStatsBoundaryTest {
 
     @Test
     void rendererSchemaOwnsGenericGeometryAndFrameStages() {
-        RtFrameStats.MetricSchema schema = RtFrameStats.rendererFrameMetrics();
+        MetricSchema schema = RtFrameStats.rendererFrameMetrics();
         assertTrue(schema.stages().stream().anyMatch(stage -> stage.name().equals("geometry.packMaterial")));
         assertTrue(schema.stages().stream().anyMatch(stage -> stage.name().equals("geometry.schedulerValidate")));
         assertTrue(schema.stages().stream().filter(stage -> stage.name().startsWith("frame."))
-                .allMatch(RtFrameStats.StageMetric::contributesToAccountedTime));
+                .allMatch(StageMetric::contributesToAccountedTime));
         assertTrue(schema.counters().contains("geometryTrianglesSubmitted"));
         assertTrue(schema.counters().contains("geometryInstancesVisible"));
         assertTrue(schema.counters().contains("geometryPlacementFreshnessApplied"));
@@ -55,35 +58,35 @@ final class RtFrameStatsBoundaryTest {
 
     @Test
     void metricSchemasRejectDuplicatesAndProfilesRejectLateOrRepeatedConfiguration() {
-        assertThrows(IllegalArgumentException.class, () -> new RtFrameStats.MetricSchema(List.of(
-                new RtFrameStats.StageMetric("duplicate", true),
-                new RtFrameStats.StageMetric("duplicate", false)), List.of()));
-        assertThrows(IllegalArgumentException.class, () -> new RtFrameStats.MetricSchema(
-                List.of(new RtFrameStats.StageMetric("duplicate", true)), List.of("duplicate")));
+        assertThrows(IllegalArgumentException.class, () -> new MetricSchema(List.of(
+                new StageMetric("duplicate", true),
+                new StageMetric("duplicate", false)), List.of()));
+        assertThrows(IllegalArgumentException.class, () -> new MetricSchema(
+                List.of(new StageMetric("duplicate", true)), List.of("duplicate")));
 
-        RtFrameStats.MetricSchema base = new RtFrameStats.MetricSchema(
-                List.of(new RtFrameStats.StageMetric("base", true)), List.of());
+        MetricSchema base = new MetricSchema(
+                List.of(new StageMetric("base", true)), List.of());
         RtFrameStats.Profile collision = new RtFrameStats.Profile("collision", base, false);
         assertThrows(IllegalArgumentException.class, () -> collision.configureMetrics(
-                new RtFrameStats.MetricSchema(List.of(new RtFrameStats.StageMetric("base", true)), List.of())));
+                new MetricSchema(List.of(new StageMetric("base", true)), List.of())));
 
         RtFrameStats.Profile repeated = new RtFrameStats.Profile("repeated", base, false);
-        repeated.configureMetrics(new RtFrameStats.MetricSchema(List.of(), List.of("host")));
+        repeated.configureMetrics(new MetricSchema(List.of(), List.of("host")));
         assertThrows(IllegalStateException.class, () -> repeated.configureMetrics(
-                new RtFrameStats.MetricSchema(List.of(), List.of("other"))));
+                new MetricSchema(List.of(), List.of("other"))));
 
         RtFrameStats.Profile used = new RtFrameStats.Profile("used", base, false);
         used.begin();
         assertThrows(IllegalStateException.class, () -> used.configureMetrics(
-                new RtFrameStats.MetricSchema(List.of(), List.of("late"))));
+                new MetricSchema(List.of(), List.of("late"))));
     }
 
     @Test
     void explicitAccountingExcludesNestedDetailStages() {
-        RtFrameStats.MetricSchema schema = new RtFrameStats.MetricSchema(List.of(
-                new RtFrameStats.StageMetric("outer", true),
-                new RtFrameStats.StageMetric("outer.detail", false),
-                new RtFrameStats.StageMetric("next", true)), List.of());
+        MetricSchema schema = new MetricSchema(List.of(
+                new StageMetric("outer", true),
+                new StageMetric("outer.detail", false),
+                new StageMetric("next", true)), List.of());
 
         assertEquals(17L, schema.accountedNanos(new long[]{10L, 6L, 7L}));
     }
@@ -94,7 +97,7 @@ final class RtFrameStatsBoundaryTest {
         CausticaConfig.Rt.FrameStats.ENABLED.set(true);
         try {
             RtFrameStats.Profile profile = new RtFrameStats.Profile("counter-semantics",
-                    new RtFrameStats.MetricSchema(List.of(), List.of("depth")), false);
+                    new MetricSchema(List.of(), List.of("depth")), false);
             profile.begin();
             profile.set("depth", 3);
             profile.max("depth", 7);
@@ -111,7 +114,7 @@ final class RtFrameStatsBoundaryTest {
     void renderFrameSerialAdvancesOnlyAtTheExplicitBoundary() {
         long before = RtFrameStats.frameSerial();
         RtFrameStats.Profile profile = new RtFrameStats.Profile("serial-boundary",
-                new RtFrameStats.MetricSchema(List.of(), List.of()), false);
+                new MetricSchema(List.of(), List.of()), false);
         profile.begin();
         assertEquals(before, RtFrameStats.frameSerial());
         RtFrameStats.beginRenderFrame();

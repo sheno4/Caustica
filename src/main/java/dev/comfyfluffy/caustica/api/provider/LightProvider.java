@@ -8,6 +8,11 @@ public interface LightProvider {
     default void submitLights(LightSink sink) {
     }
 
+    /** Return the current immutable retained finite-light collection. */
+    default RetainedLightCollection retainedLights() {
+        return RetainedLightCollection.EMPTY;
+    }
+
     /** Called while the current resource pack is being detached. */
     default void onResourcePackClosing() {
     }

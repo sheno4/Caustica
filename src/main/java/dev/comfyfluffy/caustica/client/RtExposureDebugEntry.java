@@ -1,7 +1,6 @@
 package dev.comfyfluffy.caustica.client;
 
-import dev.comfyfluffy.caustica.rt.RtRuntime;
-import dev.comfyfluffy.caustica.rt.pipeline.RtExposure;
+import dev.comfyfluffy.caustica.spi.host.RendererRuntimeAccess;
 import dev.comfyfluffy.caustica.mixin.DebugScreenEntriesAccessor;
 import net.minecraft.client.gui.components.debug.DebugScreenDisplayer;
 import net.minecraft.client.gui.components.debug.DebugScreenEntry;
@@ -15,7 +14,7 @@ import org.jspecify.annotations.Nullable;
  * (Vanilla's own per-player {@code debug-profile.json}, toggled through the F3 entry list) --
  * registration only makes it available, it does not turn it on.
  *
- * <p>{@code RtExposure.debugSummaryLine()} owns the displayed controller values.
+ * <p>The renderer diagnostics contract owns the displayed controller values.
  */
 public final class RtExposureDebugEntry implements DebugScreenEntry {
     public static final Identifier ID = DebugScreenEntriesAccessor.caustica$register(
@@ -24,15 +23,10 @@ public final class RtExposureDebugEntry implements DebugScreenEntry {
     @Override
     public void display(DebugScreenDisplayer displayer, @Nullable Level serverOrClientLevel,
                         @Nullable LevelChunk clientChunk, @Nullable LevelChunk serverChunk) {
-        RtRuntime runtime = RtRuntime.INSTANCE;
-        if (runtime.rendererFailed()) {
+        if (RendererRuntimeAccess.status().rendererFailed()) {
             return; // vanilla is rendering this frame; the exposure state is stale/irrelevant.
         }
-        RtExposure exposure = runtime.exposureOrNull();
-        if (exposure == null || !exposure.ready()) {
-            return; // RT hasn't produced an exposure value yet (no world, or still bringing up).
-        }
-        String line = exposure.debugSummaryLine();
+        String line = RendererRuntimeAccess.diagnostics().exposureSummary();
         if (line != null) {
             displayer.addLine(line);
         }

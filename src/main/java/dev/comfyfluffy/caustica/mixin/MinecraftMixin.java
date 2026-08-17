@@ -3,10 +3,11 @@ package dev.comfyfluffy.caustica.mixin;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vulkan.VulkanDevice;
 
-import dev.comfyfluffy.caustica.rt.RtReflex;
-import dev.comfyfluffy.caustica.rt.RtRuntime;
+import dev.comfyfluffy.caustica.spi.host.RendererRuntimeAccess;
 import dev.comfyfluffy.caustica.minecraft.MinecraftFrameAdapter;
 import dev.comfyfluffy.caustica.minecraft.MinecraftUiOverlay;
+import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftVulkanBackend;
+import dev.comfyfluffy.caustica.spi.vulkan.VulkanLowLatency;
 
 import net.minecraft.client.Minecraft;
 
@@ -26,14 +27,14 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  * <p>SIMULATION_START/END bracket the tick/extract work that happens before rendering (from here through
  * just before {@code renderFrame} is called); RENDERSUBMIT/PRESENT markers are set from
  * {@code GameRendererMixin}/{@code VulkanGpuSurfaceMixin} respectively. No-ops entirely unless Reflex is
- * enabled AND {@link RtReflex#applySleepMode} has already succeeded for the current swapchain.
+ * enabled and sleep mode has already been applied to the current swapchain.
  */
 @Mixin(Minecraft.class)
 public abstract class MinecraftMixin {
 	@Inject(method = "close", at = @At("HEAD"))
 	private void caustica$destroyUiOverlayBeforeRendererShutdown(CallbackInfo ci) {
 		MinecraftUiOverlay.destroy();
-		RtRuntime.INSTANCE.shutdown();
+		RendererRuntimeAccess.controller().shutdown();
 	}
 
 	// Client-tick cadence, matching where the runtime tick has always run. runTick's HEAD would raise this
@@ -45,30 +46,37 @@ public abstract class MinecraftMixin {
 
 	@Inject(method = "runTick", at = @At("HEAD"))
 	private void caustica$reflexSleepAndSimStart(boolean advanceGameTime, CallbackInfo ci) {
+		VulkanLowLatency lowLatency = caustica$lowLatency();
 		VulkanDevice device = caustica$reflexDevice();
-		long swapchain = RtReflex.INSTANCE.appliedSwapchain();
-		if (device == null || swapchain == 0L) {
+		long swapchain = lowLatency == null ? 0L : lowLatency.appliedSwapchain();
+		if (lowLatency == null || device == null || swapchain == 0L) {
 			return;
 		}
-		RtReflex.INSTANCE.sleep(device.vkDevice(), swapchain);
-		RtReflex.INSTANCE.marker(device.vkDevice(), swapchain, RtReflex.MARKER_SIMULATION_START,
-				RtReflex.INSTANCE.currentSimFrameId());
+		lowLatency.sleep(device.vkDevice(), swapchain);
+		lowLatency.marker(device.vkDevice(), swapchain, VulkanLowLatency.SIMULATION_START,
+				lowLatency.currentSimulationId());
 	}
 
 	@Inject(method = "runTick",
 			at = @At(value = "INVOKE", target = "Lnet/minecraft/client/Minecraft;renderFrame(Z)V"))
 	private void caustica$reflexSimEnd(boolean advanceGameTime, CallbackInfo ci) {
+		VulkanLowLatency lowLatency = caustica$lowLatency();
 		VulkanDevice device = caustica$reflexDevice();
-		long swapchain = RtReflex.INSTANCE.appliedSwapchain();
-		if (device == null || swapchain == 0L) {
+		long swapchain = lowLatency == null ? 0L : lowLatency.appliedSwapchain();
+		if (lowLatency == null || device == null || swapchain == 0L) {
 			return;
 		}
-		RtReflex.INSTANCE.marker(device.vkDevice(), swapchain, RtReflex.MARKER_SIMULATION_END,
-				RtReflex.INSTANCE.currentSimFrameId());
+		lowLatency.marker(device.vkDevice(), swapchain, VulkanLowLatency.SIMULATION_END,
+				lowLatency.currentSimulationId());
+	}
+
+	private static VulkanLowLatency caustica$lowLatency() {
+		MinecraftVulkanBackend backend = MinecraftVulkanBackend.current();
+		return backend != null && backend.lowLatency().active() ? backend.lowLatency() : null;
 	}
 
 	private static VulkanDevice caustica$reflexDevice() {
-		if (!RtReflex.enabled()) {
+		if (caustica$lowLatency() == null) {
 			return null;
 		}
 		return ((GpuDeviceAccessor) RenderSystem.getDevice()).caustica$getBackend() instanceof VulkanDevice device

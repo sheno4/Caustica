@@ -22,6 +22,7 @@ import java.util.Map;
 /** Compiles host-provided OpenPBR texture inputs into canonical GPU pages. */
 public final class RtMaterialPageCompiler {
 
+    static final int EMISSION_FOOTPRINT_RESOLUTION = 16;
     private static final int DEFAULT_PAGE_SIZE = 2048;
     private static final int MAX_PAGE_SIZE = 8192;
     private static final int GUTTER = 8;
@@ -156,7 +157,7 @@ public final class RtMaterialPageCompiler {
 
     /** Compile, pack, mip, upload, and publish one immutable host catalog. */
     public void prepareAll(GpuContext ctx, int materialPageCapacity, MaterialCatalog catalog) {
-        int footprintResolution = catalog.emissionFootprintResolution();
+        int footprintResolution = EMISSION_FOOTPRINT_RESOLUTION;
         List<Candidate> candidates = new ArrayList<>(catalog.atlasAssets().size() + catalog.standalone().size());
         catalog.atlasAssets().forEach(asset -> candidates.add(new Candidate(asset)));
         catalog.standalone().forEach(asset -> candidates.add(new Candidate(asset)));

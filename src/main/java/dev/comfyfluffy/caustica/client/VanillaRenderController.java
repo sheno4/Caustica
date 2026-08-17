@@ -2,9 +2,9 @@ package dev.comfyfluffy.caustica.client;
 
 import com.mojang.blaze3d.pipeline.RenderTarget;
 import dev.comfyfluffy.caustica.CausticaMod;
-import dev.comfyfluffy.caustica.rt.RtRuntime;
-import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
+import dev.comfyfluffy.caustica.spi.host.RendererRuntimeAccess;
+import dev.comfyfluffy.caustica.spi.host.RendererRuntimeStatus;
 
 public final class VanillaRenderController {
 	public static final VanillaRenderController INSTANCE = new VanillaRenderController();
@@ -31,7 +31,7 @@ public final class VanillaRenderController {
 		this.worldSkipped = false;
 		this.baseReady = false;
 		this.inactiveReason = null;
-		this.rtActive = RtRuntime.frameActive();
+		this.rtActive = RendererRuntimeAccess.status().frameActive();
 
 		if (!Boolean.valueOf(this.rtActive).equals(this.lastLoggedRtActive)) {
 			this.lastLoggedRtActive = this.rtActive;
@@ -118,7 +118,7 @@ public final class VanillaRenderController {
 
 	/** Runtime work switch for per-frame RT work. */
 	public static boolean rtRuntimeWorkRequested() {
-		return RtRuntime.frameActive();
+		return RendererRuntimeAccess.status().frameActive();
 	}
 
 	/**
@@ -126,7 +126,7 @@ public final class VanillaRenderController {
 	 * mixins, including the loader-specific ones whose injection points differ.
 	 */
 	public static boolean rtOwnsWorldRendering() {
-		return RtRuntime.active() && INSTANCE.replacedVanillaWorldLastFrame();
+		return RendererRuntimeAccess.status().active() && INSTANCE.replacedVanillaWorldLastFrame();
 	}
 
 	public void markRtFrameResult(boolean success) {
@@ -150,19 +150,20 @@ public final class VanillaRenderController {
 	}
 
 	private String findInactiveReason(RenderTarget mainTarget) {
-		if (this.failureLatched || RtRuntime.INSTANCE.rendererFailed()) {
+		RendererRuntimeStatus.WorldReplacement replacement = RendererRuntimeAccess.status().worldReplacement();
+		if (this.failureLatched || replacement == RendererRuntimeStatus.WorldReplacement.RENDERER_FAILED) {
 			return "RT composite failure latch is set";
 		}
-		if (!RtRuntime.frameActive()) {
+		if (replacement == RendererRuntimeStatus.WorldReplacement.FRAME_INACTIVE) {
 			return "caustica.rt is false";
 		}
-		if (GpuContext.currentOrNull() == null) {
+		if (replacement == RendererRuntimeStatus.WorldReplacement.DEVICE_UNAVAILABLE) {
 			return "RT context is not ready";
 		}
 		if (RtTerrain.currentOrNull() == null) {
 			return "RT terrain is not ready";
 		}
-		if (RtRuntime.INSTANCE.requiresSourceWorldFallback()) {
+		if (replacement == RendererRuntimeStatus.WorldReplacement.RESOURCE_TRANSITION) {
 			return "RT resources are crossing an epoch boundary";
 		}
 		if (mainTarget == null || mainTarget.getColorTexture() == null || mainTarget.getDepthTexture() == null) {

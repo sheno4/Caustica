@@ -1,7 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.terrain;
 
 import dev.comfyfluffy.caustica.engine.light.LightDescriptor;
-import dev.comfyfluffy.caustica.rt.light.RetainedLightBatch;
+import dev.comfyfluffy.caustica.api.provider.RetainedLightCollection;
 
 import java.util.ArrayList;
 
@@ -12,14 +12,15 @@ final class MinecraftTerrainLightAdapter {
     private MinecraftTerrainLightAdapter() {
     }
 
-    static RetainedLightBatch describe(int slot, double originX, double originY, double originZ,
-                                       float[] records) {
+    static RetainedLightCollection.Group describe(long groupKey, long revision,
+                                                  double originX, double originY, double originZ,
+                                                  float[] records) {
         int lightCount = records.length / RtLightCollector.FLOATS_PER_LIGHT;
         ArrayList<LightDescriptor.Finite> descriptors = new ArrayList<>(lightCount);
         for (int source = 0; source < records.length;
              source += RtLightCollector.FLOATS_PER_LIGHT) {
             long localIndex = source / RtLightCollector.FLOATS_PER_LIGHT;
-            long key = ((long) slot << 32) | localIndex;
+            long key = localIndex;
             double ux = records[source + 8];
             double uy = records[source + 9];
             double uz = records[source + 10];
@@ -44,6 +45,6 @@ final class MinecraftTerrainLightAdapter {
                     ux, uy, uz, vx, vy, vz, nx, ny, nz,
                     records[source + 16], records[source + 17], records[source + 18]));
         }
-        return new RetainedLightBatch(slot, descriptors);
+        return new RetainedLightCollection.Group(groupKey, revision, descriptors);
     }
 }

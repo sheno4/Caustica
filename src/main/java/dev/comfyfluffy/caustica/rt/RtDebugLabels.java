@@ -1,5 +1,7 @@
 package dev.comfyfluffy.caustica.rt;
 
+import dev.comfyfluffy.caustica.vulkan.VulkanDiagnostics;
+
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import dev.comfyfluffy.caustica.spi.vulkan.DebugMarkers;

@@ -1,7 +1,7 @@
 package dev.comfyfluffy.caustica.client;
 
 import dev.comfyfluffy.caustica.CausticaMod;
-import dev.comfyfluffy.caustica.rt.RtRuntime;
+import dev.comfyfluffy.caustica.spi.host.RendererRuntimeAccess;
 import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.ClickEvent;
 import net.minecraft.network.chat.Component;
@@ -27,7 +27,7 @@ public final class RtScreenshotExporter {
         try {
             Files.createDirectories(screenshotDirectory);
             Path output = nextPairedPath(screenshotDirectory);
-            if (!RtRuntime.INSTANCE.exportLatestResidualExposureExr(output)) {
+            if (!RendererRuntimeAccess.diagnostics().exportLatestResidualExposureExr(output)) {
                 return pngName(output);
             }
             File file = output.toFile().getAbsoluteFile();

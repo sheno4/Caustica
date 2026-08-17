@@ -32,7 +32,7 @@ final class RtMaterialPageCompilerImageLifetimeTest {
             @Override public void close() { closes.incrementAndGet(); }
         }, MaterialUv.IDENTITY, false, false, false,
                 OpenPbrColorBinding.PARAMETER_DEFAULT, OpenPbrColorBinding.PARAMETER_DEFAULT,
-                OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR);
+                OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR, 1.0f);
 
         MaterialTextureAnalyzer.AlbedoStats stats = MaterialTextureAnalyzer.scanAlbedo(asset, 16);
 
@@ -66,7 +66,7 @@ final class RtMaterialPageCompilerImageLifetimeTest {
             @Override public void close() { closes.incrementAndGet(); }
         }, MaterialUv.IDENTITY, false, false, false,
                 OpenPbrColorBinding.PARAMETER_DEFAULT, OpenPbrColorBinding.PARAMETER_DEFAULT,
-                OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR);
+                OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR, 1.0f);
 
         assertThrows(IllegalStateException.class, () -> MaterialTextureAnalyzer.scanAlbedo(asset, 16));
         assertEquals(1, closes.get());
@@ -81,7 +81,7 @@ final class RtMaterialPageCompilerImageLifetimeTest {
             throw new AssertionError("oversized image must not be opened");
         }, MaterialUv.IDENTITY, false, false, false,
                 OpenPbrColorBinding.PARAMETER_DEFAULT, OpenPbrColorBinding.PARAMETER_DEFAULT,
-                OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR);
+                OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR, 1.0f);
 
         assertFalse(RtMaterialPageCompiler.eligibleForPageCompilation(asset));
         assertEquals(0, opens.get());

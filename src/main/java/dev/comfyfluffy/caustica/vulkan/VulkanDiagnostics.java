@@ -1,4 +1,5 @@
-package dev.comfyfluffy.caustica.rt;
+package dev.comfyfluffy.caustica.vulkan;
+
 
 import dev.comfyfluffy.caustica.CausticaMod;
 import org.lwjgl.PointerBuffer;
@@ -66,6 +67,7 @@ public final class VulkanDiagnostics {
     private static volatile VkQueue lastCausticaQueue;
     private static volatile String lastCausticaQueueLabel;
     private static int memoryHeapCount;
+    private static volatile long allocator;
     private static boolean startupLogged;
     private static boolean instanceLayersLogged;
 
@@ -86,6 +88,11 @@ public final class VulkanDiagnostics {
     }
 
     private VulkanDiagnostics() {
+    }
+
+    /** Publishes the live renderer allocator for device-loss budget reporting. */
+    public static void registerAllocator(long vmaAllocator) {
+        allocator = vmaAllocator;
     }
 
     /** Log loader-visible layers and the explicit layer list passed to {@code vkCreateInstance}. */
@@ -324,11 +331,11 @@ public final class VulkanDiagnostics {
         }
         long totalBytes = BUFFERS.values().stream().mapToLong(BufferRange::size).sum();
         CausticaMod.LOGGER.error("Caustica live BDA buffers: count={}, bytes={}", BUFFERS.size(), formatBytes(totalBytes));
-        GpuContext context = GpuContext.currentOrNull();
-        if (context != null && memoryHeapCount > 0) {
+        long liveAllocator = allocator;
+        if (liveAllocator != 0L && memoryHeapCount > 0) {
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 VmaBudget.Buffer budgets = VmaBudget.calloc(memoryHeapCount, stack);
-                Vma.vmaGetHeapBudgets(context.vma(), budgets);
+                Vma.vmaGetHeapBudgets(liveAllocator, budgets);
                 for (int i = 0; i < memoryHeapCount; i++) {
                     VmaBudget budget = budgets.get(i);
                     CausticaMod.LOGGER.error(

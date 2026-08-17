@@ -1,5 +1,7 @@
 package dev.comfyfluffy.caustica.rt.light;
 
+import dev.comfyfluffy.caustica.engine.light.RetainedLightBatch;
+
 import dev.comfyfluffy.caustica.engine.light.DistantLight;
 import dev.comfyfluffy.caustica.engine.light.FiniteLight;
 import dev.comfyfluffy.caustica.engine.light.LightBvh;
@@ -19,10 +21,12 @@ public final class RtRetainedLightSceneBuilder {
     private RtRetainedLightSceneBuilder() {
     }
 
-    public static Data build(List<RetainedLightBatch> batches, int rebaseX, int rebaseY, int rebaseZ,
+    public static Data build(List<RetainedLightBatch> batches, double rebaseX, double rebaseY, double rebaseZ,
                              double metersPerWorldUnit, BooleanSupplier cancelled) {
         ArrayList<RetainedLightBatch> ordered = new ArrayList<>(batches);
-        ordered.sort(Comparator.comparingInt(RetainedLightBatch::slot));
+        ordered.sort(Comparator.comparing((RetainedLightBatch batch) -> batch.source().namespace())
+                .thenComparing(batch -> batch.source().path())
+                .thenComparingLong(RetainedLightBatch::key));
         ArrayList<LightDescriptor.Finite> descriptors = new ArrayList<>();
         for (int batchIndex = 0; batchIndex < ordered.size(); batchIndex++) {
             if ((batchIndex & 255) == 0) checkCancelled(cancelled);

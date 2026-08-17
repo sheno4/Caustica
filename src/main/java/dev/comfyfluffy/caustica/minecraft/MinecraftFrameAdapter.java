@@ -5,8 +5,9 @@ import dev.comfyfluffy.caustica.api.provider.MaterialHandle;
 import dev.comfyfluffy.caustica.engine.frame.FrameSnapshot;
 import dev.comfyfluffy.caustica.engine.frame.SceneResources;
 import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
+import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.engine.color.ColorTransforms;
-import dev.comfyfluffy.caustica.rt.RtRuntime;
+import dev.comfyfluffy.caustica.spi.host.RendererRuntimeAccess;
 import dev.comfyfluffy.caustica.minecraft.damage.MinecraftDamageModifierPass;
 import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
 import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftVulkanBackend;
@@ -15,14 +16,12 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.LoadingOverlay;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.renderer.BiomeColors;
-import net.minecraft.client.renderer.texture.TextureAtlas;
 import net.minecraft.core.BlockPos;
 import net.minecraft.tags.FluidTags;
 import net.minecraft.util.Mth;
 import net.minecraft.world.level.material.FluidState;
 import org.joml.Matrix4fc;
 
-import com.mojang.blaze3d.vulkan.VulkanGpuTextureView;
 
 
 /** Converts Minecraft lifecycle and camera state into host-neutral renderer inputs. */
@@ -43,14 +42,14 @@ public final class MinecraftFrameAdapter {
         MinecraftVulkanBackend.installCurrent();
         ClientLevel level = client.level;
         long currentSceneId = identify(level);
-        RtRuntime.INSTANCE.observeWorld(level, currentSceneId);
+        RendererRuntimeAccess.controller().observeWorld(level, currentSceneId);
         if (!(client.gui.overlay() instanceof LoadingOverlay)) {
-            RtRuntime.INSTANCE.observeResourcePackAvailable();
+            RendererRuntimeAccess.controller().observeResourcePackAvailable();
         }
         var target = client.gameRenderer.mainRenderTarget();
         boolean startupSceneReady = level != null && client.player != null
                 && RtTerrain.isSectionReady(client.player.blockPosition());
-        RtRuntime.INSTANCE.tick(captureSceneResources(client), startupSceneReady, currentSceneId,
+        RendererRuntimeAccess.controller().tick(captureSceneResources(client), startupSceneReady, currentSceneId,
                 target != null ? target.width : 0, target != null ? target.height : 0,
                 client::invalidateSurfaceConfiguration);
     }
@@ -74,13 +73,15 @@ public final class MinecraftFrameAdapter {
         FrameSnapshot.CameraMedium cameraMedium = submerged
                 ? new FrameSnapshot.CameraMedium(new MaterialHandle(MinecraftMaterialSource.WATER),
                 new FrameSnapshot.LinearRgb(medium[0], medium[1], medium[2])) : null;
-        MinecraftDamageModifierPass damagePass = RtRuntime.INSTANCE.renderPass(
+        MinecraftDamageModifierPass damagePass = RendererRuntimeAccess.controller().renderPass(
                 MinecraftDamageModifierPass.ID, MinecraftDamageModifierPass.class);
         if (damagePass != null) {
             damagePass.capture(level);
         }
+        RtTerrain terrain = RtTerrain.currentOrNull();
+        SceneOrigin sceneOrigin = terrain != null ? terrain.sceneOrigin() : SceneOrigin.ZERO;
         return new FrameSnapshot(projection, viewRotation, cameraX, cameraY, cameraZ,
-                cameraMedium, CausticaConfig.Rt.Composite.WATER_WAVES.value(),
+                sceneOrigin, cameraMedium, CausticaConfig.Rt.Composite.WATER_WAVES.value(),
                 System.nanoTime() / 1.0e9, METERS_PER_WORLD_UNIT, identify(level));
     }
 
@@ -88,10 +89,7 @@ public final class MinecraftFrameAdapter {
         if (client.level == null) {
             return SceneResources.EMPTY;
         }
-        var view = client.getTextureManager().getTexture(TextureAtlas.LOCATION_BLOCKS).getTextureView();
-        long atlasView = view instanceof VulkanGpuTextureView vulkanView
-                ? vulkanView.vkImageView() : 0L;
-        return new SceneResources(true, atlasView);
+        return new SceneResources(true);
     }
 
     public UiPresentationResources captureUiPresentation() {

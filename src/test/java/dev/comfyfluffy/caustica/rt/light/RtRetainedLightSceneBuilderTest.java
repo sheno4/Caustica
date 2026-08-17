@@ -1,5 +1,8 @@
 package dev.comfyfluffy.caustica.rt.light;
 
+import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.engine.light.RetainedLightBatch;
+
 import dev.comfyfluffy.caustica.engine.light.LightBvh;
 import dev.comfyfluffy.caustica.engine.light.LightDescriptor;
 import dev.comfyfluffy.caustica.rt.gen.GpuLightData;
@@ -14,6 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class RtRetainedLightSceneBuilderTest {
+    private static final ResourceId SOURCE = ResourceId.of("test", "lights");
     @Test
     void lightAndNodeStridesArePinnedToReflectedStd430Layout() {
         assertEquals(64, GpuLightData.BYTE_SIZE);
@@ -30,7 +34,7 @@ final class RtRetainedLightSceneBuilderTest {
         LightDescriptor.Rectangle zero = rectangle(2, 0, 20);
         LightDescriptor.Rectangle last = rectangle(3, 4, 30);
         RtRetainedLightSceneBuilder.Data data = RtRetainedLightSceneBuilder.build(List.of(
-                new RetainedLightBatch(0, List.of(first, zero, last))),
+                new RetainedLightBatch(SOURCE, 0L, 1L, List.of(first, zero, last))),
                 8, 0, 0, 2.0, () -> false);
 
         assertEquals(2, data.lightCount());
@@ -59,7 +63,7 @@ final class RtRetainedLightSceneBuilderTest {
     @Test
     void nodeEncodingCarriesRelativeBoundsPeakIntensityAndTreeLinks() {
         RtRetainedLightSceneBuilder.Data data = RtRetainedLightSceneBuilder.build(List.of(
-                new RetainedLightBatch(0,
+                new RetainedLightBatch(SOURCE, 0L, 1L,
                         List.of(rectangle(1, 1, 10), rectangle(2, 3, 20)))),
                 8, 0, 0, 1.0, () -> false);
         int rootOffset = data.rootNodeIndex() * RtRetainedLightSceneBuilder.GPU_FLOATS_PER_NODE;
@@ -75,7 +79,7 @@ final class RtRetainedLightSceneBuilderTest {
 
     @Test
     void rebaseChangesCoordinatesButNotPhysicalPower() {
-        List<RetainedLightBatch> batches = List.of(new RetainedLightBatch(0,
+        List<RetainedLightBatch> batches = List.of(new RetainedLightBatch(SOURCE, 0L, 1L,
                 List.of(rectangle(1, 1, 20))));
         var oldGeneration = RtRetainedLightSceneBuilder.build(batches, 16, 0, 0, 1.0, () -> false);
         var newGeneration = RtRetainedLightSceneBuilder.build(batches, 32, 0, 0, 1.0, () -> false);
@@ -85,7 +89,7 @@ final class RtRetainedLightSceneBuilderTest {
 
     @Test
     void supersededBuildStopsCooperatively() {
-        List<RetainedLightBatch> batches = List.of(new RetainedLightBatch(0,
+        List<RetainedLightBatch> batches = List.of(new RetainedLightBatch(SOURCE, 0L, 1L,
                 List.of(rectangle(1, 1, 0))));
         assertThrows(CancellationException.class,
                 () -> RtRetainedLightSceneBuilder.build(batches, 0, 0, 0, 1.0, () -> true));

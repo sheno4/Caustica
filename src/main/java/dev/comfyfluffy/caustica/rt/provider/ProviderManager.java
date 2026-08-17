@@ -5,10 +5,14 @@ import dev.comfyfluffy.caustica.api.CausticaApi;
 import dev.comfyfluffy.caustica.api.CausticaRegistry;
 import dev.comfyfluffy.caustica.api.provider.LightProvider;
 import dev.comfyfluffy.caustica.api.provider.LightSink;
+import dev.comfyfluffy.caustica.api.provider.RetainedLightCollection;
+import dev.comfyfluffy.caustica.engine.light.RetainedLightBatch;
+import dev.comfyfluffy.caustica.engine.light.RetainedLightSnapshot;
 import dev.comfyfluffy.caustica.engine.light.DistantLight;
 import dev.comfyfluffy.caustica.engine.light.FiniteLight;
 import dev.comfyfluffy.caustica.engine.light.LightDescriptor;
 import dev.comfyfluffy.caustica.api.provider.MaterialSource;
+import dev.comfyfluffy.caustica.api.provider.MaterialSnapshot;
 import dev.comfyfluffy.caustica.api.provider.MaterialRule;
 import dev.comfyfluffy.caustica.api.provider.MaterialDefinition;
 import dev.comfyfluffy.caustica.api.ResourceId;
@@ -20,13 +24,13 @@ import dev.comfyfluffy.caustica.api.provider.SceneGeometryUpdateContext;
 import dev.comfyfluffy.caustica.api.provider.SceneCamera;
 import dev.comfyfluffy.caustica.api.provider.SceneGeometryKey;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
+import dev.comfyfluffy.caustica.engine.material.MaterialCatalog;
+import dev.comfyfluffy.caustica.engine.material.MaterialTextureAsset;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtFrameStats;
 import dev.comfyfluffy.caustica.rt.geometry.RtSceneGeometryManager;
 import dev.comfyfluffy.caustica.rt.geometry.GeometryUpdates;
-import dev.comfyfluffy.caustica.spi.host.BaseColorTextureSink;
-import dev.comfyfluffy.caustica.spi.host.MaterialEpochView;
-import dev.comfyfluffy.caustica.spi.host.RendererSceneSource;
+import dev.comfyfluffy.caustica.rt.texture.ProviderTextureRegistry;
 import java.util.HashSet;
 import java.util.HashMap;
 import java.util.ArrayList;
@@ -35,7 +39,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.Consumer;
 import java.util.function.ToIntFunction;
-import java.util.function.Supplier;
 
 public final class ProviderManager {
     // A provider instance is runtime-activation-scoped. Failures disable it until that activation ends.
@@ -46,15 +49,30 @@ public final class ProviderManager {
     private final Map<ResourceId, LightProvider> lights;
     private final Map<ResourceId, MaterialSource> materials;
     private List<LightDescriptor> frameLights = List.of();
+    private final Map<RetainedLightGroupKey, RetainedLightBatch> retainedLightGroups = new HashMap<>();
+    private final Map<ResourceId, Long> retainedLightProviderGenerations = new HashMap<>();
+    private final Consumer<LightDescriptor.Finite> retainedLightValidator;
+    private RetainedLightSnapshot retainedLights = RetainedLightSnapshot.empty(0L);
+    private long retainedLightGeneration;
     private Set<ResourceId> namedMaterials = Set.of();
     private RtSceneGeometryManager sceneGeometry;
+    private Runnable stopRetainedLightWork = () -> { };
     private final Map<GeometryGroupKey, Long> geometryRevisions = new HashMap<>();
+    private ProviderTextureRegistry textureRegistry;
 
     ProviderManager(Map<ResourceId, SceneProvider> scenes, Map<ResourceId, LightProvider> lights,
                     Map<ResourceId, MaterialSource> materials) {
+        this(scenes, lights, materials, light -> FiniteLight.from(light, 1.0));
+    }
+
+    ProviderManager(Map<ResourceId, SceneProvider> scenes, Map<ResourceId, LightProvider> lights,
+                    Map<ResourceId, MaterialSource> materials,
+                    Consumer<LightDescriptor.Finite> retainedLightValidator) {
         this.scenes = scenes;
         this.lights = lights;
         this.materials = materials;
+        this.retainedLightValidator = java.util.Objects.requireNonNull(retainedLightValidator,
+                "retainedLightValidator");
     }
 
     public ProviderManager(CausticaRegistry.RuntimeContributions contributions) {
@@ -68,6 +86,9 @@ public final class ProviderManager {
         stoppedThisSession.clear();
         shutDownThisSession.clear();
         geometryRevisions.clear();
+        retainedLightGroups.clear();
+        retainedLightProviderGenerations.clear();
+        retainedLights = RetainedLightSnapshot.empty(++retainedLightGeneration);
     }
 
     public void updateScenes() {
@@ -97,8 +118,10 @@ public final class ProviderManager {
             };
             try {
                 entry.getValue().submitLights(sink);
+                updateRetainedLights(entry.getKey(), entry.getValue().retainedLights());
                 submitted.addAll(providerLights);
             } catch (Throwable t) {
+                removeRetainedLights(entry.getKey());
                 failed.add(key);
                 CausticaMod.LOGGER.error("Caustica light provider {} failed and was disabled",
                         entry.getKey(), t);
@@ -113,20 +136,64 @@ public final class ProviderManager {
         return frameLights;
     }
 
-    /** Select the single active primary scene source and snapshot its retained environment state. */
-    public PrimaryScene primaryScene() {
-        SceneSourceEntry entry = primarySceneSource();
-        if (entry == null) {
-            return null;
+    /** Immutable source-qualified retained-light snapshot assembled by {@link #prepareFrame()}. */
+    public RetainedLightSnapshot retainedLights() {
+        return retainedLights;
+    }
+
+    private void updateRetainedLights(ResourceId source, RetainedLightCollection collection) {
+        java.util.Objects.requireNonNull(collection, "retainedLights");
+        Long previousGeneration = retainedLightProviderGenerations.get(source);
+        if (previousGeneration != null && previousGeneration == collection.generation()) return;
+
+        Map<Long, RetainedLightCollection.Group> submitted = new java.util.LinkedHashMap<>();
+        for (RetainedLightCollection.Group group : collection.groups()) {
+            if (submitted.putIfAbsent(group.key(), group) != null) {
+                throw new IllegalArgumentException("duplicate retained-light key " + group.key());
+            }
+            group.lights().forEach(retainedLightValidator);
         }
-        RendererSceneSource.RetainedScene retained = invokeSceneSource(entry, "retained scene",
-                entry.source()::retainedScene, null);
-        return retained != null ? new PrimaryScene(entry.id(), retained) : null;
+
+        boolean changed = retainedLightGroups.keySet().removeIf(key ->
+                key.source().equals(source) && !submitted.containsKey(key.key()));
+        for (RetainedLightCollection.Group snapshot : submitted.values()) {
+            RetainedLightGroupKey key = new RetainedLightGroupKey(source, snapshot.key());
+            RetainedLightBatch previous = retainedLightGroups.get(key);
+            if (previous != null && previous.revision() == snapshot.revision()) {
+                continue;
+            }
+            retainedLightGroups.put(key, new RetainedLightBatch(source, snapshot.key(),
+                    snapshot.revision(), snapshot.lights()));
+            changed = true;
+        }
+        retainedLightProviderGenerations.put(source, collection.generation());
+        if (changed) rebuildRetainedLightSnapshot();
+    }
+
+    private void removeRetainedLights(ResourceId source) {
+        retainedLightProviderGenerations.remove(source);
+        if (retainedLightGroups.keySet().removeIf(key -> key.source().equals(source))) {
+            rebuildRetainedLightSnapshot();
+        }
+    }
+
+    private void rebuildRetainedLightSnapshot() {
+        ArrayList<RetainedLightBatch> batches = new ArrayList<>(retainedLightGroups.values());
+        batches.sort(java.util.Comparator
+                .comparing((RetainedLightBatch batch) -> batch.source().namespace())
+                .thenComparing(batch -> batch.source().path())
+                .thenComparingLong(RetainedLightBatch::key));
+        retainedLights = new RetainedLightSnapshot(batches, ++retainedLightGeneration);
     }
 
     /** Bind the renderer-owned geometry manager for source lifecycle callbacks. */
     public void bindSceneGeometry(RtSceneGeometryManager geometry) {
         sceneGeometry = geometry;
+    }
+
+    /** Bind renderer-owned CPU work that must stop before the shared GPU executor is drained. */
+    public void bindRetainedLightStop(Runnable stop) {
+        stopRetainedLightWork = stop;
     }
 
     /** Renderer-owned geometry manager injected into host scene providers. */
@@ -135,80 +202,41 @@ public final class ProviderManager {
         return sceneGeometry;
     }
 
-    public int bindlessTextureCapacity() {
-        SceneSourceEntry entry = primarySceneSource();
-        return entry != null
-                ? invokeSceneSource(entry, "bindless texture capacity", entry.source()::bindlessTextureCapacity, 1)
-                : 1;
-    }
-
-    public void resetBindlessTextures(int capacity) {
-        SceneSourceEntry entry = primarySceneSource();
-        if (entry != null) {
-            invokeSceneSource(entry, "bindless texture reset", () -> {
-                entry.source().resetBindlessTextures(capacity);
-                return null;
-            }, null);
+    /** Bind the private texture table for the active material epoch and collect initial contributions. */
+    public void bindTextureRegistry(ProviderTextureRegistry registry) {
+        if (textureRegistry != null) throw new IllegalStateException("provider texture registry is already bound");
+        textureRegistry = java.util.Objects.requireNonNull(registry, "registry");
+        for (Map.Entry<ResourceId, SceneProvider> entry : scenes().entrySet()) {
+            try {
+                submitTextures(entry);
+            } catch (Throwable failure) {
+                failSceneTextures(entry, failure);
+            }
         }
     }
 
-    public void rebindTextures(BaseColorTextureSink textures, long sampler) {
-        SceneSourceEntry entry = primarySceneSource();
-        if (entry != null) {
-            invokeSceneSource(entry, "bindless texture rebind", () -> {
-                entry.source().rebindTextures(textures, sampler);
-                return null;
-            }, null);
-        }
+    public void unbindTextureRegistry(ProviderTextureRegistry registry) {
+        if (textureRegistry != registry) throw new IllegalStateException("provider texture registry does not match");
+        textureRegistry = null;
     }
 
-    public void uploadPendingTextures(BaseColorTextureSink textures, long sampler) {
-        SceneSourceEntry entry = primarySceneSource();
-        if (entry != null) {
-            invokeSceneSource(entry, "bindless texture upload", () -> {
-                entry.source().uploadPendingTextures(textures, sampler);
-                return null;
-            }, null);
-        }
-    }
-
-    public void publishMaterials(MaterialEpochView snapshot) {
-        SceneSourceEntry entry = primarySceneSource();
-        if (entry != null) {
-            invokeSceneSource(entry, "material epoch publication", () -> {
-                entry.source().publishMaterials(snapshot);
-                return null;
-            }, null);
-        }
+    public void publishMaterials(MaterialSnapshot snapshot) {
+        invoke("scene", scenes(), provider -> provider.onMaterialEpoch(snapshot), SceneProvider::stop);
     }
 
     public void clearMaterials() {
-        SceneSourceEntry entry = primarySceneSource();
-        if (entry != null) {
-            invokeSceneSource(entry, "material epoch clear", () -> {
-                entry.source().clearMaterials();
-                return null;
-            }, null);
-        }
-    }
-
-    /** Resolve a source-owned texture identity without exposing source texture tables to geometry producers. */
-    public int bindlessTextureSlot(SceneMesh.TextureReference texture) {
-        if (texture == null) return 0;
-        SceneSourceEntry entry = primarySceneSource();
-        return entry != null ? invokeSceneSource(entry, "bindless texture slot",
-                () -> entry.source().bindlessTextureSlot(texture), 0) : 0;
+        invoke("scene", scenes(), SceneProvider::onMaterialEpochClosing, SceneProvider::stop);
     }
 
     /** Collect each scene source transactionally into source-qualified retained-geometry groups. */
     public void submitGeometry(GpuContext ctx, SceneOrigin origin) {
-        submitGeometry(ctx, origin, SceneCamera.IDENTITY);
+        submitGeometry(ctx, origin, 0L, SceneCamera.IDENTITY);
     }
 
     /** Collect each scene source transactionally into source-qualified retained-geometry groups. */
-    public void submitGeometry(GpuContext ctx, SceneOrigin origin, SceneCamera camera) {
+    public void submitGeometry(GpuContext ctx, SceneOrigin origin, long frameIndex, SceneCamera camera) {
         submitGeometry(ctx, origin, (provider, sink) -> provider.submitGeometry(new SceneFrameContext(sink,
-                origin.x(), origin.y(), origin.z(), camera)), (updates, acknowledgment, failureHandler) ->
+                origin.x(), origin.y(), origin.z(), frameIndex, camera)), (updates, acknowledgment, failureHandler) ->
                 sceneGeometry().submit(updates, acknowledgment, failureHandler));
     }
 
@@ -227,7 +255,7 @@ public final class ProviderManager {
 
     void submitGeometry(GpuContext ctx, SceneOrigin origin, GeometrySubmitter submitter) {
         submitGeometry(ctx, origin, (provider, sink) -> provider.submitGeometry(new SceneFrameContext(sink,
-                origin.x(), origin.y(), origin.z(), SceneCamera.IDENTITY)),
+                origin.x(), origin.y(), origin.z(), 0L, SceneCamera.IDENTITY)),
                 (updates, acknowledgment, failureHandler) -> submitter.submit(updates, failureHandler));
     }
 
@@ -253,6 +281,7 @@ public final class ProviderManager {
                 try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("geometry.providerCollect")) {
                     collector.collect(entry.getValue(), stagingSink);
                 }
+                submitTextures(entry);
                 List<GeometryUpdates.Group> updates = new ArrayList<>(stagedGroups.size());
                 Map<SubmittedGeometryGroupKey, PublishedGeometryGroup> publishedGroups = new HashMap<>();
                 try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("geometry.providerConvert")) {
@@ -370,6 +399,9 @@ public final class ProviderManager {
     public MaterialContributions collectMaterials(ToIntFunction<ResourceId> surfaceIndex) {
         List<MaterialDefinition> definitions = new ArrayList<>();
         Set<ResourceId> definedMaterials = new HashSet<>();
+        List<MaterialTextureAsset> atlasAssets = new ArrayList<>();
+        List<MaterialTextureAsset> standaloneAssets = new ArrayList<>();
+        Set<ResourceId> assetMaterials = new HashSet<>();
         List<MaterialRule> result = new ArrayList<>();
         for (Map.Entry<ResourceId, MaterialSource> entry : materials().entrySet()) {
             ProviderKey key = new ProviderKey("material", entry.getKey());
@@ -378,6 +410,7 @@ public final class ProviderManager {
             }
             List<MaterialDefinition> stagedDefinitions = new ArrayList<>();
             List<MaterialRule> staged = new ArrayList<>();
+            List<MaterialTextureAsset> stagedAssets = new ArrayList<>();
             try {
                 entry.getValue().submitMaterials(new dev.comfyfluffy.caustica.api.provider.MaterialSink() {
                     @Override
@@ -388,6 +421,11 @@ public final class ProviderManager {
                     @Override
                     public void submit(MaterialRule rule) {
                         staged.add(java.util.Objects.requireNonNull(rule));
+                    }
+
+                    @Override
+                    public void submitAsset(MaterialTextureAsset asset) {
+                        stagedAssets.add(java.util.Objects.requireNonNull(asset));
                     }
                 });
                 Set<ResourceId> stagedIds = new HashSet<>();
@@ -407,6 +445,19 @@ public final class ProviderManager {
                                 + " references unregistered surface " + surface);
                     }
                 }
+                HashSet<ResourceId> stagedAssetIds = new HashSet<>();
+                for (MaterialTextureAsset asset : stagedAssets) {
+                    if (assetMaterials.contains(asset.material()) || !stagedAssetIds.add(asset.material())) {
+                        throw new IllegalStateException("duplicate material texture asset " + asset.material());
+                    }
+                }
+                assetMaterials.addAll(stagedAssetIds);
+                for (MaterialTextureAsset asset : stagedAssets) {
+                    switch (asset.kind()) {
+                        case SHARED_ATLAS -> atlasAssets.add(asset);
+                        case STANDALONE -> standaloneAssets.add(asset);
+                    }
+                }
                 definedMaterials.addAll(stagedIds);
                 definitions.addAll(stagedDefinitions);
                 result.addAll(staged);
@@ -417,20 +468,27 @@ public final class ProviderManager {
             }
         }
         namedMaterials = Set.copyOf(definedMaterials);
-        return new MaterialContributions(definitions, result);
+        MaterialCatalog catalog = new MaterialCatalog(atlasAssets, standaloneAssets);
+        return new MaterialContributions(definitions, result, catalog);
     }
 
-    public record MaterialContributions(List<MaterialDefinition> definitions, List<MaterialRule> rules) {
+    public record MaterialContributions(List<MaterialDefinition> definitions, List<MaterialRule> rules,
+                                        MaterialCatalog catalog) {
         public MaterialContributions {
             definitions = List.copyOf(definitions);
             rules = List.copyOf(rules);
+            java.util.Objects.requireNonNull(catalog, "catalog");
         }
     }
 
     /** Stop every provider before session GPU work is drained. No GPU owner is released in this phase. */
     public void stopProviders() {
         frameLights = List.of();
+        retainedLightGroups.clear();
+        retainedLightProviderGenerations.clear();
+        retainedLights = RetainedLightSnapshot.empty(++retainedLightGeneration);
         namedMaterials = Set.of();
+        stopRetainedLightWork.run();
         stopRemaining("scene", scenes(), SceneProvider::stop);
         stopRemaining("light", lights(), LightProvider::stop);
         stopRemaining("material", materials(), MaterialSource::stop);
@@ -446,6 +504,9 @@ public final class ProviderManager {
     /** Clear session-derived snapshots after every provider has shut down. */
     public void endSession() {
         frameLights = List.of();
+        retainedLightGroups.clear();
+        retainedLightProviderGenerations.clear();
+        retainedLights = RetainedLightSnapshot.empty(++retainedLightGeneration);
         namedMaterials = Set.of();
         geometryRevisions.clear();
     }
@@ -467,51 +528,22 @@ public final class ProviderManager {
         return materials;
     }
 
-    private SceneSourceEntry primarySceneSource() {
-        SceneSourceEntry selected = null;
-        for (Map.Entry<ResourceId, SceneProvider> entry : scenes().entrySet()) {
-            ProviderKey key = new ProviderKey("scene", entry.getKey());
-            if (failed.contains(key) || stoppedThisSession.contains(key)
-                    || !(entry.getValue() instanceof RendererSceneSource source)) {
-                continue;
-            }
-            if (selected != null) {
-                throw new IllegalStateException("multiple primary scene sources are active: "
-                        + selected.id() + " and " + entry.getKey());
-            }
-            selected = new SceneSourceEntry(entry.getKey(), entry, key, source);
-        }
-        return selected;
-    }
-
-    private SceneSourceEntry requireSceneSource(ResourceId id) {
-        SceneSourceEntry entry = primarySceneSource();
-        if (entry == null || !entry.id().equals(id)) {
-            throw new SceneSourceUnavailableException(id);
-        }
-        return entry;
-    }
-
-    private <T> T invokeSceneSource(SceneSourceEntry entry, String operation, Supplier<T> action, T fallback) {
-        try {
-            return action.get();
-        } catch (Throwable failure) {
-            failed.add(entry.key());
-            CausticaMod.LOGGER.error("Caustica scene provider {} failed during {} and was disabled",
-                    entry.id(), operation, failure);
-            stopOne("scene", entry.provider(), entry.key(), SceneProvider::stop);
-            if (failure instanceof Error error) {
-                throw error;
-            }
-            return fallback;
+    private void submitTextures(Map.Entry<ResourceId, SceneProvider> entry) {
+        if (textureRegistry == null) return;
+        ProviderKey key = new ProviderKey("scene", entry.getKey());
+        if (failed.contains(key) || stoppedThisSession.contains(key)) return;
+        try (ProviderTextureRegistry.Submission submission = textureRegistry.submission(entry.getKey())) {
+            entry.getValue().submitTextures(submission);
+            submission.commit();
         }
     }
 
-    /** The selected primary scene source disappeared while the current frame was being assembled. */
-    public static final class SceneSourceUnavailableException extends RuntimeException {
-        SceneSourceUnavailableException(ResourceId provider) {
-            super("primary scene source is unavailable: " + provider);
-        }
+    private void failSceneTextures(Map.Entry<ResourceId, SceneProvider> entry, Throwable failure) {
+        ProviderKey key = new ProviderKey("scene", entry.getKey());
+        if (!failed.add(key)) return;
+        CausticaMod.LOGGER.error("Caustica scene provider {} failed while submitting textures and was disabled",
+                entry.getKey(), failure);
+        stopOne("scene", entry, key, SceneProvider::stop);
     }
 
     private <T> void invoke(String kind, Map<ResourceId, T> providers, Consumer<T> action, Consumer<T> stop) {
@@ -546,6 +578,8 @@ public final class ProviderManager {
         }
         if (kind.equals("scene")) {
             clearSceneGeometry(GpuContext.currentOrNull(), entry.getKey());
+        } else if (kind.equals("light")) {
+            removeRetainedLights(entry.getKey());
         }
         try {
             action.accept(entry.getValue());
@@ -574,6 +608,9 @@ public final class ProviderManager {
     }
 
     private record GeometryGroupKey(ResourceId source, SceneGeometryKey key) {
+    }
+
+    private record RetainedLightGroupKey(ResourceId source, long key) {
     }
 
     @FunctionalInterface
@@ -607,10 +644,4 @@ public final class ProviderManager {
     private record PublishedGeometryGroup(SceneGeometryKey groupKey, Consumer<SceneGeometrySink.Publication> onPublished) {
     }
 
-    private record SceneSourceEntry(ResourceId id, Map.Entry<ResourceId, SceneProvider> provider,
-                                    ProviderKey key, RendererSceneSource source) {
-    }
-
-    public record PrimaryScene(ResourceId provider, RendererSceneSource.RetainedScene retained) {
-    }
 }

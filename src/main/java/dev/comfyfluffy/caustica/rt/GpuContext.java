@@ -5,6 +5,7 @@ import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
 import dev.comfyfluffy.caustica.api.gpu.GpuDebugScope;
 import dev.comfyfluffy.caustica.spi.vulkan.VulkanQueueRef;
 import dev.comfyfluffy.caustica.spi.vulkan.VulkanRendererBackend;
+import dev.comfyfluffy.caustica.vulkan.VulkanDiagnostics;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.util.vma.Vma;
@@ -139,6 +140,7 @@ public final class GpuContext implements GpuDevice {
                     .pVulkanFunctions(fns);
             PointerBuffer pVma = stack.mallocPointer(1);
             check(Vma.vmaCreateAllocator(aci, pVma), "vmaCreateAllocator(RT)");
+            VulkanDiagnostics.registerAllocator(pVma.get(0));
 
             // RT pipeline limits for SBT layout.
             VkPhysicalDeviceRayTracingPipelinePropertiesKHR rtProps = VkPhysicalDeviceRayTracingPipelinePropertiesKHR
@@ -192,6 +194,11 @@ public final class GpuContext implements GpuDevice {
     @Override
     public VkDevice vk() {
         return vk;
+    }
+
+    @Override
+    public dev.comfyfluffy.caustica.api.gpu.GpuRasterCapabilities rasterCapabilities() {
+        return host.capabilities().raster();
     }
 
     @Override
@@ -553,6 +560,7 @@ public final class GpuContext implements GpuDevice {
             commandPool = 0L;
         }
         if (vma != 0L) {
+            VulkanDiagnostics.registerAllocator(0L);
             Vma.vmaDestroyAllocator(vma);
         }
         instance = null;

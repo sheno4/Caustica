@@ -1,7 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft;
 
-import dev.comfyfluffy.caustica.rt.RtFrameStats.MetricSchema;
-import dev.comfyfluffy.caustica.rt.RtFrameStats.StageMetric;
+import dev.comfyfluffy.caustica.spi.host.HostTelemetry.MetricSchema;
+import dev.comfyfluffy.caustica.spi.host.HostTelemetry.StageMetric;
 
 import java.util.List;
 

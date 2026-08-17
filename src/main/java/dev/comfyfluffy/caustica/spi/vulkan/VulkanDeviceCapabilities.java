@@ -1,0 +1,35 @@
+package dev.comfyfluffy.caustica.spi.vulkan;
+
+import dev.comfyfluffy.caustica.api.gpu.GpuRasterCapabilities;
+import org.lwjgl.vulkan.VK10;
+
+/** Immutable result of host Vulkan-device negotiation and entry-point validation. */
+public record VulkanDeviceCapabilities(
+        boolean rayTracing,
+        boolean shaderExecutionReordering,
+        boolean opacityMicromaps,
+        int maxOpacity4StateSubdivisionLevel,
+        boolean lowLatency,
+        boolean presentIds,
+        boolean hdrMetadata,
+        GpuRasterCapabilities raster) {
+    public VulkanDeviceCapabilities {
+        if (maxOpacity4StateSubdivisionLevel < 0) {
+            throw new IllegalArgumentException("maxOpacity4StateSubdivisionLevel must not be negative");
+        }
+        if (!rayTracing && (shaderExecutionReordering || opacityMicromaps)) {
+            throw new IllegalArgumentException("Ray-tracing subfeatures require ray tracing");
+        }
+        if (!opacityMicromaps && maxOpacity4StateSubdivisionLevel != 0) {
+            throw new IllegalArgumentException("An OMM limit requires opacity-micromap support");
+        }
+        if (presentIds && !lowLatency) {
+            throw new IllegalArgumentException("Present IDs are negotiated only with low-latency support");
+        }
+    }
+
+    public static VulkanDeviceCapabilities unavailable() {
+        return new VulkanDeviceCapabilities(false, false, false, 0, false, false, false,
+                new GpuRasterCapabilities(false, 1.0f, VK10.VK_SAMPLE_COUNT_1_BIT));
+    }
+}

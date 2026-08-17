@@ -33,6 +33,8 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.function.BiFunction;
+import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 
 /**
  * Sequences registered {@link CausticaRenderPass}es by stage and drives their lifecycle. Each pass owns
@@ -68,6 +70,12 @@ public final class RenderPassManager {
     private GpuFrameUse gpuUse;
     private long worldTlas;
     private final Matrix4f worldViewProjection = new Matrix4f();
+    private BiFunction<ResourceId, SceneMesh.TextureReference, Integer> textureResolver =
+            (source, texture) -> { throw new IllegalStateException("provider texture epoch is not available"); };
+
+    public void setTextureResolver(BiFunction<ResourceId, SceneMesh.TextureReference, Integer> resolver) {
+        textureResolver = Objects.requireNonNull(resolver, "resolver");
+    }
 
     /**
      * A pass-published world resource: exactly one of an owned image, a buffer, or a raw view of an image
@@ -494,6 +502,11 @@ public final class RenderPassManager {
         @Override
         public long frameIndex() {
             return frameIndex;
+        }
+
+        @Override
+        public int textureIndex(ResourceId source, SceneMesh.TextureReference texture) {
+            return textureResolver.apply(source, texture);
         }
 
         @Override

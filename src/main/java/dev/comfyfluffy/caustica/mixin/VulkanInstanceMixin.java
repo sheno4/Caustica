@@ -3,7 +3,7 @@ package dev.comfyfluffy.caustica.mixin;
 import com.llamalad7.mixinextras.sugar.Local;
 import com.mojang.blaze3d.vulkan.VulkanInstance;
 import dev.comfyfluffy.caustica.CausticaMod;
-import dev.comfyfluffy.caustica.rt.VulkanDiagnostics;
+import dev.comfyfluffy.caustica.vulkan.VulkanDiagnostics;
 import java.util.Set;
 import org.lwjgl.vulkan.VkInstanceCreateInfo;
 import org.spongepowered.asm.mixin.Final;

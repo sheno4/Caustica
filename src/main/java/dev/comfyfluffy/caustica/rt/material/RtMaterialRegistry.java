@@ -149,7 +149,7 @@ public final class RtMaterialRegistry {
                         RtMaterialOverrides overrides, List<MaterialDefinition> definitions,
                         RtMaterialOverrides.SurfaceResolver surfaces, int runtimeTextureCapacity) {
         Map<ResourceId, RtMaterialPageCompiler.Entry> entries = pageCompiler.preparedEntries();
-        float defaultEmissionLuminance = catalog.defaultUniformEmissionLuminanceCdM2();
+        float fallbackEmissionLuminance = 1.0f;
         List<ResourceId> atlasAssets = catalog.atlasAssets().stream()
                 .map(MaterialTextureAsset::material).toList();
         List<ResourceId> standaloneAssets = catalog.standalone().stream()
@@ -162,7 +162,7 @@ public final class RtMaterialRegistry {
         int profileVariants = MaterialRegistryCompiler.variantCount();
         CompiledTables tables = new CompiledTables(2 + profileVariants + atlasAssets.size() * profileVariants);
         tables.add(compileDesc(TRANSPORT_SURFACE, 0, OpenPbrMaterialProfile.ROUGH_DIELECTRIC, false, true,
-                RtMaterialDesc.EmissionSummary.NONE, defaultEmissionLuminance), transparentWhiteAverage(), fallbackEntry, null,
+                RtMaterialDesc.EmissionSummary.NONE, fallbackEmissionLuminance), transparentWhiteAverage(), fallbackEntry, null,
                 PRIMARY_COVERAGE_CUTOFF, true);
         int[] fallbackVariants = new int[profileVariants];
         for (OpenPbrMaterialProfile profile : TEXTURE_PROFILES) {
@@ -176,7 +176,7 @@ public final class RtMaterialRegistry {
                     }
                     fallbackVariants[variant] = tables.add(
                             compileDesc(transport(topology), 0, profile, emitting, true,
-                                    RtMaterialDesc.EmissionSummary.NONE, defaultEmissionLuminance),
+                                    RtMaterialDesc.EmissionSummary.NONE, fallbackEmissionLuminance),
                             transparentWhiteAverage(), fallbackEntry, null, PRIMARY_COVERAGE_CUTOFF,
                             topology == MaterialTopology.SURFACE);
                 }
@@ -184,7 +184,7 @@ public final class RtMaterialRegistry {
         }
         int nextRuntimeFallbackId = tables.add(
                 compileRuntimeTextureDesc(0, true, RtMaterialDesc.EmissionSummary.NONE,
-                        defaultEmissionLuminance),
+                        fallbackEmissionLuminance),
                 transparentWhiteAverage(), fallbackEntry, null, RUNTIME_TEXTURE_COVERAGE_CUTOFF);
         Map<ResourceId, int[]> ids = new HashMap<>();
         List<MutableCompiledOverride> compiledOverrides = new ArrayList<>();
@@ -211,7 +211,9 @@ public final class RtMaterialRegistry {
                     break;
                 }
             }
-            float dielectricIor = assets.get(material).dielectricIor();
+            MaterialTextureAsset asset = assets.get(material);
+            float dielectricIor = asset.dielectricIor();
+            float uniformEmissionLuminance = asset.uniformEmissionLuminanceCdM2();
             int[] variants = new int[profileVariants];
             for (OpenPbrMaterialProfile profile : TEXTURE_PROFILES) {
                 for (MaterialTopology topology : MaterialTopology.values()) {
@@ -220,7 +222,7 @@ public final class RtMaterialRegistry {
                         RtMaterialDesc desc = compileDesc(transport(topology), features,
                                 profile, emitting, false,
                                 variantSummary(features, emitting, entry, entry.uniformEmissionSummary()),
-                                dielectricIor, defaultEmissionLuminance);
+                                dielectricIor, uniformEmissionLuminance);
                         if (materialWide != null) {
                             desc = materialWide.rule.apply(desc);
                         }
@@ -242,7 +244,7 @@ public final class RtMaterialRegistry {
                             RtMaterialDesc base = compileDesc(transport(topology),
                                     features, profile, emitting, false,
                                     variantSummary(features, emitting, entry, entry.uniformEmissionSummary()),
-                                    dielectricIor, defaultEmissionLuminance);
+                                    dielectricIor, uniformEmissionLuminance);
                             RtMaterialDesc desc = compiled.rule.apply(base);
                             overrideVariants[index(profile, topology, emitting)] = tables.add(desc,
                                     entry.average(), entry, entry.uniformEmissionFootprint(), PRIMARY_COVERAGE_CUTOFF,
@@ -259,11 +261,12 @@ public final class RtMaterialRegistry {
         Map<ResourceId, RuntimeTemplate> nextRuntimeTemplates = new HashMap<>();
         Set<RtMaterialOverrides.Rule> runtimeMatchedOverrides = new HashSet<>();
         for (ResourceId material : standaloneAssets) {
+            MaterialTextureAsset asset = assets.get(material);
             RtMaterialPageCompiler.Entry entry = entries.get(material);
             int features = entry.features() & (FEATURE_SPEC | FEATURE_NORMAL
                     | FEATURE_SUBSURFACE_COLOR_BASE | FEATURE_EMISSION_COLOR_BASE);
             RtMaterialDesc desc = compileRuntimeTextureDesc(features, false, entry.emissionSummary(),
-                    defaultEmissionLuminance);
+                    asset.uniformEmissionLuminanceCdM2());
             for (MutableCompiledOverride compiled : compiledOverridesByMaterial.getOrDefault(material, List.of())) {
                 RtMaterialOverrides.Rule rule = compiled.rule;
                 if (rule.geometry() != null) continue;
@@ -356,8 +359,9 @@ public final class RtMaterialRegistry {
             sbtClasses[i] = (byte) sbtClassOf(tables.bindings.get(i));
         }
         MaterialEpochSnapshot next = new MaterialEpochSnapshot(epoch, Collections.unmodifiableMap(ids), fallbackVariants,
-                defaultEmissionLuminance, catalog.emissionFootprintResolution(),
+                RtMaterialPageCompiler.EMISSION_FOOTPRINT_RESOLUTION,
                 Collections.unmodifiableMap(new HashMap<>(nextNamedMaterialIds)),
+                Collections.unmodifiableMap(new HashMap<>(nextRuntimeTextureIds)), nextRuntimeFallbackId,
                 List.copyOf(descriptions), Collections.unmodifiableList(new ArrayList<>(footprints)),
                 CompiledOverrideLookup.of(frozenOverrides),
                 tables.cutoutVariants.toIntArray(), sbtClasses);
@@ -544,7 +548,7 @@ public final class RtMaterialRegistry {
         return stochasticCoverage ? withStochasticCoverage(id) : id;
     }
 
-    /** Resolve a host atlas reference, appending its stitched UV surface on first use. */
+    /** Resolve a stitched atlas reference, appending its UV surface on first use. */
     public int resolveAtlasReference(AtlasMaterialReference reference, boolean stochasticCoverage) {
         if (reference == null) return runtimeFallbackId(stochasticCoverage);
         Integer current = atlasReferenceIds.get(reference);

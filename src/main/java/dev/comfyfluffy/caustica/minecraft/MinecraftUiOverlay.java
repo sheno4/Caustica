@@ -20,7 +20,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.BindGroupLayouts;
 import net.minecraft.client.renderer.RenderPipelines;
 
-import dev.comfyfluffy.caustica.rt.RtRuntime;
+import dev.comfyfluffy.caustica.spi.host.RendererRuntimeAccess;
 
 /**
  * Transparent final-UI overlay. World-space overlay features and the vanilla GUI/HUD
@@ -76,7 +76,8 @@ public final class MinecraftUiOverlay {
      * GUI on the normal path.
      */
     public static boolean enabled() {
-        return RtRuntime.frameActive() && !compositeFailed && Minecraft.getInstance().isGameLoadFinished();
+        return RendererRuntimeAccess.status().frameActive()
+                && !compositeFailed && Minecraft.getInstance().isGameLoadFinished();
     }
 
     /** Whether the overlay holds this frame's UI (for the HDR present path to composite + consume). */
@@ -190,7 +191,7 @@ public final class MinecraftUiOverlay {
             usedThisFrame = false;
             return;
         }
-        if (RtRuntime.INSTANCE.isHdrPresentActive()) {
+        if (RendererRuntimeAccess.status().hdrPresentation()) {
             // HDR path composites the overlay over the PQ HDR image at present; leave usedThisFrame set so
             // presentHdr can consume it. Do NOT composite over the SDR main target (it isn't presented).
             return;
