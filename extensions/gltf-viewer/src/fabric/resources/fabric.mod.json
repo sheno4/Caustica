@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "id": "caustica_gltf_viewer",
+  "version": "${version}",
+  "name": "Caustica glTF Viewer Example",
+  "description": "Standalone Caustica extension demonstrating glTF scenes and procedural surfaces.",
+  "authors": ["i"],
+  "license": "LGPL-3.0-or-later",
+  "environment": "client",
+  "entrypoints": {
+    "main": [
+      "dev.comfyfluffy.caustica.example.gltfviewer.FabricGltfViewerMod"
+    ],
+    "caustica": [
+      "dev.comfyfluffy.caustica.example.gltfviewer.GltfViewerExtension"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.19.3",
+    "minecraft": "26.2",
+    "java": ">=25",
+    "fabric-api": "*",
+    "caustica": ">=0.1.0"
+  }
+}

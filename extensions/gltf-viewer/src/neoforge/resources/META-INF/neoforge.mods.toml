@@ -1,0 +1,33 @@
+modLoader="javafml"
+loaderVersion="[3,)"
+license="LGPL-3.0-or-later"
+showAsResourcePack=false
+
+[[mods]]
+modId="caustica_gltf_viewer"
+version="${version}"
+displayName="Caustica glTF Viewer Example"
+authors="i"
+description='''Standalone Caustica extension demonstrating glTF scenes and procedural surfaces.'''
+displayTest="IGNORE_ALL_VERSION"
+
+[[dependencies.caustica_gltf_viewer]]
+modId="caustica"
+type="required"
+versionRange="[0.1.0,)"
+ordering="AFTER"
+side="CLIENT"
+
+[[dependencies.caustica_gltf_viewer]]
+modId="neoforge"
+type="required"
+versionRange="[${neoforge_version},)"
+ordering="NONE"
+side="CLIENT"
+
+[[dependencies.caustica_gltf_viewer]]
+modId="minecraft"
+type="required"
+versionRange="[26.2,26.3)"
+ordering="NONE"
+side="CLIENT"

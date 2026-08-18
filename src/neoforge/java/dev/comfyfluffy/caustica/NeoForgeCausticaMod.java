@@ -2,7 +2,6 @@ package dev.comfyfluffy.caustica;
 
 import dev.comfyfluffy.caustica.client.CausticaClientBootstrap;
 import dev.comfyfluffy.caustica.minecraft.CausticaItems;
-import dev.comfyfluffy.caustica.minecraft.CausticaBlocks;
 import dev.comfyfluffy.caustica.platform.CausticaPlatform;
 import dev.comfyfluffy.caustica.platform.NeoForgePlatform;
 import net.minecraft.core.registries.Registries;
@@ -18,8 +17,6 @@ public final class NeoForgeCausticaMod {
     public NeoForgeCausticaMod(IEventBus modBus) {
         CausticaPlatform.install(new NeoForgePlatform());
         modBus.addListener(this::registerItems);
-        modBus.addListener(this::registerBlocks);
-        modBus.addListener(this::registerBlockEntities);
         modBus.addListener(this::clientSetup);
         CausticaMod.initialize();
     }
@@ -35,12 +32,4 @@ public final class NeoForgeCausticaMod {
                 helper::register));
     }
 
-    private void registerBlocks(RegisterEvent event) {
-        event.register(Registries.BLOCK, helper -> CausticaBlocks.registerBlocks(helper::register));
-    }
-
-    private void registerBlockEntities(RegisterEvent event) {
-        event.register(Registries.BLOCK_ENTITY_TYPE,
-                helper -> CausticaBlocks.registerBlockEntities(helper::register));
-    }
 }

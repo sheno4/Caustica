@@ -2,12 +2,23 @@
 
 Status: current API at `CausticaApi.VERSION`. This document uses exact current Java and Slang names.
 
-## Built-in glTF viewer
+## Standalone example extension
 
-The `caustica:gltf_viewer_anchor` block is only a world-transform anchor. It renders the immutable
-scene loaded from `assets/caustica/gltf/viewer/model.glb`; resource packs can replace that exact path
-with any supported GLB. A pack reload rebuilds the shared scene, and each anchor adds only its block
-position to the authored node hierarchy. The viewer never centers, fits, rescales, or bakes transforms.
+`extensions/gltf-viewer` builds as the independent `caustica-gltf-viewer` mod jar. Its Fabric
+`caustica` entrypoint and NeoForge `CausticaExtension` service declaration exercise loader discovery;
+Caustica does not register the example directly. `checkApiBoundary` rejects references to Caustica
+implementation packages from the extension's production sources.
+
+The `caustica_gltf_viewer:gltf_viewer_anchor` block is only a world-transform anchor. It renders the
+immutable scene loaded from `assets/caustica_gltf_viewer/gltf/viewer/model.glb`; resource packs can
+replace that exact path with any supported GLB. A pack reload rebuilds the shared scene, and each anchor
+adds only its block position to the authored node hierarchy. The viewer never centers, fits, rescales,
+or bakes transforms.
+
+The `caustica_gltf_viewer:procedural_surface_anchor` block publishes an API-authored cube at the block
+transform. Its material selects the extension-owned `caustica_gltf_viewer:portal_surface` Slang
+`ISurfaceModel`, proving that shader source, surface registration, material definition and retained
+geometry all cross the standalone jar boundary.
 
 The current subset accepts glTF 2.0 triangle primitives, indexed or implicit indices, node hierarchy,
 `POSITION`, `NORMAL`, `TANGENT`, `COLOR_0`, and `TEXCOORD_0`. It supports PNG/JPEG images, standard
@@ -18,10 +29,10 @@ texture coordinates above zero, and non-repeat wrap modes are rejected explicitl
 are unsupported; a required `KHR_texture_transform` extension is rejected, while optional declarations
 retain their legal core glTF fallback.
 
-For a material with a nonzero `emissiveFactor`, the viewer maps unit emissive strength to Minecraft's
-configured block-emission luminance and multiplies it by `KHR_materials_emissive_strength`, capped at
-65504 cd/m². The emissive texture and factor remain multiplicative color terms; a zero emissive factor
-therefore stays non-emissive even when an emissive texture or the extension is present.
+glTF emissive strength is dimensionless while Caustica material emission is photometric. The example
+viewer explicitly chooses 4000 cd/m² for unit emissive strength, multiplies it by
+`KHR_materials_emissive_strength`, and caps it at 65504 cd/m². The emissive texture and factor remain
+multiplicative color terms; a zero emissive factor therefore stays non-emissive.
 
 ## Registration vocabulary
 
@@ -52,6 +63,10 @@ On Fabric, expose the extension through the `caustica` entrypoint in `fabric.mod
 On NeoForge, expose the same implementation through Java's `ServiceLoader` by listing its binary class
 name in `META-INF/services/dev.comfyfluffy.caustica.api.CausticaExtension`. The extension implementation
 and all provider code remain loader-neutral.
+
+`CausticaExtension` registers renderer contributions, not Minecraft content. A mod that adds blocks or
+items also needs its loader's normal mod initializer, as the standalone example does. Keeping those two
+entrypoints separate lets the feature/provider implementation remain loader-neutral.
 
 ## A compile-valid Java feature
 
@@ -97,7 +112,8 @@ public final class ExampleExtension implements CausticaExtension {
                 .description(DisplayText.translatable("feature.example.crystal.description"))
                 .category(FeatureCategory.GEOMETRY)
                 .runtimeActivation(RuntimeActivation.ALWAYS)
-                .shaderSource(ShaderSource.classpath("/example/caustica/shaders", "surface"))
+                .shaderSource(ShaderSource.classpath(ExampleExtension.class,
+                        "/example/caustica/shaders", "surface"))
                 .surface(SURFACE, "example_crystal_surface", "CrystalSurface")
                 .sceneProvider(SCENE, CrystalScene::new)
                 .lightProvider(LIGHTS, CrystalLight::new)
@@ -465,11 +481,32 @@ Material bindings and named-material resolutions are epoch-local. Do not cache i
 Retain `ResourceId` / `MaterialHandle` and resolve within the frame or resource snapshot supplied by the
 engine.
 
+## Boundary feedback
+
+Shader resources must be anchored to a class owned by the contributing mod. A path alone works only
+while every mod shares Caustica's class loader, so `ShaderSource.classpath(anchor, root, ...)` carries
+resource ownership explicitly. Extension colors likewise cross through public `ColorSpaces` helpers
+because material constants are ACEScg while common asset formats author in sRGB or linear BT.709.
+Slang imports expose public declarations in one composition namespace, so registered binding, surface
+and modifier type names must be globally unique across modules. The registry rejects collisions during
+extension registration rather than letting an ambiguous symbol fail world-program compilation.
+
+The example is source-isolated but still compiles against the complete Caustica mod artifact. A future
+`caustica-api` artifact requires moving the remaining implementation types exposed by public signatures
+(`LightDescriptor`, `EmissionFootprint`, atlas/catalog material types and pass compiler runtime types)
+under the API boundary or replacing them with API-owned contracts. The module boundary check prevents
+new direct implementation imports but cannot make those existing signature dependencies disappear.
+
+Both Caustica and the example are currently client-only mods. Their blocks work in integrated
+single-player, but a dedicated server cannot register or persist them until content registration is
+split into a common-side artifact that does not depend on the renderer.
+
 ## Landed proof consumers
 
 - rounded block clouds: `SceneProvider`, retained `SceneMesh`, named material;
-- glTF viewer anchor: resource-reloadable retained meshes, authored node instances, semantic textures,
-  vertex normals and linear RGBA colors;
+- standalone glTF viewer: real loader discovery, resource-reloadable retained meshes, authored node
+  instances, semantic textures, vertex normals and linear RGBA colors;
+- standalone procedural block: extension-owned Slang source and per-material `ISurfaceModel` dispatch;
 - spotlight helmet: `LightProvider` and `LightDescriptor.Spot`;
 - sun and moon: ordinary `LightDescriptor.Distant` values;
 - end portal: host material rule selecting a registered procedural surface;

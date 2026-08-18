@@ -12,7 +12,7 @@ import dev.comfyfluffy.caustica.engine.material.MaterialVariant;
 import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialDefaults;
 import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialProfile;
 import dev.comfyfluffy.caustica.rt.GpuContext;
-import dev.comfyfluffy.caustica.engine.color.ColorTransforms;
+import dev.comfyfluffy.caustica.api.ColorSpaces;
 import dev.comfyfluffy.caustica.api.gpu.GpuBuffer;
 import dev.comfyfluffy.caustica.rt.accel.RtAccel;
 import dev.comfyfluffy.caustica.rt.gen.MaterialBindingData;
@@ -853,7 +853,7 @@ public final class RtMaterialRegistry {
      * and folding it into the alpha-scaled term would crush exactly the clear-glass case it covers.
      */
     static int translucentShadowTint(float[] average) {
-        float[] acesCg = ColorTransforms.linearBt709ToAcesCg(average[0], average[1], average[2]);
+        float[] acesCg = ColorSpaces.linearBt709ToAcesCg(average[0], average[1], average[2]);
         int packed = 0;
         for (int channel = 0; channel < 3; channel++) {
             float extinction = Math.max(-(float) Math.log(Math.max(acesCg[channel], 1.0e-3f)), 0.0f);

@@ -5,39 +5,75 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * Where a module's {@code .slang} source resolves from: {@code classpathRoot}, then — for on-disk
- * organization only, never a search-path change from the module system's point of view — each of
- * {@code subdirectories} in order, first match wins. A module name never contains a slash, so this stays
- * a bounded, explicit list rather than recursive directory search.
+ * Where a feature's {@code .slang} modules resolve from. The resource anchor owns the class loader;
+ * this is required when an extension is isolated in a separate mod jar. Module lookup checks the
+ * classpath root, then each declared subdirectory in order.
  */
-public record ShaderSource(String classpathRoot, List<String> subdirectories) {
-    public ShaderSource {
-        Objects.requireNonNull(classpathRoot, "classpathRoot");
-        if (!classpathRoot.startsWith("/") || classpathRoot.endsWith("/")
-                || classpathRoot.contains("..") || classpathRoot.contains("\\")) {
-            throw new IllegalArgumentException(
-                    "classpath shader root must be an absolute normalized resource path: " + classpathRoot);
+public final class ShaderSource {
+    private final Class<?> resourceAnchor;
+    private final String classpathRoot;
+    private final List<String> subdirectories;
+
+    /** Uses Caustica's class loader for engine-owned shader resources. */
+    public ShaderSource(String classpathRoot, List<String> subdirectories) {
+        this(ShaderSource.class, classpathRoot, subdirectories);
+    }
+
+    public ShaderSource(Class<?> resourceAnchor, String classpathRoot, List<String> subdirectories) {
+        this.resourceAnchor = Objects.requireNonNull(resourceAnchor, "resourceAnchor");
+        this.classpathRoot = normalizedRoot(classpathRoot);
+        this.subdirectories = List.copyOf(Objects.requireNonNull(subdirectories, "subdirectories"));
+        for (String subdirectory : this.subdirectories) {
+            if (subdirectory.isEmpty() || subdirectory.startsWith("/") || subdirectory.endsWith("/")
+                    || subdirectory.contains("..") || subdirectory.contains("\\")) {
+                throw new IllegalArgumentException("shader subdirectory must be normalized: " + subdirectory);
+            }
         }
-        subdirectories = List.copyOf(Objects.requireNonNull(subdirectories, "subdirectories"));
     }
 
     public static ShaderSource classpath(String root, String... subdirectories) {
-        return new ShaderSource(root, List.of(subdirectories));
+        return new ShaderSource(ShaderSource.class, root, List.of(subdirectories));
+    }
+
+    /** Resolves resources through the class loader that owns {@code resourceAnchor}. */
+    public static ShaderSource classpath(Class<?> resourceAnchor, String root, String... subdirectories) {
+        return new ShaderSource(resourceAnchor, root, List.of(subdirectories));
+    }
+
+    public Class<?> resourceAnchor() {
+        return resourceAnchor;
+    }
+
+    public String classpathRoot() {
+        return classpathRoot;
+    }
+
+    public List<String> subdirectories() {
+        return subdirectories;
     }
 
     public InputStream openModule(String module) {
         Slot.requireSlangIdentifier(module, "module");
-        InputStream direct = ShaderSource.class.getResourceAsStream(classpathRoot + '/' + module + ".slang");
+        InputStream direct = resourceAnchor.getResourceAsStream(classpathRoot + '/' + module + ".slang");
         if (direct != null) {
             return direct;
         }
         for (String subdirectory : subdirectories) {
-            InputStream nested = ShaderSource.class.getResourceAsStream(
+            InputStream nested = resourceAnchor.getResourceAsStream(
                     classpathRoot + '/' + subdirectory + '/' + module + ".slang");
             if (nested != null) {
                 return nested;
             }
         }
         return null;
+    }
+
+    private static String normalizedRoot(String root) {
+        Objects.requireNonNull(root, "classpathRoot");
+        if (!root.startsWith("/") || root.endsWith("/") || root.contains("..") || root.contains("\\")) {
+            throw new IllegalArgumentException(
+                    "classpath shader root must be an absolute normalized resource path: " + root);
+        }
+        return root;
     }
 }

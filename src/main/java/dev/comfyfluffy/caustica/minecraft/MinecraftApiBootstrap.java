@@ -12,7 +12,6 @@ import dev.comfyfluffy.caustica.api.Slot;
 import dev.comfyfluffy.caustica.api.Slots;
 import dev.comfyfluffy.caustica.api.pass.PassShaderCompiler;
 import dev.comfyfluffy.caustica.builtin.BuiltinExtension;
-import dev.comfyfluffy.caustica.minecraft.gltf.GltfViewerExtension;
 import dev.comfyfluffy.caustica.platform.CausticaPlatform;
 import dev.comfyfluffy.caustica.rt.RtRuntime;
 
@@ -26,7 +25,6 @@ public final class MinecraftApiBootstrap {
         CausticaRegistry registry = new CausticaRegistry();
         new BuiltinExtension().register(registry);
         new MinecraftProvidersExtension().register(registry);
-        new GltfViewerExtension().register(registry);
         for (CausticaExtension extension : CausticaPlatform.current().extensions()) {
             try {
                 extension.register(registry);

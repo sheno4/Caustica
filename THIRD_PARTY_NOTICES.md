@@ -68,7 +68,7 @@ under Creative Commons CC0 1.0 Universal:
 
 ## Khronos Lantern glTF asset
 
-Caustica includes the binary Lantern sample model from the Khronos glTF Sample
+The standalone glTF viewer example includes the binary Lantern sample model from the Khronos glTF Sample
 Assets repository as a textured renderer integration fixture. The asset is
 dedicated to the public domain under Creative Commons CC0 1.0 Universal:
 

@@ -51,6 +51,10 @@ sourceSets.main.resources.srcDir("src/${loader}/resources")
 
 // The renderer only attaches to the Vulkan backend, so every dev client run needs these.
 def CLIENT_PROGRAM_ARGUMENTS = ["--renderDebugLabels", "--graphicsBackend", "VULKAN"]
+def quickPlayWorld = findProperty("quickPlayWorld")?.toString()
+if (quickPlayWorld) {
+	CLIENT_PROGRAM_ARGUMENTS.addAll("--quickPlaySingleplayer", quickPlayWorld)
+}
 
 // Heap and GC tuning for dev client runs only. These belong on the run configuration rather than
 // JAVA_TOOL_OPTIONS, which every forked JVM inherits — including NeoForge's JDK 21 tooling JVM, which
@@ -134,6 +138,9 @@ dependencies {
 }
 
 processResources {
+	doFirst {
+		delete(destinationDir)
+	}
 	inputs.property "version", project.version
 	inputs.property "neoforge_version", project.neoforge_version
 

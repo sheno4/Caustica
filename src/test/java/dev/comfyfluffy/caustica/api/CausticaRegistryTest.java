@@ -144,6 +144,23 @@ final class CausticaRegistryTest {
     }
 
     @Test
+    void rejectsShaderTypeNamesThatWouldBeAmbiguousAcrossModules() {
+        CausticaRegistry registry = builtins();
+        registry.feature(ResourceId.of("test", "first_surface"))
+                .shaderSource(ShaderSource.classpath("/test/shaders"))
+                .surface(ResourceId.of("test", "first"), "first_module", "SharedSurface")
+                .register();
+
+        IllegalStateException failure = assertThrows(IllegalStateException.class, () -> registry.feature(
+                        ResourceId.of("test", "second_surface"))
+                .shaderSource(ShaderSource.classpath("/test/shaders"))
+                .surface(ResourceId.of("test", "second"), "second_module", "SharedSurface")
+                .register());
+
+        assertTrue(failure.getMessage().contains("globally unique"));
+    }
+
+    @Test
     void runtimeFactoriesFollowRuntimeActivationRatherThanProgramClosure() {
         CausticaRegistry registry = builtins();
         AtomicInteger selectedFactories = new AtomicInteger();

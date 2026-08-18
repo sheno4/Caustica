@@ -127,6 +127,5 @@
 	"caustica.option.caustica.minecraft.sky.horizon-soften-degrees": "Horizon Softness",
 	"caustica.option.caustica.minecraft.sky.horizon-soften-degrees.tooltip": "How far the horizon is blurred, in degrees, to hide the hard edge of the sky model.",
 
-	"item.caustica.spotlight_helmet": "Spotlight Helmet",
-	"block.caustica.gltf_viewer_anchor": "glTF Viewer Anchor"
+	"item.caustica.spotlight_helmet": "Spotlight Helmet"
 }

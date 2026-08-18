@@ -20,6 +20,7 @@ public final class CausticaRegistry {
     private final Map<ResourceId, Feature> sceneProviderOwners = new LinkedHashMap<>();
     private final Map<ResourceId, Feature> lightProviderOwners = new LinkedHashMap<>();
     private final Map<ResourceId, Feature> materialSourceOwners = new LinkedHashMap<>();
+    private final Map<String, String> shaderTypeModules = new LinkedHashMap<>();
     private final Map<Slot, ResourceId> defaults = new LinkedHashMap<>();
     private final Map<Slot, ResourceId> selected = new LinkedHashMap<>();
     /**
@@ -58,7 +59,15 @@ public final class CausticaRegistry {
                 throw new IllegalStateException("duplicate surface modifier id " + modifier.id());
             }
         }
+        Map<String, String> declaredShaderTypes = new LinkedHashMap<>();
+        feature.bindings().values().forEach(binding -> requireUnambiguousShaderType(
+                declaredShaderTypes, binding.module(), binding.type(), feature.id()));
+        feature.surfaces().forEach(surface -> requireUnambiguousShaderType(
+                declaredShaderTypes, surface.module(), surface.type(), feature.id()));
+        feature.surfaceModifiers().forEach(modifier -> requireUnambiguousShaderType(
+                declaredShaderTypes, modifier.module(), modifier.type(), feature.id()));
         features.put(feature.id(), feature);
+        shaderTypeModules.putAll(declaredShaderTypes);
         surfaces.addAll(feature.surfaces());
         surfaceModifiers.addAll(feature.surfaceModifiers());
         for (RenderPassRegistration renderPass : feature.renderPasses()) {
@@ -70,6 +79,17 @@ public final class CausticaRegistry {
                 lightProviderOwners.put(registration.id(), feature));
         feature.materialSources().forEach(registration ->
                 materialSourceOwners.put(registration.id(), feature));
+    }
+
+    private void requireUnambiguousShaderType(Map<String, String> declared, String module,
+                                              String type, ResourceId featureId) {
+        String existingModule = declared.getOrDefault(type, shaderTypeModules.get(type));
+        if (existingModule != null && !existingModule.equals(module)) {
+            throw new IllegalStateException("feature " + featureId + " declares shader type " + type
+                    + " in module " + module + ", but the composition already imports that type from "
+                    + existingModule + "; extension shader type names must be globally unique");
+        }
+        declared.put(type, module);
     }
 
     public synchronized void setDefault(Slot slot, ResourceId featureId) {
