@@ -1,9 +1,10 @@
-package dev.comfyfluffy.caustica.engine.material;
+package dev.comfyfluffy.caustica.api.provider;
 
 /** One lazily opened, host-canonicalized OpenPBR texture bundle. */
 public interface MaterialTextureImage extends AutoCloseable {
     int width();
     int height();
+    /** sRGB-encoded base color and linear alpha packed as ARGB8. */
     int albedoArgb(int x, int y);
 
     /** Number of distinct mip-zero alpha frames, exhaustive for the resource epoch. */

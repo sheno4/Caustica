@@ -26,11 +26,13 @@ final class RtMaterialTextureData {
     private RtMaterialTextureData() {
     }
 
-    record Level(int width, int height, float[] surface0, float[] normal, float[] surface1) {
+    record Level(int width, int height, float[] surface0, float[] normal, float[] surface1,
+                 float[] emissionColor) {
         Level {
             int values = Math.multiplyExact(Math.multiplyExact(width, height), CHANNELS);
             if (width <= 0 || height <= 0 || surface0.length != values
-                    || normal.length != values || surface1.length != values) {
+                    || normal.length != values || surface1.length != values
+                    || emissionColor.length != values) {
                 throw new IllegalArgumentException("Invalid canonical material level");
             }
         }
@@ -57,12 +59,15 @@ final class RtMaterialTextureData {
         float[] surface0 = new float[width * height * CHANNELS];
         float[] normal = new float[surface0.length];
         float[] surface1 = new float[surface0.length];
+        float[] emissionColor = new float[surface0.length];
         for (int y = 0; y < height; y++) {
             for (int x = 0; x < width; x++) {
                 float alphaSum = 0.0f;
                 float metal = 0.0f, emission = 0.0f, sss = 0.0f;
                 float nx = 0.0f, ny = 0.0f, nz = 0.0f, heightValue = 0.0f;
                 float specR = 0.0f, specG = 0.0f, specB = 0.0f, ior = 0.0f;
+                float emissionR = 0.0f, emissionG = 0.0f, emissionB = 0.0f;
+                float emissionWeight = 0.0f;
                 int samples = 0;
                 for (int oy = 0; oy < 2; oy++) {
                     int sy = y * 2 + oy;
@@ -75,6 +80,11 @@ final class RtMaterialTextureData {
                         alphaSum += roughness * roughness;
                         metal += src.surface0[si + 1];
                         emission += src.surface0[si + 2];
+                        float weight = src.surface0[si + 2];
+                        emissionR += src.emissionColor[si] * weight;
+                        emissionG += src.emissionColor[si + 1] * weight;
+                        emissionB += src.emissionColor[si + 2] * weight;
+                        emissionWeight += weight;
                         sss += src.surface0[si + 3];
 
                         float tx = src.normal[si] * 2.0f - 1.0f;
@@ -120,9 +130,14 @@ final class RtMaterialTextureData {
                 surface1[di + 1] = clamp01(specG * inv);
                 surface1[di + 2] = clamp01(specB * inv);
                 surface1[di + 3] = clamp01(ior * inv);
+                float emissionInv = emissionWeight > 1.0e-6f ? 1.0f / emissionWeight : 0.0f;
+                emissionColor[di] = clamp01(emissionR * emissionInv);
+                emissionColor[di + 1] = clamp01(emissionG * emissionInv);
+                emissionColor[di + 2] = clamp01(emissionB * emissionInv);
+                emissionColor[di + 3] = 1.0f;
             }
         }
-        return new Level(width, height, surface0, normal, surface1);
+        return new Level(width, height, surface0, normal, surface1, emissionColor);
     }
 
     static int unorm8(float value) {

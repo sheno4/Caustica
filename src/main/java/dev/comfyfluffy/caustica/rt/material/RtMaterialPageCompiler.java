@@ -4,12 +4,12 @@ import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.engine.material.EmissionFootprint;
 import dev.comfyfluffy.caustica.engine.material.MaterialCatalog;
-import dev.comfyfluffy.caustica.engine.material.MaterialTextureImage;
-import dev.comfyfluffy.caustica.engine.material.MaterialTextureAsset;
-import dev.comfyfluffy.caustica.engine.material.MaterialUv;
+import dev.comfyfluffy.caustica.api.provider.MaterialTextureImage;
+import dev.comfyfluffy.caustica.api.provider.MaterialTextureAsset;
+import dev.comfyfluffy.caustica.api.provider.MaterialUv;
 import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialDefaults;
-import dev.comfyfluffy.caustica.engine.material.OpenPbrColorBinding;
-import dev.comfyfluffy.caustica.engine.material.OpenPbrTextureTexel;
+import dev.comfyfluffy.caustica.api.provider.OpenPbrColorBinding;
+import dev.comfyfluffy.caustica.api.provider.OpenPbrTextureTexel;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.pipeline.RtPipeline;
 
@@ -42,6 +42,7 @@ public final class RtMaterialPageCompiler {
     private RtMaterialPageTexture neutralSurface0;
     private RtMaterialPageTexture neutralNormal;
     private RtMaterialPageTexture neutralSurface1;
+    private RtMaterialPageTexture neutralEmission;
     private RtMaterialPageTexture neutralTemporalAlpha;
     private RtMaterialPageTexture neutralStaticAlpha;
 
@@ -64,12 +65,14 @@ public final class RtMaterialPageCompiler {
     }
 
     private record Page(RtMaterialPageTexture surface0, RtMaterialPageTexture normal,
-                        RtMaterialPageTexture surface1, RtMaterialPageTexture staticAlpha,
+                        RtMaterialPageTexture surface1, RtMaterialPageTexture emission,
+                        RtMaterialPageTexture staticAlpha,
                         RtMaterialPageTexture temporalAlpha, int index) {
         void destroy() {
             if (surface0 != null) surface0.destroy();
             if (normal != null) normal.destroy();
             if (surface1 != null) surface1.destroy();
+            if (emission != null) emission.destroy();
             if (staticAlpha != null) staticAlpha.destroy();
             if (temporalAlpha != null) temporalAlpha.destroy();
         }
@@ -149,9 +152,10 @@ public final class RtMaterialPageCompiler {
         if (neutralSurface0 != null) neutralSurface0.destroy();
         if (neutralNormal != null) neutralNormal.destroy();
         if (neutralSurface1 != null) neutralSurface1.destroy();
+        if (neutralEmission != null) neutralEmission.destroy();
         if (neutralTemporalAlpha != null) neutralTemporalAlpha.destroy();
         if (neutralStaticAlpha != null) neutralStaticAlpha.destroy();
-        neutralSurface0 = neutralNormal = neutralSurface1 = neutralTemporalAlpha = neutralStaticAlpha = null;
+        neutralSurface0 = neutralNormal = neutralSurface1 = neutralEmission = neutralTemporalAlpha = neutralStaticAlpha = null;
         compiledPageSize = 0;
     }
 
@@ -194,6 +198,7 @@ public final class RtMaterialPageCompiler {
             RtMaterialPagePlanner.Layout layout = plan.layouts().get(pageIndex);
             pagePixels[pageIndex] = new MaterialPagePacker(pageSize, mipCount, GUTTER,
                     layout.has(RtMaterialPagePlanner.CHANNEL_MATERIAL),
+                    layout.has(RtMaterialPagePlanner.CHANNEL_EMISSION),
                     layout.has(RtMaterialPagePlanner.CHANNEL_STATIC_ALPHA),
                     layout.has(RtMaterialPagePlanner.CHANNEL_TEMPORAL_ALPHA));
         }
@@ -242,6 +247,9 @@ public final class RtMaterialPageCompiler {
                 RtMaterialPageTexture surface1 = owned.own(pixels.surface1 == null ? null
                         : new RtMaterialPageTexture(ctx, pageSize, pageSize, pixels.surface1,
                         "material surface1 page " + pageIndex));
+                RtMaterialPageTexture emission = owned.own(pixels.emission == null ? null
+                        : new RtMaterialPageTexture(ctx, pageSize, pageSize, pixels.emission,
+                        "material emission page " + pageIndex));
                 RtMaterialPageTexture staticAlpha = owned.own(pixels.staticAlpha == null ? null
                         : new RtMaterialPageTexture(ctx, pageSize, pageSize, pixels.staticAlpha,
                         "material static alpha page " + pageIndex, true,
@@ -250,7 +258,7 @@ public final class RtMaterialPageCompiler {
                         : new RtMaterialPageTexture(ctx, pageSize, pageSize, pixels.temporalAlpha,
                         "material temporal alpha page " + pageIndex, true,
                         org.lwjgl.vulkan.VK10.VK_FORMAT_R8G8_UNORM));
-                pages.add(new Page(surface0, normal, surface1, staticAlpha, temporalAlpha, pageIndex));
+                pages.add(new Page(surface0, normal, surface1, emission, staticAlpha, temporalAlpha, pageIndex));
                 owned.transfer();
             } catch (Throwable failure) {
                 owned.destroy(RtMaterialPageTexture::destroy);
@@ -262,6 +270,7 @@ public final class RtMaterialPageCompiler {
         neutralSurface1 = neutral(ctx, 255, 255, 255,
                 RtMaterialTextureData.unorm8(MaterialPagePacker.encodeIor(OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR)),
                 "material neutral surface1", false);
+        neutralEmission = neutral(ctx, 255, 255, 255, 255, "material neutral emission", false);
         neutralTemporalAlpha = new RtMaterialPageTexture(ctx, 1, 1,
                 List.of(new byte[]{0, (byte) 255}), "material neutral temporal alpha", true,
                 org.lwjgl.vulkan.VK10.VK_FORMAT_R8G8_UNORM);
@@ -284,7 +293,8 @@ public final class RtMaterialPageCompiler {
     public void bindPages(RtPipeline pipeline, long sampler) {
         for (Page page : pages) {
             pipeline.setMaterialPage(page.index(), view(page.surface0(), neutralSurface0),
-                    view(page.normal(), neutralNormal), view(page.surface1(), neutralSurface1), sampler);
+                    view(page.normal(), neutralNormal), view(page.surface1(), neutralSurface1),
+                    view(page.emission(), neutralEmission), sampler);
         }
     }
 
@@ -313,6 +323,9 @@ public final class RtMaterialPageCompiler {
     static int pageChannels(int features, boolean staticAlpha, boolean temporalAlpha) {
         int channels = (features & MATERIAL_TEXTURE_FEATURES) != 0
                 ? RtMaterialPagePlanner.CHANNEL_MATERIAL : 0;
+        if ((features & RtMaterialRegistry.FEATURE_EMISSION_MASK) != 0) {
+            channels |= RtMaterialPagePlanner.CHANNEL_EMISSION;
+        }
         if (staticAlpha) channels |= RtMaterialPagePlanner.CHANNEL_STATIC_ALPHA;
         if (temporalAlpha) channels |= RtMaterialPagePlanner.CHANNEL_TEMPORAL_ALPHA;
         return channels;

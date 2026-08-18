@@ -2,6 +2,27 @@
 
 Status: current API at `CausticaApi.VERSION`. This document uses exact current Java and Slang names.
 
+## Built-in glTF viewer
+
+The `caustica:gltf_viewer_anchor` block is only a world-transform anchor. It renders the immutable
+scene loaded from `assets/caustica/gltf/viewer/model.glb`; resource packs can replace that exact path
+with any supported GLB. A pack reload rebuilds the shared scene, and each anchor adds only its block
+position to the authored node hierarchy. The viewer never centers, fits, rescales, or bakes transforms.
+
+The current subset accepts glTF 2.0 triangle primitives, indexed or implicit indices, node hierarchy,
+`POSITION`, `NORMAL`, `TANGENT`, `COLOR_0`, and `TEXCOORD_0`. It supports PNG/JPEG images, standard
+base-color, metallic-roughness, normal, and emissive textures, alpha modes and cutoff, plus uniform
+`KHR_materials_ior`, `KHR_materials_transmission`, and `KHR_materials_emissive_strength`. Required
+extensions outside that set, compressed or sparse geometry, morph targets, transmission textures,
+texture coordinates above zero, and non-repeat wrap modes are rejected explicitly. Texture transforms
+are unsupported; a required `KHR_texture_transform` extension is rejected, while optional declarations
+retain their legal core glTF fallback.
+
+For a material with a nonzero `emissiveFactor`, the viewer maps unit emissive strength to Minecraft's
+configured block-emission luminance and multiplies it by `KHR_materials_emissive_strength`, capped at
+65504 cd/m². The emissive texture and factor remain multiplicative color terms; a zero emissive factor
+therefore stays non-emissive even when an emissive texture or the extension is present.
+
 ## Registration vocabulary
 
 - An **extension** implements `CausticaExtension` and registers one or more features.
@@ -208,7 +229,10 @@ world-space placement of one retained mesh; `Transform` changes that placement; 
 retires mesh data after its placements have been removed. Omitting a previously submitted group means no
 change. Repeating an unchanged `Put` pays a real re-upload and acceleration rebuild because the renderer does
 not diff mesh bytes. `SceneMesh` carries one material surface per triangle. Positions are mesh-local floats;
-translation remains double precision in `GeometryTransform` until renderer rebasing.
+translation remains double precision in `GeometryTransform` until renderer rebasing. Optional vertex normals
+contain one mesh-local XYZ vector per indexed vertex. Optional vertex colors contain one linear BT.709 RGBA
+multiplier per indexed vertex. Empty attribute arrays select the normal and RGB tint stored in each triangle's
+`TriangleSurface` instead; the fallback color has alpha one.
 
 A mesh also survives its provider only as long as the provider stays live: the engine releases every mesh
 still retained by a provider that stopped (failure or session end) without releasing them itself. The
@@ -269,8 +293,12 @@ spotlight helmet is `Spot`. These finite and distant records are the public ligh
 - `submit(MaterialRule)` for an ordered override of a texture material and optional geometry key;
 - `submitAsset(MaterialTextureAsset)` for a neutral texture asset compiled in the same epoch.
 
-Definitions are textureless named values. Their base color is scene-linear ACEScg. A null `surface`
-selects the built-in surface; otherwise it names a registered `ISurfaceModel` implementation.
+`MaterialDefinition` is the complete named declaration. Its uniform colors are scene-linear ACEScg and
+its optional `MaterialTextureAsset` supplies semantic per-texel streams under the same material handle.
+The renderer multiplies sampled base color, roughness, metalness, subsurface weight, emissive RGB and
+emission weight by the corresponding uniform factors. A null `surface` selects the built-in surface;
+otherwise it names a registered `ISurfaceModel` implementation. All declaration, texture-source, image,
+texel, color-binding and UV types are in `dev.comfyfluffy.caustica.api.provider`.
 
 `MaterialTopology` is explicit:
 
@@ -278,8 +306,15 @@ selects the built-in surface; otherwise it names a registered `ISurfaceModel` im
 - `MEDIUM_BOUNDARY` creates an interface tracked by the engine medium stack.
 
 Topology is independent of `transmissionWeight`. A `SURFACE` with nonzero transmission remains a thin
-sheet. A `MEDIUM_BOUNDARY` does not become a surface when transmission is zero. Coverage is likewise not
-part of `MaterialDefinition`; geometry/binding derivation selects opaque, cutout or stochastic coverage.
+sheet. A `MEDIUM_BOUNDARY` does not become a surface when transmission is zero. `alphaCutoff` belongs to
+the definition, while geometry/binding derivation still selects opaque, cutout or stochastic coverage.
+
+Semantic texture flags declare the authored streams: `surfaceParameters` enables roughness, metalness,
+IOR and subsurface weight; `normalMap` enables tangent-space normals; and `emissionMask` enables both the
+scalar emission weight and independent linear-BT.709 emissive RGB. The emissive texture is multiplied by
+the definition's ACEScg `emissionColor` and `emissionLuminanceCdM2`. Set an attached asset's
+`uniformEmissionLuminanceCdM2` to zero because the definition owns that uniform; the asset-level value is
+only used when an asset is submitted without a matching definition.
 
 Rules use source-neutral identifiers:
 
@@ -295,7 +330,8 @@ sink.submit(new MaterialRule(
                 1.52f,       // specularIor
                 null,        // inherit transmissionWeight
                 null,        // inherit emission luminance
-                SURFACE)));  // registered surface, or null
+                SURFACE,     // registered surface, or null
+                MaterialTopology.SURFACE))); // explicit topology override, or null
 ```
 
 The first matching rule owns the material. The host adapter decides how its resource system maps to
@@ -303,7 +339,7 @@ The first matching rule owns the material. The host adapter decides how its reso
 Minecraft translates resource-pack JSON and logical texture/block IDs here; those types never cross into
 the engine material API.
 
-Each texture asset owns its source and optional uniform-emission calibration. Independent material sources do
+Each standalone texture asset owns its source and optional uniform-emission calibration. Independent material sources do
 not negotiate host-wide atlas or luminance policy. Integer material bindings, surface indices, bindless
 texture indices and compiled pages are private to a resource epoch. Geometry retains `MaterialHandle`, never
 an integer ID.
@@ -432,6 +468,8 @@ engine.
 ## Landed proof consumers
 
 - rounded block clouds: `SceneProvider`, retained `SceneMesh`, named material;
+- glTF viewer anchor: resource-reloadable retained meshes, authored node instances, semantic textures,
+  vertex normals and linear RGBA colors;
 - spotlight helmet: `LightProvider` and `LightDescriptor.Spot`;
 - sun and moon: ordinary `LightDescriptor.Distant` values;
 - end portal: host material rule selecting a registered procedural surface;

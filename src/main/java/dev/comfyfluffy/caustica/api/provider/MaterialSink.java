@@ -9,5 +9,5 @@ public interface MaterialSink {
     void submit(MaterialRule rule);
 
     /** Contribute one neutral texture asset compiled with this source's materials for the resource epoch. */
-    void submitAsset(dev.comfyfluffy.caustica.engine.material.MaterialTextureAsset asset);
+    void submitAsset(MaterialTextureAsset asset);
 }

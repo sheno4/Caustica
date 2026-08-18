@@ -1,7 +1,7 @@
 package dev.comfyfluffy.caustica.rt.material;
 
-import dev.comfyfluffy.caustica.engine.material.MaterialTextureImage;
-import dev.comfyfluffy.caustica.engine.material.OpenPbrTextureTexel;
+import dev.comfyfluffy.caustica.api.provider.MaterialTextureImage;
+import dev.comfyfluffy.caustica.api.provider.OpenPbrTextureTexel;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;

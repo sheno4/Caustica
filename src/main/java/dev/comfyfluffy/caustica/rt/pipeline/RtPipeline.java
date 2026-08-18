@@ -582,10 +582,11 @@ public final class RtPipeline {
 
     /** Bind one compact canonical page bundle at a resource-epoch boundary. */
     public void setMaterialPage(int page, long surface0View, long normalView, long surface1View,
-                                long sampler) {
+                                long emissionView, long sampler) {
         setBindlessTexture(WORLD_MATERIAL_SURFACE0, page, surface0View, sampler);
         setBindlessTexture(WORLD_MATERIAL_NORMAL, page, normalView, sampler);
         setBindlessTexture(WORLD_MATERIAL_SURFACE1, page, surface1View, sampler);
+        setBindlessTexture(WORLD_MATERIAL_EMISSION, page, emissionView, sampler);
     }
 
     private void setBindlessTexture(int binding, int slot, long imageView, long sampler) {

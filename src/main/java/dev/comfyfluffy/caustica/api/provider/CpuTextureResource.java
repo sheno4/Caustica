@@ -5,7 +5,9 @@ import java.util.Objects;
 /** Immutable, tightly packed RGBA8 texture content copied from provider-owned CPU memory. */
 public final class CpuTextureResource implements TextureResource {
     public enum Encoding {
+        /** RGB bytes already encode linear values; alpha is always linear. */
         LINEAR,
+        /** RGB bytes use the sRGB transfer function and are decoded once by the sampled image view. */
         SRGB
     }
 

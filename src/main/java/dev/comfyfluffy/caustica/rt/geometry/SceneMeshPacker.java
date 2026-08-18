@@ -12,12 +12,14 @@ final class SceneMeshPacker {
 
     static PackedInput pack(SceneMesh mesh, RtGeometryMaterialResolver materialResolver) {
         RtGeometryMeshPacking.PackedMesh packed = RtGeometryMeshPacking.pack(mesh, materialResolver);
-        return new PackedInput(packed.positions(), packed.indices(), packed.textureCoordinates(), packed.primitives(),
-                packed.classTriangles(), packed.flags());
+        return new PackedInput(packed.positions(), packed.indices(), packed.textureCoordinates(),
+                packed.vertexNormals(), packed.vertexColors(), packed.primitives(), packed.classTriangles(),
+                packed.flags());
     }
 
     /** Renderer-private packed representation of a source-neutral scene mesh. */
-    static record PackedInput(float[] positions, int[] indices, float[] textureCoordinates, float[] primitives,
+    static record PackedInput(float[] positions, int[] indices, float[] textureCoordinates,
+                              float[] vertexNormals, float[] vertexColors, float[] primitives,
                               int[] classTriangles, int semanticFlags) {
         PackedInput {
             if (positions.length == 0 || positions.length % 3 != 0 || indices.length == 0 || indices.length % 3 != 0) {
@@ -47,6 +49,18 @@ final class SceneMeshPacker {
             if (textureCoordinates.length != expectedTextureCoordinates) {
                 throw new IllegalArgumentException(
                         "packed geometry texture coordinates do not match their declared layout");
+            }
+            if (vertexNormals.length != 0 && vertexNormals.length != vertexCount * 3) {
+                throw new IllegalArgumentException("packed geometry vertex normals do not match its vertices");
+            }
+            if (vertexColors.length != 0 && vertexColors.length != vertexCount * 4) {
+                throw new IllegalArgumentException("packed geometry vertex colors do not match its vertices");
+            }
+            if ((vertexNormals.length != 0) != ((semanticFlags & RtGeometryAbi.FLAG_HAS_VERTEX_NORMALS) != 0)) {
+                throw new IllegalArgumentException("packed geometry vertex-normal flag does not match its data");
+            }
+            if ((vertexColors.length != 0) != ((semanticFlags & RtGeometryAbi.FLAG_HAS_VERTEX_COLORS) != 0)) {
+                throw new IllegalArgumentException("packed geometry vertex-color flag does not match its data");
             }
             if (primitives.length != triangleCount * 12) {
                 throw new IllegalArgumentException("packed geometry must provide one primitive record per triangle");
@@ -84,20 +98,22 @@ final class SceneMeshPacker {
     }
 
     record PackedLayout(long positionOffset, long indexOffset, long textureCoordinateOffset,
-                        long primitiveOffset, long totalBytes) {
+                        long vertexNormalOffset, long vertexColorOffset, long primitiveOffset, long totalBytes) {
         static PackedLayout create(int positionFloats, int indexInts, int textureCoordinateFloats,
-                                   int primitiveFloats) {
+                                   int vertexNormalFloats, int vertexColorFloats, int primitiveFloats) {
             long positionBytes = (long) positionFloats * Float.BYTES;
             long indexOffset = align(positionBytes);
             long textureOffset = align(indexOffset + (long) indexInts * Integer.BYTES);
-            long primitiveOffset = align(textureOffset + (long) textureCoordinateFloats * Float.BYTES);
-            return new PackedLayout(0L, indexOffset, textureOffset, primitiveOffset,
+            long normalOffset = align(textureOffset + (long) textureCoordinateFloats * Float.BYTES);
+            long colorOffset = align(normalOffset + (long) vertexNormalFloats * Float.BYTES);
+            long primitiveOffset = align(colorOffset + (long) vertexColorFloats * Float.BYTES);
+            return new PackedLayout(0L, indexOffset, textureOffset, normalOffset, colorOffset, primitiveOffset,
                     align(primitiveOffset + (long) primitiveFloats * Float.BYTES));
         }
 
         PackedLayout shifted(long base) {
             return new PackedLayout(positionOffset + base, indexOffset + base, textureCoordinateOffset + base,
-                    primitiveOffset + base, totalBytes + base);
+                    vertexNormalOffset + base, vertexColorOffset + base, primitiveOffset + base, totalBytes + base);
         }
 
         private static long align(long value) {

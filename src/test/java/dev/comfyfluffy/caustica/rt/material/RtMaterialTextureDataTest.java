@@ -21,6 +21,25 @@ final class RtMaterialTextureDataTest {
     }
 
     @Test
+    void reducesEmissionColorWeightedByEmissionMask() {
+        float[] surface0 = repeatedNormal(4, 0.5f, 0.0f, 0.0f, 0.0f);
+        surface0[2] = 1.0f;
+        surface0[6] = 0.5f;
+        float[] colors = {
+                1, 0, 0, 1,
+                0, 0, 1, 1,
+                0, 1, 0, 1,
+                0, 1, 0, 1
+        };
+        RtMaterialTextureData.Level reduced = RtMaterialTextureData.reduce(new RtMaterialTextureData.Level(
+                2, 2, surface0, repeatedNormal(4, 0.5f, 0.5f, 1.0f, 0.0f),
+                repeatedNormal(4, 1, 1, 1, 0), colors));
+        assertEquals(2.0f / 3.0f, reduced.emissionColor()[0], EPS);
+        assertEquals(0.0f, reduced.emissionColor()[1], EPS);
+        assertEquals(1.0f / 3.0f, reduced.emissionColor()[2], EPS);
+    }
+
+    @Test
     void renormalizesNormalsAndRaisesRoughnessForLostDetail() {
         float[] normal = {
                 1.0f, 0.5f, 1.0f, 0.0f,
@@ -62,7 +81,8 @@ final class RtMaterialTextureDataTest {
         RtMaterialTextureData.Level src = new RtMaterialTextureData.Level(3, 1,
                 repeatedNormal(pixels, 0.5f, 0.0f, 0.25f, 0.0f),
                 repeatedNormal(pixels, 0.5f, 0.5f, 1.0f, 0.0f),
-                repeatedNormal(pixels, 0.04f, 0.04f, 0.04f, 0.0f));
+                repeatedNormal(pixels, 0.04f, 0.04f, 0.04f, 0.0f),
+                repeatedNormal(pixels, 1.0f, 1.0f, 1.0f, 1.0f));
         RtMaterialTextureData.Level reduced = RtMaterialTextureData.reduce(src);
         assertEquals(2, reduced.width());
         assertEquals(1, reduced.height());
@@ -70,7 +90,8 @@ final class RtMaterialTextureDataTest {
     }
 
     private static RtMaterialTextureData.Level level(float[] surface0, float[] normal, float[] surface1) {
-        return new RtMaterialTextureData.Level(2, 2, surface0, normal, surface1);
+        return new RtMaterialTextureData.Level(2, 2, surface0, normal, surface1,
+                repeatedNormal(4, 1.0f, 1.0f, 1.0f, 1.0f));
     }
 
     private static float[] repeatedNormal(int count, float x, float y, float z, float w) {

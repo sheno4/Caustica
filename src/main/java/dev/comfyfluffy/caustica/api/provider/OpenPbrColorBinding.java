@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.engine.material;
+package dev.comfyfluffy.caustica.api.provider;
 
 /** Declares how a texture bundle supplies a canonical OpenPBR color parameter. */
 public enum OpenPbrColorBinding {

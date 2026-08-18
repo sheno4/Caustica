@@ -18,7 +18,7 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
     if (coverage == COVERAGE_OPAQUE) {
         return;
     }
-    float alpha = clamp(sampleCoverageTexel(hit).a, 0.0, 1.0);
+    float alpha = hitCoverageAlpha(hit, sampleCoverageTexel(hit).a);
     if (coverage == COVERAGE_STOCHASTIC && (payload.flags & PAYLOAD_GUIDE_RAY) == 0u) {
         if (stochasticAlphaThreshold(pid) >= alpha) {
             IgnoreHit();

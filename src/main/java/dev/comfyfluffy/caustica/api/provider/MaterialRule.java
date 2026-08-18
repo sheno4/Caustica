@@ -28,7 +28,12 @@ public record MaterialRule(ResourceId id, Match match, Parameters parameters) {
      */
     public record Parameters(Float specularRoughness, Float baseMetalness,
                              Float specularIor, Float transmissionWeight,
-                             Float emissionLuminanceCdM2, ResourceId surface) {
+                             Float emissionLuminanceCdM2, ResourceId surface, MaterialTopology topology) {
+        public Parameters(Float specularRoughness, Float baseMetalness, Float specularIor,
+                          Float transmissionWeight, Float emissionLuminanceCdM2, ResourceId surface) {
+            this(specularRoughness, baseMetalness, specularIor, transmissionWeight,
+                    emissionLuminanceCdM2, surface, null);
+        }
         public Parameters {
             unit("specularRoughness", specularRoughness);
             unit("baseMetalness", baseMetalness);

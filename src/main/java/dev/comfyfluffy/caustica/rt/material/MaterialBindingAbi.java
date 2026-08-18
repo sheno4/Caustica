@@ -6,6 +6,7 @@ public final class MaterialBindingAbi {
     public static final int COVERAGE_CUTOUT = 1;
     public static final int COVERAGE_STOCHASTIC = 2;
     public static final int FLAG_TRANSMISSIVE = 1;
+    public static final int FLAG_BASE_COLOR_LINEAR = 2;
     public static final int FLAG_TEXTURELESS = 4;
 
     private static final int BASE_COLOR_TEXTURE_INDEX_MASK = 0xFFFF;

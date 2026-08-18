@@ -245,6 +245,9 @@ public static const uint COVERAGE_STOCHASTIC = 2u;
 // Transmittance: the surface is there and passes light through, so a shadow ray filters and continues
 // rather than being blocked.
 public static const uint BINDING_TRANSMISSIVE = 1u;
+// The sampled base-colour view already returns linear values. Unset for legacy UNORM atlases whose
+// sRGB bytes are decoded explicitly in the shader.
+public static const uint BINDING_BASE_COLOR_LINEAR = 2u;
 // The binding owns a uniform linear base colour in SurfaceMaterial.baseColorUv.xyz and never samples a
 // base-color texture. Textureless definitions use opaque coverage, so any-hit needs no corresponding path.
 public static const uint BINDING_TEXTURELESS = 4u;
@@ -283,6 +286,14 @@ public struct SurfaceMaterial {
     public float baseMetalness;
     public float specularIor;
     public float transmissionWeight;
+    /** Uniform scene-linear ACEScg factor multiplied with sampled base colour. */
+    public float4 baseColorFactor;
+    /** xyz = transmission_color, w = subsurface_weight. */
+    public float4 transmissionColorSubsurfaceWeight;
+    /** xyz = subsurface_color, w = subsurface_scatter_anisotropy. */
+    public float4 subsurfaceColorAnisotropy;
+    /** Uniform scene-linear ACEScg emission_color. */
+    public float4 emissionColor;
 };
 
 // "Is there a texture to sample": a compiled fetch-skipping optimisation, not an authored concept.
@@ -290,7 +301,9 @@ public static const uint MATERIAL_FEATURE_SPEC = 1u;
 public static const uint MATERIAL_FEATURE_NORMAL = 2u;
 public static const uint MATERIAL_FEATURE_EMISSION_MASK = 4u;
 public static const uint MATERIAL_FEATURE_SUBSURFACE_COLOR_BASE = 8u;
+// Informational CPU-compiled provenance: the emission RGB page was derived from source base color.
 public static const uint MATERIAL_FEATURE_EMISSION_COLOR_BASE = 16u;
+public static const uint MATERIAL_FEATURE_UNIFORM_EMISSION = 32u;
 // Final HDR emitting-surface luminance (look-package baseline or absolute JSON cd/m² override), baked in Java
 // at material-compile time (RtMaterialRegistry) and packed here as a 16-bit fraction of the max — every
 // emissive material carries a value (0 for non-emissive), not just resource-pack-overridden ones, so the
@@ -330,14 +343,18 @@ public static const uint GEOMETRY_TRIANGLE_CORNER_TEXTURE_COORDINATES = 0u;
 public static const uint GEOMETRY_INDEXED_TEXTURE_COORDINATES = 1u;
 /** Geometry opts into the registered projected surface-modifier chain. */
 public static const uint GEOMETRY_RECEIVES_PROJECTED_SURFACE_MODIFIERS = 2u;
+/** Geometry provides one object-space float3 normal per indexed vertex. */
+public static const uint GEOMETRY_VERTEX_NORMALS = 4u;
+/** Geometry provides one linear BT.709 float4 colour per indexed vertex. */
+public static const uint GEOMETRY_VERTEX_COLORS = 8u;
 
 public struct GeometryRecord {
     public uint64_t primitiveAddress;
     public uint64_t indexAddress;
     public uint64_t textureCoordinateAddress;
     public uint64_t previousPositionAddress;
-    public uint64_t reserved0;
-    public uint64_t reserved1;
+    public uint64_t vertexNormalAddress;
+    public uint64_t vertexColorAddress;
     public uint triangleBase[3];
     public uint flags;
 };

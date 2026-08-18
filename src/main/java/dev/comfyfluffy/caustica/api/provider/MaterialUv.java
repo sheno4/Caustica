@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.engine.material;
+package dev.comfyfluffy.caustica.api.provider;
 
 /** Atlas origin and inverse extent used to map atlas UVs into a material's local UV space. */
 public record MaterialUv(float u, float v, float inverseDu, float inverseDv) {

@@ -16,6 +16,8 @@ final class RtGeometryMeshPacking {
 
     static PackedMesh pack(SceneMesh mesh, RtGeometryMaterialResolver resolver) {
         float[] positions = mesh.positions();
+        float[] vertexNormals = mesh.vertexNormals();
+        float[] vertexColors = mesh.vertexColors();
         int[] sourceIndices = mesh.indices();
         float[] sourceUvs = mesh.textureCoordinates();
         int triangleCount = mesh.triangleCount();
@@ -66,7 +68,9 @@ final class RtGeometryMeshPacking {
         if (mesh.semantics().contains(SceneMesh.Semantic.RECEIVES_PROJECTED_SURFACE_MODIFIERS)) {
             flags |= RtGeometryAbi.FLAG_RECEIVES_PROJECTED_SURFACE_MODIFIERS;
         }
-        return new PackedMesh(positions, uvs, indices, primitives, classes, flags);
+        if (vertexNormals.length != 0) flags |= RtGeometryAbi.FLAG_HAS_VERTEX_NORMALS;
+        if (vertexColors.length != 0) flags |= RtGeometryAbi.FLAG_HAS_VERTEX_COLORS;
+        return new PackedMesh(positions, uvs, vertexNormals, vertexColors, indices, primitives, classes, flags);
     }
 
     private static void writeSurfacePrimitive(float[] output, int offset, float[] positions, int[] indices,
@@ -107,7 +111,8 @@ final class RtGeometryMeshPacking {
         output[offset + 11] = 0f;
     }
 
-    record PackedMesh(float[] positions, float[] textureCoordinates, int[] indices,
+    record PackedMesh(float[] positions, float[] textureCoordinates, float[] vertexNormals, float[] vertexColors,
+                      int[] indices,
                       float[] primitives, int[] classTriangles, int flags) {
     }
 }

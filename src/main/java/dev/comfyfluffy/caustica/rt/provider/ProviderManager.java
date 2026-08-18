@@ -25,7 +25,7 @@ import dev.comfyfluffy.caustica.api.provider.SceneCamera;
 import dev.comfyfluffy.caustica.api.provider.SceneGeometryKey;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.engine.material.MaterialCatalog;
-import dev.comfyfluffy.caustica.engine.material.MaterialTextureAsset;
+import dev.comfyfluffy.caustica.api.provider.MaterialTextureAsset;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtFrameStats;
 import dev.comfyfluffy.caustica.rt.geometry.RtSceneGeometryManager;
@@ -431,6 +431,7 @@ public final class ProviderManager {
                     if (definedMaterials.contains(definition.id()) || !stagedIds.add(definition.id())) {
                         throw new IllegalStateException("duplicate material definition " + definition.id());
                     }
+                    if (definition.textures() != null) stagedAssets.add(definition.textures());
                 }
                 for (MaterialRule rule : staged) {
                     ResourceId surface = rule.parameters().surface();

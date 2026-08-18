@@ -8,7 +8,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 
-/** Immutable indexed scene mesh with source-level triangle shading facts. */
+/** Immutable indexed scene mesh with optional vertex attributes and source-level triangle shading facts. */
 public final class SceneMesh {
     public enum UvLayout { PER_VERTEX, PER_TRIANGLE_CORNER }
     public enum Coverage { OPAQUE, CUTOUT, STOCHASTIC }
@@ -91,6 +91,8 @@ public final class SceneMesh {
     private final int[] indices;
     private final UvLayout uvLayout;
     private final float[] textureCoordinates;
+    private final float[] vertexNormals;
+    private final float[] vertexColors;
     private final List<TriangleSurface> surfaces;
     private final Set<Semantic> semantics;
 
@@ -101,10 +103,23 @@ public final class SceneMesh {
 
     public SceneMesh(float[] positions, int[] indices, UvLayout uvLayout, float[] textureCoordinates,
                      List<TriangleSurface> surfaces, Set<Semantic> semantics) {
+        this(positions, indices, uvLayout, textureCoordinates, new float[0], new float[0], surfaces, semantics);
+    }
+
+    /**
+     * Creates a mesh with optional indexed shading attributes. Vertex colors are linear BT.709 RGBA
+     * multipliers. An empty normal or color array selects the corresponding per-triangle surface fallback;
+     * the fallback color uses the triangle tint with alpha one.
+     */
+    public SceneMesh(float[] positions, int[] indices, UvLayout uvLayout, float[] textureCoordinates,
+                     float[] vertexNormals, float[] vertexColors,
+                     List<TriangleSurface> surfaces, Set<Semantic> semantics) {
         this.positions = positions.clone();
         this.indices = indices.clone();
         this.uvLayout = Objects.requireNonNull(uvLayout, "uvLayout");
         this.textureCoordinates = textureCoordinates.clone();
+        this.vertexNormals = vertexNormals.clone();
+        this.vertexColors = vertexColors.clone();
         this.surfaces = List.copyOf(surfaces);
         this.semantics = Set.copyOf(semantics);
         validate();
@@ -114,6 +129,8 @@ public final class SceneMesh {
     public int[] indices() { return indices.clone(); }
     public UvLayout uvLayout() { return uvLayout; }
     public float[] textureCoordinates() { return textureCoordinates.clone(); }
+    public float[] vertexNormals() { return vertexNormals.clone(); }
+    public float[] vertexColors() { return vertexColors.clone(); }
     public List<TriangleSurface> surfaces() { return surfaces; }
     public Set<Semantic> semantics() { return semantics; }
     public int vertexCount() { return positions.length / 3; }
@@ -129,6 +146,14 @@ public final class SceneMesh {
             throw new IllegalArgumentException("scene mesh texture coordinates do not match their layout");
         }
         finite(textureCoordinates);
+        if (vertexNormals.length != 0 && vertexNormals.length != vertexCount() * 3) {
+            throw new IllegalArgumentException("scene mesh vertex normals do not match its vertices");
+        }
+        finite(vertexNormals);
+        if (vertexColors.length != 0 && vertexColors.length != vertexCount() * 4) {
+            throw new IllegalArgumentException("scene mesh vertex colors do not match its vertices");
+        }
+        finite(vertexColors);
         if (surfaces.size() != triangleCount()) {
             throw new IllegalArgumentException("scene mesh needs one surface per triangle");
         }

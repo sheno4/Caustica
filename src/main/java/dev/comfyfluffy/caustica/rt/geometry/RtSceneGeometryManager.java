@@ -495,24 +495,25 @@ public final class RtSceneGeometryManager {
         }
 
         private int appendRecord(long primitiveAddress, long indexAddress, long textureCoordinateAddress,
-                                 long previousPositionAddress,
+                                 long previousPositionAddress, long vertexNormalAddress, long vertexColorAddress,
                                  int triangleBase, int[] classTriangles, int semanticFlags) {
             if (classTriangles == null || classTriangles.length != RtAccel.SBT_CLASSES) {
                 throw new IllegalArgumentException("missing acceleration-structure class counts");
             }
             return appendRawRecord(primitiveAddress, indexAddress, textureCoordinateAddress, previousPositionAddress,
-                    triangleBase, classTriangles[0], triangleBase + classTriangles[0] + classTriangles[1],
-                    semanticFlags);
+                    vertexNormalAddress, vertexColorAddress, triangleBase, classTriangles[0],
+                    triangleBase + classTriangles[0] + classTriangles[1], semanticFlags);
         }
 
         private int appendRawRecord(long primitiveAddress, long indexAddress, long textureCoordinateAddress,
-                                    long previousPositionAddress, int triangleBase0, int triangleBase1,
-                                    int triangleBase2, int semanticFlags) {
+                                    long previousPositionAddress, long vertexNormalAddress, long vertexColorAddress,
+                                    int triangleBase0, int triangleBase1, int triangleBase2, int semanticFlags) {
             int record = RtGeometryAbi.checkedIndex(0, count);
             ensureDynamicCapacity(record + 1);
             long address = table.buffer.mapped() + (long) record * RtGeometryAbi.RECORD_BYTES;
             RtGeometryAbi.writeRecord(address, primitiveAddress, indexAddress, textureCoordinateAddress,
-                    previousPositionAddress, triangleBase0, triangleBase1, triangleBase2, semanticFlags);
+                    previousPositionAddress, vertexNormalAddress, vertexColorAddress,
+                    triangleBase0, triangleBase1, triangleBase2, semanticFlags);
             count++;
             return record;
         }
@@ -520,7 +521,8 @@ public final class RtSceneGeometryManager {
         private void appendResident(DynamicResident resident, Placement placement, PublishedPlacement published,
                                     long previousPositionAddress) {
             int record = appendRecord(resident.primitiveAddress, resident.indexAddress, resident.textureCoordinateAddress,
-                    previousPositionAddress, 0, resident.classTriangles,
+                    previousPositionAddress, resident.vertexNormalAddress, resident.vertexColorAddress,
+                    0, resident.classTriangles,
                     resident.semanticFlags);
             instances.append(placement.transform,
                     placement.translationXFor(origin), placement.translationYFor(origin), placement.translationZFor(origin),
@@ -601,7 +603,8 @@ public final class RtSceneGeometryManager {
 
     private void writeDynamic(GpuContext ctx, DynamicResident resident, PackedInput input) {
         PackedLayout layout = PackedLayout.create(input.positions().length, input.indices().length,
-                input.textureCoordinates().length, input.primitives().length);
+                input.textureCoordinates().length, input.vertexNormals().length, input.vertexColors().length,
+                input.primitives().length);
         long required = Math.max(MIN_BUFFER_BYTES, layout.totalBytes() + 15L);
         int usage = VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
         if (resident.geometry == null || resident.geometry.size() < required) {
@@ -613,11 +616,23 @@ public final class RtSceneGeometryManager {
         MemoryUtil.memFloatBuffer(resident.geometry.mapped() + layout.positionOffset(), input.positions().length).put(input.positions());
         MemoryUtil.memIntBuffer(resident.geometry.mapped() + layout.indexOffset(), input.indices().length).put(input.indices());
         MemoryUtil.memFloatBuffer(resident.geometry.mapped() + layout.textureCoordinateOffset(), input.textureCoordinates().length).put(input.textureCoordinates());
+        if (input.vertexNormals().length != 0) {
+            MemoryUtil.memFloatBuffer(resident.geometry.mapped() + layout.vertexNormalOffset(), input.vertexNormals().length)
+                    .put(input.vertexNormals());
+        }
+        if (input.vertexColors().length != 0) {
+            MemoryUtil.memFloatBuffer(resident.geometry.mapped() + layout.vertexColorOffset(), input.vertexColors().length)
+                    .put(input.vertexColors());
+        }
         MemoryUtil.memFloatBuffer(resident.geometry.mapped() + layout.primitiveOffset(), input.primitives().length).put(input.primitives());
         resident.geometry.flush(layout.positionOffset(), layout.totalBytes() - layout.positionOffset());
         resident.positionAddress = resident.geometry.deviceAddress() + layout.positionOffset();
         resident.indexAddress = resident.geometry.deviceAddress() + layout.indexOffset();
         resident.textureCoordinateAddress = resident.geometry.deviceAddress() + layout.textureCoordinateOffset();
+        resident.vertexNormalAddress = input.vertexNormals().length == 0 ? 0L
+                : resident.geometry.deviceAddress() + layout.vertexNormalOffset();
+        resident.vertexColorAddress = input.vertexColors().length == 0 ? 0L
+                : resident.geometry.deviceAddress() + layout.vertexColorOffset();
         resident.primitiveAddress = resident.geometry.deviceAddress() + layout.primitiveOffset();
         resident.classTriangles = input.classTriangles().clone();
         resident.semanticFlags = input.semanticFlags();
@@ -640,6 +655,8 @@ public final class RtSceneGeometryManager {
         long positionAddress;
         long indexAddress;
         long textureCoordinateAddress;
+        long vertexNormalAddress;
+        long vertexColorAddress;
         long primitiveAddress;
         int[] classTriangles;
         int semanticFlags;

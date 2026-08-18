@@ -1,13 +1,13 @@
 package dev.comfyfluffy.caustica.rt.material;
 
 import dev.comfyfluffy.caustica.api.ResourceId;
-import dev.comfyfluffy.caustica.engine.material.MaterialTextureImage;
-import dev.comfyfluffy.caustica.engine.material.MaterialTextureAsset;
-import dev.comfyfluffy.caustica.engine.material.MaterialTextureKind;
-import dev.comfyfluffy.caustica.engine.material.MaterialUv;
+import dev.comfyfluffy.caustica.api.provider.MaterialTextureImage;
+import dev.comfyfluffy.caustica.api.provider.MaterialTextureAsset;
+import dev.comfyfluffy.caustica.api.provider.MaterialTextureKind;
+import dev.comfyfluffy.caustica.api.provider.MaterialUv;
 import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialDefaults;
-import dev.comfyfluffy.caustica.engine.material.OpenPbrColorBinding;
-import dev.comfyfluffy.caustica.engine.material.OpenPbrTextureTexel;
+import dev.comfyfluffy.caustica.api.provider.OpenPbrColorBinding;
+import dev.comfyfluffy.caustica.api.provider.OpenPbrTextureTexel;
 import org.junit.jupiter.api.Test;
 
 import java.util.concurrent.atomic.AtomicInteger;

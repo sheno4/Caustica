@@ -18,19 +18,22 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
     // answer coverage, so that texel is also the colour light picks up crossing the surface — opaque
     // where the colorant is, clear where the sprite is see-through. An opaque binding sampled nothing and
     // takes the compile-time reduction instead, so solid glass costs no texture fetch on a shadow ray.
-    float3 transmittance = bindingShadowTint(hit.binding);
+    float3 geometryTint = hitTint709(hit);
+    float3 transmittance = bindingShadowTint(hit.binding) * bt709ToAcesCg(geometryTint);
     if (bindingCoverage(hit.binding) != COVERAGE_OPAQUE) {
         float4 texel = sampleCoverageTexel(hit);
-        if (texel.a < bindingCutoff(hit.binding)) {
+        float alpha = hitCoverageAlpha(hit, texel.a);
+        if (alpha < bindingCutoff(hit.binding)) {
             IgnoreHit();
         }
-        transmittance = bt709ToAcesCg(lerp(float3(1.0), srgbToLinear(texel.rgb), texel.a));
+        transmittance = bt709ToAcesCg(lerp(float3(1.0),
+                hitBaseColorLinear(hit, texel.rgb) * geometryTint, alpha));
     }
 
     if ((flags & BINDING_TRANSMISSIVE) != 0u) {
-        // Per-primitive tint multiplies base colour, and transmission colour is authored relative to it.
-        packAlbedo(payload, unpackAlbedo(payload) * transmittance
-                * bt709ToAcesCg(srgbToLinear(hit.tint)));
+        // Geometry colour is already folded into transmittance in the same colour/alpha order as
+        // closest-hit, so a transmissive shadow sees the same interpolated filter as a radiance ray.
+        packAlbedo(payload, unpackAlbedo(payload) * transmittance);
         // Any-hit order is arbitrary. Track only a boundary produced by the current medium's
         // implementation, so another transmissive volume cannot steal its crossing.
         bool trackBoundary = (payload.flags & PAYLOAD_TRACK_MEDIUM_BOUNDARY) != 0u;

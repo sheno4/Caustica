@@ -1,5 +1,8 @@
 package dev.comfyfluffy.caustica.engine.material;
 
+import dev.comfyfluffy.caustica.api.provider.MaterialTextureAsset;
+import dev.comfyfluffy.caustica.api.provider.MaterialTextureKind;
+
 import dev.comfyfluffy.caustica.api.ResourceId;
 
 import java.util.ArrayList;

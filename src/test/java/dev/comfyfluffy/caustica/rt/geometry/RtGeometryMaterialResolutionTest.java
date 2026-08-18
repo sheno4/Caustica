@@ -7,7 +7,7 @@ import dev.comfyfluffy.caustica.engine.material.AtlasMaterialReference;
 import dev.comfyfluffy.caustica.engine.material.MaterialVariant;
 import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialProfile;
 import dev.comfyfluffy.caustica.api.provider.MaterialTopology;
-import dev.comfyfluffy.caustica.engine.material.MaterialUv;
+import dev.comfyfluffy.caustica.api.provider.MaterialUv;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;

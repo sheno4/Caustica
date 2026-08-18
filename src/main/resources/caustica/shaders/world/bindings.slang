@@ -27,6 +27,8 @@ import world_common;
 //   normal   — tangent-space normal xy; z is reconstructed. b unused, a authored height (unused)
 //   surface1 — rgb: base_color on a metal texel, neutral on a dielectric one
 //              a: specular_ior, encoded as (ior - 1) / (ior + 1) — see surfaceIorFromPage
+//   emission — linear BT.709 emissive RGB multiplier; a unused
 [[vk::binding(1, 1)]] public Sampler2D materialSurface0Tex[];
 [[vk::binding(2, 1)]] public Sampler2D materialNormalTex[];
 [[vk::binding(3, 1)]] public Sampler2D materialSurface1Tex[];
+[[vk::binding(4, 1)]] public Sampler2D materialEmissionTex[];

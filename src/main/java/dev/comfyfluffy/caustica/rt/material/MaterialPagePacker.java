@@ -11,19 +11,21 @@ final class MaterialPagePacker {
     final List<byte[]> surface0;
     final List<byte[]> normal;
     final List<byte[]> surface1;
+    final List<byte[]> emission;
     final List<byte[]> staticAlpha;
     final List<byte[]> temporalAlpha;
     private final int pageSize;
     private final int gutter;
 
     MaterialPagePacker(int pageSize, int mipCount, int gutter, boolean materialChannels,
-                       boolean staticAlphaPresent, boolean alphaRange) {
+                       boolean emissionPresent, boolean staticAlphaPresent, boolean alphaRange) {
         this.pageSize = pageSize;
         this.gutter = gutter;
         surface0 = materialChannels ? allocate(pageSize, mipCount, 255, 0, 0, 0) : null;
         normal = materialChannels ? allocate(pageSize, mipCount, 128, 128, 0, 0) : null;
         surface1 = materialChannels ? allocate(pageSize, mipCount, 255, 255, 255,
                 RtMaterialTextureData.unorm8(encodeIor(OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR))) : null;
+        emission = emissionPresent ? allocate(pageSize, mipCount, 255, 255, 255, 255) : null;
         staticAlpha = staticAlphaPresent ? allocateR(pageSize, 0) : null;
         temporalAlpha = alphaRange ? allocateRg(pageSize, 1, 0, 255) : null;
     }
@@ -39,6 +41,10 @@ final class MaterialPagePacker {
             blit(surface0.get(mip), width, cx, cy, mipGutter, level.width(), level.height(), level.surface0());
             blit(normal.get(mip), width, cx, cy, mipGutter, level.width(), level.height(), level.normal());
             blit(surface1.get(mip), width, cx, cy, mipGutter, level.width(), level.height(), level.surface1());
+            if (emission != null) {
+                blit(emission.get(mip), width, cx, cy, mipGutter, level.width(), level.height(),
+                        level.emissionColor());
+            }
         }
     }
 

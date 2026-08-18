@@ -13,6 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class RtGeometryMeshPackingTest {
     @Test
@@ -121,6 +122,38 @@ final class RtGeometryMeshPackingTest {
         SceneMeshPacker.PackedInput packed = assertDoesNotThrow(() -> SceneMeshPacker.pack(
                 mesh(material, SceneMesh.Coverage.OPAQUE), resolver));
         assertEquals(6, packed.textureCoordinates().length);
+    }
+
+    @Test
+    void preservesOptionalIndexedShadingAttributes() {
+        MaterialHandle material = MaterialHandle.of("test", "vertex-attributes");
+        float[] normals = {0, 0, 1, 0, 1, 0, 1, 0, 0};
+        float[] colors = {1, 0, 0, 1, 0, 1, 0, 0.5f, 0, 0, 1, 0.25f};
+        SceneMesh mesh = new SceneMesh(
+                new float[]{0, 0, 0, 1, 0, 0, 0, 1, 0}, new int[]{0, 1, 2},
+                SceneMesh.UvLayout.PER_VERTEX, new float[6], normals, colors,
+                List.of(surface(material, SceneMesh.Coverage.OPAQUE)), java.util.Set.of());
+
+        SceneMeshPacker.PackedInput packed = SceneMeshPacker.pack(mesh,
+                (reference, coverage) -> new RtGeometryMaterialResolver.ResolvedMaterial(7, 0));
+
+        assertArrayEquals(normals, packed.vertexNormals());
+        assertArrayEquals(colors, packed.vertexColors());
+        assertTrue((packed.semanticFlags() & RtGeometryAbi.FLAG_HAS_VERTEX_NORMALS) != 0);
+        assertTrue((packed.semanticFlags() & RtGeometryAbi.FLAG_HAS_VERTEX_COLORS) != 0);
+    }
+
+    @Test
+    void rejectsMismatchedIndexedShadingAttributes() {
+        MaterialHandle material = MaterialHandle.of("test", "vertex-attributes");
+        assertThrows(IllegalArgumentException.class, () -> new SceneMesh(
+                new float[]{0, 0, 0, 1, 0, 0, 0, 1, 0}, new int[]{0, 1, 2},
+                SceneMesh.UvLayout.PER_VERTEX, new float[6], new float[6], new float[0],
+                List.of(surface(material, SceneMesh.Coverage.OPAQUE)), java.util.Set.of()));
+        assertThrows(IllegalArgumentException.class, () -> new SceneMesh(
+                new float[]{0, 0, 0, 1, 0, 0, 0, 1, 0}, new int[]{0, 1, 2},
+                SceneMesh.UvLayout.PER_VERTEX, new float[6], new float[0], new float[9],
+                List.of(surface(material, SceneMesh.Coverage.OPAQUE)), java.util.Set.of()));
     }
 
     @Test

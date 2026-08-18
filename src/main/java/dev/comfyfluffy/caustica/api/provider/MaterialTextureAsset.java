@@ -1,10 +1,15 @@
-package dev.comfyfluffy.caustica.engine.material;
+package dev.comfyfluffy.caustica.api.provider;
 
 import dev.comfyfluffy.caustica.api.ResourceId;
 
 import java.util.Objects;
 
-/** One canonical OpenPBR texture bundle for the current resource epoch. */
+/**
+ * Optional semantic texture streams for a named OpenPBR material in the current resource epoch.
+ * {@code surfaceParameters}, {@code normalMap}, and {@code emissionMask} declare which values written by
+ * {@link MaterialTextureImage#readOpenPbr(int, int, OpenPbrTextureTexel)} are authored. Uniform emission
+ * luminance is used only when this asset is submitted without a matching {@link MaterialDefinition}.
+ */
 public record MaterialTextureAsset(ResourceId material, MaterialTextureKind kind,
                                    int width, int height,
                                    MaterialTextureSource texture,

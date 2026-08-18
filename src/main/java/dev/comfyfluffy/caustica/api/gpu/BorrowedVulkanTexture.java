@@ -12,6 +12,8 @@ import java.util.Objects;
  * The provider keeps the image and view alive, and the image in {@link #imageLayout()}, until
  * {@link #retired()} is invoked. The renderer invokes that callback exactly once after its descriptor table
  * and submitted GPU work can no longer reference the view. The renderer never destroys the image or view.
+ * The supplied image view must return linear RGB values when sampled; use an sRGB view for sRGB-encoded
+ * storage and a UNORM or floating-point view for linear storage.
  */
 public record BorrowedVulkanTexture(long imageView, int imageLayout, Runnable retired)
         implements TextureResource {

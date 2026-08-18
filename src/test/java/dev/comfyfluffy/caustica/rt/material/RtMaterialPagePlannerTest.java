@@ -55,7 +55,7 @@ final class RtMaterialPagePlannerTest {
         assertFalse(plan.layouts().get(0).has(RtMaterialPagePlanner.CHANNEL_MATERIAL));
         assertTrue(plan.layouts().get(0).has(RtMaterialPagePlanner.CHANNEL_STATIC_ALPHA));
 
-        MaterialPagePacker pixels = new MaterialPagePacker(32, 6, 2, false, true, false);
+        MaterialPagePacker pixels = new MaterialPagePacker(32, 6, 2, false, false, true, false);
         assertNull(pixels.surface0);
         assertNull(pixels.normal);
         assertNull(pixels.surface1);

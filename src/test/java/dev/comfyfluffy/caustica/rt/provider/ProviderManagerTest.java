@@ -435,9 +435,9 @@ final class ProviderManagerTest {
 
     @Test
     void materialSourcesContributeIndependentAssetCalibration() {
-        var atlas = asset("atlas", dev.comfyfluffy.caustica.engine.material.MaterialTextureKind.SHARED_ATLAS,
+        var atlas = asset("atlas", dev.comfyfluffy.caustica.api.provider.MaterialTextureKind.SHARED_ATLAS,
                 12_000.0f);
-        var standalone = asset("standalone", dev.comfyfluffy.caustica.engine.material.MaterialTextureKind.STANDALONE,
+        var standalone = asset("standalone", dev.comfyfluffy.caustica.api.provider.MaterialTextureKind.STANDALONE,
                 24_000.0f);
         Map<ResourceId, MaterialSource> sources = new LinkedHashMap<>();
         sources.put(id("minecraft"), sink -> sink.submitAsset(atlas));
@@ -456,8 +456,8 @@ final class ProviderManagerTest {
 
     @Test
     void duplicateAssetDisablesOnlyTheLaterSourceWithoutPublishingItsOtherAssets() {
-        var shared = asset("shared", dev.comfyfluffy.caustica.engine.material.MaterialTextureKind.SHARED_ATLAS, 1.0f);
-        var discarded = asset("discarded", dev.comfyfluffy.caustica.engine.material.MaterialTextureKind.STANDALONE,
+        var shared = asset("shared", dev.comfyfluffy.caustica.api.provider.MaterialTextureKind.SHARED_ATLAS, 1.0f);
+        var discarded = asset("discarded", dev.comfyfluffy.caustica.api.provider.MaterialTextureKind.STANDALONE,
                 2.0f);
         AtomicInteger duplicateStops = new AtomicInteger();
         MaterialSource duplicate = new MaterialSource() {
@@ -512,6 +512,21 @@ final class ProviderManagerTest {
 
         assertEquals(List.of(shared), manager.collectMaterials(ignored -> 0).definitions());
         assertEquals(1, duplicateStops.get());
+    }
+
+    @Test
+    void namedDefinitionPublishesItsSemanticTextureBundleUnderTheSameId() {
+        var texture = asset("textured", dev.comfyfluffy.caustica.api.provider.MaterialTextureKind.STANDALONE, 0.0f);
+        MaterialDefinition definition = new MaterialDefinition(new MaterialHandle(id("textured")),
+                0.8f, 0.7f, 0.6f, 0.5f, 0.4f, 1.5f, 0.0f,
+                1.0f, 1.0f, 1.0f, 0.0f, 0.8f, 0.8f, 0.8f, 0.0f,
+                1.0f, 1.0f, 1.0f, 0.0f, MaterialTopology.SURFACE, null, 0.5f, texture);
+        ProviderManager.MaterialContributions contributions = new ProviderManager(Map.of(), Map.of(),
+                Map.of(id("source"), (MaterialSource) sink -> sink.define(definition)))
+                .collectMaterials(ignored -> 0);
+
+        assertEquals(List.of(definition), contributions.definitions());
+        assertEquals(List.of(texture), contributions.catalog().standalone());
     }
 
     @Test
@@ -982,13 +997,13 @@ final class ProviderManagerTest {
                 1.0f, 0.0f, 1.5f, 0.0f, MaterialTopology.SURFACE, null);
     }
 
-    private static dev.comfyfluffy.caustica.engine.material.MaterialTextureAsset asset(
-            String path, dev.comfyfluffy.caustica.engine.material.MaterialTextureKind kind, float luminance) {
-        return new dev.comfyfluffy.caustica.engine.material.MaterialTextureAsset(id(path), kind, 1, 1,
-                () -> null, dev.comfyfluffy.caustica.engine.material.MaterialUv.IDENTITY,
+    private static dev.comfyfluffy.caustica.api.provider.MaterialTextureAsset asset(
+            String path, dev.comfyfluffy.caustica.api.provider.MaterialTextureKind kind, float luminance) {
+        return new dev.comfyfluffy.caustica.api.provider.MaterialTextureAsset(id(path), kind, 1, 1,
+                () -> null, dev.comfyfluffy.caustica.api.provider.MaterialUv.IDENTITY,
                 false, false, false,
-                dev.comfyfluffy.caustica.engine.material.OpenPbrColorBinding.PARAMETER_DEFAULT,
-                dev.comfyfluffy.caustica.engine.material.OpenPbrColorBinding.PARAMETER_DEFAULT,
+                dev.comfyfluffy.caustica.api.provider.OpenPbrColorBinding.PARAMETER_DEFAULT,
+                dev.comfyfluffy.caustica.api.provider.OpenPbrColorBinding.PARAMETER_DEFAULT,
                 dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR,
                 luminance);
     }

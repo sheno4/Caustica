@@ -48,7 +48,7 @@ final class RtMaterialBindingTest {
     }
 
     @Test
-    void producerTextureReplacesUniformBaseColorWithoutChangingCoverage() {
+    void producerTextureUsesLinearSamplingWithoutChangingCoverage() {
         int flags = MaterialBindingAbi.FLAG_TEXTURELESS | 8;
         MaterialBindingData base = new MaterialBindingData(
                 MaterialBindingAbi.pack(0, 2, flags, 7), 11, 0x123456, 19);
@@ -57,7 +57,8 @@ final class RtMaterialBindingTest {
 
         assertEquals(23, MaterialBindingAbi.baseColorTextureIndex(textured.packed0()));
         assertEquals(2, MaterialBindingAbi.coverage(textured.packed0()));
-        assertEquals(8, MaterialBindingAbi.flags(textured.packed0()));
+        assertEquals(8 | MaterialBindingAbi.FLAG_BASE_COLOR_LINEAR,
+                MaterialBindingAbi.flags(textured.packed0()));
         assertEquals(7, MaterialBindingAbi.surfaceImplementation(textured.packed0()));
         assertEquals(base.surface(), textured.surface());
         assertEquals(base.shadowTint(), textured.shadowTint());

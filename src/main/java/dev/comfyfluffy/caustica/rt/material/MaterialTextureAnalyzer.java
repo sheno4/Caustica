@@ -1,10 +1,10 @@
 package dev.comfyfluffy.caustica.rt.material;
 
 import dev.comfyfluffy.caustica.engine.material.EmissionFootprint;
-import dev.comfyfluffy.caustica.engine.material.MaterialTextureAsset;
-import dev.comfyfluffy.caustica.engine.material.MaterialTextureImage;
-import dev.comfyfluffy.caustica.engine.material.OpenPbrColorBinding;
-import dev.comfyfluffy.caustica.engine.material.OpenPbrTextureTexel;
+import dev.comfyfluffy.caustica.api.provider.MaterialTextureAsset;
+import dev.comfyfluffy.caustica.api.provider.MaterialTextureImage;
+import dev.comfyfluffy.caustica.api.provider.OpenPbrColorBinding;
+import dev.comfyfluffy.caustica.api.provider.OpenPbrTextureTexel;
 
 import java.util.List;
 
@@ -32,7 +32,7 @@ final class MaterialTextureAnalyzer {
             float[] normal = new float[surface0.length];
             float[] surface1 = new float[surface0.length];
             float[] emission = asset.emissionMask() ? new float[width * height] : null;
-            float[] emissionColor = emission != null ? new float[surface0.length] : null;
+            float[] emissionColor = new float[surface0.length];
             boolean emissionUsesBase = asset.emissionColorBinding() == OpenPbrColorBinding.BASE_COLOR;
             StatsAccumulator stats = new StatsAccumulator(width, height, footprintResolution,
                     asset.emissionColorBinding());
@@ -45,14 +45,12 @@ final class MaterialTextureAnalyzer {
                 float g = RtMaterialTextureData.srgbToLinear(green(pixel));
                 float b = RtMaterialTextureData.srgbToLinear(blue(pixel));
                 float a = alpha(pixel) / 255.0f;
-                if (emissionColor != null) {
-                    emissionColor[i] = emissionUsesBase ? r : 1;
-                    emissionColor[i + 1] = emissionUsesBase ? g : 1;
-                    emissionColor[i + 2] = emissionUsesBase ? b : 1;
-                    emissionColor[i + 3] = a;
-                }
                 texel.reset();
                 texture.readOpenPbr(x, y, texel);
+                emissionColor[i] = texel.emissionColorR * (emissionUsesBase ? r : 1);
+                emissionColor[i + 1] = texel.emissionColorG * (emissionUsesBase ? g : 1);
+                emissionColor[i + 2] = texel.emissionColorB * (emissionUsesBase ? b : 1);
+                emissionColor[i + 3] = 1.0f;
                 surface0[i] = texel.specularRoughness;
                 surface0[i + 1] = texel.baseMetalness;
                 surface0[i + 2] = texel.emissionWeight;
@@ -71,7 +69,7 @@ final class MaterialTextureAnalyzer {
             EmissionFootprint footprint = emission == null ? null
                     : emissionFootprint(emissionColor, emission, width, height, footprintResolution);
             return new Decoded(RtMaterialTextureData.mipChain(new RtMaterialTextureData.Level(width, height,
-                    surface0, normal, surface1), maxLod), summary, footprint, stats.finish());
+                    surface0, normal, surface1, emissionColor), maxLod), summary, footprint, stats.finish());
         }
     }
 

@@ -35,13 +35,17 @@ final class RtMaterialLayoutTest {
 
     @Test
     void reflectedSurfaceMaterialMatchesClosestHitAbi() {
-        assertEquals(64, SurfaceMaterialData.BYTE_SIZE);
+        assertEquals(128, SurfaceMaterialData.BYTE_SIZE);
         ByteBuffer data = ByteBuffer.allocateDirect(SurfaceMaterialData.BYTE_SIZE)
                 .order(ByteOrder.nativeOrder());
         new SurfaceMaterialData(5, 7, 0xC080, 0,
                 new Float4(0.01f, 0.02f, 0.03f, 0.04f),
                 new Float4(0.05f, 0.06f, 7.0f, 8.0f),
-                0.1f, 0.2f, 1.52f, 1.0f).write(data);
+                0.1f, 0.2f, 1.52f, 1.0f,
+                new Float4(0.7f, 0.8f, 0.9f, 1.0f),
+                new Float4(0.6f, 0.5f, 0.4f, 0.3f),
+                new Float4(0.2f, 0.1f, 0.0f, -0.2f),
+                new Float4(2.0f, 3.0f, 4.0f, 1.0f)).write(data);
         assertEquals(5, data.getInt(0));  // features
         assertEquals(7, data.getInt(4));  // page
         assertEquals(0xC080, data.getInt(8));
@@ -52,6 +56,10 @@ final class RtMaterialLayoutTest {
         assertEquals(0.2f, data.getFloat(52));  // baseMetalness
         assertEquals(1.52f, data.getFloat(56)); // specularIor
         assertEquals(1.0f, data.getFloat(60));  // transmissionWeight
+        assertEquals(0.7f, data.getFloat(64));  // baseColorFactor.r
+        assertEquals(0.3f, data.getFloat(92));  // subsurfaceWeight
+        assertEquals(-0.2f, data.getFloat(108)); // subsurfaceScatterAnisotropy
+        assertEquals(2.0f, data.getFloat(112)); // emissionColor.r
         assertEquals("baseColorUv", Arrays.stream(SurfaceMaterialData.class.getRecordComponents())
                 .map(component -> component.getName())
                 .filter(name -> name.endsWith("ColorUv"))
@@ -64,7 +72,7 @@ final class RtMaterialLayoutTest {
         assertEquals(16, RtMaterialRegistry.FEATURE_EMISSION_COLOR_BASE);
         assertEquals(0, (RtMaterialRegistry.FEATURE_SUBSURFACE_COLOR_BASE
                 | RtMaterialRegistry.FEATURE_EMISSION_COLOR_BASE) >>> 8);
-        assertEquals(64, SurfaceMaterialData.BYTE_SIZE);
+        assertEquals(128, SurfaceMaterialData.BYTE_SIZE);
     }
 
     @Test

@@ -2,9 +2,9 @@ package dev.comfyfluffy.caustica.minecraft.material;
 
 import dev.comfyfluffy.caustica.engine.material.MaterialImage;
 import dev.comfyfluffy.caustica.engine.material.MaterialImageSource;
-import dev.comfyfluffy.caustica.engine.material.MaterialTextureImage;
-import dev.comfyfluffy.caustica.engine.material.MaterialTextureSource;
-import dev.comfyfluffy.caustica.engine.material.OpenPbrTextureTexel;
+import dev.comfyfluffy.caustica.api.provider.MaterialTextureImage;
+import dev.comfyfluffy.caustica.api.provider.MaterialTextureSource;
+import dev.comfyfluffy.caustica.api.provider.OpenPbrTextureTexel;
 
 /** Canonicalizes Minecraft resource-pack channels while their borrowed/owned images share one lifetime. */
 final class MinecraftMaterialTextureSource implements MaterialTextureSource {

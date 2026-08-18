@@ -15,11 +15,12 @@ import math;
 import bindings;
 import caustica_texture_resources;
 
-/** One hit's material binding, its interpolated base-color UV, and the per-primitive tint. */
+/** One hit's material binding, interpolated base-color UV, and geometry colour inputs. */
 public struct HitBinding {
     public MaterialBinding binding;
     public float2 uv;
     public float3 tint; // source 8-bit convention, still sRGB-encoded
+    public float4 vertexColor; // linear BT.709 RGBA
 };
 
 public float3 barycentrics(float2 attribs) {
@@ -31,11 +32,14 @@ public HitBinding decodeHit(float3 bary, uint pid) {
     GeometryRecord g = ConstPtr<GeometryRecord>(pc.geometryTableAddr)[InstanceID()];
     uint tri = pid + g.triangleBase[GeometryIndex()];
     ConstPtr<float2> textureCoordinates = ConstPtr<float2>(g.textureCoordinateAddress);
+    ConstPtr<uint> indices = ConstPtr<uint>(g.indexAddress);
+    uint i0 = indices[3u * tri + 0u];
+    uint i1 = indices[3u * tri + 1u];
+    uint i2 = indices[3u * tri + 2u];
     if ((g.flags & GEOMETRY_INDEXED_TEXTURE_COORDINATES) != 0u) {
-        ConstPtr<uint> indices = ConstPtr<uint>(g.indexAddress);
-        hit.uv = bary.x * textureCoordinates[indices[3u * tri + 0u]]
-                + bary.y * textureCoordinates[indices[3u * tri + 1u]]
-                + bary.z * textureCoordinates[indices[3u * tri + 2u]];
+        hit.uv = bary.x * textureCoordinates[i0]
+                + bary.y * textureCoordinates[i1]
+                + bary.z * textureCoordinates[i2];
     } else {
         hit.uv = bary.x * textureCoordinates[3u * tri + 0u]
                 + bary.y * textureCoordinates[3u * tri + 1u]
@@ -43,8 +47,28 @@ public HitBinding decodeHit(float3 bary, uint pid) {
     }
     Prim pr = ConstPtr<Prim>(g.primitiveAddress)[tri];
     hit.tint = pr.tint.rgb;
+    hit.vertexColor = float4(1.0);
+    if ((g.flags & GEOMETRY_VERTEX_COLORS) != 0u) {
+        ConstPtr<float> colors = ConstPtr<float>(g.vertexColorAddress);
+        uint c0 = 4u * i0;
+        uint c1 = 4u * i1;
+        uint c2 = 4u * i2;
+        float4 color0 = float4(colors[c0], colors[c0 + 1u], colors[c0 + 2u], colors[c0 + 3u]);
+        float4 color1 = float4(colors[c1], colors[c1 + 1u], colors[c1 + 2u], colors[c1 + 3u]);
+        float4 color2 = float4(colors[c2], colors[c2 + 1u], colors[c2 + 2u], colors[c2 + 3u]);
+        float4 color = bary.x * color0 + bary.y * color1 + bary.z * color2;
+        hit.vertexColor = float4(color.rgb, clamp(color.a, 0.0, 1.0));
+    }
     hit.binding = ConstPtr<MaterialBinding>(pc.materialTableAddr)[pr.materialId];
     return hit;
+}
+
+public float hitCoverageAlpha(HitBinding hit, float textureAlpha) {
+    return clamp(textureAlpha * hit.vertexColor.a, 0.0, 1.0);
+}
+
+public float3 hitTint709(HitBinding hit) {
+    return srgbToLinear(hit.tint) * hit.vertexColor.rgb;
 }
 
 /**
@@ -54,6 +78,11 @@ public HitBinding decodeHit(float3 bary, uint pid) {
 public float4 sampleCoverageTexel(HitBinding hit) {
     return baseColorTextures[NonUniformResourceIndex(bindingBaseColorTextureIndex(hit.binding))]
             .SampleLevel(hit.uv, 0.0);
+}
+
+public float3 hitBaseColorLinear(HitBinding hit, float3 sampled) {
+    return (bindingFlags(hit.binding) & BINDING_BASE_COLOR_LINEAR) != 0u
+            ? sampled : srgbToLinear(sampled);
 }
 
 /**

@@ -7,7 +7,7 @@ import dev.comfyfluffy.caustica.api.provider.MaterialTopology;
 import dev.comfyfluffy.caustica.engine.material.AtlasMaterialReference;
 import dev.comfyfluffy.caustica.engine.material.EmissionFootprint;
 import dev.comfyfluffy.caustica.engine.material.MaterialCatalog;
-import dev.comfyfluffy.caustica.engine.material.MaterialTextureAsset;
+import dev.comfyfluffy.caustica.api.provider.MaterialTextureAsset;
 import dev.comfyfluffy.caustica.engine.material.MaterialVariant;
 import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialDefaults;
 import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialProfile;
@@ -61,8 +61,10 @@ public final class RtMaterialRegistry {
     public static final int FEATURE_EMISSION_MASK = 4;
     /** The source binds canonical {@code subsurface_color} to evaluated {@code base_color}. */
     public static final int FEATURE_SUBSURFACE_COLOR_BASE = 8;
-    /** The source binds canonical {@code emission_color} to evaluated {@code base_color}. */
+    /** The CPU compiler derived the canonical emission RGB page from source {@code base_color}. */
     public static final int FEATURE_EMISSION_COLOR_BASE = 16;
+    /** A named definition emits uniformly without requiring per-primitive source state. */
+    public static final int FEATURE_UNIFORM_EMISSION = 32;
     /** Bindless base-color texture index reserved for the host's shared atlas. */
     public static final int SHARED_ATLAS_BASE_COLOR_TEXTURE_INDEX = 0;
     /**
@@ -157,6 +159,8 @@ public final class RtMaterialRegistry {
         Map<ResourceId, MaterialTextureAsset> assets = new HashMap<>();
         catalog.atlasAssets().forEach(asset -> assets.put(asset.material(), asset));
         catalog.standalone().forEach(asset -> assets.put(asset.material(), asset));
+        Map<ResourceId, MaterialDefinition> definitionsById = new HashMap<>();
+        definitions.forEach(definition -> definitionsById.put(definition.id(), definition));
         RtMaterialPageCompiler.Entry fallbackEntry = pageCompiler.entry(null);
 
         int profileVariants = MaterialRegistryCompiler.variantCount();
@@ -261,9 +265,10 @@ public final class RtMaterialRegistry {
         Map<ResourceId, RuntimeTemplate> nextRuntimeTemplates = new HashMap<>();
         Set<RtMaterialOverrides.Rule> runtimeMatchedOverrides = new HashSet<>();
         for (ResourceId material : standaloneAssets) {
+            if (definitionsById.containsKey(material)) continue;
             MaterialTextureAsset asset = assets.get(material);
             RtMaterialPageCompiler.Entry entry = entries.get(material);
-            int features = entry.features() & (FEATURE_SPEC | FEATURE_NORMAL
+            int features = entry.features() & (FEATURE_SPEC | FEATURE_NORMAL | FEATURE_EMISSION_MASK
                     | FEATURE_SUBSURFACE_COLOR_BASE | FEATURE_EMISSION_COLOR_BASE);
             RtMaterialDesc desc = compileRuntimeTextureDesc(features, false, entry.emissionSummary(),
                     asset.uniformEmissionLuminanceCdM2());
@@ -295,10 +300,22 @@ public final class RtMaterialRegistry {
                 }
             }
             int definitionTransport = transport(definition.topology());
-            RtMaterialDesc desc = new RtMaterialDesc(definitionTransport, RtMaterialDesc.Source.NEUTRAL, 0,
+            RtMaterialPageCompiler.Entry definitionEntry = entries.getOrDefault(definition.id(), fallbackEntry);
+            int definitionFeatures = definitionFeatures(definition.textures() != null,
+                    definitionEntry.features(), definition.emissionLuminanceCdM2());
+            RtMaterialDesc.EmissionSource emissionSource = definition.emissionLuminanceCdM2() <= 0.0f
+                    ? RtMaterialDesc.EmissionSource.NONE
+                    : (definitionFeatures & FEATURE_EMISSION_MASK) != 0
+                    ? RtMaterialDesc.EmissionSource.AUTHORED_MASK : RtMaterialDesc.EmissionSource.GEOMETRY_UNIFORM;
+            RtMaterialDesc desc = new RtMaterialDesc(definitionTransport, RtMaterialDesc.Source.NEUTRAL,
+                    definitionFeatures,
                     definition.specularRoughness(), definition.baseMetalness(), definition.specularIor(),
-                    definition.transmissionWeight(), RtMaterialDesc.EmissionSource.NONE, 0.0f,
-                    RtMaterialDesc.EmissionSummary.NONE, surfaceImplementation);
+                    definition.transmissionWeight(), definition.transmissionColorR(), definition.transmissionColorG(),
+                    definition.transmissionColorB(), definition.subsurfaceWeight(), definition.subsurfaceColorR(),
+                    definition.subsurfaceColorG(), definition.subsurfaceColorB(),
+                    definition.subsurfaceScatterAnisotropy(), definition.emissionColorR(),
+                    definition.emissionColorG(), definition.emissionColorB(), emissionSource,
+                    definition.emissionLuminanceCdM2(), definitionEntry.emissionSummary(), surfaceImplementation);
             for (MutableCompiledOverride compiled : compiledOverridesByMaterial.getOrDefault(
                     definition.id(), List.of())) {
                 RtMaterialOverrides.Rule rule = compiled.rule;
@@ -307,7 +324,7 @@ public final class RtMaterialRegistry {
                 runtimeMatchedOverrides.add(rule);
                 break;
             }
-            int id = tables.addDefinition(desc, definition);
+            int id = tables.addDefinition(desc, definition, definitionEntry);
             nextNamedMaterialIds.put(definition.id(), id);
         }
 
@@ -517,7 +534,7 @@ public final class RtMaterialRegistry {
 
     /**
      * The binding pairing {@code bindingId}'s surface with a bindless base-color texture. Supplying a
-     * texture replaces a named definition's uniform base color while preserving its other parameters.
+     * texture is sampled in linear space and modulated by the named definition's uniform base color.
      */
     public int withBaseColorTextureIndex(int bindingId, int baseColorTextureIndex) {
         MaterialBindingData base = bindingRecords.get(bindingId);
@@ -525,7 +542,8 @@ public final class RtMaterialRegistry {
     }
 
     static MaterialBindingData baseColorTextureBinding(MaterialBindingData base, int baseColorTextureIndex) {
-        int flags = MaterialBindingAbi.flags(base.packed0()) & ~MaterialBindingAbi.FLAG_TEXTURELESS;
+        int flags = (MaterialBindingAbi.flags(base.packed0()) & ~MaterialBindingAbi.FLAG_TEXTURELESS)
+                | MaterialBindingAbi.FLAG_BASE_COLOR_LINEAR;
         return new MaterialBindingData(
                 MaterialBindingAbi.pack(baseColorTextureIndex, MaterialBindingAbi.coverage(base.packed0()), flags,
                         MaterialBindingAbi.surfaceImplementation(base.packed0())),
@@ -620,6 +638,13 @@ public final class RtMaterialRegistry {
         return MaterialRegistryCompiler.transport(topology);
     }
 
+    static int definitionFeatures(boolean textured, int pageFeatures, float emissionLuminanceCdM2) {
+        int features = textured ? pageFeatures & (FEATURE_SPEC | FEATURE_NORMAL | FEATURE_EMISSION_MASK
+                | FEATURE_SUBSURFACE_COLOR_BASE | FEATURE_EMISSION_COLOR_BASE) : 0;
+        if (emissionLuminanceCdM2 > 0.0f) features |= FEATURE_UNIFORM_EMISSION;
+        return features;
+    }
+
     /** Texture masks own the summary; otherwise an emitting state uses the full texture. */
     private static RtMaterialDesc.EmissionSummary variantSummary(int features, boolean emitting,
                                                                  RtMaterialPageCompiler.Entry entry,
@@ -692,18 +717,22 @@ public final class RtMaterialRegistry {
             return id;
         }
 
-        int addDefinition(RtMaterialDesc desc, MaterialDefinition definition) {
+        int addDefinition(RtMaterialDesc desc, MaterialDefinition definition, RtMaterialPageCompiler.Entry entry) {
             int surfaceId = surfaces.size();
-            surfaces.add(surfaceDefinition(desc, definition));
-            float[] average = {definition.baseColorR(), definition.baseColorG(), definition.baseColorB(), 1.0f};
+            surfaces.add(surfaceDefinition(desc, definition, entry));
+            float[] average = definition.textures() == null
+                    ? new float[]{definition.baseColorR(), definition.baseColorG(), definition.baseColorB(), 1.0f}
+                    : new float[]{entry.averageR() * definition.baseColorR(),
+                    entry.averageG() * definition.baseColorG(), entry.averageB() * definition.baseColorB(),
+                    entry.averageA()};
             MaterialBindingData base = binding(surfaceId, desc, average,
-                    SHARED_ATLAS_BASE_COLOR_TEXTURE_INDEX, RUNTIME_TEXTURE_COVERAGE_CUTOFF);
+                    SHARED_ATLAS_BASE_COLOR_TEXTURE_INDEX, definition.alphaCutoff());
             int flags = MaterialBindingAbi.flags(base.packed0()) | MaterialBindingAbi.FLAG_TEXTURELESS;
             MaterialBindingData textureless = new MaterialBindingData(
                     MaterialBindingAbi.pack(SHARED_ATLAS_BASE_COLOR_TEXTURE_INDEX, COVERAGE_OPAQUE, flags,
                             MaterialBindingAbi.surfaceImplementation(base.packed0())),
                     base.surface(), base.shadowTint(), base.packed1());
-            return append(textureless, desc, null);
+            return append(textureless, desc, footprintFor(desc, entry, null));
         }
 
         /** The base's binding with {@link #COVERAGE_CUTOUT}, over the same surface/description/footprint. */
@@ -742,26 +771,47 @@ public final class RtMaterialRegistry {
     private static SurfaceMaterialData surface(RtMaterialDesc desc, RtMaterialPageCompiler.Entry entry,
                                                float albedoU, float albedoV,
                                                float albedoInvDu, float albedoInvDv) {
-        // Packed unconditionally (0 for non-emissive materials): the shader multiplies the emission mask
-        // by this every time, regardless of source, so the package baseline needs no shader copy.
-        int luminance = Math.round(Math.min(MAX_EMISSION_LUMINANCE, desc.emissionLuminance())
-                * (EMISSION_LUMINANCE_MASK / MAX_EMISSION_LUMINANCE));
-        int packedFeatures = desc.features() | (luminance << EMISSION_LUMINANCE_SHIFT);
         int page = (entry.pageIndex() & PAGE_MASK) | (entry.maxLod() << MAX_LOD_SHIFT);
         int alphaRange = RtMaterialTextureData.unorm8(entry.minAlpha())
                 | (RtMaterialTextureData.unorm8(entry.maxAlpha()) << 8);
-        return new SurfaceMaterialData(packedFeatures, page, alphaRange, entry.alphaSource(),
+        return surfaceData(desc, desc.features(), page, alphaRange, entry.alphaSource(),
                 new Float4(entry.materialU(), entry.materialV(), entry.materialDu(), entry.materialDv()),
                 new Float4(albedoU, albedoV, albedoInvDu, albedoInvDv),
-                desc.specularRoughness(), desc.baseMetalness(), desc.specularIor(),
-                desc.transmissionWeight());
+                new Float4(1.0f, 1.0f, 1.0f, 1.0f));
     }
 
-    private static SurfaceMaterialData surfaceDefinition(RtMaterialDesc desc, MaterialDefinition definition) {
-        return new SurfaceMaterialData(0, 0, 0xFFFF, 0,
-                new Float4(0.0f, 0.0f, 0.0f, 0.0f),
-                new Float4(definition.baseColorR(), definition.baseColorG(), definition.baseColorB(), 1.0f),
-                desc.specularRoughness(), desc.baseMetalness(), desc.specularIor(), desc.transmissionWeight());
+    private static SurfaceMaterialData surfaceDefinition(RtMaterialDesc desc, MaterialDefinition definition,
+                                                         RtMaterialPageCompiler.Entry entry) {
+        if (definition.textures() == null) {
+            return surfaceData(desc, desc.features(), 0, 0xFFFF, 0,
+                    new Float4(0.0f, 0.0f, 0.0f, 0.0f),
+                    new Float4(0.0f, 0.0f, 1.0f, 1.0f),
+                    new Float4(definition.baseColorR(), definition.baseColorG(), definition.baseColorB(), 1.0f));
+        }
+        int page = (entry.pageIndex() & PAGE_MASK) | (entry.maxLod() << MAX_LOD_SHIFT);
+        int alphaRange = RtMaterialTextureData.unorm8(entry.minAlpha())
+                | (RtMaterialTextureData.unorm8(entry.maxAlpha()) << 8);
+        return surfaceData(desc, desc.features(), page, alphaRange, entry.alphaSource(),
+                new Float4(entry.materialU(), entry.materialV(), entry.materialDu(), entry.materialDv()),
+                new Float4(entry.albedoU(), entry.albedoV(), entry.albedoInvDu(), entry.albedoInvDv()),
+                new Float4(definition.baseColorR(), definition.baseColorG(), definition.baseColorB(), 1.0f));
+    }
+
+    private static SurfaceMaterialData surfaceData(RtMaterialDesc desc, int features, int page,
+                                                   int alphaRange, int alphaFlags,
+                                                   Float4 materialUv, Float4 baseColorUv,
+                                                   Float4 baseColorFactor) {
+        int luminance = Math.round(Math.min(MAX_EMISSION_LUMINANCE, desc.emissionLuminance())
+                * (EMISSION_LUMINANCE_MASK / MAX_EMISSION_LUMINANCE));
+        int packedFeatures = features | (luminance << EMISSION_LUMINANCE_SHIFT);
+        return new SurfaceMaterialData(packedFeatures, page, alphaRange, alphaFlags,
+                materialUv, baseColorUv, desc.specularRoughness(), desc.baseMetalness(),
+                desc.specularIor(), desc.transmissionWeight(), baseColorFactor,
+                new Float4(desc.transmissionColorR(), desc.transmissionColorG(),
+                        desc.transmissionColorB(), desc.subsurfaceWeight()),
+                new Float4(desc.subsurfaceColorR(), desc.subsurfaceColorG(),
+                        desc.subsurfaceColorB(), desc.subsurfaceScatterAnisotropy()),
+                new Float4(desc.emissionColorR(), desc.emissionColorG(), desc.emissionColorB(), 1.0f));
     }
 
     /**

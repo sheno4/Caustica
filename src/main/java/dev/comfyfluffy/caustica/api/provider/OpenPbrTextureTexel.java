@@ -1,10 +1,19 @@
-package dev.comfyfluffy.caustica.engine.material;
+package dev.comfyfluffy.caustica.api.provider;
 
-/** Reusable semantic output for one canonical OpenPBR texture texel. */
+import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialDefaults;
+
+/**
+ * Reusable semantic output for one canonical OpenPBR texture texel. Color fields are linear BT.709;
+ * scalar fields are physical OpenPBR values except the tangent normal, whose x/y components are signed.
+ */
 public final class OpenPbrTextureTexel {
     public float specularRoughness = 1.0f;
     public float baseMetalness;
     public float emissionWeight;
+    /** Linear BT.709 emissive texture multiplier. */
+    public float emissionColorR = 1.0f;
+    public float emissionColorG = 1.0f;
+    public float emissionColorB = 1.0f;
     public float subsurfaceWeight;
     public float tangentNormalX;
     public float tangentNormalY;
@@ -18,6 +27,9 @@ public final class OpenPbrTextureTexel {
         specularRoughness = 1.0f;
         baseMetalness = 0.0f;
         emissionWeight = 0.0f;
+        emissionColorR = 1.0f;
+        emissionColorG = 1.0f;
+        emissionColorB = 1.0f;
         subsurfaceWeight = 0.0f;
         tangentNormalX = 0.0f;
         tangentNormalY = 0.0f;

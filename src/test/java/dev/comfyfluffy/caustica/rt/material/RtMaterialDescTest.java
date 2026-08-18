@@ -38,4 +38,12 @@ final class RtMaterialDescTest {
                 RtMaterialDesc.Source.DERIVED_TEXTURE, 0, 0.5f, 0.0f, 0.0f, 0.0f,
                 RtMaterialDesc.EmissionSource.NONE, 0.0f, RtMaterialDesc.EmissionSummary.NONE, 0));
     }
+
+    @Test
+    void namedEmissionUsesUniformBaselineBeforeItsTextureMask() {
+        int features = RtMaterialRegistry.definitionFeatures(true,
+                RtMaterialRegistry.FEATURE_EMISSION_MASK, 12.0f);
+        assertEquals(RtMaterialRegistry.FEATURE_EMISSION_MASK
+                | RtMaterialRegistry.FEATURE_UNIFORM_EMISSION, features);
+    }
 }

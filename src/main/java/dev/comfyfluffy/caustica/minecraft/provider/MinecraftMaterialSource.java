@@ -129,8 +129,10 @@ public final class MinecraftMaterialSource implements MaterialSource {
         }
         ResourceId surface = root.has("surface") ? ResourceId.parse(root.get("surface").getAsString())
                 : "water".equals(model) ? MinecraftProvidersExtension.WATER_SURFACE : null;
+        MaterialTopology topology = model == null ? null : "opaque".equals(model)
+                ? MaterialTopology.SURFACE : MaterialTopology.MEDIUM_BOUNDARY;
         MaterialRule.Parameters parameters = new MaterialRule.Parameters(roughness, metalness, ior,
-                transmission, emissionLuminanceCdM2, surface);
+                transmission, emissionLuminanceCdM2, surface, topology);
         return new MaterialRule(resourceId(source), new MaterialRule.Match(texture, geometry), parameters);
     }
 

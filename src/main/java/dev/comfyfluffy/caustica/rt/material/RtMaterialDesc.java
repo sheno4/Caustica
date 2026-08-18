@@ -13,6 +13,11 @@ public record RtMaterialDesc(
         float baseMetalness,
         float specularIor,
         float transmissionWeight,
+        float transmissionColorR, float transmissionColorG, float transmissionColorB,
+        float subsurfaceWeight,
+        float subsurfaceColorR, float subsurfaceColorG, float subsurfaceColorB,
+        float subsurfaceScatterAnisotropy,
+        float emissionColorR, float emissionColorG, float emissionColorB,
         EmissionSource emissionSource,
         /**
          * OpenPBR {@code emission_luminance}: final HDR emitting-surface luminance in cd/m², the
@@ -29,6 +34,14 @@ public record RtMaterialDesc(
          */
         int surfaceImplementation
 ) {
+    public RtMaterialDesc(int transport, Source source, int features, float specularRoughness,
+                          float baseMetalness, float specularIor, float transmissionWeight,
+                          EmissionSource emissionSource, float emissionLuminance,
+                          EmissionSummary emissionSummary, int surfaceImplementation) {
+        this(transport, source, features, specularRoughness, baseMetalness, specularIor, transmissionWeight,
+                1.0f, 1.0f, 1.0f, 0.0f, 0.8f, 0.8f, 0.8f, 0.0f,
+                1.0f, 1.0f, 1.0f, emissionSource, emissionLuminance, emissionSummary, surfaceImplementation);
+    }
     public enum Source {
         OVERRIDE,
         AUTHORED_TEXTURE,
@@ -65,6 +78,12 @@ public record RtMaterialDesc(
         if (!finite01(specularRoughness) || !finite01(baseMetalness)
                 || !Float.isFinite(specularIor) || specularIor <= 0.0f
                 || !finite01(transmissionWeight)
+                || !finite01(transmissionColorR) || !finite01(transmissionColorG) || !finite01(transmissionColorB)
+                || !finite01(subsurfaceWeight)
+                || !finite01(subsurfaceColorR) || !finite01(subsurfaceColorG) || !finite01(subsurfaceColorB)
+                || !Float.isFinite(subsurfaceScatterAnisotropy)
+                || subsurfaceScatterAnisotropy < -1.0f || subsurfaceScatterAnisotropy > 1.0f
+                || !nonNegative(emissionColorR) || !nonNegative(emissionColorG) || !nonNegative(emissionColorB)
                 || !Float.isFinite(emissionLuminance) || emissionLuminance < 0.0f) {
             throw new IllegalArgumentException("Invalid physical material parameters");
         }
@@ -72,5 +91,9 @@ public record RtMaterialDesc(
 
     private static boolean finite01(float value) {
         return Float.isFinite(value) && value >= 0.0f && value <= 1.0f;
+    }
+
+    private static boolean nonNegative(float value) {
+        return Float.isFinite(value) && value >= 0.0f;
     }
 }

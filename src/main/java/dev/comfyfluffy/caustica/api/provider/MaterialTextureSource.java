@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.engine.material;
+package dev.comfyfluffy.caustica.api.provider;
 
 import java.io.IOException;
 

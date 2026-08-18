@@ -1,0 +1,6 @@
+{
+  "model": {
+    "type": "minecraft:model",
+    "model": "caustica:item/gltf_viewer_anchor"
+  }
+}

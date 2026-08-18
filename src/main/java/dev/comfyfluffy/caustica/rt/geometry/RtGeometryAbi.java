@@ -12,12 +12,16 @@ public final class RtGeometryAbi {
     public static final int TEXTURE_COORDINATE_ADDRESS_OFFSET = 16;
     /** Previous vertex-position buffer for deforming geometry; zero reuses current positions. */
     public static final int PREVIOUS_POSITION_ADDRESS_OFFSET = 24;
+    public static final int VERTEX_NORMAL_ADDRESS_OFFSET = 32;
+    public static final int VERTEX_COLOR_ADDRESS_OFFSET = 40;
     public static final int TRIANGLE_BASE_OFFSET = 48;
     public static final int FLAGS_OFFSET = 60;
 
     public static final int FLAG_TRIANGLE_CORNER_TEXTURE_COORDINATES = 0;
     public static final int FLAG_INDEXED_TEXTURE_COORDINATES = 1;
     public static final int FLAG_RECEIVES_PROJECTED_SURFACE_MODIFIERS = 1 << 1;
+    public static final int FLAG_HAS_VERTEX_NORMALS = 1 << 2;
+    public static final int FLAG_HAS_VERTEX_COLORS = 1 << 3;
 
     private RtGeometryAbi() {
     }
@@ -41,11 +45,14 @@ public final class RtGeometryAbi {
 
     public static void writeRecord(long address, long primitiveAddress, long indexAddress,
                                    long textureCoordinateAddress, long previousPositionAddress,
+                                   long vertexNormalAddress, long vertexColorAddress,
                                    int triangleBase0, int triangleBase1, int triangleBase2, int flags) {
         MemoryUtil.memPutLong(address + PRIMITIVE_ADDRESS_OFFSET, primitiveAddress);
         MemoryUtil.memPutLong(address + INDEX_ADDRESS_OFFSET, indexAddress);
         MemoryUtil.memPutLong(address + TEXTURE_COORDINATE_ADDRESS_OFFSET, textureCoordinateAddress);
         MemoryUtil.memPutLong(address + PREVIOUS_POSITION_ADDRESS_OFFSET, previousPositionAddress);
+        MemoryUtil.memPutLong(address + VERTEX_NORMAL_ADDRESS_OFFSET, vertexNormalAddress);
+        MemoryUtil.memPutLong(address + VERTEX_COLOR_ADDRESS_OFFSET, vertexColorAddress);
         MemoryUtil.memPutInt(address + TRIANGLE_BASE_OFFSET, triangleBase0);
         MemoryUtil.memPutInt(address + TRIANGLE_BASE_OFFSET + 4, triangleBase1);
         MemoryUtil.memPutInt(address + TRIANGLE_BASE_OFFSET + 8, triangleBase2);

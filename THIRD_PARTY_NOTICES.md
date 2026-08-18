@@ -54,3 +54,28 @@ Caustica bundles `dev.harrel:json-schema` for ray-pack manifest validation. It i
 licensed under the MIT License:
 
 <https://github.com/harrel56/json-schema/blob/master/LICENSE>
+
+## Khronos Box Vertex Colors glTF asset
+
+Caustica includes the Box Vertex Colors sample model and its binary buffer from
+the Khronos glTF Sample Assets repository as a renderer integration fixture.
+The asset was created by Marco Hutter and is dedicated to the public domain
+under Creative Commons CC0 1.0 Universal:
+
+<https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/BoxVertexColors>
+
+<https://creativecommons.org/publicdomain/zero/1.0/legalcode>
+
+## Khronos Lantern glTF asset
+
+Caustica includes the binary Lantern sample model from the Khronos glTF Sample
+Assets repository as a textured renderer integration fixture. The asset is
+dedicated to the public domain under Creative Commons CC0 1.0 Universal:
+
+<https://github.com/KhronosGroup/glTF-Sample-Assets/tree/0e3a605bda7c758293ab58432f1d51a2a355d47a/Models/Lantern>
+
+Bundled GLB source:
+
+<https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/0e3a605bda7c758293ab58432f1d51a2a355d47a/Models/Lantern/glTF-Binary/Lantern.glb>
+
+<https://creativecommons.org/publicdomain/zero/1.0/legalcode>

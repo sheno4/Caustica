@@ -44,9 +44,8 @@ public final class RtMaterialOverrides {
 
     private static Rule compile(MaterialRule rule, SurfaceResolver surfaces) {
         MaterialRule.Parameters parameters = rule.parameters();
-        Integer transport = parameters.transmissionWeight() == null ? null
-                : parameters.transmissionWeight() > 0.0f
-                ? RtMaterialRegistry.TRANSPORT_MEDIUM_BOUNDARY : RtMaterialRegistry.TRANSPORT_SURFACE;
+        Integer transport = parameters.topology() == null ? null
+                : RtMaterialRegistry.transport(parameters.topology());
         Integer surfaceImplementation = null;
         if (parameters.surface() != null) {
             int index = surfaces.indexOf(parameters.surface());
@@ -96,13 +95,17 @@ public final class RtMaterialOverrides {
                     : (transport != null ? defaultIor(nextTransport) : base.specularIor());
             float nextTransmission = transmission != null ? transmission
                     : (transport != null ? defaultTransmission(nextTransport) : base.transmissionWeight());
-            // An absolute emitting-surface luminance. It can replace the level of an existing
-            // Existing texture/state emission keeps its mask; an override does not create one.
+            // An absolute emitting-surface luminance. Existing texture/state emission keeps its mask;
+            // an override does not create one.
             float nextEmissionLuminance = emissionLuminanceCdM2 != null
                     && base.emissionSource() != RtMaterialDesc.EmissionSource.NONE
                     ? emissionLuminanceCdM2 : base.emissionLuminance();
             return new RtMaterialDesc(nextTransport, RtMaterialDesc.Source.OVERRIDE, base.features(),
                     nextRoughness, nextMetalness, nextIor, nextTransmission,
+                    base.transmissionColorR(), base.transmissionColorG(), base.transmissionColorB(),
+                    base.subsurfaceWeight(), base.subsurfaceColorR(), base.subsurfaceColorG(),
+                    base.subsurfaceColorB(), base.subsurfaceScatterAnisotropy(),
+                    base.emissionColorR(), base.emissionColorG(), base.emissionColorB(),
                     base.emissionSource(), nextEmissionLuminance, base.emissionSummary(),
                     surfaceImplementation != null ? surfaceImplementation : base.surfaceImplementation());
         }
