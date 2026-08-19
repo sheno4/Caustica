@@ -15,7 +15,7 @@ final class SourceDependencyArchitectureTest {
     private static final Path PROJECT_ROOT = findProjectRoot();
     private static final Path MAIN_JAVA = PROJECT_ROOT.resolve("src/main/java");
     private static final Path MINECRAFT = MAIN_JAVA.resolve("dev/comfyfluffy/caustica/minecraft");
-    private static final Path API = MAIN_JAVA.resolve("dev/comfyfluffy/caustica/api");
+    private static final Path API = PROJECT_ROOT.resolve("api/src/main/java/dev/comfyfluffy/caustica/api");
 
     @Test
     void minecraftSceneProducersDoNotImportRendererInternals() throws IOException {

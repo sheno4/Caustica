@@ -74,6 +74,7 @@ if (loader == "fabric") {
         mods {
             caustica {
                 sourceSet(rootProject.sourceSets.main)
+                sourceSet(project(":api").sourceSets.main)
             }
             caustica_gltf_viewer {
                 sourceSet(sourceSets.main)
@@ -87,17 +88,18 @@ if (loader == "fabric") {
 }
 
 dependencies {
+    compileOnly project(":api")
+    runtimeOnly project(":api")
     if (loader == "fabric") {
         minecraft "com.mojang:minecraft:${project.minecraft_version}"
         implementation "net.fabricmc:fabric-loader:${project.loader_version}"
         implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
-        implementation rootProject
-    } else {
-        implementation rootProject
+        runtimeOnly rootProject
     }
 
     testImplementation platform("org.junit:junit-bom:5.12.2")
     testImplementation "org.junit.jupiter:junit-jupiter"
+    testImplementation project(":api")
     testRuntimeOnly "org.junit.platform:junit-platform-launcher"
 }
 
@@ -121,6 +123,8 @@ def checkApiBoundary = tasks.register("checkApiBoundary") {
     group = "verification"
     description = "Rejects extension references to Caustica implementation packages."
     inputs.files(sourceSets.main.allJava)
+    dependsOn(tasks.named("jar"))
+    inputs.file(tasks.named("jar", Jar).flatMap { it.archiveFile })
     doLast {
         def violations = []
         sourceSets.main.allJava.files.sort().each { source ->
@@ -135,6 +139,20 @@ def checkApiBoundary = tasks.register("checkApiBoundary") {
         if (!violations.empty) {
             throw new GradleException("Standalone extension crossed the Caustica API boundary:\n"
                     + violations.join("\n"))
+        }
+        def bundledApiClasses = []
+        def artifact = tasks.named("jar", Jar).get().archiveFile.get().asFile
+        new java.util.jar.JarFile(artifact).withCloseable { jar ->
+            def entries = jar.entries()
+            while (entries.hasMoreElements()) {
+                def name = entries.nextElement().name
+                if (name.startsWith("dev/comfyfluffy/caustica/api/") && name.endsWith(".class")) {
+                    bundledApiClasses.add(name)
+                }
+            }
+        }
+        if (!bundledApiClasses.empty) {
+            throw new GradleException("Standalone extension bundled caustica-api classes: ${bundledApiClasses}")
         }
     }
 }

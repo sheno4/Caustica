@@ -1,0 +1,98 @@
+plugins {
+    id "java-library"
+    id "maven-publish"
+}
+
+version = project.api_version
+group = project.maven_group
+java.toolchain.languageVersion = JavaLanguageVersion.of(25)
+
+base {
+    archivesName = "caustica-api"
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    api "org.joml:joml:${project.joml_version}"
+    api "org.lwjgl:lwjgl:${project.lwjgl_version}"
+    api "org.lwjgl:lwjgl-vulkan:${project.lwjgl_version}"
+
+    testImplementation platform("org.junit:junit-bom:5.12.2")
+    testImplementation "org.junit.jupiter:junit-jupiter"
+    testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+}
+
+tasks.named("test", Test) {
+    useJUnitPlatform()
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.release = 25
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_25
+    targetCompatibility = JavaVersion.VERSION_25
+    withSourcesJar()
+}
+
+tasks.named("jar", Jar).configure {
+    from(rootProject.files("LICENSE.md", "COPYING", "COPYING.LESSER")) {
+        into "META-INF"
+    }
+}
+
+def verifyApiJar = tasks.register("verifyApiJar") {
+    group = "verification"
+    description = "Verifies that the API artifact contains only public Caustica packages and shader modules."
+    dependsOn(tasks.named("jar"))
+    inputs.file(tasks.named("jar", Jar).flatMap { it.archiveFile })
+    doLast {
+        def jarPath = tasks.named("jar", Jar).get().archiveFile.get().asFile
+        def entries = []
+        new java.util.jar.JarFile(jarPath).withCloseable { jar ->
+            def enumeration = jar.entries()
+            while (enumeration.hasMoreElements()) {
+                entries.add(enumeration.nextElement().name)
+            }
+        }
+        def implementationClasses = entries.findAll { entry ->
+            entry.endsWith(".class")
+                    && entry.startsWith("dev/comfyfluffy/caustica/")
+                    && !entry.startsWith("dev/comfyfluffy/caustica/api/")
+        }
+        if (!implementationClasses.empty) {
+            throw new GradleException("caustica-api contains implementation classes: ${implementationClasses}")
+        }
+        def expectedShaderModules = [
+                "caustica_api.slang",
+                "caustica_color.slang",
+                "caustica_medium.slang",
+                "caustica_sky.slang",
+                "caustica_surface.slang",
+                "caustica_surface_modifier.slang",
+                "caustica_texture_resources.slang",
+                "caustica_types.slang"
+        ].collect { "caustica/shaders/api/${it}".toString() }
+        def missingShaderModules = expectedShaderModules.findAll { !entries.contains(it) }
+        if (!missingShaderModules.empty) {
+            throw new GradleException("caustica-api is missing shader modules: ${missingShaderModules}")
+        }
+    }
+}
+
+tasks.named("check") {
+    dependsOn(verifyApiJar)
+}
+
+publishing {
+    publications {
+        create("mavenJava", MavenPublication) {
+            artifactId = "caustica-api"
+            from components.java
+        }
+    }
+}

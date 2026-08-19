@@ -12,10 +12,10 @@ final class ShaderSourceTest {
     @Test
     void resolvesModulesThroughTheContributingClassAnchor() throws IOException {
         ShaderSource source = ShaderSource.classpath(
-                ShaderSourceTest.class, "/caustica-test/shaders");
+                ShaderSourceTest.class, "/caustica/shaders/api");
 
         assertSame(ShaderSourceTest.class, source.resourceAnchor());
-        try (var module = source.openModule("test_surface")) {
+        try (var module = source.openModule("caustica_api")) {
             assertNotNull(module);
         }
     }

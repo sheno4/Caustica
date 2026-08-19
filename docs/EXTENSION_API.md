@@ -6,8 +6,22 @@ Status: current API at `CausticaApi.VERSION`. This document uses exact current J
 
 `extensions/gltf-viewer` builds as the independent `caustica-gltf-viewer` mod jar. Its Fabric
 `caustica` entrypoint and NeoForge `CausticaExtension` service declaration exercise loader discovery;
-Caustica does not register the example directly. `checkApiBoundary` rejects references to Caustica
-implementation packages from the extension's production sources.
+Caustica does not register the example directly. It compiles only against the `caustica-api` project;
+the full Caustica mod is a runtime dependency and embeds those API classes and Slang modules. The
+extension jar must not bundle its own copy of the API.
+
+For a published build, use the API only at compile time and require the full mod through Fabric or
+NeoForge metadata at runtime:
+
+```groovy
+dependencies {
+    compileOnly "dev.comfyfluffy.caustica:caustica-api:0.3.0"
+}
+```
+
+The API artifact deliberately contains only `dev.comfyfluffy.caustica.api` classes, its eight public
+Slang authoring modules, and their LWJGL/JOML compile contracts. It contains no Minecraft, loader,
+renderer, Slang-runtime, or native implementation.
 
 The `caustica_gltf_viewer:gltf_viewer_anchor` block is only a world-transform anchor. It renders the
 immutable scene loaded from `assets/caustica_gltf_viewer/gltf/viewer/model.glb`; resource packs can
@@ -495,9 +509,10 @@ extension registration rather than letting an ambiguous symbol fail world-progra
 
 The public Java signatures are implementation-neutral: light and material value types live under
 `api.provider`, option lookup exposes only API views, and pass shader compilation is supplied as a host
-service. The example still compiles against the complete Caustica mod artifact, so its Gradle source scan
-is the active enforcement until these sources and shader-authoring modules are published as a separate
-`caustica-api` artifact.
+service. Gradle compiles those contracts as the independent `caustica-api` artifact, the root mod embeds
+that artifact exactly once, and the standalone example has only `compileOnly` access to it. Source and
+jar checks supplement the module boundary by rejecting implementation references and accidental API
+shading in the extension.
 
 Both Caustica and the example are currently client-only mods. Their blocks work in integrated
 single-player, but a dedicated server cannot register or persist them until content registration is

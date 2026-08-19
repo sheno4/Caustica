@@ -11,6 +11,8 @@ plugins {
 	id "maven-publish"
 }
 
+evaluationDependsOn(":api")
+
 def loader = (findProperty("loader") ?: "fabric").toString().toLowerCase(Locale.ROOT)
 if (!(loader in ["fabric", "neoforge"])) {
 	throw new GradleException("Unknown loader '${loader}'. Expected 'fabric' or 'neoforge'.")
@@ -28,8 +30,7 @@ base {
 	archivesName = project.archives_base_name
 }
 
-// Classify the shippable artifact, not the compile output. Under Loom that is remapJar — `jar` holds
-// unremapped dev classes and must keep its own classifier so the two cannot be confused.
+// Obfuscation is disabled for this development build, so `jar` is the loader-specific shippable artifact.
 tasks.named("jar") {
 	archiveClassifier = loader
 }
@@ -107,6 +108,7 @@ if (loader == "fabric") {
 		mods {
 			caustica {
 				sourceSet(sourceSets.main)
+				sourceSet(project(":api").sourceSets.main)
 			}
 		}
 		unitTest {
@@ -116,7 +118,14 @@ if (loader == "fabric") {
 	}
 }
 
+configurations {
+	apiRuntime
+}
+sourceSets.main.runtimeClasspath += configurations.apiRuntime
+
 dependencies {
+	compileOnly project(":api")
+	apiRuntime project(":api")
 	if (loader == "fabric") {
 		minecraft "com.mojang:minecraft:${project.minecraft_version}"
 		implementation "net.fabricmc:fabric-loader:${project.loader_version}"
@@ -124,6 +133,8 @@ dependencies {
 	}
 	testImplementation platform("org.junit:junit-bom:5.12.2")
 	testImplementation "org.junit.jupiter:junit-jupiter"
+	testImplementation project(":api")
+	testRuntimeOnly project(":api")
 	testRuntimeOnly "org.junit.platform:junit-platform-launcher"
 
 	// Layered TOML config (config/caustica.toml) — NightConfig, the same library NeoForge's
@@ -158,7 +169,7 @@ processResources {
 def shaderGenRoot = layout.buildDirectory.dir("generated/shaders") // classpath root -> /caustica/shaders/*.spv
 def runtimeWorldSourceDir = file("src/main/resources/caustica/shaders/world")
 def runtimeBuiltinSourceDir = file("src/main/resources/caustica/shaders/builtin")
-def runtimeApiSourceDir = file("src/main/resources/caustica/shaders/api")
+def runtimeApiSourceDir = project(":api").file("src/main/resources/caustica/shaders/api")
 def runtimeMinecraftSourceDir = file("src/main/resources/caustica/shaders/minecraft")
 
 def resolveVulkanTool = { String name ->
@@ -685,9 +696,50 @@ java {
 }
 
 tasks.named("jar", Jar).configure {
+	from(project(":api").sourceSets.main.output)
 	from(rootProject.files("LICENSE.md", "COPYING", "COPYING.LESSER", "THIRD_PARTY_NOTICES.md")) {
 		into "META-INF"
 	}
+}
+
+tasks.named("sourcesJar", Jar).configure {
+	from(project(":api").sourceSets.main.allSource)
+}
+
+def verifyEmbeddedApi = tasks.register("verifyEmbeddedApi") {
+	group = "verification"
+	description = "Verifies that the full mod embeds the standalone API exactly once."
+	dependsOn(tasks.named("jar"), project(":api").tasks.named("jar"))
+	inputs.file(tasks.named("jar", Jar).flatMap { it.archiveFile })
+	inputs.file(project(":api").tasks.named("jar", Jar).flatMap { it.archiveFile })
+	doLast {
+		def names = { File artifact ->
+			def result = []
+			new java.util.jar.JarFile(artifact).withCloseable { jar ->
+				def enumeration = jar.entries()
+				while (enumeration.hasMoreElements()) {
+					result.add(enumeration.nextElement().name)
+				}
+			}
+			return result
+		}
+		def rootEntries = names(tasks.named("jar", Jar).get().archiveFile.get().asFile)
+		def apiEntries = names(project(":api").tasks.named("jar", Jar).get().archiveFile.get().asFile)
+		def required = apiEntries.findAll { entry ->
+			entry.endsWith(".class") || entry.startsWith("caustica/shaders/api/")
+		}.findAll { !it.endsWith("/") }
+		def missing = required.findAll { !rootEntries.contains(it) }
+		def duplicated = required.findAll { requiredEntry ->
+			rootEntries.count { it == requiredEntry } != 1
+		}
+		if (!missing.empty || !duplicated.empty) {
+			throw new GradleException("embedded API mismatch; missing=${missing}, duplicate=${duplicated}")
+		}
+	}
+}
+
+tasks.named("check") {
+	dependsOn(verifyEmbeddedApi)
 }
 
 publishing {
