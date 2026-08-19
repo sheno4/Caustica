@@ -3,11 +3,11 @@ package dev.comfyfluffy.caustica.example.gltfviewer;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.api.provider.GeometryTransform;
 import dev.comfyfluffy.caustica.api.provider.MaterialHandle;
-import dev.comfyfluffy.caustica.api.provider.SceneFrameContext;
 import dev.comfyfluffy.caustica.api.provider.SceneGeometryKey;
 import dev.comfyfluffy.caustica.api.provider.SceneGeometrySink;
 import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import dev.comfyfluffy.caustica.api.provider.SceneProvider;
+import dev.comfyfluffy.caustica.api.provider.SceneScope;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 
@@ -29,10 +29,10 @@ public final class ProceduralSurfaceSceneProvider implements SceneProvider {
 
     private final Supplier<Set<BlockPos>> anchors;
     private final Map<Long, SceneGeometryKey> instanceKeys = new HashMap<>();
-    private Set<Long> visible = Set.of();
     private Set<Long> submitted = Set.of();
     private long nextInstanceKey;
     private boolean residentSubmitted;
+    private SceneScope scope;
 
     public ProceduralSurfaceSceneProvider() {
         this(ProceduralSurfaceSceneProvider::loadedAnchors);
@@ -43,16 +43,21 @@ public final class ProceduralSurfaceSceneProvider implements SceneProvider {
     }
 
     @Override
+    public void onSessionStart(SceneScope scope) {
+        reset();
+        this.scope = scope;
+    }
+
+    @Override
     public void prepareFrame() {
         Set<Long> positions = new LinkedHashSet<>();
         for (BlockPos position : anchors.get()) {
             positions.add(position.asLong());
         }
-        visible = Set.copyOf(positions);
+        publish(Set.copyOf(positions));
     }
 
-    @Override
-    public void submitGeometry(SceneFrameContext frame) {
+    private void publish(Set<Long> visible) {
         if (visible.equals(submitted)) {
             return;
         }
@@ -80,12 +85,15 @@ public final class ProceduralSurfaceSceneProvider implements SceneProvider {
             residentSubmitted = false;
         }
         submitted = visible;
-        frame.geometry().submit(GROUP, operations, () -> { });
+        scope.submit(GROUP, operations, () -> { });
     }
 
     @Override
     public void onWorldChanged() {
-        visible = Set.of();
+        reset();
+    }
+
+    private void reset() {
         submitted = Set.of();
         instanceKeys.clear();
         nextInstanceKey = 0L;

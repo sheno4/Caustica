@@ -1,10 +1,10 @@
 package dev.comfyfluffy.caustica.example.gltfviewer;
 
 import dev.comfyfluffy.caustica.api.ResourceId;
-import dev.comfyfluffy.caustica.api.provider.SceneFrameContext;
 import dev.comfyfluffy.caustica.api.provider.SceneGeometryKey;
 import dev.comfyfluffy.caustica.api.provider.SceneGeometrySink;
 import dev.comfyfluffy.caustica.api.provider.SceneProvider;
+import dev.comfyfluffy.caustica.api.provider.SceneScope;
 import dev.comfyfluffy.caustica.api.provider.TextureSink;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
@@ -26,11 +26,11 @@ public final class GltfViewerSceneProvider implements SceneProvider {
     private final GltfViewerAssetRepository assets;
     private final Supplier<Set<BlockPos>> anchors;
     private final Map<Instance, SceneGeometryKey> instanceKeys = new HashMap<>();
-    private Set<Long> visible = Set.of();
     private Set<Long> submitted = Set.of();
     private long nextInstanceKey;
     private boolean residentsSubmitted;
     private boolean texturesSubmitted;
+    private SceneScope scope;
 
     GltfViewerSceneProvider(GltfViewerScene scene, Supplier<Set<BlockPos>> anchors) {
         this(null, () -> scene, anchors);
@@ -56,12 +56,18 @@ public final class GltfViewerSceneProvider implements SceneProvider {
     }
 
     @Override
+    public void onSessionStart(SceneScope scope) {
+        reset(true);
+        this.scope = scope;
+    }
+
+    @Override
     public void prepareFrame() {
         Set<Long> positions = new LinkedHashSet<>();
         for (BlockPos position : anchors.get()) {
             positions.add(position.asLong());
         }
-        visible = Set.copyOf(positions);
+        publish(Set.copyOf(positions));
     }
 
     @Override
@@ -75,8 +81,7 @@ public final class GltfViewerSceneProvider implements SceneProvider {
         texturesSubmitted = true;
     }
 
-    @Override
-    public void submitGeometry(SceneFrameContext frame) {
+    private void publish(Set<Long> visible) {
         if (visible.equals(submitted)) {
             return;
         }
@@ -117,7 +122,7 @@ public final class GltfViewerSceneProvider implements SceneProvider {
             residentsSubmitted = false;
         }
         submitted = visible;
-        frame.geometry().submit(GROUP, operations, () -> { });
+        scope.submit(GROUP, operations, () -> { });
     }
 
     @Override
@@ -136,7 +141,6 @@ public final class GltfViewerSceneProvider implements SceneProvider {
     }
 
     private void reset(boolean resourcesClosing) {
-        visible = Set.of();
         submitted = Set.of();
         residentsSubmitted = false;
         instanceKeys.clear();

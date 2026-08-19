@@ -131,6 +131,7 @@ import dev.comfyfluffy.caustica.api.provider.SceneFrameContext;
 import dev.comfyfluffy.caustica.api.provider.SceneGeometrySink;
 import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import dev.comfyfluffy.caustica.api.provider.SceneProvider;
+import dev.comfyfluffy.caustica.api.provider.SceneScope;
 
 import java.util.List;
 
@@ -167,32 +168,35 @@ public final class ExampleExtension implements CausticaExtension {
         private static final long MESH = 1L;
         private static final long INSTANCE = 1L;
 
-        private boolean submitted;
+        private SceneScope scene;
 
         @Override
-        public void submitGeometry(SceneFrameContext frame) {
-            if (submitted) return;
+        public void onSessionStart(SceneScope scene) {
+            this.scene = scene;
+            publish();
+        }
+
+        private void publish() {
             SceneMesh mesh = new SceneMesh(
                     new float[]{0, 0, 0, 1, 0, 0, 0, 1, 0},
                     new int[]{0, 1, 2},
                     SceneMesh.UvLayout.PER_VERTEX,
                     new float[]{0, 0, 1, 0, 0, 1},
                     List.of(SceneMesh.TriangleSurface.surface(new MaterialHandle(MATERIAL))));
-            frame.geometry().submit(1L, List.of(
+            scene.submit(1L, List.of(
                     new SceneGeometrySink.Put(MESH, mesh),
                     new SceneGeometrySink.Place(
                             INSTANCE, MESH, GeometryTransform.translation(0.0, 80.0, 0.0))));
-            submitted = true;
         }
 
         @Override
         public void onWorldChanged() {
-            submitted = false;
+            publish();
         }
 
         @Override
-        public void onResourcePackClosing() {
-            submitted = false;
+        public void onResourcePackApplied() {
+            publish();
         }
     }
 
@@ -281,11 +285,21 @@ feature-context state without a global singleton or lazy cross-provider fallback
 ```java
 default void onMaterialEpoch(MaterialSnapshot materials) {}
 default void onMaterialEpochClosing() {}
+default void onSessionStart(SceneScope scope) {}
 default void update(SceneGeometryUpdateContext update) {}
 default void prepareFrame() {}
 default void submitTextures(TextureSink sink) {}
 default void submitGeometry(SceneFrameContext frame) {}
 ```
+
+`onSessionStart` runs once for the active runtime-activation-scoped provider instance. Its scope may be
+retained and submitted from any thread; inputs are copied during `submit`, and queued groups are drained
+with the `STATIC` build policy at the next host scene update. The engine closes the scope when its provider
+stops, fails, or leaves the activation, so a late submission throws `IllegalStateException`. World and
+resource-pack invalidation discard queued work before lifecycle callbacks run; providers republish retained
+state that still applies from those callbacks or later source events. `update(SceneGeometryUpdateContext)`
+remains an update-cadence compatibility path, and `submitGeometry(SceneFrameContext)` remains the
+frame-cadence `DYNAMIC` path for camera-coherent geometry.
 
 Geometry group, resident-mesh and placement keys are stable only within the provider. Submit one atomic group
 only when its retained state changes. `Put` retains or replaces a `SceneMesh`; `Place` adds or replaces a

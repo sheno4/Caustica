@@ -1,9 +1,8 @@
 package dev.comfyfluffy.caustica.example.gltfviewer;
 
-import dev.comfyfluffy.caustica.api.provider.SceneCamera;
-import dev.comfyfluffy.caustica.api.provider.SceneFrameContext;
 import dev.comfyfluffy.caustica.api.provider.SceneGeometryKey;
 import dev.comfyfluffy.caustica.api.provider.SceneGeometrySink;
+import dev.comfyfluffy.caustica.api.provider.SceneScope;
 import net.minecraft.core.BlockPos;
 import org.junit.jupiter.api.Test;
 
@@ -22,9 +21,9 @@ final class ProceduralSurfaceSceneProviderTest {
                 new BlockPos(4, 5, 6), new BlockPos(-3, 2, 9)));
         ProceduralSurfaceSceneProvider provider = new ProceduralSurfaceSceneProvider(anchors::get);
         Capture capture = new Capture();
+        provider.onSessionStart(capture);
 
         provider.prepareFrame();
-        provider.submitGeometry(frame(capture));
 
         assertEquals(3, capture.last.size());
         SceneGeometrySink.Put put = assertInstanceOf(SceneGeometrySink.Put.class, capture.last.getFirst());
@@ -39,17 +38,12 @@ final class ProceduralSurfaceSceneProviderTest {
 
         anchors.set(Set.of());
         provider.prepareFrame();
-        provider.submitGeometry(frame(capture));
         assertEquals(3, capture.last.size());
         assertEquals(2, capture.last.stream().filter(SceneGeometrySink.Remove.class::isInstance).count());
         assertEquals(1, capture.last.stream().filter(SceneGeometrySink.Drop.class::isInstance).count());
     }
 
-    private static SceneFrameContext frame(Capture capture) {
-        return new SceneFrameContext(capture, 0, 0, 0, 0, SceneCamera.IDENTITY);
-    }
-
-    private static final class Capture implements SceneGeometrySink {
+    private static final class Capture implements SceneScope {
         private List<Operation> last = List.of();
 
         @Override

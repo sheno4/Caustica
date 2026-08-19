@@ -19,6 +19,7 @@ import dev.comfyfluffy.caustica.api.provider.MaterialDefinition;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.api.provider.SceneProvider;
 import dev.comfyfluffy.caustica.api.provider.SceneGeometrySink;
+import dev.comfyfluffy.caustica.api.provider.SceneScope;
 import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import dev.comfyfluffy.caustica.api.provider.SceneFrameContext;
 import dev.comfyfluffy.caustica.api.provider.SceneGeometryUpdateContext;
@@ -32,9 +33,10 @@ import dev.comfyfluffy.caustica.rt.RtFrameStats;
 import dev.comfyfluffy.caustica.rt.geometry.RtSceneGeometryManager;
 import dev.comfyfluffy.caustica.rt.geometry.GeometryUpdates;
 import dev.comfyfluffy.caustica.rt.texture.ProviderTextureRegistry;
-import java.util.HashSet;
-import java.util.HashMap;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -59,6 +61,7 @@ public final class ProviderManager {
     private RtSceneGeometryManager sceneGeometry;
     private Runnable stopRetainedLightWork = () -> { };
     private final Map<GeometryGroupKey, Long> geometryRevisions = new HashMap<>();
+    private final Map<ResourceId, QueuedSceneScope> sceneScopes = new HashMap<>();
     private ProviderTextureRegistry textureRegistry;
 
     ProviderManager(Map<ResourceId, SceneProvider> scenes, Map<ResourceId, LightProvider> lights,
@@ -81,8 +84,9 @@ public final class ProviderManager {
         beginSession();
     }
 
-    /** Begin a new RT session; normally stopped providers become eligible for callbacks again. */
+    /** Begin a new runtime activation; normally stopped providers become eligible for callbacks again. */
     public void beginSession() {
+        closeSceneScopes();
         failed.clear();
         stoppedThisSession.clear();
         shutDownThisSession.clear();
@@ -90,6 +94,19 @@ public final class ProviderManager {
         retainedLightGroups.clear();
         retainedLightProviderGenerations.clear();
         retainedLights = RetainedLightSnapshot.empty(++retainedLightGeneration);
+        for (Map.Entry<ResourceId, SceneProvider> entry : scenes().entrySet()) {
+            ProviderKey key = new ProviderKey("scene", entry.getKey());
+            QueuedSceneScope scope = new QueuedSceneScope();
+            sceneScopes.put(entry.getKey(), scope);
+            try {
+                entry.getValue().onSessionStart(scope);
+            } catch (Throwable t) {
+                failed.add(key);
+                CausticaMod.LOGGER.error("Caustica scene provider {} failed during session start and was disabled",
+                        entry.getKey(), t);
+                stopOne("scene", entry, key, SceneProvider::stop);
+            }
+        }
     }
 
     public void prepareFrame() {
@@ -228,6 +245,7 @@ public final class ProviderManager {
     public void submitGeometry(GpuContext ctx, SceneOrigin origin, long frameIndex, SceneCamera camera) {
         submitGeometry(ctx, origin, (provider, sink) -> provider.submitGeometry(new SceneFrameContext(sink,
                 origin.x(), origin.y(), origin.z(), frameIndex, camera)), GeometryUpdates.BuildPolicy.DYNAMIC,
+                false,
                 (updates, acknowledgment, failureHandler) ->
                         sceneGeometry().submit(updates, acknowledgment, failureHandler));
     }
@@ -236,6 +254,7 @@ public final class ProviderManager {
     public void updateScenes(GpuContext ctx, SceneOrigin origin) {
         submitGeometry(ctx, origin, (provider, sink) -> provider.update(new SceneGeometryUpdateContext(sink,
                 origin.x(), origin.y(), origin.z())), GeometryUpdates.BuildPolicy.STATIC,
+                true,
                 (updates, acknowledgment, failureHandler) ->
                         sceneGeometry().submit(updates, acknowledgment, failureHandler));
     }
@@ -243,6 +262,7 @@ public final class ProviderManager {
     void updateScenes(GpuContext ctx, SceneOrigin origin, GeometrySubmitter submitter) {
         submitGeometry(ctx, origin, (provider, sink) -> provider.update(new SceneGeometryUpdateContext(sink,
                 origin.x(), origin.y(), origin.z())), GeometryUpdates.BuildPolicy.STATIC,
+                true,
                 (updates, acknowledgment, failureHandler) -> submitter.submit(updates, failureHandler));
     }
 
@@ -250,11 +270,13 @@ public final class ProviderManager {
         submitGeometry(ctx, origin, (provider, sink) -> provider.submitGeometry(new SceneFrameContext(sink,
                 origin.x(), origin.y(), origin.z(), 0L, SceneCamera.IDENTITY)),
                 GeometryUpdates.BuildPolicy.DYNAMIC,
+                false,
                 (updates, acknowledgment, failureHandler) -> submitter.submit(updates, failureHandler));
     }
 
     private void submitGeometry(GpuContext ctx, SceneOrigin origin, GeometryCollector collector,
                                 GeometryUpdates.BuildPolicy buildPolicy,
+                                boolean drainScopes,
                                 GeometrySubmission submitter) {
         for (Map.Entry<ResourceId, SceneProvider> entry : scenes().entrySet()) {
             ProviderKey key = new ProviderKey("scene", entry.getKey());
@@ -277,10 +299,16 @@ public final class ProviderManager {
                     collector.collect(entry.getValue(), stagingSink);
                 }
                 submitTextures(entry);
-                List<GeometryUpdates.Group> updates = new ArrayList<>(stagedGroups.size());
+                List<StagedGeometryGroup> collected = new ArrayList<>();
+                if (drainScopes) {
+                    QueuedSceneScope scope = sceneScopes.get(entry.getKey());
+                    if (scope != null) collected.addAll(scope.drain());
+                }
+                collected.addAll(stagedGroups.values());
+                List<GeometryUpdates.Group> updates = new ArrayList<>(collected.size());
                 Map<SubmittedGeometryGroupKey, Runnable> publishedGroups = new HashMap<>();
                 try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("geometry.providerConvert")) {
-                    for (StagedGeometryGroup group : stagedGroups.values()) {
+                    for (StagedGeometryGroup group : collected) {
                         GeometryUpdates.Group update = toUpdate(entry.getKey(), group.groupKey(),
                                 group.operations(), origin, buildPolicy);
                         updates.add(update);
@@ -365,11 +393,13 @@ public final class ProviderManager {
     }
 
     public void onWorldChanged() {
+        invalidateSceneScopes();
         clearAllSceneGeometry();
         invokeLifecycle(ProviderLifecycle::onWorldChanged);
     }
 
     public void onResourcePackClosing() {
+        invalidateSceneScopes();
         clearAllSceneGeometry();
         clearMaterials();
         invokeLifecycle(ProviderLifecycle::onResourcePackClosing);
@@ -489,6 +519,7 @@ public final class ProviderManager {
 
     /** Stop every provider before session GPU work is drained. No GPU owner is released in this phase. */
     public void stopProviders() {
+        closeSceneScopes();
         frameLights = List.of();
         retainedLightGroups.clear();
         retainedLightProviderGenerations.clear();
@@ -509,6 +540,7 @@ public final class ProviderManager {
 
     /** Clear session-derived snapshots after every provider has shut down. */
     public void endSession() {
+        closeSceneScopes();
         frameLights = List.of();
         retainedLightGroups.clear();
         retainedLightProviderGenerations.clear();
@@ -520,6 +552,15 @@ public final class ProviderManager {
     private void clearAllSceneGeometry() {
         GpuContext ctx = GpuContext.currentOrNull();
         for (ResourceId source : scenes().keySet()) clearSceneGeometry(ctx, source);
+    }
+
+    private void invalidateSceneScopes() {
+        sceneScopes.values().forEach(QueuedSceneScope::invalidate);
+    }
+
+    private void closeSceneScopes() {
+        sceneScopes.values().forEach(QueuedSceneScope::close);
+        sceneScopes.clear();
     }
 
     private Map<ResourceId, SceneProvider> scenes() {
@@ -583,6 +624,8 @@ public final class ProviderManager {
             return;
         }
         if (kind.equals("scene")) {
+            QueuedSceneScope scope = sceneScopes.remove(entry.getKey());
+            if (scope != null) scope.close();
             clearSceneGeometry(GpuContext.currentOrNull(), entry.getKey());
         } else if (kind.equals("light")) {
             removeRetainedLights(entry.getKey());
@@ -645,6 +688,54 @@ public final class ProviderManager {
     }
 
     private record SubmittedGeometryGroupKey(GeometryUpdates.GroupKey key, long revision) {
+    }
+
+    private static final class QueuedSceneScope implements SceneScope {
+        private final ArrayDeque<QueuedGeometryGroup> queued = new ArrayDeque<>();
+        private boolean open = true;
+        private long generation;
+
+        @Override
+        public synchronized void submit(SceneGeometryKey groupKey, List<SceneGeometrySink.Operation> operations,
+                                        Runnable onPublished) {
+            if (!open) throw new IllegalStateException("scene scope is closed");
+            queued.addLast(new QueuedGeometryGroup(generation, groupKey, operations, onPublished));
+        }
+
+        synchronized List<StagedGeometryGroup> drain() {
+            ArrayList<StagedGeometryGroup> drained = new ArrayList<>(queued.size());
+            while (!queued.isEmpty()) {
+                QueuedGeometryGroup group = queued.removeFirst();
+                if (group.generation() != generation) continue;
+                drained.add(new StagedGeometryGroup(group.groupKey(), group.operations(), () -> {
+                    synchronized (QueuedSceneScope.this) {
+                        if (!open || group.generation() != generation) return;
+                    }
+                    group.onPublished().run();
+                }));
+            }
+            return drained;
+        }
+
+        synchronized void invalidate() {
+            generation = Math.incrementExact(generation);
+            queued.clear();
+        }
+
+        synchronized void close() {
+            open = false;
+            generation = Math.incrementExact(generation);
+            queued.clear();
+        }
+    }
+
+    private record QueuedGeometryGroup(long generation, SceneGeometryKey groupKey,
+                                       List<SceneGeometrySink.Operation> operations, Runnable onPublished) {
+        private QueuedGeometryGroup {
+            java.util.Objects.requireNonNull(groupKey, "groupKey");
+            operations = List.copyOf(operations);
+            onPublished = java.util.Objects.requireNonNull(onPublished, "onPublished");
+        }
     }
 
 }

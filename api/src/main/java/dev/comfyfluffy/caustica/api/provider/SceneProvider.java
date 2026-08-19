@@ -1,6 +1,10 @@
 package dev.comfyfluffy.caustica.api.provider;
 
 public interface SceneProvider extends ProviderLifecycle {
+    /** Called once when this runtime-activation-scoped provider becomes active. Retain the thread-safe scope. */
+    default void onSessionStart(SceneScope scope) {
+    }
+
     /** Publish the immutable material semantics used by source workers for this resource epoch. */
     default void onMaterialEpoch(MaterialSnapshot materials) {
     }

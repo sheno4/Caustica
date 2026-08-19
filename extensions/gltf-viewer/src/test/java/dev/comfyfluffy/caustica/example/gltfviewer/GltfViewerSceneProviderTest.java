@@ -2,11 +2,10 @@ package dev.comfyfluffy.caustica.example.gltfviewer;
 
 import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.api.provider.CpuTextureResource;
-import dev.comfyfluffy.caustica.api.provider.SceneCamera;
-import dev.comfyfluffy.caustica.api.provider.SceneFrameContext;
 import dev.comfyfluffy.caustica.api.provider.SceneGeometryKey;
 import dev.comfyfluffy.caustica.api.provider.SceneGeometrySink;
 import dev.comfyfluffy.caustica.api.provider.SceneMesh;
+import dev.comfyfluffy.caustica.api.provider.SceneScope;
 import net.minecraft.core.BlockPos;
 import org.junit.jupiter.api.Test;
 
@@ -25,9 +24,9 @@ final class GltfViewerSceneProviderTest {
                 new BlockPos(10, 20, 30), new BlockPos(-4, 5, -6)));
         GltfViewerSceneProvider provider = new GltfViewerSceneProvider(scene(), anchors::get);
         Capture capture = new Capture();
+        provider.onSessionStart(capture);
 
         provider.prepareFrame();
-        provider.submitGeometry(frame(capture));
 
         assertEquals(5, capture.last.size());
         assertInstanceOf(SceneGeometrySink.Put.class, capture.last.getFirst());
@@ -50,13 +49,11 @@ final class GltfViewerSceneProviderTest {
 
         anchors.set(Set.of(new BlockPos(10, 20, 30)));
         provider.prepareFrame();
-        provider.submitGeometry(frame(capture));
         assertEquals(2, capture.last.size());
         capture.last.forEach(operation -> assertInstanceOf(SceneGeometrySink.Remove.class, operation));
 
         anchors.set(Set.of());
         provider.prepareFrame();
-        provider.submitGeometry(frame(capture));
         assertEquals(3, capture.last.size());
         assertEquals(2, capture.last.stream().filter(SceneGeometrySink.Remove.class::isInstance).count());
         assertEquals(1, capture.last.stream().filter(SceneGeometrySink.Drop.class::isInstance).count());
@@ -113,11 +110,7 @@ final class GltfViewerSceneProviderTest {
                         0, 1, 1, 1)));
     }
 
-    private static SceneFrameContext frame(SceneGeometrySink sink) {
-        return new SceneFrameContext(sink, 0, 0, 0, 0, SceneCamera.IDENTITY);
-    }
-
-    private static final class Capture implements SceneGeometrySink {
+    private static final class Capture implements SceneScope {
         private List<Operation> last = List.of();
 
         @Override

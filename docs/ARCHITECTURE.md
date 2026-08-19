@@ -103,10 +103,12 @@ that provider, retires its staged resources and leaves other providers and the a
 
 ## Geometry
 
-The public geometry boundary is `SceneProvider.submitGeometry(SceneFrameContext)`. Providers publish atomic,
-source-local groups of `Put`, `Drop`, `Place`, `Transform` and `Remove` operations through the context's
-`SceneGeometrySink`. `Put` retains an immutable indexed `SceneMesh`; `Place` and `Transform` preserve
-double-precision world translation until renderer rebasing. Omitted groups remain unchanged. Meshes and
+The public geometry boundary has two cadences. Providers retain the thread-safe `SceneScope` received by
+`SceneProvider.onSessionStart` and enqueue long-lived changes for the host's static scene-update cadence.
+Providers that need same-frame camera coherence use `submitGeometry(SceneFrameContext)`, whose changes use
+the dynamic acceleration policy. Both paths publish atomic, source-local groups of `Put`, `Drop`, `Place`,
+`Transform` and `Remove` operations. `Put` retains an immutable indexed `SceneMesh`; `Place` and `Transform`
+preserve double-precision world translation until renderer rebasing. Omitted groups remain unchanged. Meshes and
 placements remain resident until explicitly replaced or removed, or until their provider stops. The engine
 owns upload, BLAS creation, rebasing, canonical geometry records, TLAS insertion and lifetime.
 

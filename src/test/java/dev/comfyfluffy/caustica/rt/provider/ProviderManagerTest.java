@@ -5,6 +5,7 @@ import dev.comfyfluffy.caustica.api.provider.SceneFrameContext;
 import dev.comfyfluffy.caustica.api.provider.SceneGeometrySink;
 import dev.comfyfluffy.caustica.api.provider.SceneGeometryUpdateContext;
 import dev.comfyfluffy.caustica.api.provider.SceneGeometryKey;
+import dev.comfyfluffy.caustica.api.provider.SceneScope;
 import dev.comfyfluffy.caustica.api.provider.GeometryTransform;
 import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import dev.comfyfluffy.caustica.api.provider.MaterialHandle;
@@ -848,6 +849,98 @@ final class ProviderManagerTest {
 
         assertSame(GeometryUpdates.BuildPolicy.STATIC, buildPolicy(updateCadence.getFirst()));
         assertSame(GeometryUpdates.BuildPolicy.DYNAMIC, buildPolicy(frameCadence.getFirst()));
+    }
+
+    @Test
+    void startsEachSceneProviderOncePerActivationAndClosesThePreviousScope() {
+        List<SceneScope> scopes = new ArrayList<>();
+        ProviderManager manager = manager("geometry", new SceneProvider() {
+            @Override
+            public void onSessionStart(SceneScope scope) {
+                scopes.add(scope);
+            }
+        });
+
+        manager.beginSession();
+        manager.beginSession();
+
+        assertEquals(2, scopes.size());
+        assertThrows(IllegalStateException.class,
+                () -> scopes.getFirst().submit(1, List.of(new SceneGeometrySink.Drop(1))));
+        scopes.getLast().submit(1, List.of(new SceneGeometrySink.Drop(1)));
+    }
+
+    @Test
+    void drainsCopiedCrossThreadScopeSubmissionsAtStaticCadence() throws InterruptedException {
+        AtomicReference<SceneScope> scope = new AtomicReference<>();
+        ProviderManager manager = manager("geometry", new SceneProvider() {
+            @Override
+            public void onSessionStart(SceneScope started) {
+                scope.set(started);
+            }
+        });
+        manager.beginSession();
+        ArrayList<SceneGeometrySink.Operation> operations = new ArrayList<>();
+        operations.add(new SceneGeometrySink.Put(1, catalogTriangle()));
+
+        Thread producer = new Thread(() -> scope.get().submit(7, operations));
+        producer.start();
+        producer.join();
+        operations.clear();
+
+        List<GeometryUpdates.Group> frameCadence = new ArrayList<>();
+        manager.submitGeometry(null, SceneOrigin.ZERO, (updates, ignored) -> frameCadence.addAll(updates));
+        assertTrue(frameCadence.isEmpty());
+
+        List<GeometryUpdates.Group> updateCadence = new ArrayList<>();
+        manager.updateScenes(null, SceneOrigin.ZERO, (updates, ignored) -> updateCadence.addAll(updates));
+        assertEquals(1, updateCadence.size());
+        assertSame(GeometryUpdates.BuildPolicy.STATIC, buildPolicy(updateCadence.getFirst()));
+    }
+
+    @Test
+    void sceneInvalidationDropsQueuedWorkBeforeProviderCallbackCanRepublish() {
+        AtomicReference<SceneScope> scope = new AtomicReference<>();
+        SceneProvider provider = new SceneProvider() {
+            @Override
+            public void onSessionStart(SceneScope started) {
+                scope.set(started);
+            }
+
+            @Override
+            public void onWorldChanged() {
+                scope.get().submit(2, List.of(new SceneGeometrySink.Drop(2)));
+            }
+        };
+        ProviderManager manager = manager("geometry", provider);
+        manager.beginSession();
+        scope.get().submit(1, List.of(new SceneGeometrySink.Drop(1)));
+
+        manager.onWorldChanged();
+        List<GeometryUpdates.Group> forwarded = new ArrayList<>();
+        manager.updateScenes(null, SceneOrigin.ZERO, (updates, ignored) -> forwarded.addAll(updates));
+
+        assertEquals(List.of(SceneGeometryKey.of(2)), forwarded.stream()
+                .map(group -> ((GeometryUpdates.Drop) group.operations().getFirst()).residentKey()).toList());
+    }
+
+    @Test
+    void repeatedScopeGroupSubmissionsReceiveMonotonicRevisions() {
+        AtomicReference<SceneScope> scope = new AtomicReference<>();
+        ProviderManager manager = manager("geometry", new SceneProvider() {
+            @Override
+            public void onSessionStart(SceneScope started) {
+                scope.set(started);
+            }
+        });
+        manager.beginSession();
+        scope.get().submit(7, List.of(new SceneGeometrySink.Drop(1)));
+        scope.get().submit(7, List.of(new SceneGeometrySink.Drop(2)));
+        List<GeometryUpdates.Group> forwarded = new ArrayList<>();
+
+        manager.updateScenes(null, SceneOrigin.ZERO, (updates, ignored) -> forwarded.addAll(updates));
+
+        assertEquals(List.of(1L, 2L), forwarded.stream().map(GeometryUpdates.Group::revision).toList());
     }
 
     @Test
