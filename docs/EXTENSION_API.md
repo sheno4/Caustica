@@ -57,7 +57,10 @@ multiplicative color terms; a zero emissive factor therefore stays non-emissive.
 - A **surface** is a registered implementation selected per material, not a slot candidate.
 - A **surface modifier** is one member of an ordered generated dispatch applied to receiver geometry.
 - A **runtime activation** decides whether a feature's activation factories run always or only when the feature
-  owns a selected slot. It is separate from shader-program composition.
+  owns a selected slot. It is separate from shader-program composition. A feature with render passes or
+  scene, light or material providers must bind at least one slot to use `SELECTED_SLOT`; registration rejects
+  an unbound feature whose runtime contributions could never activate. Use `ALWAYS` for an unbound runtime
+  feature. Composition-only surfaces, surface modifiers and options may remain unbound.
 
 All public names use the host-neutral `ResourceId`. UI text uses `DisplayText.literal(...)` or
 `DisplayText.translatable(...)`; it never exposes a host text type. Provider identity belongs to the
@@ -477,10 +480,11 @@ Features register factories, not live render passes or providers. Each factory c
 runtime-activation-scoped instance after RT is requested; `destroy`/`shutdown` ends that instance before the
 next activation can create a replacement. Use `runtimeActivation(RuntimeActivation.ALWAYS)` for host bridges
 that must run for every session. `SELECTED_SLOT` is the default and constructs runtime contributions only
-when the feature owns a currently selected slot. Surface and surface-modifier owners still participate in
-program composition regardless of this choice. Selecting a different slot owner replaces its child runtime
-activation only after its candidate program is ready, while the parent render session and process-scoped
-programs remain available.
+when the feature owns a currently selected slot. Registering render passes or providers with this mode therefore
+requires at least one slot binding. Surface and surface-modifier owners still participate in program composition
+regardless of this choice and need no slot binding unless they also declare runtime contributions. Selecting a
+different slot owner replaces its child runtime activation only after its candidate program is ready, while the
+parent render session and process-scoped programs remain available.
 
 Material, texture, geometry and light contributions are isolated per provider. Staging completes and
 validates before a contribution becomes visible; an exception disables only that provider, discards or

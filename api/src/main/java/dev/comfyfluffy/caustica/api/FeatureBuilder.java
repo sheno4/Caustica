@@ -60,7 +60,11 @@ public final class FeatureBuilder {
         return this;
     }
 
-    /** Choose when this feature's runtime-activation contributions are instantiated. */
+    /**
+     * Choose when this feature's runtime contributions are instantiated. {@link RuntimeActivation#SELECTED_SLOT}
+     * requires this feature to bind at least one slot when it declares a render pass, scene provider, light
+     * provider or material source. Composition-only surfaces, surface modifiers and options need no slot binding.
+     */
     public FeatureBuilder runtimeActivation(RuntimeActivation runtimeActivation) {
         this.runtimeActivation = Objects.requireNonNull(runtimeActivation, "runtimeActivation");
         return this;
@@ -189,6 +193,11 @@ public final class FeatureBuilder {
         if (registered) {
             throw new IllegalStateException(id + " is already registered");
         }
+        if (runtimeActivation == RuntimeActivation.SELECTED_SLOT && bindings.isEmpty()
+                && hasRuntimeContributions()) {
+            throw new IllegalStateException(id + " uses SELECTED_SLOT runtime activation and declares runtime "
+                    + "contributions, but binds no slot; bind a slot or use ALWAYS runtime activation");
+        }
         registered = true;
         DisplayText resolvedTitle = title != null ? title : DisplayText.literal(id.toString());
         Feature feature = new Feature(id, resolvedTitle, description, category, shaderSource, runtimeActivation, bindings,
@@ -196,6 +205,11 @@ public final class FeatureBuilder {
                 materialSources, passResourceModules);
         registry.register(feature);
         return feature;
+    }
+
+    private boolean hasRuntimeContributions() {
+        return !renderPasses.isEmpty() || !sceneProviders.isEmpty() || !lightProviders.isEmpty()
+                || !materialSources.isEmpty();
     }
 
 }
