@@ -12,6 +12,7 @@ import dev.comfyfluffy.caustica.engine.light.DistantLight;
 import dev.comfyfluffy.caustica.engine.light.FiniteLight;
 import dev.comfyfluffy.caustica.api.provider.LightDescriptor;
 import dev.comfyfluffy.caustica.api.provider.MaterialSource;
+import dev.comfyfluffy.caustica.api.provider.ProviderLifecycle;
 import dev.comfyfluffy.caustica.api.provider.MaterialSnapshot;
 import dev.comfyfluffy.caustica.api.provider.MaterialRule;
 import dev.comfyfluffy.caustica.api.provider.MaterialDefinition;
@@ -365,17 +366,27 @@ public final class ProviderManager {
 
     public void onWorldChanged() {
         clearAllSceneGeometry();
-        invoke("scene", scenes(), SceneProvider::onWorldChanged, SceneProvider::stop);
+        invokeLifecycle(ProviderLifecycle::onWorldChanged);
     }
 
     public void onResourcePackClosing() {
         clearAllSceneGeometry();
         clearMaterials();
-        invoke("scene", scenes(), SceneProvider::onResourcePackClosing, SceneProvider::stop);
+        invokeLifecycle(ProviderLifecycle::onResourcePackClosing);
     }
 
+    /**
+     * Notify material sources first, then scene and light providers. This guarantees replacement material
+     * resources are ready before scene callbacks and before the host's next material collection.
+     */
     public void onResourcePackApplied() {
-        invoke("scene", scenes(), SceneProvider::onResourcePackApplied, SceneProvider::stop);
+        invokeLifecycle(ProviderLifecycle::onResourcePackApplied);
+    }
+
+    private void invokeLifecycle(Consumer<ProviderLifecycle> callback) {
+        invoke("material", materials(), callback::accept, MaterialSource::stop);
+        invoke("scene", scenes(), callback::accept, SceneProvider::stop);
+        invoke("light", lights(), callback::accept, LightProvider::stop);
     }
 
     /**

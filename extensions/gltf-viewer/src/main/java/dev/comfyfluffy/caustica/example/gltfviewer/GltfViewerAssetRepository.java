@@ -8,6 +8,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
 import java.nio.file.Path;
+import java.util.Objects;
+import java.util.function.Supplier;
 
 /**
  * Resource-epoch snapshot for the viewer model. Resource packs can replace
@@ -16,23 +18,29 @@ import java.nio.file.Path;
 final class GltfViewerAssetRepository {
     static final Identifier LOCATION = Identifier.fromNamespaceAndPath(
             GltfViewerMod.MOD_ID, "gltf/viewer/model.glb");
-    private static GltfViewerScene current;
+    private final Supplier<GltfViewerScene> loader;
+    private GltfViewerScene current;
 
-    private GltfViewerAssetRepository() {
+    GltfViewerAssetRepository() {
+        this(() -> load(Minecraft.getInstance().getResourceManager()));
     }
 
-    static GltfViewerScene current() {
+    GltfViewerAssetRepository(Supplier<GltfViewerScene> loader) {
+        this.loader = Objects.requireNonNull(loader, "loader");
+    }
+
+    GltfViewerScene current() {
         if (current == null) {
-            reload();
+            throw new IllegalStateException("glTF viewer assets are not loaded for this resource epoch");
         }
         return current;
     }
 
-    static void reload() {
-        current = load(Minecraft.getInstance().getResourceManager());
+    void reload() {
+        current = Objects.requireNonNull(loader.get(), "loader returned a null glTF viewer scene");
     }
 
-    static void clear() {
+    void clear() {
         current = null;
     }
 

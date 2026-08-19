@@ -3,6 +3,7 @@ package dev.comfyfluffy.caustica.example.gltfviewer;
 import dev.comfyfluffy.caustica.api.CausticaExtension;
 import dev.comfyfluffy.caustica.api.CausticaRegistry;
 import dev.comfyfluffy.caustica.api.DisplayText;
+import dev.comfyfluffy.caustica.api.FeatureRuntimeContext;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.api.RuntimeActivation;
 import dev.comfyfluffy.caustica.api.ShaderSource;
@@ -19,6 +20,9 @@ public final class GltfViewerExtension implements CausticaExtension {
     public static final ResourceId PROCEDURAL_SURFACE = ResourceId.of(GltfViewerMod.MOD_ID, "portal_surface");
     public static final ResourceId PROCEDURAL_MATERIAL = ResourceId.of(
             GltfViewerMod.MOD_ID, "procedural_portal");
+    static final FeatureRuntimeContext.Key<GltfViewerAssetRepository> ASSETS =
+            new FeatureRuntimeContext.Key<>(ResourceId.of(GltfViewerMod.MOD_ID, "assets"),
+                    GltfViewerAssetRepository.class);
 
     @Override
     public void register(CausticaRegistry registry) {
@@ -31,15 +35,19 @@ public final class GltfViewerExtension implements CausticaExtension {
                 .runtimeActivation(RuntimeActivation.ALWAYS)
                 .surface(PROCEDURAL_SURFACE,
                         "caustica_gltf_viewer_portal_surface", "GltfViewerPortalSurface")
-                .sceneProvider(GltfViewerSceneProvider.ID, GltfViewerSceneProvider::new)
+                .sceneProviderContextual(GltfViewerSceneProvider.ID, context ->
+                        new GltfViewerSceneProvider(assets(context), GltfViewerSceneProvider::loadedAnchors))
                 .sceneProvider(ProceduralSurfaceSceneProvider.ID, ProceduralSurfaceSceneProvider::new)
-                .materialSource(MATERIAL_SOURCE, () -> sink ->
-                        GltfViewerSceneProvider.model().materials().forEach(sink::define))
+                .materialSourceContextual(MATERIAL_SOURCE, context -> new GltfViewerMaterialSource(assets(context)))
                 .materialSource(PROCEDURAL_MATERIAL_SOURCE, () -> sink -> sink.define(
                         new MaterialDefinition(new MaterialHandle(PROCEDURAL_MATERIAL),
                                 0.002f, 0.001f, 0.006f,
                                 0.42f, 0.0f, 1.35f, 0.0f,
                                 MaterialTopology.SURFACE, PROCEDURAL_SURFACE)))
                 .register();
+    }
+
+    private static GltfViewerAssetRepository assets(FeatureRuntimeContext context) {
+        return context.getOrCreate(ASSETS, GltfViewerAssetRepository::new);
     }
 }

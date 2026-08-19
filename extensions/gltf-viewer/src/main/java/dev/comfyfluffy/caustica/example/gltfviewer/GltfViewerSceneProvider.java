@@ -23,6 +23,7 @@ public final class GltfViewerSceneProvider implements SceneProvider {
     private static final SceneGeometryKey GROUP = SceneGeometryKey.of(0L);
 
     private final Supplier<GltfViewerScene> scenes;
+    private final GltfViewerAssetRepository assets;
     private final Supplier<Set<BlockPos>> anchors;
     private final Map<Instance, SceneGeometryKey> instanceKeys = new HashMap<>();
     private Set<Long> visible = Set.of();
@@ -31,21 +32,27 @@ public final class GltfViewerSceneProvider implements SceneProvider {
     private boolean residentsSubmitted;
     private boolean texturesSubmitted;
 
-    public GltfViewerSceneProvider() {
-        this(GltfViewerAssetRepository::current, GltfViewerSceneProvider::loadedAnchors);
+    GltfViewerSceneProvider(GltfViewerScene scene, Supplier<Set<BlockPos>> anchors) {
+        this(null, () -> scene, anchors);
     }
 
-    GltfViewerSceneProvider(GltfViewerScene scene, Supplier<Set<BlockPos>> anchors) {
-        this(() -> scene, anchors);
+    GltfViewerSceneProvider(GltfViewerAssetRepository assets, Supplier<Set<BlockPos>> anchors) {
+        this(assets, assets::current, anchors);
     }
 
     GltfViewerSceneProvider(Supplier<GltfViewerScene> scenes, Supplier<Set<BlockPos>> anchors) {
+        this(null, scenes, anchors);
+    }
+
+    private GltfViewerSceneProvider(GltfViewerAssetRepository assets, Supplier<GltfViewerScene> scenes,
+                                    Supplier<Set<BlockPos>> anchors) {
+        this.assets = assets;
         this.scenes = scenes;
         this.anchors = anchors;
     }
 
-    static GltfViewerScene model() {
-        return GltfViewerAssetRepository.current();
+    GltfViewerAssetRepository assets() {
+        return assets;
     }
 
     @Override
@@ -121,12 +128,10 @@ public final class GltfViewerSceneProvider implements SceneProvider {
     @Override
     public void onResourcePackClosing() {
         reset(true);
-        GltfViewerAssetRepository.clear();
     }
 
     @Override
     public void onResourcePackApplied() {
-        GltfViewerAssetRepository.reload();
         reset(true);
     }
 
@@ -141,7 +146,7 @@ public final class GltfViewerSceneProvider implements SceneProvider {
         }
     }
 
-    private static Set<BlockPos> loadedAnchors() {
+    static Set<BlockPos> loadedAnchors() {
         Minecraft minecraft = Minecraft.getInstance();
         return minecraft.level == null ? Set.of()
                 : GltfViewerAnchorBlockEntity.loadedAnchors(minecraft.level, GltfViewerBlocks.GLTF_ANCHOR);

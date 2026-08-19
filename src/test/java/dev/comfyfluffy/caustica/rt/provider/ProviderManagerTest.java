@@ -40,6 +40,72 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class ProviderManagerTest {
     @Test
+    void lifecycleCallbacksReachEveryProviderKindInMaterialSceneLightOrderBeforeCollection() {
+        List<String> events = new ArrayList<>();
+        java.util.concurrent.atomic.AtomicBoolean resourcesApplied =
+                new java.util.concurrent.atomic.AtomicBoolean();
+        MaterialSource material = new MaterialSource() {
+            @Override public void submitMaterials(dev.comfyfluffy.caustica.api.provider.MaterialSink sink) {
+                assertTrue(resourcesApplied.get());
+                events.add("material.collect");
+            }
+            @Override public void onWorldChanged() { events.add("material.world"); }
+            @Override public void onResourcePackClosing() {
+                resourcesApplied.set(false);
+                events.add("material.close");
+            }
+            @Override public void onResourcePackApplied() {
+                resourcesApplied.set(true);
+                events.add("material.apply");
+            }
+        };
+        SceneProvider scene = new SceneProvider() {
+            @Override public void onWorldChanged() { events.add("scene.world"); }
+            @Override public void onResourcePackClosing() { events.add("scene.close"); }
+            @Override public void onResourcePackApplied() { events.add("scene.apply"); }
+        };
+        LightProvider light = new LightProvider() {
+            @Override public void onWorldChanged() { events.add("light.world"); }
+            @Override public void onResourcePackClosing() { events.add("light.close"); }
+            @Override public void onResourcePackApplied() { events.add("light.apply"); }
+        };
+        ProviderManager manager = new ProviderManager(Map.of(id("scene"), scene),
+                Map.of(id("light"), light), Map.of(id("material"), material));
+
+        manager.onResourcePackClosing();
+        manager.onResourcePackApplied();
+        manager.collectMaterials(ignored -> 0);
+        manager.onWorldChanged();
+
+        assertEquals(List.of(
+                "material.close", "scene.close", "light.close",
+                "material.apply", "scene.apply", "light.apply", "material.collect",
+                "material.world", "scene.world", "light.world"), events);
+    }
+
+    @Test
+    void lifecycleFailureDisablesOnlyTheFailingProvider() {
+        AtomicInteger stops = new AtomicInteger();
+        MaterialSource broken = new MaterialSource() {
+            @Override public void submitMaterials(dev.comfyfluffy.caustica.api.provider.MaterialSink sink) { }
+            @Override public void onResourcePackApplied() { throw new IllegalStateException("expected"); }
+            @Override public void stop() { stops.incrementAndGet(); }
+        };
+        AtomicInteger sceneCallbacks = new AtomicInteger();
+        SceneProvider healthy = new SceneProvider() {
+            @Override public void onResourcePackApplied() { sceneCallbacks.incrementAndGet(); }
+        };
+        ProviderManager manager = new ProviderManager(Map.of(id("scene"), healthy), Map.of(),
+                Map.of(id("material"), broken));
+
+        manager.onResourcePackApplied();
+        manager.onResourcePackApplied();
+
+        assertEquals(1, stops.get());
+        assertEquals(2, sceneCallbacks.get());
+    }
+
+    @Test
     void disablesOnlyTheFailingProvider() {
         AtomicInteger failedCalls = new AtomicInteger();
         AtomicInteger stopCalls = new AtomicInteger();

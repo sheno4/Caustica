@@ -212,8 +212,9 @@ public final class CausticaRegistry {
                     && !selectedFeatures.contains(feature)) {
                 continue;
             }
+            FeatureRuntimeContext context = new FeatureRuntimeContext(feature.id());
             for (RenderPassRegistration registration : feature.renderPasses()) {
-                CausticaRenderPass pass = Objects.requireNonNull(registration.factory().create(),
+                CausticaRenderPass pass = Objects.requireNonNull(registration.factory().create(context),
                         feature.id() + " created a null render pass for " + registration.id());
                 if (!registration.id().equals(pass.id())) {
                     throw new IllegalStateException(feature.id() + " created render pass " + pass.id()
@@ -226,9 +227,9 @@ public final class CausticaRegistry {
                 passes.put(registration.id(), pass);
                 passFeatures.put(registration.id(), feature);
             }
-            instantiate(scenes, feature.sceneProviders());
-            instantiate(lights, feature.lightProviders());
-            instantiate(materials, feature.materialSources());
+            instantiate(scenes, feature.sceneProviders(), context);
+            instantiate(lights, feature.lightProviders(), context);
+            instantiate(materials, feature.materialSources(), context);
         }
         return new RuntimeContributions(selectedSlots, passes, passFeatures, scenes, lights, materials);
     }
@@ -243,9 +244,10 @@ public final class CausticaRegistry {
     }
 
     private static <T> void instantiate(Map<ResourceId, T> target,
-                                        Iterable<ProviderRegistration<T>> registrations) {
+                                        Iterable<ProviderRegistration<T>> registrations,
+                                        FeatureRuntimeContext context) {
         for (ProviderRegistration<T> registration : registrations) {
-            target.put(registration.id(), Objects.requireNonNull(registration.factory().create(),
+            target.put(registration.id(), Objects.requireNonNull(registration.factory().create(context),
                     "Factory created a null provider for " + registration.id()));
         }
     }

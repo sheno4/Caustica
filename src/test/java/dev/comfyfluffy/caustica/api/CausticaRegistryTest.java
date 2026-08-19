@@ -117,9 +117,11 @@ final class CausticaRegistryTest {
         };
         ResourceId sceneId = ResourceId.of("test", "scene");
         registry.feature(ResourceId.of("test", "scene_owner"))
+                .runtimeActivation(RuntimeActivation.ALWAYS)
                 .sceneProvider(sceneId, () -> duplicateScene).register();
         assertThrows(IllegalStateException.class, () -> registry.feature(
                         ResourceId.of("test", "duplicate_scene"))
+                .runtimeActivation(RuntimeActivation.ALWAYS)
                 .sceneProvider(sceneId, () -> duplicateScene).register());
     }
 

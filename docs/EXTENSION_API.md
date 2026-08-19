@@ -67,6 +67,26 @@ All public names use the host-neutral `ResourceId`. UI text uses `DisplayText.li
 `FeatureBuilder.sceneProvider`, `lightProvider` or `materialSource` registration, not to the provider
 implementation.
 
+Runtime contributions that need feature-local shared state use the contextual registration methods:
+`renderPassContextual`, `sceneProviderContextual`, `lightProviderContextual`, and
+`materialSourceContextual`. Every contextual factory belonging to one active feature receives the same
+`FeatureRuntimeContext`; a later runtime activation receives a new context and new values. Contexts are
+never shared between features. Define a typed key and create the value from whichever factory sees it
+first:
+
+```java
+private static final FeatureRuntimeContext.Key<AssetRepository> ASSETS =
+        new FeatureRuntimeContext.Key<>(ResourceId.of("example", "assets"), AssetRepository.class);
+
+builder.sceneProviderContextual(SCENE,
+        context -> new CrystalScene(context.getOrCreate(ASSETS, AssetRepository::new)));
+builder.materialSourceContextual(MATERIALS,
+        context -> new CrystalMaterials(context.getOrCreate(ASSETS, AssetRepository::new)));
+```
+
+The ordinary no-argument registration methods remain the simplest choice when contributions do not
+share activation state.
+
 ## Loader registration
 
 On Fabric, expose the extension through the `caustica` entrypoint in `fabric.mod.json`:
@@ -240,7 +260,23 @@ behavior uses the same registered surface selected by the material.
 
 ## Scene providers
 
-`SceneProvider` has these callbacks:
+`SceneProvider`, `MaterialSource`, and `LightProvider` all inherit `ProviderLifecycle`:
+
+```java
+default void onWorldChanged() {}
+default void onResourcePackClosing() {}
+default void onResourcePackApplied() {}
+default void stop() {}
+default void shutdown() {}
+```
+
+For world and resource-pack callbacks, the engine visits material sources first, then scene providers,
+then light providers; failure of one provider does not suppress callbacks to the others. In particular,
+every successful material-source `onResourcePackApplied()` completes before scene callbacks and before
+the next `submitMaterials` collection. Resource-owning material sources can therefore reload or clear
+feature-context state without a global singleton or lazy cross-provider fallback.
+
+`SceneProvider` additionally has these callbacks:
 
 ```java
 default void onMaterialEpoch(MaterialSnapshot materials) {}
@@ -249,11 +285,6 @@ default void update(SceneGeometryUpdateContext update) {}
 default void prepareFrame() {}
 default void submitTextures(TextureSink sink) {}
 default void submitGeometry(SceneFrameContext frame) {}
-default void onWorldChanged() {}
-default void onResourcePackClosing() {}
-default void onResourcePackApplied() {}
-default void stop() {}
-default void shutdown() {}
 ```
 
 Geometry group, resident-mesh and placement keys are stable only within the provider. Submit one atomic group

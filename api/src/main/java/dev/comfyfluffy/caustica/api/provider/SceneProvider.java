@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.api.provider;
 
-public interface SceneProvider {
+public interface SceneProvider extends ProviderLifecycle {
     /** Publish the immutable material semantics used by source workers for this resource epoch. */
     default void onMaterialEpoch(MaterialSnapshot materials) {
     }
@@ -25,28 +25,5 @@ public interface SceneProvider {
 
     /** Submit frame-cadence retained-geometry changes using the renderer's dynamic acceleration policy. */
     default void submitGeometry(SceneFrameContext frame) {
-    }
-
-    /** Called whenever this render session enters or leaves a world epoch. */
-    default void onWorldChanged() {
-    }
-
-    /** Called while the current resource pack is being detached. */
-    default void onResourcePackClosing() {
-    }
-
-    /** Called after a replacement resource pack becomes active. */
-    default void onResourcePackApplied() {
-    }
-
-    /**
-     * Stop producing work for this RT session. This runs before GPU queues are drained; implementations
-     * must not destroy resources that may still be referenced by submitted work.
-     */
-    default void stop() {
-    }
-
-    /** Release this RT session's state after its GPU work is idle. */
-    default void shutdown() {
     }
 }

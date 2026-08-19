@@ -124,6 +124,12 @@ public final class FeatureBuilder {
 
     public FeatureBuilder renderPass(ResourceId passId, RenderStage stage,
                                      RuntimeFactory<? extends CausticaRenderPass> factory) {
+        return renderPassContextual(passId, stage, ContextualRuntimeFactory.from(factory));
+    }
+
+    /** Register a pass factory that shares this feature's activation context with its other contributions. */
+    public FeatureBuilder renderPassContextual(ResourceId passId, RenderStage stage,
+                                               ContextualRuntimeFactory<? extends CausticaRenderPass> factory) {
         RenderPassRegistration registration = new RenderPassRegistration(passId, stage, factory);
         if (renderPasses.stream().anyMatch(existing -> existing.id().equals(passId))) {
             throw new IllegalStateException(id + " declares duplicate render pass " + passId);
@@ -134,6 +140,12 @@ public final class FeatureBuilder {
 
     public FeatureBuilder sceneProvider(ResourceId providerId,
                                         RuntimeFactory<? extends SceneProvider> factory) {
+        return sceneProviderContextual(providerId, ContextualRuntimeFactory.from(factory));
+    }
+
+    /** Register a scene factory that shares this feature's activation context with its other contributions. */
+    public FeatureBuilder sceneProviderContextual(ResourceId providerId,
+                                                  ContextualRuntimeFactory<? extends SceneProvider> factory) {
         ProviderRegistration<SceneProvider> registration = new ProviderRegistration<>(providerId, factory);
         if (sceneProviders.stream().anyMatch(existing -> existing.id().equals(providerId))) {
             throw new IllegalStateException(id + " declares duplicate scene provider " + providerId);
@@ -154,6 +166,12 @@ public final class FeatureBuilder {
 
     public FeatureBuilder lightProvider(ResourceId providerId,
                                         RuntimeFactory<? extends LightProvider> factory) {
+        return lightProviderContextual(providerId, ContextualRuntimeFactory.from(factory));
+    }
+
+    /** Register a light factory that shares this feature's activation context with its other contributions. */
+    public FeatureBuilder lightProviderContextual(ResourceId providerId,
+                                                  ContextualRuntimeFactory<? extends LightProvider> factory) {
         ProviderRegistration<LightProvider> registration = new ProviderRegistration<>(providerId, factory);
         if (lightProviders.stream().anyMatch(existing -> existing.id().equals(providerId))) {
             throw new IllegalStateException(id + " declares duplicate light provider " + providerId);
@@ -164,6 +182,12 @@ public final class FeatureBuilder {
 
     public FeatureBuilder materialSource(ResourceId sourceId,
                                          RuntimeFactory<? extends MaterialSource> factory) {
+        return materialSourceContextual(sourceId, ContextualRuntimeFactory.from(factory));
+    }
+
+    /** Register a material factory that shares this feature's activation context with its other contributions. */
+    public FeatureBuilder materialSourceContextual(ResourceId sourceId,
+                                                   ContextualRuntimeFactory<? extends MaterialSource> factory) {
         ProviderRegistration<MaterialSource> registration = new ProviderRegistration<>(sourceId, factory);
         if (materialSources.stream().anyMatch(existing -> existing.id().equals(sourceId))) {
             throw new IllegalStateException(id + " declares duplicate material source " + sourceId);
