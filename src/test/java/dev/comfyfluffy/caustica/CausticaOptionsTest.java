@@ -141,11 +141,11 @@ final class CausticaOptionsTest {
     @Test
     void aSnapshotTakenBeforeAWriteKeepsTheOldValue() {
         CausticaOptions options = load();
-        Map<String, Object> frame = options.snapshot();
+        var frame = options.snapshot();
 
         options.set(FEATURE, ALPHA, 0.75);
 
-        assertEquals(0.25f, options.view(FEATURE, frame).get(ALPHA),
+        assertEquals(0.25f, frame.options(FEATURE).get(ALPHA),
                 "a frame holding a snapshot must not see a mid-frame write");
         assertEquals(0.75f, options.options(FEATURE).get(ALPHA),
                 "the live view must see it immediately");

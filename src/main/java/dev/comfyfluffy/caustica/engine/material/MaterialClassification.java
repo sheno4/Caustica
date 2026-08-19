@@ -1,7 +1,9 @@
 package dev.comfyfluffy.caustica.engine.material;
 
 import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.api.provider.MaterialVariant;
 import dev.comfyfluffy.caustica.api.provider.MaterialTopology;
+import dev.comfyfluffy.caustica.api.provider.OpenPbrMaterialProfile;
 
 import java.util.Objects;
 

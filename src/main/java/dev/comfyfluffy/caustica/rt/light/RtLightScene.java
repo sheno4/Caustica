@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.rt.light;
 
-import dev.comfyfluffy.caustica.engine.light.LightDescriptor;
+import dev.comfyfluffy.caustica.api.provider.LightDescriptor;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
 import dev.comfyfluffy.caustica.api.gpu.GpuBuffer;

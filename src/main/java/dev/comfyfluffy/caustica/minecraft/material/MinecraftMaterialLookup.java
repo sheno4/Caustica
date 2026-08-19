@@ -1,7 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.material;
 
 import dev.comfyfluffy.caustica.api.ResourceId;
-import dev.comfyfluffy.caustica.engine.material.AtlasMaterialReference;
+import dev.comfyfluffy.caustica.api.provider.AtlasMaterialReference;
 import dev.comfyfluffy.caustica.api.provider.MaterialUv;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.resources.Identifier;

@@ -2,8 +2,8 @@ package dev.comfyfluffy.caustica.minecraft.material;
 
 import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.engine.material.MaterialClassification;
-import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialDefaults;
-import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialProfile;
+import dev.comfyfluffy.caustica.api.provider.OpenPbrMaterialDefaults;
+import dev.comfyfluffy.caustica.api.provider.OpenPbrMaterialProfile;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;

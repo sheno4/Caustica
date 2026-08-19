@@ -1,5 +1,7 @@
 package dev.comfyfluffy.caustica.engine.light;
 
+import dev.comfyfluffy.caustica.api.provider.LightDescriptor;
+
 import org.junit.jupiter.api.Test;
 
 import java.util.HashSet;

@@ -3,7 +3,7 @@ package dev.comfyfluffy.caustica.rt.material;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.api.provider.MaterialRule;
-import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialDefaults;
+import dev.comfyfluffy.caustica.api.provider.OpenPbrMaterialDefaults;
 
 import java.util.ArrayList;
 import java.util.List;

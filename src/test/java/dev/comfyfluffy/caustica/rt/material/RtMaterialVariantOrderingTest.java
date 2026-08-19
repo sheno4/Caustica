@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.rt.material;
 
-import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialProfile;
+import dev.comfyfluffy.caustica.api.provider.OpenPbrMaterialProfile;
 import dev.comfyfluffy.caustica.api.provider.MaterialTopology;
 import org.junit.jupiter.api.Test;
 

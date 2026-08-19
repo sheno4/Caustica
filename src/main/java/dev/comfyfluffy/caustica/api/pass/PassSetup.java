@@ -14,6 +14,9 @@ public interface PassSetup {
     /** Supported pass-local Vulkan device and resource-allocation services. */
     GpuDevice device();
 
+    /** Host compiler for this pass's extension-owned compute shaders. */
+    PassShaderCompiler shaderCompiler();
+
     int displayWidth();
 
     int displayHeight();

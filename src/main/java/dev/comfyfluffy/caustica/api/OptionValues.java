@@ -4,7 +4,7 @@ import dev.comfyfluffy.caustica.api.pass.PassFrame;
 import dev.comfyfluffy.caustica.api.pass.PassSetup;
 
 /**
- * A read view of one {@link Feature}'s {@link Option} values, backed by {@code CausticaOptions}.
+ * A read view of one {@link Feature}'s {@link Option} values supplied by the active host.
  *
  * <p>Lives next to {@link Option} rather than under {@code api.pass} because a render pass is only one
  * kind of reader: the same view serves a feature whose options steer a provider, or a settings screen
@@ -18,7 +18,7 @@ import dev.comfyfluffy.caustica.api.pass.PassSetup;
  *
  * <p>Whether a view is live or frozen depends on where it came from: {@link PassFrame#options()} is
  * frozen for the whole frame (a value changed mid-frame becomes visible next frame), while
- * {@link PassSetup#options()} and {@code CausticaOptions#options} read whatever is current.
+ * {@link PassSetup#options()} and {@link CausticaApi#options(ResourceId)} read whatever is current.
  */
 public interface OptionValues {
     <T> T get(Option<T> option);

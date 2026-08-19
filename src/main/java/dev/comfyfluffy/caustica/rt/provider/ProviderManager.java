@@ -10,7 +10,7 @@ import dev.comfyfluffy.caustica.engine.light.RetainedLightBatch;
 import dev.comfyfluffy.caustica.engine.light.RetainedLightSnapshot;
 import dev.comfyfluffy.caustica.engine.light.DistantLight;
 import dev.comfyfluffy.caustica.engine.light.FiniteLight;
-import dev.comfyfluffy.caustica.engine.light.LightDescriptor;
+import dev.comfyfluffy.caustica.api.provider.LightDescriptor;
 import dev.comfyfluffy.caustica.api.provider.MaterialSource;
 import dev.comfyfluffy.caustica.api.provider.MaterialSnapshot;
 import dev.comfyfluffy.caustica.api.provider.MaterialRule;

@@ -1,8 +1,8 @@
 package dev.comfyfluffy.caustica.rt.material;
 
 import dev.comfyfluffy.caustica.api.provider.MaterialTopology;
-import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialDefaults;
-import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialProfile;
+import dev.comfyfluffy.caustica.api.provider.OpenPbrMaterialDefaults;
+import dev.comfyfluffy.caustica.api.provider.OpenPbrMaterialProfile;
 
 /** Pure CPU material-description compilation used while preparing a registry epoch. */
 final class MaterialRegistryCompiler {

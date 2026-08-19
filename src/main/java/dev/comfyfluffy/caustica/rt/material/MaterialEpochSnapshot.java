@@ -4,8 +4,8 @@ import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.api.provider.MaterialAnalysis;
 import dev.comfyfluffy.caustica.api.provider.MaterialSnapshot;
 import dev.comfyfluffy.caustica.api.provider.SceneMesh;
-import dev.comfyfluffy.caustica.engine.material.EmissionFootprint;
-import dev.comfyfluffy.caustica.engine.material.MaterialVariant;
+import dev.comfyfluffy.caustica.api.provider.EmissionFootprint;
+import dev.comfyfluffy.caustica.api.provider.MaterialVariant;
 
 import java.util.List;
 import java.util.Map;

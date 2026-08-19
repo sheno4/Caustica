@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.material;
 
-import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialDefaults;
+import dev.comfyfluffy.caustica.api.provider.OpenPbrMaterialDefaults;
 
 import org.junit.jupiter.api.Test;
 

@@ -1,5 +1,7 @@
 package dev.comfyfluffy.caustica.engine.light;
 
+import dev.comfyfluffy.caustica.api.provider.LightDescriptor;
+
 import java.util.Objects;
 
 /** Canonical metadata for a distant light, kept outside finite-light spatial structures. */

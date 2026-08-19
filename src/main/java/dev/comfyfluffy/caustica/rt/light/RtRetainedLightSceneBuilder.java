@@ -5,7 +5,7 @@ import dev.comfyfluffy.caustica.engine.light.RetainedLightBatch;
 import dev.comfyfluffy.caustica.engine.light.DistantLight;
 import dev.comfyfluffy.caustica.engine.light.FiniteLight;
 import dev.comfyfluffy.caustica.engine.light.LightBvh;
-import dev.comfyfluffy.caustica.engine.light.LightDescriptor;
+import dev.comfyfluffy.caustica.api.provider.LightDescriptor;
 
 import java.util.ArrayList;
 import java.util.List;

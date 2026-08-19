@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.provider;
 
-import dev.comfyfluffy.caustica.engine.light.LightDescriptor;
+import dev.comfyfluffy.caustica.api.provider.LightDescriptor;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;

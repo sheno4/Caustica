@@ -4,7 +4,7 @@ import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.engine.light.RetainedLightBatch;
 
 import dev.comfyfluffy.caustica.engine.light.LightBvh;
-import dev.comfyfluffy.caustica.engine.light.LightDescriptor;
+import dev.comfyfluffy.caustica.api.provider.LightDescriptor;
 import dev.comfyfluffy.caustica.rt.gen.GpuLightData;
 import dev.comfyfluffy.caustica.rt.gen.GpuLightNodeData;
 import org.junit.jupiter.api.Test;

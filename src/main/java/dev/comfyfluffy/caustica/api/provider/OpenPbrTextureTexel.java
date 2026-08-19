@@ -1,7 +1,5 @@
 package dev.comfyfluffy.caustica.api.provider;
 
-import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialDefaults;
-
 /**
  * Reusable semantic output for one canonical OpenPBR texture texel. Color fields are linear BT.709;
  * scalar fields are physical OpenPBR values except the tangent normal, whose x/y components are signed.

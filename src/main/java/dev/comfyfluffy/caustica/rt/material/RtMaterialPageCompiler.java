@@ -2,12 +2,12 @@ package dev.comfyfluffy.caustica.rt.material;
 
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.api.ResourceId;
-import dev.comfyfluffy.caustica.engine.material.EmissionFootprint;
+import dev.comfyfluffy.caustica.api.provider.EmissionFootprint;
 import dev.comfyfluffy.caustica.engine.material.MaterialCatalog;
 import dev.comfyfluffy.caustica.api.provider.MaterialTextureImage;
 import dev.comfyfluffy.caustica.api.provider.MaterialTextureAsset;
 import dev.comfyfluffy.caustica.api.provider.MaterialUv;
-import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialDefaults;
+import dev.comfyfluffy.caustica.api.provider.OpenPbrMaterialDefaults;
 import dev.comfyfluffy.caustica.api.provider.OpenPbrColorBinding;
 import dev.comfyfluffy.caustica.api.provider.OpenPbrTextureTexel;
 import dev.comfyfluffy.caustica.rt.GpuContext;

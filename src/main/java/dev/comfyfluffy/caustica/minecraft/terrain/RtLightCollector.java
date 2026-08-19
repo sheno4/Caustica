@@ -2,7 +2,7 @@ package dev.comfyfluffy.caustica.minecraft.terrain;
 
 import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import dev.comfyfluffy.caustica.api.provider.MaterialAnalysis;
-import dev.comfyfluffy.caustica.engine.material.EmissionFootprint;
+import dev.comfyfluffy.caustica.api.provider.EmissionFootprint;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 

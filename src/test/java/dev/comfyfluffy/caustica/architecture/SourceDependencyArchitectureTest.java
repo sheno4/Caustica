@@ -7,6 +7,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Predicate;
 
 import static org.junit.jupiter.api.Assertions.fail;
 
@@ -31,13 +32,20 @@ final class SourceDependencyArchitectureTest {
 
     @Test
     void supportedApiDoesNotImportHostOrImplementationPackages() throws IOException {
-        assertNoImports(List.of(API), List.of(
-                "dev.comfyfluffy.caustica.minecraft",
-                "dev.comfyfluffy.caustica.spi",
-                "dev.comfyfluffy.caustica.rt"));
+        String rootPackage = "dev.comfyfluffy.caustica";
+        String apiPackage = rootPackage + ".api";
+        assertNoImportsMatching(List.of(API), imported ->
+                (imported.equals(rootPackage) || imported.startsWith(rootPackage + "."))
+                        && !(imported.equals(apiPackage) || imported.startsWith(apiPackage + ".")));
     }
 
     private static void assertNoImports(List<Path> sourceRoots, List<String> forbiddenPackages)
+            throws IOException {
+        assertNoImportsMatching(sourceRoots, imported -> forbiddenPackages.stream().anyMatch(
+                forbidden -> imported.equals(forbidden) || imported.startsWith(forbidden + ".")));
+    }
+
+    private static void assertNoImportsMatching(List<Path> sourceRoots, Predicate<String> forbidden)
             throws IOException {
         List<String> violations = new ArrayList<>();
         for (Path sourceRoot : sourceRoots) {
@@ -49,8 +57,7 @@ final class SourceDependencyArchitectureTest {
                     List<String> lines = Files.readAllLines(source);
                     for (int i = 0; i < lines.size(); i++) {
                         String imported = importedType(lines.get(i));
-                        if (imported != null && forbiddenPackages.stream().anyMatch(
-                                forbidden -> imported.equals(forbidden) || imported.startsWith(forbidden + "."))) {
+                        if (imported != null && forbidden.test(imported)) {
                             violations.add(PROJECT_ROOT.relativize(source) + ":" + (i + 1) + ": " + imported);
                         }
                     }

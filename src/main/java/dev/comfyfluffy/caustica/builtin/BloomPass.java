@@ -86,9 +86,10 @@ public final class BloomPass implements CausticaRenderPass {
         ctx = setup.device();
         sampler = ComputeDispatch.createLinearClampSampler(ctx, ID + " sampler");
         try {
-            PassShaderCompiler.CompiledProgram compiled = PassShaderCompiler.compile(
-                    PassShaderCompiler.defaultCacheRoot(), ID, SHADERS, "caustica_bloom", "main");
-            PassShaderCompiler.validateBindings(ID, compiled.reflectionJson(), BINDINGS,
+            PassShaderCompiler compiler = setup.shaderCompiler();
+            PassShaderCompiler.CompiledProgram compiled = compiler.compile(
+                    ID, SHADERS, "caustica_bloom", "main");
+            compiler.validateBindings(ID, compiled.reflectionJson(), BINDINGS,
                     BloomPushData.BYTE_SIZE, "main", 8, 8, 1);
             dispatch = ComputeDispatch.create(ctx, ID.toString(), compiled.spirv(), "main",
                     BINDINGS, BloomPushData.BYTE_SIZE, MAX_LEVELS * 2, sampler);

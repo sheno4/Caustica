@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.engine.material;
+package dev.comfyfluffy.caustica.api.provider;
 
 /** Numeric defaults for the renderer's supported OpenPBR material parameters. */
 public final class OpenPbrMaterialDefaults {

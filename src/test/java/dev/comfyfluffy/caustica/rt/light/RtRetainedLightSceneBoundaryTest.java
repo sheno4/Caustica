@@ -2,7 +2,7 @@ package dev.comfyfluffy.caustica.rt.light;
 
 import dev.comfyfluffy.caustica.engine.light.RetainedLightSnapshot;
 import dev.comfyfluffy.caustica.engine.light.RetainedLightBatch;
-import dev.comfyfluffy.caustica.engine.light.LightDescriptor;
+import dev.comfyfluffy.caustica.api.provider.LightDescriptor;
 import dev.comfyfluffy.caustica.api.ResourceId;
 
 import java.util.ArrayList;

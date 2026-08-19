@@ -1,19 +1,21 @@
 package dev.comfyfluffy.caustica.rt.pass;
 
 import dev.comfyfluffy.caustica.CausticaMod;
-import dev.comfyfluffy.caustica.CausticaOptions;
 import dev.comfyfluffy.caustica.api.CausticaRegistry;
 import dev.comfyfluffy.caustica.api.Feature;
 import dev.comfyfluffy.caustica.api.Option;
+import dev.comfyfluffy.caustica.api.OptionLookup;
 import dev.comfyfluffy.caustica.api.OptionValues;
 import dev.comfyfluffy.caustica.api.pass.CausticaRenderPass;
 import dev.comfyfluffy.caustica.api.pass.PassFrame;
+import dev.comfyfluffy.caustica.api.pass.PassShaderCompiler;
 import dev.comfyfluffy.caustica.api.pass.PassSetup;
 import dev.comfyfluffy.caustica.api.pass.RenderStage;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtRuntime;
 import dev.comfyfluffy.caustica.rt.VulkanBarriers;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
+import dev.comfyfluffy.caustica.slang.SlangPassShaderCompiler;
 import dev.comfyfluffy.caustica.api.gpu.GpuBuffer;
 import dev.comfyfluffy.caustica.api.gpu.GpuImage;
 import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
@@ -54,7 +56,7 @@ public final class RenderPassManager {
     private final Map<String, WorldResource> worldResources = new LinkedHashMap<>();
     private final Map<String, CausticaRenderPass> worldResourcePublishers = new LinkedHashMap<>();
     private final Map<ResourceId, Feature> passFeature;
-    private final CausticaOptions optionsStore;
+    private final OptionLookup optionsStore;
     private GpuImage reconstructedColor;
     private GpuImage exposureImage;
     /** The two images the post chain rotates between; {@code null} until the engine sizes them. */
@@ -65,7 +67,7 @@ public final class RenderPassManager {
     private int displayWidth;
     private int displayHeight;
     private long frameIndex = -1;
-    private Map<String, Object> frameOptionsSnapshot = Map.of();
+    private OptionLookup frameOptions;
     private GpuFrameUse gpuUse;
     private long worldTlas;
     private final Matrix4f worldViewProjection = new Matrix4f();
@@ -114,7 +116,7 @@ public final class RenderPassManager {
     }
 
     private RenderPassManager(GpuContext ctx, List<CausticaRenderPass> ordered,
-                              Map<ResourceId, Feature> passFeature, CausticaOptions optionsStore) {
+                              Map<ResourceId, Feature> passFeature, OptionLookup optionsStore) {
         this.ctx = ctx;
         this.ordered = ordered;
         this.passFeature = passFeature;
@@ -126,7 +128,7 @@ public final class RenderPassManager {
      * Options remain process-scoped because their values outlive both the device and RT sessions.
      */
     public static RenderPassManager create(GpuContext ctx, CausticaRegistry.RuntimeContributions contributions,
-                                           CausticaOptions options) {
+                                           OptionLookup options) {
         List<CausticaRenderPass> ordered = orderPasses(contributions.renderPasses().values());
         RenderPassManager manager = new RenderPassManager(ctx, ordered, contributions.renderPassFeatures(), options);
         for (CausticaRenderPass pass : ordered) {
@@ -192,7 +194,7 @@ public final class RenderPassManager {
         sceneColor = reconstructedColor;
         nextSceneColorTarget = 0;
         if (optionsStore != null) {
-            frameOptionsSnapshot = optionsStore.snapshot();
+            frameOptions = optionsStore.snapshot();
         }
     }
 
@@ -365,6 +367,11 @@ public final class RenderPassManager {
         }
 
         @Override
+        public PassShaderCompiler shaderCompiler() {
+            return SlangPassShaderCompiler.installed();
+        }
+
+        @Override
         public int displayWidth() {
             return displayWidth;
         }
@@ -499,12 +506,12 @@ public final class RenderPassManager {
 
         @Override
         public OptionValues options() {
-            if (currentPass == null || optionsStore == null) {
+            if (currentPass == null || frameOptions == null) {
                 return DECLARED_DEFAULTS;
             }
             Feature feature = passFeature.get(currentPass.id());
             return feature != null
-                    ? optionsStore.view(feature.id(), frameOptionsSnapshot) : DECLARED_DEFAULTS;
+                    ? frameOptions.options(feature.id()) : DECLARED_DEFAULTS;
         }
 
         @Override

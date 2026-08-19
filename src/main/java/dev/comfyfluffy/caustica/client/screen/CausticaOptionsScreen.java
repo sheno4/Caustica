@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.client.screen;
 
 import dev.comfyfluffy.caustica.api.CausticaApi;
+import dev.comfyfluffy.caustica.CausticaOptions;
 import dev.comfyfluffy.caustica.client.screen.widget.CausticaGroupHeader;
 import dev.comfyfluffy.caustica.client.screen.widget.CausticaDropdown;
 import dev.comfyfluffy.caustica.client.screen.widget.CausticaNavItem;
@@ -46,8 +47,9 @@ public final class CausticaOptionsScreen extends Screen {
     public CausticaOptionsScreen(Screen parent) {
         super(Component.translatable("caustica.screen.title"));
         this.parent = parent;
-        this.commit = new SettingsCommit(CausticaApi.options());
-        this.sections = CausticaSections.build(CausticaApi.registry(), CausticaApi.options());
+        CausticaOptions options = CausticaOptions.installed();
+        this.commit = new SettingsCommit(options);
+        this.sections = CausticaSections.build(CausticaApi.registry(), options);
     }
 
     private SettingsSection section() {

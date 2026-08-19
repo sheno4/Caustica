@@ -5,6 +5,7 @@ import com.electronwill.nightconfig.core.file.FileNotFoundAction;
 import com.electronwill.nightconfig.toml.TomlFormat;
 import dev.comfyfluffy.caustica.api.Feature;
 import dev.comfyfluffy.caustica.api.Option;
+import dev.comfyfluffy.caustica.api.OptionLookup;
 import dev.comfyfluffy.caustica.api.OptionValues;
 import dev.comfyfluffy.caustica.api.ResourceId;
 
@@ -41,9 +42,10 @@ import java.util.Objects;
  * would let generic code deserialize an enum value or validate a color int without one — supporting them
  * needs that first.
  */
-public final class CausticaOptions {
+public final class CausticaOptions implements OptionLookup {
     private static final String SYSTEM_PROPERTY_PREFIX = "caustica.option.";
     private static final String FILE_NAME = "caustica-options.toml";
+    private static CausticaOptions installed;
 
     /** Per feature, its declared options by id — built once so a read is a map lookup, not a list scan. */
     private final Map<ResourceId, Map<String, Option<?>>> declared;
@@ -86,7 +88,14 @@ public final class CausticaOptions {
             }
             declared.put(feature.id(), Map.copyOf(byId));
         }
-        return new CausticaOptions(Map.copyOf(declared), file, Map.copyOf(values));
+        CausticaOptions loaded = new CausticaOptions(Map.copyOf(declared), file, Map.copyOf(values));
+        installed = loaded;
+        return loaded;
+    }
+
+    /** The store installed by the host bootstrap for its settings UI. */
+    public static CausticaOptions installed() {
+        return Objects.requireNonNull(installed, "Caustica options have not been loaded");
     }
 
     /** A live view scoped to one feature's declared options; reads whatever is current at each call. */
@@ -94,20 +103,21 @@ public final class CausticaOptions {
         return view(featureId, values);
     }
 
+    @Override
+    public OptionLookup snapshot() {
+        Map<String, Object> snapshot = values;
+        return featureId -> view(featureId, snapshot);
+    }
+
     /**
      * A view scoped to one feature reading from {@code snapshot} instead of the current values — how
      * {@code RenderPassManager} serves every pass in a frame from the one map it took at
      * {@code beginFrame}.
      */
-    public OptionValues view(ResourceId featureId, Map<String, Object> snapshot) {
+    private OptionValues view(ResourceId featureId, Map<String, Object> snapshot) {
         Map<String, Option<?>> featureOptions = declared.get(featureId);
         Objects.requireNonNull(featureOptions, () -> "unknown feature " + featureId);
         return new View(featureId, featureOptions, snapshot);
-    }
-
-    /** The current values, already immutable — a frame holds this reference for its whole duration. */
-    public Map<String, Object> snapshot() {
-        return values;
     }
 
     /**

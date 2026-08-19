@@ -2,7 +2,7 @@ package dev.comfyfluffy.caustica.rt.material;
 
 import com.google.gson.JsonParser;
 import dev.comfyfluffy.caustica.api.ResourceId;
-import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialDefaults;
+import dev.comfyfluffy.caustica.api.provider.OpenPbrMaterialDefaults;
 import dev.comfyfluffy.caustica.minecraft.MinecraftProvidersExtension;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialClassifier;
 import dev.comfyfluffy.caustica.minecraft.provider.MinecraftMaterialSource;

@@ -1,7 +1,5 @@
 package dev.comfyfluffy.caustica.api.provider;
 
-import dev.comfyfluffy.caustica.engine.light.LightDescriptor;
-
 import java.util.List;
 import java.util.Objects;
 

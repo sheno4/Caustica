@@ -554,7 +554,7 @@ final class RtFrameRenderer {
     private void ensureRenderPassManager(GpuContext ctx) throws IOException {
         if (renderPassManager == null) {
             renderPassManager = RenderPassManager.create(ctx, contributions,
-                    CausticaApi.options());
+                    CausticaApi.optionLookup());
             renderPassManager.setTextureResolver(worldResources.materialEpoch::textureSlot);
         }
     }

@@ -5,7 +5,7 @@ import dev.comfyfluffy.caustica.api.provider.MaterialTextureImage;
 import dev.comfyfluffy.caustica.api.provider.MaterialTextureAsset;
 import dev.comfyfluffy.caustica.api.provider.MaterialTextureKind;
 import dev.comfyfluffy.caustica.api.provider.MaterialUv;
-import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialDefaults;
+import dev.comfyfluffy.caustica.api.provider.OpenPbrMaterialDefaults;
 import dev.comfyfluffy.caustica.api.provider.OpenPbrColorBinding;
 import dev.comfyfluffy.caustica.api.provider.OpenPbrTextureTexel;
 import org.junit.jupiter.api.Test;

@@ -1,5 +1,7 @@
 package dev.comfyfluffy.caustica.engine.material;
 
+import dev.comfyfluffy.caustica.api.provider.OpenPbrMaterialProfile;
+
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;

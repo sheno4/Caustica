@@ -1,6 +1,6 @@
-package dev.comfyfluffy.caustica.engine.light;
+package dev.comfyfluffy.caustica.api.provider;
 
-/** Host-supplied light description using scene coordinates and the photometric units named below. */
+/** Extension-supplied light description using scene coordinates and the photometric units named below. */
 public sealed interface LightDescriptor {
     long key();
 

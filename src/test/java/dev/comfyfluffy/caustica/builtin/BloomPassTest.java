@@ -3,6 +3,7 @@ package dev.comfyfluffy.caustica.builtin;
 import dev.comfyfluffy.caustica.api.ShaderSource;
 import dev.comfyfluffy.caustica.api.pass.ComputeDispatch;
 import dev.comfyfluffy.caustica.api.pass.PassShaderCompiler;
+import dev.comfyfluffy.caustica.slang.SlangPassShaderCompiler;
 import dev.comfyfluffy.caustica.builtin.gen.BloomPushData;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import org.junit.jupiter.api.Test;
@@ -74,9 +75,10 @@ final class BloomPassTest {
     @Test
     void runtimeShaderCompilesAndBuildDoesNotPackageABloomSpirv(@TempDir Path cache) throws Exception {
         ResourceId id = ResourceId.of("caustica", "bloom");
-        PassShaderCompiler.CompiledProgram compiled = PassShaderCompiler.compile(cache, id,
+        SlangPassShaderCompiler compiler = new SlangPassShaderCompiler(cache);
+        PassShaderCompiler.CompiledProgram compiled = compiler.compile(id,
                 ShaderSource.classpath("/caustica/shaders/builtin", "bloom"), "caustica_bloom", "main");
-        PassShaderCompiler.CompiledProgram cached = PassShaderCompiler.compile(cache.resolve("second"), id,
+        PassShaderCompiler.CompiledProgram cached = compiler.compile(id,
                 ShaderSource.classpath("/caustica/shaders/builtin", "bloom"), "caustica_bloom", "main");
 
         assertEquals(0x07230203, ByteBuffer.wrap(compiled.spirv())
@@ -88,7 +90,7 @@ final class BloomPassTest {
         assertNull(getClass().getResource(
                 "/caustica/shaders/pipelines/bloom/main.comp.spv"));
 
-        PassShaderCompiler.validateBindings(id, compiled.reflectionJson(),
+        compiler.validateBindings(id, compiled.reflectionJson(),
                 List.of(ComputeDispatch.Binding.STORAGE, ComputeDispatch.Binding.SAMPLED,
                         ComputeDispatch.Binding.STORAGE, ComputeDispatch.Binding.STORAGE),
                 BloomPushData.BYTE_SIZE, "main", 8, 8, 1);

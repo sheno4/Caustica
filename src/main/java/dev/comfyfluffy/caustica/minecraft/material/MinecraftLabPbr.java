@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.material;
 
-import dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialDefaults;
+import dev.comfyfluffy.caustica.api.provider.OpenPbrMaterialDefaults;
 
 /**
  * Adapter from the LabPBR 1.3 specular texture into the engine's OpenPBR vocabulary. LabPBR is a source

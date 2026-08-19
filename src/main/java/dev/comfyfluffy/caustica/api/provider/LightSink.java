@@ -1,7 +1,5 @@
 package dev.comfyfluffy.caustica.api.provider;
 
-import dev.comfyfluffy.caustica.engine.light.LightDescriptor;
-
 /**
  * Where a {@link LightProvider} hands off the lights it wants in the scene, once per frame, via
  * {@link LightProvider#submitLights(LightSink)}.

@@ -2,7 +2,7 @@ package dev.comfyfluffy.caustica.rt.light;
 
 import dev.comfyfluffy.caustica.engine.light.FiniteLight;
 import dev.comfyfluffy.caustica.engine.light.LightBvh;
-import dev.comfyfluffy.caustica.engine.light.LightDescriptor;
+import dev.comfyfluffy.caustica.api.provider.LightDescriptor;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;

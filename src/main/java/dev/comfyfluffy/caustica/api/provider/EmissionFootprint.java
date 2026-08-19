@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.engine.material;
+package dev.comfyfluffy.caustica.api.provider;
 
 /**
  * Immutable square sampling footprint for one material's premultiplied linear emission color and coverage.

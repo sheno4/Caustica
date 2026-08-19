@@ -86,6 +86,7 @@ public final class SkyLutPass implements CausticaRenderPass {
             ComputeDispatch.Binding.STORAGE, ComputeDispatch.Binding.SAMPLED, ComputeDispatch.Binding.SAMPLED);
 
     private GpuDevice ctx;
+    private PassShaderCompiler shaderCompiler;
     private long sampler;
     /**
      * Point sampling for the celestials atlas only. The LUT sampler above is linear because a baked sky
@@ -135,6 +136,7 @@ public final class SkyLutPass implements CausticaRenderPass {
     @Override
     public void create(PassSetup setup) {
         ctx = setup.device();
+        shaderCompiler = setup.shaderCompiler();
         // The pass object outlives a RenderPassManager/GPU-context instance. Force the new manager to
         // observe and publish the Minecraft celestial atlas even when Vulkan recycles the same numeric view handle.
         celestialAtlasView = 0L;
@@ -170,9 +172,9 @@ public final class SkyLutPass implements CausticaRenderPass {
     private ComputeDispatch compile(String module, List<ComputeDispatch.Binding> bindings,
                                     int pushConstantBytes) throws IOException {
         ResourceId programId = ResourceId.of("caustica", module);
-        PassShaderCompiler.CompiledProgram compiled = PassShaderCompiler.compile(
-                PassShaderCompiler.defaultCacheRoot(), programId, SHADERS, module, "main");
-        PassShaderCompiler.validateBindings(programId, compiled.reflectionJson(), bindings,
+        PassShaderCompiler.CompiledProgram compiled = shaderCompiler.compile(
+                programId, SHADERS, module, "main");
+        shaderCompiler.validateBindings(programId, compiled.reflectionJson(), bindings,
                 pushConstantBytes, "main", 8, 8, 1);
         return ComputeDispatch.create(ctx, programId.toString(), compiled.spirv(), "main",
                 bindings, pushConstantBytes, 1, sampler);

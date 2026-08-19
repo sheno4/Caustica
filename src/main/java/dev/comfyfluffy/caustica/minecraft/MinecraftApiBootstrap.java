@@ -10,10 +10,10 @@ import dev.comfyfluffy.caustica.api.Feature;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.api.Slot;
 import dev.comfyfluffy.caustica.api.Slots;
-import dev.comfyfluffy.caustica.api.pass.PassShaderCompiler;
 import dev.comfyfluffy.caustica.builtin.BuiltinExtension;
 import dev.comfyfluffy.caustica.platform.CausticaPlatform;
 import dev.comfyfluffy.caustica.rt.RtRuntime;
+import dev.comfyfluffy.caustica.slang.SlangPassShaderCompiler;
 
 /** Loader-neutral extension discovery, config paths, and Minecraft provider installation. */
 public final class MinecraftApiBootstrap {
@@ -36,7 +36,7 @@ public final class MinecraftApiBootstrap {
         applyPersistedSelection(registry, Slots.SKY, CausticaConfig.Rt.Composition.SKY.get(),
                 MinecraftProvidersExtension.ID);
         var shaderCache = CausticaPlatform.current().gameDir().resolve("caustica-shaders");
-        PassShaderCompiler.defaultCacheRoot(shaderCache.resolve("passes"));
+        SlangPassShaderCompiler.install(shaderCache.resolve("passes"));
         RtRuntime.INSTANCE.configureShaderCache(shaderCache.resolve("sources"));
         RtRuntime.INSTANCE.telemetry().configure(CausticaPlatform.current().gameDir()
                 .resolve("rt-frame-stats"), MinecraftFrameMetrics.schema());

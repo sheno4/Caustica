@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.rt.material;
 
-import dev.comfyfluffy.caustica.engine.material.EmissionFootprint;
+import dev.comfyfluffy.caustica.api.provider.EmissionFootprint;
 import dev.comfyfluffy.caustica.api.provider.MaterialTextureAsset;
 import dev.comfyfluffy.caustica.api.provider.MaterialTextureImage;
 import dev.comfyfluffy.caustica.api.provider.OpenPbrColorBinding;

@@ -1,6 +1,4 @@
-package dev.comfyfluffy.caustica.engine.material;
-
-import dev.comfyfluffy.caustica.api.provider.MaterialTopology;
+package dev.comfyfluffy.caustica.api.provider;
 
 import java.util.Objects;
 

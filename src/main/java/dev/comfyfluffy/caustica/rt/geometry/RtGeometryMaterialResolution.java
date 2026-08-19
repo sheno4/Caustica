@@ -3,8 +3,8 @@ package dev.comfyfluffy.caustica.rt.geometry;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.api.provider.MaterialHandle;
 import dev.comfyfluffy.caustica.api.provider.SceneMesh;
-import dev.comfyfluffy.caustica.engine.material.AtlasMaterialReference;
-import dev.comfyfluffy.caustica.engine.material.MaterialVariant;
+import dev.comfyfluffy.caustica.api.provider.AtlasMaterialReference;
+import dev.comfyfluffy.caustica.api.provider.MaterialVariant;
 
 /** Applies renderer material bindings to one neutral triangle surface. */
 public final class RtGeometryMaterialResolution {

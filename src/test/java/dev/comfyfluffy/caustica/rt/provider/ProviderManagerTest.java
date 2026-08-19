@@ -11,7 +11,7 @@ import dev.comfyfluffy.caustica.api.provider.MaterialHandle;
 import dev.comfyfluffy.caustica.api.provider.MaterialTopology;
 import dev.comfyfluffy.caustica.api.provider.LightProvider;
 import dev.comfyfluffy.caustica.api.provider.RetainedLightCollection;
-import dev.comfyfluffy.caustica.engine.light.LightDescriptor;
+import dev.comfyfluffy.caustica.api.provider.LightDescriptor;
 import dev.comfyfluffy.caustica.api.provider.MaterialRule;
 import dev.comfyfluffy.caustica.api.provider.MaterialSource;
 import dev.comfyfluffy.caustica.api.provider.MaterialDefinition;
@@ -1004,7 +1004,7 @@ final class ProviderManagerTest {
                 false, false, false,
                 dev.comfyfluffy.caustica.api.provider.OpenPbrColorBinding.PARAMETER_DEFAULT,
                 dev.comfyfluffy.caustica.api.provider.OpenPbrColorBinding.PARAMETER_DEFAULT,
-                dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR,
+                dev.comfyfluffy.caustica.api.provider.OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR,
                 luminance);
     }
 
@@ -1023,8 +1023,8 @@ final class ProviderManagerTest {
         return new SceneMesh(new float[]{0, 0, 0, 1, 0, 0, 0, 1, 0}, new int[]{0, 1, 2},
                 SceneMesh.UvLayout.PER_VERTEX, new float[6], List.of(new SceneMesh.TriangleSurface(
                 new SceneMesh.CatalogMaterial(ResourceId.of("minecraft", "stone"), null,
-                        new dev.comfyfluffy.caustica.engine.material.MaterialVariant(
-                                dev.comfyfluffy.caustica.engine.material.OpenPbrMaterialProfile.ROUGH_DIELECTRIC,
+                        new dev.comfyfluffy.caustica.api.provider.MaterialVariant(
+                                dev.comfyfluffy.caustica.api.provider.OpenPbrMaterialProfile.ROUGH_DIELECTRIC,
                                 MaterialTopology.SURFACE, false)),
                 SceneMesh.Coverage.OPAQUE, Float.NaN, Float.NaN, Float.NaN, 0, 1, 1, 1)));
     }

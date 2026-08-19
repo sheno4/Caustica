@@ -85,6 +85,7 @@ import dev.comfyfluffy.caustica.api.RuntimeActivation;
 import dev.comfyfluffy.caustica.api.ShaderSource;
 import dev.comfyfluffy.caustica.api.provider.GeometryTransform;
 import dev.comfyfluffy.caustica.api.provider.LightProvider;
+import dev.comfyfluffy.caustica.api.provider.LightDescriptor;
 import dev.comfyfluffy.caustica.api.provider.MaterialDefinition;
 import dev.comfyfluffy.caustica.api.provider.MaterialHandle;
 import dev.comfyfluffy.caustica.api.provider.MaterialSource;
@@ -93,7 +94,6 @@ import dev.comfyfluffy.caustica.api.provider.SceneFrameContext;
 import dev.comfyfluffy.caustica.api.provider.SceneGeometrySink;
 import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import dev.comfyfluffy.caustica.api.provider.SceneProvider;
-import dev.comfyfluffy.caustica.engine.light.LightDescriptor;
 
 import java.util.List;
 
@@ -438,6 +438,8 @@ Passes at the same stage record in registration order.
 it and destroy what they create after the last referencing frame completes. Frame-provided images are
 renderer-owned and must not be retained across resize or destroyed. `PassFrame.gpuUse()` can retire resources
 after the current frame completes, but must never be awaited while recording that same frame.
+`PassSetup.shaderCompiler()` compiles and reflects pass-owned Slang modules through the host runtime without
+exposing that runtime's implementation types.
 `GpuDevice.rasterCapabilities()` exposes device-compatible wide-line limits and the preferred color sample
 count for pass-local raster pipelines without exposing host device negotiation.
 `PassFrame.sceneColor()` and `sceneColorTarget()` form an ordered scene-referred post chain. World shaders
@@ -491,11 +493,11 @@ Slang imports expose public declarations in one composition namespace, so regist
 and modifier type names must be globally unique across modules. The registry rejects collisions during
 extension registration rather than letting an ambiguous symbol fail world-program compilation.
 
-The example is source-isolated but still compiles against the complete Caustica mod artifact. A future
-`caustica-api` artifact requires moving the remaining implementation types exposed by public signatures
-(`LightDescriptor`, `EmissionFootprint`, atlas/catalog material types and pass compiler runtime types)
-under the API boundary or replacing them with API-owned contracts. The module boundary check prevents
-new direct implementation imports but cannot make those existing signature dependencies disappear.
+The public Java signatures are implementation-neutral: light and material value types live under
+`api.provider`, option lookup exposes only API views, and pass shader compilation is supplied as a host
+service. The example still compiles against the complete Caustica mod artifact, so its Gradle source scan
+is the active enforcement until these sources and shader-authoring modules are published as a separate
+`caustica-api` artifact.
 
 Both Caustica and the example are currently client-only mods. Their blocks work in integrated
 single-player, but a dedicated server cannot register or persist them until content registration is

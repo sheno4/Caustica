@@ -1,7 +1,5 @@
 package dev.comfyfluffy.caustica.api.provider;
 
-import dev.comfyfluffy.caustica.engine.material.EmissionFootprint;
-
 /** Renderer-resolved CPU semantics for a source-neutral material reference. */
 public record MaterialAnalysis(EmissionSource emissionSource,
                                float emissionLuminanceCdM2,

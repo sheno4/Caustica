@@ -1,7 +1,5 @@
 package dev.comfyfluffy.caustica.api;
 
-import dev.comfyfluffy.caustica.api.ResourceId;
-
 import java.util.List;
 
 /**
