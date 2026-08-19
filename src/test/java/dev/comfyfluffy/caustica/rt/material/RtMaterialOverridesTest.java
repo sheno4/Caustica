@@ -19,11 +19,12 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class RtMaterialOverridesTest {
-    /** Two registered implementations: the built-in at 0 and one third-party surface at 1. */
+    /** Reserved reference/error implementations at 0/1, followed by third-party surfaces. */
     private static final RtMaterialOverrides.SurfaceResolver SURFACES = id ->
             ResourceId.parse("caustica:surface").equals(id) ? 0
-                    : ResourceId.parse("somemod:crystal").equals(id) ? 1
-                    : MinecraftProvidersExtension.WATER_SURFACE.equals(id) ? 2 : -1;
+                    : ResourceId.parse("caustica:error_surface").equals(id) ? 1
+                    : ResourceId.parse("somemod:crystal").equals(id) ? 2
+                    : MinecraftProvidersExtension.WATER_SURFACE.equals(id) ? 3 : -1;
 
     private static RtMaterialOverrides.Rule parse(com.google.gson.JsonObject root, Identifier source) {
         return RtMaterialOverrides.from(List.of(MinecraftMaterialSource.parse(root, source)), SURFACES)
@@ -106,7 +107,7 @@ final class RtMaterialOverridesTest {
         RtMaterialDesc applied = rule.apply(base);
         assertEquals(RtMaterialRegistry.TRANSPORT_MEDIUM_BOUNDARY, applied.transport());
         assertEquals(MinecraftMaterialClassifier.WATER_IOR, applied.specularIor());
-        assertEquals(2, applied.surfaceImplementation());
+        assertEquals(3, applied.surfaceImplementation());
         assertEquals(1.0f, applied.transmissionWeight());
     }
 
@@ -171,13 +172,15 @@ final class RtMaterialOverridesTest {
                 RtMaterialDesc.Source.DERIVED_TEXTURE, 0, 0.8f, 0.0f, 1.0f, 0.0f,
                 RtMaterialDesc.EmissionSource.NONE, 0.0f, RtMaterialDesc.EmissionSummary.NONE, 0);
 
-        assertEquals(1, rule.surfaceImplementation());
-        assertEquals(1, rule.apply(base).surfaceImplementation());
+        assertEquals(2, rule.surfaceImplementation());
+        assertEquals(2, rule.apply(base).surfaceImplementation());
 
         var absent = MinecraftMaterialSource.parse(JsonParser.parseString("""
                 {"format":4,"match":{"sprite":"somemod:block/crystal"},"surface":"somemod:absent"}
                 """).getAsJsonObject(), Identifier.parse("test:materials/absent.json"));
-        assertTrue(RtMaterialOverrides.from(List.of(absent), SURFACES).rules().isEmpty());
+        var errorRule = RtMaterialOverrides.from(List.of(absent), SURFACES).rules().getFirst();
+        assertEquals(RtMaterialRegistry.ERROR_SURFACE_IMPLEMENTATION,
+                errorRule.surfaceImplementation());
     }
 
     /** A rule that says nothing about the surface leaves whatever the material already compiled with. */

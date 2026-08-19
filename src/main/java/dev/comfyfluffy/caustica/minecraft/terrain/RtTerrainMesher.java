@@ -2,6 +2,7 @@ package dev.comfyfluffy.caustica.minecraft.terrain;
 
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import dev.comfyfluffy.caustica.CausticaConfig;
+import dev.comfyfluffy.caustica.api.ColorSpaces;
 import dev.comfyfluffy.caustica.api.provider.MaterialTopology;
 import dev.comfyfluffy.caustica.api.provider.MaterialHandle;
 import dev.comfyfluffy.caustica.api.provider.MaterialAnalysis;
@@ -384,9 +385,13 @@ final class RtTerrainMesher {
                 BlockTintSource src = blockColors.getTintSource(state, tintIndex);
                 if (src != null) {
                     int rgb = src.colorInWorld(state, view, pos);
-                    tr *= ((rgb >> 16) & 0xFF) * (1f / 255f);
-                    tg *= ((rgb >> 8) & 0xFF) * (1f / 255f);
-                    tb *= (rgb & 0xFF) * (1f / 255f);
+                    float[] tint = ColorSpaces.srgbToAcesCg(
+                            ((rgb >> 16) & 0xFF) * (1f / 255f),
+                            ((rgb >> 8) & 0xFF) * (1f / 255f),
+                            (rgb & 0xFF) * (1f / 255f));
+                    tr = tint[0];
+                    tg = tint[1];
+                    tb = tint[2];
                 }
             }
             q.tr = tr; q.tg = tg; q.tb = tb;
@@ -734,9 +739,11 @@ final class RtTerrainMesher {
                     sg += (qc[i] >> 8) & 0xFF;
                     sb += qc[i] & 0xFF;
                 }
-                tr = sr / 1020f; // 4 vertices * 255
-                tg = sg / 1020f;
-                tb = sb / 1020f;
+                float[] tint = ColorSpaces.srgbToAcesCg(
+                        sr / 1020f, sg / 1020f, sb / 1020f); // 4 vertices * 255
+                tr = tint[0];
+                tg = tint[1];
+                tb = tint[2];
             }
             FloatArrayList prim = g.prim;
             for (int t = 0; t < 2; t++) { // one {normal+emission, tint, mat} record per triangle

@@ -99,6 +99,20 @@ float4 interpolateVertexColor(GeometryRecord geometry, uint3 indices, float3 bar
     return float4(color.rgb, clamp(color.a, 0.0, 1.0));
 }
 
+void loadTriangleTextureCoordinates(GeometryRecord geometry, uint pid, uint3 indices,
+        out float2 uv0, out float2 uv1, out float2 uv2) {
+    ConstPtr<float2> textureCoordinates = ConstPtr<float2>(geometry.textureCoordinateAddress);
+    if ((geometry.flags & GEOMETRY_INDEXED_TEXTURE_COORDINATES) != 0u) {
+        uv0 = textureCoordinates[indices.x];
+        uv1 = textureCoordinates[indices.y];
+        uv2 = textureCoordinates[indices.z];
+        return;
+    }
+    uv0 = textureCoordinates[3u * pid + 0u];
+    uv1 = textureCoordinates[3u * pid + 1u];
+    uv2 = textureCoordinates[3u * pid + 2u];
+}
+
 float3 transformNormalToWorld(float3x3 objectToWorld, float3 objectNormal) {
     float3 basisX = float3(objectToWorld[0][0], objectToWorld[1][0], objectToWorld[2][0]);
     float3 basisY = float3(objectToWorld[0][1], objectToWorld[1][1], objectToWorld[2][1]);
@@ -378,103 +392,6 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
     TC.SurfaceModifiers surfaceModifiers;
 
     GeometryRecord g = ConstPtr<GeometryRecord>(pc.geometryTableAddr)[InstanceID()];
-    // Indexed geometry stores shared vertex UVs. A billboard needs no path of its own — it is a thin
-    // surface that answers light from either side, which its material says with a transmission weight of one half.
-    if ((g.flags & GEOMETRY_INDEXED_TEXTURE_COORDINATES) != 0u) {
-        uint pid = PrimitiveIndex() + g.triangleBase[GeometryIndex()];
-        Prim pr = ConstPtr<Prim>(g.primitiveAddress)[pid];
-        float3x3 objectToWorld = (float3x3)ObjectToWorld3x4();
-        float3 vdir = -WorldRayDirection();
-        float3 faceNormal = normalize(transformNormalToWorld(objectToWorld, pr.normal.xyz));
-        bool entering = dot(WorldRayDirection(), faceNormal) < 0.0;
-        if (dot(faceNormal, vdir) < 0.0) {
-            faceNormal = -faceNormal;
-        }
-        ConstPtr<uint> indices = ConstPtr<uint>(g.indexAddress);
-        ConstPtr<float2> textureCoordinates = ConstPtr<float2>(g.textureCoordinateAddress);
-        uint i0 = indices[3u * pid + 0u];
-        uint i1 = indices[3u * pid + 1u];
-        uint i2 = indices[3u * pid + 2u];
-        float3 bary = float3(1.0 - attribs.x - attribs.y, attribs.x, attribs.y);
-        uint3 vertexIndices = uint3(i0, i1, i2);
-        float3 shadingNormal = interpolateShadingNormal(g, vertexIndices, bary, objectToWorld, faceNormal);
-        float4 vertexColor = interpolateVertexColor(g, vertexIndices, bary);
-        float2 uv = bary.x * textureCoordinates[i0] + bary.y * textureCoordinates[i1]
-                + bary.z * textureCoordinates[i2];
-        MaterialBinding binding = loadBinding(pr.materialId);
-        SurfaceMaterial mat = loadSurfaceMaterial(binding);
-        uint textureIndex = bindingBaseColorTextureIndex(binding);
-        float3 p0 = mul(objectToWorld, HitTriangleVertexPosition(0));
-        float3 p1 = mul(objectToWorld, HitTriangleVertexPosition(1));
-        float3 p2 = mul(objectToWorld, HitTriangleVertexPosition(2));
-        bool textureless = (bindingFlags(binding) & BINDING_TEXTURELESS) != 0u;
-        float textureLod = 0.0;
-        float4 baseColorTexel = float4(1.0);
-        if (!textureless) {
-            textureLod = rayConeTextureLod(rayCone,
-                    texSizePx(baseColorTextures[NonUniformResourceIndex(textureIndex)]),
-                    p0, p1, p2, textureCoordinates[i0], textureCoordinates[i1], textureCoordinates[i2]);
-            baseColorTexel = baseColorTextures[NonUniformResourceIndex(textureIndex)].SampleLevel(uv, textureLod);
-        }
-        bool transmissive = (bindingFlags(binding) & BINDING_TRANSMISSIVE) != 0u;
-        float coverageAlpha = baseColorTexel.a * vertexColor.a;
-        float3 vertexTint709 = srgbToLinear(pr.tint.rgb) * vertexColor.rgb;
-        float3 baseColor709 = sampledBaseColorLinear(binding, baseColorTexel.rgb) * vertexTint709;
-        float3 opticalColor709 = transmissive
-                ? lerp(float3(1.0), baseColor709, coverageAlpha) : baseColor709;
-        float3 albedo = textureless
-                ? bt709ToAcesCg(vertexTint709)
-                : bt709ToAcesCg(opticalColor709);
-
-        float3 currentLocal = bary.x * HitTriangleVertexPosition(0)
-                + bary.y * HitTriangleVertexPosition(1) + bary.z * HitTriangleVertexPosition(2);
-        float3 previousLocal = currentLocal;
-        if (g.previousPositionAddress != 0) {
-            ConstPtr<float> previousPositions = ConstPtr<float>(g.previousPositionAddress);
-            float3 previous0 = float3(previousPositions[3u * i0], previousPositions[3u * i0 + 1u], previousPositions[3u * i0 + 2u]);
-            float3 previous1 = float3(previousPositions[3u * i1], previousPositions[3u * i1 + 1u], previousPositions[3u * i1 + 2u]);
-            float3 previous2 = float3(previousPositions[3u * i2], previousPositions[3u * i2 + 1u], previousPositions[3u * i2 + 2u]);
-            previousLocal = bary.x * previous0 + bary.y * previous1 + bary.z * previous2;
-        }
-        InstanceHistory history = ConstPtr<InstanceHistory>(pc.instanceHistoryAddr)[InstanceID()];
-        float3 previousWorld = float3(dot(history.row0, float4(previousLocal, 1.0)),
-                dot(history.row1, float4(previousLocal, 1.0)),
-                dot(history.row2, float4(previousLocal, 1.0)));
-        float3 currentWorld = mul(ObjectToWorld3x4(), float4(currentLocal, 1.0));
-        float3 motionPrev = currentWorld - previousWorld;
-
-        // Checked before the material pages are sampled and the implementation runs: a guide walking
-        // through foliage or a blended surface pays for neither. A dielectric is a crossing already, so
-        // it has nothing to gain here.
-        if (!transmissive && guideCoverageCrossing(payload, coverageAlpha)) {
-            payload.hitT = RayTCurrent();
-            payload.motionPrev = half3(motionPrev);
-            payloadSetCoverageCrossing(payload,
-                    bt709ToAcesCg(lerp(float3(1.0), baseColor709, coverageAlpha)), shadingNormal);
-            return;
-        }
-
-        // Authored surface emission is suppressed for every transmissive crossing.
-        DecodedSurface surface = evaluateMaterial(mat, uv, textureLod, albedo, shadingNormal,
-                p0, p1, p2, textureCoordinates[i0], textureCoordinates[i1], textureCoordinates[i2],
-                vdir, transmissive ? 0.0 : pr.normal.w);
-
-        MaterialInput material = buildMaterialInput(surface, mat, transmissive);
-        float3 hitPos = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
-        SurfaceInput input = buildSurfaceInput(payload, hitPos, faceNormal, vdir,
-                uv, textureLod, rayConeHitWidth(rayCone));
-        uint surfaceImpl = bindingSurfaceImpl(binding);
-        surfaces.evaluateSurface(surfaceImpl, input, material);
-        if ((g.flags & GEOMETRY_RECEIVES_PROJECTED_SURFACE_MODIFIERS) != 0u) {
-            surfaceModifiers.applySurfaceModifiers(
-                    buildSurfaceModifierInput(hitPos, faceNormal, rayConeHitWidth(rayCone)), material);
-        }
-
-        writeHitPayload(payload, material, surfaceImpl, transmissive ? PAYLOAD_TRANSMISSIVE : 0u,
-                entering, motionPrev, transmissive ? 0.0 : material.emissionLuminance);
-        return;
-    }
-
     uint pid = PrimitiveIndex() + g.triangleBase[GeometryIndex()];
     Prim pr = ConstPtr<Prim>(g.primitiveAddress)[pid];
     MaterialBinding binding = loadBinding(pr.materialId);
@@ -484,12 +401,7 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
 
     bool entering = dot(WorldRayDirection(), faceNormal) < 0.0;
 
-    ConstPtr<float2> uvs = ConstPtr<float2>(g.textureCoordinateAddress);
-    float2 uv0 = uvs[3u * pid + 0u];
-    float2 uv1 = uvs[3u * pid + 1u];
-    float2 uv2 = uvs[3u * pid + 2u];
     float3 bary = float3(1.0 - attribs.x - attribs.y, attribs.x, attribs.y);
-    float2 uv = bary.x * uv0 + bary.y * uv1 + bary.z * uv2;
     float3 tp0 = HitTriangleVertexPosition(0);
     float3 tp1 = HitTriangleVertexPosition(1);
     float3 tp2 = HitTriangleVertexPosition(2);
@@ -499,6 +411,11 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
     uint i1 = indices[3u * pid + 1u];
     uint i2 = indices[3u * pid + 2u];
     uint3 vertexIndices = uint3(i0, i1, i2);
+    float2 uv0;
+    float2 uv1;
+    float2 uv2;
+    loadTriangleTextureCoordinates(g, pid, vertexIndices, uv0, uv1, uv2);
+    float2 uv = bary.x * uv0 + bary.y * uv1 + bary.z * uv2;
     float3 previousLocal = currentLocal;
     if (g.previousPositionAddress != 0) {
         ConstPtr<float> previousPositions = ConstPtr<float>(g.previousPositionAddress);
@@ -530,23 +447,22 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
     float4 vertexColor = interpolateVertexColor(g, vertexIndices, bary);
 
     bool transmissive = (bindingFlags(binding) & BINDING_TRANSMISSIVE) != 0u;
-    float3 tint709 = srgbToLinear(pr.tint.rgb) * vertexColor.rgb;
+    float3 geometryTint = pr.tint.rgb * vertexColor.rgb;
 
     float stateEmission = pr.normal.w;
 
     float4 baseColorTexel = float4(1.0, 1.0, 1.0, 1.0);
     float3 albedo;
     if (textureless) {
-        albedo = bt709ToAcesCg(tint709);
+        albedo = geometryTint;
     } else {
         baseColorTexel = baseColorTextures[NonUniformResourceIndex(textureIndex)].SampleLevel(uv, textureLod);
-        float3 texel709 = sampledBaseColorLinear(binding, baseColorTexel.rgb);
+        float3 texel = bt709ToAcesCg(sampledBaseColorLinear(binding, baseColorTexel.rgb));
         // Glass covers its whole footprint: the see-through part of the sprite is clear glass, so its
         // alpha filters the colour rather than deciding presence.
-        float3 base709 = transmissive ? lerp(float3(1.0), texel709 * tint709,
-                                                baseColorTexel.a * vertexColor.a)
-                                      : texel709 * tint709;
-        albedo = bt709ToAcesCg(base709);
+        albedo = transmissive ? lerp(float3(1.0), texel * geometryTint,
+                                         baseColorTexel.a * vertexColor.a)
+                              : texel * geometryTint;
     }
     float coverageAlpha = baseColorTexel.a * vertexColor.a;
 

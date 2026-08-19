@@ -46,12 +46,18 @@ public final class MaterialEpochSnapshot implements MaterialSnapshot {
         this.analyses = new MaterialAnalysis[descriptions.size()];
         for (int i = 0; i < analyses.length; i++) {
             RtMaterialDesc description = descriptions.get(i);
-            analyses[i] = new MaterialAnalysis(switch (description.emissionSource()) {
+            MaterialAnalysis.EmissionSource emissionSource = description.surfaceImplementation()
+                    == RtMaterialRegistry.ERROR_SURFACE_IMPLEMENTATION
+                    ? MaterialAnalysis.EmissionSource.NONE : switch (description.emissionSource()) {
                 case NONE -> MaterialAnalysis.EmissionSource.NONE;
                 case AUTHORED_MASK -> MaterialAnalysis.EmissionSource.AUTHORED_MASK;
                 case DERIVED_MASK -> MaterialAnalysis.EmissionSource.DERIVED_MASK;
                 case GEOMETRY_UNIFORM -> MaterialAnalysis.EmissionSource.GEOMETRY_UNIFORM;
-            }, description.emissionLuminance(), footprints.get(i), emissionFootprintResolution);
+            };
+            analyses[i] = new MaterialAnalysis(emissionSource,
+                    emissionSource == MaterialAnalysis.EmissionSource.NONE ? 0.0f : description.emissionLuminance(),
+                    emissionSource == MaterialAnalysis.EmissionSource.NONE ? null : footprints.get(i),
+                    emissionFootprintResolution);
         }
     }
 

@@ -22,4 +22,14 @@ final class ColorSpacesTest {
         assertArrayEquals(new float[]{1.0f, 1.0f, 1.0f},
                 ColorSpaces.linearBt709ToAcesCg(1.0, 1.0, 1.0), 1.0e-7f);
     }
+
+    @Test
+    void convertsEncodedSrgbDirectlyToAcesCg() {
+        assertArrayEquals(
+                ColorSpaces.linearBt709ToAcesCg(
+                        ColorSpaces.srgbToLinear(0.25),
+                        ColorSpaces.srgbToLinear(0.5),
+                        ColorSpaces.srgbToLinear(0.75)),
+                ColorSpaces.srgbToAcesCg(0.25, 0.5, 0.75));
+    }
 }

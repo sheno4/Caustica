@@ -39,6 +39,18 @@ final class WorldShaderCompilerTest {
     }
 
     @Test
+    void compilerRequiresTheReferenceAndErrorSurfaceImplementations(@TempDir Path cacheDirectory) {
+        CausticaRegistry.Selection valid = dev.comfyfluffy.caustica.TestRegistries.rendererOnly().selection();
+        CausticaRegistry.Selection missingError = new CausticaRegistry.Selection(
+                valid.bindings(), List.of(valid.surfaces().getFirst()), valid.surfaceOwners(),
+                valid.surfaceModifiers(), valid.surfaceModifierOwners());
+
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                () -> WorldShaderCompiler.create(cacheDirectory, missingError));
+        assertTrue(error.getMessage().contains("reference and error surface"));
+    }
+
+    @Test
     void compilesEveryCompositionGenericWorldStage(@TempDir Path cacheDirectory) throws Exception {
         try (WorldShaderCompiler compiler = compiler(cacheDirectory)) {
             assertSpirv(compiler.compilePrimary(), 1024);
@@ -144,6 +156,9 @@ final class WorldShaderCompilerTest {
         CausticaRegistry registry = registryWithTestSurface("test_surface", "TestSurface");
 
         try (WorldShaderCompiler compiler = WorldShaderCompiler.create(cacheDirectory, registry.selection())) {
+            String root = compiler.composition().rootSource();
+            assertTrue(root.contains("case 0u: { BuiltinSurface s;"));
+            assertTrue(root.contains("default: { ErrorSurface s;"));
             assertSpirv(compiler.compilePrimary(), 1024);
             assertSpirv(compiler.compileClosestHit(), 1024);
             assertSpirv(compiler.compileIndirect(false), 1024);
@@ -153,14 +168,18 @@ final class WorldShaderCompilerTest {
     /**
      * One bad third-party implementation must not take the world pipeline with it. It keeps its index —
      * renumbering would repoint every material compiled against the old order — and the switch resolves
-     * that index to the built-in surface instead.
+     * that index to the error surface instead.
      */
     @Test
-    void aSurfaceImplementationThatDoesNotCompileFallsBackToTheBuiltIn(@TempDir Path cacheDirectory)
+    void aSurfaceImplementationThatDoesNotCompileFallsBackToTheErrorSurface(@TempDir Path cacheDirectory)
             throws Exception {
         CausticaRegistry registry = registryWithTestSurface("test_surface_broken", "BrokenSurface");
 
         try (WorldShaderCompiler compiler = WorldShaderCompiler.create(cacheDirectory, registry.selection())) {
+            int broken = registry.surfaceIndex(TEST_SURFACE);
+            assertTrue(compiler.rejectedSurfaces().contains(broken));
+            assertTrue(!compiler.composition().rootSource().contains("case " + broken + "u:"));
+            assertTrue(compiler.composition().rootSource().contains("default: { ErrorSurface s;"));
             assertSpirv(compiler.compileClosestHit(), 1024);
         }
     }

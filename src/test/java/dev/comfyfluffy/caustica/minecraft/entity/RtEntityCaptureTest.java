@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.entity;
 
+import dev.comfyfluffy.caustica.api.ColorSpaces;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import org.junit.jupiter.api.Test;
@@ -57,18 +58,20 @@ final class RtEntityCaptureTest {
         assertEquals(0f, first.normalY());
         assertEquals(1f, first.normalZ());
         assertEquals(1.25f, first.emission());
-        assertEquals(128f / 255f, first.tintR());
-        assertEquals(64f / 255f, first.tintG());
-        assertEquals(32f / 255f, first.tintB());
+        float[] firstTint = ColorSpaces.srgbToAcesCg(128f / 255f, 64f / 255f, 32f / 255f);
+        assertEquals(firstTint[0], first.tintR());
+        assertEquals(firstTint[1], first.tintG());
+        assertEquals(firstTint[2], first.tintB());
         assertEquals(secondMaterial, second.material());
         assertEquals(SceneMesh.Coverage.OPAQUE, second.coverage());
         assertEquals(0f, second.normalX());
         assertEquals(1f, second.normalY());
         assertEquals(0f, second.normalZ());
         assertEquals(2.5f, second.emission());
-        assertEquals(16f / 255f, second.tintR());
-        assertEquals(32f / 255f, second.tintG());
-        assertEquals(64f / 255f, second.tintB());
+        float[] secondTint = ColorSpaces.srgbToAcesCg(16f / 255f, 32f / 255f, 64f / 255f);
+        assertEquals(secondTint[0], second.tintR());
+        assertEquals(secondTint[1], second.tintG());
+        assertEquals(secondTint[2], second.tintB());
     }
 
     @Test

@@ -6,7 +6,11 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 
-/** Immutable indexed scene mesh with optional vertex attributes and source-level triangle shading facts. */
+/**
+ * Immutable indexed scene mesh with optional vertex attributes and source-level triangle shading facts.
+ * Positions and placement translations use scene world units. RGB values crossing this boundary are
+ * scene-linear ACEScg (AP1/D60); alpha, UVs, normals, and emission strength are unitless.
+ */
 public final class SceneMesh {
     public enum UvLayout { PER_VERTEX, PER_TRIANGLE_CORNER }
     public enum Coverage { OPAQUE, CUTOUT, STOCHASTIC }
@@ -53,7 +57,7 @@ public final class SceneMesh {
     /** The renderer's neutral surface, optionally paired with a source texture. */
     public record FallbackMaterial(TextureReference texture) implements MaterialReference { }
 
-    /** One material and shading description for one indexed triangle. */
+    /** One material and shading description for one indexed triangle; {@code tint*} is scene-linear ACEScg. */
     public record TriangleSurface(MaterialReference material,
                                   Coverage coverage, float normalX, float normalY, float normalZ,
                                   float emission, float tintR, float tintG, float tintB,
@@ -105,9 +109,9 @@ public final class SceneMesh {
     }
 
     /**
-     * Creates a mesh with optional indexed shading attributes. Vertex colors are linear BT.709 RGBA
-     * multipliers. An empty normal or color array selects the corresponding per-triangle surface fallback;
-     * the fallback color uses the triangle tint with alpha one.
+     * Creates a mesh with optional indexed shading attributes. Vertex colors are scene-linear ACEScg RGB
+     * with unitless alpha multipliers. An empty normal or color array selects the corresponding
+     * per-triangle surface fallback; the fallback color uses the triangle tint with alpha one.
      */
     public SceneMesh(float[] positions, int[] indices, UvLayout uvLayout, float[] textureCoordinates,
                      float[] vertexNormals, float[] vertexColors,

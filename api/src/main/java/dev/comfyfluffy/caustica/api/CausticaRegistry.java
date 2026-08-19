@@ -25,9 +25,8 @@ public final class CausticaRegistry {
     private final Map<Slot, ResourceId> selected = new LinkedHashMap<>();
     /**
      * Registration order IS the ABI: a surface implementation's position here is the index materials pack
-     * into their binding and the case the generated dispatch switch resolves. {@code caustica:builtin}
-     * registers first, so index 0 is always the built-in surface, which is what a zero-initialised
-     * binding and any unresolved name fall back to.
+     * into their binding and the case the generated dispatch switch resolves. The renderer registers its
+     * reference surface at index 0 and its visible error surface at index 1 before host implementations.
      */
     private final List<Feature.SurfaceImplementation> surfaces = new ArrayList<>();
     private final List<Feature.SurfaceModifierImplementation> surfaceModifiers = new ArrayList<>();
@@ -331,7 +330,7 @@ public final class CausticaRegistry {
             }
             if (surfaces.isEmpty()) {
                 throw new IllegalArgumentException(
-                        "selection needs at least the built-in surface implementation");
+                        "selection needs at least one surface implementation");
             }
         }
 

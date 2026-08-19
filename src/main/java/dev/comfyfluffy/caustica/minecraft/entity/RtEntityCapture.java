@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.entity;
 
 import com.mojang.blaze3d.vertex.VertexConsumer;
+import dev.comfyfluffy.caustica.api.ColorSpaces;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
@@ -229,13 +230,14 @@ public final class RtEntityCapture implements VertexConsumer {
         idx.add(base);
         idx.add(base + 2);
         idx.add(base + 3);
-        // Vertex colour as a flat per-prim tint (ARGB → rgb). White (-1) for most models → grey when lit.
+        // Minecraft submission colours are encoded sRGB; SceneMesh accepts scene-linear ACEScg.
         int c = color;
-        float tr = ((c >> 16) & 0xFF) * (1f / 255f);
-        float tg = ((c >> 8) & 0xFF) * (1f / 255f);
-        float tb = (c & 0xFF) * (1f / 255f);
+        float[] tint = ColorSpaces.srgbToAcesCg(
+                ((c >> 16) & 0xFF) * (1f / 255f),
+                ((c >> 8) & 0xFF) * (1f / 255f),
+                (c & 0xFF) * (1f / 255f));
         SceneMesh.TriangleSurface surface = new SceneMesh.TriangleSurface(
-                currentMaterial, currentCoverage, nx, ny, nz, emission, tr, tg, tb);
+                currentMaterial, currentCoverage, nx, ny, nz, emission, tint[0], tint[1], tint[2]);
         surfaces.add(surface);
         surfaces.add(surface);
     }

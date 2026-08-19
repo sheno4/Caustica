@@ -50,7 +50,9 @@ public final class RtMaterialOverrides {
         if (parameters.surface() != null) {
             int index = surfaces.indexOf(parameters.surface());
             if (index < 0) {
-                throw new IllegalArgumentException("No registered surface implementation " + parameters.surface());
+                CausticaMod.LOGGER.warn("Material rule {} names unregistered surface {}; using the error surface",
+                        rule.id(), parameters.surface());
+                index = RtMaterialRegistry.ERROR_SURFACE_IMPLEMENTATION;
             }
             surfaceImplementation = index;
         }
@@ -76,7 +78,8 @@ public final class RtMaterialOverrides {
                        /**
                         * Registered surface-implementation index, already resolved from the authored
                         * {@code surface} name. Null leaves the material on what it inherited, which for
-                        * everything compiled today is the built-in surface.
+                        * everything compiled today is the built-in surface. An authored unresolved name
+                        * is non-null and carries the visible error implementation instead.
                         */
                        Integer surfaceImplementation) {
         boolean matchesMaterial(ResourceId value) {

@@ -151,7 +151,8 @@ final class RtProgramManager {
                 return null;
             }
             Shaders shaders = compile(compiler, key.reordered());
-            Program built = new Program(key, shaders, compiler.passResourceBindings());
+            Program built = new Program(key, shaders, compiler.passResourceBindings(),
+                    compiler.rejectedSurfaces());
             Program existing = cache.putIfAbsent(key, built);
             return existing != null ? existing : built;
         } catch (IOException e) {
@@ -209,11 +210,13 @@ final class RtProgramManager {
     }
 
     public record Program(Key key, Shaders shaders,
-                          Map<String, WorldShaderCompiler.PassResourceBinding> passResourceBindings) {
+                          Map<String, WorldShaderCompiler.PassResourceBinding> passResourceBindings,
+                          java.util.Set<Integer> rejectedSurfaces) {
         public Program {
             Objects.requireNonNull(key, "key");
             Objects.requireNonNull(shaders, "shaders");
             passResourceBindings = Map.copyOf(passResourceBindings);
+            rejectedSurfaces = java.util.Set.copyOf(rejectedSurfaces);
         }
     }
 

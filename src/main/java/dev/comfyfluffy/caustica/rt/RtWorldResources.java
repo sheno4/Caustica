@@ -74,7 +74,7 @@ final class RtWorldResources {
                 created.setStorageImage(frames.output.view());
                 frames.bindGuideImages(created);
             }
-            materialEpoch.publish(context, created, bindlessCapacity);
+            materialEpoch.publish(context, created, bindlessCapacity, program.rejectedSurfaces());
             bindPassResources(created, program, passManager);
             invalidateMaterialBindings();
         } catch (Throwable failure) {

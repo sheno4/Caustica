@@ -224,9 +224,8 @@ public struct Prim {
 // stochastic submissions use bindings instead of record variants.
 public struct MaterialBinding {
     // baseColorTextureIndex:16 | coverageMode:2 | flags:6 | surfaceImpl:8. Index 0 is the host's default
-    // base-color texture
-    // and implementation 0 is the built-in surface, so a zero-initialised binding resolves the reference
-    // textured surface. Other source render types name their own bindless texture index.
+    // base-color texture and implementation 0 is the built-in surface. Other source render types name
+    // their own bindless texture index; invalid implementation indices visibly resolve to the error surface.
     public uint packed0;
     public uint surface;    // index into the SurfaceMaterial table; closest-hit only
     // 8:8:8 ACEScg transmittance through this surface, used when coverage is OPAQUE and no texel is

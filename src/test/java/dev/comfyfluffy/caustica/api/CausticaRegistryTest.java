@@ -25,11 +25,12 @@ final class CausticaRegistryTest {
         CausticaRegistry.Selection selection = registry.selection();
 
         assertEquals(BuiltinExtension.ID, selection.binding(Slots.SKY).feature().id());
-        // Surfaces are a set, not a slot: the built-in registers first so it is always index 0, the
-        // fallback a material with no explicit choice resolves to.
-        assertEquals(1, selection.surfaces().size());
+        // Surfaces are a set, not a slot. The renderer reserves reference index 0 and error index 1.
+        assertEquals(2, selection.surfaces().size());
         assertEquals("BuiltinSurface", selection.surfaces().get(0).type());
+        assertEquals("ErrorSurface", selection.surfaces().get(1).type());
         assertEquals(0, registry.surfaceIndex(BuiltinExtension.BUILTIN_SURFACE));
+        assertEquals(1, registry.surfaceIndex(BuiltinExtension.ERROR_SURFACE));
         assertEquals(-1, registry.surfaceIndex(ResourceId.of("nope", "nope")));
         assertTrue(registry.renderPassIds().contains(ResourceId.of("caustica", "bloom")));
     }

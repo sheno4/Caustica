@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.example.gltfviewer;
 
+import dev.comfyfluffy.caustica.api.ColorSpaces;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -31,9 +32,11 @@ final class GltfViewerAssetTest {
         assertEquals(1, scene.residents().size());
         assertEquals(2, scene.placements().size());
         assertArrayEquals(positions, scene.residents().getFirst().mesh().positions());
+        float[] firstColor = ColorSpaces.linearBt709ToAcesCg(0.2f, 0.3f, 0.4f);
+        float[] secondColor = ColorSpaces.linearBt709ToAcesCg(0.6f, 0.7f, 0.8f);
         assertArrayEquals(new float[]{
-                0.2f, 0.3f, 0.4f, 0.25f,
-                0.6f, 0.7f, 0.8f, 0.45f,
+                firstColor[0], firstColor[1], firstColor[2], 0.25f,
+                secondColor[0], secondColor[1], secondColor[2], 0.45f,
                 1, 1, 1, 0.5f
         }, scene.residents().getFirst().mesh().vertexColors());
         assertEquals(scene.residents().getFirst().key(), scene.placements().get(0).resident());

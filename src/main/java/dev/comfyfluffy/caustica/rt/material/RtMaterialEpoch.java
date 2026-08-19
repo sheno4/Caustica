@@ -145,7 +145,8 @@ public final class RtMaterialEpoch {
         return state.hasPublishedResources() || opacityMicromapPipeline != null;
     }
 
-    public void publish(GpuContext ctx, RtPipeline pipeline, int textureCapacity) {
+    public void publish(GpuContext ctx, RtPipeline pipeline, int textureCapacity,
+                        java.util.Set<Integer> rejectedSurfaces) {
         if (sceneGeometry == null) throw new IllegalStateException("Scene geometry is not attached");
         if (opacityMicromapPipeline != null) {
             throw new IllegalStateException("Previous opacity micromap material epoch is still active");
@@ -153,8 +154,11 @@ public final class RtMaterialEpoch {
         long epochSampler = sampler(ctx);
         pageCompiler.reset();
         ProviderManager.MaterialContributions contributions = providers.collectMaterials();
-        RtMaterialOverrides overrides = RtMaterialOverrides.from(
-                contributions.rules(), CausticaApi.registry()::surfaceIndex);
+        RtMaterialOverrides.SurfaceResolver surfaceResolver = surface -> {
+            int index = CausticaApi.registry().surfaceIndex(surface);
+            return rejectedSurfaces.contains(index) ? RtMaterialRegistry.ERROR_SURFACE_IMPLEMENTATION : index;
+        };
+        RtMaterialOverrides overrides = RtMaterialOverrides.from(contributions.rules(), surfaceResolver);
         MaterialCatalog catalog = contributions.catalog();
         pageCompiler.prepareAll(ctx, textureCapacity, catalog);
         if (ctx.backend().capabilities().opacityMicromaps()) {
@@ -164,7 +168,7 @@ public final class RtMaterialEpoch {
         }
         sceneGeometry.setOpacityMicromapPipeline(opacityMicromapPipeline);
         registry.rebuild(ctx, pageCompiler, catalog, overrides,
-                contributions.definitions(), CausticaApi.registry()::surfaceIndex, textureCapacity);
+                contributions.definitions(), surfaceResolver, textureCapacity);
         textureRegistry = new ProviderTextureRegistry(textureCapacity,
                 (texture, label) -> new UploadedProviderTexture(ctx, texture, label),
                 (slot, view, layout) -> pipeline.setBaseColorTexture(slot, view, layout, epochSampler));

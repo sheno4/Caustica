@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -40,6 +41,22 @@ final class MaterialEpochSnapshotTest {
             assertEquals(MaterialAnalysis.EmissionSource.valueOf(source.name()),
                     snapshot.analyze(new SceneMesh.FallbackMaterial(null)).emissionSource());
         }
+    }
+
+    @Test
+    void errorSurfaceIsNeverPublishedAsALightListCandidate() {
+        EmissionFootprint footprint = new EmissionFootprint(1, new float[]{1.0f, 0.0f, 1.0f, 1.0f});
+        RtMaterialDesc material = new RtMaterialDesc(0, RtMaterialDesc.Source.NEUTRAL, 0,
+                0.5f, 0.0f, 1.5f, 0.0f, RtMaterialDesc.EmissionSource.GEOMETRY_UNIFORM, 5000.0f,
+                RtMaterialDesc.EmissionSummary.NONE, RtMaterialRegistry.ERROR_SURFACE_IMPLEMENTATION);
+        MaterialEpochSnapshot snapshot = new MaterialEpochSnapshot(1L, Map.of(), new int[0], 1,
+                Map.of(), Map.of(), 0, List.of(material), List.of(footprint),
+                RtMaterialRegistry.CompiledOverrideLookup.of(List.of()), new int[]{0}, new byte[]{0});
+
+        MaterialAnalysis analysis = snapshot.analyze(new SceneMesh.FallbackMaterial(null));
+        assertEquals(MaterialAnalysis.EmissionSource.NONE, analysis.emissionSource());
+        assertEquals(0.0f, analysis.emissionLuminanceCdM2());
+        assertNull(analysis.emissionFootprint());
     }
 
     @Test

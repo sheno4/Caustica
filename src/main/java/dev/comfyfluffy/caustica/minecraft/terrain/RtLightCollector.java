@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.terrain;
 
+import dev.comfyfluffy.caustica.api.ColorSpaces;
 import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import dev.comfyfluffy.caustica.api.provider.MaterialAnalysis;
 import dev.comfyfluffy.caustica.api.provider.EmissionFootprint;
@@ -202,24 +203,17 @@ final class RtLightCollector {
             // sum/rectSamples preserves the quad's total emissive power at rectArea. emissionLuminance()
             // is the material's final HDR luminance (catalog baseline or absolute JSON override,
             // published in the material epoch) — the single knob shared with world.rchit's direct-hit shading.
-            // Footprint averages are already linear BT.709; captured vertex/biome tint is still
-            // sRGB-encoded. Combine in the authored basis, use its invariant Y for the membership gate,
-            // then store the emitter in the scene's linear ACEScg transport basis.
-            float tintR = srgbToLinear(p[pb + 4]);
-            float tintG = srgbToLinear(p[pb + 5]);
-            float tintB = srgbToLinear(p[pb + 6]);
+            // Footprint averages are linear BT.709; triangle tint already crossed the SceneMesh boundary
+            // as ACEScg. Convert the footprint before combining them in the transport basis.
+            float[] footprintAcesCg = ColorSpaces.linearBt709ToAcesCg(sumR, sumG, sumB);
             float scale = factor * material.emissionLuminanceCdM2() / rectSamples;
-            float le709R = sumR * scale * tintR;
-            float le709G = sumG * scale * tintG;
-            float le709B = sumB * scale * tintB;
-            float lum = 0.2126f * le709R + 0.7152f * le709G + 0.0722f * le709B;
+            float leR = footprintAcesCg[0] * scale * p[pb + 4];
+            float leG = footprintAcesCg[1] * scale * p[pb + 5];
+            float leB = footprintAcesCg[2] * scale * p[pb + 6];
+            float lum = 0.27222872f * leR + 0.67408177f * leG + 0.05368952f * leB;
             if (lum < leLuminanceEps || fill < minFillRatio) {
                 continue; // excluded: always-gathered on path hits, no energy lost
             }
-            // Same OCIO-derived Linear Rec.709/D65 -> ACEScg/AP1/D60 matrix as world_common.slang.
-            float leR = 0.61309743f * le709R + 0.33952314f * le709G + 0.04737945f * le709B;
-            float leG = 0.07019372f * le709R + 0.91635388f * le709G + 0.01345240f * le709B;
-            float leB = 0.02061559f * le709R + 0.10956977f * le709G + 0.86981463f * le709B;
 
             float aC = 0.5f * (aLo + aHi);
             float bC = 0.5f * (bLo + bHi);
@@ -277,11 +271,6 @@ final class RtLightCollector {
     private static float packHalf2(float x, float y) {
         int bits = (Float.floatToFloat16(y) << 16) | (Float.floatToFloat16(x) & 0xFFFF);
         return Float.intBitsToFloat(bits);
-    }
-
-    private static float srgbToLinear(float value) {
-        return value <= 0.04045f ? value / 12.92f
-                : (float) Math.pow((value + 0.055f) / 1.055f, 2.4f);
     }
 
     /**

@@ -1,7 +1,6 @@
 package dev.comfyfluffy.caustica.rt.provider;
 
 import dev.comfyfluffy.caustica.CausticaMod;
-import dev.comfyfluffy.caustica.api.CausticaApi;
 import dev.comfyfluffy.caustica.api.CausticaRegistry;
 import dev.comfyfluffy.caustica.api.provider.LightProvider;
 import dev.comfyfluffy.caustica.api.provider.LightSink;
@@ -41,7 +40,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Consumer;
-import java.util.function.ToIntFunction;
 
 public final class ProviderManager {
     // A provider instance is runtime-activation-scoped. Failures disable it until that activation ends.
@@ -424,14 +422,6 @@ public final class ProviderManager {
      * publish a partial contribution; other sources remain active and retain their registration order.
      */
     public MaterialContributions collectMaterials() {
-        return collectMaterials(CausticaApi.registry()::surfaceIndex);
-    }
-
-    /**
-     * Collect material sources transactionally and validate every shader implementation name before its
-     * contribution becomes visible. Geometry linkage later uses the exact successfully published set.
-     */
-    MaterialContributions collectMaterials(ToIntFunction<ResourceId> surfaceIndex) {
         List<MaterialDefinition> definitions = new ArrayList<>();
         Set<ResourceId> definedMaterials = new HashSet<>();
         List<MaterialTextureAsset> atlasAssets = new ArrayList<>();
@@ -465,21 +455,10 @@ public final class ProviderManager {
                 });
                 Set<ResourceId> stagedIds = new HashSet<>();
                 for (MaterialDefinition definition : stagedDefinitions) {
-                    if (definition.surface() != null && surfaceIndex.applyAsInt(definition.surface()) < 0) {
-                        throw new IllegalStateException("material definition " + definition.id()
-                                + " references unregistered surface " + definition.surface());
-                    }
                     if (definedMaterials.contains(definition.id()) || !stagedIds.add(definition.id())) {
                         throw new IllegalStateException("duplicate material definition " + definition.id());
                     }
                     if (definition.textures() != null) stagedAssets.add(definition.textures());
-                }
-                for (MaterialRule rule : staged) {
-                    ResourceId surface = rule.parameters().surface();
-                    if (surface != null && surfaceIndex.applyAsInt(surface) < 0) {
-                        throw new IllegalStateException("material rule " + rule.id()
-                                + " references unregistered surface " + surface);
-                    }
                 }
                 HashSet<ResourceId> stagedAssetIds = new HashSet<>();
                 for (MaterialTextureAsset asset : stagedAssets) {

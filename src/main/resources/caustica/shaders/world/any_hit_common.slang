@@ -19,8 +19,8 @@ import caustica_texture_resources;
 public struct HitBinding {
     public MaterialBinding binding;
     public float2 uv;
-    public float3 tint; // source 8-bit convention, still sRGB-encoded
-    public float4 vertexColor; // linear BT.709 RGBA
+    public float3 tint; // scene-linear ACEScg
+    public float4 vertexColor; // scene-linear ACEScg RGB, unitless alpha
 };
 
 public float3 barycentrics(float2 attribs) {
@@ -67,8 +67,8 @@ public float hitCoverageAlpha(HitBinding hit, float textureAlpha) {
     return clamp(textureAlpha * hit.vertexColor.a, 0.0, 1.0);
 }
 
-public float3 hitTint709(HitBinding hit) {
-    return srgbToLinear(hit.tint) * hit.vertexColor.rgb;
+public float3 hitGeometryTint(HitBinding hit) {
+    return hit.tint * hit.vertexColor.rgb;
 }
 
 /**

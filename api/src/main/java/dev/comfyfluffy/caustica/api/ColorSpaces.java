@@ -17,4 +17,9 @@ public final class ColorSpaces {
                 (float) (0.07019372 * r + 0.91635388 * g + 0.01345240 * b),
                 (float) (0.02061559 * r + 0.10956977 * g + 0.86981463 * b)};
     }
+
+    /** Converts encoded sRGB directly to scene-linear ACEScg/AP1/D60. */
+    public static float[] srgbToAcesCg(double r, double g, double b) {
+        return linearBt709ToAcesCg(srgbToLinear(r), srgbToLinear(g), srgbToLinear(b));
+    }
 }

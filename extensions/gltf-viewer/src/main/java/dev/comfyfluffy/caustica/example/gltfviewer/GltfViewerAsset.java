@@ -167,11 +167,18 @@ final class GltfViewerAsset {
             if (colors.length == 0) {
                 colors = new float[vertexCount * 4];
                 Arrays.fill(colors, 1.0f);
-            } else {
-                colors = colors.clone();
             }
+        }
+        if (colors.length != 0) {
+            colors = colors.clone();
             for (int vertex = 0; vertex < vertexCount; vertex++) {
-                colors[vertex * 4 + 3] *= material.alphaFactor();
+                int offset = vertex * 4;
+                float[] acesCg = ColorSpaces.linearBt709ToAcesCg(
+                        colors[offset], colors[offset + 1], colors[offset + 2]);
+                colors[offset] = acesCg[0];
+                colors[offset + 1] = acesCg[1];
+                colors[offset + 2] = acesCg[2];
+                colors[offset + 3] *= material.alphaFactor();
             }
         }
         SceneMesh.NamedMaterial reference = new SceneMesh.NamedMaterial(

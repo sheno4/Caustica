@@ -14,8 +14,10 @@ import dev.comfyfluffy.caustica.api.pass.RenderStage;
 /** Registers the renderer-owned reference composition without installing any host scene sources. */
 public final class BuiltinExtension implements CausticaExtension {
     public static final ResourceId ID = ResourceId.of("caustica", "builtin");
-    /** The reference surface, and the index-0 fallback of the per-material dispatch. */
+    /** The reference surface at reserved implementation index 0. */
     public static final ResourceId BUILTIN_SURFACE = ResourceId.of("caustica", "surface");
+    /** The visible failure surface at reserved implementation index 1. */
+    public static final ResourceId ERROR_SURFACE = ResourceId.of("caustica", "error_surface");
 
     @Override
     public void register(CausticaRegistry registry) {
@@ -27,6 +29,7 @@ public final class BuiltinExtension implements CausticaExtension {
                 .runtimeActivation(RuntimeActivation.ALWAYS)
                 .bind(Slots.SKY, "caustica_builtin_sky", "BuiltinSky")
                 .surface(BUILTIN_SURFACE, "caustica_builtin_surface", "BuiltinSurface")
+                .surface(ERROR_SURFACE, "caustica_error_surface", "ErrorSurface")
                 .group(BloomPass.GROUP)
                 .options(BloomPass.OPTIONS)
                 .renderPass(BloomPass.ID, RenderStage.AFTER_RECONSTRUCTION, BloomPass::new)

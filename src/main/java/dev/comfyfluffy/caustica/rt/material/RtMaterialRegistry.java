@@ -72,6 +72,8 @@ public final class RtMaterialRegistry {
      * {@code caustica:builtin} registers its own first, so index 0 is always the reference surface.
      */
     public static final int BUILTIN_SURFACE_IMPLEMENTATION = 0;
+    /** Visible fallback for unresolved, rejected, or out-of-range surface implementations. */
+    public static final int ERROR_SURFACE_IMPLEMENTATION = 1;
 
     // Coverage — is the surface present along this ray — mirrored by world_common.slang's COVERAGE_*.
     private static final int COVERAGE_OPAQUE = MaterialBindingAbi.COVERAGE_OPAQUE;
@@ -93,22 +95,12 @@ public final class RtMaterialRegistry {
     // pane still absorbs its own colour on top of this.
     private static final float TRANSLUCENT_NEUTRAL_EXTINCTION = 0.15f;
     private static final int WHITE_SHADOW_TINT = 0x00FFFFFF;
-    // HDR radiance of a full (level-15-equivalent) emitter, modulated by albedo. Baked into every
-    // emissive RtMaterialDesc.emissionLuminance at compile time, times
-    // any resource-pack absolute emission.luminance_cd_m2 override; see surface() and RtMaterialOverrides.
-    //
-    // Photometric: cd/m² of the emitting surface, per {@link dev.comfyfluffy.caustica.rt.RtSceneUnits}.
-    //
-    // Anchored on luminous exitance: a full-strength emitter radiates about 1,000 lm/m².
-    // Lambertian exitance M = π·L, so L = 1000/π = 318 cd/m².
+    // SurfaceMaterial.features stores feature flags in the low byte and a unorm16 emission luminance
+    // in the next two bytes. These shifts are mirrored by world_common.slang.
     private static final int EMISSION_LUMINANCE_SHIFT = 8;
     private static final int EMISSION_LUMINANCE_MASK = 65535;
-    // Ceiling of the 16-bit fixed-point luminance field, raised with the baseline above. HALF_MAX is the
-    // real transport ceiling downstream — Payload.emissionSss is a half2 lane and Light.le is packed
-    // R11G11B10 — so clamping here rather than higher keeps the encoded value representable end to end.
-    // The quantisation step is MAX/65535 ≈ 1 cd/m², i.e. 0.007% at the baseline. A resource pack's
-    // maximum 5x multiplier would reach 75,000 and clamps to this: a 0.19 EV reduction on something
-    // already several EV past display white, so invisible.
+    // Emission enters fp16 payload fields after shading, so the encoded range stops at the largest finite
+    // half value rather than allowing an authored luminance to become infinity during conversion.
     private static final float MAX_EMISSION_LUMINANCE = 65504.0f;
     // SurfaceMaterial.page = pageIndex:24 | maxLod:8. The LOD limit describes the page rectangle rather
     // than the surface, so it travels with the page reference; mirrored by surfacePage/surfacePageMaxLod.
@@ -294,9 +286,9 @@ public final class RtMaterialRegistry {
             if (definition.surface() != null) {
                 surfaceImplementation = surfaces.indexOf(definition.surface());
                 if (surfaceImplementation < 0) {
-                    CausticaMod.LOGGER.warn("Ignoring material definition {} with unregistered surface {}",
+                    CausticaMod.LOGGER.warn("Material definition {} names unregistered surface {}; using the error surface",
                             definition.id(), definition.surface());
-                    continue;
+                    surfaceImplementation = ERROR_SURFACE_IMPLEMENTATION;
                 }
             }
             int definitionTransport = transport(definition.topology());
@@ -677,14 +669,16 @@ public final class RtMaterialRegistry {
     }
 
     /**
-     * The compiled tables under construction during a rebuild. Every compiled surface gets one binding —
-     * plus the cutout-coverage sibling a masked geometry source asks for — so
-     * the returned binding ID is what geometry stores and what {@link MaterialEpochSnapshot} indexes its descriptions,
-     * emission footprints and SBT classes by. Siblings share the base's surface, description and footprint, so they
-     * cost sixteen table bytes and two list slots each and keep every parallel array dense.
+     * The compiled tables under construction during a rebuild. Every compiled material gets one binding —
+     * plus the cutout-coverage sibling a masked geometry source asks for — while content-equal surface
+     * records share one surface-table index. The returned binding ID is what geometry stores and what
+     * {@link MaterialEpochSnapshot} indexes its descriptions, emission footprints and SBT classes by.
+     * Siblings share the base's surface, description and footprint, so they cost sixteen table bytes and
+     * two list slots each and keep every parallel array dense.
      */
-    private static final class CompiledTables {
+    static final class CompiledTables {
         final List<SurfaceMaterialData> surfaces;
+        private final Map<SurfaceMaterialData, Integer> surfaceIds;
         final List<MaterialBindingData> bindings;
         final List<RtMaterialDesc> descriptions;
         final List<EmissionFootprint> footprints;
@@ -693,6 +687,7 @@ public final class RtMaterialRegistry {
 
         CompiledTables(int expected) {
             surfaces = new ArrayList<>(expected);
+            surfaceIds = new HashMap<>(expected);
             bindings = new ArrayList<>(expected);
             descriptions = new ArrayList<>(expected);
             footprints = new ArrayList<>(expected);
@@ -706,8 +701,7 @@ public final class RtMaterialRegistry {
 
         int add(RtMaterialDesc desc, float[] average, RtMaterialPageCompiler.Entry entry,
                 EmissionFootprint uniformFootprint, float coverageCutoff, boolean cutoutSibling) {
-            int surfaceId = surfaces.size();
-            surfaces.add(surface(desc, entry, entry.albedoU(), entry.albedoV(),
+            int surfaceId = internSurface(surface(desc, entry, entry.albedoU(), entry.albedoV(),
                     entry.albedoInvDu(), entry.albedoInvDv()));
             int id = append(binding(surfaceId, desc, average, SHARED_ATLAS_BASE_COLOR_TEXTURE_INDEX, coverageCutoff),
                     desc, footprintFor(desc, entry, uniformFootprint));
@@ -718,8 +712,7 @@ public final class RtMaterialRegistry {
         }
 
         int addDefinition(RtMaterialDesc desc, MaterialDefinition definition, RtMaterialPageCompiler.Entry entry) {
-            int surfaceId = surfaces.size();
-            surfaces.add(surfaceDefinition(desc, definition, entry));
+            int surfaceId = internSurface(surfaceDefinition(desc, definition, entry));
             float[] average = definition.textures() == null
                     ? new float[]{definition.baseColorR(), definition.baseColorG(), definition.baseColorB(), 1.0f}
                     : new float[]{entry.averageR() * definition.baseColorR(),
@@ -733,6 +726,15 @@ public final class RtMaterialRegistry {
                             MaterialBindingAbi.surfaceImplementation(base.packed0())),
                     base.surface(), base.shadowTint(), base.packed1());
             return append(textureless, desc, footprintFor(desc, entry, null));
+        }
+
+        private int internSurface(SurfaceMaterialData surface) {
+            Integer current = surfaceIds.get(surface);
+            if (current != null) return current;
+            int id = surfaces.size();
+            surfaces.add(surface);
+            surfaceIds.put(surface, id);
+            return id;
         }
 
         /** The base's binding with {@link #COVERAGE_CUTOUT}, over the same surface/description/footprint. */

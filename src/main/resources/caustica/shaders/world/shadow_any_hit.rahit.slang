@@ -18,16 +18,16 @@ void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) 
     // answer coverage, so that texel is also the colour light picks up crossing the surface — opaque
     // where the colorant is, clear where the sprite is see-through. An opaque binding sampled nothing and
     // takes the compile-time reduction instead, so solid glass costs no texture fetch on a shadow ray.
-    float3 geometryTint = hitTint709(hit);
-    float3 transmittance = bindingShadowTint(hit.binding) * bt709ToAcesCg(geometryTint);
+    float3 geometryTint = hitGeometryTint(hit);
+    float3 transmittance = bindingShadowTint(hit.binding) * geometryTint;
     if (bindingCoverage(hit.binding) != COVERAGE_OPAQUE) {
         float4 texel = sampleCoverageTexel(hit);
         float alpha = hitCoverageAlpha(hit, texel.a);
         if (alpha < bindingCutoff(hit.binding)) {
             IgnoreHit();
         }
-        transmittance = bt709ToAcesCg(lerp(float3(1.0),
-                hitBaseColorLinear(hit, texel.rgb) * geometryTint, alpha));
+        float3 baseColor = bt709ToAcesCg(hitBaseColorLinear(hit, texel.rgb));
+        transmittance = lerp(float3(1.0), baseColor * geometryTint, alpha);
     }
 
     if ((flags & BINDING_TRANSMISSIVE) != 0u) {

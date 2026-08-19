@@ -75,7 +75,7 @@ final class ProviderManagerTest {
 
         manager.onResourcePackClosing();
         manager.onResourcePackApplied();
-        manager.collectMaterials(ignored -> 0);
+        manager.collectMaterials();
         manager.onWorldChanged();
 
         assertEquals(List.of(
@@ -495,8 +495,8 @@ final class ProviderManagerTest {
         materials.put(id("healthy"), healthy);
         ProviderManager manager = new ProviderManager(Map.of(), Map.of(), materials);
 
-        assertEquals(List.of(retained), manager.collectMaterials(ignored -> 0).rules());
-        assertEquals(List.of(retained), manager.collectMaterials(ignored -> 0).rules());
+        assertEquals(List.of(retained), manager.collectMaterials().rules());
+        assertEquals(List.of(retained), manager.collectMaterials().rules());
         assertEquals(1, failingStops.get());
     }
 
@@ -511,7 +511,7 @@ final class ProviderManagerTest {
         sources.put(id("gltf"), sink -> sink.submitAsset(standalone));
 
         ProviderManager.MaterialContributions contributions =
-                new ProviderManager(Map.of(), Map.of(), sources).collectMaterials(ignored -> 0);
+                new ProviderManager(Map.of(), Map.of(), sources).collectMaterials();
 
         assertEquals(List.of(atlas), contributions.catalog().atlasAssets());
         assertEquals(List.of(standalone), contributions.catalog().standalone());
@@ -544,7 +544,7 @@ final class ProviderManagerTest {
         sources.put(id("duplicate"), duplicate);
 
         var catalog = new ProviderManager(Map.of(), Map.of(), sources)
-                .collectMaterials(ignored -> 0).catalog();
+                .collectMaterials().catalog();
 
         assertEquals(List.of(shared), catalog.atlasAssets());
         assertTrue(catalog.standalone().isEmpty());
@@ -577,7 +577,7 @@ final class ProviderManagerTest {
         materials.put(id("duplicate"), duplicate);
         ProviderManager manager = new ProviderManager(Map.of(), Map.of(), materials);
 
-        assertEquals(List.of(shared), manager.collectMaterials(ignored -> 0).definitions());
+        assertEquals(List.of(shared), manager.collectMaterials().definitions());
         assertEquals(1, duplicateStops.get());
     }
 
@@ -590,14 +590,14 @@ final class ProviderManagerTest {
                 1.0f, 1.0f, 1.0f, 0.0f, MaterialTopology.SURFACE, null, 0.5f, texture);
         ProviderManager.MaterialContributions contributions = new ProviderManager(Map.of(), Map.of(),
                 Map.of(id("source"), (MaterialSource) sink -> sink.define(definition)))
-                .collectMaterials(ignored -> 0);
+                .collectMaterials();
 
         assertEquals(List.of(definition), contributions.definitions());
         assertEquals(List.of(texture), contributions.catalog().standalone());
     }
 
     @Test
-    void unknownSurfaceDisablesOnlyItsMaterialSource() {
+    void unknownSurfaceKeepsItsMaterialDefinitionForVisibleErrorResolution() {
         AtomicInteger invalidStops = new AtomicInteger();
         MaterialDefinition invalid = new MaterialDefinition(new MaterialHandle(id("invalid")),
                 1.0f, 1.0f, 1.0f, 1.0f, 0.0f, 1.5f, 0.0f,
@@ -619,14 +619,14 @@ final class ProviderManagerTest {
         sources.put(id("healthy"), sink -> sink.define(healthy));
         ProviderManager manager = new ProviderManager(Map.of(), Map.of(), sources);
 
-        ProviderManager.MaterialContributions contributions = manager.collectMaterials(surface -> -1);
+        ProviderManager.MaterialContributions contributions = manager.collectMaterials();
 
-        assertEquals(List.of(healthy), contributions.definitions());
-        assertEquals(1, invalidStops.get());
+        assertEquals(List.of(invalid, healthy), contributions.definitions());
+        assertEquals(0, invalidStops.get());
     }
 
     @Test
-    void unknownRuleSurfaceDisablesOnlyItsMaterialSource() {
+    void unknownSurfaceKeepsItsRuleForVisibleErrorResolution() {
         AtomicInteger invalidStops = new AtomicInteger();
         MaterialRule invalid = new MaterialRule(id("invalid_rule"),
                 new MaterialRule.Match(id("source"), null),
@@ -648,10 +648,10 @@ final class ProviderManagerTest {
         sources.put(id("healthy"), sink -> sink.submit(healthy));
         ProviderManager manager = new ProviderManager(Map.of(), Map.of(), sources);
 
-        ProviderManager.MaterialContributions contributions = manager.collectMaterials(surface -> -1);
+        ProviderManager.MaterialContributions contributions = manager.collectMaterials();
 
-        assertEquals(List.of(healthy), contributions.rules());
-        assertEquals(1, invalidStops.get());
+        assertEquals(List.of(invalid, healthy), contributions.rules());
+        assertEquals(0, invalidStops.get());
     }
 
     @Test
@@ -757,7 +757,7 @@ final class ProviderManagerTest {
         scenes.put(id("healthy"), healthy);
         ProviderManager manager = new ProviderManager(scenes, Map.of(),
                 Map.of(id("materials"), defining("healthy")));
-        manager.collectMaterials(ignored -> 0);
+        manager.collectMaterials();
         List<GeometryUpdates.Group> forwarded = new ArrayList<>();
 
         manager.submitGeometry(null, SceneOrigin.ZERO, (updates, ignored) -> forwarded.addAll(updates));
@@ -996,7 +996,7 @@ final class ProviderManagerTest {
         };
         ProviderManager manager = new ProviderManager(Map.of(id("cloud"), cloud), Map.of(),
                 Map.of(id("materials"), defining("cloud")));
-        manager.collectMaterials(ignored -> 0);
+        manager.collectMaterials();
         List<GeometryUpdates.Group> forwarded = new ArrayList<>();
 
         manager.submitGeometry(null, SceneOrigin.ZERO, (updates, ignored) -> forwarded.addAll(updates));
