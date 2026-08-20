@@ -3,10 +3,12 @@
 
 import caustica_api;
 import caustica_surface;
+import caustica_coverage;
 import caustica_surface_modifier;
 import caustica_types;
 import caustica_builtin_sky;
 import caustica_builtin_surface;
+import caustica_builtin_coverage;
 
 struct ReflectionSurfaces : ISurfaceDispatch {
     void evaluateSurface(uint implementation, SurfaceInput input, inout MaterialInput material) {
@@ -35,9 +37,17 @@ struct ReflectionSurfaceModifiers : ISurfaceModifierDispatch {
     }
 };
 
+struct ReflectionCoverages : ICoverageDispatch {
+    float4 evaluateCoverage(uint implementation, CoverageInput input) {
+        BuiltinCoverage coverage;
+        return coverage.evaluateCoverage(input);
+    }
+};
+
 struct ReflectionComposition : IComposition {
     typealias Sky = BuiltinSky;
     typealias Surfaces = ReflectionSurfaces;
+    typealias Coverages = ReflectionCoverages;
     typealias SurfaceModifiers = ReflectionSurfaceModifiers;
 };
 

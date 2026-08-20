@@ -172,6 +172,23 @@ final class RtGeometryMeshPackingTest {
     }
 
     @Test
+    void packsConservativeOmmRangeAndExplicitAbsenceIntoPrimitiveData() {
+        MaterialHandle material = MaterialHandle.of("test", "omm");
+        SceneMesh.TriangleSurface ranged = surface(material, SceneMesh.Coverage.CUTOUT)
+                .withOpacityMicromapRange(new SceneMesh.OpacityMicromapRange(0.5001f, 0.749f));
+        SceneMesh mesh = new SceneMesh(new float[]{0, 0, 0, 1, 0, 0, 0, 1, 0},
+                new int[]{0, 1, 2, 0, 1, 2}, SceneMesh.UvLayout.PER_VERTEX, new float[6],
+                List.of(ranged, surface(material, SceneMesh.Coverage.CUTOUT)));
+
+        RtGeometryMeshPacking.PackedMesh packed = RtGeometryMeshPacking.pack(mesh,
+                (reference, coverage) -> new RtGeometryMaterialResolver.ResolvedMaterial(7, 0));
+
+        assertEquals(127 | (191 << 8), Float.floatToRawIntBits(packed.primitives()[11]));
+        assertEquals(RtGeometryMeshPacking.OMM_RANGE_ABSENT,
+                Float.floatToRawIntBits(packed.primitives()[23]));
+    }
+
+    @Test
     void packsProjectedSurfaceModifierSemanticOnlyWhenRequested() {
         MaterialHandle material = MaterialHandle.of("test", "terrain");
         SceneMesh defaultMesh = mesh(material, SceneMesh.Coverage.OPAQUE);

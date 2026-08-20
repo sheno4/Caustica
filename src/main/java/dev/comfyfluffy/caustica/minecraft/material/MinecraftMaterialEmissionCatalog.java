@@ -15,7 +15,8 @@ import java.util.function.Predicate;
 /** Builds and resolves the Minecraft-owned immutable emission catalog for one resource epoch. */
 final class MinecraftMaterialEmissionCatalog implements MinecraftMaterialEmissionSnapshot {
     private record Base(float luminanceCdM2, boolean usesPrimitiveEmission,
-                        MinecraftEmissionFootprint footprint, ResourceId surface) {
+                        MinecraftEmissionFootprint footprint, ResourceId surface,
+                        dev.comfyfluffy.caustica.api.provider.SceneMesh.OpacityMicromapRange opacityRange) {
         MinecraftMaterialEmissionSnapshot.Emission emission(float luminance) {
             return luminance > 0.0f
                     ? new MinecraftMaterialEmissionSnapshot.Emission(luminance, usesPrimitiveEmission,
@@ -63,7 +64,7 @@ final class MinecraftMaterialEmissionCatalog implements MinecraftMaterialEmissio
             MinecraftEmissionFootprint footprint = scan == null ? null
                     : resource.emissionMask() ? scan.masked() : scan.uniform();
             materials.put(resource.material(), new Base(resource.uniformEmissionLuminanceCdM2(), true,
-                    footprint, null));
+                    footprint, null, scan == null ? null : scan.opacityRange()));
         }
         for (MaterialDefinition definition : definitions) {
             MaterialTextureResource resource = resourcesById.get(definition.id());
@@ -77,7 +78,7 @@ final class MinecraftMaterialEmissionCatalog implements MinecraftMaterialEmissio
                         definition.emissionColorG(), definition.emissionColorB());
             }
             materials.put(definition.id(), new Base(definition.emissionLuminanceCdM2(),
-                    false, footprint, definition.surface()));
+                    false, footprint, definition.surface(), scan == null ? null : scan.opacityRange()));
         }
         return new MinecraftMaterialEmissionCatalog(materials, rules);
     }
@@ -95,6 +96,17 @@ final class MinecraftMaterialEmissionCatalog implements MinecraftMaterialEmissio
         float luminance = rule != null && rule.parameters().emissionLuminanceCdM2() != null
                 ? rule.parameters().emissionLuminanceCdM2() : base.luminanceCdM2();
         return base.emission(luminance);
+    }
+
+    @Override
+    public dev.comfyfluffy.caustica.api.provider.SceneMesh.OpacityMicromapRange opacityMicromapRange(
+            ResourceId material, ResourceId geometry) {
+        Base base = materials.get(material);
+        if (base == null) return null;
+        MaterialRule rule = matchingRule(material, geometry);
+        ResourceId surface = rule != null && rule.parameters().surface() != null
+                ? rule.parameters().surface() : base.surface();
+        return surface == null ? base.opacityRange() : null;
     }
 
     private MaterialRule matchingRule(ResourceId material, ResourceId geometry) {

@@ -10,6 +10,7 @@ import java.util.Map;
 final class RtGeometryMeshPacking {
     private static final int PRIMITIVE_FLOATS = 12;
     private static final int COVERAGE_MODES = SceneMesh.Coverage.values().length;
+    static final int OMM_RANGE_ABSENT = 0x10000;
 
     private RtGeometryMeshPacking() {
     }
@@ -108,7 +109,14 @@ final class RtGeometryMeshPacking {
         output[offset + 8] = Float.intBitsToFloat(materialId);
         output[offset + 9] = Float.intBitsToFloat(surface.emitterInLightScene() ? 1 : 0);
         output[offset + 10] = 0f;
-        output[offset + 11] = 0f;
+        output[offset + 11] = Float.intBitsToFloat(packOpacityMicromapRange(surface.opacityMicromapRange()));
+    }
+
+    static int packOpacityMicromapRange(SceneMesh.OpacityMicromapRange range) {
+        if (range == null) return OMM_RANGE_ABSENT;
+        int minimum = Math.clamp((int) Math.floor(range.minCoverage() * 255.0f), 0, 255);
+        int maximum = Math.clamp((int) Math.ceil(range.maxCoverage() * 255.0f), 0, 255);
+        return minimum | (maximum << 8);
     }
 
     record PackedMesh(float[] positions, float[] textureCoordinates, float[] vertexNormals, float[] vertexColors,

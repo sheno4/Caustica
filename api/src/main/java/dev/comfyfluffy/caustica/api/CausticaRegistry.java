@@ -63,6 +63,8 @@ public final class CausticaRegistry {
                 declaredShaderTypes, binding.module(), binding.type(), feature.id()));
         feature.surfaces().forEach(surface -> requireUnambiguousShaderType(
                 declaredShaderTypes, surface.module(), surface.type(), feature.id()));
+        feature.surfaces().forEach(surface -> requireUnambiguousShaderType(
+                declaredShaderTypes, surface.coverageModule(), surface.coverageType(), feature.id()));
         feature.surfaceModifiers().forEach(modifier -> requireUnambiguousShaderType(
                 declaredShaderTypes, modifier.module(), modifier.type(), feature.id()));
         features.put(feature.id(), feature);

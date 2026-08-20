@@ -7,8 +7,6 @@ import java.util.List;
 /** Pure rectangle planning for independently allocated material-page channels. */
 final class RtMaterialPagePlanner {
     static final int CHANNEL_MATERIAL = 1;
-    static final int CHANNEL_STATIC_ALPHA = 2;
-    static final int CHANNEL_TEMPORAL_ALPHA = 4;
     static final int CHANNEL_EMISSION = 8;
 
     record Input(int index, String key, int width, int height, int channels) {

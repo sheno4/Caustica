@@ -9,8 +9,6 @@ import java.util.List;
 
 /** Decodes source images into canonical page levels and the albedo average used by material bindings. */
 final class MaterialTextureAnalyzer {
-    record Alpha(float[] texels, float minAlpha, float maxAlpha) { }
-
     record AlbedoStats(float averageR, float averageG, float averageB, float averageA) {
         static final AlbedoStats NEUTRAL = new AlbedoStats(1, 1, 1, 0);
     }
@@ -58,34 +56,6 @@ final class MaterialTextureAnalyzer {
             return new Decoded(RtMaterialTextureData.mipChain(new RtMaterialTextureData.Level(width, height,
                     surface0, normal, surface1, emissionColor), maxLod), stats.finish());
         }
-    }
-
-    static Alpha scanAlpha(MaterialTextureImage texture, int width, int height, int alphaFrameCount) {
-        if (alphaFrameCount <= 0) throw new IllegalArgumentException("Material texture has no alpha frames");
-        float[] texels = new float[width * height * 4];
-        int materialMin = 255, materialMax = 0;
-        for (int y = 0; y < height; y++) for (int x = 0; x < width; x++) {
-            int min = 255, max = 0;
-            for (int frame = 0; frame < alphaFrameCount; frame++) {
-                int value = alpha(texture.alphaArgb(frame, x, y));
-                min = Math.min(min, value); max = Math.max(max, value);
-            }
-            int i = (y * width + x) * 4;
-            texels[i] = min / 255f; texels[i + 1] = max / 255f;
-            materialMin = Math.min(materialMin, min); materialMax = Math.max(materialMax, max);
-        }
-        return new Alpha(texels, materialMin / 255f, materialMax / 255f);
-    }
-
-    static Alpha scanAlpha(MaterialTextureAnalysisSource source) throws Exception {
-        try (MaterialTextureImage texture = source.texture().open()) {
-            return scanAlpha(texture, source.width(), source.height(), source.alphaFrameCount());
-        }
-    }
-
-    static boolean hasTemporalVariation(Alpha alpha) {
-        for (int i = 0; i < alpha.texels.length; i += 4) if (alpha.texels[i] != alpha.texels[i + 1]) return true;
-        return false;
     }
 
     static AlbedoStats scanAlbedo(MaterialTextureAnalysisSource source) throws Exception {

@@ -15,6 +15,9 @@ import java.util.Map;
 import java.util.Objects;
 
 public final class FeatureBuilder {
+    public static final ResourceId BUILTIN_COVERAGE = ResourceId.of("caustica", "coverage");
+    public static final String BUILTIN_COVERAGE_MODULE = "caustica_builtin_coverage";
+    public static final String BUILTIN_COVERAGE_TYPE = "BuiltinCoverage";
     private final CausticaRegistry registry;
     private final ResourceId id;
     private DisplayText title;
@@ -79,17 +82,26 @@ public final class FeatureBuilder {
     }
 
     /**
-     * Register a Slang {@code ISurfaceModel} implementation under {@code id}. Surface implementations do
-     * not compete for a slot: every registered one is compiled into the composition and a material
-     * selects the one it wants by this id, so a mod adding one changes nothing about what any other
-     * material renders as.
+     * Register a Slang {@code ISurfaceModel} implementation under {@code id}, paired with the built-in
+     * coverage implementation. Surface implementations do not compete for a slot: every registered one
+     * is compiled into the composition and a material selects the one it wants by this id.
      */
     public FeatureBuilder surface(ResourceId id, String module, String type) {
+        return surface(id, module, type, BUILTIN_COVERAGE, BUILTIN_COVERAGE_MODULE, BUILTIN_COVERAGE_TYPE);
+    }
+
+    /**
+     * Register shading and coverage implementations selected by the same material implementation index.
+     * Coverage is a separately named, narrow shader type so any-hit never reaches the shading interface.
+     */
+    public FeatureBuilder surface(ResourceId id, String module, String type,
+                                  ResourceId coverageId, String coverageModule, String coverageType) {
         Objects.requireNonNull(id, "id");
         if (surfaces.stream().anyMatch(existing -> existing.id().equals(id))) {
             throw new IllegalStateException(this.id + " declares duplicate surface implementation " + id);
         }
-        surfaces.add(new Feature.SurfaceImplementation(this.id, id, module, type));
+        surfaces.add(new Feature.SurfaceImplementation(this.id, id, module, type,
+                coverageId, coverageModule, coverageType));
         return this;
     }
 

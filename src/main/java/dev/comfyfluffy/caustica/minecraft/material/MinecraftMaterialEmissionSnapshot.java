@@ -26,6 +26,8 @@ public interface MinecraftMaterialEmissionSnapshot {
     Emission resolve(ResourceId material, ResourceId geometry, boolean emitting,
                      Predicate<ResourceId> surfaceAvailable);
 
+    SceneMesh.OpacityMicromapRange opacityMicromapRange(ResourceId material, ResourceId geometry);
+
     record Emission(float luminanceCdM2, boolean usesPrimitiveEmission, Footprint footprint) {
         public static final Emission NONE = new Emission(0.0f, false, null);
 
@@ -59,6 +61,15 @@ public interface MinecraftMaterialEmissionSnapshot {
                         catalog.material(), catalog.geometry(), catalog.variant().emitting(),
                         compilation::surfaceAvailable);
                 default -> Emission.NONE;
+            };
+        }
+
+        public SceneMesh.OpacityMicromapRange opacityMicromapRange(SceneMesh.MaterialReference material) {
+            return switch (material) {
+                case SceneMesh.NamedMaterial named -> semantics.opacityMicromapRange(named.material().id(), null);
+                case SceneMesh.CatalogMaterial catalog -> semantics.opacityMicromapRange(
+                        catalog.material(), catalog.geometry());
+                default -> null;
             };
         }
     }

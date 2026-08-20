@@ -179,9 +179,9 @@ final class RtProgramManager {
         RtShaderCode closestHit = RtShaderCode.of(
                 "closest_hit(" + surfaceCount + " surfaces)", compiler.compileClosestHit());
         RtShaderCode radianceAnyHit = RtShaderCode.of("radiance_any_hit",
-                compiler.compilePlain("radiance_any_hit.rahit.slang", WorldShaderCompiler.ENTRY_POINT));
+                compiler.compileRadianceAnyHit());
         RtShaderCode shadowAnyHit = RtShaderCode.of("shadow_any_hit",
-                compiler.compilePlain("shadow_any_hit.rahit.slang", WorldShaderCompiler.ENTRY_POINT));
+                compiler.compileShadowAnyHit());
         CausticaMod.LOGGER.info("World program candidate compiled: sky={} ({}), surfaces={}, SER={}",
                 sky.feature().id(), sky.binding().type(),
                 composition.selection().surfaces().stream()

@@ -9,16 +9,20 @@
 import world_common;
 import bindings;
 import any_hit_common;
+import caustica_api;
+import caustica_pass_resources;
 
 [shader("anyhit")]
-void main(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) {
+void main<C : IComposition>(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) {
     uint pid = PrimitiveIndex();
     HitBinding hit = decodeHit(barycentrics(attr.barycentrics), pid);
     uint coverage = bindingCoverage(hit.binding);
     if (coverage == COVERAGE_OPAQUE) {
         return;
     }
-    float alpha = hitCoverageAlpha(hit, sampleCoverageTexel(hit).a);
+    C.Coverages coverages;
+    float alpha = coverages.evaluateCoverage(
+            bindingSurfaceImpl(hit.binding), hit.coverageInput).a;
     if (coverage == COVERAGE_STOCHASTIC && (payload.flags & PAYLOAD_GUIDE_RAY) == 0u) {
         if (stochasticAlphaThreshold(pid) >= alpha) {
             IgnoreHit();

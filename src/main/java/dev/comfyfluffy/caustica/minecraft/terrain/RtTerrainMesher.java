@@ -410,12 +410,15 @@ final class RtTerrainMesher {
                     classification.geometry(), variant, spriteMaterial.texture);
             ResolvedCatalogMaterial resolved = catalogMaterials.get(candidate);
             if (resolved == null) {
-                resolved = new ResolvedCatalogMaterial(candidate, materials.resolve(candidate));
+                resolved = new ResolvedCatalogMaterial(candidate, materials.resolve(candidate),
+                        materials.opacityMicromapRange(candidate));
                 catalogMaterials.put(candidate, resolved);
             }
             q.material = resolved.material;
             q.coverage = q.cutout && !q.translucent ? SceneMesh.Coverage.CUTOUT : SceneMesh.Coverage.OPAQUE;
             q.materialEmission = resolved.emission;
+            q.opacityMicromapRange = q.coverage == SceneMesh.Coverage.CUTOUT
+                    ? resolved.opacityMicromapRange : null;
         }
 
         /** Returns true when vanilla's nominal face should be discarded. */
@@ -452,7 +455,8 @@ final class RtTerrainMesher {
         }
 
         private record ResolvedCatalogMaterial(SceneMesh.CatalogMaterial material,
-                                               MinecraftMaterialEmissionSnapshot.Emission emission) {
+                                               MinecraftMaterialEmissionSnapshot.Emission emission,
+                                               SceneMesh.OpacityMicromapRange opacityMicromapRange) {
         }
 
         /** Resolve coplanar ties among the current block's quads, then emit them into the section classes. */
@@ -592,7 +596,7 @@ final class RtTerrainMesher {
                 g.lightSprites.add(q.sprite);
                 g.materialEmissions.add(q.materialEmission);
                 g.surfaces.add(new SceneMesh.TriangleSurface(q.material, q.coverage, q.nx, q.ny, q.nz,
-                        q.emission, q.tr, q.tg, q.tb));
+                        q.emission, q.tr, q.tg, q.tb, q.opacityMicromapRange, false));
             }
         }
     }
@@ -609,6 +613,7 @@ final class RtTerrainMesher {
         MinecraftMaterialEmissionSnapshot.Emission materialEmission;
         SceneMesh.MaterialReference material;
         SceneMesh.Coverage coverage;
+        SceneMesh.OpacityMicromapRange opacityMicromapRange;
         TextureAtlasSprite sprite;
     }
 

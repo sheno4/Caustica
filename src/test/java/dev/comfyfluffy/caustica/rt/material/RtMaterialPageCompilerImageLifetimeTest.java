@@ -38,7 +38,7 @@ final class RtMaterialPageCompilerImageLifetimeTest {
         MaterialTextureAnalyzer.AlbedoStats stats = MaterialTextureAnalyzer.scanAlbedo(
                 resource.analysisSource());
 
-        assertEquals(0, RtMaterialPageCompiler.pageChannels(0, false, false));
+        assertEquals(0, RtMaterialPageCompiler.pageChannels(0));
         assertEquals(MaterialTextureKind.STANDALONE, resource.kind());
         assertEquals(MaterialUv.IDENTITY, resource.albedoUv());
         assertEquals(1, closes.get());

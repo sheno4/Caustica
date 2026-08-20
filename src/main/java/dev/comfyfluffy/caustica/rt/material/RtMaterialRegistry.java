@@ -488,16 +488,6 @@ public final class RtMaterialRegistry {
         return sbtClassOf(bindingRecords.get(bindingId));
     }
 
-    /** Whether the binding's sampled alpha is represented by the current canonical temporal-range pages. */
-    public boolean opacityMicromapEligible(int bindingId) {
-        MaterialBindingData binding = bindingRecords.get(bindingId);
-        int flags = MaterialBindingAbi.flags(binding.packed0());
-        return MaterialBindingAbi.coverage(binding.packed0()) == COVERAGE_CUTOUT
-                && MaterialBindingAbi.baseColorTextureIndex(binding.packed0()) == SHARED_ATLAS_BASE_COLOR_TEXTURE_INDEX
-                && (flags & (BINDING_TRANSMISSIVE | MaterialBindingAbi.FLAG_TEXTURELESS)) == 0
-                && (surfaceRecords.get(binding.surface()).alphaFlags() & 3) != 0;
-    }
-
     private static int sbtClassOf(MaterialBindingData binding) {
         if (MaterialBindingAbi.coverage(binding.packed0()) != COVERAGE_OPAQUE) return RtAccel.CLASS_MASKED;
         int flags = MaterialBindingAbi.flags(binding.packed0());
@@ -731,9 +721,7 @@ public final class RtMaterialRegistry {
                                                float albedoU, float albedoV,
                                                float albedoInvDu, float albedoInvDv) {
         int page = (entry.pageIndex() & PAGE_MASK) | (entry.maxLod() << MAX_LOD_SHIFT);
-        int alphaRange = RtMaterialTextureData.unorm8(entry.minAlpha())
-                | (RtMaterialTextureData.unorm8(entry.maxAlpha()) << 8);
-        return surfaceData(desc, desc.features(), page, alphaRange, entry.alphaSource(),
+        return surfaceData(desc, desc.features(), page,
                 new Float4(entry.materialU(), entry.materialV(), entry.materialDu(), entry.materialDv()),
                 new Float4(albedoU, albedoV, albedoInvDu, albedoInvDv),
                 new Float4(1.0f, 1.0f, 1.0f, 1.0f));
@@ -742,28 +730,25 @@ public final class RtMaterialRegistry {
     private static SurfaceMaterialData surfaceDefinition(RtMaterialDesc desc, MaterialDefinition definition,
                                                          RtMaterialPageCompiler.Entry entry) {
         if (definition.textureResource() == null) {
-            return surfaceData(desc, desc.features(), 0, 0xFFFF, 0,
+            return surfaceData(desc, desc.features(), 0,
                     new Float4(0.0f, 0.0f, 0.0f, 0.0f),
                     new Float4(0.0f, 0.0f, 1.0f, 1.0f),
                     new Float4(definition.baseColorR(), definition.baseColorG(), definition.baseColorB(), 1.0f));
         }
         int page = (entry.pageIndex() & PAGE_MASK) | (entry.maxLod() << MAX_LOD_SHIFT);
-        int alphaRange = RtMaterialTextureData.unorm8(entry.minAlpha())
-                | (RtMaterialTextureData.unorm8(entry.maxAlpha()) << 8);
-        return surfaceData(desc, desc.features(), page, alphaRange, entry.alphaSource(),
+        return surfaceData(desc, desc.features(), page,
                 new Float4(entry.materialU(), entry.materialV(), entry.materialDu(), entry.materialDv()),
                 new Float4(entry.albedoU(), entry.albedoV(), entry.albedoInvDu(), entry.albedoInvDv()),
                 new Float4(definition.baseColorR(), definition.baseColorG(), definition.baseColorB(), 1.0f));
     }
 
     private static SurfaceMaterialData surfaceData(RtMaterialDesc desc, int features, int page,
-                                                   int alphaRange, int alphaFlags,
                                                    Float4 materialUv, Float4 baseColorUv,
                                                    Float4 baseColorFactor) {
         int luminance = Math.round(Math.min(MAX_EMISSION_LUMINANCE, desc.emissionLuminance())
                 * (EMISSION_LUMINANCE_MASK / MAX_EMISSION_LUMINANCE));
         int packedFeatures = features | (luminance << EMISSION_LUMINANCE_SHIFT);
-        return new SurfaceMaterialData(packedFeatures, page, alphaRange, alphaFlags,
+        return new SurfaceMaterialData(packedFeatures, page,
                 materialUv, baseColorUv, desc.specularRoughness(), desc.baseMetalness(),
                 desc.specularIor(), desc.transmissionWeight(), baseColorFactor,
                 new Float4(desc.transmissionColorR(), desc.transmissionColorG(),

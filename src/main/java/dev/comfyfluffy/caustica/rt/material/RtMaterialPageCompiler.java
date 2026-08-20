@@ -24,9 +24,6 @@ public final class RtMaterialPageCompiler {
     private static final int GUTTER = 8;
     private static final int MAX_VALID_LOD = 3;
     private static final int PACK_ALIGNMENT = 1 << MAX_VALID_LOD;
-    public static final int ALPHA_SOURCE_NONE = 0;
-    public static final int ALPHA_SOURCE_STATIC_PAGE = 1;
-    public static final int ALPHA_SOURCE_ANIMATED_RANGE = 2;
     private static final int MATERIAL_TEXTURE_FEATURES = RtMaterialRegistry.FEATURE_SPEC
             | RtMaterialRegistry.FEATURE_NORMAL | RtMaterialRegistry.FEATURE_EMISSION_MASK;
 
@@ -39,8 +36,6 @@ public final class RtMaterialPageCompiler {
     private RtMaterialPageTexture neutralNormal;
     private RtMaterialPageTexture neutralSurface1;
     private RtMaterialPageTexture neutralEmission;
-    private RtMaterialPageTexture neutralTemporalAlpha;
-    private RtMaterialPageTexture neutralStaticAlpha;
 
     RtMaterialPageCompiler() {
     }
@@ -49,24 +44,19 @@ public final class RtMaterialPageCompiler {
     public record Entry(int features, int pageIndex, int maxLod,
                         float materialU, float materialV, float materialDu, float materialDv,
                         float albedoU, float albedoV, float albedoInvDu, float albedoInvDv,
-                        float averageR, float averageG, float averageB, float averageA,
-                        float minAlpha, float maxAlpha, int alphaSource) {
+                        float averageR, float averageG, float averageB, float averageA) {
         public float[] average() {
             return new float[]{averageR, averageG, averageB, averageA};
         }
     }
 
     private record Page(RtMaterialPageTexture surface0, RtMaterialPageTexture normal,
-                        RtMaterialPageTexture surface1, RtMaterialPageTexture emission,
-                        RtMaterialPageTexture staticAlpha,
-                        RtMaterialPageTexture temporalAlpha, int index) {
+                        RtMaterialPageTexture surface1, RtMaterialPageTexture emission, int index) {
         void destroy() {
             if (surface0 != null) surface0.destroy();
             if (normal != null) normal.destroy();
             if (surface1 != null) surface1.destroy();
             if (emission != null) emission.destroy();
-            if (staticAlpha != null) staticAlpha.destroy();
-            if (temporalAlpha != null) temporalAlpha.destroy();
         }
     }
 
@@ -95,14 +85,6 @@ public final class RtMaterialPageCompiler {
         int x;
         int y;
         MaterialTextureAnalyzer.AlbedoStats stats = MaterialTextureAnalyzer.AlbedoStats.NEUTRAL;
-        float minAlpha;
-        float maxAlpha = 1.0f;
-        final int alphaFrameCount;
-        MaterialTextureAnalyzer.Alpha alphaSamples;
-        boolean needsAlphaRange;
-        boolean needsStaticAlpha;
-        int alphaSource;
-        boolean statsPrepared;
 
         Candidate(MaterialTextureResource resource) {
             this.resource = resource;
@@ -117,7 +99,6 @@ public final class RtMaterialPageCompiler {
                 value |= RtMaterialRegistry.FEATURE_EMISSION_COLOR_BASE;
             }
             features = value;
-            alphaFrameCount = resource.analysisSource().alphaFrameCount();
         }
 
         int width() {
@@ -129,7 +110,7 @@ public final class RtMaterialPageCompiler {
         }
 
         int pageChannels() {
-            return RtMaterialPageCompiler.pageChannels(features, needsStaticAlpha, needsAlphaRange);
+            return RtMaterialPageCompiler.pageChannels(features);
         }
     }
 
@@ -143,9 +124,7 @@ public final class RtMaterialPageCompiler {
         if (neutralNormal != null) neutralNormal.destroy();
         if (neutralSurface1 != null) neutralSurface1.destroy();
         if (neutralEmission != null) neutralEmission.destroy();
-        if (neutralTemporalAlpha != null) neutralTemporalAlpha.destroy();
-        if (neutralStaticAlpha != null) neutralStaticAlpha.destroy();
-        neutralSurface0 = neutralNormal = neutralSurface1 = neutralEmission = neutralTemporalAlpha = neutralStaticAlpha = null;
+        neutralSurface0 = neutralNormal = neutralSurface1 = neutralEmission = null;
         compiledPageSize = 0;
     }
 
@@ -155,8 +134,6 @@ public final class RtMaterialPageCompiler {
                 catalog.atlasResources().size() + catalog.standaloneResources().size());
         catalog.atlasResources().forEach(resource -> candidates.add(new Candidate(resource)));
         catalog.standaloneResources().forEach(resource -> candidates.add(new Candidate(resource)));
-        candidates.parallelStream().filter(candidate -> eligibleForPageCompilation(candidate.resource))
-                .forEach(this::prepareAlpha);
         List<RtMaterialPagePlanner.Input> inputs = new ArrayList<>(candidates.size());
         for (int i = 0; i < candidates.size(); i++) {
             Candidate candidate = candidates.get(i);
@@ -188,9 +165,7 @@ public final class RtMaterialPageCompiler {
             RtMaterialPagePlanner.Layout layout = plan.layouts().get(pageIndex);
             pagePixels[pageIndex] = new MaterialPagePacker(pageSize, mipCount, GUTTER,
                     layout.has(RtMaterialPagePlanner.CHANNEL_MATERIAL),
-                    layout.has(RtMaterialPagePlanner.CHANNEL_EMISSION),
-                    layout.has(RtMaterialPagePlanner.CHANNEL_STATIC_ALPHA),
-                    layout.has(RtMaterialPagePlanner.CHANNEL_TEMPORAL_ALPHA));
+                    layout.has(RtMaterialPagePlanner.CHANNEL_EMISSION));
         }
         List<Candidate> paged = candidates.stream().filter(candidate -> candidate.page >= 0).toList();
         paged.parallelStream().forEach(candidate -> {
@@ -202,20 +177,12 @@ public final class RtMaterialPageCompiler {
                     candidate.stats = decoded.stats();
                     pagePixels[candidate.page].write(candidate.x, candidate.y, decoded.levels());
                 }
-                if (candidate.needsAlphaRange) {
-                    pagePixels[candidate.page].writeTemporalAlpha(candidate.x, candidate.y,
-                            candidate.width(), candidate.height(), candidate.alphaSamples.texels());
-                }
-                if (candidate.needsStaticAlpha) {
-                    pagePixels[candidate.page].writeStaticAlpha(candidate.x, candidate.y,
-                            candidate.width(), candidate.height(), candidate.alphaSamples.texels());
-                }
             } catch (Throwable t) {
                 warnOnce("RT canonical material decode failed for " + candidate.resource.material(), t);
                 candidate.page = -1;
             }
         });
-        candidates.parallelStream().filter(candidate -> candidate.page < 0 && !candidate.statsPrepared
+        candidates.parallelStream().filter(candidate -> candidate.page < 0
                 && eligibleForPageCompilation(candidate.resource)).forEach(candidate -> {
             try {
                 candidate.stats = MaterialTextureAnalyzer.scanAlbedo(candidate.resource.analysisSource());
@@ -239,15 +206,7 @@ public final class RtMaterialPageCompiler {
                 RtMaterialPageTexture emission = owned.own(pixels.emission == null ? null
                         : new RtMaterialPageTexture(ctx, pageSize, pageSize, pixels.emission,
                         "material emission page " + pageIndex));
-                RtMaterialPageTexture staticAlpha = owned.own(pixels.staticAlpha == null ? null
-                        : new RtMaterialPageTexture(ctx, pageSize, pageSize, pixels.staticAlpha,
-                        "material static alpha page " + pageIndex, true,
-                        org.lwjgl.vulkan.VK10.VK_FORMAT_R8_UNORM));
-                RtMaterialPageTexture temporalAlpha = owned.own(pixels.temporalAlpha == null ? null
-                        : new RtMaterialPageTexture(ctx, pageSize, pageSize, pixels.temporalAlpha,
-                        "material temporal alpha page " + pageIndex, true,
-                        org.lwjgl.vulkan.VK10.VK_FORMAT_R8G8_UNORM));
-                pages.add(new Page(surface0, normal, surface1, emission, staticAlpha, temporalAlpha, pageIndex));
+                pages.add(new Page(surface0, normal, surface1, emission, pageIndex));
                 owned.transfer();
             } catch (Throwable failure) {
                 owned.destroy(RtMaterialPageTexture::destroy);
@@ -260,17 +219,10 @@ public final class RtMaterialPageCompiler {
                 RtMaterialTextureData.unorm8(MaterialPagePacker.encodeIor(OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR)),
                 "material neutral surface1", false);
         neutralEmission = neutral(ctx, 255, 255, 255, 255, "material neutral emission", false);
-        neutralTemporalAlpha = new RtMaterialPageTexture(ctx, 1, 1,
-                List.of(new byte[]{0, (byte) 255}), "material neutral temporal alpha", true,
-                org.lwjgl.vulkan.VK10.VK_FORMAT_R8G8_UNORM);
-        neutralStaticAlpha = new RtMaterialPageTexture(ctx, 1, 1, List.of(new byte[]{0}),
-                "material neutral static alpha", true, org.lwjgl.vulkan.VK10.VK_FORMAT_R8_UNORM);
-
         float fallbackUv = GUTTER / (float) pageSize;
         fallback = new Entry(0, 0, 0, fallbackUv, fallbackUv,
                 1.0f / pageSize, 1.0f / pageSize, 0, 0, 1, 1,
-                1.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f,
-                ALPHA_SOURCE_NONE);
+                1.0f, 1.0f, 1.0f, 0.0f);
         for (Candidate candidate : candidates) {
             entries.put(candidate.resource.material(), candidate.page >= 0
                     ? compiledEntry(candidate, pageSize) : fallbackFor(candidate));
@@ -285,18 +237,6 @@ public final class RtMaterialPageCompiler {
         }
     }
 
-    public long[] temporalAlphaViews() {
-        long[] views = new long[pages.size()];
-        for (Page page : pages) views[page.index()] = view(page.temporalAlpha(), neutralTemporalAlpha);
-        return views;
-    }
-
-    public long[] staticAlphaViews() {
-        long[] views = new long[pages.size()];
-        for (Page page : pages) views[page.index()] = view(page.staticAlpha(), neutralStaticAlpha);
-        return views;
-    }
-
     private static long view(RtMaterialPageTexture texture, RtMaterialPageTexture fallback) {
         return (texture != null ? texture : fallback).view();
     }
@@ -307,14 +247,12 @@ public final class RtMaterialPageCompiler {
                 label, asyncShared);
     }
 
-    static int pageChannels(int features, boolean staticAlpha, boolean temporalAlpha) {
+    static int pageChannels(int features) {
         int channels = (features & MATERIAL_TEXTURE_FEATURES) != 0
                 ? RtMaterialPagePlanner.CHANNEL_MATERIAL : 0;
         if ((features & RtMaterialRegistry.FEATURE_EMISSION_MASK) != 0) {
             channels |= RtMaterialPagePlanner.CHANNEL_EMISSION;
         }
-        if (staticAlpha) channels |= RtMaterialPagePlanner.CHANNEL_STATIC_ALPHA;
-        if (temporalAlpha) channels |= RtMaterialPagePlanner.CHANNEL_TEMPORAL_ALPHA;
         return channels;
     }
 
@@ -346,10 +284,7 @@ public final class RtMaterialPageCompiler {
                 candidate.x / (float) pageSize, candidate.y / (float) pageSize,
                 candidate.width() / (float) pageSize, candidate.height() / (float) pageSize,
                 uv.u(), uv.v(), uv.inverseDu(), uv.inverseDv(),
-                stats.averageR(), stats.averageG(), stats.averageB(), stats.averageA(),
-                candidate.minAlpha, candidate.maxAlpha,
-                publishedAlphaSource(candidate.alphaSource,
-                        candidate.needsStaticAlpha || candidate.needsAlphaRange, true));
+                stats.averageR(), stats.averageG(), stats.averageB(), stats.averageA());
     }
 
     private Entry fallbackFor(Candidate candidate) {
@@ -360,58 +295,7 @@ public final class RtMaterialPageCompiler {
         return new Entry(colorBindings, fallback.pageIndex(), 0,
                 fallback.materialU, fallback.materialV, fallback.materialDu, fallback.materialDv,
                 uv.u(), uv.v(), uv.inverseDu(), uv.inverseDv(),
-                stats.averageR(), stats.averageG(), stats.averageB(), stats.averageA(),
-                candidate.minAlpha, candidate.maxAlpha,
-                publishedAlphaSource(candidate.alphaSource,
-                        candidate.needsStaticAlpha || candidate.needsAlphaRange, false));
-    }
-
-    private void prepareAlpha(Candidate candidate) {
-        if (candidate.alphaFrameCount <= 0) {
-            candidate.alphaSource = ALPHA_SOURCE_NONE;
-            return;
-        }
-        try {
-            MaterialTextureAnalyzer.Alpha temporal = MaterialTextureAnalyzer.scanAlpha(
-                    candidate.resource.analysisSource());
-            candidate.minAlpha = temporal.minAlpha();
-            candidate.maxAlpha = temporal.maxAlpha();
-            candidate.stats = MaterialTextureAnalyzer.scanAlbedo(candidate.resource.analysisSource());
-            candidate.statsPrepared = true;
-            if (candidate.alphaFrameCount == 1 || !MaterialTextureAnalyzer.hasTemporalVariation(temporal)) {
-                candidate.alphaSource = ALPHA_SOURCE_STATIC_PAGE;
-                candidate.needsStaticAlpha = requiresSpatialAlpha(candidate.minAlpha, candidate.maxAlpha);
-                if (candidate.needsStaticAlpha) candidate.alphaSamples = temporal;
-            } else {
-                candidate.alphaSource = alphaSource(candidate.alphaFrameCount);
-                candidate.needsAlphaRange = requiresTemporalRange(candidate.alphaFrameCount,
-                        candidate.minAlpha, candidate.maxAlpha);
-                if (candidate.needsAlphaRange) candidate.alphaSamples = temporal;
-            }
-        } catch (Throwable failure) {
-            candidate.alphaSource = ALPHA_SOURCE_NONE;
-            warnOnce("RT material alpha scan failed for " + candidate.resource.material(), failure);
-        }
-    }
-
-    static int alphaSource(int frameCount) {
-        if (frameCount == 1) {
-            return ALPHA_SOURCE_STATIC_PAGE;
-        }
-        return frameCount > 1 ? ALPHA_SOURCE_ANIMATED_RANGE : ALPHA_SOURCE_NONE;
-    }
-
-    static boolean requiresTemporalRange(int frameCount, float minAlpha, float maxAlpha) {
-        return frameCount > 1 && minAlpha < maxAlpha;
-    }
-
-    static boolean requiresSpatialAlpha(float minAlpha, float maxAlpha) {
-        return minAlpha < maxAlpha;
-    }
-
-    static int publishedAlphaSource(int alphaSource, boolean requiresSpatialPage,
-                                    boolean spatialPagePresent) {
-        return requiresSpatialPage && !spatialPagePresent ? ALPHA_SOURCE_NONE : alphaSource;
+                stats.averageR(), stats.averageG(), stats.averageB(), stats.averageA());
     }
 
     static int maxLodFor(int width, int height) {

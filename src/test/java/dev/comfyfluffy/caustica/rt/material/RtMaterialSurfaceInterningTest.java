@@ -12,8 +12,7 @@ final class RtMaterialSurfaceInterningTest {
                 RtMaterialRegistry.FEATURE_SPEC, 4, 2,
                 0.25f, 0.5f, 0.125f, 0.25f,
                 0.0f, 0.0f, 1.0f, 1.0f,
-                0.6f, 0.7f, 0.8f, 1.0f,
-                1.0f, 1.0f, RtMaterialPageCompiler.ALPHA_SOURCE_NONE);
+                0.6f, 0.7f, 0.8f, 1.0f);
         RtMaterialDesc authored = description(RtMaterialDesc.Source.AUTHORED_TEXTURE);
         RtMaterialDesc derived = description(RtMaterialDesc.Source.DERIVED_TEXTURE);
 

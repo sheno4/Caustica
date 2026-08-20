@@ -104,6 +104,33 @@ final class MinecraftMaterialEmissionCatalogTest {
                 surface -> surface.equals(baseSurface)).emissive());
     }
 
+    @Test
+    void opacityRangeIncludesEveryDeclaredMinecraftAnimationFrame() {
+        MaterialTextureAnalysisSource source = new MaterialTextureAnalysisSource(1, 1, 2,
+                () -> new MaterialTextureImage() {
+                    @Override public int width() { return 1; }
+                    @Override public int height() { return 1; }
+                    @Override public int albedoArgb(int x, int y) { return 0xFFFFFFFF; }
+                    @Override public int alphaArgb(int frame, int x, int y) {
+                        return frame == 0 ? 0x40FFFFFF : 0xC0FFFFFF;
+                    }
+                    @Override public void readOpenPbr(int x, int y, OpenPbrTextureTexel out) { }
+                    @Override public void close() { }
+                });
+        MaterialTextureResource resource = new MaterialTextureResource(MATERIAL,
+                MaterialTextureKind.SHARED_ATLAS, source, MaterialUv.IDENTITY,
+                false, false, false, OpenPbrColorBinding.PARAMETER_DEFAULT,
+                OpenPbrColorBinding.BASE_COLOR, 1.5f, 0.0f);
+        MinecraftMaterialEmissionSnapshot snapshot = MinecraftMaterialEmissionSnapshot.build(
+                List.of(), List.of(), List.of(resource));
+
+        var range = snapshot.opacityMicromapRange(MATERIAL, GEOMETRY);
+
+        assertNotNull(range);
+        assertEquals(0x40 / 255.0f, range.minCoverage(), 1.0e-6f);
+        assertEquals(0xC0 / 255.0f, range.maxCoverage(), 1.0e-6f);
+    }
+
     private static MaterialTextureResource resource(ResourceId id, int albedo, boolean emissionMask,
                                                     float luminance, Consumer<OpenPbrTextureTexel> semantic) {
         MaterialTextureAnalysisSource source = new MaterialTextureAnalysisSource(1, 1, 1,

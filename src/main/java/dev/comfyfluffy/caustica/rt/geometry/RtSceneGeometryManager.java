@@ -40,8 +40,6 @@ import static dev.comfyfluffy.caustica.rt.geometry.SceneMeshPacker.Topology;
 public final class RtSceneGeometryManager {
     public interface MaterialTables {
         long bindingTableAddress();
-        long surfaceTableAddress();
-        boolean opacityMicromapEligible(int materialId);
     }
     private static final int TABLE_RING = 4;
     private static final long MIN_BUFFER_BYTES = 256L;
@@ -248,10 +246,9 @@ public final class RtSceneGeometryManager {
             boolean opacityAcceleration = minimizeMemory
                     && ctx.backend().capabilities().opacityMicromaps() && opacityMicromapPipeline != null
                     && candidate.classTriangles[RtAccel.CLASS_MASKED] > 0
-                    && hasEligibleOpacityBinding(input);
+                    && hasOpacityMicromapRange(input);
             if (opacityAcceleration) {
-                int subdivisionLevel = Math.min(4, Math.max(0,
-                        ctx.backend().capabilities().maxOpacity4StateSubdivisionLevel()));
+                int subdivisionLevel = 0;
                 int microTriangles = 1 << (subdivisionLevel * 2);
                 int bytesPerTriangle = Math.max(1, (microTriangles * 2 + 7) >>> 3);
                 int maskedBase = candidate.classTriangles[RtAccel.CLASS_OPAQUE];
@@ -259,11 +256,9 @@ public final class RtSceneGeometryManager {
                 RtAccel.OpacityMicromapGpuInput opacityInput = new RtAccel.OpacityMicromapGpuInput(
                         candidate.classTriangles[RtAccel.CLASS_MASKED], subdivisionLevel, bytesPerTriangle,
                         (command, dataAddress, triangleAddress, dataStride) -> classifier.record(command,
-                                candidate.indexAddress, candidate.textureCoordinateAddress,
                                 candidate.primitiveAddress, materialTables.bindingTableAddress(),
-                                materialTables.surfaceTableAddress(), dataAddress, triangleAddress,
-                                maskedBase, candidate.classTriangles[RtAccel.CLASS_MASKED], candidate.semanticFlags,
-                                subdivisionLevel, dataStride));
+                                dataAddress, triangleAddress, maskedBase,
+                                candidate.classTriangles[RtAccel.CLASS_MASKED], dataStride));
                 if (!loggedOpacityMicromapBuild) {
                     loggedOpacityMicromapBuild = true;
                     CausticaMod.LOGGER.info("RT opacity micromap build active: maskedTriangles={}, subdivisionLevel={}, compact={}",
@@ -340,12 +335,12 @@ public final class RtSceneGeometryManager {
         return SceneMeshPacker.pack(mesh, materialResolver.apply(source));
     }
 
-    private boolean hasEligibleOpacityBinding(PackedInput input) {
+    private static boolean hasOpacityMicromapRange(PackedInput input) {
         int first = input.classTriangles()[RtAccel.CLASS_OPAQUE];
         int end = first + input.classTriangles()[RtAccel.CLASS_MASKED];
         for (int triangle = first; triangle < end; triangle++) {
-            int materialId = Float.floatToRawIntBits(input.primitives()[triangle * 12 + 8]);
-            if (materialTables.opacityMicromapEligible(materialId)) return true;
+            int range = Float.floatToRawIntBits(input.primitives()[triangle * 12 + 11]);
+            if ((range & RtGeometryMeshPacking.OMM_RANGE_ABSENT) == 0) return true;
         }
         return false;
     }

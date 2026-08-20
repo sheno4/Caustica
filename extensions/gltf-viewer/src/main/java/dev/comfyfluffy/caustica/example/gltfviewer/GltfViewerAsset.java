@@ -19,7 +19,6 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -60,7 +59,7 @@ final class GltfViewerAsset {
                 SceneGeometryKey key = SceneGeometryKey.of(nextResidentKey++);
                 residentKeys[meshIndex][primitiveIndex] = key;
                 AdaptedMaterial material = primitive.material() < 0
-                        ? new AdaptedMaterial(defaultDefinition, null, SceneMesh.Coverage.OPAQUE, 1.0f)
+                        ? new AdaptedMaterial(defaultDefinition, null, null, SceneMesh.Coverage.OPAQUE, 1.0f)
                         : materials.get(primitive.material());
                 residents.add(new GltfViewerScene.Resident(key, mesh(primitive, material)));
             }
@@ -85,14 +84,15 @@ final class GltfViewerAsset {
         validateTextureInfo(source.normalTexture(), "normal");
         validateTextureInfo(source.emissiveTexture(), "emissive");
         SceneMesh.TextureReference baseTexture = null;
+        GltfMaterialTextureSource.ImageData baseImage = null;
         if (source.baseColorTexture() != null) {
             int textureIndex = source.baseColorTexture().texture();
+            baseImage = textureImage(asset, images, textureIndex);
             baseTexture = baseTextures.get(textureIndex);
             if (baseTexture == null) {
                 baseTexture = new SceneMesh.StandaloneTexture(ResourceId.of(
                         GltfViewerMod.MOD_ID, "gltf_viewer/texture_" + textureIndex));
-                GltfMaterialTextureSource.ImageData image = textureImage(asset, images, textureIndex);
-                submittedTextures.add(new GltfViewerScene.Texture(baseTexture, cpuTexture(image)));
+                submittedTextures.add(new GltfViewerScene.Texture(baseTexture, cpuTexture(baseImage)));
                 baseTextures.put(textureIndex, baseTexture);
             }
         }
@@ -130,7 +130,7 @@ final class GltfViewerAsset {
             case MASK -> SceneMesh.Coverage.CUTOUT;
             case BLEND -> SceneMesh.Coverage.STOCHASTIC;
         };
-        return new AdaptedMaterial(definition, baseTexture, coverage, source.baseColorA());
+        return new AdaptedMaterial(definition, baseTexture, baseImage, coverage, source.baseColorA());
     }
 
     private static MaterialDefinition definition(MaterialHandle handle, GltfLoader.Material source,
@@ -184,11 +184,48 @@ final class GltfViewerAsset {
         }
         SceneMesh.NamedMaterial reference = new SceneMesh.NamedMaterial(
                 material.definition().handle(), material.baseTexture());
-        SceneMesh.TriangleSurface surface = new SceneMesh.TriangleSurface(reference,
-                material.coverage(), Float.NaN, Float.NaN, Float.NaN, 0.0f, 1.0f, 1.0f, 1.0f);
+        List<SceneMesh.TriangleSurface> surfaces = new ArrayList<>(indices.length / 3);
+        for (int triangle = 0; triangle < indices.length; triangle += 3) {
+            SceneMesh.OpacityMicromapRange range = null;
+            if (material.coverage() == SceneMesh.Coverage.CUTOUT) {
+                float alpha0 = 1.0f;
+                float alpha1 = 1.0f;
+                float alpha2 = 1.0f;
+                if (colors.length != 0) {
+                    alpha0 = colors[indices[triangle] * 4 + 3];
+                    alpha1 = colors[indices[triangle + 1] * 4 + 3];
+                    alpha2 = colors[indices[triangle + 2] * 4 + 3];
+                }
+                range = triangleOpacityMicromapRange(material.baseImage(), alpha0, alpha1, alpha2);
+            }
+            surfaces.add(new SceneMesh.TriangleSurface(reference,
+                    material.coverage(), Float.NaN, Float.NaN, Float.NaN,
+                    0.0f, 1.0f, 1.0f, 1.0f, range, false));
+        }
         return new SceneMesh(primitive.positions(), indices, SceneMesh.UvLayout.PER_VERTEX,
                 uvs, primitive.normals(), colors,
-                Collections.nCopies(indices.length / 3, surface), Set.of());
+                surfaces, Set.of());
+    }
+
+    private static float[] alphaRange(GltfMaterialTextureSource.ImageData image) {
+        if (image == null) return new float[]{1.0f, 1.0f};
+        int minimum = 255;
+        int maximum = 0;
+        for (int pixel : image.argb()) {
+            int alpha = pixel >>> 24;
+            minimum = Math.min(minimum, alpha);
+            maximum = Math.max(maximum, alpha);
+        }
+        return new float[]{minimum / 255.0f, maximum / 255.0f};
+    }
+
+    static SceneMesh.OpacityMicromapRange triangleOpacityMicromapRange(
+            GltfMaterialTextureSource.ImageData image, float alpha0, float alpha1, float alpha2) {
+        float[] texture = alphaRange(image);
+        float vertexMinimum = Math.min(alpha0, Math.min(alpha1, alpha2));
+        float vertexMaximum = Math.max(alpha0, Math.max(alpha1, alpha2));
+        return new SceneMesh.OpacityMicromapRange(
+                texture[0] * vertexMinimum, texture[1] * vertexMaximum);
     }
 
     private static int[] nonDegenerateIndices(float[] positions, int[] indices) {
@@ -328,6 +365,7 @@ final class GltfViewerAsset {
 
     private record AdaptedMaterial(MaterialDefinition definition,
                                    SceneMesh.TextureReference baseTexture,
+                                   GltfMaterialTextureSource.ImageData baseImage,
                                    SceneMesh.Coverage coverage, float alphaFactor) {
     }
 }

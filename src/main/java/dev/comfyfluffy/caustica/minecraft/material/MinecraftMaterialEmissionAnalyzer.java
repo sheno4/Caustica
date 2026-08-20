@@ -10,7 +10,8 @@ import dev.comfyfluffy.caustica.api.provider.OpenPbrTextureTexel;
 final class MinecraftMaterialEmissionAnalyzer {
     static final int FOOTPRINT_RESOLUTION = 16;
 
-    record Scan(MinecraftEmissionFootprint masked, MinecraftEmissionFootprint uniform) {
+    record Scan(MinecraftEmissionFootprint masked, MinecraftEmissionFootprint uniform,
+                dev.comfyfluffy.caustica.api.provider.SceneMesh.OpacityMicromapRange opacityRange) {
     }
 
     private MinecraftMaterialEmissionAnalyzer() {
@@ -46,8 +47,26 @@ final class MinecraftMaterialEmissionAnalyzer {
                             emissionB * weight, weight);
                 }
             }
-            return new Scan(masked.build(), uniform.build());
+            return new Scan(masked.build(), uniform.build(), scanAlpha(source, image));
         }
+    }
+
+    private static dev.comfyfluffy.caustica.api.provider.SceneMesh.OpacityMicromapRange scanAlpha(
+            MaterialTextureAnalysisSource source, MaterialTextureImage image) {
+        if (source.alphaFrameCount() == 0) return null;
+        int minimum = 255;
+        int maximum = 0;
+        for (int frame = 0; frame < source.alphaFrameCount(); frame++) {
+            for (int y = 0; y < source.height(); y++) {
+                for (int x = 0; x < source.width(); x++) {
+                    int alpha = image.alphaArgb(frame, x, y) >>> 24;
+                    minimum = Math.min(minimum, alpha);
+                    maximum = Math.max(maximum, alpha);
+                }
+            }
+        }
+        return new dev.comfyfluffy.caustica.api.provider.SceneMesh.OpacityMicromapRange(
+                minimum / 255.0f, maximum / 255.0f);
     }
 
     static MinecraftEmissionFootprint constant(float r, float g, float b) {

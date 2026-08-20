@@ -29,6 +29,8 @@ final class CausticaRegistryTest {
         assertEquals(2, selection.surfaces().size());
         assertEquals("BuiltinSurface", selection.surfaces().get(0).type());
         assertEquals("ErrorSurface", selection.surfaces().get(1).type());
+        assertEquals("BuiltinCoverage", selection.surfaces().get(0).coverageType());
+        assertEquals("ErrorCoverage", selection.surfaces().get(1).coverageType());
         assertEquals(0, registry.surfaceIndex(BuiltinExtension.BUILTIN_SURFACE));
         assertEquals(1, registry.surfaceIndex(BuiltinExtension.ERROR_SURFACE));
         assertEquals(-1, registry.surfaceIndex(ResourceId.of("nope", "nope")));
@@ -144,6 +146,28 @@ final class CausticaRegistryTest {
                 .shaderSource(ShaderSource.classpath("/test/shaders"))
                 .surfaceModifier(first, "duplicate_modifier", "DuplicateModifier")
                 .register());
+    }
+
+    @Test
+    void surfacesDefaultToBuiltinCoverageAndMayNameANarrowImplementation() {
+        CausticaRegistry registry = builtins();
+        ResourceId defaultSurface = ResourceId.of("test", "default_coverage");
+        ResourceId customSurface = ResourceId.of("test", "custom_coverage");
+        ResourceId customCoverage = ResourceId.of("test", "coverage_model");
+        registry.feature(ResourceId.of("test", "coverage_owner"))
+                .shaderSource(ShaderSource.classpath("/test/shaders"))
+                .surface(defaultSurface, "default_surface", "DefaultSurface")
+                .surface(customSurface, "custom_surface", "CustomSurface",
+                        customCoverage, "custom_coverage", "CustomCoverage")
+                .register();
+
+        List<Feature.SurfaceImplementation> surfaces = registry.selection().surfaces();
+        Feature.SurfaceImplementation defaulted = surfaces.get(2);
+        Feature.SurfaceImplementation custom = surfaces.get(3);
+        assertEquals(FeatureBuilder.BUILTIN_COVERAGE, defaulted.coverageId());
+        assertEquals(FeatureBuilder.BUILTIN_COVERAGE_TYPE, defaulted.coverageType());
+        assertEquals(customCoverage, custom.coverageId());
+        assertEquals("CustomCoverage", custom.coverageType());
     }
 
     @Test

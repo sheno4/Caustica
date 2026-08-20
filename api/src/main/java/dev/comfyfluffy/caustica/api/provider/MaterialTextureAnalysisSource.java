@@ -4,8 +4,8 @@ import java.util.Objects;
 
 /**
  * Lazily opened canonical CPU pixels and their compile resolution. {@code alphaFrameCount} is exhaustive
- * for the resource epoch; zero makes no conservative temporal-alpha claim. Analysis consumers depend
- * only on this source and do not need GPU placement or semantic-stream declarations.
+ * for the resource epoch; zero means the provider cannot derive conservative coverage across animation.
+ * Analysis consumers depend only on this source and do not need GPU placement or semantic declarations.
  */
 public record MaterialTextureAnalysisSource(int width, int height, int alphaFrameCount,
                                             MaterialTextureSource texture) {

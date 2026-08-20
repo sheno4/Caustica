@@ -92,6 +92,17 @@ final class GltfViewerAssetTest {
         assertArrayEquals(new int[]{0, 1, 2}, scene.residents().getFirst().mesh().indices());
     }
 
+    @Test
+    void conservativeOmmRangeMultipliesBaseTextureAndTriangleVertexAlpha() {
+        var image = new GltfMaterialTextureSource.ImageData(2, 1,
+                new int[]{0x40FFFFFF, 0xC0FFFFFF});
+
+        var range = GltfViewerAsset.triangleOpacityMicromapRange(image, 0.5f, 0.25f, 0.75f);
+
+        assertEquals((0x40 / 255.0f) * 0.25f, range.minCoverage(), 1.0e-6f);
+        assertEquals((0xC0 / 255.0f) * 0.75f, range.maxCoverage(), 1.0e-6f);
+    }
+
     private static float[] translation(float x, float y, float z) {
         return new float[]{
                 1, 0, 0, 0,

@@ -14,6 +14,19 @@ import java.util.Set;
 public final class SceneMesh {
     public enum UvLayout { PER_VERTEX, PER_TRIANGLE_CORNER }
     public enum Coverage { OPAQUE, CUTOUT, STOCHASTIC }
+    /**
+     * Conservative coverage bounds over one triangle for every state the provider may render.
+     * Absence means the engine must classify the triangle as unknown. An incorrect bound can create
+     * visible holes because an opacity micromap classified as opaque skips any-hit entirely.
+     */
+    public record OpacityMicromapRange(float minCoverage, float maxCoverage) {
+        public OpacityMicromapRange {
+            finite(minCoverage, maxCoverage);
+            if (minCoverage < 0.0f || maxCoverage > 1.0f || minCoverage > maxCoverage) {
+                throw new IllegalArgumentException("opacity micromap range must be ordered within [0,1]");
+            }
+        }
+    }
     /** Mesh-wide renderer-neutral geometry semantics. */
     public enum Semantic { RECEIVES_PROJECTED_SURFACE_MODIFIERS }
 
@@ -61,6 +74,7 @@ public final class SceneMesh {
     public record TriangleSurface(MaterialReference material,
                                   Coverage coverage, float normalX, float normalY, float normalZ,
                                   float emission, float tintR, float tintG, float tintB,
+                                  OpacityMicromapRange opacityMicromapRange,
                                   boolean emitterInLightScene) {
         public TriangleSurface {
             Objects.requireNonNull(material, "material");
@@ -74,18 +88,23 @@ public final class SceneMesh {
 
         public TriangleSurface(MaterialReference material, Coverage coverage, float normalX, float normalY, float normalZ,
                                float emission, float tintR, float tintG, float tintB) {
-            this(material, coverage, normalX, normalY, normalZ, emission, tintR, tintG, tintB, false);
+            this(material, coverage, normalX, normalY, normalZ, emission, tintR, tintG, tintB, null, false);
         }
 
         /** Returns this surface marked as represented by a retained emitter light. */
         public TriangleSurface withEmitterInLightScene() {
             return emitterInLightScene ? this : new TriangleSurface(material, coverage, normalX, normalY, normalZ,
-                    emission, tintR, tintG, tintB, true);
+                    emission, tintR, tintG, tintB, opacityMicromapRange, true);
+        }
+
+        public TriangleSurface withOpacityMicromapRange(OpacityMicromapRange range) {
+            return new TriangleSurface(material, coverage, normalX, normalY, normalZ,
+                    emission, tintR, tintG, tintB, Objects.requireNonNull(range, "range"), emitterInLightScene);
         }
 
         public static TriangleSurface surface(MaterialHandle material) {
             return new TriangleSurface(new NamedMaterial(material),
-                    Coverage.OPAQUE, Float.NaN, Float.NaN, Float.NaN, 0f, 1f, 1f, 1f, false);
+                    Coverage.OPAQUE, Float.NaN, Float.NaN, Float.NaN, 0f, 1f, 1f, 1f, null, false);
         }
     }
 

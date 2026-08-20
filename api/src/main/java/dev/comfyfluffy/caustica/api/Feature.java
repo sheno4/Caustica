@@ -91,16 +91,20 @@ public record Feature(ResourceId id, DisplayText title, DisplayText description,
     }
 
     /**
-     * A Slang type implementing {@code ISurfaceModel}, named by {@code id} so a material can select it.
-     * Unlike a slot binding these do not compete: every registered implementation is compiled into the
-     * composition at once and each material names the one it wants.
+     * Separately named Slang implementations for shading and narrow coverage evaluation, selected by the
+     * same material index. Unlike a slot binding these do not compete: every registered implementation is
+     * compiled into the composition at once and each material names the one it wants.
      */
-    public record SurfaceImplementation(ResourceId featureId, ResourceId id, String module, String type) {
+    public record SurfaceImplementation(ResourceId featureId, ResourceId id, String module, String type,
+                                        ResourceId coverageId, String coverageModule, String coverageType) {
         public SurfaceImplementation {
             Objects.requireNonNull(featureId, "featureId");
             Objects.requireNonNull(id, "id");
+            Objects.requireNonNull(coverageId, "coverageId");
             Slot.requireSlangIdentifier(module, "module");
             Slot.requireSlangIdentifier(type, "type");
+            Slot.requireSlangIdentifier(coverageModule, "coverageModule");
+            Slot.requireSlangIdentifier(coverageType, "coverageType");
         }
     }
 

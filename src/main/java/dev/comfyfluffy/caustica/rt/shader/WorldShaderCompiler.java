@@ -42,6 +42,8 @@ public final class WorldShaderCompiler implements AutoCloseable {
     public static final String PRIMARY_MODULE = "primary_rgen";
     public static final String INDIRECT_MODULE = "indirect";
     public static final String INDIRECT_SER_MODULE = "indirect_ser";
+    public static final String RADIANCE_ANY_HIT_MODULE = "radiance_any_hit_rahit";
+    public static final String SHADOW_ANY_HIT_MODULE = "shadow_any_hit_rahit";
     public static final String ENTRY_POINT = "main";
 
     /**
@@ -57,6 +59,7 @@ public final class WorldShaderCompiler implements AutoCloseable {
     private static final String COMPOSITION_MODULE = "caustica_composition";
     private static final String COMPOSITION_TYPE = "Composition";
     private static final String SURFACE_DISPATCH_TYPE = "SurfaceDispatch";
+    private static final String COVERAGE_DISPATCH_TYPE = "CoverageDispatch";
     private static final String SURFACE_MODIFIER_DISPATCH_TYPE = "SurfaceModifierDispatch";
     /**
      * Fixed, always-valid module name every composition-generic engine stage (e.g. {@code sky_miss.slang})
@@ -78,7 +81,7 @@ public final class WorldShaderCompiler implements AutoCloseable {
             "trace_ser.slang", "world_common.slang", "world_core.slang");
     private static final List<String> API_MODULES = List.of(
             "caustica_api.slang", "caustica_color.slang", "caustica_medium.slang", "caustica_sky.slang",
-            "caustica_surface.slang", "caustica_surface_modifier.slang",
+            "caustica_coverage.slang", "caustica_surface.slang", "caustica_surface_modifier.slang",
             "caustica_texture_resources.slang", "caustica_types.slang");
     private static final Set<String> ENGINE_MODULE_NAMES = moduleNames(WORLD_MODULES, API_MODULES);
 
@@ -87,17 +90,20 @@ public final class WorldShaderCompiler implements AutoCloseable {
     private final Path cleanupDirectory;
     private final Composition composition;
     private final Set<Integer> rejectedSurfaces;
+    private final Set<Integer> rejectedCoverages;
     private final Map<String, byte[]> spirvByKey = new ConcurrentHashMap<>();
     /** Name → binding, accumulated from every compiled stage's reflection. See {@link #PASS_RESOURCE_SET}. */
     private final Map<String, PassResourceBinding> passResourceBindings = new LinkedHashMap<>();
 
     private WorldShaderCompiler(SlangSession session, Path worldDirectory, Path cleanupDirectory,
-                                Composition composition, Set<Integer> rejectedSurfaces) {
+                                Composition composition, Set<Integer> rejectedSurfaces,
+                                Set<Integer> rejectedCoverages) {
         this.session = session;
         this.worldDirectory = worldDirectory;
         this.cleanupDirectory = cleanupDirectory;
         this.composition = composition;
         this.rejectedSurfaces = Set.copyOf(rejectedSurfaces);
+        this.rejectedCoverages = Set.copyOf(rejectedCoverages);
     }
 
     public static WorldShaderCompiler create(Path cacheDirectory, CausticaRegistry.Selection selection)
@@ -133,6 +139,8 @@ public final class WorldShaderCompiler implements AutoCloseable {
 
         Map<String, byte[]> sources = new LinkedHashMap<>();
         extractClasspath(WORLD_SHADER_ROOT, WORLD_MODULES, worldDirectory, "world", sources);
+        writeSpecializedModuleAlias(worldDirectory, "radiance_any_hit.rahit.slang", RADIANCE_ANY_HIT_MODULE);
+        writeSpecializedModuleAlias(worldDirectory, "shadow_any_hit.rahit.slang", SHADOW_ANY_HIT_MODULE);
         extractClasspath(API_ROOT, API_MODULES, apiDirectory, "api", sources);
 
         List<Feature> selectedFeatures = selection.features();
@@ -158,6 +166,7 @@ public final class WorldShaderCompiler implements AutoCloseable {
         sources.put("generated/" + PASS_RESOURCE_ANCHOR_MODULE + ".slang",
                 anchorSource.getBytes(StandardCharsets.UTF_8));
         writeSurfaceProbes(selection, compositionDirectory);
+        writeCoverageProbes(selection, compositionDirectory);
         writeSurfaceModifierProbes(selection, compositionDirectory);
 
         List<Path> searchPaths = new ArrayList<>();
@@ -168,7 +177,10 @@ public final class WorldShaderCompiler implements AutoCloseable {
         SlangSession session = SlangRuntime.INSTANCE.openSession(searchPaths, false, true);
 
         // The root is generated only after every third-party implementation has proved it compiles.
-        Set<Integer> rejectedSurfaces = rejectedSurfaces(session, selection);
+        Set<Integer> rejectedSurfaceModels = rejectedSurfaces(session, selection);
+        Set<Integer> rejectedCoverages = rejectedCoverages(session, selection);
+        Set<Integer> rejectedSurfaces = new LinkedHashSet<>(rejectedSurfaceModels);
+        rejectedSurfaces.addAll(rejectedCoverages);
         String rootSource = compositionRoot(selection, rejectedSurfaces,
                 rejectedSurfaceModifiers(session, selection));
         Files.writeString(compositionDirectory.resolve(COMPOSITION_MODULE + ".slang"), rootSource,
@@ -177,7 +189,7 @@ public final class WorldShaderCompiler implements AutoCloseable {
         Composition composition = Composition.create(selection, COMPOSITION_MODULE, COMPOSITION_TYPE,
                 rootSource, sources);
         return new WorldShaderCompiler(session, worldDirectory, cleanupDirectory, composition,
-                rejectedSurfaces);
+                rejectedSurfaces, rejectedCoverages);
     }
 
     /**
@@ -188,6 +200,7 @@ public final class WorldShaderCompiler implements AutoCloseable {
     private static void writeSurfaceProbes(CausticaRegistry.Selection selection, Path directory)
             throws IOException {
         List<Feature.SurfaceImplementation> surfaces = selection.surfaces();
+        Feature.SurfaceImplementation referenceSurface = surfaces.get(0);
         String skyModule = selection.binding(Slots.SKY).binding().module();
         String skyType = selection.binding(Slots.SKY).binding().type();
         for (int index = 2; index < surfaces.size(); index++) {
@@ -195,8 +208,12 @@ public final class WorldShaderCompiler implements AutoCloseable {
             String source = "module " + surfaceProbeModule(index) + ";\n\n"
                     + "import caustica_api;\nimport caustica_types;\nimport caustica_surface;\n"
                     + "import caustica_surface_modifier;\n"
+                    + "import caustica_coverage;\n"
                     + "import " + skyModule + ";\n"
                     + (skyModule.equals(surface.module()) ? "" : "import " + surface.module() + ";\n")
+                    + (skyModule.equals(referenceSurface.coverageModule())
+                    || surface.module().equals(referenceSurface.coverageModule()) ? ""
+                    : "import " + referenceSurface.coverageModule() + ";\n")
                     + "\npublic struct ProbeSurfaces : ISurfaceDispatch {\n"
                     + "    public void evaluateSurface(uint implementation, SurfaceInput input,\n"
                     + "            inout MaterialInput material) {\n"
@@ -212,9 +229,11 @@ public final class WorldShaderCompiler implements AutoCloseable {
                     + "        " + surface.type() + " s; return s.evaluateMediumLighting(input);\n"
                     + "    }\n};\n\n"
                     + noOpModifierDispatch("ProbeSurfaceModifiers")
+                    + referenceCoverageDispatch(referenceSurface.coverageType())
                     + "public struct ProbeComposition : IComposition {\n"
                     + "    public typealias Sky = " + skyType + ";\n"
                     + "    public typealias Surfaces = ProbeSurfaces;\n"
+                    + "    public typealias Coverages = ProbeCoverages;\n"
                     + "    public typealias SurfaceModifiers = ProbeSurfaceModifiers;\n};\n";
             Files.writeString(directory.resolve(surfaceProbeModule(index) + ".slang"), source,
                     StandardCharsets.UTF_8);
@@ -251,6 +270,63 @@ public final class WorldShaderCompiler implements AutoCloseable {
         return "caustica_surface_probe_" + index;
     }
 
+    /** One actual any-hit specialization per third-party coverage implementation. */
+    private static void writeCoverageProbes(CausticaRegistry.Selection selection, Path directory)
+            throws IOException {
+        List<Feature.SurfaceImplementation> surfaces = selection.surfaces();
+        Feature.SurfaceImplementation referenceSurface = surfaces.get(0);
+        String skyModule = selection.binding(Slots.SKY).binding().module();
+        String skyType = selection.binding(Slots.SKY).binding().type();
+        for (int index = 2; index < surfaces.size(); index++) {
+            Feature.SurfaceImplementation surface = surfaces.get(index);
+            String source = "module " + coverageProbeModule(index) + ";\n\n"
+                    + "import caustica_api;\nimport caustica_types;\nimport caustica_surface;\n"
+                    + "import caustica_surface_modifier;\nimport caustica_coverage;\n"
+                    + "import " + skyModule + ";\n"
+                    + (skyModule.equals(referenceSurface.module()) ? ""
+                    : "import " + referenceSurface.module() + ";\n")
+                    + (skyModule.equals(surface.coverageModule())
+                    || referenceSurface.module().equals(surface.coverageModule()) ? ""
+                    : "import " + surface.coverageModule() + ";\n")
+                    + referenceSurfaceDispatch(referenceSurface.type())
+                    + noOpModifierDispatch("ProbeSurfaceModifiers")
+                    + "public struct ProbeCoverages : ICoverageDispatch {\n"
+                    + "    public float4 evaluateCoverage(uint implementation, CoverageInput input) {\n"
+                    + "        " + surface.coverageType()
+                    + " c; return c.evaluateCoverage(input);\n    }\n};\n\n"
+                    + "public struct ProbeComposition : IComposition {\n"
+                    + "    public typealias Sky = " + skyType + ";\n"
+                    + "    public typealias Surfaces = ProbeSurfaces;\n"
+                    + "    public typealias Coverages = ProbeCoverages;\n"
+                    + "    public typealias SurfaceModifiers = ProbeSurfaceModifiers;\n};\n";
+            Files.writeString(directory.resolve(coverageProbeModule(index) + ".slang"), source,
+                    StandardCharsets.UTF_8);
+        }
+    }
+
+    private static Set<Integer> rejectedCoverages(SlangSession session,
+                                                   CausticaRegistry.Selection selection) {
+        List<Feature.SurfaceImplementation> surfaces = selection.surfaces();
+        Set<Integer> rejected = new LinkedHashSet<>();
+        for (int index = 2; index < surfaces.size(); index++) {
+            Feature.SurfaceImplementation surface = surfaces.get(index);
+            try {
+                session.compileSpecialized(RADIANCE_ANY_HIT_MODULE, ENTRY_POINT,
+                        coverageProbeModule(index), "ProbeComposition");
+            } catch (RuntimeException e) {
+                CausticaMod.LOGGER.error("Coverage implementation {} from feature {} does not compile in "
+                                + "any-hit; index {} uses the error coverage",
+                        surface.coverageId(), surface.featureId(), index, e);
+                rejected.add(index);
+            }
+        }
+        return rejected;
+    }
+
+    private static String coverageProbeModule(int index) {
+        return "caustica_coverage_probe_" + index;
+    }
+
     /** One isolated composition per modifier, so a broken extension cannot reject the whole pipeline. */
     private static void writeSurfaceModifierProbes(CausticaRegistry.Selection selection, Path directory)
             throws IOException {
@@ -263,13 +339,19 @@ public final class WorldShaderCompiler implements AutoCloseable {
             String source = "module " + surfaceModifierProbeModule(index) + ";\n\n"
                     + "import caustica_api;\nimport caustica_types;\nimport caustica_surface;\n"
                     + "import caustica_surface_modifier;\n"
+                    + "import caustica_coverage;\n"
                     + "import " + skyModule + ";\n"
                     + (skyModule.equals(referenceSurface.module()) ? ""
                     : "import " + referenceSurface.module() + ";\n")
                     + (skyModule.equals(modifier.module())
                     || referenceSurface.module().equals(modifier.module()) ? ""
                     : "import " + modifier.module() + ";\n")
+                    + (skyModule.equals(referenceSurface.coverageModule())
+                    || referenceSurface.module().equals(referenceSurface.coverageModule())
+                    || modifier.module().equals(referenceSurface.coverageModule()) ? ""
+                    : "import " + referenceSurface.coverageModule() + ";\n")
                     + referenceSurfaceDispatch(referenceSurface.type())
+                    + referenceCoverageDispatch(referenceSurface.coverageType())
                     + "public struct ProbeSurfaceModifiers : ISurfaceModifierDispatch {\n"
                     + "    public void applySurfaceModifiers(SurfaceModifierInput input,\n"
                     + "            inout MaterialInput material) {\n"
@@ -278,6 +360,7 @@ public final class WorldShaderCompiler implements AutoCloseable {
                     + "public struct ProbeComposition : IComposition {\n"
                     + "    public typealias Sky = " + skyType + ";\n"
                     + "    public typealias Surfaces = ProbeSurfaces;\n"
+                    + "    public typealias Coverages = ProbeCoverages;\n"
                     + "    public typealias SurfaceModifiers = ProbeSurfaceModifiers;\n};\n";
             Files.writeString(directory.resolve(surfaceModifierProbeModule(index) + ".slang"), source,
                     StandardCharsets.UTF_8);
@@ -326,12 +409,22 @@ public final class WorldShaderCompiler implements AutoCloseable {
                 + type + " s; return s.evaluateMediumLighting(input); }\n};\n\n";
     }
 
+    private static String referenceCoverageDispatch(String type) {
+        return "public struct ProbeCoverages : ICoverageDispatch {\n"
+                + "    public float4 evaluateCoverage(uint implementation, CoverageInput input) { "
+                + type + " c; return c.evaluateCoverage(input); }\n};\n\n";
+    }
+
     public Composition composition() {
         return composition;
     }
 
     public Set<Integer> rejectedSurfaces() {
         return rejectedSurfaces;
+    }
+
+    public Set<Integer> rejectedCoverages() {
+        return rejectedCoverages;
     }
 
     public byte[] compileSpecialized(String engineModule, String entryPoint) {
@@ -447,6 +540,14 @@ public final class WorldShaderCompiler implements AutoCloseable {
         return compileSpecialized(CLOSEST_HIT_MODULE, ENTRY_POINT);
     }
 
+    public byte[] compileRadianceAnyHit() {
+        return compileSpecialized(RADIANCE_ANY_HIT_MODULE, ENTRY_POINT);
+    }
+
+    public byte[] compileShadowAnyHit() {
+        return compileSpecialized(SHADOW_ANY_HIT_MODULE, ENTRY_POINT);
+    }
+
     public byte[] compilePrimary() {
         return compileSpecialized(PRIMARY_MODULE, ENTRY_POINT);
     }
@@ -511,6 +612,7 @@ public final class WorldShaderCompiler implements AutoCloseable {
         }
         for (Feature.SurfaceImplementation surface : selection.surfaces()) {
             resolveFeatureModule(surface.module(), selectedFeatures, resolved, visiting);
+            resolveFeatureModule(surface.coverageModule(), selectedFeatures, resolved, visiting);
         }
         for (Feature.SurfaceModifierImplementation modifier : selection.surfaceModifiers()) {
             resolveFeatureModule(modifier.module(), selectedFeatures, resolved, visiting);
@@ -562,23 +664,25 @@ public final class WorldShaderCompiler implements AutoCloseable {
     }
 
     /**
-     * Generates the composition root: the slot aliases, plus the per-material surface dispatch as a
-     * literal switch over every registered implementation. The engine never names an extension
-     * implementation: a material carries its index. Index 0 explicitly preserves the built-in reference
-     * surface, while rejected and out-of-range indices resolve through the default error surface.
+     * Generates the composition root: slot aliases plus separate shading and coverage switches over the
+     * registered material implementation indices. Index 0 explicitly preserves the built-ins, while a
+     * rejected or out-of-range index resolves through both visible error implementations.
      */
     private static String compositionRoot(CausticaRegistry.Selection selection,
                                           Set<Integer> rejectedSurfaces,
                                           Set<Integer> rejectedModifiers) {
         StringBuilder source = new StringBuilder("module ").append(COMPOSITION_MODULE)
                 .append(";\n\nimport caustica_api;\nimport caustica_types;\nimport caustica_surface;\n")
-                .append("import caustica_surface_modifier;\n");
+                .append("import caustica_surface_modifier;\nimport caustica_coverage;\n");
         List<Feature.SurfaceImplementation> surfaces = selection.surfaces();
         List<Feature.SurfaceModifierImplementation> modifiers = selection.surfaceModifiers();
         Stream.of(selection.bindings().values().stream().map(selected -> selected.binding().module()),
                         java.util.stream.IntStream.range(0, surfaces.size())
                                 .filter(index -> !rejectedSurfaces.contains(index))
                                 .mapToObj(index -> surfaces.get(index).module()),
+                        java.util.stream.IntStream.range(0, surfaces.size())
+                                .filter(index -> !rejectedSurfaces.contains(index))
+                                .mapToObj(index -> surfaces.get(index).coverageModule()),
                         java.util.stream.IntStream.range(0, modifiers.size())
                                 .filter(index -> !rejectedModifiers.contains(index))
                                 .mapToObj(index -> modifiers.get(index).module()))
@@ -622,9 +726,17 @@ public final class WorldShaderCompiler implements AutoCloseable {
         }
         source.append("    }\n};\n");
 
+        source.append("\npublic struct ").append(COVERAGE_DISPATCH_TYPE)
+                .append(" : ICoverageDispatch {\n")
+                .append("    public float4 evaluateCoverage(uint implementation, CoverageInput input) {\n")
+                .append("        switch (implementation) {\n");
+        appendCoverageCases(source, selection, rejectedSurfaces);
+        source.append("        }\n    }\n};\n");
+
         source.append("\npublic struct ").append(COMPOSITION_TYPE).append(" : IComposition {\n");
         appendAlias(source, "Sky", selection.binding(Slots.SKY).binding().type());
         appendAlias(source, "Surfaces", SURFACE_DISPATCH_TYPE);
+        appendAlias(source, "Coverages", COVERAGE_DISPATCH_TYPE);
         appendAlias(source, "SurfaceModifiers", SURFACE_MODIFIER_DISPATCH_TYPE);
         return source.append("};\n").toString();
     }
@@ -641,6 +753,23 @@ public final class WorldShaderCompiler implements AutoCloseable {
                     .append(body.apply(surfaces.get(index).type())).append('\n');
         }
         source.append("        default: ").append(body.apply(surfaces.get(1).type())).append('\n');
+    }
+
+    private static void appendCoverageCases(StringBuilder source, CausticaRegistry.Selection selection,
+                                            Set<Integer> rejectedCoverages) {
+        List<Feature.SurfaceImplementation> surfaces = selection.surfaces();
+        source.append("        case 0u: { ").append(surfaces.get(0).coverageType())
+                .append(" c; return c.evaluateCoverage(input); }\n");
+        for (int index = 2; index < surfaces.size(); index++) {
+            if (rejectedCoverages.contains(index)) {
+                continue;
+            }
+            source.append("        case ").append(index).append("u: { ")
+                    .append(surfaces.get(index).coverageType())
+                    .append(" c; return c.evaluateCoverage(input); }\n");
+        }
+        source.append("        default: { ").append(surfaces.get(1).coverageType())
+                .append(" c; return c.evaluateCoverage(input); }\n");
     }
 
     private static void appendAlias(StringBuilder source, String name, String type) {
@@ -685,6 +814,12 @@ public final class WorldShaderCompiler implements AutoCloseable {
         if (!missing.isEmpty()) {
             throw new IOException("Missing bundled Slang source(s): " + String.join(", ", missing));
         }
+    }
+
+    /** Slang resolves a specialized module by identifier, so dotted stage suffixes need an identifier alias. */
+    private static void writeSpecializedModuleAlias(Path directory, String sourceFile, String module)
+            throws IOException {
+        Files.copy(directory.resolve(sourceFile), directory.resolve(module + ".slang"));
     }
 
     private static String flatFileName(String name) {

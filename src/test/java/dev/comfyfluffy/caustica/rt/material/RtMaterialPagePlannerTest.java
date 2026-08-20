@@ -16,66 +16,54 @@ final class RtMaterialPagePlannerTest {
         int semanticOnly = RtMaterialRegistry.FEATURE_SUBSURFACE_COLOR_BASE
                 | RtMaterialRegistry.FEATURE_EMISSION_COLOR_BASE;
 
-        assertEquals(0, RtMaterialPageCompiler.pageChannels(semanticOnly, false, false));
+        assertEquals(0, RtMaterialPageCompiler.pageChannels(semanticOnly));
         assertEquals(RtMaterialPagePlanner.CHANNEL_MATERIAL,
-                RtMaterialPageCompiler.pageChannels(RtMaterialRegistry.FEATURE_SPEC, false, false));
+                RtMaterialPageCompiler.pageChannels(RtMaterialRegistry.FEATURE_SPEC));
     }
 
     @Test
-    void plannerClustersMaterialChannelsBeforeAlphaOnlyLayoutsDeterministically() {
+    void plannerOrdersMaterialAndEmissionLayoutsDeterministically() {
         List<RtMaterialPagePlanner.Input> inputs = List.of(
-                new RtMaterialPagePlanner.Input(0, "z-static", 28, 28,
-                        RtMaterialPagePlanner.CHANNEL_STATIC_ALPHA),
+                new RtMaterialPagePlanner.Input(0, "z-emission", 28, 28,
+                        RtMaterialPagePlanner.CHANNEL_EMISSION),
                 new RtMaterialPagePlanner.Input(1, "material", 28, 23,
-                        RtMaterialPagePlanner.CHANNEL_MATERIAL),
-                new RtMaterialPagePlanner.Input(2, "a-temporal", 28, 28,
-                        RtMaterialPagePlanner.CHANNEL_TEMPORAL_ALPHA));
+                        RtMaterialPagePlanner.CHANNEL_MATERIAL));
 
         RtMaterialPagePlanner.Plan forward = RtMaterialPagePlanner.plan(inputs, 32, 32, 2, 1);
         RtMaterialPagePlanner.Plan reversed = RtMaterialPagePlanner.plan(inputs.reversed(), 32, 32, 2, 1);
 
         assertEquals(forward, reversed);
-        assertEquals(3, forward.layouts().size());
+        assertEquals(2, forward.layouts().size());
         assertTrue(forward.layouts().get(0).has(RtMaterialPagePlanner.CHANNEL_MATERIAL));
         assertFalse(forward.layouts().get(1).has(RtMaterialPagePlanner.CHANNEL_MATERIAL));
-        assertFalse(forward.layouts().get(2).has(RtMaterialPagePlanner.CHANNEL_MATERIAL));
         assertNotNull(forward.placement(0));
         assertNotNull(forward.placement(1));
-        assertNotNull(forward.placement(2));
     }
 
     @Test
-    void alphaOnlyAndMetadataLayoutsNeedNoMaterialImages() {
+    void metadataInputsNeedNoMaterialImages() {
         RtMaterialPagePlanner.Plan plan = RtMaterialPagePlanner.plan(List.of(
-                new RtMaterialPagePlanner.Input(0, "metadata", 16, 16, 0),
-                new RtMaterialPagePlanner.Input(1, "alpha", 16, 16,
-                        RtMaterialPagePlanner.CHANNEL_STATIC_ALPHA)), 32, 32, 2, 1);
+                new RtMaterialPagePlanner.Input(0, "metadata", 16, 16, 0)), 32, 32, 2, 1);
 
         assertNull(plan.placement(0));
         assertFalse(plan.layouts().get(0).has(RtMaterialPagePlanner.CHANNEL_MATERIAL));
-        assertTrue(plan.layouts().get(0).has(RtMaterialPagePlanner.CHANNEL_STATIC_ALPHA));
 
-        MaterialPagePacker pixels = new MaterialPagePacker(32, 6, 2, false, false, true, false);
+        MaterialPagePacker pixels = new MaterialPagePacker(32, 6, 2, false, false);
         assertNull(pixels.surface0);
         assertNull(pixels.normal);
         assertNull(pixels.surface1);
-        assertNotNull(pixels.staticAlpha);
     }
 
     @Test
     void oversizedInputsRemainUnpublishedForFallback() {
         RtMaterialPagePlanner.Plan plan = RtMaterialPagePlanner.plan(List.of(
                 new RtMaterialPagePlanner.Input(0, "oversized", 33, 1,
-                        RtMaterialPagePlanner.CHANNEL_STATIC_ALPHA)), 32, 32, 0, 1);
+                        RtMaterialPagePlanner.CHANNEL_MATERIAL)), 32, 32, 0, 1);
 
         assertTrue(plan.rejectedOversizedInput());
         assertNull(plan.placement(0));
         assertEquals(1, plan.layouts().size());
         assertEquals(0, plan.layouts().get(0).channels());
-        assertEquals(RtMaterialPageCompiler.ALPHA_SOURCE_NONE,
-                RtMaterialPageCompiler.publishedAlphaSource(
-                        RtMaterialPageCompiler.ALPHA_SOURCE_STATIC_PAGE, true,
-                        plan.placement(0) != null));
     }
 
     @Test
@@ -84,7 +72,7 @@ final class RtMaterialPagePlannerTest {
                 new RtMaterialPagePlanner.Input(0, "oversized", 65, 1,
                         RtMaterialPagePlanner.CHANNEL_MATERIAL),
                 new RtMaterialPagePlanner.Input(1, "small", 8, 8,
-                        RtMaterialPagePlanner.CHANNEL_STATIC_ALPHA)), 16, 64, 2, 1);
+                        RtMaterialPagePlanner.CHANNEL_EMISSION)), 16, 64, 2, 1);
 
         assertTrue(plan.rejectedOversizedInput());
         assertNull(plan.placement(0));

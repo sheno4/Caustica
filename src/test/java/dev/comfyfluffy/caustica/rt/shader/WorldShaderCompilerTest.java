@@ -28,6 +28,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class WorldShaderCompilerTest {
     private static final ResourceId TEST_SURFACE = ResourceId.of("test", "surface");
+    private static final ResourceId TEST_COVERAGE = ResourceId.of("test", "coverage");
 
     @Test
     void packagesWorldSourcesWithoutPrecompiledWorldStages() {
@@ -75,8 +76,8 @@ final class WorldShaderCompilerTest {
                     compiler.compileSkyMiss(),
                     compiler.compilePlain("guide.rmiss.slang", WorldShaderCompiler.ENTRY_POINT),
                     compiler.compileClosestHit(),
-                    compiler.compilePlain("radiance_any_hit.rahit.slang", WorldShaderCompiler.ENTRY_POINT),
-                    compiler.compilePlain("shadow_any_hit.rahit.slang", WorldShaderCompiler.ENTRY_POINT));
+                    compiler.compileRadianceAnyHit(),
+                    compiler.compileShadowAnyHit());
             for (byte[] stage : stages) {
                 assertSpirv(stage, 256);
             }
@@ -180,7 +181,41 @@ final class WorldShaderCompilerTest {
             assertTrue(compiler.rejectedSurfaces().contains(broken));
             assertTrue(!compiler.composition().rootSource().contains("case " + broken + "u:"));
             assertTrue(compiler.composition().rootSource().contains("default: { ErrorSurface s;"));
+            assertTrue(compiler.composition().rootSource().contains("default: { ErrorCoverage c;"));
             assertSpirv(compiler.compileClosestHit(), 1024);
+        }
+    }
+
+    @Test
+    void coverageDispatchUsesItsOwnTypesAndConservativeErrorFallback(@TempDir Path cacheDirectory)
+            throws Exception {
+        CausticaRegistry registry = registryWithTestCoverage("test_coverage", "TestCoverage");
+
+        try (WorldShaderCompiler compiler = WorldShaderCompiler.create(cacheDirectory, registry.selection())) {
+            int implementation = registry.surfaceIndex(TEST_SURFACE);
+            String root = compiler.composition().rootSource();
+            assertTrue(compiler.rejectedCoverages().isEmpty());
+            assertTrue(root.contains("case 0u: { BuiltinCoverage c;"));
+            assertTrue(root.contains("case " + implementation + "u: { TestCoverage c;"));
+            assertTrue(root.contains("default: { ErrorCoverage c;"));
+            assertTrue(!root.substring(root.indexOf("public struct CoverageDispatch"))
+                    .contains("ISurfaceModel"));
+        }
+    }
+
+    @Test
+    void aCoverageProbeFailureRejectsTheWholeImplementation(@TempDir Path cacheDirectory)
+            throws Exception {
+        CausticaRegistry registry = registryWithTestCoverage("test_coverage_broken", "BrokenCoverage");
+
+        try (WorldShaderCompiler compiler = WorldShaderCompiler.create(cacheDirectory, registry.selection())) {
+            int implementation = registry.surfaceIndex(TEST_SURFACE);
+            String root = compiler.composition().rootSource();
+            assertTrue(compiler.rejectedSurfaces().contains(implementation));
+            assertTrue(compiler.rejectedCoverages().contains(implementation));
+            assertTrue(!root.contains("case " + implementation + "u: { TestSurface s;"));
+            assertTrue(!root.contains("case " + implementation + "u: { BrokenCoverage c;"));
+            assertTrue(root.contains("default: { ErrorCoverage c;"));
         }
     }
 
@@ -207,6 +242,16 @@ final class WorldShaderCompilerTest {
                 .category(FeatureCategory.GENERAL)
                 .shaderSource(ShaderSource.classpath("/caustica-test/shaders"))
                 .surface(TEST_SURFACE, module, type)
+                .register();
+        return registry;
+    }
+
+    private static CausticaRegistry registryWithTestCoverage(String module, String type) {
+        CausticaRegistry registry = dev.comfyfluffy.caustica.TestRegistries.withBuiltins();
+        registry.feature(TEST_SURFACE)
+                .shaderSource(ShaderSource.classpath("/caustica-test/shaders"))
+                .surface(TEST_SURFACE, "test_surface", "TestSurface",
+                        TEST_COVERAGE, module, type)
                 .register();
         return registry;
     }
@@ -281,14 +326,10 @@ final class WorldShaderCompilerTest {
         }
     }
 
-    @ParameterizedTest
-    @ValueSource(strings = {
-            "guide.rmiss.slang",
-            "radiance_any_hit.rahit.slang", "shadow_any_hit.rahit.slang"})
-    void compilesEveryPlainWorldStage(String moduleFileName, @TempDir Path cacheDirectory)
-            throws Exception {
+    @Test
+    void compilesThePlainGuideMissStage(@TempDir Path cacheDirectory) throws Exception {
         try (WorldShaderCompiler compiler = compiler(cacheDirectory)) {
-            assertSpirv(compiler.compilePlain(moduleFileName, WorldShaderCompiler.ENTRY_POINT), 256);
+            assertSpirv(compiler.compilePlain("guide.rmiss.slang", WorldShaderCompiler.ENTRY_POINT), 256);
         }
     }
 

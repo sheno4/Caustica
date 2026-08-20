@@ -15,6 +15,7 @@ import bindings;
 import caustica_texture_resources;
 import caustica_types;
 import caustica_surface;
+import caustica_coverage;
 import caustica_api;
 // Required in EVERY composition-specialized entry point, not just the ones that read a pass resource:
 // Slang rejects a module that declares global shader parameters if it is reachable only through the
@@ -389,6 +390,7 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
     float2 attribs = attr.barycentrics;
     uint rayCone = payload.rayCone;
     TC.Surfaces surfaces;
+    TC.Coverages coverages;
     TC.SurfaceModifiers surfaceModifiers;
 
     GeometryRecord g = ConstPtr<GeometryRecord>(pc.geometryTableAddr)[InstanceID()];
@@ -451,6 +453,24 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
 
     float stateEmission = pr.normal.w;
 
+    // A guide crossing needs only the narrow coverage result. Resolve it before the shading texture path
+    // so a rejected hit does not also pay for closest-hit's base-colour sample and material decode.
+    if (!transmissive && (payload.flags & PAYLOAD_GUIDE_RAY) != 0u) {
+        CoverageInput coverageInput;
+        coverageInput.materialId = pr.materialId;
+        coverageInput.textureCoordinate = uv;
+        coverageInput.tint = pr.tint.rgb;
+        coverageInput.vertexColor = vertexColor;
+        float4 resolvedCoverage = coverages.evaluateCoverage(
+                bindingSurfaceImpl(binding), coverageInput);
+        if (guideCoverageCrossing(payload, resolvedCoverage.a)) {
+            payload.hitT = RayTCurrent();
+            payload.motionPrev = half3(motionPrev);
+            payloadSetCoverageCrossing(payload, resolvedCoverage.rgb, shadingNormal);
+            return;
+        }
+    }
+
     float4 baseColorTexel = float4(1.0, 1.0, 1.0, 1.0);
     float3 albedo;
     if (textureless) {
@@ -464,18 +484,6 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
                                          baseColorTexel.a * vertexColor.a)
                               : texel * geometryTint;
     }
-    float coverageAlpha = baseColorTexel.a * vertexColor.a;
-
-    // Checked before the material pages are sampled and the implementation runs: a guide walking through
-    // foliage pays for neither.
-    if (!transmissive && guideCoverageCrossing(payload, coverageAlpha)) {
-        payload.hitT = RayTCurrent();
-        payload.motionPrev = half3(motionPrev);
-        payloadSetCoverageCrossing(payload,
-                lerp(float3(1.0), albedo, coverageAlpha), shadingNormal);
-        return;
-    }
-
     DecodedSurface surface = evaluateMaterial(mat, uv, textureLod, albedo, shadingNormal,
             mul(objectToWorld, tp0), mul(objectToWorld, tp1), mul(objectToWorld, tp2), uv0, uv1, uv2,
             vdir, transmissive ? 0.0 : stateEmission);

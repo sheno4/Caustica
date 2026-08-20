@@ -209,6 +209,7 @@ public struct Prim {
     public uint materialId;
     public uint flags;
     public uint aux0;
+    // Conservative provider-authored triangle coverage min:8|max:8; bit 16 means absent.
     public uint aux1;
 };
 
@@ -274,9 +275,6 @@ public struct SurfaceMaterial {
     // rectangle within that page is still valid. The LOD limit describes the page rectangle, not the
     // surface, which is why it travels with the page reference rather than with the parameters below.
     public uint page;
-    public uint packedAlphaRange; // mip-zero temporal min:8 | max:8
-    // 0 unknown/unproven, 1 immutable static mip-zero alpha page, 2 per-texel temporal min/max page.
-    public uint alphaFlags;
     public float4 materialUv; // packed-page uvMin.xy + uvExtent.xy
     public float4 baseColorUv; // source atlas uvMin.xy + inverse uvExtent.xy
     // OpenPBR names, OpenPBR meanings. specularRoughness is PERCEPTUAL r: the GGX alpha every lobe wants

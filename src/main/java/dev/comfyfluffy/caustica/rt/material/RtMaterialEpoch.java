@@ -124,14 +124,6 @@ public final class RtMaterialEpoch {
             @Override public long bindingTableAddress() {
                 return registry.bindingTableAddress();
             }
-
-            @Override public long surfaceTableAddress() {
-                return registry.surfaceTableAddress();
-            }
-
-            @Override public boolean opacityMicromapEligible(int materialId) {
-                return registry.opacityMicromapEligible(materialId);
-            }
         });
     }
 
@@ -172,9 +164,7 @@ public final class RtMaterialEpoch {
         MaterialCatalog catalog = contributions.catalog();
         pageCompiler.prepareAll(ctx, textureCapacity, catalog);
         if (ctx.backend().capabilities().opacityMicromaps()) {
-            opacityMicromapPipeline = RtOpacityMicromapPipeline.create(ctx,
-                    pageCompiler.temporalAlphaViews(),
-                    pageCompiler.staticAlphaViews());
+            opacityMicromapPipeline = RtOpacityMicromapPipeline.create(ctx);
         }
         sceneGeometry.setOpacityMicromapPipeline(opacityMicromapPipeline);
         registry.rebuild(ctx, pageCompiler, catalog, overrides,
