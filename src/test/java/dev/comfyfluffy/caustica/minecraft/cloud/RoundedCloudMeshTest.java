@@ -16,9 +16,12 @@ final class RoundedCloudMeshTest {
         MaterialHandle material = MaterialHandle.of("test", "cloud");
         SceneMesh first = RoundedCloudMesh.generate(42L, material);
         SceneMesh second = RoundedCloudMesh.generate(42L, material);
+        SceneMesh differentlyShaped = RoundedCloudMesh.generate(43L, material);
 
         assertArrayEquals(first.positions(), second.positions());
         assertArrayEquals(first.indices(), second.indices());
+        assertEquals(first.topologyRevision(), second.topologyRevision());
+        assertEquals(first.topologyRevision(), differentlyShaped.topologyRevision());
         assertEquals(6 * 18, first.triangleCount());
         float[] positions = first.positions();
         int[] indices = first.indices();

@@ -26,6 +26,7 @@ public final class ProceduralSurfaceSceneProvider implements SceneProvider {
     public static final ResourceId ID = ResourceId.of(GltfViewerMod.MOD_ID, "procedural_surface_anchors");
     private static final SceneGeometryKey GROUP = SceneGeometryKey.of(0L);
     private static final SceneGeometryKey RESIDENT = SceneGeometryKey.of(0L);
+    private static final SceneMesh.TopologyRevision TOPOLOGY = new SceneMesh.TopologyRevision(1L);
     private static final SceneMesh MESH = cube();
 
     private final Supplier<Set<BlockPos>> anchors;
@@ -121,7 +122,7 @@ public final class ProceduralSurfaceSceneProvider implements SceneProvider {
         SceneMesh.TriangleSurface surface = SceneMesh.TriangleSurface.surface(
                 new MaterialHandle(GltfViewerExtension.PROCEDURAL_MATERIAL));
         return new SceneMesh(positions, indices, SceneMesh.UvLayout.PER_VERTEX, new float[16],
-                Collections.nCopies(indices.length / 3, surface));
+                Collections.nCopies(indices.length / 3, surface), Set.of(), TOPOLOGY);
     }
 
     private static Set<BlockPos> loadedAnchors() {

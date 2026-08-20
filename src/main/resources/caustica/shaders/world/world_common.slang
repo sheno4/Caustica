@@ -278,7 +278,7 @@ public static const uint GEOMETRY_INDEXED_TEXTURE_COORDINATES = 1u;
 public static const uint GEOMETRY_RECEIVES_PROJECTED_SURFACE_MODIFIERS = 2u;
 /** Geometry provides one object-space float3 normal per indexed vertex. */
 public static const uint GEOMETRY_VERTEX_NORMALS = 4u;
-/** Geometry provides one linear BT.709 float4 colour per indexed vertex. */
+/** Geometry provides one scene-linear ACEScg float4 colour per indexed vertex. */
 public static const uint GEOMETRY_VERTEX_COLORS = 8u;
 
 public struct GeometryRecord {

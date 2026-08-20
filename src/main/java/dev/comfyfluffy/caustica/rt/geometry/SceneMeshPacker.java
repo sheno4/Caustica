@@ -3,8 +3,6 @@ package dev.comfyfluffy.caustica.rt.geometry;
 import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import dev.comfyfluffy.caustica.rt.accel.RtAccel;
 
-import java.util.Arrays;
-
 /** Converts source-neutral meshes into the validated arrays and aligned layout consumed by the GPU scene. */
 final class SceneMeshPacker {
     private SceneMeshPacker() {
@@ -14,13 +12,14 @@ final class SceneMeshPacker {
         RtGeometryMeshPacking.PackedMesh packed = RtGeometryMeshPacking.pack(mesh, materialResolver);
         return new PackedInput(packed.positions(), packed.indices(), packed.textureCoordinates(),
                 packed.vertexNormals(), packed.vertexColors(), packed.primitives(), packed.classTriangles(),
-                packed.flags());
+                packed.flags(), mesh.topologyRevision());
     }
 
     /** Renderer-private packed representation of a source-neutral scene mesh. */
     static record PackedInput(float[] positions, int[] indices, float[] textureCoordinates,
                               float[] vertexNormals, float[] vertexColors, float[] primitives,
-                              int[] classTriangles, int semanticFlags) {
+                              int[] classTriangles, int semanticFlags,
+                              SceneMesh.TopologyRevision topologyRevision) {
         PackedInput {
             if (positions.length == 0 || positions.length % 3 != 0 || indices.length == 0 || indices.length % 3 != 0) {
                 throw new IllegalArgumentException("packed geometry must contain complete vertices and triangles");
@@ -73,27 +72,13 @@ final class SceneMeshPacker {
         }
     }
 
-    static final class Topology {
-        private final int vertexCount;
-        private final int[] indices;
-        private final int[] classTriangles;
-        private final int semanticFlags;
-
-        private Topology(int vertexCount, int[] indices, int[] classTriangles, int semanticFlags) {
-            this.vertexCount = vertexCount;
-            this.indices = indices.clone();
-            this.classTriangles = classTriangles.clone();
-            this.semanticFlags = semanticFlags;
-        }
-
+    static record Topology(SceneMesh.TopologyRevision revision, int vertexCount, int indexCount,
+                           int opaqueTriangleCount, int maskedTriangleCount, int transmissiveTriangleCount,
+                           int semanticFlags) {
         static Topology of(PackedInput input) {
-            return new Topology(input.positions.length / 3, input.indices, input.classTriangles, input.semanticFlags);
-        }
-
-        boolean matches(Topology other) {
-            return vertexCount == other.vertexCount && semanticFlags == other.semanticFlags
-                    && Arrays.equals(indices, other.indices)
-                    && Arrays.equals(classTriangles, other.classTriangles);
+            return new Topology(input.topologyRevision, input.positions.length / 3, input.indices.length,
+                    input.classTriangles[RtAccel.CLASS_OPAQUE], input.classTriangles[RtAccel.CLASS_MASKED],
+                    input.classTriangles[RtAccel.CLASS_TRANSMISSIVE], input.semanticFlags);
         }
     }
 

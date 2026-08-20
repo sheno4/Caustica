@@ -92,15 +92,27 @@ final class RtGeometryMeshPackingTest {
     }
 
     @Test
-    void coverageClassChangeChangesManagerTopologyCompatibility() {
+    void packedTopologyCarriesProviderRevisionAndScalarStructuralFacts() {
         MaterialHandle material = MaterialHandle.of("test", "material");
         RtGeometryMaterialResolver resolver = (reference, coverage) ->
                 new RtGeometryMaterialResolver.ResolvedMaterial(7, 0, 0);
-        SceneMesh opaque = mesh(material, SceneMesh.Coverage.OPAQUE);
-        SceneMesh cutout = mesh(material, SceneMesh.Coverage.CUTOUT);
+        SceneMesh.TopologyRevision revision = new SceneMesh.TopologyRevision(41L);
+        SceneMesh mesh = new SceneMesh(
+                new float[]{0, 0, 0, 1, 0, 0, 0, 1, 0},
+                new int[]{0, 1, 2, 0, 1, 2}, SceneMesh.UvLayout.PER_VERTEX, new float[6],
+                new float[0], new float[0],
+                List.of(surface(material, SceneMesh.Coverage.OPAQUE),
+                        surface(material, SceneMesh.Coverage.CUTOUT)), java.util.Set.of(), revision);
 
-        assertFalse(SceneMeshPacker.Topology.of(SceneMeshPacker.pack(opaque, resolver)).matches(
-                SceneMeshPacker.Topology.of(SceneMeshPacker.pack(cutout, resolver))));
+        SceneMeshPacker.Topology topology = SceneMeshPacker.Topology.of(SceneMeshPacker.pack(mesh, resolver));
+
+        assertEquals(revision, topology.revision());
+        assertEquals(3, topology.vertexCount());
+        assertEquals(6, topology.indexCount());
+        assertEquals(1, topology.opaqueTriangleCount());
+        assertEquals(1, topology.maskedTriangleCount());
+        assertEquals(0, topology.transmissiveTriangleCount());
+        assertEquals(RtGeometryAbi.FLAG_INDEXED_TEXTURE_COORDINATES, topology.semanticFlags());
     }
 
     @Test

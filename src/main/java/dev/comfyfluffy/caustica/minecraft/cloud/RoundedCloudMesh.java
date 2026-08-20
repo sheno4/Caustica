@@ -6,11 +6,13 @@ import it.unimi.dsi.fastutil.floats.FloatArrayList;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 
 import java.util.Collections;
+import java.util.Set;
 import java.util.SplittableRandom;
 
 /** Deterministic tessellation of a low block-shaped cloud as one closed rounded cuboid. */
 public final class RoundedCloudMesh {
     private static final int CORNER_SEGMENTS = 3;
+    private static final SceneMesh.TopologyRevision TOPOLOGY = new SceneMesh.TopologyRevision(1L);
 
     private RoundedCloudMesh() {
     }
@@ -25,7 +27,7 @@ public final class RoundedCloudMesh {
         int triangles = builder.indices.size() / 3;
         return new SceneMesh(builder.positions.toFloatArray(), builder.indices.toIntArray(),
                 SceneMesh.UvLayout.PER_VERTEX, builder.texCoords.toFloatArray(),
-                Collections.nCopies(triangles, SceneMesh.TriangleSurface.surface(material)));
+                Collections.nCopies(triangles, SceneMesh.TriangleSurface.surface(material)), Set.of(), TOPOLOGY);
     }
 
     private static float snapped(double value) {

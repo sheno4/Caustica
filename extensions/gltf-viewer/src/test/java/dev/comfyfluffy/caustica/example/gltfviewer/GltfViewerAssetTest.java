@@ -7,6 +7,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class GltfViewerAssetTest {
@@ -44,6 +45,10 @@ final class GltfViewerAssetTest {
         assertArrayEquals(translation(1, 2, 3), scene.placements().get(0).nodeWorldMatrix());
         assertArrayEquals(translation(5, 7, 9), scene.placements().get(1).nodeWorldMatrix());
         assertEquals(0.0f, scene.materials().getFirst().definition().emissionLuminanceCdM2());
+
+        GltfViewerScene reloaded = GltfViewerAsset.adapt(asset);
+        assertNotEquals(scene.residents().getFirst().mesh().topologyRevision(),
+                reloaded.residents().getFirst().mesh().topologyRevision());
     }
 
     @Test

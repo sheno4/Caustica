@@ -821,8 +821,8 @@ public final class RtEntities {
         if (entry != null) {
             entry.lastSeen = now;
         }
-        long hash = meshHash();
-        if (entry == null || entry.meshHash != hash) {
+        MeshFingerprint fingerprint = meshFingerprint(capture);
+        if (entry == null || entry.meshHash != fingerprint.contentHash()) {
             // Geometry changed (or new BE) → rebuild, but only within this frame's budget. Over budget: keep
             // showing the previous geometry; a brand-new BE simply pops in over the next frames.
             if (beBuildsThisFrame >= beBuildsPerFrame()) {
@@ -832,7 +832,7 @@ public final class RtEntities {
                 build.telemetry.count("blockEntityGeometryDeferred", 1);
                 return;
             }
-            BeEntry rebuilt = buildBe(build, entry, be, hash);
+            BeEntry rebuilt = buildBe(build, entry, be, fingerprint);
             rebuilt.lastSeen = now;
             beCache.put(key, rebuilt);
             recordVisibleBlockEntity(build);
@@ -842,7 +842,7 @@ public final class RtEntities {
     }
 
     /** Submits a keyed dynamic resident so compatible block-entity mesh updates retain vertex history. */
-    private BeEntry buildBe(FrameBuild build, BeEntry entry, BlockEntity be, long hash) {
+    private BeEntry buildBe(FrameBuild build, BeEntry entry, BlockEntity be, MeshFingerprint fingerprint) {
         BlockPos p = be.getBlockPos();
         beBuildsThisFrame++;
 
@@ -851,10 +851,11 @@ public final class RtEntities {
         e.bx = p.getX();
         e.by = p.getY();
         e.bz = p.getZ();
-        e.meshHash = hash;
+        e.meshHash = fingerprint.contentHash();
         long key = p.asLong();
         SceneGeometryKey geometryKey = key(BLOCK_ENTITY_GEOMETRY, key);
-        build.submit(geometryKey, blockEntityMeshUpdate(geometryKey, capture.sceneMesh(),
+        build.submit(geometryKey, blockEntityMeshUpdate(geometryKey,
+                capture.sceneMesh(fingerprint.topologyRevision()),
                 GeometryTransform.translation(p.getX(), p.getY(), p.getZ()), initial), null);
         build.telemetry.count("blockEntityGeometrySubmissions", 1);
         return e;
@@ -867,28 +868,38 @@ public final class RtEntities {
         return initial ? List.of(put, new SceneGeometrySink.Place(key, key, initialTransform, MASK_ALL)) : List.of(put);
     }
 
-    /** FNV-1a hash of every manager-visible field in the currently captured mesh. */
-    private long meshHash() {
-        long h = 1469598103934665603L;
+    record MeshFingerprint(long contentHash, SceneMesh.TopologyRevision topologyRevision) { }
+
+    /** Computes content and topology fingerprints together during the capture's required change scan. */
+    static MeshFingerprint meshFingerprint(RtEntityCapture capture) {
+        long content = 1469598103934665603L;
+        long topology = 1469598103934665603L;
         float[] v = capture.verts.elements();
         int vn = capture.verts.size();
         for (int i = 0; i < vn; i++) {
-            h = (h ^ (Float.floatToRawIntBits(v[i]) & 0xffffffffL)) * 1099511628211L;
+            content = (content ^ (Float.floatToRawIntBits(v[i]) & 0xffffffffL)) * 1099511628211L;
         }
+        topology = (topology ^ (vn / 3)) * 1099511628211L;
         int[] x = capture.idx.elements();
         int xn = capture.idx.size();
         for (int i = 0; i < xn; i++) {
-            h = (h ^ (x[i] & 0xffffffffL)) * 1099511628211L;
+            long value = x[i] & 0xffffffffL;
+            content = (content ^ value) * 1099511628211L;
+            topology = (topology ^ value) * 1099511628211L;
         }
         float[] uv = capture.uvList.elements();
         int uvn = capture.uvList.size();
         for (int i = 0; i < uvn; i++) {
-            h = (h ^ (Float.floatToRawIntBits(uv[i]) & 0xffffffffL)) * 1099511628211L;
+            long value = Float.floatToRawIntBits(uv[i]) & 0xffffffffL;
+            content = (content ^ value) * 1099511628211L;
         }
+        topology = (topology ^ SceneMesh.UvLayout.PER_VERTEX.ordinal()) * 1099511628211L;
+        topology = (topology ^ uvn) * 1099511628211L;
         for (SceneMesh.TriangleSurface surface : capture.surfaces) {
-            h = (h ^ surface.hashCode()) * 1099511628211L;
+            long value = surface.hashCode() & 0xffffffffL;
+            content = (content ^ value) * 1099511628211L;
         }
-        return h;
+        return new MeshFingerprint(content, new SceneMesh.TopologyRevision(topology));
     }
 
     /** Counts one selected cached block entity without resubmitting its unchanged retained state. */
@@ -957,12 +968,13 @@ public final class RtEntities {
         state.lastSeen = build.frameIndex;
         pendingDrops.remove(key);
         GeometryTransform transform = transform(instanceTransform, build.origin);
-        long capturedMeshHash = meshHash();
+        MeshFingerprint fingerprint = meshFingerprint(capture);
+        long capturedMeshHash = fingerprint.contentHash();
         if (state.beginInitialSubmission(capturedMeshHash)) {
             build.telemetry.count("entityPlacementInitialSubmissions", 1);
             EntityState submitted = state;
             List<SceneGeometrySink.Operation> operations = List.of(
-                    new SceneGeometrySink.Put(key, capture.sceneMesh()),
+                    new SceneGeometrySink.Put(key, capture.sceneMesh(fingerprint.topologyRevision())),
                     new SceneGeometrySink.Place(key, key, transform, mask));
             if (build.telemetry.enabled()) {
                 long version = state.profileMeshSubmission();
@@ -987,10 +999,12 @@ public final class RtEntities {
                     long visibilityToken = state.meshVisibilityToken;
                     EntityState submitted = state;
                     MinecraftTelemetry.Instrumentation telemetry = build.telemetry;
-                    build.submit(key, List.of(new SceneGeometrySink.Put(key, capture.sceneMesh())),
+                    build.submit(key, List.of(new SceneGeometrySink.Put(key,
+                                    capture.sceneMesh(fingerprint.topologyRevision()))),
                             () -> submitted.meshPublicationAccepted(version, sourceFrame, visibilityToken, telemetry));
                 } else {
-                    build.submit(key, List.of(new SceneGeometrySink.Put(key, capture.sceneMesh())), null);
+                    build.submit(key, List.of(new SceneGeometrySink.Put(key,
+                            capture.sceneMesh(fingerprint.topologyRevision()))), null);
                 }
             }
         }

@@ -1,6 +1,10 @@
 package dev.comfyfluffy.caustica.rt.geometry;
 
+import dev.comfyfluffy.caustica.api.provider.MaterialHandle;
+import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import org.junit.jupiter.api.Test;
+
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -9,12 +13,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 final class RtSceneGeometryCompactionStateTest {
     @Test
     void providerPayloadPreservesInternalBuildPolicy() {
-        GeometryUpdates.ProviderPayload payload = new GeometryUpdates.ProviderPayload(null,
+        SceneMesh mesh = mesh();
+        GeometryUpdates.ProviderPayload payload = new GeometryUpdates.ProviderPayload(mesh,
                 GeometryUpdates.BuildPolicy.STATIC);
 
         assertEquals(GeometryUpdates.BuildPolicy.STATIC, payload.buildPolicy());
         assertEquals(GeometryUpdates.BuildPolicy.DYNAMIC,
-                new GeometryUpdates.ProviderPayload(null, GeometryUpdates.BuildPolicy.DYNAMIC).buildPolicy());
+                new GeometryUpdates.ProviderPayload(mesh, GeometryUpdates.BuildPolicy.DYNAMIC).buildPolicy());
     }
 
     @Test
@@ -55,5 +60,11 @@ final class RtSceneGeometryCompactionStateTest {
         state.completeBuild();
 
         assertTrue(state.publishable());
+    }
+
+    private static SceneMesh mesh() {
+        return new SceneMesh(new float[]{0, 0, 0, 1, 0, 0, 0, 1, 0}, new int[]{0, 1, 2},
+                SceneMesh.UvLayout.PER_VERTEX, new float[6],
+                List.of(SceneMesh.TriangleSurface.surface(MaterialHandle.of("test", "material"))));
     }
 }

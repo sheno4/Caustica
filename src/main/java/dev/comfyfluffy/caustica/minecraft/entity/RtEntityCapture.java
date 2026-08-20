@@ -105,9 +105,14 @@ public final class RtEntityCapture implements VertexConsumer {
     }
 
     SceneMesh sceneMesh() {
+        return sceneMesh(null);
+    }
+
+    SceneMesh sceneMesh(SceneMesh.TopologyRevision topologyRevision) {
         return new SceneMesh(java.util.Arrays.copyOf(verts.elements(), verts.size()),
                 java.util.Arrays.copyOf(idx.elements(), idx.size()), SceneMesh.UvLayout.PER_VERTEX,
-                java.util.Arrays.copyOf(uvList.elements(), uvList.size()), surfaces);
+                java.util.Arrays.copyOf(uvList.elements(), uvList.size()), new float[0], new float[0],
+                surfaces, java.util.Set.of(), topologyRevision);
     }
 
     @Override

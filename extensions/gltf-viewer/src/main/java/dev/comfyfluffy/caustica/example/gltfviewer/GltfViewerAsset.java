@@ -18,12 +18,14 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
 
 /** Adapts a glTF asset without altering primitive vertices or authored scene transforms. */
 final class GltfViewerAsset {
     private static final ResourceId DEFAULT_MATERIAL = ResourceId.of(
             GltfViewerMod.MOD_ID, "gltf_viewer/material_default");
     private static final float EMISSIVE_REFERENCE_LUMINANCE_CD_M2 = 4000.0f;
+    private static final AtomicLong TOPOLOGY_REVISIONS = new AtomicLong();
 
     private GltfViewerAsset() {
     }
@@ -182,7 +184,7 @@ final class GltfViewerAsset {
         }
         return new SceneMesh(primitive.positions(), indices, SceneMesh.UvLayout.PER_VERTEX,
                 uvs, primitive.normals(), colors,
-                surfaces, Set.of());
+                surfaces, Set.of(), new SceneMesh.TopologyRevision(TOPOLOGY_REVISIONS.incrementAndGet()));
     }
 
     private static float[] alphaRange(GltfImageData image) {

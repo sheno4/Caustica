@@ -14,6 +14,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 final class ProceduralSurfaceSceneProviderTest {
     @Test
@@ -29,6 +30,7 @@ final class ProceduralSurfaceSceneProviderTest {
         assertEquals(3, capture.last.size());
         SceneGeometrySink.Put put = assertInstanceOf(SceneGeometrySink.Put.class, capture.last.getFirst());
         assertEquals(12, put.mesh().triangleCount());
+        assertNotNull(put.mesh().topologyRevision());
         List<SceneGeometrySink.Place> places = capture.last.stream()
                 .filter(SceneGeometrySink.Place.class::isInstance)
                 .map(SceneGeometrySink.Place.class::cast)
@@ -47,7 +49,8 @@ final class ProceduralSurfaceSceneProviderTest {
         MinecraftSceneReset.request();
         provider.prepareFrame();
         assertEquals(1, capture.resetRequests);
-        assertInstanceOf(SceneGeometrySink.Put.class, capture.last.getFirst());
+        SceneGeometrySink.Put reloaded = assertInstanceOf(SceneGeometrySink.Put.class, capture.last.getFirst());
+        assertEquals(put.mesh().topologyRevision(), reloaded.mesh().topologyRevision());
         provider.stop();
     }
 

@@ -15,6 +15,13 @@ public final class SceneMesh {
     public enum UvLayout { PER_VERTEX, PER_TRIANGLE_CORNER }
     public enum Coverage { OPAQUE, CUTOUT, STOCHASTIC }
     /**
+     * Provider-owned identity of vertex correspondence, index order, and source structural
+     * semantic layout. Equality is meaningful only for the same provider and resident key.
+     * Providers must change the value whenever any of those facts changes; reusing a value
+     * for different topology is a contract violation.
+     */
+    public record TopologyRevision(long value) { }
+    /**
      * Conservative coverage bounds over one triangle for every state the provider may render.
      * Absence means the engine must classify the triangle as unknown. An incorrect bound can create
      * visible holes because an opacity micromap classified as opaque skips any-hit entirely.
@@ -97,6 +104,7 @@ public final class SceneMesh {
     private final float[] vertexColors;
     private final List<TriangleSurface> surfaces;
     private final Set<Semantic> semantics;
+    private final TopologyRevision topologyRevision;
 
     public SceneMesh(float[] positions, int[] indices, UvLayout uvLayout, float[] textureCoordinates,
                      List<TriangleSurface> surfaces) {
@@ -108,6 +116,13 @@ public final class SceneMesh {
         this(positions, indices, uvLayout, textureCoordinates, new float[0], new float[0], surfaces, semantics);
     }
 
+    public SceneMesh(float[] positions, int[] indices, UvLayout uvLayout, float[] textureCoordinates,
+                     List<TriangleSurface> surfaces, Set<Semantic> semantics,
+                     TopologyRevision topologyRevision) {
+        this(positions, indices, uvLayout, textureCoordinates, new float[0], new float[0], surfaces, semantics,
+                topologyRevision);
+    }
+
     /**
      * Creates a mesh with optional indexed shading attributes. Vertex colors are scene-linear ACEScg RGB
      * with unitless alpha multipliers. An empty normal or color array selects the corresponding
@@ -116,6 +131,17 @@ public final class SceneMesh {
     public SceneMesh(float[] positions, int[] indices, UvLayout uvLayout, float[] textureCoordinates,
                      float[] vertexNormals, float[] vertexColors,
                      List<TriangleSurface> surfaces, Set<Semantic> semantics) {
+        this(positions, indices, uvLayout, textureCoordinates, vertexNormals, vertexColors, surfaces, semantics, null);
+    }
+
+    /**
+     * Creates a mesh with optional indexed shading attributes and an optional provider-owned topology revision.
+     * A null revision explicitly declines topology reuse; the renderer then treats every submission as changed.
+     */
+    public SceneMesh(float[] positions, int[] indices, UvLayout uvLayout, float[] textureCoordinates,
+                     float[] vertexNormals, float[] vertexColors,
+                     List<TriangleSurface> surfaces, Set<Semantic> semantics,
+                     TopologyRevision topologyRevision) {
         this.positions = positions.clone();
         this.indices = indices.clone();
         this.uvLayout = Objects.requireNonNull(uvLayout, "uvLayout");
@@ -124,6 +150,7 @@ public final class SceneMesh {
         this.vertexColors = vertexColors.clone();
         this.surfaces = List.copyOf(surfaces);
         this.semantics = Set.copyOf(semantics);
+        this.topologyRevision = topologyRevision;
         validate();
     }
 
@@ -135,6 +162,8 @@ public final class SceneMesh {
     public float[] vertexColors() { return vertexColors.clone(); }
     public List<TriangleSurface> surfaces() { return surfaces; }
     public Set<Semantic> semantics() { return semantics; }
+    /** Returns the provider-owned topology identity, or null when topology reuse is not permitted. */
+    public TopologyRevision topologyRevision() { return topologyRevision; }
     public int vertexCount() { return positions.length / 3; }
     public int triangleCount() { return indices.length / 3; }
 

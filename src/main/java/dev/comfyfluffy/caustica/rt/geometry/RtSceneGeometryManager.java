@@ -234,14 +234,16 @@ public final class RtSceneGeometryManager {
             try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("geometry.packMaterial")) {
                 input = providerInput(prepared.key.source(), provider.mesh());
             }
-            writeDynamic(ctx, candidate, input);
             candidate.vertexCount = input.positions().length / 3;
             candidate.topology = Topology.of(input);
-            RtAccel.PreparedBlas operation;
             DynamicResident dynamicSource = source instanceof DynamicResident resident ? resident : null;
-            boolean previousIndexed = dynamicSource != null;
-            boolean retainPreviousPositions = previousIndexed && dynamicSource.topology != null
-                    && dynamicSource.topology.matches(candidate.topology);
+            ResidentId candidateId = new ResidentId(prepared.key.source(), entry.getKey());
+            TopologyPolicy topologyPolicy = dynamicSource == null
+                    ? TopologyPolicy.REBUILD_AND_RESET
+                    : topologyPolicy(candidateId, dynamicSource.topology, candidate.topology);
+            boolean retainPreviousPositions = topologyPolicy.preserveVertexHistory();
+            writeDynamic(ctx, candidate, input);
+            RtAccel.PreparedBlas operation;
             boolean minimizeMemory = provider.buildPolicy() == GeometryUpdates.BuildPolicy.STATIC;
             boolean opacityAcceleration = minimizeMemory
                     && ctx.backend().capabilities().opacityMicromaps() && opacityMicromapPipeline != null
@@ -273,7 +275,7 @@ public final class RtSceneGeometryManager {
                 operation = build.op();
             } else if (!minimizeMemory && dynamicSource != null && dynamicSource.updatable
                     && dynamicSource.updatesSinceBuild < 120
-                    && retainPreviousPositions) {
+                    && topologyPolicy.updateBlas()) {
                 RtAccel.UpdatableBuild update = RtAccel.prepareOutOfPlaceUpdate(ctx, dynamicSource.accel,
                         candidate.positionAddress, candidate.vertexCount, candidate.indexAddress,
                         candidate.classTriangles, "scene group BLAS update");
@@ -299,7 +301,7 @@ public final class RtSceneGeometryManager {
                 operation = build.op();
             }
             candidates.add(new GroupCandidate(
-                    new ResidentId(prepared.key.source(), entry.getKey()), candidate, source, operation,
+                    candidateId, candidate, source, operation,
                     !retainPreviousPositions));
             RtFrameStats.FRAME.count("geometryBlasCandidates", 1);
             preparingCandidate = null;
@@ -333,6 +335,31 @@ public final class RtSceneGeometryManager {
 
     PackedInput providerInput(ResourceId source, SceneMesh mesh) {
         return SceneMeshPacker.pack(mesh, materialResolver.apply(source));
+    }
+
+    static TopologyPolicy topologyPolicy(ResidentId resident, Topology previous, Topology candidate) {
+        if (previous == null || previous.revision() == null || candidate.revision() == null) {
+            return TopologyPolicy.REBUILD_AND_RESET;
+        }
+        if (!previous.revision().equals(candidate.revision())) return TopologyPolicy.REBUILD_AND_RESET;
+        if (previous.vertexCount() != candidate.vertexCount()
+                || previous.indexCount() != candidate.indexCount()
+                || previous.semanticFlags() != candidate.semanticFlags()) {
+            throw new IllegalArgumentException("geometry provider reused topology revision "
+                    + candidate.revision().value() + " with incompatible structure for "
+                    + resident.source() + "/" + resident.key());
+        }
+        boolean sameSbtPartition = previous.opaqueTriangleCount() == candidate.opaqueTriangleCount()
+                && previous.maskedTriangleCount() == candidate.maskedTriangleCount()
+                && previous.transmissiveTriangleCount() == candidate.transmissiveTriangleCount();
+        return sameSbtPartition ? TopologyPolicy.REUSE_AND_UPDATE
+                : TopologyPolicy.REBUILD_PRESERVE_HISTORY;
+    }
+
+    record TopologyPolicy(boolean preserveVertexHistory, boolean updateBlas) {
+        static final TopologyPolicy REBUILD_AND_RESET = new TopologyPolicy(false, false);
+        static final TopologyPolicy REBUILD_PRESERVE_HISTORY = new TopologyPolicy(true, false);
+        static final TopologyPolicy REUSE_AND_UPDATE = new TopologyPolicy(true, true);
     }
 
     private static boolean hasOpacityMicromapRange(PackedInput input) {

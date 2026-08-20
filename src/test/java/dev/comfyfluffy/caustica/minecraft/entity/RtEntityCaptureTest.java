@@ -6,7 +6,9 @@ import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 
 final class RtEntityCaptureTest {
@@ -83,5 +85,29 @@ final class RtEntityCaptureTest {
         capture.addDirectQuad(X, Y, Z, U, V, 0f, 0f, 1f, -1);
         assertSame(capture.surfaces.getFirst(), capture.surfaces.get(1));
         assertNotSame(retired, capture.surfaces.getFirst());
+    }
+
+    @Test
+    void topologyFingerprintRetainsAttributeChangesButRejectsIndexReordering() {
+        RtEntityCapture capture = new RtEntityCapture();
+        capture.addDirectQuad(X, Y, Z, U, V, 0f, 0f, 1f, -1);
+
+        RtEntities.MeshFingerprint initial = RtEntities.meshFingerprint(capture);
+        assertNull(capture.sceneMesh().topologyRevision());
+
+        capture.verts.set(0, 0.25f);
+        RtEntities.MeshFingerprint deformed = RtEntities.meshFingerprint(capture);
+        assertNotEquals(initial.contentHash(), deformed.contentHash());
+        assertEquals(initial.topologyRevision(), deformed.topologyRevision());
+
+        capture.uvList.set(0, 0.25f);
+        RtEntities.MeshFingerprint uvChanged = RtEntities.meshFingerprint(capture);
+        assertNotEquals(deformed.contentHash(), uvChanged.contentHash());
+        assertEquals(deformed.topologyRevision(), uvChanged.topologyRevision());
+
+        capture.idx.set(0, 1);
+        RtEntities.MeshFingerprint reordered = RtEntities.meshFingerprint(capture);
+        assertNotEquals(uvChanged.topologyRevision(), reordered.topologyRevision());
+        assertEquals(reordered.topologyRevision(), capture.sceneMesh(reordered.topologyRevision()).topologyRevision());
     }
 }

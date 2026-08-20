@@ -6,6 +6,7 @@ import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 
 import java.util.List;
+import java.util.Objects;
 
 /** Immutable protocol for atomically updating retained renderer geometry. */
 public final class GeometryUpdates {
@@ -22,6 +23,14 @@ public final class GeometryUpdates {
 
     public record ProviderPayload(SceneMesh mesh, BuildPolicy buildPolicy)
             implements GeometryPayload {
+        public ProviderPayload {
+            Objects.requireNonNull(mesh, "mesh");
+            Objects.requireNonNull(buildPolicy, "buildPolicy");
+        }
+
+        public SceneMesh.TopologyRevision topologyRevision() {
+            return mesh.topologyRevision();
+        }
     }
 
     public enum BuildPolicy {
