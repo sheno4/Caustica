@@ -1,0 +1,148 @@
+package dev.comfyfluffy.caustica.minecraft.terrain;
+
+import dev.comfyfluffy.caustica.api.ColorSpaces;
+import dev.comfyfluffy.caustica.api.provider.SceneMesh;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialEmissionSnapshot;
+import it.unimi.dsi.fastutil.floats.FloatArrayList;
+import net.minecraft.client.renderer.texture.TextureAtlasSprite;
+import org.junit.jupiter.api.Test;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+final class RtLightCollectorTest {
+    @Test
+    void primitiveGatedEmissionRejectsZeroAndScalesHalfStrength() {
+        var emission = emission(100.0f, true, footprint(1, 1.0f, 1.0f));
+
+        Result zero = collect(emission, 0.0f, 0.0f);
+        Result half = collect(emission, 0.5f, 0.0f);
+        Result full = collect(emission, 1.0f, 0.0f);
+
+        assertTrue(zero.lights.isEmpty());
+        assertFalse(zero.surfaces.getFirst().emitterInLightScene());
+        assertEquals(RtLightCollector.FLOATS_PER_LIGHT, half.lights.size());
+        assertTrue(half.surfaces.getFirst().emitterInLightScene());
+        assertEquals(full.lights.getFloat(16) * 0.5f, half.lights.getFloat(16), 1.0e-5f);
+        assertEquals(full.lights.getFloat(17) * 0.5f, half.lights.getFloat(17), 1.0e-5f);
+        assertEquals(full.lights.getFloat(18) * 0.5f, half.lights.getFloat(18), 1.0e-5f);
+    }
+
+    @Test
+    void namedUniformEmissionIgnoresPrimitiveState() {
+        Result result = collect(emission(80.0f, false, footprint(1, 1.0f, 1.0f)), 0.0f, 0.0f);
+
+        assertEquals(RtLightCollector.FLOATS_PER_LIGHT, result.lights.size());
+        assertTrue(result.surfaces.getFirst().emitterInLightScene());
+        assertTrue(result.surfaces.getLast().emitterInLightScene());
+    }
+
+    @Test
+    void rectangleMeanPreservesTheFootprintPower() {
+        float[] weights = {1.0f, 0.0f, 0.0f, 1.0f};
+        Result result = collect(emission(120.0f, false, footprint(2, weights, weights)), 0.0f, 0.0f);
+        float area = result.lights.getFloat(3);
+        float[] white = ColorSpaces.linearBt709ToAcesCg(1.0f, 1.0f, 1.0f);
+
+        assertEquals(1.0f, area, 1.0e-6f);
+        assertEquals(white[0] * 60.0f, result.lights.getFloat(16) * area, 1.0e-4f);
+        assertEquals(white[1] * 60.0f, result.lights.getFloat(17) * area, 1.0e-4f);
+        assertEquals(white[2] * 60.0f, result.lights.getFloat(18) * area, 1.0e-4f);
+    }
+
+    @Test
+    void sparseAndLowLuminanceCandidatesStayOutsideTheLightScene() {
+        float[] sparse = {
+                0, 0, 0,
+                1, 0, 1,
+                0, 0, 0
+        };
+        Result belowFill = collect(emission(100.0f, false, footprint(3, sparse, sparse)), 0.0f, 0.8f);
+        Result belowLuminance = collect(emission(100.0f, false,
+                footprint(1, new float[]{1.0f}, new float[]{0.0001f})), 0.0f, 0.0f);
+
+        assertTrue(belowFill.lights.isEmpty());
+        assertFalse(belowFill.surfaces.getFirst().emitterInLightScene());
+        assertTrue(belowLuminance.lights.isEmpty());
+        assertFalse(belowLuminance.surfaces.getFirst().emitterInLightScene());
+    }
+
+    @Test
+    void missingFootprintDoesNotCreateADescriptorOrEmitterMarker() {
+        Result result = collect(emission(100.0f, false, null), 0.0f, 0.0f);
+
+        assertTrue(result.lights.isEmpty());
+        assertFalse(result.surfaces.getFirst().emitterInLightScene());
+    }
+
+    private static Result collect(MinecraftMaterialEmissionSnapshot.Emission emission,
+                                  float stateEmission, float minFillRatio) {
+        FloatArrayList verts = new FloatArrayList(new float[]{
+                0, 0, 0,
+                1, 0, 0,
+                1, 1, 0,
+                0, 1, 0
+        });
+        FloatArrayList prim = new FloatArrayList(24);
+        for (int triangle = 0; triangle < 2; triangle++) {
+            prim.add(0.0f);
+            prim.add(0.0f);
+            prim.add(1.0f);
+            prim.add(stateEmission);
+            prim.add(1.0f);
+            prim.add(1.0f);
+            prim.add(1.0f);
+            for (int lane = 7; lane < 12; lane++) prim.add(0.0f);
+        }
+        FloatArrayList cornerUv = new FloatArrayList(new float[]{
+                0, 0, 1, 0, 1, 1,
+                0, 0, 1, 1, 0, 1
+        });
+        SceneMesh.TriangleSurface surface = new SceneMesh.TriangleSurface(
+                new SceneMesh.FallbackMaterial(null), SceneMesh.Coverage.OPAQUE,
+                0, 0, 1, stateEmission, 1, 1, 1);
+        List<SceneMesh.TriangleSurface> surfaces = new ArrayList<>(List.of(surface, surface));
+        FloatArrayList lights = new FloatArrayList();
+        RtLightCollector.collectClass(lights, verts, prim, surfaces, cornerUv,
+                new TextureAtlasSprite[2], new MinecraftMaterialEmissionSnapshot.Emission[]{emission, emission},
+                minFillRatio);
+        return new Result(lights, surfaces);
+    }
+
+    private static MinecraftMaterialEmissionSnapshot.Emission emission(
+            float luminance, boolean primitiveGated, MinecraftMaterialEmissionSnapshot.Footprint footprint) {
+        return new MinecraftMaterialEmissionSnapshot.Emission(luminance, primitiveGated, footprint);
+    }
+
+    private static TestFootprint footprint(int resolution, float weight, float color) {
+        float[] weights = new float[resolution * resolution];
+        float[] colors = new float[resolution * resolution];
+        java.util.Arrays.fill(weights, weight);
+        java.util.Arrays.fill(colors, color);
+        return footprint(resolution, weights, colors);
+    }
+
+    private static TestFootprint footprint(int resolution, float[] weights, float[] colors) {
+        return new TestFootprint(resolution, weights, colors);
+    }
+
+    private record Result(FloatArrayList lights, List<SceneMesh.TriangleSurface> surfaces) {
+    }
+
+    private record TestFootprint(int resolution, float[] weights, float[] colors)
+            implements MinecraftMaterialEmissionSnapshot.Footprint {
+        @Override
+        public int sampleIndex(float coordinate) {
+            return Math.max(0, Math.min(resolution - 1, (int) (coordinate * resolution)));
+        }
+
+        @Override public float r(int x, int y) { return colors[y * resolution + x]; }
+        @Override public float g(int x, int y) { return colors[y * resolution + x]; }
+        @Override public float b(int x, int y) { return colors[y * resolution + x]; }
+        @Override public float weight(int x, int y) { return weights[y * resolution + x]; }
+    }
+}

@@ -7,15 +7,11 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class RtMaterialDescTest {
     @Test
-    void retainsCompilerSourceAndNormalizedEmissionMetadata() {
-        RtMaterialDesc.EmissionSummary summary = new RtMaterialDesc.EmissionSummary(
-                0.4f, 0.2f, 0.1f, 0.25f, 0.5f);
+    void retainsCompilerSourceAndShaderEmissionLuminance() {
         RtMaterialDesc desc = new RtMaterialDesc(0, RtMaterialDesc.Source.DERIVED_TEXTURE, 0,
-                0.7f, 0.0f, 1.0f, 0.0f, RtMaterialDesc.EmissionSource.DERIVED_MASK,
-                1.0f, summary, 0);
+                0.7f, 0.0f, 1.0f, 0.0f, 1.0f, 0);
         assertEquals(RtMaterialDesc.Source.DERIVED_TEXTURE, desc.source());
-        assertEquals(RtMaterialDesc.EmissionSource.DERIVED_MASK, desc.emissionSource());
-        assertEquals(summary, desc.emissionSummary());
+        assertEquals(1.0f, desc.emissionLuminance());
     }
 
     /**
@@ -26,17 +22,17 @@ final class RtMaterialDescTest {
     void rejectsASurfaceImplementationTheBindingCannotCarry() {
         assertThrows(IllegalArgumentException.class, () -> new RtMaterialDesc(0,
                 RtMaterialDesc.Source.DERIVED_TEXTURE, 0, 0.5f, 0.0f, 1.0f, 0.0f,
-                RtMaterialDesc.EmissionSource.NONE, 0.0f, RtMaterialDesc.EmissionSummary.NONE, 256));
+                0.0f, 256));
     }
 
     @Test
     void rejectsInvalidPhysicalParameters() {
         assertThrows(IllegalArgumentException.class, () -> new RtMaterialDesc(0,
                 RtMaterialDesc.Source.DERIVED_TEXTURE, 0, 1.1f, 0.0f, 1.0f, 0.0f,
-                RtMaterialDesc.EmissionSource.NONE, 0.0f, RtMaterialDesc.EmissionSummary.NONE, 0));
+                0.0f, 0));
         assertThrows(IllegalArgumentException.class, () -> new RtMaterialDesc(0,
                 RtMaterialDesc.Source.DERIVED_TEXTURE, 0, 0.5f, 0.0f, 0.0f, 0.0f,
-                RtMaterialDesc.EmissionSource.NONE, 0.0f, RtMaterialDesc.EmissionSummary.NONE, 0));
+                0.0f, 0));
     }
 
     @Test

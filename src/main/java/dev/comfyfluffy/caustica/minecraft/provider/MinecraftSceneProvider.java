@@ -9,6 +9,8 @@ import dev.comfyfluffy.caustica.api.provider.MaterialSnapshot;
 import dev.comfyfluffy.caustica.api.provider.TextureSink;
 import dev.comfyfluffy.caustica.minecraft.entity.RtEntities;
 import dev.comfyfluffy.caustica.minecraft.entity.RtEntityTextures;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialEmissionSnapshot;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialEmissionState;
 import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
 import dev.comfyfluffy.caustica.minecraft.terrain.RtWorkerPool;
 import net.minecraft.client.renderer.texture.TextureAtlas;
@@ -19,6 +21,15 @@ public final class MinecraftSceneProvider implements SceneProvider {
     public static final ResourceId ID = ResourceId.of("caustica", "minecraft_scene");
     private static final Consumer<SceneGeometrySink> TERRAIN_GEOMETRY = RtTerrain::submitGeometry;
     private static final Consumer<SceneFrameContext> ENTITY_GEOMETRY = RtEntities.INSTANCE::submitGeometry;
+    private final MinecraftMaterialEmissionState emissionState;
+
+    public MinecraftSceneProvider() {
+        this(new MinecraftMaterialEmissionState());
+    }
+
+    public MinecraftSceneProvider(MinecraftMaterialEmissionState emissionState) {
+        this.emissionState = java.util.Objects.requireNonNull(emissionState, "emissionState");
+    }
 
     @Override
     public void update(SceneGeometryUpdateContext update) {
@@ -80,7 +91,8 @@ public final class MinecraftSceneProvider implements SceneProvider {
 
     @Override
     public void onMaterialEpoch(MaterialSnapshot materials) {
-        RtTerrain.publishMaterials(materials);
+        RtTerrain.publishMaterials(new MinecraftMaterialEmissionSnapshot.Published(
+                emissionState.snapshot(), materials));
     }
 
     @Override

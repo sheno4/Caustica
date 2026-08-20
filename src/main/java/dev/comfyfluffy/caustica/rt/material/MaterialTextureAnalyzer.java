@@ -1,6 +1,5 @@
 package dev.comfyfluffy.caustica.rt.material;
 
-import dev.comfyfluffy.caustica.api.provider.EmissionFootprint;
 import dev.comfyfluffy.caustica.api.provider.MaterialTextureAnalysisSource;
 import dev.comfyfluffy.caustica.api.provider.MaterialTextureImage;
 import dev.comfyfluffy.caustica.api.provider.OpenPbrColorBinding;
@@ -8,45 +7,36 @@ import dev.comfyfluffy.caustica.api.provider.OpenPbrTextureTexel;
 
 import java.util.List;
 
-/** Decodes source images and computes the statistics consumed by material table compilation. */
+/** Decodes source images into canonical page levels and the albedo average used by material bindings. */
 final class MaterialTextureAnalyzer {
     record Alpha(float[] texels, float minAlpha, float maxAlpha) { }
 
-    record AlbedoStats(float averageR, float averageG, float averageB, float averageA,
-                       RtMaterialDesc.EmissionSummary uniformEmissionSummary,
-                       EmissionFootprint uniformEmissionFootprint) {
-        static final AlbedoStats NEUTRAL = new AlbedoStats(1, 1, 1, 0,
-                RtMaterialDesc.EmissionSummary.NONE, null);
+    record AlbedoStats(float averageR, float averageG, float averageB, float averageA) {
+        static final AlbedoStats NEUTRAL = new AlbedoStats(1, 1, 1, 0);
     }
 
-    record Decoded(List<RtMaterialTextureData.Level> levels,
-                   RtMaterialDesc.EmissionSummary emissionSummary,
-                   EmissionFootprint emissionFootprint, AlbedoStats stats) { }
+    record Decoded(List<RtMaterialTextureData.Level> levels, AlbedoStats stats) { }
 
     private MaterialTextureAnalyzer() { }
 
-    static Decoded decode(MaterialTextureAnalysisSource source, boolean emissionMask,
-                          OpenPbrColorBinding emissionColorBinding,
-                          int footprintResolution, int maxLod) throws Exception {
+    static Decoded decode(MaterialTextureAnalysisSource source,
+                          OpenPbrColorBinding emissionColorBinding, int maxLod) throws Exception {
         try (MaterialTextureImage texture = source.texture().open()) {
             int width = source.width(), height = source.height();
             float[] surface0 = new float[width * height * 4];
             float[] normal = new float[surface0.length];
             float[] surface1 = new float[surface0.length];
-            float[] emission = emissionMask ? new float[width * height] : null;
             float[] emissionColor = new float[surface0.length];
             boolean emissionUsesBase = emissionColorBinding == OpenPbrColorBinding.BASE_COLOR;
-            StatsAccumulator stats = new StatsAccumulator(width, height, footprintResolution,
-                    emissionColorBinding);
+            StatsAccumulator stats = new StatsAccumulator(width, height);
             OpenPbrTextureTexel texel = new OpenPbrTextureTexel();
             for (int y = 0; y < height; y++) for (int x = 0; x < width; x++) {
                 int i = (y * width + x) * 4;
                 int pixel = sample(texture, x, y, width, height);
-                stats.add(x, y, pixel);
+                stats.add(pixel);
                 float r = RtMaterialTextureData.srgbToLinear(red(pixel));
                 float g = RtMaterialTextureData.srgbToLinear(green(pixel));
                 float b = RtMaterialTextureData.srgbToLinear(blue(pixel));
-                float a = alpha(pixel) / 255.0f;
                 texel.reset();
                 texture.readOpenPbr(x, y, texel);
                 emissionColor[i] = texel.emissionColorR * (emissionUsesBase ? r : 1);
@@ -64,14 +54,9 @@ final class MaterialTextureAnalyzer {
                 surface1[i + 1] = texel.metalBaseColorG;
                 surface1[i + 2] = texel.metalBaseColorB;
                 surface1[i + 3] = MaterialPagePacker.encodeIor(texel.specularIor);
-                if (emission != null) emission[y * width + x] = texel.emissionWeight * a;
             }
-            RtMaterialDesc.EmissionSummary summary = emission == null
-                    ? RtMaterialDesc.EmissionSummary.NONE : summarize(emissionColor, emission);
-            EmissionFootprint footprint = emission == null ? null
-                    : emissionFootprint(emissionColor, emission, width, height, footprintResolution);
             return new Decoded(RtMaterialTextureData.mipChain(new RtMaterialTextureData.Level(width, height,
-                    surface0, normal, surface1, emissionColor), maxLod), summary, footprint, stats.finish());
+                    surface0, normal, surface1, emissionColor), maxLod), stats.finish());
         }
     }
 
@@ -103,63 +88,29 @@ final class MaterialTextureAnalyzer {
         return false;
     }
 
-    static AlbedoStats scanAlbedo(MaterialTextureAnalysisSource source,
-                                  OpenPbrColorBinding emissionColorBinding, int resolution) throws Exception {
+    static AlbedoStats scanAlbedo(MaterialTextureAnalysisSource source) throws Exception {
         try (MaterialTextureImage image = source.texture().open()) {
-            StatsAccumulator stats = new StatsAccumulator(source.width(), source.height(), resolution,
-                    emissionColorBinding);
+            StatsAccumulator stats = new StatsAccumulator(source.width(), source.height());
             for (int y = 0; y < source.height(); y++) for (int x = 0; x < source.width(); x++)
-                stats.add(x, y, sample(image, x, y, source.width(), source.height()));
+                stats.add(sample(image, x, y, source.width(), source.height()));
             return stats.finish();
         }
     }
 
-    private static EmissionFootprint emissionFootprint(float[] color, float[] mask, int width, int height,
-                                                        int resolution) {
-        EmissionFootprint.Builder result = new EmissionFootprint.Builder(resolution, width, height);
-        for (int y = 0; y < height; y++) for (int x = 0; x < width; x++) {
-            int p = y * width + x, i = p * 4; float w = Math.clamp(mask[p], 0, 1);
-            result.add(x, y, color[i] * w, color[i + 1] * w, color[i + 2] * w, w);
-        }
-        return result.build();
-    }
-
-    private static RtMaterialDesc.EmissionSummary summarize(float[] color, float[] mask) {
-        double r = 0, g = 0, b = 0, energy = 0; int covered = 0;
-        for (int p = 0; p < mask.length; p++) {
-            int i = p * 4; float w = Math.clamp(mask[p], 0, 1);
-            float er = color[i] * w, eg = color[i + 1] * w, eb = color[i + 2] * w;
-            r += er; g += eg; b += eb; energy += .2126 * er + .7152 * eg + .0722 * eb;
-            if (w > 1f / 255) covered++;
-        }
-        if (energy <= 0) return RtMaterialDesc.EmissionSummary.NONE;
-        float inv = 1f / mask.length;
-        return new RtMaterialDesc.EmissionSummary((float) r * inv, (float) g * inv, (float) b * inv,
-                (float) energy * inv, covered * inv);
-    }
-
     private static final class StatsAccumulator {
-        final int width, height; final EmissionFootprint.Builder footprint; final OpenPbrColorBinding emissionColor;
-        long sr, sg, sb, sa; double lr, lg, lb; int covered;
-        StatsAccumulator(int width, int height, int resolution, OpenPbrColorBinding emissionColor) {
-            this.width = width; this.height = height; this.emissionColor = emissionColor;
-            footprint = new EmissionFootprint.Builder(resolution, width, height);
+        final int width, height;
+        long sr, sg, sb, sa;
+        StatsAccumulator(int width, int height) {
+            this.width = width;
+            this.height = height;
         }
-        void add(int x, int y, int pixel) {
+        void add(int pixel) {
             int a = alpha(pixel), r = red(pixel), g = green(pixel), b = blue(pixel);
-            sr += r; sg += g; sb += b; sa += a; float c = a / 255f;
-            float pr = (emissionColor == OpenPbrColorBinding.BASE_COLOR ? RtMaterialTextureData.srgbToLinear(r) : 1) * c;
-            float pg = (emissionColor == OpenPbrColorBinding.BASE_COLOR ? RtMaterialTextureData.srgbToLinear(g) : 1) * c;
-            float pb = (emissionColor == OpenPbrColorBinding.BASE_COLOR ? RtMaterialTextureData.srgbToLinear(b) : 1) * c;
-            lr += pr; lg += pg; lb += pb; footprint.add(x, y, pr, pg, pb, c); if (a > 1) covered++;
+            sr += r; sg += g; sb += b; sa += a;
         }
         AlbedoStats finish() {
-            float inv = 1f / (width * (float) height), scale = inv / 255f;
-            double luminance = .2126 * lr + .7152 * lg + .0722 * lb;
-            RtMaterialDesc.EmissionSummary uniform = luminance <= 0 ? RtMaterialDesc.EmissionSummary.NONE
-                    : new RtMaterialDesc.EmissionSummary((float) lr * inv, (float) lg * inv,
-                    (float) lb * inv, (float) luminance * inv, covered * inv);
-            return new AlbedoStats(sr * scale, sg * scale, sb * scale, sa * scale, uniform, footprint.build());
+            float scale = 1.0f / (width * (float) height * 255.0f);
+            return new AlbedoStats(sr * scale, sg * scale, sb * scale, sa * scale);
         }
     }
 

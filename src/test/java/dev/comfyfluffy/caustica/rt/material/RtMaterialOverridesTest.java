@@ -62,14 +62,10 @@ final class RtMaterialOverridesTest {
         assertEquals(2000.0f, rule.emissionLuminanceCdM2());
         RtMaterialDesc base = new RtMaterialDesc(RtMaterialRegistry.TRANSPORT_SURFACE,
                 RtMaterialDesc.Source.AUTHORED_TEXTURE, RtMaterialRegistry.FEATURE_SPEC,
-                0.8f, 0.0f, 1.0f, 0.0f, RtMaterialDesc.EmissionSource.AUTHORED_MASK,
-                5.0f, new RtMaterialDesc.EmissionSummary(0.2f, 0.1f, 0.05f, 0.1f, 0.5f), 0);
-        RtMaterialDesc applied = rule.apply(base);
+                0.8f, 0.0f, 1.0f, 0.0f, 5.0f, 0);
+        RtMaterialDesc applied = rule.apply(base, true);
         assertEquals(RtMaterialDesc.Source.OVERRIDE, applied.source());
-        // luminance_cd_m2 replaces the level but keeps LabPBR's mask/source/summary.
-        assertEquals(RtMaterialDesc.EmissionSource.AUTHORED_MASK, applied.emissionSource());
         assertEquals(2000.0f, applied.emissionLuminance());
-        assertEquals(base.emissionSummary(), applied.emissionSummary());
         assertEquals(0.06f, applied.specularRoughness());
         assertEquals(1.0f, applied.transmissionWeight());
     }
@@ -79,12 +75,12 @@ final class RtMaterialOverridesTest {
         RtMaterialDesc glassBase = new RtMaterialDesc(RtMaterialRegistry.TRANSPORT_MEDIUM_BOUNDARY,
                 RtMaterialDesc.Source.DERIVED_TEXTURE, 0, 0.05f, 0.0f,
                 OpenPbrMaterialDefaults.TRANSMISSIVE_SPECULAR_IOR, 1.0f,
-                RtMaterialDesc.EmissionSource.NONE, 0.0f, RtMaterialDesc.EmissionSummary.NONE, 0);
+                0.0f, 0);
         var rule = parse(JsonParser.parseString("""
                 {"format":4,"match":{"sprite":"somemod:block/crystal"},
                 "model":"dielectric","specular":{"ior":2.417}}
                 """).getAsJsonObject(), Identifier.parse("test:materials/crystal.json"));
-        RtMaterialDesc applied = rule.apply(glassBase);
+        RtMaterialDesc applied = rule.apply(glassBase, false);
         assertEquals(RtMaterialRegistry.TRANSPORT_MEDIUM_BOUNDARY, applied.transport());
         assertEquals(2.417f, applied.specularIor());
 
@@ -93,7 +89,7 @@ final class RtMaterialOverridesTest {
                 {"format":4,"match":{"sprite":"somemod:block/crystal"},"specular":{"roughness":0.5}}
                 """).getAsJsonObject(), Identifier.parse("test:materials/crystal.json"));
         assertEquals(OpenPbrMaterialDefaults.TRANSMISSIVE_SPECULAR_IOR,
-                silent.apply(glassBase).specularIor());
+                silent.apply(glassBase, false).specularIor());
     }
 
     @Test
@@ -103,8 +99,8 @@ final class RtMaterialOverridesTest {
                 """).getAsJsonObject(), Identifier.parse("test:materials/pool.json"));
         RtMaterialDesc base = new RtMaterialDesc(RtMaterialRegistry.TRANSPORT_SURFACE,
                 RtMaterialDesc.Source.DERIVED_TEXTURE, 0, 0.8f, 0.0f, 1.0f, 0.0f,
-                RtMaterialDesc.EmissionSource.NONE, 0.0f, RtMaterialDesc.EmissionSummary.NONE, 0);
-        RtMaterialDesc applied = rule.apply(base);
+                0.0f, 0);
+        RtMaterialDesc applied = rule.apply(base, false);
         assertEquals(RtMaterialRegistry.TRANSPORT_MEDIUM_BOUNDARY, applied.transport());
         assertEquals(MinecraftMaterialClassifier.WATER_IOR, applied.specularIor());
         assertEquals(3, applied.surfaceImplementation());
@@ -112,19 +108,18 @@ final class RtMaterialOverridesTest {
     }
 
     @Test
-    void emissionLuminanceCannotForceEmissionOntoANonEmissiveMaterial() {
+    void compileLocalCapabilityControlsWhetherEmissionLuminanceIsOverridden() {
         var rule = parse(JsonParser.parseString("""
                 {"format":4,"match":{"sprite":"minecraft:block/stone"},
                 "emission":{"luminance_cd_m2":5000.0}}
                 """).getAsJsonObject(), Identifier.parse("test:boost.json"));
         RtMaterialDesc base = new RtMaterialDesc(RtMaterialRegistry.TRANSPORT_SURFACE,
                 RtMaterialDesc.Source.DERIVED_TEXTURE, 0, 0.8f, 0.0f, 1.0f, 0.0f,
-                RtMaterialDesc.EmissionSource.NONE, 0.0f, RtMaterialDesc.EmissionSummary.NONE, 0);
+                5.0f, 0);
 
-        RtMaterialDesc applied = rule.apply(base);
+        RtMaterialDesc applied = rule.apply(base, false);
 
-        assertEquals(RtMaterialDesc.EmissionSource.NONE, applied.emissionSource());
-        assertEquals(0.0f, applied.emissionLuminance());
+        assertEquals(5.0f, applied.emissionLuminance());
     }
 
     @Test
@@ -170,10 +165,10 @@ final class RtMaterialOverridesTest {
                 """).getAsJsonObject(), Identifier.parse("test:materials/crystal.json"));
         RtMaterialDesc base = new RtMaterialDesc(RtMaterialRegistry.TRANSPORT_SURFACE,
                 RtMaterialDesc.Source.DERIVED_TEXTURE, 0, 0.8f, 0.0f, 1.0f, 0.0f,
-                RtMaterialDesc.EmissionSource.NONE, 0.0f, RtMaterialDesc.EmissionSummary.NONE, 0);
+                0.0f, 0);
 
         assertEquals(2, rule.surfaceImplementation());
-        assertEquals(2, rule.apply(base).surfaceImplementation());
+        assertEquals(2, rule.apply(base, false).surfaceImplementation());
 
         var absent = MinecraftMaterialSource.parse(JsonParser.parseString("""
                 {"format":4,"match":{"sprite":"somemod:block/crystal"},"surface":"somemod:absent"}
@@ -191,9 +186,9 @@ final class RtMaterialOverridesTest {
                 """).getAsJsonObject(), Identifier.parse("test:materials/crystal.json"));
         RtMaterialDesc base = new RtMaterialDesc(RtMaterialRegistry.TRANSPORT_SURFACE,
                 RtMaterialDesc.Source.DERIVED_TEXTURE, 0, 0.8f, 0.0f, 1.0f, 0.0f,
-                RtMaterialDesc.EmissionSource.NONE, 0.0f, RtMaterialDesc.EmissionSummary.NONE, 1);
+                0.0f, 1);
 
-        assertEquals(1, rule.apply(base).surfaceImplementation());
+        assertEquals(1, rule.apply(base, false).surfaceImplementation());
     }
 
     @Test

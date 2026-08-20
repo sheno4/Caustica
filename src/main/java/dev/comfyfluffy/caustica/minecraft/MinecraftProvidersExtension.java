@@ -14,6 +14,7 @@ import dev.comfyfluffy.caustica.minecraft.damage.MinecraftDamageModifierPass;
 import dev.comfyfluffy.caustica.minecraft.provider.MinecraftLightProvider;
 import dev.comfyfluffy.caustica.minecraft.provider.MinecraftMaterialSource;
 import dev.comfyfluffy.caustica.minecraft.provider.MinecraftSceneProvider;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialEmissionState;
 import dev.comfyfluffy.caustica.minecraft.sky.SkyLutPass;
 
 /** Installs Minecraft as scene, light, and material input to the host-neutral renderer API. */
@@ -42,10 +43,14 @@ public final class MinecraftProvidersExtension implements CausticaExtension {
                 .renderPass(MinecraftDamageModifierPass.ID, RenderStage.BEFORE_TRACE,
                         MinecraftDamageModifierPass::new)
                 .renderPass(WorldOverlayPass.ID, RenderStage.OVERLAY, WorldOverlayPass::new)
-                .sceneProvider(MinecraftSceneProvider.ID, MinecraftSceneProvider::new)
+                .sceneProviderContextual(MinecraftSceneProvider.ID, context -> new MinecraftSceneProvider(
+                        context.getOrCreate(MinecraftMaterialEmissionState.CONTEXT_KEY,
+                                MinecraftMaterialEmissionState::new)))
                 .sceneProvider(MinecraftCloudSceneProvider.ID, MinecraftCloudSceneProvider::new)
                 .lightProvider(MinecraftLightProvider.ID, MinecraftLightProvider::new)
-                .materialSource(MinecraftMaterialSource.ID, MinecraftMaterialSource::new)
+                .materialSourceContextual(MinecraftMaterialSource.ID, context -> new MinecraftMaterialSource(
+                        context.getOrCreate(MinecraftMaterialEmissionState.CONTEXT_KEY,
+                                MinecraftMaterialEmissionState::new)))
                 .register();
     }
 }

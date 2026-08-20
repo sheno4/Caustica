@@ -5,7 +5,6 @@ import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.api.provider.MaterialDefinition;
 import dev.comfyfluffy.caustica.api.provider.MaterialTopology;
 import dev.comfyfluffy.caustica.api.provider.AtlasMaterialReference;
-import dev.comfyfluffy.caustica.api.provider.EmissionFootprint;
 import dev.comfyfluffy.caustica.engine.material.MaterialCatalog;
 import dev.comfyfluffy.caustica.api.provider.MaterialTextureResource;
 import dev.comfyfluffy.caustica.api.provider.MaterialVariant;
@@ -141,7 +140,8 @@ public final class RtMaterialRegistry {
     /** Build and atomically publish the registry for the current resource epoch. */
     public void rebuild(GpuContext ctx, RtMaterialPageCompiler pageCompiler, MaterialCatalog catalog,
                         RtMaterialOverrides overrides, List<MaterialDefinition> definitions,
-                        RtMaterialOverrides.SurfaceResolver surfaces, int runtimeTextureCapacity) {
+                        RtMaterialOverrides.SurfaceResolver surfaces, Set<ResourceId> availableSurfaces,
+                        int runtimeTextureCapacity) {
         Map<ResourceId, RtMaterialPageCompiler.Entry> entries = pageCompiler.preparedEntries();
         float fallbackEmissionLuminance = 1.0f;
         List<ResourceId> atlasResources = catalog.atlasResources().stream()
@@ -158,7 +158,7 @@ public final class RtMaterialRegistry {
         int profileVariants = MaterialRegistryCompiler.variantCount();
         CompiledTables tables = new CompiledTables(2 + profileVariants + atlasResources.size() * profileVariants);
         tables.add(compileDesc(TRANSPORT_SURFACE, 0, OpenPbrMaterialProfile.ROUGH_DIELECTRIC, false, true,
-                RtMaterialDesc.EmissionSummary.NONE, fallbackEmissionLuminance), transparentWhiteAverage(), fallbackEntry, null,
+                fallbackEmissionLuminance), transparentWhiteAverage(), fallbackEntry,
                 PRIMARY_COVERAGE_CUTOFF, true);
         int[] fallbackVariants = new int[profileVariants];
         for (OpenPbrMaterialProfile profile : TEXTURE_PROFILES) {
@@ -172,16 +172,15 @@ public final class RtMaterialRegistry {
                     }
                     fallbackVariants[variant] = tables.add(
                             compileDesc(transport(topology), 0, profile, emitting, true,
-                                    RtMaterialDesc.EmissionSummary.NONE, fallbackEmissionLuminance),
-                            transparentWhiteAverage(), fallbackEntry, null, PRIMARY_COVERAGE_CUTOFF,
+                                    fallbackEmissionLuminance),
+                            transparentWhiteAverage(), fallbackEntry, PRIMARY_COVERAGE_CUTOFF,
                             topology == MaterialTopology.SURFACE);
                 }
             }
         }
         int nextRuntimeFallbackId = tables.add(
-                compileRuntimeTextureDesc(0, true, RtMaterialDesc.EmissionSummary.NONE,
-                        fallbackEmissionLuminance),
-                transparentWhiteAverage(), fallbackEntry, null, RUNTIME_TEXTURE_COVERAGE_CUTOFF);
+                compileRuntimeTextureDesc(0, true, fallbackEmissionLuminance),
+                transparentWhiteAverage(), fallbackEntry, RUNTIME_TEXTURE_COVERAGE_CUTOFF);
         Map<ResourceId, int[]> ids = new HashMap<>();
         List<MutableCompiledOverride> compiledOverrides = new ArrayList<>();
         Map<ResourceId, List<MutableCompiledOverride>> compiledOverridesByMaterial = new HashMap<>();
@@ -217,13 +216,12 @@ public final class RtMaterialRegistry {
                         int features = emitting ? baseFeatures : baseFeatures & ~FEATURE_EMISSION_MASK;
                         RtMaterialDesc desc = compileDesc(transport(topology), features,
                                 profile, emitting, false,
-                                variantSummary(features, emitting, entry, entry.uniformEmissionSummary()),
                                 dielectricIor, uniformEmissionLuminance);
                         if (materialWide != null) {
-                            desc = materialWide.rule.apply(desc);
+                            desc = materialWide.rule.apply(desc, emissionCapable(emitting, features));
                         }
                         variants[index(profile, topology, emitting)] = tables.add(desc, entry.average(),
-                                entry, entry.uniformEmissionFootprint(), PRIMARY_COVERAGE_CUTOFF,
+                                entry, PRIMARY_COVERAGE_CUTOFF,
                                 topology == MaterialTopology.SURFACE);
                     }
                 }
@@ -239,11 +237,10 @@ public final class RtMaterialRegistry {
                             int features = emitting ? baseFeatures : baseFeatures & ~FEATURE_EMISSION_MASK;
                             RtMaterialDesc base = compileDesc(transport(topology),
                                     features, profile, emitting, false,
-                                    variantSummary(features, emitting, entry, entry.uniformEmissionSummary()),
                                     dielectricIor, uniformEmissionLuminance);
-                            RtMaterialDesc desc = compiled.rule.apply(base);
+                            RtMaterialDesc desc = compiled.rule.apply(base, emissionCapable(emitting, features));
                             overrideVariants[index(profile, topology, emitting)] = tables.add(desc,
-                                    entry.average(), entry, entry.uniformEmissionFootprint(), PRIMARY_COVERAGE_CUTOFF,
+                                    entry.average(), entry, PRIMARY_COVERAGE_CUTOFF,
                                     topology == MaterialTopology.SURFACE);
                         }
                     }
@@ -262,16 +259,16 @@ public final class RtMaterialRegistry {
             RtMaterialPageCompiler.Entry entry = entries.get(material);
             int features = entry.features() & (FEATURE_SPEC | FEATURE_NORMAL | FEATURE_EMISSION_MASK
                     | FEATURE_SUBSURFACE_COLOR_BASE | FEATURE_EMISSION_COLOR_BASE);
-            RtMaterialDesc desc = compileRuntimeTextureDesc(features, false, entry.emissionSummary(),
+            RtMaterialDesc desc = compileRuntimeTextureDesc(features, false,
                     resource.uniformEmissionLuminanceCdM2());
             for (MutableCompiledOverride compiled : compiledOverridesByMaterial.getOrDefault(material, List.of())) {
                 RtMaterialOverrides.Rule rule = compiled.rule;
                 if (rule.geometry() != null) continue;
-                desc = rule.apply(desc);
+                desc = rule.apply(desc, emissionCapable(false, features));
                 runtimeMatchedOverrides.add(rule);
                 break;
             }
-            int id = tables.add(desc, transparentWhiteAverage(), entry, null,
+            int id = tables.add(desc, transparentWhiteAverage(), entry,
                     RUNTIME_TEXTURE_COVERAGE_CUTOFF);
             nextRuntimeTextureIds.put(material, id);
             nextNamedMaterialIds.put(material, id);
@@ -295,10 +292,8 @@ public final class RtMaterialRegistry {
             RtMaterialPageCompiler.Entry definitionEntry = entries.getOrDefault(definition.id(), fallbackEntry);
             int definitionFeatures = definitionFeatures(definition.textureResource() != null,
                     definitionEntry.features(), definition.emissionLuminanceCdM2());
-            RtMaterialDesc.EmissionSource emissionSource = definition.emissionLuminanceCdM2() <= 0.0f
-                    ? RtMaterialDesc.EmissionSource.NONE
-                    : (definitionFeatures & FEATURE_EMISSION_MASK) != 0
-                    ? RtMaterialDesc.EmissionSource.AUTHORED_MASK : RtMaterialDesc.EmissionSource.GEOMETRY_UNIFORM;
+            boolean definitionEmissionCapable = (definitionFeatures
+                    & (FEATURE_EMISSION_MASK | FEATURE_UNIFORM_EMISSION)) != 0;
             RtMaterialDesc desc = new RtMaterialDesc(definitionTransport, RtMaterialDesc.Source.NEUTRAL,
                     definitionFeatures,
                     definition.specularRoughness(), definition.baseMetalness(), definition.specularIor(),
@@ -306,13 +301,13 @@ public final class RtMaterialRegistry {
                     definition.transmissionColorB(), definition.subsurfaceWeight(), definition.subsurfaceColorR(),
                     definition.subsurfaceColorG(), definition.subsurfaceColorB(),
                     definition.subsurfaceScatterAnisotropy(), definition.emissionColorR(),
-                    definition.emissionColorG(), definition.emissionColorB(), emissionSource,
-                    definition.emissionLuminanceCdM2(), definitionEntry.emissionSummary(), surfaceImplementation);
+                    definition.emissionColorG(), definition.emissionColorB(),
+                    definition.emissionLuminanceCdM2(), surfaceImplementation);
             for (MutableCompiledOverride compiled : compiledOverridesByMaterial.getOrDefault(
                     definition.id(), List.of())) {
                 RtMaterialOverrides.Rule rule = compiled.rule;
                 if (rule.geometry() != null) continue;
-                desc = rule.apply(desc);
+                desc = rule.apply(desc, definitionEmissionCapable);
                 runtimeMatchedOverrides.add(rule);
                 break;
             }
@@ -348,8 +343,6 @@ public final class RtMaterialRegistry {
         GpuBuffer oldBindingTable = bindingTable;
         GpuBuffer oldSurfaceTable = surfaceTable;
         long epoch = ++nextEpoch;
-        List<RtMaterialDesc> descriptions = tables.descriptions;
-        List<EmissionFootprint> footprints = tables.footprints;
         List<CompiledOverrideLookup.Entry> frozenOverrides = compiledOverrides.stream()
                 .filter(value -> !value.ids.isEmpty())
                 .map(MutableCompiledOverride::freeze).toList();
@@ -368,10 +361,9 @@ public final class RtMaterialRegistry {
             sbtClasses[i] = (byte) sbtClassOf(tables.bindings.get(i));
         }
         MaterialEpochSnapshot next = new MaterialEpochSnapshot(epoch, Collections.unmodifiableMap(ids), fallbackVariants,
-                RtMaterialPageCompiler.EMISSION_FOOTPRINT_RESOLUTION,
                 Collections.unmodifiableMap(new HashMap<>(nextNamedMaterialIds)),
-                Collections.unmodifiableMap(new HashMap<>(nextRuntimeTextureIds)), nextRuntimeFallbackId,
-                List.copyOf(descriptions), Collections.unmodifiableList(new ArrayList<>(footprints)),
+                availableSurfaces,
+                tables.descriptions,
                 CompiledOverrideLookup.of(frozenOverrides),
                 tables.cutoutVariants.toIntArray(), sbtClasses);
         runtimeTextureIds = Collections.unmodifiableMap(nextRuntimeTextureIds);
@@ -395,22 +387,10 @@ public final class RtMaterialRegistry {
         snapshot = next; // volatile publication: map and arrays are never mutated afterward
         if (oldBindingTable != null) oldBindingTable.destroy();
         if (oldSurfaceTable != null) oldSurfaceTable.destroy();
-        long emissive = descriptions.stream().filter(desc -> desc.emissionSource() != RtMaterialDesc.EmissionSource.NONE)
-                .count();
-        long inferred = descriptions.stream().filter(desc -> desc.emissionSource()
-                == RtMaterialDesc.EmissionSource.DERIVED_MASK).count();
-        long authoredEmission = descriptions.stream().filter(desc -> desc.emissionSource()
-                == RtMaterialDesc.EmissionSource.AUTHORED_MASK).count();
-        long geometryUniformEmission = descriptions.stream().filter(desc -> desc.emissionSource()
-                == RtMaterialDesc.EmissionSource.GEOMETRY_UNIFORM).count();
-        double averageCoverage = descriptions.stream().filter(desc -> desc.emissionSummary().emissive())
-                .mapToDouble(desc -> desc.emissionSummary().coverage()).average().orElse(0.0);
-        CausticaMod.LOGGER.info("RT materials: epoch={}, surfaces={}/{}, bindings={}/{}, atlasResources={}, standaloneResources={}, overrideRules={}, matchedOverrides={}, emissive={}, authoredMasks={}, derivedMasks={}, geometryUniformEmission={}, avgEmissionCoverage={}, tableKiB={}",
+        CausticaMod.LOGGER.info("RT materials: epoch={}, surfaces={}/{}, bindings={}/{}, atlasResources={}, standaloneResources={}, overrideRules={}, matchedOverrides={}, tableKiB={}",
                 epoch, surfaceCount, nextSurfaceCapacity, bindingCount, nextBindingCapacity,
                 atlasResources.size(), standaloneResources.size(), overrides.rules().size(),
-                matchedOverrideRules, emissive,
-                authoredEmission, inferred, geometryUniformEmission,
-                String.format(java.util.Locale.ROOT, "%.3f", averageCoverage),
+                matchedOverrideRules,
                 ((long) nextSurfaceCapacity * SurfaceMaterialData.BYTE_SIZE
                         + (long) nextBindingCapacity * MaterialBindingData.BYTE_SIZE) / 1024);
     }
@@ -637,34 +617,27 @@ public final class RtMaterialRegistry {
         return features;
     }
 
-    /** Texture masks own the summary; otherwise an emitting state uses the full texture. */
-    private static RtMaterialDesc.EmissionSummary variantSummary(int features, boolean emitting,
-                                                                 RtMaterialPageCompiler.Entry entry,
-                                                                 RtMaterialDesc.EmissionSummary uniformSummary) {
-        if ((features & (FEATURE_SPEC | FEATURE_EMISSION_MASK)) != 0) return entry.emissionSummary();
-        return emitting ? uniformSummary : RtMaterialDesc.EmissionSummary.NONE;
+    private static boolean emissionCapable(boolean emitting, int features) {
+        return emitting || (features & FEATURE_EMISSION_MASK) != 0;
     }
 
     private static RtMaterialDesc compileDesc(int transport, int features, OpenPbrMaterialProfile profile,
                                               boolean emitting, boolean neutral,
-                                              RtMaterialDesc.EmissionSummary emissionSummary,
                                               float defaultEmissionLuminance) {
-        return compileDesc(transport, features, profile, emitting, neutral, emissionSummary,
+        return compileDesc(transport, features, profile, emitting, neutral,
                 OpenPbrMaterialDefaults.TRANSMISSIVE_SPECULAR_IOR, defaultEmissionLuminance);
     }
 
     private static RtMaterialDesc compileDesc(int transport, int features, OpenPbrMaterialProfile profile,
                                               boolean emitting, boolean neutral,
-                                              RtMaterialDesc.EmissionSummary emissionSummary,
                                               float dielectricIor, float defaultEmissionLuminance) {
         return MaterialRegistryCompiler.textureDescription(transport, features, profile, emitting, neutral,
-                emissionSummary, dielectricIor, defaultEmissionLuminance);
+                dielectricIor, defaultEmissionLuminance);
     }
 
     private static RtMaterialDesc compileRuntimeTextureDesc(int features, boolean neutral,
-                                                    RtMaterialDesc.EmissionSummary emissionSummary,
                                                     float defaultEmissionLuminance) {
-        return MaterialRegistryCompiler.runtimeTextureDescription(features, neutral, emissionSummary,
+        return MaterialRegistryCompiler.runtimeTextureDescription(features, neutral,
                 defaultEmissionLuminance);
     }
 
@@ -672,8 +645,8 @@ public final class RtMaterialRegistry {
      * The compiled tables under construction during a rebuild. Every compiled material gets one binding —
      * plus the cutout-coverage sibling a masked geometry source asks for — while content-equal surface
      * records share one surface-table index. The returned binding ID is what geometry stores and what
-     * {@link MaterialEpochSnapshot} indexes its descriptions, emission footprints and SBT classes by.
-     * Siblings share the base's surface, description and footprint, so they cost sixteen table bytes and
+     * {@link MaterialEpochSnapshot} indexes its bindings and SBT classes by. Siblings share the base's
+     * surface and description, so they cost sixteen table bytes and
      * two list slots each and keep every parallel array dense.
      */
     static final class CompiledTables {
@@ -681,7 +654,6 @@ public final class RtMaterialRegistry {
         private final Map<SurfaceMaterialData, Integer> surfaceIds;
         final List<MaterialBindingData> bindings;
         final List<RtMaterialDesc> descriptions;
-        final List<EmissionFootprint> footprints;
         /** Parallel to {@code bindings}: the cutout-coverage variant of each ID, or the ID itself. */
         final IntArrayList cutoutVariants;
 
@@ -690,21 +662,20 @@ public final class RtMaterialRegistry {
             surfaceIds = new HashMap<>(expected);
             bindings = new ArrayList<>(expected);
             descriptions = new ArrayList<>(expected);
-            footprints = new ArrayList<>(expected);
             cutoutVariants = new IntArrayList(expected);
         }
 
         int add(RtMaterialDesc desc, float[] average, RtMaterialPageCompiler.Entry entry,
-                EmissionFootprint uniformFootprint, float coverageCutoff) {
-            return add(desc, average, entry, uniformFootprint, coverageCutoff, false);
+                float coverageCutoff) {
+            return add(desc, average, entry, coverageCutoff, false);
         }
 
         int add(RtMaterialDesc desc, float[] average, RtMaterialPageCompiler.Entry entry,
-                EmissionFootprint uniformFootprint, float coverageCutoff, boolean cutoutSibling) {
+                float coverageCutoff, boolean cutoutSibling) {
             int surfaceId = internSurface(surface(desc, entry, entry.albedoU(), entry.albedoV(),
                     entry.albedoInvDu(), entry.albedoInvDv()));
             int id = append(binding(surfaceId, desc, average, SHARED_ATLAS_BASE_COLOR_TEXTURE_INDEX, coverageCutoff),
-                    desc, footprintFor(desc, entry, uniformFootprint));
+                    desc);
             if (cutoutSibling) {
                 cutoutVariants.set(id, addCutoutSibling(id));
             }
@@ -725,7 +696,7 @@ public final class RtMaterialRegistry {
                     MaterialBindingAbi.pack(SHARED_ATLAS_BASE_COLOR_TEXTURE_INDEX, COVERAGE_OPAQUE, flags,
                             MaterialBindingAbi.surfaceImplementation(base.packed0())),
                     base.surface(), base.shadowTint(), base.packed1());
-            return append(textureless, desc, footprintFor(desc, entry, null));
+            return append(textureless, desc);
         }
 
         private int internSurface(SurfaceMaterialData surface) {
@@ -737,37 +708,23 @@ public final class RtMaterialRegistry {
             return id;
         }
 
-        /** The base's binding with {@link #COVERAGE_CUTOUT}, over the same surface/description/footprint. */
+        /** The base's binding with {@link #COVERAGE_CUTOUT}, over the same surface and description. */
         private int addCutoutSibling(int baseId) {
             MaterialBindingData base = bindings.get(baseId);
             return append(new MaterialBindingData(
                             MaterialBindingAbi.pack(MaterialBindingAbi.baseColorTextureIndex(base.packed0()), COVERAGE_CUTOUT,
                                     MaterialBindingAbi.flags(base.packed0()), MaterialBindingAbi.surfaceImplementation(base.packed0())),
                             base.surface(), base.shadowTint(), base.packed1()),
-                    descriptions.get(baseId), footprints.get(baseId));
+                    descriptions.get(baseId));
         }
 
-        private int append(MaterialBindingData binding, RtMaterialDesc desc, EmissionFootprint footprint) {
+        private int append(MaterialBindingData binding, RtMaterialDesc desc) {
             int id = bindings.size();
             bindings.add(binding);
             descriptions.add(desc);
-            footprints.add(footprint);
             cutoutVariants.add(id); // no sibling of its own until one is compiled below
             return id;
         }
-    }
-
-    /**
-     * The emission footprint whose sampled source matches what {@code world.rchit} shades for this
-     * description — the same selection {@link #variantSummary}/override application made for the summary.
-     */
-    private static EmissionFootprint footprintFor(RtMaterialDesc desc, RtMaterialPageCompiler.Entry entry,
-                                                  EmissionFootprint uniformFootprint) {
-        return switch (desc.emissionSource()) {
-            case AUTHORED_MASK, DERIVED_MASK -> entry.emissionFootprint();
-            case GEOMETRY_UNIFORM -> uniformFootprint;
-            case NONE -> null;
-        };
     }
 
     private static SurfaceMaterialData surface(RtMaterialDesc desc, RtMaterialPageCompiler.Entry entry,

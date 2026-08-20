@@ -30,7 +30,6 @@ final class MaterialRegistryCompiler {
 
     static RtMaterialDesc textureDescription(int transport, int features, OpenPbrMaterialProfile profile,
                                              boolean emitting, boolean neutral,
-                                             RtMaterialDesc.EmissionSummary emissionSummary,
                                              float dielectricIor, float defaultEmissionLuminance) {
         boolean medium = transport == RtMaterialRegistry.TRANSPORT_MEDIUM_BOUNDARY;
         float roughness = medium ? OpenPbrMaterialDefaults.TRANSMISSIVE_SPECULAR_ROUGHNESS
@@ -45,29 +44,24 @@ final class MaterialRegistryCompiler {
         boolean authored = (features & (RtMaterialRegistry.FEATURE_SPEC | RtMaterialRegistry.FEATURE_NORMAL)) != 0;
         RtMaterialDesc.Source source = neutral ? RtMaterialDesc.Source.NEUTRAL
                 : authored ? RtMaterialDesc.Source.AUTHORED_TEXTURE : RtMaterialDesc.Source.DERIVED_TEXTURE;
-        RtMaterialDesc.EmissionSource emissionSource;
-        if ((features & RtMaterialRegistry.FEATURE_EMISSION_MASK) != 0) emissionSource = RtMaterialDesc.EmissionSource.AUTHORED_MASK;
-        else if (emitting) emissionSource = RtMaterialDesc.EmissionSource.GEOMETRY_UNIFORM;
-        else emissionSource = RtMaterialDesc.EmissionSource.NONE;
-        float luminance = emissionSource == RtMaterialDesc.EmissionSource.NONE ? 0 : defaultEmissionLuminance;
+        boolean emissionCapable = emitting || (features & RtMaterialRegistry.FEATURE_EMISSION_MASK) != 0;
+        float luminance = emissionCapable ? defaultEmissionLuminance : 0.0f;
         return new RtMaterialDesc(transport, source, features, roughness, metalness, ior, transmission,
-                emissionSource, luminance, emissionSummary, RtMaterialRegistry.BUILTIN_SURFACE_IMPLEMENTATION);
+                luminance, RtMaterialRegistry.BUILTIN_SURFACE_IMPLEMENTATION);
     }
 
     static RtMaterialDesc runtimeTextureDescription(int features, boolean neutral,
-                                                     RtMaterialDesc.EmissionSummary emissionSummary,
                                                      float defaultEmissionLuminance) {
         boolean authored = (features & (RtMaterialRegistry.FEATURE_SPEC | RtMaterialRegistry.FEATURE_NORMAL)) != 0;
         RtMaterialDesc.Source source = neutral ? RtMaterialDesc.Source.NEUTRAL
                 : authored ? RtMaterialDesc.Source.AUTHORED_TEXTURE : RtMaterialDesc.Source.DERIVED_TEXTURE;
-        RtMaterialDesc.EmissionSource emissionSource = (features & RtMaterialRegistry.FEATURE_EMISSION_MASK) != 0
-                ? RtMaterialDesc.EmissionSource.AUTHORED_MASK : RtMaterialDesc.EmissionSource.NONE;
+        boolean emissionCapable = (features & RtMaterialRegistry.FEATURE_EMISSION_MASK) != 0;
         return new RtMaterialDesc(RtMaterialRegistry.TRANSPORT_SURFACE, source, features,
                 (features & RtMaterialRegistry.FEATURE_SPEC) != 0 ? 1.0f
                         : OpenPbrMaterialDefaults.RUNTIME_TEXTURE_SPECULAR_ROUGHNESS,
                 (features & RtMaterialRegistry.FEATURE_SPEC) != 0 ? 1.0f : 0.0f,
-                OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR, 0, emissionSource,
-                emissionSource == RtMaterialDesc.EmissionSource.NONE ? 0 : defaultEmissionLuminance,
-                emissionSummary, RtMaterialRegistry.BUILTIN_SURFACE_IMPLEMENTATION);
+                OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR, 0,
+                emissionCapable ? defaultEmissionLuminance : 0.0f,
+                RtMaterialRegistry.BUILTIN_SURFACE_IMPLEMENTATION);
     }
 }

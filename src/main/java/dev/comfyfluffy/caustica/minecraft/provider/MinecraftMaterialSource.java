@@ -11,10 +11,13 @@ import dev.comfyfluffy.caustica.api.provider.MaterialHandle;
 import dev.comfyfluffy.caustica.api.provider.MaterialSink;
 import dev.comfyfluffy.caustica.api.provider.MaterialSource;
 import dev.comfyfluffy.caustica.api.provider.MaterialTopology;
+import dev.comfyfluffy.caustica.api.provider.MaterialTextureResource;
 import dev.comfyfluffy.caustica.api.provider.OpenPbrMaterialDefaults;
 import dev.comfyfluffy.caustica.minecraft.MinecraftProvidersExtension;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialClassifier;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialCatalogBuilder;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialEmissionSnapshot;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialEmissionState;
 import net.minecraft.client.Minecraft;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.packs.resources.Resource;
@@ -34,14 +37,22 @@ public final class MinecraftMaterialSource implements MaterialSource {
     public static final ResourceId PARTICLE_BILLBOARD =
             ResourceId.of("caustica", "minecraft_particle_billboard");
     public static final int FORMAT = 4;
+    private final MinecraftMaterialEmissionState emissionState;
+
+    public MinecraftMaterialSource() {
+        this(new MinecraftMaterialEmissionState());
+    }
+
+    public MinecraftMaterialSource(MinecraftMaterialEmissionState emissionState) {
+        this.emissionState = java.util.Objects.requireNonNull(emissionState, "emissionState");
+    }
 
     @Override
     public void submitMaterials(MaterialSink sink) {
-        sink.define(new MaterialDefinition(new MaterialHandle(CLOUD), 0.82f, 0.86f, 0.9f,
-                0.92f, 0.0f, 1.33f, 0.0f, MaterialTopology.SURFACE, null));
-        sink.define(waterDefinition());
-        sink.define(endPortalDefinition());
-        sink.define(particleBillboardDefinition());
+        List<MaterialDefinition> definitions = List.of(
+                new MaterialDefinition(new MaterialHandle(CLOUD), 0.82f, 0.86f, 0.9f,
+                        0.92f, 0.0f, 1.33f, 0.0f, MaterialTopology.SURFACE, null),
+                waterDefinition(), endPortalDefinition(), particleBillboardDefinition());
         Map<Identifier, Resource> resources = Minecraft.getInstance().getResourceManager().listResources(
                 "materials", id -> id.getPath().endsWith(".json"));
         List<Map.Entry<Identifier, Resource>> ordered = new ArrayList<>(resources.entrySet());
@@ -58,9 +69,24 @@ public final class MinecraftMaterialSource implements MaterialSource {
         // resource manager has selected the highest-priority pack for each identifier.
         rules.sort(Comparator.comparing((MaterialRule rule) -> rule.match().geometry() == null)
                 .thenComparing(MaterialRule::id));
-        rules.forEach(sink::submit);
-        MinecraftMaterialCatalogBuilder.build(rules).forEach(sink::submitResource);
+        var textureResources = MinecraftMaterialCatalogBuilder.build(rules);
+        stageEpoch(sink, definitions, rules, textureResources);
         CausticaMod.LOGGER.info("RT material source: format={}, rules={}", FORMAT, rules.size());
+    }
+
+    void stageEpoch(MaterialSink sink, List<MaterialDefinition> definitions, List<MaterialRule> rules,
+                    List<MaterialTextureResource> textureResources) {
+        MinecraftMaterialEmissionSnapshot nextEmissionSnapshot = MinecraftMaterialEmissionSnapshot.build(
+                definitions, rules, textureResources);
+
+        definitions.forEach(sink::define);
+        rules.forEach(sink::submit);
+        textureResources.forEach(sink::submitResource);
+        emissionState.publish(nextEmissionSnapshot);
+    }
+
+    public MinecraftMaterialEmissionSnapshot emissionSnapshot() {
+        return emissionState.snapshot();
     }
 
     static MaterialDefinition waterDefinition() {

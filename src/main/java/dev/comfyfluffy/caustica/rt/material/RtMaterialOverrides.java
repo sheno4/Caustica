@@ -90,7 +90,7 @@ public final class RtMaterialOverrides {
             return matchesMaterial(material) && (this.geometry == null || this.geometry.equals(geometry));
         }
 
-        RtMaterialDesc apply(RtMaterialDesc base) {
+        RtMaterialDesc apply(RtMaterialDesc base, boolean emissionCapable) {
             int nextTransport = transport != null ? transport : base.transport();
             float nextRoughness = roughness != null ? roughness : base.specularRoughness();
             float nextMetalness = metalness != null ? metalness : base.baseMetalness();
@@ -101,7 +101,7 @@ public final class RtMaterialOverrides {
             // An absolute emitting-surface luminance. Existing texture/state emission keeps its mask;
             // an override does not create one.
             float nextEmissionLuminance = emissionLuminanceCdM2 != null
-                    && base.emissionSource() != RtMaterialDesc.EmissionSource.NONE
+                    && emissionCapable
                     ? emissionLuminanceCdM2 : base.emissionLuminance();
             return new RtMaterialDesc(nextTransport, RtMaterialDesc.Source.OVERRIDE, base.features(),
                     nextRoughness, nextMetalness, nextIor, nextTransmission,
@@ -109,7 +109,7 @@ public final class RtMaterialOverrides {
                     base.subsurfaceWeight(), base.subsurfaceColorR(), base.subsurfaceColorG(),
                     base.subsurfaceColorB(), base.subsurfaceScatterAnisotropy(),
                     base.emissionColorR(), base.emissionColorG(), base.emissionColorB(),
-                    base.emissionSource(), nextEmissionLuminance, base.emissionSummary(),
+                    nextEmissionLuminance,
                     surfaceImplementation != null ? surfaceImplementation : base.surfaceImplementation());
         }
 

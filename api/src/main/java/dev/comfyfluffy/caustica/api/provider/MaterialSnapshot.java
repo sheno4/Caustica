@@ -1,15 +1,17 @@
 package dev.comfyfluffy.caustica.api.provider;
 
+import dev.comfyfluffy.caustica.api.ResourceId;
+
 /**
- * Immutable semantic material view for one compiled resource epoch. Scene workers may retain this
- * snapshot until their work finishes; renderer binding and texture indices are intentionally absent.
+ * Immutable material-compilation status for one resource epoch. Scene workers may retain this snapshot
+ * until their work finishes; renderer binding and texture indices are intentionally absent.
  */
 public interface MaterialSnapshot {
     long epoch();
 
     /**
-     * Resolve source-neutral material semantics. Implementations return an epoch-cached value and do
-     * not allocate, so callers may use this while building every mesh primitive.
+     * Whether a named surface implementation compiled and is usable in this epoch's world program.
+     * Returns false for an unregistered name, the explicit error surface, or a probe-rejected implementation.
      */
-    MaterialAnalysis analyze(SceneMesh.MaterialReference material);
+    boolean surfaceAvailable(ResourceId surface);
 }

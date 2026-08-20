@@ -12,15 +12,13 @@ final class RtMaterialSurfaceInterningTest {
                 RtMaterialRegistry.FEATURE_SPEC, 4, 2,
                 0.25f, 0.5f, 0.125f, 0.25f,
                 0.0f, 0.0f, 1.0f, 1.0f,
-                RtMaterialDesc.EmissionSummary.NONE, null,
                 0.6f, 0.7f, 0.8f, 1.0f,
-                1.0f, 1.0f, RtMaterialPageCompiler.ALPHA_SOURCE_NONE,
-                RtMaterialDesc.EmissionSummary.NONE, null);
+                1.0f, 1.0f, RtMaterialPageCompiler.ALPHA_SOURCE_NONE);
         RtMaterialDesc authored = description(RtMaterialDesc.Source.AUTHORED_TEXTURE);
         RtMaterialDesc derived = description(RtMaterialDesc.Source.DERIVED_TEXTURE);
 
-        int authoredBinding = tables.add(authored, entry.average(), entry, null, 0.5f);
-        int derivedBinding = tables.add(derived, entry.average(), entry, null, 0.5f);
+        int authoredBinding = tables.add(authored, entry.average(), entry, 0.5f);
+        int derivedBinding = tables.add(derived, entry.average(), entry, 0.5f);
 
         assertEquals(2, tables.bindings.size(), "binding-indexed metadata stays dense");
         assertEquals(1, tables.surfaces.size(), "content-equal GPU surfaces share one record");
@@ -31,8 +29,7 @@ final class RtMaterialSurfaceInterningTest {
     private static RtMaterialDesc description(RtMaterialDesc.Source source) {
         return new RtMaterialDesc(RtMaterialRegistry.TRANSPORT_SURFACE, source,
                 RtMaterialRegistry.FEATURE_SPEC, 0.4f, 0.2f, 1.5f, 0.0f,
-                RtMaterialDesc.EmissionSource.NONE, 0.0f,
-                RtMaterialDesc.EmissionSummary.NONE,
+                0.0f,
                 RtMaterialRegistry.BUILTIN_SURFACE_IMPLEMENTATION);
     }
 }

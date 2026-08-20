@@ -21,6 +21,8 @@ import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkSamplerCreateInfo;
 
 import java.nio.LongBuffer;
+import java.util.HashSet;
+import java.util.Set;
 
 /** Owns the active immutable resource-pack material epoch and replaces it across reloads. */
 public final class RtMaterialEpoch {
@@ -146,7 +148,7 @@ public final class RtMaterialEpoch {
     }
 
     public void publish(GpuContext ctx, RtPipeline pipeline, int textureCapacity,
-                        java.util.Set<Integer> rejectedSurfaces) {
+                        Set<Integer> rejectedSurfaces) {
         if (sceneGeometry == null) throw new IllegalStateException("Scene geometry is not attached");
         if (opacityMicromapPipeline != null) {
             throw new IllegalStateException("Previous opacity micromap material epoch is still active");
@@ -158,6 +160,14 @@ public final class RtMaterialEpoch {
             int index = CausticaApi.registry().surfaceIndex(surface);
             return rejectedSurfaces.contains(index) ? RtMaterialRegistry.ERROR_SURFACE_IMPLEMENTATION : index;
         };
+        Set<ResourceId> availableSurfaces = new HashSet<>();
+        var registeredSurfaces = CausticaApi.registry().surfaces();
+        for (int index = 0; index < registeredSurfaces.size(); index++) {
+            if (index != RtMaterialRegistry.ERROR_SURFACE_IMPLEMENTATION
+                    && !rejectedSurfaces.contains(index)) {
+                availableSurfaces.add(registeredSurfaces.get(index).id());
+            }
+        }
         RtMaterialOverrides overrides = RtMaterialOverrides.from(contributions.rules(), surfaceResolver);
         MaterialCatalog catalog = contributions.catalog();
         pageCompiler.prepareAll(ctx, textureCapacity, catalog);
@@ -168,7 +178,7 @@ public final class RtMaterialEpoch {
         }
         sceneGeometry.setOpacityMicromapPipeline(opacityMicromapPipeline);
         registry.rebuild(ctx, pageCompiler, catalog, overrides,
-                contributions.definitions(), surfaceResolver, textureCapacity);
+                contributions.definitions(), surfaceResolver, Set.copyOf(availableSurfaces), textureCapacity);
         textureRegistry = new ProviderTextureRegistry(textureCapacity,
                 (texture, label) -> new UploadedProviderTexture(ctx, texture, label),
                 (slot, view, layout) -> pipeline.setBaseColorTexture(slot, view, layout, epochSampler));

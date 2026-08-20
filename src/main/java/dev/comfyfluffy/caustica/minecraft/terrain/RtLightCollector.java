@@ -2,8 +2,7 @@ package dev.comfyfluffy.caustica.minecraft.terrain;
 
 import dev.comfyfluffy.caustica.api.ColorSpaces;
 import dev.comfyfluffy.caustica.api.provider.SceneMesh;
-import dev.comfyfluffy.caustica.api.provider.MaterialAnalysis;
-import dev.comfyfluffy.caustica.api.provider.EmissionFootprint;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialEmissionSnapshot;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 
@@ -13,7 +12,7 @@ import java.util.List;
  * RIS emitter-NEE light collection. Enumerates a section's emissive terrain quads into a
  * samplable light list, in <b>section-local</b> coordinates (flattened into rebased world space at
  * publish, see {@code RtTerrain.applyBuildChanges}). Runs on the meshing worker over the transient
- * per-class arrays, before packing — pure CPU + material-snapshot reads only.
+ * per-class arrays, before packing — pure CPU + immutable Minecraft emission-snapshot reads only.
  *
  * <p><b>One rectangle light per emissive quad.</b> {@code emit()}/{@code emitQuad()} always write a quad
  * as two lockstep triangles (0,1,2)(0,2,3) over 4 consecutive verts with prim/cornerUv records in step,
@@ -23,12 +22,10 @@ import java.util.List;
  * sprite-local UV map used for exact radiance lookup.
  *
  * <p><b>Radiance matches the closest-hit.</b> Per-texel shaded emission is {@code albedo * mask *
- * emissionLuminance}, where the mask source (LabPBR {@code _s} blue channel / heuristic mask x block
- * light / uniform block light) is exactly what {@code world.rchit.evaluateMaterial} resolves, and
- * {@code emissionLuminance} is the material snapshot's luminance — the material-compile-time
- * baseline replaced by any resource-pack override, the single knob shared with the shader. The
- * per-material {@link EmissionFootprint} stores the same premultiplied linear emission color and mask
- * coverage. The light's radiance is the mean over its bounding rectangle (dark texels included — a uniform-rectangle
+ * emissionLuminance}, where Minecraft's catalog supplies the same emission mask, material luminance,
+ * and primitive-state dependency used by closest-hit shading. The per-material
+ * {@link MinecraftMaterialEmissionSnapshot.Footprint} stores premultiplied linear emission color and
+ * mask coverage. The light's radiance is the mean over its bounding rectangle (dark texels included — a uniform-rectangle
  * approximation), so total power equals the quad's true emissive integral: the rectangle contains every
  * emissive sample, hence {@code Le_rect * rectArea == quadArea * mean(albedo*mask)}.
  *
@@ -46,7 +43,7 @@ final class RtLightCollector {
     /** Block-light levels below this are non-emissive (smallest real level is 1/15). */
     private static final float EMISSION_EPS = 0.5f / 255f;
 
-    /** Footprint weights below this don't count as emissive coverage (mirrors the summary's 1/255). */
+    /** Footprint weights below one encoded byte step don't count as emissive coverage. */
     private static final float WEIGHT_EPS = 1.0f / 255f;
 
     /** Degenerate (zero-area) rectangles carry no power and would NaN the estimator — skip them. */
@@ -72,35 +69,28 @@ final class RtLightCollector {
     static void collectClass(FloatArrayList out, FloatArrayList verts, FloatArrayList prim,
                               List<SceneMesh.TriangleSurface> surfaces,
                               FloatArrayList cornerUv, TextureAtlasSprite[] sprites,
-                              MaterialAnalysis[] materialAnalyses, float minFillRatio) {
+                              MinecraftMaterialEmissionSnapshot.Emission[] materialEmissions,
+                              float minFillRatio) {
         int quads = prim.size() / (2 * PRIM_FLOATS);
         float[] v = verts.elements();
         float[] p = prim.elements();
         float[] uv = cornerUv.elements();
         for (int k = 0; k < quads; k++) {
             int pb = k * 2 * PRIM_FLOATS;
-            MaterialAnalysis material = materialAnalyses[2 * k];
-            float leLuminanceEps = 0.001f * material.emissionLuminanceCdM2();
-            MaterialAnalysis.EmissionSource source = material.emissionSource();
-            if (source == MaterialAnalysis.EmissionSource.NONE) {
+            MinecraftMaterialEmissionSnapshot.Emission material = materialEmissions[2 * k];
+            if (!material.emissive()) {
                 continue;
             }
+            float leLuminanceEps = 0.001f * material.luminanceCdM2();
 
             float stateEmission = p[pb + 3];
-            float factor = switch (source) {
-                case AUTHORED_MASK -> 1.0f;
-                case DERIVED_MASK, GEOMETRY_UNIFORM -> stateEmission;
-                case NONE -> 0.0f;
-            };
+            float factor = material.usesPrimitiveEmission() ? stateEmission : 1.0f;
             if (factor <= EMISSION_EPS) {
                 continue;
             }
-            EmissionFootprint footprint = material.emissionFootprint();
-            if (footprint == null && source != MaterialAnalysis.EmissionSource.GEOMETRY_UNIFORM) {
-                continue; // masked source with no emissive texels
-            }
-            int scan = footprint != null
-                    ? footprint.resolution() : material.emissionFootprintResolution();
+            MinecraftMaterialEmissionSnapshot.Footprint footprint = material.footprint();
+            if (footprint == null) continue;
+            int scan = footprint.resolution();
 
             // Quad corners: 4 consecutive verts. Parallelogram frame (exact for block faces, the same
             // approximation the barycentric UV map below already makes for irregular model quads).
@@ -156,23 +146,12 @@ final class RtLightCollector {
                         lu = a;
                         lv = b;
                     }
-                    float w;
-                    float r;
-                    float g;
-                    float bl;
-                    if (footprint != null) {
-                        int cx = footprint.sampleIndex(lu);
-                        int cy = footprint.sampleIndex(lv);
-                        w = footprint.weight(cx, cy);
-                        r = footprint.r(cx, cy);
-                        g = footprint.g(cx, cy);
-                        bl = footprint.b(cx, cy);
-                    } else {
-                        w = 1.0f; // uniform source without a footprint: flat white (albedo unknown)
-                        r = 1.0f;
-                        g = 1.0f;
-                        bl = 1.0f;
-                    }
+                    int cx = footprint.sampleIndex(lu);
+                    int cy = footprint.sampleIndex(lv);
+                    float w = footprint.weight(cx, cy);
+                    float r = footprint.r(cx, cy);
+                    float g = footprint.g(cx, cy);
+                    float bl = footprint.b(cx, cy);
                     sumR += r;
                     sumG += g;
                     sumB += bl;
@@ -200,13 +179,12 @@ final class RtLightCollector {
             }
 
             // Rectangle-mean radiance: every emissive sample lies inside the rectangle, so
-            // sum/rectSamples preserves the quad's total emissive power at rectArea. emissionLuminance()
-            // is the material's final HDR luminance (catalog baseline or absolute JSON override,
-            // published in the material epoch) — the single knob shared with world.rchit's direct-hit shading.
+            // sum/rectSamples preserves the quad's total emissive power at rectArea. luminanceCdM2()
+            // is the final Minecraft material luminance after its matching resource rule.
             // Footprint averages are linear BT.709; triangle tint already crossed the SceneMesh boundary
             // as ACEScg. Convert the footprint before combining them in the transport basis.
             float[] footprintAcesCg = ColorSpaces.linearBt709ToAcesCg(sumR, sumG, sumB);
-            float scale = factor * material.emissionLuminanceCdM2() / rectSamples;
+            float scale = factor * material.luminanceCdM2() / rectSamples;
             float leR = footprintAcesCg[0] * scale * p[pb + 4];
             float leG = footprintAcesCg[1] * scale * p[pb + 5];
             float leB = footprintAcesCg[2] * scale * p[pb + 6];

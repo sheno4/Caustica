@@ -5,14 +5,13 @@ import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.api.ColorSpaces;
 import dev.comfyfluffy.caustica.api.provider.MaterialTopology;
 import dev.comfyfluffy.caustica.api.provider.MaterialHandle;
-import dev.comfyfluffy.caustica.api.provider.MaterialAnalysis;
-import dev.comfyfluffy.caustica.api.provider.MaterialSnapshot;
 import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.engine.material.MaterialClassification;
 import dev.comfyfluffy.caustica.api.provider.MaterialVariant;
 import dev.comfyfluffy.caustica.api.provider.OpenPbrMaterialProfile;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialClassifier;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialEmissionSnapshot;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialLookup;
 import dev.comfyfluffy.caustica.minecraft.provider.MinecraftMaterialSource;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
@@ -93,7 +92,7 @@ final class RtTerrainMesher {
                                               QuadCapture capture,
                                               FluidStateModelSet fluidModels, FluidCapture fluidCapture,
                                               SectionMesh mesh, BlockPos.MutableBlockPos m,
-                                              MaterialSnapshot materials,
+                                              MinecraftMaterialEmissionSnapshot.Published materials,
                                               int scx, int scy, int scz) {
         capture.materials = materials;
         fluidCapture.materials = materials;
@@ -122,7 +121,7 @@ final class RtTerrainMesher {
     private static void collectLights(FloatArrayList out, Geom geom, float minFillRatio) {
         if (geom != null && !geom.idx.isEmpty()) {
             RtLightCollector.collectClass(out, geom.verts, geom.prim, geom.surfaces, geom.cornerUv,
-                    geom.lightSprites.elements(), geom.materialAnalyses.elements(), minFillRatio);
+                    geom.lightSprites.elements(), geom.materialEmissions.elements(), minFillRatio);
         }
     }
 
@@ -232,7 +231,7 @@ final class RtTerrainMesher {
         final List<SceneMesh.TriangleSurface> surfaces;
         // One sprite per triangle for CPU light extraction.
         final SpriteList lightSprites;
-        final MaterialAnalysisList materialAnalyses;
+        final MaterialEmissionList materialEmissions;
 
         Geom(int triCapacity) {
             int cap = Math.max(2, triCapacity);
@@ -243,7 +242,7 @@ final class RtTerrainMesher {
             prim = new FloatArrayList(cap * 12);
             surfaces = new ArrayList<>(cap);
             lightSprites = new SpriteList(cap);
-            materialAnalyses = new MaterialAnalysisList(cap);
+            materialEmissions = new MaterialEmissionList(cap);
         }
 
         int triCount() {
@@ -257,27 +256,27 @@ final class RtTerrainMesher {
             prim.clear();
             surfaces.clear();
             lightSprites.clear();
-            materialAnalyses.clear();
+            materialEmissions.clear();
         }
     }
 
     /** Growable reference array paired one-to-one with triangles; entries are epoch-cached snapshots. */
-    private static final class MaterialAnalysisList {
-        private MaterialAnalysis[] elements;
+    private static final class MaterialEmissionList {
+        private MinecraftMaterialEmissionSnapshot.Emission[] elements;
         private int size;
 
-        MaterialAnalysisList(int capacity) {
-            elements = new MaterialAnalysis[Math.max(2, capacity)];
+        MaterialEmissionList(int capacity) {
+            elements = new MinecraftMaterialEmissionSnapshot.Emission[Math.max(2, capacity)];
         }
 
-        void add(MaterialAnalysis analysis) {
+        void add(MinecraftMaterialEmissionSnapshot.Emission emission) {
             if (size == elements.length) {
                 elements = java.util.Arrays.copyOf(elements, size * 2);
             }
-            elements[size++] = analysis;
+            elements[size++] = emission;
         }
 
-        MaterialAnalysis[] elements() {
+        MinecraftMaterialEmissionSnapshot.Emission[] elements() {
             return elements;
         }
 
@@ -326,7 +325,7 @@ final class RtTerrainMesher {
     /** Captures vanilla baked model quads into the current section's mesh. */
     private static final class QuadCapture {
         SectionMesh cur; // set before each block model emission
-        MaterialSnapshot materials;
+        MinecraftMaterialEmissionSnapshot.Published materials;
 
         // Per-block context for biome tint, set before each model emission. We resolve it straight from
         // BlockColors resolves biome tint before raster lighting, so the path tracer receives unlit albedo
@@ -411,12 +410,12 @@ final class RtTerrainMesher {
                     classification.geometry(), variant, spriteMaterial.texture);
             ResolvedCatalogMaterial resolved = catalogMaterials.get(candidate);
             if (resolved == null) {
-                resolved = new ResolvedCatalogMaterial(candidate, materials.analyze(candidate));
+                resolved = new ResolvedCatalogMaterial(candidate, materials.resolve(candidate));
                 catalogMaterials.put(candidate, resolved);
             }
             q.material = resolved.material;
             q.coverage = q.cutout && !q.translucent ? SceneMesh.Coverage.CUTOUT : SceneMesh.Coverage.OPAQUE;
-            q.materialAnalysis = resolved.analysis;
+            q.materialEmission = resolved.emission;
         }
 
         /** Returns true when vanilla's nominal face should be discarded. */
@@ -452,7 +451,8 @@ final class RtTerrainMesher {
         private record SpriteMaterial(ResourceId material, SceneMesh.AtlasTexture texture) {
         }
 
-        private record ResolvedCatalogMaterial(SceneMesh.CatalogMaterial material, MaterialAnalysis analysis) {
+        private record ResolvedCatalogMaterial(SceneMesh.CatalogMaterial material,
+                                               MinecraftMaterialEmissionSnapshot.Emission emission) {
         }
 
         /** Resolve coplanar ties among the current block's quads, then emit them into the section classes. */
@@ -590,7 +590,7 @@ final class RtTerrainMesher {
                 prim.add(0f); // aux0
                 prim.add(0f); // aux1
                 g.lightSprites.add(q.sprite);
-                g.materialAnalyses.add(q.materialAnalysis);
+                g.materialEmissions.add(q.materialEmission);
                 g.surfaces.add(new SceneMesh.TriangleSurface(q.material, q.coverage, q.nx, q.ny, q.nz,
                         q.emission, q.tr, q.tg, q.tb));
             }
@@ -606,7 +606,7 @@ final class RtTerrainMesher {
         boolean translucent; // TRANSLUCENT layer (stained glass / ice): colored-transmission dielectric
         boolean tinted; // tintIndex >= 0 — the tinted member of a base+overlay pair
         float tr, tg, tb, emission;
-        MaterialAnalysis materialAnalysis;
+        MinecraftMaterialEmissionSnapshot.Emission materialEmission;
         SceneMesh.MaterialReference material;
         SceneMesh.Coverage coverage;
         TextureAtlasSprite sprite;
@@ -652,9 +652,9 @@ final class RtTerrainMesher {
                         MaterialTopology.SURFACE, true));
 
         SectionMesh cur;     // set before each section
-        MaterialSnapshot materials;
-        MaterialAnalysis waterAnalysis;
-        MaterialAnalysis lavaAnalysis;
+        MinecraftMaterialEmissionSnapshot.Published materials;
+        MinecraftMaterialEmissionSnapshot.Emission waterEmission;
+        MinecraftMaterialEmissionSnapshot.Emission lavaEmission;
         float emission;      // set per fluid block (lava = 1, water = 0)
         boolean water;       // set per fluid block: true for water (dielectric), false for lava
         private int n;
@@ -664,8 +664,8 @@ final class RtTerrainMesher {
         /** Reset per-job assembly state (a mid-quad meshing throw could leave a partial quad buffered). */
         void reset() {
             n = 0;
-            waterAnalysis = null;
-            lavaAnalysis = null;
+            waterEmission = null;
+            lavaEmission = null;
         }
 
         @Override
@@ -686,16 +686,16 @@ final class RtTerrainMesher {
         private void emitQuad() {
             Geom g = cur.geometry();
             SceneMesh.MaterialReference material = water ? WATER_MATERIAL : LAVA_MATERIAL;
-            MaterialAnalysis materialAnalysis;
+            MinecraftMaterialEmissionSnapshot.Emission materialEmission;
             if (water) {
-                materialAnalysis = waterAnalysis;
-                if (materialAnalysis == null) {
-                    materialAnalysis = waterAnalysis = materials.analyze(WATER_MATERIAL);
+                materialEmission = waterEmission;
+                if (materialEmission == null) {
+                    materialEmission = waterEmission = materials.resolve(WATER_MATERIAL);
                 }
             } else {
-                materialAnalysis = lavaAnalysis;
-                if (materialAnalysis == null) {
-                    materialAnalysis = lavaAnalysis = materials.analyze(LAVA_MATERIAL);
+                materialEmission = lavaEmission;
+                if (materialEmission == null) {
+                    materialEmission = lavaEmission = materials.resolve(LAVA_MATERIAL);
                 }
             }
             FloatArrayList verts = g.verts;
@@ -760,7 +760,7 @@ final class RtTerrainMesher {
                 prim.add(0f);
                 prim.add(0f);
                 g.lightSprites.add(null);
-                g.materialAnalyses.add(materialAnalysis);
+                g.materialEmissions.add(materialEmission);
                 g.surfaces.add(new SceneMesh.TriangleSurface(material, SceneMesh.Coverage.OPAQUE,
                         nx, ny, nz, emission, tr, tg, tb));
             }

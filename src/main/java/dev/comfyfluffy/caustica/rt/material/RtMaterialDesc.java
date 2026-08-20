@@ -18,15 +18,12 @@ public record RtMaterialDesc(
         float subsurfaceColorR, float subsurfaceColorG, float subsurfaceColorB,
         float subsurfaceScatterAnisotropy,
         float emissionColorR, float emissionColorG, float emissionColorB,
-        EmissionSource emissionSource,
         /**
          * OpenPBR {@code emission_luminance}: final HDR emitting-surface luminance in cd/m², the
          * look-package baseline replaced by a source-authored {@code emission.luminance_cd_m2} value
-         * when present. 0 when {@code emissionSource == NONE}. Applied uniformly regardless of source —
-         * Authored, derived-mask, and geometry-uniform emission use the same baseline unless overridden.
+         * when present. Whether a compilation path can emit is decided by that path's feature/state data.
          */
         float emissionLuminance,
-        EmissionSummary emissionSummary,
         /**
          * Index of the registered {@code ISurfaceModel} implementation this material's description is
          * routed through, resolved from an authored name at load time. 0 is the built-in surface, which
@@ -36,11 +33,10 @@ public record RtMaterialDesc(
 ) {
     public RtMaterialDesc(int transport, Source source, int features, float specularRoughness,
                           float baseMetalness, float specularIor, float transmissionWeight,
-                          EmissionSource emissionSource, float emissionLuminance,
-                          EmissionSummary emissionSummary, int surfaceImplementation) {
+                          float emissionLuminance, int surfaceImplementation) {
         this(transport, source, features, specularRoughness, baseMetalness, specularIor, transmissionWeight,
                 1.0f, 1.0f, 1.0f, 0.0f, 0.8f, 0.8f, 0.8f, 0.0f,
-                1.0f, 1.0f, 1.0f, emissionSource, emissionLuminance, emissionSummary, surfaceImplementation);
+                1.0f, 1.0f, 1.0f, emissionLuminance, surfaceImplementation);
     }
     public enum Source {
         OVERRIDE,
@@ -49,26 +45,9 @@ public record RtMaterialDesc(
         NEUTRAL
     }
 
-    public enum EmissionSource {
-        NONE,
-        AUTHORED_MASK,
-        DERIVED_MASK,
-        GEOMETRY_UNIFORM
-    }
-
-    /** Normalized compiler output; per-primitive state light multiplies it when the source is state-gated. */
-    public record EmissionSummary(float averageR, float averageG, float averageB,
-                                  float integratedLuminance, float coverage) {
-        public static final EmissionSummary NONE = new EmissionSummary(0, 0, 0, 0, 0);
-
-        public boolean emissive() {
-            return integratedLuminance > 0.0f && coverage > 0.0f;
-        }
-    }
-
     public RtMaterialDesc {
-        if (source == null || emissionSource == null || emissionSummary == null) {
-            throw new IllegalArgumentException("Material description enums/summary must be present");
+        if (source == null) {
+            throw new IllegalArgumentException("Material description source must be present");
         }
         if (surfaceImplementation < 0 || surfaceImplementation > 255) {
             // The compiled binding carries it in eight bits, so an out-of-range index would alias
