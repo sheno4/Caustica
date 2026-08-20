@@ -207,21 +207,21 @@ public final class RtPipeline {
                 RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_DESCRIPTOR_SET, sets[i], label + " descriptor set " + i);
             }
 
-            // Optional bindless set (set 1): base color plus canonical material-page arrays.
+            // Optional bindless set (set 1): provider textures plus canonical material-page arrays.
             long bindlessLayout = 0L, bindlessPool = 0L, bindlessSet = 0L;
             if (bindlessTextures > 0) {
-                // Base-color textures and canonical material pages have independent index spaces. All arrays
+                // Provider textures and canonical material pages have independent index spaces. All arrays
                 // use the configured capacity here; material pages occupy compact indices from zero.
                 int nb = WORLD_BINDLESS_COUNT;
                 VkDescriptorSetLayoutBinding.Buffer bl = VkDescriptorSetLayoutBinding.calloc(nb, stack);
                 java.nio.IntBuffer bindFlags = stack.mallocInt(nb);
                 for (int b = 0; b < nb; b++) {
                     int stages = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-                    if (b == WORLD_BASE_COLOR_TEXTURES && hasAhit) stages |= VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
+                    if (b == WORLD_PROVIDER_TEXTURES && hasAhit) stages |= VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
                     bl.get(b).binding(b).descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
                             .descriptorCount(bindlessTextures).stageFlags(stages);
                     int flags = VK12.VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
-                    if (b == WORLD_BASE_COLOR_TEXTURES) flags |= VK12.VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+                    if (b == WORLD_PROVIDER_TEXTURES) flags |= VK12.VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
                     bindFlags.put(b, flags);
                 }
                 VkDescriptorSetLayoutBindingFlagsCreateInfo bf = VkDescriptorSetLayoutBindingFlagsCreateInfo.calloc(stack).sType$Default()
@@ -574,10 +574,9 @@ public final class RtPipeline {
         }
     }
 
-    /** Append or initialize one base-color texture index. Existing entries remain immutable in flight. */
     /** Write one provider texture using the layout declared by its renderer-owned or borrowed resource. */
-    public void setBaseColorTexture(int textureIndex, long imageView, int imageLayout, long sampler) {
-        setBindlessTexture(WORLD_BASE_COLOR_TEXTURES, textureIndex, imageView, imageLayout, sampler);
+    public void setProviderTexture(int textureIndex, long imageView, int imageLayout, long sampler) {
+        setBindlessTexture(WORLD_PROVIDER_TEXTURES, textureIndex, imageView, imageLayout, sampler);
     }
 
     /** Bind one compact canonical page bundle at a resource-epoch boundary. */

@@ -146,6 +146,10 @@ public final class RtMaterialEpoch {
             throw new IllegalStateException("Previous opacity micromap material epoch is still active");
         }
         long epochSampler = sampler(ctx);
+        textureRegistry = new ProviderTextureRegistry(textureCapacity,
+                (texture, label) -> new UploadedProviderTexture(ctx, texture, label),
+                (slot, view, layout) -> pipeline.setProviderTexture(slot, view, layout, epochSampler));
+        providers.bindTextureRegistry(textureRegistry);
         pageCompiler.reset();
         ProviderManager.MaterialContributions contributions = providers.collectMaterials();
         RtMaterialOverrides.SurfaceResolver surfaceResolver = surface -> {
@@ -169,10 +173,6 @@ public final class RtMaterialEpoch {
         sceneGeometry.setOpacityMicromapPipeline(opacityMicromapPipeline);
         registry.rebuild(ctx, pageCompiler, catalog, overrides,
                 contributions.definitions(), surfaceResolver, Set.copyOf(availableSurfaces), textureCapacity);
-        textureRegistry = new ProviderTextureRegistry(textureCapacity,
-                (texture, label) -> new UploadedProviderTexture(ctx, texture, label),
-                (slot, view, layout) -> pipeline.setBaseColorTexture(slot, view, layout, epochSampler));
-        providers.bindTextureRegistry(textureRegistry);
         providers.publishMaterials(registry.requireSnapshot());
         providerSnapshotPublished = true;
         pageCompiler.bindPages(pipeline, epochSampler);

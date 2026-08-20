@@ -5,6 +5,7 @@ module world_common;
 // Re-exported: engine code has used these names since before the API existed, and the colour space a
 // slot must return is part of the slot contract, so one definition serves both sides.
 __exported import caustica_color;
+import caustica_types;
 
 // Read-only device pointer with explicit std430 layout. The layout parameter is LOAD-BEARING: a bare
 // Ptr<T> gets Slang's "natural" layout (no vec4 16-byte alignment can shift reflected vector fields
@@ -229,9 +230,7 @@ public struct MaterialBinding {
     // their own bindless texture index; invalid implementation indices visibly resolve to the error surface.
     public uint packed0;
     public uint surface;    // index into the SurfaceMaterial table; closest-hit only
-    // 8:8:8 ACEScg transmittance through this surface, used when coverage is OPAQUE and no texel is
-    // sampled. A compile-time reduction of the surface's transmission colour, not an authored parameter.
-    public uint shadowTint;
+    public uint reserved;
     public uint packed1;    // coverageCutoff:8, unorm
 };
 
@@ -248,7 +247,7 @@ public static const uint BINDING_TRANSMISSIVE = 1u;
 // The sampled base-colour view already returns linear values. Unset for legacy UNORM atlases whose
 // sRGB bytes are decoded explicitly in the shader.
 public static const uint BINDING_BASE_COLOR_LINEAR = 2u;
-// The binding owns a uniform linear base colour in SurfaceMaterial.baseColorUv.xyz and never samples a
+// The binding owns a uniform linear base colour in SurfaceMaterial.baseColorFactor.xyz and never samples a
 // base-color texture. Textureless definitions use opaque coverage, so any-hit needs no corresponding path.
 public static const uint BINDING_TEXTURELESS = 4u;
 
@@ -259,24 +258,10 @@ public uint bindingFlags(MaterialBinding binding) { return (binding.packed0 >> 1
 public uint bindingSurfaceImpl(MaterialBinding binding) { return binding.packed0 >> 24; }
 public float bindingCutoff(MaterialBinding binding) { return float(binding.packed1 & 255u) * (1.0 / 255.0); }
 
-public float3 bindingShadowTint(MaterialBinding binding) {
-    return float3(uint3(binding.shadowTint, binding.shadowTint >> 8u, binding.shadowTint >> 16u) & 255u)
-            * (1.0 / 255.0);
-}
-
-// Closest-hit-only surface parameters, shared by every binding that names them. The uniform half of the
-// authored OpenPBR Surface subset: everything that varies per texel lives in the canonical pages `page`
-// names instead. Source-format data has already been decoded, so nothing here is source-shaped.
-// materialUv maps sprite-local UV into the packed page, while baseColorUv maps the source atlas rectangle
-// back to sprite-local UV.
+// Closest-hit-only surface parameters, shared by every binding that names them. Provider data is opaque
+// to the engine; the remaining fields are the uniform OpenPBR vocabulary it initializes before dispatch.
 public struct SurfaceMaterial {
-    public uint features;     // MATERIAL_FEATURE_* | emission luminance
-    // Canonical page index in bits 0..23, and in bits 24..31 the maximum LOD at which this material's
-    // rectangle within that page is still valid. The LOD limit describes the page rectangle, not the
-    // surface, which is why it travels with the page reference rather than with the parameters below.
-    public uint page;
-    public float4 materialUv; // packed-page uvMin.xy + uvExtent.xy
-    public float4 baseColorUv; // source atlas uvMin.xy + inverse uvExtent.xy
+    public MaterialProviderData providerData;
     // OpenPBR names, OpenPBR meanings. specularRoughness is PERCEPTUAL r: the GGX alpha every lobe wants
     // is its square, computed where the lobe is evaluated. Nothing in the pipeline stores alpha.
     public float specularRoughness;
@@ -289,49 +274,9 @@ public struct SurfaceMaterial {
     public float4 transmissionColorSubsurfaceWeight;
     /** xyz = subsurface_color, w = subsurface_scatter_anisotropy. */
     public float4 subsurfaceColorAnisotropy;
-    /** Uniform scene-linear ACEScg emission_color. */
+    /** xyz = uniform scene-linear ACEScg emission_color, w = emission_luminance in cd/m². */
     public float4 emissionColor;
 };
-
-// "Is there a texture to sample": a compiled fetch-skipping optimisation, not an authored concept.
-public static const uint MATERIAL_FEATURE_SPEC = 1u;
-public static const uint MATERIAL_FEATURE_NORMAL = 2u;
-public static const uint MATERIAL_FEATURE_EMISSION_MASK = 4u;
-public static const uint MATERIAL_FEATURE_SUBSURFACE_COLOR_BASE = 8u;
-// Informational CPU-compiled provenance: the emission RGB page was derived from source base color.
-public static const uint MATERIAL_FEATURE_EMISSION_COLOR_BASE = 16u;
-public static const uint MATERIAL_FEATURE_UNIFORM_EMISSION = 32u;
-// Final HDR emitting-surface luminance (look-package baseline or absolute JSON cd/m² override), baked in Java
-// at material-compile time (RtMaterialRegistry) and packed here as a 16-bit fraction of the max — every
-// emissive material carries a value (0 for non-emissive), not just resource-pack-overridden ones, so the
-// full features word's spare 16 bits (8..23) hold the encoded value.
-public static const uint MATERIAL_EMISSION_LUMINANCE_SHIFT = 8u;
-public static const uint MATERIAL_EMISSION_LUMINANCE_MASK = 65535u;
-// Mirrors RtMaterialRegistry.MAX_EMISSION_LUMINANCE — HALF_MAX, the ceiling emission can survive through
-// the payload's fp16 emission components and Light.le (R11G11B10). Emission is measured in cd/m².
-public static const float MATERIAL_MAX_EMISSION_LUMINANCE = 65504.0;
-public static const uint MATERIAL_PAGE_MASK = 0xFFFFFFu;
-public static const uint MATERIAL_MAX_LOD_SHIFT = 24u;
-
-public uint surfacePage(SurfaceMaterial mat) { return mat.page & MATERIAL_PAGE_MASK; }
-public float surfacePageMaxLod(SurfaceMaterial mat) { return float(mat.page >> MATERIAL_MAX_LOD_SHIFT); }
-
-/** OpenPBR emission_luminance in cd/m²: the emissive baseline this material's emission mask scales. */
-public float surfaceEmissionLuminance(SurfaceMaterial mat) {
-    return float((mat.features >> MATERIAL_EMISSION_LUMINANCE_SHIFT) & MATERIAL_EMISSION_LUMINANCE_MASK)
-            * (MATERIAL_MAX_EMISSION_LUMINANCE / float(MATERIAL_EMISSION_LUMINANCE_MASK));
-}
-
-/**
- * Decode the canonical page's specular_ior channel. IOR is stored as its amplitude reflectance
- * (ior - 1) / (ior + 1), which maps the whole dielectric range onto a unorm8 with useful precision where
- * real materials sit. The engine material page compiler owns the matching encode and clamps to the same
- * one-unorm8-step-below-one ceiling before upload.
- */
-public float surfaceIorFromPage(float encoded) {
-    float amplitude = clamp(encoded, 0.0, 254.0 / 255.0);
-    return (1.0 + amplitude) / (1.0 - amplitude);
-}
 
 // One record for every TLAS instance. PrimitiveIndex restarts at zero for each BLAS geometry, so hit shaders add
 // triangleBase[GeometryIndex()]. Texture-coordinate storage is selected explicitly by flags rather than

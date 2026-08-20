@@ -1,5 +1,7 @@
 package dev.comfyfluffy.caustica.rt.material;
 
+import dev.comfyfluffy.caustica.api.provider.MaterialTextureData;
+
 import dev.comfyfluffy.caustica.api.provider.OpenPbrMaterialDefaults;
 
 import java.util.ArrayList;
@@ -21,14 +23,14 @@ final class MaterialPagePacker {
         surface0 = materialChannels ? allocate(pageSize, mipCount, 255, 0, 0, 0) : null;
         normal = materialChannels ? allocate(pageSize, mipCount, 128, 128, 0, 0) : null;
         surface1 = materialChannels ? allocate(pageSize, mipCount, 255, 255, 255,
-                RtMaterialTextureData.unorm8(encodeIor(OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR))) : null;
+                MaterialTextureData.unorm8(encodeIor(OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR))) : null;
         emission = emissionPresent ? allocate(pageSize, mipCount, 255, 255, 255, 255) : null;
     }
 
-    void write(int x, int y, List<RtMaterialTextureData.Level> levels) {
+    void write(int x, int y, List<MaterialTextureData.Level> levels) {
         if (surface0 == null) return;
         for (int mip = 0; mip < levels.size(); mip++) {
-            RtMaterialTextureData.Level level = levels.get(mip);
+            MaterialTextureData.Level level = levels.get(mip);
             int width = Math.max(1, pageSize >> mip);
             int cx = x >> mip;
             int cy = y >> mip;
@@ -72,10 +74,10 @@ final class MaterialPagePacker {
                 if (tx < 0 || tx >= dstWidth) continue;
                 int si = (sy * srcWidth + sx) * 4;
                 int di = (ty * dstWidth + tx) * 4;
-                dst[di] = (byte) RtMaterialTextureData.unorm8(src[si]);
-                dst[di + 1] = (byte) RtMaterialTextureData.unorm8(src[si + 1]);
-                dst[di + 2] = (byte) RtMaterialTextureData.unorm8(src[si + 2]);
-                dst[di + 3] = (byte) RtMaterialTextureData.unorm8(src[si + 3]);
+                dst[di] = (byte) MaterialTextureData.unorm8(src[si]);
+                dst[di + 1] = (byte) MaterialTextureData.unorm8(src[si + 1]);
+                dst[di + 2] = (byte) MaterialTextureData.unorm8(src[si + 2]);
+                dst[di + 3] = (byte) MaterialTextureData.unorm8(src[si + 3]);
             }
         }
     }

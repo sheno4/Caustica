@@ -1,5 +1,5 @@
 package dev.comfyfluffy.caustica.api.provider;
 
-/** Texture content contributed for a source-local {@link SceneMesh.TextureReference}. */
+/** Texture content registered into an epoch-local bindless slot. */
 public interface TextureResource {
 }

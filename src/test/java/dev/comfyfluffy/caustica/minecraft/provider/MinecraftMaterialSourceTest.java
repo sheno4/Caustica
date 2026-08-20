@@ -129,6 +129,11 @@ final class MinecraftMaterialSourceTest {
         private final List<MaterialTextureResource> resources = new ArrayList<>();
 
         @Override
+        public int register(dev.comfyfluffy.caustica.api.provider.TextureResource resource) {
+            return 1;
+        }
+
+        @Override
         public void define(MaterialDefinition definition) {
             definitions.add(definition);
         }

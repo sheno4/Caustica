@@ -98,7 +98,7 @@ public final class MinecraftLabPbr {
     /**
      * Page storage encoding of {@code specular_ior}: its amplitude reflectance {@code (ior-1)/(ior+1)}.
      * Monotonic and bounded, so the whole dielectric range fits a unorm8 with a step of about 0.008 in
-     * IOR where real materials sit. {@code surfaceIorFromPage} in world_common.slang is the decode.
+     * IOR where real materials sit. {@code canonicalIor} in the registered adapter is the decode.
      */
     public static float encodeIor(float ior) {
         float amplitude = (ior - 1.0f) / (ior + 1.0f);

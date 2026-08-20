@@ -1,5 +1,7 @@
 package dev.comfyfluffy.caustica.rt.material;
 
+import dev.comfyfluffy.caustica.api.provider.MaterialTextureData;
+
 import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.api.provider.MaterialTextureAnalysisSource;
 import dev.comfyfluffy.caustica.api.provider.MaterialTextureImage;
@@ -19,7 +21,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class RtMaterialPageCompilerImageLifetimeTest {
     @Test
-    void baseColorOnlyStandaloneKeepsScannedStatsWithoutMaterialPageChannels() throws Exception {
+    void baseColorOnlyStandaloneNeedsNoCanonicalPageChannels() {
         int[] pixels = {0xFF204060};
         AtomicInteger closes = new AtomicInteger();
         MaterialTextureResource resource = new MaterialTextureResource(ResourceId.of("test", "owned"),
@@ -35,17 +37,10 @@ final class RtMaterialPageCompilerImageLifetimeTest {
                 OpenPbrColorBinding.PARAMETER_DEFAULT, OpenPbrColorBinding.PARAMETER_DEFAULT,
                 OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR, 1.0f);
 
-        MaterialTextureAnalyzer.AlbedoStats stats = MaterialTextureAnalyzer.scanAlbedo(
-                resource.analysisSource());
-
         assertEquals(0, RtMaterialPageCompiler.pageChannels(0));
         assertEquals(MaterialTextureKind.STANDALONE, resource.kind());
         assertEquals(MaterialUv.IDENTITY, resource.albedoUv());
-        assertEquals(1, closes.get());
-        assertEquals(0x20 / 255.0f, stats.averageR(), 1.0e-6f);
-        assertEquals(0x40 / 255.0f, stats.averageG(), 1.0e-6f);
-        assertEquals(0x60 / 255.0f, stats.averageB(), 1.0e-6f);
-        assertEquals(1.0f, stats.averageA(), 1.0e-6f);
+        assertEquals(0, closes.get(), "base colour no longer has a CPU statistics walk");
     }
 
     @Test
@@ -64,8 +59,8 @@ final class RtMaterialPageCompilerImageLifetimeTest {
                 OpenPbrColorBinding.PARAMETER_DEFAULT, OpenPbrColorBinding.PARAMETER_DEFAULT,
                 OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR, 1.0f);
 
-        assertThrows(IllegalStateException.class, () -> MaterialTextureAnalyzer.scanAlbedo(
-                resource.analysisSource()));
+        assertThrows(IllegalStateException.class, () -> MaterialTextureAnalyzer.decode(
+                resource.analysisSource(), OpenPbrColorBinding.BASE_COLOR, 0));
         assertEquals(1, closes.get());
     }
 
@@ -88,14 +83,14 @@ final class RtMaterialPageCompilerImageLifetimeTest {
 
         MaterialTextureAnalyzer.Decoded decoded = MaterialTextureAnalyzer.decode(
                 source, OpenPbrColorBinding.BASE_COLOR, 0);
-        RtMaterialTextureData.Level level = decoded.levels().getFirst();
+        MaterialTextureData.Level level = decoded.levels().getFirst();
 
         assertEquals(0.75f, level.surface0()[2], 1.0e-6f);
-        assertEquals(0.5f * RtMaterialTextureData.srgbToLinear(0x80),
+        assertEquals(0.5f * MaterialTextureData.srgbToLinear(0x80),
                 level.emissionColor()[0], 1.0e-6f);
-        assertEquals(0.25f * RtMaterialTextureData.srgbToLinear(0x40),
+        assertEquals(0.25f * MaterialTextureData.srgbToLinear(0x40),
                 level.emissionColor()[1], 1.0e-6f);
-        assertEquals(RtMaterialTextureData.srgbToLinear(0x20),
+        assertEquals(MaterialTextureData.srgbToLinear(0x20),
                 level.emissionColor()[2], 1.0e-6f);
     }
 

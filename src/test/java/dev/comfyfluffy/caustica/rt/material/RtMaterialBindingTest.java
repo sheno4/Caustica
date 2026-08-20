@@ -61,7 +61,7 @@ final class RtMaterialBindingTest {
                 MaterialBindingAbi.flags(textured.packed0()));
         assertEquals(7, MaterialBindingAbi.surfaceImplementation(textured.packed0()));
         assertEquals(base.surface(), textured.surface());
-        assertEquals(base.shadowTint(), textured.shadowTint());
+        assertEquals(base.reserved(), textured.reserved());
         assertEquals(base.packed1(), textured.packed1());
     }
 
@@ -77,28 +77,4 @@ final class RtMaterialBindingTest {
         }
     }
 
-    @Test
-    void clearGlassStillDimsShadowRays() {
-        // A white sprite with no alpha coverage carries no colour extinction, so only the neutral term
-        // applies: exp(-0.15). This is the case a purely colour-derived tint would leave fully invisible
-        // to a shadow ray.
-        int tint = RtMaterialRegistry.translucentShadowTint(new float[]{1.0f, 1.0f, 1.0f, 0.0f});
-        int expected = Math.round((float) Math.exp(-0.15) * 255.0f);
-        for (int channel = 0; channel < 3; channel++) {
-            assertEquals(expected, (tint >>> (channel * 8)) & 0xFF);
-        }
-        assertEquals(0, tint >>> 24, "shadow tint occupies the low 24 bits only");
-    }
-
-    @Test
-    void saturatedPanesAbsorbTheirOwnColour() {
-        // A blue pane covering its whole footprint: red absorbs, blue passes. ACEScg mixes the primaries,
-        // so the assertion is the ordering the shadow path depends on, not an exact triple.
-        int tint = RtMaterialRegistry.translucentShadowTint(new float[]{0.1f, 0.1f, 0.9f, 1.0f});
-        int red = tint & 0xFF;
-        int blue = (tint >>> 16) & 0xFF;
-        assertTrue(blue > red, "blue transmittance " + blue + " should exceed red " + red);
-        assertTrue(red < Math.round((float) Math.exp(-0.15) * 255.0f),
-                "an absorbing pane must dim more than clear glass");
-    }
 }

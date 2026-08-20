@@ -4,19 +4,20 @@ import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.api.gpu.BorrowedVulkanTexture;
 import dev.comfyfluffy.caustica.api.provider.CpuTextureResource;
 import dev.comfyfluffy.caustica.api.provider.SceneMesh;
+import dev.comfyfluffy.caustica.api.provider.TextureRegistrar;
 import dev.comfyfluffy.caustica.api.provider.TextureResource;
 import dev.comfyfluffy.caustica.api.provider.TextureSink;
 
-import java.util.LinkedHashMap;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
-/** Activation-owned table mapping source-local texture references to private append-only descriptor slots. */
+/** Activation-owned append-only bindless texture table. */
 public final class ProviderTextureRegistry implements AutoCloseable {
     @FunctionalInterface
     public interface CpuUploader {
@@ -25,9 +26,7 @@ public final class ProviderTextureRegistry implements AutoCloseable {
 
     public interface UploadedTexture {
         long imageView();
-
         int imageLayout();
-
         void destroy();
     }
 
@@ -46,14 +45,19 @@ public final class ProviderTextureRegistry implements AutoCloseable {
     private record Entry(int slot, long imageView, int imageLayout, Runnable retire) {
     }
 
+    private record Staged(SceneMesh.TextureReference reference, TextureResource resource, int slot) {
+    }
+
     private final int capacity;
     private final CpuUploader uploader;
-    private final Map<Key, Entry> entries = new LinkedHashMap<>();
+    private final DescriptorWriter descriptors;
+    private final Map<Key, Entry> references = new LinkedHashMap<>();
+    private final List<Entry> entries = new ArrayList<>();
     private final Set<BorrowedVulkanTexture> borrowedResources =
             Collections.newSetFromMap(new IdentityHashMap<>());
     private final UploadedTexture fallback;
-    private final DescriptorWriter descriptors;
     private int nextSlot = 1;
+    private boolean submissionActive;
     private boolean closed;
 
     /** Slot zero is reserved for the renderer's fallback texture. */
@@ -72,18 +76,23 @@ public final class ProviderTextureRegistry implements AutoCloseable {
         }
     }
 
-    /** Stage one provider callback so failure cannot mutate shared slots or capacity. */
+    /** Start one atomic source contribution. Slots returned by it become live only when it commits. */
     public Submission submission(ResourceId source) {
         if (closed) throw new IllegalStateException("texture registry is closed");
-        return new Submission(Objects.requireNonNull(source, "source"));
+        if (submissionActive) throw new IllegalStateException("texture submission is already active");
+        Objects.requireNonNull(source, "source");
+        submissionActive = true;
+        return new Submission(source);
     }
 
-    public final class Submission implements TextureSink, AutoCloseable {
+    public final class Submission implements TextureSink, TextureRegistrar, AutoCloseable {
         private final ResourceId source;
-        private final Map<SceneMesh.TextureReference, TextureResource> staged = new LinkedHashMap<>();
+        private final List<Staged> staged = new ArrayList<>();
+        private final Map<SceneMesh.TextureReference, TextureResource> stagedReferences = new LinkedHashMap<>();
         private final Set<BorrowedVulkanTexture> stagedBorrowed =
                 Collections.newSetFromMap(new IdentityHashMap<>());
-        private final List<BorrowedVulkanTexture> rejectedBorrowed = new ArrayList<>();
+        private final Set<BorrowedVulkanTexture> rejectedBorrowed =
+                Collections.newSetFromMap(new IdentityHashMap<>());
         private boolean finished;
         private boolean invalid;
 
@@ -92,30 +101,60 @@ public final class ProviderTextureRegistry implements AutoCloseable {
         }
 
         @Override
+        public int register(TextureResource resource) {
+            return stage(null, resource);
+        }
+
+        @Override
         public void submit(SceneMesh.TextureReference reference, TextureResource resource) {
             if (finished) throw new IllegalStateException("texture submission is finished");
             Objects.requireNonNull(reference, "reference");
+            Objects.requireNonNull(resource, "resource");
+            if (references.containsKey(new Key(source, reference))
+                    || stagedReferences.putIfAbsent(reference, resource) != null) {
+                rejectBorrowed(resource);
+                invalid = true;
+                throw new IllegalArgumentException("duplicate texture contribution " + source + "/" + reference);
+            }
+            try {
+                stage(reference, resource);
+            } catch (Throwable failure) {
+                stagedReferences.remove(reference);
+                throw failure;
+            }
+        }
+
+        private int stage(SceneMesh.TextureReference reference, TextureResource resource) {
+            if (finished) throw new IllegalStateException("texture submission is finished");
             Objects.requireNonNull(resource, "resource");
             if (!(resource instanceof CpuTextureResource) && !(resource instanceof BorrowedVulkanTexture)) {
                 invalid = true;
                 throw new IllegalArgumentException("unsupported texture resource " + resource.getClass());
             }
-            if (resource instanceof BorrowedVulkanTexture borrowed && borrowedResources.contains(borrowed)) {
+            if (staged.size() >= capacity - nextSlot) {
+                rejectBorrowed(resource);
                 invalid = true;
-                throw new IllegalArgumentException("borrowed texture resource was already submitted");
+                throw new IllegalStateException("provider texture table is full");
             }
-            TextureResource previous = staged.putIfAbsent(reference, resource);
-            if (previous != null) {
-                if (resource instanceof BorrowedVulkanTexture borrowed && borrowed != previous) {
-                    rejectedBorrowed.add(borrowed);
+            if (resource instanceof BorrowedVulkanTexture borrowed) {
+                if (borrowedResources.contains(borrowed)) {
+                    invalid = true;
+                    throw new IllegalArgumentException("borrowed texture resource was already submitted");
                 }
-                invalid = true;
-                throw new IllegalArgumentException("duplicate texture contribution " + source + "/" + reference);
+                if (!stagedBorrowed.add(borrowed)) {
+                    invalid = true;
+                    throw new IllegalArgumentException("borrowed texture resource was submitted more than once");
+                }
             }
-            if (resource instanceof BorrowedVulkanTexture borrowed && !stagedBorrowed.add(borrowed)) {
-                staged.remove(reference);
-                invalid = true;
-                throw new IllegalArgumentException("borrowed texture resource was submitted more than once");
+            int slot = nextSlot + staged.size();
+            staged.add(new Staged(reference, resource, slot));
+            return slot;
+        }
+
+        private void rejectBorrowed(TextureResource resource) {
+            if (resource instanceof BorrowedVulkanTexture borrowed
+                    && !borrowedResources.contains(borrowed) && !stagedBorrowed.contains(borrowed)) {
+                rejectedBorrowed.add(borrowed);
             }
         }
 
@@ -123,51 +162,30 @@ public final class ProviderTextureRegistry implements AutoCloseable {
             if (finished) throw new IllegalStateException("texture submission is finished");
             if (invalid) throw new IllegalStateException("texture submission was rejected");
             if (closed) throw new IllegalStateException("texture registry is closed");
-            for (SceneMesh.TextureReference reference : staged.keySet()) {
-                if (entries.containsKey(new Key(source, reference))) {
-                    throw new IllegalArgumentException("duplicate texture contribution " + source + "/" + reference);
-                }
-            }
-            if (staged.size() > capacity - nextSlot) {
-                throw new IllegalStateException("provider texture table is full");
-            }
-            for (TextureResource resource : staged.values()) {
-                if (resource instanceof BorrowedVulkanTexture borrowed && borrowedResources.contains(borrowed)) {
-                    throw new IllegalArgumentException("borrowed texture resource was already submitted");
-                }
-            }
 
-            ArrayList<Map.Entry<Key, Entry>> materialized = new ArrayList<>(staged.size());
-            int slot = nextSlot;
+            ArrayList<Entry> materialized = new ArrayList<>(staged.size());
             try {
-                for (Map.Entry<SceneMesh.TextureReference, TextureResource> contribution : staged.entrySet()) {
-                    TextureResource resource = contribution.getValue();
-                    long imageView;
-                    int imageLayout;
-                    Runnable retire;
-                    switch (resource) {
+                for (Staged contribution : staged) {
+                    TextureResource resource = contribution.resource();
+                    Entry entry = switch (resource) {
                         case CpuTextureResource cpu -> {
-                            UploadedTexture uploaded = uploader.upload(cpu, source + "/" + contribution.getKey());
-                            imageView = uploaded.imageView();
-                            imageLayout = uploaded.imageLayout();
-                            retire = uploaded::destroy;
+                            String suffix = contribution.reference() == null
+                                    ? "texture-" + contribution.slot() : contribution.reference().toString();
+                            UploadedTexture uploaded = uploader.upload(cpu, source + "/" + suffix);
+                            yield new Entry(contribution.slot(), uploaded.imageView(), uploaded.imageLayout(),
+                                    uploaded::destroy);
                         }
-                        case BorrowedVulkanTexture borrowed -> {
-                            imageView = borrowed.imageView();
-                            imageLayout = borrowed.imageLayout();
-                            retire = borrowed.retired();
-                        }
+                        case BorrowedVulkanTexture borrowed -> new Entry(contribution.slot(), borrowed.imageView(),
+                                borrowed.imageLayout(), borrowed.retired());
                         default -> throw new AssertionError(resource);
-                    }
-                    materialized.add(Map.entry(new Key(source, contribution.getKey()),
-                            new Entry(slot++, imageView, imageLayout, retire)));
+                    };
+                    materialized.add(entry);
                 }
-                for (Map.Entry<Key, Entry> contribution : materialized) {
-                    Entry entry = contribution.getValue();
+                for (Entry entry : materialized) {
                     descriptors.write(entry.slot(), entry.imageView(), entry.imageLayout());
                 }
             } catch (Throwable failure) {
-                finished = true;
+                finish();
                 try {
                     retireFailedSubmission(materialized);
                 } catch (Throwable retirementFailure) {
@@ -176,59 +194,68 @@ public final class ProviderTextureRegistry implements AutoCloseable {
                 throw failure;
             }
 
-            for (Map.Entry<Key, Entry> contribution : materialized) {
-                entries.put(contribution.getKey(), contribution.getValue());
+            for (int index = 0; index < staged.size(); index++) {
+                Staged contribution = staged.get(index);
+                Entry entry = materialized.get(index);
+                entries.add(entry);
+                if (contribution.reference() != null) references.put(new Key(source, contribution.reference()), entry);
+                if (contribution.resource() instanceof BorrowedVulkanTexture borrowed) borrowedResources.add(borrowed);
             }
-            staged.values().stream().filter(BorrowedVulkanTexture.class::isInstance)
-                    .map(BorrowedVulkanTexture.class::cast).forEach(borrowedResources::add);
-            nextSlot = slot;
+            nextSlot += staged.size();
             staged.clear();
+            stagedReferences.clear();
             rejectedBorrowed.clear();
-            finished = true;
+            finish();
         }
 
-        private void retireFailedSubmission(List<Map.Entry<Key, Entry>> materialized) {
+        private void retireFailedSubmission(List<Entry> materialized) {
             Set<TextureResource> materializedResources = Collections.newSetFromMap(new IdentityHashMap<>());
-            int index = 0;
-            for (TextureResource resource : staged.values()) {
-                if (index < materialized.size()) {
-                    materializedResources.add(resource);
-                    index++;
-                }
+            for (int index = 0; index < materialized.size(); index++) {
+                materializedResources.add(staged.get(index).resource());
             }
             ArrayList<Runnable> retirements = new ArrayList<>();
-            for (int i = materialized.size() - 1; i >= 0; i--) {
-                retirements.add(materialized.get(i).getValue().retire());
+            for (int index = materialized.size() - 1; index >= 0; index--) {
+                retirements.add(materialized.get(index).retire());
             }
-            for (TextureResource resource : staged.values()) {
-                if (!materializedResources.contains(resource) && resource instanceof BorrowedVulkanTexture borrowed) {
+            for (Staged contribution : staged) {
+                if (!materializedResources.contains(contribution.resource())
+                        && contribution.resource() instanceof BorrowedVulkanTexture borrowed) {
                     retirements.add(borrowed.retired());
                 }
             }
-            staged.clear();
             for (BorrowedVulkanTexture borrowed : rejectedBorrowed) retirements.add(borrowed.retired());
+            staged.clear();
+            stagedReferences.clear();
             rejectedBorrowed.clear();
             retireAll(retirements);
+        }
+
+        private void finish() {
+            finished = true;
+            submissionActive = false;
         }
 
         @Override
         public void close() {
             if (finished) return;
-            finished = true;
             ArrayList<Runnable> retirements = new ArrayList<>();
-            for (TextureResource resource : staged.values()) {
-                if (resource instanceof BorrowedVulkanTexture borrowed) retirements.add(borrowed.retired());
+            for (Staged contribution : staged) {
+                if (contribution.resource() instanceof BorrowedVulkanTexture borrowed) {
+                    retirements.add(borrowed.retired());
+                }
             }
             for (BorrowedVulkanTexture borrowed : rejectedBorrowed) retirements.add(borrowed.retired());
             staged.clear();
+            stagedReferences.clear();
             rejectedBorrowed.clear();
+            finish();
             retireAll(retirements);
         }
     }
 
     /** Resolve a submitted source-local reference while packing that source's geometry. */
     public int requireSlot(ResourceId source, SceneMesh.TextureReference reference) {
-        Entry entry = entries.get(new Key(source, reference));
+        Entry entry = references.get(new Key(source, reference));
         if (entry == null) throw new IllegalArgumentException("texture was not submitted: " + source + "/" + reference);
         return entry.slot();
     }
@@ -237,19 +264,18 @@ public final class ProviderTextureRegistry implements AutoCloseable {
         return entries.size();
     }
 
-    /**
-     * Retire all resources after the runtime has drained GPU work referencing this table. Owned uploads are
-     * destroyed; borrowed resources receive their provider callback. Slots are never reused within an epoch.
-     */
+    /** Retire all resources after the runtime has drained GPU work referencing this table. */
     @Override
     public void close() {
         if (closed) return;
+        if (submissionActive) throw new IllegalStateException("texture submission is active");
         closed = true;
-        Entry[] retired = entries.values().toArray(Entry[]::new);
+        Entry[] retired = entries.toArray(Entry[]::new);
         entries.clear();
+        references.clear();
         borrowedResources.clear();
         ArrayList<Runnable> retirements = new ArrayList<>(retired.length + 1);
-        for (int i = retired.length - 1; i >= 0; i--) retirements.add(retired[i].retire());
+        for (int index = retired.length - 1; index >= 0; index--) retirements.add(retired[index].retire());
         retirements.add(fallback::destroy);
         retireAll(retirements);
     }

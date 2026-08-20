@@ -1,5 +1,12 @@
 module caustica_types;
 
+/** Opaque words interpreted only by the registered implementation selected for a material. */
+public struct MaterialProviderData {
+    public uint4 words0;
+    public uint4 words1;
+    public uint4 words2;
+};
+
 // Extension colours and radiance are scene-linear ACEScg. Distances are scene world units and
 // directions are normalized and point away from the shaded position.
 public static const uint EVENT_NONE = 0x0u;
@@ -17,6 +24,9 @@ public static const uint EVENT_TRANSMISSION = 0x10u;
 public static const uint SURFACE_RECONSTRUCTION_ANCHOR = 0x1u;
 /** Enables optional time-varying procedural surface and medium evaluation for this frame. */
 public static const uint SURFACE_ANIMATION_ENABLED = 0x2u;
+
+public static const uint SURFACE_BASE_TEXTURE_PRESENT = 0x1u;
+public static const uint SURFACE_BASE_TEXTURE_LINEAR = 0x2u;
 
 /** The material values available when a transmissive surface creates its interior medium. */
 public struct MediumInput {
@@ -124,11 +134,26 @@ public float3 openPbrSpecularF0(MaterialInput material) {
  * description itself is not here: it arrives as the `inout MaterialInput` an implementation edits.
  */
 public struct SurfaceInput {
+    /** Opaque material words interpreted only by the selected surface implementation. */
+    public MaterialProviderData providerData;
     public float3 position;
     /** The triangle's own normal, oriented toward the viewer. Unperturbed by any normal map. */
     public float3 geometricNormal;
+    /** Source-neutral tangent frame constructed from geometry positions and texture coordinates. */
+    public float3 tangent;
+    public float3 bitangent;
     public float3 outgoingDirection;
     public float2 textureCoordinate;
+    /** Provider texture LOD derived from the ray footprint and the selected base texture dimensions. */
+    public float textureLod;
+    /** Epoch-local provider texture slot and SURFACE_BASE_TEXTURE_* facts from the traversal binding. */
+    public uint baseTextureIndex;
+    public uint baseTextureFlags;
+    /** Primitive and interpolated vertex colours in scene-linear ACEScg with unitless alpha. */
+    public float3 tint;
+    public float4 vertexColor;
+    /** Provider-authored primitive emission multiplier, unitless. */
+    public float primitiveEmission;
     public float textureFootprint;
     /**
      * A world-pinned, precision-safe position for procedural evaluation. It follows `position` while

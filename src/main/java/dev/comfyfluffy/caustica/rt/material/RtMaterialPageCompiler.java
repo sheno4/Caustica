@@ -4,6 +4,7 @@ import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.engine.material.MaterialCatalog;
 import dev.comfyfluffy.caustica.api.provider.MaterialTextureResource;
+import dev.comfyfluffy.caustica.api.provider.MaterialTextureData;
 import dev.comfyfluffy.caustica.api.provider.MaterialUv;
 import dev.comfyfluffy.caustica.api.provider.OpenPbrMaterialDefaults;
 import dev.comfyfluffy.caustica.api.provider.OpenPbrColorBinding;
@@ -40,15 +41,10 @@ public final class RtMaterialPageCompiler {
     RtMaterialPageCompiler() {
     }
 
-    /** Immutable texture-to-page mapping and compile-time image statistics. */
+    /** Immutable texture-to-page mapping. */
     public record Entry(int features, int pageIndex, int maxLod,
                         float materialU, float materialV, float materialDu, float materialDv,
-                        float albedoU, float albedoV, float albedoInvDu, float albedoInvDv,
-                        float averageR, float averageG, float averageB, float averageA) {
-        public float[] average() {
-            return new float[]{averageR, averageG, averageB, averageA};
-        }
-    }
+                        float albedoU, float albedoV, float albedoInvDu, float albedoInvDv) { }
 
     private record Page(RtMaterialPageTexture surface0, RtMaterialPageTexture normal,
                         RtMaterialPageTexture surface1, RtMaterialPageTexture emission, int index) {
@@ -84,7 +80,6 @@ public final class RtMaterialPageCompiler {
         int page = -1;
         int x;
         int y;
-        MaterialTextureAnalyzer.AlbedoStats stats = MaterialTextureAnalyzer.AlbedoStats.NEUTRAL;
 
         Candidate(MaterialTextureResource resource) {
             this.resource = resource;
@@ -174,20 +169,11 @@ public final class RtMaterialPageCompiler {
                     MaterialTextureAnalyzer.Decoded decoded = MaterialTextureAnalyzer.decode(
                             candidate.resource.analysisSource(), candidate.resource.emissionColorBinding(),
                             maxLodFor(candidate.width(), candidate.height()));
-                    candidate.stats = decoded.stats();
                     pagePixels[candidate.page].write(candidate.x, candidate.y, decoded.levels());
                 }
             } catch (Throwable t) {
                 warnOnce("RT canonical material decode failed for " + candidate.resource.material(), t);
                 candidate.page = -1;
-            }
-        });
-        candidates.parallelStream().filter(candidate -> candidate.page < 0
-                && eligibleForPageCompilation(candidate.resource)).forEach(candidate -> {
-            try {
-                candidate.stats = MaterialTextureAnalyzer.scanAlbedo(candidate.resource.analysisSource());
-            } catch (Throwable t) {
-                warnOnce("RT material image scan failed for " + candidate.resource.material(), t);
             }
         });
         for (int pageIndex = 0; pageIndex < plan.layouts().size(); pageIndex++) {
@@ -216,13 +202,12 @@ public final class RtMaterialPageCompiler {
         neutralSurface0 = neutral(ctx, 255, 0, 0, 0, "material neutral surface0", false);
         neutralNormal = neutral(ctx, 128, 128, 0, 0, "material neutral normal", false);
         neutralSurface1 = neutral(ctx, 255, 255, 255,
-                RtMaterialTextureData.unorm8(MaterialPagePacker.encodeIor(OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR)),
+                MaterialTextureData.unorm8(MaterialPagePacker.encodeIor(OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR)),
                 "material neutral surface1", false);
         neutralEmission = neutral(ctx, 255, 255, 255, 255, "material neutral emission", false);
         float fallbackUv = GUTTER / (float) pageSize;
         fallback = new Entry(0, 0, 0, fallbackUv, fallbackUv,
-                1.0f / pageSize, 1.0f / pageSize, 0, 0, 1, 1,
-                1.0f, 1.0f, 1.0f, 0.0f);
+                1.0f / pageSize, 1.0f / pageSize, 0, 0, 1, 1);
         for (Candidate candidate : candidates) {
             entries.put(candidate.resource.material(), candidate.page >= 0
                     ? compiledEntry(candidate, pageSize) : fallbackFor(candidate));
@@ -279,23 +264,19 @@ public final class RtMaterialPageCompiler {
 
     private Entry compiledEntry(Candidate candidate, int pageSize) {
         MaterialUv uv = candidate.resource.albedoUv();
-        MaterialTextureAnalyzer.AlbedoStats stats = candidate.stats;
         return new Entry(candidate.features, candidate.page, maxLodFor(candidate.width(), candidate.height()),
                 candidate.x / (float) pageSize, candidate.y / (float) pageSize,
                 candidate.width() / (float) pageSize, candidate.height() / (float) pageSize,
-                uv.u(), uv.v(), uv.inverseDu(), uv.inverseDv(),
-                stats.averageR(), stats.averageG(), stats.averageB(), stats.averageA());
+                uv.u(), uv.v(), uv.inverseDu(), uv.inverseDv());
     }
 
     private Entry fallbackFor(Candidate candidate) {
         MaterialUv uv = candidate.resource.albedoUv();
-        MaterialTextureAnalyzer.AlbedoStats stats = candidate.stats;
         int colorBindings = candidate.features & (RtMaterialRegistry.FEATURE_SUBSURFACE_COLOR_BASE
                 | RtMaterialRegistry.FEATURE_EMISSION_COLOR_BASE);
         return new Entry(colorBindings, fallback.pageIndex(), 0,
                 fallback.materialU, fallback.materialV, fallback.materialDu, fallback.materialDv,
-                uv.u(), uv.v(), uv.inverseDu(), uv.inverseDv(),
-                stats.averageR(), stats.averageG(), stats.averageB(), stats.averageA());
+                uv.u(), uv.v(), uv.inverseDu(), uv.inverseDv());
     }
 
     static int maxLodFor(int width, int height) {

@@ -1115,6 +1115,46 @@ final class ProviderManagerTest {
         registry.close();
     }
 
+    @Test
+    void failedMaterialSourceRetiresBorrowedTextureAndDoesNotConsumeItsSlot() {
+        AtomicInteger retired = new AtomicInteger();
+        AtomicInteger stopped = new AtomicInteger();
+        AtomicInteger healthySlot = new AtomicInteger();
+        MaterialSource broken = new MaterialSource() {
+            @Override
+            public void submitMaterials(dev.comfyfluffy.caustica.api.provider.MaterialSink materials) {
+                materials.register(new dev.comfyfluffy.caustica.api.gpu.BorrowedVulkanTexture(301L,
+                        org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_GENERAL, retired::incrementAndGet));
+                throw new IllegalStateException("expected");
+            }
+
+            @Override
+            public void stop() {
+                stopped.incrementAndGet();
+            }
+        };
+        MaterialSource healthy = materials -> healthySlot.set(materials.register(
+                new dev.comfyfluffy.caustica.api.provider.CpuTextureResource(1, 1,
+                        dev.comfyfluffy.caustica.api.provider.CpuTextureResource.Encoding.SRGB,
+                        new byte[] { 1, 2, 3, 4 })));
+        Map<ResourceId, MaterialSource> sources = new LinkedHashMap<>();
+        sources.put(id("broken"), broken);
+        sources.put(id("healthy"), healthy);
+        ProviderManager manager = new ProviderManager(Map.of(), Map.of(), sources);
+        ProviderTextureRegistry registry = new ProviderTextureRegistry(2,
+                (texture, label) -> uploaded(100L, new AtomicInteger()), (slot, imageView, layout) -> { });
+        manager.bindTextureRegistry(registry);
+
+        manager.collectMaterials();
+
+        assertEquals(1, retired.get());
+        assertEquals(1, stopped.get());
+        assertEquals(1, healthySlot.get());
+        assertEquals(1, registry.size());
+        manager.unbindTextureRegistry(registry);
+        registry.close();
+    }
+
     private static ProviderManager manager(String path, SceneProvider provider) {
         return new ProviderManager(Map.of(id(path), provider), Map.of(), Map.of());
     }

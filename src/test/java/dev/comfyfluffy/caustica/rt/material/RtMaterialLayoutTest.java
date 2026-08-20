@@ -3,13 +3,13 @@ package dev.comfyfluffy.caustica.rt.material;
 import dev.comfyfluffy.caustica.rt.gen.MaterialBindingData;
 import dev.comfyfluffy.caustica.rt.gen.SurfaceMaterialData;
 import dev.comfyfluffy.caustica.rt.gen.SurfaceMaterialData.Float4;
+import dev.comfyfluffy.caustica.rt.gen.SurfaceMaterialData.Int4;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushConstantsData;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushData;
 import org.junit.jupiter.api.Test;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -38,20 +38,17 @@ final class RtMaterialLayoutTest {
         assertEquals(128, SurfaceMaterialData.BYTE_SIZE);
         ByteBuffer data = ByteBuffer.allocateDirect(SurfaceMaterialData.BYTE_SIZE)
                 .order(ByteOrder.nativeOrder());
-        new SurfaceMaterialData(5, 7,
-                new Float4(0.01f, 0.02f, 0.03f, 0.04f),
-                new Float4(0.05f, 0.06f, 7.0f, 8.0f),
+        new SurfaceMaterialData(new SurfaceMaterialData.MaterialProviderData(
+                        new Int4(11, 12, 13, 14),
+                        new Int4(15, 16, 17, 18),
+                        new Int4(19, 20, 21, 22)),
                 0.1f, 0.2f, 1.52f, 1.0f,
                 new Float4(0.7f, 0.8f, 0.9f, 1.0f),
                 new Float4(0.6f, 0.5f, 0.4f, 0.3f),
                 new Float4(0.2f, 0.1f, 0.0f, -0.2f),
-                new Float4(2.0f, 3.0f, 4.0f, 1.0f)).write(data);
-        assertEquals(5, data.getInt(0));  // features
-        assertEquals(7, data.getInt(4));  // page
-        assertEquals(0, data.getInt(8));
-        assertEquals("materialUv", SurfaceMaterialData.class.getRecordComponents()[2].getName());
-        assertEquals(0.01f, data.getFloat(16));
-        assertEquals(7.0f, data.getFloat(40));
+                new Float4(2.0f, 3.0f, 4.0f, 64.0f)).write(data);
+        assertEquals(11, data.getInt(0));
+        assertEquals(22, data.getInt(44));
         assertEquals(0.1f, data.getFloat(48));  // specularRoughness, perceptual
         assertEquals(0.2f, data.getFloat(52));  // baseMetalness
         assertEquals(1.52f, data.getFloat(56)); // specularIor
@@ -60,10 +57,7 @@ final class RtMaterialLayoutTest {
         assertEquals(0.3f, data.getFloat(92));  // subsurfaceWeight
         assertEquals(-0.2f, data.getFloat(108)); // subsurfaceScatterAnisotropy
         assertEquals(2.0f, data.getFloat(112)); // emissionColor.r
-        assertEquals("baseColorUv", Arrays.stream(SurfaceMaterialData.class.getRecordComponents())
-                .map(component -> component.getName())
-                .filter(name -> name.endsWith("ColorUv"))
-                .findFirst().orElseThrow());
+        assertEquals(64.0f, data.getFloat(124)); // emissionLuminance, cd/m²
     }
 
     @Test

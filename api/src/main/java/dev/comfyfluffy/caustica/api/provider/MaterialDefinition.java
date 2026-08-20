@@ -21,19 +21,41 @@ public record MaterialDefinition(MaterialHandle handle, float baseColorR, float 
                                  float emissionColorR, float emissionColorG, float emissionColorB,
                                  float emissionLuminanceCdM2,
                                  MaterialTopology topology, ResourceId surface, float alphaCutoff,
-                                 MaterialTextureResource textureResource) {
+                                 MaterialTextureResource textureResource,
+                                 MaterialProviderData providerData) {
     public MaterialDefinition(MaterialHandle handle, float baseColorR, float baseColorG, float baseColorB,
                               float specularRoughness, float baseMetalness, float specularIor,
                               float transmissionWeight, MaterialTopology topology, ResourceId surface) {
         this(handle, baseColorR, baseColorG, baseColorB, specularRoughness, baseMetalness, specularIor,
                 transmissionWeight, 1.0f, 1.0f, 1.0f,
                 0.0f, 0.8f, 0.8f, 0.8f, 0.0f,
-                1.0f, 1.0f, 1.0f, 0.0f, topology, surface, 0.5f, null);
+                1.0f, 1.0f, 1.0f, 0.0f, topology, surface, 0.5f, null,
+                MaterialProviderData.ZERO);
+    }
+
+    public MaterialDefinition(MaterialHandle handle, float baseColorR, float baseColorG, float baseColorB,
+                              float specularRoughness, float baseMetalness, float specularIor,
+                              float transmissionWeight,
+                              float transmissionColorR, float transmissionColorG, float transmissionColorB,
+                              float subsurfaceWeight,
+                              float subsurfaceColorR, float subsurfaceColorG, float subsurfaceColorB,
+                              float subsurfaceScatterAnisotropy,
+                              float emissionColorR, float emissionColorG, float emissionColorB,
+                              float emissionLuminanceCdM2,
+                              MaterialTopology topology, ResourceId surface, float alphaCutoff,
+                              MaterialTextureResource textureResource) {
+        this(handle, baseColorR, baseColorG, baseColorB, specularRoughness, baseMetalness, specularIor,
+                transmissionWeight, transmissionColorR, transmissionColorG, transmissionColorB,
+                subsurfaceWeight, subsurfaceColorR, subsurfaceColorG, subsurfaceColorB,
+                subsurfaceScatterAnisotropy, emissionColorR, emissionColorG, emissionColorB,
+                emissionLuminanceCdM2, topology, surface, alphaCutoff, textureResource,
+                MaterialProviderData.ZERO);
     }
 
     public MaterialDefinition {
         Objects.requireNonNull(handle, "handle");
         Objects.requireNonNull(topology, "topology");
+        Objects.requireNonNull(providerData, "providerData");
         unit("baseColorR", baseColorR);
         unit("baseColorG", baseColorG);
         unit("baseColorB", baseColorB);

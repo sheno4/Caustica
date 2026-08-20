@@ -3,24 +3,22 @@ module caustica_builtin_coverage;
 import caustica_color;
 import caustica_coverage;
 import caustica_texture_resources;
-import bindings;
-import world_common;
 
-/** Coverage and transmission decode for the engine's current material binding. */
+/** Base-texture coverage and transmission tint for the canonical material adapter. */
 public struct BuiltinCoverage : ICoverageModel {
     public override float4 evaluateCoverage(CoverageInput input) {
-        MaterialBinding binding = ConstPtr<MaterialBinding>(pc.materialTableAddr)[input.materialId];
-        float3 geometryTint = input.tint * input.vertexColor.rgb;
-        if (bindingCoverage(binding) == COVERAGE_OPAQUE) {
-            return float4(bindingShadowTint(binding) * geometryTint, 1.0);
+        float3 geometryTint = input.tint * input.vertexColor.rgb * input.baseColorFactor;
+        if ((input.flags & COVERAGE_TEXTURE_PRESENT) == 0u) {
+            return float4(geometryTint, 1.0);
         }
 
-        float4 texel = baseColorTextures[NonUniformResourceIndex(bindingBaseColorTextureIndex(binding))]
+        float4 texel = providerTextures[NonUniformResourceIndex(input.baseTextureIndex)]
                 .SampleLevel(input.textureCoordinate, 0.0);
-        float coverage = clamp(texel.a * input.vertexColor.a, 0.0, 1.0);
-        float3 baseColor = (bindingFlags(binding) & BINDING_BASE_COLOR_LINEAR) != 0u
+        float sampledCoverage = clamp(texel.a * input.vertexColor.a, 0.0, 1.0);
+        float3 baseColor = (input.flags & COVERAGE_TEXTURE_LINEAR) != 0u
                 ? texel.rgb : srgbToLinear(texel.rgb);
-        float3 tint = lerp(float3(1.0), bt709ToAcesCg(baseColor) * geometryTint, coverage);
+        float3 tint = lerp(float3(1.0), bt709ToAcesCg(baseColor) * geometryTint, sampledCoverage);
+        float coverage = (input.flags & COVERAGE_MODE_OPAQUE) != 0u ? 1.0 : sampledCoverage;
         return float4(tint, coverage);
     }
 };

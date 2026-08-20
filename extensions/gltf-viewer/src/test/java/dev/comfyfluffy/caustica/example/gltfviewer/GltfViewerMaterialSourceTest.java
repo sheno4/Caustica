@@ -30,6 +30,7 @@ final class GltfViewerMaterialSourceTest {
 
     private static dev.comfyfluffy.caustica.api.provider.MaterialSink ignoredSink() {
         return new dev.comfyfluffy.caustica.api.provider.MaterialSink() {
+            @Override public int register(dev.comfyfluffy.caustica.api.provider.TextureResource resource) { return 1; }
             @Override public void define(dev.comfyfluffy.caustica.api.provider.MaterialDefinition definition) { }
             @Override public void submit(dev.comfyfluffy.caustica.api.provider.MaterialRule rule) { }
             @Override public void submitResource(

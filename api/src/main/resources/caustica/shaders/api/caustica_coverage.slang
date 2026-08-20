@@ -1,9 +1,17 @@
 module caustica_coverage;
 
-/** Geometry and material identity available to coverage evaluation in traversal stages. */
+public static const uint COVERAGE_TEXTURE_PRESENT = 1u;
+public static const uint COVERAGE_TEXTURE_LINEAR = 2u;
+public static const uint COVERAGE_MODE_OPAQUE = 4u;
+
+/** Geometry and base-texture facts available to coverage evaluation in traversal stages. */
 public struct CoverageInput {
-    /** The binding index stored by the hit primitive for this material epoch. */
-    public uint materialId;
+    /** Epoch-local slot in the provider texture array. Read only when COVERAGE_TEXTURE_PRESENT is set. */
+    public uint baseTextureIndex;
+    /** COVERAGE_* bits resolved by the engine from its traversal binding. */
+    public uint flags;
+    /** Uniform scene-linear ACEScg OpenPBR base_color factor. */
+    public float3 baseColorFactor;
     public float2 textureCoordinate;
     /** Primitive tint in scene-linear ACEScg. */
     public float3 tint;

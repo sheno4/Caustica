@@ -2,7 +2,7 @@ package dev.comfyfluffy.caustica.rt.pipeline;
 
 import org.junit.jupiter.api.Test;
 
-import static dev.comfyfluffy.caustica.rt.pipeline.RtBindings.WORLD_BASE_COLOR_TEXTURES;
+import static dev.comfyfluffy.caustica.rt.pipeline.RtBindings.WORLD_PROVIDER_TEXTURES;
 import static dev.comfyfluffy.caustica.rt.pipeline.RtBindings.WORLD_G_NORMAL;
 import static dev.comfyfluffy.caustica.rt.pipeline.RtBindings.WORLD_G_SPEC_MOTION;
 import static dev.comfyfluffy.caustica.rt.pipeline.RtBindings.WORLD_SET_BINDING_COUNT;
@@ -22,6 +22,6 @@ final class RtPipelineBindingAbiTest {
 
     @Test
     void baseColorTextureArrayKeepsItsSetOneIndex() {
-        assertEquals(0, WORLD_BASE_COLOR_TEXTURES);
+        assertEquals(0, WORLD_PROVIDER_TEXTURES);
     }
 }

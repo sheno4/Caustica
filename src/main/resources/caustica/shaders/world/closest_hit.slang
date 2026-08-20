@@ -1,6 +1,5 @@
-// Composition-generic closest-hit shader. Geometry decode, texture sampling, source-format decode, and
-// ray-cone LOD stay engine-owned; the OpenPBR description every hit resolves to is then handed to its
-// registered surface implementation and the geometry-opted-in modifier chain.
+// Composition-generic closest-hit shader. It resolves geometry, texture footprint and uniform OpenPBR
+// values, then hands opaque provider data and source-neutral hit inputs to the registered implementation.
 //
 // WorldShaderCompiler specializes this generic entry point with the active composition.
 //
@@ -165,11 +164,6 @@ float2 texSizePx(Sampler2D t) {
     return float2(w, h);
 }
 
-float3 sampledBaseColorLinear(MaterialBinding binding, float3 sampled) {
-    return (bindingFlags(binding) & BINDING_BASE_COLOR_LINEAR) != 0u
-            ? sampled : srgbToLinear(sampled);
-}
-
 float rayConeHitWidth(uint rayCone) {
     float2 cone = unpackHalf2(rayCone);
     return max(cone.x + cone.y * max(RayTCurrent(), 0.0), RAY_CONE_MIN_WIDTH);
@@ -191,112 +185,20 @@ float rayConeTextureLod(uint rayCone, float2 textureSizePx, float3 p0, float3 p1
     return clamp(log2(footprint), 0.0, RAY_CONE_MAX_LOD);
 }
 
-float3 perturbNormal(float3 n, float3 p0, float3 p1, float3 p2, float2 t0, float2 t1, float2 t2, float3 vdir, float2 ntex) {
+void buildTangentFrame(float3 n, float3 p0, float3 p1, float3 p2,
+        float2 t0, float2 t1, float2 t2, out float3 tangent, out float3 bitangent) {
     float2 g1 = t1 - t0;
     float2 g2 = t2 - t0;
     float det = g1.x * g2.y - g1.y * g2.x;
     if (abs(det) <= 1.0e-12) {
-        return n;
+        tangent = float3(0.0);
+        bitangent = float3(0.0);
+        return;
     }
     float r = 1.0 / det;
     float3 traw = ((p1 - p0) * g2.y - (p2 - p0) * g1.y) * r;
-    float3 T = normalize(traw - n * dot(n, traw));
-    float3 B = cross(n, T) * (det < 0.0 ? -1.0 : 1.0);
-    float2 nxy = ntex * 2.0 - 1.0;
-    float nz = sqrt(max(0.0, 1.0 - dot(nxy, nxy)));
-    float3 nm = normalize(nxy.x * T + nxy.y * B + nz * n);
-    float NoV = dot(nm, vdir);
-    if (NoV < 0.02) {
-        nm = normalize(nm + vdir * (0.02 - NoV));
-    }
-    return nm;
-}
-
-/**
- * The OpenPBR parameters one hit resolves: the material's uniform values, overridden per texel wherever
- * the canonical pages carry authored data. Names and meanings are the spec's, so `specularRoughness` is
- * perceptual r and reflectance is absent — derive it with `openPbrSpecularF0`.
- */
-struct DecodedSurface {
-    float3 normal;            // OpenPBR geometry_normal: the shading normal after the normal map
-    float3 baseColor;
-    float specularRoughness;
-    float baseMetalness;
-    float specularIor;
-    float emissionLuminance;  // cd/m²
-    float subsurfaceWeight;
-    float3 subsurfaceColor;
-    float3 emissionColor;
-};
-
-float4 samplePageSurface0(uint page, float2 uv, float lod) {
-    return materialSurface0Tex[NonUniformResourceIndex(page)].SampleLevel(uv, lod);
-}
-float4 samplePageSurface1(uint page, float2 uv, float lod) {
-    return materialSurface1Tex[NonUniformResourceIndex(page)].SampleLevel(uv, lod);
-}
-float4 samplePageNormal(uint page, float2 uv, float lod) {
-    return materialNormalTex[NonUniformResourceIndex(page)].SampleLevel(uv, lod);
-}
-float3 samplePageEmission(uint page, float2 uv, float lod) {
-    return materialEmissionTex[NonUniformResourceIndex(page)].SampleLevel(uv, lod).rgb;
-}
-
-// `stateEmission` is the per-primitive source emission level: what an emitter with no authored mask emits,
-// and what a heuristic mask modulates.
-DecodedSurface evaluateMaterial(SurfaceMaterial mat, float2 atlasUv, float lod, float3 baseColor,
-        float3 geometricNormal, float3 p0, float3 p1, float3 p2,
-        float2 uv0, float2 uv1, float2 uv2, float3 vdir, float stateEmission) {
-    DecodedSurface surface;
-    surface.normal = geometricNormal;
-    surface.baseColor = baseColor * mat.baseColorFactor.xyz;
-    surface.specularRoughness = mat.specularRoughness;
-    surface.baseMetalness = mat.baseMetalness;
-    surface.specularIor = mat.specularIor;
-    surface.emissionLuminance = (mat.features & MATERIAL_FEATURE_UNIFORM_EMISSION) != 0u
-            ? 1.0 : stateEmission;
-    surface.subsurfaceWeight = mat.transmissionColorSubsurfaceWeight.w;
-    surface.subsurfaceColor = mat.subsurfaceColorAnisotropy.xyz;
-    surface.emissionColor = mat.emissionColor.xyz;
-
-    float2 localUv = clamp((atlasUv - mat.baseColorUv.xy) * mat.baseColorUv.zw,
-            float2(0.0, 0.0), float2(1.0, 1.0));
-    float2 pageUv = mat.materialUv.xy + localUv * mat.materialUv.zw;
-    float materialLod = min(lod, surfacePageMaxLod(mat));
-    uint page = surfacePage(mat);
-    if ((mat.features & (MATERIAL_FEATURE_SPEC | MATERIAL_FEATURE_EMISSION_MASK)) != 0u) {
-        float4 surface0 = samplePageSurface0(page, pageUv, materialLod);
-        if ((mat.features & MATERIAL_FEATURE_SPEC) != 0u) {
-            float4 surface1 = samplePageSurface1(page, pageUv, materialLod);
-            surface.specularRoughness *= surface0.r;
-            surface.baseMetalness *= surface0.g;
-            // Canonical subsurface_weight is separate from the translucent dielectric selected by
-            // transmission_weight. Thin-walled closure evaluation splits it into reflection and
-            // transmission using subsurface_scatter_anisotropy.
-            surface.subsurfaceWeight *= surface0.a;
-            surface.specularIor = surfaceIorFromPage(surface1.a);
-            // The source format's RGB reflectance is conductor base_color only. A dielectric's scalar
-            // reflectance has already become specular_ior; OpenPBR specular_color stays at its unsupported
-            // white default rather than being misinterpreted as an F0 tint.
-            float3 authored = clamp(bt709ToAcesCg(surface1.rgb), float3(0.0), float3(1.0));
-            surface.baseColor = lerp(surface.baseColor,
-                    authored * mat.baseColorFactor.xyz, surface.baseMetalness);
-        }
-        if ((mat.features & MATERIAL_FEATURE_EMISSION_MASK) != 0u) {
-            surface.emissionLuminance *= surface0.b;
-            surface.emissionColor *= bt709ToAcesCg(samplePageEmission(page, pageUv, materialLod));
-        }
-    }
-    if ((mat.features & MATERIAL_FEATURE_SUBSURFACE_COLOR_BASE) != 0u) {
-        surface.subsurfaceColor = surface.baseColor;
-    }
-    surface.emissionLuminance *= surfaceEmissionLuminance(mat);
-    if ((mat.features & MATERIAL_FEATURE_NORMAL) != 0u) {
-        float4 normalTexel = samplePageNormal(page, pageUv, materialLod);
-        surface.normal = perturbNormal(geometricNormal, p0, p1, p2, uv0, uv1, uv2,
-                vdir, normalTexel.xy);
-    }
-    return surface;
+    tangent = normalize(traw - n * dot(n, traw));
+    bitangent = cross(n, tangent) * (det < 0.0 ? -1.0 : 1.0);
 }
 
 // Builds the OpenPBR description handed to the surface implementation. The base colour is ACEScg; the
@@ -305,31 +207,45 @@ DecodedSurface evaluateMaterial(SurfaceMaterial mat, float2 atlasUv, float lod, 
 // `dielectric` is structural input from the binding: a volume has two interfaces and a real interior,
 // while every closure path is a thin wall. Surface evaluation cannot rewrite that decision because
 // coverage and traversal classification have already happened.
-MaterialInput buildMaterialInput(DecodedSurface surface, SurfaceMaterial mat, bool dielectric) {
+MaterialInput buildMaterialInput(SurfaceMaterial mat, float3 shadingNormal, bool dielectric) {
     MaterialInput material;
-    material.geometryNormal = surface.normal;
-    material.previousGeometryNormal = surface.normal;
-    material.baseColor = surface.baseColor;
-    material.baseMetalness = surface.baseMetalness;
-    material.specularRoughness = surface.specularRoughness;
-    material.specularIor = dielectric ? mat.specularIor : surface.specularIor;
+    material.geometryNormal = shadingNormal;
+    material.previousGeometryNormal = shadingNormal;
+    material.baseColor = mat.baseColorFactor.xyz;
+    material.baseMetalness = mat.baseMetalness;
+    material.specularRoughness = mat.specularRoughness;
+    material.specularIor = mat.specularIor;
     material.transmissionWeight = dielectric ? mat.transmissionWeight : 0.0;
     material.transmissionColor = mat.transmissionColorSubsurfaceWeight.xyz;
-    material.subsurfaceWeight = dielectric ? 0.0 : surface.subsurfaceWeight;
-    material.subsurfaceColor = surface.subsurfaceColor;
+    material.subsurfaceWeight = dielectric ? 0.0 : mat.transmissionColorSubsurfaceWeight.w;
+    material.subsurfaceColor = mat.subsurfaceColorAnisotropy.xyz;
     material.subsurfaceScatterAnisotropy = mat.subsurfaceColorAnisotropy.w;
-    material.emissionColor = surface.emissionColor;
-    material.emissionLuminance = max(surface.emissionLuminance, 0.0);
+    material.emissionColor = mat.emissionColor.xyz;
+    material.emissionLuminance = max(mat.emissionColor.w, 0.0);
     return material;
 }
 
-SurfaceInput buildSurfaceInput(Payload payload, float3 position, float3 geometricNormal,
-        float3 outgoingDirection, float2 uv, float lod, float rayFootprint) {
+SurfaceInput buildSurfaceInput(Payload payload, SurfaceMaterial material, MaterialBinding binding,
+        float3 position, float3 geometricNormal, float3 tangent, float3 bitangent,
+        float3 outgoingDirection, float2 uv, float lod, float rayFootprint,
+        float3 tint, float4 vertexColor, float primitiveEmission) {
     SurfaceInput input;
+    input.providerData = material.providerData;
     input.position = position;
     input.geometricNormal = geometricNormal;
+    input.tangent = tangent;
+    input.bitangent = bitangent;
     input.outgoingDirection = outgoingDirection;
     input.textureCoordinate = uv;
+    input.textureLod = lod;
+    input.baseTextureIndex = bindingBaseColorTextureIndex(binding);
+    input.baseTextureFlags = ((bindingFlags(binding) & BINDING_TEXTURELESS) == 0u
+                    ? SURFACE_BASE_TEXTURE_PRESENT : 0u)
+            | ((bindingFlags(binding) & BINDING_BASE_COLOR_LINEAR) != 0u
+                    ? SURFACE_BASE_TEXTURE_LINEAR : 0u);
+    input.tint = tint;
+    input.vertexColor = vertexColor;
+    input.primitiveEmission = primitiveEmission;
     input.textureFootprint = rayFootprint
             / max(abs(dot(outgoingDirection, geometricNormal)), 0.2);
     input.proceduralPosition = position + frameProceduralDomainOffset();
@@ -437,7 +353,7 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
     float textureLod = 0.0;
     if (!textureless) {
         textureLod = rayConeTextureLod(rayCone,
-                texSizePx(baseColorTextures[NonUniformResourceIndex(textureIndex)]),
+                texSizePx(providerTextures[NonUniformResourceIndex(textureIndex)]),
                 mul(objectToWorld, tp0), mul(objectToWorld, tp1), mul(objectToWorld, tp2), uv0, uv1, uv2);
     }
 
@@ -449,15 +365,18 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
     float4 vertexColor = interpolateVertexColor(g, vertexIndices, bary);
 
     bool transmissive = (bindingFlags(binding) & BINDING_TRANSMISSIVE) != 0u;
-    float3 geometryTint = pr.tint.rgb * vertexColor.rgb;
-
     float stateEmission = pr.normal.w;
 
     // A guide crossing needs only the narrow coverage result. Resolve it before the shading texture path
     // so a rejected hit does not also pay for closest-hit's base-colour sample and material decode.
     if (!transmissive && (payload.flags & PAYLOAD_GUIDE_RAY) != 0u) {
         CoverageInput coverageInput;
-        coverageInput.materialId = pr.materialId;
+        coverageInput.baseTextureIndex = textureIndex;
+        coverageInput.flags = (!textureless ? COVERAGE_TEXTURE_PRESENT : 0u)
+                | ((bindingFlags(binding) & BINDING_BASE_COLOR_LINEAR) != 0u
+                        ? COVERAGE_TEXTURE_LINEAR : 0u)
+                | (bindingCoverage(binding) == COVERAGE_OPAQUE ? COVERAGE_MODE_OPAQUE : 0u);
+        coverageInput.baseColorFactor = mat.baseColorFactor.xyz;
         coverageInput.textureCoordinate = uv;
         coverageInput.tint = pr.tint.rgb;
         coverageInput.vertexColor = vertexColor;
@@ -471,27 +390,15 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
         }
     }
 
-    float4 baseColorTexel = float4(1.0, 1.0, 1.0, 1.0);
-    float3 albedo;
-    if (textureless) {
-        albedo = geometryTint;
-    } else {
-        baseColorTexel = baseColorTextures[NonUniformResourceIndex(textureIndex)].SampleLevel(uv, textureLod);
-        float3 texel = bt709ToAcesCg(sampledBaseColorLinear(binding, baseColorTexel.rgb));
-        // Glass covers its whole footprint: the see-through part of the sprite is clear glass, so its
-        // alpha filters the colour rather than deciding presence.
-        albedo = transmissive ? lerp(float3(1.0), texel * geometryTint,
-                                         baseColorTexel.a * vertexColor.a)
-                              : texel * geometryTint;
-    }
-    DecodedSurface surface = evaluateMaterial(mat, uv, textureLod, albedo, shadingNormal,
-            mul(objectToWorld, tp0), mul(objectToWorld, tp1), mul(objectToWorld, tp2), uv0, uv1, uv2,
-            vdir, transmissive ? 0.0 : stateEmission);
-
-    MaterialInput material = buildMaterialInput(surface, mat, transmissive);
+    float3 tangent;
+    float3 bitangent;
+    buildTangentFrame(shadingNormal, mul(objectToWorld, tp0), mul(objectToWorld, tp1),
+            mul(objectToWorld, tp2), uv0, uv1, uv2, tangent, bitangent);
+    MaterialInput material = buildMaterialInput(mat, shadingNormal, transmissive);
     float3 hitPos = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
-    SurfaceInput input = buildSurfaceInput(payload, hitPos, faceNormal, vdir, uv, textureLod,
-            rayConeHitWidth(rayCone));
+    SurfaceInput input = buildSurfaceInput(payload, mat, binding, hitPos, faceNormal, tangent, bitangent,
+            vdir, uv, textureLod, rayConeHitWidth(rayCone), pr.tint.rgb, vertexColor,
+            transmissive ? 0.0 : stateEmission);
     uint surfaceImpl = bindingSurfaceImpl(binding);
     surfaces.evaluateSurface(surfaceImpl, input, material);
     if ((g.flags & GEOMETRY_RECEIVES_PROJECTED_SURFACE_MODIFIERS) != 0u) {

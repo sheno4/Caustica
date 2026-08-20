@@ -13,9 +13,8 @@ import caustica_medium;
  */
 public interface ISurfaceModel {
     /**
-     * Edit the description the engine decoded for this hit. Everything is already filled in from the
-     * material record and its texture pages, so an implementation overrides only what it owns — an
-     * animated normal, a procedurally computed emission — and leaves the rest alone.
+     * Resolve provider data into the uniform OpenPBR description initialized by the engine, then apply
+     * any procedural parameters owned by this implementation.
      */
     public void evaluateSurface(SurfaceInput input, inout MaterialInput material) {}
 

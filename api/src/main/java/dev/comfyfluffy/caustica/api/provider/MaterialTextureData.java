@@ -1,11 +1,11 @@
-package dev.comfyfluffy.caustica.rt.material;
+package dev.comfyfluffy.caustica.api.provider;
 
 import java.util.ArrayList;
 import java.util.List;
 
 /** CPU-side canonical material texels and semantic mip reduction. All channels are physical values. */
-final class RtMaterialTextureData {
-    static final int CHANNELS = 4;
+public final class MaterialTextureData {
+    public static final int CHANNELS = 4;
 
     // sRGB byte -> linear float. Every decode input is 8-bit, so the exact transfer function
     // collapses to one 256-entry table instead of a Math.pow per texel on the reload path.
@@ -19,16 +19,16 @@ final class RtMaterialTextureData {
         }
     }
 
-    static float srgbToLinear(int value8) {
+    public static float srgbToLinear(int value8) {
         return SRGB_TO_LINEAR[value8 & 0xFF];
     }
 
-    private RtMaterialTextureData() {
+    private MaterialTextureData() {
     }
 
-    record Level(int width, int height, float[] surface0, float[] normal, float[] surface1,
-                 float[] emissionColor) {
-        Level {
+    public record Level(int width, int height, float[] surface0, float[] normal, float[] surface1,
+                        float[] emissionColor) {
+        public Level {
             int values = Math.multiplyExact(Math.multiplyExact(width, height), CHANNELS);
             if (width <= 0 || height <= 0 || surface0.length != values
                     || normal.length != values || surface1.length != values
@@ -38,7 +38,7 @@ final class RtMaterialTextureData {
         }
     }
 
-    static List<Level> mipChain(Level base, int maxLevel) {
+    public static List<Level> mipChain(Level base, int maxLevel) {
         List<Level> levels = new ArrayList<>(maxLevel + 1);
         levels.add(base);
         while (levels.size() <= maxLevel) {
@@ -53,7 +53,7 @@ final class RtMaterialTextureData {
      * falsely smooth surface. Roughness is stored perceptual (OpenPBR r) but reduced in GGX alpha, which
      * is where normal-map variance actually adds — see the Toksvig term below.
      */
-    static Level reduce(Level src) {
+    public static Level reduce(Level src) {
         int width = Math.max(1, (src.width + 1) / 2);
         int height = Math.max(1, (src.height + 1) / 2);
         float[] surface0 = new float[width * height * CHANNELS];
@@ -140,7 +140,7 @@ final class RtMaterialTextureData {
         return new Level(width, height, surface0, normal, surface1, emissionColor);
     }
 
-    static int unorm8(float value) {
+    public static int unorm8(float value) {
         return Math.round(clamp01(value) * 255.0f);
     }
 

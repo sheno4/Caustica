@@ -1,7 +1,7 @@
 package dev.comfyfluffy.caustica.api.provider;
 
-/** Receives a material source's ordered rules for the current resource epoch. */
-public interface MaterialSink {
+/** Receives one material source's texture registrations and material contributions for the current epoch. */
+public interface MaterialSink extends TextureRegistrar {
     /** Define a textureless material addressable by geometry sources. */
     void define(MaterialDefinition definition);
 

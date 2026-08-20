@@ -15,6 +15,7 @@ import dev.comfyfluffy.caustica.api.provider.ProviderLifecycle;
 import dev.comfyfluffy.caustica.api.provider.MaterialSnapshot;
 import dev.comfyfluffy.caustica.api.provider.MaterialRule;
 import dev.comfyfluffy.caustica.api.provider.MaterialDefinition;
+import dev.comfyfluffy.caustica.api.provider.MaterialSink;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.api.provider.SceneProvider;
 import dev.comfyfluffy.caustica.api.provider.SceneGeometrySink;
@@ -27,6 +28,7 @@ import dev.comfyfluffy.caustica.api.provider.SceneGeometryKey;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.engine.material.MaterialCatalog;
 import dev.comfyfluffy.caustica.api.provider.MaterialTextureResource;
+import dev.comfyfluffy.caustica.api.provider.TextureResource;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtFrameStats;
 import dev.comfyfluffy.caustica.rt.geometry.RtSceneGeometryManager;
@@ -436,8 +438,18 @@ public final class ProviderManager {
             List<MaterialDefinition> stagedDefinitions = new ArrayList<>();
             List<MaterialRule> staged = new ArrayList<>();
             List<MaterialTextureResource> stagedResources = new ArrayList<>();
-            try {
-                entry.getValue().submitMaterials(new dev.comfyfluffy.caustica.api.provider.MaterialSink() {
+            ProviderTextureRegistry.Submission textureSubmission = textureRegistry == null
+                    ? null : textureRegistry.submission(entry.getKey());
+            try (textureSubmission) {
+                entry.getValue().submitMaterials(new MaterialSink() {
+                    @Override
+                    public int register(TextureResource resource) {
+                        if (textureSubmission == null) {
+                            throw new IllegalStateException("provider texture registry is not bound");
+                        }
+                        return textureSubmission.register(resource);
+                    }
+
                     @Override
                     public void define(MaterialDefinition definition) {
                         stagedDefinitions.add(java.util.Objects.requireNonNull(definition));
@@ -467,6 +479,7 @@ public final class ProviderManager {
                         throw new IllegalStateException("duplicate material texture resource " + resource.material());
                     }
                 }
+                if (textureSubmission != null) textureSubmission.commit();
                 resourceMaterials.addAll(stagedResourceIds);
                 for (MaterialTextureResource resource : stagedResources) {
                     switch (resource.kind()) {

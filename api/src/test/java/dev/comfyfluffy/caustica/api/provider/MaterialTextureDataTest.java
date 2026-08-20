@@ -1,16 +1,16 @@
-package dev.comfyfluffy.caustica.rt.material;
+package dev.comfyfluffy.caustica.api.provider;
 
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-final class RtMaterialTextureDataTest {
+final class MaterialTextureDataTest {
     private static final float EPS = 1.0e-5f;
 
     @Test
     void averagesEmissionAsEnergyAndContinuousChannels() {
-        RtMaterialTextureData.Level reduced = RtMaterialTextureData.reduce(level(
+        MaterialTextureData.Level reduced = MaterialTextureData.reduce(level(
                 new float[]{0.2f, 0.0f, 0.0f, 0.0f, 0.4f, 1.0f, 1.0f, 0.5f,
                         0.6f, 0.0f, 0.5f, 1.0f, 0.8f, 1.0f, 0.5f, 0.5f},
                 repeatedNormal(4, 0.5f, 0.5f, 1.0f, 0.0f),
@@ -31,7 +31,7 @@ final class RtMaterialTextureDataTest {
                 0, 1, 0, 1,
                 0, 1, 0, 1
         };
-        RtMaterialTextureData.Level reduced = RtMaterialTextureData.reduce(new RtMaterialTextureData.Level(
+        MaterialTextureData.Level reduced = MaterialTextureData.reduce(new MaterialTextureData.Level(
                 2, 2, surface0, repeatedNormal(4, 0.5f, 0.5f, 1.0f, 0.0f),
                 repeatedNormal(4, 1, 1, 1, 0), colors));
         assertEquals(2.0f / 3.0f, reduced.emissionColor()[0], EPS);
@@ -47,7 +47,7 @@ final class RtMaterialTextureDataTest {
                 1.0f, 0.5f, 1.0f, 0.0f,
                 0.0f, 0.5f, 1.0f, 0.0f
         };
-        RtMaterialTextureData.Level reduced = RtMaterialTextureData.reduce(level(
+        MaterialTextureData.Level reduced = MaterialTextureData.reduce(level(
                 repeatedNormal(4, 0.1f, 0.0f, 0.0f, 0.0f), normal,
                 repeatedNormal(4, 0.04f, 0.04f, 0.04f, 0.0f)));
         assertEquals(0.5f, reduced.normal()[0], EPS);
@@ -68,7 +68,7 @@ final class RtMaterialTextureDataTest {
                 0.2f, 0.0f, 0.0f, 0.0f,
                 0.8f, 0.0f, 0.0f, 0.0f
         };
-        RtMaterialTextureData.Level reduced = RtMaterialTextureData.reduce(level(roughness,
+        MaterialTextureData.Level reduced = MaterialTextureData.reduce(level(roughness,
                 repeatedNormal(4, 0.5f, 0.5f, 0.0f, 0.0f),
                 repeatedNormal(4, 1.0f, 1.0f, 1.0f, 0.0f)));
         float expected = (float) Math.sqrt((0.2f * 0.2f + 0.8f * 0.8f) / 2.0f);
@@ -78,19 +78,19 @@ final class RtMaterialTextureDataTest {
     @Test
     void oddSizedMipReductionKeepsEdgeSamples() {
         int pixels = 3;
-        RtMaterialTextureData.Level src = new RtMaterialTextureData.Level(3, 1,
+        MaterialTextureData.Level src = new MaterialTextureData.Level(3, 1,
                 repeatedNormal(pixels, 0.5f, 0.0f, 0.25f, 0.0f),
                 repeatedNormal(pixels, 0.5f, 0.5f, 1.0f, 0.0f),
                 repeatedNormal(pixels, 0.04f, 0.04f, 0.04f, 0.0f),
                 repeatedNormal(pixels, 1.0f, 1.0f, 1.0f, 1.0f));
-        RtMaterialTextureData.Level reduced = RtMaterialTextureData.reduce(src);
+        MaterialTextureData.Level reduced = MaterialTextureData.reduce(src);
         assertEquals(2, reduced.width());
         assertEquals(1, reduced.height());
         assertEquals(0.25f, reduced.surface0()[6], EPS);
     }
 
-    private static RtMaterialTextureData.Level level(float[] surface0, float[] normal, float[] surface1) {
-        return new RtMaterialTextureData.Level(2, 2, surface0, normal, surface1,
+    private static MaterialTextureData.Level level(float[] surface0, float[] normal, float[] surface1) {
+        return new MaterialTextureData.Level(2, 2, surface0, normal, surface1,
                 repeatedNormal(4, 1.0f, 1.0f, 1.0f, 1.0f));
     }
 

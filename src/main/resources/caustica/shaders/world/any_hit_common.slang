@@ -35,7 +35,6 @@ public HitBinding decodeHit(float3 bary, uint pid) {
     uint i1 = indices[3u * tri + 1u];
     uint i2 = indices[3u * tri + 2u];
     Prim pr = ConstPtr<Prim>(g.primitiveAddress)[tri];
-    hit.coverageInput.materialId = pr.materialId;
     if ((g.flags & GEOMETRY_INDEXED_TEXTURE_COORDINATES) != 0u) {
         hit.coverageInput.textureCoordinate = bary.x * textureCoordinates[i0]
                 + bary.y * textureCoordinates[i1]
@@ -59,6 +58,16 @@ public HitBinding decodeHit(float3 bary, uint pid) {
         hit.coverageInput.vertexColor = float4(color.rgb, clamp(color.a, 0.0, 1.0));
     }
     hit.binding = ConstPtr<MaterialBinding>(pc.materialTableAddr)[pr.materialId];
+    SurfaceMaterial material = ConstPtr<SurfaceMaterial>(pc.materialSurfaceAddr)[hit.binding.surface];
+    uint bindingFlags = bindingFlags(hit.binding);
+    hit.coverageInput.baseTextureIndex = bindingBaseColorTextureIndex(hit.binding);
+    hit.coverageInput.flags = ((bindingFlags & BINDING_TEXTURELESS) == 0u
+                    ? COVERAGE_TEXTURE_PRESENT : 0u)
+            | ((bindingFlags & BINDING_BASE_COLOR_LINEAR) != 0u
+                    ? COVERAGE_TEXTURE_LINEAR : 0u)
+            | (bindingCoverage(hit.binding) == COVERAGE_OPAQUE
+                    ? COVERAGE_MODE_OPAQUE : 0u);
+    hit.coverageInput.baseColorFactor = material.baseColorFactor.xyz;
     return hit;
 }
 

@@ -18,7 +18,7 @@ public struct MinecraftDamageModifier : ISurfaceModifier {
             float3 axisWeight = abs(input.geometricNormal);
             float2 uv = axisWeight.x >= axisWeight.y && axisWeight.x >= axisWeight.z ? local.zy
                     : axisWeight.y >= axisWeight.z ? local.xz : local.xy;
-            Sampler2D texture = baseColorTextures[NonUniformResourceIndex(entry.baseColorTextureIndex)];
+            Sampler2D texture = providerTextures[NonUniformResourceIndex(entry.baseColorTextureIndex)];
             uint width, height;
             texture.GetDimensions(width, height);
             float footprint = max(input.textureFootprint * max(float(width), float(height)), 1.0e-4);

@@ -2,18 +2,15 @@ package dev.comfyfluffy.caustica.rt.material;
 
 import dev.comfyfluffy.caustica.api.provider.MaterialTextureAnalysisSource;
 import dev.comfyfluffy.caustica.api.provider.MaterialTextureImage;
+import dev.comfyfluffy.caustica.api.provider.MaterialTextureData;
 import dev.comfyfluffy.caustica.api.provider.OpenPbrColorBinding;
 import dev.comfyfluffy.caustica.api.provider.OpenPbrTextureTexel;
 
 import java.util.List;
 
-/** Decodes source images into canonical page levels and the albedo average used by material bindings. */
+/** Decodes source images into canonical page levels. */
 final class MaterialTextureAnalyzer {
-    record AlbedoStats(float averageR, float averageG, float averageB, float averageA) {
-        static final AlbedoStats NEUTRAL = new AlbedoStats(1, 1, 1, 0);
-    }
-
-    record Decoded(List<RtMaterialTextureData.Level> levels, AlbedoStats stats) { }
+    record Decoded(List<MaterialTextureData.Level> levels) { }
 
     private MaterialTextureAnalyzer() { }
 
@@ -26,15 +23,13 @@ final class MaterialTextureAnalyzer {
             float[] surface1 = new float[surface0.length];
             float[] emissionColor = new float[surface0.length];
             boolean emissionUsesBase = emissionColorBinding == OpenPbrColorBinding.BASE_COLOR;
-            StatsAccumulator stats = new StatsAccumulator(width, height);
             OpenPbrTextureTexel texel = new OpenPbrTextureTexel();
             for (int y = 0; y < height; y++) for (int x = 0; x < width; x++) {
                 int i = (y * width + x) * 4;
                 int pixel = sample(texture, x, y, width, height);
-                stats.add(pixel);
-                float r = RtMaterialTextureData.srgbToLinear(red(pixel));
-                float g = RtMaterialTextureData.srgbToLinear(green(pixel));
-                float b = RtMaterialTextureData.srgbToLinear(blue(pixel));
+                float r = MaterialTextureData.srgbToLinear(red(pixel));
+                float g = MaterialTextureData.srgbToLinear(green(pixel));
+                float b = MaterialTextureData.srgbToLinear(blue(pixel));
                 texel.reset();
                 texture.readOpenPbr(x, y, texel);
                 emissionColor[i] = texel.emissionColorR * (emissionUsesBase ? r : 1);
@@ -53,34 +48,8 @@ final class MaterialTextureAnalyzer {
                 surface1[i + 2] = texel.metalBaseColorB;
                 surface1[i + 3] = MaterialPagePacker.encodeIor(texel.specularIor);
             }
-            return new Decoded(RtMaterialTextureData.mipChain(new RtMaterialTextureData.Level(width, height,
-                    surface0, normal, surface1, emissionColor), maxLod), stats.finish());
-        }
-    }
-
-    static AlbedoStats scanAlbedo(MaterialTextureAnalysisSource source) throws Exception {
-        try (MaterialTextureImage image = source.texture().open()) {
-            StatsAccumulator stats = new StatsAccumulator(source.width(), source.height());
-            for (int y = 0; y < source.height(); y++) for (int x = 0; x < source.width(); x++)
-                stats.add(sample(image, x, y, source.width(), source.height()));
-            return stats.finish();
-        }
-    }
-
-    private static final class StatsAccumulator {
-        final int width, height;
-        long sr, sg, sb, sa;
-        StatsAccumulator(int width, int height) {
-            this.width = width;
-            this.height = height;
-        }
-        void add(int pixel) {
-            int a = alpha(pixel), r = red(pixel), g = green(pixel), b = blue(pixel);
-            sr += r; sg += g; sb += b; sa += a;
-        }
-        AlbedoStats finish() {
-            float scale = 1.0f / (width * (float) height * 255.0f);
-            return new AlbedoStats(sr * scale, sg * scale, sb * scale, sa * scale);
+            return new Decoded(MaterialTextureData.mipChain(new MaterialTextureData.Level(width, height,
+                    surface0, normal, surface1, emissionColor), maxLod));
         }
     }
 
@@ -88,7 +57,6 @@ final class MaterialTextureAnalyzer {
         return image.albedoArgb(Math.min(image.width() - 1, x * image.width() / width),
                 Math.min(image.height() - 1, y * image.height() / height));
     }
-    private static int alpha(int argb) { return argb >>> 24; }
     private static int red(int argb) { return argb >>> 16 & 255; }
     private static int green(int argb) { return argb >>> 8 & 255; }
     private static int blue(int argb) { return argb & 255; }

@@ -15,6 +15,9 @@ import org.lwjgl.vulkan.VkImageCreateInfo;
 import org.lwjgl.vulkan.VkImageMemoryBarrier;
 import org.lwjgl.vulkan.VkImageViewCreateInfo;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /** Renderer-owned sampled image uploaded from a neutral provider CPU texture. */
 public final class UploadedProviderTexture implements ProviderTextureRegistry.UploadedTexture {
     private final GpuContext context;
@@ -25,6 +28,8 @@ public final class UploadedProviderTexture implements ProviderTextureRegistry.Up
 
     public UploadedProviderTexture(GpuContext context, CpuTextureResource source, String label) {
         this.context = context;
+        List<CpuTextureResource.MipLevel> levels = source.mipLevels();
+        List<UploadLevel> uploadLevels = uploadLevels(source);
         int format = source.encoding() == CpuTextureResource.Encoding.SRGB
                 ? VK10.VK_FORMAT_R8G8B8A8_SRGB : VK10.VK_FORMAT_R8G8B8A8_UNORM;
         long createdImage = 0L;
@@ -33,7 +38,7 @@ public final class UploadedProviderTexture implements ProviderTextureRegistry.Up
         GpuBuffer staging = null;
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkImageCreateInfo imageInfo = VkImageCreateInfo.calloc(stack).sType$Default()
-                    .imageType(VK10.VK_IMAGE_TYPE_2D).format(format).mipLevels(1).arrayLayers(1)
+                    .imageType(VK10.VK_IMAGE_TYPE_2D).format(format).mipLevels(levels.size()).arrayLayers(1)
                     .samples(VK10.VK_SAMPLE_COUNT_1_BIT).tiling(VK10.VK_IMAGE_TILING_OPTIMAL)
                     .usage(VK10.VK_IMAGE_USAGE_SAMPLED_BIT | VK10.VK_IMAGE_USAGE_TRANSFER_DST_BIT)
                     .sharingMode(VK10.VK_SHARING_MODE_EXCLUSIVE).initialLayout(VK10.VK_IMAGE_LAYOUT_UNDEFINED);
@@ -51,16 +56,17 @@ public final class UploadedProviderTexture implements ProviderTextureRegistry.Up
             VkImageViewCreateInfo viewInfo = VkImageViewCreateInfo.calloc(stack).sType$Default()
                     .image(createdImage).viewType(VK10.VK_IMAGE_VIEW_TYPE_2D).format(format);
             viewInfo.subresourceRange().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT)
-                    .baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
+                    .baseMipLevel(0).levelCount(levels.size()).baseArrayLayer(0).layerCount(1);
             var viewOut = stack.mallocLong(1);
             check(VK10.vkCreateImageView(context.vk(), viewInfo, null, viewOut),
                     "vkCreateImageView(provider texture)");
             createdView = viewOut.get(0);
             RtDebugLabels.nameImageView(context, createdView, label + " view");
 
-            byte[] rgba = source.rgba8();
-            staging = context.createUploadBuffer(rgba.length, label + " upload");
-            MemoryUtil.memByteBuffer(staging.mapped(), rgba.length).put(rgba);
+            int uploadBytes = Math.toIntExact(uploadLevels.getLast().endOffset());
+            staging = context.createUploadBuffer(uploadBytes, label + " upload");
+            var mapped = MemoryUtil.memByteBuffer(staging.mapped(), uploadBytes);
+            for (CpuTextureResource.MipLevel level : levels) mapped.put(level.rgba8());
             staging.flush();
             long uploadImage = createdImage;
             long uploadBuffer = staging.handle();
@@ -73,16 +79,19 @@ public final class UploadedProviderTexture implements ProviderTextureRegistry.Up
                             .srcQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED)
                             .dstQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED).image(uploadImage);
                     toTransfer.get(0).subresourceRange().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT)
-                            .baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
+                            .baseMipLevel(0).levelCount(levels.size()).baseArrayLayer(0).layerCount(1);
                     VK10.vkCmdPipelineBarrier(commandBuffer, VK10.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                             VK10.VK_PIPELINE_STAGE_TRANSFER_BIT, 0, null, null, toTransfer);
 
-                    VkBufferImageCopy.Buffer copy = VkBufferImageCopy.calloc(1, uploadStack);
-                    copy.get(0).bufferOffset(0).bufferRowLength(0).bufferImageHeight(0);
-                    copy.get(0).imageSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT)
-                            .mipLevel(0).baseArrayLayer(0).layerCount(1);
-                    copy.get(0).imageOffset().set(0, 0, 0);
-                    copy.get(0).imageExtent().set(source.width(), source.height(), 1);
+                    VkBufferImageCopy.Buffer copy = VkBufferImageCopy.calloc(uploadLevels.size(), uploadStack);
+                    for (int index = 0; index < uploadLevels.size(); index++) {
+                        UploadLevel level = uploadLevels.get(index);
+                        copy.get(index).bufferOffset(level.offset()).bufferRowLength(0).bufferImageHeight(0);
+                        copy.get(index).imageSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT)
+                                .mipLevel(index).baseArrayLayer(0).layerCount(1);
+                        copy.get(index).imageOffset().set(0, 0, 0);
+                        copy.get(index).imageExtent().set(level.width(), level.height(), 1);
+                    }
                     VK10.vkCmdCopyBufferToImage(commandBuffer, uploadBuffer, uploadImage,
                             VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, copy);
 
@@ -94,7 +103,7 @@ public final class UploadedProviderTexture implements ProviderTextureRegistry.Up
                             .srcQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED)
                             .dstQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED).image(uploadImage);
                     toGeneral.get(0).subresourceRange().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT)
-                            .baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
+                            .baseMipLevel(0).levelCount(levels.size()).baseArrayLayer(0).layerCount(1);
                     VK10.vkCmdPipelineBarrier(commandBuffer, VK10.VK_PIPELINE_STAGE_TRANSFER_BIT,
                             VK10.VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, null, null, toGeneral);
                 }
@@ -113,6 +122,20 @@ public final class UploadedProviderTexture implements ProviderTextureRegistry.Up
 
     @Override public long imageView() { return view; }
     @Override public int imageLayout() { return VK10.VK_IMAGE_LAYOUT_GENERAL; }
+
+    static List<UploadLevel> uploadLevels(CpuTextureResource source) {
+        ArrayList<UploadLevel> result = new ArrayList<>(source.mipLevels().size());
+        long offset = 0L;
+        for (CpuTextureResource.MipLevel level : source.mipLevels()) {
+            long size = Math.multiplyExact(Math.multiplyExact((long) level.width(), level.height()), 4L);
+            result.add(new UploadLevel(offset, Math.addExact(offset, size), level.width(), level.height()));
+            offset = Math.addExact(offset, size);
+        }
+        return List.copyOf(result);
+    }
+
+    record UploadLevel(long offset, long endOffset, int width, int height) {
+    }
 
     @Override
     public void destroy() {

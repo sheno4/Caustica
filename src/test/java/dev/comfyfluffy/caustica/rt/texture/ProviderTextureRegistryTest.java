@@ -130,6 +130,48 @@ final class ProviderTextureRegistryTest {
     }
 
     @Test
+    void directRegistrationReturnsEpochSlotsAndAbortReusesThem() {
+        AtomicInteger retired = new AtomicInteger();
+        List<Write> writes = new ArrayList<>();
+        ProviderTextureRegistry registry = new ProviderTextureRegistry(4,
+                (texture, label) -> uploaded(101L, new AtomicInteger()),
+                (slot, view, layout) -> writes.add(new Write(slot, view, layout)));
+
+        try (ProviderTextureRegistry.Submission aborted = registry.submission(FIRST)) {
+            assertEquals(1, aborted.register(borrowed(201L, retired)));
+        }
+        assertEquals(1, retired.get());
+        assertEquals(0, registry.size());
+
+        try (ProviderTextureRegistry.Submission committed = registry.submission(SECOND)) {
+            assertEquals(1, committed.register(borrowed(202L, retired)));
+            assertEquals(2, committed.register(cpu()));
+            committed.commit();
+        }
+        assertEquals(2, registry.size());
+        assertEquals(List.of(
+                new Write(0, 101L, VK10.VK_IMAGE_LAYOUT_GENERAL),
+                new Write(1, 202L, VK10.VK_IMAGE_LAYOUT_GENERAL),
+                new Write(2, 101L, VK10.VK_IMAGE_LAYOUT_GENERAL)), writes);
+        registry.close();
+        assertEquals(2, retired.get());
+    }
+
+    @Test
+    void buildsOneUploadRegionForEveryMipLevel() {
+        CpuTextureResource texture = new CpuTextureResource(CpuTextureResource.Encoding.LINEAR, List.of(
+                new CpuTextureResource.MipLevel(4, 2, new byte[32]),
+                new CpuTextureResource.MipLevel(2, 1, new byte[8]),
+                new CpuTextureResource.MipLevel(1, 1, new byte[4])));
+
+        assertEquals(List.of(
+                new UploadedProviderTexture.UploadLevel(0, 32, 4, 2),
+                new UploadedProviderTexture.UploadLevel(32, 40, 2, 1),
+                new UploadedProviderTexture.UploadLevel(40, 44, 1, 1)),
+                UploadedProviderTexture.uploadLevels(texture));
+    }
+
+    @Test
     void duplicateInBatchRollsBackEveryAcceptedBorrow() {
         AtomicInteger retired = new AtomicInteger();
         ProviderTextureRegistry registry = new ProviderTextureRegistry(3,
