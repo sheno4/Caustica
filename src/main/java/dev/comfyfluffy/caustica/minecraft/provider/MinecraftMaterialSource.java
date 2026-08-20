@@ -12,6 +12,8 @@ import dev.comfyfluffy.caustica.api.provider.MaterialSource;
 import dev.comfyfluffy.caustica.api.provider.MaterialTopology;
 import dev.comfyfluffy.caustica.api.provider.OpenPbrMaterialDefaults;
 import dev.comfyfluffy.caustica.minecraft.MinecraftProvidersExtension;
+import dev.comfyfluffy.caustica.minecraft.MinecraftApiBootstrap;
+import dev.comfyfluffy.caustica.minecraft.api.MinecraftExtensionRegistry;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialClassifier;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialCatalogBuilder;
 import dev.comfyfluffy.caustica.minecraft.material.MaterialTextureResource;
@@ -41,13 +43,20 @@ public final class MinecraftMaterialSource implements MaterialSource {
     public static final ResourceId VERTEX_COLOR = ResourceId.of("caustica", "minecraft_vertex_color");
     public static final int FORMAT = 4;
     private final MinecraftMaterialState materialState;
+    private final MinecraftExtensionRegistry minecraftExtensions;
 
     public MinecraftMaterialSource() {
-        this(new MinecraftMaterialState());
+        this(new MinecraftMaterialState(), MinecraftApiBootstrap.minecraftExtensions());
     }
 
     public MinecraftMaterialSource(MinecraftMaterialState materialState) {
+        this(materialState, MinecraftApiBootstrap.minecraftExtensions());
+    }
+
+    MinecraftMaterialSource(MinecraftMaterialState materialState,
+                            MinecraftExtensionRegistry minecraftExtensions) {
         this.materialState = java.util.Objects.requireNonNull(materialState, "materialState");
+        this.minecraftExtensions = java.util.Objects.requireNonNull(minecraftExtensions, "minecraftExtensions");
     }
 
     @Override
@@ -80,7 +89,8 @@ public final class MinecraftMaterialSource implements MaterialSource {
                     List<MaterialTextureResource> textureResources) {
         MinecraftMaterialPageCompiler.Result pages = MinecraftMaterialPageCompiler.compile(textureResources, sink);
         MinecraftResolvedMaterialCatalog catalog = MinecraftResolvedMaterialCatalog.build(
-                definitions, rules, textureResources, pages, MinecraftProvidersExtension.MATERIAL_SURFACE);
+                definitions, rules, textureResources, pages, MinecraftProvidersExtension.MATERIAL_SURFACE,
+                sink, minecraftExtensions);
         catalog.definitions().forEach(sink::define);
         sink.onCommit(() -> materialState.publish(catalog));
     }

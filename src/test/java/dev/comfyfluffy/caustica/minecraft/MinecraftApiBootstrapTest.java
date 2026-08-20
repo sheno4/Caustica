@@ -1,6 +1,8 @@
 package dev.comfyfluffy.caustica.minecraft;
 
 import dev.comfyfluffy.caustica.api.CausticaRegistry;
+import dev.comfyfluffy.caustica.minecraft.api.MinecraftApiExtension;
+import dev.comfyfluffy.caustica.minecraft.api.MinecraftExtensionRegistry;
 import dev.comfyfluffy.caustica.api.DisplayText;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.api.ShaderSource;
@@ -9,6 +11,7 @@ import dev.comfyfluffy.caustica.builtin.BuiltinExtension;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class MinecraftApiBootstrapTest {
@@ -48,5 +51,39 @@ final class MinecraftApiBootstrapTest {
         MinecraftApiBootstrap.applyPersistedSelection(
                 registry, Slots.SKY, BuiltinExtension.ID.toString(), MinecraftProvidersExtension.ID);
         assertEquals(BuiltinExtension.ID, registry.selectedFeature(Slots.SKY));
+    }
+
+    @Test
+    void featureAndMinecraftEntrypointsFailIndependentlyBeforeRegistryFreeze() {
+        CausticaRegistry features = new CausticaRegistry();
+        MinecraftExtensionRegistry minecraft = new MinecraftExtensionRegistry();
+        ResourceId ordinaryFeature = ResourceId.of("test", "ordinary_survives");
+        MinecraftApiExtension ordinaryFails = new MinecraftApiExtension() {
+            @Override public void register(CausticaRegistry registry) {
+                throw new IllegalStateException("ordinary failure");
+            }
+            @Override public void registerMinecraft(MinecraftExtensionRegistry registry) {
+                registry.registerMaterialResolver(ResourceId.of("test", "host_survives"), 0,
+                        java.util.List.of(new dev.comfyfluffy.caustica.minecraft.api.MinecraftMaterialSelector(
+                                null, null)), request -> null);
+            }
+        };
+        MinecraftApiExtension hostFails = new MinecraftApiExtension() {
+            @Override public void register(CausticaRegistry registry) {
+                registry.feature(ordinaryFeature).register();
+            }
+            @Override public void registerMinecraft(MinecraftExtensionRegistry registry) {
+                throw new IllegalStateException("host failure");
+            }
+        };
+
+        MinecraftApiBootstrap.registerExtensions(features, minecraft, java.util.List.of(ordinaryFails, hostFails));
+
+        assertTrue(features.features().containsKey(ordinaryFeature));
+        assertTrue(minecraft.frozen());
+        assertThrows(IllegalStateException.class, () -> minecraft.registerMaterialResolver(
+                ResourceId.of("test", "late"), 0,
+                java.util.List.of(new dev.comfyfluffy.caustica.minecraft.api.MinecraftMaterialSelector(null, null)),
+                request -> null));
     }
 }

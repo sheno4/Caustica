@@ -2,7 +2,8 @@ package dev.comfyfluffy.caustica.minecraft.terrain;
 
 import dev.comfyfluffy.caustica.api.ColorSpaces;
 import dev.comfyfluffy.caustica.api.provider.SceneMesh;
-import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialSnapshot;
+import dev.comfyfluffy.caustica.minecraft.api.MinecraftEmissionFootprint;
+import dev.comfyfluffy.caustica.minecraft.api.MinecraftMaterialEmission;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import org.junit.jupiter.api.Test;
@@ -71,15 +72,7 @@ final class RtLightCollectorTest {
         assertFalse(belowLuminance.surfaces.getFirst().emitterInLightScene());
     }
 
-    @Test
-    void missingFootprintDoesNotCreateADescriptorOrEmitterMarker() {
-        Result result = collect(emission(100.0f, false, null), 0.0f, 0.0f);
-
-        assertTrue(result.lights.isEmpty());
-        assertFalse(result.surfaces.getFirst().emitterInLightScene());
-    }
-
-    private static Result collect(MinecraftMaterialSnapshot.Emission emission,
+    private static Result collect(MinecraftMaterialEmission emission,
                                   float stateEmission, float minFillRatio) {
         FloatArrayList verts = new FloatArrayList(new float[]{
                 0, 0, 0,
@@ -108,14 +101,14 @@ final class RtLightCollectorTest {
         List<SceneMesh.TriangleSurface> surfaces = new ArrayList<>(List.of(surface, surface));
         FloatArrayList lights = new FloatArrayList();
         RtLightCollector.collectClass(lights, verts, prim, surfaces, cornerUv,
-                new TextureAtlasSprite[2], new MinecraftMaterialSnapshot.Emission[]{emission, emission},
+                new TextureAtlasSprite[2], new MinecraftMaterialEmission[]{emission, emission},
                 minFillRatio);
         return new Result(lights, surfaces);
     }
 
-    private static MinecraftMaterialSnapshot.Emission emission(
-            float luminance, boolean primitiveGated, MinecraftMaterialSnapshot.Footprint footprint) {
-        return new MinecraftMaterialSnapshot.Emission(luminance, primitiveGated, footprint);
+    private static MinecraftMaterialEmission emission(
+            float luminance, boolean primitiveGated, MinecraftEmissionFootprint footprint) {
+        return new MinecraftMaterialEmission(luminance, primitiveGated, footprint);
     }
 
     private static TestFootprint footprint(int resolution, float weight, float color) {
@@ -134,7 +127,7 @@ final class RtLightCollectorTest {
     }
 
     private record TestFootprint(int resolution, float[] weights, float[] colors)
-            implements MinecraftMaterialSnapshot.Footprint {
+            implements MinecraftEmissionFootprint {
         @Override
         public int sampleIndex(float coordinate) {
             return Math.max(0, Math.min(resolution - 1, (int) (coordinate * resolution)));

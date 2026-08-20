@@ -6,6 +6,12 @@ import dev.comfyfluffy.caustica.api.provider.MaterialHandle;
 import dev.comfyfluffy.caustica.api.provider.MaterialTopology;
 import dev.comfyfluffy.caustica.api.provider.OpenPbrMaterialDefaults;
 import dev.comfyfluffy.caustica.api.provider.SceneMesh;
+import dev.comfyfluffy.caustica.api.provider.TextureRegistrar;
+import dev.comfyfluffy.caustica.minecraft.api.MinecraftExtensionRegistry;
+import dev.comfyfluffy.caustica.minecraft.api.MinecraftMaterialEmission;
+import dev.comfyfluffy.caustica.minecraft.api.MinecraftMaterialProfile;
+import dev.comfyfluffy.caustica.minecraft.api.MinecraftMaterialRequest;
+import dev.comfyfluffy.caustica.minecraft.api.MinecraftMaterialResolution;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -28,24 +34,12 @@ public final class MinecraftResolvedMaterialCatalog implements MinecraftMaterial
     public static final int FEATURE_SUBSURFACE_COLOR_BASE = 8;
     public static final int FEATURE_EMISSION_COLOR_BASE = 16;
 
-    public record Resolved(MaterialDefinition definition, Emission emission,
-                           SceneMesh.OpacityMicromapRange opacityMicromapRange) {
-        public Resolved {
-            java.util.Objects.requireNonNull(definition, "definition");
-            java.util.Objects.requireNonNull(emission, "emission");
-        }
-
-        public MaterialHandle handle() {
-            return definition.handle();
-        }
-    }
-
-    private final Map<MinecraftMaterialKey, Resolved> keyed;
-    private final Map<ResourceId, Resolved> named;
+    private final Map<MinecraftMaterialKey, MinecraftMaterialResolution> keyed;
+    private final Map<ResourceId, MinecraftMaterialResolution> named;
     private final List<MaterialDefinition> definitions;
 
-    private MinecraftResolvedMaterialCatalog(Map<MinecraftMaterialKey, Resolved> keyed,
-                                             Map<ResourceId, Resolved> named,
+    private MinecraftResolvedMaterialCatalog(Map<MinecraftMaterialKey, MinecraftMaterialResolution> keyed,
+                                             Map<ResourceId, MinecraftMaterialResolution> named,
                                              List<MaterialDefinition> definitions) {
         this.keyed = Map.copyOf(keyed);
         this.named = Map.copyOf(named);
@@ -60,8 +54,12 @@ public final class MinecraftResolvedMaterialCatalog implements MinecraftMaterial
                                                           List<MinecraftMaterialRule> rules,
                                                           List<MaterialTextureResource> resources,
                                                           MinecraftMaterialPageCompiler.Result pages,
-                                                          ResourceId defaultSurface) {
+                                                          ResourceId defaultSurface,
+                                                          TextureRegistrar textures,
+                                                          MinecraftExtensionRegistry extensions) {
         Objects.requireNonNull(defaultSurface, "defaultSurface");
+        Objects.requireNonNull(textures, "textures");
+        Objects.requireNonNull(extensions, "extensions");
         Map<ResourceId, MaterialTextureResource> resourcesById = new LinkedHashMap<>();
         resources.stream().sorted(Comparator.comparing(MaterialTextureResource::material))
                 .forEach(resource -> resourcesById.put(resource.material(), resource));
@@ -87,7 +85,9 @@ public final class MinecraftResolvedMaterialCatalog implements MinecraftMaterial
         for (ResourceId material : resourcesById.keySet()) {
             List<ResourceId> cases = new ArrayList<>();
             cases.add(null);
-            geometries.getOrDefault(material, Set.of()).stream()
+            Set<ResourceId> materialGeometries = new HashSet<>(geometries.getOrDefault(material, Set.of()));
+            materialGeometries.addAll(extensions.geometryCases(material));
+            materialGeometries.stream()
                     .sorted(Comparator.comparing(ResourceId::toString)).forEach(cases::add);
             for (ResourceId geometry : cases) {
                 for (MinecraftMaterialProfile profile : MinecraftMaterialProfile.values()) {
@@ -99,12 +99,12 @@ public final class MinecraftResolvedMaterialCatalog implements MinecraftMaterial
         }
         keys.sort(Comparator.comparing(MinecraftResolvedMaterialCatalog::canonicalKey));
 
-        Map<MinecraftMaterialKey, Resolved> keyed = new LinkedHashMap<>();
-        Map<ResourceId, Resolved> named = new LinkedHashMap<>();
+        Map<MinecraftMaterialKey, MinecraftMaterialResolution> keyed = new LinkedHashMap<>();
+        Map<ResourceId, MinecraftMaterialResolution> named = new LinkedHashMap<>();
         Map<ResourceId, MinecraftMaterialKey> handleKeys = new HashMap<>();
         List<MaterialDefinition> definitions = new ArrayList<>(fixedDefinitions.size() + keys.size());
         for (MaterialDefinition definition : fixedDefinitions) {
-            Resolved resolved = fixed(definition);
+            MinecraftMaterialResolution resolved = fixed(definition);
             if (named.putIfAbsent(definition.id(), resolved) != null) {
                 throw new IllegalStateException("duplicate Minecraft material " + definition.id());
             }
@@ -115,11 +115,15 @@ public final class MinecraftResolvedMaterialCatalog implements MinecraftMaterial
             MinecraftMaterialPageCompiler.CompiledMaterial page = pages.material(key.material());
             MinecraftMaterialRule rule = matchingRule(rules, key.material(), key.geometry());
             MaterialHandle handle = handle(key, handleKeys);
-            Resolved resolved = compile(handle, key, resource, page, rule, scans.get(key.material()),
-                    defaultSurface);
+            MinecraftMaterialResolution fallback = compile(handle, key, resource, page, rule,
+                    scans.get(key.material()), defaultSurface);
+            MinecraftMaterialResolution resolved = extensions.resolve(new MinecraftMaterialRequest(
+                    key.material(), key.geometry(),
+                    key.profile(),
+                    key.topology(), textures, fallback));
             keyed.put(key, resolved);
-            if (named.putIfAbsent(handle.id(), resolved) != null) {
-                throw new IllegalStateException("duplicate resolved Minecraft material " + handle.id());
+            if (named.putIfAbsent(resolved.definition().id(), resolved) != null) {
+                throw new IllegalStateException("duplicate resolved Minecraft material " + resolved.definition().id());
             }
             definitions.add(resolved.definition());
         }
@@ -130,39 +134,39 @@ public final class MinecraftResolvedMaterialCatalog implements MinecraftMaterial
         return definitions;
     }
 
-    public Resolved resolve(MinecraftMaterialKey key) {
-        Resolved resolved = keyed.get(key);
+    public MinecraftMaterialResolution resolve(MinecraftMaterialKey key) {
+        MinecraftMaterialResolution resolved = keyed.get(key);
         if (resolved == null && key.geometry() != null) resolved = keyed.get(key.defaultGeometry());
         if (resolved == null) throw new IllegalArgumentException("No resolved Minecraft material for " + key);
         return resolved;
     }
 
-    public Resolved named(MaterialHandle handle) {
+    public MinecraftMaterialResolution named(MaterialHandle handle) {
         return named.get(handle.id());
     }
 
-    private static Resolved fixed(MaterialDefinition definition) {
+    private static MinecraftMaterialResolution fixed(MaterialDefinition definition) {
         MinecraftEmissionFootprint footprint = definition.emissionLuminanceCdM2() > 0.0f
                 ? MinecraftMaterialEmissionAnalyzer.constant(definition.emissionColorR(),
                 definition.emissionColorG(), definition.emissionColorB()) : null;
-        Emission emission = footprint == null ? Emission.NONE
-                : new Emission(definition.emissionLuminanceCdM2(), false, footprint);
-        return new Resolved(definition, emission, null);
+        MinecraftMaterialEmission emission = footprint == null ? MinecraftMaterialEmission.NONE
+                : new MinecraftMaterialEmission(definition.emissionLuminanceCdM2(), false, footprint);
+        return new MinecraftMaterialResolution(definition, emission, null);
     }
 
-    private static Resolved compile(MaterialHandle handle, MinecraftMaterialKey key,
-                                    MaterialTextureResource resource,
-                                    MinecraftMaterialPageCompiler.CompiledMaterial page,
-                                    MinecraftMaterialRule rule,
-                                    MinecraftMaterialEmissionAnalyzer.Scan scan,
-                                    ResourceId defaultSurface) {
+    private static MinecraftMaterialResolution compile(MaterialHandle handle, MinecraftMaterialKey key,
+                                                       MaterialTextureResource resource,
+                                                       MinecraftMaterialPageCompiler.CompiledMaterial page,
+                                                       MinecraftMaterialRule rule,
+                                                       MinecraftMaterialEmissionAnalyzer.Scan scan,
+                                                       ResourceId defaultSurface) {
         int features = page.features();
         MaterialTopology topology = key.topology();
         float roughness = topology == MaterialTopology.MEDIUM_BOUNDARY
                 ? OpenPbrMaterialDefaults.TRANSMISSIVE_SPECULAR_ROUGHNESS
-                : key.profile().specularRoughness();
+                : specularRoughness(key.profile());
         float metalness = topology == MaterialTopology.MEDIUM_BOUNDARY
-                ? 0.0f : key.profile().baseMetalness();
+                ? 0.0f : baseMetalness(key.profile());
         if ((features & FEATURE_SPEC) != 0) {
             roughness = 1.0f;
             metalness = 1.0f;
@@ -196,11 +200,25 @@ public final class MinecraftResolvedMaterialCatalog implements MinecraftMaterial
                 1, 1, 1, luminance, topology, surface, 0.5f, page.providerData());
         MinecraftEmissionFootprint footprint = scan == null ? null
                 : (features & FEATURE_EMISSION_MASK) != 0 ? scan.masked() : scan.uniform();
-        Emission emission = luminance > 0.0f && footprint != null
-                ? new Emission(luminance, true, footprint) : Emission.NONE;
+        MinecraftMaterialEmission emission = luminance > 0.0f && footprint != null
+                ? new MinecraftMaterialEmission(luminance, true, footprint) : MinecraftMaterialEmission.NONE;
         SceneMesh.OpacityMicromapRange opacityRange = surface.equals(defaultSurface) && scan != null
                 ? scan.opacityRange() : null;
-        return new Resolved(definition, emission, opacityRange);
+        return new MinecraftMaterialResolution(definition, emission, opacityRange);
+    }
+
+    private static float specularRoughness(MinecraftMaterialProfile profile) {
+        return switch (profile) {
+            case ROUGH_DIELECTRIC -> 0.9f;
+            case CONDUCTOR -> 0.3f;
+            case SMOOTH_DIELECTRIC -> 0.1f;
+            case POLISHED_DIELECTRIC -> 0.35f;
+            case MEDIUM_ROUGH_DIELECTRIC -> 0.7f;
+        };
+    }
+
+    private static float baseMetalness(MinecraftMaterialProfile profile) {
+        return profile == MinecraftMaterialProfile.CONDUCTOR ? 1.0f : 0.0f;
     }
 
     private static MinecraftMaterialRule matchingRule(List<MinecraftMaterialRule> rules,

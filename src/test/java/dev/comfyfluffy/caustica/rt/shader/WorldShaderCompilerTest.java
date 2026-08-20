@@ -30,6 +30,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 final class WorldShaderCompilerTest {
     private static final ResourceId TEST_SURFACE = ResourceId.of("test", "surface");
     private static final ResourceId TEST_COVERAGE = ResourceId.of("test", "coverage");
+    private static final ResourceId CUSTOM_MINECRAFT_SURFACE =
+            ResourceId.of("test", "custom_minecraft_surface");
+    private static final ResourceId CUSTOM_MINECRAFT_COVERAGE =
+            ResourceId.of("test", "custom_minecraft_coverage");
     private static final ResourceId ERROR_COVERAGE = ResourceId.of("caustica", "error_coverage");
 
     @Test
@@ -234,6 +238,31 @@ final class WorldShaderCompilerTest {
             String root = compiler.composition().rootSource();
             assertTrue(root.contains("case " + implementation + "u: { MinecraftSurface s;"));
             assertTrue(root.contains("case " + implementation + "u: { MinecraftCoverage c;"));
+            assertSpirv(compiler.compileClosestHit(), 1024);
+            assertSpirv(compiler.compileRadianceAnyHit(), 1024);
+            assertSpirv(compiler.compileShadowAnyHit(), 1024);
+        }
+    }
+
+    @Test
+    void customMinecraftMaterialPairIsAvailableToRuntimeDispatch(@TempDir Path cacheDirectory)
+            throws Exception {
+        CausticaRegistry registry = dev.comfyfluffy.caustica.TestRegistries.withBuiltins();
+        registry.feature(ResourceId.of("test", "custom_minecraft_material"))
+                .shaderSource(ShaderSource.classpath("/caustica-test/shaders"))
+                .surface(CUSTOM_MINECRAFT_SURFACE,
+                        "minecraft_custom_material", "CustomMinecraftSurface",
+                        CUSTOM_MINECRAFT_COVERAGE,
+                        "minecraft_custom_material", "CustomMinecraftCoverage")
+                .register();
+
+        try (WorldShaderCompiler compiler = WorldShaderCompiler.create(cacheDirectory, registry.selection())) {
+            int implementation = registry.surfaceIndex(CUSTOM_MINECRAFT_SURFACE);
+            String root = compiler.composition().rootSource();
+            assertTrue(!compiler.rejectedSurfaces().contains(implementation));
+            assertTrue(!compiler.rejectedCoverages().contains(implementation));
+            assertTrue(root.contains("case " + implementation + "u: { CustomMinecraftSurface s;"));
+            assertTrue(root.contains("case " + implementation + "u: { CustomMinecraftCoverage c;"));
             assertSpirv(compiler.compileClosestHit(), 1024);
             assertSpirv(compiler.compileRadianceAnyHit(), 1024);
             assertSpirv(compiler.compileShadowAnyHit(), 1024);

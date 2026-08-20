@@ -1,7 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.material;
 
 /** Immutable footprint implementation used by the Minecraft emission catalog. */
-final class MinecraftEmissionFootprint implements MinecraftMaterialSnapshot.Footprint {
+final class MinecraftEmissionFootprint implements dev.comfyfluffy.caustica.minecraft.api.MinecraftEmissionFootprint {
     private static final int SAMPLE_FLOATS = 4;
 
     private final int resolution;

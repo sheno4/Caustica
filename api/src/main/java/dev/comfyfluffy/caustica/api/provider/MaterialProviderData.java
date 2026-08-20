@@ -6,7 +6,8 @@ import java.util.Objects;
 /**
  * Opaque material data written by a provider and consumed only by its registered shader implementation.
  * Every word preserves its complete unsigned 32-bit bit pattern; the renderer copies the words without
- * assigning them a meaning.
+ * assigning them a meaning. These twelve words are available to shading only; coverage implementations
+ * receive generic base-texture, UV, tint, and vertex-color facts instead of this provider blob.
  */
 public final class MaterialProviderData {
     public static final int WORD_COUNT = 12;

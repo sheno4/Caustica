@@ -3,23 +3,15 @@ package dev.comfyfluffy.caustica.minecraft.material;
 import dev.comfyfluffy.caustica.api.provider.MaterialHandle;
 import dev.comfyfluffy.caustica.api.provider.MaterialSnapshot;
 import dev.comfyfluffy.caustica.api.provider.SceneMesh;
+import dev.comfyfluffy.caustica.minecraft.api.MinecraftMaterialEmission;
+import dev.comfyfluffy.caustica.minecraft.api.MinecraftMaterialResolution;
 
 /** Immutable Minecraft-owned material semantics for one submitted resource epoch. */
 public interface MinecraftMaterialSnapshot {
     static MinecraftMaterialSnapshot empty() { return MinecraftResolvedMaterialCatalog.empty(); }
 
-    MinecraftResolvedMaterialCatalog.Resolved resolve(MinecraftMaterialKey key);
-    MinecraftResolvedMaterialCatalog.Resolved named(MaterialHandle handle);
-
-    record Emission(float luminanceCdM2, boolean usesPrimitiveEmission, Footprint footprint) {
-        public static final Emission NONE = new Emission(0.0f, false, null);
-        public Emission {
-            if (!Float.isFinite(luminanceCdM2) || luminanceCdM2 < 0.0f) {
-                throw new IllegalArgumentException("emission luminance must be finite and non-negative");
-            }
-        }
-        public boolean emissive() { return luminanceCdM2 > 0.0f; }
-    }
+    MinecraftMaterialResolution resolve(MinecraftMaterialKey key);
+    MinecraftMaterialResolution named(MaterialHandle handle);
 
     /** Worker-retainable pairing of Minecraft semantics with one engine compilation epoch. */
     record Published(MinecraftMaterialSnapshot semantics, MaterialSnapshot compilation) {
@@ -31,30 +23,30 @@ public interface MinecraftMaterialSnapshot {
         public ResolvedMaterial resolve(MinecraftMaterialKey key, SceneMesh.TextureReference texture) {
             return published(semantics.resolve(key), texture);
         }
-        public Emission resolve(SceneMesh.MaterialReference material) {
-            if (!(material instanceof SceneMesh.NamedMaterial named)) return Emission.NONE;
-            MinecraftResolvedMaterialCatalog.Resolved resolved = semantics.named(named.material());
-            return available(resolved) ? resolved.emission() : Emission.NONE;
+        public MinecraftMaterialEmission resolve(SceneMesh.MaterialReference material) {
+            if (!(material instanceof SceneMesh.NamedMaterial named)) return MinecraftMaterialEmission.NONE;
+            MinecraftMaterialResolution resolved = semantics.named(named.material());
+            return available(resolved) ? resolved.emission() : MinecraftMaterialEmission.NONE;
         }
         public SceneMesh.OpacityMicromapRange opacityMicromapRange(SceneMesh.MaterialReference material) {
             if (!(material instanceof SceneMesh.NamedMaterial named)) return null;
-            MinecraftResolvedMaterialCatalog.Resolved resolved = semantics.named(named.material());
+            MinecraftMaterialResolution resolved = semantics.named(named.material());
             return available(resolved) ? resolved.opacityMicromapRange() : null;
         }
-        private ResolvedMaterial published(MinecraftResolvedMaterialCatalog.Resolved resolved,
+        private ResolvedMaterial published(MinecraftMaterialResolution resolved,
                                            SceneMesh.TextureReference texture) {
             boolean available = available(resolved);
-            return new ResolvedMaterial(new SceneMesh.NamedMaterial(resolved.handle(), texture),
-                    available ? resolved.emission() : Emission.NONE,
+            return new ResolvedMaterial(new SceneMesh.NamedMaterial(resolved.definition().handle(), texture),
+                    available ? resolved.emission() : MinecraftMaterialEmission.NONE,
                     available ? resolved.opacityMicromapRange() : null);
         }
-        private boolean available(MinecraftResolvedMaterialCatalog.Resolved resolved) {
+        private boolean available(MinecraftMaterialResolution resolved) {
             if (resolved == null) return false;
             return compilation.surfaceAvailable(resolved.definition().surface());
         }
     }
 
-    record ResolvedMaterial(SceneMesh.NamedMaterial material, Emission emission,
+    record ResolvedMaterial(SceneMesh.NamedMaterial material, MinecraftMaterialEmission emission,
                             SceneMesh.OpacityMicromapRange opacityMicromapRange) {
         public ResolvedMaterial {
             java.util.Objects.requireNonNull(material, "material");
@@ -62,13 +54,4 @@ public interface MinecraftMaterialSnapshot {
         }
     }
 
-    /** Fixed-resolution premultiplied linear-BT.709 emission color and coverage. */
-    interface Footprint {
-        int resolution();
-        int sampleIndex(float coordinate);
-        float r(int x, int y);
-        float g(int x, int y);
-        float b(int x, int y);
-        float weight(int x, int y);
-    }
 }

@@ -11,12 +11,16 @@ import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.api.Slot;
 import dev.comfyfluffy.caustica.api.Slots;
 import dev.comfyfluffy.caustica.builtin.BuiltinExtension;
+import dev.comfyfluffy.caustica.minecraft.api.MinecraftApiExtension;
+import dev.comfyfluffy.caustica.minecraft.api.MinecraftExtensionRegistry;
 import dev.comfyfluffy.caustica.platform.CausticaPlatform;
 import dev.comfyfluffy.caustica.rt.RtRuntime;
 import dev.comfyfluffy.caustica.slang.SlangPassShaderCompiler;
 
 /** Loader-neutral extension discovery, config paths, and Minecraft provider installation. */
 public final class MinecraftApiBootstrap {
+    private static MinecraftExtensionRegistry minecraftExtensions;
+
     private MinecraftApiBootstrap() {
     }
 
@@ -25,14 +29,9 @@ public final class MinecraftApiBootstrap {
         CausticaRegistry registry = new CausticaRegistry();
         new BuiltinExtension().register(registry);
         new MinecraftProvidersExtension().register(registry);
-        for (CausticaExtension extension : CausticaPlatform.current().extensions()) {
-            try {
-                extension.register(registry);
-            } catch (RuntimeException e) {
-                CausticaMod.LOGGER.error("Caustica extension registration failed: {}",
-                        extension.getClass().getName(), e);
-            }
-        }
+        MinecraftExtensionRegistry minecraftRegistry = new MinecraftExtensionRegistry();
+        registerExtensions(registry, minecraftRegistry, CausticaPlatform.current().extensions());
+        minecraftExtensions = minecraftRegistry;
         applyPersistedSelection(registry, Slots.SKY, CausticaConfig.Rt.Composition.SKY.get(),
                 MinecraftProvidersExtension.ID);
         var shaderCache = CausticaPlatform.current().gameDir().resolve("caustica-shaders");
@@ -46,6 +45,33 @@ public final class MinecraftApiBootstrap {
         CausticaApi.initialize(registry, options);
         CausticaMod.LOGGER.info("Caustica extension API {} initialized with {} feature(s)",
                 CausticaApi.VERSION, registry.features().size());
+    }
+
+    static void registerExtensions(CausticaRegistry registry, MinecraftExtensionRegistry minecraftRegistry,
+                                   java.util.List<CausticaExtension> extensions) {
+        for (CausticaExtension extension : extensions) {
+            try {
+                extension.register(registry);
+            } catch (RuntimeException e) {
+                CausticaMod.LOGGER.error("Caustica feature registration failed: {}",
+                        extension.getClass().getName(), e);
+            }
+            if (extension instanceof MinecraftApiExtension minecraftExtension) {
+                try {
+                    minecraftExtension.registerMinecraft(minecraftRegistry);
+                } catch (RuntimeException e) {
+                    CausticaMod.LOGGER.error("Minecraft host registration failed: {}",
+                            extension.getClass().getName(), e);
+                }
+            }
+        }
+        minecraftRegistry.freeze();
+    }
+
+    public static MinecraftExtensionRegistry minecraftExtensions() {
+        MinecraftExtensionRegistry current = minecraftExtensions;
+        if (current == null) throw new IllegalStateException("Minecraft extension API is not initialized");
+        return current;
     }
 
     static void applyPersistedSelection(CausticaRegistry registry, Slot slot, String saved,

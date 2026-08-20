@@ -9,10 +9,11 @@ import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialClassification;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialKey;
-import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialProfile;
+import dev.comfyfluffy.caustica.minecraft.api.MinecraftMaterialProfile;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialClassifier;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialSnapshot;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialLookup;
+import dev.comfyfluffy.caustica.minecraft.api.MinecraftMaterialEmission;
 import dev.comfyfluffy.caustica.minecraft.provider.MinecraftMaterialSource;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
@@ -263,21 +264,21 @@ final class RtTerrainMesher {
 
     /** Growable reference array paired one-to-one with triangles; entries are epoch-cached snapshots. */
     private static final class MaterialEmissionList {
-        private MinecraftMaterialSnapshot.Emission[] elements;
+        private MinecraftMaterialEmission[] elements;
         private int size;
 
         MaterialEmissionList(int capacity) {
-            elements = new MinecraftMaterialSnapshot.Emission[Math.max(2, capacity)];
+            elements = new MinecraftMaterialEmission[Math.max(2, capacity)];
         }
 
-        void add(MinecraftMaterialSnapshot.Emission emission) {
+        void add(MinecraftMaterialEmission emission) {
             if (size == elements.length) {
                 elements = java.util.Arrays.copyOf(elements, size * 2);
             }
             elements[size++] = emission;
         }
 
-        MinecraftMaterialSnapshot.Emission[] elements() {
+        MinecraftMaterialEmission[] elements() {
             return elements;
         }
 
@@ -602,7 +603,7 @@ final class RtTerrainMesher {
         boolean translucent; // TRANSLUCENT layer (stained glass / ice): colored-transmission dielectric
         boolean tinted; // tintIndex >= 0 — the tinted member of a base+overlay pair
         float tr, tg, tb, emission;
-        MinecraftMaterialSnapshot.Emission materialEmission;
+        MinecraftMaterialEmission materialEmission;
         SceneMesh.MaterialReference material;
         SceneMesh.Coverage coverage;
         SceneMesh.OpacityMicromapRange opacityMicromapRange;
@@ -651,8 +652,8 @@ final class RtTerrainMesher {
 
         SectionMesh cur;     // set before each section
         MinecraftMaterialSnapshot.Published materials;
-        MinecraftMaterialSnapshot.Emission waterEmission;
-        MinecraftMaterialSnapshot.Emission lavaEmission;
+        MinecraftMaterialEmission waterEmission;
+        MinecraftMaterialEmission lavaEmission;
         SceneMesh.NamedMaterial lavaMaterial;
         float emission;      // set per fluid block (lava = 1, water = 0)
         boolean water;       // set per fluid block: true for water (dielectric), false for lava
@@ -686,7 +687,7 @@ final class RtTerrainMesher {
         private void emitQuad() {
             Geom g = cur.geometry();
             SceneMesh.MaterialReference material = WATER_MATERIAL;
-            MinecraftMaterialSnapshot.Emission materialEmission;
+            MinecraftMaterialEmission materialEmission;
             if (water) {
                 materialEmission = waterEmission;
                 if (materialEmission == null) {
