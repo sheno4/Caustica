@@ -47,8 +47,7 @@ final class RtWorldResources {
         return !requiresSourceFallback();
     }
 
-    void invalidateMaterialBindings() {
-        providers.onWorldChanged();
+    void gateTracingForMaterialPublication() {
         traceGate = true;
     }
 
@@ -76,7 +75,7 @@ final class RtWorldResources {
             }
             materialEpoch.publish(context, created, bindlessCapacity, program.rejectedSurfaces());
             bindPassResources(created, program, passManager);
-            invalidateMaterialBindings();
+            gateTracingForMaterialPublication();
         } catch (Throwable failure) {
             try {
                 if (created != null) {

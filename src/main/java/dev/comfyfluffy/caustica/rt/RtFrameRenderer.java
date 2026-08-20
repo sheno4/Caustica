@@ -130,7 +130,6 @@ final class RtFrameRenderer {
     private final RtSceneGeometryManager sceneGeometry;
     private final RtFrameResources frameResources;
     private RenderPassManager renderPassManager;
-    private long renderPassSceneId = Long.MIN_VALUE;
 
     private static final class PushSlot {
         final GpuBuffer buffer;
@@ -370,7 +369,7 @@ final class RtFrameRenderer {
      */
     /**
      * Invalidate the published presentation snapshot at the start of host rendering. Menu and loading
-     * frames do not call {@link #composite()}, so retaining the previous world snapshot would present stale
+     * frames do not call {@link #composite()}, so retaining the previous scene snapshot would present stale
      * HDR content instead of selecting the SDR-to-PQ path.
      */
     public void beginFrame() {
@@ -447,6 +446,9 @@ final class RtFrameRenderer {
         // Providers prepare their frame contributions before the ready gate below. A failing provider is
         // disabled and cleaned up independently, so another provider can continue serving the frame.
         providers.prepareFrame();
+        if (providers.consumeSceneResetRequest()) {
+            resetSceneHistory();
+        }
         FrameSnapshot snapshot = frameSnapshot;
         if (snapshot == null) {
             // No scene was captured this frame. Skip RT so the present path falls back to the host image.
@@ -496,12 +498,6 @@ final class RtFrameRenderer {
 
     private boolean ensurePresentationResources(GpuContext ctx, long sceneId, int width, int height)
             throws IOException {
-        if (renderPassSceneId != sceneId) {
-            renderPassSceneId = sceneId;
-            if (renderPassManager != null) {
-                renderPassManager.onWorldChanged();
-            }
-        }
         ensureRenderPassManager(ctx);
         frameResources.ensurePresentationPipelines(ctx, LOOK);
         if (frameResources.ensureSized(ctx, width, height, renderPassManager, worldResources.pipeline)) {
@@ -514,7 +510,7 @@ final class RtFrameRenderer {
     /**
      * Bring the world pipeline, material pages, and provider texture table up before scene tessellation so
      * the immutable material snapshot is available to the first worker build. Driven ahead of scene-source
-     * update and deferred until a world exists.
+     * update and deferred until scene resources are ready.
      */
     public boolean ensureResourcesReady(GpuContext ctx, SceneResources sceneResources) {
         if (failed || worldResources.materialEpoch.reloadPending()) {
@@ -568,7 +564,7 @@ final class RtFrameRenderer {
      * them ("in use by VkDescriptorSet" → device lost). So we drain in-flight frames and then <b>destroy
      * the world pipeline outright</b> — dropping every bindless descriptor reference — so the host can free
      * its textures cleanly. The pipeline is cheap to rebuild (no scene
-     * re-upload); {@code ensureWorld} recreates it on the first world frame after the reload, once the new
+     * re-upload); {@code ensureWorld} recreates it on the first scene frame after the reload, once the new
      * atlas is ready (gated in {@link #composite}). The new material epoch clears retained geometry before trace.
      */
     public void onResourceReloadStart() {
@@ -589,12 +585,14 @@ final class RtFrameRenderer {
         worldResources.resourcePackApplied(renderPassManager);
     }
 
-    /** Reset world-scoped pass state when the active render session changes worlds. */
-    public void onWorldChanged() {
+    /** Invalidate renderer state that cannot cross a provider-requested scene discontinuity. */
+    public void resetSceneHistory() {
         resetExposureHistory();
-        if (renderPassManager != null) {
-            renderPassManager.onWorldChanged();
-        }
+        RtDlssRr.INSTANCE.resetHistory();
+        presenter.resetSceneHistory();
+        currentTlasHandle = 0L;
+        mvHasPrev = false;
+        proceduralTimeValid = false;
     }
 
     /**
@@ -891,7 +889,6 @@ final class RtFrameRenderer {
             renderPassManager.destroy();
             renderPassManager = null;
         }
-        renderPassSceneId = Long.MIN_VALUE;
         worldResources.destroy();
         frameResources.destroy();
         if (pushRing != null) {

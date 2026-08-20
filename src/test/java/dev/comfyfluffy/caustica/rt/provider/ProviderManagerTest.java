@@ -40,7 +40,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class ProviderManagerTest {
     @Test
-    void lifecycleCallbacksReachEveryProviderKindInMaterialSceneLightOrderBeforeCollection() {
+    void resourceLifecycleCallbacksReachEveryProviderKindInMaterialSceneLightOrderBeforeCollection() {
         List<String> events = new ArrayList<>();
         java.util.concurrent.atomic.AtomicBoolean resourcesApplied =
                 new java.util.concurrent.atomic.AtomicBoolean();
@@ -49,7 +49,6 @@ final class ProviderManagerTest {
                 assertTrue(resourcesApplied.get());
                 events.add("material.collect");
             }
-            @Override public void onWorldChanged() { events.add("material.world"); }
             @Override public void onResourcePackClosing() {
                 resourcesApplied.set(false);
                 events.add("material.close");
@@ -60,12 +59,10 @@ final class ProviderManagerTest {
             }
         };
         SceneProvider scene = new SceneProvider() {
-            @Override public void onWorldChanged() { events.add("scene.world"); }
             @Override public void onResourcePackClosing() { events.add("scene.close"); }
             @Override public void onResourcePackApplied() { events.add("scene.apply"); }
         };
         LightProvider light = new LightProvider() {
-            @Override public void onWorldChanged() { events.add("light.world"); }
             @Override public void onResourcePackClosing() { events.add("light.close"); }
             @Override public void onResourcePackApplied() { events.add("light.apply"); }
         };
@@ -75,12 +72,10 @@ final class ProviderManagerTest {
         manager.onResourcePackClosing();
         manager.onResourcePackApplied();
         manager.collectMaterials();
-        manager.onWorldChanged();
 
         assertEquals(List.of(
                 "material.close", "scene.close", "light.close",
-                "material.apply", "scene.apply", "light.apply", "material.collect",
-                "material.world", "scene.world", "light.world"), events);
+                "material.apply", "scene.apply", "light.apply", "material.collect"), events);
     }
 
     @Test
@@ -300,7 +295,6 @@ final class ProviderManagerTest {
 
         manager.updateScenes(null, SceneOrigin.ZERO);
         manager.prepareFrame();
-        manager.onWorldChanged();
         manager.updateScenes(null, SceneOrigin.ZERO);
 
         assertEquals(1, updates.get());
@@ -688,8 +682,10 @@ final class ProviderManagerTest {
         ProviderManager manager = new ProviderManager(scenes, Map.of(), Map.of());
         List<GeometryUpdates.Group> forwarded = new ArrayList<>();
 
-        manager.submitGeometry(null, SceneOrigin.ZERO, (updates, ignored) -> forwarded.addAll(updates));
-        manager.submitGeometry(null, SceneOrigin.ZERO, (updates, ignored) -> forwarded.addAll(updates));
+        manager.submitGeometry(null, SceneOrigin.ZERO,
+                (updates, acknowledgment, failure) -> forwarded.addAll(updates));
+        manager.submitGeometry(null, SceneOrigin.ZERO,
+                (updates, acknowledgment, failure) -> forwarded.addAll(updates));
 
         assertEquals(List.of(id("healthy"), id("healthy")), forwarded.stream()
                 .map(update -> update.key().source()).toList());
@@ -727,7 +723,8 @@ final class ProviderManagerTest {
         manager.collectMaterials();
         List<GeometryUpdates.Group> forwarded = new ArrayList<>();
 
-        manager.submitGeometry(null, SceneOrigin.ZERO, (updates, ignored) -> forwarded.addAll(updates));
+        manager.submitGeometry(null, SceneOrigin.ZERO,
+                (updates, acknowledgment, failure) -> forwarded.addAll(updates));
 
         assertEquals(List.of(id("healthy")), forwarded.stream().map(update -> update.key().source()).toList());
         assertEquals(1, brokenStops.get());
@@ -794,8 +791,10 @@ final class ProviderManagerTest {
         List<GeometryUpdates.Group> updateCadence = new ArrayList<>();
         List<GeometryUpdates.Group> frameCadence = new ArrayList<>();
 
-        manager.updateScenes(null, SceneOrigin.ZERO, (updates, ignored) -> updateCadence.addAll(updates));
-        manager.submitGeometry(null, SceneOrigin.ZERO, (updates, ignored) -> frameCadence.addAll(updates));
+        manager.updateScenes(null, SceneOrigin.ZERO,
+                (updates, acknowledgment, failure) -> updateCadence.addAll(updates));
+        manager.submitGeometry(null, SceneOrigin.ZERO,
+                (updates, acknowledgment, failure) -> frameCadence.addAll(updates));
 
         assertSame(GeometryUpdates.BuildPolicy.STATIC, buildPolicy(updateCadence.getFirst()));
         assertSame(GeometryUpdates.BuildPolicy.DYNAMIC, buildPolicy(frameCadence.getFirst()));
@@ -839,39 +838,141 @@ final class ProviderManagerTest {
         operations.clear();
 
         List<GeometryUpdates.Group> frameCadence = new ArrayList<>();
-        manager.submitGeometry(null, SceneOrigin.ZERO, (updates, ignored) -> frameCadence.addAll(updates));
+        manager.submitGeometry(null, SceneOrigin.ZERO,
+                (updates, acknowledgment, failure) -> frameCadence.addAll(updates));
         assertTrue(frameCadence.isEmpty());
 
         List<GeometryUpdates.Group> updateCadence = new ArrayList<>();
-        manager.updateScenes(null, SceneOrigin.ZERO, (updates, ignored) -> updateCadence.addAll(updates));
+        manager.updateScenes(null, SceneOrigin.ZERO,
+                (updates, acknowledgment, failure) -> updateCadence.addAll(updates));
         assertEquals(1, updateCadence.size());
         assertSame(GeometryUpdates.BuildPolicy.STATIC, buildPolicy(updateCadence.getFirst()));
     }
 
     @Test
-    void sceneInvalidationDropsQueuedWorkBeforeProviderCallbackCanRepublish() {
+    void crossThreadSceneResetRequestsCoalesceGlobally() throws InterruptedException {
+        List<SceneScope> scopes = new ArrayList<>();
+        Map<ResourceId, SceneProvider> providers = new LinkedHashMap<>();
+        providers.put(id("first"), new SceneProvider() {
+            @Override public void onSessionStart(SceneScope scope) { scopes.add(scope); }
+        });
+        providers.put(id("second"), new SceneProvider() {
+            @Override public void onSessionStart(SceneScope scope) { scopes.add(scope); }
+        });
+        ProviderManager manager = new ProviderManager(providers, Map.of(), Map.of());
+        manager.beginSession();
+
+        Thread first = new Thread(scopes.get(0)::requestSceneReset);
+        Thread second = new Thread(scopes.get(1)::requestSceneReset);
+        first.start();
+        second.start();
+        first.join();
+        second.join();
+
+        assertTrue(manager.consumeSceneResetRequest());
+        assertTrue(!manager.consumeSceneResetRequest());
+    }
+
+    @Test
+    void globalSceneResetDropsQueuedGroupsAndStaleAcknowledgmentsThenAcceptsTheNextGeneration() {
+        Map<ResourceId, SceneScope> scopes = new LinkedHashMap<>();
+        AtomicInteger providerUpdates = new AtomicInteger();
+        Map<ResourceId, SceneProvider> providers = new LinkedHashMap<>();
+        for (String path : List.of("first", "second")) {
+            ResourceId source = id(path);
+            providers.put(source, new SceneProvider() {
+                @Override public void onSessionStart(SceneScope scope) { scopes.put(source, scope); }
+                @Override public void update(SceneGeometryUpdateContext ignored) { providerUpdates.incrementAndGet(); }
+            });
+        }
+        ProviderManager manager = new ProviderManager(providers, Map.of(), Map.of());
+        manager.beginSession();
+        AtomicInteger stalePublications = new AtomicInteger();
+        scopes.forEach((source, scope) -> scope.submit(7,
+                List.of(new SceneGeometrySink.Drop(1)), stalePublications::incrementAndGet));
+        List<Runnable> acknowledgments = new ArrayList<>();
+        manager.updateScenes(null, SceneOrigin.ZERO, (updates, acknowledgment, failure) -> {
+            for (GeometryUpdates.Group update : updates) {
+                acknowledgments.add(() -> acknowledgment.accept(new GeometryUpdates.Publication(
+                        update.key(), update.revision(), update.operations())));
+            }
+        });
+        scopes.values().forEach(scope -> scope.submit(8, List.of(new SceneGeometrySink.Drop(2))));
+        int updatesBeforeReset = providerUpdates.get();
+
+        scopes.values().iterator().next().requestSceneReset();
+        assertTrue(manager.consumeSceneResetRequest());
+        assertEquals(updatesBeforeReset, providerUpdates.get(),
+                "reset consumption must not invoke providers");
+        acknowledgments.forEach(Runnable::run);
+        List<GeometryUpdates.Group> discarded = new ArrayList<>();
+        manager.updateScenes(null, SceneOrigin.ZERO,
+                (updates, acknowledgment, failure) -> discarded.addAll(updates));
+
+        assertEquals(0, stalePublications.get());
+        assertTrue(discarded.isEmpty());
+        assertEquals(updatesBeforeReset + providers.size(), providerUpdates.get(),
+                "only the explicit post-reset update may invoke providers");
+
+        scopes.forEach((source, scope) -> scope.submit(7, List.of(new SceneGeometrySink.Drop(3))));
+        List<GeometryUpdates.Group> nextGeneration = new ArrayList<>();
+        manager.updateScenes(null, SceneOrigin.ZERO,
+                (updates, acknowledgment, failure) -> nextGeneration.addAll(updates));
+        assertEquals(providers.size(), nextGeneration.size());
+        assertTrue(nextGeneration.stream().allMatch(group -> group.revision() == 1L));
+    }
+
+    @Test
+    void closedSceneScopeDiscardsCrossThreadResetRequest() throws InterruptedException {
+        AtomicReference<SceneScope> firstScope = new AtomicReference<>();
+        ProviderManager manager = manager("geometry", new SceneProvider() {
+            @Override public void onSessionStart(SceneScope scope) { firstScope.compareAndSet(null, scope); }
+        });
+        manager.beginSession();
+        manager.beginSession();
+
+        Thread request = new Thread(firstScope.get()::requestSceneReset);
+        request.start();
+        request.join();
+
+        assertTrue(!manager.consumeSceneResetRequest());
+    }
+
+    @Test
+    void globalSceneResetClearsFrameAndRetainedLightsAndTheirProviderGenerationCache() {
         AtomicReference<SceneScope> scope = new AtomicReference<>();
-        SceneProvider provider = new SceneProvider() {
+        SceneProvider scene = new SceneProvider() {
+            @Override public void onSessionStart(SceneScope started) { scope.set(started); }
+        };
+        LightProvider light = new LightProvider() {
             @Override
-            public void onSessionStart(SceneScope started) {
-                scope.set(started);
+            public void submitLights(dev.comfyfluffy.caustica.api.provider.LightSink sink) {
+                sink.submit(new LightDescriptor.Distant(10L, 0.0, -1.0, 0.0, 1.0, 1.0, 1.0, 0.0));
             }
 
             @Override
-            public void onWorldChanged() {
-                scope.get().submit(2, List.of(new SceneGeometrySink.Drop(2)));
+            public RetainedLightCollection retainedLights() {
+                return collection(3L, 7L, 5L, point(11L, 2.0));
             }
         };
-        ProviderManager manager = manager("geometry", provider);
+        ProviderManager manager = new ProviderManager(Map.of(id("scene"), scene), Map.of(id("light"), light),
+                Map.of());
         manager.beginSession();
-        scope.get().submit(1, List.of(new SceneGeometrySink.Drop(1)));
+        manager.prepareFrame();
+        long publishedGeneration = manager.retainedLights().generation();
+        assertEquals(1, manager.frameLights().size());
+        assertEquals(1, manager.retainedLights().batches().size());
 
-        manager.onWorldChanged();
-        List<GeometryUpdates.Group> forwarded = new ArrayList<>();
-        manager.updateScenes(null, SceneOrigin.ZERO, (updates, ignored) -> forwarded.addAll(updates));
+        scope.get().requestSceneReset();
+        assertTrue(manager.consumeSceneResetRequest());
 
-        assertEquals(List.of(SceneGeometryKey.of(2)), forwarded.stream()
-                .map(group -> ((GeometryUpdates.Drop) group.operations().getFirst()).residentKey()).toList());
+        assertTrue(manager.frameLights().isEmpty());
+        assertTrue(manager.retainedLights().isEmpty());
+        assertTrue(manager.retainedLights().generation() > publishedGeneration);
+        manager.prepareFrame();
+        assertEquals(1, manager.frameLights().size());
+        assertEquals(1, manager.retainedLights().batches().size(),
+                "clearing the provider generation cache must accept the same generation again");
     }
 
     @Test
@@ -888,7 +989,8 @@ final class ProviderManagerTest {
         scope.get().submit(7, List.of(new SceneGeometrySink.Drop(2)));
         List<GeometryUpdates.Group> forwarded = new ArrayList<>();
 
-        manager.updateScenes(null, SceneOrigin.ZERO, (updates, ignored) -> forwarded.addAll(updates));
+        manager.updateScenes(null, SceneOrigin.ZERO,
+                (updates, acknowledgment, failure) -> forwarded.addAll(updates));
 
         assertEquals(List.of(1L, 2L), forwarded.stream().map(GeometryUpdates.Group::revision).toList());
     }
@@ -910,8 +1012,10 @@ final class ProviderManagerTest {
         ProviderManager manager = manager("geometry", provider);
         List<GeometryUpdates.Group> forwarded = new ArrayList<>();
 
-        manager.submitGeometry(null, origin, (updates, ignored) -> forwarded.addAll(updates));
-        manager.submitGeometry(null, origin, (updates, ignored) -> forwarded.addAll(updates));
+        manager.submitGeometry(null, origin,
+                (updates, acknowledgment, failure) -> forwarded.addAll(updates));
+        manager.submitGeometry(null, origin,
+                (updates, acknowledgment, failure) -> forwarded.addAll(updates));
 
         assertEquals(List.of(1L, 2L), forwarded.stream().map(GeometryUpdates.Group::revision).toList());
         GeometryUpdates.Place place = (GeometryUpdates.Place) forwarded.getFirst().operations().getFirst();
@@ -949,9 +1053,11 @@ final class ProviderManagerTest {
         manager.collectMaterials();
         List<GeometryUpdates.Group> forwarded = new ArrayList<>();
 
-        manager.submitGeometry(null, SceneOrigin.ZERO, (updates, ignored) -> forwarded.addAll(updates));
+        manager.submitGeometry(null, SceneOrigin.ZERO,
+                (updates, acknowledgment, failure) -> forwarded.addAll(updates));
         cell.incrementAndGet();
-        manager.submitGeometry(null, SceneOrigin.ZERO, (updates, ignored) -> forwarded.addAll(updates));
+        manager.submitGeometry(null, SceneOrigin.ZERO,
+                (updates, acknowledgment, failure) -> forwarded.addAll(updates));
 
         assertEquals(List.of(1L, 2L), forwarded.stream().map(GeometryUpdates.Group::revision).toList());
         for (GeometryUpdates.Group update : forwarded) {
@@ -990,13 +1096,14 @@ final class ProviderManagerTest {
         ProviderManager manager = new ProviderManager(scenes, Map.of(), Map.of());
         AtomicReference<java.util.function.Consumer<Throwable>> failure = new AtomicReference<>();
 
-        manager.submitGeometry(null, SceneOrigin.ZERO, (updates, handler) -> {
+        manager.submitGeometry(null, SceneOrigin.ZERO, (updates, acknowledgment, handler) -> {
             if (updates.getFirst().key().source().equals(id("broken"))) failure.set(handler);
         });
         assertTrue(failure.get() != null);
         failure.get().accept(new IllegalStateException("expected"));
-        manager.submitGeometry(null, SceneOrigin.ZERO, (updates, ignored) -> assertEquals(id("healthy"),
-                updates.getFirst().key().source()));
+        manager.submitGeometry(null, SceneOrigin.ZERO,
+                (updates, acknowledgment, ignoredFailure) ->
+                        assertEquals(id("healthy"), updates.getFirst().key().source()));
 
         assertEquals(1, brokenStops.get());
         assertEquals(2, healthySubmits.get());

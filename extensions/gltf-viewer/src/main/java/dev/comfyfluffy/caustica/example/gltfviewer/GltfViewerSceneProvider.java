@@ -6,6 +6,7 @@ import dev.comfyfluffy.caustica.api.provider.SceneGeometrySink;
 import dev.comfyfluffy.caustica.api.provider.SceneProvider;
 import dev.comfyfluffy.caustica.api.provider.SceneScope;
 import dev.comfyfluffy.caustica.api.provider.TextureSink;
+import dev.comfyfluffy.caustica.minecraft.api.MinecraftSceneReset;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 
@@ -31,6 +32,7 @@ public final class GltfViewerSceneProvider implements SceneProvider {
     private boolean residentsSubmitted;
     private boolean texturesSubmitted;
     private SceneScope scope;
+    private MinecraftSceneReset.Registration sceneReset = () -> { };
 
     GltfViewerSceneProvider(GltfViewerScene scene, Supplier<Set<BlockPos>> anchors) {
         this(null, () -> scene, anchors);
@@ -59,6 +61,8 @@ public final class GltfViewerSceneProvider implements SceneProvider {
     public void onSessionStart(SceneScope scope) {
         reset(true);
         this.scope = scope;
+        sceneReset.close();
+        sceneReset = MinecraftSceneReset.register(scope, () -> reset(false));
     }
 
     @Override
@@ -126,11 +130,6 @@ public final class GltfViewerSceneProvider implements SceneProvider {
     }
 
     @Override
-    public void onWorldChanged() {
-        reset(false);
-    }
-
-    @Override
     public void onResourcePackClosing() {
         reset(true);
     }
@@ -138,6 +137,12 @@ public final class GltfViewerSceneProvider implements SceneProvider {
     @Override
     public void onResourcePackApplied() {
         reset(true);
+    }
+
+    @Override
+    public void stop() {
+        sceneReset.close();
+        sceneReset = () -> { };
     }
 
     private void reset(boolean resourcesClosing) {

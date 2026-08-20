@@ -2,10 +2,6 @@ package dev.comfyfluffy.caustica.api.provider;
 
 /** Lifecycle shared by every provider created for one runtime activation. */
 public interface ProviderLifecycle {
-    /** Called whenever this render session enters or leaves a world epoch. */
-    default void onWorldChanged() {
-    }
-
     /** Called while the current resource pack is being detached. */
     default void onResourcePackClosing() {
     }

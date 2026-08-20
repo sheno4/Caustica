@@ -32,6 +32,11 @@ final class FrameGeneration {
         renderedFrame = null;
     }
 
+    void resetHistory() {
+        renderedFrame = null;
+        reset = true;
+    }
+
     void captureHudless(long sourceImage, int width, int height, UiPresentationResources ui) {
         if (!RtDlssFg.enabled() || !ui.enabled() || sourceImage == 0L) {
             return;

@@ -138,7 +138,7 @@ public final class RtRetainedLightScene {
         }
     }
 
-    /** World-reset path only. Normal light changes intentionally retain the published generation. */
+    /** Empty-snapshot path only. Normal light changes intentionally retain the published generation. */
     private void invalidate(GpuContext ctx, GraphicsUse lastGraphicsUse) {
         cancelPending();
         PublishedState old = published;

@@ -8,6 +8,7 @@ import dev.comfyfluffy.caustica.api.provider.SceneGeometrySink;
 import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import dev.comfyfluffy.caustica.api.provider.SceneProvider;
 import dev.comfyfluffy.caustica.api.provider.SceneScope;
+import dev.comfyfluffy.caustica.minecraft.api.MinecraftSceneReset;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 
@@ -33,6 +34,7 @@ public final class ProceduralSurfaceSceneProvider implements SceneProvider {
     private long nextInstanceKey;
     private boolean residentSubmitted;
     private SceneScope scope;
+    private MinecraftSceneReset.Registration sceneReset = () -> { };
 
     public ProceduralSurfaceSceneProvider() {
         this(ProceduralSurfaceSceneProvider::loadedAnchors);
@@ -46,6 +48,8 @@ public final class ProceduralSurfaceSceneProvider implements SceneProvider {
     public void onSessionStart(SceneScope scope) {
         reset();
         this.scope = scope;
+        sceneReset.close();
+        sceneReset = MinecraftSceneReset.register(scope, this::reset);
     }
 
     @Override
@@ -89,8 +93,9 @@ public final class ProceduralSurfaceSceneProvider implements SceneProvider {
     }
 
     @Override
-    public void onWorldChanged() {
-        reset();
+    public void stop() {
+        sceneReset.close();
+        sceneReset = () -> { };
     }
 
     private void reset() {

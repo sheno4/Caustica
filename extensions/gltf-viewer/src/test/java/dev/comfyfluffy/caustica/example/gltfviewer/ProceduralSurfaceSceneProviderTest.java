@@ -3,6 +3,7 @@ package dev.comfyfluffy.caustica.example.gltfviewer;
 import dev.comfyfluffy.caustica.api.provider.SceneGeometryKey;
 import dev.comfyfluffy.caustica.api.provider.SceneGeometrySink;
 import dev.comfyfluffy.caustica.api.provider.SceneScope;
+import dev.comfyfluffy.caustica.minecraft.api.MinecraftSceneReset;
 import net.minecraft.core.BlockPos;
 import org.junit.jupiter.api.Test;
 
@@ -41,15 +42,28 @@ final class ProceduralSurfaceSceneProviderTest {
         assertEquals(3, capture.last.size());
         assertEquals(2, capture.last.stream().filter(SceneGeometrySink.Remove.class::isInstance).count());
         assertEquals(1, capture.last.stream().filter(SceneGeometrySink.Drop.class::isInstance).count());
+
+        anchors.set(Set.of(new BlockPos(4, 5, 6)));
+        MinecraftSceneReset.request();
+        provider.prepareFrame();
+        assertEquals(1, capture.resetRequests);
+        assertInstanceOf(SceneGeometrySink.Put.class, capture.last.getFirst());
+        provider.stop();
     }
 
     private static final class Capture implements SceneScope {
         private List<Operation> last = List.of();
+        private int resetRequests;
 
         @Override
         public void submit(SceneGeometryKey groupKey, List<Operation> operations, Runnable onPublished) {
             last = new ArrayList<>(operations);
             onPublished.run();
+        }
+
+        @Override
+        public void requestSceneReset() {
+            resetRequests++;
         }
     }
 }

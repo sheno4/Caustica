@@ -8,6 +8,8 @@ import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import dev.comfyfluffy.caustica.api.provider.SceneGeometryKey;
 import dev.comfyfluffy.caustica.api.provider.SceneGeometrySink;
 import dev.comfyfluffy.caustica.api.provider.SceneProvider;
+import dev.comfyfluffy.caustica.api.provider.SceneScope;
+import dev.comfyfluffy.caustica.minecraft.api.MinecraftSceneReset;
 import net.minecraft.client.Minecraft;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.Level;
@@ -32,6 +34,13 @@ public final class MinecraftCloudSceneProvider implements SceneProvider {
     private int centerCellZ;
     private boolean visible;
     private final RetainedState retained = new RetainedState();
+    private MinecraftSceneReset.Registration sceneReset = () -> { };
+
+    @Override
+    public void onSessionStart(SceneScope scope) {
+        sceneReset.close();
+        sceneReset = MinecraftSceneReset.register(scope, this::resetGeometry);
+    }
 
     @Override
     public void prepareFrame() {
@@ -97,11 +106,6 @@ public final class MinecraftCloudSceneProvider implements SceneProvider {
     }
 
     @Override
-    public void onWorldChanged() {
-        resetGeometry();
-    }
-
-    @Override
     public void onResourcePackClosing() {
         resetGeometry();
     }
@@ -109,6 +113,12 @@ public final class MinecraftCloudSceneProvider implements SceneProvider {
     @Override
     public void onResourcePackApplied() {
         resetGeometry();
+    }
+
+    @Override
+    public void stop() {
+        sceneReset.close();
+        sceneReset = () -> { };
     }
 
     private void resetGeometry() {

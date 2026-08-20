@@ -5,4 +5,6 @@ package dev.comfyfluffy.caustica.api.provider;
  * copied before the call returns and become eligible for publication at the next host scene-update cadence.
  */
 public interface SceneScope extends SceneGeometrySink {
+    /** Request one global retained-scene reset at the next engine update boundary. Closed scopes ignore requests. */
+    void requestSceneReset();
 }

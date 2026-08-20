@@ -11,22 +11,15 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 
 final class RtLifecycleCoordinatorTest {
     @Test
-    void initialResourcePackAndWorldHaveIndependentEpochs() {
+    void initialResourcePackOpensAnIndependentEpoch() {
         Events events = new Events();
         RtLifecycleCoordinator coordinator = new RtLifecycleCoordinator(events);
-        Object firstWorld = new Object();
-        Object secondWorld = new Object();
 
         coordinator.startProcess();
         assertEquals(1, coordinator.observeResourcePackAvailable().generation());
-        coordinator.observeWorld(firstWorld, 10);
-        coordinator.observeWorld(secondWorld, 11);
-        coordinator.observeWorld(null, 0);
 
-        assertEquals(List.of("process:start", "pack:applied:1", "world:enter:1:10",
-                "world:leave:1:10", "world:enter:2:11", "world:leave:2:11"), events.events);
+        assertEquals(List.of("process:start", "pack:applied:1"), events.events);
         assertEquals(1, coordinator.resourcePackEpoch().generation());
-        assertNull(coordinator.worldEpoch());
     }
 
     @Test
@@ -71,21 +64,19 @@ final class RtLifecycleCoordinatorTest {
     }
 
     @Test
-    void processStopClosesWorldThenDeviceBeforeProcess() {
+    void processStopClosesResourcePackThenDeviceBeforeProcess() {
         Events events = new Events();
         RtLifecycleCoordinator coordinator = new RtLifecycleCoordinator(events);
         Object device = new Object();
         coordinator.startProcess();
         coordinator.observeDevice(device);
         coordinator.observeResourcePackAvailable();
-        coordinator.observeWorld(new Object(), 7);
 
         coordinator.stopProcess();
 
-        assertEquals(List.of("process:start", "device:observed:1", "pack:applied:1", "world:enter:1:7",
-                "world:leave:1:7", "pack:closing:1", "device:closing:1", "process:stop"), events.events);
+        assertEquals(List.of("process:start", "device:observed:1", "pack:applied:1",
+                "pack:closing:1", "device:closing:1", "process:stop"), events.events);
         assertNull(coordinator.deviceEpoch());
-        assertNull(coordinator.worldEpoch());
     }
 
     @Test
@@ -174,14 +165,5 @@ final class RtLifecycleCoordinatorTest {
             events.add("pack:failed:" + epoch.generation());
         }
 
-        @Override
-        public void worldEntered(RtLifecycleCoordinator.WorldEpoch epoch) {
-            events.add("world:enter:" + epoch.generation() + ':' + epoch.sceneId());
-        }
-
-        @Override
-        public void worldLeaving(RtLifecycleCoordinator.WorldEpoch epoch) {
-            events.add("world:leave:" + epoch.generation() + ':' + epoch.sceneId());
-        }
     }
 }

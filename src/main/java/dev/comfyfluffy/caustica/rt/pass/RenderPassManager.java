@@ -285,16 +285,6 @@ public final class RenderPassManager {
         }
     }
 
-    /** Tell every active pass that the render session changed worlds. */
-    public void onWorldChanged() {
-        for (CausticaRenderPass pass : ordered) {
-            if (disabled.contains(pass)) {
-                continue;
-            }
-            invoke(pass, "world changed", pass::onWorldChanged);
-        }
-    }
-
     public void destroy() {
         for (CausticaRenderPass pass : ordered) {
             destroyPass(pass, "shutdown");

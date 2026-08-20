@@ -448,7 +448,7 @@ public final class RtExposure {
             pendingStateReadback = slot;
         }
 
-        // On a reset frame the previous world's exposure is a poor storage-scale prediction. Unity is
+        // On a reset frame the previous scene's exposure is a poor storage-scale prediction. Unity is
         // neutral and the resolve removes it exactly; subsequent frames resume last-frame prediction.
         framePreExposure = reset ? 1.0f : computePreExposure();
     }

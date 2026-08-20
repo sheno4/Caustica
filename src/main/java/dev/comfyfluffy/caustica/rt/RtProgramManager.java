@@ -20,7 +20,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
-/** Compiles and caches immutable world programs independently of any world or resource-pack epoch. */
+/** Compiles and caches immutable world programs independently of scene and resource-pack state. */
 final class RtProgramManager {
     private static final AtomicInteger THREAD_ID = new AtomicInteger();
     private final ExecutorService buildExecutor = Executors.newSingleThreadExecutor(runnable -> {

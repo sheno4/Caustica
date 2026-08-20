@@ -7,8 +7,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
- * Serializes host lifecycle facts into process, device, render-session, runtime-activation, resource-pack,
- * and world epochs.
+ * Serializes host lifecycle facts into process, device, render-session, runtime-activation, and
+ * resource-pack epochs.
  *
  * <p>Host callbacks may start a resource-pack reload on the client thread and complete its future on a
  * loader worker. Completion is queued here and applied only by {@link #drainResourcePackCompletions()} on
@@ -52,11 +52,6 @@ public final class RtLifecycleCoordinator {
         default void resourcePackReloadFailed(ResourcePackEpoch pending, Throwable failure) {
         }
 
-        default void worldEntered(WorldEpoch epoch) {
-        }
-
-        default void worldLeaving(WorldEpoch epoch) {
-        }
     }
 
     public record DeviceEpoch(long generation) {
@@ -71,9 +66,6 @@ public final class RtLifecycleCoordinator {
     }
 
     public record ResourcePackEpoch(long generation) {
-    }
-
-    public record WorldEpoch(long generation, long sceneId) {
     }
 
     private record ResourcePackCompletion(long generation, Throwable failure) {
@@ -94,9 +86,6 @@ public final class RtLifecycleCoordinator {
     private ResourcePackEpoch resourcePackEpoch;
     private ResourcePackEpoch pendingResourcePackEpoch;
     private long nextResourcePackGeneration;
-    private Object worldIdentity;
-    private WorldEpoch worldEpoch;
-    private long nextWorldGeneration;
 
     public RtLifecycleCoordinator(Listener listener) {
         this.listener = Objects.requireNonNull(listener, "listener");
@@ -247,32 +236,11 @@ public final class RtLifecycleCoordinator {
         return pending;
     }
 
-    /** Reconcile the current level identity. A null identity leaves the active world. */
-    public synchronized void observeWorld(Object identity, long sceneId) {
-        requireStarted();
-        if (identity == worldIdentity) {
-            return;
-        }
-        if (worldEpoch != null) {
-            listener.worldLeaving(worldEpoch);
-        }
-        worldIdentity = identity;
-        worldEpoch = identity == null ? null : new WorldEpoch(++nextWorldGeneration, sceneId);
-        if (worldEpoch != null) {
-            listener.worldEntered(worldEpoch);
-        }
-    }
-
     /** Close child epochs before the process runtime is destroyed. */
     public synchronized void stopProcess() {
         if (!processStarted) {
             return;
         }
-        if (worldEpoch != null) {
-            listener.worldLeaving(worldEpoch);
-        }
-        worldIdentity = null;
-        worldEpoch = null;
         closeRenderSession(renderSessionEpoch);
         pendingResourcePackEpoch = null;
         resourcePackCompletions.clear();
@@ -311,10 +279,6 @@ public final class RtLifecycleCoordinator {
 
     public synchronized ResourcePackEpoch pendingResourcePackEpoch() {
         return pendingResourcePackEpoch;
-    }
-
-    public synchronized WorldEpoch worldEpoch() {
-        return worldEpoch;
     }
 
     private void requireStarted() {

@@ -41,6 +41,11 @@ final class RtFramePresenter {
         frameGeneration.invalidate();
     }
 
+    void resetSceneHistory() {
+        renderedFrame = null;
+        frameGeneration.resetHistory();
+    }
+
     void publish(RenderedFrame frame) {
         renderedFrame = frame;
         frameGeneration.publish(frame);

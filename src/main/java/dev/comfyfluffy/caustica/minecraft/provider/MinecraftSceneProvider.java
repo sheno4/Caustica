@@ -5,9 +5,11 @@ import dev.comfyfluffy.caustica.api.provider.SceneFrameContext;
 import dev.comfyfluffy.caustica.api.provider.SceneGeometrySink;
 import dev.comfyfluffy.caustica.api.provider.SceneGeometryUpdateContext;
 import dev.comfyfluffy.caustica.api.provider.SceneProvider;
+import dev.comfyfluffy.caustica.api.provider.SceneScope;
 import dev.comfyfluffy.caustica.api.provider.MaterialSnapshot;
 import dev.comfyfluffy.caustica.api.provider.TextureSink;
 import dev.comfyfluffy.caustica.minecraft.entity.RtEntities;
+import dev.comfyfluffy.caustica.minecraft.api.MinecraftSceneReset;
 import dev.comfyfluffy.caustica.minecraft.entity.RtEntityTextures;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialSnapshot;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialState;
@@ -22,6 +24,7 @@ public final class MinecraftSceneProvider implements SceneProvider {
     private static final Consumer<SceneGeometrySink> TERRAIN_GEOMETRY = RtTerrain::submitGeometry;
     private static final Consumer<SceneFrameContext> ENTITY_GEOMETRY = RtEntities.INSTANCE::submitGeometry;
     private final MinecraftMaterialState materialState;
+    private MinecraftSceneReset.Registration sceneReset = () -> { };
 
     public MinecraftSceneProvider() {
         this(new MinecraftMaterialState());
@@ -43,9 +46,12 @@ public final class MinecraftSceneProvider implements SceneProvider {
     }
 
     @Override
-    public void onWorldChanged() {
-        RtEntities.INSTANCE.onWorldChanged();
-        RtTerrain.requestFullClear();
+    public void onSessionStart(SceneScope scope) {
+        sceneReset.close();
+        sceneReset = MinecraftSceneReset.register(scope, () -> {
+            RtEntities.INSTANCE.resetWorldState();
+            RtTerrain.requestFullClear();
+        });
     }
 
     @Override
@@ -56,6 +62,8 @@ public final class MinecraftSceneProvider implements SceneProvider {
 
     @Override
     public void stop() {
+        sceneReset.close();
+        sceneReset = () -> { };
         stopSources(RtEntities.INSTANCE::onSourceStopped, RtWorkerPool.INSTANCE::shutdown);
     }
 

@@ -38,6 +38,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 public final class ProviderManager {
@@ -59,6 +60,8 @@ public final class ProviderManager {
     private Runnable stopRetainedLightWork = () -> { };
     private final Map<GeometryGroupKey, Long> geometryRevisions = new HashMap<>();
     private final Map<ResourceId, QueuedSceneScope> sceneScopes = new HashMap<>();
+    private final AtomicBoolean sceneResetRequested = new AtomicBoolean();
+    private volatile long sceneGeneration;
     private ProviderTextureRegistry textureRegistry;
 
     ProviderManager(Map<ResourceId, SceneProvider> scenes, Map<ResourceId, LightProvider> lights,
@@ -93,7 +96,7 @@ public final class ProviderManager {
         retainedLights = RetainedLightSnapshot.empty(++retainedLightGeneration);
         for (Map.Entry<ResourceId, SceneProvider> entry : scenes().entrySet()) {
             ProviderKey key = new ProviderKey("scene", entry.getKey());
-            QueuedSceneScope scope = new QueuedSceneScope();
+            QueuedSceneScope scope = new QueuedSceneScope(() -> sceneResetRequested.set(true));
             sceneScopes.put(entry.getKey(), scope);
             try {
                 entry.getValue().onSessionStart(scope);
@@ -259,22 +262,20 @@ public final class ProviderManager {
     void updateScenes(GpuContext ctx, SceneOrigin origin, GeometrySubmitter submitter) {
         submitGeometry(ctx, origin, (provider, sink) -> provider.update(new SceneGeometryUpdateContext(sink,
                 origin.x(), origin.y(), origin.z())), GeometryUpdates.BuildPolicy.STATIC,
-                true,
-                (updates, acknowledgment, failureHandler) -> submitter.submit(updates, failureHandler));
+                true, submitter);
     }
 
     void submitGeometry(GpuContext ctx, SceneOrigin origin, GeometrySubmitter submitter) {
         submitGeometry(ctx, origin, (provider, sink) -> provider.submitGeometry(new SceneFrameContext(sink,
                 origin.x(), origin.y(), origin.z(), 0L, SceneCamera.IDENTITY)),
-                GeometryUpdates.BuildPolicy.DYNAMIC,
-                false,
-                (updates, acknowledgment, failureHandler) -> submitter.submit(updates, failureHandler));
+                GeometryUpdates.BuildPolicy.DYNAMIC, false, submitter);
     }
 
     private void submitGeometry(GpuContext ctx, SceneOrigin origin, GeometryCollector collector,
                                 GeometryUpdates.BuildPolicy buildPolicy,
                                 boolean drainScopes,
-                                GeometrySubmission submitter) {
+                                GeometrySubmitter submitter) {
+        long submissionGeneration = sceneGeneration;
         for (Map.Entry<ResourceId, SceneProvider> entry : scenes().entrySet()) {
             ProviderKey key = new ProviderKey("scene", entry.getKey());
             if (failed.contains(key) || stoppedThisSession.contains(key)) {
@@ -317,6 +318,7 @@ public final class ProviderManager {
                     continue;
                 }
                 submitter.submit(updates, acknowledgement -> {
+                    if (submissionGeneration != sceneGeneration) return;
                     Runnable onPublished = publishedGroups.remove(new SubmittedGeometryGroupKey(
                             acknowledgement.key(), acknowledgement.revision()));
                     if (onPublished == null) {
@@ -327,7 +329,9 @@ public final class ProviderManager {
                     } catch (Throwable t) {
                         failSceneGeometry(ctx, entry, key, t);
                     }
-                }, failure -> failSceneGeometry(ctx, entry, key, failure));
+                }, failure -> {
+                    if (submissionGeneration == sceneGeneration) failSceneGeometry(ctx, entry, key, failure);
+                });
             } catch (Throwable t) {
                 failSceneGeometry(ctx, entry, key, t);
             }
@@ -389,10 +393,17 @@ public final class ProviderManager {
         }
     }
 
-    public void onWorldChanged() {
+    /** Apply one coalesced provider-requested reset on the engine update/render thread. */
+    public boolean consumeSceneResetRequest() {
+        if (!sceneResetRequested.getAndSet(false)) return false;
+        sceneGeneration = Math.incrementExact(sceneGeneration);
         invalidateSceneScopes();
         clearAllSceneGeometry();
-        invokeLifecycle(ProviderLifecycle::onWorldChanged);
+        frameLights = List.of();
+        retainedLightGroups.clear();
+        retainedLightProviderGenerations.clear();
+        retainedLights = RetainedLightSnapshot.empty(++retainedLightGeneration);
+        return true;
     }
 
     public void onResourcePackClosing() {
@@ -524,6 +535,8 @@ public final class ProviderManager {
     private void closeSceneScopes() {
         sceneScopes.values().forEach(QueuedSceneScope::close);
         sceneScopes.clear();
+        sceneResetRequested.set(false);
+        sceneGeneration = Math.incrementExact(sceneGeneration);
     }
 
     private Map<ResourceId, SceneProvider> scenes() {
@@ -627,11 +640,6 @@ public final class ProviderManager {
 
     @FunctionalInterface
     interface GeometrySubmitter {
-        void submit(List<GeometryUpdates.Group> updates, Consumer<Throwable> failureHandler);
-    }
-
-    @FunctionalInterface
-    private interface GeometrySubmission {
         void submit(List<GeometryUpdates.Group> updates,
                     Consumer<GeometryUpdates.Publication> acknowledgment,
                     Consumer<Throwable> failureHandler);
@@ -655,8 +663,18 @@ public final class ProviderManager {
 
     private static final class QueuedSceneScope implements SceneScope {
         private final ArrayDeque<QueuedGeometryGroup> queued = new ArrayDeque<>();
+        private final Runnable requestReset;
         private boolean open = true;
         private long generation;
+
+        private QueuedSceneScope(Runnable requestReset) {
+            this.requestReset = java.util.Objects.requireNonNull(requestReset, "requestReset");
+        }
+
+        @Override
+        public synchronized void requestSceneReset() {
+            if (open) requestReset.run();
+        }
 
         @Override
         public synchronized void submit(SceneGeometryKey groupKey, List<SceneGeometrySink.Operation> operations,

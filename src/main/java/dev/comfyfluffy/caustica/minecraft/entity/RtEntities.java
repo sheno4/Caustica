@@ -1069,7 +1069,7 @@ public final class RtEntities {
     }
 
     /** Clears this source's published snapshot before entity IDs can be reused by a new world. */
-    public void onWorldChanged() {
+    public void resetWorldState() {
         entityStates.values().forEach(EntityState::invalidateMeshVisibility);
         entityStates.clear();
         beCache.clear();

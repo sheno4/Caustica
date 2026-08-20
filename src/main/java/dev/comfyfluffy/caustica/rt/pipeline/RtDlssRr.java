@@ -76,6 +76,12 @@ public final class RtDlssRr {
         return initialized && !failed && !isNull(feature);
     }
 
+    /** Discard temporal reconstruction state before the next evaluation. */
+    public void resetHistory() {
+        resetHistory = true;
+        lastFrameNanos = 0L;
+    }
+
     /**
      * Record a DLSS-RR evaluation: denoise + upscale the noisy path-traced color (at render res) using
      * the guide buffers, writing the display-res result into {@code out}. {@code jitterX/jitterY} is the

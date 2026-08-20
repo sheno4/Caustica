@@ -42,10 +42,6 @@ public interface CausticaRenderPass {
     default void onResourcePackApplied() {
     }
 
-    /** Called whenever this render session enters or leaves a world epoch. */
-    default void onWorldChanged() {
-    }
-
     /** Called once, when this pass's feature is deselected or the engine shuts down. */
     default void destroy() {
     }

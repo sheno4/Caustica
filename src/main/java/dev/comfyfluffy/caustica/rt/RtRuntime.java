@@ -82,19 +82,6 @@ public final class RtRuntime {
                     }
                 }
 
-                @Override
-                public void worldEntered(RtLifecycleCoordinator.WorldEpoch epoch) {
-                    if (session != null) {
-                        session.onWorldChanged();
-                    }
-                }
-
-                @Override
-                public void worldLeaving(RtLifecycleCoordinator.WorldEpoch epoch) {
-                    if (session != null) {
-                        session.onWorldChanged();
-                    }
-                }
             });
 
     private RtRuntime() {
@@ -137,18 +124,6 @@ public final class RtRuntime {
     public void trackResourcePackReload(long generation,
                                         java.util.concurrent.CompletableFuture<?> future) {
         lifecycle.trackResourcePackReload(generation, future);
-    }
-
-    /** Reconcile the current level identity at the client-tick boundary. */
-    public void observeWorld(Object levelIdentity, long sceneId) {
-        lifecycle.observeWorld(levelIdentity, sceneId);
-    }
-
-    /** Invalidate render-session world state without changing the host world epoch identity. */
-    public void invalidateWorld() {
-        if (session != null) {
-            session.onWorldChanged();
-        }
     }
 
     /** Whether a completed resource pack can be replayed into newly created session instances. */
@@ -457,9 +432,6 @@ public final class RtRuntime {
             if (hasAppliedResourcePack()) {
                 renderer.onResourcePackApplied();
             }
-            if (lifecycle.worldEpoch() != null) {
-                session.onWorldChanged();
-            }
             state = State.STARTING;
             CausticaMod.LOGGER.info("RT runtime starting; source presentation remains active");
         } catch (Throwable failure) {
@@ -573,9 +545,10 @@ public final class RtRuntime {
             this.presenter = presenter;
         }
 
-        private void onWorldChanged() {
-            providers.onWorldChanged();
-            renderer.onWorldChanged();
+        private void consumeSceneResetRequest() {
+            if (providers.consumeSceneResetRequest()) {
+                renderer.resetSceneHistory();
+            }
         }
 
         private boolean matches(CausticaRegistry.Selection selection) {
@@ -589,6 +562,7 @@ public final class RtRuntime {
 
         boolean tick(SceneResources sceneResources, long sceneId, int displayWidth, int displayHeight,
                      boolean starting) {
+            consumeSceneResetRequest();
             if (context == null) {
                 context = GpuContext.get();
                 if (context == null) {

@@ -9,6 +9,7 @@ import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.api.ColorSpaces;
 import dev.comfyfluffy.caustica.rt.RtRuntime;
 import dev.comfyfluffy.caustica.minecraft.damage.MinecraftDamageModifierPass;
+import dev.comfyfluffy.caustica.minecraft.api.MinecraftSceneReset;
 import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
 import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftVulkanBackend;
 import dev.comfyfluffy.caustica.minecraft.provider.MinecraftMaterialSource;
@@ -42,7 +43,6 @@ public final class MinecraftFrameAdapter {
         MinecraftVulkanBackend.installCurrent();
         ClientLevel level = client.level;
         long currentSceneId = identify(level);
-        RtRuntime.INSTANCE.observeWorld(level, currentSceneId);
         if (!(client.gui.overlay() instanceof LoadingOverlay)) {
             RtRuntime.INSTANCE.observeResourcePackAvailable();
         }
@@ -109,6 +109,9 @@ public final class MinecraftFrameAdapter {
         if (level != identifiedLevel) {
             identifiedLevel = level;
             sceneId = level == null ? 0L : ++nextSceneId;
+            // tickRuntime calls this before forwarding the new identity to the renderer, so every
+            // Minecraft-aware provider drops old-world CPU state before any scene update can run.
+            MinecraftSceneReset.request();
         }
         return sceneId;
     }
