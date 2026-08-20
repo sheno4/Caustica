@@ -9,6 +9,7 @@ import dev.comfyfluffy.caustica.api.Feature;
 import dev.comfyfluffy.caustica.api.ShaderSource;
 import dev.comfyfluffy.caustica.api.Slot;
 import dev.comfyfluffy.caustica.api.Slots;
+import dev.comfyfluffy.caustica.builtin.BuiltinExtension;
 import dev.comfyfluffy.caustica.slang.SlangCompileResult;
 import dev.comfyfluffy.caustica.slang.SlangRuntime;
 import dev.comfyfluffy.caustica.slang.SlangSession;
@@ -128,9 +129,11 @@ public final class WorldShaderCompiler implements AutoCloseable {
                                               Path cleanupDirectory) throws IOException {
         Objects.requireNonNull(cacheDirectory, "cacheDirectory");
         Objects.requireNonNull(selection, "selection");
-        if (selection.surfaces().size() < 2) {
+        if (selection.surfaces().isEmpty()
+                || !selection.surfaces().getFirst().id().equals(BuiltinExtension.ERROR_SURFACE)
+                || !selection.surfaces().getFirst().coverageId().equals(BuiltinExtension.ERROR_COVERAGE)) {
             throw new IllegalArgumentException(
-                    "world shader compilation requires reference and error surface implementations");
+                    "world shader compilation requires the reserved error surface and coverage at index 0");
         }
         Path worldDirectory = cacheDirectory.resolve("world");
         Path apiDirectory = cacheDirectory.resolve("api");
@@ -194,16 +197,16 @@ public final class WorldShaderCompiler implements AutoCloseable {
 
     /**
      * One single-implementation composition per extension surface, used to compile that implementation
-     * on its own. The renderer-owned reference and error surfaces occupy indices 0 and 1 and compile in
-     * every real stage, so probing them would only cost two compiles.
+     * on its own. The renderer-owned error surface occupies index 0 and compiles in every real stage, so
+     * probing it would only duplicate that compile.
      */
     private static void writeSurfaceProbes(CausticaRegistry.Selection selection, Path directory)
             throws IOException {
         List<Feature.SurfaceImplementation> surfaces = selection.surfaces();
-        Feature.SurfaceImplementation referenceSurface = surfaces.get(0);
+        Feature.SurfaceImplementation fallbackSurface = surfaces.get(0);
         String skyModule = selection.binding(Slots.SKY).binding().module();
         String skyType = selection.binding(Slots.SKY).binding().type();
-        for (int index = 2; index < surfaces.size(); index++) {
+        for (int index = 1; index < surfaces.size(); index++) {
             Feature.SurfaceImplementation surface = surfaces.get(index);
             String source = "module " + surfaceProbeModule(index) + ";\n\n"
                     + "import caustica_api;\nimport caustica_types;\nimport caustica_surface;\n"
@@ -211,9 +214,9 @@ public final class WorldShaderCompiler implements AutoCloseable {
                     + "import caustica_coverage;\n"
                     + "import " + skyModule + ";\n"
                     + (skyModule.equals(surface.module()) ? "" : "import " + surface.module() + ";\n")
-                    + (skyModule.equals(referenceSurface.coverageModule())
-                    || surface.module().equals(referenceSurface.coverageModule()) ? ""
-                    : "import " + referenceSurface.coverageModule() + ";\n")
+                    + (skyModule.equals(fallbackSurface.coverageModule())
+                    || surface.module().equals(fallbackSurface.coverageModule()) ? ""
+                    : "import " + fallbackSurface.coverageModule() + ";\n")
                     + "\npublic struct ProbeSurfaces : ISurfaceDispatch {\n"
                     + "    public void evaluateSurface(uint implementation, SurfaceInput input,\n"
                     + "            inout MaterialInput material) {\n"
@@ -229,7 +232,7 @@ public final class WorldShaderCompiler implements AutoCloseable {
                     + "        " + surface.type() + " s; return s.evaluateMediumLighting(input);\n"
                     + "    }\n};\n\n"
                     + noOpModifierDispatch("ProbeSurfaceModifiers")
-                    + referenceCoverageDispatch(referenceSurface.coverageType())
+                    + fallbackCoverageDispatch(fallbackSurface.coverageType())
                     + "public struct ProbeComposition : IComposition {\n"
                     + "    public typealias Sky = " + skyType + ";\n"
                     + "    public typealias Surfaces = ProbeSurfaces;\n"
@@ -249,7 +252,7 @@ public final class WorldShaderCompiler implements AutoCloseable {
                                                  CausticaRegistry.Selection selection) {
         List<Feature.SurfaceImplementation> surfaces = selection.surfaces();
         Set<Integer> rejected = new LinkedHashSet<>();
-        for (int index = 2; index < surfaces.size(); index++) {
+        for (int index = 1; index < surfaces.size(); index++) {
             Feature.SurfaceImplementation surface = surfaces.get(index);
             try {
                 // Specializing a real stage, not just compiling the module: only this reaches the rules
@@ -274,21 +277,21 @@ public final class WorldShaderCompiler implements AutoCloseable {
     private static void writeCoverageProbes(CausticaRegistry.Selection selection, Path directory)
             throws IOException {
         List<Feature.SurfaceImplementation> surfaces = selection.surfaces();
-        Feature.SurfaceImplementation referenceSurface = surfaces.get(0);
+        Feature.SurfaceImplementation fallbackSurface = surfaces.get(0);
         String skyModule = selection.binding(Slots.SKY).binding().module();
         String skyType = selection.binding(Slots.SKY).binding().type();
-        for (int index = 2; index < surfaces.size(); index++) {
+        for (int index = 1; index < surfaces.size(); index++) {
             Feature.SurfaceImplementation surface = surfaces.get(index);
             String source = "module " + coverageProbeModule(index) + ";\n\n"
                     + "import caustica_api;\nimport caustica_types;\nimport caustica_surface;\n"
                     + "import caustica_surface_modifier;\nimport caustica_coverage;\n"
                     + "import " + skyModule + ";\n"
-                    + (skyModule.equals(referenceSurface.module()) ? ""
-                    : "import " + referenceSurface.module() + ";\n")
+                    + (skyModule.equals(fallbackSurface.module()) ? ""
+                    : "import " + fallbackSurface.module() + ";\n")
                     + (skyModule.equals(surface.coverageModule())
-                    || referenceSurface.module().equals(surface.coverageModule()) ? ""
+                    || fallbackSurface.module().equals(surface.coverageModule()) ? ""
                     : "import " + surface.coverageModule() + ";\n")
-                    + referenceSurfaceDispatch(referenceSurface.type())
+                    + fallbackSurfaceDispatch(fallbackSurface.type())
                     + noOpModifierDispatch("ProbeSurfaceModifiers")
                     + "public struct ProbeCoverages : ICoverageDispatch {\n"
                     + "    public float4 evaluateCoverage(uint implementation, CoverageInput input) {\n"
@@ -308,7 +311,7 @@ public final class WorldShaderCompiler implements AutoCloseable {
                                                    CausticaRegistry.Selection selection) {
         List<Feature.SurfaceImplementation> surfaces = selection.surfaces();
         Set<Integer> rejected = new LinkedHashSet<>();
-        for (int index = 2; index < surfaces.size(); index++) {
+        for (int index = 1; index < surfaces.size(); index++) {
             Feature.SurfaceImplementation surface = surfaces.get(index);
             try {
                 session.compileSpecialized(RADIANCE_ANY_HIT_MODULE, ENTRY_POINT,
@@ -331,7 +334,7 @@ public final class WorldShaderCompiler implements AutoCloseable {
     private static void writeSurfaceModifierProbes(CausticaRegistry.Selection selection, Path directory)
             throws IOException {
         List<Feature.SurfaceModifierImplementation> modifiers = selection.surfaceModifiers();
-        Feature.SurfaceImplementation referenceSurface = selection.surfaces().get(0);
+        Feature.SurfaceImplementation fallbackSurface = selection.surfaces().get(0);
         String skyModule = selection.binding(Slots.SKY).binding().module();
         String skyType = selection.binding(Slots.SKY).binding().type();
         for (int index = 0; index < modifiers.size(); index++) {
@@ -341,17 +344,17 @@ public final class WorldShaderCompiler implements AutoCloseable {
                     + "import caustica_surface_modifier;\n"
                     + "import caustica_coverage;\n"
                     + "import " + skyModule + ";\n"
-                    + (skyModule.equals(referenceSurface.module()) ? ""
-                    : "import " + referenceSurface.module() + ";\n")
+                    + (skyModule.equals(fallbackSurface.module()) ? ""
+                    : "import " + fallbackSurface.module() + ";\n")
                     + (skyModule.equals(modifier.module())
-                    || referenceSurface.module().equals(modifier.module()) ? ""
+                    || fallbackSurface.module().equals(modifier.module()) ? ""
                     : "import " + modifier.module() + ";\n")
-                    + (skyModule.equals(referenceSurface.coverageModule())
-                    || referenceSurface.module().equals(referenceSurface.coverageModule())
-                    || modifier.module().equals(referenceSurface.coverageModule()) ? ""
-                    : "import " + referenceSurface.coverageModule() + ";\n")
-                    + referenceSurfaceDispatch(referenceSurface.type())
-                    + referenceCoverageDispatch(referenceSurface.coverageType())
+                    + (skyModule.equals(fallbackSurface.coverageModule())
+                    || fallbackSurface.module().equals(fallbackSurface.coverageModule())
+                    || modifier.module().equals(fallbackSurface.coverageModule()) ? ""
+                    : "import " + fallbackSurface.coverageModule() + ";\n")
+                    + fallbackSurfaceDispatch(fallbackSurface.type())
+                    + fallbackCoverageDispatch(fallbackSurface.coverageType())
                     + "public struct ProbeSurfaceModifiers : ISurfaceModifierDispatch {\n"
                     + "    public void applySurfaceModifiers(SurfaceModifierInput input,\n"
                     + "            inout MaterialInput material) {\n"
@@ -395,7 +398,7 @@ public final class WorldShaderCompiler implements AutoCloseable {
                 + "            inout MaterialInput material) {}\n};\n\n";
     }
 
-    private static String referenceSurfaceDispatch(String type) {
+    private static String fallbackSurfaceDispatch(String type) {
         return "public struct ProbeSurfaces : ISurfaceDispatch {\n"
                 + "    public void evaluateSurface(uint implementation, SurfaceInput input,\n"
                 + "            inout MaterialInput material) { " + type
@@ -409,7 +412,7 @@ public final class WorldShaderCompiler implements AutoCloseable {
                 + type + " s; return s.evaluateMediumLighting(input); }\n};\n\n";
     }
 
-    private static String referenceCoverageDispatch(String type) {
+    private static String fallbackCoverageDispatch(String type) {
         return "public struct ProbeCoverages : ICoverageDispatch {\n"
                 + "    public float4 evaluateCoverage(uint implementation, CoverageInput input) { "
                 + type + " c; return c.evaluateCoverage(input); }\n};\n\n";
@@ -665,8 +668,8 @@ public final class WorldShaderCompiler implements AutoCloseable {
 
     /**
      * Generates the composition root: slot aliases plus separate shading and coverage switches over the
-     * registered material implementation indices. Index 0 explicitly preserves the built-ins, while a
-     * rejected or out-of-range index resolves through both visible error implementations.
+     * registered material implementation indices. The error implementation at index 0 is also the
+     * fallback for every rejected or out-of-range index.
      */
     private static String compositionRoot(CausticaRegistry.Selection selection,
                                           Set<Integer> rejectedSurfaces,
@@ -745,14 +748,14 @@ public final class WorldShaderCompiler implements AutoCloseable {
                                            Set<Integer> rejectedSurfaces, UnaryOperator<String> body) {
         List<Feature.SurfaceImplementation> surfaces = selection.surfaces();
         source.append("        case 0u: ").append(body.apply(surfaces.get(0).type())).append('\n');
-        for (int index = 2; index < surfaces.size(); index++) {
+        for (int index = 1; index < surfaces.size(); index++) {
             if (rejectedSurfaces.contains(index)) {
                 continue;
             }
             source.append("        case ").append(index).append("u: ")
                     .append(body.apply(surfaces.get(index).type())).append('\n');
         }
-        source.append("        default: ").append(body.apply(surfaces.get(1).type())).append('\n');
+        source.append("        default: ").append(body.apply(surfaces.get(0).type())).append('\n');
     }
 
     private static void appendCoverageCases(StringBuilder source, CausticaRegistry.Selection selection,
@@ -760,7 +763,7 @@ public final class WorldShaderCompiler implements AutoCloseable {
         List<Feature.SurfaceImplementation> surfaces = selection.surfaces();
         source.append("        case 0u: { ").append(surfaces.get(0).coverageType())
                 .append(" c; return c.evaluateCoverage(input); }\n");
-        for (int index = 2; index < surfaces.size(); index++) {
+        for (int index = 1; index < surfaces.size(); index++) {
             if (rejectedCoverages.contains(index)) {
                 continue;
             }
@@ -768,7 +771,7 @@ public final class WorldShaderCompiler implements AutoCloseable {
                     .append(surfaces.get(index).coverageType())
                     .append(" c; return c.evaluateCoverage(input); }\n");
         }
-        source.append("        default: { ").append(surfaces.get(1).coverageType())
+        source.append("        default: { ").append(surfaces.get(0).coverageType())
                 .append(" c; return c.evaluateCoverage(input); }\n");
     }
 

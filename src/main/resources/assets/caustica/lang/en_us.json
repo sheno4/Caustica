@@ -1,7 +1,7 @@
 {
 	"caustica.options.open": "Caustica Options...",
-	"feature.caustica.builtin": "Built-in Appearance",
-	"feature.caustica.builtin.description": "The reference surface and post effects Caustica ships with.",
+	"feature.caustica.builtin": "Built-in Effects",
+	"feature.caustica.builtin.description": "Core sky and post-processing effects Caustica ships with.",
 
 	"caustica.screen.title": "CAUSTICA",
 	"caustica.screen.done": "Done",

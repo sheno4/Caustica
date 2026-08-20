@@ -6,9 +6,10 @@ import java.util.Objects;
 
 /**
  * A named OpenPBR material that geometry sources reference through a stable handle. Colors are
- * scene-linear ACEScg. Roughness is OpenPBR perceptual roughness, not GGX alpha. A null surface selects
- * the renderer's built-in implementation. Topology is structural and independent of transmission weight.
- * Provider data is opaque to the engine and interpreted only by the selected surface implementation.
+ * scene-linear ACEScg. Roughness is OpenPBR perceptual roughness, not GGX alpha. The surface identifier
+ * must name an implementation registered for the active resource epoch; its paired coverage implementation
+ * evaluates alpha. Topology is structural and independent of transmission weight. Provider data is opaque
+ * to the engine and interpreted only by the selected surface implementation.
  */
 public record MaterialDefinition(MaterialHandle handle, float baseColorR, float baseColorG, float baseColorB,
                                  float specularRoughness, float baseMetalness, float specularIor,
@@ -52,6 +53,7 @@ public record MaterialDefinition(MaterialHandle handle, float baseColorR, float 
     public MaterialDefinition {
         Objects.requireNonNull(handle, "handle");
         Objects.requireNonNull(topology, "topology");
+        Objects.requireNonNull(surface, "surface");
         Objects.requireNonNull(providerData, "providerData");
         unit("baseColorR", baseColorR);
         unit("baseColorG", baseColorG);

@@ -26,7 +26,7 @@ public final class CausticaRegistry {
     /**
      * Registration order IS the ABI: a surface implementation's position here is the index materials pack
      * into their binding and the case the generated dispatch switch resolves. The renderer registers its
-     * reference surface at index 0 and its visible error surface at index 1 before host implementations.
+     * visible error surface at index 0 before host implementations.
      */
     private final List<Feature.SurfaceImplementation> surfaces = new ArrayList<>();
     private final List<Feature.SurfaceModifierImplementation> surfaceModifiers = new ArrayList<>();

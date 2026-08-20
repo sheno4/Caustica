@@ -1171,7 +1171,7 @@ final class ProviderManagerTest {
 
     private static MaterialDefinition definition(String path) {
         return new MaterialDefinition(new MaterialHandle(id(path)), 1.0f, 1.0f, 1.0f,
-                1.0f, 0.0f, 1.5f, 0.0f, MaterialTopology.SURFACE, null);
+                1.0f, 0.0f, 1.5f, 0.0f, MaterialTopology.SURFACE, id("surface"));
     }
 
     private static SceneMesh triangle(String material) {

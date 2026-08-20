@@ -32,7 +32,8 @@ final class FeatureBuilderRuntimeActivationTest {
 
         assertDoesNotThrow(() -> registry.feature(id("composition"))
                 .shaderSource(SHADERS)
-                .surface(id("surface"), "test_surface", "TestSurface")
+                .surface(id("surface"), "test_surface", "TestSurface",
+                        id("coverage"), "test_coverage", "TestCoverage")
                 .surfaceModifier(id("modifier"), "test_modifier", "TestModifier")
                 .option(Option.bool("enabled", true))
                 .register());

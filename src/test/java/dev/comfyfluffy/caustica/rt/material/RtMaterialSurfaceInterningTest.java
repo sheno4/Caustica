@@ -36,7 +36,8 @@ final class RtMaterialSurfaceInterningTest {
         return new MaterialDefinition(new MaterialHandle(ResourceId.of("test", path)),
                 1, 1, 1, 0.5f, 0, 1.5f, 0,
                 1, 1, 1, 0, 0.8f, 0.8f, 0.8f, 0,
-                1, 1, 1, 0, MaterialTopology.SURFACE, null, 0.5f, providerData);
+                1, 1, 1, 0, MaterialTopology.SURFACE,
+                ResourceId.of("test", "surface"), 0.5f, providerData);
     }
 
     private static MaterialProviderData providerData(int firstWord) {

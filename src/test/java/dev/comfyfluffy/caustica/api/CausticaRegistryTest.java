@@ -25,14 +25,10 @@ final class CausticaRegistryTest {
         CausticaRegistry.Selection selection = registry.selection();
 
         assertEquals(BuiltinExtension.ID, selection.binding(Slots.SKY).feature().id());
-        // Surfaces are a set, not a slot. The renderer reserves reference index 0 and error index 1.
-        assertEquals(2, selection.surfaces().size());
-        assertEquals("BuiltinSurface", selection.surfaces().get(0).type());
-        assertEquals("ErrorSurface", selection.surfaces().get(1).type());
-        assertEquals("BuiltinCoverage", selection.surfaces().get(0).coverageType());
-        assertEquals("ErrorCoverage", selection.surfaces().get(1).coverageType());
-        assertEquals(0, registry.surfaceIndex(BuiltinExtension.BUILTIN_SURFACE));
-        assertEquals(1, registry.surfaceIndex(BuiltinExtension.ERROR_SURFACE));
+        assertEquals(1, selection.surfaces().size());
+        assertEquals("ErrorSurface", selection.surfaces().get(0).type());
+        assertEquals("ErrorCoverage", selection.surfaces().get(0).coverageType());
+        assertEquals(0, registry.surfaceIndex(BuiltinExtension.ERROR_SURFACE));
         assertEquals(-1, registry.surfaceIndex(ResourceId.of("nope", "nope")));
         assertTrue(registry.renderPassIds().contains(ResourceId.of("caustica", "bloom")));
     }
@@ -149,23 +145,18 @@ final class CausticaRegistryTest {
     }
 
     @Test
-    void surfacesDefaultToBuiltinCoverageAndMayNameANarrowImplementation() {
+    void surfacesRequireAnExplicitNarrowCoverageImplementation() {
         CausticaRegistry registry = builtins();
-        ResourceId defaultSurface = ResourceId.of("test", "default_coverage");
         ResourceId customSurface = ResourceId.of("test", "custom_coverage");
         ResourceId customCoverage = ResourceId.of("test", "coverage_model");
         registry.feature(ResourceId.of("test", "coverage_owner"))
                 .shaderSource(ShaderSource.classpath("/test/shaders"))
-                .surface(defaultSurface, "default_surface", "DefaultSurface")
                 .surface(customSurface, "custom_surface", "CustomSurface",
                         customCoverage, "custom_coverage", "CustomCoverage")
                 .register();
 
         List<Feature.SurfaceImplementation> surfaces = registry.selection().surfaces();
-        Feature.SurfaceImplementation defaulted = surfaces.get(2);
-        Feature.SurfaceImplementation custom = surfaces.get(3);
-        assertEquals(FeatureBuilder.BUILTIN_COVERAGE, defaulted.coverageId());
-        assertEquals(FeatureBuilder.BUILTIN_COVERAGE_TYPE, defaulted.coverageType());
+        Feature.SurfaceImplementation custom = surfaces.get(1);
         assertEquals(customCoverage, custom.coverageId());
         assertEquals("CustomCoverage", custom.coverageType());
     }
@@ -175,13 +166,15 @@ final class CausticaRegistryTest {
         CausticaRegistry registry = builtins();
         registry.feature(ResourceId.of("test", "first_surface"))
                 .shaderSource(ShaderSource.classpath("/test/shaders"))
-                .surface(ResourceId.of("test", "first"), "first_module", "SharedSurface")
+                .surface(ResourceId.of("test", "first"), "first_module", "SharedSurface",
+                        ResourceId.of("test", "first_coverage"), "first_coverage", "FirstCoverage")
                 .register();
 
         IllegalStateException failure = assertThrows(IllegalStateException.class, () -> registry.feature(
                         ResourceId.of("test", "second_surface"))
                 .shaderSource(ShaderSource.classpath("/test/shaders"))
-                .surface(ResourceId.of("test", "second"), "second_module", "SharedSurface")
+                .surface(ResourceId.of("test", "second"), "second_module", "SharedSurface",
+                        ResourceId.of("test", "second_coverage"), "second_coverage", "SecondCoverage")
                 .register());
 
         assertTrue(failure.getMessage().contains("globally unique"));

@@ -15,9 +15,6 @@ import java.util.Map;
 import java.util.Objects;
 
 public final class FeatureBuilder {
-    public static final ResourceId BUILTIN_COVERAGE = ResourceId.of("caustica", "coverage");
-    public static final String BUILTIN_COVERAGE_MODULE = "caustica_builtin_coverage";
-    public static final String BUILTIN_COVERAGE_TYPE = "BuiltinCoverage";
     private final CausticaRegistry registry;
     private final ResourceId id;
     private DisplayText title;
@@ -82,17 +79,9 @@ public final class FeatureBuilder {
     }
 
     /**
-     * Register a Slang {@code ISurfaceModel} implementation under {@code id}, paired with the built-in
-     * coverage implementation. Surface implementations do not compete for a slot: every registered one
-     * is compiled into the composition and a material selects the one it wants by this id.
-     */
-    public FeatureBuilder surface(ResourceId id, String module, String type) {
-        return surface(id, module, type, BUILTIN_COVERAGE, BUILTIN_COVERAGE_MODULE, BUILTIN_COVERAGE_TYPE);
-    }
-
-    /**
      * Register shading and coverage implementations selected by the same material implementation index.
-     * Coverage is a separately named, narrow shader type so any-hit never reaches the shading interface.
+     * Both implementations are required: closest-hit evaluates the surface type while any-hit and opacity
+     * micromap classification evaluate the separately named, narrow coverage type.
      */
     public FeatureBuilder surface(ResourceId id, String module, String type,
                                   ResourceId coverageId, String coverageModule, String coverageType) {

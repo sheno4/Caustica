@@ -48,7 +48,7 @@ public final class SceneMesh {
         public NamedMaterial { Objects.requireNonNull(material, "material"); }
         public NamedMaterial(MaterialHandle material) { this(material, null); }
     }
-    /** The renderer's neutral surface, optionally paired with a source texture. */
+    /** Diagnostic error material for geometry that did not select a provider-defined material. */
     public record FallbackMaterial(TextureReference texture) implements MaterialReference { }
 
     /** One material and shading description for one indexed triangle; {@code tint*} is scene-linear ACEScg. */

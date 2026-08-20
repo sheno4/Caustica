@@ -30,6 +30,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 final class WorldShaderCompilerTest {
     private static final ResourceId TEST_SURFACE = ResourceId.of("test", "surface");
     private static final ResourceId TEST_COVERAGE = ResourceId.of("test", "coverage");
+    private static final ResourceId ERROR_COVERAGE = ResourceId.of("caustica", "error_coverage");
 
     @Test
     void packagesWorldSourcesWithoutPrecompiledWorldStages() {
@@ -41,15 +42,32 @@ final class WorldShaderCompilerTest {
     }
 
     @Test
-    void compilerRequiresTheReferenceAndErrorSurfaceImplementations(@TempDir Path cacheDirectory) {
-        CausticaRegistry.Selection valid = dev.comfyfluffy.caustica.TestRegistries.rendererOnly().selection();
-        CausticaRegistry.Selection missingError = new CausticaRegistry.Selection(
-                valid.bindings(), List.of(valid.surfaces().getFirst()), valid.surfaceOwners(),
-                valid.surfaceModifiers(), valid.surfaceModifierOwners());
+    void errorOnlyCompositionCompilesAndOwnsCaseZeroAndDefault(@TempDir Path cacheDirectory)
+            throws Exception {
+        CausticaRegistry registry = dev.comfyfluffy.caustica.TestRegistries.rendererOnly();
+        try (WorldShaderCompiler compiler = WorldShaderCompiler.create(
+                cacheDirectory, registry.selection())) {
+            String root = compiler.composition().rootSource();
+            assertTrue(root.contains("case 0u: { ErrorSurface s;"));
+            assertTrue(root.contains("default: { ErrorSurface s;"));
+            assertTrue(root.contains("case 0u: { ErrorCoverage c;"));
+            assertTrue(root.contains("default: { ErrorCoverage c;"));
+            assertSpirv(compiler.compileClosestHit(), 1024);
+            assertSpirv(compiler.compileRadianceAnyHit(), 1024);
+            assertSpirv(compiler.compileShadowAnyHit(), 1024);
+        }
+    }
+
+    @Test
+    void compilerRejectsACompositionWithoutTheErrorPairAtIndexZero(@TempDir Path cacheDirectory) {
+        CausticaRegistry.Selection valid = dev.comfyfluffy.caustica.TestRegistries.withBuiltins().selection();
+        CausticaRegistry.Selection wrongIndexZero = new CausticaRegistry.Selection(
+                valid.bindings(), valid.surfaces().subList(1, valid.surfaces().size()),
+                valid.surfaceOwners(), valid.surfaceModifiers(), valid.surfaceModifierOwners());
 
         IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
-                () -> WorldShaderCompiler.create(cacheDirectory, missingError));
-        assertTrue(error.getMessage().contains("reference and error surface"));
+                () -> WorldShaderCompiler.create(cacheDirectory, wrongIndexZero));
+        assertTrue(error.getMessage().contains("error surface and coverage at index 0"));
     }
 
     @Test
@@ -159,7 +177,9 @@ final class WorldShaderCompilerTest {
 
         try (WorldShaderCompiler compiler = WorldShaderCompiler.create(cacheDirectory, registry.selection())) {
             String root = compiler.composition().rootSource();
-            assertTrue(root.contains("case 0u: { BuiltinSurface s;"));
+            int implementation = registry.surfaceIndex(TEST_SURFACE);
+            assertTrue(root.contains("case 0u: { ErrorSurface s;"));
+            assertTrue(root.contains("case " + implementation + "u: { TestSurface s;"));
             assertTrue(root.contains("default: { ErrorSurface s;"));
             assertSpirv(compiler.compilePrimary(), 1024);
             assertSpirv(compiler.compileClosestHit(), 1024);
@@ -196,7 +216,7 @@ final class WorldShaderCompilerTest {
             int implementation = registry.surfaceIndex(TEST_SURFACE);
             String root = compiler.composition().rootSource();
             assertTrue(compiler.rejectedCoverages().isEmpty());
-            assertTrue(root.contains("case 0u: { BuiltinCoverage c;"));
+            assertTrue(root.contains("case 0u: { ErrorCoverage c;"));
             assertTrue(root.contains("case " + implementation + "u: { TestCoverage c;"));
             assertTrue(root.contains("default: { ErrorCoverage c;"));
             assertTrue(!root.substring(root.indexOf("public struct CoverageDispatch"))
@@ -276,7 +296,8 @@ final class WorldShaderCompilerTest {
                 .title(DisplayText.literal("Test surface"))
                 .category(FeatureCategory.GENERAL)
                 .shaderSource(ShaderSource.classpath("/caustica-test/shaders"))
-                .surface(TEST_SURFACE, module, type)
+                .surface(TEST_SURFACE, module, type,
+                        ERROR_COVERAGE, "caustica_error_coverage", "ErrorCoverage")
                 .register();
         return registry;
     }

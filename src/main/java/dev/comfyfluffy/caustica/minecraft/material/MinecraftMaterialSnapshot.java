@@ -50,8 +50,7 @@ public interface MinecraftMaterialSnapshot {
         }
         private boolean available(MinecraftResolvedMaterialCatalog.Resolved resolved) {
             if (resolved == null) return false;
-            var surface = resolved.definition().surface();
-            return surface == null || compilation.surfaceAvailable(surface);
+            return compilation.surfaceAvailable(resolved.definition().surface());
         }
     }
 

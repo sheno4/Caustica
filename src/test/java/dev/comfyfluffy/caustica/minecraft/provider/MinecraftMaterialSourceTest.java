@@ -30,6 +30,8 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 final class MinecraftMaterialSourceTest {
     @Test
     void fixedMaterialsSelectMinecraftOwnedSurfaces() {
+        assertEquals(MinecraftProvidersExtension.MATERIAL_SURFACE,
+                MinecraftMaterialSource.cloudDefinition().surface());
         MaterialDefinition water = MinecraftMaterialSource.waterDefinition();
         assertEquals(OpenPbrMaterialDefaults.TRANSMISSIVE_SPECULAR_ROUGHNESS, water.specularRoughness());
         assertEquals(MinecraftMaterialClassifier.WATER_IOR, water.specularIor());

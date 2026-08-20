@@ -37,13 +37,8 @@ public final class RtMaterialRegistry {
     // Canonical transport values compiled into SurfaceMaterial and MaterialBinding.
     public static final int TRANSPORT_SURFACE = 0;
     public static final int TRANSPORT_MEDIUM_BOUNDARY = 3;
-    /**
-     * The surface implementation every material compiles with unless its definition names another.
-     * {@code caustica:builtin} registers its own first, so index 0 is always the reference surface.
-     */
-    public static final int BUILTIN_SURFACE_IMPLEMENTATION = 0;
     /** Visible fallback for unresolved, rejected, or out-of-range surface implementations. */
-    public static final int ERROR_SURFACE_IMPLEMENTATION = 1;
+    public static final int ERROR_SURFACE_IMPLEMENTATION = 0;
 
     // Transmittance — how much light passes where the surface is present. Mirrors BINDING_* in Slang.
     private static final int BINDING_TRANSMISSIVE = MaterialBindingAbi.FLAG_TRANSMISSIVE;
@@ -71,7 +66,7 @@ public final class RtMaterialRegistry {
                         SurfaceResolver surfaces, Set<ResourceId> availableSurfaces) {
         CompiledTables tables = new CompiledTables(1 + definitions.size());
         RtMaterialDesc fallbackDesc = new RtMaterialDesc(TRANSPORT_SURFACE,
-                1.0f, 0.0f, 1.5f, 0.0f, 1.0f, BUILTIN_SURFACE_IMPLEMENTATION);
+                1.0f, 0.0f, 1.5f, 0.0f, 1.0f, ERROR_SURFACE_IMPLEMENTATION);
         int nextRuntimeFallbackId = tables.add(fallbackDesc,
                 surfaceData(fallbackDesc, providerData(dev.comfyfluffy.caustica.api.provider.MaterialProviderData.ZERO),
                         new Float4(1.0f, 1.0f, 1.0f, 1.0f)),
@@ -81,15 +76,7 @@ public final class RtMaterialRegistry {
             if (nextNamedMaterialIds.containsKey(definition.id())) {
                 throw new IllegalStateException("Duplicate submitted material " + definition.id());
             }
-            int surfaceImplementation = BUILTIN_SURFACE_IMPLEMENTATION;
-            if (definition.surface() != null) {
-                surfaceImplementation = surfaces.indexOf(definition.surface());
-                if (surfaceImplementation < 0) {
-                    CausticaMod.LOGGER.warn("Material definition {} names unregistered surface {}; using the error surface",
-                            definition.id(), definition.surface());
-                    surfaceImplementation = ERROR_SURFACE_IMPLEMENTATION;
-                }
-            }
+            int surfaceImplementation = resolveSurfaceImplementation(definition, surfaces);
             int definitionTransport = transport(definition.topology());
             RtMaterialDesc desc = new RtMaterialDesc(definitionTransport,
                     definition.specularRoughness(), definition.baseMetalness(), definition.specularIor(),
@@ -223,6 +210,14 @@ public final class RtMaterialRegistry {
 
     static int transport(MaterialTopology topology) {
         return topology == MaterialTopology.SURFACE ? TRANSPORT_SURFACE : TRANSPORT_MEDIUM_BOUNDARY;
+    }
+
+    static int resolveSurfaceImplementation(MaterialDefinition definition, SurfaceResolver surfaces) {
+        int implementation = surfaces.indexOf(definition.surface());
+        if (implementation >= 0) return implementation;
+        CausticaMod.LOGGER.warn("Material definition {} names unregistered surface {}; using the error surface",
+                definition.id(), definition.surface());
+        return ERROR_SURFACE_IMPLEMENTATION;
     }
 
     @FunctionalInterface

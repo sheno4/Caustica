@@ -32,6 +32,7 @@ public final class RtEntityCapture implements VertexConsumer {
     final IntArrayList idx = new IntArrayList(indexCapacity(DEFAULT_VERTEX_CAPACITY)); // 3 indices/triangle
     final FloatArrayList uvList = new FloatArrayList(DEFAULT_VERTEX_CAPACITY * 2);  // 2 floats/vertex (entity-texture UV)
     final List<SceneMesh.TriangleSurface> surfaces = new ArrayList<>();
+    // Reset to the diagnostic material so a producer path that omits material selection fails visibly.
     SceneMesh.MaterialReference currentMaterial = new SceneMesh.FallbackMaterial(null);
     SceneMesh.Coverage currentCoverage = SceneMesh.Coverage.CUTOUT;
     // Decal-stacking rank for the current submission (0 = no offset). Set by the collector from

@@ -53,9 +53,7 @@ public final class MinecraftMaterialSource implements MaterialSource {
     @Override
     public void submitMaterials(MaterialSink sink) {
         List<MaterialDefinition> definitions = List.of(
-                new MaterialDefinition(new MaterialHandle(CLOUD), 0.82f, 0.86f, 0.9f,
-                        0.92f, 0.0f, 1.33f, 0.0f, MaterialTopology.SURFACE,
-                        MinecraftProvidersExtension.MATERIAL_SURFACE),
+                cloudDefinition(),
                 waterDefinition(), endPortalDefinition(), particleBillboardDefinition(), vertexColorDefinition());
         Map<Identifier, Resource> resources = Minecraft.getInstance().getResourceManager().listResources(
                 "materials", id -> id.getPath().endsWith(".json"));
@@ -89,6 +87,12 @@ public final class MinecraftMaterialSource implements MaterialSource {
 
     public MinecraftMaterialSnapshot materialSnapshot() {
         return materialState.snapshot();
+    }
+
+    static MaterialDefinition cloudDefinition() {
+        return new MaterialDefinition(new MaterialHandle(CLOUD), 0.82f, 0.86f, 0.9f,
+                0.92f, 0.0f, 1.33f, 0.0f, MaterialTopology.SURFACE,
+                MinecraftProvidersExtension.MATERIAL_SURFACE);
     }
 
     static MaterialDefinition waterDefinition() {

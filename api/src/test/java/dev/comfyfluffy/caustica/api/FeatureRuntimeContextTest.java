@@ -30,7 +30,8 @@ final class FeatureRuntimeContextTest {
                 .runtimeActivation(RuntimeActivation.ALWAYS)
                 .shaderSource(ShaderSource.classpath("/test/shaders"))
                 .bind(Slots.SKY, "test_sky", "TestSky")
-                .surface(ResourceId.of("test", "surface"), "test_surface", "TestSurface")
+                .surface(ResourceId.of("test", "surface"), "test_surface", "TestSurface",
+                        ResourceId.of("test", "coverage"), "test_coverage", "TestCoverage")
                 .renderPassContextual(PASS, RenderStage.OVERLAY, context -> {
                     capture(contexts, values, context);
                     return pass();

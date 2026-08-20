@@ -37,8 +37,16 @@ final class MaterialProviderDataTest {
     void materialConvenienceConstructorDefaultsToZeroData() {
         MaterialDefinition definition = new MaterialDefinition(
                 new MaterialHandle(ResourceId.of("test", "plain")),
-                1, 1, 1, 0.5f, 0, 1.5f, 0, MaterialTopology.SURFACE, null);
+                1, 1, 1, 0.5f, 0, 1.5f, 0, MaterialTopology.SURFACE,
+                ResourceId.of("test", "surface"));
 
         assertEquals(MaterialProviderData.ZERO, definition.providerData());
+    }
+
+    @Test
+    void materialRequiresAnExplicitSurfaceImplementation() {
+        assertThrows(NullPointerException.class, () -> new MaterialDefinition(
+                new MaterialHandle(ResourceId.of("test", "plain")),
+                1, 1, 1, 0.5f, 0, 1.5f, 0, MaterialTopology.SURFACE, null));
     }
 }
