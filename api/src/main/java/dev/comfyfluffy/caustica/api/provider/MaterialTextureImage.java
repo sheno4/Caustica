@@ -7,12 +7,10 @@ public interface MaterialTextureImage extends AutoCloseable {
     /** sRGB-encoded base color and linear alpha packed as ARGB8. */
     int albedoArgb(int x, int y);
 
-    /** Number of distinct mip-zero alpha frames, exhaustive for the resource epoch. */
-    int alphaFrameCount();
-
     /**
-     * Mip-zero alpha for one exhaustive frame. Interpolated animation alpha must remain within the extrema
-     * of the supplied frames so their per-texel minimum and maximum are conservative for the whole epoch.
+     * Mip-zero alpha for one frame declared by {@link MaterialTextureAnalysisSource#alphaFrameCount()}.
+     * Interpolated animation alpha must remain within the extrema of the declared frames so their
+     * per-texel minimum and maximum are conservative for the whole epoch.
      */
     int alphaArgb(int frame, int x, int y);
 

@@ -15,7 +15,7 @@ final class RtTemporalAlphaRangeTest {
         MaterialTextureImage image = new Frames(new int[][]{
                 {0, 255}, {255, 128}, {64, 128}
         });
-        MaterialTextureAnalyzer.Alpha range = MaterialTextureAnalyzer.scanAlpha(image, 2, 1);
+        MaterialTextureAnalyzer.Alpha range = MaterialTextureAnalyzer.scanAlpha(image, 2, 1, 3);
         assertEquals(0.0f, range.minAlpha());
         assertEquals(1.0f, range.maxAlpha());
         assertArrayEquals(new float[]{0.0f, 1.0f, 0.0f, 0.0f,
@@ -25,7 +25,7 @@ final class RtTemporalAlphaRangeTest {
     @Test
     void staticTextureHasIdenticalTemporalBounds() {
         MaterialTextureAnalyzer.Alpha range = MaterialTextureAnalyzer.scanAlpha(
-                new Frames(new int[][]{{32}}), 1, 1);
+                new Frames(new int[][]{{32}}), 1, 1, 1);
         assertEquals(32 / 255.0f, range.texels()[0]);
         assertEquals(range.texels()[0], range.texels()[1]);
     }
@@ -53,9 +53,9 @@ final class RtTemporalAlphaRangeTest {
     @Test
     void animatedColorWithStableMixedAlphaUsesStaticR8Samples() {
         MaterialTextureAnalyzer.Alpha stable = MaterialTextureAnalyzer.scanAlpha(
-                new Frames(new int[][]{{0, 51}, {0, 51}, {0, 51}}), 2, 1);
+                new Frames(new int[][]{{0, 51}, {0, 51}, {0, 51}}), 2, 1, 3);
         MaterialTextureAnalyzer.Alpha changing = MaterialTextureAnalyzer.scanAlpha(
-                new Frames(new int[][]{{0, 51}, {51, 0}}), 2, 1);
+                new Frames(new int[][]{{0, 51}, {51, 0}}), 2, 1, 2);
 
         assertFalse(MaterialTextureAnalyzer.hasTemporalVariation(stable));
         assertTrue(MaterialTextureAnalyzer.hasTemporalVariation(changing));
@@ -84,7 +84,6 @@ final class RtTemporalAlphaRangeTest {
         @Override public int width() { return alpha[0].length; }
         @Override public int height() { return 1; }
         @Override public int albedoArgb(int x, int y) { return alpha[0][x] << 24; }
-        @Override public int alphaFrameCount() { return alpha.length; }
         @Override public int alphaArgb(int frame, int x, int y) { return alpha[frame][x] << 24; }
         @Override public void readOpenPbr(int x, int y, OpenPbrTextureTexel out) { }
         @Override public void close() { }

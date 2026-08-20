@@ -3,9 +3,10 @@ package dev.comfyfluffy.caustica.engine.material;
 import dev.comfyfluffy.caustica.api.provider.AtlasMaterialReference;
 import dev.comfyfluffy.caustica.api.provider.OpenPbrMaterialDefaults;
 
-import dev.comfyfluffy.caustica.api.provider.MaterialTextureAsset;
+import dev.comfyfluffy.caustica.api.provider.MaterialTextureAnalysisSource;
 import dev.comfyfluffy.caustica.api.provider.MaterialTextureImage;
 import dev.comfyfluffy.caustica.api.provider.MaterialTextureKind;
+import dev.comfyfluffy.caustica.api.provider.MaterialTextureResource;
 import dev.comfyfluffy.caustica.api.provider.MaterialUv;
 import dev.comfyfluffy.caustica.api.provider.OpenPbrColorBinding;
 import dev.comfyfluffy.caustica.api.provider.OpenPbrTextureTexel;
@@ -24,21 +25,23 @@ final class MaterialCatalogTest {
     private static final ResourceId B = ResourceId.of("test", "b");
 
     @Test
-    void catalogOrdersAssetsAndRejectsDuplicateNames() {
-        MaterialTextureAsset a = asset(A, MaterialTextureKind.SHARED_ATLAS, image(0xFFFFFFFF));
-        MaterialTextureAsset b = asset(B, MaterialTextureKind.SHARED_ATLAS, image(0xFF000000));
+    void catalogOrdersResourcesAndRejectsDuplicateNames() {
+        MaterialTextureResource a = resource(A, MaterialTextureKind.SHARED_ATLAS, image(0xFFFFFFFF));
+        MaterialTextureResource b = resource(B, MaterialTextureKind.SHARED_ATLAS, image(0xFF000000));
         MaterialCatalog catalog = new MaterialCatalog(List.of(b, a), List.of());
-        assertEquals(List.of(A, B), catalog.atlasAssets().stream().map(MaterialTextureAsset::material).toList());
+        assertEquals(List.of(A, B), catalog.atlasResources().stream()
+                .map(MaterialTextureResource::material).toList());
         assertThrows(IllegalArgumentException.class,
                 () -> new MaterialCatalog(List.of(a),
-                        List.of(asset(A, MaterialTextureKind.STANDALONE, image(0)))));
+                        List.of(resource(A, MaterialTextureKind.STANDALONE, image(0)))));
     }
 
     @Test
-    void uniformEmissionLuminanceIsAssetLocalAndMustBeNonNegative() {
+    void uniformEmissionLuminanceIsResourceLocalAndMustBeNonNegative() {
         assertThrows(IllegalArgumentException.class,
-                () -> new MaterialTextureAsset(A, MaterialTextureKind.STANDALONE, 1, 1,
-                        () -> null, MaterialUv.IDENTITY, false, false, false,
+                () -> new MaterialTextureResource(A, MaterialTextureKind.STANDALONE,
+                        new MaterialTextureAnalysisSource(1, 1, 1, () -> null),
+                        MaterialUv.IDENTITY, false, false, false,
                         OpenPbrColorBinding.PARAMETER_DEFAULT, OpenPbrColorBinding.PARAMETER_DEFAULT,
                         OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR, -1.0f));
     }
@@ -71,20 +74,19 @@ final class MaterialCatalogTest {
         assertEquals(first.hashCode(), second.hashCode());
     }
 
-    private static MaterialTextureAsset asset(ResourceId id, MaterialTextureKind kind,
-                                              MaterialImageSource source) {
-        return new MaterialTextureAsset(id, kind, 1, 1, () -> {
+    private static MaterialTextureResource resource(ResourceId id, MaterialTextureKind kind,
+                                                    MaterialImageSource source) {
+        return new MaterialTextureResource(id, kind, new MaterialTextureAnalysisSource(1, 1, 1, () -> {
             MaterialImage image = source.open();
             return new MaterialTextureImage() {
                 @Override public int width() { return image.width(); }
                 @Override public int height() { return image.height(); }
                 @Override public int albedoArgb(int x, int y) { return image.argb(x, y); }
-                @Override public int alphaFrameCount() { return 1; }
                 @Override public int alphaArgb(int frame, int x, int y) { return image.argb(x, y); }
                 @Override public void readOpenPbr(int x, int y, OpenPbrTextureTexel out) { }
                 @Override public void close() { image.close(); }
             };
-        }, MaterialUv.IDENTITY, false, false, false,
+        }), MaterialUv.IDENTITY, false, false, false,
                 OpenPbrColorBinding.PARAMETER_DEFAULT, OpenPbrColorBinding.PARAMETER_DEFAULT,
                 OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR, 15000.0f);
     }

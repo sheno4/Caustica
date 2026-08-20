@@ -53,11 +53,6 @@ final class MinecraftMaterialTextureSource implements MaterialTextureSource {
         }
     }
 
-    @Override
-    public int alphaFrameCount() {
-        return alphaFrames == null ? 1 : alphaFrames.length;
-    }
-
     private static void close(MaterialImage image, Throwable failure) {
         if (image == null) {
             return;
@@ -85,11 +80,6 @@ final class MinecraftMaterialTextureSource implements MaterialTextureSource {
         @Override
         public int albedoArgb(int x, int y) {
             return albedo.argb(x, y);
-        }
-
-        @Override
-        public int alphaFrameCount() {
-            return alphaFrames == null ? 1 : alphaFrames.length;
         }
 
         @Override

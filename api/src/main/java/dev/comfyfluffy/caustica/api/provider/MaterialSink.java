@@ -8,6 +8,6 @@ public interface MaterialSink {
     /** Contribute an ordered override rule. */
     void submit(MaterialRule rule);
 
-    /** Contribute one neutral texture asset compiled with this source's materials for the resource epoch. */
-    void submitAsset(MaterialTextureAsset asset);
+    /** Contribute one GPU texture resource compiled with this source's materials for the resource epoch. */
+    void submitResource(MaterialTextureResource resource);
 }

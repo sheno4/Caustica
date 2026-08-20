@@ -59,7 +59,7 @@ public final class MinecraftMaterialSource implements MaterialSource {
         rules.sort(Comparator.comparing((MaterialRule rule) -> rule.match().geometry() == null)
                 .thenComparing(MaterialRule::id));
         rules.forEach(sink::submit);
-        MinecraftMaterialCatalogBuilder.build(rules).forEach(sink::submitAsset);
+        MinecraftMaterialCatalogBuilder.build(rules).forEach(sink::submitResource);
         CausticaMod.LOGGER.info("RT material source: format={}, rules={}", FORMAT, rules.size());
     }
 

@@ -8,8 +8,8 @@ import java.util.Objects;
  * A named OpenPBR material that geometry sources reference through a stable handle. Colors are
  * scene-linear ACEScg. Roughness is OpenPBR perceptual roughness, not GGX alpha. A null surface selects
  * the renderer's built-in implementation. Topology is structural and independent of transmission weight.
- * When {@code textures} is present, sampled base color, roughness, metalness, subsurface weight, and
- * emission are multiplied by their corresponding uniform values in this declaration.
+ * When {@code textureResource} is present, sampled base color, roughness, metalness, subsurface weight,
+ * and emission are multiplied by their corresponding uniform values in this declaration.
  */
 public record MaterialDefinition(MaterialHandle handle, float baseColorR, float baseColorG, float baseColorB,
                                  float specularRoughness, float baseMetalness, float specularIor,
@@ -21,7 +21,7 @@ public record MaterialDefinition(MaterialHandle handle, float baseColorR, float 
                                  float emissionColorR, float emissionColorG, float emissionColorB,
                                  float emissionLuminanceCdM2,
                                  MaterialTopology topology, ResourceId surface, float alphaCutoff,
-                                 MaterialTextureAsset textures) {
+                                 MaterialTextureResource textureResource) {
     public MaterialDefinition(MaterialHandle handle, float baseColorR, float baseColorG, float baseColorB,
                               float specularRoughness, float baseMetalness, float specularIor,
                               float transmissionWeight, MaterialTopology topology, ResourceId surface) {
@@ -62,8 +62,8 @@ public record MaterialDefinition(MaterialHandle handle, float baseColorR, float 
         if (!Float.isFinite(specularIor) || specularIor <= 0.0f) {
             throw new IllegalArgumentException("specularIor must be positive");
         }
-        if (textures != null && !textures.material().equals(handle.id())) {
-            throw new IllegalArgumentException("material texture asset must use the definition handle id");
+        if (textureResource != null && !textureResource.material().equals(handle.id())) {
+            throw new IllegalArgumentException("material texture resource must use the definition handle id");
         }
     }
 

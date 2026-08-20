@@ -6,8 +6,9 @@ import dev.comfyfluffy.caustica.api.ColorSpaces;
 import dev.comfyfluffy.caustica.api.provider.CpuTextureResource;
 import dev.comfyfluffy.caustica.api.provider.MaterialDefinition;
 import dev.comfyfluffy.caustica.api.provider.MaterialHandle;
-import dev.comfyfluffy.caustica.api.provider.MaterialTextureAsset;
+import dev.comfyfluffy.caustica.api.provider.MaterialTextureAnalysisSource;
 import dev.comfyfluffy.caustica.api.provider.MaterialTextureKind;
+import dev.comfyfluffy.caustica.api.provider.MaterialTextureResource;
 import dev.comfyfluffy.caustica.api.provider.MaterialTopology;
 import dev.comfyfluffy.caustica.api.provider.MaterialUv;
 import dev.comfyfluffy.caustica.api.provider.OpenPbrColorBinding;
@@ -99,7 +100,7 @@ final class GltfViewerAsset {
         GltfMaterialTextureSource.ImageData mrImage = textureImage(asset, images, source.metallicRoughnessTexture());
         GltfMaterialTextureSource.ImageData normalImage = textureImage(asset, images, source.normalTexture());
         GltfMaterialTextureSource.ImageData emissiveImage = textureImage(asset, images, source.emissiveTexture());
-        MaterialTextureAsset semanticTextures = null;
+        MaterialTextureResource semanticTextures = null;
         if (mrImage != null || normalImage != null || emissiveImage != null) {
             int width = 1;
             int height = 1;
@@ -111,11 +112,11 @@ final class GltfViewerAsset {
                 }
             }
             MaterialHandle handle = materialHandle(materialIndex);
-            semanticTextures = new MaterialTextureAsset(handle.id(), MaterialTextureKind.STANDALONE,
-                    width, height,
-                    new GltfMaterialTextureSource(mrImage, normalImage, emissiveImage,
-                            width, height, source.ior(),
-                            source.normalTexture() == null ? 1.0f : source.normalTexture().scale()),
+            semanticTextures = new MaterialTextureResource(handle.id(), MaterialTextureKind.STANDALONE,
+                    new MaterialTextureAnalysisSource(width, height, 1,
+                            new GltfMaterialTextureSource(mrImage, normalImage, emissiveImage,
+                                    width, height, source.ior(),
+                                    source.normalTexture() == null ? 1.0f : source.normalTexture().scale())),
                     MaterialUv.IDENTITY,
                     mrImage != null, normalImage != null, emissiveImage != null,
                     OpenPbrColorBinding.PARAMETER_DEFAULT,
@@ -133,7 +134,7 @@ final class GltfViewerAsset {
     }
 
     private static MaterialDefinition definition(MaterialHandle handle, GltfLoader.Material source,
-                                                 MaterialTextureAsset textures) {
+                                                 MaterialTextureResource textureResource) {
         float[] baseColor = ColorSpaces.linearBt709ToAcesCg(
                 source.baseColorR(), source.baseColorG(), source.baseColorB());
         float[] emissionColor = ColorSpaces.linearBt709ToAcesCg(
@@ -148,14 +149,14 @@ final class GltfViewerAsset {
                 1.0f, 1.0f, 1.0f,
                 0.0f, 0.8f, 0.8f, 0.8f, 0.0f,
                 emissionColor[0], emissionColor[1], emissionColor[2], emissionLuminance,
-                MaterialTopology.SURFACE, null, source.alphaCutoff(), textures);
+                MaterialTopology.SURFACE, null, source.alphaCutoff(), textureResource);
     }
 
     private static SceneMesh mesh(GltfLoader.Primitive primitive, AdaptedMaterial material) {
         int vertexCount = primitive.positions().length / 3;
         int[] indices = nonDegenerateIndices(primitive.positions(), primitive.indices());
         float[] uvs = primitive.textureCoordinates();
-        boolean textured = material.baseTexture() != null || material.definition().textures() != null;
+        boolean textured = material.baseTexture() != null || material.definition().textureResource() != null;
         if (textured && uvs.length == 0) {
             throw new IllegalArgumentException("textured glTF primitive has no TEXCOORD_0");
         }

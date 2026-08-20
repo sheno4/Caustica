@@ -5,7 +5,7 @@ import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.api.provider.EmissionFootprint;
 import dev.comfyfluffy.caustica.engine.material.MaterialCatalog;
 import dev.comfyfluffy.caustica.api.provider.MaterialTextureImage;
-import dev.comfyfluffy.caustica.api.provider.MaterialTextureAsset;
+import dev.comfyfluffy.caustica.api.provider.MaterialTextureResource;
 import dev.comfyfluffy.caustica.api.provider.MaterialUv;
 import dev.comfyfluffy.caustica.api.provider.OpenPbrMaterialDefaults;
 import dev.comfyfluffy.caustica.api.provider.OpenPbrColorBinding;
@@ -97,7 +97,7 @@ public final class RtMaterialPageCompiler {
     }
 
     private static final class Candidate {
-        final MaterialTextureAsset asset;
+        final MaterialTextureResource resource;
         final int features;
         int page = -1;
         int x;
@@ -114,28 +114,28 @@ public final class RtMaterialPageCompiler {
         int alphaSource;
         boolean statsPrepared;
 
-        Candidate(MaterialTextureAsset asset) {
-            this.asset = asset;
+        Candidate(MaterialTextureResource resource) {
+            this.resource = resource;
             int value = 0;
-            if (asset.surfaceParameters()) value |= RtMaterialRegistry.FEATURE_SPEC;
-            if (asset.normalMap()) value |= RtMaterialRegistry.FEATURE_NORMAL;
-            if (asset.emissionMask()) value |= RtMaterialRegistry.FEATURE_EMISSION_MASK;
-            if (asset.subsurfaceColorBinding() == OpenPbrColorBinding.BASE_COLOR) {
+            if (resource.surfaceParameters()) value |= RtMaterialRegistry.FEATURE_SPEC;
+            if (resource.normalMap()) value |= RtMaterialRegistry.FEATURE_NORMAL;
+            if (resource.emissionMask()) value |= RtMaterialRegistry.FEATURE_EMISSION_MASK;
+            if (resource.subsurfaceColorBinding() == OpenPbrColorBinding.BASE_COLOR) {
                 value |= RtMaterialRegistry.FEATURE_SUBSURFACE_COLOR_BASE;
             }
-            if (asset.emissionColorBinding() == OpenPbrColorBinding.BASE_COLOR) {
+            if (resource.emissionColorBinding() == OpenPbrColorBinding.BASE_COLOR) {
                 value |= RtMaterialRegistry.FEATURE_EMISSION_COLOR_BASE;
             }
             features = value;
-            alphaFrameCount = asset.texture().alphaFrameCount();
+            alphaFrameCount = resource.analysisSource().alphaFrameCount();
         }
 
         int width() {
-            return asset.width();
+            return resource.analysisSource().width();
         }
 
         int height() {
-            return asset.height();
+            return resource.analysisSource().height();
         }
 
         int pageChannels() {
@@ -162,15 +162,16 @@ public final class RtMaterialPageCompiler {
     /** Compile, pack, mip, upload, and publish one immutable host catalog. */
     public void prepareAll(GpuContext ctx, int materialPageCapacity, MaterialCatalog catalog) {
         int footprintResolution = EMISSION_FOOTPRINT_RESOLUTION;
-        List<Candidate> candidates = new ArrayList<>(catalog.atlasAssets().size() + catalog.standalone().size());
-        catalog.atlasAssets().forEach(asset -> candidates.add(new Candidate(asset)));
-        catalog.standalone().forEach(asset -> candidates.add(new Candidate(asset)));
-        candidates.parallelStream().filter(candidate -> eligibleForPageCompilation(candidate.asset))
+        List<Candidate> candidates = new ArrayList<>(
+                catalog.atlasResources().size() + catalog.standaloneResources().size());
+        catalog.atlasResources().forEach(resource -> candidates.add(new Candidate(resource)));
+        catalog.standaloneResources().forEach(resource -> candidates.add(new Candidate(resource)));
+        candidates.parallelStream().filter(candidate -> eligibleForPageCompilation(candidate.resource))
                 .forEach(candidate -> prepareAlpha(candidate, footprintResolution));
         List<RtMaterialPagePlanner.Input> inputs = new ArrayList<>(candidates.size());
         for (int i = 0; i < candidates.size(); i++) {
             Candidate candidate = candidates.get(i);
-            inputs.add(new RtMaterialPagePlanner.Input(i, candidate.asset.material().toString(),
+            inputs.add(new RtMaterialPagePlanner.Input(i, candidate.resource.material().toString(),
                     candidate.width(), candidate.height(), candidate.pageChannels()));
         }
         RtMaterialPagePlanner.Plan plan = RtMaterialPagePlanner.plan(inputs, DEFAULT_PAGE_SIZE,
@@ -206,8 +207,10 @@ public final class RtMaterialPageCompiler {
         paged.parallelStream().forEach(candidate -> {
             try {
                 if ((candidate.features & MATERIAL_TEXTURE_FEATURES) != 0) {
-                    MaterialTextureAnalyzer.Decoded decoded = MaterialTextureAnalyzer.decode(candidate.asset,
-                            footprintResolution, maxLodFor(candidate.width(), candidate.height()));
+                    MaterialTextureAnalyzer.Decoded decoded = MaterialTextureAnalyzer.decode(
+                            candidate.resource.analysisSource(), candidate.resource.emissionMask(),
+                            candidate.resource.emissionColorBinding(), footprintResolution,
+                            maxLodFor(candidate.width(), candidate.height()));
                     candidate.emissionSummary = decoded.emissionSummary();
                     candidate.emissionFootprint = decoded.emissionFootprint();
                     candidate.stats = decoded.stats();
@@ -222,16 +225,17 @@ public final class RtMaterialPageCompiler {
                             candidate.width(), candidate.height(), candidate.alphaSamples.texels());
                 }
             } catch (Throwable t) {
-                warnOnce("RT canonical material decode failed for " + candidate.asset.material(), t);
+                warnOnce("RT canonical material decode failed for " + candidate.resource.material(), t);
                 candidate.page = -1;
             }
         });
         candidates.parallelStream().filter(candidate -> candidate.page < 0 && !candidate.statsPrepared
-                && eligibleForPageCompilation(candidate.asset)).forEach(candidate -> {
+                && eligibleForPageCompilation(candidate.resource)).forEach(candidate -> {
             try {
-                candidate.stats = MaterialTextureAnalyzer.scanAlbedo(candidate.asset, footprintResolution);
+                candidate.stats = MaterialTextureAnalyzer.scanAlbedo(candidate.resource.analysisSource(),
+                        candidate.resource.emissionColorBinding(), footprintResolution);
             } catch (Throwable t) {
-                warnOnce("RT material image scan failed for " + candidate.asset.material(), t);
+                warnOnce("RT material image scan failed for " + candidate.resource.material(), t);
             }
         });
         for (int pageIndex = 0; pageIndex < plan.layouts().size(); pageIndex++) {
@@ -285,7 +289,7 @@ public final class RtMaterialPageCompiler {
                 ALPHA_SOURCE_NONE,
                 RtMaterialDesc.EmissionSummary.NONE, null);
         for (Candidate candidate : candidates) {
-            entries.put(candidate.asset.material(), candidate.page >= 0
+            entries.put(candidate.resource.material(), candidate.page >= 0
                     ? compiledEntry(candidate, pageSize) : fallbackFor(candidate));
         }
     }
@@ -331,8 +335,9 @@ public final class RtMaterialPageCompiler {
         return channels;
     }
 
-    static boolean eligibleForPageCompilation(MaterialTextureAsset asset) {
-        return RtMaterialPagePlanner.eligible(asset.width(), asset.height(), MAX_PAGE_SIZE, GUTTER);
+    static boolean eligibleForPageCompilation(MaterialTextureResource resource) {
+        return RtMaterialPagePlanner.eligible(resource.analysisSource().width(),
+                resource.analysisSource().height(), MAX_PAGE_SIZE, GUTTER);
     }
 
     public int pageSize() {
@@ -352,7 +357,7 @@ public final class RtMaterialPageCompiler {
     }
 
     private Entry compiledEntry(Candidate candidate, int pageSize) {
-        MaterialUv uv = candidate.asset.albedoUv();
+        MaterialUv uv = candidate.resource.albedoUv();
         MaterialTextureAnalyzer.AlbedoStats stats = candidate.stats;
         return new Entry(candidate.features, candidate.page, maxLodFor(candidate.width(), candidate.height()),
                 candidate.x / (float) pageSize, candidate.y / (float) pageSize,
@@ -366,7 +371,7 @@ public final class RtMaterialPageCompiler {
     }
 
     private Entry fallbackFor(Candidate candidate) {
-        MaterialUv uv = candidate.asset.albedoUv();
+        MaterialUv uv = candidate.resource.albedoUv();
         MaterialTextureAnalyzer.AlbedoStats stats = candidate.stats;
         int colorBindings = candidate.features & (RtMaterialRegistry.FEATURE_SUBSURFACE_COLOR_BASE
                 | RtMaterialRegistry.FEATURE_EMISSION_COLOR_BASE);
@@ -386,10 +391,12 @@ public final class RtMaterialPageCompiler {
             return;
         }
         try {
-            MaterialTextureAnalyzer.Alpha temporal = MaterialTextureAnalyzer.scanAlpha(candidate.asset);
+            MaterialTextureAnalyzer.Alpha temporal = MaterialTextureAnalyzer.scanAlpha(
+                    candidate.resource.analysisSource());
             candidate.minAlpha = temporal.minAlpha();
             candidate.maxAlpha = temporal.maxAlpha();
-            candidate.stats = MaterialTextureAnalyzer.scanAlbedo(candidate.asset, footprintResolution);
+            candidate.stats = MaterialTextureAnalyzer.scanAlbedo(candidate.resource.analysisSource(),
+                    candidate.resource.emissionColorBinding(), footprintResolution);
             candidate.statsPrepared = true;
             if (candidate.alphaFrameCount == 1 || !MaterialTextureAnalyzer.hasTemporalVariation(temporal)) {
                 candidate.alphaSource = ALPHA_SOURCE_STATIC_PAGE;
@@ -403,7 +410,7 @@ public final class RtMaterialPageCompiler {
             }
         } catch (Throwable failure) {
             candidate.alphaSource = ALPHA_SOURCE_NONE;
-            warnOnce("RT material alpha scan failed for " + candidate.asset.material(), failure);
+            warnOnce("RT material alpha scan failed for " + candidate.resource.material(), failure);
         }
     }
 

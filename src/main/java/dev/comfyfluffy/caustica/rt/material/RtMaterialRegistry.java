@@ -7,7 +7,7 @@ import dev.comfyfluffy.caustica.api.provider.MaterialTopology;
 import dev.comfyfluffy.caustica.api.provider.AtlasMaterialReference;
 import dev.comfyfluffy.caustica.api.provider.EmissionFootprint;
 import dev.comfyfluffy.caustica.engine.material.MaterialCatalog;
-import dev.comfyfluffy.caustica.api.provider.MaterialTextureAsset;
+import dev.comfyfluffy.caustica.api.provider.MaterialTextureResource;
 import dev.comfyfluffy.caustica.api.provider.MaterialVariant;
 import dev.comfyfluffy.caustica.api.provider.OpenPbrMaterialDefaults;
 import dev.comfyfluffy.caustica.api.provider.OpenPbrMaterialProfile;
@@ -144,19 +144,19 @@ public final class RtMaterialRegistry {
                         RtMaterialOverrides.SurfaceResolver surfaces, int runtimeTextureCapacity) {
         Map<ResourceId, RtMaterialPageCompiler.Entry> entries = pageCompiler.preparedEntries();
         float fallbackEmissionLuminance = 1.0f;
-        List<ResourceId> atlasAssets = catalog.atlasAssets().stream()
-                .map(MaterialTextureAsset::material).toList();
-        List<ResourceId> standaloneAssets = catalog.standalone().stream()
-                .map(MaterialTextureAsset::material).toList();
-        Map<ResourceId, MaterialTextureAsset> assets = new HashMap<>();
-        catalog.atlasAssets().forEach(asset -> assets.put(asset.material(), asset));
-        catalog.standalone().forEach(asset -> assets.put(asset.material(), asset));
+        List<ResourceId> atlasResources = catalog.atlasResources().stream()
+                .map(MaterialTextureResource::material).toList();
+        List<ResourceId> standaloneResources = catalog.standaloneResources().stream()
+                .map(MaterialTextureResource::material).toList();
+        Map<ResourceId, MaterialTextureResource> resources = new HashMap<>();
+        catalog.atlasResources().forEach(resource -> resources.put(resource.material(), resource));
+        catalog.standaloneResources().forEach(resource -> resources.put(resource.material(), resource));
         Map<ResourceId, MaterialDefinition> definitionsById = new HashMap<>();
         definitions.forEach(definition -> definitionsById.put(definition.id(), definition));
         RtMaterialPageCompiler.Entry fallbackEntry = pageCompiler.entry(null);
 
         int profileVariants = MaterialRegistryCompiler.variantCount();
-        CompiledTables tables = new CompiledTables(2 + profileVariants + atlasAssets.size() * profileVariants);
+        CompiledTables tables = new CompiledTables(2 + profileVariants + atlasResources.size() * profileVariants);
         tables.add(compileDesc(TRANSPORT_SURFACE, 0, OpenPbrMaterialProfile.ROUGH_DIELECTRIC, false, true,
                 RtMaterialDesc.EmissionSummary.NONE, fallbackEmissionLuminance), transparentWhiteAverage(), fallbackEntry, null,
                 PRIMARY_COVERAGE_CUTOFF, true);
@@ -190,7 +190,7 @@ public final class RtMaterialRegistry {
             compiledOverrides.add(compiled);
             compiledOverridesByMaterial.computeIfAbsent(rule.material(), ignored -> new ArrayList<>()).add(compiled);
         }
-        for (ResourceId material : atlasAssets) {
+        for (ResourceId material : atlasResources) {
             RtMaterialPageCompiler.Entry entry = entries.get(material);
             int baseFeatures = entry.features()
                     & (FEATURE_SPEC | FEATURE_NORMAL | FEATURE_EMISSION_MASK
@@ -207,9 +207,9 @@ public final class RtMaterialRegistry {
                     break;
                 }
             }
-            MaterialTextureAsset asset = assets.get(material);
-            float dielectricIor = asset.dielectricIor();
-            float uniformEmissionLuminance = asset.uniformEmissionLuminanceCdM2();
+            MaterialTextureResource resource = resources.get(material);
+            float dielectricIor = resource.dielectricIor();
+            float uniformEmissionLuminance = resource.uniformEmissionLuminanceCdM2();
             int[] variants = new int[profileVariants];
             for (OpenPbrMaterialProfile profile : TEXTURE_PROFILES) {
                 for (MaterialTopology topology : MaterialTopology.values()) {
@@ -256,14 +256,14 @@ public final class RtMaterialRegistry {
         Map<ResourceId, Integer> nextNamedMaterialIds = new HashMap<>();
         Map<ResourceId, RuntimeTemplate> nextRuntimeTemplates = new HashMap<>();
         Set<RtMaterialOverrides.Rule> runtimeMatchedOverrides = new HashSet<>();
-        for (ResourceId material : standaloneAssets) {
+        for (ResourceId material : standaloneResources) {
             if (definitionsById.containsKey(material)) continue;
-            MaterialTextureAsset asset = assets.get(material);
+            MaterialTextureResource resource = resources.get(material);
             RtMaterialPageCompiler.Entry entry = entries.get(material);
             int features = entry.features() & (FEATURE_SPEC | FEATURE_NORMAL | FEATURE_EMISSION_MASK
                     | FEATURE_SUBSURFACE_COLOR_BASE | FEATURE_EMISSION_COLOR_BASE);
             RtMaterialDesc desc = compileRuntimeTextureDesc(features, false, entry.emissionSummary(),
-                    asset.uniformEmissionLuminanceCdM2());
+                    resource.uniformEmissionLuminanceCdM2());
             for (MutableCompiledOverride compiled : compiledOverridesByMaterial.getOrDefault(material, List.of())) {
                 RtMaterialOverrides.Rule rule = compiled.rule;
                 if (rule.geometry() != null) continue;
@@ -293,7 +293,7 @@ public final class RtMaterialRegistry {
             }
             int definitionTransport = transport(definition.topology());
             RtMaterialPageCompiler.Entry definitionEntry = entries.getOrDefault(definition.id(), fallbackEntry);
-            int definitionFeatures = definitionFeatures(definition.textures() != null,
+            int definitionFeatures = definitionFeatures(definition.textureResource() != null,
                     definitionEntry.features(), definition.emissionLuminanceCdM2());
             RtMaterialDesc.EmissionSource emissionSource = definition.emissionLuminanceCdM2() <= 0.0f
                     ? RtMaterialDesc.EmissionSource.NONE
@@ -323,11 +323,11 @@ public final class RtMaterialRegistry {
         // Standalone textures have fixed UVs. Shared-atlas references append one surface with the
         // stitched UV rectangle supplied by the host at capture time.
         int surfaceCount = tables.surfaces.size();
-        int nextSurfaceCapacity = Math.addExact(surfaceCount, Math.max(64, atlasAssets.size()));
+        int nextSurfaceCapacity = Math.addExact(surfaceCount, Math.max(64, atlasResources.size()));
         // Bindings are appended per surface, base-color texture index, and coverage mode actually submitted.
         int bindingCount = tables.bindings.size();
         int nextBindingCapacity = Math.addExact(bindingCount, Math.max(1024,
-                Math.addExact(Math.addExact(atlasAssets.size(), Math.multiplyExact(standaloneAssets.size(), 3)),
+                Math.addExact(Math.addExact(atlasResources.size(), Math.multiplyExact(standaloneResources.size(), 3)),
                         Math.multiplyExact(runtimeTextureCapacity, 2))));
         GpuBuffer nextSurfaceTable = createTable(ctx, nextSurfaceCapacity, SurfaceMaterialData.BYTE_SIZE,
                 "surface material table");
@@ -405,9 +405,9 @@ public final class RtMaterialRegistry {
                 == RtMaterialDesc.EmissionSource.GEOMETRY_UNIFORM).count();
         double averageCoverage = descriptions.stream().filter(desc -> desc.emissionSummary().emissive())
                 .mapToDouble(desc -> desc.emissionSummary().coverage()).average().orElse(0.0);
-        CausticaMod.LOGGER.info("RT materials: epoch={}, surfaces={}/{}, bindings={}/{}, atlasAssets={}, standaloneAssets={}, overrideRules={}, matchedOverrides={}, emissive={}, authoredMasks={}, derivedMasks={}, geometryUniformEmission={}, avgEmissionCoverage={}, tableKiB={}",
+        CausticaMod.LOGGER.info("RT materials: epoch={}, surfaces={}/{}, bindings={}/{}, atlasResources={}, standaloneResources={}, overrideRules={}, matchedOverrides={}, emissive={}, authoredMasks={}, derivedMasks={}, geometryUniformEmission={}, avgEmissionCoverage={}, tableKiB={}",
                 epoch, surfaceCount, nextSurfaceCapacity, bindingCount, nextBindingCapacity,
-                atlasAssets.size(), standaloneAssets.size(), overrides.rules().size(),
+                atlasResources.size(), standaloneResources.size(), overrides.rules().size(),
                 matchedOverrideRules, emissive,
                 authoredEmission, inferred, geometryUniformEmission,
                 String.format(java.util.Locale.ROOT, "%.3f", averageCoverage),
@@ -713,7 +713,7 @@ public final class RtMaterialRegistry {
 
         int addDefinition(RtMaterialDesc desc, MaterialDefinition definition, RtMaterialPageCompiler.Entry entry) {
             int surfaceId = internSurface(surfaceDefinition(desc, definition, entry));
-            float[] average = definition.textures() == null
+            float[] average = definition.textureResource() == null
                     ? new float[]{definition.baseColorR(), definition.baseColorG(), definition.baseColorB(), 1.0f}
                     : new float[]{entry.averageR() * definition.baseColorR(),
                     entry.averageG() * definition.baseColorG(), entry.averageB() * definition.baseColorB(),
@@ -784,7 +784,7 @@ public final class RtMaterialRegistry {
 
     private static SurfaceMaterialData surfaceDefinition(RtMaterialDesc desc, MaterialDefinition definition,
                                                          RtMaterialPageCompiler.Entry entry) {
-        if (definition.textures() == null) {
+        if (definition.textureResource() == null) {
             return surfaceData(desc, desc.features(), 0, 0xFFFF, 0,
                     new Float4(0.0f, 0.0f, 0.0f, 0.0f),
                     new Float4(0.0f, 0.0f, 1.0f, 1.0f),

@@ -8,8 +8,9 @@ import dev.comfyfluffy.caustica.api.provider.MaterialRule;
 import dev.comfyfluffy.caustica.engine.material.MaterialEmissionIndex;
 import dev.comfyfluffy.caustica.engine.material.MaterialImage;
 import dev.comfyfluffy.caustica.engine.material.MaterialImageSource;
-import dev.comfyfluffy.caustica.api.provider.MaterialTextureAsset;
+import dev.comfyfluffy.caustica.api.provider.MaterialTextureAnalysisSource;
 import dev.comfyfluffy.caustica.api.provider.MaterialTextureKind;
+import dev.comfyfluffy.caustica.api.provider.MaterialTextureResource;
 import dev.comfyfluffy.caustica.api.provider.MaterialUv;
 import dev.comfyfluffy.caustica.api.provider.OpenPbrColorBinding;
 import dev.comfyfluffy.caustica.mixin.SpriteContentsAccessor;
@@ -30,16 +31,16 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
-/** Collects Minecraft material texture assets from atlases and resource packs. */
+/** Collects Minecraft material texture resources from atlases and resource packs. */
 public final class MinecraftMaterialCatalogBuilder {
     private MinecraftMaterialCatalogBuilder() {
     }
 
-    public static List<MaterialTextureAsset> build(List<MaterialRule> rules) {
+    public static List<MaterialTextureResource> build(List<MaterialRule> rules) {
         MaterialEmissionIndex emissions = MinecraftEmissionSemantics.analyze();
         float uniformEmissionLuminance = MinecraftLightingCalibration.current().blockEmissionLuminanceCdM2();
         List<TextureAtlasSprite> sprites = blockSprites();
-        List<MaterialTextureAsset> blocks = new ArrayList<>();
+        List<MaterialTextureResource> blocks = new ArrayList<>();
         for (TextureAtlasSprite sprite : sprites) {
             if (sprite == null) continue;
             Identifier name = sprite.contents().name();
@@ -54,11 +55,12 @@ public final class MinecraftMaterialCatalogBuilder {
             MaterialImageSource specular = spec.map(value -> resourceImage(value, true)).orElse(null);
             MaterialImageSource normalMap = normal.map(value -> resourceImage(value, true)).orElse(null);
             boolean inferEmission = spec.isEmpty() && emissions.permits(material);
-            blocks.add(new MaterialTextureAsset(material, MaterialTextureKind.SHARED_ATLAS,
-                    sprite.contents().width(), sprite.contents().height(),
-                    new MinecraftMaterialTextureSource(albedo, specular, normalMap, inferEmission,
-                            alphaFrames,
-                            Math.max(1, original.getWidth() / sprite.contents().width())),
+            blocks.add(new MaterialTextureResource(material, MaterialTextureKind.SHARED_ATLAS,
+                    new MaterialTextureAnalysisSource(sprite.contents().width(), sprite.contents().height(),
+                            alphaFrames.length,
+                            new MinecraftMaterialTextureSource(albedo, specular, normalMap, inferEmission,
+                                    alphaFrames,
+                                    Math.max(1, original.getWidth() / sprite.contents().width()))),
                     new MaterialUv(sprite.getU0(), sprite.getV0(),
                             inverseExtent(sprite.getU1() - sprite.getU0()),
                             inverseExtent(sprite.getV1() - sprite.getV0())),
@@ -68,16 +70,16 @@ public final class MinecraftMaterialCatalogBuilder {
         }
 
         Set<ResourceId> blockNames = new HashSet<>();
-        blocks.forEach(asset -> blockNames.add(asset.material()));
-        blocks.addAll(standaloneAssets(blockNames, rules, uniformEmissionLuminance));
+        blocks.forEach(resource -> blockNames.add(resource.material()));
+        blocks.addAll(standaloneResources(blockNames, rules, uniformEmissionLuminance));
         return List.copyOf(blocks);
     }
 
-    private static List<MaterialTextureAsset> standaloneAssets(Set<ResourceId> blockNames,
-                                                                List<MaterialRule> rules,
-                                                                float uniformEmissionLuminance) {
+    private static List<MaterialTextureResource> standaloneResources(Set<ResourceId> blockNames,
+                                                                      List<MaterialRule> rules,
+                                                                      float uniformEmissionLuminance) {
         Map<Identifier, Integer> discovered = discoverStandalone(blockNames, rules);
-        List<MaterialTextureAsset> result = new ArrayList<>();
+        List<MaterialTextureResource> result = new ArrayList<>();
         for (Map.Entry<Identifier, Integer> entry : discovered.entrySet()) {
             Identifier albedoLocation = entry.getKey();
             Optional<Resource> albedoResource = resource(albedoLocation);
@@ -93,9 +95,9 @@ public final class MinecraftMaterialCatalogBuilder {
                 MaterialImageSource albedoSource = resourceImage(albedoResource.get(), false);
                 MaterialImageSource specular = spec.map(value -> resourceImage(value, false)).orElse(null);
                 MaterialImageSource normalMap = normal.map(value -> resourceImage(value, false)).orElse(null);
-                result.add(new MaterialTextureAsset(material, MaterialTextureKind.STANDALONE,
-                        albedo.width(), albedo.height(),
-                        new MinecraftMaterialTextureSource(albedoSource, specular, normalMap, false),
+                result.add(new MaterialTextureResource(material, MaterialTextureKind.STANDALONE,
+                        new MaterialTextureAnalysisSource(albedo.width(), albedo.height(), 1,
+                                new MinecraftMaterialTextureSource(albedoSource, specular, normalMap, false)),
                         MaterialUv.IDENTITY, spec.isPresent(), normal.isPresent(), spec.isPresent(),
                         OpenPbrColorBinding.BASE_COLOR, OpenPbrColorBinding.BASE_COLOR,
                         MinecraftMaterialClassifier.dielectricIor(material), uniformEmissionLuminance));

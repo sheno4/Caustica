@@ -31,11 +31,6 @@ final class GltfMaterialTextureSource implements MaterialTextureSource {
         return new Image();
     }
 
-    @Override
-    public int alphaFrameCount() {
-        return 1;
-    }
-
     record ImageData(int width, int height, int[] argb) {
         ImageData {
             argb = argb.clone();
@@ -70,11 +65,6 @@ final class GltfMaterialTextureSource implements MaterialTextureSource {
         @Override
         public int albedoArgb(int x, int y) {
             return 0xffffffff;
-        }
-
-        @Override
-        public int alphaFrameCount() {
-            return 1;
         }
 
         @Override

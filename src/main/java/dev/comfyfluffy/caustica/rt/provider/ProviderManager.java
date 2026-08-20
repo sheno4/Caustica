@@ -26,7 +26,7 @@ import dev.comfyfluffy.caustica.api.provider.SceneCamera;
 import dev.comfyfluffy.caustica.api.provider.SceneGeometryKey;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.engine.material.MaterialCatalog;
-import dev.comfyfluffy.caustica.api.provider.MaterialTextureAsset;
+import dev.comfyfluffy.caustica.api.provider.MaterialTextureResource;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtFrameStats;
 import dev.comfyfluffy.caustica.rt.geometry.RtSceneGeometryManager;
@@ -424,9 +424,9 @@ public final class ProviderManager {
     public MaterialContributions collectMaterials() {
         List<MaterialDefinition> definitions = new ArrayList<>();
         Set<ResourceId> definedMaterials = new HashSet<>();
-        List<MaterialTextureAsset> atlasAssets = new ArrayList<>();
-        List<MaterialTextureAsset> standaloneAssets = new ArrayList<>();
-        Set<ResourceId> assetMaterials = new HashSet<>();
+        List<MaterialTextureResource> atlasResources = new ArrayList<>();
+        List<MaterialTextureResource> standaloneResources = new ArrayList<>();
+        Set<ResourceId> resourceMaterials = new HashSet<>();
         List<MaterialRule> result = new ArrayList<>();
         for (Map.Entry<ResourceId, MaterialSource> entry : materials().entrySet()) {
             ProviderKey key = new ProviderKey("material", entry.getKey());
@@ -435,7 +435,7 @@ public final class ProviderManager {
             }
             List<MaterialDefinition> stagedDefinitions = new ArrayList<>();
             List<MaterialRule> staged = new ArrayList<>();
-            List<MaterialTextureAsset> stagedAssets = new ArrayList<>();
+            List<MaterialTextureResource> stagedResources = new ArrayList<>();
             try {
                 entry.getValue().submitMaterials(new dev.comfyfluffy.caustica.api.provider.MaterialSink() {
                     @Override
@@ -449,8 +449,8 @@ public final class ProviderManager {
                     }
 
                     @Override
-                    public void submitAsset(MaterialTextureAsset asset) {
-                        stagedAssets.add(java.util.Objects.requireNonNull(asset));
+                    public void submitResource(MaterialTextureResource resource) {
+                        stagedResources.add(java.util.Objects.requireNonNull(resource));
                     }
                 });
                 Set<ResourceId> stagedIds = new HashSet<>();
@@ -458,19 +458,20 @@ public final class ProviderManager {
                     if (definedMaterials.contains(definition.id()) || !stagedIds.add(definition.id())) {
                         throw new IllegalStateException("duplicate material definition " + definition.id());
                     }
-                    if (definition.textures() != null) stagedAssets.add(definition.textures());
+                    if (definition.textureResource() != null) stagedResources.add(definition.textureResource());
                 }
-                HashSet<ResourceId> stagedAssetIds = new HashSet<>();
-                for (MaterialTextureAsset asset : stagedAssets) {
-                    if (assetMaterials.contains(asset.material()) || !stagedAssetIds.add(asset.material())) {
-                        throw new IllegalStateException("duplicate material texture asset " + asset.material());
+                HashSet<ResourceId> stagedResourceIds = new HashSet<>();
+                for (MaterialTextureResource resource : stagedResources) {
+                    if (resourceMaterials.contains(resource.material())
+                            || !stagedResourceIds.add(resource.material())) {
+                        throw new IllegalStateException("duplicate material texture resource " + resource.material());
                     }
                 }
-                assetMaterials.addAll(stagedAssetIds);
-                for (MaterialTextureAsset asset : stagedAssets) {
-                    switch (asset.kind()) {
-                        case SHARED_ATLAS -> atlasAssets.add(asset);
-                        case STANDALONE -> standaloneAssets.add(asset);
+                resourceMaterials.addAll(stagedResourceIds);
+                for (MaterialTextureResource resource : stagedResources) {
+                    switch (resource.kind()) {
+                        case SHARED_ATLAS -> atlasResources.add(resource);
+                        case STANDALONE -> standaloneResources.add(resource);
                     }
                 }
                 definedMaterials.addAll(stagedIds);
@@ -483,7 +484,7 @@ public final class ProviderManager {
             }
         }
         namedMaterials = Set.copyOf(definedMaterials);
-        MaterialCatalog catalog = new MaterialCatalog(atlasAssets, standaloneAssets);
+        MaterialCatalog catalog = new MaterialCatalog(atlasResources, standaloneResources);
         return new MaterialContributions(definitions, result, catalog);
     }
 

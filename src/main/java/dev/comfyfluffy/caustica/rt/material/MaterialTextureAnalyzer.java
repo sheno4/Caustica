@@ -1,7 +1,7 @@
 package dev.comfyfluffy.caustica.rt.material;
 
 import dev.comfyfluffy.caustica.api.provider.EmissionFootprint;
-import dev.comfyfluffy.caustica.api.provider.MaterialTextureAsset;
+import dev.comfyfluffy.caustica.api.provider.MaterialTextureAnalysisSource;
 import dev.comfyfluffy.caustica.api.provider.MaterialTextureImage;
 import dev.comfyfluffy.caustica.api.provider.OpenPbrColorBinding;
 import dev.comfyfluffy.caustica.api.provider.OpenPbrTextureTexel;
@@ -25,17 +25,19 @@ final class MaterialTextureAnalyzer {
 
     private MaterialTextureAnalyzer() { }
 
-    static Decoded decode(MaterialTextureAsset asset, int footprintResolution, int maxLod) throws Exception {
-        try (MaterialTextureImage texture = asset.texture().open()) {
-            int width = asset.width(), height = asset.height();
+    static Decoded decode(MaterialTextureAnalysisSource source, boolean emissionMask,
+                          OpenPbrColorBinding emissionColorBinding,
+                          int footprintResolution, int maxLod) throws Exception {
+        try (MaterialTextureImage texture = source.texture().open()) {
+            int width = source.width(), height = source.height();
             float[] surface0 = new float[width * height * 4];
             float[] normal = new float[surface0.length];
             float[] surface1 = new float[surface0.length];
-            float[] emission = asset.emissionMask() ? new float[width * height] : null;
+            float[] emission = emissionMask ? new float[width * height] : null;
             float[] emissionColor = new float[surface0.length];
-            boolean emissionUsesBase = asset.emissionColorBinding() == OpenPbrColorBinding.BASE_COLOR;
+            boolean emissionUsesBase = emissionColorBinding == OpenPbrColorBinding.BASE_COLOR;
             StatsAccumulator stats = new StatsAccumulator(width, height, footprintResolution,
-                    asset.emissionColorBinding());
+                    emissionColorBinding);
             OpenPbrTextureTexel texel = new OpenPbrTextureTexel();
             for (int y = 0; y < height; y++) for (int x = 0; x < width; x++) {
                 int i = (y * width + x) * 4;
@@ -73,13 +75,13 @@ final class MaterialTextureAnalyzer {
         }
     }
 
-    static Alpha scanAlpha(MaterialTextureImage texture, int width, int height) {
-        if (texture.alphaFrameCount() <= 0) throw new IllegalArgumentException("Material texture has no alpha frames");
+    static Alpha scanAlpha(MaterialTextureImage texture, int width, int height, int alphaFrameCount) {
+        if (alphaFrameCount <= 0) throw new IllegalArgumentException("Material texture has no alpha frames");
         float[] texels = new float[width * height * 4];
         int materialMin = 255, materialMax = 0;
         for (int y = 0; y < height; y++) for (int x = 0; x < width; x++) {
             int min = 255, max = 0;
-            for (int frame = 0; frame < texture.alphaFrameCount(); frame++) {
+            for (int frame = 0; frame < alphaFrameCount; frame++) {
                 int value = alpha(texture.alphaArgb(frame, x, y));
                 min = Math.min(min, value); max = Math.max(max, value);
             }
@@ -90,9 +92,9 @@ final class MaterialTextureAnalyzer {
         return new Alpha(texels, materialMin / 255f, materialMax / 255f);
     }
 
-    static Alpha scanAlpha(MaterialTextureAsset asset) throws Exception {
-        try (MaterialTextureImage texture = asset.texture().open()) {
-            return scanAlpha(texture, asset.width(), asset.height());
+    static Alpha scanAlpha(MaterialTextureAnalysisSource source) throws Exception {
+        try (MaterialTextureImage texture = source.texture().open()) {
+            return scanAlpha(texture, source.width(), source.height(), source.alphaFrameCount());
         }
     }
 
@@ -101,12 +103,13 @@ final class MaterialTextureAnalyzer {
         return false;
     }
 
-    static AlbedoStats scanAlbedo(MaterialTextureAsset asset, int resolution) throws Exception {
-        try (MaterialTextureImage image = asset.texture().open()) {
-            StatsAccumulator stats = new StatsAccumulator(asset.width(), asset.height(), resolution,
-                    asset.emissionColorBinding());
-            for (int y = 0; y < asset.height(); y++) for (int x = 0; x < asset.width(); x++)
-                stats.add(x, y, sample(image, x, y, asset.width(), asset.height()));
+    static AlbedoStats scanAlbedo(MaterialTextureAnalysisSource source,
+                                  OpenPbrColorBinding emissionColorBinding, int resolution) throws Exception {
+        try (MaterialTextureImage image = source.texture().open()) {
+            StatsAccumulator stats = new StatsAccumulator(source.width(), source.height(), resolution,
+                    emissionColorBinding);
+            for (int y = 0; y < source.height(); y++) for (int x = 0; x < source.width(); x++)
+                stats.add(x, y, sample(image, x, y, source.width(), source.height()));
             return stats.finish();
         }
     }

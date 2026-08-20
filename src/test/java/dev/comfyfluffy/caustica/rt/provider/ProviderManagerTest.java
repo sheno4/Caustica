@@ -501,37 +501,37 @@ final class ProviderManagerTest {
     }
 
     @Test
-    void materialSourcesContributeIndependentAssetCalibration() {
-        var atlas = asset("atlas", dev.comfyfluffy.caustica.api.provider.MaterialTextureKind.SHARED_ATLAS,
+    void materialSourcesContributeIndependentResourceCalibration() {
+        var atlas = resource("atlas", dev.comfyfluffy.caustica.api.provider.MaterialTextureKind.SHARED_ATLAS,
                 12_000.0f);
-        var standalone = asset("standalone", dev.comfyfluffy.caustica.api.provider.MaterialTextureKind.STANDALONE,
+        var standalone = resource("standalone", dev.comfyfluffy.caustica.api.provider.MaterialTextureKind.STANDALONE,
                 24_000.0f);
         Map<ResourceId, MaterialSource> sources = new LinkedHashMap<>();
-        sources.put(id("minecraft"), sink -> sink.submitAsset(atlas));
-        sources.put(id("gltf"), sink -> sink.submitAsset(standalone));
+        sources.put(id("minecraft"), sink -> sink.submitResource(atlas));
+        sources.put(id("gltf"), sink -> sink.submitResource(standalone));
 
         ProviderManager.MaterialContributions contributions =
                 new ProviderManager(Map.of(), Map.of(), sources).collectMaterials();
 
-        assertEquals(List.of(atlas), contributions.catalog().atlasAssets());
-        assertEquals(List.of(standalone), contributions.catalog().standalone());
-        assertEquals(12_000.0f, contributions.catalog().atlasAssets().getFirst()
+        assertEquals(List.of(atlas), contributions.catalog().atlasResources());
+        assertEquals(List.of(standalone), contributions.catalog().standaloneResources());
+        assertEquals(12_000.0f, contributions.catalog().atlasResources().getFirst()
                 .uniformEmissionLuminanceCdM2());
-        assertEquals(24_000.0f, contributions.catalog().standalone().getFirst()
+        assertEquals(24_000.0f, contributions.catalog().standaloneResources().getFirst()
                 .uniformEmissionLuminanceCdM2());
     }
 
     @Test
-    void duplicateAssetDisablesOnlyTheLaterSourceWithoutPublishingItsOtherAssets() {
-        var shared = asset("shared", dev.comfyfluffy.caustica.api.provider.MaterialTextureKind.SHARED_ATLAS, 1.0f);
-        var discarded = asset("discarded", dev.comfyfluffy.caustica.api.provider.MaterialTextureKind.STANDALONE,
+    void duplicateResourceDisablesOnlyTheLaterSourceWithoutPublishingItsOtherResources() {
+        var shared = resource("shared", dev.comfyfluffy.caustica.api.provider.MaterialTextureKind.SHARED_ATLAS, 1.0f);
+        var discarded = resource("discarded", dev.comfyfluffy.caustica.api.provider.MaterialTextureKind.STANDALONE,
                 2.0f);
         AtomicInteger duplicateStops = new AtomicInteger();
         MaterialSource duplicate = new MaterialSource() {
             @Override
             public void submitMaterials(dev.comfyfluffy.caustica.api.provider.MaterialSink sink) {
-                sink.submitAsset(discarded);
-                sink.submitAsset(shared);
+                sink.submitResource(discarded);
+                sink.submitResource(shared);
             }
 
             @Override
@@ -540,14 +540,14 @@ final class ProviderManagerTest {
             }
         };
         Map<ResourceId, MaterialSource> sources = new LinkedHashMap<>();
-        sources.put(id("first"), sink -> sink.submitAsset(shared));
+        sources.put(id("first"), sink -> sink.submitResource(shared));
         sources.put(id("duplicate"), duplicate);
 
         var catalog = new ProviderManager(Map.of(), Map.of(), sources)
                 .collectMaterials().catalog();
 
-        assertEquals(List.of(shared), catalog.atlasAssets());
-        assertTrue(catalog.standalone().isEmpty());
+        assertEquals(List.of(shared), catalog.atlasResources());
+        assertTrue(catalog.standaloneResources().isEmpty());
         assertEquals(1, duplicateStops.get());
     }
 
@@ -583,7 +583,7 @@ final class ProviderManagerTest {
 
     @Test
     void namedDefinitionPublishesItsSemanticTextureBundleUnderTheSameId() {
-        var texture = asset("textured", dev.comfyfluffy.caustica.api.provider.MaterialTextureKind.STANDALONE, 0.0f);
+        var texture = resource("textured", dev.comfyfluffy.caustica.api.provider.MaterialTextureKind.STANDALONE, 0.0f);
         MaterialDefinition definition = new MaterialDefinition(new MaterialHandle(id("textured")),
                 0.8f, 0.7f, 0.6f, 0.5f, 0.4f, 1.5f, 0.0f,
                 1.0f, 1.0f, 1.0f, 0.0f, 0.8f, 0.8f, 0.8f, 0.0f,
@@ -593,7 +593,7 @@ final class ProviderManagerTest {
                 .collectMaterials();
 
         assertEquals(List.of(definition), contributions.definitions());
-        assertEquals(List.of(texture), contributions.catalog().standalone());
+        assertEquals(List.of(texture), contributions.catalog().standaloneResources());
     }
 
     @Test
@@ -1156,10 +1156,11 @@ final class ProviderManagerTest {
                 1.0f, 0.0f, 1.5f, 0.0f, MaterialTopology.SURFACE, null);
     }
 
-    private static dev.comfyfluffy.caustica.api.provider.MaterialTextureAsset asset(
+    private static dev.comfyfluffy.caustica.api.provider.MaterialTextureResource resource(
             String path, dev.comfyfluffy.caustica.api.provider.MaterialTextureKind kind, float luminance) {
-        return new dev.comfyfluffy.caustica.api.provider.MaterialTextureAsset(id(path), kind, 1, 1,
-                () -> null, dev.comfyfluffy.caustica.api.provider.MaterialUv.IDENTITY,
+        return new dev.comfyfluffy.caustica.api.provider.MaterialTextureResource(id(path), kind,
+                new dev.comfyfluffy.caustica.api.provider.MaterialTextureAnalysisSource(1, 1, 1, () -> null),
+                dev.comfyfluffy.caustica.api.provider.MaterialUv.IDENTITY,
                 false, false, false,
                 dev.comfyfluffy.caustica.api.provider.OpenPbrColorBinding.PARAMETER_DEFAULT,
                 dev.comfyfluffy.caustica.api.provider.OpenPbrColorBinding.PARAMETER_DEFAULT,

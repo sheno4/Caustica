@@ -32,7 +32,8 @@ final class GltfViewerMaterialSourceTest {
         return new dev.comfyfluffy.caustica.api.provider.MaterialSink() {
             @Override public void define(dev.comfyfluffy.caustica.api.provider.MaterialDefinition definition) { }
             @Override public void submit(dev.comfyfluffy.caustica.api.provider.MaterialRule rule) { }
-            @Override public void submitAsset(dev.comfyfluffy.caustica.api.provider.MaterialTextureAsset asset) { }
+            @Override public void submitResource(
+                    dev.comfyfluffy.caustica.api.provider.MaterialTextureResource resource) { }
         };
     }
 }
