@@ -1,10 +1,5 @@
 package dev.comfyfluffy.caustica.minecraft.material;
 
-import dev.comfyfluffy.caustica.api.provider.MaterialTextureAnalysisSource;
-import dev.comfyfluffy.caustica.api.provider.MaterialTextureImage;
-import dev.comfyfluffy.caustica.api.provider.MaterialTextureResource;
-import dev.comfyfluffy.caustica.api.provider.OpenPbrColorBinding;
-import dev.comfyfluffy.caustica.api.provider.OpenPbrTextureTexel;
 
 /** Scans canonical Minecraft pixels into the fixed emission footprints used by terrain light derivation. */
 final class MinecraftMaterialEmissionAnalyzer {

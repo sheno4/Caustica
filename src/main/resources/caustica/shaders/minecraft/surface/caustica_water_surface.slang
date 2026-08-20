@@ -2,7 +2,7 @@ module caustica_water_surface;
 
 import caustica_surface;
 import caustica_types;
-import caustica_builtin_surface;
+import caustica_minecraft_material;
 
 static const float PI = 3.14159265359;
 static const float WAVE_STRENGTH = 0.3;
@@ -110,7 +110,7 @@ float2 backsolveCausticSurface(float2 initialSurface, float2 receiver, float t,
 
 public struct WaterSurface : ISurfaceModel {
     public override void evaluateSurface(SurfaceInput input, inout MaterialInput material) {
-        evaluateCanonicalSurface(input, material);
+        evaluateMinecraftMaterial(input, material);
         if ((input.surfaceFlags & SURFACE_ANIMATION_ENABLED) == 0u
                 || abs(input.geometricNormal.y) < 0.5) return;
         float2 domain = input.proceduralPosition.xz;

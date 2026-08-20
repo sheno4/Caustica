@@ -25,7 +25,7 @@ import java.nio.LongBuffer;
 /**
  * A baked ACES color-pipeline 3D LUT (scene-referred look or display transform; see
  * {@code tools/bake_display_lut.py}). RGBA16F, one mip, loaded whole from a classpath
- * resource and uploaded once via a staging buffer — same shape as {@code RtMaterialPageTexture}
+ * resource and uploaded once via a staging buffer
  * but 3D and self-describing (the resource carries its own size + shaper range in a small header,
  * see {@link #load}).
  */
@@ -197,7 +197,7 @@ public final class RtToneLut {
                             VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, copy);
 
                     // GENERAL, not SHADER_READ_ONLY_OPTIMAL, to match every other sampled/storage
-                    // image in this codebase (see RtMaterialPageTexture, GpuContext.createStorageImage)
+                    // image in this codebase (see GpuContext.createStorageImage)
                     // — the descriptor write below must use the same layout or validation flags a
                     // mismatch.
                     VkImageMemoryBarrier.Buffer toRead = VkImageMemoryBarrier.calloc(1, uploadStack);

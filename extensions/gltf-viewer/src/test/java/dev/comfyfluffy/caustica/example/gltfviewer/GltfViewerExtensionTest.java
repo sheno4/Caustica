@@ -29,7 +29,17 @@ final class GltfViewerExtensionTest {
         assertTrue(feature.materialSources().stream()
                 .anyMatch(provider -> provider.id().equals(GltfViewerExtension.MATERIAL_SOURCE)));
         assertSame(GltfViewerExtension.class, feature.shaderSource().resourceAnchor());
-        assertEquals(GltfViewerExtension.PROCEDURAL_SURFACE, feature.surfaces().getFirst().id());
+        assertEquals(2, feature.surfaces().size());
+        var material = feature.surfaces().getFirst();
+        assertEquals(GltfViewerExtension.MATERIAL_SURFACE, material.id());
+        assertEquals("caustica_gltf_viewer_material_surface", material.module());
+        assertEquals("GltfViewerMaterialSurface", material.type());
+        assertEquals(GltfViewerExtension.MATERIAL_COVERAGE, material.coverageId());
+        assertEquals("caustica_gltf_viewer_material_coverage", material.coverageModule());
+        assertEquals("GltfViewerMaterialCoverage", material.coverageType());
+        var portal = feature.surfaces().getLast();
+        assertEquals(GltfViewerExtension.PROCEDURAL_SURFACE, portal.id());
+        assertEquals(GltfViewerExtension.MATERIAL_COVERAGE, portal.coverageId());
     }
 
     @Test

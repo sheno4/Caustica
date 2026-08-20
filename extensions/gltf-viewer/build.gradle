@@ -100,6 +100,7 @@ dependencies {
     testImplementation platform("org.junit:junit-bom:5.12.2")
     testImplementation "org.junit.jupiter:junit-jupiter"
     testImplementation project(":api")
+    testImplementation rootProject
     testRuntimeOnly "org.junit.platform:junit-platform-launcher"
 }
 
@@ -159,6 +160,20 @@ def checkApiBoundary = tasks.register("checkApiBoundary") {
 
 tasks.named("test", Test) {
     useJUnitPlatform()
+    dependsOn(rootProject.tasks.named("bundleSlangRuntime"))
+    doFirst {
+        def os = org.gradle.internal.os.OperatingSystem.current()
+        def arch = System.getProperty("os.arch", "").toLowerCase(Locale.ROOT)
+        def platform = os.windows && arch in ["x86_64", "amd64"] ? "windows-x64"
+                : os.linux && arch in ["x86_64", "amd64"] ? "linux-x64" : null
+        if (platform == null) {
+            throw new GradleException("Unsupported Slang test platform ${os}/${arch}")
+        }
+        def runtime = new File(rootProject.layout.buildDirectory.get().asFile,
+                "generated/slang-runtime/caustica/natives/slang/"
+                        + "${rootProject.property('slang_runtime_version')}/${platform}")
+        systemProperty "caustica.slang.path", runtime.absolutePath
+    }
 }
 
 tasks.named("check") {

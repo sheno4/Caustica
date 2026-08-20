@@ -209,6 +209,7 @@ public struct Prim {
     public float4 tint;
     public uint materialId;
     public uint flags;
+    // baseColorTextureIndex:16 | coverageMode:2 | texturePresent:1 | textureLinear:1.
     public uint aux0;
     // Conservative provider-authored triangle coverage min:8|max:8; bit 16 means absent.
     public uint aux1;
@@ -216,18 +217,11 @@ public struct Prim {
 
 // The compiled material record is split by which stage reads it.
 //
-// MaterialBinding is the only material record either any-hit loads: sixteen aligned bytes answering the
-// two questions traversal asks. Coverage — is the surface present along this ray — and transmittance —
-// how much light passes where it is present. The two are independent (a stained-glass-textured surface has
-// both) and compose sequentially: test coverage, then apply interface behaviour.
-//
-// A binding is the cheap object. Pairing one SurfaceMaterial with a different base-color texture index or a
-// different coverage mode costs sixteen bytes rather than a cloned material, so source render types and
-// stochastic submissions use bindings instead of record variants.
+// MaterialBinding is the only material record either any-hit loads. Its sixteen aligned bytes hold only
+// definition-owned state; per-triangle texture and coverage facts live in Prim.aux0.
 public struct MaterialBinding {
-    // baseColorTextureIndex:16 | coverageMode:2 | flags:6 | surfaceImpl:8. Index 0 is the host's default
-    // base-color texture and implementation 0 is the built-in surface. Other source render types name
-    // their own bindless texture index; invalid implementation indices visibly resolve to the error surface.
+    // flags:8 | reserved:16 | surfaceImpl:8. Implementation 0 is the built-in surface; invalid indices
+    // visibly resolve to the error surface.
     public uint packed0;
     public uint surface;    // index into the SurfaceMaterial table; closest-hit only
     public uint reserved;
@@ -244,16 +238,13 @@ public static const uint COVERAGE_STOCHASTIC = 2u;
 // Transmittance: the surface is there and passes light through, so a shadow ray filters and continues
 // rather than being blocked.
 public static const uint BINDING_TRANSMISSIVE = 1u;
-// The sampled base-colour view already returns linear values. Unset for legacy UNORM atlases whose
-// sRGB bytes are decoded explicitly in the shader.
-public static const uint BINDING_BASE_COLOR_LINEAR = 2u;
-// The binding owns a uniform linear base colour in SurfaceMaterial.baseColorFactor.xyz and never samples a
-// base-color texture. Textureless definitions use opaque coverage, so any-hit needs no corresponding path.
-public static const uint BINDING_TEXTURELESS = 4u;
 
-public uint bindingBaseColorTextureIndex(MaterialBinding binding) { return binding.packed0 & 0xFFFFu; }
-public uint bindingCoverage(MaterialBinding binding) { return (binding.packed0 >> 16) & 3u; }
-public uint bindingFlags(MaterialBinding binding) { return (binding.packed0 >> 18) & 63u; }
+public uint primitiveBaseColorTextureIndex(uint aux0) { return aux0 & 0xFFFFu; }
+public uint primitiveCoverage(uint aux0) { return (aux0 >> 16u) & 3u; }
+public bool primitiveBaseTexturePresent(uint aux0) { return (aux0 & (1u << 18u)) != 0u; }
+public bool primitiveBaseTextureLinear(uint aux0) { return (aux0 & (1u << 19u)) != 0u; }
+
+public uint bindingFlags(MaterialBinding binding) { return binding.packed0 & 255u; }
 /** Which registered surface implementation this material's description is routed through. */
 public uint bindingSurfaceImpl(MaterialBinding binding) { return binding.packed0 >> 24; }
 public float bindingCutoff(MaterialBinding binding) { return float(binding.packed1 & 255u) * (1.0 / 255.0); }

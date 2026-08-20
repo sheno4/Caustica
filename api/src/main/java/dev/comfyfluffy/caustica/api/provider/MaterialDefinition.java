@@ -8,8 +8,7 @@ import java.util.Objects;
  * A named OpenPBR material that geometry sources reference through a stable handle. Colors are
  * scene-linear ACEScg. Roughness is OpenPBR perceptual roughness, not GGX alpha. A null surface selects
  * the renderer's built-in implementation. Topology is structural and independent of transmission weight.
- * When {@code textureResource} is present, sampled base color, roughness, metalness, subsurface weight,
- * and emission are multiplied by their corresponding uniform values in this declaration.
+ * Provider data is opaque to the engine and interpreted only by the selected surface implementation.
  */
 public record MaterialDefinition(MaterialHandle handle, float baseColorR, float baseColorG, float baseColorB,
                                  float specularRoughness, float baseMetalness, float specularIor,
@@ -21,7 +20,6 @@ public record MaterialDefinition(MaterialHandle handle, float baseColorR, float 
                                  float emissionColorR, float emissionColorG, float emissionColorB,
                                  float emissionLuminanceCdM2,
                                  MaterialTopology topology, ResourceId surface, float alphaCutoff,
-                                 MaterialTextureResource textureResource,
                                  MaterialProviderData providerData) {
     public MaterialDefinition(MaterialHandle handle, float baseColorR, float baseColorG, float baseColorB,
                               float specularRoughness, float baseMetalness, float specularIor,
@@ -29,7 +27,7 @@ public record MaterialDefinition(MaterialHandle handle, float baseColorR, float 
         this(handle, baseColorR, baseColorG, baseColorB, specularRoughness, baseMetalness, specularIor,
                 transmissionWeight, 1.0f, 1.0f, 1.0f,
                 0.0f, 0.8f, 0.8f, 0.8f, 0.0f,
-                1.0f, 1.0f, 1.0f, 0.0f, topology, surface, 0.5f, null,
+                1.0f, 1.0f, 1.0f, 0.0f, topology, surface, 0.5f,
                 MaterialProviderData.ZERO);
     }
 
@@ -42,13 +40,12 @@ public record MaterialDefinition(MaterialHandle handle, float baseColorR, float 
                               float subsurfaceScatterAnisotropy,
                               float emissionColorR, float emissionColorG, float emissionColorB,
                               float emissionLuminanceCdM2,
-                              MaterialTopology topology, ResourceId surface, float alphaCutoff,
-                              MaterialTextureResource textureResource) {
+                              MaterialTopology topology, ResourceId surface, float alphaCutoff) {
         this(handle, baseColorR, baseColorG, baseColorB, specularRoughness, baseMetalness, specularIor,
                 transmissionWeight, transmissionColorR, transmissionColorG, transmissionColorB,
                 subsurfaceWeight, subsurfaceColorR, subsurfaceColorG, subsurfaceColorB,
                 subsurfaceScatterAnisotropy, emissionColorR, emissionColorG, emissionColorB,
-                emissionLuminanceCdM2, topology, surface, alphaCutoff, textureResource,
+                emissionLuminanceCdM2, topology, surface, alphaCutoff,
                 MaterialProviderData.ZERO);
     }
 
@@ -83,9 +80,6 @@ public record MaterialDefinition(MaterialHandle handle, float baseColorR, float 
         unit("alphaCutoff", alphaCutoff);
         if (!Float.isFinite(specularIor) || specularIor <= 0.0f) {
             throw new IllegalArgumentException("specularIor must be positive");
-        }
-        if (textureResource != null && !textureResource.material().equals(handle.id())) {
-            throw new IllegalArgumentException("material texture resource must use the definition handle id");
         }
     }
 

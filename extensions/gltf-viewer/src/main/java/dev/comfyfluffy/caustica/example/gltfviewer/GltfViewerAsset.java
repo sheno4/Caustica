@@ -6,12 +6,7 @@ import dev.comfyfluffy.caustica.api.ColorSpaces;
 import dev.comfyfluffy.caustica.api.provider.CpuTextureResource;
 import dev.comfyfluffy.caustica.api.provider.MaterialDefinition;
 import dev.comfyfluffy.caustica.api.provider.MaterialHandle;
-import dev.comfyfluffy.caustica.api.provider.MaterialTextureAnalysisSource;
-import dev.comfyfluffy.caustica.api.provider.MaterialTextureKind;
-import dev.comfyfluffy.caustica.api.provider.MaterialTextureResource;
 import dev.comfyfluffy.caustica.api.provider.MaterialTopology;
-import dev.comfyfluffy.caustica.api.provider.MaterialUv;
-import dev.comfyfluffy.caustica.api.provider.OpenPbrColorBinding;
 import dev.comfyfluffy.caustica.api.provider.SceneGeometryKey;
 import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 
@@ -34,19 +29,19 @@ final class GltfViewerAsset {
     }
 
     static GltfViewerScene adapt(GltfLoader.Asset asset) {
-        List<GltfMaterialTextureSource.ImageData> images = decodeImages(asset.images());
+        List<GltfImageData> images = decodeImages(asset.images());
         List<GltfViewerScene.Texture> textures = new ArrayList<>();
         Map<Integer, SceneMesh.TextureReference> baseTextures = new HashMap<>();
-        List<MaterialDefinition> definitions = new ArrayList<>();
+        List<GltfViewerScene.Material> definitions = new ArrayList<>();
         List<AdaptedMaterial> materials = new ArrayList<>();
         for (int materialIndex = 0; materialIndex < asset.materials().size(); materialIndex++) {
             AdaptedMaterial adapted = adaptMaterial(asset, images, materialIndex, textures, baseTextures);
             materials.add(adapted);
-            definitions.add(adapted.definition());
+            definitions.add(adapted.material());
         }
         MaterialDefinition defaultDefinition = definition(new MaterialHandle(DEFAULT_MATERIAL),
-                defaultMaterial(), null);
-        definitions.add(defaultDefinition);
+                defaultMaterial());
+        definitions.add(new GltfViewerScene.Material(defaultDefinition, null, null, null, 1.0f));
 
         List<GltfViewerScene.Resident> residents = new ArrayList<>();
         SceneGeometryKey[][] residentKeys = new SceneGeometryKey[asset.meshes().size()][];
@@ -59,7 +54,8 @@ final class GltfViewerAsset {
                 SceneGeometryKey key = SceneGeometryKey.of(nextResidentKey++);
                 residentKeys[meshIndex][primitiveIndex] = key;
                 AdaptedMaterial material = primitive.material() < 0
-                        ? new AdaptedMaterial(defaultDefinition, null, null, SceneMesh.Coverage.OPAQUE, 1.0f)
+                        ? new AdaptedMaterial(definitions.getLast(), null, null,
+                                SceneMesh.Coverage.OPAQUE, 1.0f)
                         : materials.get(primitive.material());
                 residents.add(new GltfViewerScene.Resident(key, mesh(primitive, material)));
             }
@@ -74,7 +70,7 @@ final class GltfViewerAsset {
     }
 
     private static AdaptedMaterial adaptMaterial(GltfLoader.Asset asset,
-                                                  List<GltfMaterialTextureSource.ImageData> images,
+                                                  List<GltfImageData> images,
                                                   int materialIndex,
                                                   List<GltfViewerScene.Texture> submittedTextures,
                                                   Map<Integer, SceneMesh.TextureReference> baseTextures) {
@@ -84,7 +80,7 @@ final class GltfViewerAsset {
         validateTextureInfo(source.normalTexture(), "normal");
         validateTextureInfo(source.emissiveTexture(), "emissive");
         SceneMesh.TextureReference baseTexture = null;
-        GltfMaterialTextureSource.ImageData baseImage = null;
+        GltfImageData baseImage = null;
         if (source.baseColorTexture() != null) {
             int textureIndex = source.baseColorTexture().texture();
             baseImage = textureImage(asset, images, textureIndex);
@@ -97,44 +93,25 @@ final class GltfViewerAsset {
             }
         }
 
-        GltfMaterialTextureSource.ImageData mrImage = textureImage(asset, images, source.metallicRoughnessTexture());
-        GltfMaterialTextureSource.ImageData normalImage = textureImage(asset, images, source.normalTexture());
-        GltfMaterialTextureSource.ImageData emissiveImage = textureImage(asset, images, source.emissiveTexture());
-        MaterialTextureResource semanticTextures = null;
-        if (mrImage != null || normalImage != null || emissiveImage != null) {
-            int width = 1;
-            int height = 1;
-            for (GltfMaterialTextureSource.ImageData image :
-                    new GltfMaterialTextureSource.ImageData[]{mrImage, normalImage, emissiveImage}) {
-                if (image != null) {
-                    width = Math.max(width, image.width());
-                    height = Math.max(height, image.height());
-                }
-            }
-            MaterialHandle handle = materialHandle(materialIndex);
-            semanticTextures = new MaterialTextureResource(handle.id(), MaterialTextureKind.STANDALONE,
-                    new MaterialTextureAnalysisSource(width, height, 1,
-                            new GltfMaterialTextureSource(mrImage, normalImage, emissiveImage,
-                                    width, height, source.ior(),
-                                    source.normalTexture() == null ? 1.0f : source.normalTexture().scale())),
-                    MaterialUv.IDENTITY,
-                    mrImage != null, normalImage != null, emissiveImage != null,
-                    OpenPbrColorBinding.PARAMETER_DEFAULT,
-                    OpenPbrColorBinding.PARAMETER_DEFAULT,
-                    source.ior(), 0.0f);
-        }
+        GltfImageData mrImage = textureImage(asset, images, source.metallicRoughnessTexture());
+        GltfImageData normalImage = textureImage(asset, images, source.normalTexture());
+        GltfImageData emissiveImage = textureImage(asset, images, source.emissiveTexture());
         MaterialHandle handle = materialHandle(materialIndex);
-        MaterialDefinition definition = definition(handle, source, semanticTextures);
+        MaterialDefinition definition = definition(handle, source);
+        float normalScale = source.normalTexture() == null ? 1.0f : source.normalTexture().scale();
+        GltfViewerScene.Material material = new GltfViewerScene.Material(definition,
+                cpuTexture(mrImage, CpuTextureResource.Encoding.LINEAR),
+                cpuTexture(normalImage, CpuTextureResource.Encoding.LINEAR),
+                cpuTexture(emissiveImage, CpuTextureResource.Encoding.SRGB), normalScale);
         SceneMesh.Coverage coverage = switch (source.alphaMode()) {
             case OPAQUE -> SceneMesh.Coverage.OPAQUE;
             case MASK -> SceneMesh.Coverage.CUTOUT;
             case BLEND -> SceneMesh.Coverage.STOCHASTIC;
         };
-        return new AdaptedMaterial(definition, baseTexture, baseImage, coverage, source.baseColorA());
+        return new AdaptedMaterial(material, baseTexture, baseImage, coverage, source.baseColorA());
     }
 
-    private static MaterialDefinition definition(MaterialHandle handle, GltfLoader.Material source,
-                                                 MaterialTextureResource textureResource) {
+    private static MaterialDefinition definition(MaterialHandle handle, GltfLoader.Material source) {
         float[] baseColor = ColorSpaces.linearBt709ToAcesCg(
                 source.baseColorR(), source.baseColorG(), source.baseColorB());
         float[] emissionColor = ColorSpaces.linearBt709ToAcesCg(
@@ -149,14 +126,15 @@ final class GltfViewerAsset {
                 1.0f, 1.0f, 1.0f,
                 0.0f, 0.8f, 0.8f, 0.8f, 0.0f,
                 emissionColor[0], emissionColor[1], emissionColor[2], emissionLuminance,
-                MaterialTopology.SURFACE, null, source.alphaCutoff(), textureResource);
+                MaterialTopology.SURFACE, GltfViewerExtension.MATERIAL_SURFACE,
+                source.alphaCutoff());
     }
 
     private static SceneMesh mesh(GltfLoader.Primitive primitive, AdaptedMaterial material) {
         int vertexCount = primitive.positions().length / 3;
         int[] indices = nonDegenerateIndices(primitive.positions(), primitive.indices());
         float[] uvs = primitive.textureCoordinates();
-        boolean textured = material.baseTexture() != null || material.definition().textureResource() != null;
+        boolean textured = material.baseTexture() != null || material.hasSemanticTextures();
         if (textured && uvs.length == 0) {
             throw new IllegalArgumentException("textured glTF primitive has no TEXCOORD_0");
         }
@@ -207,7 +185,7 @@ final class GltfViewerAsset {
                 surfaces, Set.of());
     }
 
-    private static float[] alphaRange(GltfMaterialTextureSource.ImageData image) {
+    private static float[] alphaRange(GltfImageData image) {
         if (image == null) return new float[]{1.0f, 1.0f};
         int minimum = 255;
         int maximum = 0;
@@ -220,7 +198,7 @@ final class GltfViewerAsset {
     }
 
     static SceneMesh.OpacityMicromapRange triangleOpacityMicromapRange(
-            GltfMaterialTextureSource.ImageData image, float alpha0, float alpha1, float alpha2) {
+            GltfImageData image, float alpha0, float alpha1, float alpha2) {
         float[] texture = alphaRange(image);
         float vertexMinimum = Math.min(alpha0, Math.min(alpha1, alpha2));
         float vertexMaximum = Math.max(alpha0, Math.max(alpha1, alpha2));
@@ -271,8 +249,8 @@ final class GltfViewerAsset {
         }
     }
 
-    private static List<GltfMaterialTextureSource.ImageData> decodeImages(List<GltfLoader.Image> images) {
-        List<GltfMaterialTextureSource.ImageData> decoded = new ArrayList<>(images.size());
+    private static List<GltfImageData> decodeImages(List<GltfLoader.Image> images) {
+        List<GltfImageData> decoded = new ArrayList<>(images.size());
         for (GltfLoader.Image image : images) {
             try (NativeImage nativeImage = NativeImage.read(new ByteArrayInputStream(image.encoded()))) {
                 int width = nativeImage.getWidth();
@@ -283,7 +261,7 @@ final class GltfViewerAsset {
                         argb[y * width + x] = nativeImage.getPixel(x, y);
                     }
                 }
-                decoded.add(new GltfMaterialTextureSource.ImageData(width, height, argb));
+                decoded.add(new GltfImageData(width, height, argb));
             } catch (IOException exception) {
                 throw new IllegalArgumentException("failed to decode glTF image " + image.name(), exception);
             }
@@ -291,14 +269,14 @@ final class GltfViewerAsset {
         return List.copyOf(decoded);
     }
 
-    private static GltfMaterialTextureSource.ImageData textureImage(
-            GltfLoader.Asset asset, List<GltfMaterialTextureSource.ImageData> images,
+    private static GltfImageData textureImage(
+            GltfLoader.Asset asset, List<GltfImageData> images,
             GltfLoader.TextureInfo info) {
         return info == null ? null : textureImage(asset, images, info.texture());
     }
 
-    private static GltfMaterialTextureSource.ImageData textureImage(
-            GltfLoader.Asset asset, List<GltfMaterialTextureSource.ImageData> images, int textureIndex) {
+    private static GltfImageData textureImage(
+            GltfLoader.Asset asset, List<GltfImageData> images, int textureIndex) {
         GltfLoader.Texture texture = asset.textures().get(textureIndex);
         requireSupportedSampler(texture.sampler());
         return images.get(texture.image());
@@ -316,7 +294,12 @@ final class GltfViewerAsset {
         }
     }
 
-    private static CpuTextureResource cpuTexture(GltfMaterialTextureSource.ImageData image) {
+    private static CpuTextureResource cpuTexture(GltfImageData image) {
+        return cpuTexture(image, CpuTextureResource.Encoding.SRGB);
+    }
+
+    private static CpuTextureResource cpuTexture(GltfImageData image, CpuTextureResource.Encoding encoding) {
+        if (image == null) return null;
         byte[] rgba = new byte[Math.multiplyExact(Math.multiplyExact(image.width(), image.height()), 4)];
         int[] argb = image.argb();
         for (int pixelIndex = 0; pixelIndex < argb.length; pixelIndex++) {
@@ -327,7 +310,7 @@ final class GltfViewerAsset {
             rgba[byteIndex + 2] = (byte) pixel;
             rgba[byteIndex + 3] = (byte) (pixel >>> 24);
         }
-        return new CpuTextureResource(image.width(), image.height(), CpuTextureResource.Encoding.SRGB, rgba);
+        return new CpuTextureResource(image.width(), image.height(), encoding, rgba);
     }
 
     private static MaterialHandle materialHandle(int index) {
@@ -363,9 +346,13 @@ final class GltfViewerAsset {
         return result;
     }
 
-    private record AdaptedMaterial(MaterialDefinition definition,
+    private record AdaptedMaterial(GltfViewerScene.Material material,
                                    SceneMesh.TextureReference baseTexture,
-                                   GltfMaterialTextureSource.ImageData baseImage,
+                                   GltfImageData baseImage,
                                    SceneMesh.Coverage coverage, float alphaFactor) {
+        MaterialDefinition definition() { return material.definition(); }
+        boolean hasSemanticTextures() {
+            return material.metallicRoughness() != null || material.normal() != null || material.emissive() != null;
+        }
     }
 }

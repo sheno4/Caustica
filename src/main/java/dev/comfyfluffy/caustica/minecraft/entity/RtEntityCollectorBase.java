@@ -9,8 +9,9 @@ import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.api.provider.MaterialHandle;
 import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import dev.comfyfluffy.caustica.api.provider.MaterialTopology;
-import dev.comfyfluffy.caustica.api.provider.MaterialVariant;
-import dev.comfyfluffy.caustica.api.provider.OpenPbrMaterialProfile;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialSnapshot;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialKey;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialProfile;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialLookup;
 import dev.comfyfluffy.caustica.minecraft.provider.MinecraftMaterialSource;
 import dev.comfyfluffy.caustica.mixin.ModelPartAccessor;
@@ -78,6 +79,7 @@ class RtEntityCollectorBase {
 
     private RtEntityCapture capture;
     private boolean profileDynamicEntity;
+    private MinecraftMaterialSnapshot.Published materials;
     private final RtCuboidEmitter cuboidEmitter = new RtCuboidEmitter();
     // Set by order(int) for the very next submitModel call (banner/shield pattern-layer stacking), then
     // consumed. Baked-quad paths (addQuad) don't use ordering and always reset the capture's order to 0.
@@ -105,6 +107,10 @@ class RtEntityCollectorBase {
             this.outlineColor = 0;
             this.pendingOrder = 0;
         }
+    }
+
+    public void publishMaterials(MinecraftMaterialSnapshot.Published materials) {
+        this.materials = materials;
     }
 
     /** This entity's Glowing-effect outline colour (opaque ARGB), or 0 if it isn't glowing. */
@@ -143,7 +149,7 @@ class RtEntityCollectorBase {
             if (sprite != null) {
                 capture.setUvRemap(sprite.getU0(), sprite.getV0(), sprite.getU1(), sprite.getV1());
                 RtEntityTextures.INSTANCE.contributeAtlas(sprite.atlasLocation());
-                setSpriteMaterial(sprite, OpenPbrMaterialProfile.ROUGH_DIELECTRIC, false, stochasticAlpha);
+                setSpriteMaterial(sprite, MinecraftMaterialProfile.ROUGH_DIELECTRIC, false, stochasticAlpha);
             } else {
                 setStandaloneMaterial(renderType);
                 if (isEndPortal(renderType)) capture.currentCoverage = SceneMesh.Coverage.OPAQUE;
@@ -255,8 +261,8 @@ class RtEntityCollectorBase {
         ChunkSectionLayer layer = q.materialInfo().layer();
         boolean transmissive = layer == ChunkSectionLayer.TRANSLUCENT;
         boolean cutout = !transmissive && layer != ChunkSectionLayer.SOLID;
-        setSpriteMaterial(sprite, transmissive ? OpenPbrMaterialProfile.SMOOTH_DIELECTRIC
-                        : OpenPbrMaterialProfile.ROUGH_DIELECTRIC,
+        setSpriteMaterial(sprite, transmissive ? MinecraftMaterialProfile.SMOOTH_DIELECTRIC
+                        : MinecraftMaterialProfile.ROUGH_DIELECTRIC,
                 transmissive, false);
         capture.currentCoverage = cutout ? SceneMesh.Coverage.CUTOUT : SceneMesh.Coverage.OPAQUE;
         capture.currentOrder = 0; // baked-quad paths never stack decal layers
@@ -265,18 +271,25 @@ class RtEntityCollectorBase {
 
     /** Resolve block-atlas geometry through the same immutable material snapshot as terrain. */
     private void setSpriteMaterial(TextureAtlasSprite sprite, boolean stochasticAlpha) {
-        setSpriteMaterial(sprite, OpenPbrMaterialProfile.ROUGH_DIELECTRIC, false, stochasticAlpha);
+        setSpriteMaterial(sprite, MinecraftMaterialProfile.ROUGH_DIELECTRIC, false, stochasticAlpha);
     }
 
-    private void setSpriteMaterial(TextureAtlasSprite sprite, OpenPbrMaterialProfile profile,
+    private void setSpriteMaterial(TextureAtlasSprite sprite, MinecraftMaterialProfile profile,
                                    boolean transmissive, boolean stochasticAlpha) {
-        MaterialVariant variant = new MaterialVariant(profile,
-                transmissive ? MaterialTopology.MEDIUM_BOUNDARY : MaterialTopology.SURFACE, false);
-        capture.currentMaterial = sprite == null ? missingMaterial()
-                : TextureAtlas.LOCATION_BLOCKS.equals(sprite.atlasLocation())
-                ? new SceneMesh.CatalogMaterial(MinecraftMaterialLookup.material(sprite), null, variant,
-                new SceneMesh.AtlasTexture(ResourceId.of(sprite.atlasLocation().getNamespace(), sprite.atlasLocation().getPath())))
-                : new SceneMesh.AtlasMaterial(MinecraftMaterialLookup.atlasMaterial(sprite));
+        if (sprite == null) {
+            capture.currentMaterial = missingMaterial();
+        } else {
+            SceneMesh.AtlasTexture texture = new SceneMesh.AtlasTexture(ResourceId.of(
+                    sprite.atlasLocation().getNamespace(), sprite.atlasLocation().getPath()));
+            if (TextureAtlas.LOCATION_BLOCKS.equals(sprite.atlasLocation())) {
+                MinecraftMaterialKey key = new MinecraftMaterialKey(MinecraftMaterialLookup.material(sprite), null,
+                        profile, transmissive ? MaterialTopology.MEDIUM_BOUNDARY : MaterialTopology.SURFACE);
+                capture.currentMaterial = materials.resolve(key, texture).material();
+            } else {
+                capture.currentMaterial = new SceneMesh.NamedMaterial(
+                        new MaterialHandle(MinecraftMaterialSource.PARTICLE_BILLBOARD), texture);
+            }
+        }
         capture.currentCoverage = stochasticAlpha ? SceneMesh.Coverage.STOCHASTIC
                 : SceneMesh.Coverage.OPAQUE;
     }
@@ -286,7 +299,8 @@ class RtEntityCollectorBase {
         var texture = RtEntityTextures.INSTANCE.textureLocation(renderType);
         if (texture == null) return missingMaterial();
         ResourceId logicalTexture = MinecraftMaterialLookup.logicalTexture(texture);
-        return new SceneMesh.StandaloneMaterial(logicalTexture);
+        return new SceneMesh.NamedMaterial(new MaterialHandle(MinecraftMaterialSource.PARTICLE_BILLBOARD),
+                new SceneMesh.StandaloneTexture(logicalTexture));
     }
 
     private void setStandaloneMaterial(RenderType renderType) {
@@ -300,7 +314,7 @@ class RtEntityCollectorBase {
     }
 
     private static SceneMesh.MaterialReference missingMaterial() {
-        return new SceneMesh.FallbackMaterial(null);
+        return new SceneMesh.NamedMaterial(new MaterialHandle(MinecraftMaterialSource.PARTICLE_BILLBOARD));
     }
 
     /** Whether a render type is alpha-blended (translucent) — its pipeline's color target has a blend
@@ -519,7 +533,8 @@ class RtEntityCollectorBase {
         }
         capture.clearUvRemap();
         capture.currentOrder = 0;
-        capture.currentMaterial = new SceneMesh.FallbackMaterial(RtEntityTextures.INSTANCE.whiteTexture());
+        capture.currentMaterial = new SceneMesh.NamedMaterial(
+                new MaterialHandle(MinecraftMaterialSource.VERTEX_COLOR), RtEntityTextures.INSTANCE.whiteTexture());
         capture.currentCoverage = SceneMesh.Coverage.OPAQUE;
         Matrix4f pose = poseStack.last().pose();
         // Same derivation as LeashFeatureRenderer.prepare: the ribbon's horizontal half-extent is the
@@ -682,7 +697,8 @@ class RtEntityCollectorBase {
         // Lines are untextured: bind the white texture so base color is exactly the vertex colour (index 0 is
         // the block atlas, whose (0,0) texel would tint the ribbon arbitrarily).
         if (lines) {
-            capture.currentMaterial = new SceneMesh.FallbackMaterial(RtEntityTextures.INSTANCE.whiteTexture());
+            capture.currentMaterial = new SceneMesh.NamedMaterial(
+                    new MaterialHandle(MinecraftMaterialSource.VERTEX_COLOR), RtEntityTextures.INSTANCE.whiteTexture());
         } else {
             setStandaloneMaterial(renderType);
         }

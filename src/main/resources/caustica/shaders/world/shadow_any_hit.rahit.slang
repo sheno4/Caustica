@@ -18,7 +18,7 @@ void main<C : IComposition>(inout Payload payload, in BuiltInTriangleIntersectio
     float4 resolved = coverages.evaluateCoverage(
             bindingSurfaceImpl(hit.binding), hit.coverageInput);
 
-    if (bindingCoverage(hit.binding) != COVERAGE_OPAQUE) {
+    if (hit.coverage != COVERAGE_OPAQUE) {
         if (resolved.a < bindingCutoff(hit.binding)) {
             IgnoreHit();
         }

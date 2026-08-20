@@ -26,7 +26,8 @@ final class RtGeometryMeshPacking {
         float[] uvs = mesh.uvLayout() == SceneMesh.UvLayout.PER_VERTEX ? sourceUvs : new float[sourceUvs.length];
         float[] primitives = new float[triangleCount * PRIMITIVE_FLOATS];
         int[] classes = new int[RtAccel.SBT_CLASSES];
-        int[] materialIds = new int[triangleCount];
+        RtGeometryMaterialResolver.ResolvedMaterial[] materials =
+                new RtGeometryMaterialResolver.ResolvedMaterial[triangleCount];
         int[] surfaceClasses = new int[triangleCount];
         Map<SceneMesh.MaterialReference, RtGeometryMaterialResolver.ResolvedMaterial[]> resolvedMaterials =
                 new HashMap<>();
@@ -40,7 +41,7 @@ final class RtGeometryMeshPacking {
                 resolved = resolver.resolve(surface.material(), surface.coverage());
                 coverageVariants[coverage] = resolved;
             }
-            materialIds[triangle] = resolved.bindingId();
+            materials[triangle] = resolved;
             surfaceClasses[triangle] = surface.coverage() == SceneMesh.Coverage.OPAQUE
                     ? resolved.sbtClass() : RtAccel.CLASS_MASKED;
         }
@@ -58,7 +59,7 @@ final class RtGeometryMeshPacking {
                     System.arraycopy(sourceUvs, triangle * 6, uvs, output * 6, 6);
                 }
                 writeSurfacePrimitive(primitives, output * PRIMITIVE_FLOATS, positions, sourceIndices, inputIndex,
-                        surface, materialIds[triangle]);
+                        surface, materials[triangle]);
                 output++;
                 classes[targetClass]++;
             }
@@ -75,7 +76,8 @@ final class RtGeometryMeshPacking {
     }
 
     private static void writeSurfacePrimitive(float[] output, int offset, float[] positions, int[] indices,
-                                              int indexOffset, SceneMesh.TriangleSurface surface, int materialId) {
+                                              int indexOffset, SceneMesh.TriangleSurface surface,
+                                              RtGeometryMaterialResolver.ResolvedMaterial material) {
         float nx = surface.normalX();
         float ny = surface.normalY();
         float nz = surface.normalZ();
@@ -106,9 +108,9 @@ final class RtGeometryMeshPacking {
         output[offset + 5] = surface.tintG();
         output[offset + 6] = surface.tintB();
         output[offset + 7] = 0f;
-        output[offset + 8] = Float.intBitsToFloat(materialId);
+        output[offset + 8] = Float.intBitsToFloat(material.bindingId());
         output[offset + 9] = Float.intBitsToFloat(surface.emitterInLightScene() ? 1 : 0);
-        output[offset + 10] = 0f;
+        output[offset + 10] = Float.intBitsToFloat(material.primitiveMaterial());
         output[offset + 11] = Float.intBitsToFloat(packOpacityMicromapRange(surface.opacityMicromapRange()));
     }
 

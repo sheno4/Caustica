@@ -1,23 +1,24 @@
 package dev.comfyfluffy.caustica.minecraft.provider;
 
 import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.api.provider.CpuTextureResource;
 import dev.comfyfluffy.caustica.api.provider.MaterialDefinition;
-import dev.comfyfluffy.caustica.api.provider.MaterialRule;
 import dev.comfyfluffy.caustica.api.provider.MaterialSink;
-import dev.comfyfluffy.caustica.api.provider.MaterialSnapshot;
-import dev.comfyfluffy.caustica.api.provider.MaterialTextureAnalysisSource;
-import dev.comfyfluffy.caustica.api.provider.MaterialTextureImage;
-import dev.comfyfluffy.caustica.api.provider.MaterialTextureKind;
-import dev.comfyfluffy.caustica.api.provider.MaterialTextureResource;
 import dev.comfyfluffy.caustica.api.provider.MaterialTopology;
-import dev.comfyfluffy.caustica.api.provider.MaterialUv;
-import dev.comfyfluffy.caustica.api.provider.OpenPbrColorBinding;
 import dev.comfyfluffy.caustica.api.provider.OpenPbrMaterialDefaults;
-import dev.comfyfluffy.caustica.api.provider.OpenPbrTextureTexel;
+import dev.comfyfluffy.caustica.minecraft.material.MaterialTextureAnalysisSource;
+import dev.comfyfluffy.caustica.minecraft.material.MaterialTextureImage;
+import dev.comfyfluffy.caustica.minecraft.material.MaterialTextureKind;
+import dev.comfyfluffy.caustica.minecraft.material.MaterialTextureResource;
+import dev.comfyfluffy.caustica.minecraft.material.MaterialUv;
+import dev.comfyfluffy.caustica.minecraft.material.OpenPbrColorBinding;
+import dev.comfyfluffy.caustica.minecraft.material.OpenPbrTextureTexel;
+import dev.comfyfluffy.caustica.api.provider.TextureResource;
 import dev.comfyfluffy.caustica.minecraft.MinecraftProvidersExtension;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialClassifier;
-import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialEmissionState;
-import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialEmissionSnapshot;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialKey;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialProfile;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialState;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -25,86 +26,53 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class MinecraftMaterialSourceTest {
     @Test
-    void namedWaterMaterialSelectsTheMinecraftProceduralSurface() {
-        MaterialDefinition material = MinecraftMaterialSource.waterDefinition();
-
-        assertEquals(MinecraftMaterialSource.WATER, material.handle().id());
-        assertEquals(1.0f, material.baseColorR());
-        assertEquals(1.0f, material.baseColorG());
-        assertEquals(1.0f, material.baseColorB());
-        assertEquals(OpenPbrMaterialDefaults.TRANSMISSIVE_SPECULAR_ROUGHNESS,
-                material.specularRoughness());
-        assertEquals(MinecraftMaterialClassifier.WATER_IOR, material.specularIor());
-        assertEquals(1.0f, material.transmissionWeight());
-        assertEquals(MinecraftProvidersExtension.WATER_SURFACE, material.surface());
+    void fixedMaterialsSelectMinecraftOwnedSurfaces() {
+        MaterialDefinition water = MinecraftMaterialSource.waterDefinition();
+        assertEquals(OpenPbrMaterialDefaults.TRANSMISSIVE_SPECULAR_ROUGHNESS, water.specularRoughness());
+        assertEquals(MinecraftMaterialClassifier.WATER_IOR, water.specularIor());
+        assertEquals(MinecraftProvidersExtension.WATER_SURFACE, water.surface());
+        assertEquals(MinecraftProvidersExtension.MATERIAL_SURFACE,
+                MinecraftMaterialSource.particleBillboardDefinition().surface());
+        assertEquals(MinecraftProvidersExtension.END_PORTAL_SURFACE,
+                MinecraftMaterialSource.endPortalDefinition().surface());
+        assertEquals(MinecraftProvidersExtension.MATERIAL_SURFACE,
+                MinecraftMaterialSource.vertexColorDefinition().surface());
     }
 
     @Test
-    void namedParticleBillboardOwnsTheThinSurfaceCalibration() {
-        MaterialDefinition material = MinecraftMaterialSource.particleBillboardDefinition();
-
-        assertEquals(MinecraftMaterialSource.PARTICLE_BILLBOARD, material.handle().id());
-        assertEquals(MaterialTopology.SURFACE, material.topology());
-        assertEquals(1.0f, material.specularRoughness());
-        assertEquals(0.0f, material.baseMetalness());
-        assertEquals(1.0f, material.specularIor());
-        assertEquals(0.5f, material.transmissionWeight());
-        org.junit.jupiter.api.Assertions.assertNull(material.surface());
-    }
-
-    @Test
-    void namedEndPortalMaterialSelectsTheProceduralSurface() {
-        MaterialDefinition material = MinecraftMaterialSource.endPortalDefinition();
-
-        assertEquals(MinecraftMaterialSource.END_PORTAL, material.handle().id());
-        assertEquals(MaterialTopology.SURFACE, material.topology());
-        assertEquals(0.0f, material.transmissionWeight());
-        assertEquals(MinecraftProvidersExtension.END_PORTAL_SURFACE, material.surface());
-    }
-
-    @Test
-    void stagesGpuResourcesAndPublishesTheirMatchingEmissionCatalog() {
-        MinecraftMaterialEmissionState state = new MinecraftMaterialEmissionState();
+    void compilesFiniteNamedSupersetAndPublishesOnlyOnCommit() {
+        MinecraftMaterialState state = new MinecraftMaterialState();
         MinecraftMaterialSource source = new MinecraftMaterialSource(state);
         MaterialTextureResource resource = resource(75.0f);
         RecordingSink sink = new RecordingSink();
+        var previous = state.snapshot();
 
         source.stageEpoch(sink, List.of(), List.of(), List.of(resource));
 
-        assertEquals(List.of(resource), sink.resources);
-        assertTrue(state.snapshot().resolve(resource.material(), null, true, ignored -> true).emissive());
-        assertSame(state.snapshot(), source.emissionSnapshot());
+        assertSame(previous, state.snapshot());
+        assertEquals(10, sink.definitions.size());
+        sink.commit();
+        var key = new MinecraftMaterialKey(resource.material(), null,
+                MinecraftMaterialProfile.ROUGH_DIELECTRIC, MaterialTopology.SURFACE);
+        assertEquals(75.0f, state.snapshot().resolve(key).emission().luminanceCdM2());
+        assertSame(state.snapshot(), source.materialSnapshot());
     }
 
     @Test
-    void failedSubmissionKeepsTheLastCatalogPairableWithTheNextEngineEpoch() {
-        MinecraftMaterialEmissionState state = new MinecraftMaterialEmissionState();
+    void abandonedSourceTransactionKeepsPriorSnapshot() {
+        MinecraftMaterialState state = new MinecraftMaterialState();
         MinecraftMaterialSource source = new MinecraftMaterialSource(state);
-        source.stageEpoch(new RecordingSink(), List.of(), List.of(), List.of(resource(25.0f)));
+        RecordingSink first = new RecordingSink();
+        source.stageEpoch(first, List.of(), List.of(), List.of(resource(25.0f)));
+        first.commit();
         var published = state.snapshot();
 
-        assertThrows(IllegalStateException.class, () -> source.stageEpoch(new RecordingSink() {
-            @Override
-            public void submitResource(MaterialTextureResource resource) {
-                throw new IllegalStateException("submission failed");
-            }
-        }, List.of(), List.of(), List.of(resource(50.0f))));
+        source.stageEpoch(new RecordingSink(), List.of(), List.of(), List.of(resource(50.0f)));
 
         assertSame(published, state.snapshot());
-
-        MaterialSnapshot compiled = new MaterialSnapshot() {
-            @Override public long epoch() { return 37; }
-            @Override public boolean surfaceAvailable(ResourceId surface) { return true; }
-        };
-        MinecraftMaterialEmissionSnapshot.Published paired =
-                new MinecraftMaterialEmissionSnapshot.Published(state.snapshot(), compiled);
-        assertEquals(37, paired.epoch());
-        assertSame(published, paired.semantics());
     }
 
     private static MaterialTextureResource resource(float luminance) {
@@ -123,29 +91,16 @@ final class MinecraftMaterialSourceTest {
                 OpenPbrColorBinding.BASE_COLOR, 1.5f, luminance);
     }
 
-    private static class RecordingSink implements MaterialSink {
+    private static final class RecordingSink implements MaterialSink {
         private final List<MaterialDefinition> definitions = new ArrayList<>();
-        private final List<MaterialRule> rules = new ArrayList<>();
-        private final List<MaterialTextureResource> resources = new ArrayList<>();
-
-        @Override
-        public int register(dev.comfyfluffy.caustica.api.provider.TextureResource resource) {
-            return 1;
+        private final List<Runnable> commits = new ArrayList<>();
+        private int nextSlot = 1;
+        @Override public int register(TextureResource resource) {
+            if (!(resource instanceof CpuTextureResource)) throw new AssertionError(resource);
+            return nextSlot++;
         }
-
-        @Override
-        public void define(MaterialDefinition definition) {
-            definitions.add(definition);
-        }
-
-        @Override
-        public void submit(MaterialRule rule) {
-            rules.add(rule);
-        }
-
-        @Override
-        public void submitResource(MaterialTextureResource resource) {
-            resources.add(resource);
-        }
+        @Override public void define(MaterialDefinition definition) { definitions.add(definition); }
+        @Override public void onCommit(Runnable action) { commits.add(action); }
+        void commit() { commits.forEach(Runnable::run); }
     }
 }

@@ -34,12 +34,21 @@ final class MinecraftProvidersExtensionTest {
                         && modifier.module().equals("caustica_minecraft_damage_modifier")
                         && modifier.type().equals("MinecraftDamageModifier")));
         assertTrue(registry.surfaces().stream()
+                .anyMatch(surface -> surface.id().equals(MinecraftProvidersExtension.MATERIAL_SURFACE)
+                        && surface.module().equals("caustica_minecraft_surface")
+                        && surface.type().equals("MinecraftSurface")
+                        && surface.coverageId().equals(MinecraftProvidersExtension.MATERIAL_COVERAGE)
+                        && surface.coverageModule().equals("caustica_minecraft_coverage")
+                        && surface.coverageType().equals("MinecraftCoverage")));
+        assertTrue(registry.surfaces().stream()
                 .anyMatch(surface -> surface.id().equals(MinecraftProvidersExtension.WATER_SURFACE)
                         && surface.module().equals("caustica_water_surface")
-                        && surface.type().equals("WaterSurface")));
+                        && surface.type().equals("WaterSurface")
+                        && surface.coverageId().equals(MinecraftProvidersExtension.MATERIAL_COVERAGE)));
         assertTrue(registry.surfaces().stream()
                 .anyMatch(surface -> surface.id().equals(MinecraftProvidersExtension.END_PORTAL_SURFACE)
                         && surface.module().equals("caustica_portal_surface")
-                        && surface.type().equals("PortalSurface")));
+                        && surface.type().equals("PortalSurface")
+                        && surface.coverageId().equals(MinecraftProvidersExtension.MATERIAL_COVERAGE)));
     }
 }

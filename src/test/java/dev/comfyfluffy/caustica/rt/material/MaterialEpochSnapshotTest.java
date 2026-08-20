@@ -34,8 +34,6 @@ final class MaterialEpochSnapshotTest {
     }
 
     private static MaterialEpochSnapshot snapshot(Set<ResourceId> availableSurfaces) {
-        return new MaterialEpochSnapshot(1L, Map.of(), new int[0], Map.of(), availableSurfaces,
-                List.of(),
-                RtMaterialRegistry.CompiledOverrideLookup.of(List.of()), new int[]{0}, new byte[]{0});
+        return new MaterialEpochSnapshot(1L, Map.of(), availableSurfaces, List.of(), new byte[]{0});
     }
 }

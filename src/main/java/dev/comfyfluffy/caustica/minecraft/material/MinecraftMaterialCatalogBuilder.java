@@ -4,15 +4,6 @@ import com.mojang.blaze3d.platform.NativeImage;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.minecraft.MinecraftLightingCalibration;
 import dev.comfyfluffy.caustica.api.ResourceId;
-import dev.comfyfluffy.caustica.api.provider.MaterialRule;
-import dev.comfyfluffy.caustica.engine.material.MaterialEmissionIndex;
-import dev.comfyfluffy.caustica.engine.material.MaterialImage;
-import dev.comfyfluffy.caustica.engine.material.MaterialImageSource;
-import dev.comfyfluffy.caustica.api.provider.MaterialTextureAnalysisSource;
-import dev.comfyfluffy.caustica.api.provider.MaterialTextureKind;
-import dev.comfyfluffy.caustica.api.provider.MaterialTextureResource;
-import dev.comfyfluffy.caustica.api.provider.MaterialUv;
-import dev.comfyfluffy.caustica.api.provider.OpenPbrColorBinding;
 import dev.comfyfluffy.caustica.mixin.SpriteContentsAccessor;
 import dev.comfyfluffy.caustica.mixin.TextureAtlasAccessor;
 import net.minecraft.client.Minecraft;
@@ -36,7 +27,7 @@ public final class MinecraftMaterialCatalogBuilder {
     private MinecraftMaterialCatalogBuilder() {
     }
 
-    public static List<MaterialTextureResource> build(List<MaterialRule> rules) {
+    public static List<MaterialTextureResource> build(List<MinecraftMaterialRule> rules) {
         MaterialEmissionIndex emissions = MinecraftEmissionSemantics.analyze();
         float uniformEmissionLuminance = MinecraftLightingCalibration.current().blockEmissionLuminanceCdM2();
         List<TextureAtlasSprite> sprites = blockSprites();
@@ -76,7 +67,7 @@ public final class MinecraftMaterialCatalogBuilder {
     }
 
     private static List<MaterialTextureResource> standaloneResources(Set<ResourceId> blockNames,
-                                                                      List<MaterialRule> rules,
+                                                                      List<MinecraftMaterialRule> rules,
                                                                       float uniformEmissionLuminance) {
         Map<Identifier, Integer> discovered = discoverStandalone(blockNames, rules);
         List<MaterialTextureResource> result = new ArrayList<>();
@@ -109,7 +100,7 @@ public final class MinecraftMaterialCatalogBuilder {
     }
 
     private static Map<Identifier, Integer> discoverStandalone(Set<ResourceId> blockNames,
-                                                                List<MaterialRule> rules) {
+                                                                List<MinecraftMaterialRule> rules) {
         Map<Identifier, Integer> result = new LinkedHashMap<>();
         Map<Identifier, Resource> authored = Minecraft.getInstance().getResourceManager().listResources(
                 "textures", id -> id.getPath().endsWith("_s.png") || id.getPath().endsWith("_n.png"));
@@ -124,9 +115,9 @@ public final class MinecraftMaterialCatalogBuilder {
             if (blockNames.contains(material) || resource(albedo).isEmpty()) continue;
             result.merge(albedo, spec ? 1 : 2, (a, b) -> a | b);
         }
-        for (MaterialRule rule : rules) {
-            if (rule.match().geometry() != null || blockNames.contains(rule.match().material())) continue;
-            Identifier albedo = textureLocation(rule.match().material());
+        for (MinecraftMaterialRule rule : rules) {
+            if (rule.geometry() != null || blockNames.contains(rule.material())) continue;
+            Identifier albedo = textureLocation(rule.material());
             if (resource(albedo).isPresent()) result.merge(albedo, 0, (a, b) -> a | b);
         }
         return result;

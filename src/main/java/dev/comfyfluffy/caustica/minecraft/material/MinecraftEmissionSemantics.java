@@ -2,7 +2,6 @@ package dev.comfyfluffy.caustica.minecraft.material;
 
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.api.ResourceId;
-import dev.comfyfluffy.caustica.engine.material.MaterialEmissionIndex;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.block.dispatch.BlockStateModel;
 import net.minecraft.client.renderer.block.dispatch.BlockStateModelPart;
@@ -27,7 +26,7 @@ public final class MinecraftEmissionSemantics {
     private MinecraftEmissionSemantics() {
     }
 
-    public static MaterialEmissionIndex analyze() {
+    static MaterialEmissionIndex analyze() {
         Map<ResourceId, Integer> materials = new HashMap<>();
         int states = 0;
         int failures = 0;

@@ -12,12 +12,23 @@ import java.util.Objects;
 
 /** Immutable renderer-facing view of one authored glTF scene. */
 record GltfViewerScene(List<Resident> residents, List<Placement> placements,
-                       List<MaterialDefinition> materials, List<Texture> textures) {
+                       List<Material> materials, List<Texture> textures) {
     GltfViewerScene {
         residents = List.copyOf(residents);
         placements = List.copyOf(placements);
         materials = List.copyOf(materials);
         textures = List.copyOf(textures);
+    }
+
+    /** Uniform OpenPBR definition and the glTF textures its registered implementation samples. */
+    record Material(MaterialDefinition definition, CpuTextureResource metallicRoughness,
+                    CpuTextureResource normal, CpuTextureResource emissive, float normalScale) {
+        Material {
+            Objects.requireNonNull(definition, "definition");
+            if (!Float.isFinite(normalScale) || normalScale < 0.0f) {
+                throw new IllegalArgumentException("glTF normal scale must be finite and non-negative");
+            }
+        }
     }
 
     record Resident(SceneGeometryKey key, SceneMesh mesh) {

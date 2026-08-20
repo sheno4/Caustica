@@ -1,7 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.material;
 
 import com.mojang.blaze3d.platform.NativeImage;
-import dev.comfyfluffy.caustica.engine.material.MaterialImage;
 
 /** Zero-copy material image view over Minecraft's native image storage. */
 final class MinecraftMaterialImage implements MaterialImage {

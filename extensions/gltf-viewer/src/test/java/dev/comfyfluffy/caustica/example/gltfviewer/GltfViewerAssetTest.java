@@ -43,7 +43,7 @@ final class GltfViewerAssetTest {
         assertEquals(scene.residents().getFirst().key(), scene.placements().get(1).resident());
         assertArrayEquals(translation(1, 2, 3), scene.placements().get(0).nodeWorldMatrix());
         assertArrayEquals(translation(5, 7, 9), scene.placements().get(1).nodeWorldMatrix());
-        assertEquals(0.0f, scene.materials().getFirst().emissionLuminanceCdM2());
+        assertEquals(0.0f, scene.materials().getFirst().definition().emissionLuminanceCdM2());
     }
 
     @Test
@@ -57,7 +57,7 @@ final class GltfViewerAssetTest {
 
         GltfViewerScene scene = GltfViewerAsset.adapt(asset);
 
-        assertEquals(8000.0f, scene.materials().getFirst().emissionLuminanceCdM2());
+        assertEquals(8000.0f, scene.materials().getFirst().definition().emissionLuminanceCdM2());
     }
 
     @Test
@@ -94,7 +94,7 @@ final class GltfViewerAssetTest {
 
     @Test
     void conservativeOmmRangeMultipliesBaseTextureAndTriangleVertexAlpha() {
-        var image = new GltfMaterialTextureSource.ImageData(2, 1,
+        var image = new GltfImageData(2, 1,
                 new int[]{0x40FFFFFF, 0xC0FFFFFF});
 
         var range = GltfViewerAsset.triangleOpacityMicromapRange(image, 0.5f, 0.25f, 0.75f);

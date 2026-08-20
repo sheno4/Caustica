@@ -19,8 +19,9 @@ static const uint OMM_FORMAT_4_STATE = 2u;
 static const uint OMM_RANGE_ABSENT = 0x10000u;
 
 uint classifyTriangle(Prim primitive, MaterialBinding binding) {
-    if (bindingCoverage(binding) != COVERAGE_CUTOUT
-            || (bindingFlags(binding) & (BINDING_TRANSMISSIVE | BINDING_TEXTURELESS)) != 0u) {
+    if (primitiveCoverage(primitive.aux0) != COVERAGE_CUTOUT
+            || !primitiveBaseTexturePresent(primitive.aux0)
+            || (bindingFlags(binding) & BINDING_TRANSMISSIVE) != 0u) {
         return OMM_UNKNOWN;
     }
     uint range = primitive.aux1;

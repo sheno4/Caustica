@@ -9,7 +9,7 @@ import dev.comfyfluffy.caustica.api.provider.SceneGeometryKey;
 import dev.comfyfluffy.caustica.api.provider.SceneGeometrySink;
 import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import dev.comfyfluffy.caustica.api.provider.RetainedLightCollection;
-import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialEmissionSnapshot;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialSnapshot;
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
@@ -110,7 +110,7 @@ public final class RtTerrain {
     private static final RtTerrain INSTANCE = new RtTerrain();
 
     private boolean sceneInitialized;
-    private volatile MinecraftMaterialEmissionSnapshot.Published materials;
+    private volatile MinecraftMaterialSnapshot.Published materials;
     // Persistent palette snapshots for tessellation regions (render-thread only); invalidated on dirty
     // sections, column unload/window-leave, and full clears.
     private final RtSectionSnapshots snapshots = new RtSectionSnapshots();
@@ -258,7 +258,7 @@ public final class RtTerrain {
         if (INSTANCE.materials != null) INSTANCE.frameStream();
     }
 
-    public static void publishMaterials(MinecraftMaterialEmissionSnapshot.Published materials) {
+    public static void publishMaterials(MinecraftMaterialSnapshot.Published materials) {
         INSTANCE.materials = materials;
     }
 
@@ -1019,7 +1019,7 @@ public final class RtTerrain {
         if (dirtyGroup != NO_DIRTY_GROUP && !dirtyGroups.containsKey(dirtyGroup)) {
             dirtyGroup = NO_DIRTY_GROUP;
         }
-        MinecraftMaterialEmissionSnapshot.Published materialSnapshot = materials;
+        MinecraftMaterialSnapshot.Published materialSnapshot = materials;
         if (materialSnapshot == null) return;
         SectionTask task = new SectionTask(key, token, sx << 4, sy << 4, sz << 4, dirtyGroup,
                 terrainEpoch, materialSnapshot.epoch(),

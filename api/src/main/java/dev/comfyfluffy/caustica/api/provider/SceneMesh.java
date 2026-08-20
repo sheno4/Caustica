@@ -31,7 +31,7 @@ public final class SceneMesh {
     public enum Semantic { RECEIVES_PROJECTED_SURFACE_MODIFIERS }
 
     /** Source-level material identity resolved by the renderer for its current material epoch. */
-    public sealed interface MaterialReference permits NamedMaterial, CatalogMaterial, AtlasMaterial, StandaloneMaterial, FallbackMaterial {
+    public sealed interface MaterialReference permits NamedMaterial, FallbackMaterial {
         TextureReference texture();
     }
     /** Stable texture identity local to the scene provider that submitted this mesh. */
@@ -47,25 +47,6 @@ public final class SceneMesh {
             implements MaterialReference {
         public NamedMaterial { Objects.requireNonNull(material, "material"); }
         public NamedMaterial(MaterialHandle material) { this(material, null); }
-    }
-    /** A renderer catalog material selected by resource identity, geometry, and variant. */
-    public record CatalogMaterial(ResourceId material, ResourceId geometry, MaterialVariant variant, TextureReference texture)
-            implements MaterialReference {
-        public CatalogMaterial {
-            Objects.requireNonNull(material, "material");
-            Objects.requireNonNull(variant, "variant");
-        }
-        public CatalogMaterial(ResourceId material, ResourceId geometry, MaterialVariant variant) {
-            this(material, geometry, variant, null);
-        }
-    }
-    public record AtlasMaterial(AtlasMaterialReference reference) implements MaterialReference {
-        public AtlasMaterial { Objects.requireNonNull(reference, "reference"); }
-        @Override public TextureReference texture() { return new AtlasTexture(reference.atlas()); }
-    }
-    public record StandaloneMaterial(ResourceId material) implements MaterialReference {
-        public StandaloneMaterial { Objects.requireNonNull(material, "material"); }
-        @Override public TextureReference texture() { return new StandaloneTexture(material); }
     }
     /** The renderer's neutral surface, optionally paired with a source texture. */
     public record FallbackMaterial(TextureReference texture) implements MaterialReference { }

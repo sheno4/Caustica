@@ -62,10 +62,6 @@ final class RtMaterialLayoutTest {
 
     @Test
     void canonicalColorBindingsFitTheExistingSurfaceFeatureWord() {
-        assertEquals(8, RtMaterialRegistry.FEATURE_SUBSURFACE_COLOR_BASE);
-        assertEquals(16, RtMaterialRegistry.FEATURE_EMISSION_COLOR_BASE);
-        assertEquals(0, (RtMaterialRegistry.FEATURE_SUBSURFACE_COLOR_BASE
-                | RtMaterialRegistry.FEATURE_EMISSION_COLOR_BASE) >>> 8);
         assertEquals(128, SurfaceMaterialData.BYTE_SIZE);
     }
 

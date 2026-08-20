@@ -1,13 +1,10 @@
 package dev.comfyfluffy.caustica.rt.material;
 
 /**
- * Immutable material description produced at the resource-epoch boundary, in OpenPBR vocabulary. Only
- * the uniform half lives here; anything varying per texel is in the canonical pages.
+ * Immutable uniform OpenPBR material description produced at the resource-epoch boundary.
  */
 public record RtMaterialDesc(
         int transport,
-        Source source,
-        int features,
         /** OpenPBR {@code specular_roughness}: perceptual. GGX alpha is its square, taken in the shader. */
         float specularRoughness,
         float baseMetalness,
@@ -31,24 +28,15 @@ public record RtMaterialDesc(
          */
         int surfaceImplementation
 ) {
-    public RtMaterialDesc(int transport, Source source, int features, float specularRoughness,
+    public RtMaterialDesc(int transport, float specularRoughness,
                           float baseMetalness, float specularIor, float transmissionWeight,
                           float emissionLuminance, int surfaceImplementation) {
-        this(transport, source, features, specularRoughness, baseMetalness, specularIor, transmissionWeight,
+        this(transport, specularRoughness, baseMetalness, specularIor, transmissionWeight,
                 1.0f, 1.0f, 1.0f, 0.0f, 0.8f, 0.8f, 0.8f, 0.0f,
                 1.0f, 1.0f, 1.0f, emissionLuminance, surfaceImplementation);
     }
-    public enum Source {
-        OVERRIDE,
-        AUTHORED_TEXTURE,
-        DERIVED_TEXTURE,
-        NEUTRAL
-    }
 
     public RtMaterialDesc {
-        if (source == null) {
-            throw new IllegalArgumentException("Material description source must be present");
-        }
         if (surfaceImplementation < 0 || surfaceImplementation > 255) {
             // The compiled binding carries it in eight bits, so an out-of-range index would alias
             // another implementation rather than fail.

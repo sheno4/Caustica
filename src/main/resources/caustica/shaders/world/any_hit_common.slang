@@ -18,6 +18,7 @@ import caustica_coverage;
 /** The engine-owned traversal binding and the narrow input exposed to coverage implementations. */
 public struct HitBinding {
     public MaterialBinding binding;
+    public uint coverage;
     public CoverageInput coverageInput;
 };
 
@@ -58,14 +59,14 @@ public HitBinding decodeHit(float3 bary, uint pid) {
         hit.coverageInput.vertexColor = float4(color.rgb, clamp(color.a, 0.0, 1.0));
     }
     hit.binding = ConstPtr<MaterialBinding>(pc.materialTableAddr)[pr.materialId];
+    hit.coverage = primitiveCoverage(pr.aux0);
     SurfaceMaterial material = ConstPtr<SurfaceMaterial>(pc.materialSurfaceAddr)[hit.binding.surface];
-    uint bindingFlags = bindingFlags(hit.binding);
-    hit.coverageInput.baseTextureIndex = bindingBaseColorTextureIndex(hit.binding);
-    hit.coverageInput.flags = ((bindingFlags & BINDING_TEXTURELESS) == 0u
+    hit.coverageInput.baseTextureIndex = primitiveBaseColorTextureIndex(pr.aux0);
+    hit.coverageInput.flags = (primitiveBaseTexturePresent(pr.aux0)
                     ? COVERAGE_TEXTURE_PRESENT : 0u)
-            | ((bindingFlags & BINDING_BASE_COLOR_LINEAR) != 0u
+            | (primitiveBaseTextureLinear(pr.aux0)
                     ? COVERAGE_TEXTURE_LINEAR : 0u)
-            | (bindingCoverage(hit.binding) == COVERAGE_OPAQUE
+            | (hit.coverage == COVERAGE_OPAQUE
                     ? COVERAGE_MODE_OPAQUE : 0u);
     hit.coverageInput.baseColorFactor = material.baseColorFactor.xyz;
     return hit;

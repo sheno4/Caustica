@@ -2,7 +2,7 @@ package dev.comfyfluffy.caustica.minecraft.terrain;
 
 import dev.comfyfluffy.caustica.api.ColorSpaces;
 import dev.comfyfluffy.caustica.api.provider.SceneMesh;
-import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialEmissionSnapshot;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialSnapshot;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 
@@ -24,7 +24,7 @@ import java.util.List;
  * <p><b>Radiance matches the closest-hit.</b> Per-texel shaded emission is {@code albedo * mask *
  * emissionLuminance}, where Minecraft's catalog supplies the same emission mask, material luminance,
  * and primitive-state dependency used by closest-hit shading. The per-material
- * {@link MinecraftMaterialEmissionSnapshot.Footprint} stores premultiplied linear emission color and
+ * {@link MinecraftMaterialSnapshot.Footprint} stores premultiplied linear emission color and
  * mask coverage. The light's radiance is the mean over its bounding rectangle (dark texels included — a uniform-rectangle
  * approximation), so total power equals the quad's true emissive integral: the rectangle contains every
  * emissive sample, hence {@code Le_rect * rectArea == quadArea * mean(albedo*mask)}.
@@ -69,7 +69,7 @@ final class RtLightCollector {
     static void collectClass(FloatArrayList out, FloatArrayList verts, FloatArrayList prim,
                               List<SceneMesh.TriangleSurface> surfaces,
                               FloatArrayList cornerUv, TextureAtlasSprite[] sprites,
-                              MinecraftMaterialEmissionSnapshot.Emission[] materialEmissions,
+                              MinecraftMaterialSnapshot.Emission[] materialEmissions,
                               float minFillRatio) {
         int quads = prim.size() / (2 * PRIM_FLOATS);
         float[] v = verts.elements();
@@ -77,7 +77,7 @@ final class RtLightCollector {
         float[] uv = cornerUv.elements();
         for (int k = 0; k < quads; k++) {
             int pb = k * 2 * PRIM_FLOATS;
-            MinecraftMaterialEmissionSnapshot.Emission material = materialEmissions[2 * k];
+            MinecraftMaterialSnapshot.Emission material = materialEmissions[2 * k];
             if (!material.emissive()) {
                 continue;
             }
@@ -88,7 +88,7 @@ final class RtLightCollector {
             if (factor <= EMISSION_EPS) {
                 continue;
             }
-            MinecraftMaterialEmissionSnapshot.Footprint footprint = material.footprint();
+            MinecraftMaterialSnapshot.Footprint footprint = material.footprint();
             if (footprint == null) continue;
             int scan = footprint.resolution();
 

@@ -17,6 +17,10 @@ public final class GltfViewerExtension implements CausticaExtension {
     public static final ResourceId MATERIAL_SOURCE = ResourceId.of(GltfViewerMod.MOD_ID, "gltf_materials");
     public static final ResourceId PROCEDURAL_MATERIAL_SOURCE = ResourceId.of(
             GltfViewerMod.MOD_ID, "procedural_materials");
+    public static final ResourceId MATERIAL_SURFACE = ResourceId.of(
+            GltfViewerMod.MOD_ID, "gltf_material");
+    public static final ResourceId MATERIAL_COVERAGE = ResourceId.of(
+            GltfViewerMod.MOD_ID, "gltf_coverage");
     public static final ResourceId PROCEDURAL_SURFACE = ResourceId.of(GltfViewerMod.MOD_ID, "portal_surface");
     public static final ResourceId PROCEDURAL_MATERIAL = ResourceId.of(
             GltfViewerMod.MOD_ID, "procedural_portal");
@@ -33,8 +37,14 @@ public final class GltfViewerExtension implements CausticaExtension {
                 .shaderSource(ShaderSource.classpath(GltfViewerExtension.class,
                         "/caustica_gltf_viewer/shaders"))
                 .runtimeActivation(RuntimeActivation.ALWAYS)
+                .surface(MATERIAL_SURFACE,
+                        "caustica_gltf_viewer_material_surface", "GltfViewerMaterialSurface",
+                        MATERIAL_COVERAGE,
+                        "caustica_gltf_viewer_material_coverage", "GltfViewerMaterialCoverage")
                 .surface(PROCEDURAL_SURFACE,
-                        "caustica_gltf_viewer_portal_surface", "GltfViewerPortalSurface")
+                        "caustica_gltf_viewer_portal_surface", "GltfViewerPortalSurface",
+                        MATERIAL_COVERAGE,
+                        "caustica_gltf_viewer_material_coverage", "GltfViewerMaterialCoverage")
                 .sceneProviderContextual(GltfViewerSceneProvider.ID, context ->
                         new GltfViewerSceneProvider(assets(context), GltfViewerSceneProvider::loadedAnchors))
                 .sceneProvider(ProceduralSurfaceSceneProvider.ID, ProceduralSurfaceSceneProvider::new)

@@ -2,7 +2,6 @@ package dev.comfyfluffy.caustica.minecraft.material;
 
 import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.api.provider.OpenPbrMaterialDefaults;
-import dev.comfyfluffy.caustica.api.provider.OpenPbrMaterialProfile;
 import net.minecraft.SharedConstants;
 import net.minecraft.server.Bootstrap;
 import net.minecraft.world.level.block.Blocks;
@@ -49,11 +48,10 @@ final class MinecraftMaterialClassifierTest {
     void blockStateClassificationProducesNeutralProfilesAndGeometryIds() {
         var anvil = MinecraftMaterialClassifier.classify(Blocks.ANVIL.defaultBlockState());
         assertEquals(ResourceId.parse("minecraft:anvil"), anvil.geometry());
-        assertEquals(OpenPbrMaterialProfile.CONDUCTOR, anvil.profile());
+        assertEquals(MinecraftMaterialProfile.CONDUCTOR, anvil.profile());
 
         var quartz = MinecraftMaterialClassifier.classify(Blocks.SMOOTH_QUARTZ.defaultBlockState());
-        assertEquals(OpenPbrMaterialProfile.POLISHED_DIELECTRIC, quartz.profile());
-        assertFalse(quartz.emitting());
+        assertEquals(MinecraftMaterialProfile.POLISHED_DIELECTRIC, quartz.profile());
     }
 
     @Test

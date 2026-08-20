@@ -1,9 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.material;
 
 import dev.comfyfluffy.caustica.api.ResourceId;
-import dev.comfyfluffy.caustica.engine.material.MaterialClassification;
 import dev.comfyfluffy.caustica.api.provider.OpenPbrMaterialDefaults;
-import dev.comfyfluffy.caustica.api.provider.OpenPbrMaterialProfile;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
@@ -37,22 +35,21 @@ public final class MinecraftMaterialClassifier {
     private MinecraftMaterialClassifier() {
     }
 
-    public static MaterialClassification classify(BlockState state) {
+    public static MinecraftMaterialClassification classify(BlockState state) {
         if (state == null) {
-            return new MaterialClassification(null, OpenPbrMaterialProfile.ROUGH_DIELECTRIC, false);
+            return new MinecraftMaterialClassification(null, MinecraftMaterialProfile.ROUGH_DIELECTRIC);
         }
         var id = BuiltInRegistries.BLOCK.getKey(state.getBlock());
-        return new MaterialClassification(ResourceId.of(id.getNamespace(), id.getPath()), profile(state),
-                state.getLightEmission() > 0);
+        return new MinecraftMaterialClassification(ResourceId.of(id.getNamespace(), id.getPath()), profile(state));
     }
 
-    public static OpenPbrMaterialProfile profile(BlockState state) {
-        if (state == null) return OpenPbrMaterialProfile.ROUGH_DIELECTRIC;
+    public static MinecraftMaterialProfile profile(BlockState state) {
+        if (state == null) return MinecraftMaterialProfile.ROUGH_DIELECTRIC;
         SoundType sound = state.getSoundType();
-        if (isMetal(sound)) return OpenPbrMaterialProfile.CONDUCTOR;
-        if (sound == SoundType.GLASS) return OpenPbrMaterialProfile.SMOOTH_DIELECTRIC;
-        if (POLISHED.contains(state.getBlock())) return OpenPbrMaterialProfile.POLISHED_DIELECTRIC;
-        return OpenPbrMaterialProfile.ROUGH_DIELECTRIC;
+        if (isMetal(sound)) return MinecraftMaterialProfile.CONDUCTOR;
+        if (sound == SoundType.GLASS) return MinecraftMaterialProfile.SMOOTH_DIELECTRIC;
+        if (POLISHED.contains(state.getBlock())) return MinecraftMaterialProfile.POLISHED_DIELECTRIC;
+        return MinecraftMaterialProfile.ROUGH_DIELECTRIC;
     }
 
     public static float dielectricIor(ResourceId material) {

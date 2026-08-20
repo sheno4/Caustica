@@ -1,7 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.entity;
 
 import dev.comfyfluffy.caustica.api.ColorSpaces;
-import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.api.provider.MaterialHandle;
 import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import org.junit.jupiter.api.Test;
 
@@ -19,7 +19,7 @@ final class RtEntityCaptureTest {
     @Test
     void capturesOneNeutralSurfaceForEachTriangle() {
         RtEntityCapture capture = new RtEntityCapture();
-        capture.currentMaterial = new SceneMesh.StandaloneMaterial(ResourceId.of("test", "entity"));
+        capture.currentMaterial = new SceneMesh.NamedMaterial(MaterialHandle.of("test", "entity"));
         capture.currentCoverage = SceneMesh.Coverage.STOCHASTIC;
         capture.addDirectQuad(X, Y, Z, U, V, 0f, 0f, 1f, -1);
 
@@ -35,10 +35,8 @@ final class RtEntityCaptureTest {
     @Test
     void adjacentQuadsShareOnlyTheirOwnSurfaceValue() {
         RtEntityCapture capture = new RtEntityCapture();
-        SceneMesh.MaterialReference firstMaterial = new SceneMesh.StandaloneMaterial(
-                ResourceId.of("test", "first"));
-        SceneMesh.MaterialReference secondMaterial = new SceneMesh.StandaloneMaterial(
-                ResourceId.of("test", "second"));
+        SceneMesh.MaterialReference firstMaterial = new SceneMesh.NamedMaterial(MaterialHandle.of("test", "first"));
+        SceneMesh.MaterialReference secondMaterial = new SceneMesh.NamedMaterial(MaterialHandle.of("test", "second"));
         capture.currentMaterial = firstMaterial;
         capture.currentCoverage = SceneMesh.Coverage.STOCHASTIC;
         capture.addDirectQuad(X, Y, Z, U, V, 0f, 0f, 1f, 0xFF804020, 1.25f);

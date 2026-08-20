@@ -1,7 +1,5 @@
 package dev.comfyfluffy.caustica.minecraft.material;
 
-import dev.comfyfluffy.caustica.engine.material.MaterialImage;
-import dev.comfyfluffy.caustica.engine.material.MaterialImageSource;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;

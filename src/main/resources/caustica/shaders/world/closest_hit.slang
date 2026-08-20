@@ -225,7 +225,7 @@ MaterialInput buildMaterialInput(SurfaceMaterial mat, float3 shadingNormal, bool
     return material;
 }
 
-SurfaceInput buildSurfaceInput(Payload payload, SurfaceMaterial material, MaterialBinding binding,
+SurfaceInput buildSurfaceInput(Payload payload, SurfaceMaterial material, uint primitiveAux0,
         float3 position, float3 geometricNormal, float3 tangent, float3 bitangent,
         float3 outgoingDirection, float2 uv, float lod, float rayFootprint,
         float3 tint, float4 vertexColor, float primitiveEmission) {
@@ -238,10 +238,10 @@ SurfaceInput buildSurfaceInput(Payload payload, SurfaceMaterial material, Materi
     input.outgoingDirection = outgoingDirection;
     input.textureCoordinate = uv;
     input.textureLod = lod;
-    input.baseTextureIndex = bindingBaseColorTextureIndex(binding);
-    input.baseTextureFlags = ((bindingFlags(binding) & BINDING_TEXTURELESS) == 0u
+    input.baseTextureIndex = primitiveBaseColorTextureIndex(primitiveAux0);
+    input.baseTextureFlags = (primitiveBaseTexturePresent(primitiveAux0)
                     ? SURFACE_BASE_TEXTURE_PRESENT : 0u)
-            | ((bindingFlags(binding) & BINDING_BASE_COLOR_LINEAR) != 0u
+            | (primitiveBaseTextureLinear(primitiveAux0)
                     ? SURFACE_BASE_TEXTURE_LINEAR : 0u);
     input.tint = tint;
     input.vertexColor = vertexColor;
@@ -347,11 +347,10 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
             dot(history.row1, float4(previousLocal, 1.0)),
             dot(history.row2, float4(previousLocal, 1.0)));
     float3 motionPrev = mul(ObjectToWorld3x4(), float4(currentLocal, 1.0)) - previousWorld;
-    bool textureless = (bindingFlags(binding) & BINDING_TEXTURELESS) != 0u;
-    // The material record names the shared bindless base-color texture, so geometry carries no texture index.
-    uint textureIndex = bindingBaseColorTextureIndex(binding);
+    bool texturePresent = primitiveBaseTexturePresent(pr.aux0);
+    uint textureIndex = primitiveBaseColorTextureIndex(pr.aux0);
     float textureLod = 0.0;
-    if (!textureless) {
+    if (texturePresent) {
         textureLod = rayConeTextureLod(rayCone,
                 texSizePx(providerTextures[NonUniformResourceIndex(textureIndex)]),
                 mul(objectToWorld, tp0), mul(objectToWorld, tp1), mul(objectToWorld, tp2), uv0, uv1, uv2);
@@ -372,10 +371,10 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
     if (!transmissive && (payload.flags & PAYLOAD_GUIDE_RAY) != 0u) {
         CoverageInput coverageInput;
         coverageInput.baseTextureIndex = textureIndex;
-        coverageInput.flags = (!textureless ? COVERAGE_TEXTURE_PRESENT : 0u)
-                | ((bindingFlags(binding) & BINDING_BASE_COLOR_LINEAR) != 0u
+        coverageInput.flags = (texturePresent ? COVERAGE_TEXTURE_PRESENT : 0u)
+                | (primitiveBaseTextureLinear(pr.aux0)
                         ? COVERAGE_TEXTURE_LINEAR : 0u)
-                | (bindingCoverage(binding) == COVERAGE_OPAQUE ? COVERAGE_MODE_OPAQUE : 0u);
+                | (primitiveCoverage(pr.aux0) == COVERAGE_OPAQUE ? COVERAGE_MODE_OPAQUE : 0u);
         coverageInput.baseColorFactor = mat.baseColorFactor.xyz;
         coverageInput.textureCoordinate = uv;
         coverageInput.tint = pr.tint.rgb;
@@ -396,7 +395,7 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
             mul(objectToWorld, tp2), uv0, uv1, uv2, tangent, bitangent);
     MaterialInput material = buildMaterialInput(mat, shadingNormal, transmissive);
     float3 hitPos = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
-    SurfaceInput input = buildSurfaceInput(payload, mat, binding, hitPos, faceNormal, tangent, bitangent,
+    SurfaceInput input = buildSurfaceInput(payload, mat, pr.aux0, hitPos, faceNormal, tangent, bitangent,
             vdir, uv, textureLod, rayConeHitWidth(rayCone), pr.tint.rgb, vertexColor,
             transmissive ? 0.0 : stateEmission);
     uint surfaceImpl = bindingSurfaceImpl(binding);

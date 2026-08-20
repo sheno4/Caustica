@@ -35,9 +35,7 @@ abstract class GenerateRtBindings extends DefaultTask {
                     // inputs are none of them engine-fixed set-0 bindings: the selected pass declares
                     // them at set 2, discovered from per-composition runtime reflection instead of this
                     // build-time one.
-                    PROVIDER_TEXTURES: "providerTextures", MATERIAL_SURFACE0: "materialSurface0Tex",
-                    MATERIAL_NORMAL: "materialNormalTex", MATERIAL_SURFACE1: "materialSurface1Tex",
-                    MATERIAL_EMISSION: "materialEmissionTex"]],
+                    PROVIDER_TEXTURES: "providerTextures"]],
             [prefix: "DISPLAY", source: "pipelines/display/main.comp.slang", resources: [
                     OUTPUT: "outputImage", RT_IMAGE: "rtImage", EXPOSURE: "exposureImage", HDR_OUTPUT: "hdrImage",
                     SDR_TONE_LUT: "toneLut", HDR_TONE_LUT: "hdrToneLut", LOOK_LUT: "lookLut"]],
@@ -114,8 +112,8 @@ abstract class GenerateRtBindings extends DefaultTask {
                     throw new GradleException("overlay shaders disagree on descriptor set: ${overlaySet} and ${locations.VALUE.set}")
                 }
             } else if (spec.prefix == "WORLD") {
-                def ordinary = locations.findAll { suffix, ignored -> suffix != "PROVIDER_TEXTURES" && !(suffix as String).startsWith("MATERIAL_") }
-                def bindless = locations.findAll { suffix, ignored -> suffix == "PROVIDER_TEXTURES" || (suffix as String).startsWith("MATERIAL_") }
+                def ordinary = locations.findAll { suffix, ignored -> suffix != "PROVIDER_TEXTURES" }
+                def bindless = locations.findAll { suffix, ignored -> suffix == "PROVIDER_TEXTURES" }
                 if ((ordinary.values()*.set as Set).size() != 1 || (bindless.values()*.set as Set).size() != 1
                         || ordinary.values().first().set == bindless.values().first().set) {
                     throw new GradleException("world resources do not have distinct ordinary and bindless sets: ${locations}")

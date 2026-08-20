@@ -16,7 +16,7 @@ import caustica_pass_resources;
 void main<C : IComposition>(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) {
     uint pid = PrimitiveIndex();
     HitBinding hit = decodeHit(barycentrics(attr.barycentrics), pid);
-    uint coverage = bindingCoverage(hit.binding);
+    uint coverage = hit.coverage;
     if (coverage == COVERAGE_OPAQUE) {
         return;
     }

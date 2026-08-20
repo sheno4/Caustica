@@ -4,9 +4,6 @@ import dev.comfyfluffy.caustica.api.CausticaApi;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.api.provider.MaterialHandle;
 import dev.comfyfluffy.caustica.api.provider.SceneMesh;
-import dev.comfyfluffy.caustica.api.provider.AtlasMaterialReference;
-import dev.comfyfluffy.caustica.engine.material.MaterialCatalog;
-import dev.comfyfluffy.caustica.api.provider.MaterialVariant;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.accel.RtOpacityMicromapPipeline;
@@ -26,10 +23,10 @@ import java.util.Set;
 
 /** Owns the active immutable resource-pack material epoch and replaces it across reloads. */
 public final class RtMaterialEpoch {
-    public static final int TEXTURE_CAPACITY = 256;
+    /** Shared capacity for provider base textures and four canonical mip resources per compiled page. */
+    public static final int TEXTURE_CAPACITY = 1280;
     private final ProviderManager providers;
     private final RtMaterialRegistry registry = new RtMaterialRegistry();
-    private final RtMaterialPageCompiler pageCompiler = new RtMaterialPageCompiler();
     static final class LifecycleState {
         boolean bindingsReady;
         volatile boolean reloadPending;
@@ -67,33 +64,12 @@ public final class RtMaterialEpoch {
                     return registry.bindingId(material.id());
                 }
 
-                @Override public int catalog(ResourceId material, ResourceId geometry, MaterialVariant variant) {
-                    return registry.requireSnapshot().resolve(material, geometry, variant);
-                }
-
-                @Override public int atlas(AtlasMaterialReference reference) {
-                    return registry.resolveAtlasReference(reference, false);
-                }
-
-                @Override public int standalone(ResourceId material) {
-                    return registry.resolveStandaloneTexture(material, false);
-                }
-
                 @Override public int fallback() {
                     return registry.runtimeFallbackId();
                 }
 
-                @Override public int withTexture(int binding, SceneMesh.TextureReference texture) {
-                    return registry.withBaseColorTextureIndex(binding,
-                            textureRegistry.requireSlot(source, texture));
-                }
-
-                @Override public int cutout(int binding) {
-                    return registry.withCutoutCoverage(binding);
-                }
-
-                @Override public int stochastic(int binding) {
-                    return registry.withStochasticCoverage(binding);
+                @Override public int textureSlot(SceneMesh.TextureReference texture) {
+                    return textureRegistry.requireSlot(source, texture);
                 }
 
                 @Override public int sbtClass(int binding) {
@@ -150,9 +126,8 @@ public final class RtMaterialEpoch {
                 (texture, label) -> new UploadedProviderTexture(ctx, texture, label),
                 (slot, view, layout) -> pipeline.setProviderTexture(slot, view, layout, epochSampler));
         providers.bindTextureRegistry(textureRegistry);
-        pageCompiler.reset();
         ProviderManager.MaterialContributions contributions = providers.collectMaterials();
-        RtMaterialOverrides.SurfaceResolver surfaceResolver = surface -> {
+        RtMaterialRegistry.SurfaceResolver surfaceResolver = surface -> {
             int index = CausticaApi.registry().surfaceIndex(surface);
             return rejectedSurfaces.contains(index) ? RtMaterialRegistry.ERROR_SURFACE_IMPLEMENTATION : index;
         };
@@ -164,18 +139,14 @@ public final class RtMaterialEpoch {
                 availableSurfaces.add(registeredSurfaces.get(index).id());
             }
         }
-        RtMaterialOverrides overrides = RtMaterialOverrides.from(contributions.rules(), surfaceResolver);
-        MaterialCatalog catalog = contributions.catalog();
-        pageCompiler.prepareAll(ctx, textureCapacity, catalog);
         if (ctx.backend().capabilities().opacityMicromaps()) {
             opacityMicromapPipeline = RtOpacityMicromapPipeline.create(ctx);
         }
         sceneGeometry.setOpacityMicromapPipeline(opacityMicromapPipeline);
-        registry.rebuild(ctx, pageCompiler, catalog, overrides,
-                contributions.definitions(), surfaceResolver, Set.copyOf(availableSurfaces), textureCapacity);
+        registry.rebuild(ctx, contributions.definitions(), surfaceResolver,
+                Set.copyOf(availableSurfaces));
         providers.publishMaterials(registry.requireSnapshot());
         providerSnapshotPublished = true;
-        pageCompiler.bindPages(pipeline, epochSampler);
         state.published();
     }
 
@@ -223,7 +194,6 @@ public final class RtMaterialEpoch {
             opacityMicromapPipeline.destroy();
             opacityMicromapPipeline = null;
         }
-        pageCompiler.reset();
         registry.destroy();
         if (textureRegistry != null) {
             providers.unbindTextureRegistry(textureRegistry);

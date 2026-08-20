@@ -13,7 +13,6 @@ import dev.comfyfluffy.caustica.api.provider.MaterialTopology;
 import dev.comfyfluffy.caustica.api.provider.LightProvider;
 import dev.comfyfluffy.caustica.api.provider.RetainedLightCollection;
 import dev.comfyfluffy.caustica.api.provider.LightDescriptor;
-import dev.comfyfluffy.caustica.api.provider.MaterialRule;
 import dev.comfyfluffy.caustica.api.provider.MaterialSource;
 import dev.comfyfluffy.caustica.api.provider.MaterialDefinition;
 import dev.comfyfluffy.caustica.api.ResourceId;
@@ -469,13 +468,13 @@ final class ProviderManagerTest {
 
     @Test
     void materialCollectionIsTransactionalAndIsolatesFailingSources() {
-        MaterialRule discarded = rule("discarded");
-        MaterialRule retained = rule("retained");
+        MaterialDefinition discarded = definition("discarded");
+        MaterialDefinition retained = definition("retained");
         AtomicInteger failingStops = new AtomicInteger();
         MaterialSource failing = new MaterialSource() {
             @Override
             public void submitMaterials(dev.comfyfluffy.caustica.api.provider.MaterialSink sink) {
-                sink.submit(discarded);
+                sink.define(discarded);
                 throw new IllegalStateException("expected");
             }
 
@@ -487,7 +486,7 @@ final class ProviderManagerTest {
         MaterialSource healthy = new MaterialSource() {
             @Override
             public void submitMaterials(dev.comfyfluffy.caustica.api.provider.MaterialSink sink) {
-                sink.submit(retained);
+                sink.define(retained);
             }
         };
         Map<ResourceId, MaterialSource> materials = new LinkedHashMap<>();
@@ -495,65 +494,15 @@ final class ProviderManagerTest {
         materials.put(id("healthy"), healthy);
         ProviderManager manager = new ProviderManager(Map.of(), Map.of(), materials);
 
-        assertEquals(List.of(retained), manager.collectMaterials().rules());
-        assertEquals(List.of(retained), manager.collectMaterials().rules());
+        assertEquals(List.of(retained), manager.collectMaterials().definitions());
+        assertEquals(List.of(retained), manager.collectMaterials().definitions());
         assertEquals(1, failingStops.get());
-    }
-
-    @Test
-    void materialSourcesContributeIndependentResourceCalibration() {
-        var atlas = resource("atlas", dev.comfyfluffy.caustica.api.provider.MaterialTextureKind.SHARED_ATLAS,
-                12_000.0f);
-        var standalone = resource("standalone", dev.comfyfluffy.caustica.api.provider.MaterialTextureKind.STANDALONE,
-                24_000.0f);
-        Map<ResourceId, MaterialSource> sources = new LinkedHashMap<>();
-        sources.put(id("minecraft"), sink -> sink.submitResource(atlas));
-        sources.put(id("gltf"), sink -> sink.submitResource(standalone));
-
-        ProviderManager.MaterialContributions contributions =
-                new ProviderManager(Map.of(), Map.of(), sources).collectMaterials();
-
-        assertEquals(List.of(atlas), contributions.catalog().atlasResources());
-        assertEquals(List.of(standalone), contributions.catalog().standaloneResources());
-        assertEquals(12_000.0f, contributions.catalog().atlasResources().getFirst()
-                .uniformEmissionLuminanceCdM2());
-        assertEquals(24_000.0f, contributions.catalog().standaloneResources().getFirst()
-                .uniformEmissionLuminanceCdM2());
-    }
-
-    @Test
-    void duplicateResourceDisablesOnlyTheLaterSourceWithoutPublishingItsOtherResources() {
-        var shared = resource("shared", dev.comfyfluffy.caustica.api.provider.MaterialTextureKind.SHARED_ATLAS, 1.0f);
-        var discarded = resource("discarded", dev.comfyfluffy.caustica.api.provider.MaterialTextureKind.STANDALONE,
-                2.0f);
-        AtomicInteger duplicateStops = new AtomicInteger();
-        MaterialSource duplicate = new MaterialSource() {
-            @Override
-            public void submitMaterials(dev.comfyfluffy.caustica.api.provider.MaterialSink sink) {
-                sink.submitResource(discarded);
-                sink.submitResource(shared);
-            }
-
-            @Override
-            public void stop() {
-                duplicateStops.incrementAndGet();
-            }
-        };
-        Map<ResourceId, MaterialSource> sources = new LinkedHashMap<>();
-        sources.put(id("first"), sink -> sink.submitResource(shared));
-        sources.put(id("duplicate"), duplicate);
-
-        var catalog = new ProviderManager(Map.of(), Map.of(), sources)
-                .collectMaterials().catalog();
-
-        assertEquals(List.of(shared), catalog.atlasResources());
-        assertTrue(catalog.standaloneResources().isEmpty());
-        assertEquals(1, duplicateStops.get());
     }
 
     @Test
     void duplicateNamedMaterialDisablesOnlyTheLaterSource() {
         MaterialDefinition shared = definition("shared");
+        AtomicInteger duplicateCommits = new AtomicInteger();
         AtomicInteger duplicateStops = new AtomicInteger();
         MaterialSource first = new MaterialSource() {
             @Override
@@ -565,6 +514,7 @@ final class ProviderManagerTest {
             @Override
             public void submitMaterials(dev.comfyfluffy.caustica.api.provider.MaterialSink sink) {
                 sink.define(shared);
+                sink.onCommit(duplicateCommits::incrementAndGet);
             }
 
             @Override
@@ -578,22 +528,68 @@ final class ProviderManagerTest {
         ProviderManager manager = new ProviderManager(Map.of(), Map.of(), materials);
 
         assertEquals(List.of(shared), manager.collectMaterials().definitions());
+        assertEquals(0, duplicateCommits.get());
         assertEquals(1, duplicateStops.get());
     }
 
     @Test
-    void namedDefinitionPublishesItsSemanticTextureBundleUnderTheSameId() {
-        var texture = resource("textured", dev.comfyfluffy.caustica.api.provider.MaterialTextureKind.STANDALONE, 0.0f);
-        MaterialDefinition definition = new MaterialDefinition(new MaterialHandle(id("textured")),
-                0.8f, 0.7f, 0.6f, 0.5f, 0.4f, 1.5f, 0.0f,
-                1.0f, 1.0f, 1.0f, 0.0f, 0.8f, 0.8f, 0.8f, 0.0f,
-                1.0f, 1.0f, 1.0f, 0.0f, MaterialTopology.SURFACE, null, 0.5f, texture);
-        ProviderManager.MaterialContributions contributions = new ProviderManager(Map.of(), Map.of(),
-                Map.of(id("source"), (MaterialSource) sink -> sink.define(definition)))
-                .collectMaterials();
+    void materialCommitHookRunsAfterTextureMaterializationAndAcceptedDefinitionPublication() {
+        List<String> events = new ArrayList<>();
+        MaterialDefinition accepted = definition("accepted");
+        MaterialSource source = sink -> {
+            sink.register(new dev.comfyfluffy.caustica.api.provider.CpuTextureResource(1, 1,
+                    dev.comfyfluffy.caustica.api.provider.CpuTextureResource.Encoding.SRGB,
+                    new byte[] { 1, 2, 3, 4 }));
+            sink.define(accepted);
+            sink.onCommit(() -> {
+                assertEquals(List.of("upload", "descriptor"), events);
+                events.add("callback");
+            });
+        };
+        ProviderManager manager = new ProviderManager(Map.of(), Map.of(), Map.of(id("source"), source));
+        ProviderTextureRegistry registry = new ProviderTextureRegistry(2, (texture, label) -> {
+            events.add("upload");
+            return uploaded(100L, new AtomicInteger());
+        }, (slot, imageView, layout) -> events.add("descriptor"));
+        events.clear();
+        manager.bindTextureRegistry(registry);
 
-        assertEquals(List.of(definition), contributions.definitions());
-        assertEquals(List.of(texture), contributions.catalog().standaloneResources());
+        ProviderManager.MaterialContributions contributions = manager.collectMaterials();
+
+        assertEquals(List.of(accepted), contributions.definitions());
+        assertEquals(List.of("upload", "descriptor", "callback"), events);
+        manager.unbindTextureRegistry(registry);
+        registry.close();
+    }
+
+    @Test
+    void throwingMaterialCommitHookFailsTheEpochWithoutDisablingItsSource() {
+        AtomicInteger stops = new AtomicInteger();
+        AtomicInteger laterSubmissions = new AtomicInteger();
+        MaterialSource source = new MaterialSource() {
+            @Override
+            public void submitMaterials(dev.comfyfluffy.caustica.api.provider.MaterialSink sink) {
+                sink.define(definition("committed"));
+                sink.onCommit(() -> {
+                    throw new IllegalStateException("commit hook failed");
+                });
+            }
+
+            @Override
+            public void stop() {
+                stops.incrementAndGet();
+            }
+        };
+        Map<ResourceId, MaterialSource> sources = new LinkedHashMap<>();
+        sources.put(id("source"), source);
+        sources.put(id("later"), sink -> laterSubmissions.incrementAndGet());
+        ProviderManager manager = new ProviderManager(Map.of(), Map.of(), sources);
+
+        IllegalStateException failure = assertThrows(IllegalStateException.class, manager::collectMaterials);
+
+        assertEquals("commit hook failed", failure.getMessage());
+        assertEquals(0, stops.get());
+        assertEquals(0, laterSubmissions.get());
     }
 
     @Test
@@ -622,35 +618,6 @@ final class ProviderManagerTest {
         ProviderManager.MaterialContributions contributions = manager.collectMaterials();
 
         assertEquals(List.of(invalid, healthy), contributions.definitions());
-        assertEquals(0, invalidStops.get());
-    }
-
-    @Test
-    void unknownSurfaceKeepsItsRuleForVisibleErrorResolution() {
-        AtomicInteger invalidStops = new AtomicInteger();
-        MaterialRule invalid = new MaterialRule(id("invalid_rule"),
-                new MaterialRule.Match(id("source"), null),
-                new MaterialRule.Parameters(null, null, null, null, null, id("missing_surface")));
-        MaterialSource broken = new MaterialSource() {
-            @Override
-            public void submitMaterials(dev.comfyfluffy.caustica.api.provider.MaterialSink sink) {
-                sink.submit(invalid);
-            }
-
-            @Override
-            public void stop() {
-                invalidStops.incrementAndGet();
-            }
-        };
-        MaterialRule healthy = rule("healthy_rule");
-        Map<ResourceId, MaterialSource> sources = new LinkedHashMap<>();
-        sources.put(id("broken"), broken);
-        sources.put(id("healthy"), sink -> sink.submit(healthy));
-        ProviderManager manager = new ProviderManager(Map.of(), Map.of(), sources);
-
-        ProviderManager.MaterialContributions contributions = manager.collectMaterials();
-
-        assertEquals(List.of(invalid, healthy), contributions.rules());
         assertEquals(0, invalidStops.get());
     }
 
@@ -767,23 +734,6 @@ final class ProviderManagerTest {
     }
 
     @Test
-    void catalogGeometryDoesNotRequireAPublicMaterialDefinition() {
-        SceneProvider terrain = new SceneProvider() {
-            @Override
-            public void submitGeometry(SceneFrameContext frame) {
-                frame.geometry().submit(1, List.of(new SceneGeometrySink.Put(1, catalogTriangle())));
-            }
-        };
-        ProviderManager manager = manager("terrain", terrain);
-        List<GeometryUpdates.Group> forwarded = new ArrayList<>();
-
-        manager.submitGeometry(null, SceneOrigin.ZERO, (updates, ignored) -> forwarded.addAll(updates));
-
-        assertEquals(1, forwarded.size());
-        assertEquals(id("terrain"), forwarded.getFirst().key().source());
-    }
-
-    @Test
     void frameIndexFlowsIntoSceneProviderContext() {
         AtomicReference<SceneFrameContext> captured = new AtomicReference<>();
         ProviderManager manager = manager("scene", new SceneProvider() {
@@ -832,12 +782,12 @@ final class ProviderManagerTest {
         SceneProvider provider = new SceneProvider() {
             @Override
             public void update(SceneGeometryUpdateContext update) {
-                update.geometry().submit(1, List.of(new SceneGeometrySink.Put(1, catalogTriangle())));
+                update.geometry().submit(1, List.of(new SceneGeometrySink.Put(1, fallbackTriangle())));
             }
 
             @Override
             public void submitGeometry(SceneFrameContext frame) {
-                frame.geometry().submit(2, List.of(new SceneGeometrySink.Put(2, catalogTriangle())));
+                frame.geometry().submit(2, List.of(new SceneGeometrySink.Put(2, fallbackTriangle())));
             }
         };
         ProviderManager manager = manager("geometry", provider);
@@ -881,7 +831,7 @@ final class ProviderManagerTest {
         });
         manager.beginSession();
         ArrayList<SceneGeometrySink.Operation> operations = new ArrayList<>();
-        operations.add(new SceneGeometrySink.Put(1, catalogTriangle()));
+        operations.add(new SceneGeometrySink.Put(1, fallbackTriangle()));
 
         Thread producer = new Thread(() -> scope.get().submit(7, operations));
         producer.start();
@@ -1155,6 +1105,39 @@ final class ProviderManagerTest {
         registry.close();
     }
 
+    @Test
+    void materialCommitHookDoesNotRunWhenTextureUploadFails() {
+        AtomicInteger uploads = new AtomicInteger();
+        AtomicReference<String> semantics = new AtomicReference<>("prior");
+        AtomicInteger stops = new AtomicInteger();
+        MaterialSource broken = new MaterialSource() {
+            @Override
+            public void submitMaterials(dev.comfyfluffy.caustica.api.provider.MaterialSink sink) {
+                sink.register(new dev.comfyfluffy.caustica.api.provider.CpuTextureResource(1, 1,
+                        dev.comfyfluffy.caustica.api.provider.CpuTextureResource.Encoding.SRGB,
+                        new byte[]{1, 2, 3, 4}));
+                sink.define(definition("uncommitted"));
+                sink.onCommit(() -> semantics.set("next"));
+            }
+
+            @Override public void stop() { stops.incrementAndGet(); }
+        };
+        ProviderManager manager = new ProviderManager(Map.of(), Map.of(), Map.of(id("broken"), broken));
+        ProviderTextureRegistry registry = new ProviderTextureRegistry(3, (texture, label) -> {
+            if (uploads.getAndIncrement() > 0) throw new IllegalStateException("upload failed");
+            return uploaded(100L, new AtomicInteger());
+        }, (slot, imageView, layout) -> { });
+        manager.bindTextureRegistry(registry);
+
+        ProviderManager.MaterialContributions contributions = manager.collectMaterials();
+
+        assertTrue(contributions.definitions().isEmpty());
+        assertEquals("prior", semantics.get());
+        assertEquals(1, stops.get());
+        manager.unbindTextureRegistry(registry);
+        registry.close();
+    }
+
     private static ProviderManager manager(String path, SceneProvider provider) {
         return new ProviderManager(Map.of(id(path), provider), Map.of(), Map.of());
     }
@@ -1182,11 +1165,6 @@ final class ProviderManagerTest {
         return new LightDescriptor.Point(key, x, 0.0, 0.0, 3.0, 1.0, 1.0, 1.0);
     }
 
-    private static MaterialRule rule(String path) {
-        return new MaterialRule(id(path), new MaterialRule.Match(id(path), null),
-                new MaterialRule.Parameters(null, null, null, null, null, null));
-    }
-
     private static MaterialSource defining(String path) {
         return sink -> sink.define(definition(path));
     }
@@ -1194,18 +1172,6 @@ final class ProviderManagerTest {
     private static MaterialDefinition definition(String path) {
         return new MaterialDefinition(new MaterialHandle(id(path)), 1.0f, 1.0f, 1.0f,
                 1.0f, 0.0f, 1.5f, 0.0f, MaterialTopology.SURFACE, null);
-    }
-
-    private static dev.comfyfluffy.caustica.api.provider.MaterialTextureResource resource(
-            String path, dev.comfyfluffy.caustica.api.provider.MaterialTextureKind kind, float luminance) {
-        return new dev.comfyfluffy.caustica.api.provider.MaterialTextureResource(id(path), kind,
-                new dev.comfyfluffy.caustica.api.provider.MaterialTextureAnalysisSource(1, 1, 1, () -> null),
-                dev.comfyfluffy.caustica.api.provider.MaterialUv.IDENTITY,
-                false, false, false,
-                dev.comfyfluffy.caustica.api.provider.OpenPbrColorBinding.PARAMETER_DEFAULT,
-                dev.comfyfluffy.caustica.api.provider.OpenPbrColorBinding.PARAMETER_DEFAULT,
-                dev.comfyfluffy.caustica.api.provider.OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR,
-                luminance);
     }
 
     private static SceneMesh triangle(String material) {
@@ -1219,13 +1185,10 @@ final class ProviderManagerTest {
         return ((GeometryUpdates.ProviderPayload) put.payload()).buildPolicy();
     }
 
-    private static SceneMesh catalogTriangle() {
+    private static SceneMesh fallbackTriangle() {
         return new SceneMesh(new float[]{0, 0, 0, 1, 0, 0, 0, 1, 0}, new int[]{0, 1, 2},
                 SceneMesh.UvLayout.PER_VERTEX, new float[6], List.of(new SceneMesh.TriangleSurface(
-                new SceneMesh.CatalogMaterial(ResourceId.of("minecraft", "stone"), null,
-                        new dev.comfyfluffy.caustica.api.provider.MaterialVariant(
-                                dev.comfyfluffy.caustica.api.provider.OpenPbrMaterialProfile.ROUGH_DIELECTRIC,
-                                MaterialTopology.SURFACE, false)),
+                new SceneMesh.FallbackMaterial(null),
                 SceneMesh.Coverage.OPAQUE, Float.NaN, Float.NaN, Float.NaN, 0, 1, 1, 1)));
     }
 

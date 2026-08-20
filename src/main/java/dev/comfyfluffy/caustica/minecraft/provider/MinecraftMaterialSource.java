@@ -5,19 +5,21 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.api.ResourceId;
-import dev.comfyfluffy.caustica.api.provider.MaterialRule;
 import dev.comfyfluffy.caustica.api.provider.MaterialDefinition;
 import dev.comfyfluffy.caustica.api.provider.MaterialHandle;
 import dev.comfyfluffy.caustica.api.provider.MaterialSink;
 import dev.comfyfluffy.caustica.api.provider.MaterialSource;
 import dev.comfyfluffy.caustica.api.provider.MaterialTopology;
-import dev.comfyfluffy.caustica.api.provider.MaterialTextureResource;
 import dev.comfyfluffy.caustica.api.provider.OpenPbrMaterialDefaults;
 import dev.comfyfluffy.caustica.minecraft.MinecraftProvidersExtension;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialClassifier;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialCatalogBuilder;
-import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialEmissionSnapshot;
-import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialEmissionState;
+import dev.comfyfluffy.caustica.minecraft.material.MaterialTextureResource;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialSnapshot;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialState;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialPageCompiler;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialRule;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftResolvedMaterialCatalog;
 import net.minecraft.client.Minecraft;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.packs.resources.Resource;
@@ -36,28 +38,30 @@ public final class MinecraftMaterialSource implements MaterialSource {
     public static final ResourceId LAVA_MATERIAL = ResourceId.of("minecraft", "block/lava_still");
     public static final ResourceId PARTICLE_BILLBOARD =
             ResourceId.of("caustica", "minecraft_particle_billboard");
+    public static final ResourceId VERTEX_COLOR = ResourceId.of("caustica", "minecraft_vertex_color");
     public static final int FORMAT = 4;
-    private final MinecraftMaterialEmissionState emissionState;
+    private final MinecraftMaterialState materialState;
 
     public MinecraftMaterialSource() {
-        this(new MinecraftMaterialEmissionState());
+        this(new MinecraftMaterialState());
     }
 
-    public MinecraftMaterialSource(MinecraftMaterialEmissionState emissionState) {
-        this.emissionState = java.util.Objects.requireNonNull(emissionState, "emissionState");
+    public MinecraftMaterialSource(MinecraftMaterialState materialState) {
+        this.materialState = java.util.Objects.requireNonNull(materialState, "materialState");
     }
 
     @Override
     public void submitMaterials(MaterialSink sink) {
         List<MaterialDefinition> definitions = List.of(
                 new MaterialDefinition(new MaterialHandle(CLOUD), 0.82f, 0.86f, 0.9f,
-                        0.92f, 0.0f, 1.33f, 0.0f, MaterialTopology.SURFACE, null),
-                waterDefinition(), endPortalDefinition(), particleBillboardDefinition());
+                        0.92f, 0.0f, 1.33f, 0.0f, MaterialTopology.SURFACE,
+                        MinecraftProvidersExtension.MATERIAL_SURFACE),
+                waterDefinition(), endPortalDefinition(), particleBillboardDefinition(), vertexColorDefinition());
         Map<Identifier, Resource> resources = Minecraft.getInstance().getResourceManager().listResources(
                 "materials", id -> id.getPath().endsWith(".json"));
         List<Map.Entry<Identifier, Resource>> ordered = new ArrayList<>(resources.entrySet());
         ordered.sort(Map.Entry.comparingByKey(Comparator.comparing(Identifier::toString)));
-        List<MaterialRule> rules = new ArrayList<>();
+        List<MinecraftMaterialRule> rules = new ArrayList<>();
         for (Map.Entry<Identifier, Resource> entry : ordered) {
             try (Reader reader = entry.getValue().openAsReader()) {
                 rules.add(parse(JsonParser.parseReader(reader).getAsJsonObject(), entry.getKey()));
@@ -67,26 +71,24 @@ public final class MinecraftMaterialSource implements MaterialSource {
         }
         // Geometry-specific rules win over texture-wide rules. Resource identifiers break ties after the
         // resource manager has selected the highest-priority pack for each identifier.
-        rules.sort(Comparator.comparing((MaterialRule rule) -> rule.match().geometry() == null)
-                .thenComparing(MaterialRule::id));
+        rules.sort(Comparator.comparing((MinecraftMaterialRule rule) -> rule.geometry() == null)
+                .thenComparing(MinecraftMaterialRule::id));
         var textureResources = MinecraftMaterialCatalogBuilder.build(rules);
         stageEpoch(sink, definitions, rules, textureResources);
         CausticaMod.LOGGER.info("RT material source: format={}, rules={}", FORMAT, rules.size());
     }
 
-    void stageEpoch(MaterialSink sink, List<MaterialDefinition> definitions, List<MaterialRule> rules,
+    void stageEpoch(MaterialSink sink, List<MaterialDefinition> definitions, List<MinecraftMaterialRule> rules,
                     List<MaterialTextureResource> textureResources) {
-        MinecraftMaterialEmissionSnapshot nextEmissionSnapshot = MinecraftMaterialEmissionSnapshot.build(
-                definitions, rules, textureResources);
-
-        definitions.forEach(sink::define);
-        rules.forEach(sink::submit);
-        textureResources.forEach(sink::submitResource);
-        emissionState.publish(nextEmissionSnapshot);
+        MinecraftMaterialPageCompiler.Result pages = MinecraftMaterialPageCompiler.compile(textureResources, sink);
+        MinecraftResolvedMaterialCatalog catalog = MinecraftResolvedMaterialCatalog.build(
+                definitions, rules, textureResources, pages, MinecraftProvidersExtension.MATERIAL_SURFACE);
+        catalog.definitions().forEach(sink::define);
+        sink.onCommit(() -> materialState.publish(catalog));
     }
 
-    public MinecraftMaterialEmissionSnapshot emissionSnapshot() {
-        return emissionState.snapshot();
+    public MinecraftMaterialSnapshot materialSnapshot() {
+        return materialState.snapshot();
     }
 
     static MaterialDefinition waterDefinition() {
@@ -98,7 +100,8 @@ public final class MinecraftMaterialSource implements MaterialSource {
 
     static MaterialDefinition particleBillboardDefinition() {
         return new MaterialDefinition(new MaterialHandle(PARTICLE_BILLBOARD), 1.0f, 1.0f, 1.0f,
-                1.0f, 0.0f, 1.0f, 0.5f, MaterialTopology.SURFACE, null);
+                1.0f, 0.0f, 1.0f, 0.5f, MaterialTopology.SURFACE,
+                MinecraftProvidersExtension.MATERIAL_SURFACE);
     }
 
     static MaterialDefinition endPortalDefinition() {
@@ -107,7 +110,13 @@ public final class MinecraftMaterialSource implements MaterialSource {
                 MinecraftProvidersExtension.END_PORTAL_SURFACE);
     }
 
-    public static MaterialRule parse(JsonObject root, Identifier source) {
+    static MaterialDefinition vertexColorDefinition() {
+        return new MaterialDefinition(new MaterialHandle(VERTEX_COLOR), 1.0f, 1.0f, 1.0f,
+                0.9f, 0.0f, 1.5f, 0.0f, MaterialTopology.SURFACE,
+                MinecraftProvidersExtension.MATERIAL_SURFACE);
+    }
+
+    public static MinecraftMaterialRule parse(JsonObject root, Identifier source) {
         int format = requiredInt(root, "format");
         if (format != FORMAT) throw new IllegalArgumentException("Unsupported material format " + format);
         JsonObject match = requiredObject(root, "match");
@@ -157,9 +166,9 @@ public final class MinecraftMaterialSource implements MaterialSource {
                 : "water".equals(model) ? MinecraftProvidersExtension.WATER_SURFACE : null;
         MaterialTopology topology = model == null ? null : "opaque".equals(model)
                 ? MaterialTopology.SURFACE : MaterialTopology.MEDIUM_BOUNDARY;
-        MaterialRule.Parameters parameters = new MaterialRule.Parameters(roughness, metalness, ior,
+        MinecraftMaterialRule.Parameters parameters = new MinecraftMaterialRule.Parameters(roughness, metalness, ior,
                 transmission, emissionLuminanceCdM2, surface, topology);
-        return new MaterialRule(resourceId(source), new MaterialRule.Match(texture, geometry), parameters);
+        return new MinecraftMaterialRule(resourceId(source), texture, geometry, parameters);
     }
 
     private static ResourceId resourceId(Identifier id) {

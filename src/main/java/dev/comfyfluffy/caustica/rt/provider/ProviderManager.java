@@ -13,7 +13,6 @@ import dev.comfyfluffy.caustica.api.provider.LightDescriptor;
 import dev.comfyfluffy.caustica.api.provider.MaterialSource;
 import dev.comfyfluffy.caustica.api.provider.ProviderLifecycle;
 import dev.comfyfluffy.caustica.api.provider.MaterialSnapshot;
-import dev.comfyfluffy.caustica.api.provider.MaterialRule;
 import dev.comfyfluffy.caustica.api.provider.MaterialDefinition;
 import dev.comfyfluffy.caustica.api.provider.MaterialSink;
 import dev.comfyfluffy.caustica.api.ResourceId;
@@ -26,8 +25,6 @@ import dev.comfyfluffy.caustica.api.provider.SceneGeometryUpdateContext;
 import dev.comfyfluffy.caustica.api.provider.SceneCamera;
 import dev.comfyfluffy.caustica.api.provider.SceneGeometryKey;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
-import dev.comfyfluffy.caustica.engine.material.MaterialCatalog;
-import dev.comfyfluffy.caustica.api.provider.MaterialTextureResource;
 import dev.comfyfluffy.caustica.api.provider.TextureResource;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtFrameStats;
@@ -420,26 +417,22 @@ public final class ProviderManager {
     }
 
     /**
-     * Collect one immutable material rule snapshot. A source stages into its own list so a failure cannot
-     * publish a partial contribution; other sources remain active and retain their registration order.
+     * Collect one immutable material-definition snapshot. Submission failures cannot publish partial source
+     * contributions. Commit hooks run after publication and must not throw because their failure aborts the epoch.
      */
     public MaterialContributions collectMaterials() {
         List<MaterialDefinition> definitions = new ArrayList<>();
         Set<ResourceId> definedMaterials = new HashSet<>();
-        List<MaterialTextureResource> atlasResources = new ArrayList<>();
-        List<MaterialTextureResource> standaloneResources = new ArrayList<>();
-        Set<ResourceId> resourceMaterials = new HashSet<>();
-        List<MaterialRule> result = new ArrayList<>();
         for (Map.Entry<ResourceId, MaterialSource> entry : materials().entrySet()) {
             ProviderKey key = new ProviderKey("material", entry.getKey());
             if (failed.contains(key) || stoppedThisSession.contains(key)) {
                 continue;
             }
             List<MaterialDefinition> stagedDefinitions = new ArrayList<>();
-            List<MaterialRule> staged = new ArrayList<>();
-            List<MaterialTextureResource> stagedResources = new ArrayList<>();
+            List<Runnable> stagedCommitActions = new ArrayList<>();
             ProviderTextureRegistry.Submission textureSubmission = textureRegistry == null
                     ? null : textureRegistry.submission(entry.getKey());
+            boolean committed = false;
             try (textureSubmission) {
                 entry.getValue().submitMaterials(new MaterialSink() {
                     @Override
@@ -456,13 +449,8 @@ public final class ProviderManager {
                     }
 
                     @Override
-                    public void submit(MaterialRule rule) {
-                        staged.add(java.util.Objects.requireNonNull(rule));
-                    }
-
-                    @Override
-                    public void submitResource(MaterialTextureResource resource) {
-                        stagedResources.add(java.util.Objects.requireNonNull(resource));
+                    public void onCommit(Runnable action) {
+                        stagedCommitActions.add(java.util.Objects.requireNonNull(action));
                     }
                 });
                 Set<ResourceId> stagedIds = new HashSet<>();
@@ -470,43 +458,25 @@ public final class ProviderManager {
                     if (definedMaterials.contains(definition.id()) || !stagedIds.add(definition.id())) {
                         throw new IllegalStateException("duplicate material definition " + definition.id());
                     }
-                    if (definition.textureResource() != null) stagedResources.add(definition.textureResource());
-                }
-                HashSet<ResourceId> stagedResourceIds = new HashSet<>();
-                for (MaterialTextureResource resource : stagedResources) {
-                    if (resourceMaterials.contains(resource.material())
-                            || !stagedResourceIds.add(resource.material())) {
-                        throw new IllegalStateException("duplicate material texture resource " + resource.material());
-                    }
                 }
                 if (textureSubmission != null) textureSubmission.commit();
-                resourceMaterials.addAll(stagedResourceIds);
-                for (MaterialTextureResource resource : stagedResources) {
-                    switch (resource.kind()) {
-                        case SHARED_ATLAS -> atlasResources.add(resource);
-                        case STANDALONE -> standaloneResources.add(resource);
-                    }
-                }
                 definedMaterials.addAll(stagedIds);
                 definitions.addAll(stagedDefinitions);
-                result.addAll(staged);
+                committed = true;
             } catch (Throwable t) {
                 failed.add(key);
                 CausticaMod.LOGGER.error("Caustica material provider {} failed and was disabled", entry.getKey(), t);
                 stopOne("material", entry, key, MaterialSource::stop);
             }
+            if (committed) stagedCommitActions.forEach(Runnable::run);
         }
         namedMaterials = Set.copyOf(definedMaterials);
-        MaterialCatalog catalog = new MaterialCatalog(atlasResources, standaloneResources);
-        return new MaterialContributions(definitions, result, catalog);
+        return new MaterialContributions(definitions);
     }
 
-    public record MaterialContributions(List<MaterialDefinition> definitions, List<MaterialRule> rules,
-                                        MaterialCatalog catalog) {
+    public record MaterialContributions(List<MaterialDefinition> definitions) {
         public MaterialContributions {
             definitions = List.copyOf(definitions);
-            rules = List.copyOf(rules);
-            java.util.Objects.requireNonNull(catalog, "catalog");
         }
     }
 

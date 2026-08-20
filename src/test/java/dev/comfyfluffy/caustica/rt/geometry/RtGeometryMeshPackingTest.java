@@ -29,7 +29,8 @@ final class RtGeometryMeshPackingTest {
 
         RtGeometryMeshPacking.PackedMesh packed = RtGeometryMeshPacking.pack(mesh, (reference, coverage) -> {
             resolvedCoverage.add(coverage);
-            return new RtGeometryMaterialResolver.ResolvedMaterial(7 + coverage.ordinal(), 0);
+            return new RtGeometryMaterialResolver.ResolvedMaterial(7 + coverage.ordinal(), 0,
+                    0x100 + coverage.ordinal());
         });
 
         assertEquals(List.of(SceneMesh.Coverage.OPAQUE, SceneMesh.Coverage.CUTOUT,
@@ -38,6 +39,9 @@ final class RtGeometryMeshPackingTest {
         assertEquals(7, Float.floatToRawIntBits(packed.primitives()[8]));
         assertEquals(8, Float.floatToRawIntBits(packed.primitives()[20]));
         assertEquals(9, Float.floatToRawIntBits(packed.primitives()[32]));
+        assertEquals(0x100, Float.floatToRawIntBits(packed.primitives()[10]));
+        assertEquals(0x101, Float.floatToRawIntBits(packed.primitives()[22]));
+        assertEquals(0x102, Float.floatToRawIntBits(packed.primitives()[34]));
     }
 
     @Test
@@ -55,7 +59,7 @@ final class RtGeometryMeshPackingTest {
 
         RtGeometryMeshPacking.PackedMesh packed = RtGeometryMeshPacking.pack(mesh, (reference, coverage) -> {
             resolutions.incrementAndGet();
-            return new RtGeometryMaterialResolver.ResolvedMaterial(7 + coverage.ordinal(), 0);
+            return new RtGeometryMaterialResolver.ResolvedMaterial(7 + coverage.ordinal(), 0, 0);
         });
 
         assertEquals(2, resolutions.get());
@@ -73,7 +77,7 @@ final class RtGeometryMeshPackingTest {
         SceneMesh distinct = quadMesh(List.of(surface(material, SceneMesh.Coverage.CUTOUT),
                 surface(material, SceneMesh.Coverage.CUTOUT)));
         RtGeometryMaterialResolver resolver = (reference, coverage) ->
-                new RtGeometryMaterialResolver.ResolvedMaterial(7, 0);
+                new RtGeometryMaterialResolver.ResolvedMaterial(7, 0, 0);
 
         RtGeometryMeshPacking.PackedMesh sharedPacked = RtGeometryMeshPacking.pack(shared, resolver);
         RtGeometryMeshPacking.PackedMesh distinctPacked = RtGeometryMeshPacking.pack(distinct, resolver);
@@ -91,7 +95,7 @@ final class RtGeometryMeshPackingTest {
     void coverageClassChangeChangesManagerTopologyCompatibility() {
         MaterialHandle material = MaterialHandle.of("test", "material");
         RtGeometryMaterialResolver resolver = (reference, coverage) ->
-                new RtGeometryMaterialResolver.ResolvedMaterial(7, 0);
+                new RtGeometryMaterialResolver.ResolvedMaterial(7, 0, 0);
         SceneMesh opaque = mesh(material, SceneMesh.Coverage.OPAQUE);
         SceneMesh cutout = mesh(material, SceneMesh.Coverage.CUTOUT);
 
@@ -107,7 +111,7 @@ final class RtGeometryMeshPackingTest {
                 new float[]{0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1},
                 List.of(surface(material, SceneMesh.Coverage.OPAQUE), surface(material, SceneMesh.Coverage.OPAQUE)));
         RtGeometryMaterialResolver resolver = (reference, coverage) ->
-                new RtGeometryMaterialResolver.ResolvedMaterial(7, 0);
+                new RtGeometryMaterialResolver.ResolvedMaterial(7, 0, 0);
 
         SceneMeshPacker.PackedInput packed = assertDoesNotThrow(() -> SceneMeshPacker.pack(terrain, resolver));
         assertEquals(12, packed.textureCoordinates().length);
@@ -117,7 +121,7 @@ final class RtGeometryMeshPackingTest {
     void managerAcceptsPerVertexUvs() {
         MaterialHandle material = MaterialHandle.of("test", "entity");
         RtGeometryMaterialResolver resolver = (reference, coverage) ->
-                new RtGeometryMaterialResolver.ResolvedMaterial(7, 0);
+                new RtGeometryMaterialResolver.ResolvedMaterial(7, 0, 0);
 
         SceneMeshPacker.PackedInput packed = assertDoesNotThrow(() -> SceneMeshPacker.pack(
                 mesh(material, SceneMesh.Coverage.OPAQUE), resolver));
@@ -135,7 +139,7 @@ final class RtGeometryMeshPackingTest {
                 List.of(surface(material, SceneMesh.Coverage.OPAQUE)), java.util.Set.of());
 
         SceneMeshPacker.PackedInput packed = SceneMeshPacker.pack(mesh,
-                (reference, coverage) -> new RtGeometryMaterialResolver.ResolvedMaterial(7, 0));
+                (reference, coverage) -> new RtGeometryMaterialResolver.ResolvedMaterial(7, 0, 0));
 
         assertArrayEquals(normals, packed.vertexNormals());
         assertArrayEquals(colors, packed.vertexColors());
@@ -165,7 +169,7 @@ final class RtGeometryMeshPackingTest {
                 List.of(selected, surface(material, SceneMesh.Coverage.OPAQUE)));
 
         RtGeometryMeshPacking.PackedMesh packed = RtGeometryMeshPacking.pack(mesh,
-                (reference, coverage) -> new RtGeometryMaterialResolver.ResolvedMaterial(7, 0));
+                (reference, coverage) -> new RtGeometryMaterialResolver.ResolvedMaterial(7, 0, 0));
 
         assertEquals(1, Float.floatToRawIntBits(packed.primitives()[9]));
         assertEquals(0, Float.floatToRawIntBits(packed.primitives()[21]));
@@ -181,7 +185,7 @@ final class RtGeometryMeshPackingTest {
                 List.of(ranged, surface(material, SceneMesh.Coverage.CUTOUT)));
 
         RtGeometryMeshPacking.PackedMesh packed = RtGeometryMeshPacking.pack(mesh,
-                (reference, coverage) -> new RtGeometryMaterialResolver.ResolvedMaterial(7, 0));
+                (reference, coverage) -> new RtGeometryMaterialResolver.ResolvedMaterial(7, 0, 0));
 
         assertEquals(127 | (191 << 8), Float.floatToRawIntBits(packed.primitives()[11]));
         assertEquals(RtGeometryMeshPacking.OMM_RANGE_ABSENT,
@@ -197,9 +201,9 @@ final class RtGeometryMeshPackingTest {
                 java.util.Set.of(SceneMesh.Semantic.RECEIVES_PROJECTED_SURFACE_MODIFIERS));
 
         RtGeometryMeshPacking.PackedMesh defaultPacked = RtGeometryMeshPacking.pack(defaultMesh,
-                (reference, coverage) -> new RtGeometryMaterialResolver.ResolvedMaterial(7, 0));
+                (reference, coverage) -> new RtGeometryMaterialResolver.ResolvedMaterial(7, 0, 0));
         RtGeometryMeshPacking.PackedMesh projectedPacked = RtGeometryMeshPacking.pack(projectedMesh,
-                (reference, coverage) -> new RtGeometryMaterialResolver.ResolvedMaterial(7, 0));
+                (reference, coverage) -> new RtGeometryMaterialResolver.ResolvedMaterial(7, 0, 0));
 
         assertFalse((defaultPacked.flags() & RtGeometryAbi.FLAG_RECEIVES_PROJECTED_SURFACE_MODIFIERS) != 0);
         assertTrue((projectedPacked.flags() & RtGeometryAbi.FLAG_RECEIVES_PROJECTED_SURFACE_MODIFIERS) != 0);

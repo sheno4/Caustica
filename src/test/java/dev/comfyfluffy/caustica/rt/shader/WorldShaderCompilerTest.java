@@ -4,6 +4,7 @@ import dev.comfyfluffy.caustica.api.CausticaRegistry;
 import dev.comfyfluffy.caustica.api.FeatureCategory;
 import dev.comfyfluffy.caustica.api.ShaderSource;
 import dev.comfyfluffy.caustica.api.Slots;
+import dev.comfyfluffy.caustica.minecraft.MinecraftProvidersExtension;
 import dev.comfyfluffy.caustica.api.DisplayText;
 import dev.comfyfluffy.caustica.api.ResourceId;
 import org.junit.jupiter.api.Test;
@@ -200,6 +201,40 @@ final class WorldShaderCompilerTest {
             assertTrue(root.contains("default: { ErrorCoverage c;"));
             assertTrue(!root.substring(root.indexOf("public struct CoverageDispatch"))
                     .contains("ISurfaceModel"));
+        }
+    }
+
+    @Test
+    void minecraftMaterialAndCoverageCompileThroughRuntimeStages(@TempDir Path cacheDirectory)
+            throws Exception {
+        CausticaRegistry registry = dev.comfyfluffy.caustica.TestRegistries.withBuiltins();
+
+        try (WorldShaderCompiler compiler = WorldShaderCompiler.create(cacheDirectory, registry.selection())) {
+            int implementation = registry.surfaceIndex(MinecraftProvidersExtension.MATERIAL_SURFACE);
+            String root = compiler.composition().rootSource();
+            assertTrue(root.contains("case " + implementation + "u: { MinecraftSurface s;"));
+            assertTrue(root.contains("case " + implementation + "u: { MinecraftCoverage c;"));
+            assertSpirv(compiler.compileClosestHit(), 1024);
+            assertSpirv(compiler.compileRadianceAnyHit(), 1024);
+            assertSpirv(compiler.compileShadowAnyHit(), 1024);
+        }
+    }
+
+    @Test
+    void primitiveAux0OwnsTextureAndCoverageFactsAcrossRuntimeHitStages(@TempDir Path cacheDirectory)
+            throws Exception {
+        CausticaRegistry registry = dev.comfyfluffy.caustica.TestRegistries.withBuiltins();
+        try (WorldShaderCompiler compiler = WorldShaderCompiler.create(cacheDirectory, registry.selection())) {
+            String common = Files.readString(cacheDirectory.resolve("world/world_common.slang"));
+            assertTrue(common.contains("primitiveBaseColorTextureIndex(uint aux0)"));
+            assertTrue(common.contains("primitiveCoverage(uint aux0)"));
+            assertTrue(common.contains("primitiveBaseTexturePresent(uint aux0)"));
+            assertTrue(common.contains("primitiveBaseTextureLinear(uint aux0)"));
+            assertTrue(!common.contains("bindingBaseColorTextureIndex"));
+            assertTrue(!common.contains("bindingCoverage"));
+            assertSpirv(compiler.compileClosestHit(), 1024);
+            assertSpirv(compiler.compileRadianceAnyHit(), 1024);
+            assertSpirv(compiler.compileShadowAnyHit(), 1024);
         }
     }
 

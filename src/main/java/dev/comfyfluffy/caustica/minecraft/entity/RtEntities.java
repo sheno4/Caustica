@@ -5,6 +5,7 @@ import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.mixin.ParticleEngineAccessor;
 import dev.comfyfluffy.caustica.mixin.ParticleGroupAccessor;
 import dev.comfyfluffy.caustica.minecraft.provider.MinecraftMaterialSource;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialSnapshot;
 import dev.comfyfluffy.caustica.minecraft.MinecraftTelemetry;
 import dev.comfyfluffy.caustica.api.provider.GeometryTransform;
 import dev.comfyfluffy.caustica.api.ResourceId;
@@ -205,6 +206,14 @@ public final class RtEntities {
     private final Set<SceneGeometryKey> pendingDrops = new java.util.LinkedHashSet<>();
 
     private RtEntities() {
+    }
+
+    public void publishMaterials(MinecraftMaterialSnapshot.Published materials) {
+        collector.publishMaterials(java.util.Objects.requireNonNull(materials, "materials"));
+    }
+
+    public void clearMaterials() {
+        collector.publishMaterials(null);
     }
 
     /**

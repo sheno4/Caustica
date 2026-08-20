@@ -207,11 +207,9 @@ public final class RtPipeline {
                 RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_DESCRIPTOR_SET, sets[i], label + " descriptor set " + i);
             }
 
-            // Optional bindless set (set 1): provider textures plus canonical material-page arrays.
+            // Optional bindless set (set 1): provider textures.
             long bindlessLayout = 0L, bindlessPool = 0L, bindlessSet = 0L;
             if (bindlessTextures > 0) {
-                // Provider textures and canonical material pages have independent index spaces. All arrays
-                // use the configured capacity here; material pages occupy compact indices from zero.
                 int nb = WORLD_BINDLESS_COUNT;
                 VkDescriptorSetLayoutBinding.Buffer bl = VkDescriptorSetLayoutBinding.calloc(nb, stack);
                 java.nio.IntBuffer bindFlags = stack.mallocInt(nb);
@@ -577,19 +575,6 @@ public final class RtPipeline {
     /** Write one provider texture using the layout declared by its renderer-owned or borrowed resource. */
     public void setProviderTexture(int textureIndex, long imageView, int imageLayout, long sampler) {
         setBindlessTexture(WORLD_PROVIDER_TEXTURES, textureIndex, imageView, imageLayout, sampler);
-    }
-
-    /** Bind one compact canonical page bundle at a resource-epoch boundary. */
-    public void setMaterialPage(int page, long surface0View, long normalView, long surface1View,
-                                long emissionView, long sampler) {
-        setBindlessTexture(WORLD_MATERIAL_SURFACE0, page, surface0View, sampler);
-        setBindlessTexture(WORLD_MATERIAL_NORMAL, page, normalView, sampler);
-        setBindlessTexture(WORLD_MATERIAL_SURFACE1, page, surface1View, sampler);
-        setBindlessTexture(WORLD_MATERIAL_EMISSION, page, emissionView, sampler);
-    }
-
-    private void setBindlessTexture(int binding, int slot, long imageView, long sampler) {
-        setBindlessTexture(binding, slot, imageView, VK10.VK_IMAGE_LAYOUT_GENERAL, sampler);
     }
 
     private void setBindlessTexture(int binding, int slot, long imageView, int imageLayout, long sampler) {

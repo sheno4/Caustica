@@ -9,8 +9,8 @@ import dev.comfyfluffy.caustica.api.provider.MaterialSnapshot;
 import dev.comfyfluffy.caustica.api.provider.TextureSink;
 import dev.comfyfluffy.caustica.minecraft.entity.RtEntities;
 import dev.comfyfluffy.caustica.minecraft.entity.RtEntityTextures;
-import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialEmissionSnapshot;
-import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialEmissionState;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialSnapshot;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialState;
 import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
 import dev.comfyfluffy.caustica.minecraft.terrain.RtWorkerPool;
 import net.minecraft.client.renderer.texture.TextureAtlas;
@@ -21,14 +21,14 @@ public final class MinecraftSceneProvider implements SceneProvider {
     public static final ResourceId ID = ResourceId.of("caustica", "minecraft_scene");
     private static final Consumer<SceneGeometrySink> TERRAIN_GEOMETRY = RtTerrain::submitGeometry;
     private static final Consumer<SceneFrameContext> ENTITY_GEOMETRY = RtEntities.INSTANCE::submitGeometry;
-    private final MinecraftMaterialEmissionState emissionState;
+    private final MinecraftMaterialState materialState;
 
     public MinecraftSceneProvider() {
-        this(new MinecraftMaterialEmissionState());
+        this(new MinecraftMaterialState());
     }
 
-    public MinecraftSceneProvider(MinecraftMaterialEmissionState emissionState) {
-        this.emissionState = java.util.Objects.requireNonNull(emissionState, "emissionState");
+    public MinecraftSceneProvider(MinecraftMaterialState materialState) {
+        this.materialState = java.util.Objects.requireNonNull(materialState, "materialState");
     }
 
     @Override
@@ -91,13 +91,15 @@ public final class MinecraftSceneProvider implements SceneProvider {
 
     @Override
     public void onMaterialEpoch(MaterialSnapshot materials) {
-        RtTerrain.publishMaterials(new MinecraftMaterialEmissionSnapshot.Published(
-                emissionState.snapshot(), materials));
+        var published = new MinecraftMaterialSnapshot.Published(materialState.snapshot(), materials);
+        RtTerrain.publishMaterials(published);
+        RtEntities.INSTANCE.publishMaterials(published);
     }
 
     @Override
     public void onMaterialEpochClosing() {
         RtTerrain.clearMaterials();
+        RtEntities.INSTANCE.clearMaterials();
     }
 
 }

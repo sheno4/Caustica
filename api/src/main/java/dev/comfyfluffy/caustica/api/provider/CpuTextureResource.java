@@ -38,7 +38,7 @@ public final class CpuTextureResource implements TextureResource {
                     throw new IllegalArgumentException("mip level dimensions do not follow the base level");
                 }
             }
-            copied.add(new MipLevel(level.width(), level.height(), level.rgba8));
+            copied.add(level);
         }
         this.mipLevels = List.copyOf(copied);
     }
