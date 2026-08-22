@@ -10,9 +10,8 @@ module caustica_minecraft_celestial_dressing;
 
 /**
  * Drawn disc radiance derived from illuminance and the solid angle a body is actually DRAWN at
- * (L = E / Ω), deliberately not from its true surface luminance — see the call site in
- * caustica_lut_sky.slang for why (vanilla's oversized sun quad and the NEE double-count it would cause
- * at the physical value).
+ * (L = E / Ω), deliberately not from its true surface luminance because Minecraft draws oversized
+ * celestial bodies.
  */
 public float3 discRadiance(float illuminance, float halfAngle) {
     float side = 2.0 * tan(halfAngle); // the square spans this much on a side, gnomonically

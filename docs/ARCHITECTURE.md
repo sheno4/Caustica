@@ -131,21 +131,16 @@ key and revision, and the collection generation changes whenever group membershi
 An unchanged generation is reused without traversing its groups. Omitted retained keys are removed when a
 new generation is collected. Finite positions are scene coordinates. Rectangle radiance is cd/m², point and
 spot intensity is candela, and distant normal illuminance is lux. `Distant.direction` points toward the
-source; its angular radius defines the sampled source cone.
+source; its angular radius describes the source extent.
 
-Finite retained lights use a renderer-owned retained BVH segment. Per-frame finite provider lights use a
-transient BVH, and distant lights occupy the distant segment of the same frame light buffer. The shader's
-light-tree sampler selects across retained finite, transient finite and distant segments using their
-canonical selection metrics, then samples the chosen finite hierarchy or distant source. NEE and RIS
-therefore see one light scene; there is no fixed celestial-light branch or legacy light grid.
+The provider manager currently retains these immutable frame and retained snapshots as the light-system
+skeleton. No renderer buffer, acceleration structure, proposal distribution or direct-light sampling pass
+consumes them. Emissive surfaces and environment emitters therefore contribute only when paths hit them.
 
-Minecraft supplies emissive terrain lights as ordinary source-qualified retained light groups. The
-activation-owned renderer light scene builds and uploads their hierarchy, publishes GPU addresses and
-retires replaced arenas. Rebase origin, world scale and diagnostic focus come from the current frame, not
-from a light provider.
+Minecraft supplies emissive terrain lights as ordinary source-qualified retained light groups.
 Minecraft supplies sun and moon as ordinary distant descriptors and the equipped `caustica:spotlight_helmet`
-as an ordinary spot descriptor. The helmet is the light-provider proof: it receives the same visibility,
-shadow and path-traced lighting treatment as any other submitted spot.
+as an ordinary spot descriptor. These exercise provider collection and identity without selecting a
+renderer-side sampling implementation.
 
 ## Materials and OpenPBR
 

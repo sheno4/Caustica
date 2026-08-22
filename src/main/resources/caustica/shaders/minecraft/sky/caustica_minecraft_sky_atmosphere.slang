@@ -432,8 +432,7 @@ public float3 celestialAxis(float noonTiltRad) {
 /**
  * Tangent frame for a celestial body's square, kept level with the horizon: {@code right} is horizontal
  * and {@code up} lies in the vertical plane through the body. This keeps the sun and moon from rolling
- * about their own centres as they cross the sky. The same frame
- * builds the NEE shadow-ray square in math.slang, so the sampled light and the drawn body stay identical.
+ * about their own centres as they cross the sky.
  */
 public void celestialSquareFrame(float3 bodyDir, out float3 right, out float3 up) {
     // Near the zenith the horizontal reference degenerates; the arc's tilt keeps the sun/moon well away
@@ -481,7 +480,7 @@ public struct SkyInputs {
     // x sun illuminance (lux, top of atmosphere), y full-moon illuminance (lux), z night airglow
     // (cd/m²), w star luminance anchor (cd/m²).
     public float4 skyLook0;
-    // x noon south tilt (rad), y sun NEE half-angle (rad), z moon NEE half-angle (rad),
+    // x noon south tilt (rad), y sun angular half-angle (rad), z moon angular half-angle (rad),
     // w moon-phase fixed light fraction.
     public float4 skyLook1;
     // x drawn sun half-angle (rad), y drawn moon half-angle (rad), z viewer altitude (km),
@@ -506,9 +505,9 @@ public struct SkyState {
     public float  sunIlluminance;      // lux, top of atmosphere
     public float  moonIlluminance;     // lux, already scaled by the visible phase
     public float  viewerRadiusKm;      // planet centre to viewer
-    public float  sunAngularRadius;    // NEE sampling half-angle, also the planet-shadow softness
+    public float  sunAngularRadius;    // physical half-angle, also the planet-shadow softness
     public float  moonAngularRadius;
-    public float  sunDiscHalfAngle;    // drawn size, decoupled from the NEE radius (vanilla quads are huge)
+    public float  sunDiscHalfAngle;    // drawn size, decoupled from the physical radius
     public float  moonDiscHalfAngle;
     public float  starAngle;
     public float  starLuminance;       // cd/m², MC's star brightness times the look package's anchor

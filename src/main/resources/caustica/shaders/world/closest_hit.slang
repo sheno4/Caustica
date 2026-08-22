@@ -407,8 +407,4 @@ void main<TC : IComposition>(inout Payload payload, in BuiltInTriangleIntersecti
 
     writeHitPayload(payload, material, surfaceImpl, transmissive ? PAYLOAD_TRANSMISSIVE : 0u,
             entering, motionPrev, transmissive ? 0.0 : material.emissionLuminance);
-    // RIS emitter-NEE membership: raygen gates this emitter's direct-hit emission term (RIS covers it).
-    if (!transmissive && (pr.flags & PRIM_EMITTER_IN_LIGHT_SCENE) != 0u) {
-        payload.flags |= PAYLOAD_EMITTER_IN_LIST;
-    }
 }

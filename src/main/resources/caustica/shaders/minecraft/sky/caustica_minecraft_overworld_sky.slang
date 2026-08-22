@@ -77,7 +77,7 @@ float3 lutSkyEvaluateEnvironment(EnvironmentQuery query) {
                    * moonExtinction * texel * shape;
         }
         // No separate horizon gate on either body. A set sun or moon goes dark because its extinction is
-        // zero below the horizon, matching the NEE visibility test.
+        // zero below the horizon.
     }
 
     // sky.slang's own header: colour is linear BT.709 inside that module and crosses to ACEScg exactly

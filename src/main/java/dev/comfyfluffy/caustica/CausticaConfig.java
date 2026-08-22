@@ -104,8 +104,7 @@ public final class CausticaConfig {
                 " NVIDIA Reflex. Requires supported NVIDIA hardware and drivers.\n"
                         + " minimum-interval-us controls frame limiting; 0 disables the limit.");
         FILE.setComment("lights",
-                " Controls direct lighting from glowing blocks such as torches, glowstone, and lava.\n"
-                        + " Set ris-candidates to 0 to disable it. stats, dump, and dump-radius are debugging options.");
+                " Controls how Minecraft emitter geometry is converted into light-provider descriptors.");
         FILE.setComment("tonemap",
                 " Controls the final image. gamma: 1 is neutral; lower values brighten midtones.");
         FILE.setComment("exposure",
@@ -718,17 +717,10 @@ public final class CausticaConfig {
             }
         }
 
-        /** RIS block-emitter lights. {@code ris-candidates = 0} disables everything. */
+        /** Minecraft emitter discovery parameters retained for the light-provider API. */
         public static final class Lights {
-            public static final IntSetting RIS_CANDIDATES =
-                    intAtLeast("caustica.rt.risCandidates", "lights.ris-candidates", 8, 0)
-                            .inGroup("quality").sliderRange(0, 32);
             public static final FloatSetting MIN_FILL_RATIO =
                     finiteFloat("caustica.rt.lightMinFillRatio", "lights.min-fill-ratio", 0.25f);
-            public static final BooleanSetting STATS = bool("caustica.rt.lightStats", "lights.stats", false);
-            public static final BooleanSetting DUMP = bool("caustica.rt.lightDump", "lights.dump", false);
-            public static final IntSetting DUMP_RADIUS =
-                    intAtLeast("caustica.rt.lightDumpRadius", "lights.dump-radius", 12, 1);
 
             private Lights() {
             }

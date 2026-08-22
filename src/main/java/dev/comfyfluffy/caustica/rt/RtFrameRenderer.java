@@ -11,13 +11,9 @@ import dev.comfyfluffy.caustica.engine.frame.FrameSnapshot;
 import dev.comfyfluffy.caustica.engine.frame.SceneResources;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushConstantsData;
-import dev.comfyfluffy.caustica.rt.light.RtLightScene;
-import dev.comfyfluffy.caustica.rt.light.RtRetainedLightScene;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushData;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushData.Float2;
 import dev.comfyfluffy.caustica.rt.gen.WorldPushData.Float3;
-import dev.comfyfluffy.caustica.rt.gen.WorldPushData.Float4;
-import dev.comfyfluffy.caustica.rt.gen.WorldPushData.Int4;
 import org.joml.Matrix4f;
 import org.joml.Matrix4fc;
 import org.lwjgl.system.MemoryStack;
@@ -125,8 +121,6 @@ final class RtFrameRenderer {
     private static final int PUSH_RING = 6;
     private PushSlot[] pushRing;
     private int pushSlot;
-    private final RtLightScene lightScene = new RtLightScene();
-    private final RtRetainedLightScene retainedLightScene = new RtRetainedLightScene();
     private final RtSceneGeometryManager sceneGeometry;
     private final RtFrameResources frameResources;
     private RenderPassManager renderPassManager;
@@ -181,7 +175,6 @@ final class RtFrameRenderer {
                         material, coverage, worldResources.materialEpoch.geometryBindings(source)));
         this.frameResources = new RtFrameResources(presenter);
         worldResources.attachSceneGeometry(sceneGeometry);
-        providers.bindRetainedLightStop(retainedLightScene::stopCpuWork);
     }
 
     /** Renderer-owned geometry manager shared by every active scene producer. */
@@ -635,17 +628,11 @@ final class RtFrameRenderer {
         frameResources.exposure.beginFrame(graphicsUseWaiter);
         pendingGraphicsUse = graphicsUse;
         RtSceneGeometryManager.FrameUpdate dynamicGeometry = null;
-        RtLightScene.Frame frameLights = null;
         PushSlot framePushSlot = null;
         VkCommandBuffer cmd = submission.beginTransientCommandBuffer();
         RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_COMMAND_BUFFER, cmd.address(), "composite command buffer");
         int debugView = debugView();
         SceneOrigin sceneOrigin = snapshot.sceneOrigin();
-        RtRetainedLightScene.PublishedState retainedLights;
-        try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("terrain.lightScenePublish")) {
-            retainedLights = retainedLightScene.advance(ctx, providers.retainedLights(), sceneOrigin,
-                    snapshot.metersPerWorldUnit(), snapshot.cameraX(), snapshot.cameraY(), snapshot.cameraZ());
-        }
         try (MemoryStack stack = MemoryStack.stackPush(); RtDebugLabels.Scope frameLabel = RtDebugLabels.scope(ctx, cmd, "composite frame")) {
             // RR drives the upscale: trace + jitter at render res, DLSS-RR denoises+upscales to display.
             // A debug view observes this ordinary path; it never changes jitter or disables RR.
@@ -692,9 +679,6 @@ final class RtFrameRenderer {
             // Procedural domain anchor: the scene rebase origin reduced mod 4096 (kept small for shader
             // float precision). hitPos.xz (rebased) + anchor reconstructs a world-pinned coordinate, so a
             // pattern stays fixed in the world as the player moves and the rebase origin shifts.
-            frameLights = lightScene.prepareFrame(ctx,
-                    providers.frameLights(), sceneOrigin.x(), sceneOrigin.y(),
-                    sceneOrigin.z(), snapshot.metersPerWorldUnit(), graphicsUseWaiter);
             double proceduralPeriod = PROCEDURAL_ANCHOR_MASK + 1.0;
             Float3 proceduralDomainOffset = new Float3(sceneOrigin.wrappedX(proceduralPeriod),
                     sceneOrigin.wrappedY(proceduralPeriod), sceneOrigin.wrappedZ(proceduralPeriod));
@@ -722,17 +706,7 @@ final class RtFrameRenderer {
                     time,
                     proceduralDomainOffset,
                     mvCurProjView,
-                    new Float4((float) (retainedLights.rebaseX() - sceneOrigin.x()),
-                            (float) (retainedLights.rebaseY() - sceneOrigin.y()),
-                            (float) (retainedLights.rebaseZ() - sceneOrigin.z()),
-                            retainedLights.metersPerWorldUnit()),
-                    new Int4(retainedLights.rootNodeIndex(), retainedLights.lightCount(),
-                            retainedLights.lightCount(), 0),
                     previousTime,
-                    new Int4(frameLights.rootNodeIndex(), frameLights.finiteLightCount(),
-                            frameLights.distantFirstLight(), frameLights.distantLightCount()),
-                    frameLights.metersPerWorldUnit(),
-                    CausticaConfig.Rt.Lights.RIS_CANDIDATES.value(),
                     // Must be the SAME value the exposure resolve divides out this frame (it reads it
                     // from the same RtExposure accessor), or the two stop cancelling.
                     frameResources.exposure.preExposure()
@@ -752,15 +726,12 @@ final class RtFrameRenderer {
             // Push the BDA ring slot's address plus the small hot subset used directly by the shaders.
             // Every 64-bit device address the trace needs lives here, not behind worldPushAddr: the
             // geometry/material tables are read from world.rahit/world.rchit, which never load
-            // WorldPush at all, and the RIS light buffers are read from world.rgen's hot inner loop, so
-            // none of them should cost an extra BDA dereference to find.
+            // WorldPush at all, so none of them should cost an extra BDA dereference to find.
             ByteBuffer pushConstants = stack.malloc(WorldPushConstantsData.BYTE_SIZE);
             new WorldPushConstantsData(pushBuf.deviceAddress(), sceneGeometry.geometryTableAddress(dynamicGeometry),
                     sceneGeometry.instanceHistoryAddress(dynamicGeometry),
                     worldResources.materialEpoch.bindingTableAddress(),
                     worldResources.materialEpoch.surfaceTableAddress(),
-                    retainedLights.lightAddress(), retainedLights.nodeAddress(),
-                    frameLights.lightAddress(), frameLights.nodeAddress(),
                     frameResources.continuationQueue.deviceAddress(),
                     (int) frameCounter).write(pushConstants);
             renderPassManager.beginFrame(graphicsUse, currentTlasHandle, mvCurProjView);
@@ -873,7 +844,6 @@ final class RtFrameRenderer {
         // every owner in this frame's manifest is protected through the final overlay consumer.
         framePushSlot.graphicsUse.mark(graphicsUse);
         sceneGeometry.markGraphicsUse(dynamicGeometry, graphicsUse);
-        lightScene.markGraphicsUse(frameLights, graphicsUse);
         frameResources.exposure.markStateReadbackUse(graphicsUse);
     }
 
@@ -881,8 +851,6 @@ final class RtFrameRenderer {
         // Session teardown stops the GPU executor and waits the device idle before entering here, so the
         // TLAS ring's slots are no longer in flight and can be freed immediately.
         sceneGeometry.shutdown();
-        lightScene.destroy();
-        retainedLightScene.destroyAfterDeviceIdle();
         RtDlssRr.INSTANCE.destroy();
         presenter.destroyGpuResources();
         if (renderPassManager != null) {

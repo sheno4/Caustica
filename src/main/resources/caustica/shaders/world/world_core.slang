@@ -43,7 +43,6 @@ public bool payloadDielectric() { return (payload.flags & PAYLOAD_TRANSMISSIVE) 
 // Set by world.rchit on any dielectric hit (see PAYLOAD_DIELECTRIC_ENTERING) — whether the ray was
 // travelling into the volume (vs. out of it) at this hit's face.
 public bool payloadDielectricEntering() { return (payload.flags & PAYLOAD_DIELECTRIC_ENTERING) != 0u; }
-public bool payloadEmitterInList() { return (payload.flags & PAYLOAD_EMITTER_IN_LIST) != 0u; }
 /** The registered surface implementation this hit resolved through; 0 is the built-in surface. */
 public uint payloadSurfaceImpl() { return payload.flags >> PAYLOAD_SURFACE_IMPL_SHIFT; }
 // OpenPBR specular_roughness: PERCEPTUAL, not GGX alpha. This is the one convention used end to end —

@@ -7,8 +7,6 @@ import dev.comfyfluffy.caustica.api.provider.LightSink;
 import dev.comfyfluffy.caustica.api.provider.RetainedLightCollection;
 import dev.comfyfluffy.caustica.engine.light.RetainedLightBatch;
 import dev.comfyfluffy.caustica.engine.light.RetainedLightSnapshot;
-import dev.comfyfluffy.caustica.engine.light.DistantLight;
-import dev.comfyfluffy.caustica.engine.light.FiniteLight;
 import dev.comfyfluffy.caustica.api.provider.LightDescriptor;
 import dev.comfyfluffy.caustica.api.provider.MaterialSource;
 import dev.comfyfluffy.caustica.api.provider.ProviderLifecycle;
@@ -52,12 +50,10 @@ public final class ProviderManager {
     private List<LightDescriptor> frameLights = List.of();
     private final Map<RetainedLightGroupKey, RetainedLightBatch> retainedLightGroups = new HashMap<>();
     private final Map<ResourceId, Long> retainedLightProviderGenerations = new HashMap<>();
-    private final Consumer<LightDescriptor.Finite> retainedLightValidator;
     private RetainedLightSnapshot retainedLights = RetainedLightSnapshot.empty(0L);
     private long retainedLightGeneration;
     private Set<ResourceId> namedMaterials = Set.of();
     private RtSceneGeometryManager sceneGeometry;
-    private Runnable stopRetainedLightWork = () -> { };
     private final Map<GeometryGroupKey, Long> geometryRevisions = new HashMap<>();
     private final Map<ResourceId, QueuedSceneScope> sceneScopes = new HashMap<>();
     private final AtomicBoolean sceneResetRequested = new AtomicBoolean();
@@ -66,17 +62,9 @@ public final class ProviderManager {
 
     ProviderManager(Map<ResourceId, SceneProvider> scenes, Map<ResourceId, LightProvider> lights,
                     Map<ResourceId, MaterialSource> materials) {
-        this(scenes, lights, materials, light -> FiniteLight.from(light, 1.0));
-    }
-
-    ProviderManager(Map<ResourceId, SceneProvider> scenes, Map<ResourceId, LightProvider> lights,
-                    Map<ResourceId, MaterialSource> materials,
-                    Consumer<LightDescriptor.Finite> retainedLightValidator) {
         this.scenes = scenes;
         this.lights = lights;
         this.materials = materials;
-        this.retainedLightValidator = java.util.Objects.requireNonNull(retainedLightValidator,
-                "retainedLightValidator");
     }
 
     public ProviderManager(CausticaRegistry.RuntimeContributions contributions) {
@@ -123,10 +111,6 @@ public final class ProviderManager {
                 if (!providerKeys.add(light.key())) {
                     throw new IllegalArgumentException("duplicate light key " + light.key());
                 }
-                switch (light) {
-                    case LightDescriptor.Finite finite -> FiniteLight.from(finite, 1.0);
-                    case LightDescriptor.Distant distant -> DistantLight.from(distant);
-                }
                 providerLights.add(light);
             };
             try {
@@ -164,7 +148,6 @@ public final class ProviderManager {
             if (submitted.putIfAbsent(group.key(), group) != null) {
                 throw new IllegalArgumentException("duplicate retained-light key " + group.key());
             }
-            group.lights().forEach(retainedLightValidator);
         }
 
         boolean changed = retainedLightGroups.keySet().removeIf(key ->
@@ -202,11 +185,6 @@ public final class ProviderManager {
     /** Bind the renderer-owned geometry manager for source lifecycle callbacks. */
     public void bindSceneGeometry(RtSceneGeometryManager geometry) {
         sceneGeometry = geometry;
-    }
-
-    /** Bind renderer-owned CPU work that must stop before the shared GPU executor is drained. */
-    public void bindRetainedLightStop(Runnable stop) {
-        stopRetainedLightWork = stop;
     }
 
     /** Renderer-owned geometry manager injected into host scene providers. */
@@ -499,7 +477,6 @@ public final class ProviderManager {
         retainedLightProviderGenerations.clear();
         retainedLights = RetainedLightSnapshot.empty(++retainedLightGeneration);
         namedMaterials = Set.of();
-        stopRetainedLightWork.run();
         stopRemaining("scene", scenes(), SceneProvider::stop);
         stopRemaining("light", lights(), LightProvider::stop);
         stopRemaining("material", materials(), MaterialSource::stop);

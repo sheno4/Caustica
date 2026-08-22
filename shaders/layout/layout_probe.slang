@@ -22,20 +22,10 @@ struct ExposureStateLayoutProbe {
     ExposureState values[2]; // array stride is the complete, tail-padded ExposureState byte size
 };
 
-struct GpuLightLayoutProbe {
-    GpuLight values[2];
-};
-
-struct GpuLightNodeLayoutProbe {
-    GpuLightNode values[2];
-};
-
 [[vk::binding(0, 0)]] StructuredBuffer<WorldPushLayoutProbe, Std430DataLayout> worldPushLayoutProbe;
 [[vk::binding(1, 0)]] StructuredBuffer<MaterialBindingLayoutProbe, Std430DataLayout> materialBindingLayoutProbe;
 [[vk::binding(2, 0)]] StructuredBuffer<SurfaceMaterialLayoutProbe, Std430DataLayout> surfaceMaterialLayoutProbe;
 [[vk::binding(3, 0)]] StructuredBuffer<ExposureStateLayoutProbe, Std430DataLayout> exposureStateLayoutProbe;
-[[vk::binding(4, 0)]] StructuredBuffer<GpuLightLayoutProbe, Std430DataLayout> gpuLightLayoutProbe;
-[[vk::binding(5, 0)]] StructuredBuffer<GpuLightNodeLayoutProbe, Std430DataLayout> gpuLightNodeLayoutProbe;
 [[vk::push_constant]] WorldPushConstants pushConstantsLayoutProbe;
 
 [shader("compute")]
@@ -47,8 +37,6 @@ void main(uint3 id : SV_DispatchThreadID) {
                 + float(materialBindingLayoutProbe[0].values[0].packed0)
                 + surfaceMaterialLayoutProbe[0].values[0].specularRoughness
                 + exposureStateLayoutProbe[0].values[0].previous
-                + gpuLightLayoutProbe[0].values[0].selectionMetric
-                + gpuLightNodeLayoutProbe[0].values[0].peakIntensityCandela
                 + float(pushConstantsLayoutProbe.frameIndex);
     }
 }

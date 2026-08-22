@@ -103,17 +103,13 @@ final class RtTerrainMesher {
         if (mesh.isEmpty()) {
             return new CpuSection(null, null);
         }
-        // RIS emitter-NEE light collection marks matching neutral triangle surfaces before packing.
-        // Only opaque + masked can emit (glass is shaded
-        // emission-free, water never emits; lava lives in the opaque class).
+        // Only opaque and masked surfaces contribute light descriptors; transmissive surfaces use
+        // their material path, while lava is represented by opaque terrain geometry.
+        FloatArrayList collected = new FloatArrayList();
+        collectLights(collected, mesh.geometry, CausticaConfig.Rt.Lights.MIN_FILL_RATIO.value());
         float[] lights = EMPTY_LIGHTS;
-        if (CausticaConfig.Rt.Lights.RIS_CANDIDATES.value() > 0) {
-            FloatArrayList collected = new FloatArrayList();
-            float minFill = CausticaConfig.Rt.Lights.MIN_FILL_RATIO.value();
-            collectLights(collected, mesh.geometry, minFill);
-            if (!collected.isEmpty()) {
-                lights = collected.toFloatArray();
-            }
+        if (!collected.isEmpty()) {
+            lights = collected.toFloatArray();
         }
         return new CpuSection(packSection(mesh), lights);
     }

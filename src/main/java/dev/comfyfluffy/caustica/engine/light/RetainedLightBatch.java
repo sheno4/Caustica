@@ -6,7 +6,7 @@ import dev.comfyfluffy.caustica.api.ResourceId;
 
 import java.util.List;
 
-/** One source-qualified retained finite-light group prepared for hierarchy construction. */
+/** One source-qualified retained finite-light group collected from the public provider API. */
 public record RetainedLightBatch(ResourceId source, long key, long revision,
                                  List<LightDescriptor.Finite> lights) {
     public RetainedLightBatch {

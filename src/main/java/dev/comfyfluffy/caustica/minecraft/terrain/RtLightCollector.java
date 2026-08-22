@@ -10,8 +10,8 @@ import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import java.util.List;
 
 /**
- * RIS emitter-NEE light collection. Enumerates a section's emissive terrain quads into a
- * samplable light list, in <b>section-local</b> coordinates (flattened into rebased world space at
+ * Light-provider input collection. Enumerates a section's emissive terrain quads into a
+ * light-descriptor list, in <b>section-local</b> coordinates (flattened into rebased world space at
  * publish, see {@code RtTerrain.applyBuildChanges}). Runs on the meshing worker over the transient
  * per-class arrays, before packing — pure CPU + immutable Minecraft emission-snapshot reads only.
  *
@@ -30,9 +30,7 @@ import java.util.List;
  * approximation), so total power equals the quad's true emissive integral: the rectangle contains every
  * emissive sample, hence {@code Le_rect * rectArea == quadArea * mean(albedo*mask)}.
  *
- * <p><b>Membership.</b> A scene-linked quad marks both neutral triangle surfaces, so the renderer can
- * gate its direct-hit emission term. Emitters too weak or too sparse (fill-ratio
- * gate) stay excluded and are always-gathered on path hits — bit-identical to the no-NEE path.
+ * Emitters too weak or too sparse for a useful descriptor stay excluded from the provider snapshot.
  */
 final class RtLightCollector {
     private RtLightCollector() {
@@ -47,15 +45,15 @@ final class RtLightCollector {
     /** Footprint weights below one encoded byte step don't count as emissive coverage. */
     private static final float WEIGHT_EPS = 1.0f / 255f;
 
-    /** Degenerate (zero-area) rectangles carry no power and would NaN the estimator — skip them. */
+    /** Degenerate rectangles carry no emitted power. */
     private static final float AREA_EPS = 1.0e-9f;
 
     /**
-     * An emitter whose rectangle-mean radiance luminance is below this is too weak to bother sampling:
-     * keep it out of the buffer (always-gathered on hits instead).
+     * An emitter whose rectangle-mean radiance luminance is below this is too weak to retain as a
+     * provider descriptor.
      *
      * <p>Expressed as a fraction of the emissive baseline rather than as an absolute radiance, because
-     * "too weak to sample" is a statement about this emitter relative to a full-strength one, not about
+     * the threshold is relative to a full-strength emitter rather than an absolute radiance, not about
      * cd/m². Expressing it relative to the configured baseline keeps material brightness and sampling
      * eligibility independent.
      */
@@ -63,7 +61,7 @@ final class RtLightCollector {
 
     /**
      * Collect one geometry class's emissive quads into {@code out} (packed light records,
-     * section-local) and mark matching neutral triangle surfaces. Only the opaque
+     * section-local). Only the opaque
      * and masked classes can emit: glass is shaded with zero emission and water never emits (lava lives
      * in the opaque class).
      */
@@ -190,7 +188,7 @@ final class RtLightCollector {
             float leB = footprintAcesCg[2] * scale * p[pb + 6];
             float lum = 0.27222872f * leR + 0.67408177f * leG + 0.05368952f * leB;
             if (lum < leLuminanceEps || fill < minFillRatio) {
-                continue; // excluded: always-gathered on path hits, no energy lost
+                continue;
             }
 
             float aC = 0.5f * (aLo + aHi);
@@ -228,14 +226,7 @@ final class RtLightCollector {
                     0.5f * (bHi - bLo) * e03x, 0.5f * (bHi - bLo) * e03y, 0.5f * (bHi - bLo) * e03z,
                     packHalf2(uvHvU, uvHvV),
                     leR, leG, leB, packHalf2(uvCu, uvCv));
-
-            markEmitterInLightScene(surfaces, 2 * k);
         }
-    }
-
-    static void markEmitterInLightScene(List<SceneMesh.TriangleSurface> surfaces, int firstTriangle) {
-        surfaces.set(firstTriangle, surfaces.get(firstTriangle).withEmitterInLightScene());
-        surfaces.set(firstTriangle + 1, surfaces.get(firstTriangle + 1).withEmitterInLightScene());
     }
 
     /** Bilinear corner interpolation localized into the sprite rect (shared by U and V lanes). */

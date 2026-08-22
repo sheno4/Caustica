@@ -359,9 +359,9 @@ Available descriptors and units:
 | `Spot` | center, normalized direction, finite range and outer half-angle | ACEScg intensity, candela |
 | `Distant` | normalized direction toward source and angular radius | ACEScg normal illuminance, lux |
 
-Finite descriptors enter the finite light BVHs. Distant descriptors share the unified light selection
-distribution but do not pretend to have a finite position. Minecraft's sun and moon are `Distant`; the
-spotlight helmet is `Spot`. These finite and distant records are the public light structures.
+The engine currently collects these descriptors into immutable frame and retained snapshots but does not
+upload or sample them. Minecraft's sun and moon are `Distant`; the spotlight helmet is `Spot`. The public
+records and provider lifecycle are the retained light-system API skeleton for a future renderer backend.
 
 ## Material sources
 

@@ -15,7 +15,6 @@ import math;
 import medium;
 import segment;
 import trace;
-import lighting;
 import surface_bsdf;
 import bindings;
 import caustica_types;
@@ -39,18 +38,6 @@ public float3 tracePath<TC : IComposition, TTrace : IRadianceTrace>(TC.Surfaces 
     float rayConeSpread = max(seg.rayConeSpread, RAY_CONE_MIN_SPREAD);
     int maxBounces = int(worldPush.maxBounces);
     int rrStart = maxBounces <= 3 ? 1 : 2;
-    bool retainedLightsPresent = worldPush.retainedLightInfo.y > 0
-            && pc.retainedLightAddr != 0 && pc.retainedLightNodeAddr != 0;
-    bool frameLightsPresent = (worldPush.frameLightInfo.y > 0 || worldPush.frameLightInfo.w > 0)
-            && pc.frameLightAddr != 0;
-    bool risOn = worldPush.risCandidates > 0u && (retainedLightsPresent || frameLightsPresent);
-    bool distantNeeOn = worldPush.risCandidates > 0u && worldPush.frameLightInfo.w > 0
-            && pc.frameLightAddr != 0;
-    bool linkedEmitterNeeOn = worldPush.risCandidates > 0u
-            && worldPush.retainedLightInfo.z > 0 && retainedLightsPresent;
-    uint proposalSeed = pix.x * 1973u + pix.y * 9277u + 26699u
-            ^ worldPush.frameIndex * 2654435761u ^ sampleIndex * 2246822519u;
-    proposalSeed = pcg(proposalSeed);
     MediumStack medium = seg.medium;
     bool showEnvironmentEmitter = seg.showEnvironmentEmitter;
     TTrace tracer;
@@ -132,17 +119,8 @@ public float3 tracePath<TC : IComposition, TTrace : IRadianceTrace>(TC.Surfaces 
 
         // Emissive surfaces carry the resolved OpenPBR emission colour independently from base colour.
         float3 emissionRadiance = closure.emissionRadiance;
-        bool gateEmitter = linkedEmitterNeeOn && payloadEmitterInList();
-        if (any(emissionRadiance > 0.0) && (!gateEmitter || showEnvironmentEmitter)) {
+        if (any(emissionRadiance > 0.0)) {
             vertexRadiance += emissionRadiance;
-        }
-
-        // RIS direct lighting from the unified light scene, evaluated with the engine's reference target
-        // function against the same parameters the material closure carries.
-        if (risOn) {
-            Reservoir r = risInitial(hitPos, v, closure, seed, proposalSeed);
-            vertexRadiance += shadeReservoir(surfaces, r, hitPos, n, v,
-                    closure, medium.current);
         }
 
         // Look policy applies once to this vertex's total shaded contribution, through the same
@@ -169,11 +147,9 @@ public float3 tracePath<TC : IComposition, TTrace : IRadianceTrace>(TC.Surfaces 
         // A transmitted bounce leaves through the far side, so the origin follows the direction rather
         // than the normal.
         ro = hitPos + (dot(n, rd) >= 0.0 ? n : -n) * SURF_BIAS;
-        // Distant sources sampled by NEE must not also appear as environment dressing on a continuous
-        // BSDF continuation. Camera rays and dielectric delta events retain their explicit visibility,
-        // while disabling distant NEE restores environment emitters for every ordinary continuation.
+        // With no direct-light estimator, environment emitters remain visible to every continuation.
         bool diffuseEvent = (sample.eventFlags & EVENT_DIFFUSE) != 0u;
-        showEnvironmentEmitter = !distantNeeOn;
+        showEnvironmentEmitter = true;
         rayConeSpread = max(rayConeSpread,
                 diffuseEvent ? RAY_CONE_DIFFUSE_SPREAD : rough * RAY_CONE_GLOSSY_SPREAD_SCALE);
 

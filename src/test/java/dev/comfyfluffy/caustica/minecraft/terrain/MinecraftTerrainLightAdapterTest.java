@@ -1,6 +1,5 @@
 package dev.comfyfluffy.caustica.minecraft.terrain;
 
-import dev.comfyfluffy.caustica.engine.light.FiniteLight;
 import dev.comfyfluffy.caustica.api.provider.LightDescriptor;
 import org.junit.jupiter.api.Test;
 
@@ -31,7 +30,6 @@ final class MinecraftTerrainLightAdapterTest {
         assertEquals(-6.0, light.normalZ());
         assertEquals(4L, batch.key());
         assertEquals(7L, batch.revision());
-        FiniteLight.from(light, MinecraftTerrainLightAdapter.METERS_PER_WORLD_UNIT);
         assertThrows(UnsupportedOperationException.class, () -> batch.lights().add(light));
     }
 }

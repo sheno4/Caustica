@@ -48,8 +48,6 @@
 	"caustica.setting.composite.spp.tooltip": "Path-tracing samples taken per pixel each frame. Higher is cleaner but more demanding.",
 	"caustica.setting.composite.max-bounces": "Path Bounces",
 	"caustica.setting.composite.max-bounces.tooltip": "Maximum secondary bounces after the primary hit. Higher captures more indirect light at more cost.",
-	"caustica.setting.lights.ris-candidates": "Light Samples",
-	"caustica.setting.lights.ris-candidates.tooltip": "Candidate lights weighed per shading point for direct lighting from torches, glowstone, and lava. Zero disables it.",
 	"caustica.setting.composite.water-waves": "Animated Water",
 	"caustica.setting.composite.water-waves.tooltip": "Animate water-surface normals for moving wave highlights.",
 	"caustica.setting.tonemap.gamma": "Gamma",

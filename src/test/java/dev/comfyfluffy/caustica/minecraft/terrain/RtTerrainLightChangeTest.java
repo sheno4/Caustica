@@ -54,17 +54,4 @@ final class RtTerrainLightChangeTest {
         assertFalse(RtTerrain.emptyAfterDrop(false));
     }
 
-    @Test
-    void retainedLightMarksBothSourceTrianglesAndLeavesOthersUnmarked() {
-        var material = dev.comfyfluffy.caustica.api.provider.MaterialHandle.of("test", "emitter");
-        var surface = dev.comfyfluffy.caustica.api.provider.SceneMesh.TriangleSurface.surface(material);
-        var surfaces = new java.util.ArrayList<>(java.util.List.of(surface, surface, surface, surface));
-
-        RtLightCollector.markEmitterInLightScene(surfaces, 0);
-
-        assertTrue(surfaces.get(0).emitterInLightScene());
-        assertTrue(surfaces.get(1).emitterInLightScene());
-        assertFalse(surfaces.get(2).emitterInLightScene());
-        assertFalse(surfaces.get(3).emitterInLightScene());
-    }
 }

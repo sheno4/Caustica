@@ -3,7 +3,7 @@
 // Traces one camera radiance ray, captures DLSS-RR guides, and writes one or two resumable
 // continuations per pixel. At the first eligible dielectric it queues both post-interface branches and
 // stops; every later radiance trace belongs to Pass B. Deterministic guide probes may continue through
-// refraction, but Pass A does no NEE, RIS, or BSDF sampling.
+// refraction, but Pass A does no direct-light or BSDF sampling.
 //
 // Perspective setup: invViewProj = inverse(proj * viewRot) maps clip to camera-relative world. Primary
 // rays are reconstructed from two unprojected points (near and far plane) rather than assuming the eye

@@ -76,7 +76,7 @@ public final class WorldShaderCompiler implements AutoCloseable {
             "any_hit_common.slang", "radiance_any_hit.rahit.slang", "shadow_any_hit.rahit.slang",
             "bindings.slang", "closest_hit.slang",
             "guide.rmiss.slang", "guides.slang", "indirect.slang", "indirect_core.slang",
-            "indirect_ser.slang", "lighting.slang", "math.slang", "medium.slang",
+            "indirect_ser.slang", "math.slang", "medium.slang",
             "primary_rgen.slang", "segment.slang", "sky_miss.slang", "surface_bsdf.slang",
             "trace.slang", "trace_ordinary.slang", "trace_policy.slang", "trace_reordered.slang",
             "trace_ser.slang", "world_common.slang", "world_core.slang");

@@ -27,7 +27,7 @@ final class RtLightCollectorTest {
         assertTrue(zero.lights.isEmpty());
         assertFalse(zero.surfaces.getFirst().emitterInLightScene());
         assertEquals(RtLightCollector.FLOATS_PER_LIGHT, half.lights.size());
-        assertTrue(half.surfaces.getFirst().emitterInLightScene());
+        assertFalse(half.surfaces.getFirst().emitterInLightScene());
         assertEquals(full.lights.getFloat(16) * 0.5f, half.lights.getFloat(16), 1.0e-5f);
         assertEquals(full.lights.getFloat(17) * 0.5f, half.lights.getFloat(17), 1.0e-5f);
         assertEquals(full.lights.getFloat(18) * 0.5f, half.lights.getFloat(18), 1.0e-5f);
@@ -38,8 +38,8 @@ final class RtLightCollectorTest {
         Result result = collect(emission(80.0f, false, footprint(1, 1.0f, 1.0f)), 0.0f, 0.0f);
 
         assertEquals(RtLightCollector.FLOATS_PER_LIGHT, result.lights.size());
-        assertTrue(result.surfaces.getFirst().emitterInLightScene());
-        assertTrue(result.surfaces.getLast().emitterInLightScene());
+        assertFalse(result.surfaces.getFirst().emitterInLightScene());
+        assertFalse(result.surfaces.getLast().emitterInLightScene());
     }
 
     @Test
@@ -56,7 +56,7 @@ final class RtLightCollectorTest {
     }
 
     @Test
-    void sparseAndLowLuminanceCandidatesStayOutsideTheLightScene() {
+    void sparseAndLowLuminanceCandidatesStayOutsideTheProviderSnapshot() {
         float[] sparse = {
                 0, 0, 0,
                 1, 0, 1,

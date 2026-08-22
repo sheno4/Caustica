@@ -197,23 +197,6 @@ final class ProviderManagerTest {
     }
 
     @Test
-    void rendererLightWorkerStopsBeforeSceneProducer() {
-        List<String> events = new ArrayList<>();
-        SceneProvider provider = new SceneProvider() {
-            @Override
-            public void stop() {
-                events.add("provider");
-            }
-        };
-        ProviderManager manager = manager("phased", provider);
-        manager.bindRetainedLightStop(() -> events.add("retained-lights"));
-
-        manager.stopProviders();
-
-        assertEquals(List.of("retained-lights", "provider"), events);
-    }
-
-    @Test
     void aNormallyStoppedProviderRunsAgainInTheNextSession() {
         AtomicInteger updates = new AtomicInteger();
         AtomicInteger shutdowns = new AtomicInteger();
@@ -364,32 +347,7 @@ final class ProviderManagerTest {
     }
 
     @Test
-    void failingRetainedLightProviderCannotPublishPartialGroups() {
-        AtomicInteger stops = new AtomicInteger();
-        LightProvider broken = new LightProvider() {
-            @Override
-            public RetainedLightCollection retainedLights() {
-                return new RetainedLightCollection(1L, List.of(
-                        new RetainedLightCollection.Group(1L, 1L, List.of(point(1L, 1.0))),
-                        new RetainedLightCollection.Group(2L, 1L, List.of(new LightDescriptor.Spot(
-                                2L, 0, 0, 0, 0, 0, 0, 3, 0.5, 1, 1, 1)))));
-            }
-
-            @Override
-            public void stop() {
-                stops.incrementAndGet();
-            }
-        };
-        ProviderManager manager = new ProviderManager(Map.of(), Map.of(id("broken"), broken), Map.of());
-
-        manager.prepareFrame();
-
-        assertTrue(manager.retainedLights().isEmpty());
-        assertEquals(1, stops.get());
-    }
-
-    @Test
-    void unchangedRetainedCollectionSkipsGroupWalkAndLightValidation() {
+    void unchangedRetainedCollectionKeepsPublishedSnapshot() {
         AtomicReference<RetainedLightCollection> collection = new AtomicReference<>(
                 collection(7L, 1L, 3L, point(1L, 2.0)));
         LightProvider provider = new LightProvider() {
@@ -398,39 +356,17 @@ final class ProviderManagerTest {
                 return collection.get();
             }
         };
-        AtomicInteger validations = new AtomicInteger();
-        ProviderManager manager = new ProviderManager(Map.of(), Map.of(id("retained"), provider), Map.of(),
-                ignored -> validations.incrementAndGet());
+        ProviderManager manager = new ProviderManager(Map.of(), Map.of(id("retained"), provider), Map.of());
 
         manager.prepareFrame();
         var published = manager.retainedLights();
         manager.prepareFrame();
 
-        assertEquals(1, validations.get());
         assertSame(published, manager.retainedLights());
 
         collection.set(collection(8L, 1L, 4L, point(1L, 3.0)));
         manager.prepareFrame();
-        assertEquals(2, validations.get());
         assertEquals(4L, manager.retainedLights().batches().getFirst().revision());
-    }
-
-    @Test
-    void invalidProviderDoesNotPublishItsPartialSnapshot() {
-        LightProvider invalid = new LightProvider() {
-            @Override
-            public void submitLights(dev.comfyfluffy.caustica.api.provider.LightSink sink) {
-                sink.submit(new LightDescriptor.Point(1, 0, 0, 0,
-                        3, 1, 1, 1));
-                sink.submit(new LightDescriptor.Spot(2, 0, 0, 0,
-                        0, 0, 0, 3, 0.5, 1, 1, 1));
-            }
-        };
-        ProviderManager manager = new ProviderManager(Map.of(), Map.of(id("invalid"), invalid), Map.of());
-
-        manager.prepareFrame();
-
-        assertEquals(List.of(), manager.frameLights());
     }
 
     @Test

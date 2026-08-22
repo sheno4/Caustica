@@ -18,19 +18,13 @@ public typealias DevicePtr<T> = Ptr<T, Access.ReadWrite, AddressSpace.Device, St
 // Push constants. The hot inline lanes avoid dereferencing WorldPush for values that are read in
 // hit shaders or used for raygen control flow — every 64-bit device address lives here for exactly that
 // reason, rather than behind the worldPushAddr indirection. geometryTableAddr/materialTableAddr
-// are read in world.rahit/world.rchit, which never load WorldPush at all; the light-buffer addresses are
-// only read in world.rgen, which loads WorldPush anyway, but keeping every Addr in one place means there
-// is exactly one struct to check when adding a new device buffer, instead of two.
+// are read in world.rahit/world.rchit, which never load WorldPush at all.
 public struct WorldPushConstants {
     public uint64_t worldPushAddr;
     public uint64_t geometryTableAddr;
     public uint64_t instanceHistoryAddr;
     public uint64_t materialTableAddr;   // MaterialBinding[], indexed by Prim.materialId
     public uint64_t materialSurfaceAddr; // SurfaceMaterial[], indexed by MaterialBinding.surface
-    public uint64_t retainedLightAddr;
-    public uint64_t retainedLightNodeAddr;
-    public uint64_t frameLightAddr;
-    public uint64_t frameLightNodeAddr;
     public uint64_t pathQueueAddr;       // packed primary -> indirect continuation records
     public uint frameIndex;
 };
@@ -60,57 +54,13 @@ public struct WorldPush {
     // two, so (rebased position + this) stays fixed in scene space at usable precision.
     public float3   proceduralDomainOffset;
     public float4x4 curViewProj;      // forward camera-relative view-projection
-    // Retained records are relative to their immutable build origin. xyz shifts them into the current
-    // frame origin and w converts one scene unit to metres.
-    public float4   retainedLightTransform;
-    // x root node, y finite-light count, z linked geometry-emitter count, w reserved.
-    public int4     retainedLightInfo;
     public float    previousTime;     // `time` last frame; equal to `time` with no adjacent frame
-    // x root node, y finite count, z first distant record, w distant count.
-    public int4     frameLightInfo;
-    public float    frameMetersPerWorldUnit;
-    public uint     risCandidates;    // RIS candidate count M per diffuse vertex (0 = emitter NEE off)
     // Pre-exposure scalar applied to radiance at the outImage write
     // ONLY, so all light transport above stays in absolute scene units. Keeps stored fp16 values
     // near mid-grey at any scene brightness; the display pass divides it back out, so the two cancel
     // exactly and this cannot change the image. 1.0 disables it.
     public float    preExposure;
 };
-
-// Source-neutral 64-byte light record. Shape-specific lanes are:
-// rectangle: axis0/axis1 are half axes and shapeScalar is the geometric-normal sign;
-// point: range is the finite influence radius; spot: axis0 is direction and shapeScalar is cos(outer);
-// distant: axis0 points toward the source, shapeScalar is cos(angular radius), radiometry is lux.
-// selectionMetric is finite luminous power in lumens or distant illuminance luminance in lux.
-public struct GpuLight {
-    public float3 pos;
-    public uint type; // 0 rectangle, 1 point, 2 spot, 3 distant
-    public float3 axis0;
-    public float range;
-    public float3 axis1;
-    public float shapeScalar;
-    public float3 radiometry;
-    public float selectionMetric;
-};
-
-// Source-neutral 48-byte finite-light BVH node. Leaves have lightIndex >= 0; branches have two
-// non-negative child indices. Bounds and positions use the same segment-relative scene coordinates.
-//
-// peakIntensityCandela is the summed peak luminous intensity of the subtree, not its emitted power: it
-// is what the proposal divides by squared distance to reach lux, which is the one scale on which a
-// rectangle, a point, a spot and a distant light can be compared.
-public struct GpuLightNode {
-    public float3 boundsMin;
-    public int left;
-    public float3 boundsMax;
-    public int right;
-    public float peakIntensityCandela;
-    public int lightIndex;
-    public uint2 reserved;
-};
-
-// Prim.flags bit 0: this emissive primitive has a linked record in the retained light scene.
-public static const uint PRIM_EMITTER_IN_LIGHT_SCENE = 1u;
 
 // Largest finite half. Producers of fp16 HDR storage clamp to this instead of letting the conversion
 // round up to +inf and propagate as NaN — world.rgen's rgba16f outImage store most of all, which is the
@@ -165,9 +115,6 @@ public struct Payload {
 };
 
 public static const uint PAYLOAD_SHOW_ENVIRONMENT_EMITTERS = 4u;
-// Set by world.rchit on a hit whose primitive carries PRIM_EMITTER_IN_LIGHT_SCENE: this emitter is
-// RIS-sampled, so raygen gates its direct-hit emission on diffuse continuation rays (no double count).
-public static const uint PAYLOAD_EMITTER_IN_LIST = 128u;
 // Set by world.rchit on any dielectric hit: true when the incoming ray travels
 // against the prim's outward face normal (entering the volume), false when it exits. Derived from face
 // orientation rather than toggled, so a stray or missing face cannot corrupt the medium for the rest of
