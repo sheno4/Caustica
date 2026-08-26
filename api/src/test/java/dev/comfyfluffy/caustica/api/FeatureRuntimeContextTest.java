@@ -1,10 +1,9 @@
 package dev.comfyfluffy.caustica.api;
 
-import dev.comfyfluffy.caustica.api.pass.CausticaRenderPass;
-import dev.comfyfluffy.caustica.api.pass.PassFrame;
-import dev.comfyfluffy.caustica.api.pass.RenderStage;
-import dev.comfyfluffy.caustica.api.provider.LightProvider;
-import dev.comfyfluffy.caustica.api.provider.SceneProvider;
+import dev.comfyfluffy.caustica.api.pass.PostEffectFrame;
+import dev.comfyfluffy.caustica.api.pass.PostEffectPass;
+import dev.comfyfluffy.caustica.api.shader.ShaderSource;
+import dev.comfyfluffy.caustica.api.scene.SceneProvider;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -28,39 +27,30 @@ final class FeatureRuntimeContextTest {
         List<Object> values = new ArrayList<>();
         var builder = registry.feature(FEATURE)
                 .runtimeActivation(RuntimeActivation.ALWAYS)
-                .shaderSource(ShaderSource.classpath("/test/shaders"))
-                .bind(Slots.SKY, "test_sky", "TestSky")
+                .shaderSource(ShaderSource.classpath(Object.class, "/test/shaders"))
+                .environment(ResourceId.of("test", "sky"), "test_sky", "TestSky")
                 .surface(ResourceId.of("test", "surface"), "test_surface", "TestSurface",
                         ResourceId.of("test", "coverage"), "test_coverage", "TestCoverage")
-                .renderPassContextual(PASS, RenderStage.OVERLAY, context -> {
+                .postEffectPass(PASS, context -> {
                     capture(contexts, values, context);
                     return pass();
                 })
-                .sceneProviderContextual(ResourceId.of("test", "scene"), context -> {
+                .sceneProvider(ResourceId.of("test", "scene"), context -> {
                     capture(contexts, values, context);
                     return new SceneProvider() { };
-                })
-                .lightProviderContextual(ResourceId.of("test", "light"), context -> {
-                    capture(contexts, values, context);
-                    return new LightProvider() { };
-                })
-                .materialSourceContextual(ResourceId.of("test", "material"), context -> {
-                    capture(contexts, values, context);
-                    return sink -> { };
                 });
         builder.register();
-        registry.setDefault(Slots.SKY, FEATURE);
 
         registry.createRuntimeContributions();
         registry.createRuntimeContributions();
 
-        assertEquals(8, contexts.size());
-        contexts.subList(1, 4).forEach(context -> assertSame(contexts.getFirst(), context));
-        values.subList(1, 4).forEach(value -> assertSame(values.getFirst(), value));
-        contexts.subList(5, 8).forEach(context -> assertSame(contexts.get(4), context));
-        values.subList(5, 8).forEach(value -> assertSame(values.get(4), value));
-        assertNotSame(contexts.getFirst(), contexts.get(4));
-        assertNotSame(values.getFirst(), values.get(4));
+        assertEquals(4, contexts.size());
+        assertSame(contexts.getFirst(), contexts.get(1));
+        assertSame(values.getFirst(), values.get(1));
+        assertSame(contexts.get(2), contexts.get(3));
+        assertSame(values.get(2), values.get(3));
+        assertNotSame(contexts.getFirst(), contexts.get(2));
+        assertNotSame(values.getFirst(), values.get(2));
     }
 
     @Test
@@ -80,11 +70,10 @@ final class FeatureRuntimeContextTest {
         values.add(context.getOrCreate(SHARED, Object::new));
     }
 
-    private static CausticaRenderPass pass() {
-        return new CausticaRenderPass() {
+    private static PostEffectPass pass() {
+        return new PostEffectPass() {
             @Override public ResourceId id() { return PASS; }
-            @Override public RenderStage stage() { return RenderStage.OVERLAY; }
-            @Override public void record(PassFrame frame) { }
+            @Override public void record(PostEffectFrame frame) { }
         };
     }
 }

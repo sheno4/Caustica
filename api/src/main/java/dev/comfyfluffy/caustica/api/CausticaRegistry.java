@@ -1,11 +1,11 @@
 package dev.comfyfluffy.caustica.api;
 
-import dev.comfyfluffy.caustica.api.pass.CausticaRenderPass;
-import dev.comfyfluffy.caustica.api.pass.RenderPassRegistration;
-import dev.comfyfluffy.caustica.api.provider.LightProvider;
-import dev.comfyfluffy.caustica.api.provider.MaterialSource;
-import dev.comfyfluffy.caustica.api.provider.ProviderRegistration;
-import dev.comfyfluffy.caustica.api.provider.SceneProvider;
+import dev.comfyfluffy.caustica.api.pass.PassLifecycle;
+import dev.comfyfluffy.caustica.api.pass.PostEffectPass;
+import dev.comfyfluffy.caustica.api.pass.WorldResourcePass;
+import dev.comfyfluffy.caustica.api.shader.ShaderSource;
+import dev.comfyfluffy.caustica.api.ui.UiPass;
+import dev.comfyfluffy.caustica.api.scene.SceneProvider;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -16,10 +16,10 @@ import java.util.Objects;
 
 public final class CausticaRegistry {
     private final Map<ResourceId, Feature> features = new LinkedHashMap<>();
-    private final Map<ResourceId, Feature> renderPassOwners = new LinkedHashMap<>();
+    private final Map<ResourceId, Feature> worldResourcePassOwners = new LinkedHashMap<>();
+    private final Map<ResourceId, Feature> postEffectPassOwners = new LinkedHashMap<>();
+    private final Map<ResourceId, Feature> uiPassOwners = new LinkedHashMap<>();
     private final Map<ResourceId, Feature> sceneProviderOwners = new LinkedHashMap<>();
-    private final Map<ResourceId, Feature> lightProviderOwners = new LinkedHashMap<>();
-    private final Map<ResourceId, Feature> materialSourceOwners = new LinkedHashMap<>();
     private final Map<String, String> shaderTypeModules = new LinkedHashMap<>();
     private final Map<Slot, ResourceId> defaults = new LinkedHashMap<>();
     private final Map<Slot, ResourceId> selected = new LinkedHashMap<>();
@@ -29,6 +29,8 @@ public final class CausticaRegistry {
      * visible error surface at index 0 before host implementations.
      */
     private final List<Feature.SurfaceImplementation> surfaces = new ArrayList<>();
+    /** Registration order is the ABI here too: a scene's environment resolves to a position in this list. */
+    private final List<Feature.EnvironmentImplementation> environments = new ArrayList<>();
     private final List<Feature.SurfaceModifierImplementation> surfaceModifiers = new ArrayList<>();
 
     public FeatureBuilder feature(ResourceId id) {
@@ -40,17 +42,18 @@ public final class CausticaRegistry {
         if (features.containsKey(feature.id())) {
             throw new IllegalStateException("duplicate feature id " + feature.id());
         }
-        for (RenderPassRegistration renderPass : feature.renderPasses()) {
-            if (renderPassOwners.containsKey(renderPass.id())) {
-                throw new IllegalStateException("duplicate render pass id " + renderPass.id());
-            }
-        }
+        requireUnique(worldResourcePassOwners, feature.worldResourcePasses(), "world resource pass");
+        requireUnique(postEffectPassOwners, feature.postEffectPasses(), "post effect pass");
+        requireUnique(uiPassOwners, feature.uiPasses(), "UI pass");
         requireUnique(sceneProviderOwners, feature.sceneProviders(), "scene provider");
-        requireUnique(lightProviderOwners, feature.lightProviders(), "light provider");
-        requireUnique(materialSourceOwners, feature.materialSources(), "material source");
         for (Feature.SurfaceImplementation surface : feature.surfaces()) {
             if (surfaceIndex(surface.id()) >= 0) {
                 throw new IllegalStateException("duplicate surface implementation id " + surface.id());
+            }
+        }
+        for (Feature.EnvironmentImplementation environment : feature.environments()) {
+            if (environments.stream().anyMatch(existing -> existing.id().equals(environment.id()))) {
+                throw new IllegalStateException("duplicate environment implementation id " + environment.id());
             }
         }
         for (Feature.SurfaceModifierImplementation modifier : feature.surfaceModifiers()) {
@@ -65,21 +68,20 @@ public final class CausticaRegistry {
                 declaredShaderTypes, surface.module(), surface.type(), feature.id()));
         feature.surfaces().forEach(surface -> requireUnambiguousShaderType(
                 declaredShaderTypes, surface.coverageModule(), surface.coverageType(), feature.id()));
+        feature.environments().forEach(environment -> requireUnambiguousShaderType(
+                declaredShaderTypes, environment.module(), environment.type(), feature.id()));
         feature.surfaceModifiers().forEach(modifier -> requireUnambiguousShaderType(
                 declaredShaderTypes, modifier.module(), modifier.type(), feature.id()));
         features.put(feature.id(), feature);
         shaderTypeModules.putAll(declaredShaderTypes);
         surfaces.addAll(feature.surfaces());
+        environments.addAll(feature.environments());
         surfaceModifiers.addAll(feature.surfaceModifiers());
-        for (RenderPassRegistration renderPass : feature.renderPasses()) {
-            renderPassOwners.put(renderPass.id(), feature);
-        }
+        claim(worldResourcePassOwners, feature.worldResourcePasses(), feature);
+        claim(postEffectPassOwners, feature.postEffectPasses(), feature);
+        claim(uiPassOwners, feature.uiPasses(), feature);
         feature.sceneProviders().forEach(registration ->
                 sceneProviderOwners.put(registration.id(), feature));
-        feature.lightProviders().forEach(registration ->
-                lightProviderOwners.put(registration.id(), feature));
-        feature.materialSources().forEach(registration ->
-                materialSourceOwners.put(registration.id(), feature));
     }
 
     private void requireUnambiguousShaderType(Map<String, String> declared, String module,
@@ -177,20 +179,21 @@ public final class CausticaRegistry {
     }
 
     /** Stable pass identities declared by registered features; no pass instances exist at process scope. */
-    public synchronized List<ResourceId> renderPassIds() {
-        return List.copyOf(renderPassOwners.keySet());
+    public synchronized List<ResourceId> worldResourcePassIds() {
+        return List.copyOf(worldResourcePassOwners.keySet());
+    }
+
+    public synchronized List<ResourceId> postEffectPassIds() {
+        return List.copyOf(postEffectPassOwners.keySet());
+    }
+
+    /** Stable UI-pass identities declared by registered features. */
+    public synchronized List<ResourceId> uiPassIds() {
+        return List.copyOf(uiPassOwners.keySet());
     }
 
     public synchronized List<ResourceId> sceneProviderIds() {
         return List.copyOf(sceneProviderOwners.keySet());
-    }
-
-    public synchronized List<ResourceId> lightProviderIds() {
-        return List.copyOf(lightProviderOwners.keySet());
-    }
-
-    public synchronized List<ResourceId> materialSourceIds() {
-        return List.copyOf(materialSourceOwners.keySet());
     }
 
     /** Instantiate the currently active runtime closure for one RT session. */
@@ -203,51 +206,91 @@ public final class CausticaRegistry {
             selectedFeatures.add(binding.feature());
             selectedSlots.put(entry.getKey(), binding.feature().id());
         }
-        Map<ResourceId, CausticaRenderPass> passes = new LinkedHashMap<>();
-        Map<ResourceId, Feature> passFeatures = new LinkedHashMap<>();
-        Map<ResourceId, SceneProvider> scenes = new LinkedHashMap<>();
-        Map<ResourceId, LightProvider> lights = new LinkedHashMap<>();
-        Map<ResourceId, MaterialSource> materials = new LinkedHashMap<>();
+        ActivePasses<WorldResourcePass> worldResourcePasses = new ActivePasses<>();
+        ActivePasses<PostEffectPass> postEffectPasses = new ActivePasses<>();
+        ActivePasses<UiPass> uiPasses = new ActivePasses<>();
+        Map<ResourceId, SceneProvider> sceneProviders = new LinkedHashMap<>();
         for (Feature feature : features.values()) {
             if (feature.runtimeActivation() != RuntimeActivation.ALWAYS
                     && !selectedFeatures.contains(feature)) {
                 continue;
             }
             FeatureRuntimeContext context = new FeatureRuntimeContext(feature.id());
-            for (RenderPassRegistration registration : feature.renderPasses()) {
-                CausticaRenderPass pass = Objects.requireNonNull(registration.factory().create(context),
-                        feature.id() + " created a null render pass for " + registration.id());
-                if (!registration.id().equals(pass.id())) {
-                    throw new IllegalStateException(feature.id() + " created render pass " + pass.id()
-                            + " for registration " + registration.id());
-                }
-                if (registration.stage() != pass.stage()) {
-                    throw new IllegalStateException(feature.id() + " created render pass " + pass.id()
-                            + " at " + pass.stage() + " for registration " + registration.stage());
-                }
-                passes.put(registration.id(), pass);
-                passFeatures.put(registration.id(), feature);
-            }
-            instantiate(scenes, feature.sceneProviders(), context);
-            instantiate(lights, feature.lightProviders(), context);
-            instantiate(materials, feature.materialSources(), context);
+            instantiatePasses(worldResourcePasses, feature.worldResourcePasses(), feature, context,
+                    "world resource pass");
+            instantiatePasses(postEffectPasses, feature.postEffectPasses(), feature, context,
+                    "post effect pass");
+            instantiatePasses(uiPasses, feature.uiPasses(), feature, context, "UI pass");
+            instantiate(sceneProviders, feature.sceneProviders(), context);
         }
-        return new RuntimeContributions(selectedSlots, passes, passFeatures, scenes, lights, materials);
+        return new RuntimeContributions(selectedSlots, worldResourcePasses.frozen(),
+                postEffectPasses.frozen(), uiPasses.frozen(), sceneProviders);
+    }
+
+    /**
+     * A pass instance and the feature that owns it are always wanted together — the owner is how a pass's
+     * option view is resolved — so they travel as one rather than as two maps a caller has to keep aligned.
+     */
+    public record ActivePasses<P>(Map<ResourceId, P> instances, Map<ResourceId, Feature> owners) {
+        ActivePasses() {
+            this(new LinkedHashMap<>(), new LinkedHashMap<>());
+        }
+
+        public ActivePasses {
+            Objects.requireNonNull(instances, "instances");
+            Objects.requireNonNull(owners, "owners");
+        }
+
+        ActivePasses<P> frozen() {
+            return new ActivePasses<>(Collections.unmodifiableMap(new LinkedHashMap<>(instances)),
+                    Collections.unmodifiableMap(new LinkedHashMap<>(owners)));
+        }
+
+        /** The feature whose options a given pass reads, or null if the pass is not one of these. */
+        public Feature ownerOf(ResourceId passId) {
+            return owners.get(passId);
+        }
+    }
+
+    /**
+     * Every pass kind carries its own id, so the registration's id and the instance's must agree — a
+     * mismatch means a factory returned someone else's pass and would silently misattribute its options.
+     */
+    private static <P extends PassLifecycle<?>> void instantiatePasses(
+            ActivePasses<P> target, Iterable<RuntimeRegistration<P>> registrations, Feature feature,
+            FeatureRuntimeContext context, String kind) {
+        for (RuntimeRegistration<P> registration : registrations) {
+            P pass = Objects.requireNonNull(registration.factory().create(context),
+                    feature.id() + " created a null " + kind + " for " + registration.id());
+            if (!registration.id().equals(pass.id())) {
+                throw new IllegalStateException(feature.id() + " created " + kind + " " + pass.id()
+                        + " for registration " + registration.id());
+            }
+            target.instances().put(registration.id(), pass);
+            target.owners().put(registration.id(), feature);
+        }
     }
 
     private static <T> void requireUnique(Map<ResourceId, Feature> registered,
-                                          Iterable<ProviderRegistration<T>> candidates, String kind) {
-        for (ProviderRegistration<T> candidate : candidates) {
+                                          Iterable<RuntimeRegistration<T>> candidates, String kind) {
+        for (RuntimeRegistration<T> candidate : candidates) {
             if (registered.containsKey(candidate.id())) {
                 throw new IllegalStateException("duplicate " + kind + " id " + candidate.id());
             }
         }
     }
 
+    private static <T> void claim(Map<ResourceId, Feature> owners,
+                                  Iterable<RuntimeRegistration<T>> registrations, Feature feature) {
+        for (RuntimeRegistration<T> registration : registrations) {
+            owners.put(registration.id(), feature);
+        }
+    }
+
     private static <T> void instantiate(Map<ResourceId, T> target,
-                                        Iterable<ProviderRegistration<T>> registrations,
+                                        Iterable<RuntimeRegistration<T>> registrations,
                                         FeatureRuntimeContext context) {
-        for (ProviderRegistration<T> registration : registrations) {
+        for (RuntimeRegistration<T> registration : registrations) {
             target.put(registration.id(), Objects.requireNonNull(registration.factory().create(context),
                     "Factory created a null provider for " + registration.id()));
         }
@@ -255,18 +298,13 @@ public final class CausticaRegistry {
 
     /** Runtime-activation instances selected independently from the program-composition closure. */
     public record RuntimeContributions(Map<Slot, ResourceId> selectedSlots,
-                                       Map<ResourceId, CausticaRenderPass> renderPasses,
-                                       Map<ResourceId, Feature> renderPassFeatures,
-                                       Map<ResourceId, SceneProvider> sceneProviders,
-                                       Map<ResourceId, LightProvider> lightProviders,
-                                       Map<ResourceId, MaterialSource> materialSources) {
+                                       ActivePasses<WorldResourcePass> worldResourcePasses,
+                                       ActivePasses<PostEffectPass> postEffectPasses,
+                                       ActivePasses<UiPass> uiPasses,
+                                       Map<ResourceId, SceneProvider> sceneProviders) {
         public RuntimeContributions {
             selectedSlots = Collections.unmodifiableMap(new LinkedHashMap<>(selectedSlots));
-            renderPasses = Collections.unmodifiableMap(new LinkedHashMap<>(renderPasses));
-            renderPassFeatures = Collections.unmodifiableMap(new LinkedHashMap<>(renderPassFeatures));
             sceneProviders = Collections.unmodifiableMap(new LinkedHashMap<>(sceneProviders));
-            lightProviders = Collections.unmodifiableMap(new LinkedHashMap<>(lightProviders));
-            materialSources = Collections.unmodifiableMap(new LinkedHashMap<>(materialSources));
         }
     }
 
@@ -284,11 +322,16 @@ public final class CausticaRegistry {
         for (Feature.SurfaceImplementation surface : surfaces) {
             owners.put(surface.id(), features.get(surface.featureId()));
         }
+        Map<ResourceId, Feature> environmentOwners = new LinkedHashMap<>();
+        for (Feature.EnvironmentImplementation environment : environments) {
+            environmentOwners.put(environment.id(), features.get(environment.featureId()));
+        }
         Map<ResourceId, Feature> modifierOwners = new LinkedHashMap<>();
         for (Feature.SurfaceModifierImplementation modifier : surfaceModifiers) {
             modifierOwners.put(modifier.id(), features.get(modifier.featureId()));
         }
         return new Selection(bindings, List.copyOf(surfaces), Map.copyOf(owners),
+                List.copyOf(environments), Map.copyOf(environmentOwners),
                 List.copyOf(surfaceModifiers), Map.copyOf(modifierOwners));
     }
 
@@ -313,18 +356,22 @@ public final class CausticaRegistry {
 
     /**
      * What one world pipeline is compiled from: the feature bound to each slot, plus every registered
-     * surface implementation in index order (the dispatch switch's cases) and the feature each came from
-     * (whose shader source resolves its module).
+     * surface and environment implementation in index order (the dispatch switches' cases) and the feature
+     * each came from (whose shader source resolves its module).
      */
     public record Selection(Map<Slot, SelectedBinding> bindings,
                             List<Feature.SurfaceImplementation> surfaces,
                             Map<ResourceId, Feature> surfaceOwners,
+                            List<Feature.EnvironmentImplementation> environments,
+                            Map<ResourceId, Feature> environmentOwners,
                             List<Feature.SurfaceModifierImplementation> surfaceModifiers,
                             Map<ResourceId, Feature> surfaceModifierOwners) {
         public Selection {
             bindings = Map.copyOf(bindings);
             surfaces = List.copyOf(surfaces);
             surfaceOwners = Map.copyOf(surfaceOwners);
+            environments = List.copyOf(environments);
+            environmentOwners = Map.copyOf(environmentOwners);
             surfaceModifiers = List.copyOf(surfaceModifiers);
             surfaceModifierOwners = Map.copyOf(surfaceModifierOwners);
             if (!bindings.keySet().containsAll(Slots.ALL)) {
@@ -333,6 +380,10 @@ public final class CausticaRegistry {
             if (surfaces.isEmpty()) {
                 throw new IllegalArgumentException(
                         "selection needs at least one surface implementation");
+            }
+            if (environments.isEmpty()) {
+                throw new IllegalArgumentException(
+                        "selection needs at least one environment implementation");
             }
         }
 
@@ -346,6 +397,8 @@ public final class CausticaRegistry {
             bindings.values().stream().map(SelectedBinding::feature)
                     .filter(feature -> !features.contains(feature)).forEach(features::add);
             surfaces.stream().map(surface -> surfaceOwners.get(surface.id()))
+                    .filter(feature -> !features.contains(feature)).forEach(features::add);
+            environments.stream().map(environment -> environmentOwners.get(environment.id()))
                     .filter(feature -> !features.contains(feature)).forEach(features::add);
             surfaceModifiers.stream().map(modifier -> surfaceModifierOwners.get(modifier.id()))
                     .filter(feature -> !features.contains(feature)).forEach(features::add);

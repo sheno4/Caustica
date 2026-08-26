@@ -4,10 +4,10 @@ import caustica_types;
 
 /** A projected edit applied only to geometry carrying the modifier-receiver semantic. */
 public interface ISurfaceModifier {
-    public void applySurfaceModifier(SurfaceModifierInput input, inout MaterialInput material);
+    public OpenPbrSurface applySurfaceModifier(SurfaceModifierInput input, OpenPbrSurface material);
 };
 
 /** Generated sequential fan-out over every registered modifier. */
 public interface ISurfaceModifierDispatch {
-    public void applySurfaceModifiers(SurfaceModifierInput input, inout MaterialInput material);
+    public OpenPbrSurface applySurfaceModifiers(SurfaceModifierInput input, OpenPbrSurface material);
 };

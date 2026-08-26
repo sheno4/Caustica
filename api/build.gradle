@@ -69,9 +69,9 @@ def verifyApiJar = tasks.register("verifyApiJar") {
         }
         def expectedShaderModules = [
                 "caustica_api.slang",
-                "caustica_color.slang",
+                "caustica_coverage.slang",
+                "caustica_environment.slang",
                 "caustica_medium.slang",
-                "caustica_sky.slang",
                 "caustica_surface.slang",
                 "caustica_surface_modifier.slang",
                 "caustica_texture_resources.slang",

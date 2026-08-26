@@ -3,18 +3,17 @@ package dev.comfyfluffy.caustica.api;
 import java.util.List;
 
 /**
- * The engine slots a composition binds exactly one feature to. Surfaces are deliberately absent: a
- * material names its own {@code ISurfaceModel} implementation, so they are registered as a set rather
- * than competing for one slot — see {@link FeatureBuilder#surface}.
+ * The engine slots a composition binds exactly one feature to.
+ *
+ * <p>There are none. A slot exists where the engine has one role and implementations compete for it;
+ * every role the API currently exposes is instead a registered <em>set</em> whose member is named by
+ * whatever uses it — a material names its {@code ISurfaceModel} (see {@link FeatureBuilder#surface}), a
+ * scene names its {@code IEnvironmentModel} (see {@link FeatureBuilder#environment}) — so nothing competes
+ * and two of them can be live at once.
  */
 public final class Slots {
-    public static final Slot SKY = slot("sky", "caustica_sky", "ISkyModel");
-    public static final List<Slot> ALL = List.of(SKY);
+    public static final List<Slot> ALL = List.of();
 
     private Slots() {
-    }
-
-    private static Slot slot(String path, String module, String type) {
-        return new Slot(ResourceId.of("caustica", path), module, type);
     }
 }

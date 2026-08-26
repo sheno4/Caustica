@@ -1,49 +1,39 @@
 package dev.comfyfluffy.caustica.api.pass;
 
-import dev.comfyfluffy.caustica.api.OptionValues;
-import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
 import dev.comfyfluffy.caustica.api.gpu.GpuBuffer;
+import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
 import dev.comfyfluffy.caustica.api.gpu.GpuImage;
+import dev.comfyfluffy.caustica.api.option.OptionValues;
+import dev.comfyfluffy.caustica.api.shader.ShaderCompiler;
 
 /**
- * Passed to {@link CausticaRenderPass#create} and {@link CausticaRenderPass#resize}. A pass allocates its
- * own {@link GpuImage}/{@link GpuBuffer} resources through
- * {@link #device()} and owns their lifetime — the engine does not track or retire them.
+ * The services available to a pass at an epoch boundary, and the extent to which the renderer knows the
+ * pass at all.
+ *
+ * <p>Every {@link PassLifecycle} callback that can allocate receives one of these, which is the whole
+ * point: a pass rebuilding a resource because the display resized or the resource pack changed needs the
+ * same handles it had when it first allocated. A pass owns every {@link GpuImage} and {@link GpuBuffer}
+ * it creates here — the renderer does not track or retire them.
+ *
+ * <p>Subtypes add what a particular kind of pass may additionally do:
+ * {@link WorldResourceSetup} can publish into the world pipeline;
+ * {@code UiSetup} exposes the UI layer's format.
  */
 public interface PassSetup {
-    /** Supported pass-local Vulkan device and resource-allocation services. */
+    /** Vulkan device, allocator, and resource factories. */
     GpuDevice device();
 
-    /** Host compiler for this pass's extension-owned compute shaders. */
-    PassShaderCompiler shaderCompiler();
+    /** Host compiler for this pass's own shaders. */
+    ShaderCompiler shaderCompiler();
 
     int displayWidth();
 
     int displayHeight();
 
     /**
-     * Hand the engine a pass-produced image the world ray-tracing pipeline's own shaders sample, at the
-     * binding {@code name} the pass's own Slang declares (a {@code [[vk::binding(N, 2)]]} in a module the
-     * pass owns). The engine discovers the binding index from the active composition's own reflection;
-     * it never declares this slot itself. At most one pass may publish a given
-     * name. The image must stay valid — and its identity stable across a resize unless republished — for
-     * as long as this pass is active.
-     */
-    void publishWorldResource(String name, GpuImage image, long sampler);
-
-    /**
-     * Same as {@link #publishWorldResource(String, GpuImage, long)}, for a pass that declared a
-     * {@code StructuredBuffer}/{@code RWStructuredBuffer}/{@code ConstantBuffer} binding instead of a
-     * sampler — reflected the same way, at the same set, just a different Vulkan descriptor kind. No
-     * sampler; a buffer binding doesn't have one.
-     */
-    void publishWorldResource(String name, GpuBuffer buffer);
-
-    /**
-     * This feature's current option values, for a decision {@link CausticaRenderPass#create}/
-     * {@link CausticaRenderPass#resize} has to make once rather than every frame (e.g. sizing an image
-     * pyramid) — unlike {@link PassFrame#options()}, this is not frozen for a frame, since create/resize
-     * are not per-frame calls; it reads whatever is current when called.
+     * This feature's current option values, for a decision made once per epoch rather than every frame
+     * (sizing an image pyramid, choosing a format). Not frozen the way a frame's view is: an epoch
+     * callback is not a per-frame call, so this reads whatever is current.
      */
     OptionValues options();
 }

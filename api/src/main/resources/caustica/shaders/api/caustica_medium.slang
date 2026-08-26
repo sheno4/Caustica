@@ -9,10 +9,15 @@ public float3 referenceVolumeExtinction(float3 sourceColor, float transmissionWe
     return -log(unitTransmittance);
 }
 
-public MediumProperties referenceMedium(MediumInput input) {
+/**
+ * The reference interior for a transmissive surface, derived from the description the implementation
+ * just produced. Nothing is read from an engine-uploaded material record: `material` is the same struct
+ * `evaluateSurface` filled moments earlier.
+ */
+public MediumProperties referenceMedium(OpenPbrSurface material) {
     MediumProperties properties;
-    properties.extinction = referenceVolumeExtinction(input.sourceColor, input.transmissionWeight);
-    properties.guideTransmittance = input.sourceColor;
+    properties.extinction = referenceVolumeExtinction(material.transmission_color, material.transmission_weight);
+    properties.guideTransmittance = material.transmission_color;
     properties.transmissionRayBias = 1.0e-4;
     properties.flags = 0u;
     return properties;

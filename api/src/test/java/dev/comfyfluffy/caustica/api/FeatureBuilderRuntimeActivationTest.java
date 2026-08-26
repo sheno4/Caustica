@@ -1,8 +1,8 @@
 package dev.comfyfluffy.caustica.api;
 
-import dev.comfyfluffy.caustica.api.pass.RenderStage;
-import dev.comfyfluffy.caustica.api.provider.LightProvider;
-import dev.comfyfluffy.caustica.api.provider.SceneProvider;
+import dev.comfyfluffy.caustica.api.option.Option;
+import dev.comfyfluffy.caustica.api.shader.ShaderSource;
+import dev.comfyfluffy.caustica.api.scene.SceneProvider;
 import org.junit.jupiter.api.Test;
 
 import java.util.function.Consumer;
@@ -12,18 +12,20 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class FeatureBuilderRuntimeActivationTest {
-    private static final ShaderSource SHADERS = ShaderSource.classpath("/test/shaders");
+    private static final ShaderSource SHADERS = ShaderSource.classpath(Object.class, "/test/shaders");
+    /** No engine slot exists, so SELECTED_SLOT is exercised against one a test declares for itself. */
+    private static final Slot SLOT = new Slot(ResourceId.of("test", "slot"), "test_slot", "TestSlot");
 
     @Test
     void rejectsUnboundSelectedSlotRuntimeContributions() {
-        assertUnboundSelectedSlotRejected(builder -> builder.renderPass(
-                id("pass"), RenderStage.BEFORE_TRACE, () -> null));
+        assertUnboundSelectedSlotRejected(builder -> builder.worldResourcePass(
+                id("world-resource"), context -> null));
+        assertUnboundSelectedSlotRejected(builder -> builder.postEffectPass(
+                id("post-effect"), context -> null));
+        assertUnboundSelectedSlotRejected(builder -> builder.uiPass(
+                id("ui"), context -> null));
         assertUnboundSelectedSlotRejected(builder -> builder.sceneProvider(
-                id("scene"), () -> new SceneProvider() { }));
-        assertUnboundSelectedSlotRejected(builder -> builder.lightProvider(
-                id("light"), () -> new LightProvider() { }));
-        assertUnboundSelectedSlotRejected(builder -> builder.materialSource(
-                id("materials"), () -> sink -> { }));
+                id("scene"), context -> new SceneProvider() { }));
     }
 
     @Test
@@ -31,6 +33,7 @@ final class FeatureBuilderRuntimeActivationTest {
         CausticaRegistry registry = new CausticaRegistry();
 
         assertDoesNotThrow(() -> registry.feature(id("composition"))
+                .runtimeActivation(RuntimeActivation.SELECTED_SLOT)
                 .shaderSource(SHADERS)
                 .surface(id("surface"), "test_surface", "TestSurface",
                         id("coverage"), "test_coverage", "TestCoverage")
@@ -45,7 +48,7 @@ final class FeatureBuilderRuntimeActivationTest {
 
         assertDoesNotThrow(() -> registry.feature(id("always"))
                 .runtimeActivation(RuntimeActivation.ALWAYS)
-                .sceneProvider(id("scene"), () -> new SceneProvider() { })
+                .sceneProvider(id("scene"), context -> new SceneProvider() { })
                 .register());
     }
 
@@ -54,15 +57,17 @@ final class FeatureBuilderRuntimeActivationTest {
         CausticaRegistry registry = new CausticaRegistry();
 
         assertDoesNotThrow(() -> registry.feature(id("selected"))
+                .runtimeActivation(RuntimeActivation.SELECTED_SLOT)
                 .shaderSource(SHADERS)
-                .bind(Slots.SKY, "test_sky", "TestSky")
-                .sceneProvider(id("scene"), () -> new SceneProvider() { })
+                .bind(SLOT, "test_sky", "TestSky")
+                .sceneProvider(id("scene"), context -> new SceneProvider() { })
                 .register());
     }
 
     private static void assertUnboundSelectedSlotRejected(Consumer<FeatureBuilder> contribution) {
         CausticaRegistry registry = new CausticaRegistry();
-        FeatureBuilder builder = registry.feature(id("unbound"));
+        FeatureBuilder builder = registry.feature(id("unbound"))
+                .runtimeActivation(RuntimeActivation.SELECTED_SLOT);
         contribution.accept(builder);
 
         IllegalStateException exception = assertThrows(IllegalStateException.class, builder::register);

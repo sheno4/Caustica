@@ -9,7 +9,7 @@ public record Slot(ResourceId id, String interfaceModule, String interfaceType) 
         requireSlangIdentifier(interfaceType, "interfaceType");
     }
 
-    static String requireSlangIdentifier(String value, String label) {
+    public static String requireSlangIdentifier(String value, String label) {
         Objects.requireNonNull(value, label);
         if (!value.matches("[A-Za-z_][A-Za-z0-9_]*")) {
             throw new IllegalArgumentException(label + " is not a Slang identifier: " + value);

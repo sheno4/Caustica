@@ -1,12 +1,11 @@
 package dev.comfyfluffy.caustica.api;
 
-import dev.comfyfluffy.caustica.api.pass.CausticaRenderPass;
-import dev.comfyfluffy.caustica.api.pass.RenderPassRegistration;
-import dev.comfyfluffy.caustica.api.pass.RenderStage;
-import dev.comfyfluffy.caustica.api.provider.LightProvider;
-import dev.comfyfluffy.caustica.api.provider.MaterialSource;
-import dev.comfyfluffy.caustica.api.provider.ProviderRegistration;
-import dev.comfyfluffy.caustica.api.provider.SceneProvider;
+import dev.comfyfluffy.caustica.api.option.Option;
+import dev.comfyfluffy.caustica.api.pass.PostEffectPass;
+import dev.comfyfluffy.caustica.api.pass.WorldResourcePass;
+import dev.comfyfluffy.caustica.api.shader.ShaderSource;
+import dev.comfyfluffy.caustica.api.ui.UiPass;
+import dev.comfyfluffy.caustica.api.scene.SceneProvider;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -21,16 +20,17 @@ public final class FeatureBuilder {
     private DisplayText description = DisplayText.EMPTY;
     private FeatureCategory category = FeatureCategory.GENERAL;
     private ShaderSource shaderSource;
-    private RuntimeActivation runtimeActivation = RuntimeActivation.SELECTED_SLOT;
+    private RuntimeActivation runtimeActivation = RuntimeActivation.ALWAYS;
     private final Map<Slot, Feature.Binding> bindings = new LinkedHashMap<>();
     private final List<Feature.SurfaceImplementation> surfaces = new ArrayList<>();
+    private final List<Feature.EnvironmentImplementation> environments = new ArrayList<>();
     private final List<Feature.SurfaceModifierImplementation> surfaceModifiers = new ArrayList<>();
     private final List<Option<?>> options = new ArrayList<>();
     private final List<String> optionGroups = new ArrayList<>();
-    private final List<RenderPassRegistration> renderPasses = new ArrayList<>();
-    private final List<ProviderRegistration<SceneProvider>> sceneProviders = new ArrayList<>();
-    private final List<ProviderRegistration<LightProvider>> lightProviders = new ArrayList<>();
-    private final List<ProviderRegistration<MaterialSource>> materialSources = new ArrayList<>();
+    private final List<RuntimeRegistration<WorldResourcePass>> worldResourcePasses = new ArrayList<>();
+    private final List<RuntimeRegistration<PostEffectPass>> postEffectPasses = new ArrayList<>();
+    private final List<RuntimeRegistration<UiPass>> uiPasses = new ArrayList<>();
+    private final List<RuntimeRegistration<SceneProvider>> sceneProviders = new ArrayList<>();
     private final List<String> passResourceModules = new ArrayList<>();
     private boolean registered;
 
@@ -61,9 +61,10 @@ public final class FeatureBuilder {
     }
 
     /**
-     * Choose when this feature's runtime contributions are instantiated. {@link RuntimeActivation#SELECTED_SLOT}
-     * requires this feature to bind at least one slot when it declares a render pass, scene provider, light
-     * provider or material source. Composition-only surfaces, surface modifiers and options need no slot binding.
+     * Choose when this feature's runtime contributions are instantiated. The default is
+     * {@link RuntimeActivation#ALWAYS}, which is what a feature wants when nothing selects it — a surface or
+     * environment implementation is compiled into every composition and chosen per material or per scene,
+     * so its passes cannot be gated on a selection that never happens.
      */
     public FeatureBuilder runtimeActivation(RuntimeActivation runtimeActivation) {
         this.runtimeActivation = Objects.requireNonNull(runtimeActivation, "runtimeActivation");
@@ -91,6 +92,20 @@ public final class FeatureBuilder {
         }
         surfaces.add(new Feature.SurfaceImplementation(this.id, id, module, type,
                 coverageId, coverageModule, coverageType));
+        return this;
+    }
+
+    /**
+     * Register an environment implementation a scene can name. Registered as a set, not bound to a slot:
+     * every registered implementation is compiled into the composition at once and each scene selects one,
+     * so a second scene can have its own sky.
+     */
+    public FeatureBuilder environment(ResourceId id, String module, String type) {
+        Objects.requireNonNull(id, "id");
+        if (environments.stream().anyMatch(existing -> existing.id().equals(id))) {
+            throw new IllegalStateException(this.id + " declares duplicate environment implementation " + id);
+        }
+        environments.add(new Feature.EnvironmentImplementation(this.id, id, module, type));
         return this;
     }
 
@@ -123,31 +138,47 @@ public final class FeatureBuilder {
         return this;
     }
 
-    public FeatureBuilder renderPass(ResourceId passId, RenderStage stage,
-                                     RuntimeFactory<? extends CausticaRenderPass> factory) {
-        return renderPassContextual(passId, stage, ContextualRuntimeFactory.from(factory));
-    }
-
-    /** Register a pass factory that shares this feature's activation context with its other contributions. */
-    public FeatureBuilder renderPassContextual(ResourceId passId, RenderStage stage,
-                                               ContextualRuntimeFactory<? extends CausticaRenderPass> factory) {
-        RenderPassRegistration registration = new RenderPassRegistration(passId, stage, factory);
-        if (renderPasses.stream().anyMatch(existing -> existing.id().equals(passId))) {
-            throw new IllegalStateException(id + " declares duplicate render pass " + passId);
-        }
-        renderPasses.add(registration);
+    /**
+     * Register a pass that produces something the world pipeline reads, recorded before the trace — see
+     * {@link WorldResourcePass}.
+     */
+    public FeatureBuilder worldResourcePass(ResourceId passId,
+                                            ContextualRuntimeFactory<? extends WorldResourcePass> factory) {
+        worldResourcePasses.add(declare(worldResourcePasses, passId, factory, "world resource pass"));
         return this;
     }
 
-    public FeatureBuilder sceneProvider(ResourceId providerId,
-                                        RuntimeFactory<? extends SceneProvider> factory) {
-        return sceneProviderContextual(providerId, ContextualRuntimeFactory.from(factory));
+    /**
+     * Register a pass that transforms the scene image, recorded after reconstruction and before the
+     * display transform — see {@link PostEffectPass}.
+     */
+    public FeatureBuilder postEffectPass(ResourceId passId,
+                                         ContextualRuntimeFactory<? extends PostEffectPass> factory) {
+        postEffectPasses.add(declare(postEffectPasses, passId, factory, "post effect pass"));
+        return this;
     }
 
-    /** Register a scene factory that shares this feature's activation context with its other contributions. */
-    public FeatureBuilder sceneProviderContextual(ResourceId providerId,
-                                                  ContextualRuntimeFactory<? extends SceneProvider> factory) {
-        ProviderRegistration<SceneProvider> registration = new ProviderRegistration<>(providerId, factory);
+    /**
+     * Register a pass that draws the separate UI layer after the display transform, once per rendered
+     * frame. Presentation consumes the layer for every output frame; a frame-generation backend may reuse
+     * it or interpolate it separately from the scene — see {@link UiPass}.
+     */
+    public FeatureBuilder uiPass(ResourceId passId, ContextualRuntimeFactory<? extends UiPass> factory) {
+        uiPasses.add(declare(uiPasses, passId, factory, "UI pass"));
+        return this;
+    }
+
+    private <P> RuntimeRegistration<P> declare(List<RuntimeRegistration<P>> declared, ResourceId passId,
+                                            ContextualRuntimeFactory<? extends P> factory, String kind) {
+        if (declared.stream().anyMatch(existing -> existing.id().equals(passId))) {
+            throw new IllegalStateException(id + " declares duplicate " + kind + " " + passId);
+        }
+        return new RuntimeRegistration<>(passId, factory);
+    }
+
+    public FeatureBuilder sceneProvider(ResourceId providerId,
+                                                   ContextualRuntimeFactory<? extends SceneProvider> factory) {
+        RuntimeRegistration<SceneProvider> registration = new RuntimeRegistration<>(providerId, factory);
         if (sceneProviders.stream().anyMatch(existing -> existing.id().equals(providerId))) {
             throw new IllegalStateException(id + " declares duplicate scene provider " + providerId);
         }
@@ -165,37 +196,7 @@ public final class FeatureBuilder {
         return this;
     }
 
-    public FeatureBuilder lightProvider(ResourceId providerId,
-                                        RuntimeFactory<? extends LightProvider> factory) {
-        return lightProviderContextual(providerId, ContextualRuntimeFactory.from(factory));
-    }
 
-    /** Register a light factory that shares this feature's activation context with its other contributions. */
-    public FeatureBuilder lightProviderContextual(ResourceId providerId,
-                                                  ContextualRuntimeFactory<? extends LightProvider> factory) {
-        ProviderRegistration<LightProvider> registration = new ProviderRegistration<>(providerId, factory);
-        if (lightProviders.stream().anyMatch(existing -> existing.id().equals(providerId))) {
-            throw new IllegalStateException(id + " declares duplicate light provider " + providerId);
-        }
-        lightProviders.add(registration);
-        return this;
-    }
-
-    public FeatureBuilder materialSource(ResourceId sourceId,
-                                         RuntimeFactory<? extends MaterialSource> factory) {
-        return materialSourceContextual(sourceId, ContextualRuntimeFactory.from(factory));
-    }
-
-    /** Register a material factory that shares this feature's activation context with its other contributions. */
-    public FeatureBuilder materialSourceContextual(ResourceId sourceId,
-                                                   ContextualRuntimeFactory<? extends MaterialSource> factory) {
-        ProviderRegistration<MaterialSource> registration = new ProviderRegistration<>(sourceId, factory);
-        if (materialSources.stream().anyMatch(existing -> existing.id().equals(sourceId))) {
-            throw new IllegalStateException(id + " declares duplicate material source " + sourceId);
-        }
-        materialSources.add(registration);
-        return this;
-    }
 
     /**
      * Declare a Slang module (by module name, not slot) this feature wants anchored outside the generic
@@ -226,15 +227,15 @@ public final class FeatureBuilder {
         registered = true;
         DisplayText resolvedTitle = title != null ? title : DisplayText.literal(id.toString());
         Feature feature = new Feature(id, resolvedTitle, description, category, shaderSource, runtimeActivation, bindings,
-                surfaces, surfaceModifiers, options, optionGroups, renderPasses, sceneProviders, lightProviders,
-                materialSources, passResourceModules);
+                surfaces, environments, surfaceModifiers, options, optionGroups, worldResourcePasses, postEffectPasses, uiPasses,
+                sceneProviders, passResourceModules);
         registry.register(feature);
         return feature;
     }
 
     private boolean hasRuntimeContributions() {
-        return !renderPasses.isEmpty() || !sceneProviders.isEmpty() || !lightProviders.isEmpty()
-                || !materialSources.isEmpty();
+        return !worldResourcePasses.isEmpty() || !postEffectPasses.isEmpty() || !uiPasses.isEmpty()
+                || !sceneProviders.isEmpty();
     }
 
 }

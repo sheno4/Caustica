@@ -1,10 +1,11 @@
 package dev.comfyfluffy.caustica.api.gpu;
 
 /**
- * A renderer-allocated Vulkan buffer with a device address.
+ * An extension-owned Vulkan buffer allocated through the renderer's device service.
  *
- * <p>The pass that creates a buffer through {@link GpuDevice#createBuffer} owns it and must call
- * {@link #destroy()} once no recorded or submitted work can reference it.
+ * <p>The extension that creates a buffer through {@link GpuDevice#createBuffer} owns it. Free it through
+ * {@link GpuDevice#retireAfterUse}, not by calling {@link #destroy()} directly — the only place a direct
+ * destroy is safe is a lifecycle's final callback, where the device is already idle.
  */
 public interface GpuBuffer {
     long handle();

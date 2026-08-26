@@ -1,12 +1,5 @@
 module caustica_types;
 
-/** Opaque words interpreted only by the registered implementation selected for a material. */
-public struct MaterialProviderData {
-    public uint4 words0;
-    public uint4 words1;
-    public uint4 words2;
-};
-
 // Extension colours and radiance are scene-linear ACEScg. Distances are scene world units and
 // directions are normalized and point away from the shaded position.
 public static const uint EVENT_NONE = 0x0u;
@@ -27,13 +20,6 @@ public static const uint SURFACE_ANIMATION_ENABLED = 0x2u;
 
 public static const uint SURFACE_BASE_TEXTURE_PRESENT = 0x1u;
 public static const uint SURFACE_BASE_TEXTURE_LINEAR = 0x2u;
-
-/** The material values available when a transmissive surface creates its interior medium. */
-public struct MediumInput {
-    public float3 sourceColor;
-    public float specularIor;
-    public float transmissionWeight;
-};
 
 public static const uint MEDIUM_TERMINATE_ON_MISS = 0x1u;
 public static const uint MEDIUM_BOUNDARY_LIGHTING = 0x2u;
@@ -60,59 +46,83 @@ public struct MediumLightingInput {
 };
 
 /**
- * The authored surface description, a subset of OpenPBR Surface. Field names are the spec's, so a value
- * here means what the spec says it means — most of all `specularRoughness`, which is OpenPBR r and NOT
- * the GGX alpha the BSDF consumes (alpha = r * r).
+ * The OpenPBR Surface description a surface implementation produces and the engine's BSDF consumes.
  *
- * Normal-incidence reflectance is deliberately absent: OpenPBR derives it from `specularIor` and
- * `specularIor` for a dielectric and from `baseColor` for a metal. Use `openPbrSpecularF0`.
+ * Not an input to the implementation: the engine uploads no material record and passes nothing in.
+ * `SurfaceInput` is what the implementation is given; this is what it returns.
+ *
+ * Every field carries the specification's own default, so an implementation declares an
+ * `OpenPbrSurface` and writes only what it actually varies. Both `OpenPbrSurface material;` and
+ * `OpenPbrSurface material = {};` yield the defaults.
+ *
+ * Field names, grouping, and declaration order are the specification's, verbatim, so a parameter here
+ * and a parameter in an `open_pbr_surface` node are the same thing under the same name. A value means
+ * exactly what the spec says it means — most of all `specular_roughness`, which is OpenPBR r and NOT the
+ * GGX alpha the BSDF consumes (alpha = r * r).
+ *
+ * Unsupported groups are absent rather than present-and-ignored: there is no fuzz, coat, or thin film
+ * here because the engine's BSDF has no lobe for them. Normal-incidence reflectance is likewise absent
+ * because OpenPBR derives it from `specular_ior` for a dielectric and `base_color` for a metal — use
+ * `openPbrSpecularF0`.
  */
-public struct MaterialInput {
-    /**
-     * OpenPBR geometry_normal: the shading normal, already carrying the material's normal map. It is
-     * writable because a procedural surface's normal IS its description — the engine's transport reads
-     * this one for refraction, so perturbing it here is what makes a wave a wave.
-     */
-    public float3 geometryNormal;
-    /**
-     * `geometryNormal` one frame ago. Not an OpenPBR parameter: reconstruction reprojects a reflection
-     * through the surface plane and needs to know where that plane was, which only the function that
-     * produced the normal can answer. The engine pre-fills it with `geometryNormal`, which is the right
-     * answer for everything that does not animate; fill it only when
-     * SURFACE_RECONSTRUCTION_ANCHOR is set.
-     */
-    public float3 previousGeometryNormal;
-    public float3 baseColor;
-    public float baseMetalness;
+public struct OpenPbrSurface {
+    // Base
+    public float3 base_color = float3(0.8, 0.8, 0.8);
+    public float base_metalness = 0.0;
+
+    // Specular
     /** OpenPBR specular_roughness: perceptual. GGX alpha is its square. */
-    public float specularRoughness;
-    public float specularIor;
+    public float specular_roughness = 0.3;
+    public float specular_ior = 1.5;
+
+    // Transmission
     /**
      * OpenPBR transmission_weight: the mix between the opaque dielectric base and the translucent base.
      * A volume routes the latter through the engine's refractive medium transport. A thin wall resolves
      * it as an absorbing, non-scattering dielectric sheet with a straight-through rough BTDF.
      */
-    public float transmissionWeight;
+    public float transmission_weight = 0.0;
     /**
      * OpenPBR transmission_color. The supported thin-sheet model treats it as normal-incidence
-     * transmittance through the sheet. Volume colour remains a geometry-source input to the medium hook.
+     * transmittance through the sheet.
      */
-    public float3 transmissionColor;
+    public float3 transmission_color = float3(1.0, 1.0, 1.0);
+
+    // Subsurface
     /** OpenPBR subsurface_weight: the mix between glossy-diffuse and subsurface slabs. */
-    public float subsurfaceWeight;
+    public float subsurface_weight = 0.0;
     /** OpenPBR subsurface_color: the dense scattering sheet's observed colour. */
-    public float3 subsurfaceColor;
+    public float3 subsurface_color = float3(0.8, 0.8, 0.8);
     /**
      * OpenPBR subsurface_scatter_anisotropy. In thin-walled mode it divides subsurface energy between
      * diffuse reflection and diffuse transmission exactly as the specification defines.
      */
-    public float subsurfaceScatterAnisotropy;
+    public float subsurface_scatter_anisotropy = 0.0;
+
+    // Emission
+    /** OpenPBR emission_luminance, in cd/m². */
+    public float emission_luminance = 0.0;
+    public float3 emission_color = float3(1.0, 1.0, 1.0);
+
+    // Geometry
     /**
-     * OpenPBR emission_color and emission_luminance (cd/m²). A material adapter may derive emission
-     * colour from its base texture, but that is source policy rather than part of this model.
+     * OpenPBR geometry_normal: the shading normal, already carrying the material's normal map. It is
+     * written rather than read because a procedural surface's normal IS its description — the engine's
+     * transport reads this one for refraction, so perturbing it is what makes a wave a wave.
+     *
+     * Zero, the default, means "the triangle's own normal": the engine substitutes
+     * `SurfaceInput.geometricNormal` after the implementation returns, so a surface with no normal map
+     * writes nothing here.
      */
-    public float3 emissionColor;
-    public float emissionLuminance;
+    public float3 geometry_normal = float3(0.0);
+    /**
+     * `geometry_normal` one frame ago. NOT an OpenPBR parameter: reconstruction reprojects a reflection
+     * through the surface plane and needs to know where that plane was, which only the function that
+     * produced the normal can answer. Zero, the default, means "unchanged since last frame" and resolves
+     * to `geometry_normal`; write it only when SURFACE_RECONSTRUCTION_ANCHOR is set and the normal
+     * animates.
+     */
+    public float3 previous_geometry_normal = float3(0.0);
 };
 
 /**
@@ -125,17 +135,21 @@ public float3 openPbrSpecularF0(float3 baseColor, float baseMetalness, float spe
     return lerp(float3(amplitude * amplitude), baseColor, clamp(baseMetalness, 0.0, 1.0));
 }
 
-public float3 openPbrSpecularF0(MaterialInput material) {
-    return openPbrSpecularF0(material.baseColor, material.baseMetalness, material.specularIor);
+public float3 openPbrSpecularF0(OpenPbrSurface material) {
+    return openPbrSpecularF0(material.base_color, material.base_metalness, material.specular_ior);
 }
 
 /**
  * Where the surface is being looked at, and the frame constants a procedural one evaluates against. The
- * description itself is not here: it arrives as the `inout MaterialInput` an implementation edits.
+ * description itself is not here: the implementation produces it as the `inout OpenPbrSurface` it fills.
  */
 public struct SurfaceInput {
-    /** Opaque material words interpreted only by the selected surface implementation. */
-    public MaterialProviderData providerData;
+    /**
+     * The material's `userData` word, copied verbatim from MaterialDefinition. The engine assigns it no
+     * meaning: it is whatever the extension that defined this material put there — a bindless texture
+     * slot, packed bits, or an index into a buffer the extension published itself.
+     */
+    public uint userData;
     public float3 position;
     /** The triangle's own normal, oriented toward the viewer. Unperturbed by any normal map. */
     public float3 geometricNormal;
@@ -181,9 +195,9 @@ public struct SurfaceModifierInput {
 };
 
 /**
- * Exactly what the engine's BSDF evaluates with. Unlike MaterialInput this is not authored vocabulary
+ * Exactly what the engine's BSDF evaluates with. Unlike OpenPbrSurface this is not authored vocabulary
  * and nothing outside the engine produces one: reflectance is already F0 and roughness is already GGX
- * alpha (the square of MaterialInput.specularRoughness). It reaches an extension only as the surface
+ * alpha (the square of OpenPbrSurface.specularRoughness). It reaches an extension only as the surface
  * `evaluateResponse` is stylizing, and it is exactly the state the payload carries between stages.
  */
 public struct SurfaceClosure {
@@ -231,4 +245,10 @@ public struct EnvironmentQuery {
     public float3 direction;
     /** Whether environment emitters already represented by direct-light sampling remain visible. */
     public bool showEnvironmentEmitters;
+    /**
+     * The word the scene carried when it named this implementation, copied verbatim. The engine assigns it
+     * no meaning: it is whatever the extension put there — a bindless slot, packed bits, or the address of
+     * a buffer holding this scene's atmosphere.
+     */
+    public uint64_t parameters;
 };

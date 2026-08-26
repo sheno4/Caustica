@@ -2,7 +2,7 @@ package dev.comfyfluffy.caustica.api;
 
 public enum FeatureCategory {
     GENERAL,
-    SKY,
+    ENVIRONMENT,
     SURFACE,
     MEDIUM,
     LIGHTING,
