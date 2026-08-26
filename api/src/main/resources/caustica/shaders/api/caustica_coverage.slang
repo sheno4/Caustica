@@ -1,22 +1,23 @@
 module caustica_coverage;
 
-public static const uint COVERAGE_TEXTURE_PRESENT = 1u;
-public static const uint COVERAGE_TEXTURE_LINEAR = 2u;
-public static const uint COVERAGE_MODE_OPAQUE = 4u;
+public static const uint COVERAGE_MODE_OPAQUE = 1u;
 
-/** Geometry and base-texture facts available to coverage evaluation in traversal stages. */
+/**
+ * What coverage evaluation gets. The same uninterpreted words shading gets, and nothing else: an any-hit
+ * that decides whether a hit exists needs its own data, not the engine's opinion about textures.
+ *
+ * <p>Deliberately narrower than SurfaceInput. This runs in traversal, once per candidate hit rather than
+ * once per accepted one, so it carries no position, no normal, and no footprint — a coverage test that
+ * wants them is doing shading work in the wrong stage.
+ */
 public struct CoverageInput {
-    /** Epoch-local slot in the provider texture array. Read only when COVERAGE_TEXTURE_PRESENT is set. */
-    public uint baseTextureIndex;
+    public uint64_t materialData;
+    public uint64_t geometryData;
+    public uint64_t instanceData;
+    /** Geometry-local, so `geometryData` indexes with it directly. */
+    public uint primitiveIndex;
     /** COVERAGE_* bits resolved by the engine from its traversal binding. */
     public uint flags;
-    /** Uniform scene-linear ACEScg OpenPBR base_color factor. */
-    public float3 baseColorFactor;
-    public float2 textureCoordinate;
-    /** Primitive tint in scene-linear ACEScg. */
-    public float3 tint;
-    /** Interpolated vertex colour in scene-linear ACEScg with unitless alpha. */
-    public float4 vertexColor;
 };
 
 /**

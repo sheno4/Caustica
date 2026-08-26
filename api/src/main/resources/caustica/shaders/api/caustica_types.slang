@@ -18,9 +18,6 @@ public static const uint SURFACE_RECONSTRUCTION_ANCHOR = 0x1u;
 /** Enables optional time-varying procedural surface and medium evaluation for this frame. */
 public static const uint SURFACE_ANIMATION_ENABLED = 0x2u;
 
-public static const uint SURFACE_BASE_TEXTURE_PRESENT = 0x1u;
-public static const uint SURFACE_BASE_TEXTURE_LINEAR = 0x2u;
-
 public static const uint MEDIUM_TERMINATE_ON_MISS = 0x1u;
 public static const uint MEDIUM_BOUNDARY_LIGHTING = 0x2u;
 
@@ -145,29 +142,37 @@ public float3 openPbrSpecularF0(OpenPbrSurface material) {
  */
 public struct SurfaceInput {
     /**
-     * The material's `userData` word, copied verbatim from MaterialDefinition. The engine assigns it no
-     * meaning: it is whatever the extension that defined this material put there — a bindless texture
-     * slot, packed bits, or an index into a buffer the extension published itself.
+     * The material's word, copied verbatim from MaterialDefinition. Sixty-four bits so it can simply be a
+     * device address: a material's parameters are whatever buffer the source pointed it at, and there is
+     * no size beyond which an extension has to start packing bits.
      */
-    public uint userData;
+    public uint64_t materialData;
+    /**
+     * This geometry's word, copied verbatim from MeshBuild.Geometry. Normally the address of the geometry's
+     * own attribute slice — per geometry rather than per mesh precisely so that
+     * `attributes[primitiveIndex]` is correct with no base to add.
+     */
+    public uint64_t geometryData;
+    /**
+     * This placement's word, copied verbatim from SetInstance. What lets one mesh be placed many times and
+     * still shade differently: a team colour, an animation frame, an index into a buffer the source
+     * published. Shading only — geometry that differs per placement is a different mesh.
+     */
+    public uint64_t instanceData;
+    /**
+     * Index of the hit triangle within its geometry. Geometry-local: it restarts at zero for each
+     * geometry, which is what makes `geometryData` a usable base pointer.
+     */
+    public uint primitiveIndex;
     public float3 position;
     /** The triangle's own normal, oriented toward the viewer. Unperturbed by any normal map. */
     public float3 geometricNormal;
-    /** Source-neutral tangent frame constructed from geometry positions and texture coordinates. */
-    public float3 tangent;
-    public float3 bitangent;
     public float3 outgoingDirection;
-    public float2 textureCoordinate;
-    /** Provider texture LOD derived from the ray footprint and the selected base texture dimensions. */
-    public float textureLod;
-    /** Epoch-local provider texture slot and SURFACE_BASE_TEXTURE_* facts from the traversal binding. */
-    public uint baseTextureIndex;
-    public uint baseTextureFlags;
-    /** Primitive and interpolated vertex colours in scene-linear ACEScg with unitless alpha. */
-    public float3 tint;
-    public float4 vertexColor;
-    /** Provider-authored primitive emission multiplier, unitless. */
-    public float primitiveEmission;
+    /**
+     * Ray footprint width at the hit, in scene world units. Engine-produced from the ray cone, which is
+     * the one filtering fact an extension cannot derive for itself — everything downstream of it, the
+     * texture coordinates and the mip choice included, is the extension's own.
+     */
     public float textureFootprint;
     /**
      * A world-pinned, precision-safe position for procedural evaluation. It follows `position` while
@@ -192,6 +197,11 @@ public struct SurfaceModifierInput {
     public float3 geometricNormal;
     /** Ray footprint width at the hit, in scene world units. */
     public float textureFootprint;
+    /** The same three uninterpreted words `SurfaceInput` carries, and the same geometry-local index. */
+    public uint64_t materialData;
+    public uint64_t geometryData;
+    public uint64_t instanceData;
+    public uint primitiveIndex;
 };
 
 /**

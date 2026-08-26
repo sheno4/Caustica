@@ -338,6 +338,17 @@ worth doing — without it, a mesh that must shade differently in two places has
 shading only: the renderer derives motion vectors from a placement's current and previous transform, so
 rigid motion is handled, and geometry that genuinely differs per placement is a different mesh.
 
+`SurfaceInput` carries exactly these three, `primitiveIndex`, position, geometric normal, outgoing
+direction, the ray footprint, the world-pinned procedural position, and the animation clock — and nothing
+else. Texture coordinates, LOD, tint, vertex colour, primitive emission and the tangent frame are all gone:
+each is derived from data the renderer no longer sees, so each is the extension's own work behind its
+pointer. The footprint stays because the ray cone is engine state an extension cannot reconstruct;
+everything downstream of it, the mip choice included, is not.
+
+`CoverageInput` is narrower still — the three words and `primitiveIndex`, no position, no normal, no
+footprint. It runs in traversal, once per candidate hit rather than once per accepted one, so a coverage
+test reaching for shading inputs is working in the wrong stage.
+
 **Per-triangle data needs no support at all.** `primitiveIndex` is free in a hit shader, so the source's
 Slang does `attributes[primitiveIndex]` and the renderer never participates. That is why the per-triangle
 record was deleted rather than relocated. Note `primitiveIndex` is **geometry-local** — it restarts at zero
@@ -650,14 +661,6 @@ reach.
 LWJGL is not a blocker: `EXTDescriptorHeap` ships in 3.4.1, the version already pinned, with
 `vkWriteResourceDescriptorsEXT` writing descriptors to a host address — which is what
 `GpuDescriptorRange.mapped()` exists to hand over.
-
-**`SurfaceInput` is well behind the Java side.** It still carries texture coordinates, LOD, base texture
-index and flags, tint, vertex colour, primitive emission, and a tangent frame — all now the extension's own
-business behind a pointer — and its material word is still 32 bits, which the pointer-indirection idiom
-above needs widened to 64 before an extension can use it at all. It should reduce to the three words,
-`primitiveIndex`, position, geometric normal, outgoing direction, and the world-pinned procedural position.
-The tangent frame in particular belongs to the extension, being derived from texture coordinates the
-renderer no longer sees.
 
 **Opacity micromaps are unplaced.** They *are* a build input, so by the rule above they belong in the mesh
 — most likely as a prebuilt micromap the source hands over, since the conservative per-triangle bounds the
