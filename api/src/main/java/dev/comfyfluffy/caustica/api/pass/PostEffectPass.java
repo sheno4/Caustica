@@ -18,7 +18,7 @@ package dev.comfyfluffy.caustica.api.pass;
  * the order effects compose in. It is still not a dependency mechanism — a pass must work correctly when
  * the passes around it are absent.
  */
-public interface PostEffectPass extends PassLifecycle<PassSetup> {
+public interface PostEffectPass extends PassLifecycle {
     /** Record this pass's work for one frame. */
     void record(PostEffectFrame frame);
 }

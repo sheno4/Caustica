@@ -631,13 +631,25 @@ so this costs no API surface. It reuses the rectangle solid-angle sampler the ar
 the mixture weight is a proposal weight under the rule `averagePower` already states — wrong costs variance
 and nothing else.
 
-**Descriptor heap or descriptor buffer, and what it costs in hardware.** The heap model is the better fit
-and the reason capability 3 has no publish API. But NVIDIA support lands in the 610 driver series with
-RTX 30-series and later, while `VK_EXT_descriptor_buffer` reaches further back at the price of keeping set
-layouts. The heap also indexes acceleration structures uniformly, which is what a second TLAS would want. A
-ray-traced renderer already needs RT hardware, so the question is precisely whether dropping
-RTX 20-series is acceptable — and since neither model mixes with the other, this cannot be a runtime
-fallback without two binding paths through the whole renderer.
+**Descriptor heap: what it actually costs.** The heap model is the better fit and the reason capability 3
+has no publish API. It also indexes acceleration structures uniformly, which is what a second TLAS would
+want.
+
+**It is not a hardware trade.** The floor is already set by what the renderer requires to trace at all —
+`VK_KHR_ray_tracing_pipeline`, `VK_KHR_acceleration_structure`, `VK_KHR_ray_tracing_position_fetch`,
+`VK_KHR_ray_query` — which is Turing and later, RT cores or not. `VK_EXT_descriptor_heap` does not reach
+less far than that, so choosing it over `VK_EXT_descriptor_buffer` gives up no card that could have run this
+renderer anyway. The exact driver-version floor is worth recording here once someone has confirmed it
+against a support matrix rather than asserted it.
+
+What it does cost is that the two binding models cannot mix in one draw or dispatch, so adoption moves the
+whole renderer at once — world pipelines, post passes, UI passes — and cannot be a runtime fallback without
+two binding paths through all of it. That is the real question, and it is about migration size rather than
+reach.
+
+LWJGL is not a blocker: `EXTDescriptorHeap` ships in 3.4.1, the version already pinned, with
+`vkWriteResourceDescriptorsEXT` writing descriptors to a host address — which is what
+`GpuDescriptorRange.mapped()` exists to hand over.
 
 **`SurfaceInput` is well behind the Java side.** It still carries texture coordinates, LOD, base texture
 index and flags, tint, vertex colour, primitive emission, and a tangent frame — all now the extension's own

@@ -6,7 +6,7 @@ import java.util.Objects;
  * Validation for the Slang module and type names an extension hands the compiler.
  *
  * <p>Here rather than on any one of its callers: surface implementations, environment implementations,
- * emission profiles and pass resource modules all name Slang symbols, and none of them owns the rule.
+ * emission profiles and pass shaders all name Slang symbols, and none of them owns the rule.
  */
 public final class SlangIdentifier {
     private SlangIdentifier() {

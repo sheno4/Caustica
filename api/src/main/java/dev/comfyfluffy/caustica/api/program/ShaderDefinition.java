@@ -8,9 +8,8 @@ import java.util.Objects;
 /**
  * One Slang type compiled into the world program: where its module resolves from, the module, and the type.
  *
- * <p>The source travels with the definition rather than being held by some enclosing scope, because there
- * is no enclosing scope any more — an extension adds implementations one at a time from wherever it likes,
- * and one constant of its own is cheaper than a registry of who owns what.
+ * <p>The source travels with the definition because implementations are added independently from wherever
+ * an extension owns them; no enclosing declaration scope supplies one.
  *
  * <p>Type names are global to the composition: two live implementations may not declare the same type from
  * different modules, and that is checked when the operation is submitted.

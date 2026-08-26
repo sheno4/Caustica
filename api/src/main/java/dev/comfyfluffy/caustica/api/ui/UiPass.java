@@ -23,7 +23,7 @@ import dev.comfyfluffy.caustica.api.pass.PostEffectPass;
  * and it must not be embedded in the scene input that frame generation interpolates. A
  * {@link PostEffectPass} fails both. What belongs in the post chain is an effect on the scene image itself.
  */
-public interface UiPass extends PassLifecycle<UiSetup> {
+public interface UiPass extends PassLifecycle {
     /** Draw this pass's contribution onto {@link UiFrame#layer()}. */
     void record(UiFrame frame);
 }

@@ -17,7 +17,7 @@ package dev.comfyfluffy.caustica.api.pass;
 public enum PassAnchor {
     /** Before every unpinned pass. For a pass that wants the scene image as reconstruction left it. */
     FIRST,
-    /** No opinion. The default, and where all but a handful of passes belong. */
+    /** No opinion, and where all but a handful of passes belong. */
     MIDDLE,
     /** After every unpinned pass. For a scene-referred grade, which ACES puts last before the output transform. */
     LAST

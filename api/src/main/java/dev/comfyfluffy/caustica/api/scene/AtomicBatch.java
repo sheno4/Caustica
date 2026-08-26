@@ -22,32 +22,30 @@ import java.util.Objects;
  * keep everything else in its own batch. Placement-only batches especially: they need no build and publish
  * at the next update boundary unless something heavier is mixed in to hold them back.
  *
- * <h2>Acceptance is synchronous; retirement is not</h2>
+ * <h2>Acceptance is synchronous; retirement follows what the batch retained</h2>
  *
  * Whether a batch was accepted is decided before {@code submit} returns and reported by throwing, so a
  * source knows on the calling thread whether it may update its own bookkeeping. That is what makes it safe
  * to drop something and immediately forget its id.
  *
- * <p>{@link #retired()} is the one asynchronous signal: it runs once everything this batch displaced —
- * replaced, dropped — has left the collection <em>and</em> no submitted GPU work still reads it. Those are
- * different instants, usually frames apart.
+ * <p>{@link #retired()} is the one asynchronous signal: it runs once every value this batch introduced has
+ * later been replaced, dropped, discarded because a GPU build failed, or removed by a scene cascade, and no
+ * submitted GPU work still reads it. Those are different instants, usually frames apart. A batch that
+ * only drops values introduces no resource borrow and may use a no-op callback; the callbacks belonging to
+ * the earlier batches that introduced those values report their retirement.
  *
- * <h2>Why retirement is batch-scoped rather than per operation</h2>
+ * <h2>Why retirement is batch-scoped</h2>
  *
- * It costs nothing, because atomicity has already tied the fates together. A batch that replaces one mesh
- * and drops another keeps the dropped one placed, and therefore read, until the replacement is ready
- * — so both become unreferenced at the same instant regardless of where the callback hangs.
- *
- * <p>And it is the only scope a source can write correctly. Superseding a mesh usually frees the old build
- * while keeping per-mesh resources that will be reused; dropping it frees everything. Only the caller knows
- * which, and at submit time it does. A callback attached to an operation would run identically in both
- * cases with nothing to tell them apart.
+ * Atomic publication already ties the introduced values together. One callback keeps that same lifetime:
+ * it runs after the last value from the batch retires. If two resources should be reclaimed independently,
+ * submit them in separate batches; if an allocation is shared across batches, the source refcounts those
+ * borrows in their callbacks.
  *
  * <h2>Ordering</h2>
  *
  * Batches from one source apply in submission order. The renderer may coalesce internally — skipping an
- * acceleration build already obsoleted by a later batch — but that is invisible: each batch still reports
- * what it displaced.
+ * acceleration build already obsoleted by a later batch — but that is invisible: each accepted batch still
+ * retires exactly once after the data it introduced can no longer be read.
  *
  * @param <O> the operation type of the channel this batch is submitted to
  */
@@ -60,7 +58,7 @@ public record AtomicBatch<O>(List<O> operations, Runnable retired) {
         }
     }
 
-    /** A batch that displaces nothing, so nothing has to come back. */
+    /** A batch for which the caller requires no retirement notification. */
     public static <O> AtomicBatch<O> of(List<O> operations) {
         return new AtomicBatch<>(operations, () -> { });
     }

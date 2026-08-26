@@ -28,8 +28,9 @@ public interface LightChannel {
      * Apply operations, with the contract {@link AtomicBatch} describes and the synchronous validation the
      * geometry channel has. A batch may span scenes.
      *
-     * <p>A descriptor is copied, but the buffer an {@link LightDescriptor.Emission} points at is not — so a
-     * source replacing emission parameters waits for the batch's retirement before reusing them.
+     * <p>A descriptor is copied, but the buffer an {@link LightDescriptor.Emission} points at is not. The
+     * callback of the batch that retained the descriptor runs after replacement, removal, or a scene
+     * cascade and after the last GPU read, which is when the source may reuse that buffer.
      *
      * @throws IllegalArgumentException if any operation names an id this channel did not issue, a scene
      *         {@link SceneChannel} did not issue, or one belonging to an earlier

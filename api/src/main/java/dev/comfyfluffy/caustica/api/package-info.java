@@ -43,9 +43,10 @@
  *     point.</li>
  * <li><b>Retained lights</b> ({@link dev.comfyfluffy.caustica.api.scene.light}) — the same shape for primitive
  *     emitters, placed into a scene the same way, and selected scene-locally.</li>
- * <li><b>Resource injection</b> ({@link dev.comfyfluffy.caustica.api.pass.WorldResourcePass}) — bind
- *     extension-owned images and buffers into the world pipeline, computed by the extension's own passes
- *     before the trace. The renderer does ordering and barriers; it never interprets the contents.</li>
+ * <li><b>Resource injection</b> ({@link dev.comfyfluffy.caustica.api.pass.WorldResourcePass}) — write
+ *     extension-owned image descriptors into an allocated heap range and pass buffer device addresses
+ *     through extension-owned data. Dirty GPU updates are recorded before the trace; the renderer never
+ *     interprets their contents.</li>
  * <li><b>Material</b> ({@link dev.comfyfluffy.caustica.api.material}) — the renderer owns the OpenPBR
  *     BSDF and evaluates it once, so value/pdf agreement cannot be broken by an implementation. An
  *     extension registers a Slang surface that feeds that BSDF its parameters.</li>
@@ -73,8 +74,9 @@
  * the capabilities usable.
  *
  * <ul>
- * <li><b>GPU</b> ({@link dev.comfyfluffy.caustica.api.gpu}) — the device, allocator, and command buffer the
- *     renderer already owns. Sharing them beats every extension creating its own.</li>
+ * <li><b>GPU</b> ({@link dev.comfyfluffy.caustica.api.gpu}) — the device, allocator, descriptor heaps, and
+ *     command buffer the renderer already owns. GPU queues remain renderer-owned; extensions prepare CPU
+ *     data asynchronously and record GPU work at a pass boundary.</li>
  * <li><b>Shader compilation</b> ({@link dev.comfyfluffy.caustica.api.shader}) — the host's Slang
  *     toolchain, with the renderer's own module search paths already on it.</li>
  * </ul>
@@ -120,8 +122,7 @@
  * <p><b>There is no declaration phase.</b> A surface implementation is added and dropped exactly like a
  * mesh, so switching a feature off means it is not in the program — there is no gate to consult, nothing
  * compiled-but-disabled, and no way to name something that is not there. Adding recompiles the world
- * program, which is why {@link dev.comfyfluffy.caustica.api.program.ProgramChannel} batches: one batch is
- * one recompile.
+ * program; the renderer coalesces additions and removals at its compilation boundary.
  *
  * <p>What this gives up is naming across a boundary the process does not span — a config file, or a mod
  * that will not compile against the one it wants to reference. That naming is real, and it belongs to the
@@ -137,15 +138,19 @@
  * <ol>
  * <li><b>Engine services</b> — an interface the extension calls and never implements.
  *     {@link dev.comfyfluffy.caustica.api.gpu.GpuDevice},
- *     {@link dev.comfyfluffy.caustica.api.pass.PassSetup},
  *     {@link dev.comfyfluffy.caustica.api.pass.PostEffectFrame},
  *     {@link dev.comfyfluffy.caustica.api.scene.SceneChannel}.</li>
- * <li><b>Engine-allocated resources</b> — an interface the extension receives from a factory, owns, and
- *     destroys after every API borrow retires. {@link dev.comfyfluffy.caustica.api.gpu.GpuBuffer},
- *     {@link dev.comfyfluffy.caustica.api.gpu.GpuImage},
- *     {@link dev.comfyfluffy.caustica.api.gpu.GpuFrameUse}. Beside them sit the issued identities an
- *     extension receives, holds and hands back — {@link dev.comfyfluffy.caustica.api.RetainedId} and its
- *     subinterfaces, {@link dev.comfyfluffy.caustica.api.scene.SceneId} among them.</li>
+ * <li><b>Engine-produced resources and identities</b> — received, held, handed back, and never destroyed
+ *     by the extension. {@link dev.comfyfluffy.caustica.api.gpu.GpuImage} is lent for one frame;
+ *     {@link dev.comfyfluffy.caustica.api.gpu.GpuDescriptorRange} is sub-allocated from the heap the
+ *     renderer must own because only one can be bound;
+ *     {@link dev.comfyfluffy.caustica.api.gpu.GpuFrameUse} is a completion reservation. Beside them sit the
+ *     issued identities — {@link dev.comfyfluffy.caustica.api.RetainedId} and its subinterfaces.
+ *
+ *     <p>An extension's <em>own</em> memory is not here. It allocates through
+ *     {@link dev.comfyfluffy.caustica.api.gpu.GpuDevice#vmaAllocator()} and holds raw handles, because the
+ *     renderer has no opinion to enforce about memory it never reads, binds, or learns the existence
+ *     of — so a factory would have been a helper, and helpers are not in this artifact.</li>
  * <li><b>Extension contributions</b> — an interface the extension implements and the renderer calls.
  *     {@link dev.comfyfluffy.caustica.api.CausticaExtension},
  *     {@link dev.comfyfluffy.caustica.api.pass.WorldResourcePass},
@@ -163,8 +168,8 @@
  * is an interface.</b> A category-2 type must never appear in a category-4 position. The moment the
  * renderer <i>consumes</i> a type it also <i>produces</i>, anything an extension built for itself has to
  * be laundered through a hand-written implementation of an interface it was never meant to implement.
- * This is why {@link dev.comfyfluffy.caustica.api.pass.WorldResourceSetup#publishWorldTexture} takes an
- * image view and a layout rather than a {@code GpuImage}.
+ * This is why a descriptor range exposes raw heap memory and offsets rather than accepting a
+ * {@code GpuImage}: the image may have come from the API factory or from the raw VMA escape hatch.
  *
  * <h2>Paved paths and escape hatches</h2>
  *

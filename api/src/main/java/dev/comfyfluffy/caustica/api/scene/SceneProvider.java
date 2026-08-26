@@ -9,13 +9,12 @@ import dev.comfyfluffy.caustica.api.ProviderLifecycle;
  * is being told when the facts underneath the data change, and one hook that cannot be reached any other
  * way.
  *
- * <p>Registration is therefore optional. A source that resubmits on its own terms and watches
- * {@link SceneChannel#generation()} needs none of this; a source that wants world-change notification or
- * frame coherence registers.
+ * <p>Registration through {@link CausticaApi#providers()} is therefore optional. A source that resubmits
+ * on its own terms and watches {@link SceneChannel#generation()} needs none of this; a source that wants
+ * world-change notification or frame coherence registers.
  *
- * <p>There is no session-start callback because there is nothing for it to say: a provider is rebuilt for
- * each runtime activation, and a render session cannot restart without one, so a fresh instance already
- * means no scenes at all.
+ * <p>A provider instance is registered for one runtime activation and is finished after removal. Add a
+ * fresh instance for another activation.
  */
 public interface SceneProvider extends ProviderLifecycle {
     /** Advance source state immediately before frame-cadence data is collected. */

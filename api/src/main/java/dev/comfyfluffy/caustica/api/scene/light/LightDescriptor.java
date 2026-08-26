@@ -29,7 +29,8 @@ public sealed interface LightDescriptor {
      * <p>The profile computes the final scene-linear ACEScg emitted value from renderer-produced facts —
      * direction leaving the light, distance, cone cosine, projected coordinates — plus {@code parameters},
      * which is uninterpreted and wide enough to be a device address. It may read anything the same feature
-     * published, and may ignore the descriptor's own colour entirely.
+     * published, and may ignore the descriptor's own colour entirely. Dynamic data stays behind a stable
+     * address and is updated by GPU commands recorded before tracing, not by an unsynchronized host write.
      *
      * <p>{@code peak*} is a correctness contract wherever the renderer culls on it: every value the profile
      * can produce while this descriptor is retained must stay within it. Changing resources beyond that

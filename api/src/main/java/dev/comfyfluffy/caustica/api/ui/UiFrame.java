@@ -47,4 +47,7 @@ public interface UiFrame extends PassFrame {
 
     int displayHeight();
 
+    /** The sRGB VkFormat the layer is created with, for building a pipeline compatible with it. */
+    int layerFormat();
+
 }

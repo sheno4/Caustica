@@ -16,7 +16,9 @@ import java.util.Objects;
  *
  * <p>{@code parameters} is 64 bits so it can simply be a device address — a material's parameters are
  * whatever buffer the source points it at, and there is no size beyond which an extension has to start
- * packing bits. It reaches the surface unchanged.
+ * packing bits. It reaches the surface unchanged. Frequently changing data stays behind a stable root
+ * address; a {@link dev.comfyfluffy.caustica.api.pass.WorldResourcePass} records the GPU-visible pointer
+ * or data update when the asynchronously prepared source state is dirty.
  */
 public record MaterialDefinition(SurfaceId surface, MaterialTopology topology,
                                  float alphaCutoff, long parameters) {

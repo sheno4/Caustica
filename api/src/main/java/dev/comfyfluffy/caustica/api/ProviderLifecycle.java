@@ -1,39 +1,38 @@
 package dev.comfyfluffy.caustica.api;
 
-/** Lifecycle shared by every provider created for one runtime activation. */
+/** Lifecycle of one registered provider instance. */
 public interface ProviderLifecycle {
-    /** Called when the host replaces the world represented by the active runtime session. */
+    /** Called when the host replaces the world the active session represents. */
     default void onWorldChanged() {
     }
 
-    /** Called while the current resource pack is being detached. */
-    default void onResourcePackClosing() {
+    /** Called while the host's content set is being detached. */
+    default void onContentClosing() {
     }
 
-    /** Called after a replacement resource pack becomes active. */
-    default void onResourcePackApplied() {
+    /** Called after replacement host content becomes active. */
+    default void onContentApplied() {
     }
 
     /**
-     * Stop producing work for this runtime activation. Submissions made after this return are ignored.
-     * Retained geometry is still published and still being read, so nothing may be destroyed here — hand
-     * anything that must go to {@link dev.comfyfluffy.caustica.api.gpu.GpuDevice#retireAfterUse}.
+     * Stop producing work for this runtime activation, join producer threads, and submit drops for every
+     * retained id this provider owns. No submission may originate from this provider after the method
+     * returns. GPU resources may still be read, so nothing is destroyed here; their retained-data
+     * callbacks report when they are free.
      *
-     * <p>Separate from {@link #shutdown()} for the CPU side: a provider with worker threads uses this to
-     * stop dispatching and that to release once they have joined. A provider without them can leave this
-     * empty.
+     * <p>The renderer cannot enforce the no-more-submissions rule because channels are process-wide rather
+     * than provider-scoped. This callback is synchronous so the retirement boundary can be placed after
+     * every submission the provider made.
      */
     default void stop() {
     }
 
     /**
-     * Release this activation's state. The renderer has drained its queues, dropped everything this
-     * provider retained, and run every outstanding retirement callback — so by the time this is called,
-     * each accepted {@code SceneMesh}'s {@code retired()} has already fired exactly once, and no further
-     * callback will reach this instance.
+     * Release this provider's state. The renderer has drained submissions accepted before {@link #stop()}
+     * and run their outstanding retirement callbacks, so no further callback will reach this instance.
      *
-     * <p>That is what makes a shared arena tractable: a provider suballocating many meshes from one buffer
-     * refcounts through the per-mesh retirements and frees the arena here, unconditionally.
+     * <p>Registration supplies lifecycle notification and frame coherence; it does not make the renderer
+     * the owner of channel submissions.
      */
     default void shutdown() {
     }

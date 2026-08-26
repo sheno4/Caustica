@@ -1,71 +1,36 @@
 package dev.comfyfluffy.caustica.api.pass;
 
-
 /**
- * When a pass's resources live. This is one half of what the pass API is; {@link WorldResourcePass} and
- * {@link PostEffectPass} supply the other half by naming <em>where in the frame</em> a pass records.
- * Neither says anything about what the pass computes — that is the extension's own shader, pipeline, and
- * dispatch, which the renderer never inspects.
+ * The one thing a pass cannot work out for itself: that the device is about to go away.
  *
- * <p>A pass instance belongs to exactly one runtime activation: the factory creates it when the activation
- * opens and nothing reuses it afterwards. So the instance's own lifetime is the outermost scope, and every
- * callback here marks a boundary strictly inside it:
+ * <p>Everything else a lifecycle used to announce, the extension already knows or can see. It called
+ * {@link PassChannel} to add the pass, so it knows when the pass started; it can read
+ * {@link dev.comfyfluffy.caustica.api.CausticaApi#gpu()} whenever it likes, so it needs no handles posted
+ * to it; and anything that varies — the render resolution, the host's content, its own settings — it
+ * compares at the top of {@code record} against what it last built from, which is the same shape as
+ * deciding whether to do any work at all that frame.
  *
- * <pre>
- *   activated                                                            deactivated
- *   ├─ displayResized ─────── displayResized ───────────────────────────────┤
- *   └─ resourcePackClosing ── resourcePackApplied ── resourcePackClosing ───┘
- * </pre>
+ * <p>That check is not merely equivalent to a callback, it is stricter. A resize callback cannot catch a
+ * render resolution that moved because the upscaler's quality mode changed, and a content callback cannot
+ * catch an extension reloading its own assets. Comparing against what you built from catches every case,
+ * including the ones nobody thought to fire an event for.
  *
- * <p>The two inner scopes are independent of each other and both may cycle any number of times. Resources
- * that survive everything are allocated in {@link #activated}; resources that depend on the display size or
- * on the active resource pack are allocated in the callback that opens their scope and released in the one
- * that closes it. Nothing is reference-counted for you, so a resource allocated in a scope that never
- * closes lives until {@link #deactivated}.
- *
- * <p><b>These callbacks mark when a resource became wrong, never when it became free.</b> A pass told that
- * the display resized is still one or more frames away from the GPU finishing with the images it is about
- * to replace, and nothing here will ever tell it that moment arrived. Release through
- * {@link dev.comfyfluffy.caustica.api.gpu.GpuDevice#retireAfterUse} — the API's single resource-lifetime
- * primitive — everywhere except {@link #deactivated}, the one callback that runs with the device already
- * idle.
- *
- * <p>A pass that throws from any callback is disabled with a logged error, anything it published is
- * unpublished in the same step, and {@link #deactivated} is invoked so it can still clean up. The frame
- * loop continues without it.
- *
- * @param <S> the setup this kind of pass receives — see {@link PassSetup}
+ * <p>What remains is a window, not a notification. When the renderer is about to destroy the device, an
+ * extension's Vulkan objects have to be destroyed first, and nothing it can poll will tell it that moment
+ * arrived.
  */
-public interface PassLifecycle<S extends PassSetup> {
-    /** The activation opened. Allocate anything that outlives every inner scope. */
-    default void activated(S setup) {
-    }
-
+public interface PassLifecycle {
     /**
-     * The display resolution changed, and {@code setup} reports the new one. Called after
-     * {@link #activated} and before the first frame at that size. Free the previous size's resources here
-     * — this is the close and the open of the display scope in one call, because there is never a moment
-     * between them worth observing.
+     * Destroy everything this pass owns, now. Called when the pass is removed from {@link PassChannel} or
+     * the render session ends, whichever comes first.
+     *
+     * <p>Unconditional: no frame that recorded this pass is still executing, so nothing here needs
+     * {@link dev.comfyfluffy.caustica.api.gpu.GpuDevice#retireAfterUse}. That is the opposite of every
+     * other point in a pass's life, where a resource being wrong is never the same instant as it being
+     * free.
+     *
+     * <p>Not the end of the instance. A pass that was not removed stays registered, and the next session
+     * records it again — so leave the object able to rebuild rather than assuming it is finished.
      */
-    default void displayResized(S setup) {
-    }
-
-    /**
-     * The active resource pack is being detached. Anything derived from it — an uploaded texture, a
-     * compiled variant, a cached lookup — is invalid after this returns and must be released here.
-     */
-    default void resourcePackClosing() {
-    }
-
-    /** A replacement resource pack became active. Rebuild whatever {@link #resourcePackClosing} released. */
-    default void resourcePackApplied(S setup) {
-    }
-
-    /**
-     * The activation closed: this pass was deselected, the render session ended, or the engine is shutting
-     * down. The device is idle, so everything this pass still owns can be destroyed unconditionally. The
-     * instance is not reused.
-     */
-    default void deactivated() {
-    }
+    void destroy();
 }

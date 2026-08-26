@@ -78,15 +78,4 @@ public interface ProgramChannel {
     /** Stop running a modifier. {@code retired} runs once no in-flight program contains it. */
     void dropSurfaceModifier(SurfaceModifierId modifier, Runnable retired);
 
-    /**
-     * Anchor a Slang module into the program outside the generic composition mechanism. Needed by a module
-     * a pass's own binding declarations live in, since Slang forbids a generic entry point's type-parameter
-     * implementation from declaring global shader parameters itself. The engine imports every anchored
-     * module into one generated module that every composition-generic engine stage imports unconditionally,
-     * so the pass never needs the engine to know its resource names — only that the module exists.
-     */
-    ResourceModuleId addResourceModule(ModuleDefinition definition);
-
-    /** Stop anchoring a module. {@code retired} runs once no in-flight program contains it. */
-    void dropResourceModule(ResourceModuleId module, Runnable retired);
 }

@@ -19,6 +19,9 @@ dependencies {
     api "org.joml:joml:${project.joml_version}"
     api "org.lwjgl:lwjgl:${project.lwjgl_version}"
     api "org.lwjgl:lwjgl-vulkan:${project.lwjgl_version}"
+    // GpuDevice.vmaAllocator() hands out a VmaAllocator and the API has no buffer or image
+    // factories, so allocating is something every extension does through VMA directly.
+    api "org.lwjgl:lwjgl-vma:${project.lwjgl_version}"
 
     testImplementation platform("org.junit:junit-bom:5.12.2")
     testImplementation "org.junit.jupiter:junit-jupiter"

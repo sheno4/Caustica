@@ -1,6 +1,5 @@
 package dev.comfyfluffy.caustica.api.pass;
 
-import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
 import dev.comfyfluffy.caustica.api.gpu.GpuFrameUse;
 import org.lwjgl.vulkan.VkCommandBuffer;
 
@@ -20,18 +19,10 @@ public interface PassFrame {
     VkCommandBuffer commandBuffer();
 
     /**
-     * GPU services for pass-local resources. The same device {@link PassSetup#device()} gave, repeated
-     * because a pass that only ever records has no reason to have kept it.
-     */
-    GpuDevice device();
-
-    /**
      * Completion reservation covering every GPU resource this frame's recorded work references.
      *
-     * <p>{@link GpuFrameUse#retire} is the tighter form of {@link GpuDevice#retireAfterUse}: this frame's
-     * work is not submitted yet, so only this reservation covers it. Nothing here needs
-     * {@link GpuFrameUse#awaitCompletion} — replacing a resource and retiring the old one is the documented
-     * pattern, and it never blocks.
+     * <p>{@link GpuFrameUse#retire} covers this frame's work even though it has not been submitted yet.
+     * Replacing a resource and retiring the old one is the non-blocking update pattern.
      */
     GpuFrameUse gpuUse();
 
@@ -46,8 +37,15 @@ public interface PassFrame {
     long frameIndex();
 
     /**
-     * A full pipeline barrier (all commands, all memory) between two of this pass's own dispatches — the
-     * same broad, safe idiom the engine uses between its own stages.
+     * The resolution the world was traced at this frame, which is not the display resolution: an upscaler
+     * reconstructs to display size afterwards.
+     *
+     * <p>Per frame rather than announced at a boundary, because there is no boundary that covers it. It
+     * moves when the display resizes, and equally when the upscaler's quality mode changes, which no resize
+     * callback would have fired for. A pass sizing anything to the trace compares this against what it last
+     * built from and rebuilds when it differs.
      */
-    void memoryBarrier();
+    int renderWidth();
+
+    int renderHeight();
 }

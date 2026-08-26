@@ -43,7 +43,10 @@ public interface SceneChannel {
      * <p>A scene has an environment from the moment it exists, because there is no sensible thing for a
      * ray leaving its geometry to find otherwise. {@code parameters} is an uninterpreted 64-bit word
      * reaching the implementation for this scene only — wide enough to be a device address, so a sky's
-     * per-scene state is whatever buffer the source points it at.
+     * per-scene state is whatever buffer the source points it at. Dynamic state normally stays behind this
+     * stable address and is changed by commands recorded in a
+     * {@link dev.comfyfluffy.caustica.api.pass.WorldResourcePass}, not by racing a host write against a
+     * frame that may still read it.
      *
      * @throws IllegalStateException if no render session is active
      */
@@ -52,14 +55,15 @@ public interface SceneChannel {
     /**
      * Replace a scene's environment implementation and its word.
      *
-     * <p>Takes effect for the next frame the scene is traced. Nothing is retired: the word is copied and
-     * whatever it addresses belongs to the source, which releases the displaced buffer through
-     * {@link CausticaApi#gpu()} once it is done with it.
+     * <p>Takes effect for the next frame the scene is traced. {@code retiredPrevious} runs after the
+     * displaced implementation and parameter word are no longer selected by a frame and no submitted GPU
+     * work can still read what that word addresses.
      *
      * @throws IllegalArgumentException if this channel did not issue {@code scene}, or already dropped it
      * @throws IllegalStateException if no render session is active
      */
-    void setEnvironment(SceneId scene, EnvironmentId environment, long parameters);
+    void setEnvironment(SceneId scene, EnvironmentId environment, long parameters,
+                        Runnable retiredPrevious);
 
     /**
      * Remove a scene, every placement in it, and every light in it.
@@ -69,15 +73,16 @@ public interface SceneChannel {
      * not caught up is rejected on its next submission rather than writing into somebody else's scene —
      * the same protection {@link #generation()} gives.
      *
-     * <p>No retirement callback comes with this. A placement owns nothing to reclaim, and a light's
-     * parameter buffer belongs to whoever published it: that source releases it through
-     * {@link CausticaApi#gpu()} once it learns the scene is gone. Meshes and materials are untouched,
-     * being scene-independent.
+     * <p>{@code retired} runs once the scene, its environment word, every placement and every light have
+     * left the collection and no submitted GPU work reads them. The retirement callback on each batch that
+     * introduced placement or light data also runs, so contributors can reclaim their own resources even
+     * when somebody else owns and drops the scene. Meshes and materials are untouched, being
+     * scene-independent.
      *
      * @throws IllegalArgumentException if this channel did not issue {@code scene}, or already dropped it
      * @throws IllegalStateException if no render session is active
      */
-    void dropScene(SceneId scene);
+    void dropScene(SceneId scene, Runnable retired);
 
     /**
      * Changes whenever every scene was emptied out from under its sources — a new render session, a device

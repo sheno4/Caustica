@@ -5,6 +5,7 @@ import dev.comfyfluffy.caustica.api.material.MaterialChannel;
 import dev.comfyfluffy.caustica.api.pass.PassChannel;
 import dev.comfyfluffy.caustica.api.program.ProgramChannel;
 import dev.comfyfluffy.caustica.api.scene.SceneChannel;
+import dev.comfyfluffy.caustica.api.shader.ShaderCompiler;
 import dev.comfyfluffy.caustica.api.scene.geometry.GeometryChannel;
 import dev.comfyfluffy.caustica.api.scene.light.LightChannel;
 
@@ -19,7 +20,6 @@ import java.util.Objects;
  */
 public final class CausticaApi {
     public static final String VERSION = "0.3.0";
-    public static final String ENTRYPOINT = "caustica";
     private static CausticaApi instance;
 
     private final RendererChannels channels;
@@ -28,7 +28,7 @@ public final class CausticaApi {
         this.channels = channels;
     }
 
-    public static synchronized void initialize(RendererChannels installedChannels) {
+    static synchronized void install(RendererChannels installedChannels) {
         Objects.requireNonNull(installedChannels, "installedChannels");
         if (instance != null) {
             throw new IllegalStateException("Caustica API is already initialized");
@@ -58,8 +58,17 @@ public final class CausticaApi {
     }
 
     /**
+     * The host's Slang toolchain, with the renderer's own module search paths already on it, for compiling
+     * an extension's own pass shaders. Reachable whenever, rather than posted to a pass at a boundary,
+     * because a pass builds its pipelines when it decides to and nothing else needs to know.
+     */
+    public ShaderCompiler shaderCompiler() {
+        return channels.shaderCompiler();
+    }
+
+    /**
      * What is compiled into the world program — surfaces, environments, emission profiles, surface
-     * modifiers. Added and dropped like any other retained object; a batch is one recompile.
+     * modifiers. Added and dropped like any other retained object; the renderer coalesces recompiles.
      */
     public ProgramChannel program() {
         return channels.program();
@@ -68,6 +77,11 @@ public final class CausticaApi {
     /** The passes currently recording into a frame. An extension hands over its own instances. */
     public PassChannel passes() {
         return channels.passes();
+    }
+
+    /** Sources that want lifecycle notifications or frame-coherent scene submission. */
+    public ProviderChannel providers() {
+        return channels.providers();
     }
 
     /**

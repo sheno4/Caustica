@@ -47,8 +47,8 @@ public interface GeometryChannel {
      * naming a scene that was never issued or has been dropped, a malformed build — is decided before this
      * returns, and throws. Nothing is applied if anything throws.
      *
-     * <p>See {@link AtomicBatch} for what a batch guarantees, how to choose its granularity, and when its
-     * retirement callback runs.
+     * <p>See {@link AtomicBatch} for what a batch guarantees, how to choose its granularity, and how its
+     * retirement callback follows the retained data that batch introduces.
      *
      * <p>Acceptance is deliberately not a callback, because the question it answers is "may I update my own
      * bookkeeping now". Dropping a mesh and then forgetting the id is only safe if the drop is known to
@@ -69,9 +69,9 @@ public interface GeometryChannel {
     sealed interface Operation permits SetMesh, DropMesh, SetInstance, DropInstance { }
 
     /**
-     * Retain or replace a mesh. The source keeps every buffer and its contents unchanged until the batch
-     * that displaces this build reports retirement — which is also when the buffers this one displaces come
-     * back. A rejected submission changes nothing and releases nothing.
+     * Retain or replace a mesh. The source keeps every buffer and its contents unchanged until this batch
+     * reports retirement after the build is later replaced, dropped, fails, or is removed with its scene.
+     * A rejected submission changes nothing and does not take ownership of the callback.
      */
     record SetMesh(MeshId mesh, MeshBuild build) implements Operation {
         public SetMesh {
@@ -80,7 +80,10 @@ public interface GeometryChannel {
         }
     }
 
-    /** Remove a mesh and every placement of it, in every scene. Its buffers come back through this batch's retirement. */
+    /**
+     * Remove a mesh and every placement of it, in every scene. The batch that retained its current build
+     * reports when those buffers are free.
+     */
     record DropMesh(MeshId mesh) implements Operation {
         public DropMesh {
             Objects.requireNonNull(mesh, "mesh");
@@ -105,6 +108,8 @@ public interface GeometryChannel {
      * be placed many times and still shade differently: a team colour, an animation frame, a per-chunk
      * light sample, an index into a buffer the source published. Without it a source would have to
      * duplicate the mesh per placement, which defeats the point of placing it.
+     * The callback of the batch containing this operation follows that word until the placement is replaced,
+     * dropped, or removed with its scene.
      *
      * <p>Shading only. The renderer derives motion vectors from this placement's current and previous
      * transforms, so rigid per-instance motion is handled, but a word that moves geometry — vertex
