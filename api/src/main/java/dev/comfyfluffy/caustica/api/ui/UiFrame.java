@@ -1,11 +1,8 @@
 package dev.comfyfluffy.caustica.api.ui;
 
-import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
-import dev.comfyfluffy.caustica.api.gpu.GpuFrameUse;
 import dev.comfyfluffy.caustica.api.gpu.GpuImage;
-import dev.comfyfluffy.caustica.api.option.OptionValues;
+import dev.comfyfluffy.caustica.api.pass.PassFrame;
 import org.joml.Matrix4fc;
-import org.lwjgl.vulkan.VkCommandBuffer;
 
 /**
  * Passed to {@link UiPass#record} to draw one frame's UI layer.
@@ -17,16 +14,7 @@ import org.lwjgl.vulkan.VkCommandBuffer;
  * <p>The camera is the exception, because world-anchored UI is still UI — see
  * {@link #worldViewProjection()}.
  */
-public interface UiFrame {
-    /** The command buffer currently being recorded for the UI layer. */
-    VkCommandBuffer commandBuffer();
-
-    /** GPU services for pass-local resources. */
-    GpuDevice device();
-
-    /** Completion reservation covering every GPU resource referenced by this layer. */
-    GpuFrameUse gpuUse();
-
+public interface UiFrame extends PassFrame {
     /**
      * The layer this pass draws into, sized to the display and cleared to transparent black once per frame
      * before the first pass runs. Passes compose onto it in registration order, so it holds whatever
@@ -59,6 +47,4 @@ public interface UiFrame {
 
     int displayHeight();
 
-    /** This feature's option snapshot for the current frame. */
-    OptionValues options();
 }

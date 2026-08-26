@@ -37,10 +37,10 @@ make one.
    descriptor heap and device addresses. The only route for extension GPU data, textures included.
 4. **Material** — the renderer owns the OpenPBR BSDF and evaluates it once. An extension registers a Slang
    surface that feeds it parameters, and registers materials naming that surface.
-5. **Environment** — a registered implementation set named per scene, exactly parallel to material: the
-   scene picks which one evaluates the sky and hands it one uninterpreted word.
+5. **Environment** — an added implementation named per scene, exactly parallel to material: the scene picks
+   which one evaluates the sky and hands it one uninterpreted word, which is how it reaches its own LUTs.
 6. **Post effects** — a pass after reconstruction and before the display transform, in scene-linear ACEScg.
-   Plus **look**: one fixed slot for a scene-referred grade, applied after exposure.
+   A scene-referred grade is one of these, anchored to the end of the chain.
 7. **UI** — a pass after the display transform, drawing a premultiplied sRGB layer once per *rendered*
    frame; presentation consumes it for every output frame.
 
@@ -48,6 +48,77 @@ make one.
 build it for itself. The **GPU** service shares the device, allocator, and command buffer the renderer
 already owns. **Shader compilation** shares the host's Slang toolchain with the renderer's module search
 paths on it. Neither is numbered, because neither adds a way to contribute.
+
+---
+
+## Identity is issued, and nothing is declared
+
+Nothing in the artifact takes a name, and nothing is fixed at startup. Every id comes from the channel that
+made the object — a mesh, a placement, a light, a material, a scene, and equally a surface implementation or
+an environment. One rule covers all of them: an id is valid until the object is dropped or its collection's
+generation moves.
+
+The retained side always worked this way, and the argument was written down there: authoring a key is
+writing a hash function, and compressing a composite into a fixed width silently collides. Implementations
+were the exception — a namespaced string that had to be unique, spelled identically in two places, and
+validated against a charset somebody chose. They are retained objects now, so the exception is gone.
+
+**There is no declaration phase.** A surface implementation is added and dropped exactly like a mesh.
+Switching a feature off means it is not in the program: no gate to consult, nothing compiled-but-disabled,
+no way to name something that is not there, and no availability query — because the extension that just
+added something is the one holding its id. Switching it back on adds it again and issues a new id.
+
+Adding is synchronous and returns a usable id, the way registering a material is, so no ordering between
+channels is ever required. Adding recompiles the world program, but scheduling that is not the caller's
+problem: the renderer rebuilds at most once per boundary, so a run of additions costs one rebuild — and it
+coalesces across extensions, which a caller-side batch could never do. Until the rebuild lands, a material
+naming a new surface shades as the visible error surface, which is paid where nothing is looking, because
+every realistic trigger already sits on a reload boundary.
+
+**What this gives up is naming across a boundary the process does not span** — a config file, a mod that
+will not compile against the one it wants to reference. That naming is real, and belongs to the layer with a
+native vocabulary for it: a host's own resource name, persisted by the host, mapped to an id the host holds.
+`ResourceId` therefore lives in the settings artifact, and the engine artifact has no name type at all.
+
+---
+
+## Updating extension data is one mechanism at every frequency
+
+There is no per-frame path and no rare-update path, for the same reason retained geometry has neither: a
+mesh submitted every frame and a mesh submitted once go through one `SetMesh`. Extension parameters work
+the same way, through the machinery that already exists.
+
+**Never rewrite a buffer the GPU may still be reading. Replace it.** That is the single lifetime primitive
+stated once more: allocate the new one, hand the old one to `retireAfterUse`, keep going. It is correct at
+any frequency, needs no ring index, and never blocks.
+
+The piece that makes it work against a *stable* address is one indirection. A material's word cannot change
+without re-registering the material, so point it at a small buffer that holds a pointer, and put the data
+behind that:
+
+```
+material.parameters ──► [ uint64 dataAddress ]  ──►  the actual parameters
+       (stable, set once at registration)     (replaced whenever they change)
+```
+
+Updating is then a single aligned 64-bit store into the header plus a `retireAfterUse` of the block it
+displaced. An in-flight frame reads either the old pointer or the new one; both address live memory,
+because the old block is not freed until the work that could read it has completed. There is no torn read
+to guard against at that alignment and no ordering to arrange — a frame that observes the stale pointer
+simply renders one frame behind, which is what it would have done anyway.
+
+**A source that does this every frame recycles rather than allocates**, feeding blocks back onto its own
+free list from the retirement callback. That is a private optimisation, exactly like a mesh source
+suballocating from its own arena instead of allocating a buffer per mesh, and no part of it reaches the API.
+
+**Nothing here uses `GpuFrameUse.awaitCompletion`.** The callback form is what this pattern wants; the
+blocking form exists for reusing something last touched many frames ago, and its contract has a sharp edge
+— awaiting the token for the frame being recorded waits on work that cannot yet be submitted. Replace-and-
+retire never goes near it.
+
+The renderer's own ring — `PUSH_RING` slots of push-constant storage, each awaited before reuse — is the
+other approach, and it is deliberately not what the API offers. It needs a ring depth, a frame counter on
+both sides of the language boundary, and a correct await; replacement needs none of those.
 
 ---
 
@@ -78,8 +149,25 @@ equivalent that accepts what the escape hatch produces**, or it is a wall rather
 extension reaches around the API entirely.
 
 **Helpers are not in the API.** The artifact holds only what the renderer names in a signature. Descriptor
-scaffolding, colour-space maths, texture upload live in `caustica-api-support`, which is optional. Typed
-settings and their persistence are independent of the renderer and belong in host integration.
+scaffolding, colour-space maths, texture upload live in `caustica-api-support`, which is optional.
+
+**Settings are a parallel artifact, not a layer.** Typed options, their values, and the text a settings
+screen renders live in `caustica-api-settings`. It depends on the engine artifact for `ResourceId` and
+nothing else; the engine artifact does not depend on it at all, and the renderer never reads it. A feature
+declares what it contributes to a frame in one registry and what it exposes to a settings screen in the
+other, and the two are the same feature only because they chose the same id.
+
+This is worth the second entry point. While the two were one artifact, the engine's own feature record
+carried a title, a description, and a category that only a settings screen reads, and its constructor
+rejected any option kind the *host's storage* could not persist — a store's limitation enforced by the
+renderer's registry. Neither survives the split.
+
+What the renderer keeps is `frameIndex()` on every frame context. Freezing state for the length of a frame
+is something only the renderer can anchor, because only it knows where a frame begins; but it cannot freeze
+state it does not understand. So it publishes the boundary and whoever owns the state snapshots on it. The
+cost is honest: two stages of one frame can now observe a setting changing between them, which is a
+one-frame skew on a value someone is dragging, and a settings layer that snapshots once per index removes
+even that.
 
 ---
 
@@ -122,6 +210,12 @@ MeshId mesh = sections.computeIfAbsent(packedSectionPosition, k -> geometry.newM
 
 **Nothing is reset by the renderer.** Retained data persists until whoever submitted it drops it, so one
 extension reloading cannot disturb another's. There is deliberately no clear-everything call.
+
+**Atomicity is a scene-contents concept.** Geometry and lights take `AtomicBatch`es; materials, surface
+implementations and environments do not. What a batch protects is a frame's picture, and only scene contents
+are in it — a table entry nothing names changes nothing, so there is no half-applied state to hide. When one
+of those tables is replaced, the atomicity comes from the geometry batch that starts naming the new entries,
+which is exactly where the reload story already puts it.
 
 **Updates go in `AtomicBatch`es.** A batch publishes all at once or not at all — the name carries it, because that property is the whole reason batches exist rather than being a convenience for submitting several things. Rejection is
 **synchronous** — an unknown or stale id, a placement naming a mesh that is neither live nor created earlier
@@ -359,6 +453,17 @@ resource ownership is total.
 adopting it moves the entire renderer — world pipelines, post passes, UI passes — and sets a hardware
 floor.
 
+**The environment reaches its resources this way, and that is what keeps it independent of its pass.** A sky
+bakes transmittance and sky-view LUTs in a `WorldResourcePass`, writes their heap indices into a buffer it
+owns, and puts that buffer's address in the environment's word. The pass and the environment are then
+coupled by nothing but a pointer the extension itself holds, so they can be added and dropped separately and
+a mistake is the same class of bug as a material pointing at a freed parameter buffer — which is already the
+contract. The alternative was to bundle the pass into the environment so one lifetime covered both, and it
+is only unnecessary because of this.
+
+Named bindings (`publishWorldTexture`, `publishWorldBuffer`) and anchored resource modules remain for
+everything not yet moved, and are what the heap retires.
+
 ---
 
 ## Passes declare when, not what
@@ -375,8 +480,21 @@ because there are exactly as many places to record as there are interfaces:
 | `PostEffectPass` | after reconstruction | scene colour, exposure | a chain target, which enrols it |
 | `UiPass` | after the display transform | nothing of the world but the camera | the UI layer |
 
-Passes record in registration order — composition order for post effects, meaningless for the others, never
-a dependency mechanism. A pass must work when the passes around it are absent.
+An extension constructs its own pass and hands over the instance; there is no factory and no engine-created
+context, because whatever two of your passes share you already have somewhere to put. Adding runs
+`activated` against the current epoch before the pass records anything, so one added mid-session is
+indistinguishable from one added at startup; removing runs `deactivated` once the last frame that recorded
+it completes, and the instance is finished.
+
+Passes record in the order they were added, which is meaningless for world-resource and UI passes and load
+order for everyone. The post-effect chain is the one place order is visible, so a pass may anchor itself to an
+end of it — `FIRST` for a pass that wants the scene image as reconstruction left it, `LAST` for a grade,
+`MIDDLE` for everything else, which is nearly everything.
+
+**An anchor is not a priority and not a dependency.** There is no number to escalate and no way to name
+another pass, so a pass still cannot say "after theirs" — deliberately, because the rule that makes the
+chain composable is that **a pass must work when the passes around it are absent**. Two passes claiming the
+same end run in the order they were added: they both wanted the same place and only one can have it.
 
 **Lifetime.** One shared lifecycle names the scopes a pass's resources live inside, and every callback that
 can allocate receives the same setup, so a rebuild after a resize or a pack swap has the handles the first
@@ -413,7 +531,7 @@ that is acceptable, never for a reticle.
 ## The display transform is not replaceable
 
 ```
-scene-linear ACEScg → exposure → look (LMT) → ACES 2.0 output transform → sRGB SDR / PQ BT.2020 HDR
+scene-linear ACEScg → exposure → post chain (grade last) → ACES 2.0 output transform → sRGB SDR / PQ BT.2020 HDR
 ```
 
 The output transform is not a function an extension could swap; it is a multi-way contract. One
@@ -426,9 +544,19 @@ Same argument as materials: the renderer owns the BSDF so an implementation cann
 agreement, and owns the output transform so one cannot break the display contract. By the boundary rule a
 different transform is not adding to the image — it is changing how the renderer maps its output.
 
-**The look slot is where customization goes**, and that is not a workaround: ACES puts looks exactly there,
-scene-referred and before the output transform. Best expressed as a Slang function rather than a LUT, so it
-composes at compile time like the other slots and costs no 3D texture fetch.
+**A look is an ordinary post effect**, and that is not a workaround: ACES puts an LMT scene-referred and
+before the output transform, which is exactly where the post chain already sits. So a LUT loader and a
+procedural grade are the same kind of thing as bloom, need no mechanism of their own, and reach the right
+place by anchoring `LAST`.
+
+It used to be a fixed slot, on the argument that a Slang function composes at compile time and costs no 3D
+texture fetch. That is a performance argument, and it bought a whole selection mechanism to serve one
+customization point. The dispatch it saves is one per frame.
+
+What a slot did buy is exclusivity: two extensions can now both anchor a grade `LAST`, and both will run.
+Nothing detects that, because nothing in the API knows which post effect is a grade. If that has to be
+prevented, the answer is a frame position of its own — an interface, the way UI is — not a return to
+selection.
 
 **Deliberately foreclosed:** an extension cannot ship AgX, Khronos PBR Neutral, or Filmic. Those are tone
 curves, not looks, and a post-effect pass cannot substitute because the output transform still runs
@@ -450,7 +578,8 @@ in one batch, drops the old materials. Both sets live in between, so no frame sh
 frees the old atlas in the retirement callback of the last dropped material — the only signal that says the
 GPU is done.
 
-**A shader pack replaces the sky.** Binds the environment slot to a Slang type, plus a `WorldResourcePass`
+**A shader pack replaces the sky.** Declares an environment implementation, keeps the key its
+registration issued, and hands it to whoever creates the scene. Plus a `WorldResourcePass`
 that bakes transmittance and sky-view LUTs into images it owns, whose heap indices its own Slang reads. The
 renderer never learns what a LUT is.
 
@@ -512,7 +641,8 @@ fallback without two binding paths through the whole renderer.
 
 **`SurfaceInput` is well behind the Java side.** It still carries texture coordinates, LOD, base texture
 index and flags, tint, vertex colour, primitive emission, and a tangent frame — all now the extension's own
-business behind a pointer — and its material word is still 32 bits. It should reduce to the three words,
+business behind a pointer — and its material word is still 32 bits, which the pointer-indirection idiom
+above needs widened to 64 before an extension can use it at all. It should reduce to the three words,
 `primitiveIndex`, position, geometric normal, outgoing direction, and the world-pinned procedural position.
 The tangent frame in particular belongs to the extension, being derived from texture coordinates the
 renderer no longer sees.
@@ -530,14 +660,6 @@ side has no setup payload on resource-pack callbacks — acute now that sources 
 rebuild them there. The two-phase provider teardown does earn its keep: it is the CPU side, stopping
 dispatch before releasing after workers join, which passes do not have.
 
-**No slot has a slot in it.** Environment was the last one, and scene ownership took it: every engine role
-the API exposes is now a registered set whose member is named by whatever uses it — a material names a
-surface, a scene names an environment — so nothing competes for a slot and two can be live at once. The
-candidate/default/selection machinery therefore has no user, and `RuntimeActivation.SELECTED_SLOT` cannot be
-satisfied. Either `look` lands in it, or it goes. Worth noting what would be lost: selection is also what a
-settings screen lists, so a sky picker becomes host integration reading a setting and naming an environment
-per scene, which is where typed settings already belong.
-
 **Refcounting granularity.** Material retirement needs each mesh's distinct material set, built while the
 renderer already walks its geometries — so the cost rides along with a pass it makes anyway. Refcounting
 per (mesh, material) rather than per triangle keeps it that way; worth confirming before the walk is
@@ -547,7 +669,5 @@ written.
 
 ## Potential improvements
 
-- **Move Slang identifier validation into the shader package.** Used by slots, bindings, surface
-  implementations and shader sources, and sits on none of their natural owners.
 - **State the ignore rules once.** Dropped submissions, rejected batches, and disabled contributions are
   all "the renderer carries on without you", documented per site rather than in one place.

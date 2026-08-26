@@ -2,40 +2,38 @@ package dev.comfyfluffy.caustica.api;
 
 import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
 import dev.comfyfluffy.caustica.api.material.MaterialChannel;
-import dev.comfyfluffy.caustica.api.option.OptionLookup;
-import dev.comfyfluffy.caustica.api.option.OptionValues;
+import dev.comfyfluffy.caustica.api.pass.PassChannel;
+import dev.comfyfluffy.caustica.api.program.ProgramChannel;
 import dev.comfyfluffy.caustica.api.scene.SceneChannel;
 import dev.comfyfluffy.caustica.api.scene.geometry.GeometryChannel;
 import dev.comfyfluffy.caustica.api.scene.light.LightChannel;
+
 import java.util.Objects;
 
-/** Process-wide access to the registry and option store installed by the current host adapter. */
+/**
+ * Process-wide access to the renderer's channels, installed by the current host adapter.
+ *
+ * <p>Everything an extension contributes goes through one of these, and every one of them takes additions
+ * and removals at any time. There is no declaration phase and no composition closure to be inside of: an
+ * extension that is switched off drops what it added, and one switched back on adds it again.
+ */
 public final class CausticaApi {
     public static final String VERSION = "0.3.0";
     public static final String ENTRYPOINT = "caustica";
     private static CausticaApi instance;
 
-    private final CausticaRegistry registry;
-    private final OptionLookup options;
     private final RendererChannels channels;
 
-    private CausticaApi(CausticaRegistry registry, OptionLookup options, RendererChannels channels) {
-        this.registry = registry;
-        this.options = options;
+    private CausticaApi(RendererChannels channels) {
         this.channels = channels;
     }
 
-    public static synchronized void initialize(CausticaRegistry installedRegistry,
-                                               OptionLookup installedOptions,
-                                               RendererChannels installedChannels) {
-        Objects.requireNonNull(installedRegistry, "installedRegistry");
-        Objects.requireNonNull(installedOptions, "installedOptions");
+    public static synchronized void initialize(RendererChannels installedChannels) {
         Objects.requireNonNull(installedChannels, "installedChannels");
         if (instance != null) {
             throw new IllegalStateException("Caustica API is already initialized");
         }
-        installedRegistry.selection();
-        instance = new CausticaApi(installedRegistry, installedOptions, installedChannels);
+        instance = new CausticaApi(installedChannels);
     }
 
     /** Returns the API installed by the host adapter. */
@@ -44,15 +42,6 @@ public final class CausticaApi {
             throw new IllegalStateException("Caustica API has not been initialized by a host adapter");
         }
         return instance;
-    }
-
-    public CausticaRegistry registry() {
-        return registry;
-    }
-
-    /** The current values for one registered feature's declared options. */
-    public OptionValues options(ResourceId featureId) {
-        return options.options(Objects.requireNonNull(featureId, "featureId"));
     }
 
     /**
@@ -66,6 +55,19 @@ public final class CausticaApi {
      */
     public GpuDevice gpu() {
         return channels.gpu();
+    }
+
+    /**
+     * What is compiled into the world program — surfaces, environments, emission profiles, surface
+     * modifiers. Added and dropped like any other retained object; a batch is one recompile.
+     */
+    public ProgramChannel program() {
+        return channels.program();
+    }
+
+    /** The passes currently recording into a frame. An extension hands over its own instances. */
+    public PassChannel passes() {
+        return channels.passes();
     }
 
     /**
@@ -93,10 +95,5 @@ public final class CausticaApi {
     /** Retained lights, in the same shape as retained geometry and scoped to a scene the same way. */
     public LightChannel lights() {
         return channels.lights();
-    }
-
-    /** Host-neutral option lookup used by render-session infrastructure. */
-    public OptionLookup optionLookup() {
-        return options;
     }
 }

@@ -26,10 +26,6 @@ public sealed interface LightDescriptor {
     /**
      * A Slang emission profile and its per-light word.
      *
-     * <p>{@code profile} is resolved once through {@link LightChannel#emissionProfile} rather than named
-     * here. A descriptor is submitted per light and often per frame, so a registration name in it is a
-     * string the renderer would resolve every time and could only reject at submission.
-     *
      * <p>The profile computes the final scene-linear ACEScg emitted value from renderer-produced facts —
      * direction leaving the light, distance, cone cosine, projected coordinates — plus {@code parameters},
      * which is uninterpreted and wide enough to be a device address. It may read anything the same feature

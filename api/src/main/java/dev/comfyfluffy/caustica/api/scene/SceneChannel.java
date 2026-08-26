@@ -1,7 +1,6 @@
 package dev.comfyfluffy.caustica.api.scene;
 
 import dev.comfyfluffy.caustica.api.CausticaApi;
-import dev.comfyfluffy.caustica.api.ResourceId;
 
 /**
  * Scene identity and lifetime, reached from {@link CausticaApi#scenes()}.
@@ -33,24 +32,6 @@ import dev.comfyfluffy.caustica.api.ResourceId;
  * is there.
  */
 public interface SceneChannel {
-    /**
-     * Resolve a registered environment implementation to the handle a scene names.
-     *
-     * <p>Bound to the runtime activation for the reason {@code MaterialChannel.surface} is: the compiled
-     * closure changes with feature selection, so an id resolved here dies with the program that produced
-     * it. Check {@link #environmentAvailable} first to fall back instead of catching.
-     *
-     * @throws IllegalStateException if {@code environment} names no implementation compiled into the
-     *         active world program
-     */
-    EnvironmentId environment(ResourceId environment);
-
-    /**
-     * Whether an environment implementation compiled into the active world program. The non-throwing
-     * companion to {@link #environment}.
-     */
-    boolean environmentAvailable(ResourceId environment);
-
     /**
      * Create a scene and return an id usable immediately.
      *

@@ -1,7 +1,5 @@
 package dev.comfyfluffy.caustica.api.shader;
 
-import dev.comfyfluffy.caustica.api.Slot;
-
 import java.io.InputStream;
 import java.util.List;
 import java.util.Objects;
@@ -46,7 +44,7 @@ public final class ShaderSource {
     }
 
     public InputStream openModule(String module) {
-        Slot.requireSlangIdentifier(module, "module");
+        SlangIdentifier.require(module, "module");
         InputStream direct = resourceAnchor.getResourceAsStream(classpathRoot + '/' + module + ".slang");
         if (direct != null) {
             return direct;

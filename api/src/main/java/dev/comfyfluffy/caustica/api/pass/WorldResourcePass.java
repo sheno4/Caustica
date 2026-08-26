@@ -10,10 +10,10 @@ package dev.comfyfluffy.caustica.api.pass;
  * pipelines it built, or what the resource means — the shader that reads it is the extension's too, and
  * the binding is matched by name through reflection.
  *
- * <p>Nothing about the frame being traced is offered, because at this point in the frame there is nothing
- * to offer: the acceleration structure is not yet consumed, no colour exists, and a pass that wants the
- * camera or the game state reads it from the host itself, as it already must for everything else it
- * gathers.
+ * <p>It records against a bare {@link PassFrame}, and that is the point: at this stage there is nothing to
+ * offer. The acceleration structure is not yet consumed, no colour exists, and a pass wanting the camera or
+ * the game state reads it from the host itself, as it already must for everything else it gathers. A frame
+ * type of its own would have carried only the services every stage has.
  *
  * <p>Passes record in registration order. Do not depend on it: a pass must not read what another pass
  * wrote earlier in the same frame, because pass selection is a runtime decision and the pass you were
@@ -21,5 +21,5 @@ package dev.comfyfluffy.caustica.api.pass;
  */
 public interface WorldResourcePass extends PassLifecycle<WorldResourceSetup> {
     /** Record this pass's work for one frame. */
-    void record(WorldResourceFrame frame);
+    void record(PassFrame frame);
 }

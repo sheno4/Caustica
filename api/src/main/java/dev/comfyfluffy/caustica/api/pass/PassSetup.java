@@ -3,7 +3,6 @@ package dev.comfyfluffy.caustica.api.pass;
 import dev.comfyfluffy.caustica.api.gpu.GpuBuffer;
 import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
 import dev.comfyfluffy.caustica.api.gpu.GpuImage;
-import dev.comfyfluffy.caustica.api.option.OptionValues;
 import dev.comfyfluffy.caustica.api.shader.ShaderCompiler;
 
 /**
@@ -30,10 +29,4 @@ public interface PassSetup {
 
     int displayHeight();
 
-    /**
-     * This feature's current option values, for a decision made once per epoch rather than every frame
-     * (sizing an image pyramid, choosing a format). Not frozen the way a frame's view is: an epoch
-     * callback is not a per-frame call, so this reads whatever is current.
-     */
-    OptionValues options();
 }

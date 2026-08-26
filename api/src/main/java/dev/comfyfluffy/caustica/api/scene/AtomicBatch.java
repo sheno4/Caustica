@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.api;
+package dev.comfyfluffy.caustica.api.scene;
 
 import java.util.List;
 import java.util.Objects;
@@ -6,9 +6,14 @@ import java.util.Objects;
 /**
  * A set of operations against one retained collection that becomes visible together or not at all.
  *
- * <p>Every retained channel — geometry, lights — takes these, so the contract is written once here rather
- * than per channel. A batch may span scenes: it is a set of operations against one collection, and which
- * scene each operation names is part of the operation, not of the batch.
+ * <p><b>Scene contents take these, and nothing else does.</b> Geometry and lights are what a frame's
+ * picture is made of, so a half-applied change to them is a frame someone sees wrong. A material, a surface
+ * implementation, an environment — those are table entries, and a table entry nothing names changes nothing.
+ * They are added synchronously with no batch, and the atomicity their replacement needs is carried by the
+ * geometry batch that starts naming them.
+ *
+ * <p>A batch may span scenes: it is a set of operations against one collection, and which scene each
+ * operation names is part of the operation, not of the batch.
  *
  * <h2>Atomicity is the source's choice, and it is not free</h2>
  *

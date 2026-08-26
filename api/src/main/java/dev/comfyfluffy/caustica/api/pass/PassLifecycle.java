@@ -1,6 +1,5 @@
 package dev.comfyfluffy.caustica.api.pass;
 
-import dev.comfyfluffy.caustica.api.ResourceId;
 
 /**
  * When a pass's resources live. This is one half of what the pass API is; {@link WorldResourcePass} and
@@ -38,9 +37,6 @@ import dev.comfyfluffy.caustica.api.ResourceId;
  * @param <S> the setup this kind of pass receives — see {@link PassSetup}
  */
 public interface PassLifecycle<S extends PassSetup> {
-    /** Process-stable identity, matching the id this pass was registered under. */
-    ResourceId id();
-
     /** The activation opened. Allocate anything that outlives every inner scope. */
     default void activated(S setup) {
     }

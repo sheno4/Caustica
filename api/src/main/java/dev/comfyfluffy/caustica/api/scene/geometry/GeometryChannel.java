@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.api.scene.geometry;
 
-import dev.comfyfluffy.caustica.api.AtomicBatch;
+import dev.comfyfluffy.caustica.api.scene.AtomicBatch;
 import dev.comfyfluffy.caustica.api.CausticaApi;
 import dev.comfyfluffy.caustica.api.scene.SceneChannel;
 import dev.comfyfluffy.caustica.api.scene.SceneId;

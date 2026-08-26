@@ -49,12 +49,14 @@
  * <li><b>Material</b> ({@link dev.comfyfluffy.caustica.api.material}) — the renderer owns the OpenPBR
  *     BSDF and evaluates it once, so value/pdf agreement cannot be broken by an implementation. An
  *     extension registers a Slang surface that feeds that BSDF its parameters.</li>
- * <li><b>Environment</b> ({@link dev.comfyfluffy.caustica.api.FeatureBuilder#environment}) — a registered
- *     {@code IEnvironmentModel} set, named per scene rather than bound to a slot, exactly parallel to
+ * <li><b>Environment</b> ({@link dev.comfyfluffy.caustica.api.program.ProgramChannel}) — an added
+ *     {@code IEnvironmentModel} set, named per scene, exactly parallel to
  *     material: the scene picks the implementation and hands it one uninterpreted word.</li>
  * <li><b>Post effects</b> ({@link dev.comfyfluffy.caustica.api.pass.PostEffectPass}) — a pass after
- *     reconstruction and before the display transform, working in scene-linear ACEScg. Only effects on the
- *     scene image itself; anything crisp and 2D is UI, even when the world positions it.</li>
+ *     reconstruction and before the display transform, working in scene-linear ACEScg, optionally anchored
+ *     to an end of the chain ({@link dev.comfyfluffy.caustica.api.pass.PassAnchor}). A scene-referred grade
+ *     is one of these anchored last, which is where ACES puts an LMT. Only effects on the scene image
+ *     itself; anything crisp and 2D is UI, even when the world positions it.</li>
  * <li><b>UI</b> ({@link dev.comfyfluffy.caustica.api.ui}) — a pass after the display transform, drawing a
  *     separate sRGB layer once per rendered frame. Presentation consumes it for every output frame; a
  *     frame-generation backend may reuse it or interpolate it separately from the HUD-less scene before
@@ -75,10 +77,15 @@
  *     renderer already owns. Sharing them beats every extension creating its own.</li>
  * <li><b>Shader compilation</b> ({@link dev.comfyfluffy.caustica.api.shader}) — the host's Slang
  *     toolchain, with the renderer's own module search paths already on it.</li>
- * <li><b>Options</b> ({@link dev.comfyfluffy.caustica.api.option}) — declare typed settings; the host
- *     persists them and renders their controls. An extension cannot supply its own settings screen, so
- *     without this its settings live in a file of its own that nothing surfaces.</li>
  * </ul>
+ *
+ * <p>Settings are <b>not</b> here. Typed options, their values, and the text a settings screen renders live
+ * in {@code caustica-api-settings}, which is parallel to this artifact rather than layered on it: it
+ * depends on this one and the renderer never reads it. An extension adds what it contributes to a frame
+ * here and declares what it exposes to a settings screen there, and nothing links the two but the extension
+ * itself. What the
+ * renderer offers instead is {@code frameIndex()} on every frame context — the one fact an outside layer
+ * needs to freeze its own state for the length of a frame.
  *
  * <h2>A pass declares when, not what</h2>
  *
@@ -98,6 +105,28 @@
  *
  * <p>What a pass computes never enters the API. The renderer does not inspect it, name it, or validate it
  * — a frame context carries only what the renderer itself produced and the pass cannot get elsewhere.
+ *
+ * <h2>Identity is issued, and nothing is declared</h2>
+ *
+ * Nothing in this artifact takes a name, and nothing is fixed at startup. Every id comes from the channel
+ * that made the object ({@link dev.comfyfluffy.caustica.api.RetainedId}) — a mesh, a placement, a light, a
+ * material, a scene, and equally a surface implementation or an environment. There is one lifetime rule for
+ * all of them: an id is valid until the object is dropped or its collection's generation moves.
+ *
+ * <p>Authoring a key is writing a hash function: a namespaced string has to be unique, has to be spelled
+ * the same in two places, and is validated against a charset somebody chose. An issued identity has none of
+ * those failure modes and needs no registry of reserved names.
+ *
+ * <p><b>There is no declaration phase.</b> A surface implementation is added and dropped exactly like a
+ * mesh, so switching a feature off means it is not in the program — there is no gate to consult, nothing
+ * compiled-but-disabled, and no way to name something that is not there. Adding recompiles the world
+ * program, which is why {@link dev.comfyfluffy.caustica.api.program.ProgramChannel} batches: one batch is
+ * one recompile.
+ *
+ * <p>What this gives up is naming across a boundary the process does not span — a config file, or a mod
+ * that will not compile against the one it wants to reference. That naming is real, and it belongs to the
+ * layer with a native vocabulary for it: a host's own resource name, persisted by the host, mapped to an id
+ * the host holds. It is not the renderer's.
  *
  * <h2>Ownership decides the shape of a type</h2>
  *

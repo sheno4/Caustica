@@ -12,7 +12,11 @@ import dev.comfyfluffy.caustica.api.gpu.GpuImage;
  * republished or the pass is disabled, so the ordinary case is to publish once in
  * {@link PassLifecycle#activated} and never think about it again. Republish from
  * {@link PassLifecycle#displayResized} or {@link PassLifecycle#resourcePackApplied} when the resource is
- * rebuilt, and from {@link WorldResourceFrame} when the handle can change between frames.
+ * rebuilt.
+
+ * <p>Named bindings are what the descriptor heap retires. A pass whose resources reach the shader by
+ * device address publishes nothing here: it puts the address in the word its implementation already reads,
+ * and replaces the buffer rather than republishing a handle.
  */
 public interface WorldResourceSetup extends PassSetup {
     /**

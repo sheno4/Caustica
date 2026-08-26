@@ -1,8 +1,7 @@
 package dev.comfyfluffy.caustica.api.scene.light;
 
-import dev.comfyfluffy.caustica.api.AtomicBatch;
+import dev.comfyfluffy.caustica.api.scene.AtomicBatch;
 import dev.comfyfluffy.caustica.api.CausticaApi;
-import dev.comfyfluffy.caustica.api.ResourceId;
 import dev.comfyfluffy.caustica.api.scene.SceneChannel;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 
@@ -22,25 +21,6 @@ import java.util.Objects;
  * rectangle. That is what keeps the acceleration path free of shading data.
  */
 public interface LightChannel {
-    /**
-     * Resolve a registered emission profile to the handle a {@link LightDescriptor.Emission} names.
-     *
-     * <p>Bound to the runtime activation for the reason {@code MaterialChannel.surface} is: the compiled
-     * closure changes with feature selection, so an id resolved here dies with the program that produced
-     * it. Check {@link #emissionProfileAvailable} first to fall back instead of catching.
-     *
-     * @throws IllegalStateException if {@code profile} names no emission profile compiled into the active
-     *         world program
-     */
-    EmissionProfileId emissionProfile(ResourceId profile);
-
-    /**
-     * Whether an emission profile compiled into the active world program. The non-throwing companion to
-     * {@link #emissionProfile}, for an extension with something to fall back to — a descriptor's own colour
-     * is always available, so falling back costs the profile and not the light.
-     */
-    boolean emissionProfileAvailable(ResourceId profile);
-
     /** A fresh light id. Cheap, thread-safe, and does not choose a scene; {@link SetLight} does. */
     LightId newLight();
 

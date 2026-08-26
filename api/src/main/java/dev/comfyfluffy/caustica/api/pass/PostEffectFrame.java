@@ -1,36 +1,15 @@
 package dev.comfyfluffy.caustica.api.pass;
 
-import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
-import dev.comfyfluffy.caustica.api.gpu.GpuFrameUse;
 import dev.comfyfluffy.caustica.api.gpu.GpuImage;
-import dev.comfyfluffy.caustica.api.option.OptionValues;
-import org.lwjgl.vulkan.VkCommandBuffer;
 
 /**
- * Passed to {@link PostEffectPass#record} once per rendered frame. The command buffer is mid-recording:
- * the engine owns submission and the barriers into and out of the post chain, but barriers <em>between
- * this pass's own dispatches</em> are the pass's job — {@link #memoryBarrier}, or a raw
- * {@code vkCmdPipelineBarrier} on {@link #commandBuffer()} for anything more specific.
+ * {@link PassFrame} for a {@link PostEffectPass}, adding what the post chain produces for it to read and
+ * the target that enrols it.
  *
  * <p>Both images are display-resolution and carry their own extent, so there is no separate display size
  * to read here and no way for the two to disagree.
  */
-public interface PostEffectFrame {
-    /** The command buffer currently being recorded. Record compute work directly onto it. */
-    VkCommandBuffer commandBuffer();
-
-    /** GPU services for pass-local resources. */
-    GpuDevice device();
-
-    /** Completion reservation covering every GPU resource this frame's recorded work references. */
-    GpuFrameUse gpuUse();
-
-    /**
-     * This feature's option values, frozen for the whole frame. A value changed mid-frame becomes visible
-     * next frame, so every stage of one frame sees one consistent set.
-     */
-    OptionValues options();
-
+public interface PostEffectFrame extends PassFrame {
     /**
      * The scene as it stands at this point in the chain: scene-linear ACEScg, not yet exposed, look
      * transformed, or tone mapped. For the first pass that takes a target it is the reconstructed colour
@@ -57,10 +36,4 @@ public interface PostEffectFrame {
 
     /** This frame's scalar exposure. Engine-produced and resolved fresh every frame, as above. */
     GpuImage exposureImage();
-
-    /**
-     * A full pipeline barrier (all commands, all memory) between two of this pass's own dispatches — the
-     * same broad, safe idiom the engine uses between its own stages.
-     */
-    void memoryBarrier();
 }

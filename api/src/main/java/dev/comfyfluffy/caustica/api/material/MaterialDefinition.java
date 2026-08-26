@@ -10,11 +10,9 @@ import java.util.Objects;
  * <p>No shading parameters. Colour, roughness, metalness, transmission and emission belong to the surface
  * implementation, which is the extension's own Slang.
  *
- * <p>{@code surface} is resolved once through {@link MaterialChannel#surface}, not named here as a
- * {@link dev.comfyfluffy.caustica.api.ResourceId}. A name in a submitted record is a string the renderer
- * resolves on every registration and can only reject there; an issued id is resolved when the extension
- * looks it up, and every other cross-reference a submitted record carries — a mesh's material, a
- * placement's mesh and scene — is already an issued id.
+ * <p>{@code surface} is the id the program channel issued, named directly. Every cross-reference a submitted
+ * record carries — a mesh's material, a placement's mesh and scene — is an issued identity, and this is no
+ * exception.
  *
  * <p>{@code parameters} is 64 bits so it can simply be a device address — a material's parameters are
  * whatever buffer the source points it at, and there is no size beyond which an extension has to start

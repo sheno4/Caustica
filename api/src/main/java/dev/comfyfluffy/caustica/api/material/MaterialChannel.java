@@ -1,7 +1,6 @@
 package dev.comfyfluffy.caustica.api.material;
 
 import dev.comfyfluffy.caustica.api.CausticaApi;
-import dev.comfyfluffy.caustica.api.ResourceId;
 
 import java.util.Objects;
 
@@ -14,19 +13,6 @@ import java.util.Objects;
  * Both sets are live in between, so no frame ever references something that has been taken away.
  */
 public interface MaterialChannel {
-    /**
-     * Resolve a registered surface implementation to the handle a {@link MaterialDefinition} names.
-     *
-     * <p>Bound to the runtime activation, not to the material: the compiled closure changes with feature
-     * selection, so an id resolved here dies with the program that produced it. An unavailable name is the
-     * difference between shading and the visible error surface, which is why this throws rather than
-     * yielding a handle that fails later — check {@link #surfaceAvailable} first to fall back instead.
-     *
-     * @throws IllegalStateException if {@code surface} names no implementation compiled into the active
-     *         world program
-     */
-    SurfaceId surface(ResourceId surface);
-
     /**
      * Register a material and return an id usable immediately.
      *
@@ -49,10 +35,4 @@ public interface MaterialChannel {
      * goes. A source that never drops that geometry never gets the callback.
      */
     void drop(MaterialId material, Runnable retired);
-
-    /**
-     * Whether a surface implementation compiled into the active world program. The non-throwing companion
-     * to {@link #surface}, for an extension with something to fall back to.
-     */
-    boolean surfaceAvailable(ResourceId surface);
 }
