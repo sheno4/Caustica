@@ -1,15 +1,14 @@
 package dev.comfyfluffy.caustica.api.scene.light;
 
 import dev.comfyfluffy.caustica.api.scene.AtomicBatch;
-import dev.comfyfluffy.caustica.api.CausticaApi;
-import dev.comfyfluffy.caustica.api.scene.SceneChannel;
+import dev.comfyfluffy.caustica.api.session.RenderSessionContext;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 
 import java.util.List;
 import java.util.Objects;
 
 /**
- * Retained lights, reached from {@link CausticaApi#lights()}. The same shape as retained geometry: one
+ * Retained lights, reached from {@link RenderSessionContext#lights()}. The same shape as retained geometry: one
  * engine-owned collection, issued ids, batched atomic updates, nothing reset on the renderer's schedule.
  *
  * <p>A light is placed into a scene, in that scene's coordinate system, and is gathered by the sampling
@@ -19,6 +18,8 @@ import java.util.Objects;
  * <p>Lights are not derived from geometry. The renderer sees no emission on a triangle, so an emissive
  * surface is lit by retaining a light beside it — Minecraft turns every emissive block face into a
  * rectangle. That is what keeps the acceleration path free of shading data.
+ *
+ * <p>All methods are thread-safe.
  */
 public interface LightChannel {
     /** A fresh light id. Cheap, thread-safe, and does not choose a scene; {@link SetLight} does. */
@@ -28,14 +29,8 @@ public interface LightChannel {
      * Apply operations, with the contract {@link AtomicBatch} describes and the synchronous validation the
      * geometry channel has. A batch may span scenes.
      *
-     * <p>A descriptor is copied, but the buffer an {@link LightDescriptor.Emission} points at is not. The
-     * callback of the batch that retained the descriptor runs after replacement, removal, or a scene
-     * cascade and after the last GPU read, which is when the source may reuse that buffer.
-     *
-     * @throws IllegalArgumentException if any operation names an id this channel did not issue, a scene
-     *         {@link SceneChannel} did not issue, or one belonging to an earlier
-     *         {@link SceneChannel#generation()}
-     * @throws IllegalStateException if no render session is active
+     * @throws IllegalArgumentException if any operation names an id this session did not issue, a stale
+     *         scene reference, or an identity from another render session
      */
     void submit(List<AtomicBatch<Operation>> batches);
 

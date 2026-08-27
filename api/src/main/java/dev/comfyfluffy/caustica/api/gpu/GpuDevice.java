@@ -1,9 +1,7 @@
 package dev.comfyfluffy.caustica.api.gpu;
 
 import org.lwjgl.vulkan.VkDevice;
-import org.lwjgl.vulkan.VkCommandBuffer;
 
-import java.util.function.Consumer;
 
 /**
  * Vulkan device services available to extensions.
@@ -15,9 +13,28 @@ import java.util.function.Consumer;
  *
  * <p>Device discovery, queues, submission, and renderer lifecycle are intentionally outside this API. GPU
  * work is recorded by a pass; an extension may prepare it on its own CPU executors first.
+ *
+ * <p>The logical device is Vulkan 1.4. The renderer enables the features required for buffer device
+ * addresses, dynamic rendering, synchronization2, unified {@code GENERAL} image layouts, descriptor
+ * heaps, shader objects, untyped pointers, acceleration structures, ray-tracing pipelines, ray queries,
+ * and ray-tracing position fetch. The corresponding device extensions are
+ * {@code VK_KHR_unified_image_layouts}, {@code VK_EXT_descriptor_heap},
+ * {@code VK_EXT_shader_object}, {@code VK_KHR_shader_untyped_pointers},
+ * {@code VK_KHR_acceleration_structure}, {@code VK_KHR_deferred_host_operations},
+ * {@code VK_KHR_ray_tracing_pipeline}, {@code VK_KHR_ray_query}, and
+ * {@code VK_KHR_ray_tracing_position_fetch}.
+ *
+ * <p>Extensions query implementation-dependent limits and physical-device support directly through
+ * {@link VkDevice#getPhysicalDevice()} and Vulkan's extensible feature/property queries. A reported
+ * physical feature is not permission to use it: features outside the baseline above are not guaranteed to
+ * have been enabled when the logical device was created. Optional device features require a separate
+ * pre-device contract when a concrete extension use case needs one.
  */
 public interface GpuDevice {
-    /** The live Vulkan device used to record and create pass-local Vulkan objects. */
+    /**
+     * The live Vulkan device used to record and create pass-local Vulkan objects. Its physical device and
+     * LWJGL command capabilities are available directly from the returned object.
+     */
     VkDevice vk();
 
     /**
@@ -43,8 +60,8 @@ public interface GpuDevice {
     /**
      * Run {@code cleanup} once every command submitted before this call has completed on the GPU.
      *
-     * <p><b>This is the API's only resource-lifetime primitive.</b> Epoch callbacks say a resource has
-     * become logically wrong — the display resized, the resource pack changed, the mesh was dropped — and
+     * <p>This is the session service for retiring resources not tied to the current frame. A resource can
+     * become logically wrong — the display resized, host content changed, an object was dropped — and
      * that is never the same instant as when the GPU has finished reading it. Between those two instants
      * the resource must stay alive, and nothing an extension can observe tells it when the second one
      * arrives. This does.
@@ -63,13 +80,17 @@ public interface GpuDevice {
      *   }
      * </pre>
      *
-     * <p>Destroying directly is correct in exactly one place: a lifecycle's final callback
-     * ({@code PassLifecycle.destroy}, {@code ProviderLifecycle.shutdown}), where the renderer has already
-     * idled the device. Everywhere else it is a use-after-free that survives testing, because the
-     * window is one frame wide.
+     * <p>A session-created pass may destroy its exclusively owned resources directly from
+     * {@link dev.comfyfluffy.caustica.api.pass.Pass#close() Pass.close()}: every GPU use by that pass has
+     * drained then. This says nothing about
+     * unrelated device work. Everywhere else, replacing or dropping a resource requires retirement.
      *
-     * <p>Cleanup runs on the renderer thread and must not throw. This covers work already submitted, not
-     * the frame currently being recorded — for that, {@link GpuFrameUse#retire} is the tighter reservation.
+     * <p>Eligible callbacks run on the renderer thread in registration order and must not block or throw.
+     * This covers work already submitted, not the frame currently being recorded — for that,
+     * {@link GpuFrameUse#retire} is the tighter reservation. It does not imply that later device work or
+     * unrelated passes are idle.
+     *
+     * <p>This method is thread-safe.
      */
     void retireAfterUse(Runnable cleanup);
 }

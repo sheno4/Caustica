@@ -1,23 +1,21 @@
 package dev.comfyfluffy.caustica.api.program;
 
-import dev.comfyfluffy.caustica.api.CausticaApi;
 import dev.comfyfluffy.caustica.api.material.SurfaceId;
 import dev.comfyfluffy.caustica.api.scene.EnvironmentId;
-import dev.comfyfluffy.caustica.api.scene.light.EmissionProfileId;
 
 /**
- * Everything an extension compiles into the world ray-tracing program, reached from
- * {@link CausticaApi#program()}.
+ * Everything an extension compiles into one render session's world ray-tracing program.
  *
  * <p>An implementation is not declared once at startup — it is added and dropped at any time, which is what
  * makes switching a feature off mean <em>not present</em> rather than present-but-disabled. There is no gate
  * to consult and no way to name something that is not there.
  *
- * <h2>Adding is synchronous; there are no batches</h2>
+ * <h2>Ids are synchronous; compilation is observable without blocking</h2>
  *
- * The same shape as {@link dev.comfyfluffy.caustica.api.material.MaterialChannel#register}, and for the same
- * reason: immediacy is what keeps ordering between channels from becoming a concept. A material registered
- * after {@link #addSurface} returns can always name the result.
+ * A returned {@link ProgramUpdate} contains an id usable immediately and a {@link ProgramTicket} for the
+ * composition that implements it. Callers which require an atomic visible switchover register a completion
+ * callback and publish materials or scenes only after readiness. Callers that accept the visible error
+ * implementation may publish immediately.
  *
  * <p><b>Nothing here is batched, because nothing here is visible on its own.</b> Atomicity exists so that no
  * frame shows a half-applied change, and only scene content is in a frame's picture — a table entry nothing
@@ -32,10 +30,11 @@ import dev.comfyfluffy.caustica.api.scene.light.EmissionProfileId;
  * to schedule. The renderer rebuilds at most once per boundary, so a run of additions costs one rebuild —
  * and it coalesces across extensions, which a caller-side batch could never do.
  *
- * <p>Until that rebuild lands, an id names something that is not yet compiled: a material naming a new
- * surface shades as the visible error surface for those frames. That is the cost of keeping the id usable
- * immediately, and it is paid where nothing is looking, because every realistic trigger — startup, a
- * setting, a pack reload — already sits on a reload boundary.
+ * <p>Tickets do not prevent renderer-wide coalescing. Additions and removals made before the same program
+ * boundary may share one compilation and complete together.
+ *
+ * <p>All methods are thread-safe. They accept the requested composition change synchronously; compilation
+ * and publication proceed asynchronously as the returned ticket describes.
  */
 public interface ProgramChannel {
     /**
@@ -46,7 +45,7 @@ public interface ProgramChannel {
      * @throws IllegalStateException if another live implementation declares this type name from a different
      *         module — extension shader type names are global to the composition
      */
-    SurfaceId addSurface(SurfaceDefinition definition);
+    ProgramUpdate<SurfaceId> addSurface(SurfaceDefinition definition);
 
     /**
      * Stop using a surface implementation, and learn when whatever the source associated with it is free.
@@ -54,28 +53,29 @@ public interface ProgramChannel {
      * <p>Nothing is freed at the call, and dropping while materials still name it is neither an error nor
      * rejected — the same contract dropping a material has. {@code retired} runs once nothing names it and
      * no in-flight program contains it; until then those materials shade as the visible error surface.
+     * The callback follows the serialized, non-blocking, must-not-throw policy of retained callbacks.
      */
-    void dropSurface(SurfaceId surface, Runnable retired);
+    ProgramTicket dropSurface(SurfaceId surface, Runnable retired);
 
     /** Add an environment implementation. A scene names one; several may be live at once. */
-    EnvironmentId addEnvironment(ShaderDefinition definition);
+    ProgramUpdate<EnvironmentId> addEnvironment(ShaderDefinition definition);
 
-    /** Stop using an environment. {@code retired} runs once no scene names it. */
-    void dropEnvironment(EnvironmentId environment, Runnable retired);
-
-    /** Add an emission profile a light descriptor can name. */
-    EmissionProfileId addEmissionProfile(ShaderDefinition definition);
-
-    /** Stop using an emission profile. {@code retired} runs once no light descriptor names it. */
-    void dropEmissionProfile(EmissionProfileId profile, Runnable retired);
+    /**
+     * Stop using an environment. {@code retired} runs once no scene names it and follows the serialized,
+     * non-blocking, must-not-throw retained-callback policy.
+     */
+    ProgramTicket dropEnvironment(EnvironmentId environment, Runnable retired);
 
     /**
      * Add a projected surface modifier. Nothing names one: every live modifier runs, in the order they were
      * added, and geometry without the receiver semantic pays for no dispatch.
      */
-    SurfaceModifierId addSurfaceModifier(ShaderDefinition definition);
+    ProgramUpdate<SurfaceModifierId> addSurfaceModifier(ShaderDefinition definition);
 
-    /** Stop running a modifier. {@code retired} runs once no in-flight program contains it. */
-    void dropSurfaceModifier(SurfaceModifierId modifier, Runnable retired);
+    /**
+     * Stop running a modifier. {@code retired} runs once no in-flight program contains it and follows the
+     * serialized, non-blocking, must-not-throw retained-callback policy.
+     */
+    ProgramTicket dropSurfaceModifier(SurfaceModifierId modifier, Runnable retired);
 
 }

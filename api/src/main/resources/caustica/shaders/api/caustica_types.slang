@@ -1,5 +1,11 @@
 module caustica_types;
 
+/** Must equal dev.comfyfluffy.caustica.api.program.ProgramAbi.VERSION. */
+public static const uint CAUSTICA_SHADER_ABI_VERSION = 2u;
+
+/** MeshBuild.GeometrySemantic.PROJECTED_SURFACE_MODIFIER_RECEIVER. */
+public static const uint GEOMETRY_PROJECTED_SURFACE_MODIFIER_RECEIVER = 0x1u;
+
 // Extension colours and radiance are scene-linear ACEScg. Distances are scene world units and
 // directions are normalized and point away from the shaded position.
 public static const uint EVENT_NONE = 0x0u;
@@ -11,12 +17,52 @@ public static const uint EVENT_TRANSMISSION = 0x10u;
 
 /**
  * SurfaceInput.surfaceFlags: this hit is the one the reconstructor sees, so a surface whose normal
- * animates should also fill `previousGeometryNormal` — that pair is what a reflection reprojects with.
+ * animates should also fill `previous_geometry_normal` — that pair is what a reflection reprojects with.
  * Unset on every other hit, where the previous normal is never read and evaluating it would be waste.
  */
 public static const uint SURFACE_RECONSTRUCTION_ANCHOR = 0x1u;
 /** Enables optional time-varying procedural surface and medium evaluation for this frame. */
 public static const uint SURFACE_ANIMATION_ENABLED = 0x2u;
+
+/**
+ * Stable pushed root available to every extension shader stage. `compositionData` addresses the generated
+ * immutable table of extension roots. Descriptor heaps are SPIR-V built-ins and therefore need no address
+ * in pushed data; typed indices and lookup helpers live in `caustica_resources`.
+ */
+public struct ShaderRootData {
+    public uint abiVersion;
+    public uint reserved;
+    public uint64_t compositionData;
+};
+
+/** Three rows of an affine object-to-scene transform. Translation occupies each row's fourth component. */
+public struct AffineTransform {
+    public float4 row0;
+    public float4 row1;
+    public float4 row2;
+};
+
+/** Inverse-transpose linear transform used for object-space normals. */
+public struct NormalTransform {
+    public float3 row0;
+    public float3 row1;
+    public float3 row2;
+};
+
+public float3 transformPosition(AffineTransform transform, float3 position) {
+    float4 homogeneous = float4(position, 1.0);
+    return float3(dot(transform.row0, homogeneous), dot(transform.row1, homogeneous),
+            dot(transform.row2, homogeneous));
+}
+
+public float3 transformDirection(AffineTransform transform, float3 direction) {
+    return float3(dot(transform.row0.xyz, direction), dot(transform.row1.xyz, direction),
+            dot(transform.row2.xyz, direction));
+}
+
+public float3 transformNormal(NormalTransform transform, float3 normal) {
+    return float3(dot(transform.row0, normal), dot(transform.row1, normal), dot(transform.row2, normal));
+}
 
 public static const uint MEDIUM_TERMINATE_ON_MISS = 0x1u;
 public static const uint MEDIUM_BOUNDARY_LIGHTING = 0x2u;
@@ -103,6 +149,12 @@ public struct OpenPbrSurface {
 
     // Geometry
     /**
+     * OpenPBR geometry_thin_walled. A transmissive thin wall is a two-dimensional sheet and does not
+     * change the path's medium stack. A non-thin-walled transmissive surface bounds the medium returned by
+     * its implementation's evaluateMedium method.
+     */
+    public bool geometry_thin_walled = false;
+    /**
      * OpenPBR geometry_normal: the shading normal, already carrying the material's normal map. It is
      * written rather than read because a procedural surface's normal IS its description — the engine's
      * transport reads this one for refraction, so perturbing it is what makes a wave a wave.
@@ -124,7 +176,7 @@ public struct OpenPbrSurface {
 
 /**
  * OpenPBR normal-incidence reflectance. Not an authored parameter: a dielectric's follows from
- * `specularIor`; a metal's is `baseColor`. OpenPBR specular_color is fixed at its white default in the
+ * `specular_ior`; a metal's is `base_color`. OpenPBR specular_color is fixed at its white default in the
  * supported subset because its conductor F82 edge-tint semantics are not implemented.
  */
 public float3 openPbrSpecularF0(float3 baseColor, float baseMetalness, float specularIor) {
@@ -141,6 +193,8 @@ public float3 openPbrSpecularF0(OpenPbrSurface material) {
  * description itself is not here: the implementation produces it as the `inout OpenPbrSurface` it fills.
  */
 public struct SurfaceInput {
+    /** Versioned pushed roots and descriptor-heap address-table root for this composition. */
+    public ShaderRootData shaderRoot;
     /**
      * The material's word, copied verbatim from MaterialDefinition. Sixty-four bits so it can simply be a
      * device address: a material's parameters are whatever buffer the source pointed it at, and there is
@@ -164,6 +218,14 @@ public struct SurfaceInput {
      * geometry, which is what makes `geometryData` a usable base pointer.
      */
     public uint primitiveIndex;
+    /** Weights for triangle vertices one and two; vertex zero has weight `1 - x - y`. */
+    public float2 barycentrics;
+    /** Current object-to-scene transform for positions and tangent vectors. */
+    public AffineTransform objectToScene;
+    /** Previous-frame object-to-scene transform, equal to current when no history exists. */
+    public AffineTransform previousObjectToScene;
+    /** Inverse-transpose object-to-scene transform for normal-map vectors. */
+    public NormalTransform normalToScene;
     public float3 position;
     /** The triangle's own normal, oriented toward the viewer. Unperturbed by any normal map. */
     public float3 geometricNormal;
@@ -191,6 +253,7 @@ public struct SurfaceInput {
 
 /** Geometry and footprint inputs shared by projected surface modifiers. */
 public struct SurfaceModifierInput {
+    public ShaderRootData shaderRoot;
     /** Hit position in the current scene-origin coordinate system. */
     public float3 position;
     /** The oriented triangle normal, before material or procedural perturbation. */
@@ -202,12 +265,15 @@ public struct SurfaceModifierInput {
     public uint64_t geometryData;
     public uint64_t instanceData;
     public uint primitiveIndex;
+    public float2 barycentrics;
+    /** GEOMETRY_* bits copied from MeshBuild.Geometry. */
+    public uint geometrySemantics;
 };
 
 /**
  * Exactly what the engine's BSDF evaluates with. Unlike OpenPbrSurface this is not authored vocabulary
  * and nothing outside the engine produces one: reflectance is already F0 and roughness is already GGX
- * alpha (the square of OpenPbrSurface.specularRoughness). It reaches an extension only as the surface
+ * alpha (the square of OpenPbrSurface.specular_roughness). It reaches an extension only as the surface
  * `evaluateResponse` is stylizing, and it is exactly the state the payload carries between stages.
  */
 public struct SurfaceClosure {
@@ -252,6 +318,7 @@ public struct BsdfSample {
 };
 
 public struct EnvironmentQuery {
+    public ShaderRootData shaderRoot;
     public float3 direction;
     /** Whether environment emitters already represented by direct-light sampling remain visible. */
     public bool showEnvironmentEmitters;

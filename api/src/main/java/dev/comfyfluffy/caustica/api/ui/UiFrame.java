@@ -1,15 +1,16 @@
 package dev.comfyfluffy.caustica.api.ui;
 
 import dev.comfyfluffy.caustica.api.gpu.GpuImage;
+import dev.comfyfluffy.caustica.api.pass.Pass;
 import dev.comfyfluffy.caustica.api.pass.PassFrame;
-import org.joml.Matrix4fc;
+import dev.comfyfluffy.caustica.api.scene.RenderView;
 
 /**
- * Passed to {@link UiPass#record} to draw one frame's UI layer.
+ * Passed to a UI-stage {@link Pass} to draw one rendered frame's UI layer. There is no recording callback
+ * for a generated frame; presentation may reuse or separately interpolate the recorded layer.
  *
- * <p>Nothing the world pipeline produces is reachable from here, and that is deliberate: this runs after
- * the display transform, so there is no acceleration structure, no exposure, and no scene-linear colour to
- * read. A pass that needs any of those belongs in the post-effects chain instead.
+ * <p>Scene-linear colour and exposure are not reachable here. The only borrowed world resource is the
+ * root scene's TLAS for occlusion ray queries by world-anchored overlays.
  *
  * <p>The camera is the exception, because world-anchored UI is still UI — see
  * {@link #worldViewProjection()}.
@@ -39,9 +40,19 @@ public interface UiFrame extends PassFrame {
      * <p>It is the <em>rendered</em> frame's camera; no new camera or UI invocation exists for a generated
      * frame. A frame-generation backend may reuse or separately interpolate the recorded layer, so exact
      * alignment with the generated scene is not guaranteed. Anchor UI to the world only where that
-     * mismatch is acceptable — never for a reticle. Do not retain or mutate the matrix.
+     * mismatch is acceptable — never for a reticle. The returned 16 column-major floats are an immutable
+     * snapshot: implementations return a defensive copy, and callers do not retain or mutate it.
      */
-    Matrix4fc worldViewProjection();
+    float[] worldViewProjection();
+
+    /** The camera and root scene this rendered frame started from. Never retain it past this callback. */
+    RenderView view();
+
+    /**
+     * Borrowed top-level acceleration structure for {@link #view()}'s root scene. It is valid only during
+     * this callback and may be used for ray queries by this pass; it is never owned or destroyed here.
+     */
+    long worldTlas();
 
     int displayWidth();
 

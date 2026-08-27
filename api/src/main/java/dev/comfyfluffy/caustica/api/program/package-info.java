@@ -1,7 +1,6 @@
 /**
- * What an extension compiles into the world ray-tracing program: surface implementations, environments,
- * emission profiles, and projected surface modifiers. Implementations are retained objects added and
- * dropped through {@link dev.comfyfluffy.caustica.api.program.ProgramChannel}; a disabled feature is absent
- * from the program rather than compiled behind a runtime gate.
+ * Dynamically composed world-program implementations. Java definitions and the public
+ * {@code caustica/shaders/api/caustica_*} Slang modules are one versioned ABI; neither may be upgraded
+ * independently. See {@link dev.comfyfluffy.caustica.api.program.ProgramAbi#VERSION}.
  */
 package dev.comfyfluffy.caustica.api.program;

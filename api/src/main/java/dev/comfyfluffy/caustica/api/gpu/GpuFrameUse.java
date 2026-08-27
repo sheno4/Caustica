@@ -8,6 +8,10 @@ package dev.comfyfluffy.caustica.api.gpu;
  * being submitted.
  */
 public interface GpuFrameUse {
-    /** Run cleanup after this frame reservation completes without blocking the render thread. */
+    /**
+     * Run cleanup on the renderer thread after this frame reservation completes. Eligible callbacks run
+     * in registration order and must not block or throw. Later frames and unrelated GPU work may still be
+     * executing.
+     */
     void retire(Runnable cleanup);
 }

@@ -1,103 +1,96 @@
 package dev.comfyfluffy.caustica.api.scene.light;
 
-import java.util.Objects;
-
 /**
- * One light, in scene coordinates and the photometric units named per shape.
- *
- * <p><b>Shape and emission are separate.</b> The renderer owns the geometric and sampling contract for
- * every primitive here: it chooses candidates, samples positions or directions, and computes the PDF the
- * estimator uses. An extension never replaces those, for the reason it never replaces the OpenPBR BSDF —
- * independently implemented sampling and evaluation can disagree and bias every lighting backend at once.
- *
- * <p>What an extension can replace is the emitted value, through an {@link Emission} profile. Sampling
- * stays that of the underlying primitive, so a concentrated profile can raise variance but cannot
- * invalidate the PDF.
- *
- * <p>A new emitter <em>shape</em> — a tube, a line, a volumetric beam — changes how the renderer samples
- * light and is an engine feature, not an extension one. Triangle lights, if they arrive, arrive as their
- * own retained list rather than as a field on scene geometry.
+ * One engine-sampled light in scene coordinates. Colours use scene-linear ACEScg and every vector named
+ * as a direction or normal is unit length. Custom light emission is intentionally absent until a matching
+ * public shader ABI and a demonstrated engine consumer exist.
  */
 public sealed interface LightDescriptor {
-
-    /** The optional profile authoring this light's emitted value, or null for the descriptor's own. */
-    Emission emission();
-
-    /**
-     * A Slang emission profile and its per-light word.
-     *
-     * <p>The profile computes the final scene-linear ACEScg emitted value from renderer-produced facts —
-     * direction leaving the light, distance, cone cosine, projected coordinates — plus {@code parameters},
-     * which is uninterpreted and wide enough to be a device address. It may read anything the same feature
-     * published, and may ignore the descriptor's own colour entirely. Dynamic data stays behind a stable
-     * address and is updated by GPU commands recorded before tracing, not by an unsynchronized host write.
-     *
-     * <p>{@code peak*} is a correctness contract wherever the renderer culls on it: every value the profile
-     * can produce while this descriptor is retained must stay within it. Changing resources beyond that
-     * bound requires a new {@code Put}. {@code averagePower} is only a proposal weight for light selection
-     * — a wrong value costs variance but must never remove the light from sampling support.
-     */
-    record Emission(EmissionProfileId profile, long parameters,
-                    double peakRed, double peakGreen, double peakBlue,
-                    double averagePower) {
-        public Emission {
-            Objects.requireNonNull(profile, "profile");
-            if (peakRed < 0.0 || peakGreen < 0.0 || peakBlue < 0.0 || averagePower < 0.0) {
-                throw new IllegalArgumentException("emission bounds must be non-negative");
-            }
-        }
-    }
 
     /** A spatial emitter eligible for finite-light acceleration structures. */
     sealed interface Finite extends LightDescriptor {
         double positionX();
-
         double positionY();
-
         double positionZ();
     }
 
-    /** A one-sided rectangular emitter; radiance is scene-linear ACEScg in cd/m². */
+    /** A one-sided rectangular emitter; radiance is in cd/m². */
     record Rectangle(double positionX, double positionY, double positionZ,
                      double halfUx, double halfUy, double halfUz,
                      double halfVx, double halfVy, double halfVz,
                      double normalX, double normalY, double normalZ,
-                     double radianceRedCdM2, double radianceGreenCdM2, double radianceBlueCdM2,
-                     Emission emission) implements Finite {
+                     double radianceRedCdM2, double radianceGreenCdM2, double radianceBlueCdM2)
+            implements Finite {
+        public Rectangle {
+            LightValidation.position(positionX, positionY, positionZ);
+            LightValidation.nonzero(halfUx, halfUy, halfUz, "rectangle half-U axis");
+            LightValidation.nonzero(halfVx, halfVy, halfVz, "rectangle half-V axis");
+            LightValidation.unit(normalX, normalY, normalZ, "rectangle normal");
+            double cx = halfUy * halfVz - halfUz * halfVy;
+            double cy = halfUz * halfVx - halfUx * halfVz;
+            double cz = halfUx * halfVy - halfUy * halfVx;
+            LightValidation.nonzero(cx, cy, cz, "rectangle axes");
+            double inverseLength = 1.0 / Math.sqrt(cx * cx + cy * cy + cz * cz);
+            double alignment = (cx * normalX + cy * normalY + cz * normalZ) * inverseLength;
+            if (!Double.isFinite(alignment) || alignment < 1.0 - LightValidation.UNIT_TOLERANCE) {
+                throw new IllegalArgumentException("rectangle normal must match half-U cross half-V");
+            }
+            LightValidation.color(radianceRedCdM2, radianceGreenCdM2, radianceBlueCdM2, "radiance");
+        }
     }
 
-    /** An omnidirectional point emitter; range is a finite influence bound in metres, intensity in candela. */
+    /** An omnidirectional point emitter; range is in metres and intensity is in candela. */
     record Point(double positionX, double positionY, double positionZ,
                  double rangeMeters,
-                 double intensityRedCandela, double intensityGreenCandela, double intensityBlueCandela,
-                 Emission emission) implements Finite {
+                 double intensityRedCandela, double intensityGreenCandela, double intensityBlueCandela)
+            implements Finite {
+        public Point {
+            LightValidation.position(positionX, positionY, positionZ);
+            LightValidation.positive(rangeMeters, "rangeMeters");
+            LightValidation.color(intensityRedCandela, intensityGreenCandela, intensityBlueCandela,
+                    "intensity");
+        }
     }
 
     /**
-     * A cone emitter, in candela over a range in metres.
-     *
-     * <p>Orientation is complete rather than a bare direction: a profile that varies in two dimensions —
-     * a gobo, a projected texture — needs a stable roll axis for the renderer to produce projected
-     * coordinates from. Separate horizontal and vertical half-angles define the projection and its aspect;
-     * a plain radial falloff can ignore both and use the cone cosine.
+     * A cone emitter. Direction and up are unit, mutually perpendicular vectors. Separate horizontal and
+     * vertical half-angles describe an elliptical cone and give it a stable roll orientation.
      */
     record Spot(double positionX, double positionY, double positionZ,
                 double directionX, double directionY, double directionZ,
                 double upX, double upY, double upZ,
                 double rangeMeters,
                 double horizontalHalfAngleRadians, double verticalHalfAngleRadians,
-                double intensityRedCandela, double intensityGreenCandela, double intensityBlueCandela,
-                Emission emission) implements Finite {
+                double intensityRedCandela, double intensityGreenCandela, double intensityBlueCandela)
+            implements Finite {
+        public Spot {
+            LightValidation.position(positionX, positionY, positionZ);
+            LightValidation.unit(directionX, directionY, directionZ, "spot direction");
+            LightValidation.unit(upX, upY, upZ, "spot up");
+            double dot = directionX * upX + directionY * upY + directionZ * upZ;
+            if (!Double.isFinite(dot) || Math.abs(dot) > LightValidation.UNIT_TOLERANCE) {
+                throw new IllegalArgumentException("spot direction and up must be perpendicular");
+            }
+            LightValidation.positive(rangeMeters, "rangeMeters");
+            LightValidation.halfAngle(horizontalHalfAngleRadians, "horizontalHalfAngleRadians", false);
+            LightValidation.halfAngle(verticalHalfAngleRadians, "verticalHalfAngleRadians", false);
+            LightValidation.color(intensityRedCandela, intensityGreenCandela, intensityBlueCandela,
+                    "intensity");
+        }
     }
 
     /**
-     * A distant angular emitter. Direction points toward the source, illuminance is total scene-linear
-     * ACEScg normal illuminance in lux, and angular radius is the sampling cone's half-angle; zero is an
-     * exact directional source.
+     * A distant angular emitter. Direction points toward the source, illuminance is in lux, and zero
+     * angular radius is an exact directional source.
      */
     record Distant(double directionX, double directionY, double directionZ,
                    double illuminanceRedLux, double illuminanceGreenLux, double illuminanceBlueLux,
-                   double angularRadiusRadians,
-                   Emission emission) implements LightDescriptor {
+                   double angularRadiusRadians) implements LightDescriptor {
+        public Distant {
+            LightValidation.unit(directionX, directionY, directionZ, "distant direction");
+            LightValidation.color(illuminanceRedLux, illuminanceGreenLux, illuminanceBlueLux,
+                    "illuminance");
+            LightValidation.halfAngle(angularRadiusRadians, "angularRadiusRadians", true);
+        }
     }
 }

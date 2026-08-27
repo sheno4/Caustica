@@ -3,9 +3,11 @@ package dev.comfyfluffy.caustica.api.gpu;
 /**
  * Suballocator for the one resource heap and one sampler heap the renderer binds to command buffers.
  *
- * <p>This is an allocator, not a resource registry. The renderer assigns byte ranges but never learns
- * which image, buffer, or sampler descriptor an extension writes there. The extension stores heap offsets
+ * <p>This is an allocator, not a resource registry. The renderer assigns descriptor slots and encodes requested
+ * descriptors but retains no descriptor ownership or resource mapping. The extension stores heap indices
  * in its own GPU data and its own Slang reads them.
+ * Allocation and descriptor writing are thread-safe; callers still synchronize publication of indices in
+ * their own data.
  */
 public interface GpuDescriptorHeap {
     enum Kind {
@@ -13,12 +15,16 @@ public interface GpuDescriptorHeap {
         SAMPLER
     }
 
-    /** Descriptor byte sizes and alignments for laying out a range. */
+    /** Vulkan heap properties for pipeline and raw-resource setup. */
     GpuDescriptorHeapProperties properties();
 
     /**
-     * Allocate an aligned byte range from one bound heap. The range is uninitialized; write descriptor
-     * bytes with Vulkan's descriptor-heap commands before making its offset reachable by a shader.
+     * Allocate consecutive shader-visible descriptor slots from one bound heap. Resource slots use the
+     * unified image/buffer stride required by the session compiler; sampler slots use the sampler stride.
+     * The range is uninitialized until written through {@link #writer()}.
      */
-    GpuDescriptorRange allocate(Kind kind, long byteSize, long byteAlignment, String label);
+    GpuDescriptorRange allocate(Kind kind, int descriptorCount, String label);
+
+    /** Encoder that writes valid descriptor bytes and flushes non-coherent heap memory before returning. */
+    GpuDescriptorWriter writer();
 }

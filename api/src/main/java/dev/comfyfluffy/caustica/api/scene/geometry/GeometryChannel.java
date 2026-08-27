@@ -1,15 +1,14 @@
 package dev.comfyfluffy.caustica.api.scene.geometry;
 
 import dev.comfyfluffy.caustica.api.scene.AtomicBatch;
-import dev.comfyfluffy.caustica.api.CausticaApi;
-import dev.comfyfluffy.caustica.api.scene.SceneChannel;
+import dev.comfyfluffy.caustica.api.session.RenderSessionContext;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 
 import java.util.List;
 import java.util.Objects;
 
 /**
- * Retained meshes and their placements, reached from {@link CausticaApi#geometry()}.
+ * Retained meshes and their placements, reached from {@link RenderSessionContext#geometry()}.
  *
  * <p>One collection, renderer-owned. Extensions do not get their own — ids are issued, so they cannot
  * collide, and there is nothing for a per-source namespace to protect. A {@link SceneId} is not a
@@ -24,8 +23,8 @@ import java.util.Objects;
  * <p><b>The renderer never clears the collection.</b> Retained objects persist until whoever submitted them
  * drops them, so one extension reloading cannot disturb another's. There is deliberately no "clear
  * everything" call: a source drops the ids it holds, which is exactly the bookkeeping it already has. The
- * two things that do empty it are outside this channel — {@link SceneChannel#dropScene} for one scene's
- * placements, {@link SceneChannel#generation()} for all of it.
+ * placements are also removed when their owned scene closes, and everything remaining is removed by the
+ * owning session scope.
  */
 public interface GeometryChannel {
     /** A fresh mesh id. Cheap, thread-safe, and does nothing until a {@link SetMesh} uses it. */
@@ -59,10 +58,8 @@ public interface GeometryChannel {
      * reported here. The mesh does not appear and its batch's retirement runs, so the source reclaims its
      * buffers the same way it would for any other release.
      *
-     * @throws IllegalArgumentException if any operation names an id this channel did not issue, a scene
-     *         {@link SceneChannel} did not issue, or one belonging to an earlier
-     *         {@link SceneChannel#generation()}
-     * @throws IllegalStateException if no render session is active
+     * @throws IllegalArgumentException if any operation names an id this session did not issue, a stale
+     *         scene reference, or an identity from another render session
      */
     void submit(List<AtomicBatch<Operation>> batches);
 

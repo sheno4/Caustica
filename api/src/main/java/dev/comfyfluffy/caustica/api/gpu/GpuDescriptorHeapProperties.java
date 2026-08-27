@@ -9,14 +9,16 @@ package dev.comfyfluffy.caustica.api.gpu;
  * @param samplerDescriptorAlignment required alignment of a sampler descriptor
  * @param imageDescriptorAlignment required alignment of an image descriptor
  * @param bufferDescriptorAlignment required alignment of a buffer or acceleration-structure descriptor
+ * @param maxPushDataSize maximum bytes accepted by {@code vkCmdPushDataEXT}
  */
 public record GpuDescriptorHeapProperties(
-        int samplerDescriptorSize,
-        int imageDescriptorSize,
-        int bufferDescriptorSize,
-        int samplerDescriptorAlignment,
-        int imageDescriptorAlignment,
-        int bufferDescriptorAlignment
+        long samplerDescriptorSize,
+        long imageDescriptorSize,
+        long bufferDescriptorSize,
+        long samplerDescriptorAlignment,
+        long imageDescriptorAlignment,
+        long bufferDescriptorAlignment,
+        long maxPushDataSize
 ) {
     public GpuDescriptorHeapProperties {
         requirePositive(samplerDescriptorSize, "samplerDescriptorSize");
@@ -25,16 +27,17 @@ public record GpuDescriptorHeapProperties(
         requirePowerOfTwo(samplerDescriptorAlignment, "samplerDescriptorAlignment");
         requirePowerOfTwo(imageDescriptorAlignment, "imageDescriptorAlignment");
         requirePowerOfTwo(bufferDescriptorAlignment, "bufferDescriptorAlignment");
+        requirePositive(maxPushDataSize, "maxPushDataSize");
     }
 
-    private static void requirePositive(int value, String name) {
+    private static void requirePositive(long value, String name) {
         if (value <= 0) {
             throw new IllegalArgumentException(name + " must be positive");
         }
     }
 
-    private static void requirePowerOfTwo(int value, String name) {
-        if (value <= 0 || Integer.bitCount(value) != 1) {
+    private static void requirePowerOfTwo(long value, String name) {
+        if (value <= 0 || Long.bitCount(value) != 1) {
             throw new IllegalArgumentException(name + " must be a positive power of two");
         }
     }

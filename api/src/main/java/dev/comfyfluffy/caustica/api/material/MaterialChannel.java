@@ -1,16 +1,17 @@
 package dev.comfyfluffy.caustica.api.material;
 
-import dev.comfyfluffy.caustica.api.CausticaApi;
-
 import java.util.Objects;
 
 /**
- * Registered materials, reached from {@link CausticaApi#materials()}.
+ * Registered materials for one render session. Material ids and registrations do not cross session
+ * boundaries and are retired during session teardown.
  *
  * <p>There is no material epoch. A material is usable from the moment it is registered and stays usable
  * until it is dropped — the same contract as retained geometry, and the reason a resource reload is not a
  * global event: register the new materials, resubmit the affected meshes in one batch, drop the old ones.
  * Both sets are live in between, so no frame ever references something that has been taken away.
+ *
+ * <p>All methods are thread-safe.
  */
 public interface MaterialChannel {
     /**
@@ -33,6 +34,10 @@ public interface MaterialChannel {
      * <p>Dropping while geometry still names it is not an error and is not rejected: the drop is honoured
      * from the source's point of view and the callback simply arrives later, when the last mesh naming it
      * goes. A source that never drops that geometry never gets the callback.
+     *
+     * <p>The callback is a serialized, non-blocking notification on an implementation-selected callback
+     * thread, never a promise of the render thread. It must return promptly and must not throw. There is no
+     * waiting counterpart because retirement may require render-thread progress.
      */
     void drop(MaterialId material, Runnable retired);
 }

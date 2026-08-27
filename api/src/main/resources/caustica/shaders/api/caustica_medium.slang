@@ -2,7 +2,7 @@ module caustica_medium;
 
 import caustica_types;
 
-/** Reference one-world-unit Beer-Lambert mapping for an ordinary transmissive volume. */
+/** Reference one-world-unit Beer-Lambert mapping for an ordinary non-thin-walled transmissive volume. */
 public float3 referenceVolumeExtinction(float3 sourceColor, float transmissionWeight) {
     float3 unitTransmittance = clamp(clamp(sourceColor, 0.0, 1.0)
             * clamp(transmissionWeight, 0.0, 1.0), 1.0e-3, 1.0);

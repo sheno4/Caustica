@@ -75,6 +75,7 @@ def verifyApiJar = tasks.register("verifyApiJar") {
                 "caustica_coverage.slang",
                 "caustica_environment.slang",
                 "caustica_medium.slang",
+                "caustica_resources.slang",
                 "caustica_surface.slang",
                 "caustica_surface_modifier.slang",
                 "caustica_types.slang"

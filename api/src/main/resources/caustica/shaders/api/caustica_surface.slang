@@ -13,9 +13,9 @@ import caustica_medium;
  */
 public interface ISurfaceModel {
     /**
-     * Produce the OpenPBR description for this hit, from `input.userData`, the extension's own
-     * textures, and its own procedural evaluation. Declare an `OpenPbrSurface` and write only what
-     * varies; every field already holds the specification's default.
+     * Produce the OpenPBR description for this hit from the input's material, geometry, and instance data
+     * words, the extension's own textures, and its own procedural evaluation. Declare an
+     * `OpenPbrSurface` and write only what varies; every field already holds the specification's default.
      */
     public OpenPbrSurface evaluateSurface(SurfaceInput input) { return {}; }
 
@@ -25,8 +25,9 @@ public interface ISurfaceModel {
     }
 
     /**
-     * Describe the interior bounded by this surface when it is transmissive. `material` is the
-     * description this implementation produced in `evaluateSurface`.
+     * Describe the interior bounded by this surface when it is transmissive and not thin-walled.
+     * `material` is the description this implementation produced in `evaluateSurface`. The result is not
+     * used for a material whose `geometry_thin_walled` field is true.
      */
     public MediumProperties evaluateMedium(OpenPbrSurface material) {
         return referenceMedium(material);

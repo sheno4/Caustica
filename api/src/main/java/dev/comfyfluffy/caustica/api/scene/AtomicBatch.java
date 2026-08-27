@@ -47,6 +47,11 @@ import java.util.Objects;
  * acceleration build already obsoleted by a later batch — but that is invisible: each accepted batch still
  * retires exactly once after the data it introduced can no longer be read.
  *
+ * <p>Retirement callbacks from one session are serialized in retirement order on an
+ * implementation-selected callback thread. They are non-blocking notifications, not render-thread work:
+ * a callback must return promptly and must not throw. There is no waiting API because retirement may
+ * require render-thread progress.
+ *
  * @param <O> the operation type of the channel this batch is submitted to
  */
 public record AtomicBatch<O>(List<O> operations, Runnable retired) {

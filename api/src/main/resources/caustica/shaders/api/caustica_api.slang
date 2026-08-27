@@ -6,7 +6,8 @@ import caustica_surface_modifier;
 import caustica_environment;
 
 public interface IComposition {
-    associatedtype Environment : IEnvironmentModel;
+    // Scenes select among registered environments, so the composition binds the generated dispatch.
+    associatedtype Environments : IEnvironmentDispatch;
     // Not a single surface model: materials name their own implementation, so what a composition binds is
     // the generated fan-out over every registered one.
     associatedtype Surfaces : ISurfaceDispatch;
