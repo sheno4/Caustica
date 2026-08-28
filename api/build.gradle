@@ -74,10 +74,9 @@ def verifyApiJar = tasks.register("verifyApiJar") {
                 "caustica_api.slang",
                 "caustica_coverage.slang",
                 "caustica_environment.slang",
-                "caustica_medium.slang",
                 "caustica_resources.slang",
                 "caustica_surface.slang",
-                "caustica_surface_modifier.slang",
+                "caustica_volume.slang",
                 "caustica_types.slang"
         ].collect { "caustica/shaders/api/${it}".toString() }
         def missingShaderModules = expectedShaderModules.findAll { !entries.contains(it) }

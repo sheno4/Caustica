@@ -1,8 +1,5 @@
 package dev.comfyfluffy.caustica.api.pass;
 
-import dev.comfyfluffy.caustica.api.ui.UiFrame;
-import dev.comfyfluffy.caustica.api.ui.UiSetup;
-
 /**
  * The passes currently recording in one render session.
  *
@@ -13,6 +10,7 @@ import dev.comfyfluffy.caustica.api.ui.UiSetup;
  *
  * <p>The registration method selects the engine stage. The generic pass type only couples that stage to
  * the frame capabilities valid there; it does not expose an open-ended render graph.
+ * A factory failure leaves no registration and follows {@link PassFactory}'s partial-resource rule.
  */
 public interface PassChannel {
     /**

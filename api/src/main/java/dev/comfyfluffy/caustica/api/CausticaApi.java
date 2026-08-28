@@ -8,7 +8,7 @@ import java.util.Objects;
  * Process-wide extension entry point installed by the host.
  */
 public final class CausticaApi {
-    public static final String VERSION = "0.4.0";
+    public static final String VERSION = "0.7.0";
     private static CausticaApi instance;
 
     private final RenderSessionChannel sessions;

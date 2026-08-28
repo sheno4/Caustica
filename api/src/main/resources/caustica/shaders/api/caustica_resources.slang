@@ -17,6 +17,10 @@ public struct SamplerIndex {
     public uint value;
 };
 
+public struct AccelerationStructureIndex {
+    public uint value;
+};
+
 /** Resolve a possibly invocation-varying sampled 2D texture descriptor. */
 public Texture2D<float4> sampledTexture2D(SampledTexture2DIndex index) {
     Texture2D<float4> texture = ResourceDescriptorHeap[NonUniformResourceIndex(index.value)];
@@ -26,6 +30,13 @@ public Texture2D<float4> sampledTexture2D(SampledTexture2DIndex index) {
 /** Resolve a possibly invocation-varying sampler descriptor. */
 public SamplerState sampler(SamplerIndex index) {
     SamplerState value = SamplerDescriptorHeap[NonUniformResourceIndex(index.value)];
+    return value;
+}
+
+/** Resolve a possibly invocation-varying acceleration-structure descriptor for ray queries. */
+public RaytracingAccelerationStructure accelerationStructure(AccelerationStructureIndex index) {
+    RaytracingAccelerationStructure value =
+            ResourceDescriptorHeap[NonUniformResourceIndex(index.value)];
     return value;
 }
 

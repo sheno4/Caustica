@@ -14,7 +14,7 @@ public static const uint COVERAGE_MODE_OPAQUE = 1u;
  */
 public struct CoverageInput {
     public ShaderRootData shaderRoot;
-    public uint64_t materialData;
+    public uint64_t surfaceData;
     public uint64_t geometryData;
     public uint64_t instanceData;
     /** Geometry-local, so `geometryData` indexes with it directly. */
@@ -23,8 +23,6 @@ public struct CoverageInput {
     public float2 barycentrics;
     /** COVERAGE_* bits resolved by the engine from its traversal binding. */
     public uint flags;
-    /** GEOMETRY_* bits copied from MeshBuild.Geometry. */
-    public uint geometrySemantics;
 };
 
 /**

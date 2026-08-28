@@ -19,9 +19,11 @@ public interface GpuDescriptorHeap {
     GpuDescriptorHeapProperties properties();
 
     /**
-     * Allocate consecutive shader-visible descriptor slots from one bound heap. Resource slots use the
-     * unified image/buffer stride required by the session compiler; sampler slots use the sampler stride.
-     * The range is uninitialized until written through {@link #writer()}.
+     * Allocate consecutive shader-visible descriptor slots from one bound heap. Resource slots use
+     * {@link GpuDescriptorHeapProperties#resourceDescriptorStride()}, and sampler slots use
+     * {@link GpuDescriptorHeapProperties#samplerDescriptorStride()}. Pass shaders own their compilation;
+     * SPIR-V descriptor-heap access must target Vulkan 1.4 with {@code spvDescriptorHeapEXT} and those
+     * strides. The range is uninitialized until written through {@link #writer()}.
      */
     GpuDescriptorRange allocate(Kind kind, int descriptorCount, String label);
 

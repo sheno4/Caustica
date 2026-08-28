@@ -15,9 +15,20 @@ package dev.comfyfluffy.caustica.api.gpu;
  * transition a borrowed image or substitute a stage-specific layout in a descriptor.
  */
 public interface GpuImage {
+    /**
+     * Raw {@code VkImage}. LWJGL represents this non-dispatchable Vulkan handle as {@code long}; unlike
+     * {@link org.lwjgl.vulkan.VkDevice} and {@link org.lwjgl.vulkan.VkCommandBuffer}, it has no wrapper type.
+     */
     long image();
 
+    /** Raw {@code VkImageView}, represented by LWJGL as {@code long} for the same reason. */
     long view();
+
+    /**
+     * Engine-owned shader descriptor with the requested image interpretation. The returned view follows
+     * this frame borrow; the extension does not allocate or retire it.
+     */
+    GpuResourceDescriptor descriptor(GpuImageDescriptorKind kind);
 
     int width();
 

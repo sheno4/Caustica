@@ -21,13 +21,33 @@ public record GpuDescriptorHeapProperties(
         long maxPushDataSize
 ) {
     public GpuDescriptorHeapProperties {
-        requirePositive(samplerDescriptorSize, "samplerDescriptorSize");
-        requirePositive(imageDescriptorSize, "imageDescriptorSize");
-        requirePositive(bufferDescriptorSize, "bufferDescriptorSize");
+        requirePowerOfTwo(samplerDescriptorSize, "samplerDescriptorSize");
+        requirePowerOfTwo(imageDescriptorSize, "imageDescriptorSize");
+        requirePowerOfTwo(bufferDescriptorSize, "bufferDescriptorSize");
         requirePowerOfTwo(samplerDescriptorAlignment, "samplerDescriptorAlignment");
         requirePowerOfTwo(imageDescriptorAlignment, "imageDescriptorAlignment");
         requirePowerOfTwo(bufferDescriptorAlignment, "bufferDescriptorAlignment");
+        requireAtMost(samplerDescriptorAlignment, samplerDescriptorSize,
+                "samplerDescriptorAlignment", "samplerDescriptorSize");
+        requireAtMost(imageDescriptorAlignment, imageDescriptorSize,
+                "imageDescriptorAlignment", "imageDescriptorSize");
+        requireAtMost(bufferDescriptorAlignment, bufferDescriptorSize,
+                "bufferDescriptorAlignment", "bufferDescriptorSize");
         requirePositive(maxPushDataSize, "maxPushDataSize");
+    }
+
+    /**
+     * Byte stride of one shader-visible resource slot. Pass shaders using {@code spvDescriptorHeapEXT}
+     * must emit this unified image/buffer stride; in Slang, enable the unified descriptor-heap-stride
+     * option rather than supplying a renderer-specific compiler service.
+     */
+    public long resourceDescriptorStride() {
+        return Math.max(imageDescriptorSize, bufferDescriptorSize);
+    }
+
+    /** Byte stride of one shader-visible sampler slot. */
+    public long samplerDescriptorStride() {
+        return samplerDescriptorSize;
     }
 
     private static void requirePositive(long value, String name) {
@@ -39,6 +59,12 @@ public record GpuDescriptorHeapProperties(
     private static void requirePowerOfTwo(long value, String name) {
         if (value <= 0 || Long.bitCount(value) != 1) {
             throw new IllegalArgumentException(name + " must be a positive power of two");
+        }
+    }
+
+    private static void requireAtMost(long value, long limit, String name, String limitName) {
+        if (value > limit) {
+            throw new IllegalArgumentException(name + " must not exceed " + limitName);
         }
     }
 }

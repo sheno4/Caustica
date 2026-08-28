@@ -17,6 +17,9 @@ public interface GpuDescriptorRange {
 
     int descriptorCount();
 
-    /** Return this range to the heap allocator after every GPU use has retired. */
+    /**
+     * Return this range to the heap allocator after every GPU use has retired. Destruction is exactly once;
+     * the range and its indices are invalid afterwards.
+     */
     void destroy();
 }

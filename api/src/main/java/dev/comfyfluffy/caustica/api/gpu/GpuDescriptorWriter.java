@@ -20,18 +20,13 @@ public interface GpuDescriptorWriter {
     /** Encode one image resource descriptor at an index relative to a resource range. */
     void writeImage(GpuDescriptorRange destination, int relativeIndex, VkResourceDescriptorInfoEXT image);
 
-    /** Encode a renderer-borrowed image without requiring its private image-view create information. */
-    void writeImage(
-            GpuDescriptorRange destination,
-            int relativeIndex,
-            GpuImage image,
-            GpuImageDescriptorKind kind
-    );
-
     /** Encode one buffer or acceleration-structure descriptor into a resource range. */
     void writeBuffer(GpuDescriptorRange destination, int relativeIndex, VkResourceDescriptorInfoEXT buffer);
 
-    /** Encode a borrowed acceleration structure, such as {@code UiFrame.worldTlas()}. */
+    /**
+     * Encode an extension-owned acceleration structure. LWJGL represents the non-dispatchable
+     * {@code VkAccelerationStructureKHR} handle as {@code long}; it has no typed wrapper class.
+     */
     void writeAccelerationStructure(
             GpuDescriptorRange destination, int relativeIndex, long accelerationStructure
     );

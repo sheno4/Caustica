@@ -5,7 +5,7 @@ package dev.comfyfluffy.caustica.api.pass;
  *
  * <p>The frame type is the capability surface for that stage. A pre-trace pass receives the common
  * {@link PassFrame}; post effects receive {@link PostEffectFrame}; UI passes receive
- * {@link dev.comfyfluffy.caustica.api.ui.UiFrame}. The registration method, not the implementation class,
+ * {@link UiFrame}. The registration method, not the implementation class,
  * selects when the callback runs.
  *
  * <p>A pass has no resize or content-reload callbacks. It compares each frame with the state it built and
@@ -14,7 +14,13 @@ package dev.comfyfluffy.caustica.api.pass;
  * @param <F> frame capabilities available at the registered stage
  */
 public interface Pass<F extends PassFrame> extends AutoCloseable {
-    /** Record this pass's work for one frame. */
+    /**
+     * Record this pass's work for one frame.
+     *
+     * <p>If this method throws, the host reports the exception, abandons the current frame command buffer,
+     * stops future recording for this pass, resolves retirement callbacks belonging to the abandoned frame
+     * once it cannot execute, and closes the pass after its earlier submitted uses drain.
+     */
     void record(F frame);
 
     /**

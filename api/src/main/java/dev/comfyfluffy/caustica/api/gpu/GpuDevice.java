@@ -38,7 +38,8 @@ public interface GpuDevice {
     VkDevice vk();
 
     /**
-     * The renderer's VMA allocator, as a raw {@code VmaAllocator} handle.
+     * The renderer's VMA allocator, as a raw {@code VmaAllocator} handle. LWJGL represents VMA's opaque
+     * allocator handle as {@code long}; it provides no typed wrapper class.
      *
      * <p><b>This is how an extension allocates.</b> There are no buffer or image factories here: the
      * renderer has no opinion to enforce about an extension's own memory — it never reads it, never binds
@@ -60,14 +61,19 @@ public interface GpuDevice {
     /**
      * Run {@code cleanup} once every command submitted before this call has completed on the GPU.
      *
-     * <p>This is the session service for retiring resources not tied to the current frame. A resource can
+     * <p>This is the session service for retiring resources not tied to a recording currently in progress.
+     * A resource can
      * become logically wrong — the display resized, host content changed, an object was dropped — and
      * that is never the same instant as when the GPU has finished reading it. Between those two instants
      * the resource must stay alive, and nothing an extension can observe tells it when the second one
      * arrives. This does.
      *
-     * <p>So the shape of replacing a resource is always: allocate the new one, hand the old one to this,
-     * keep going.
+     * <p>The call is safe only after the caller has prevented the old resource from being captured by work
+     * which is still recording or will record later. The usual place is the pass callback which publishes
+     * the replacement before it records any current-frame use. A CPU worker prepares replacement state and
+     * hands it to that pass; it must not swap a live GPU root and retire the old resource concurrently with
+     * recording. Data borrowed through retained geometry, scenes, or program implementations uses that
+     * owner's retirement callback instead.
      *
      * <pre>
      *   public void record(PassFrame frame) {
@@ -90,7 +96,8 @@ public interface GpuDevice {
      * {@link GpuFrameUse#retire} is the tighter reservation. It does not imply that later device work or
      * unrelated passes are idle.
      *
-     * <p>This method is thread-safe.
+     * <p>This method is thread-safe, but thread safety does not create the publication ordering described
+     * above. If the session no longer accepts retirement, the call throws without taking {@code cleanup}.
      */
     void retireAfterUse(Runnable cleanup);
 }

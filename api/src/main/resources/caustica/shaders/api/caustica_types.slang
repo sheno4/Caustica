@@ -1,13 +1,11 @@
 module caustica_types;
 
 /** Must equal dev.comfyfluffy.caustica.api.program.ProgramAbi.VERSION. */
-public static const uint CAUSTICA_SHADER_ABI_VERSION = 2u;
+public static const uint CAUSTICA_SHADER_ABI_VERSION = 5u;
 
-/** MeshBuild.GeometrySemantic.PROJECTED_SURFACE_MODIFIER_RECEIVER. */
-public static const uint GEOMETRY_PROJECTED_SURFACE_MODIFIER_RECEIVER = 0x1u;
-
-// Extension colours and radiance are scene-linear ACEScg. Distances are scene world units and
-// directions are normalized and point away from the shaded position.
+// Extension colours and radiance are scene-linear ACEScg. Spatial shader values are in scene units unless
+// documented otherwise. metersPerSceneUnit converts them to physical distance. Directions are normalized
+// and point away from the shaded position.
 public static const uint EVENT_NONE = 0x0u;
 public static const uint EVENT_DIFFUSE = 0x1u;
 public static const uint EVENT_GLOSSY = 0x2u;
@@ -21,7 +19,7 @@ public static const uint EVENT_TRANSMISSION = 0x10u;
  * Unset on every other hit, where the previous normal is never read and evaluating it would be waste.
  */
 public static const uint SURFACE_RECONSTRUCTION_ANCHOR = 0x1u;
-/** Enables optional time-varying procedural surface and medium evaluation for this frame. */
+/** Enables optional time-varying procedural surface and volume evaluation for this frame. */
 public static const uint SURFACE_ANIMATION_ENABLED = 0x2u;
 
 /**
@@ -64,26 +62,33 @@ public float3 transformNormal(NormalTransform transform, float3 normal) {
     return float3(dot(transform.row0, normal), dot(transform.row1, normal), dot(transform.row2, normal));
 }
 
-public static const uint MEDIUM_TERMINATE_ON_MISS = 0x1u;
-public static const uint MEDIUM_BOUNDARY_LIGHTING = 0x2u;
+public static const uint VOLUME_TERMINATE_ON_MISS = 0x1u;
+public static const uint VOLUME_BOUNDARY_LIGHTING = 0x2u;
 
-/** Host-neutral transport properties produced by the material implementation at an interface. */
-public struct MediumProperties {
+/** Host-neutral homogeneous transport properties produced by a volume implementation at its boundary. */
+public struct VolumeProperties {
+    /** Beer-Lambert extinction coefficient per scene unit. */
     public float3 extinction;
-    /** Filter used only while reconstruction guides walk into the medium. */
+    /** Filter used only while reconstruction guides walk through the volume. */
     public float3 guideTransmittance;
-    public float transmissionRayBias;
-    /** MEDIUM_* bits retained with the path's medium stack. */
+    /** Boundary offset in scene units. */
+    public float boundaryRayBias;
+    /** VOLUME_* bits retained with the path's volume stack. */
     public uint flags;
 };
 
-/** Inputs for a medium's optional multiplicative direct-light response at its exit boundary. */
-public struct MediumLightingInput {
+/** Inputs for a volume's optional multiplicative direct-light response at its exit boundary. */
+public struct VolumeLightingInput {
+    /** Position in the current scene-origin coordinate system. */
     public float3 boundaryPosition;
+    /** Precision-safe scene-unit position which compensates for scene-origin rebases. */
     public float3 proceduralPosition;
     public float3 lightDirection;
+    /** Distance in scene units. */
     public float boundaryDistance;
-    public float mediumIor;
+    /** Stable conversion supplied when this scene was created. */
+    public float metersPerSceneUnit;
+    public float interiorIor;
     public float time;
     public uint surfaceFlags;
 };
@@ -121,7 +126,7 @@ public struct OpenPbrSurface {
     // Transmission
     /**
      * OpenPBR transmission_weight: the mix between the opaque dielectric base and the translucent base.
-     * A volume routes the latter through the engine's refractive medium transport. A thin wall resolves
+     * A volume routes the latter through the engine's refractive volume transport. A thin wall resolves
      * it as an absorbing, non-scattering dielectric sheet with a straight-through rough BTDF.
      */
     public float transmission_weight = 0.0;
@@ -150,8 +155,9 @@ public struct OpenPbrSurface {
     // Geometry
     /**
      * OpenPBR geometry_thin_walled. A transmissive thin wall is a two-dimensional sheet and does not
-     * change the path's medium stack. A non-thin-walled transmissive surface bounds the medium returned by
-     * its implementation's evaluateMedium method.
+     * change the path's volume stack. A non-thin-walled transmissive surface may pair with a geometry
+     * volume slot which describes its interior. A surface evaluated on geometry carrying a volume slot
+     * leaves this false.
      */
     public bool geometry_thin_walled = false;
     /**
@@ -196,11 +202,10 @@ public struct SurfaceInput {
     /** Versioned pushed roots and descriptor-heap address-table root for this composition. */
     public ShaderRootData shaderRoot;
     /**
-     * The material's word, copied verbatim from MaterialDefinition. Sixty-four bits so it can simply be a
-     * device address: a material's parameters are whatever buffer the source pointed it at, and there is
-     * no size beyond which an extension has to start packing bits.
+     * The registered surface implementation's word, commonly the address of the extension's session-wide
+     * material and texture table. Copied verbatim from SurfaceDefinition.
      */
-    public uint64_t materialData;
+    public uint64_t surfaceData;
     /**
      * This geometry's word, copied verbatim from MeshBuild.Geometry. Normally the address of the geometry's
      * own attribute slice — per geometry rather than per mesh precisely so that
@@ -226,12 +231,15 @@ public struct SurfaceInput {
     public AffineTransform previousObjectToScene;
     /** Inverse-transpose object-to-scene transform for normal-map vectors. */
     public NormalTransform normalToScene;
+    /** Hit position in the current scene-origin coordinate system, in scene units. */
     public float3 position;
+    /** Stable conversion supplied when this scene was created. */
+    public float metersPerSceneUnit;
     /** The triangle's own normal, oriented toward the viewer. Unperturbed by any normal map. */
     public float3 geometricNormal;
     public float3 outgoingDirection;
     /**
-     * Ray footprint width at the hit, in scene world units. Engine-produced from the ray cone, which is
+     * Ray footprint width at the hit, in scene units. Engine-produced from the ray cone, which is
      * the one filtering fact an extension cannot derive for itself — everything downstream of it, the
      * texture coordinates and the mip choice included, is the extension's own.
      */
@@ -251,23 +259,24 @@ public struct SurfaceInput {
     public uint surfaceFlags;
 };
 
-/** Geometry and footprint inputs shared by projected surface modifiers. */
-public struct SurfaceModifierInput {
+/** Inputs used to describe the homogeneous interior selected by one geometry volume slot. */
+public struct VolumeInput {
     public ShaderRootData shaderRoot;
-    /** Hit position in the current scene-origin coordinate system. */
-    public float3 position;
-    /** The oriented triangle normal, before material or procedural perturbation. */
-    public float3 geometricNormal;
-    /** Ray footprint width at the hit, in scene world units. */
-    public float textureFootprint;
-    /** The same three uninterpreted words `SurfaceInput` carries, and the same geometry-local index. */
-    public uint64_t materialData;
+    /** The registered volume implementation's word, copied verbatim from VolumeDefinition. */
+    public uint64_t volumeData;
+    /** The same geometry and placement words supplied to the boundary's surface implementation. */
     public uint64_t geometryData;
     public uint64_t instanceData;
-    public uint primitiveIndex;
-    public float2 barycentrics;
-    /** GEOMETRY_* bits copied from MeshBuild.Geometry. */
-    public uint geometrySemantics;
+    /** Boundary position in the current scene-origin coordinate system. */
+    public float3 boundaryPosition;
+    /** Precision-safe boundary position which compensates for scene-origin rebases. */
+    public float3 proceduralPosition;
+    /** Stable conversion supplied when this scene was created. */
+    public float metersPerSceneUnit;
+    public float time;
+    public float previousTime;
+    /** SURFACE_* frame facts shared with evaluation at the boundary. */
+    public uint surfaceFlags;
 };
 
 /**

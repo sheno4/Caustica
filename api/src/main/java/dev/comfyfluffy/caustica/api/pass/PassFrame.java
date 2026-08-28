@@ -10,9 +10,14 @@ import org.lwjgl.vulkan.VkCommandBuffer;
  * stage, but barriers <em>between one pass's own dispatches</em> are that pass's job.
  *
  * <p>Subtypes add what the stage itself produces — {@link PostEffectFrame} the scene image and the chain,
- * {@link dev.comfyfluffy.caustica.api.ui.UiFrame} the layer and the camera. A stage that produces nothing
+ * {@link UiFrame} the layer and the camera. A stage that produces nothing
  * for a pass to read takes this type unchanged, which is the honest statement that at that point in the
  * frame there is nothing to offer.
+ *
+ * <p>The frame, command buffer, completion reservation, images, descriptor views, and subtype capabilities
+ * are borrowed only for the current {@link Pass#record} invocation on that thread. Do not retain any of
+ * them or call their methods after the callback returns. Commands recorded during the callback may continue
+ * using the borrowed GPU resources; the renderer owns that asynchronous lifetime.
  */
 public interface PassFrame {
     /** The command buffer currently being recorded. Record work directly onto it. */
@@ -22,7 +27,8 @@ public interface PassFrame {
      * Completion reservation covering every GPU resource this frame's recorded work references.
      *
      * <p>{@link GpuFrameUse#retire} covers this frame's work even though it has not been submitted yet.
-     * Replacing a resource and retiring the old one is the non-blocking update pattern.
+     * Register retirement before {@code record} returns. Replacing a resource and retiring the old one is
+     * the non-blocking update pattern.
      */
     GpuFrameUse gpuUse();
 

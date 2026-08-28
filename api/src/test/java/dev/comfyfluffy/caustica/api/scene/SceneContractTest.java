@@ -1,46 +1,23 @@
 package dev.comfyfluffy.caustica.api.scene;
 
+import dev.comfyfluffy.caustica.api.program.EnvironmentId;
 import org.junit.jupiter.api.Test;
 
-import java.util.List;
-
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class SceneContractTest {
     @Test
     void owningCapabilityIsNotADataReference() {
-        assertFalse(SceneId.class.isAssignableFrom(OwnedScene.class));
+        assertFalse(SceneId.class.isAssignableFrom(SceneHandle.class));
     }
 
     @Test
-    void renderViewAssociatesCameraWithARootScene() {
-        SceneId scene = new SceneId() { };
-
-        RenderView view = new RenderView(scene, SceneCamera.IDENTITY);
-
-        assertSame(scene, view.rootScene());
-        assertSame(SceneCamera.IDENTITY, view.camera());
-    }
-
-    @Test
-    void frameScaleMustBeFiniteAndPositive() {
-        RenderView view = new RenderView(new SceneId() { }, SceneCamera.IDENTITY);
-        SceneFrameWriter writer = new SceneFrameWriter() {
-            @Override public void submit(SceneMutation mutation) { }
-            @Override public void submitTransient(List<AtomicBatch<TransientGeometry>> batches) { }
-        };
-
+    void sceneScaleMustBeFiniteAndPositive() {
+        SceneEnvironment environment = SceneEnvironment.of(new EnvironmentId() { }, 0L);
         assertThrows(IllegalArgumentException.class,
-                () -> new SceneFrameContext(view, 0, 0, 0, 0, 1, writer));
+                () -> new SceneDefinition(environment, 0.0));
         assertThrows(IllegalArgumentException.class,
-                () -> new SceneFrameContext(view, 0, 0, 0, Double.NaN, 1, writer));
-    }
-
-    @Test
-    void sceneMutationRequiresAnOperation() {
-        assertThrows(IllegalArgumentException.class,
-                () -> SceneMutation.of(List.of(), List.of()));
+                () -> new SceneDefinition(environment, Double.NaN));
     }
 }
