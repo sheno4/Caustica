@@ -30,13 +30,13 @@ import org.lwjgl.vulkan.VkPhysicalDeviceRayQueryFeaturesKHR;
 import org.lwjgl.vulkan.VkPhysicalDeviceRayTracingInvocationReorderFeaturesEXT;
 import org.lwjgl.vulkan.VkPhysicalDeviceRayTracingPipelineFeaturesKHR;
 import org.lwjgl.vulkan.VkPhysicalDeviceRayTracingPositionFetchFeaturesKHR;
+import org.lwjgl.vulkan.VkPhysicalDeviceShaderDemoteToHelperInvocationFeatures;
 import org.lwjgl.vulkan.VkPhysicalDeviceShaderObjectFeaturesEXT;
 import org.lwjgl.vulkan.VkPhysicalDeviceShaderUntypedPointersFeaturesKHR;
 import org.lwjgl.vulkan.VkPhysicalDeviceSynchronization2Features;
 import org.lwjgl.vulkan.VkPhysicalDeviceUnifiedImageLayoutsFeaturesKHR;
 import org.lwjgl.vulkan.VkPhysicalDeviceVulkan11Features;
 import org.lwjgl.vulkan.VkPhysicalDeviceVulkan12Features;
-import org.lwjgl.vulkan.VkPhysicalDeviceVulkan13Features;
 import org.lwjgl.vulkan.VkDevice;
 import org.lwjgl.vulkan.VkDeviceQueueCreateInfo;
 import org.lwjgl.vulkan.VkQueueFamilyProperties;
@@ -109,9 +109,9 @@ public final class MinecraftDeviceBringup {
     private static final VulkanPNextStruct SHADER_UNTYPED_POINTERS_STRUCT = new VulkanPNextStruct(
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_UNTYPED_POINTERS_FEATURES_KHR,
             VkPhysicalDeviceShaderUntypedPointersFeaturesKHR.SIZEOF);
-    private static final VulkanPNextStruct VK13_FEATURES_STRUCT = new VulkanPNextStruct(
-            org.lwjgl.vulkan.VK13.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
-            VkPhysicalDeviceVulkan13Features.SIZEOF);
+    private static final VulkanPNextStruct SHADER_DEMOTE_STRUCT = new VulkanPNextStruct(
+            org.lwjgl.vulkan.VK13.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DEMOTE_TO_HELPER_INVOCATION_FEATURES,
+            VkPhysicalDeviceShaderDemoteToHelperInvocationFeatures.SIZEOF);
 
     private static final VulkanFeature BUFFER_ADDRESS = new VulkanFeature(VulkanBackend.VK12_FEATURES_STRUCT,
             "bufferDeviceAddress", VkPhysicalDeviceVulkan12Features.BUFFERDEVICEADDRESS);
@@ -130,9 +130,9 @@ public final class MinecraftDeviceBringup {
             VkPhysicalDeviceFeatures.SHADERSTORAGEIMAGEWRITEWITHOUTFORMAT);
     private static final VulkanFeature SHADER_DRAW_PARAMETERS = new VulkanFeature(VulkanBackend.VK11_FEATURES_STRUCT,
             "shaderDrawParameters", VkPhysicalDeviceVulkan11Features.SHADERDRAWPARAMETERS);
-    private static final VulkanFeature SHADER_DEMOTE = new VulkanFeature(VK13_FEATURES_STRUCT,
+    private static final VulkanFeature SHADER_DEMOTE = new VulkanFeature(SHADER_DEMOTE_STRUCT,
             "shaderDemoteToHelperInvocation",
-            VkPhysicalDeviceVulkan13Features.SHADERDEMOTETOHELPERINVOCATION);
+            VkPhysicalDeviceShaderDemoteToHelperInvocationFeatures.SHADERDEMOTETOHELPERINVOCATION);
     private static final VulkanFeature SYNCHRONIZATION_2 = new VulkanFeature(VulkanBackend.SYNC2_FEATURES_STRUCT,
             "synchronization2", VkPhysicalDeviceSynchronization2Features.SYNCHRONIZATION2);
     private static final VulkanFeature DYNAMIC_RENDERING = new VulkanFeature(VulkanBackend.DYNAMIC_RENDERING_FEATURES_STRUCT,
