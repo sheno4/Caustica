@@ -2,35 +2,20 @@ package dev.comfyfluffy.caustica.minecraft.terrain;
 
 import dev.comfyfluffy.caustica.api.geometry.MeshBuild;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
-import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
-import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
 import dev.comfyfluffy.caustica.api.program.ShaderData;
 import dev.comfyfluffy.caustica.minecraft.program.MinecraftPrograms;
 import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
 import dev.comfyfluffy.caustica.minecraft.gen.MinecraftInstanceData;
 import dev.comfyfluffy.caustica.minecraft.gen.MinecraftPrimitiveData;
-import org.lwjgl.PointerBuffer;
-import org.lwjgl.system.MemoryStack;
-import org.lwjgl.system.MemoryUtil;
-import org.lwjgl.util.vma.Vma;
-import org.lwjgl.util.vma.VmaAllocationCreateInfo;
-import org.lwjgl.util.vma.VmaAllocationInfo;
-import org.lwjgl.vulkan.VkBufferCreateInfo;
-import org.lwjgl.vulkan.VkBufferDeviceAddressInfo;
+import dev.comfyfluffy.caustica.vulkan.VmaMappedBuffer;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.nio.LongBuffer;
 import java.util.ArrayList;
 import java.util.List;
 
-import static org.lwjgl.util.vma.Vma.vmaCreateBuffer;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
 import static org.lwjgl.vulkan.VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-import static org.lwjgl.vulkan.VK10.VK_SHARING_MODE_EXCLUSIVE;
-import static org.lwjgl.vulkan.VK10.VK_SUCCESS;
-import static org.lwjgl.vulkan.VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-import static org.lwjgl.vulkan.VK12.vkGetBufferDeviceAddress;
 
 /** Host-mapped VMA upload owner for retained Minecraft terrain buffers. */
 public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUploader {
@@ -48,12 +33,12 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
         int[] indices = source.indices();
         float[] cornerUvs = source.cornerUvs();
         float[] primitive = source.primitiveData();
-        Buffer positionsBuffer = create((long) positions.length * Float.BYTES,
+        VmaMappedBuffer positionsBuffer = create((long) positions.length * Float.BYTES,
                 VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
                 bytes -> { for (float value : positions) bytes.putFloat(value); });
-        Buffer indicesBuffer = null;
-        Buffer primitiveBuffer = null;
-        Buffer instanceBuffer = null;
+        VmaMappedBuffer indicesBuffer = null;
+        VmaMappedBuffer primitiveBuffer = null;
+        VmaMappedBuffer instanceBuffer = null;
         try {
             indicesBuffer = create((long) indices.length * Integer.BYTES,
                     VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
@@ -66,10 +51,10 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
                             new MinecraftInstanceData.SampledTexture2DIndex(0), 0f).write(bytes));
             return uploaded(source, programs, positionsBuffer, indicesBuffer, primitiveBuffer, instanceBuffer);
         } catch (RuntimeException | Error failure) {
-            if (instanceBuffer != null) instanceBuffer.destroy();
-            if (primitiveBuffer != null) primitiveBuffer.destroy();
-            if (indicesBuffer != null) indicesBuffer.destroy();
-            positionsBuffer.destroy();
+            if (instanceBuffer != null) instanceBuffer.close();
+            if (primitiveBuffer != null) primitiveBuffer.close();
+            if (indicesBuffer != null) indicesBuffer.close();
+            positionsBuffer.close();
             throw failure;
         }
     }
@@ -85,12 +70,13 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
     }
 
     private UploadedSection uploaded(MinecraftTerrainMesh source, MinecraftPrograms programs,
-                                     Buffer positions, Buffer indices, Buffer primitive, Buffer instance) {
+                                     VmaMappedBuffer positions, VmaMappedBuffer indices,
+                                     VmaMappedBuffer primitive, VmaMappedBuffer instance) {
         List<MeshBuild.Geometry<MinecraftProgramTypes.InstanceData>> geometries = new ArrayList<>();
         for (MinecraftTerrainMesh.Geometry geometry : source.geometries()) {
             long primitiveOffset = primitiveRecordOffset(geometry.firstIndex());
             ShaderData<MinecraftProgramTypes.PrimitiveData> binding =
-                    MinecraftProgramTypes.PRIMITIVE_DATA.data(primitive.addressAt(primitiveOffset));
+                    MinecraftProgramTypes.PRIMITIVE_DATA.data(primitive.deviceAddressAt(primitiveOffset).value());
             var policy = geometry.coverage() == MinecraftTerrainMesh.Coverage.OPAQUE
                     ? (MeshBuild.CoveragePolicy) new MeshBuild.CoveragePolicy.Opaque()
                     : new MeshBuild.CoveragePolicy.Cutout(geometry.alphaCutoff(), geometry.opacityMicromap() == null
@@ -105,10 +91,12 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
                     ? new MeshBuild.VolumeSlot<>(programs.waterVolume(), binding) : null;
             geometries.add(new MeshBuild.Geometry<>(surface, volume, geometry.firstIndex(), geometry.indexCount()));
         }
-        MeshBuild<MinecraftProgramTypes.InstanceData> build = new MeshBuild<>(positions.stream(12), null,
-                indices.stream(4), source.vertexCount(), new MeshBuild.IndexRevision(source.indexRevision()), geometries);
+        MeshBuild<MinecraftProgramTypes.InstanceData> build = new MeshBuild<>(
+                new MeshBuild.Stream(positions.deviceRange(), 12), null,
+                new MeshBuild.Stream(indices.deviceRange(), 4), source.vertexCount(),
+                new MeshBuild.IndexRevision(source.indexRevision()), geometries);
         ShaderData<MinecraftProgramTypes.InstanceData> instanceData =
-                MinecraftProgramTypes.INSTANCE_DATA.data(instance.address);
+                MinecraftProgramTypes.INSTANCE_DATA.data(instance.deviceRange().address().value());
         return new Uploaded(build, instanceData, positions, indices, primitive, instance);
     }
 
@@ -133,78 +121,29 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
         bytes.position(triangles * MinecraftPrimitiveData.BYTE_SIZE);
     }
 
-    private Buffer create(long size, int extraUsage, Writer writer) {
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            // These buffers are populated by the host before their first queue use, so exclusive sharing
-            // has no queue-family transfer. The retained build's first submission establishes queue ownership.
-            VkBufferCreateInfo bufferInfo = VkBufferCreateInfo.calloc(stack).sType$Default().size(size)
-                    .usage(VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | extraUsage)
-                    .sharingMode(VK_SHARING_MODE_EXCLUSIVE);
-            VmaAllocationCreateInfo allocationInfo = VmaAllocationCreateInfo.calloc(stack)
-                    .usage(Vma.VMA_MEMORY_USAGE_AUTO)
-                    .flags(Vma.VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
-                            | Vma.VMA_ALLOCATION_CREATE_MAPPED_BIT);
-            LongBuffer outBuffer = stack.mallocLong(1);
-            PointerBuffer outAllocation = stack.mallocPointer(1);
-            VmaAllocationInfo outInfo = VmaAllocationInfo.calloc(stack);
-            int result = vmaCreateBuffer(gpu.vmaAllocator(), bufferInfo, allocationInfo,
-                    outBuffer, outAllocation, outInfo);
-            if (result != VK_SUCCESS) throw new IllegalStateException("vmaCreateBuffer failed: " + result);
-            long handle = outBuffer.get(0);
-            long allocation = outAllocation.get(0);
-            long address = vkGetBufferDeviceAddress(gpu.vk(),
-                    VkBufferDeviceAddressInfo.calloc(stack).sType$Default().buffer(handle));
-            if (address == 0L || outInfo.pMappedData() == 0L) {
-                Vma.vmaDestroyBuffer(gpu.vmaAllocator(), handle, allocation);
-                throw new IllegalStateException("terrain buffer is not mapped and device-addressable");
-            }
-            ByteBuffer bytes = MemoryUtil.memByteBuffer(outInfo.pMappedData(), Math.toIntExact(size))
-                    .order(ByteOrder.LITTLE_ENDIAN);
+    private VmaMappedBuffer create(long size, int extraUsage, Writer writer) {
+        VmaMappedBuffer buffer = VmaMappedBuffer.create(gpu, size, extraUsage, "Minecraft terrain upload");
+        try {
+            ByteBuffer bytes = buffer.mapped().order(ByteOrder.LITTLE_ENDIAN);
             writer.write(bytes);
-            Vma.vmaFlushAllocation(gpu.vmaAllocator(), allocation, 0, size);
-            return new Buffer(handle, allocation, address, size);
+            buffer.flush(0L, size);
+            return buffer;
+        } catch (RuntimeException | Error failure) {
+            buffer.close();
+            throw failure;
         }
     }
 
     private record Uploaded(MeshBuild<MinecraftProgramTypes.InstanceData> build,
                             ShaderData<MinecraftProgramTypes.InstanceData> instanceData,
-                            Buffer positions, Buffer indices, Buffer primitive, Buffer instance)
+                            VmaMappedBuffer positions, VmaMappedBuffer indices,
+                            VmaMappedBuffer primitive, VmaMappedBuffer instance)
             implements UploadedSection {
         @Override public void close() {
-            instance.destroy();
-            primitive.destroy();
-            indices.destroy();
-            positions.destroy();
-        }
-    }
-
-    private final class Buffer {
-        private final long handle;
-        private final long allocation;
-        private final long address;
-        private final long size;
-        private boolean destroyed;
-
-        private Buffer(long handle, long allocation, long address, long size) {
-            this.handle = handle;
-            this.allocation = allocation;
-            this.address = address;
-            this.size = size;
-        }
-
-        private MeshBuild.Stream stream(int stride) {
-            return new MeshBuild.Stream(new VulkanDeviceAddressRange(new VulkanDeviceAddress(address), size), stride);
-        }
-
-        private long addressAt(long byteOffset) {
-            if (byteOffset < 0L || byteOffset >= size) throw new IllegalArgumentException("buffer offset is outside range");
-            return Math.addExact(address, byteOffset);
-        }
-
-        private void destroy() {
-            if (destroyed) return;
-            Vma.vmaDestroyBuffer(gpu.vmaAllocator(), handle, allocation);
-            destroyed = true;
+            instance.close();
+            primitive.close();
+            indices.close();
+            positions.close();
         }
     }
 

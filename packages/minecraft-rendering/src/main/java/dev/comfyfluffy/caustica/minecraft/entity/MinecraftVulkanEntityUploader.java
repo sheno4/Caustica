@@ -5,8 +5,6 @@ import dev.comfyfluffy.caustica.api.program.ShaderData;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorIndex;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorRange;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
-import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
-import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
 import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
 import dev.comfyfluffy.caustica.minecraft.gen.MinecraftInstanceData;
 import dev.comfyfluffy.caustica.minecraft.gen.MinecraftPrimitiveData;
@@ -15,21 +13,14 @@ import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialKey;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialProfile;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialTopology;
 import dev.comfyfluffy.caustica.minecraft.program.MinecraftPrograms;
+import dev.comfyfluffy.caustica.vulkan.VmaMappedBuffer;
 import org.lwjgl.system.MemoryStack;
-import org.lwjgl.system.MemoryUtil;
-import org.lwjgl.PointerBuffer;
-import org.lwjgl.util.vma.Vma;
-import org.lwjgl.util.vma.VmaAllocationCreateInfo;
-import org.lwjgl.util.vma.VmaAllocationInfo;
-import org.lwjgl.vulkan.VkBufferCreateInfo;
-import org.lwjgl.vulkan.VkBufferDeviceAddressInfo;
 import org.lwjgl.vulkan.VkImageDescriptorInfoEXT;
 import org.lwjgl.vulkan.VkImageViewCreateInfo;
 import org.lwjgl.vulkan.VkResourceDescriptorInfoEXT;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.nio.LongBuffer;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -38,16 +29,11 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.function.Function;
 
-import static org.lwjgl.util.vma.Vma.vmaCreateBuffer;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
 import static org.lwjgl.vulkan.VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
 import static org.lwjgl.vulkan.VK10.VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
 import static org.lwjgl.vulkan.VK10.VK_IMAGE_ASPECT_COLOR_BIT;
 import static org.lwjgl.vulkan.VK10.VK_IMAGE_VIEW_TYPE_2D;
-import static org.lwjgl.vulkan.VK10.VK_SHARING_MODE_EXCLUSIVE;
-import static org.lwjgl.vulkan.VK10.VK_SUCCESS;
-import static org.lwjgl.vulkan.VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-import static org.lwjgl.vulkan.VK12.vkGetBufferDeviceAddress;
 
 /** VMA-backed uploader for retained Minecraft entity geometry and per-triangle shader records. */
 public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploader {
@@ -69,11 +55,11 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
         float[] positions = source.positions();
         int[] indices = source.indices();
         float[] uvs = source.uvs();
-        Buffer position = create((long) positions.length * 4, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+        VmaMappedBuffer position = create((long) positions.length * 4, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
                 bytes -> {
                     for (float value : positions) bytes.putFloat(value);
                 });
-        Buffer index = null, primitive = null, instance = null;
+        VmaMappedBuffer index = null, primitive = null, instance = null;
         TextureSet textureSet = null;
         try {
             index = create((long) indices.length * 4, VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
@@ -96,15 +82,16 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
         }
     }
 
-    private UploadedEntity uploaded(MinecraftEntityMesh source, Buffer positions, Buffer indices,
-                                    Buffer primitive, Buffer instance, TextureSet textureSet) {
+    private UploadedEntity uploaded(MinecraftEntityMesh source, VmaMappedBuffer positions,
+                                    VmaMappedBuffer indices, VmaMappedBuffer primitive,
+                                    VmaMappedBuffer instance, TextureSet textureSet) {
         List<MeshBuild.Geometry<MinecraftProgramTypes.InstanceData>> geometries = new ArrayList<>();
         for (GeometryRange range : geometryRanges(source,
                 material -> materials.resolve(materialKey(material)).opacityMicromap())) {
             int first = range.firstTriangle(), end = range.endTriangle();
             MinecraftEntityMesh.Triangle triangle = source.triangles().get(first);
             ShaderData<MinecraftProgramTypes.PrimitiveData> binding = MinecraftProgramTypes.PRIMITIVE_DATA.data(
-                    primitive.address + (long) first * MinecraftPrimitiveData.BYTE_SIZE);
+                    primitive.deviceAddressAt((long) first * MinecraftPrimitiveData.BYTE_SIZE).value());
             MeshBuild.CoveragePolicy policy = triangle.coverage() == MinecraftEntityMesh.Coverage.OPAQUE
                     ? new MeshBuild.CoveragePolicy.Opaque()
                     : new MeshBuild.CoveragePolicy.Cutout(.5f, range.opacityMicromap());
@@ -113,9 +100,12 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
                     : new MeshBuild.SurfaceSlot<>(programs.materialSurface(), binding, policy);
             geometries.add(new MeshBuild.Geometry<>(surface, null, first * 3, (end - first) * 3));
         }
-        MeshBuild<MinecraftProgramTypes.InstanceData> build = new MeshBuild<>(positions.stream(12), null,
-                indices.stream(4), source.vertexCount(), new MeshBuild.IndexRevision(source.indexRevision()), geometries);
-        return new Uploaded(build, MinecraftProgramTypes.INSTANCE_DATA.data(instance.address),
+        MeshBuild<MinecraftProgramTypes.InstanceData> build = new MeshBuild<>(
+                new MeshBuild.Stream(positions.deviceRange(), 12), null,
+                new MeshBuild.Stream(indices.deviceRange(), 4), source.vertexCount(),
+                new MeshBuild.IndexRevision(source.indexRevision()), geometries);
+        return new Uploaded(build, MinecraftProgramTypes.INSTANCE_DATA.data(
+                instance.deviceRange().address().value()),
                 positions, indices, primitive, instance, textureSet);
     }
 
@@ -266,33 +256,16 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
         }
     }
 
-    private Buffer create(long size, int extraUsage, Writer writer) {
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            var info = VkBufferCreateInfo.calloc(stack).sType$Default().size(size).usage(VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | extraUsage).sharingMode(VK_SHARING_MODE_EXCLUSIVE);
-            var ai = VmaAllocationCreateInfo.calloc(stack).usage(Vma.VMA_MEMORY_USAGE_AUTO).flags(Vma.VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | Vma.VMA_ALLOCATION_CREATE_MAPPED_BIT);
-            LongBuffer buffer = stack.mallocLong(1);
-            PointerBuffer allocation = stack.mallocPointer(1);
-            VmaAllocationInfo out = VmaAllocationInfo.calloc(stack);
-            int result = vmaCreateBuffer(gpu.vmaAllocator(), info, ai, buffer, allocation, out);
-            if (result != VK_SUCCESS) throw new IllegalStateException("vmaCreateBuffer failed: " + result);
-            long handle = buffer.get(0);
-            long alloc = allocation.get(0);
-            long address = vkGetBufferDeviceAddress(gpu.vk(),
-                    VkBufferDeviceAddressInfo.calloc(stack).sType$Default().buffer(handle));
-            if (address == 0 || out.pMappedData() == 0) {
-                Vma.vmaDestroyBuffer(gpu.vmaAllocator(), handle, alloc);
-                throw new IllegalStateException("entity buffer is not mapped and device-addressable");
-            }
-            try {
-                ByteBuffer bytes = MemoryUtil.memByteBuffer(out.pMappedData(), Math.toIntExact(size))
-                        .order(ByteOrder.LITTLE_ENDIAN);
-                writer.write(bytes);
-                Vma.vmaFlushAllocation(gpu.vmaAllocator(), alloc, 0, size);
-                return new Buffer(handle, alloc, address, size);
-            } catch (RuntimeException | Error failure) {
-                Vma.vmaDestroyBuffer(gpu.vmaAllocator(), handle, alloc);
-                throw failure;
-            }
+    private VmaMappedBuffer create(long size, int extraUsage, Writer writer) {
+        VmaMappedBuffer buffer = VmaMappedBuffer.create(gpu, size, extraUsage, "Minecraft entity upload");
+        try {
+            ByteBuffer bytes = buffer.mapped().order(ByteOrder.LITTLE_ENDIAN);
+            writer.write(bytes);
+            buffer.flush(0L, size);
+            return buffer;
+        } catch (RuntimeException | Error failure) {
+            buffer.close();
+            throw failure;
         }
     }
 
@@ -308,25 +281,6 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
             }
         }
         return failure;
-    }
-    private final class Buffer implements AutoCloseable {
-        final long handle, allocation, address, size;
-        boolean closed;
-        Buffer(long handle, long allocation, long address, long size) {
-            this.handle = handle;
-            this.allocation = allocation;
-            this.address = address;
-            this.size = size;
-        }
-        MeshBuild.Stream stream(int stride) {
-            return new MeshBuild.Stream(new VulkanDeviceAddressRange(
-                    new VulkanDeviceAddress(address), size), stride);
-        }
-        @Override public void close() {
-            if (closed) return;
-            closed = true;
-            Vma.vmaDestroyBuffer(gpu.vmaAllocator(), handle, allocation);
-        }
     }
     static final class TextureSet implements AutoCloseable {
         final GpuDescriptorRange<GpuDescriptorIndex.Resource> range;
@@ -345,7 +299,8 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
     }
     private record Uploaded(MeshBuild<MinecraftProgramTypes.InstanceData> build,
                             ShaderData<MinecraftProgramTypes.InstanceData> instanceData,
-                            Buffer positions, Buffer indices, Buffer primitive, Buffer instance,
+                            VmaMappedBuffer positions, VmaMappedBuffer indices,
+                            VmaMappedBuffer primitive, VmaMappedBuffer instance,
                             TextureSet textures) implements UploadedEntity {
         @Override public void close() {
             throwIfFailed(closeAll(textures, instance, primitive, indices, positions));
