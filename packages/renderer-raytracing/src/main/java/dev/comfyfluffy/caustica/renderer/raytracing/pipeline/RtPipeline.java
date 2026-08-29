@@ -7,12 +7,9 @@ import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtDebugLabels;
 import dev.comfyfluffy.caustica.renderer.raytracing.accel.RtAccel;
 import dev.comfyfluffy.caustica.renderer.raytracing.scene.RtRetainedGeometryPlan;
 import dev.comfyfluffy.caustica.renderer.raytracing.layout.RtBindings;
-import org.lwjgl.PointerBuffer;
+import dev.comfyfluffy.caustica.vulkan.VmaMappedBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
-import org.lwjgl.util.vma.Vma;
-import org.lwjgl.util.vma.VmaAllocationCreateInfo;
-import org.lwjgl.util.vma.VmaAllocationInfo;
 import org.lwjgl.vulkan.*;
 
 import java.nio.ByteBuffer;
@@ -28,7 +25,7 @@ import static org.lwjgl.vulkan.KHRRayTracingPipeline.*;
 public final class RtPipeline {
     private final VulkanDeviceContext context;
     private final long pipeline;
-    private final SbtBuffer sbt;
+    private final VmaMappedBuffer sbt;
     private final long stride;
     private final int handleSize;
     private final int raygenCount;
@@ -36,7 +33,7 @@ public final class RtPipeline {
     private final int hitCount;
     private boolean destroyed;
 
-    private RtPipeline(VulkanDeviceContext context, long pipeline, SbtBuffer sbt, long stride, int handleSize,
+    private RtPipeline(VulkanDeviceContext context, long pipeline, VmaMappedBuffer sbt, long stride, int handleSize,
                        int raygenCount, int missCount, int hitCount) {
         this.context = context;
         this.pipeline = pipeline;
@@ -123,7 +120,7 @@ public final class RtPipeline {
                         info, null, out), "vkCreateRayTracingPipelinesKHR");
                 long pipeline = out.get(0);
                 RtDebugLabels.name(context, VK10.VK_OBJECT_TYPE_PIPELINE, pipeline, "world RT pipeline");
-                SbtBuffer sbt = null;
+                VmaMappedBuffer sbt = null;
                 try {
                     int handleSize = context.shaderGroupHandleSize();
                     ByteBuffer handles = stack.malloc(groupCount * handleSize);
@@ -134,16 +131,20 @@ public final class RtPipeline {
                     if (stride > Integer.toUnsignedLong(context.maxShaderGroupStride())) {
                         throw new UnsupportedOperationException("SBT stride exceeds maxShaderGroupStride");
                     }
-                    sbt = SbtBuffer.create(context, stride * groupCount, context.shaderGroupBaseAlignment());
+                    long sbtSize = stride * groupCount;
+                    sbt = VmaMappedBuffer.create(context, sbtSize,
+                            VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR,
+                            context.shaderGroupBaseAlignment(), "world shader binding table");
+                    long mappedAddress = MemoryUtil.memAddress(sbt.mapped());
                     for (int i = 0; i < groupCount; i++) {
                         MemoryUtil.memCopy(MemoryUtil.memAddress(handles) + (long) i * handleSize,
-                                sbt.mapped + i * stride, handleSize);
+                                mappedAddress + i * stride, handleSize);
                     }
-                    Vma.vmaFlushAllocation(context.vmaAllocator(), sbt.allocation, 0, VK10.VK_WHOLE_SIZE);
+                    sbt.flush(0L, sbtSize);
                     return new RtPipeline(context, pipeline, sbt, stride, handleSize,
                             raygenCount, missCount, hitCount);
                 } catch (RuntimeException | Error failure) {
-                    if (sbt != null) sbt.destroy(context.vmaAllocator());
+                    if (sbt != null) sbt.close();
                     VK10.vkDestroyPipeline(device, pipeline, null);
                     throw failure;
                 }
@@ -173,11 +174,12 @@ public final class RtPipeline {
             context.pushData(commandBuffer, 0, roots);
             VK10.vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, pipeline);
             VkStridedDeviceAddressRegionKHR rgen = region(stack,
-                    sbt.address.addBytes((long) raygenIndex * stride), stride, stride);
+                    sbt.deviceRange().address().addBytes((long) raygenIndex * stride), stride, stride);
             VkStridedDeviceAddressRegionKHR rmiss = region(stack,
-                    sbt.address.addBytes((long) raygenCount * stride), stride, (long) missCount * stride);
+                    sbt.deviceRange().address().addBytes((long) raygenCount * stride),
+                    stride, (long) missCount * stride);
             VkStridedDeviceAddressRegionKHR hit = retainedHits == null
-                    ? region(stack, sbt.address.addBytes((long) (raygenCount + missCount) * stride),
+                    ? region(stack, sbt.deviceRange().address().addBytes((long) (raygenCount + missCount) * stride),
                             stride, (long) hitCount * stride)
                     : region(stack, retainedHits.bytes().address(), retainedHits.stride(),
                             retainedHits.bytes().byteSize());
@@ -201,7 +203,7 @@ public final class RtPipeline {
 
     public void destroy() {
         if (destroyed) return;
-        sbt.destroy(context.vmaAllocator());
+        sbt.close();
         VK10.vkDestroyPipeline(context.vk(), pipeline, null);
         destroyed = true;
     }
@@ -213,7 +215,7 @@ public final class RtPipeline {
             throw new IllegalStateException("pipeline has no coverage-class hit groups");
         }
         ByteBuffer handles = ByteBuffer.allocate(hitCount * handleSize);
-        long firstHit = sbt.mapped + (long) (raygenCount + missCount) * stride;
+        long firstHit = MemoryUtil.memAddress(sbt.mapped()) + (long) (raygenCount + missCount) * stride;
         for (int group = 0; group < hitCount; group++) {
             for (int byteIndex = 0; byteIndex < handleSize; byteIndex++) {
                 handles.put(group * handleSize + byteIndex,
@@ -314,45 +316,4 @@ public final class RtPipeline {
         }
     }
 
-    private static final class SbtBuffer {
-        final long buffer;
-        final long allocation;
-        final VulkanDeviceAddress address;
-        final long mapped;
-
-        private SbtBuffer(long buffer, long allocation, VulkanDeviceAddress address, long mapped) {
-            this.buffer = buffer;
-            this.allocation = allocation;
-            this.address = address;
-            this.mapped = mapped;
-        }
-
-        static SbtBuffer create(VulkanDeviceContext context, long size, long alignment) {
-            try (MemoryStack stack = MemoryStack.stackPush()) {
-                VkBufferCreateInfo bufferInfo = VkBufferCreateInfo.calloc(stack).sType$Default().size(size)
-                        .usage(VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR | VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT)
-                        .sharingMode(VK10.VK_SHARING_MODE_EXCLUSIVE);
-                VmaAllocationCreateInfo allocationInfo = VmaAllocationCreateInfo.calloc(stack)
-                        .usage(Vma.VMA_MEMORY_USAGE_AUTO)
-                        .flags(Vma.VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
-                                | Vma.VMA_ALLOCATION_CREATE_MAPPED_BIT);
-                LongBuffer outBuffer = stack.mallocLong(1);
-                PointerBuffer outAllocation = stack.mallocPointer(1);
-                VmaAllocationInfo allocation = VmaAllocationInfo.calloc(stack);
-                check(Vma.vmaCreateBufferWithAlignment(context.vmaAllocator(), bufferInfo, allocationInfo,
-                        alignment, outBuffer, outAllocation, allocation), "vmaCreateBufferWithAlignment(SBT)");
-                long buffer = outBuffer.get(0);
-                long address = VK12.vkGetBufferDeviceAddress(context.vk(),
-                        VkBufferDeviceAddressInfo.calloc(stack).sType$Default().buffer(buffer));
-                if (address == 0L || allocation.pMappedData() == 0L) {
-                    Vma.vmaDestroyBuffer(context.vmaAllocator(), buffer, outAllocation.get(0));
-                    throw new IllegalStateException("SBT buffer is not addressable and mapped");
-                }
-                return new SbtBuffer(buffer, outAllocation.get(0), new VulkanDeviceAddress(address),
-                        allocation.pMappedData());
-            }
-        }
-
-        void destroy(long vma) { Vma.vmaDestroyBuffer(vma, buffer, allocation); }
-    }
 }

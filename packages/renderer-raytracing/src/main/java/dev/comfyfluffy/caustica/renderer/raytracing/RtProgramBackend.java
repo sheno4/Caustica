@@ -12,21 +12,12 @@ import dev.comfyfluffy.caustica.renderer.raytracing.pipeline.RtPipeline;
 import dev.comfyfluffy.caustica.renderer.raytracing.pipeline.RtShaderCode;
 import dev.comfyfluffy.caustica.renderer.raytracing.shader.WorldShaderCompiler;
 import dev.comfyfluffy.caustica.slang.SlangRuntime;
-import org.lwjgl.PointerBuffer;
-import org.lwjgl.system.MemoryStack;
-import org.lwjgl.system.MemoryUtil;
-import org.lwjgl.util.vma.Vma;
-import org.lwjgl.util.vma.VmaAllocationCreateInfo;
-import org.lwjgl.util.vma.VmaAllocationInfo;
+import dev.comfyfluffy.caustica.vulkan.VmaMappedBuffer;
 import org.lwjgl.vulkan.VK10;
-import org.lwjgl.vulkan.VK12;
-import org.lwjgl.vulkan.VkBufferCreateInfo;
-import org.lwjgl.vulkan.VkBufferDeviceAddressInfo;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.nio.LongBuffer;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Objects;
@@ -35,8 +26,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
-
-import static dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext.check;
 
 /** Compiles engine program compositions and publishes complete descriptor-heap RT programs. */
 public final class RtProgramBackend implements ProgramBackend, AutoCloseable {
@@ -231,51 +220,30 @@ public final class RtProgramBackend implements ProgramBackend, AutoCloseable {
     private enum CandidateState { CANDIDATE, ACTIVE, RETIRING, DISPOSED }
 
     private static final class ImplementationTable {
-        final VulkanDeviceContext context;
-        final long buffer;
-        final long allocation;
+        final VmaMappedBuffer storage;
         final VulkanDeviceAddress address;
 
-        private ImplementationTable(VulkanDeviceContext context, long buffer, long allocation,
-                                    VulkanDeviceAddress address) {
-            this.context = context;
-            this.buffer = buffer;
-            this.allocation = allocation;
-            this.address = address;
+        private ImplementationTable(VmaMappedBuffer storage) {
+            this.storage = storage;
+            this.address = storage.deviceRange().address();
         }
 
         static ImplementationTable create(VulkanDeviceContext context, List<Long> words) {
             long size = Math.max(Long.BYTES, Math.multiplyExact((long) words.size(), Long.BYTES));
-            try (MemoryStack stack = MemoryStack.stackPush()) {
-                VkBufferCreateInfo bufferInfo = VkBufferCreateInfo.calloc(stack).sType$Default().size(size)
-                        .usage(VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT)
-                        .sharingMode(VK10.VK_SHARING_MODE_EXCLUSIVE);
-                VmaAllocationCreateInfo allocationInfo = VmaAllocationCreateInfo.calloc(stack)
-                        .usage(Vma.VMA_MEMORY_USAGE_AUTO)
-                        .flags(Vma.VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
-                                | Vma.VMA_ALLOCATION_CREATE_MAPPED_BIT);
-                LongBuffer outBuffer = stack.mallocLong(1);
-                PointerBuffer outAllocation = stack.mallocPointer(1);
-                VmaAllocationInfo allocationInfoOut = VmaAllocationInfo.calloc(stack);
-                check(Vma.vmaCreateBuffer(context.vmaAllocator(), bufferInfo, allocationInfo,
-                        outBuffer, outAllocation, allocationInfoOut), "vmaCreateBuffer(program data)");
-                long buffer = outBuffer.get(0);
-                long allocation = outAllocation.get(0);
-                long address = VK12.vkGetBufferDeviceAddress(context.vk(),
-                        VkBufferDeviceAddressInfo.calloc(stack).sType$Default().buffer(buffer));
-                if (address == 0L || allocationInfoOut.pMappedData() == 0L) {
-                    Vma.vmaDestroyBuffer(context.vmaAllocator(), buffer, allocation);
-                    throw new IllegalStateException("program implementation table is not addressable and mapped");
-                }
-                ByteBuffer mapped = MemoryUtil.memByteBuffer(allocationInfoOut.pMappedData(), Math.toIntExact(size))
-                        .order(ByteOrder.nativeOrder());
+            VmaMappedBuffer storage = VmaMappedBuffer.create(
+                    context, size, VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "program data");
+            try {
+                ByteBuffer mapped = storage.mapped().order(ByteOrder.nativeOrder());
                 for (Long word : words) mapped.putLong(word);
                 if (words.isEmpty()) mapped.putLong(0L);
-                Vma.vmaFlushAllocation(context.vmaAllocator(), allocation, 0, VK10.VK_WHOLE_SIZE);
-                return new ImplementationTable(context, buffer, allocation, new VulkanDeviceAddress(address));
+                storage.flush(0L, size);
+                return new ImplementationTable(storage);
+            } catch (RuntimeException | Error failure) {
+                storage.close();
+                throw failure;
             }
         }
 
-        void destroy() { Vma.vmaDestroyBuffer(context.vmaAllocator(), buffer, allocation); }
+        void destroy() { storage.close(); }
     }
 }

@@ -6,7 +6,6 @@ import dev.comfyfluffy.caustica.api.geometry.InstanceId;
 import dev.comfyfluffy.caustica.api.geometry.MeshBuild;
 import dev.comfyfluffy.caustica.api.geometry.MeshId;
 import dev.comfyfluffy.caustica.api.geometry.PrimitiveLightMap;
-import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
 import dev.comfyfluffy.caustica.api.light.LightChannel;
 import dev.comfyfluffy.caustica.api.light.LightDescriptor;
@@ -40,8 +39,9 @@ final class ShowcaseScene {
     /**
      * Publishes GPU data uploaded by a world-resource pass. The caller owns all streams until retired runs.
      */
-    void publishMesh(long currentPositionAddress, long previousPositionAddress,
-                     long indexAddress, Runnable retired) {
+    void publishMesh(VulkanDeviceAddressRange currentPositions,
+                     VulkanDeviceAddressRange previousPositions,
+                     VulkanDeviceAddressRange indices, Runnable retired) {
         var opaque = new MeshBuild.SurfaceSlot<>(programs.opaque(),
                 ShowcasePrograms.SURFACE_BINDING.data(0L), new MeshBuild.CoveragePolicy.Opaque());
         var cutout = new MeshBuild.SurfaceSlot<>(programs.cutout(),
@@ -51,9 +51,9 @@ final class ShowcaseScene {
         var volume = new MeshBuild.VolumeSlot<>(programs.volume(),
                 ShowcasePrograms.VOLUME_BINDING.data(0L));
         var build = new MeshBuild<>(
-                stream(currentPositionAddress, 48L, 12),
-                stream(previousPositionAddress, 48L, 12),
-                stream(indexAddress, 48L, 4),
+                new MeshBuild.Stream(currentPositions, 12),
+                new MeshBuild.Stream(previousPositions, 12),
+                new MeshBuild.Stream(indices, 4),
                 4, new MeshBuild.IndexRevision(1L),
                 List.of(
                         new MeshBuild.Geometry<>(opaque, null, 0, 3),
@@ -67,11 +67,6 @@ final class ShowcaseScene {
                         ShowcasePrograms.INSTANCE.data(7L),
                         new PrimitiveLightMap(List.of(
                                 new PrimitiveLightMap.Range(0, 1, lightIds.getFirst()))))), retired));
-    }
-
-    private static MeshBuild.Stream stream(long address, long byteSize, int byteStride) {
-        return new MeshBuild.Stream(new VulkanDeviceAddressRange(
-                new VulkanDeviceAddress(address), byteSize), byteStride);
     }
 
     private void publishLights() {
