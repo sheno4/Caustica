@@ -26,4 +26,14 @@ final class PassSetupContractTest {
                         || method.getName().equals("displayHeight")
                         || method.getName().equals("layerFormat")));
     }
+
+    @Test
+    void coherentSceneFactsBelongToEveryPassFrame() throws ReflectiveOperationException {
+        assertEquals(dev.comfyfluffy.caustica.api.view.SceneView.class,
+                PassFrame.class.getMethod("view").getReturnType());
+        assertEquals(double.class, PassFrame.class.getMethod("timeSeconds").getReturnType());
+        assertEquals(double.class, PassFrame.class.getMethod("metersPerSceneUnit").getReturnType());
+        assertFalse(java.util.Arrays.stream(UiFrame.class.getDeclaredMethods())
+                .anyMatch(method -> method.getName().equals("view")));
+    }
 }

@@ -39,4 +39,14 @@ final class RtWorldPassSeparationTest {
         int indirect = renderer.indexOf("roots, 1, trace.hitTable()", barrier);
         assertTrue(primary >= 0 && barrier > primary && indirect > barrier);
     }
+
+    @Test
+    void passFramesPublishTraceResolutionRatherThanDisplayResolution() throws IOException {
+        String renderer = Files.readString(Path.of(
+                "src/main/java/dev/comfyfluffy/caustica/rt/RtFrameRenderer.java"));
+        assertTrue(renderer.contains(
+                "frameResources.renderW, frameResources.renderH, frameResources.rrOutput"));
+        assertFalse(renderer.contains(
+                "frameResources.displayW, frameResources.displayH, frameResources.rrOutput"));
+    }
 }

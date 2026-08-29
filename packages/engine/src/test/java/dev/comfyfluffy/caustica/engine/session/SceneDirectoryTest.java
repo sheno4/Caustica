@@ -224,7 +224,8 @@ final class SceneDirectoryTest {
                 new GeometryChannel.SetInstance<>(instance, scene, mesh, GeometryTransform.translation(0, 0, 0),
                         0xff, INSTANCE.data(0))), geometryRetired::incrementAndGet));
         lights.submit(new RetainedBatch<>(List.of(new LightChannel.SetLight(light, scene,
-                new LightDescriptor.Point(0, 1, 0, 10, 1, 1, 1))), lightRetired::incrementAndGet));
+                new LightDescriptor.Spot(0, 1, 0, 0, -1, 0, 10, 0.5, 1, 1, 1))),
+                lightRetired::incrementAndGet));
 
         directory.dropScene(scene);
         assertEquals(1, directory.snapshot().meshes().size());

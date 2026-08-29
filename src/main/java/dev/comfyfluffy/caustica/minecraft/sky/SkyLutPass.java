@@ -20,7 +20,6 @@ import net.minecraft.client.renderer.texture.*;
 import net.minecraft.data.AtlasIds;
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.attribute.EnvironmentAttributes;
-import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.MoonPhase;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.*;
@@ -111,7 +110,7 @@ public final class SkyLutPass implements Pass<PassFrame> {
 
     @Override public void record(PassFrame frame) {
         if (!initialized) { initializeImages(frame.commandBuffer()); initialized = true; }
-        SkyState state = gather(options.get());
+        SkyState state = gather(options.get(), frame);
         AtlasSnapshot snapshot = celestialAtlas(state);
         if (snapshot == null) return;
         ensureAtlas(snapshot);
@@ -205,14 +204,12 @@ public final class SkyLutPass implements Pass<PassFrame> {
                 a.sunUv(), a.moonUv());
     }
 
-    private static SkyState gather(OptionValues options) {
+    private static SkyState gather(OptionValues options, PassFrame frame) {
         Minecraft mc = Minecraft.getInstance();
         float partial = mc.getDeltaTracker().getGameTimeDeltaPartialTick(false);
         var probe = mc.gameRenderer.mainCamera().attributeProbe();
         int sea = mc.level != null ? mc.level.getSeaLevel() : 0;
-        Entity entity = mc.getCameraEntity() != null ? mc.getCameraEntity() : mc.player;
-        double y = entity != null ? entity.getEyePosition(partial).y : sea;
-        float altitude = Math.clamp((float) ((y - sea) / 100.0), 0, 99);
+        float altitude = viewerAltitudeKm(frame.view().camera().y(), sea, frame.metersPerSceneUnit());
         float r = (float) (Math.PI / 180.0);
         MinecraftLightingCalibration l = MinecraftLightingCalibration.current();
         return new SkyState(probe.getValue(EnvironmentAttributes.SUN_ANGLE, partial) * r,
@@ -226,6 +223,10 @@ public final class SkyLutPass implements Pass<PassFrame> {
                 options.get(MOON_DISC_HALF_ANGLE_DEGREES) * r, altitude,
                 probe.getValue(EnvironmentAttributes.MOON_PHASE, partial).index(), options.get(GROUND_ALBEDO),
                 options.get(HORIZON_SOFTEN_DEGREES) * r);
+    }
+
+    static float viewerAltitudeKm(double cameraY, double seaLevel, double metersPerSceneUnit) {
+        return Math.clamp((float) ((cameraY - seaLevel) * metersPerSceneUnit / 1000.0), 0, 99);
     }
 
     private static AtlasSnapshot celestialAtlas(SkyState state) {

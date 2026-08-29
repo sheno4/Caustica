@@ -8,6 +8,9 @@ import dev.comfyfluffy.caustica.api.gpu.GpuImageDescriptor;
 import dev.comfyfluffy.caustica.api.gpu.GpuImageDescriptorKind;
 import dev.comfyfluffy.caustica.engine.pass.PassKey;
 import dev.comfyfluffy.caustica.engine.pass.PassSchedulerBackend;
+import dev.comfyfluffy.caustica.api.scene.SceneId;
+import dev.comfyfluffy.caustica.api.view.Camera;
+import dev.comfyfluffy.caustica.api.view.SceneView;
 import org.junit.jupiter.api.Test;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkDevice;
@@ -77,6 +80,12 @@ final class RtPassSchedulerBackendTest {
                 new PassKey(0, PassKey.Stage.WORLD_RESOURCE));
         AtomicBoolean drained = new AtomicBoolean();
 
+        assertSame(fixture.view, invocation.frame().view());
+        assertEquals(12.5, invocation.frame().timeSeconds());
+        assertEquals(0.5, invocation.frame().metersPerSceneUnit());
+        assertEquals(960, invocation.frame().renderWidth());
+        assertEquals(540, invocation.frame().renderHeight());
+
         invocation.submit(() -> drained.set(true));
 
         assertTrue(!drained.get());
@@ -114,6 +123,7 @@ final class RtPassSchedulerBackendTest {
         final FakeImage exposure = new FakeImage(2);
         final FakeImage postA = new FakeImage(3);
         final FakeImage postB = new FakeImage(4);
+        final SceneView view = new SceneView(new SceneId() { }, Camera.IDENTITY);
         final RtPassSchedulerBackend backend = new RtPassSchedulerBackend(
                 new FakeGpu(), 97, 100, 37, commands);
         final AtomicBoolean firstDrained = new AtomicBoolean();
@@ -124,7 +134,7 @@ final class RtPassSchedulerBackendTest {
 
         RtPassSchedulerBackend.FrameState frameState() {
             return new RtPassSchedulerBackend.FrameState(
-                    fakeCommandBuffer(), use, 4L, 960, 540,
+                    fakeCommandBuffer(), use, 4L, view, 12.5, 0.5, 960, 540,
                     reconstruction, exposure, postA, postB, null);
         }
     }

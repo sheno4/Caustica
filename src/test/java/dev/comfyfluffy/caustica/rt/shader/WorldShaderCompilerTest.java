@@ -107,6 +107,10 @@ final class WorldShaderCompilerTest {
         assertFalse(primary.contains("specularMotionGuide)[pixel] = motion"));
 
         assertTrue(lights.contains("pixelIndex * 2u + 1u"));
+        assertTrue(lights.contains("dot(fromLight, forward) < cos(light.axisU.w)"));
+        assertFalse(lights.contains("RETAINED_LIGHT_POINT"));
+        assertFalse(lights.contains("tan(light.axisU.w)"));
+        assertFalse(lights.contains("normalize(light.axisV.xyz)"));
         assertFalse(lights.contains("asuint(RayTCurrent())"));
         assertFalse(bake.contains("previousMotionIndex"));
         assertFalse(bake.contains("previousDepthIndex"));

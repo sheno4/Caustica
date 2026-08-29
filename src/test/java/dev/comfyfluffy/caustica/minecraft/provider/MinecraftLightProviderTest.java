@@ -18,6 +18,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class MinecraftLightProviderTest {
     @Test
+    void helmetUsesTheCircularSpotContract() {
+        LightDescriptor.Spot spot = MinecraftLightProvider.helmetSpot(1, 2, 3, 0, 0, -1);
+
+        assertEquals(48.0, spot.rangeMeters());
+        assertEquals(Math.toRadians(22.0), spot.halfAngleRadians());
+        assertEquals(-1.0, spot.directionZ());
+    }
+
+    @Test
     void noonSubmitsOnlyTheAboveHorizonSun() {
         MinecraftLightProvider.CelestialLights lights = MinecraftLightProvider.celestialLights(frame(
                 0.0, Math.PI, 128_000, 5, 0));

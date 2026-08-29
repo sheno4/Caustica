@@ -3,8 +3,8 @@ package dev.comfyfluffy.caustica.api.light;
 /**
  * One engine-sampled light. Positions and rectangle axes use the target scene's coordinate units; fields
  * explicitly named in metres remain physical. Colours use scene-linear ACEScg and every vector named as a
- * direction or normal is unit length. The supported light types are {@link Rectangle}, {@link Point},
- * {@link Spot}, and {@link Distant}.
+ * direction or normal is unit length. The supported light types are {@link Rectangle}, {@link Spot}, and
+ * {@link Distant}.
  */
 public sealed interface LightDescriptor {
 
@@ -36,41 +36,21 @@ public sealed interface LightDescriptor {
         }
     }
 
-    /** An omnidirectional point emitter; range is in metres and intensity is in candela. */
-    record Point(double positionX, double positionY, double positionZ,
-                 double rangeMeters,
-                 double intensityRedCandela, double intensityGreenCandela, double intensityBlueCandela)
-            implements Finite {
-        public Point {
-            LightValidation.position(positionX, positionY, positionZ);
-            LightValidation.positive(rangeMeters, "rangeMeters");
-            LightValidation.color(intensityRedCandela, intensityGreenCandela, intensityBlueCandela,
-                    "intensity");
-        }
-    }
-
     /**
-     * A cone emitter. Direction and up are unit, mutually perpendicular vectors. Separate horizontal and
-     * vertical half-angles describe an elliptical cone and give it a stable roll orientation.
+     * A circular cone emitter. Direction is unit length, range is in metres, the half-angle is in radians,
+     * and intensity is in candela.
      */
     record Spot(double positionX, double positionY, double positionZ,
                 double directionX, double directionY, double directionZ,
-                double upX, double upY, double upZ,
                 double rangeMeters,
-                double horizontalHalfAngleRadians, double verticalHalfAngleRadians,
+                double halfAngleRadians,
                 double intensityRedCandela, double intensityGreenCandela, double intensityBlueCandela)
             implements Finite {
         public Spot {
             LightValidation.position(positionX, positionY, positionZ);
             LightValidation.unit(directionX, directionY, directionZ, "spot direction");
-            LightValidation.unit(upX, upY, upZ, "spot up");
-            double dot = directionX * upX + directionY * upY + directionZ * upZ;
-            if (!Double.isFinite(dot) || Math.abs(dot) > LightValidation.UNIT_TOLERANCE) {
-                throw new IllegalArgumentException("spot direction and up must be perpendicular");
-            }
             LightValidation.positive(rangeMeters, "rangeMeters");
-            LightValidation.halfAngle(horizontalHalfAngleRadians, "horizontalHalfAngleRadians", false);
-            LightValidation.halfAngle(verticalHalfAngleRadians, "verticalHalfAngleRadians", false);
+            LightValidation.halfAngle(halfAngleRadians, "halfAngleRadians", false);
             LightValidation.color(intensityRedCandela, intensityGreenCandela, intensityBlueCandela,
                     "intensity");
         }

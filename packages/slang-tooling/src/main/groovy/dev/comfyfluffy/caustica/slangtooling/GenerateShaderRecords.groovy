@@ -6,6 +6,7 @@ import org.gradle.api.GradleException
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.provider.Property
+import org.gradle.api.provider.ListProperty
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputDirectory
 import org.gradle.api.tasks.InputFile
@@ -30,6 +31,8 @@ abstract class GenerateShaderRecords extends DefaultTask {
     @Input abstract Property<String> getSpirvVal()
     @Input abstract Property<String> getSpirvProfile()
     @Input abstract Property<String> getVulkanTarget()
+    @Input abstract ListProperty<String> getIncludedRecords()
+    @Input abstract ListProperty<String> getExcludedRecords()
     @OutputDirectory abstract DirectoryProperty getOutDir()
 
     @Inject abstract ExecOperations getExecOps()
@@ -237,7 +240,6 @@ abstract class GenerateShaderRecords extends DefaultTask {
     private static final List<List<Object>> BUFFER_PROBES = [
             ["worldPushLayoutProbe", "WorldPush", RT_GENERATED_PACKAGE, "WorldPushData", false],
             ["materialBindingLayoutProbe", "MaterialBinding", RT_GENERATED_PACKAGE, "MaterialBindingData", false],
-            ["surfaceMaterialLayoutProbe", "SurfaceMaterial", RT_GENERATED_PACKAGE, "SurfaceMaterialData", false],
             ["retainedGeometryRecordLayoutProbe", "RetainedGeometryRecord", RT_GENERATED_PACKAGE, "RetainedGeometryRecordData", false],
             ["retainedLightRecordLayoutProbe", "RetainedLightRecord", RT_GENERATED_PACKAGE, "RetainedLightRecordData", false],
             ["neeAtStateLayoutProbe", "NeeAtState", RT_GENERATED_PACKAGE, "NeeAtStateData", false],
@@ -255,7 +257,6 @@ abstract class GenerateShaderRecords extends DefaultTask {
     // plain push-constant struct probed directly (no structured-buffer array wrapper needed -- see the
     // probeXxx blocks below main() in the probe file).
     private static final List<List<String>> PUSH_CONSTANT_PROBES = [
-            ["pushConstantsLayoutProbe", "WorldPushConstants", RT_GENERATED_PACKAGE, "WorldPushConstantsData"],
             ["exposureHistPushProbe", "ExposureHistPush", RT_GENERATED_PACKAGE, "ExposureHistPushData"],
             ["exposureResolvePushProbe", "ExposureResolvePush", RT_GENERATED_PACKAGE, "ExposureResolvePushData"],
             ["displayPushProbe", "DisplayPush", RT_GENERATED_PACKAGE, "DisplayPushData"],
@@ -317,7 +318,17 @@ abstract class GenerateShaderRecords extends DefaultTask {
         if (generatedRoot.exists() && !generatedRoot.deleteDir()) {
             throw new GradleException("failed to clear generated shader record sources under ${generatedRoot}")
         }
-        BUFFER_PROBES.each { probeName, structName, packageName, className, emitReader ->
+        def knownRecords = (BUFFER_PROBES + PUSH_CONSTANT_PROBES).collect { it[3] as String }.toSet()
+        def requested = includedRecords.get().toSet()
+        def excluded = excludedRecords.get().toSet()
+        def unknown = (requested + excluded) - knownRecords
+        if (!unknown.empty) throw new GradleException("unknown generated shader records: ${unknown.sort()}")
+        def selected = { List<?> probe ->
+            String className = probe[3] as String
+            (requested.empty || requested.contains(className)) && !excluded.contains(className)
+        }
+
+        BUFFER_PROBES.findAll(selected).each { probeName, structName, packageName, className, emitReader ->
             Map probeArray = extractBufferProbeArray(reflection, probeName as String, structName as String)
             def packageDir = new File(generatedRoot, (packageName as String).replace('.', '/'))
             packageDir.mkdirs()
@@ -326,7 +337,7 @@ abstract class GenerateShaderRecords extends DefaultTask {
                             packageName as String, className as String, emitReader as boolean), "UTF-8")
         }
 
-        PUSH_CONSTANT_PROBES.each { probeName, structName, packageName, className ->
+        PUSH_CONSTANT_PROBES.findAll(selected).each { probeName, structName, packageName, className ->
             Map type = extractPushConstantType(reflection, probeName, structName)
             int byteSize = extractPushConstantByteSize(reflection, probeName)
             def packageDir = new File(generatedRoot, packageName.replace('.', '/'))

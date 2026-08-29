@@ -13,9 +13,8 @@ import java.util.Objects;
 /** Packs public physical-light descriptors into the reflected scene-relative GPU ABI. */
 final class RtRetainedLightPlan {
     static final int RECTANGLE = 0;
-    static final int POINT = 1;
-    static final int SPOT = 2;
-    static final int DISTANT = 3;
+    static final int SPOT = 1;
+    static final int DISTANT = 2;
     static final int RECORD_BYTES = RetainedLightRecordData.BYTE_SIZE;
 
     private RtRetainedLightPlan() { }
@@ -50,17 +49,12 @@ final class RtRetainedLightPlan {
                     vector(light.halfVx(), light.halfVy(), light.halfVz(), 0.0),
                     vector(light.radianceRedCdM2(), light.radianceGreenCdM2(),
                             light.radianceBlueCdM2(), 0.0));
-            case LightDescriptor.Point light -> new RetainedLightRecordData(
-                    POINT, flags, finiteFloat(light.rangeMeters()), 0.0f,
-                    position(light.positionX(), light.positionY(), light.positionZ(), origin),
-                    zero(), zero(), vector(light.intensityRedCandela(), light.intensityGreenCandela(),
-                            light.intensityBlueCandela(), 0.0));
             case LightDescriptor.Spot light -> new RetainedLightRecordData(
                     SPOT, flags, finiteFloat(light.rangeMeters()), 0.0f,
                     position(light.positionX(), light.positionY(), light.positionZ(), origin),
                     vector(light.directionX(), light.directionY(), light.directionZ(),
-                            light.horizontalHalfAngleRadians()),
-                    vector(light.upX(), light.upY(), light.upZ(), light.verticalHalfAngleRadians()),
+                            light.halfAngleRadians()),
+                    zero(),
                     vector(light.intensityRedCandela(), light.intensityGreenCandela(),
                             light.intensityBlueCandela(), 0.0));
             case LightDescriptor.Distant light -> new RetainedLightRecordData(

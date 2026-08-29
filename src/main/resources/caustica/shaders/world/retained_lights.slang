@@ -4,9 +4,8 @@ import bindings;
 import world_common;
 
 public static const uint RETAINED_LIGHT_RECTANGLE = 0u;
-public static const uint RETAINED_LIGHT_POINT = 1u;
-public static const uint RETAINED_LIGHT_SPOT = 2u;
-public static const uint RETAINED_LIGHT_DISTANT = 3u;
+public static const uint RETAINED_LIGHT_SPOT = 1u;
+public static const uint RETAINED_LIGHT_DISTANT = 2u;
 public static const uint NEE_AT_HISTORY_VALID = 1u;
 public static const uint NEE_AT_NO_LIGHT = 0xffffffffu;
 public static const uint RETAINED_LIGHT_LINKED_EMITTER = 1u;
@@ -177,14 +176,8 @@ DirectLightSample sampleRetainedLightIndex(NeeAtState state, uint lightIndex,
     }
     if (light.type == RETAINED_LIGHT_SPOT) {
         float3 forward = normalize(light.axisU.xyz);
-        float3 up = normalize(light.axisV.xyz);
-        float3 right = normalize(cross(forward, up));
         float3 fromLight = -sample.direction;
-        float axial = dot(fromLight, forward);
-        if (axial <= 0.0) return invalidDirectLight();
-        float horizontal = dot(fromLight, right) / max(axial * tan(light.axisU.w), 1.0e-6);
-        float vertical = dot(fromLight, up) / max(axial * tan(light.axisV.w), 1.0e-6);
-        if (horizontal * horizontal + vertical * vertical > 1.0) return invalidDirectLight();
+        if (dot(fromLight, forward) < cos(light.axisU.w)) return invalidDirectLight();
     }
     sample.radianceOverShapePdf = light.radiometry.xyz / max(distanceMetersSquared, 1.0e-8);
     return sample;

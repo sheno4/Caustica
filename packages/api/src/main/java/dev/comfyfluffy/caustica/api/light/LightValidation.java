@@ -12,9 +12,9 @@ final class LightValidation {
     }
 
     static void color(double red, double green, double blue, String name) {
-        nonnegative(red, name + " red");
-        nonnegative(green, name + " green");
-        nonnegative(blue, name + " blue");
+        gpuNonnegative(red, name + " red");
+        gpuNonnegative(green, name + " green");
+        gpuNonnegative(blue, name + " blue");
     }
 
     static void unit(double x, double y, double z, String name) {
@@ -28,9 +28,9 @@ final class LightValidation {
     }
 
     static void nonzero(double x, double y, double z, String name) {
-        finite(x, name + " X");
-        finite(y, name + " Y");
-        finite(z, name + " Z");
+        gpuFinite(x, name + " X");
+        gpuFinite(y, name + " Y");
+        gpuFinite(z, name + " Z");
         double squaredLength = x * x + y * y + z * z;
         if (!Double.isFinite(squaredLength) || squaredLength <= 0.0) {
             throw new IllegalArgumentException(name + " must be nondegenerate");
@@ -38,7 +38,7 @@ final class LightValidation {
     }
 
     static void positive(double value, String name) {
-        finite(value, name);
+        gpuFinite(value, name);
         if (value <= 0.0) throw new IllegalArgumentException(name + " must be positive");
     }
 
@@ -50,9 +50,16 @@ final class LightValidation {
         }
     }
 
-    private static void nonnegative(double value, String name) {
-        finite(value, name);
+    private static void gpuNonnegative(double value, String name) {
+        gpuFinite(value, name);
         if (value < 0.0) throw new IllegalArgumentException(name + " must be non-negative");
+    }
+
+    private static void gpuFinite(double value, String name) {
+        finite(value, name);
+        if (!Float.isFinite((float) value)) {
+            throw new IllegalArgumentException(name + " must fit a Vulkan float");
+        }
     }
 
     private static void finite(double value, String name) {

@@ -54,14 +54,8 @@ final class RtNeeAtPlan {
                 yield positive(Math.PI * areaM2 * luminance(light.radianceRedCdM2(),
                         light.radianceGreenCdM2(), light.radianceBlueCdM2()));
             }
-            case LightDescriptor.Point light -> positive(4.0 * Math.PI * luminance(
-                    light.intensityRedCandela(), light.intensityGreenCandela(),
-                    light.intensityBlueCandela()));
             case LightDescriptor.Spot light -> {
-                double projectedEllipse = Math.tan(light.horizontalHalfAngleRadians())
-                        * Math.tan(light.verticalHalfAngleRadians());
-                double solidAngle = 2.0 * Math.PI
-                        * (1.0 - 1.0 / Math.sqrt(1.0 + projectedEllipse));
+                double solidAngle = 2.0 * Math.PI * (1.0 - Math.cos(light.halfAngleRadians()));
                 yield positive(solidAngle * luminance(light.intensityRedCandela(),
                         light.intensityGreenCandela(), light.intensityBlueCandela()));
             }

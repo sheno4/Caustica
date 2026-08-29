@@ -41,4 +41,10 @@ final class SkyLutPassTest {
         assertEquals(192, SkyLutPass.SKY_VIEW_WIDTH);
         assertEquals(216, SkyLutPass.SKY_VIEW_HEIGHT);
     }
+
+    @Test void convertsSceneAltitudeToKilometresUsingFrameScale() {
+        assertEquals(1.0f, SkyLutPass.viewerAltitudeKm(1063.0, 63.0, 1.0));
+        assertEquals(1.0f, SkyLutPass.viewerAltitudeKm(2063.0, 63.0, 0.5));
+        assertEquals(0.0f, SkyLutPass.viewerAltitudeKm(20.0, 63.0, 1.0));
+    }
 }

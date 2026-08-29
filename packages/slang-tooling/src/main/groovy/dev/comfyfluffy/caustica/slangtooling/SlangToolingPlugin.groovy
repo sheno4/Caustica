@@ -12,7 +12,11 @@ final class SlangToolingPlugin implements Plugin<Project> {
         tooling.spirvProfile.convention(project.providers.gradleProperty("slang_spirv_profile").orElse("spirv_1_6"))
         tooling.vulkanTarget.convention(project.providers.gradleProperty("slang_vulkan_target").orElse("vulkan1.4"))
 
-        project.tasks.withType(GenerateShaderRecords).configureEach { task -> conventions(task, tooling) }
+        project.tasks.withType(GenerateShaderRecords).configureEach { task ->
+            conventions(task, tooling)
+            task.includedRecords.convention([])
+            task.excludedRecords.convention([])
+        }
         project.tasks.withType(GenerateRtBindings).configureEach { task -> conventions(task, tooling) }
         project.tasks.withType(CompileSlangShaders).configureEach { task -> conventions(task, tooling) }
         project.tasks.withType(ReflectSlang).configureEach { task -> conventions(task, tooling) }

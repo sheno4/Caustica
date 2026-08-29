@@ -21,8 +21,13 @@ final class ShowcasePasses {
             @Override
             public void record(PassFrame frame) {
                 if (runtimeGpuRecordingEnabled()) {
+                    var view = frame.view();
+                    double shaderTime = frame.timeSeconds();
+                    double metresPerUnit = frame.metersPerSceneUnit();
                     frame.gpuUse().retire(() -> { });
                     gpu.retireAfterUse(() -> { });
+                    throw missingCommands(view.rootScene(), shaderTime, metresPerUnit,
+                            frame.renderWidth(), frame.renderHeight());
                 }
             }
 

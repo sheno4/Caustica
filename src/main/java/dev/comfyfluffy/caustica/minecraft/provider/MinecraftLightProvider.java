@@ -65,11 +65,7 @@ public final class MinecraftLightProvider implements AutoCloseable {
                 double x = eye.x + forward.x() * 0.18;
                 double y = eye.y - 0.08 + forward.y() * 0.18;
                 double z = eye.z + forward.z() * 0.18;
-                double[] up = perpendicularUp(forward.x(), forward.y(), forward.z());
-                helmet = Optional.of(new LightDescriptor.Spot(x, y, z,
-                        forward.x(), forward.y(), forward.z(), up[0], up[1], up[2],
-                        48.0, Math.toRadians(22.0), Math.toRadians(22.0),
-                        720.0, 690.0, 610.0));
+                helmet = Optional.of(helmetSpot(x, y, z, forward.x(), forward.y(), forward.z()));
             }
         }
         publish(celestial, helmet, RtTerrain.retainedLightSnapshot());
@@ -177,15 +173,10 @@ public final class MinecraftLightProvider implements AutoCloseable {
                 illuminance, illuminance, illuminance, angularRadius, true));
     }
 
-    private static double[] perpendicularUp(double x, double y, double z) {
-        double referenceY = Math.abs(y) < 0.99 ? 1.0 : 0.0;
-        double referenceZ = referenceY == 0.0 ? 1.0 : 0.0;
-        double dot = y * referenceY + z * referenceZ;
-        double upX = -x * dot;
-        double upY = referenceY - y * dot;
-        double upZ = referenceZ - z * dot;
-        double inverseLength = 1.0 / Math.sqrt(upX * upX + upY * upY + upZ * upZ);
-        return new double[]{upX * inverseLength, upY * inverseLength, upZ * inverseLength};
+    static LightDescriptor.Spot helmetSpot(double x, double y, double z,
+                                           double directionX, double directionY, double directionZ) {
+        return new LightDescriptor.Spot(x, y, z, directionX, directionY, directionZ,
+                48.0, Math.toRadians(22.0), 720.0, 690.0, 610.0);
     }
 
     record CelestialLights(Optional<LightDescriptor.Distant> sun,

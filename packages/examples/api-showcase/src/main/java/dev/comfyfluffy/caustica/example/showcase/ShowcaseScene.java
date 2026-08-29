@@ -33,7 +33,7 @@ final class ShowcaseScene {
         this.lights = lights;
         mesh = geometry.newMesh(ShowcasePrograms.INSTANCE);
         instance = geometry.newInstance();
-        lightIds = List.of(lights.newLight(), lights.newLight(), lights.newLight(), lights.newLight());
+        lightIds = List.of(lights.newLight(), lights.newLight(), lights.newLight());
         publishLights();
     }
 
@@ -78,12 +78,9 @@ final class ShowcaseScene {
         lights.submit(RetainedBatch.of(List.of(
                 new LightChannel.SetLight(lightIds.get(0), scene, new LightDescriptor.Rectangle(
                         0, 66, 0, 0.5, 0, 0, 0, 0, 0.5, 20, 18, 15)),
-                new LightChannel.SetLight(lightIds.get(1), scene, new LightDescriptor.Point(
-                        2, 65, 0, 12, 40, 30, 20)),
-                new LightChannel.SetLight(lightIds.get(2), scene, new LightDescriptor.Spot(
-                        0, 66, 0, 0, -1, 0, 0, 0, 1,
-                        24, 0.35, 0.2, 500, 450, 400)),
-                new LightChannel.SetLight(lightIds.get(3), scene, new LightDescriptor.Distant(
+                new LightChannel.SetLight(lightIds.get(1), scene, new LightDescriptor.Spot(
+                        0, 66, 0, 0, -1, 0, 24, 0.35, 500, 450, 400)),
+                new LightChannel.SetLight(lightIds.get(2), scene, new LightDescriptor.Distant(
                         0, 1, 0, 100_000, 95_000, 90_000, 0.00465, false)))));
     }
 

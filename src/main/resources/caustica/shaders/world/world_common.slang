@@ -15,20 +15,6 @@ import caustica_types;
 public typealias ConstPtr<T> = Ptr<T, Access.Read, AddressSpace.Device, Std430DataLayout>;
 public typealias DevicePtr<T> = Ptr<T, Access.ReadWrite, AddressSpace.Device, Std430DataLayout>;
 
-// Push constants. The hot inline lanes avoid dereferencing WorldPush for values that are read in
-// hit shaders or used for raygen control flow — every 64-bit device address lives here for exactly that
-// reason, rather than behind the worldPushAddr indirection. geometryTableAddr/materialTableAddr
-// are read in world.rahit/world.rchit, which never load WorldPush at all.
-public struct WorldPushConstants {
-    public uint64_t worldPushAddr;
-    public uint64_t geometryTableAddr;
-    public uint64_t instanceHistoryAddr;
-    public uint64_t materialTableAddr;   // MaterialBinding[], indexed by Prim.materialId
-    public uint64_t materialSurfaceAddr; // SurfaceMaterial[], indexed by MaterialBinding.surface
-    public uint64_t pathQueueAddr;       // packed primary -> indirect continuation records
-    public uint frameIndex;
-};
-
 // GeometryIndex-addressed retained hit state. The TLAS instance custom index is the placement's base.
 // The explicit float4 transform rows and emitter sidecar tail keep the std430 record stride stable.
 public struct RetainedGeometryRecord {
@@ -52,9 +38,7 @@ public struct RetainedGeometryRecord {
     public uint reservedEmitter;
 };
 
-public static const uint RETAINED_GEOMETRY_HAS_SURFACE = 1u;
 public static const uint RETAINED_GEOMETRY_HAS_VOLUME = 2u;
-public static const uint RETAINED_GEOMETRY_CUTOUT = 4u;
 
 // Scene-relative geometry and physical radiometry for one immutable retained light.
 public struct RetainedLightRecord {
@@ -131,88 +115,6 @@ public struct WorldPush {
 // one place the whole path integral's absolute radiance meets a half.
 public static const float HALF_MAX = 65504.0;
 
-// Radiance-ray payload (location 0). Member order and types are a cross-stage ABI.
-//
-// Three-component quantities are packed into half pairs rather than declared as float3: they cost 6 bytes
-// instead of 12, and payload storage is reserved per trace call site, so every byte here is paid twice per
-// radiance trace (once for TraceRay, once for Invoke) and is preserved across the SER reorder. hitT stays
-// f32 — it reaches 10000 scene units and the hit position is reconstructed from it, where half's
-// roughly four-unit spacing at that magnitude would be visible.
-public struct Payload {
-    // surface0..2 are a hand-packed UNION of the two things a radiance ray can come back with. Reach them
-    // only through unpackAlbedo/packAlbedo, unpackNormal/packNormal, unpackSky/packSky — the raw words
-    // have no meaning without knowing which case you are in.
-    //
-    //   hit  — half3 albedo + half3 normal
-    //   miss — float3 sky radiance, full fp32
-    //
-    // The miss case is the entire reason these are hand-packed. Sky is in absolute photometric units and
-    // a bright environment emitter can exceed 3.6e5 cd/m², well past half's 65504 ceiling — a
-    // half3 could not carry it without first normalising by the frame's exposure, which made a storage
-    // format's limitation into a dependency on the exposure controller. A hit has no sky and a miss has
-    // neither albedo nor normal, so reinterpreting the same twelve bytes buys the range for free and keeps
-    // the payload exactly the size it was.
-    //
-    // The albedo lane doubles as the shadow ray's accumulated transmittance (see makeShadowPayload).
-    public uint   surface0;    // hit: half2(albedo.r, albedo.g) | miss: asuint(sky.r)
-    public uint   surface1;    // hit: half2(albedo.b, normal.x) | miss: asuint(sky.g)
-    public uint   surface2;    // hit: half2(normal.y, normal.z) | miss: asuint(sky.b)
-    public float  hitT;        // >= 0 on hit, < 0 on miss.
-    public half3  motionPrev;  // per-vertex world displacement since last frame.
-    public half3  f0;          // specular F0.
-    // Octahedral 16:16 of the shading normal one frame ago — equal to the normal itself unless the
-    // surface animates. Written only for the hit reconstruction anchors on (see PAYLOAD_PRIMARY_RAY),
-    // because that is the only hit whose reflection is reprojected through the surface plane. Packed
-    // rather than a third half3: it costs one word and is finer than the fp16 the normal itself uses.
-    public uint   previousNormal;
-    public uint   flags;       // low bits are hit state; high byte is the surface implementation.
-    // Metalness has already been resolved into diffuse albedo and F0 at closest-hit, so its former half
-    // is the third component of emission without increasing the cross-stage payload.
-    public uint   roughEmissionB; // packHalf2x16(perceptual roughness, emission radiance B)
-    public uint   emissionRG;     // packHalf2x16(emission radiance R, G)
-    // Volume hit: IOR, transmission_weight. Surface hit: thin transmission_weight, reserved zero.
-    public uint   iorTransmission;
-    // Surface-only closure lanes. Volume hits, misses and shadow rays leave them zero.
-    public half3  diffuseTransmissionAlbedo;
-    public half3  thinTransmissionColor;
-    public uint   rayCone;     // packHalf2x16(width, spread)
-};
-
-public static const uint PAYLOAD_SHOW_ENVIRONMENT_EMITTERS = 4u;
-// Set by world.rchit on any dielectric hit: true when the incoming ray travels
-// against the prim's outward face normal (entering the volume), false when it exits. Derived from face
-// orientation rather than toggled, so a stray or missing face cannot corrupt the medium for the rest of
-// the path — each crossing re-derives which side it is on. Bit 2 (PAYLOAD_SHOW_ENVIRONMENT_EMITTERS) is only
-// meaningful on a miss and this bit only on a hit, so they never need to be read together, but they get
-// distinct bits anyway to keep the two concerns unambiguous.
-public static const uint PAYLOAD_DIELECTRIC_ENTERING = 8u;
-
-// Which registered surface implementation this hit resolved through, forwarded from its
-// MaterialBinding so the estimator can call the same one's response hook a stage later. The high byte of
-// the flags word rather than a payload lane of its own: it is eight bits and the word had them free.
-public static const uint PAYLOAD_SURFACE_IMPL_SHIFT = 24u;
-
-// Set by the camera's own first radiance trace: this hit is what the reconstructor anchors on, so
-// closest-hit resolves the extra state only reconstruction reads — an animated surface's previous-frame
-// normal. Every other ray leaves it clear and pays for none of it.
-public static const uint PAYLOAD_PRIMARY_RAY = 512u;
-
-// Set by traceGuide so the radiance any-hit can suppress stochastic alpha. A guide probe answers which
-// surface a reflection/refraction points at, so a coin-flip there is a flickering control signal rather
-// than a sample that averages out; a deterministic accept lets a translucent surface reach closest-hit as
-// a dielectric, which is the crossing the guide loop already walks. world.rchit overwrites flags, but the
-// any-hit has already run by then, so the bit never needs to survive the hit.
-public static const uint PAYLOAD_GUIDE_RAY = 256u;
-
-// Set by world.rchit whenever the hit routes through the engine's dielectric transport (refracts, pushes
-// a medium) rather than the generic PBR surface slot — derived from MaterialBinding.flags &
-// BINDING_TRANSMISSIVE, the same bit the any-hits already read, so this is a forward of that fact rather
-// than a second encoding of it.
-public static const uint PAYLOAD_TRANSMISSIVE = 1u;
-// Shadow-only request: record the nearest transmissive crossing whose material implementation matches
-// the high-byte implementation carried by the payload. It is never interpreted as radiance hit state.
-public static const uint PAYLOAD_TRACK_MEDIUM_BOUNDARY = 2u;
-
 // Canonical per-triangle record (48 B). Geometry producers resolve source-specific attributes before
 // writing this representation; the hit shaders do not branch on producer identity.
 public struct Prim {
@@ -234,7 +136,7 @@ public struct MaterialBinding {
     // flags:8 | reserved:16 | surfaceImpl:8. Implementation 0 is the built-in surface; invalid indices
     // visibly resolve to the error surface.
     public uint packed0;
-    public uint surface;    // index into the SurfaceMaterial table; closest-hit only
+    public uint surface;
     public uint reserved;
     public uint packed1;    // coverageCutoff:8, unorm
 };
@@ -242,79 +144,17 @@ public struct MaterialBinding {
 // Coverage: whether the surface is present along this ray. Varies per texel, and it is the only axis
 // whose estimator varies by ray type — radiance rays resolve STOCHASTIC with white noise, guide and
 // shadow rays need a single-valued answer and take the deterministic cutoff instead.
-public static const uint COVERAGE_OPAQUE = 0u;
 public static const uint COVERAGE_CUTOUT = 1u;
-public static const uint COVERAGE_STOCHASTIC = 2u;
 
 // Transmittance: the surface is there and passes light through, so a shadow ray filters and continues
 // rather than being blocked.
 public static const uint BINDING_TRANSMISSIVE = 1u;
 
-public uint primitiveBaseColorTextureIndex(uint aux0) { return aux0 & 0xFFFFu; }
 public uint primitiveCoverage(uint aux0) { return (aux0 >> 16u) & 3u; }
 public bool primitiveBaseTexturePresent(uint aux0) { return (aux0 & (1u << 18u)) != 0u; }
-public bool primitiveBaseTextureLinear(uint aux0) { return (aux0 & (1u << 19u)) != 0u; }
 
 public uint bindingFlags(MaterialBinding binding) { return binding.packed0 & 255u; }
-/** Which registered surface implementation this material's description is routed through. */
-public uint bindingSurfaceImpl(MaterialBinding binding) { return binding.packed0 >> 24; }
 public float bindingCutoff(MaterialBinding binding) { return float(binding.packed1 & 255u) * (1.0 / 255.0); }
-
-// Private storage layout for the closest-hit material table. This is not part of the public shader ABI.
-public struct SurfaceMaterialWords {
-    public uint4 words0;
-    public uint4 words1;
-    public uint4 words2;
-};
-
-// Closest-hit-only surface parameters, shared by every binding that names them.
-public struct SurfaceMaterial {
-    public SurfaceMaterialWords providerData;
-    // OpenPBR names, OpenPBR meanings. specularRoughness is PERCEPTUAL r: the GGX alpha every lobe wants
-    // is its square, computed where the lobe is evaluated. Nothing in the pipeline stores alpha.
-    public float specularRoughness;
-    public float baseMetalness;
-    public float specularIor;
-    public float transmissionWeight;
-    /** Uniform scene-linear ACEScg factor multiplied with sampled base colour. */
-    public float4 baseColorFactor;
-    /** xyz = transmission_color, w = subsurface_weight. */
-    public float4 transmissionColorSubsurfaceWeight;
-    /** xyz = subsurface_color, w = subsurface_scatter_anisotropy. */
-    public float4 subsurfaceColorAnisotropy;
-    /** xyz = uniform scene-linear ACEScg emission_color, w = emission_luminance in cd/m². */
-    public float4 emissionColor;
-};
-
-// One record for every TLAS instance. PrimitiveIndex restarts at zero for each BLAS geometry, so hit shaders add
-// triangleBase[GeometryIndex()]. Texture-coordinate storage is selected explicitly by flags rather than
-// inferred from whether an otherwise optional address happens to be zero.
-public static const uint GEOMETRY_TRIANGLE_CORNER_TEXTURE_COORDINATES = 0u;
-public static const uint GEOMETRY_INDEXED_TEXTURE_COORDINATES = 1u;
-/** Geometry opts into the registered projected surface-modifier chain. */
-public static const uint GEOMETRY_RECEIVES_PROJECTED_SURFACE_MODIFIERS = 2u;
-/** Geometry provides one object-space float3 normal per indexed vertex. */
-public static const uint GEOMETRY_VERTEX_NORMALS = 4u;
-/** Geometry provides one scene-linear ACEScg float4 colour per indexed vertex. */
-public static const uint GEOMETRY_VERTEX_COLORS = 8u;
-
-public struct GeometryRecord {
-    public uint64_t primitiveAddress;
-    public uint64_t indexAddress;
-    public uint64_t textureCoordinateAddress;
-    public uint64_t previousPositionAddress;
-    public uint64_t vertexNormalAddress;
-    public uint64_t vertexColorAddress;
-    public uint triangleBase[3];
-    public uint flags;
-};
-
-/** Previous object-to-world transform in the current frame's rebased coordinate system. */
-public struct InstanceHistory {
-    public float4 row0;
-    public float4 row1;
-    public float4 row2;
-};
 
 // packHalf2x16 equivalent (Slang core module has no GLSL pack builtin; f32tof16 returns the half
 // bit-pattern in the low 16 bits).
@@ -326,34 +166,7 @@ public float2 unpackHalf2(uint p) {
     return float2(f16tof32(p & 0xFFFFu), f16tof32(p >> 16));
 }
 
-// ---- Payload.surface0..2 accessors. Two views of the same twelve bytes; see the struct for why.
-//
-// The hit view straddles surface1 (albedo.b in its low half, normal.x in its high half), so the two
-// setters are read-modify-write on that word. That is a couple of ALU ops on a value already in
-// registers, and it buys a payload that did not have to grow. Each setter touches only its own halves,
-// so writing one before the other is initialised is safe — nothing here does arithmetic on the half it
-// is preserving.
-public float3 unpackAlbedo(Payload p) {
-    return float3(unpackHalf2(p.surface0), unpackHalf2(p.surface1).x);
-}
-
-public void packAlbedo(inout Payload p, float3 albedo) {
-    p.surface0 = packHalf2(albedo.xy);
-    p.surface1 = (p.surface1 & 0xFFFF0000u) | (f32tof16(albedo.z) & 0xFFFFu);
-}
-
-public float3 unpackNormal(Payload p) {
-    return float3(unpackHalf2(p.surface1).y, unpackHalf2(p.surface2));
-}
-
-public void packNormal(inout Payload p, float3 normal) {
-    p.surface1 = (p.surface1 & 0x0000FFFFu) | (f32tof16(normal.x) << 16);
-    p.surface2 = packHalf2(normal.yz);
-}
-
-// Octahedral 16:16 unit-vector packing, used for Payload.previousNormal. The octahedron maps the sphere
-// onto [-1,1]^2 with bounded distortion, so a 16-bit pair resolves finer than the fp16 the payload's
-// other normal is stored as, in a quarter of the words.
+// Octahedral 16:16 unit-vector packing for compact current/previous guide normals.
 public uint packNormalOct(float3 n) {
     float3 v = n / max(abs(n.x) + abs(n.y) + abs(n.z), 1.0e-8);
     float2 p = v.z >= 0.0 ? v.xy
@@ -369,17 +182,4 @@ public float3 unpackNormalOct(uint packed) {
     v.x += v.x >= 0.0 ? -fold : fold;
     v.y += v.y >= 0.0 ? -fold : fold;
     return normalize(v);
-}
-
-// Miss view: full fp32, so absolute photometric sky needs no pre-exposure round trip through the payload
-// and no clamp to keep it finite. The fp16 ceiling still applies at the outImage store in world.rgen,
-// where the finite-half clamp guards every radiance source.
-public float3 unpackSky(Payload p) {
-    return float3(asfloat(p.surface0), asfloat(p.surface1), asfloat(p.surface2));
-}
-
-public void packSky(inout Payload p, float3 sky) {
-    p.surface0 = asuint(sky.x);
-    p.surface1 = asuint(sky.y);
-    p.surface2 = asuint(sky.z);
 }

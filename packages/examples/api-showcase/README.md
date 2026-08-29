@@ -19,7 +19,7 @@ integration at `packages/examples/gltf-viewer-minecraft`.
 | initial view volume | camera beginning underwater | internal frame ingress plus generic volume dispatch | Required by the existing renderer. Minecraft chooses water; engine transport consumes it. It is intentionally not public while extensions cannot submit rendered views. |
 | environment | one exported gradient-sky binding | scene/program boundary | Necessary; the Minecraft dimension selector applies the binding to its host-owned scene. |
 | retained geometry | one mesh with opaque, cutout, surface+volume, and volume-only slices | geometry channel | Issued IDs and atomic batches fit shared resident meshes and many placements. |
-| retained lights | rectangle, point, spot, and distant descriptors | light channel | Rectangle, spot, and distant map to emissive faces, the helmet light, and sun/moon. No current engine feature proves the point light or elliptical spot roll fields. |
+| retained lights | rectangle, circular spot, and distant descriptors | light channel | The three shapes map directly to emissive faces, the helmet light, and sun/moon. |
 | world-resource pass | publish a replacement descriptor/table root before tracing | pass/GPU boundary | Stage is necessary. The current frame lacks `SceneView` and time, which a camera-dependent atmosphere upload needs. |
 | post effect | read scene color/exposure and acquire a distinct output | pass boundary | Necessary for bloom. Cross-extension registration order is not a stable ordering contract. |
 | UI pass | draw a world marker using camera and root-scene TLAS | pass boundary | Necessary for outlines/name tags and correctly separate from scene-linear color. |
@@ -43,9 +43,6 @@ integration at `packages/examples/gltf-viewer-minecraft`.
 - Post and UI passes compose in registration order, but extension discovery order is not a stable semantic
   order. Bloom-before-colour-grade and marker-before-HUD are real ordering requirements. Pass registration
   needs stable IDs plus constrained `before`/`after` relationships, or a smaller set of named anchors.
-- `addWorldResourcePass` receives only the common `PassFrame`. A camera-dependent sky LUT needs the current
-  `SceneView` and a host time snapshot before tracing. A typed `WorldResourceFrame` should carry those facts;
-  reading Minecraft globals would break coherent frame snapshotting.
 - The three identity-checked `ShaderDataType` layers prevent implementation/binding/instance word mixups,
   which is useful, but they make a multi-material mesh require one deliberately shared instance marker.
   Generated schema tokens tied to reflected Java records would preserve the safety with less handwritten
@@ -61,10 +58,6 @@ integration at `packages/examples/gltf-viewer-minecraft`.
   `FrameInput`, carrying the registered volume plus its binding and instance words. Keep it out of `Camera`,
   because camera pose/projection and the host's sampled containing medium have different ownership. Do not add
   a public volume-selection feature channel while only the host can create a rendered view.
-- `LightDescriptor.Point` has no demonstrated current engine producer. `Spot` adds elliptical horizontal and
-  vertical angles plus an up vector, while the existing helmet light needs only a circular cone. Keep these
-  only if a real producer and sampler behavior are added; otherwise the simpler public shape is stronger.
-
 ## Deliberate runtime guards
 
 `ShowcasePasses.runtimeGpuRecordingEnabled()` always returns false. The guarded branches touch the borrowed

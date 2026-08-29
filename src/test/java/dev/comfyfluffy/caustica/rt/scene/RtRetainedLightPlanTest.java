@@ -16,29 +16,24 @@ final class RtRetainedLightPlanTest {
     void packsEveryPublicLightInAcceptanceOrderAndPhysicalUnits() {
         ByteBuffer records = RtRetainedLightPlan.pack(List.of(
                 new LightDescriptor.Rectangle(11, 22, 33, 2, 0, 0, 0, 3, 0, 4, 5, 6),
-                new LightDescriptor.Point(14, 25, 36, 7, 8, 9, 10),
-                new LightDescriptor.Spot(17, 28, 39, 0, 0, 1, 0, 1, 0,
-                        11, 0.2, 0.3, 12, 13, 14),
+                new LightDescriptor.Spot(17, 28, 39, 0, 0, 1,
+                        11, 0.2, 12, 13, 14),
                 new LightDescriptor.Distant(0, 1, 0, 15, 16, 17, 0.4, false)),
                 new SceneOrigin(10, 20, 30)).order(ByteOrder.nativeOrder());
 
-        assertEquals(4 * 80, records.remaining());
+        assertEquals(3 * 80, records.remaining());
         assertRecord(records, 0, RtRetainedLightPlan.RECTANGLE, 1, 2, 3, 0, 0);
         assertEquals(2.0f, records.getFloat(32));
         assertEquals(3.0f, records.getFloat(52));
         assertEquals(4.0f, records.getFloat(64));
 
-        int point = 80;
-        assertRecord(records, point, RtRetainedLightPlan.POINT, 4, 5, 6, 7, 0);
-        assertEquals(8.0f, records.getFloat(point + 64));
-
-        int spot = 160;
+        int spot = 80;
         assertRecord(records, spot, RtRetainedLightPlan.SPOT, 7, 8, 9, 11, 0);
         assertEquals(0.2f, records.getFloat(spot + 44));
-        assertEquals(0.3f, records.getFloat(spot + 60));
+        assertEquals(0.0f, records.getFloat(spot + 60));
         assertEquals(12.0f, records.getFloat(spot + 64));
 
-        int distant = 240;
+        int distant = 160;
         assertRecord(records, distant, RtRetainedLightPlan.DISTANT, 0, 1, 0, 0, 0.4f);
         assertEquals(15.0f, records.getFloat(distant + 64));
     }
@@ -55,8 +50,8 @@ final class RtRetainedLightPlanTest {
 
     @Test
     void rejectsPhysicalValuesOutsideGpuFloatRange() {
-        var light = new LightDescriptor.Point(0, 0, 0, 1,
-                Double.MAX_VALUE, 1, 1);
+        var light = new LightDescriptor.Spot(Double.MAX_VALUE, 0, 0, 0, 0, 1,
+                1, 0.2, 1, 1, 1);
         assertThrows(IllegalArgumentException.class,
                 () -> RtRetainedLightPlan.pack(List.of(light), new SceneOrigin(0, 0, 0)));
     }

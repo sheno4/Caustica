@@ -296,6 +296,9 @@ final class PassSessionTest {
         @Override public VkCommandBuffer commandBuffer() { return null; }
         @Override public GpuFrameUse gpuUse() { return null; }
         @Override public long frameIndex() { return 1; }
+        @Override public dev.comfyfluffy.caustica.api.view.SceneView view() { return null; }
+        @Override public double timeSeconds() { return 2.0; }
+        @Override public double metersPerSceneUnit() { return 1.0; }
         @Override public int renderWidth() { return 1920; }
         @Override public int renderHeight() { return 1080; }
     };
@@ -307,6 +310,9 @@ final class PassSessionTest {
         @Override public VkCommandBuffer commandBuffer() { return null; }
         @Override public GpuFrameUse gpuUse() { return null; }
         @Override public long frameIndex() { return 1; }
+        @Override public dev.comfyfluffy.caustica.api.view.SceneView view() { return null; }
+        @Override public double timeSeconds() { return 2.0; }
+        @Override public double metersPerSceneUnit() { return 1.0; }
         @Override public int renderWidth() { return 1920; }
         @Override public int renderHeight() { return 1080; }
     };
@@ -319,6 +325,8 @@ final class PassSessionTest {
         @Override public VkCommandBuffer commandBuffer() { return null; }
         @Override public GpuFrameUse gpuUse() { return null; }
         @Override public long frameIndex() { return 1; }
+        @Override public double timeSeconds() { return 2.0; }
+        @Override public double metersPerSceneUnit() { return 1.0; }
         @Override public int renderWidth() { return 1920; }
         @Override public int renderHeight() { return 1080; }
     };

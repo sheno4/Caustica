@@ -173,6 +173,9 @@ final class EngineSessionServicesTest {
         @Override public VkCommandBuffer commandBuffer() { return null; }
         @Override public GpuFrameUse gpuUse() { return null; }
         @Override public long frameIndex() { return 1; }
+        @Override public dev.comfyfluffy.caustica.api.view.SceneView view() { return null; }
+        @Override public double timeSeconds() { return 2.0; }
+        @Override public double metersPerSceneUnit() { return 1.0; }
         @Override public int renderWidth() { return 1280; }
         @Override public int renderHeight() { return 720; }
     };

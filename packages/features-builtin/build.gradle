@@ -1,0 +1,161 @@
+import dev.comfyfluffy.caustica.slangtooling.CompileSlangShaders
+import dev.comfyfluffy.caustica.slangtooling.GenerateShaderRecords
+import dev.comfyfluffy.caustica.slangtooling.ReflectSlang
+
+plugins {
+    id "java-library"
+    id "dev.comfyfluffy.caustica.slang-tooling"
+}
+
+version = project.api_version
+group = project.maven_group
+java.toolchain.languageVersion = JavaLanguageVersion.of(25)
+
+base { archivesName = "caustica-features-builtin" }
+repositories { mavenCentral() }
+
+dependencies {
+    api project(":packages:api")
+    api project(":packages:settings-api")
+    implementation project(":packages:vulkan-support")
+    testImplementation platform("org.junit:junit-bom:5.12.2")
+    testImplementation "org.junit.jupiter:junit-jupiter"
+    testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+}
+
+def builtinShaderModules = file("src/main/resources/caustica/shaders/builtin")
+def apiShaderModules = project(":packages:shader-api").file("src/main/resources/caustica/shaders/api")
+def generatedShaderResources = layout.buildDirectory.dir("generated/resources")
+
+def compileBloomShaders = tasks.register("compileBloomShaders", CompileSlangShaders) {
+    group = "build"
+    description = "Compiles and validates the built-in Bloom compute shader."
+    sourceDirectory = file("shaders")
+    includeDirectories.from(builtinShaderModules, apiShaderModules)
+    aliasSourceDirectory = file("shaders")
+    outputDirectory = generatedShaderResources.map { it.dir("caustica/shaders") }
+}
+
+def bloomReflectionRoot = layout.buildDirectory.dir("generated/bloom-reflection-sources")
+def prepareBloomReflectionSources = tasks.register("prepareBloomReflectionSources", Sync) {
+    from(builtinShaderModules) { into "builtin" }
+    from(file("src/shaderReflection")) { into "layout" }
+    into(bloomReflectionRoot)
+}
+
+def generateBloomPushData = tasks.register("generateBloomPushData", GenerateShaderRecords) {
+    group = "build"
+    description = "Generates the typed Bloom push-data record from Slang reflection."
+    dependsOn(prepareBloomReflectionSources)
+    shaderRoot = bloomReflectionRoot
+    probeSource = bloomReflectionRoot.map { it.file("layout/bloom_probe.slang") }
+    includedRecords = ["BloomPushData"]
+    outDir = layout.buildDirectory.dir("generated/sources/shaderRecords")
+}
+
+def reflectBloomShader = tasks.register("reflectBloomShader", ReflectSlang) {
+    group = "verification"
+    description = "Reflects and validates the descriptor-heap-native Bloom compute ABI."
+    sourceFile = file("shaders/pipelines/bloom/main.comp.slang")
+    includeDirectories.from(builtinShaderModules, apiShaderModules)
+    reflectionJson = layout.buildDirectory.file("generated/shader-reflection/bloom.json")
+    spirv = layout.buildDirectory.file("generated/shader-reflection/bloom.spv")
+}
+
+def verifyBloomShaderAbi = tasks.register("verifyBloomShaderAbi") {
+    group = "verification"
+    dependsOn(reflectBloomShader)
+    def reflection = reflectBloomShader.flatMap { it.reflectionJson }
+    inputs.file(reflection)
+    doLast {
+        def json = new groovy.json.JsonSlurper().parse(reflection.get().asFile)
+        if (json.parameters*.name != ["pc"] || json.parameters[0].binding.kind != "pushConstantBuffer") {
+            throw new GradleException("Bloom reflection must expose only the push-data parameter")
+        }
+        def fields = json.parameters[0].type.elementType.fields
+        def expected = [destinationImageIndex: 0, sourceImageIndex: 4, samplerIndex: 8,
+                exposureImageIndex: 12, sceneImageIndex: 16, mode: 20, threshold: 24,
+                softKnee: 28, radius: 32, compositeStrength: 36]
+        def actual = fields.collectEntries { [(it.name): it.binding.offset] }
+        if (actual != expected || json.parameters[0].type.elementType.sizes[0].value != 40) {
+            throw new GradleException("Bloom push-data ABI mismatch: ${actual}")
+        }
+        if (json.entryPoints.size() != 1 || json.entryPoints[0].name != "main"
+                || json.entryPoints[0].threadGroupSize != [8, 8, 1]) {
+            throw new GradleException("Bloom compute entry-point ABI mismatch")
+        }
+    }
+}
+
+def verifyBuiltinDependencies = tasks.register("verifyBuiltinDependencies") {
+    group = "verification"
+    inputs.files(sourceSets.main.allJava)
+    doLast {
+        def forbidden = ["dev.comfyfluffy.caustica.engine", "dev.comfyfluffy.caustica.minecraft",
+                "dev.comfyfluffy.caustica.rt", "dev.comfyfluffy.caustica.ngx",
+                "dev.comfyfluffy.caustica.platform", "net.minecraft", "net.fabricmc", "net.neoforged"]
+        def violations = []
+        sourceSets.main.allJava.files.sort().each { source ->
+            source.eachLine { line, number ->
+                if (line.stripLeading().startsWith("import ") && forbidden.any { line.contains(it) }) {
+                    violations.add("${source}:${number}: ${line.trim()}")
+                }
+            }
+        }
+        if (!violations.empty) throw new GradleException("built-in feature dependency violations:\n${violations.join('\n')}")
+    }
+}
+
+def verifyBuiltinJar = tasks.register("verifyBuiltinJar") {
+    group = "verification"
+    dependsOn(tasks.named("jar"))
+    doLast {
+        def artifact = tasks.named("jar", Jar).get().archiveFile.get().asFile
+        def strays = []
+        def names = []
+        new java.util.jar.JarFile(artifact).withCloseable { jar ->
+            def entries = jar.entries()
+            while (entries.hasMoreElements()) {
+                def name = entries.nextElement().name
+                names.add(name)
+                if (name.endsWith(".class")
+                        && !name.startsWith("dev/comfyfluffy/caustica/builtin/")) strays.add(name)
+            }
+        }
+        if (!strays.empty) throw new GradleException("built-in feature JAR contains foreign classes: ${strays}")
+        def required = [
+                "dev/comfyfluffy/caustica/builtin/BloomPass.class",
+                "dev/comfyfluffy/caustica/builtin/BuiltinExtension.class",
+                "dev/comfyfluffy/caustica/builtin/gen/BloomPushData.class",
+                "caustica/shaders/builtin/bloom/caustica_bloom.slang",
+                "caustica/shaders/pipelines/bloom/main.comp.spv"
+        ]
+        def missing = required.findAll { !names.contains(it) }
+        if (!missing.empty) throw new GradleException("built-in feature JAR is missing: ${missing}")
+    }
+}
+
+sourceSets.main.java.srcDir(files(layout.buildDirectory.dir("generated/sources/shaderRecords"))
+        .builtBy(generateBloomPushData))
+sourceSets.main.resources.srcDir(files(generatedShaderResources).builtBy(compileBloomShaders))
+
+tasks.named("test", Test) { useJUnitPlatform() }
+tasks.withType(JavaCompile).configureEach { options.release = 25 }
+tasks.named("check") {
+    dependsOn(verifyBloomShaderAbi, verifyBuiltinDependencies, verifyBuiltinJar)
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_25
+    targetCompatibility = JavaVersion.VERSION_25
+    withSourcesJar()
+}
+
+tasks.named("jar", Jar).configure {
+    from(rootProject.files("LICENSE.md", "COPYING", "COPYING.LESSER")) { into "META-INF" }
+}
+
+tasks.named("sourcesJar", Jar).configure {
+    from("shaders") { into "shaders" }
+    from("src/shaderReflection") { into "shaderReflection" }
+}

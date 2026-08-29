@@ -127,6 +127,9 @@ public final class RtPassSchedulerBackend implements PassSchedulerBackend {
             VkCommandBuffer commandBuffer,
             GpuFrameUse gpuUse,
             long frameIndex,
+            SceneView view,
+            double timeSeconds,
+            double metersPerSceneUnit,
             int renderWidth,
             int renderHeight,
             GpuImage reconstructedSceneColor,
@@ -138,6 +141,11 @@ public final class RtPassSchedulerBackend implements PassSchedulerBackend {
             Objects.requireNonNull(commandBuffer, "commandBuffer");
             Objects.requireNonNull(gpuUse, "gpuUse");
             if (frameIndex < 0L) throw new IllegalArgumentException("frameIndex must be non-negative");
+            Objects.requireNonNull(view, "view");
+            if (!Double.isFinite(timeSeconds)) throw new IllegalArgumentException("timeSeconds must be finite");
+            if (!(metersPerSceneUnit > 0.0) || !Double.isFinite(metersPerSceneUnit)) {
+                throw new IllegalArgumentException("metersPerSceneUnit must be finite and positive");
+            }
             if (renderWidth <= 0 || renderHeight <= 0) {
                 throw new IllegalArgumentException("render extent must be positive");
             }
@@ -152,11 +160,9 @@ public final class RtPassSchedulerBackend implements PassSchedulerBackend {
     public record UiState(
             GpuImage layer,
             float[] worldViewProjection,
-            SceneView view,
             GpuAccelerationStructureDescriptor rootSceneTlasDescriptor) {
         public UiState {
             Objects.requireNonNull(layer, "layer");
-            Objects.requireNonNull(view, "view");
             Objects.requireNonNull(rootSceneTlasDescriptor, "rootSceneTlasDescriptor");
             if (worldViewProjection == null || worldViewProjection.length != 16) {
                 throw new IllegalArgumentException("worldViewProjection must contain 16 values");
@@ -241,6 +247,9 @@ public final class RtPassSchedulerBackend implements PassSchedulerBackend {
         @Override public VkCommandBuffer commandBuffer() { requireLive(); return state.commandBuffer(); }
         @Override public GpuFrameUse gpuUse() { requireLive(); return state.gpuUse(); }
         @Override public long frameIndex() { requireLive(); return state.frameIndex(); }
+        @Override public SceneView view() { requireLive(); return state.view(); }
+        @Override public double timeSeconds() { requireLive(); return state.timeSeconds(); }
+        @Override public double metersPerSceneUnit() { requireLive(); return state.metersPerSceneUnit(); }
         @Override public int renderWidth() { requireLive(); return state.renderWidth(); }
         @Override public int renderHeight() { requireLive(); return state.renderHeight(); }
     }
@@ -326,7 +335,6 @@ public final class RtPassSchedulerBackend implements PassSchedulerBackend {
             UiBorrow(InvocationBase<?> owner, FrameState state) { super(owner, state); }
             @Override public GpuImage layer() { requireLive(); return state.ui().layer(); }
             @Override public float[] worldViewProjection() { requireLive(); return state.ui().worldViewProjection(); }
-            @Override public SceneView view() { requireLive(); return state.ui().view(); }
             @Override public GpuAccelerationStructureDescriptor rootSceneTlasDescriptor() {
                 requireLive();
                 return state.ui().rootSceneTlasDescriptor();

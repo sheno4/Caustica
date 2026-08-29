@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.api.pass;
 
 import dev.comfyfluffy.caustica.api.gpu.GpuFrameUse;
+import dev.comfyfluffy.caustica.api.view.SceneView;
 import org.lwjgl.vulkan.VkCommandBuffer;
 
 /**
@@ -12,7 +13,7 @@ import org.lwjgl.vulkan.VkCommandBuffer;
  * remain bound for the callback. A pass indexes those heaps directly and must not replace their bindings.
  *
  * <p>Subtypes expose stage-specific resources: {@link PostEffectFrame} provides the scene image and effect
- * chain, while {@link UiFrame} provides the UI layer and camera.
+ * chain, while {@link UiFrame} provides the UI layer and world-overlay resources.
  *
  * <p>The frame, command buffer, completion reservation, images, descriptor views, and subtype capabilities
  * are borrowed only for the current {@link Pass#record} invocation on that thread. Do not retain any of
@@ -38,6 +39,15 @@ public interface PassFrame {
      * <p>Use this value to share a stable snapshot across an extension's passes in the same frame.
      */
     long frameIndex();
+
+    /** The immutable camera and root scene coherently sampled for this rendered frame. */
+    SceneView view();
+
+    /** Renderer time coherently sampled for this rendered frame, in seconds. */
+    double timeSeconds();
+
+    /** Physical metres represented by one coordinate unit in {@link #view()}'s root scene. */
+    double metersPerSceneUnit();
 
     /**
      * The resolution the world was traced at this frame, which is not the display resolution: an upscaler

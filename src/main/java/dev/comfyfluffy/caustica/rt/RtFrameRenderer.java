@@ -376,7 +376,7 @@ final class RtFrameRenderer {
         }
         passes.beginFrame(passFrame(commandBuffer, pendingGraphicsUse,
                 new RtPassSchedulerBackend.UiState(uiLayer, mvCurProjView.get(new float[16]),
-                        frameSnapshot.view(), currentTrace.tlasDescriptor())));
+                        currentTrace.tlasDescriptor())));
         try {
             services.passes().recordUi();
         } finally {
@@ -789,7 +789,8 @@ final class RtFrameRenderer {
             VkCommandBuffer commandBuffer, RtGpuExecutor.GraphicsUse graphicsUse,
             RtPassSchedulerBackend.UiState ui) {
         return new RtPassSchedulerBackend.FrameState(commandBuffer, graphicsUse, frameCounter,
-                frameResources.displayW, frameResources.displayH, frameResources.rrOutput,
+                frameSnapshot.view(), frameSnapshot.timeSeconds(), frameSnapshot.metersPerWorldUnit(),
+                frameResources.renderW, frameResources.renderH, frameResources.rrOutput,
                 frameResources.exposure.image(), frameResources.postColorA, frameResources.postColorB, ui);
     }
 

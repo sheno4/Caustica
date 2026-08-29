@@ -3,7 +3,6 @@
 // complete Std430DataLayout: field types, byte offsets, total size, matrix mode, and array counts.
 import world_common;
 import display_common;
-import caustica_bloom_types;
 import caustica_minecraft_sky_atmosphere;
 import caustica_minecraft_sky_bindings;
 import caustica_minecraft_sky_lut_types;
@@ -18,10 +17,6 @@ struct WorldPushLayoutProbe {
 
 struct MaterialBindingLayoutProbe {
     MaterialBinding values[2]; // array stride is the complete, tail-padded MaterialBinding byte size
-};
-
-struct SurfaceMaterialLayoutProbe {
-    SurfaceMaterial values[2]; // array stride is the complete, tail-padded SurfaceMaterial byte size
 };
 
 struct RetainedGeometryRecordLayoutProbe { RetainedGeometryRecord values[2]; };
@@ -41,7 +36,6 @@ struct MinecraftEnvironmentBindingLayoutProbe { MinecraftEnvironmentBinding valu
 
 [[vk::binding(0, 0)]] StructuredBuffer<WorldPushLayoutProbe, Std430DataLayout> worldPushLayoutProbe;
 [[vk::binding(1, 0)]] StructuredBuffer<MaterialBindingLayoutProbe, Std430DataLayout> materialBindingLayoutProbe;
-[[vk::binding(2, 0)]] StructuredBuffer<SurfaceMaterialLayoutProbe, Std430DataLayout> surfaceMaterialLayoutProbe;
 [[vk::binding(3, 0)]] StructuredBuffer<ExposureStateLayoutProbe, Std430DataLayout> exposureStateLayoutProbe;
 [[vk::binding(4, 0)]] StructuredBuffer<MinecraftImplementationLayoutProbe, Std430DataLayout> minecraftImplementationLayoutProbe;
 [[vk::binding(5, 0)]] StructuredBuffer<MinecraftMaterialLayoutProbe, Std430DataLayout> minecraftMaterialLayoutProbe;
@@ -52,8 +46,6 @@ struct MinecraftEnvironmentBindingLayoutProbe { MinecraftEnvironmentBinding valu
 [[vk::binding(10, 0)]] StructuredBuffer<RetainedLightRecordLayoutProbe, Std430DataLayout> retainedLightRecordLayoutProbe;
 [[vk::binding(11, 0)]] StructuredBuffer<NeeAtStateLayoutProbe, Std430DataLayout> neeAtStateLayoutProbe;
 [[vk::binding(12, 0)]] StructuredBuffer<PackedPathSegmentLayoutProbe, Std430DataLayout> packedPathSegmentLayoutProbe;
-[[vk::push_constant]] WorldPushConstants pushConstantsLayoutProbe;
-
 [shader("compute")]
 [numthreads(1, 1, 1)]
 void main(uint3 id : SV_DispatchThreadID) {
@@ -61,7 +53,6 @@ void main(uint3 id : SV_DispatchThreadID) {
     if (id.x == 0xFFFFFFFFu) {
         float sink = worldPushLayoutProbe[0].values[0].invViewProj[0][0]
                 + float(materialBindingLayoutProbe[0].values[0].packed0)
-                + surfaceMaterialLayoutProbe[0].values[0].specularRoughness
                 + exposureStateLayoutProbe[0].values[0].previous
                 + float(minecraftImplementationLayoutProbe[0].values[0].materialsAddress)
                 + minecraftMaterialLayoutProbe[0].values[0].specularRoughness
@@ -71,8 +62,7 @@ void main(uint3 id : SV_DispatchThreadID) {
                 + float(retainedGeometryRecordLayoutProbe[0].values[0].surfaceImplementation)
                 + float(retainedLightRecordLayoutProbe[0].values[0].type)
                 + float(neeAtStateLayoutProbe[0].values[0].lightCount)
-                + float(packedPathSegmentLayoutProbe[0].values[0].nextRecord)
-                + float(pushConstantsLayoutProbe.frameIndex);
+                + float(packedPathSegmentLayoutProbe[0].values[0].nextRecord);
     }
 }
 
@@ -134,17 +124,6 @@ void probeSkyDispatchPush(uint3 id : SV_DispatchThreadID) {
     if (id.x == 0xFFFFFFFFu) {
         float sink = float(skyDispatchPushProbe.destinationImageIndex)
                 + skyDispatchPushProbe.inputs.celestial.x;
-    }
-}
-
-[[vk::push_constant]] BloomPush bloomPushProbe;
-[shader("compute")]
-[numthreads(1, 1, 1)]
-void probeBloomPush(uint3 id : SV_DispatchThreadID) {
-    if (id.x == 0xFFFFFFFFu) {
-        float sink = float(bloomPushProbe.destinationImageIndex)
-                + float(bloomPushProbe.samplerIndex)
-                + float(bloomPushProbe.mode) + bloomPushProbe.radius;
     }
 }
 

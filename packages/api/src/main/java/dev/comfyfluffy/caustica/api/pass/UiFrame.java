@@ -2,7 +2,6 @@ package dev.comfyfluffy.caustica.api.pass;
 
 import dev.comfyfluffy.caustica.api.gpu.GpuImage;
 import dev.comfyfluffy.caustica.api.gpu.GpuAccelerationStructureDescriptor;
-import dev.comfyfluffy.caustica.api.view.SceneView;
 
 /**
  * Passed to a UI-stage {@link Pass} to draw one rendered frame's UI layer. There is no recording callback
@@ -43,9 +42,6 @@ public interface UiFrame extends PassFrame {
      * snapshot: implementations return a defensive copy, and callers do not retain or mutate it.
      */
     float[] worldViewProjection();
-
-    /** The camera and root scene for this rendered frame. Never retain it past this callback. */
-    SceneView view();
 
     /**
      * Shader-visible descriptor for {@link #view()}'s root-scene TLAS. Pass the descriptor index to the
