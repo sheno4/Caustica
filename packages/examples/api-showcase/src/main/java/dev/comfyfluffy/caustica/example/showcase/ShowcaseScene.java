@@ -79,6 +79,10 @@ final class ShowcaseScene {
                         0, 1, 0, 100_000, 95_000, 90_000, 0.00465, false)))));
     }
 
+    SceneId identity() {
+        return scene;
+    }
+
     void stop() {
         geometry.submit(RetainedBatch.of(List.of(
                 new GeometryChannel.DropInstance(instance),

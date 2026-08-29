@@ -9,16 +9,23 @@ import dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptorKind;
 import dev.comfyfluffy.caustica.api.pass.Pass;
 import dev.comfyfluffy.caustica.api.pass.PassFrame;
 import dev.comfyfluffy.caustica.api.pass.PassId;
+import dev.comfyfluffy.caustica.api.pass.PassPlacement;
 import dev.comfyfluffy.caustica.api.pass.PostEffectFrame;
 import dev.comfyfluffy.caustica.api.pass.UiFrame;
+import dev.comfyfluffy.caustica.settings.OptionLookup;
+import dev.comfyfluffy.caustica.vulkan.ShaderObjectCompute;
 import org.lwjgl.vulkan.VkResourceDescriptorInfoEXT;
 import org.lwjgl.vulkan.VkSamplerCreateInfo;
+
+import java.nio.ByteBuffer;
 
 final class ShowcasePasses {
     static final PassId BLOOM = PassId.of("caustica", "bloom");
     static final PassId POST_EFFECT = PassId.of("caustica_showcase", "colour_grade");
     static final PassId UI = PassId.of("caustica_showcase", "world_marker");
     static final PassId WORLD_OVERLAY = PassId.of("caustica", "world_overlay");
+    static final PassPlacement POST_EFFECT_PLACEMENT = PassPlacement.after(BLOOM);
+    static final PassPlacement UI_PLACEMENT = PassPlacement.before(WORLD_OVERLAY);
 
     private ShowcasePasses() { }
 
@@ -42,22 +49,33 @@ final class ShowcasePasses {
         };
     }
 
-    static Pass<PostEffectFrame> postEffect(GpuDevice gpu) {
+    static Pass<PostEffectFrame> postEffect(GpuDevice gpu, OptionLookup options) {
         return new Pass<>() {
             @Override
             public void record(PostEffectFrame frame) {
                 if (runtimeGpuRecordingEnabled()) {
+                    float strength = colourGradeStrength(options);
                     int input = frame.sceneColor().descriptor(GpuImageDescriptorKind.SAMPLED).index().value();
                     int exposure = frame.exposureImage().descriptor(GpuImageDescriptorKind.SAMPLED).index().value();
                     int output = frame.acquireSceneColorOutput()
                             .descriptor(GpuImageDescriptorKind.STORAGE).index().value();
-                    throw missingCommands(input, exposure, output);
+                    throw missingCommands(input, exposure, output, strength);
                 }
             }
 
             @Override
             public void close() { }
         };
+    }
+
+    /** Creates a pass-owned compute shader object from tooling-produced direct SPIR-V. */
+    static ShaderObjectCompute createComputeShader(GpuDevice gpu, ByteBuffer spirv) {
+        return ShaderObjectCompute.create(gpu, spirv, "main");
+    }
+
+    static float colourGradeStrength(OptionLookup options) {
+        return options.snapshot().options(ApiShowcaseExtension.ID)
+                .get(ApiShowcaseExtension.COLOUR_GRADE_STRENGTH);
     }
 
     static Pass<UiFrame> ui(GpuDevice gpu) {

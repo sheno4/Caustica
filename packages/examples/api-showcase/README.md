@@ -15,8 +15,8 @@ integration at `packages/examples/gltf-viewer-minecraft`.
 |---|---|---|---|
 | process registration and session contribution | device recreation creates a fresh `ShowcaseSession` | Vulkan session ownership | Necessary; process objects must not retain handles from an old device. |
 | surface plus coverage | opaque metal and alpha-cut foliage | world-program composition | Separate coverage is necessary for traversal; an opaque surface should not pay for it. |
-| volume | glass boundary with absorption and an invisible fog-boundary proposal | world-program composition | The narrow absorption ABI fits; independent registration and volume-only geometry remain provisional until rendered. |
-| initial view medium | camera beginning underwater | generic view state plus volume dispatch | Required by the existing renderer. Minecraft chooses water; `SceneView` carries the typed volume or explicit vacuum. |
+| volume | glass boundary with absorption and a volume-only fog boundary | world-program composition | The narrow absorption ABI fits both surface boundaries and volume-only geometry. |
+| initial view medium | explicit vacuum and camera beginning underwater | generic view state plus volume dispatch | `SceneView` carries either `ViewMedium.Vacuum` or the typed volume binding and instance data selected by the host. |
 | environment | one exported gradient-sky binding | scene/program boundary | Necessary; the Minecraft dimension selector applies the binding to its host-owned scene. |
 | retained geometry | one mesh with opaque, cutout, surface+volume, and volume-only slices | geometry channel | Issued IDs and atomic batches fit shared resident meshes and many placements. |
 | retained lights | rectangle, circular spot, and distant descriptors | light channel | The three shapes map directly to emissive faces, the helmet light, and sun/moon. |
@@ -24,6 +24,8 @@ integration at `packages/examples/gltf-viewer-minecraft`.
 | post effect | read scene color/exposure, acquire a distinct output, and order after optional bloom | pass boundary | Necessary for bloom and colour grading. Stable ids plus one optional anchor avoid relying on extension discovery order. |
 | UI pass | draw a world marker using camera and entry-scene TLAS | pass boundary | Necessary for outlines/name tags and correctly separate from scene-linear color. |
 | descriptor heap and retirement | typed resource/sampler ranges, borrowed descriptors, per-frame and prior-use cleanup | Vulkan boundary | Necessary for independent passes; raw VMA allocation still benefits from an optional Vulkan support package. |
+| shader object | create a pass-owned compute shader from direct SPIR-V | Vulkan support boundary | `ShaderObjectCompute` supplies descriptor-heap validation, creation, binding, push data, dispatch, and destruction without moving shader ownership into the renderer. |
+| settings lookup | snapshot one feature-scoped colour-grade option during pass recording | process API plus settings API | Declaration stays process-scoped; the pass reads a stable snapshot without reaching host storage. |
 
 ## Refactor decisions proven by the probe
 
@@ -35,6 +37,10 @@ integration at `packages/examples/gltf-viewer-minecraft`.
   registration or administer the scene.
 - Mesh streams use retained `VulkanDeviceAddressRange` values instead of four interchangeable primitive
   arguments. Descriptor ranges and borrowed indices preserve resource-versus-sampler type information.
+- `ShowcaseSession.vacuumView` and `underwaterView` reuse the single host-issued scene identity. They vary
+  only the camera's containing medium and do not imply scene creation, selection, or portal authority.
+- `ApiShowcaseExtension` declares its option independently of render-session creation. The post pass uses
+  `OptionLookup.snapshot()` before reading the feature-scoped value used for that frame.
 - `GpuFrameUse.whenComplete` is the frame-scoped callback for both resource retirement and positive
   completion work, such as publishing a mesh after its staging upload completes. It follows this frame's
   recorded commands, runs once on the renderer thread, and does not wait for later or unrelated GPU work.
@@ -51,9 +57,8 @@ integration at `packages/examples/gltf-viewer-minecraft`.
   which is useful, but they make a multi-material mesh require one deliberately shared instance marker.
   Generated schema tokens tied to reflected Java records would preserve the safety with less handwritten
   phantom-type ceremony.
-- Public scene creation remains deferred. A future ray portal justifies keeping `SceneId` in geometry, lights,
-  and views, but it will also need a destination transform, lifetime link, hop policy, and shader-visible TLAS
-  selection. Add scene creation and a retained portal-link capability together with that implementation.
+- Scene identity remains host-issued and non-owning. The showcase intentionally demonstrates one scene
+  referenced consistently by geometry, lights, environment bindings, and views, with no scene-control API.
 - Public `SceneView` carries the typed medium containing the camera origin. It remains separate from `Camera`
   because camera pose/projection and the host's sampled containing medium have different ownership. The host
   selects Minecraft water; no public volume-selection feature channel is needed while only the host creates
@@ -61,14 +66,16 @@ integration at `packages/examples/gltf-viewer-minecraft`.
 ## Deliberate runtime guards
 
 `ShowcasePasses.runtimeGpuRecordingEnabled()` always returns false. The guarded branches touch the borrowed
-image, descriptor, output-chain, and retirement APIs but do not record valid Vulkan commands. Enabling them
-would violate the post-effect full-write contract. Real commands require pipelines and resources which are
-outside a compile-only probe.
+image, descriptor, output-chain, settings-snapshot, and retirement APIs but do not record valid Vulkan
+commands. Enabling them would violate the post-effect full-write contract. `createComputeShader` demonstrates
+the supported shader-object construction boundary; a runnable pass still needs packaged SPIR-V, push-data
+records, output writes, and owned Vulkan resources.
 
 `ShowcaseScene.publishMesh(...)` accepts externally uploaded device addresses. The main API deliberately
 has no CPU mesh or texture uploader. A real glTF consumer therefore needs to write substantial VMA,
 staging, descriptor, and retirement code before it can submit a `MeshBuild`. That is a strong case for a
-separate reusable `vulkan-support` package, not for putting upload policy in the main API.
+separate reusable upload support package, not for putting upload policy in the main API. Shader-object
+creation is already covered by `vulkan-support` and is consumed directly by this probe.
 
 ## Missing Minecraft boundary
 
