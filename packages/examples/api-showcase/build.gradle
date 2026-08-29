@@ -1,5 +1,8 @@
+import dev.comfyfluffy.caustica.slangtooling.CompileSlangShaders
+
 plugins {
     id "java-library"
+    id "dev.comfyfluffy.caustica.slang-tooling"
 }
 
 java.toolchain.languageVersion = JavaLanguageVersion.of(25)
@@ -16,8 +19,23 @@ dependencies {
     testRuntimeOnly "org.junit.platform:junit-platform-launcher"
 }
 
+def validateShowcaseShaders = tasks.register("validateShowcaseShaders", CompileSlangShaders) {
+    group = "verification"
+    description = "Compiles the showcase world models and pass entry points against the public Slang ABI."
+    sourceDirectory = layout.projectDirectory.dir("src/main/resources/api_showcase/shaders")
+    includeDirectories.from(
+            layout.projectDirectory.dir("src/main/resources/api_showcase/shaders"),
+            project(":packages:shader-api").layout.projectDirectory.dir("src/main/resources/caustica/shaders/api"))
+    aliasSourceDirectory = layout.projectDirectory.dir("src/main/resources/api_showcase/shaders")
+    outputDirectory = layout.buildDirectory.dir("validated-shaders")
+}
+
 tasks.named("test", Test) {
     useJUnitPlatform()
+}
+
+tasks.named("check") {
+    dependsOn(validateShowcaseShaders)
 }
 
 tasks.withType(JavaCompile).configureEach {

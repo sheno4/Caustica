@@ -79,10 +79,13 @@ environment/sky contribution channel; it should not expose the engine's scene ad
 
 ## Slang reflection reuse
 
-The repository's reflection generators are currently hard-coded `buildSrc` tasks with engine package names
-and fixed probe lists. Move the reflection parser/generator into a reusable Gradle plugin package with a
-declarative per-module manifest: source roots, entry point, reflected struct, Java package/class, layout,
-and whether a reader is required. Publish the public Slang ABI as an input configuration. The plugin should
-generate records/serializers plus a compiler-option and source-hash manifest, and validate all four world
-interfaces and independent pass entry points at build time. This lets extension packages reuse reflection
-without exposing the engine's runtime Slang compiler through `RenderSessionContext`.
+The independently publishable `dev.comfyfluffy.caustica.slang-tooling` Gradle plugin provides reusable
+compile, reflection, and typed-record generation tasks. This package applies it directly: `check` compiles
+the world-model validation probe and all three pass entry points against the public `shader-api` modules,
+then validates Vulkan 1.4 SPIR-V 1.6. The generated validation binaries remain build outputs and are not
+added to the showcase JAR.
+
+Each package owns its probes, generated Java namespace, and concrete record manifest. The tooling plugin
+owns compiler discovery, target/profile conventions, reflection parsing, and reproducible task inputs and
+outputs, so extension packages can reuse compile-time validation without receiving the engine's runtime
+Slang compiler through `RenderSessionContext`.
