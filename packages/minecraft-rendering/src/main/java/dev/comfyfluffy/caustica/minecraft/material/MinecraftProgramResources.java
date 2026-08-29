@@ -13,14 +13,8 @@ import dev.comfyfluffy.caustica.minecraft.gen.MinecraftInstanceData;
 import dev.comfyfluffy.caustica.minecraft.gen.MinecraftMaterialData;
 import dev.comfyfluffy.caustica.minecraft.gen.MinecraftPrimitiveData;
 import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
-import org.lwjgl.PointerBuffer;
+import dev.comfyfluffy.caustica.vulkan.VmaMappedBuffer;
 import org.lwjgl.system.MemoryStack;
-import org.lwjgl.system.MemoryUtil;
-import org.lwjgl.util.vma.Vma;
-import org.lwjgl.util.vma.VmaAllocationCreateInfo;
-import org.lwjgl.util.vma.VmaAllocationInfo;
-import org.lwjgl.vulkan.VkBufferCreateInfo;
-import org.lwjgl.vulkan.VkBufferDeviceAddressInfo;
 import org.lwjgl.vulkan.VkImageDescriptorInfoEXT;
 import org.lwjgl.vulkan.VkImageViewCreateInfo;
 import org.lwjgl.vulkan.VkSamplerCreateInfo;
@@ -29,15 +23,11 @@ import org.slf4j.LoggerFactory;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.nio.LongBuffer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
 
-import static org.lwjgl.util.vma.Vma.vmaCreateBuffer;
 import static org.lwjgl.vulkan.VK10.*;
-import static org.lwjgl.vulkan.VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-import static org.lwjgl.vulkan.VK12.vkGetBufferDeviceAddress;
 
 /** Session-wide sampler and factory for immutable Minecraft program/material epochs. */
 public final class MinecraftProgramResources implements AutoCloseable {
@@ -116,10 +106,10 @@ public final class MinecraftProgramResources implements AutoCloseable {
 
     private Epoch createEpoch(List<MinecraftMaterialRecord> records, List<UploadedImage> images) {
         GpuDescriptorRange<GpuDescriptorIndex.Resource> descriptors = null;
-        Buffer materialTable = null;
-        Buffer implementation = null;
-        Buffer primitive = null;
-        Buffer instance = null;
+        VmaMappedBuffer materialTable = null;
+        VmaMappedBuffer implementation = null;
+        VmaMappedBuffer primitive = null;
+        VmaMappedBuffer instance = null;
         try {
             if (!images.isEmpty()) {
                 descriptors = gpu.descriptorHeap().allocateResources(images.size(), "Minecraft material textures");
@@ -136,9 +126,9 @@ public final class MinecraftProgramResources implements AutoCloseable {
                             .write(destination.slice().order(ByteOrder.LITTLE_ENDIAN));
                 }
             });
-            Buffer table = materialTable;
+            VmaMappedBuffer table = materialTable;
             implementation = create(MinecraftImplementationData.BYTE_SIZE,
-                    bytes -> new MinecraftImplementationData(table.address,
+                    bytes -> new MinecraftImplementationData(table.deviceRange().address().value(),
                             new MinecraftImplementationData.SamplerIndex(sampler.firstIndex().value()), 0).write(bytes));
             primitive = create(MinecraftPrimitiveData.BYTE_SIZE, bytes -> new MinecraftPrimitiveData(
                     new MinecraftPrimitiveData.Float2[0], new MinecraftPrimitiveData.Float4[0],
@@ -151,10 +141,10 @@ public final class MinecraftProgramResources implements AutoCloseable {
                     new MinecraftInstanceData.SampledTexture2DIndex(0), 0.0f).write(bytes));
             return new Epoch(descriptors, materialTable, implementation, primitive, instance, images);
         } catch (RuntimeException | Error failure) {
-            if (instance != null) instance.destroy();
-            if (primitive != null) primitive.destroy();
-            if (implementation != null) implementation.destroy();
-            if (materialTable != null) materialTable.destroy();
+            if (instance != null) instance.close();
+            if (primitive != null) primitive.close();
+            if (implementation != null) implementation.close();
+            if (materialTable != null) materialTable.close();
             if (descriptors != null) descriptors.destroy();
             throw failure;
         }
@@ -203,34 +193,16 @@ public final class MinecraftProgramResources implements AutoCloseable {
         }
     }
 
-    private Buffer create(long size, Writer writer) {
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkBufferCreateInfo bufferInfo = VkBufferCreateInfo.calloc(stack).sType$Default().size(size)
-                    .usage(VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT)
-                    .sharingMode(VK_SHARING_MODE_EXCLUSIVE);
-            VmaAllocationCreateInfo allocationInfo = VmaAllocationCreateInfo.calloc(stack)
-                    .usage(Vma.VMA_MEMORY_USAGE_AUTO)
-                    .flags(Vma.VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
-                            | Vma.VMA_ALLOCATION_CREATE_MAPPED_BIT);
-            LongBuffer outBuffer = stack.mallocLong(1);
-            PointerBuffer outAllocation = stack.mallocPointer(1);
-            VmaAllocationInfo outInfo = VmaAllocationInfo.calloc(stack);
-            int result = vmaCreateBuffer(gpu.vmaAllocator(), bufferInfo, allocationInfo,
-                    outBuffer, outAllocation, outInfo);
-            if (result != VK_SUCCESS) throw new IllegalStateException("vmaCreateBuffer failed: " + result);
-            long handle = outBuffer.get(0);
-            long allocation = outAllocation.get(0);
-            long address = vkGetBufferDeviceAddress(gpu.vk(),
-                    VkBufferDeviceAddressInfo.calloc(stack).sType$Default().buffer(handle));
-            if (address == 0L || outInfo.pMappedData() == 0L) {
-                Vma.vmaDestroyBuffer(gpu.vmaAllocator(), handle, allocation);
-                throw new IllegalStateException("Minecraft program buffer is not mapped and device-addressable");
-            }
-            ByteBuffer bytes = MemoryUtil.memByteBuffer(outInfo.pMappedData(), Math.toIntExact(size))
-                    .order(ByteOrder.LITTLE_ENDIAN);
-            writer.write(bytes);
-            Vma.vmaFlushAllocation(gpu.vmaAllocator(), allocation, 0, size);
-            return new Buffer(handle, allocation, address);
+    private VmaMappedBuffer create(long size, Writer writer) {
+        VmaMappedBuffer buffer = VmaMappedBuffer.create(
+                gpu, size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "Minecraft program buffer");
+        try {
+            writer.write(buffer.mapped().order(ByteOrder.LITTLE_ENDIAN));
+            buffer.flush(0, size);
+            return buffer;
+        } catch (RuntimeException | Error failure) {
+            buffer.close();
+            throw failure;
         }
     }
 
@@ -266,15 +238,16 @@ public final class MinecraftProgramResources implements AutoCloseable {
     /** Immutable root and all resource-pack GPU resources captured by one program registration. */
     public final class Epoch implements AutoCloseable {
         private final GpuDescriptorRange<GpuDescriptorIndex.Resource> descriptors;
-        private final Buffer materialTable;
-        private final Buffer implementation;
-        private final Buffer primitive;
-        private final Buffer instance;
+        private final VmaMappedBuffer materialTable;
+        private final VmaMappedBuffer implementation;
+        private final VmaMappedBuffer primitive;
+        private final VmaMappedBuffer instance;
         private final List<UploadedImage> images;
         private final Runnable retirement = this::retire;
         private boolean closed;
         private Epoch(GpuDescriptorRange<GpuDescriptorIndex.Resource> descriptors,
-                      Buffer materialTable, Buffer implementation, Buffer primitive, Buffer instance,
+                      VmaMappedBuffer materialTable, VmaMappedBuffer implementation,
+                      VmaMappedBuffer primitive, VmaMappedBuffer instance,
                       List<UploadedImage> images) {
             this.descriptors = descriptors;
             this.materialTable = materialTable;
@@ -285,15 +258,16 @@ public final class MinecraftProgramResources implements AutoCloseable {
         }
         public ShaderData<MinecraftProgramTypes.ImplementationData> implementationData() {
             if (closed) throw new IllegalStateException("Minecraft material epoch is retired");
-            return MinecraftProgramTypes.IMPLEMENTATION_DATA.data(implementation.address);
+            return MinecraftProgramTypes.IMPLEMENTATION_DATA.data(
+                    implementation.deviceRange().address().value());
         }
         public ShaderData<MinecraftProgramTypes.PrimitiveData> fallbackBindingData() {
             if (closed) throw new IllegalStateException("Minecraft material epoch is retired");
-            return MinecraftProgramTypes.PRIMITIVE_DATA.data(primitive.address);
+            return MinecraftProgramTypes.PRIMITIVE_DATA.data(primitive.deviceRange().address().value());
         }
         public ShaderData<MinecraftProgramTypes.InstanceData> fallbackInstanceData() {
             if (closed) throw new IllegalStateException("Minecraft material epoch is retired");
-            return MinecraftProgramTypes.INSTANCE_DATA.data(instance.address);
+            return MinecraftProgramTypes.INSTANCE_DATA.data(instance.deviceRange().address().value());
         }
         public Runnable retirement() { return retirement; }
         @Override public void close() {
@@ -311,10 +285,10 @@ public final class MinecraftProgramResources implements AutoCloseable {
         private synchronized Throwable release() {
             if (closed) return null;
             closed = true;
-            Throwable failure = MinecraftProgramResources.release(null, implementation::destroy);
-            failure = MinecraftProgramResources.release(failure, primitive::destroy);
-            failure = MinecraftProgramResources.release(failure, instance::destroy);
-            failure = MinecraftProgramResources.release(failure, materialTable::destroy);
+            Throwable failure = MinecraftProgramResources.release(null, implementation::close);
+            failure = MinecraftProgramResources.release(failure, primitive::close);
+            failure = MinecraftProgramResources.release(failure, instance::close);
+            failure = MinecraftProgramResources.release(failure, materialTable::close);
             if (descriptors != null) failure = MinecraftProgramResources.release(failure, descriptors::destroy);
             try {
                 for (UploadedImage image : images) {
@@ -350,23 +324,6 @@ public final class MinecraftProgramResources implements AutoCloseable {
             }
         }
         if (failure != null) throw failure;
-    }
-
-    private final class Buffer {
-        private final long handle;
-        private final long allocation;
-        private final long address;
-        private boolean destroyed;
-        private Buffer(long handle, long allocation, long address) {
-            this.handle = handle;
-            this.allocation = allocation;
-            this.address = address;
-        }
-        private void destroy() {
-            if (destroyed) return;
-            Vma.vmaDestroyBuffer(gpu.vmaAllocator(), handle, allocation);
-            destroyed = true;
-        }
     }
 
     @FunctionalInterface private interface Writer { void write(ByteBuffer destination); }

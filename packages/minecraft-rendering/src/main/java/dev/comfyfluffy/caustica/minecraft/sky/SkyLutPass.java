@@ -14,9 +14,7 @@ import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
 import dev.comfyfluffy.caustica.minecraft.sky.gen.*;
 import dev.comfyfluffy.caustica.settings.*;
 import dev.comfyfluffy.caustica.vulkan.*;
-import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.*;
-import org.lwjgl.util.vma.*;
 import org.lwjgl.vulkan.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -28,8 +26,6 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 
 import static org.lwjgl.vulkan.VK10.*;
-import static org.lwjgl.vulkan.VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-import static org.lwjgl.vulkan.VK12.vkGetBufferDeviceAddress;
 
 /** Owns the Overworld atmosphere LUTs and publishes immutable environment binding generations. */
 public final class SkyLutPass implements Pass<PassFrame> {
@@ -123,7 +119,8 @@ public final class SkyLutPass implements Pass<PassFrame> {
         BindingGeneration binding = createBinding(inputs, atlas.retain());
         try {
             selector.select(new EnvironmentBinding<>(environment,
-                    MinecraftProgramTypes.ENVIRONMENT_BINDING_DATA.data(binding.root.address), binding::retire));
+                    MinecraftProgramTypes.ENVIRONMENT_BINDING_DATA.data(
+                            binding.root.deviceRange().address().value()), binding::retire));
             binding.published = true;
         } finally {
             if (!binding.published) binding.closeStrict();
@@ -142,20 +139,34 @@ public final class SkyLutPass implements Pass<PassFrame> {
     }
 
     private BindingGeneration createBinding(SkyInputsData inputs, AtlasEntry atlasLease) {
-        SkyBuffer inputBuffer = null, root = null;
+        VmaMappedBuffer inputBuffer = null, root = null;
         try {
-            inputBuffer = SkyBuffer.create(gpu, SkyInputsData.BYTE_SIZE, inputs::write);
-            SkyBuffer captured = inputBuffer;
-            root = SkyBuffer.create(gpu, MinecraftEnvironmentBindingData.BYTE_SIZE, bytes ->
+            inputBuffer = createBuffer(SkyInputsData.BYTE_SIZE, inputs::write);
+            VmaMappedBuffer captured = inputBuffer;
+            root = createBuffer(MinecraftEnvironmentBindingData.BYTE_SIZE, bytes ->
                     new MinecraftEnvironmentBindingData(
                             sampled(skyView.sampledIndex()), sampled(transmittance.sampledIndex()),
                             sampled(atlasLease.index()), sampler(lutSampler.index()),
-                            sampler(celestialSampler.index()), captured.address).write(bytes));
+                            sampler(celestialSampler.index()),
+                            captured.deviceRange().address().value()).write(bytes));
             liveBindings++;
             return new BindingGeneration(root, inputBuffer, atlasLease);
         } catch (RuntimeException | Error failure) {
             closeAll(root, inputBuffer);
             atlasLease.release();
+            throw failure;
+        }
+    }
+
+    private VmaMappedBuffer createBuffer(int size, java.util.function.Consumer<ByteBuffer> writer) {
+        VmaMappedBuffer buffer = VmaMappedBuffer.create(
+                gpu, size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "Minecraft sky buffer");
+        try {
+            writer.accept(buffer.mapped().order(ByteOrder.LITTLE_ENDIAN));
+            buffer.flush(0, size);
+            return buffer;
+        } catch (RuntimeException | Error failure) {
+            buffer.close();
             throw failure;
         }
     }
@@ -283,9 +294,9 @@ public final class SkyLutPass implements Pass<PassFrame> {
     }
 
     private final class BindingGeneration {
-        final SkyBuffer root, skyInputs; final AtlasEntry atlas;
+        final VmaMappedBuffer root, skyInputs; final AtlasEntry atlas;
         boolean published, closed;
-        BindingGeneration(SkyBuffer root, SkyBuffer skyInputs, AtlasEntry atlas) {
+        BindingGeneration(VmaMappedBuffer root, VmaMappedBuffer skyInputs, AtlasEntry atlas) {
             this.root = root; this.skyInputs = skyInputs; this.atlas = atlas;
         }
         void closeStrict() {
@@ -350,37 +361,6 @@ public final class SkyLutPass implements Pass<PassFrame> {
             if (failure instanceof Error error) throw error;
         }
         GpuDescriptorIndex.Resource index() { return descriptor.firstIndex(); }
-    }
-
-    private static final class SkyBuffer implements AutoCloseable {
-        final long allocator, buffer, allocation, address; boolean closed;
-        SkyBuffer(long allocator, long buffer, long allocation, long address) {
-            this.allocator = allocator; this.buffer = buffer; this.allocation = allocation; this.address = address;
-        }
-        static SkyBuffer create(GpuDevice gpu, int size, java.util.function.Consumer<ByteBuffer> writer) {
-            try (MemoryStack stack = MemoryStack.stackPush()) {
-                VkBufferCreateInfo info = VkBufferCreateInfo.calloc(stack).sType$Default().size(size)
-                        .usage(VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT)
-                        .sharingMode(VK_SHARING_MODE_EXCLUSIVE);
-                VmaAllocationCreateInfo ai = VmaAllocationCreateInfo.calloc(stack).usage(Vma.VMA_MEMORY_USAGE_AUTO)
-                        .flags(Vma.VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | Vma.VMA_ALLOCATION_CREATE_MAPPED_BIT);
-                LongBuffer outBuffer = stack.mallocLong(1); PointerBuffer outAllocation = stack.mallocPointer(1);
-                VmaAllocationInfo outInfo = VmaAllocationInfo.calloc(stack);
-                int result = Vma.vmaCreateBuffer(gpu.vmaAllocator(), info, ai, outBuffer, outAllocation, outInfo);
-                if (result != VK_SUCCESS) throw new IllegalStateException("vmaCreateBuffer failed: " + result);
-                long buffer = outBuffer.get(0), allocation = outAllocation.get(0);
-                long address = vkGetBufferDeviceAddress(gpu.vk(),
-                        VkBufferDeviceAddressInfo.calloc(stack).sType$Default().buffer(buffer));
-                if (address == 0 || outInfo.pMappedData() == 0) {
-                    Vma.vmaDestroyBuffer(gpu.vmaAllocator(), buffer, allocation);
-                    throw new IllegalStateException("sky buffer is not mapped and device-addressable");
-                }
-                writer.accept(MemoryUtil.memByteBuffer(outInfo.pMappedData(), size).order(ByteOrder.LITTLE_ENDIAN));
-                Vma.vmaFlushAllocation(gpu.vmaAllocator(), allocation, 0, size);
-                return new SkyBuffer(gpu.vmaAllocator(), buffer, allocation, address);
-            }
-        }
-        @Override public void close() { if (!closed) { closed = true; Vma.vmaDestroyBuffer(allocator, buffer, allocation); } }
     }
 
     record AtlasSnapshot(CelestialAtlasImage image, int baseMipLevel, int mipLevels,
