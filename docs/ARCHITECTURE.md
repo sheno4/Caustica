@@ -222,7 +222,9 @@ receiver terrain without a renderer-owned block-damage branch.
 
 Minecraft's portal, water and damage Slang modules live under `shaders/minecraft`; the renderer imports
 only generated dispatch interfaces and reflected resources. Java records generated from reflected pass
-layouts are likewise emitted beside the pass that owns the layout rather than through `rt.gen`.
+layouts are emitted by the physical package that owns the layout. The ray-tracing package publishes its
+private host serializers and reflected world-root constants under the existing `rt.gen` and `rt.pipeline`
+Java namespaces; those namespaces do not imply root-project generation or public API ownership.
 
 ## Render passes and resources
 

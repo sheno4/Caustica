@@ -5,6 +5,8 @@ import dev.comfyfluffy.caustica.api.pass.*;
 import dev.comfyfluffy.caustica.api.program.*;
 import dev.comfyfluffy.caustica.minecraft.MinecraftFrameSelector;
 import dev.comfyfluffy.caustica.minecraft.MinecraftFrameSelectionInstaller;
+import dev.comfyfluffy.caustica.minecraft.MinecraftFrameCaptureInstaller;
+import dev.comfyfluffy.caustica.minecraft.MinecraftFrameCaptureState;
 import dev.comfyfluffy.caustica.minecraft.MinecraftProvidersExtension;
 import dev.comfyfluffy.caustica.minecraft.api.*;
 import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
@@ -12,6 +14,7 @@ import dev.comfyfluffy.caustica.minecraft.material.*;
 import dev.comfyfluffy.caustica.minecraft.overlay.WorldOverlayPass;
 import dev.comfyfluffy.caustica.minecraft.provider.MinecraftLightProvider;
 import dev.comfyfluffy.caustica.minecraft.sky.SkyLutPass;
+import dev.comfyfluffy.caustica.minecraft.sky.MinecraftSkyCatalog;
 import dev.comfyfluffy.caustica.minecraft.terrain.MinecraftTerrainSession;
 import dev.comfyfluffy.caustica.settings.*;
 
@@ -22,11 +25,13 @@ import java.util.List;
 public final class MinecraftProgramSession implements MinecraftWorldSessionContribution {
     private static final ShaderSource SHADERS = ShaderSource.classpath(
             MinecraftProgramSession.class, "/caustica/shaders/minecraft", "surface", "sky");
-    private static final ResourceId OVERWORLD = ResourceId.of("minecraft", "overworld");
+    private static final MinecraftSkyCatalog SKIES = new MinecraftSkyCatalog();
 
     private final MinecraftWorldSessionContext context;
     private final MinecraftProgramResources resources;
     private final MinecraftFrameSelectionInstaller frameSelections;
+    private final MinecraftFrameCaptureState frames;
+    private final MinecraftFrameCaptureInstaller.Lease frameCapture;
     private final MinecraftLightProvider lights;
     private final PassRegistration lightRegistration;
     private final PassRegistration overlayRegistration;
@@ -36,38 +41,50 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
 
     private MinecraftProgramSession(MinecraftWorldSessionContext context, MinecraftProgramResources resources,
                                     MinecraftFrameSelectionInstaller frameSelections,
+                                    MinecraftFrameCaptureState frames,
+                                    MinecraftFrameCaptureInstaller.Lease frameCapture,
                                     MinecraftLightProvider lights, PassRegistration lightRegistration,
                                     PassRegistration overlayRegistration) {
         this.context = context;
         this.resources = resources;
         this.frameSelections = frameSelections;
+        this.frames = frames;
+        this.frameCapture = frameCapture;
         this.lights = lights;
         this.lightRegistration = lightRegistration;
         this.overlayRegistration = overlayRegistration;
     }
 
     public static MinecraftProgramSession open(MinecraftWorldSessionContext context,
-                                               MinecraftFrameSelectionInstaller frameSelections) {
+                                               MinecraftFrameSelectionInstaller frameSelections,
+                                               MinecraftFrameCaptureInstaller frameCaptures) {
         java.util.Objects.requireNonNull(frameSelections, "frameSelections");
+        java.util.Objects.requireNonNull(frameCaptures, "frameCaptures");
         MinecraftProgramResources resources = new MinecraftProgramResources(context.renderSession().gpu());
+        MinecraftFrameCaptureState frames = new MinecraftFrameCaptureState();
+        MinecraftFrameCaptureInstaller.Lease frameCapture = null;
         MinecraftLightProvider lights = null;
         PassRegistration lightRegistration = null;
         PassRegistration overlayRegistration = null;
         try {
+            frameCapture = java.util.Objects.requireNonNull(frameCaptures.install(frames),
+                    "frame capture lease");
             lights = new MinecraftLightProvider(context.renderSession().lights(), context.scene(),
-                    MinecraftProgramSession::celestialSettings);
+                    MinecraftProgramSession::celestialSettings, frames::current);
             MinecraftLightProvider installedLights = lights;
             lightRegistration = context.renderSession().passes().addWorldResourcePass(
                     setup -> new LightUpdatePass(installedLights));
             overlayRegistration = context.renderSession().passes().addUiPass(WorldOverlayPass::new);
             MinecraftProgramSession session = new MinecraftProgramSession(
-                    context, resources, frameSelections, lights, lightRegistration, overlayRegistration);
+                    context, resources, frameSelections, frames, frameCapture,
+                    lights, lightRegistration, overlayRegistration);
             session.beginReplacement(context.resourcePackEpoch());
             return session;
         } catch (RuntimeException | Error failure) {
             if (overlayRegistration != null) overlayRegistration.close();
             if (lightRegistration != null) lightRegistration.close();
             if (lights != null) lights.close();
+            if (frameCapture != null) frameCapture.close();
             resources.close();
             throw failure;
         }
@@ -186,11 +203,12 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
     }
 
     private PassRegistration createSky(MinecraftPrograms programs, long generation) {
-        if (!context.dimension().id().equals(OVERWORLD)) return null;
-        return context.renderSession().passes().addWorldResourcePass(setup ->
-                new FirstRecordPass(new SkyLutPass(setup.gpu(), MinecraftProgramSession::options,
-                        programs.environment(), context.environment(), generation),
-                        () -> skySelected(generation)));
+        if (!SKIES.supports(context.dimension())) return null;
+        return context.renderSession().passes().addWorldResourcePass(setup -> {
+            SkyLutPass sky = SKIES.create(context.dimension(), setup.gpu(), MinecraftProgramSession::options,
+                    frames::current, programs.environment(), context.environment(), generation);
+            return new FirstRecordPass(sky, () -> skySelected(generation));
+        });
     }
 
     private synchronized void skySelected(long generation) {
@@ -239,6 +257,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
     @Override public synchronized void stop() {
         if (stopped) return;
         stopped = true;
+        frameCapture.close();
         overlayRegistration.close();
         lightRegistration.close();
         if (pending != null && pending.upload != null) pending.upload.close();

@@ -39,6 +39,7 @@ import org.lwjgl.vulkan.VkSamplerCreateInfo;
 
 import java.nio.ByteBuffer;
 import java.nio.LongBuffer;
+import java.util.List;
 
 /** Owns the device-wide resource and sampler heaps bound by Caustica command streams. */
 final class VulkanDescriptorHeap implements GpuDescriptorHeap, DescriptorHeapNativeWriter, AutoCloseable {
@@ -173,6 +174,44 @@ final class VulkanDescriptorHeap implements GpuDescriptorHeap, DescriptorHeapNat
     }
 
     @Override
+    public void writeSamplers(long destinationHostAddress, VkSamplerCreateInfo.Buffer samplers) {
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            VkHostAddressRangeEXT.Buffer destinations = destinations(stack, destinationHostAddress,
+                    properties.samplerDescriptorStride(), samplers.remaining());
+            VulkanDeviceContext.check(EXTDescriptorHeap.nvkWriteSamplerDescriptorsEXT(
+                    vk, samplers.remaining(), samplers.address(), destinations.address()),
+                    "vkWriteSamplerDescriptorsEXT");
+        }
+    }
+
+    @Override
+    public void writeImages(long destinationHostAddress, List<GpuDescriptorWriter.ImageWrite> images) {
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            VkResourceDescriptorInfoEXT.Buffer resources = imageResources(stack, images);
+            VkHostAddressRangeEXT.Buffer destinations = destinations(stack, destinationHostAddress,
+                    properties.resourceDescriptorStride(), images.size());
+            VulkanDeviceContext.check(EXTDescriptorHeap.nvkWriteResourceDescriptorsEXT(
+                    vk, images.size(), resources.address(), destinations.address()),
+                    "vkWriteResourceDescriptorsEXT");
+        }
+    }
+
+    static VkResourceDescriptorInfoEXT.Buffer imageResources(
+            MemoryStack stack, List<GpuDescriptorWriter.ImageWrite> images) {
+        VkResourceDescriptorInfoEXT.Buffer resources = VkResourceDescriptorInfoEXT.calloc(images.size(), stack);
+        for (int index = 0; index < images.size(); index++) {
+            GpuDescriptorWriter.ImageWrite image = images.get(index);
+            int type = switch (image.kind()) {
+                case SAMPLED -> VK10.VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+                case STORAGE -> VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            };
+            resources.get(index).sType$Default().type(type)
+                    .data(data -> data.pImage(image.descriptor()));
+        }
+        return resources;
+    }
+
+    @Override
     public void writeResource(long destinationHostAddress, VkResourceDescriptorInfoEXT resource) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkHostAddressRangeEXT.Buffer destination = destination(stack, destinationHostAddress,
@@ -216,6 +255,17 @@ final class VulkanDescriptorHeap implements GpuDescriptorHeap, DescriptorHeapNat
     private static VkHostAddressRangeEXT.Buffer destination(MemoryStack stack, long address, long size) {
         ByteBuffer bytes = MemoryUtil.memByteBuffer(address, Math.toIntExact(size));
         return VkHostAddressRangeEXT.calloc(1, stack).address$(bytes);
+    }
+
+    private static VkHostAddressRangeEXT.Buffer destinations(MemoryStack stack, long address,
+                                                              long stride, int count) {
+        VkHostAddressRangeEXT.Buffer destinations = VkHostAddressRangeEXT.calloc(count, stack);
+        for (int index = 0; index < count; index++) {
+            long descriptorAddress = Math.addExact(address, Math.multiplyExact(stride, index));
+            destinations.get(index).address$(MemoryUtil.memByteBuffer(
+                    descriptorAddress, Math.toIntExact(stride)));
+        }
+        return destinations;
     }
 
     static long[] alignedFlushRange(long offset, long size, long allocationSize, long atomSize) {

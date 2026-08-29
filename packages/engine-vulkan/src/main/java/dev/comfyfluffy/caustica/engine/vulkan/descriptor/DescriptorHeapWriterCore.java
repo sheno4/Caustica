@@ -6,6 +6,9 @@ import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorWriter;
 import org.lwjgl.vulkan.VkResourceDescriptorInfoEXT;
 import org.lwjgl.vulkan.VkSamplerCreateInfo;
 
+import java.util.List;
+import java.util.Objects;
+
 /** Validates typed allocation destinations before native descriptor encoding and storage flushing. */
 public final class DescriptorHeapWriterCore implements GpuDescriptorWriter {
     private final DescriptorHeapAllocationCore allocations;
@@ -30,6 +33,32 @@ public final class DescriptorHeapWriterCore implements GpuDescriptorWriter {
         allocations.samplers().withWriteSpan(allocation, relativeIndex, span -> {
             nativeWriter.writeSampler(hostAddress(samplerStorage, span), sampler);
             samplerStorage.flush(span.byteOffset(), span.byteSize());
+        });
+    }
+
+    @Override
+    public synchronized void writeSamplers(GpuDescriptorRange<GpuDescriptorIndex.Sampler> destination,
+                                           int relativeIndex, VkSamplerCreateInfo.Buffer samplers) {
+        Objects.requireNonNull(samplers, "samplers");
+        int count = samplers.remaining();
+        if (count == 0) throw new IllegalArgumentException("sampler batch must not be empty");
+        DescriptorHeapAllocation<GpuDescriptorIndex.Sampler> allocation = samplerAllocation(destination);
+        allocations.samplers().withWriteSpan(allocation, relativeIndex, count, span -> {
+            nativeWriter.writeSamplers(hostAddress(samplerStorage, span), samplers);
+            samplerStorage.flush(span.byteOffset(), span.byteSize());
+        });
+    }
+
+    @Override
+    public synchronized void writeImages(GpuDescriptorRange<GpuDescriptorIndex.Resource> destination,
+                                         int relativeIndex, List<GpuDescriptorWriter.ImageWrite> images) {
+        Objects.requireNonNull(images, "images");
+        List<GpuDescriptorWriter.ImageWrite> batch = List.copyOf(images);
+        if (batch.isEmpty()) throw new IllegalArgumentException("image batch must not be empty");
+        DescriptorHeapAllocation<GpuDescriptorIndex.Resource> allocation = resourceAllocation(destination);
+        allocations.resources().withWriteSpan(allocation, relativeIndex, batch.size(), span -> {
+            nativeWriter.writeImages(hostAddress(resourceStorage, span), batch);
+            resourceStorage.flush(span.byteOffset(), span.byteSize());
         });
     }
 

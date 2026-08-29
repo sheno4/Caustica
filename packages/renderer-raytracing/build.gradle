@@ -1,6 +1,10 @@
+import dev.comfyfluffy.caustica.slangtooling.GenerateRtBindings
+import dev.comfyfluffy.caustica.slangtooling.GenerateShaderRecords
+
 plugins {
     id "java-library"
     id "maven-publish"
+    id "dev.comfyfluffy.caustica.slang-tooling"
 }
 
 version = project.api_version
@@ -32,6 +36,211 @@ def worldShaderNames = [
         "retained_trace_reordered.slang", "shadow_any_hit.rahit.slang", "sky_miss.slang",
         "surface_bsdf.slang", "world_common.slang", "world_minimal.slang"
 ] as Set
+
+def apiShaderModules = project(":packages:shader-api").file("src/main/resources/caustica/shaders/api")
+def builtinShaderModules = project(":packages:features-builtin").file("src/main/resources/caustica/shaders/builtin")
+def worldShaderModules = file("src/main/resources/caustica/shaders/world")
+def opacityMicromapModule = rootProject.file("shaders/common/opacity_micromap_common.slang")
+def reflectionRoot = layout.buildDirectory.dir("generated/reflection-sources")
+def prepareRayTracingReflectionSources = tasks.register("prepareRayTracingReflectionSources", Sync) {
+    from(worldShaderModules) { into "pipelines/world" }
+    from(apiShaderModules) { into "api" }
+    from(builtinShaderModules) { into "builtin" }
+    from(opacityMicromapModule) { into "common" }
+    from(file("src/shaderReflection")) { into "layout" }
+    into(reflectionRoot)
+}
+
+def rayTracingRecordSpecs = [
+        "buffer|worldPushLayoutProbe|WorldPush|dev.comfyfluffy.caustica.rt.gen|WorldPushData|false",
+        "buffer|retainedGeometryRecordLayoutProbe|RetainedGeometryRecord|dev.comfyfluffy.caustica.rt.gen|RetainedGeometryRecordData|false",
+        "buffer|retainedLightRecordLayoutProbe|RetainedLightRecord|dev.comfyfluffy.caustica.rt.gen|RetainedLightRecordData|false",
+        "buffer|neeAtStateLayoutProbe|NeeAtState|dev.comfyfluffy.caustica.rt.gen|NeeAtStateData|false",
+        "buffer|packedPathSegmentLayoutProbe|PackedPathSegment|dev.comfyfluffy.caustica.rt.gen|PackedPathSegmentData|false",
+        "push|opacityMicromapPushProbe|OpacityMicromapPush|dev.comfyfluffy.caustica.rt.gen|OpacityMicromapPushData|false"
+]
+def generatedRecordRoot = layout.buildDirectory.dir("generated/sources/shaderRecords")
+def generateRayTracingRecords = tasks.register("generateRayTracingRecords", GenerateShaderRecords) {
+    group = "build"
+    description = "Generates the ray-tracing-owned host records from Slang reflection."
+    dependsOn(prepareRayTracingReflectionSources)
+    shaderRoot = reflectionRoot
+    probeSource = reflectionRoot.map { it.file("layout/raytracing_probe.slang") }
+    recordSpecs = rayTracingRecordSpecs
+    outDir = generatedRecordRoot
+}
+
+def generatedBindingsRoot = layout.buildDirectory.dir("generated/sources/rtBindings")
+def generateRayTracingBindings = tasks.register("generateRayTracingBindings", GenerateRtBindings) {
+    group = "build"
+    description = "Generates the descriptor-heap world roots from primary ray reflection."
+    dependsOn(prepareRayTracingReflectionSources)
+    shaderRoot = reflectionRoot
+    outDir = generatedBindingsRoot
+}
+
+sourceSets.main.java.srcDir(files(generatedRecordRoot).builtBy(generateRayTracingRecords))
+sourceSets.main.java.srcDir(files(generatedBindingsRoot).builtBy(generateRayTracingBindings))
+
+def verifyRayTracingAbi = tasks.register("verifyRayTracingAbi") {
+    group = "verification"
+    description = "Verifies exact host layouts reflected from ray-tracing Slang records."
+    dependsOn(generateRayTracingRecords, generateRayTracingBindings)
+    def expectedFragments = [
+            WorldPushData: ["BYTE_SIZE = 304", "invViewProj().get(0, dst)",
+                            "putFloat(64, camOffset().x())", "putInt(76, frameIndex())",
+                            "prevViewProj().get(80, dst)", "putInt(168, flags())",
+                            "putFloat(192, time())", "curViewProj().get(224, dst)",
+                            "putFloat(292, preExposure())"],
+            RetainedGeometryRecordData: ["BYTE_SIZE = 160", "putInt(0, surfaceImplementation())",
+                    "putLong(16, surfaceBinding())", "putFloat(48, currentRow0().x())",
+                    "putFloat(96, previousRow0().x())", "putLong(144, emitterIndexAddress())",
+                    "putInt(152, emitterPrimitiveBase())"],
+            RetainedLightRecordData: ["BYTE_SIZE = 80", "putInt(0, type())",
+                    "putFloat(8, rangeMeters())", "putFloat(16, positionOrDirection().x())",
+                    "putFloat(64, radiometry().x())"],
+            NeeAtStateData: ["BYTE_SIZE = 88", "putLong(0, lightTableAddress())",
+                    "putLong(32, pixelFeedbackAddress())", "putInt(40, lightCount())",
+                    "putInt(64, tileSize())", "putInt(72, candidateCount())",
+                    "putFloat(80, metersPerSceneUnit())", "putInt(84, frameIndex())"],
+            PackedPathSegmentData: ["BYTE_SIZE = 48", "putFloat(0, ro().x())",
+                    "putInt(12, rd())", "putInt(44, nextRecord())"],
+            OpacityMicromapPushData: ["BYTE_SIZE = 48", "putLong(0, primitiveAddress())",
+                    "putLong(24, triangleAddress())", "putInt(32, maskedTriangleBase())",
+                    "putInt(40, dataStride())"]
+    ]
+    inputs.dir(generatedRecordRoot)
+    inputs.dir(generatedBindingsRoot)
+    doLast {
+        expectedFragments.each { className, fragments ->
+            def source = generatedRecordRoot.get().file(
+                    "dev/comfyfluffy/caustica/rt/gen/${className}.java").asFile.getText("UTF-8")
+            def missing = fragments.findAll { !source.contains(it) }
+            if (!missing.empty) throw new GradleException("${className} ABI drifted: ${missing}")
+        }
+        def bindings = generatedBindingsRoot.get().file(
+                "dev/comfyfluffy/caustica/rt/pipeline/RtBindings.java").asFile.getText("UTF-8")
+        def requiredBindings = [
+                "WORLD_PUSH_ADDRESS_OFFSET = 0", "WORLD_COMPOSITION_DATA_ADDRESS_OFFSET = 8",
+                "WORLD_GEOMETRY_TABLE_ADDRESS_OFFSET = 16", "WORLD_PATH_QUEUE_ADDRESS_OFFSET = 24",
+                "WORLD_TOP_LEVEL_AS_INDEX_OFFSET = 32", "WORLD_SPECULAR_MOTION_GUIDE_INDEX_OFFSET = 60",
+                "WORLD_INITIAL_VOLUME_IMPLEMENTATION_OFFSET = 64", "WORLD_INITIAL_VOLUME_ACTIVE_OFFSET = 68",
+                "WORLD_INITIAL_VOLUME_BINDING_OFFSET = 72", "WORLD_INITIAL_VOLUME_INSTANCE_OFFSET = 80",
+                "WORLD_NEE_AT_STATE_ADDRESS_OFFSET = 88", "WORLD_PUSH_CONSTANT_SIZE = 96"
+        ]
+        def missing = requiredBindings.findAll { !bindings.contains(it) }
+        if (!missing.empty) throw new GradleException("world root ABI drifted: ${missing}")
+        def obsolete = ["WORLD_SET", "WORLD_BINDLESS", "WORLD_PROVIDER_TEXTURES"].findAll {
+            bindings.contains(it)
+        }
+        if (!obsolete.empty) throw new GradleException("world root retains descriptor-set ABI: ${obsolete}")
+    }
+}
+
+def reproducibleRecordRoot = layout.buildDirectory.dir("generated/reproducibility/shaderRecords")
+def reproduceRayTracingRecords = tasks.register("reproduceRayTracingRecords", GenerateShaderRecords) {
+    dependsOn(prepareRayTracingReflectionSources)
+    shaderRoot = reflectionRoot
+    probeSource = reflectionRoot.map { it.file("layout/raytracing_probe.slang") }
+    recordSpecs = rayTracingRecordSpecs
+    outDir = reproducibleRecordRoot
+}
+def reproducibleBindingsRoot = layout.buildDirectory.dir("generated/reproducibility/rtBindings")
+def reproduceRayTracingBindings = tasks.register("reproduceRayTracingBindings", GenerateRtBindings) {
+    dependsOn(prepareRayTracingReflectionSources)
+    shaderRoot = reflectionRoot
+    outDir = reproducibleBindingsRoot
+}
+def verifyRayTracingGenerationReproducible = tasks.register("verifyRayTracingGenerationReproducible") {
+    group = "verification"
+    description = "Verifies repeat reflection produces byte-identical Java sources."
+    dependsOn(generateRayTracingRecords, generateRayTracingBindings,
+            reproduceRayTracingRecords, reproduceRayTracingBindings)
+    doLast {
+        def compareTrees = { File expectedRoot, File actualRoot ->
+            def relativeFiles = { File root ->
+                fileTree(root).files.collect { root.toPath().relativize(it.toPath()).toString().replace('\\', '/') }.sort()
+            }
+            def expectedFiles = relativeFiles(expectedRoot)
+            def actualFiles = relativeFiles(actualRoot)
+            if (expectedFiles != actualFiles) {
+                throw new GradleException("generated file sets differ: ${expectedFiles} != ${actualFiles}")
+            }
+            expectedFiles.each { path ->
+                if (!java.util.Arrays.equals(new File(expectedRoot, path).bytes, new File(actualRoot, path).bytes)) {
+                    throw new GradleException("generated source is not reproducible: ${path}")
+                }
+            }
+        }
+        compareTrees(generatedRecordRoot.get().asFile, reproducibleRecordRoot.get().asFile)
+        compareTrees(generatedBindingsRoot.get().asFile, reproducibleBindingsRoot.get().asFile)
+    }
+}
+
+def verifyRayTracingSpirvTarget = tasks.register("verifyRayTracingSpirvTarget") {
+    group = "verification"
+    description = "Verifies reflection probes are validated as Vulkan 1.4 SPIR-V 1.6."
+    dependsOn(generateRayTracingRecords, generateRayTracingBindings)
+    doLast {
+        [generateRayTracingRecords.get(), generateRayTracingBindings.get()].each { task ->
+            if (task.spirvProfile.get() != "spirv_1_6" || task.vulkanTarget.get() != "vulkan1.4") {
+                throw new GradleException("${task.name} targets ${task.spirvProfile.get()}/${task.vulkanTarget.get()}")
+            }
+        }
+    }
+}
+
+def verifyRetainedLightShader = tasks.register("verifyRetainedLightShader") {
+    group = "verification"
+    description = "Verifies retained-light sampling and two-ray-type shadow tracing."
+    def sampler = new File(worldShaderModules, "retained_lights.slang")
+    def closestHit = new File(worldShaderModules, "closest_hit.slang")
+    def worldMinimal = new File(worldShaderModules, "world_minimal.slang")
+    def bake = new File(worldShaderModules, "nee_at_bake.slang")
+    inputs.files(sampler, closestHit, worldMinimal, bake)
+    doLast {
+        def samplerSource = sampler.getText("UTF-8")
+        def hitSource = closestHit.getText("UTF-8")
+        def worldSource = worldMinimal.getText("UTF-8")
+        def bakeSource = bake.getText("UTF-8")
+        def required = [
+                "RETAINED_LIGHT_RECTANGLE", "RETAINED_LIGHT_SPOT", "RETAINED_LIGHT_DISTANT",
+                "distance * state.metersPerSceneUnit > light.rangeMeters",
+                "neeAtSampleGlobal", "neeAtSampleLocal", "neeAtLocalPdf",
+                "radianceOverShapePdf", "neeAtWriteFeedback", "neeAtSaturatingAdd",
+                "neeAtProposalPdf", "candidateCount / 2u", "NEE_AT_PROPOSAL_SCREEN_MIXTURE"
+        ].findAll { !samplerSource.contains(it) }
+        required += [
+                "1u, 2u, 1u, ray, shadow", "evaluateBsdf(query)",
+                "frame[0].frameIndex", "dot(input.geometricNormal, selected.direction)",
+                "weightSum / (float(candidateCount) * selectedTarget)",
+                "neeAtWriteFeedback(worldBindings, pixel, selected.lightIndex, feedback)",
+                "emission * retainedEmissionMis(payload, record, input.position)",
+                "payload.previousNeeProposalMode"
+        ].findAll { !hitSource.contains(it) }
+        required += [
+                "state.localSlotCount", "state.tileSize * state.tileSize",
+                "previousToCurrent", "currentToPrevious", "InterlockedAdd(localMasses[slot], event.y)",
+                "GroupMemoryBarrierWithGroupSync", "uint2(localLights[slot], localScan[slot])",
+                "globalPowerSums[lane]", "chunk += 64u", "globalScanNext[lane]",
+                "index + 1u == state.lightCount ? 1.0"
+        ].findAll { !bakeSource.contains(it) }
+        if (bakeSource.contains("previousMotionIndex") || bakeSource.contains("previousDepthIndex")) {
+            required += "same-screen-tile history without stale guide reprojection"
+        }
+        if (!worldSource.contains("records[worldInstanceCustomIndex() + GeometryIndex()]")) {
+            required += "worldInstanceCustomIndex() + GeometryIndex()"
+        }
+        if (worldSource.contains("records[InstanceID() + GeometryIndex()]")) {
+            required += "no InstanceID geometry-record addressing"
+        }
+        if (!worldSource.contains("HitTriangleVertexPosition(1u)")
+                || !worldSource.contains("previousGeometricNormal = previousNormal * orientation")) {
+            required += "position-fetch current/previous geometric normals"
+        }
+        if (!required.empty) throw new GradleException("retained light shader contract drifted: ${required}")
+    }
+}
 
 def verifyRendererRayTracingDependencies = tasks.register("verifyRendererRayTracingDependencies") {
     group = "verification"
@@ -118,8 +327,19 @@ def verifyRendererRayTracingJar = tasks.register("verifyRendererRayTracingJar") 
             def entries = jar.entries()
             while (entries.hasMoreElements()) names.add(entries.nextElement().name)
         }
-        def classRoot = "dev/comfyfluffy/caustica/renderer/raytracing/shader/"
-        def foreignClasses = names.findAll { it.endsWith(".class") && !it.startsWith(classRoot) }
+        def shaderClassRoot = "dev/comfyfluffy/caustica/renderer/raytracing/shader/"
+        def generatedRecordClassRoot = "dev/comfyfluffy/caustica/rt/gen/"
+        def generatedBindingsClass = "dev/comfyfluffy/caustica/rt/pipeline/RtBindings.class"
+        def foreignClasses = names.findAll {
+            it.endsWith(".class") && !it.startsWith(shaderClassRoot)
+                    && !it.startsWith(generatedRecordClassRoot) && it != generatedBindingsClass
+        }
+        def generatedTopLevelClasses = names.findAll {
+            it.startsWith(generatedRecordClassRoot) && it.endsWith("Data.class")
+        } as Set
+        def expectedGeneratedTopLevelClasses = ["WorldPushData", "RetainedGeometryRecordData",
+                "RetainedLightRecordData", "NeeAtStateData", "PackedPathSegmentData",
+                "OpacityMicromapPushData"].collect { "${generatedRecordClassRoot}${it}.class" } as Set
         def packagedShaders = names.findAll {
             it.startsWith("caustica/shaders/world/") && it.endsWith(".slang")
         }.collect { it.substring("caustica/shaders/world/".length()) } as Set
@@ -127,8 +347,11 @@ def verifyRendererRayTracingJar = tasks.register("verifyRendererRayTracingJar") 
             it.startsWith("caustica/") && !it.endsWith("/")
                     && !it.startsWith("caustica/shaders/world/")
         }
-        if (!foreignClasses.empty || packagedShaders != worldShaderNames || !foreignResources.empty) {
+        if (!foreignClasses.empty || generatedTopLevelClasses != expectedGeneratedTopLevelClasses
+                || !names.contains(generatedBindingsClass)
+                || packagedShaders != worldShaderNames || !foreignResources.empty) {
             throw new GradleException("renderer-raytracing JAR mismatch; foreignClasses=${foreignClasses}, "
+                    + "generatedClasses=${generatedTopLevelClasses}, "
                     + "missingShaders=${worldShaderNames - packagedShaders}, "
                     + "unexpectedShaders=${packagedShaders - worldShaderNames}, foreignResources=${foreignResources}")
         }
@@ -143,7 +366,9 @@ tasks.named("test", Test) {
 }
 tasks.named("check") {
     dependsOn(verifyRendererRayTracingDependencies, verifyRendererRayTracingImports,
-            verifyRendererRayTracingResources, verifyRendererRayTracingJar)
+            verifyRendererRayTracingResources, verifyRendererRayTracingJar, verifyRayTracingAbi,
+            verifyRayTracingGenerationReproducible, verifyRayTracingSpirvTarget,
+            verifyRetainedLightShader)
 }
 tasks.withType(JavaCompile).configureEach { options.release = 25 }
 

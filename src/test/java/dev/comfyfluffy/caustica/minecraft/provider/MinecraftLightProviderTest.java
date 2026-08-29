@@ -7,11 +7,14 @@ import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.engine.light.RetainedLightBatch;
 import dev.comfyfluffy.caustica.engine.light.RetainedLightSnapshot;
+import dev.comfyfluffy.caustica.minecraft.MinecraftCapturedFrame;
+import dev.comfyfluffy.caustica.minecraft.MinecraftLightingCalibration;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -62,7 +65,7 @@ final class MinecraftLightProviderTest {
     void terrainLightsKeepIssuedIdsUntilTheirSectionDisappears() {
         RecordingLights channel = new RecordingLights();
         MinecraftLightProvider provider = new MinecraftLightProvider(channel, new SceneId() { },
-                () -> new MinecraftLightProvider.CelestialSettings(30.0, 0.6, 1.5));
+                () -> new MinecraftLightProvider.CelestialSettings(30.0, 0.6, 1.5), () -> null);
         LightDescriptor.Rectangle rectangle = new LightDescriptor.Rectangle(
                 1, 2, 3, 0.5, 0, 0, 0, 0.5, 0, 4, 5, 6);
         RetainedLightBatch section = new RetainedLightBatch(9L, 1L, List.of(rectangle));
@@ -80,6 +83,25 @@ final class MinecraftLightProviderTest {
         provider.publish(emptyCelestial(), Optional.empty(), RetainedLightSnapshot.empty(3L));
         assertEquals(4, channel.submissions.getLast().operations().size());
         assertTrue(channel.submissions.getLast().operations().getLast() instanceof LightChannel.DropLight);
+    }
+
+    @Test
+    void updateConsumesOneCoherentCapturedFrame() {
+        RecordingLights channel = new RecordingLights();
+        AtomicInteger reads = new AtomicInteger();
+        var celestial = new MinecraftCapturedFrame.Celestial(0, (float) Math.PI, 0, 0,
+                0, 63, 63, 1, new MinecraftLightingCalibration(128_000, 5, 1, 0, 0, .1f));
+        var frame = new MinecraftCapturedFrame(Optional.of(celestial), Optional.empty(), Optional.empty(),
+                RetainedLightSnapshot.empty(1));
+        MinecraftLightProvider provider = new MinecraftLightProvider(channel, new SceneId() { },
+                () -> new MinecraftLightProvider.CelestialSettings(30, .6, 1.5),
+                () -> { reads.incrementAndGet(); return frame; });
+
+        provider.update();
+
+        assertEquals(1, reads.get());
+        assertEquals(3, channel.submissions.getLast().operations().size());
+        assertTrue(channel.submissions.getLast().operations().getFirst() instanceof LightChannel.SetLight);
     }
 
     private static MinecraftLightProvider.CelestialLights emptyCelestial() {

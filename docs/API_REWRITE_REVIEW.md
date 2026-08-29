@@ -686,7 +686,8 @@ clean-room and follows this repository's data model, shader ABI, synchronization
 
 - `:packages:api:check`, `:packages:api-support:check`, `:packages:settings-api:check`,
   `:packages:minecraft-api:check`, `:packages:minecraft-content:check`, `:packages:engine:check`,
-  `:packages:engine-vulkan:check`, `:packages:shader-api:check`, and `:packages:vulkan-support:check` have
+  `:packages:engine-vulkan:check`, `:packages:renderer-raytracing:check`,
+  `:packages:shader-api:check`, and `:packages:vulkan-support:check` have
   focused green gates and import/dependency boundary checks.
 - `:packages:examples:api-showcase:check` passes against published contract artifacts only.
 - `:packages:examples:gltf-viewer-minecraft:check` passes, including strict implementation-package rejection, retained

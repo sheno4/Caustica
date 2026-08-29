@@ -50,6 +50,16 @@ final class SourceDependencyArchitectureTest {
                 "MinecraftFrameSelector must not own static epoch state");
     }
 
+    @Test
+    void minecraftSkyAndLightPublicationDoNotSampleClientState() throws IOException {
+        for (Path source : List.of(MINECRAFT.resolve("sky/SkyLutPass.java"),
+                MINECRAFT.resolve("provider/MinecraftLightProvider.java"))) {
+            String text = Files.readString(source);
+            assertFalse(text.contains("Minecraft.getInstance()"), source + " samples Minecraft during recording");
+            assertFalse(text.contains("import net.minecraft"), source + " imports live Minecraft state");
+        }
+    }
+
     private static void assertNoImports(List<Path> sourceRoots, List<String> forbiddenPackages)
             throws IOException {
         assertNoImportsMatching(sourceRoots, imported -> forbiddenPackages.stream().anyMatch(

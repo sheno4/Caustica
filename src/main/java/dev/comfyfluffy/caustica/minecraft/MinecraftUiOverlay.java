@@ -298,8 +298,9 @@ public final class MinecraftUiOverlay {
                         .baseMipLevel(view.baseMipLevel()).levelCount(view.mipLevels()).baseArrayLayer(0).layerCount(1);
                 VkImageDescriptorInfoEXT image = VkImageDescriptorInfoEXT.calloc(stack).sType$Default()
                         .pView(viewInfo).layout(VK10.VK_IMAGE_LAYOUT_GENERAL);
-                gpu.descriptorHeap().writer().writeResource(range, 0, resource(stack, VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, image));
-                gpu.descriptorHeap().writer().writeResource(range, 1, resource(stack, VK10.VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, image));
+                gpu.descriptorHeap().writer().writeImages(range, 0, java.util.List.of(
+                        new GpuDescriptorWriter.ImageWrite(GpuImageDescriptorKind.STORAGE, image),
+                        new GpuDescriptorWriter.ImageWrite(GpuImageDescriptorKind.SAMPLED, image)));
                 return new BorrowedOverlayImage(view, texture, range, width, height);
             } catch (RuntimeException | Error failure) {
                 if (range != null) range.destroy();
@@ -308,9 +309,6 @@ public final class MinecraftUiOverlay {
             }
         }
 
-        private static VkResourceDescriptorInfoEXT resource(MemoryStack stack, int type, VkImageDescriptorInfoEXT image) {
-            return VkResourceDescriptorInfoEXT.calloc(stack).sType$Default().type(type).data(data -> data.pImage(image));
-        }
         @Override public long image() { return texture.vkImage(); }
         @Override public long view() { return hostView.vkImageView(); }
         @Override public GpuImageDescriptor descriptor(GpuImageDescriptorKind kind) { return kind == GpuImageDescriptorKind.STORAGE ? storage : sampled; }

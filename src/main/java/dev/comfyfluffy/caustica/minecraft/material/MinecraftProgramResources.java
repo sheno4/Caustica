@@ -2,7 +2,9 @@ package dev.comfyfluffy.caustica.minecraft.material;
 
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorIndex;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorRange;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorWriter;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
+import dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptorKind;
 import dev.comfyfluffy.caustica.api.program.ShaderData;
 import dev.comfyfluffy.caustica.api.pass.Pass;
 import dev.comfyfluffy.caustica.api.pass.PassFrame;
@@ -22,12 +24,12 @@ import org.lwjgl.vulkan.VkBufferCreateInfo;
 import org.lwjgl.vulkan.VkBufferDeviceAddressInfo;
 import org.lwjgl.vulkan.VkImageDescriptorInfoEXT;
 import org.lwjgl.vulkan.VkImageViewCreateInfo;
-import org.lwjgl.vulkan.VkResourceDescriptorInfoEXT;
 import org.lwjgl.vulkan.VkSamplerCreateInfo;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.LongBuffer;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
 
@@ -167,19 +169,21 @@ public final class MinecraftProgramResources implements AutoCloseable {
 
     private void writeDescriptors(GpuDescriptorRange<GpuDescriptorIndex.Resource> descriptors,
                                   List<UploadedImage> images) {
-        for (int index = 0; index < images.size(); index++) {
-            try (MemoryStack stack = MemoryStack.stackPush()) {
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            VkImageViewCreateInfo.Buffer views = VkImageViewCreateInfo.calloc(images.size(), stack);
+            VkImageDescriptorInfoEXT.Buffer imageDescriptors = VkImageDescriptorInfoEXT.calloc(images.size(), stack);
+            List<GpuDescriptorWriter.ImageWrite> writes = new ArrayList<>(images.size());
+            for (int index = 0; index < images.size(); index++) {
                 UploadedImage image = images.get(index);
-                VkImageViewCreateInfo view = VkImageViewCreateInfo.calloc(stack).sType$Default()
+                VkImageViewCreateInfo view = views.get(index).sType$Default()
                         .image(image.image()).viewType(VK_IMAGE_VIEW_TYPE_2D).format(image.format());
                 view.subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
                         .baseMipLevel(0).levelCount(image.mipLevels()).baseArrayLayer(0).layerCount(1);
-                VkImageDescriptorInfoEXT info = VkImageDescriptorInfoEXT.calloc(stack).sType$Default()
+                VkImageDescriptorInfoEXT info = imageDescriptors.get(index).sType$Default()
                         .pView(view).layout(VK_IMAGE_LAYOUT_GENERAL);
-                VkResourceDescriptorInfoEXT resource = VkResourceDescriptorInfoEXT.calloc(stack).sType$Default()
-                        .type(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE).data(data -> data.pImage(info));
-                gpu.descriptorHeap().writer().writeResource(descriptors, index, resource);
+                writes.add(new GpuDescriptorWriter.ImageWrite(GpuImageDescriptorKind.SAMPLED, info));
             }
+            gpu.descriptorHeap().writer().writeImages(descriptors, 0, writes);
         }
     }
 

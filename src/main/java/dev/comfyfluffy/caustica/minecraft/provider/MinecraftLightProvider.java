@@ -7,15 +7,7 @@ import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.engine.light.RetainedLightBatch;
 import dev.comfyfluffy.caustica.engine.light.RetainedLightSnapshot;
-import dev.comfyfluffy.caustica.minecraft.CausticaItems;
-import dev.comfyfluffy.caustica.minecraft.MinecraftLightingCalibration;
-import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
-import net.minecraft.client.Minecraft;
-import net.minecraft.world.attribute.EnvironmentAttributes;
-import net.minecraft.world.entity.EquipmentSlot;
-import net.minecraft.world.level.Level;
-import net.minecraft.world.phys.Vec3;
-import org.joml.Vector3fc;
+import dev.comfyfluffy.caustica.minecraft.MinecraftCapturedFrame;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -34,6 +26,7 @@ public final class MinecraftLightProvider implements AutoCloseable {
     private final LightChannel lights;
     private final SceneId scene;
     private final Supplier<CelestialSettings> celestialSettings;
+    private final Supplier<MinecraftCapturedFrame> frames;
     private final LightId helmetLight;
     private final LightId sunLight;
     private final LightId moonLight;
@@ -41,34 +34,25 @@ public final class MinecraftLightProvider implements AutoCloseable {
     private long terrainGeneration = Long.MIN_VALUE;
 
     public MinecraftLightProvider(LightChannel lights, SceneId scene,
-                                  Supplier<CelestialSettings> celestialSettings) {
+                                  Supplier<CelestialSettings> celestialSettings,
+                                  Supplier<MinecraftCapturedFrame> frames) {
         this.lights = lights;
         this.scene = scene;
         this.celestialSettings = celestialSettings;
+        this.frames = frames;
         helmetLight = lights.newLight();
         sunLight = lights.newLight();
         moonLight = lights.newLight();
     }
 
-    /** Samples Minecraft state and submits one atomic retained-light update for the current frame. */
+    /** Publishes one already-captured Minecraft frame as an atomic retained-light update. */
     public void update() {
-        Minecraft minecraft = Minecraft.getInstance();
-        Optional<LightDescriptor.Spot> helmet = Optional.empty();
-        CelestialLights celestial = CelestialLights.NONE;
-        if (minecraft.player != null) {
-            if (minecraft.level != null && Level.OVERWORLD.equals(minecraft.level.dimension())) {
-                celestial = celestialLights(celestialFrame(minecraft, celestialSettings.get()));
-            }
-            if (minecraft.player.getItemBySlot(EquipmentSlot.HEAD).is(CausticaItems.SPOTLIGHT_HELMET)) {
-                Vec3 eye = minecraft.player.getEyePosition();
-                Vector3fc forward = minecraft.gameRenderer.mainCamera().forwardVector();
-                double x = eye.x + forward.x() * 0.18;
-                double y = eye.y - 0.08 + forward.y() * 0.18;
-                double z = eye.z + forward.z() * 0.18;
-                helmet = Optional.of(helmetSpot(x, y, z, forward.x(), forward.y(), forward.z()));
-            }
-        }
-        publish(celestial, helmet, RtTerrain.retainedLightSnapshot());
+        MinecraftCapturedFrame frame = frames.get();
+        if (frame == null) return;
+        CelestialLights celestial = frame.celestial()
+                .map(value -> celestialLights(celestialFrame(value, celestialSettings.get())))
+                .orElse(CelestialLights.NONE);
+        publish(celestial, frame.helmet(), frame.terrainLights());
     }
 
     void publish(CelestialLights celestial, Optional<LightDescriptor.Spot> helmet,
@@ -145,17 +129,14 @@ public final class MinecraftLightProvider implements AutoCloseable {
         return new CelestialLights(sun, moon);
     }
 
-    private static CelestialFrame celestialFrame(Minecraft minecraft, CelestialSettings settings) {
-        float partial = minecraft.getDeltaTracker().getGameTimeDeltaPartialTick(false);
-        var probe = minecraft.gameRenderer.mainCamera().attributeProbe();
-        MinecraftLightingCalibration lighting = MinecraftLightingCalibration.current();
+    static CelestialFrame celestialFrame(MinecraftCapturedFrame.Celestial captured, CelestialSettings settings) {
+        var lighting = captured.lighting();
         return new CelestialFrame(
-                probe.getValue(EnvironmentAttributes.SUN_ANGLE, partial) * TO_RADIANS,
-                probe.getValue(EnvironmentAttributes.MOON_ANGLE, partial) * TO_RADIANS,
+                captured.sunAngleRadians(), captured.moonAngleRadians(),
                 settings.noonTiltDegrees() * TO_RADIANS,
                 lighting.sunIlluminanceLux() * SURFACE_TO_TOP_ILLUMINANCE,
                 lighting.moonIlluminanceLux() * SURFACE_TO_TOP_ILLUMINANCE,
-                probe.getValue(EnvironmentAttributes.MOON_PHASE, partial).index(),
+                captured.moonPhaseIndex(),
                 lighting.moonPhaseFixedFraction(),
                 settings.sunAngularRadiusDegrees() * TO_RADIANS,
                 settings.moonAngularRadiusDegrees() * TO_RADIANS);
@@ -173,8 +154,8 @@ public final class MinecraftLightProvider implements AutoCloseable {
                 illuminance, illuminance, illuminance, angularRadius, true));
     }
 
-    static LightDescriptor.Spot helmetSpot(double x, double y, double z,
-                                           double directionX, double directionY, double directionZ) {
+    public static LightDescriptor.Spot helmetSpot(double x, double y, double z,
+                                                  double directionX, double directionY, double directionZ) {
         return new LightDescriptor.Spot(x, y, z, directionX, directionY, directionZ,
                 48.0, Math.toRadians(22.0), 720.0, 690.0, 610.0);
     }

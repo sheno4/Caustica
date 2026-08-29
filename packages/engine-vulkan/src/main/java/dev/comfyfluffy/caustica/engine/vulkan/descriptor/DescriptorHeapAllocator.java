@@ -77,19 +77,31 @@ public final class DescriptorHeapAllocator<I extends GpuDescriptorIndex> {
     /** Keeps a validated span live and unavailable for reuse through the complete native write. */
     synchronized void withWriteSpan(DescriptorHeapAllocation<I> allocation, int relativeIndex,
                                     Consumer<DescriptorHeapWriteSpan> write) {
-        write.accept(validatedWriteSpan(allocation, relativeIndex));
+        withWriteSpan(allocation, relativeIndex, 1, write);
+    }
+
+    /** Keeps one contiguous validated span live through the complete native write. */
+    synchronized void withWriteSpan(DescriptorHeapAllocation<I> allocation, int relativeIndex,
+                                    int descriptorCount, Consumer<DescriptorHeapWriteSpan> write) {
+        write.accept(validatedWriteSpan(allocation, relativeIndex, descriptorCount));
     }
 
     private DescriptorHeapWriteSpan validatedWriteSpan(DescriptorHeapAllocation<I> allocation, int relativeIndex) {
+        return validatedWriteSpan(allocation, relativeIndex, 1);
+    }
+
+    private DescriptorHeapWriteSpan validatedWriteSpan(DescriptorHeapAllocation<I> allocation, int relativeIndex,
+                                                        int descriptorCount) {
         if (live.get(allocation.identity()) != allocation || allocation.retired()) {
             throw new IllegalStateException("descriptor allocation is not live");
         }
-        if (relativeIndex < 0 || relativeIndex >= allocation.descriptorCount()) {
+        if (descriptorCount <= 0) throw new IllegalArgumentException("descriptor count must be positive");
+        if (relativeIndex < 0 || relativeIndex > allocation.descriptorCount() - descriptorCount) {
             throw new IndexOutOfBoundsException(relativeIndex);
         }
         int absoluteIndex = Math.addExact(allocation.firstIndex().value(), relativeIndex);
         return new DescriptorHeapWriteSpan(layout.kind(), allocation.identity(), absoluteIndex,
-                layout.byteOffset(absoluteIndex), layout.descriptorStrideBytes());
+                layout.byteOffset(absoluteIndex), Math.multiplyExact(layout.descriptorStrideBytes(), descriptorCount));
     }
 
     private void insertAndCoalesce(int first, int count) {

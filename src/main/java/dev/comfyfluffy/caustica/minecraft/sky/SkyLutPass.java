@@ -1,8 +1,5 @@
 package dev.comfyfluffy.caustica.minecraft.sky;
 
-import com.mojang.blaze3d.GpuFormat;
-import com.mojang.blaze3d.textures.GpuTextureView;
-import com.mojang.blaze3d.vulkan.VulkanGpuTextureView;
 import com.mojang.blaze3d.vulkan.VulkanGpuTexture;
 import dev.comfyfluffy.caustica.api.vulkan.*;
 import dev.comfyfluffy.caustica.api.pass.Pass;
@@ -10,17 +7,12 @@ import dev.comfyfluffy.caustica.api.pass.PassFrame;
 import dev.comfyfluffy.caustica.api.program.EnvironmentId;
 import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
 import dev.comfyfluffy.caustica.minecraft.MinecraftLightingCalibration;
+import dev.comfyfluffy.caustica.minecraft.MinecraftCapturedFrame;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftEnvironmentSelector;
 import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
 import dev.comfyfluffy.caustica.minecraft.sky.gen.*;
 import dev.comfyfluffy.caustica.settings.*;
 import dev.comfyfluffy.caustica.vulkan.*;
-import net.minecraft.client.Minecraft;
-import net.minecraft.client.renderer.texture.*;
-import net.minecraft.data.AtlasIds;
-import net.minecraft.resources.Identifier;
-import net.minecraft.world.attribute.EnvironmentAttributes;
-import net.minecraft.world.level.MoonPhase;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.*;
 import org.lwjgl.util.vma.*;
@@ -43,8 +35,6 @@ public final class SkyLutPass implements Pass<PassFrame> {
     private static final Logger LOGGER = LoggerFactory.getLogger(SkyLutPass.class);
     public static final ResourceId ID = ResourceId.of("caustica", "sky_lut");
     private static final String SHADER_ROOT = "/caustica/shaders/pipelines/sky/";
-    private static final Identifier SUN_SPRITE_ID = Identifier.withDefaultNamespace("sun");
-    private static final Identifier[] MOON_SPRITE_IDS = moonSpriteIds();
     static final int TRANSMITTANCE_WIDTH = 256, TRANSMITTANCE_HEIGHT = 64;
     static final int MULTISCATTER_WIDTH = 32, MULTISCATTER_HEIGHT = 32;
     static final int SKY_VIEW_WIDTH = 192, SKY_VIEW_HEIGHT = 216;
@@ -63,6 +53,7 @@ public final class SkyLutPass implements Pass<PassFrame> {
 
     private final GpuDevice gpu;
     private final Supplier<OptionValues> options;
+    private final Supplier<MinecraftCapturedFrame> frames;
     private final EnvironmentId<MinecraftProgramTypes.EnvironmentBindingData> environment;
     private final MinecraftEnvironmentSelector selector;
     private final VmaImage2D transmittance, multiScatter, skyView;
@@ -75,10 +66,12 @@ public final class SkyLutPass implements Pass<PassFrame> {
     private int liveBindings;
 
     public SkyLutPass(GpuDevice gpu, Supplier<OptionValues> options,
+                      Supplier<MinecraftCapturedFrame> frames,
                       EnvironmentId<MinecraftProgramTypes.EnvironmentBindingData> environment,
                       MinecraftEnvironmentSelector selector, long epoch) {
         this.gpu = Objects.requireNonNull(gpu, "gpu");
         this.options = Objects.requireNonNull(options, "options");
+        this.frames = Objects.requireNonNull(frames, "frames");
         this.environment = Objects.requireNonNull(environment, "environment");
         this.selector = Objects.requireNonNull(selector, "selector");
         resourcePackEpoch = new AtomicLong(epoch);
@@ -110,9 +103,10 @@ public final class SkyLutPass implements Pass<PassFrame> {
 
     @Override public void record(PassFrame frame) {
         if (!initialized) { initializeImages(frame.commandBuffer()); initialized = true; }
-        SkyState state = gather(options.get(), frame);
-        AtlasSnapshot snapshot = celestialAtlas(state);
-        if (snapshot == null) return;
+        MinecraftCapturedFrame captured = frames.get();
+        if (captured == null || captured.celestial().isEmpty() || captured.atlas().isEmpty()) return;
+        SkyState state = gather(options.get(), captured.celestial().orElseThrow());
+        AtlasSnapshot snapshot = atlasSnapshot(captured.atlas().orElseThrow());
         ensureAtlas(snapshot);
         SkyInputsData inputs = skyInputs(state, snapshot);
         if (baked && Float.compare(bakedGroundAlbedo, state.groundAlbedo()) != 0) baked = false;
@@ -204,24 +198,19 @@ public final class SkyLutPass implements Pass<PassFrame> {
                 a.sunUv(), a.moonUv());
     }
 
-    private static SkyState gather(OptionValues options, PassFrame frame) {
-        Minecraft mc = Minecraft.getInstance();
-        float partial = mc.getDeltaTracker().getGameTimeDeltaPartialTick(false);
-        var probe = mc.gameRenderer.mainCamera().attributeProbe();
-        int sea = mc.level != null ? mc.level.getSeaLevel() : 0;
-        float altitude = viewerAltitudeKm(frame.view().camera().y(), sea, frame.metersPerSceneUnit());
+    static SkyState gather(OptionValues options, MinecraftCapturedFrame.Celestial captured) {
+        float altitude = viewerAltitudeKm(captured.cameraY(), captured.seaLevel(),
+                captured.metersPerSceneUnit());
         float r = (float) (Math.PI / 180.0);
-        MinecraftLightingCalibration l = MinecraftLightingCalibration.current();
-        return new SkyState(probe.getValue(EnvironmentAttributes.SUN_ANGLE, partial) * r,
-                probe.getValue(EnvironmentAttributes.MOON_ANGLE, partial) * r,
-                probe.getValue(EnvironmentAttributes.STAR_ANGLE, partial) * r,
-                probe.getValue(EnvironmentAttributes.STAR_BRIGHTNESS, partial), l.sunIlluminanceLux(),
+        MinecraftLightingCalibration l = captured.lighting();
+        return new SkyState(captured.sunAngleRadians(), captured.moonAngleRadians(),
+                captured.starAngleRadians(), captured.starBrightness(), l.sunIlluminanceLux(),
                 l.moonIlluminanceLux(), l.nightAirglowLuminanceCdM2(), l.starLuminanceCdM2(),
                 options.get(SUN_NOON_SOUTH_TILT_DEGREES) * r, options.get(SUN_ANGULAR_RADIUS_DEGREES) * r,
                 options.get(MOON_ANGULAR_RADIUS_DEGREES) * r, l.moonPhaseFixedFraction(),
                 options.get(SUN_DISC_HALF_ANGLE_DEGREES) * r,
                 options.get(MOON_DISC_HALF_ANGLE_DEGREES) * r, altitude,
-                probe.getValue(EnvironmentAttributes.MOON_PHASE, partial).index(), options.get(GROUND_ALBEDO),
+                captured.moonPhaseIndex(), options.get(GROUND_ALBEDO),
                 options.get(HORIZON_SOFTEN_DEGREES) * r);
     }
 
@@ -229,20 +218,12 @@ public final class SkyLutPass implements Pass<PassFrame> {
         return Math.clamp((float) ((cameraY - seaLevel) * metersPerSceneUnit / 1000.0), 0, 99);
     }
 
-    private static AtlasSnapshot celestialAtlas(SkyState state) {
-        try {
-            TextureAtlas atlas = Minecraft.getInstance().getAtlasManager().getAtlasOrThrow(AtlasIds.CELESTIALS);
-            GpuTextureView raw = atlas.getTextureView();
-            if (!(raw instanceof VulkanGpuTextureView view) || view.texture().getFormat() != GpuFormat.RGBA8_UNORM) return null;
-            TextureAtlasSprite sun = atlas.getSprite(SUN_SPRITE_ID);
-            int phase = Math.clamp((int) state.moonPhaseIndex(), 0, MOON_SPRITE_IDS.length - 1);
-            TextureAtlasSprite moon = atlas.getSprite(MOON_SPRITE_IDS[phase]);
-            return new AtlasSnapshot(view.texture(), view.baseMipLevel(), view.mipLevels(),
-                    uv(sun), uv(moon));
-        } catch (RuntimeException unavailable) { return null; }
+    private static AtlasSnapshot atlasSnapshot(MinecraftCapturedFrame.CelestialAtlas atlas) {
+        return new AtlasSnapshot(atlas.texture(), atlas.baseMipLevel(), atlas.mipLevels(),
+                uv(atlas.sunUv()), uv(atlas.moonUv()));
     }
-    private static SkyInputsData.Float4 uv(TextureAtlasSprite s) {
-        return new SkyInputsData.Float4(s.getU0(), s.getV0(), s.getU1(), s.getV1());
+    private static SkyInputsData.Float4 uv(MinecraftCapturedFrame.Uv uv) {
+        return new SkyInputsData.Float4(uv.u0(), uv.v0(), uv.u1(), uv.v1());
     }
 
     private static ShaderObjectCompute load(GpuDevice gpu, String name) {
@@ -420,10 +401,5 @@ public final class SkyLutPass implements Pass<PassFrame> {
             failure.addSuppressed(cleanupFailure);
         }
         return failure;
-    }
-    private static Identifier[] moonSpriteIds() {
-        MoonPhase[] phases = MoonPhase.values(); Identifier[] ids = new Identifier[phases.length];
-        for (int i = 0; i < phases.length; i++) ids[i] = Identifier.withDefaultNamespace("moon/" + phases[i].getSerializedName());
-        return ids;
     }
 }

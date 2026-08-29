@@ -34,6 +34,7 @@ public final class MinecraftFrameAdapter {
     private long nextSceneId;
     private long sceneId;
     private volatile MinecraftFrameSelector frameSelector;
+    private volatile MinecraftFrameCaptureInstaller.Sink frameCapture;
 
     private MinecraftFrameAdapter() {
     }
@@ -65,6 +66,10 @@ public final class MinecraftFrameAdapter {
             submerged = fluid.is(FluidTags.WATER)
                     && cameraY < cameraBlockPos.getY() + fluid.getHeight(level, cameraBlockPos);
         }
+        MinecraftFrameCaptureInstaller.Sink capture = frameCapture;
+        if (capture != null) {
+            capture.update(MinecraftClientFrameCapture.capture(client, cameraY, METERS_PER_WORLD_UNIT));
+        }
         MinecraftFrameSelector.Selection selection = selection(submerged);
         if (selection == null) return null;
         Camera camera = new Camera(cameraX, cameraY, cameraZ,
@@ -88,6 +93,14 @@ public final class MinecraftFrameAdapter {
     MinecraftFrameSelector.Selection selection(boolean submerged) {
         MinecraftFrameSelector selector = frameSelector;
         return selector == null ? null : selector.select(submerged);
+    }
+
+    MinecraftFrameCaptureInstaller.Lease installFrameCapture(MinecraftFrameCaptureInstaller.Sink sink) {
+        java.util.Objects.requireNonNull(sink, "sink");
+        frameCapture = sink;
+        return () -> {
+            if (frameCapture == sink) frameCapture = null;
+        };
     }
 
     public SceneResources captureSceneResources(Minecraft client) {

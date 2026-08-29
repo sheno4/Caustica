@@ -3,12 +3,20 @@ package dev.comfyfluffy.caustica.minecraft.sky;
 import dev.comfyfluffy.caustica.minecraft.sky.gen.MinecraftEnvironmentBindingData;
 import dev.comfyfluffy.caustica.minecraft.sky.gen.SkyInputsData;
 import dev.comfyfluffy.caustica.minecraft.sky.gen.SkyLutPushData;
+import dev.comfyfluffy.caustica.minecraft.MinecraftCapturedFrame;
+import dev.comfyfluffy.caustica.minecraft.MinecraftLightingCalibration;
+import dev.comfyfluffy.caustica.minecraft.api.MinecraftDimensionKey;
+import dev.comfyfluffy.caustica.settings.Option;
+import dev.comfyfluffy.caustica.settings.OptionValues;
+import dev.comfyfluffy.caustica.settings.ResourceId;
 import org.junit.jupiter.api.Test;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class SkyLutPassTest {
     private static final SkyLutPass.SkyState SKY = new SkyLutPass.SkyState(
@@ -46,5 +54,27 @@ final class SkyLutPassTest {
         assertEquals(1.0f, SkyLutPass.viewerAltitudeKm(1063.0, 63.0, 1.0));
         assertEquals(1.0f, SkyLutPass.viewerAltitudeKm(2063.0, 63.0, 0.5));
         assertEquals(0.0f, SkyLutPass.viewerAltitudeKm(20.0, 63.0, 1.0));
+    }
+
+    @Test void dimensionCatalogSelectsOnlyTheBuiltInOverworldSky() {
+        MinecraftSkyCatalog catalog = new MinecraftSkyCatalog();
+        assertTrue(catalog.supports(new MinecraftDimensionKey(ResourceId.of("minecraft", "overworld"))));
+        assertFalse(catalog.supports(new MinecraftDimensionKey(ResourceId.of("minecraft", "the_nether"))));
+    }
+
+    @Test void skyStateUsesOneCapturedHostFrame() {
+        var lighting = new MinecraftLightingCalibration(100, 2, 3, 4, 5, .25f);
+        var captured = new MinecraftCapturedFrame.Celestial(.1f, .2f, .3f, .4f,
+                6, 63, 1063, 1, lighting);
+        OptionValues defaults = new OptionValues() {
+            @Override public <T> T get(Option<T> option) { return option.defaultValue(); }
+        };
+
+        SkyLutPass.SkyState state = SkyLutPass.gather(defaults, captured);
+
+        assertEquals(.1f, state.sunAngleRadians());
+        assertEquals(.3f, state.starAngleRadians());
+        assertEquals(1f, state.viewerAltitudeKm());
+        assertEquals(6f, state.moonPhaseIndex());
     }
 }

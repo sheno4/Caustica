@@ -13,13 +13,16 @@ import dev.comfyfluffy.caustica.settings.SettingsRegistry;
 public final class MinecraftProvidersExtension implements MinecraftExtension, CausticaSettingsExtension {
     public static final ResourceId ID = ResourceId.of("caustica", "minecraft");
     private final MinecraftFrameSelectionInstaller frameSelections;
+    private final MinecraftFrameCaptureInstaller frameCaptures;
 
-    public MinecraftProvidersExtension(MinecraftFrameSelectionInstaller frameSelections) {
+    public MinecraftProvidersExtension(MinecraftFrameSelectionInstaller frameSelections,
+                                       MinecraftFrameCaptureInstaller frameCaptures) {
         this.frameSelections = java.util.Objects.requireNonNull(frameSelections, "frameSelections");
+        this.frameCaptures = java.util.Objects.requireNonNull(frameCaptures, "frameCaptures");
     }
 
     @Override public void registerMinecraft(MinecraftApi api) {
-        api.sessions().add(context -> MinecraftProgramSession.open(context, frameSelections));
+        api.sessions().add(context -> MinecraftProgramSession.open(context, frameSelections, frameCaptures));
     }
 
     @Override public void registerSettings(SettingsRegistry registry) {

@@ -18,7 +18,7 @@ final class MinecraftProvidersExtensionTest {
     void builtinAndMinecraftSettingsUseTheIndependentSettingsRegistry() {
         SettingsRegistry settings = new SettingsRegistry();
         new BuiltinExtension().registerSettings(settings);
-        new MinecraftProvidersExtension(selector -> () -> { }).registerSettings(settings);
+        new MinecraftProvidersExtension(selector -> () -> { }, sink -> () -> { }).registerSettings(settings);
 
         assertTrue(settings.declared(BuiltinExtension.ID));
         assertTrue(settings.declared(MinecraftProvidersExtension.ID));
@@ -33,7 +33,7 @@ final class MinecraftProvidersExtensionTest {
             return () -> { };
         });
 
-        new MinecraftProvidersExtension(selector -> () -> { }).registerMinecraft(api);
+        new MinecraftProvidersExtension(selector -> () -> { }, sink -> () -> { }).registerMinecraft(api);
 
         assertEquals(1, factories.size());
     }

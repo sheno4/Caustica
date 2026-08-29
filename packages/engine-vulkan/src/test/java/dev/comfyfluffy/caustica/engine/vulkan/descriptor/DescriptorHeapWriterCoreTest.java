@@ -1,7 +1,14 @@
 package dev.comfyfluffy.caustica.engine.vulkan.descriptor;
 
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorHeapProperties;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorWriter;
+import dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptorKind;
 import org.junit.jupiter.api.Test;
+import org.lwjgl.system.MemoryStack;
+import org.lwjgl.vulkan.VK10;
+import org.lwjgl.vulkan.VK13;
+import org.lwjgl.vulkan.VkImageDescriptorInfoEXT;
+import org.lwjgl.vulkan.VkImageViewCreateInfo;
 import org.lwjgl.vulkan.VkResourceDescriptorInfoEXT;
 import org.lwjgl.vulkan.VkSamplerCreateInfo;
 
@@ -54,6 +61,70 @@ final class DescriptorHeapWriterCoreTest {
         assertThrows(IllegalStateException.class, () -> writer.writeResource(retired, 0, null));
         assertThrows(IllegalArgumentException.class,
                 () -> writer.writeAccelerationStructure(allocations.allocateResources(1), 0, 0L));
+        assertEquals(List.of(), nativeWriter.destinations);
+    }
+
+    @Test
+    void contiguousBatchesUseOneNativeCallAndOneFlush() {
+        DescriptorHeapAllocationCore allocations = allocations();
+        RecordingStorage resources = new RecordingStorage(DescriptorHeapKind.RESOURCE, 0x1000, 0x10000, 4096);
+        RecordingStorage samplers = new RecordingStorage(DescriptorHeapKind.SAMPLER, 0x2000, 0x20000, 1024);
+        RecordingWriter nativeWriter = new RecordingWriter();
+        DescriptorHeapWriterCore writer = new DescriptorHeapWriterCore(
+                allocations, resources, samplers, nativeWriter);
+        var resourceRange = allocations.allocateResources(4);
+        var samplerRange = allocations.allocateSamplers(3);
+
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            VkImageViewCreateInfo.Buffer views = VkImageViewCreateInfo.calloc(2, stack);
+            views.get(0).sType$Default().image(101L);
+            views.get(1).sType$Default().image(202L);
+            VkImageDescriptorInfoEXT.Buffer images = VkImageDescriptorInfoEXT.calloc(2, stack);
+            images.get(0).sType$Default().pView(views.get(0)).layout(VK10.VK_IMAGE_LAYOUT_GENERAL);
+            images.get(1).sType$Default().pView(views.get(1)).layout(VK13.VK_IMAGE_LAYOUT_READ_ONLY_OPTIMAL);
+            writer.writeImages(resourceRange, 1, List.of(
+                    new GpuDescriptorWriter.ImageWrite(GpuImageDescriptorKind.STORAGE, images.get(0)),
+                    new GpuDescriptorWriter.ImageWrite(GpuImageDescriptorKind.SAMPLED, images.get(1))));
+
+            VkSamplerCreateInfo.Buffer samplerInfos = VkSamplerCreateInfo.calloc(2, stack);
+            samplerInfos.get(0).sType$Default().flags(11);
+            samplerInfos.get(1).sType$Default().flags(22);
+            writer.writeSamplers(samplerRange, 1, samplerInfos);
+        }
+
+        assertEquals(List.of(0x10000L + 96, 0x20000L + 24), nativeWriter.destinations);
+        assertEquals(List.of(new Flush(96, 64)), resources.flushes);
+        assertEquals(List.of(new Flush(24, 16)), samplers.flushes);
+        assertEquals(List.of(List.of(GpuImageDescriptorKind.STORAGE, GpuImageDescriptorKind.SAMPLED)),
+                nativeWriter.imageKinds);
+        assertEquals(List.of(List.of(101L, 202L)), nativeWriter.imageViews);
+        assertEquals(List.of(List.of(VK10.VK_IMAGE_LAYOUT_GENERAL, VK13.VK_IMAGE_LAYOUT_READ_ONLY_OPTIMAL)),
+                nativeWriter.imageLayouts);
+        assertEquals(List.of(List.of(11, 22)), nativeWriter.samplerFlags);
+    }
+
+    @Test
+    void batchesRejectEmptyAndOutOfBoundsWritesBeforeNativeEncoding() {
+        DescriptorHeapAllocationCore allocations = allocations();
+        RecordingWriter nativeWriter = new RecordingWriter();
+        DescriptorHeapWriterCore writer = new DescriptorHeapWriterCore(
+                allocations,
+                new RecordingStorage(DescriptorHeapKind.RESOURCE, 0x1000, 0x10000, 4096),
+                new RecordingStorage(DescriptorHeapKind.SAMPLER, 0x2000, 0x20000, 1024),
+                nativeWriter);
+        var resources = allocations.allocateResources(2);
+        var samplers = allocations.allocateSamplers(2);
+
+        assertThrows(IllegalArgumentException.class, () -> writer.writeImages(resources, 0, List.of()));
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            VkImageDescriptorInfoEXT image = VkImageDescriptorInfoEXT.calloc(stack).sType$Default();
+            List<GpuDescriptorWriter.ImageWrite> two = List.of(
+                    new GpuDescriptorWriter.ImageWrite(GpuImageDescriptorKind.SAMPLED, image),
+                    new GpuDescriptorWriter.ImageWrite(GpuImageDescriptorKind.SAMPLED, image));
+            assertThrows(IndexOutOfBoundsException.class, () -> writer.writeImages(resources, 1, two));
+            assertThrows(IndexOutOfBoundsException.class,
+                    () -> writer.writeSamplers(samplers, 1, VkSamplerCreateInfo.calloc(2, stack)));
+        }
         assertEquals(List.of(), nativeWriter.destinations);
     }
 
@@ -134,9 +205,29 @@ final class DescriptorHeapWriterCoreTest {
 
     private static class RecordingWriter implements DescriptorHeapNativeWriter {
         private final List<Long> destinations = new ArrayList<>();
+        private final List<List<GpuImageDescriptorKind>> imageKinds = new ArrayList<>();
+        private final List<List<Long>> imageViews = new ArrayList<>();
+        private final List<List<Integer>> imageLayouts = new ArrayList<>();
+        private final List<List<Integer>> samplerFlags = new ArrayList<>();
 
         @Override public void writeSampler(long destinationHostAddress, VkSamplerCreateInfo sampler) {
             destinations.add(destinationHostAddress);
+        }
+
+        @Override public void writeSamplers(long destinationHostAddress, VkSamplerCreateInfo.Buffer samplers) {
+            destinations.add(destinationHostAddress);
+            List<Integer> flags = new ArrayList<>();
+            for (int index = samplers.position(); index < samplers.limit(); index++) {
+                flags.add(samplers.get(index).flags());
+            }
+            samplerFlags.add(List.copyOf(flags));
+        }
+
+        @Override public void writeImages(long destinationHostAddress, List<GpuDescriptorWriter.ImageWrite> images) {
+            destinations.add(destinationHostAddress);
+            imageKinds.add(images.stream().map(GpuDescriptorWriter.ImageWrite::kind).toList());
+            imageViews.add(images.stream().map(image -> image.descriptor().pView().image()).toList());
+            imageLayouts.add(images.stream().map(image -> image.descriptor().layout()).toList());
         }
 
         @Override public void writeResource(long destinationHostAddress, VkResourceDescriptorInfoEXT resource) {
