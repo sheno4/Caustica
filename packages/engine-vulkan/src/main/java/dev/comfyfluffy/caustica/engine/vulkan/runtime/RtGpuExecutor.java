@@ -139,11 +139,20 @@ public final class RtGpuExecutor {
         return new GraphicsUse(this, nextGraphicsValue.incrementAndGet());
     }
 
-    /** Signal the frame token after its final graphics consumer. */
-    public void endGraphicsUse(GraphicsSubmission submission, GraphicsUse graphicsUse) {
+    /**
+     * Resolve one frame reservation and signal it only when its commands entered the host submission.
+     * Callback publication and the timeline signal are one terminal operation: either may fail, but the
+     * reservation cannot remain open or be resolved a second time.
+     */
+    public void resolveGraphicsUse(GraphicsSubmission submission, GraphicsUse graphicsUse) {
         assertRenderThread();
-        enqueueGraphicsSignal(submission, graphicsTimeline, graphicsUse.value);
-        latestGraphicsUseValue.accumulateAndGet(graphicsUse.value, Math::max);
+        if (graphicsUse.owner != this) {
+            throw new IllegalArgumentException("Graphics use belongs to a different Vulkan device");
+        }
+        graphicsUse.resolveSubmission(() -> {
+            enqueueGraphicsSignal(submission, graphicsTimeline, graphicsUse.value);
+            latestGraphicsUseValue.accumulateAndGet(graphicsUse.value, Math::max);
+        });
     }
 
     static void enqueueBuildWait(GraphicsSubmission submission, long semaphore, long value) {
@@ -583,9 +592,34 @@ public final class RtGpuExecutor {
             commandsAccepted = true;
         }
 
-        public void resolveSubmission() {
-            if (commandsAccepted) fireSubmittedCallbacks();
-            else discardSubmittedCallbacks();
+        void resolveSubmission() {
+            resolveSubmission(() -> { });
+        }
+
+        void resolveSubmission(Runnable signalAcceptedCommands) {
+            java.util.Objects.requireNonNull(signalAcceptedCommands, "signalAcceptedCommands");
+            if (submittedResolved) {
+                throw new IllegalStateException("graphics submission callbacks are resolved");
+            }
+            boolean signal = commandsAccepted;
+            Throwable failure = null;
+            try {
+                if (signal) fireSubmittedCallbacks();
+                else discardSubmittedCallbacks();
+            } catch (Throwable callbackFailure) {
+                failure = callbackFailure;
+            }
+            if (signal) {
+                try {
+                    signalAcceptedCommands.run();
+                } catch (Throwable signalFailure) {
+                    if (failure == null) failure = signalFailure;
+                    else failure.addSuppressed(signalFailure);
+                }
+            }
+            if (failure instanceof RuntimeException runtime) throw runtime;
+            if (failure instanceof Error error) throw error;
+            if (failure != null) throw new IllegalStateException("graphics-use resolution failed", failure);
         }
 
         private void fireSubmittedCallbacks() {

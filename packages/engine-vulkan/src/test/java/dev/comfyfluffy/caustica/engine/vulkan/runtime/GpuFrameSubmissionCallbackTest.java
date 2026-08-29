@@ -29,10 +29,30 @@ final class GpuFrameSubmissionCallbackTest {
         List<String> events = new ArrayList<>();
         use.whenSubmitted(() -> events.add("unexpected"));
 
-        use.resolveSubmission();
+        use.resolveSubmission(() -> events.add("unexpected signal"));
 
         assertEquals(List.of(), events);
         assertThrows(IllegalStateException.class, use::commandsAccepted);
         assertThrows(IllegalStateException.class, () -> use.whenSubmitted(() -> { }));
+    }
+
+    @Test
+    void acceptedCommandsSignalEvenWhenPublicationCallbackFails() {
+        RtGpuExecutor.GraphicsUse use = new RtGpuExecutor.GraphicsUse(null, 1L);
+        List<String> events = new ArrayList<>();
+        use.whenSubmitted(() -> {
+            events.add("callback");
+            throw new IllegalStateException("publication failed");
+        });
+        use.commandsAccepted();
+
+        IllegalStateException failure = assertThrows(IllegalStateException.class,
+                () -> use.resolveSubmission(() -> events.add("signal")));
+
+        assertEquals("publication failed", failure.getMessage());
+        assertEquals(List.of("callback", "signal"), events);
+        assertThrows(IllegalStateException.class,
+                () -> use.resolveSubmission(() -> events.add("duplicate signal")));
+        assertEquals(List.of("callback", "signal"), events);
     }
 }

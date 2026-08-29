@@ -448,14 +448,10 @@ final class RtFrameRenderer {
         if (graphicsUse == null) {
             return;
         }
+        pendingGraphicsUse = null;
+        currentTrace = null;
         GraphicsSubmission submission = context.backend().createGraphicsSubmission();
-        try {
-            graphicsUse.resolveSubmission();
-        } finally {
-            context.gpuExecutor().endGraphicsUse(submission, graphicsUse);
-            pendingGraphicsUse = null;
-            currentTrace = null;
-        }
+        context.gpuExecutor().resolveGraphicsUse(submission, graphicsUse);
     }
 
     public void endFrame() {
@@ -502,10 +498,24 @@ final class RtFrameRenderer {
             return true;
         } catch (Throwable t) {
             presenter.invalidateRenderedFrame();
+            resolvePendingGraphicsUse(t);
             context.gpuExecutor().throwIfFailed();
             failed = true;
             LOGGER.error("RT composite failed; reverting to source rasterization", t);
             return false;
+        }
+    }
+
+    private void resolvePendingGraphicsUse(Throwable frameFailure) {
+        RtGpuExecutor.GraphicsUse graphicsUse = pendingGraphicsUse;
+        if (graphicsUse == null) return;
+        pendingGraphicsUse = null;
+        currentTrace = null;
+        try {
+            context.gpuExecutor().resolveGraphicsUse(
+                    context.backend().createGraphicsSubmission(), graphicsUse);
+        } catch (Throwable resolutionFailure) {
+            frameFailure.addSuppressed(resolutionFailure);
         }
     }
 
