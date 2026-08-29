@@ -4,6 +4,11 @@ package dev.comfyfluffy.caustica.engine.vulkan;
 public enum VulkanFeature {
     SHADER_INT64("shaderInt64"),
     SHADER_FLOAT16("shaderFloat16"),
+    SHADER_STORAGE_IMAGE_EXTENDED_FORMATS("shaderStorageImageExtendedFormats"),
+    SHADER_STORAGE_IMAGE_READ_WITHOUT_FORMAT("shaderStorageImageReadWithoutFormat"),
+    SHADER_STORAGE_IMAGE_WRITE_WITHOUT_FORMAT("shaderStorageImageWriteWithoutFormat"),
+    SHADER_DRAW_PARAMETERS("shaderDrawParameters"),
+    SHADER_DEMOTE_TO_HELPER_INVOCATION("shaderDemoteToHelperInvocation"),
     BUFFER_DEVICE_ADDRESS("bufferDeviceAddress"),
     TIMELINE_SEMAPHORE("timelineSemaphore"),
     SYNCHRONIZATION_2("synchronization2"),

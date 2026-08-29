@@ -36,6 +36,23 @@ final class MinecraftDeviceBringupTest {
     }
 
     @Test
+    void profileIncludesEveryOptionalFeatureDeclaredByStaticShaderObjects() {
+        Set<VulkanFeature> features = VulkanRequiredProfile.CAUSTICA_1_4.features();
+
+        assertTrue(features.containsAll(Set.of(
+                VulkanFeature.SHADER_STORAGE_IMAGE_EXTENDED_FORMATS,
+                VulkanFeature.SHADER_STORAGE_IMAGE_READ_WITHOUT_FORMAT,
+                VulkanFeature.SHADER_STORAGE_IMAGE_WRITE_WITHOUT_FORMAT,
+                VulkanFeature.SHADER_DRAW_PARAMETERS,
+                VulkanFeature.SHADER_DEMOTE_TO_HELPER_INVOCATION,
+                VulkanFeature.BUFFER_DEVICE_ADDRESS,
+                VulkanFeature.SHADER_INT64,
+                VulkanFeature.RAY_QUERY,
+                VulkanFeature.DESCRIPTOR_HEAP,
+                VulkanFeature.SHADER_UNTYPED_POINTERS)));
+    }
+
+    @Test
     void aggregatesDeviceVersionExtensionAndFeatureFailures() {
         VulkanRequiredProfile required = VulkanRequiredProfile.CAUSTICA_1_4;
         Set<String> extensions = new HashSet<>(required.deviceExtensions());
