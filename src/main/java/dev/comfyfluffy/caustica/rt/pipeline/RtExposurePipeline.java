@@ -1,10 +1,11 @@
 package dev.comfyfluffy.caustica.rt.pipeline;
 
+
 import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptorKind;
-import dev.comfyfluffy.caustica.rt.GpuBuffer;
-import dev.comfyfluffy.caustica.rt.GpuContext;
-import dev.comfyfluffy.caustica.rt.RtDebugLabels;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuBuffer;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.gen.ExposureHistPushData;
 import dev.comfyfluffy.caustica.rt.gen.ExposureResolvePushData;
 import dev.comfyfluffy.caustica.vulkan.ShaderObjectCompute;
@@ -20,18 +21,18 @@ import java.nio.ByteBuffer;
 /** Descriptor-heap shader objects for histogram auto exposure. */
 final class RtExposurePipeline {
     private static final String ROOT = "/caustica/shaders/pipelines/";
-    private final GpuContext context;
+    private final VulkanDeviceContext context;
     private final ShaderObjectCompute histogramShader;
     private final ShaderObjectCompute resolveShader;
 
-    private RtExposurePipeline(GpuContext context, ShaderObjectCompute histogramShader,
+    private RtExposurePipeline(VulkanDeviceContext context, ShaderObjectCompute histogramShader,
                                ShaderObjectCompute resolveShader) {
         this.context = context;
         this.histogramShader = histogramShader;
         this.resolveShader = resolveShader;
     }
 
-    static RtExposurePipeline create(GpuContext context) {
+    static RtExposurePipeline create(VulkanDeviceContext context) {
         ShaderObjectCompute histogram = load(context, "exposure_hist/main.comp.spv");
         try {
             return new RtExposurePipeline(context, histogram,
@@ -78,7 +79,7 @@ final class RtExposurePipeline {
         return image.descriptor(GpuImageDescriptorKind.STORAGE).index().value();
     }
 
-    private static ShaderObjectCompute load(GpuContext context, String name) {
+    private static ShaderObjectCompute load(VulkanDeviceContext context, String name) {
         String resource = ROOT + name;
         try (InputStream input = RtExposurePipeline.class.getResourceAsStream(resource)) {
             if (input == null) throw new IllegalStateException("missing SPIR-V resource: " + resource);

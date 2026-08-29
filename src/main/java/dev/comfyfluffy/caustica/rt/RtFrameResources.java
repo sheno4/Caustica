@@ -1,5 +1,10 @@
 package dev.comfyfluffy.caustica.rt;
 
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuBuffer;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuImage;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtGpuExecutor;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
+
 import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDebugPresentPipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDisplayPipeline;
@@ -54,7 +59,7 @@ final class RtFrameResources {
         }
     }
 
-    void ensurePresentationPipelines(GpuContext context, RtLookPackage look) throws IOException {
+    void ensurePresentationPipelines(VulkanDeviceContext context, RtLookPackage look) throws IOException {
         if (displayPipeline == null) {
             displayPipeline = RtDisplayPipeline.create(context);
         }
@@ -86,7 +91,7 @@ final class RtFrameResources {
     }
 
     /** Ensure the complete extent-keyed resource set, replacing it only after all prior GPU use drains. */
-    boolean ensureSized(GpuContext context, int width, int height) {
+    boolean ensureSized(VulkanDeviceContext context, int width, int height) {
         boolean rrEnabled = RtDlssRr.configured();
         int rrQuality = rrEnabled ? RtDlssRr.quality() : Integer.MIN_VALUE;
         if (output != null && continuationQueues[0] != null && displayImage != null && hdrDisplayImage != null

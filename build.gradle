@@ -13,6 +13,7 @@ plugins {
 }
 
 evaluationDependsOn(":packages:api")
+evaluationDependsOn(":packages:slang-runtime")
 
 def loader = (findProperty("loader") ?: "fabric").toString().toLowerCase(Locale.ROOT)
 if (!(loader in ["fabric", "neoforge"])) {
@@ -120,6 +121,7 @@ if (loader == "fabric") {
 				sourceSet(project(":packages:minecraft-content").sourceSets.main)
 				sourceSet(project(":packages:settings-api").sourceSets.main)
 				sourceSet(project(":packages:shader-api").sourceSets.main)
+				sourceSet(project(":packages:slang-runtime").sourceSets.main)
 				sourceSet(project(":packages:vulkan-support").sourceSets.main)
 			}
 		}
@@ -156,6 +158,8 @@ dependencies {
 	apiRuntime project(":packages:minecraft-content")
 	compileOnly project(":packages:settings-api")
 	apiRuntime project(":packages:settings-api")
+	compileOnly project(":packages:slang-runtime")
+	apiRuntime project(":packages:slang-runtime")
 	compileOnly project(":packages:vulkan-support")
 	apiRuntime project(":packages:vulkan-support")
 	if (loader == "fabric") {
@@ -176,6 +180,7 @@ dependencies {
 	testImplementation project(":packages:minecraft-content")
 	testImplementation(testFixtures(project(":packages:minecraft-content")))
 	testImplementation project(":packages:settings-api")
+	testImplementation project(":packages:slang-runtime")
 	testImplementation project(":packages:vulkan-support")
 	testRuntimeOnly project(":packages:api")
 	testRuntimeOnly project(":packages:api-support")
@@ -187,6 +192,7 @@ dependencies {
 	testRuntimeOnly project(":packages:minecraft-adapter")
 	testRuntimeOnly project(":packages:minecraft-content")
 	testRuntimeOnly project(":packages:settings-api")
+	testRuntimeOnly project(":packages:slang-runtime")
 	testRuntimeOnly project(":packages:vulkan-support")
 	testRuntimeOnly "org.junit.platform:junit-platform-launcher"
 
@@ -563,197 +569,24 @@ sourceSets.main.java.srcDir(files(rtBindingsGenRoot).builtBy(generateRtBindings)
 // same /caustica/shaders/ path the pipeline loaders read. builtBy wires the dependency.
 sourceSets.main.resources.srcDir(files(shaderGenRoot).builtBy(compileShaders))
 
-def slangRuntimeVersion = project.property("slang_runtime_version").toString()
-def slangRuntimeGenRoot = layout.buildDirectory.dir("generated/slang-runtime")
-def slangRuntimeInputRoot = providers.gradleProperty("slangRuntimeInputRoot").map { file(it) }
-def slangShimConfig = (findProperty("slangShimConfig") ?: "release").toString().toLowerCase(java.util.Locale.ROOT)
-// The shim is produced outside Gradle, so -PbuildRoot must not move where we look for it. Mirrors
-// ngxShimInputRoot.
-def slangShimInputRoot = file(findProperty("slangShimInputRoot")
-		?: layout.buildDirectory.dir("native/slang_shim").get().asFile)
-def slangShimOutDir = new File(slangShimInputRoot, slangShimConfig)
-def currentSlangPlatform = {
-	def os = org.gradle.internal.os.OperatingSystem.current()
-	def arch = System.getProperty("os.arch", "").toLowerCase(java.util.Locale.ROOT)
-	def x64 = arch == "x86_64" || arch == "amd64"
-	if (os.windows && x64) {
-		return "windows-x64"
-	}
-	if (os.linux && x64) {
-		return "linux-x64"
-	}
-	return null
-}()
-def requestedSlangPlatforms = (findProperty("slangPlatforms") ?: "current").toString()
-		.split(",")
-		.collect { it.trim() }
-		.findAll { !it.isEmpty() }
-		.collect { it == "current" ? currentSlangPlatform : it }
-def supportedSlangPlatforms = ["windows-x64", "linux-x64"]
-if (requestedSlangPlatforms.any { it == null || !supportedSlangPlatforms.contains(it) }) {
-	throw new GradleException("Unsupported Slang runtime platform(s): ${requestedSlangPlatforms}")
-}
-
-def bundleSlangRuntime = tasks.register("bundleSlangRuntime") {
-	group = "build"
-	description = "Bundles the Slang shared-library compiler runtime into mod resources."
-	inputs.property "slangRuntimeVersion", slangRuntimeVersion
-	inputs.property "slangPlatforms", requestedSlangPlatforms.join(",")
-	inputs.property "slangShimConfig", slangShimConfig
-	if (slangRuntimeInputRoot.isPresent()) {
-		inputs.dir(slangRuntimeInputRoot)
-	} else {
-		inputs.dir(slangShimOutDir)
-		def sdk = System.getenv("SLANG_SDK")
-		if (sdk) {
-			inputs.files(fileTree(new File(sdk, "bin")) {
-				include "slang*.dll"
-				include "slang-standard-module-*/**"
-			})
-			inputs.files(fileTree(new File(sdk, "bin")) {
-				include "libslang*.so*"
-				include "slang-standard-module-*/**"
-			})
-			inputs.files(fileTree(new File(sdk, "lib")) {
-				include "libslang*.so*"
-				include "slang-standard-module-*/**"
-			})
-		}
-	}
-	outputs.dir(slangRuntimeGenRoot)
-
-	doLast {
-		def outputRoot = slangRuntimeGenRoot.get().asFile
-		delete(outputRoot)
-		def scratchRoot = new File(temporaryDir, "runtime")
-		delete(scratchRoot)
-		scratchRoot.mkdirs()
-
-		requestedSlangPlatforms.each { platform ->
-			def destination = new File(scratchRoot,
-					"caustica/natives/slang/${slangRuntimeVersion}/${platform}")
-			destination.mkdirs()
-			if (slangRuntimeInputRoot.isPresent()) {
-				def source = new File(slangRuntimeInputRoot.get(), platform)
-				if (!source.isDirectory()) {
-					throw new GradleException("Missing prepared Slang runtime directory ${source}")
-				}
-				copy {
-					from(source)
-					exclude "runtime.json"
-					into(destination)
-				}
-			} else {
-				if (platform != currentSlangPlatform) {
-					throw new GradleException("Platform ${platform} requires -PslangRuntimeInputRoot")
-				}
-				def sdkPath = System.getenv("SLANG_SDK")
-				if (!sdkPath) {
-					throw new GradleException("SLANG_SDK environment variable is not set")
-				}
-				def sdk = file(sdkPath)
-				copy {
-					from(slangShimOutDir) {
-						include platform == "windows-x64" ? "causticaslang.dll" : "libcausticaslang.so"
-					}
-					if (platform == "windows-x64") {
-						from(new File(sdk, "bin")) {
-							include "slang*.dll"
-							include "slang-standard-module-*/**"
-						}
-					} else {
-						from(new File(sdk, "lib")) {
-							include "libslang*.so*"
-							include "slang-standard-module-*/**"
-						}
-						from(new File(sdk, "bin")) {
-							include "libslang*.so*"
-							include "slang-standard-module-*/**"
-						}
-					}
-					into(destination)
-				}
-			}
-
-			def shimName = platform == "windows-x64" ? "causticaslang.dll" : "libcausticaslang.so"
-			def coreName = platform == "windows-x64" ? "slang.dll" : "libslang.so"
-			def compilerName = platform == "windows-x64" ? "slang-compiler.dll" : "libslang-compiler.so"
-			def missing = [shimName, coreName, compilerName].findAll { !new File(destination, it).isFile() }
-			if (!missing.empty) {
-				throw new GradleException("Incomplete Slang runtime for ${platform}; missing ${missing.join(', ')}")
-			}
-
-			def files = fileTree(destination).files.sort { a, b -> a.path <=> b.path }
-			def digest = { File source ->
-				def md = MessageDigest.getInstance("SHA-256")
-				source.withInputStream { input ->
-					byte[] buffer = new byte[64 * 1024]
-					for (int read = input.read(buffer); read >= 0; read = input.read(buffer)) {
-						if (read > 0) md.update(buffer, 0, read)
-					}
-				}
-				return md.digest().encodeHex().toString()
-			}
-			def entries = files.collect { source ->
-				[
-					path: destination.toPath().relativize(source.toPath()).toString().replace('\\', '/'),
-					size: source.length(),
-					sha256: digest(source),
-				]
-			}
-			def bundleDigest = MessageDigest.getInstance("SHA-256")
-			entries.each { entry ->
-				bundleDigest.update(entry.path.getBytes(java.nio.charset.StandardCharsets.UTF_8))
-				bundleDigest.update((byte) 0)
-				bundleDigest.update(entry.sha256.getBytes(java.nio.charset.StandardCharsets.US_ASCII))
-			}
-			def manifest = [
-				format: 1,
-				abi: 2,
-				slangVersion: slangRuntimeVersion,
-				platform: platform,
-				shim: shimName,
-				bundleSha256: bundleDigest.digest().encodeHex().toString(),
-				files: entries,
-			]
-			new File(destination, "runtime.json").text = JsonOutput.prettyPrint(JsonOutput.toJson(manifest)) + "\n"
-		}
-		def indexFile = new File(scratchRoot, "caustica/natives/slang/runtime.json")
-		indexFile.parentFile.mkdirs()
-		indexFile.text = JsonOutput.prettyPrint(JsonOutput.toJson([
-			format: 1,
-			slangVersion: slangRuntimeVersion,
-			platforms: requestedSlangPlatforms,
-		])) + "\n"
-
-		copy {
-			from(scratchRoot)
-			into(outputRoot)
-		}
-	}
-}
-
-sourceSets.main.resources.srcDir(files(slangRuntimeGenRoot).builtBy(bundleSlangRuntime))
+def slangRuntimePackage = project(":packages:slang-runtime")
+def bundleSlangRuntime = slangRuntimePackage.tasks.named("bundleSlangRuntime")
 
 tasks.named("test", Test) {
 	dependsOn(bundleSlangRuntime)
-	workingDir project.projectDir
 	jvmArgs "--enable-native-access=ALL-UNNAMED"
 	doFirst {
-		workingDir project.projectDir
-		def slangRuntimeDir = new File(slangRuntimeGenRoot.get().asFile,
-				"caustica/natives/slang/${slangRuntimeVersion}/${currentSlangPlatform}").absolutePath
-		systemProperty "caustica.test.slangRuntimeDir", slangRuntimeDir
-		systemProperty "caustica.test.slangVersion", slangRuntimeVersion
-		systemProperty "caustica.test.spirvVal", slangTooling.spirvVal.get()
-		// SlangRuntime normally locates its extracted natives through the active loader's game directory,
-		// which does not exist under plain JUnit. The same override players can use to point at a local
-		// Slang build lets tests exercise the real runtime path (session creation, module search paths)
-		// instead of only the lower-level SlangLibrary calls.
-		systemProperty "caustica.slang.path", slangRuntimeDir
+		def os = org.gradle.internal.os.OperatingSystem.current()
+		def arch = System.getProperty("os.arch", "").toLowerCase(java.util.Locale.ROOT)
+		def x64 = arch == "x86_64" || arch == "amd64"
+		def platform = os.windows && x64 ? "windows-x64" : os.linux && x64 ? "linux-x64" : null
+		if (platform == null) throw new GradleException("Unsupported Slang runtime host")
+		def runtimeDir = slangRuntimePackage.layout.buildDirectory.dir(
+				"generated/slang-runtime/caustica/natives/slang/${project.slang_runtime_version}/${platform}")
+				.get().asFile
+		systemProperty "caustica.slang.path", runtimeDir.absolutePath
 	}
 }
-
 def ngxNativeGenRoot = layout.buildDirectory.dir("generated/ngx-natives")
 def requestedTaskNames = gradle.startParameter.taskNames.collect { it.toLowerCase(java.util.Locale.ROOT) }
 def isRunClientInvocation = requestedTaskNames.any { it == "runclient" || it.endsWith(":runclient") }
@@ -934,6 +767,7 @@ tasks.named("jar", Jar).configure {
 	from(project(":packages:minecraft-content").sourceSets.main.output)
 	from(project(":packages:settings-api").sourceSets.main.output)
 	from(project(":packages:shader-api").sourceSets.main.output)
+	from(project(":packages:slang-runtime").sourceSets.main.output)
 	from(project(":packages:vulkan-support").sourceSets.main.output)
 	from(rootProject.files("LICENSE.md", "COPYING", "COPYING.LESSER", "THIRD_PARTY_NOTICES.md")) {
 		into "META-INF"
@@ -953,6 +787,8 @@ tasks.named("sourcesJar", Jar).configure {
 	from(project(":packages:minecraft-content").sourceSets.main.allSource)
 	from(project(":packages:settings-api").sourceSets.main.allSource)
 	from(project(":packages:shader-api").sourceSets.main.allSource)
+	from(project(":packages:slang-runtime").sourceSets.main.allJava)
+	from(project(":packages:slang-runtime").file("native")) { into "native/slang-runtime" }
 	from(project(":packages:vulkan-support").sourceSets.main.allSource)
 }
 
@@ -970,6 +806,7 @@ def verifyEmbeddedApi = tasks.register("verifyEmbeddedApi") {
 			project(":packages:minecraft-content").tasks.named("jar"),
 			project(":packages:settings-api").tasks.named("jar"),
 			project(":packages:shader-api").tasks.named("jar"),
+			project(":packages:slang-runtime").tasks.named("jar"),
 			project(":packages:vulkan-support").tasks.named("jar"))
 	inputs.file(tasks.named("jar", Jar).flatMap { it.archiveFile })
 	inputs.file(project(":packages:api").tasks.named("jar", Jar).flatMap { it.archiveFile })
@@ -983,6 +820,7 @@ def verifyEmbeddedApi = tasks.register("verifyEmbeddedApi") {
 	inputs.file(project(":packages:minecraft-content").tasks.named("jar", Jar).flatMap { it.archiveFile })
 	inputs.file(project(":packages:settings-api").tasks.named("jar", Jar).flatMap { it.archiveFile })
 	inputs.file(project(":packages:shader-api").tasks.named("jar", Jar).flatMap { it.archiveFile })
+	inputs.file(project(":packages:slang-runtime").tasks.named("jar", Jar).flatMap { it.archiveFile })
 	inputs.file(project(":packages:vulkan-support").tasks.named("jar", Jar).flatMap { it.archiveFile })
 	doLast {
 		def names = { File artifact ->
@@ -1008,6 +846,8 @@ def verifyEmbeddedApi = tasks.register("verifyEmbeddedApi") {
 		def minecraftContentEntries = names(project(":packages:minecraft-content").tasks.named("jar", Jar).get().archiveFile.get().asFile)
 		def settingsApiEntries = names(project(":packages:settings-api").tasks.named("jar", Jar).get().archiveFile.get().asFile)
 		def shaderApiEntries = names(project(":packages:shader-api").tasks.named("jar", Jar).get().archiveFile.get().asFile)
+		def slangRuntimeEntries = names(project(":packages:slang-runtime").tasks.named("jar", Jar)
+				.get().archiveFile.get().asFile)
 		def vulkanSupportEntries = names(project(":packages:vulkan-support").tasks.named("jar", Jar)
 				.get().archiveFile.get().asFile)
 		def required = apiEntries.findAll { it.endsWith(".class") }
@@ -1024,6 +864,8 @@ def verifyEmbeddedApi = tasks.register("verifyEmbeddedApi") {
 		required.addAll(shaderApiEntries.findAll { entry ->
 			entry.startsWith("caustica/shaders/api/") && !entry.endsWith("/")
 		})
+		required.addAll(slangRuntimeEntries.findAll { it.endsWith(".class")
+				|| it.startsWith("caustica/natives/slang/") && !it.endsWith("/") })
 		required.addAll(vulkanSupportEntries.findAll { it.endsWith(".class") })
 		def missing = required.findAll { !rootEntries.contains(it) }
 		def duplicated = required.findAll { requiredEntry ->
@@ -1035,11 +877,34 @@ def verifyEmbeddedApi = tasks.register("verifyEmbeddedApi") {
 	}
 }
 
+def verifySlangRuntimeOwnership = tasks.register("verifySlangRuntimeOwnership") {
+	group = "verification"
+	description = "Verifies that renderer compilation receives Slang through explicit ownership."
+	inputs.files(sourceSets.main.allJava, sourceSets.test.allJava,
+			project(":packages:slang-runtime").sourceSets.main.allJava,
+			project(":packages:slang-runtime").sourceSets.test.allJava)
+	doLast {
+		def violations = []
+		inputs.files.files.findAll { it.name.endsWith(".java") }.sort().each { source ->
+			source.eachLine { line, number ->
+				if (line.contains("SlangRuntime.INSTANCE")) {
+					violations.add("${source}:${number}: ${line.trim()}")
+				}
+			}
+		}
+		if (!violations.empty) {
+			throw new GradleException("Slang runtime singleton references remain:\n${violations.join('\n')}")
+		}
+	}
+}
+
 tasks.named("check") {
-	dependsOn(verifyEmbeddedApi, project(":packages:features-builtin").tasks.named("check"),
+	dependsOn(verifyEmbeddedApi, verifySlangRuntimeOwnership,
+			project(":packages:features-builtin").tasks.named("check"),
 			project(":packages:config").tasks.named("check"),
 			project(":packages:engine-vulkan").tasks.named("check"),
 			project(":packages:minecraft-content").tasks.named("check"),
+			project(":packages:slang-runtime").tasks.named("check"),
 			project(":packages:vulkan-support").tasks.named("check"))
 }
 

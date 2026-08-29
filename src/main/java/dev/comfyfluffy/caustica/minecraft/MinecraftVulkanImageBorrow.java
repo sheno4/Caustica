@@ -6,8 +6,8 @@ import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorIndex;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorRange;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptor;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptorKind;
-import dev.comfyfluffy.caustica.rt.GpuContext;
-import dev.comfyfluffy.caustica.rt.GpuImage;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuImage;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkImageDescriptorInfoEXT;
@@ -18,19 +18,19 @@ import org.lwjgl.vulkan.VkResourceDescriptorInfoEXT;
 public final class MinecraftVulkanImageBorrow implements GpuImage {
     private final VulkanGpuTextureView view;
     private final VulkanGpuTexture texture;
-    private final GpuContext gpu;
+    private final VulkanDeviceContext gpu;
     private final GpuDescriptorRange<GpuDescriptorIndex.Resource> descriptor;
     private final int width, height, format;
     private boolean destroyed;
 
-    private MinecraftVulkanImageBorrow(GpuContext gpu, VulkanGpuTextureView view, VulkanGpuTexture texture,
+    private MinecraftVulkanImageBorrow(VulkanDeviceContext gpu, VulkanGpuTextureView view, VulkanGpuTexture texture,
                                        GpuDescriptorRange<GpuDescriptorIndex.Resource> descriptor,
                                        int width, int height, int format) {
         this.gpu = gpu; this.view = view; this.texture = texture; this.descriptor = descriptor;
         this.width = width; this.height = height; this.format = format;
     }
 
-    public static MinecraftVulkanImageBorrow sampled(GpuContext gpu, VulkanGpuTextureView view,
+    public static MinecraftVulkanImageBorrow sampled(VulkanDeviceContext gpu, VulkanGpuTextureView view,
                                                       int width, int height, int format) {
         VulkanGpuTexture texture = view.texture();
         texture.addViews();
@@ -55,7 +55,7 @@ public final class MinecraftVulkanImageBorrow implements GpuImage {
         }
     }
 
-    public boolean wraps(GpuContext candidateGpu, VulkanGpuTextureView candidate,
+    public boolean wraps(VulkanDeviceContext candidateGpu, VulkanGpuTextureView candidate,
                          int candidateWidth, int candidateHeight) {
         return gpu == candidateGpu && view == candidate
                 && width == candidateWidth && height == candidateHeight;

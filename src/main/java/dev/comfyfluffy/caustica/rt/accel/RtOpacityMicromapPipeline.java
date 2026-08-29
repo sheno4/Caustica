@@ -1,7 +1,7 @@
 package dev.comfyfluffy.caustica.rt.accel;
 
-import dev.comfyfluffy.caustica.rt.GpuContext;
-import dev.comfyfluffy.caustica.rt.RtDebugLabels;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.gen.OpacityMicromapPushData;
 import dev.comfyfluffy.caustica.vulkan.ShaderObjectCompute;
 import org.lwjgl.system.MemoryStack;
@@ -17,15 +17,15 @@ import java.nio.ByteBuffer;
 public final class RtOpacityMicromapPipeline {
     private static final String SHADER = "/caustica/shaders/pipelines/opacity_micromap/main.comp.spv";
 
-    private final GpuContext context;
+    private final VulkanDeviceContext context;
     private final ShaderObjectCompute shader;
 
-    private RtOpacityMicromapPipeline(GpuContext context, ShaderObjectCompute shader) {
+    private RtOpacityMicromapPipeline(VulkanDeviceContext context, ShaderObjectCompute shader) {
         this.context = context;
         this.shader = shader;
     }
 
-    public static RtOpacityMicromapPipeline create(GpuContext context) {
+    public static RtOpacityMicromapPipeline create(VulkanDeviceContext context) {
         try (InputStream input = RtOpacityMicromapPipeline.class.getResourceAsStream(SHADER)) {
             if (input == null) throw new IllegalStateException("missing SPIR-V resource: " + SHADER);
             byte[] bytes = input.readAllBytes();

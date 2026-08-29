@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.vulkan;
 
-import dev.comfyfluffy.caustica.rt.GpuRasterCapabilities;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuRasterCapabilities;
 import dev.comfyfluffy.caustica.engine.vulkan.VulkanFeature;
 import dev.comfyfluffy.caustica.engine.vulkan.VulkanProfileSupport;
 import dev.comfyfluffy.caustica.engine.vulkan.VulkanProfileValidation;

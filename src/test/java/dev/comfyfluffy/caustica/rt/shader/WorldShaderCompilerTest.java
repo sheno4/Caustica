@@ -8,6 +8,10 @@ import dev.comfyfluffy.caustica.api.program.SurfaceDefinition;
 import dev.comfyfluffy.caustica.api.program.VolumeDefinition;
 import dev.comfyfluffy.caustica.engine.program.ProgramComposition;
 import dev.comfyfluffy.caustica.engine.program.ProgramKey;
+import dev.comfyfluffy.caustica.slang.SlangRuntime;
+import dev.comfyfluffy.caustica.slang.SlangRuntimeConfig;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -16,6 +20,7 @@ import java.nio.ByteOrder;
 import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -28,6 +33,19 @@ final class WorldShaderCompilerTest {
     private static final ShaderDataType<Object> DATA = ShaderDataType.create("test-data");
     private static final ShaderDataType<Object> BINDING = ShaderDataType.create("test-binding");
     private static final ShaderDataType<Object> INSTANCE = ShaderDataType.create("test-instance");
+    private static SlangRuntime runtime;
+
+    @BeforeAll
+    static void createRuntime() {
+        runtime = new SlangRuntime(new SlangRuntimeConfig(
+                Path.of("build/test-slang-extraction"),
+                Optional.of(Path.of(System.getProperty("caustica.slang.path")))));
+    }
+
+    @AfterAll
+    static void stopRuntime() {
+        runtime.shutdown();
+    }
 
     @Test
     void bundledWorldManifestContainsEveryTransitiveEngineImport() throws Exception {
@@ -54,7 +72,7 @@ final class WorldShaderCompilerTest {
                 new ProgramComposition.RegistrationSet(4, List.of(
                         program.registrations().getFirst().declarations().get(0),
                         program.registrations().getFirst().declarations().get(2)))));
-        try (WorldShaderCompiler compiler = WorldShaderCompiler.create(cache, sourceOnly)) {
+        try (WorldShaderCompiler compiler = WorldShaderCompiler.create(runtime, cache, sourceOnly)) {
             assertEquals(1, compiler.implementationIndex(surfaceKey));
             assertEquals(1, compiler.implementationIndex(environmentKey));
             assertEquals(List.of(41L), compiler.composition().implementationData());
@@ -142,7 +160,7 @@ final class WorldShaderCompilerTest {
         ProgramComposition program = new ProgramComposition(1, List.of(
                 new ProgramComposition.RegistrationSet(2, List.of()),
                 new ProgramComposition.RegistrationSet(1, List.of())));
-        assertThrows(IllegalArgumentException.class, () -> WorldShaderCompiler.create(cache, program));
+        assertThrows(IllegalArgumentException.class, () -> WorldShaderCompiler.create(runtime, cache, program));
     }
 
     private static ShaderDefinition shader(String module, String type) {

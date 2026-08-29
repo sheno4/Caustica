@@ -21,8 +21,8 @@ import com.mojang.blaze3d.vulkan.VulkanGpuTextureView;
 import dev.comfyfluffy.caustica.api.vulkan.*;
 import dev.comfyfluffy.caustica.mixin.CommandEncoderAccessor;
 import dev.comfyfluffy.caustica.mixin.VulkanCommandEncoderAccessor;
-import dev.comfyfluffy.caustica.rt.GpuContext;
-import dev.comfyfluffy.caustica.rt.GpuImage;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuImage;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.*;
 
@@ -150,7 +150,7 @@ public final class MinecraftUiOverlay {
 
     public static UiPassTarget uiPassTarget(RenderTarget main) {
         TextureTarget target = prepare(main);
-        GpuContext gpu = GpuContext.currentOrNull();
+        VulkanDeviceContext gpu = RtRuntime.INSTANCE.vulkanContextOrNull();
         if (gpu == null || !(target.getColorTextureView() instanceof VulkanGpuTextureView view)) return null;
         if (borrowedImage == null || borrowedImage.hostView != view) {
             BorrowedOverlayImage replacement = BorrowedOverlayImage.create(gpu, view, target.width, target.height);
@@ -257,7 +257,7 @@ public final class MinecraftUiOverlay {
         overlayClearedThisFrame = false;
         compositeFailed = false;
         if (borrowedImage != null) {
-            GpuContext gpu = GpuContext.currentOrNull();
+            VulkanDeviceContext gpu = RtRuntime.INSTANCE.vulkanContextOrNull();
             if (gpu != null) gpu.retireAfterUse(borrowedImage::destroy);
             else borrowedImage.destroy();
             borrowedImage = null;

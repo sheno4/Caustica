@@ -2,14 +2,14 @@ package dev.comfyfluffy.caustica.rt.pipeline;
 
 import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
-import dev.comfyfluffy.caustica.rt.GpuContext;
-import dev.comfyfluffy.caustica.rt.VulkanBarriers;
-import dev.comfyfluffy.caustica.rt.RtDebugLabels;
-import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanBarriers;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtDebugLabels;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtGpuExecutor;
 import dev.comfyfluffy.caustica.rt.RtSceneUnits;
 import dev.comfyfluffy.caustica.rt.RtLookPackage;
-import dev.comfyfluffy.caustica.rt.GpuBuffer;
-import dev.comfyfluffy.caustica.rt.GpuImage;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuBuffer;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuImage;
 import dev.comfyfluffy.caustica.rt.gen.ExposureStateData;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
@@ -112,7 +112,7 @@ public final class RtExposure {
                 snapshot.evScene(), snapshot.evTarget(), snapshot.evApplied());
     }
 
-    public void ensureResources(GpuContext ctx) {
+    public void ensureResources(VulkanDeviceContext ctx) {
         if (image == null) {
             image = ctx.createStorageImage(1, 1, VK10.VK_FORMAT_R32_SFLOAT, "display exposure");
         }
@@ -156,7 +156,7 @@ public final class RtExposure {
         logOnce();
     }
 
-    public void record(GpuContext ctx, VkCommandBuffer cmd, MemoryStack stack,
+    public void record(VulkanDeviceContext ctx, VkCommandBuffer cmd, MemoryStack stack,
                        GpuImage traceColor, GpuImage guideDepth, GpuImage guideAlbedo) {
         if (image == null) {
             throw new IllegalStateException("RT exposure image not created");
@@ -214,7 +214,7 @@ public final class RtExposure {
         return CausticaConfig.Rt.Exposure.clampScale((float) Math.pow(2.0, manualEv()));
     }
 
-    private void recordAuto(GpuContext ctx, VkCommandBuffer cmd, MemoryStack stack,
+    private void recordAuto(VulkanDeviceContext ctx, VkCommandBuffer cmd, MemoryStack stack,
                             GpuImage traceColor, GpuImage guideDepth, GpuImage guideAlbedo) {
         if (pipeline == null || histogram == null || state == null) {
             throw new IllegalStateException("RT auto exposure resources not created");

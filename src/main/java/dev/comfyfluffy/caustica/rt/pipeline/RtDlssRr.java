@@ -1,8 +1,9 @@
 package dev.comfyfluffy.caustica.rt.pipeline;
 
+
 import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
-import dev.comfyfluffy.caustica.rt.GpuContext;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.rt.RtRuntime;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
 import dev.comfyfluffy.caustica.ngx.NgxLibrary;
@@ -147,7 +148,7 @@ public final class RtDlssRr {
         if (!configured() || failed) {
             return null;
         }
-        GpuContext context = GpuContext.currentOrNull();
+        VulkanDeviceContext context = RtRuntime.INSTANCE.vulkanContextOrNull();
         if (context == null) {
             return null;
         }
@@ -182,7 +183,7 @@ public final class RtDlssRr {
         if (!enabled() || failed) {
             return false;
         }
-        GpuContext context = GpuContext.currentOrNull();
+        VulkanDeviceContext context = RtRuntime.INSTANCE.vulkanContextOrNull();
         if (context == null) {
             return false;
         }
@@ -246,7 +247,7 @@ public final class RtDlssRr {
      * teardown ({@code NgxRuntime.shutdown()} in {@code CausticaClient.shutdownRt}), so FG can keep using NGX.
      */
     public void destroy() {
-        GpuContext context = GpuContext.currentOrNull();
+        VulkanDeviceContext context = RtRuntime.INSTANCE.vulkanContextOrNull();
         if (context != null) {
             releaseFeature(context.vk());
         }
@@ -259,7 +260,7 @@ public final class RtDlssRr {
 
     private void releaseFeature(VkDevice device) {
         if (!isNull(feature)) {
-            GpuContext ctx = GpuContext.currentOrNull();
+            VulkanDeviceContext ctx = RtRuntime.INSTANCE.vulkanContextOrNull();
             if (ctx != null && ctx.vk().address() == device.address()) {
                 ctx.waitIdle();
             } else {

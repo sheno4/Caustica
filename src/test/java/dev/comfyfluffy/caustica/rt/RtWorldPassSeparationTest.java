@@ -1,5 +1,7 @@
 package dev.comfyfluffy.caustica.rt;
 
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanBarriers;
+
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;

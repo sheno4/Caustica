@@ -1,6 +1,5 @@
 package dev.comfyfluffy.caustica.rt.shader;
 
-import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.api.program.ShaderDefinition;
 import dev.comfyfluffy.caustica.api.program.ShaderSource;
 import dev.comfyfluffy.caustica.engine.program.ProgramBackend;
@@ -8,6 +7,8 @@ import dev.comfyfluffy.caustica.engine.program.ProgramComposition;
 import dev.comfyfluffy.caustica.engine.program.ProgramKey;
 import dev.comfyfluffy.caustica.slang.SlangRuntime;
 import dev.comfyfluffy.caustica.slang.SlangSession;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -32,6 +33,7 @@ import java.util.regex.Pattern;
 
 /** Compiles one immutable engine {@link ProgramComposition} into specialized world shader stages. */
 public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram, AutoCloseable {
+    private static final Logger LOGGER = LoggerFactory.getLogger(WorldShaderCompiler.class);
     public static final String SKY_MISS_MODULE = "sky_miss";
     public static final String CLOSEST_HIT_MODULE = "closest_hit";
     public static final String PRIMARY_MODULE = "primary_rgen";
@@ -95,25 +97,30 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
         this.composition = composition;
     }
 
-    public static WorldShaderCompiler create(Path cacheDirectory, ProgramComposition program)
+    public static WorldShaderCompiler create(SlangRuntime runtime, Path cacheDirectory,
+                                             ProgramComposition program)
             throws IOException {
-        return create(cacheDirectory, program, null);
+        return create(runtime, cacheDirectory, program, null);
     }
 
-    public static WorldShaderCompiler createIsolated(Path cacheRoot, ProgramComposition program)
+    public static WorldShaderCompiler createIsolated(SlangRuntime runtime, Path cacheRoot,
+                                                     ProgramComposition program)
             throws IOException {
+        Objects.requireNonNull(runtime, "runtime");
         Files.createDirectories(cacheRoot);
         Path directory = Files.createTempDirectory(cacheRoot, "runtime-");
         try {
-            return create(directory, program, directory);
+            return create(runtime, directory, program, directory);
         } catch (IOException | RuntimeException | Error failure) {
             deleteDirectory(directory);
             throw failure;
         }
     }
 
-    private static WorldShaderCompiler create(Path cacheDirectory, ProgramComposition program,
+    private static WorldShaderCompiler create(SlangRuntime runtime, Path cacheDirectory,
+                                              ProgramComposition program,
                                               Path cleanupDirectory) throws IOException {
+        Objects.requireNonNull(runtime, "runtime");
         Objects.requireNonNull(cacheDirectory, "cacheDirectory");
         Objects.requireNonNull(program, "program");
         validateRegistrationOrder(program);
@@ -146,7 +153,7 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
                 StandardCharsets.UTF_8);
         List<Path> searchPaths = List.of(worldDirectory, apiDirectory, builtinDirectory,
                 extensionDirectory, compositionDirectory);
-        SlangSession session = SlangRuntime.INSTANCE.openSession(searchPaths, false, true);
+        SlangSession session = runtime.openSession(searchPaths, false, true);
         Composition composition = Composition.create(program, generated.indices(), generated.data(),
                 COMPOSITION_MODULE, COMPOSITION_TYPE, generated.source(), sources);
         return new WorldShaderCompiler(session, worldDirectory, cleanupDirectory, composition);
@@ -206,7 +213,7 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
         return spirvByKey.computeIfAbsent(key, ignored -> {
             long startNanos = System.nanoTime();
             byte[] spirv = compile.get();
-            CausticaMod.LOGGER.info(String.format(Locale.ROOT,
+            LOGGER.info(String.format(Locale.ROOT,
                     "Compiled world shader %s in %.1f ms (%d bytes SPIR-V)", label,
                     (System.nanoTime() - startNanos) / 1.0e6, spirv.length));
             return spirv;
@@ -432,7 +439,7 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
         try (var paths = Files.walk(directory)) {
             for (Path path : paths.sorted(Comparator.reverseOrder()).toList()) Files.deleteIfExists(path);
         } catch (IOException e) {
-            CausticaMod.LOGGER.warn("Could not delete temporary shader sources at {}", directory, e);
+            LOGGER.warn("Could not delete temporary shader sources at {}", directory, e);
         }
     }
 

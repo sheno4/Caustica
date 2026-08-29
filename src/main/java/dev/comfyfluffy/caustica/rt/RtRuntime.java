@@ -1,5 +1,8 @@
 package dev.comfyfluffy.caustica.rt;
 
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuImage;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
+
 import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.engine.session.RenderSessionHost;
@@ -52,6 +55,9 @@ public final class RtRuntime {
     private RuntimeHost host;
     private RenderSessionHost apiHost;
     private Path shaderCacheRoot;
+    private SlangRuntime slangRuntime;
+    private VulkanRendererBackend vulkanBackend;
+    private VulkanDeviceContext vulkanContext;
     private final RtLifecycleCoordinator lifecycle = new RtLifecycleCoordinator(
             new RtLifecycleCoordinator.Listener() {
                 @Override
@@ -86,8 +92,36 @@ public final class RtRuntime {
         return RtTelemetryImpl.INSTANCE;
     }
 
-    public void installVulkanBackend(VulkanRendererBackend backend) {
-        GpuContext.installBackend(backend);
+    /** Attach the host backend whose device lifetime encloses every RT activation. */
+    public synchronized void installVulkanBackend(VulkanRendererBackend backend) {
+        VulkanRendererBackend installed = java.util.Objects.requireNonNull(backend, "backend");
+        if (vulkanContext != null && vulkanContext.backend() != installed) {
+            throw new IllegalStateException("Cannot replace a Vulkan backend while its device context is live");
+        }
+        vulkanBackend = installed;
+    }
+
+    /** The device context already created for this runtime, without starting device work. */
+    public synchronized VulkanDeviceContext vulkanContextOrNull() {
+        return vulkanContext;
+    }
+
+    /** Create or return the single device context owned by this runtime. */
+    public synchronized VulkanDeviceContext requireVulkanContext() {
+        if (vulkanContext != null) {
+            return vulkanContext;
+        }
+        VulkanRendererBackend backend = java.util.Objects.requireNonNull(
+                vulkanBackend, "Vulkan renderer backend is not installed");
+        VulkanDeviceContext created = VulkanDeviceContext.create(backend);
+        try {
+            lifecycle.observeDevice(created);
+        } catch (Throwable failure) {
+            created.destroy();
+            throw failure;
+        }
+        vulkanContext = created;
+        return created;
     }
 
     public void installHost(RuntimeHost installedHost) {
@@ -97,6 +131,15 @@ public final class RtRuntime {
     /** Install process-scoped extension factories before the first renderer session opens. */
     public void installApiHost(RenderSessionHost installedHost) {
         apiHost = java.util.Objects.requireNonNull(installedHost, "installedHost");
+    }
+
+    /** Install the process-scoped shader compiler before a render session starts. */
+    public synchronized void installSlangRuntime(SlangRuntime installedRuntime) {
+        if (session != null) throw new IllegalStateException("Cannot replace Slang while a render session is live");
+        if (slangRuntime != null && slangRuntime != installedRuntime) {
+            throw new IllegalStateException("Slang runtime is already installed");
+        }
+        slangRuntime = java.util.Objects.requireNonNull(installedRuntime, "installedRuntime");
     }
 
     /** Process-scoped extension host used when the renderer creates its engine session services. */
@@ -331,7 +374,8 @@ public final class RtRuntime {
         } finally {
             session = null;
             try {
-                GpuContext context = GpuContext.currentOrNull();
+                VulkanDeviceContext context = vulkanContext;
+                vulkanContext = null;
                 if (context != null) {
                     try {
                         lifecycle.closeDevice(context);
@@ -347,8 +391,10 @@ public final class RtRuntime {
                         NgxRuntime.INSTANCE.shutdown();
                     } finally {
                         try {
-                            SlangRuntime.INSTANCE.shutdown();
+                            SlangRuntime compilerRuntime = slangRuntime;
+                            if (compilerRuntime != null) compilerRuntime.shutdown();
                         } finally {
+                            vulkanBackend = null;
                             state = State.OFF;
                         }
                     }
@@ -367,7 +413,7 @@ public final class RtRuntime {
             return WorldReplacement.FRAME_INACTIVE;
         } else if (failed) {
             return WorldReplacement.RENDERER_FAILED;
-        } else if (GpuContext.currentOrNull() == null) {
+        } else if (vulkanContext == null) {
             return WorldReplacement.DEVICE_UNAVAILABLE;
         } else if (requiresSourceWorldFallback()) {
             return WorldReplacement.RESOURCE_TRANSITION;
@@ -402,7 +448,7 @@ public final class RtRuntime {
     }
 
     private void start() {
-        VulkanRendererBackend backend = GpuContext.backendOrNull();
+        VulkanRendererBackend backend = vulkanBackend;
         if (backend == null || !backend.capabilities().rayTracing()) {
             state = State.FAILED;
             CausticaMod.LOGGER.warn("RT runtime unavailable: the Vulkan device was not provisioned for ray tracing");
@@ -415,7 +461,6 @@ public final class RtRuntime {
     private void startRuntimeActivation(RtLifecycleCoordinator.RenderSessionEpoch renderSessionEpoch) {
         RtLifecycleCoordinator.RuntimeActivationEpoch activationEpoch = lifecycle.beginRuntimeActivation();
         try {
-            SlangRuntime.INSTANCE.resume();
             session = new Session(renderSessionEpoch, activationEpoch,
                     new RtFramePresenter(), java.util.Objects.requireNonNull(
                     shaderCacheRoot, "shader cache is not configured"));
@@ -483,7 +528,7 @@ public final class RtRuntime {
         private final RtLifecycleCoordinator.RuntimeActivationEpoch activationEpoch;
         private final RtFramePresenter presenter;
         private final Path shaderCacheRoot;
-        private GpuContext context;
+        private VulkanDeviceContext context;
         private RtProgramBackend programs;
         private RtRetainedSceneBackend scenes;
         private RtPassSchedulerBackend passes;
@@ -512,11 +557,7 @@ public final class RtRuntime {
                      MinecraftDimensionKey dimension, int displayWidth, int displayHeight,
                      boolean starting) {
             if (context == null) {
-                context = GpuContext.get();
-                if (context == null) {
-                    return false;
-                }
-                INSTANCE.lifecycle.observeDevice(context);
+                context = INSTANCE.requireVulkanContext();
             }
             RtLifecycleCoordinator.ResourcePackEpoch applied = INSTANCE.lifecycle.resourcePackEpoch();
             if (requestedWorldEpoch == 0L || dimension == null || applied == null) {
@@ -550,7 +591,9 @@ public final class RtRuntime {
 
         private void openWorld(long epoch, MinecraftDimensionKey dimension,
                                ResourcePackEpoch resourcePackEpoch) {
-            programs = new RtProgramBackend(context, shaderCacheRoot);
+            programs = new RtProgramBackend(context,
+                    java.util.Objects.requireNonNull(INSTANCE.slangRuntime, "Slang runtime is not installed"),
+                    shaderCacheRoot);
             scenes = new RtRetainedSceneBackend(context);
             passes = new RtPassSchedulerBackend(context,
                     org.lwjgl.vulkan.VK10.VK_FORMAT_R16G16B16A16_SFLOAT,

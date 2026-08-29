@@ -1,9 +1,10 @@
 package dev.comfyfluffy.caustica.rt.pipeline;
 
+
 import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptorKind;
-import dev.comfyfluffy.caustica.rt.GpuContext;
-import dev.comfyfluffy.caustica.rt.RtDebugLabels;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.gen.DisplayPushData;
 import dev.comfyfluffy.caustica.vulkan.ShaderObjectCompute;
 import org.lwjgl.system.MemoryStack;
@@ -18,15 +19,15 @@ import java.nio.ByteBuffer;
 /** Maps the display-res scene-linear ACEScg image to sRGB SDR and optional PQ/BT.2020 HDR. */
 public final class RtDisplayPipeline {
     private static final String SHADER = "/caustica/shaders/pipelines/display/main.comp.spv";
-    private final GpuContext context;
+    private final VulkanDeviceContext context;
     private final ShaderObjectCompute shader;
 
-    private RtDisplayPipeline(GpuContext context, ShaderObjectCompute shader) {
+    private RtDisplayPipeline(VulkanDeviceContext context, ShaderObjectCompute shader) {
         this.context = context;
         this.shader = shader;
     }
 
-    public static RtDisplayPipeline create(GpuContext context) {
+    public static RtDisplayPipeline create(VulkanDeviceContext context) {
         try (InputStream input = RtDisplayPipeline.class.getResourceAsStream(SHADER)) {
             if (input == null) throw new IllegalStateException("missing SPIR-V resource: " + SHADER);
             byte[] bytes = input.readAllBytes();

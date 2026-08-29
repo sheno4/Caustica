@@ -1,5 +1,7 @@
 package dev.comfyfluffy.caustica.rt.scene;
 
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtGpuExecutor;
+
 import dev.comfyfluffy.caustica.api.geometry.MeshBuild;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorRange;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorIndex;
@@ -10,10 +12,10 @@ import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneBackend;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
-import dev.comfyfluffy.caustica.rt.GpuContext;
-import dev.comfyfluffy.caustica.rt.GpuBuffer;
-import dev.comfyfluffy.caustica.rt.RtGpuExecutor.GraphicsUse;
-import dev.comfyfluffy.caustica.rt.RtGpuExecutor.TrackedGraphicsUse;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuBuffer;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtGpuExecutor.GraphicsUse;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtGpuExecutor.TrackedGraphicsUse;
 import dev.comfyfluffy.caustica.rt.accel.RtAccel;
 import dev.comfyfluffy.caustica.rt.accel.TlasBuilder;
 import dev.comfyfluffy.caustica.rt.pipeline.RtPipeline;
@@ -37,7 +39,7 @@ import static org.lwjgl.vulkan.KHRRayTracingPipeline.VK_BUFFER_USAGE_SHADER_BIND
 
 /** Vulkan owner for immutable retained-scene publications. */
 public final class RtRetainedSceneBackend implements RetainedSceneBackend {
-    private final GpuContext ctx;
+    private final VulkanDeviceContext ctx;
     private final RtNeeAtBackend neeAt;
     private final Map<SceneId, TlasBuilder.Ring> tlasRings = new IdentityHashMap<>();
     private final Map<SceneId, TraceRing> traceRings = new IdentityHashMap<>();
@@ -47,7 +49,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     private Throwable fatalFailure;
     private boolean closed;
 
-    public RtRetainedSceneBackend(GpuContext ctx) {
+    public RtRetainedSceneBackend(VulkanDeviceContext ctx) {
         this.ctx = Objects.requireNonNull(ctx, "ctx");
         this.neeAt = new RtNeeAtBackend(ctx);
     }
@@ -490,7 +492,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         private final TraceSlot[] slots = new TraceSlot[SIZE];
         private int cursor;
 
-        TraceSlot next(GpuContext ctx, int geometryBytes, int hitBytes, int lightBytes, int emitterBytes,
+        TraceSlot next(VulkanDeviceContext ctx, int geometryBytes, int hitBytes, int lightBytes, int emitterBytes,
                        RtPipeline pipeline) {
             TraceSlot slot = slots[cursor];
             cursor = (cursor + 1) % SIZE;

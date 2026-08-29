@@ -1,5 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.terrain;
 
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtGpuExecutor;
+
 import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 

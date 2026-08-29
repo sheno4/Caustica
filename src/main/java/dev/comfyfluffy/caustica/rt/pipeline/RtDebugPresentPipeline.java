@@ -1,10 +1,11 @@
 package dev.comfyfluffy.caustica.rt.pipeline;
 
+
 import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptorKind;
-import dev.comfyfluffy.caustica.rt.GpuBuffer;
-import dev.comfyfluffy.caustica.rt.GpuContext;
-import dev.comfyfluffy.caustica.rt.RtDebugLabels;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuBuffer;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.gen.DebugPresentPushData;
 import dev.comfyfluffy.caustica.vulkan.ShaderObjectCompute;
 import org.lwjgl.system.MemoryStack;
@@ -19,15 +20,15 @@ import java.nio.ByteBuffer;
 /** Presents guide-buffer diagnostics after exposure and display mapping. */
 public final class RtDebugPresentPipeline {
     private static final String SHADER = "/caustica/shaders/pipelines/debug_present/main.comp.spv";
-    private final GpuContext context;
+    private final VulkanDeviceContext context;
     private final ShaderObjectCompute shader;
 
-    private RtDebugPresentPipeline(GpuContext context, ShaderObjectCompute shader) {
+    private RtDebugPresentPipeline(VulkanDeviceContext context, ShaderObjectCompute shader) {
         this.context = context;
         this.shader = shader;
     }
 
-    public static RtDebugPresentPipeline create(GpuContext context) {
+    public static RtDebugPresentPipeline create(VulkanDeviceContext context) {
         try (InputStream input = RtDebugPresentPipeline.class.getResourceAsStream(SHADER)) {
             if (input == null) throw new IllegalStateException("missing SPIR-V resource: " + SHADER);
             byte[] bytes = input.readAllBytes();

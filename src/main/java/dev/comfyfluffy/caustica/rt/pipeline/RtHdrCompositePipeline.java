@@ -1,10 +1,11 @@
 package dev.comfyfluffy.caustica.rt.pipeline;
 
+
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorIndex;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptorKind;
-import dev.comfyfluffy.caustica.rt.GpuContext;
-import dev.comfyfluffy.caustica.rt.RtDebugLabels;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.gen.PresentPushData;
 import dev.comfyfluffy.caustica.vulkan.ShaderObjectCompute;
 import org.lwjgl.system.MemoryStack;
@@ -19,15 +20,15 @@ import java.nio.ByteBuffer;
 /** Composites a sampled sRGB UI image over a PQ HDR image in place. */
 public final class RtHdrCompositePipeline {
     private static final String SHADER = "/caustica/shaders/pipelines/hdr_composite/main.comp.spv";
-    private final GpuContext context;
+    private final VulkanDeviceContext context;
     private final ShaderObjectCompute shader;
 
-    private RtHdrCompositePipeline(GpuContext context, ShaderObjectCompute shader) {
+    private RtHdrCompositePipeline(VulkanDeviceContext context, ShaderObjectCompute shader) {
         this.context = context;
         this.shader = shader;
     }
 
-    public static RtHdrCompositePipeline create(GpuContext context) {
+    public static RtHdrCompositePipeline create(VulkanDeviceContext context) {
         return new RtHdrCompositePipeline(context, load(context));
     }
 
@@ -44,7 +45,7 @@ public final class RtHdrCompositePipeline {
 
     public void destroy() { shader.close(); }
 
-    private static ShaderObjectCompute load(GpuContext context) {
+    private static ShaderObjectCompute load(VulkanDeviceContext context) {
         try (InputStream input = RtHdrCompositePipeline.class.getResourceAsStream(SHADER)) {
             if (input == null) throw new IllegalStateException("missing SPIR-V resource: " + SHADER);
             byte[] bytes = input.readAllBytes();

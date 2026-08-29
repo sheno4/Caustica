@@ -1,5 +1,8 @@
 package dev.comfyfluffy.caustica.rt;
 
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuImage;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
+
 import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.rt.pipeline.RtSdrPresentPipeline;
 import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
@@ -24,7 +27,7 @@ final class SdrPqPresentation {
         if (!RtRuntime.hasSession() || source == null) {
             return false;
         }
-        GpuContext context = GpuContext.get();
+        VulkanDeviceContext context = RtRuntime.INSTANCE.requireVulkanContext();
         if (context == null) {
             return false;
         }

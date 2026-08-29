@@ -1,5 +1,7 @@
 package dev.comfyfluffy.caustica.rt;
 
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
+
 import dev.comfyfluffy.caustica.api.program.ProgramFailure;
 import dev.comfyfluffy.caustica.engine.program.ProgramBackend;
 import dev.comfyfluffy.caustica.engine.program.ProgramComposition;
@@ -8,6 +10,7 @@ import dev.comfyfluffy.caustica.rt.pipeline.RtBindings;
 import dev.comfyfluffy.caustica.rt.pipeline.RtPipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtShaderCode;
 import dev.comfyfluffy.caustica.rt.shader.WorldShaderCompiler;
+import dev.comfyfluffy.caustica.slang.SlangRuntime;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
@@ -35,13 +38,14 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
-import static dev.comfyfluffy.caustica.rt.GpuContext.check;
+import static dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext.check;
 
 /** Compiles engine program compositions and publishes complete descriptor-heap RT programs. */
 public final class RtProgramBackend implements ProgramBackend, AutoCloseable {
     private static final AtomicInteger THREAD_ID = new AtomicInteger();
 
-    private final GpuContext context;
+    private final VulkanDeviceContext context;
+    private final SlangRuntime slangRuntime;
     private final Path cacheRoot;
     private final ExecutorService compiler = Executors.newSingleThreadExecutor(task -> {
         Thread thread = new Thread(task, "Caustica program compiler-" + THREAD_ID.incrementAndGet());
@@ -52,8 +56,9 @@ public final class RtProgramBackend implements ProgramBackend, AutoCloseable {
     private Candidate active;
     private boolean closed;
 
-    public RtProgramBackend(GpuContext context, Path cacheRoot) {
+    public RtProgramBackend(VulkanDeviceContext context, SlangRuntime slangRuntime, Path cacheRoot) {
         this.context = Objects.requireNonNull(context, "context");
+        this.slangRuntime = Objects.requireNonNull(slangRuntime, "slangRuntime");
         this.cacheRoot = Objects.requireNonNull(cacheRoot, "cacheRoot").toAbsolutePath().normalize();
     }
 
@@ -163,7 +168,7 @@ public final class RtProgramBackend implements ProgramBackend, AutoCloseable {
         ImplementationTable table = null;
         RtPipeline pipeline = null;
         try {
-            shaderCompiler = WorldShaderCompiler.createIsolated(cacheRoot, composition);
+            shaderCompiler = WorldShaderCompiler.createIsolated(slangRuntime, cacheRoot, composition);
             List<Long> data = shaderCompiler.composition().implementationData();
             table = ImplementationTable.create(context, data);
             boolean reordered = context.backend().capabilities().shaderExecutionReordering();
@@ -253,19 +258,19 @@ public final class RtProgramBackend implements ProgramBackend, AutoCloseable {
     private enum CandidateState { CANDIDATE, ACTIVE, RETIRING, DISPOSED }
 
     private static final class ImplementationTable {
-        final GpuContext context;
+        final VulkanDeviceContext context;
         final long buffer;
         final long allocation;
         final long address;
 
-        private ImplementationTable(GpuContext context, long buffer, long allocation, long address) {
+        private ImplementationTable(VulkanDeviceContext context, long buffer, long allocation, long address) {
             this.context = context;
             this.buffer = buffer;
             this.allocation = allocation;
             this.address = address;
         }
 
-        static ImplementationTable create(GpuContext context, List<Long> words) {
+        static ImplementationTable create(VulkanDeviceContext context, List<Long> words) {
             long size = Math.max(Long.BYTES, Math.multiplyExact((long) words.size(), Long.BYTES));
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 VkBufferCreateInfo bufferInfo = VkBufferCreateInfo.calloc(stack).sType$Default().size(size)

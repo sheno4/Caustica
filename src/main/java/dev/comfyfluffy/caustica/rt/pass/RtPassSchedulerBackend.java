@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.rt.pass;
 
+
 import dev.comfyfluffy.caustica.api.vulkan.GpuAccelerationStructureDescriptor;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.api.vulkan.GpuFrameUse;
@@ -13,8 +14,8 @@ import dev.comfyfluffy.caustica.api.pass.WorldResourceSetup;
 import dev.comfyfluffy.caustica.api.view.SceneView;
 import dev.comfyfluffy.caustica.engine.pass.PassKey;
 import dev.comfyfluffy.caustica.engine.pass.PassSchedulerBackend;
-import dev.comfyfluffy.caustica.rt.GpuContext;
-import dev.comfyfluffy.caustica.rt.VulkanBarriers;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanBarriers;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VkCommandBuffer;
 
@@ -33,7 +34,7 @@ public final class RtPassSchedulerBackend implements PassSchedulerBackend {
     private int nextPostTarget;
     private long chainVersion;
 
-    public RtPassSchedulerBackend(GpuContext gpu, int sceneColorFormat, int exposureFormat, int uiLayerFormat) {
+    public RtPassSchedulerBackend(VulkanDeviceContext gpu, int sceneColorFormat, int exposureFormat, int uiLayerFormat) {
         this(gpu, sceneColorFormat, exposureFormat, uiLayerFormat, new NativeCommandHooks(gpu));
     }
 
@@ -179,9 +180,9 @@ public final class RtPassSchedulerBackend implements PassSchedulerBackend {
     }
 
     private static final class NativeCommandHooks implements CommandHooks {
-        private final GpuContext gpu;
+        private final VulkanDeviceContext gpu;
 
-        private NativeCommandHooks(GpuContext gpu) {
+        private NativeCommandHooks(VulkanDeviceContext gpu) {
             this.gpu = Objects.requireNonNull(gpu, "gpu");
         }
 

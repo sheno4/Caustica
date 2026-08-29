@@ -1,5 +1,7 @@
 package dev.comfyfluffy.caustica.rt;
 
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
+
 import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
 import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
@@ -36,7 +38,7 @@ final class HdrPresentation {
         int copyHeight = Math.min(swapHeight, source.height());
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkCommandBuffer commandBuffer = submission.beginTransientCommandBuffer();
-            GpuContext context = GpuContext.get();
+            VulkanDeviceContext context = RtRuntime.INSTANCE.requireVulkanContext();
             context.bindDescriptorHeaps(commandBuffer);
             if (RtDlssFg.enabled()) {
                 generation.captureHdrHudless(commandBuffer, stack, source);
@@ -71,7 +73,7 @@ final class HdrPresentation {
         if (pipeline != null) {
             return;
         }
-        GpuContext context = GpuContext.get();
+        VulkanDeviceContext context = RtRuntime.INSTANCE.requireVulkanContext();
         if (context == null) {
             return;
         }

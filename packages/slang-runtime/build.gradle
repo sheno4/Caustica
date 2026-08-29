@@ -1,0 +1,269 @@
+import groovy.json.JsonOutput
+import java.security.MessageDigest
+
+plugins {
+    id "java-library"
+    id "maven-publish"
+}
+
+version = project.api_version
+group = project.maven_group
+java.toolchain.languageVersion = JavaLanguageVersion.of(25)
+
+base { archivesName = "caustica-slang-runtime" }
+repositories { mavenCentral() }
+
+dependencies {
+    implementation "com.google.code.gson:gson:2.14.0"
+    implementation "org.slf4j:slf4j-api:2.0.17"
+    testImplementation platform("org.junit:junit-bom:5.12.2")
+    testImplementation "org.junit.jupiter:junit-jupiter"
+    testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+}
+
+def slangRuntimeVersion = rootProject.property("slang_runtime_version").toString()
+def slangRuntimeGenRoot = layout.buildDirectory.dir("generated/slang-runtime")
+def slangRuntimeInputRoot = providers.gradleProperty("slangRuntimeInputRoot").map { rootProject.file(it) }
+def slangShimConfig = (findProperty("slangShimConfig") ?: "release").toString()
+        .toLowerCase(java.util.Locale.ROOT)
+def slangShimInputRoot = rootProject.file(findProperty("slangShimInputRoot")
+        ?: rootProject.layout.buildDirectory.dir("native/slang_shim").get().asFile)
+def slangShimOutDir = new File(slangShimInputRoot, slangShimConfig)
+def currentSlangPlatform = {
+    def os = org.gradle.internal.os.OperatingSystem.current()
+    def arch = System.getProperty("os.arch", "").toLowerCase(java.util.Locale.ROOT)
+    def x64 = arch == "x86_64" || arch == "amd64"
+    if (os.windows && x64) return "windows-x64"
+    if (os.linux && x64) return "linux-x64"
+    return null
+}()
+def requestedSlangPlatforms = (findProperty("slangPlatforms") ?: "current").toString()
+        .split(",")
+        .collect { it.trim() }
+        .findAll { !it.isEmpty() }
+        .collect { it == "current" ? currentSlangPlatform : it }
+def supportedSlangPlatforms = ["windows-x64", "linux-x64"]
+if (requestedSlangPlatforms.any { it == null || !supportedSlangPlatforms.contains(it) }) {
+    throw new GradleException("Unsupported Slang runtime platform(s): ${requestedSlangPlatforms}")
+}
+
+def bundleSlangRuntime = tasks.register("bundleSlangRuntime") {
+    group = "build"
+    description = "Bundles the Slang shared-library compiler runtime into package resources."
+    inputs.property "slangRuntimeVersion", slangRuntimeVersion
+    inputs.property "slangPlatforms", requestedSlangPlatforms.join(",")
+    inputs.property "slangShimConfig", slangShimConfig
+    if (slangRuntimeInputRoot.isPresent()) {
+        inputs.dir(slangRuntimeInputRoot)
+    } else {
+        inputs.dir(slangShimOutDir)
+        def sdk = System.getenv("SLANG_SDK")
+        if (sdk) {
+            inputs.files(fileTree(new File(sdk, "bin")) {
+                include "slang*.dll"
+                include "slang-standard-module-*/**"
+            })
+            inputs.files(fileTree(new File(sdk, "bin")) {
+                include "libslang*.so*"
+                include "slang-standard-module-*/**"
+            })
+            inputs.files(fileTree(new File(sdk, "lib")) {
+                include "libslang*.so*"
+                include "slang-standard-module-*/**"
+            })
+        }
+    }
+    outputs.dir(slangRuntimeGenRoot)
+
+    doLast {
+        def outputRoot = slangRuntimeGenRoot.get().asFile
+        delete(outputRoot)
+        def scratchRoot = new File(temporaryDir, "runtime")
+        delete(scratchRoot)
+        scratchRoot.mkdirs()
+
+        requestedSlangPlatforms.each { platform ->
+            def destination = new File(scratchRoot,
+                    "caustica/natives/slang/${slangRuntimeVersion}/${platform}")
+            destination.mkdirs()
+            if (slangRuntimeInputRoot.isPresent()) {
+                def source = new File(slangRuntimeInputRoot.get(), platform)
+                if (!source.isDirectory()) {
+                    throw new GradleException("Missing prepared Slang runtime directory ${source}")
+                }
+                copy {
+                    from(source)
+                    exclude "runtime.json"
+                    into(destination)
+                }
+            } else {
+                if (platform != currentSlangPlatform) {
+                    throw new GradleException("Platform ${platform} requires -PslangRuntimeInputRoot")
+                }
+                def sdkPath = System.getenv("SLANG_SDK")
+                if (!sdkPath) throw new GradleException("SLANG_SDK environment variable is not set")
+                def sdk = file(sdkPath)
+                copy {
+                    from(slangShimOutDir) {
+                        include platform == "windows-x64" ? "causticaslang.dll" : "libcausticaslang.so"
+                    }
+                    if (platform == "windows-x64") {
+                        from(new File(sdk, "bin")) {
+                            include "slang*.dll"
+                            include "slang-standard-module-*/**"
+                        }
+                    } else {
+                        from(new File(sdk, "lib")) {
+                            include "libslang*.so*"
+                            include "slang-standard-module-*/**"
+                        }
+                        from(new File(sdk, "bin")) {
+                            include "libslang*.so*"
+                            include "slang-standard-module-*/**"
+                        }
+                    }
+                    into(destination)
+                }
+            }
+
+            def shimName = platform == "windows-x64" ? "causticaslang.dll" : "libcausticaslang.so"
+            def coreName = platform == "windows-x64" ? "slang.dll" : "libslang.so"
+            def compilerName = platform == "windows-x64" ? "slang-compiler.dll" : "libslang-compiler.so"
+            def missing = [shimName, coreName, compilerName].findAll { !new File(destination, it).isFile() }
+            if (!missing.empty) {
+                throw new GradleException("Incomplete Slang runtime for ${platform}; missing ${missing.join(', ')}")
+            }
+
+            def files = fileTree(destination).files.sort { a, b -> a.path <=> b.path }
+            def digest = { File source ->
+                def md = MessageDigest.getInstance("SHA-256")
+                source.withInputStream { input ->
+                    byte[] buffer = new byte[64 * 1024]
+                    for (int read = input.read(buffer); read >= 0; read = input.read(buffer)) {
+                        if (read > 0) md.update(buffer, 0, read)
+                    }
+                }
+                return md.digest().encodeHex().toString()
+            }
+            def entries = files.collect { source ->
+                [path: destination.toPath().relativize(source.toPath()).toString().replace('\\', '/'),
+                 size: source.length(), sha256: digest(source)]
+            }
+            def bundleDigest = MessageDigest.getInstance("SHA-256")
+            entries.each { entry ->
+                bundleDigest.update(entry.path.getBytes(java.nio.charset.StandardCharsets.UTF_8))
+                bundleDigest.update((byte) 0)
+                bundleDigest.update(entry.sha256.getBytes(java.nio.charset.StandardCharsets.US_ASCII))
+            }
+            def manifest = [format: 1, abi: 2, slangVersion: slangRuntimeVersion,
+                            platform: platform, shim: shimName,
+                            bundleSha256: bundleDigest.digest().encodeHex().toString(), files: entries]
+            new File(destination, "runtime.json").text =
+                    JsonOutput.prettyPrint(JsonOutput.toJson(manifest)) + "\n"
+        }
+        def indexFile = new File(scratchRoot, "caustica/natives/slang/runtime.json")
+        indexFile.parentFile.mkdirs()
+        indexFile.text = JsonOutput.prettyPrint(JsonOutput.toJson(
+                [format: 1, slangVersion: slangRuntimeVersion, platforms: requestedSlangPlatforms])) + "\n"
+        copy {
+            from(scratchRoot)
+            into(outputRoot)
+        }
+    }
+}
+
+sourceSets.main.resources.srcDir(files(slangRuntimeGenRoot).builtBy(bundleSlangRuntime))
+
+def verifySlangRuntimeImports = tasks.register("verifySlangRuntimeImports") {
+    group = "verification"
+    description = "Verifies that the Slang runtime has no host, renderer, or configuration imports."
+    inputs.files(sourceSets.main.allJava)
+    doLast {
+        def forbidden = ["dev.comfyfluffy.caustica.CausticaMod",
+                         "dev.comfyfluffy.caustica.config",
+                         "dev.comfyfluffy.caustica.platform",
+                         "dev.comfyfluffy.caustica.minecraft",
+                         "dev.comfyfluffy.caustica.rt",
+                         "dev.comfyfluffy.caustica.engine"]
+        def violations = []
+        sourceSets.main.allJava.files.sort().each { source ->
+            source.eachLine { line, number ->
+                if (line.stripLeading().startsWith("import ") && forbidden.any { line.contains(it) }) {
+                    violations.add("${source}:${number}: ${line.trim()}")
+                }
+            }
+        }
+        if (!violations.empty) throw new GradleException("Slang runtime import violations:\n${violations.join('\n')}")
+    }
+}
+
+def verifySlangRuntimeJar = tasks.register("verifySlangRuntimeJar") {
+    group = "verification"
+    dependsOn(tasks.named("jar"))
+    doLast {
+        def artifact = tasks.named("jar", Jar).get().archiveFile.get().asFile
+        def names = []
+        def strays = []
+        new java.util.jar.JarFile(artifact).withCloseable { jar ->
+            def entries = jar.entries()
+            while (entries.hasMoreElements()) {
+                def entry = entries.nextElement()
+                names.add(entry.name)
+                if (entry.name.endsWith(".class")
+                        && !entry.name.startsWith("dev/comfyfluffy/caustica/slang/")) strays.add(entry.name)
+            }
+        }
+        def required = ["caustica/natives/slang/runtime.json"]
+        requestedSlangPlatforms.each { platform ->
+            def root = "caustica/natives/slang/${slangRuntimeVersion}/${platform}/".toString()
+            required.add(root + "runtime.json")
+            required.add(root + (platform == "windows-x64" ? "causticaslang.dll" : "libcausticaslang.so"))
+            required.add(root + (platform == "windows-x64" ? "slang.dll" : "libslang.so"))
+            required.add(root + (platform == "windows-x64" ? "slang-compiler.dll" : "libslang-compiler.so"))
+        }
+        def missing = required.findAll { !names.contains(it) }
+        if (!strays.empty || !missing.empty) {
+            throw new GradleException("Slang runtime JAR mismatch; foreign=${strays}, missing=${missing}")
+        }
+    }
+}
+
+tasks.named("test", Test) {
+    dependsOn(bundleSlangRuntime)
+    useJUnitPlatform()
+    jvmArgs "--enable-native-access=ALL-UNNAMED"
+    doFirst {
+        def runtimeDir = new File(slangRuntimeGenRoot.get().asFile,
+                "caustica/natives/slang/${slangRuntimeVersion}/${currentSlangPlatform}")
+        systemProperty "caustica.test.slangRuntimeDir", runtimeDir.absolutePath
+        systemProperty "caustica.test.slangVersion", slangRuntimeVersion
+        systemProperty "caustica.test.spirvVal", rootProject.slangTooling.spirvVal.get()
+    }
+}
+tasks.named("check") { dependsOn(verifySlangRuntimeImports, verifySlangRuntimeJar) }
+tasks.withType(JavaCompile).configureEach { options.release = 25 }
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_25
+    targetCompatibility = JavaVersion.VERSION_25
+    withSourcesJar()
+}
+
+tasks.named("jar", Jar).configure {
+    from(rootProject.files("LICENSE.md", "COPYING", "COPYING.LESSER", "THIRD_PARTY_NOTICES.md")) {
+        into "META-INF"
+    }
+}
+tasks.named("sourcesJar", Jar).configure {
+    exclude "caustica/natives/slang/**"
+    from("native") { into "native" }
+}
+
+publishing {
+    publications {
+        create("mavenJava", MavenPublication) {
+            artifactId = "caustica-slang-runtime"
+            from components.java
+        }
+    }
+}

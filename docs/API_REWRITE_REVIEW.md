@@ -157,7 +157,8 @@ The contract is now exercised by production bootstrap/program registration and e
 - engine tests execute contribution teardown, program compilation/publication, same-session cross-owner
   selection, retained geometry/light retirement, pass scheduling, dimension scenes, environment selection,
   and resource-pack epochs;
-- `GpuContext` owns the required resource/sampler heaps, and device bring-up validates the Vulkan 1.4 feature
+- `RtRuntime` owns one `VulkanDeviceContext` for the installed host device. That context owns the required
+  resource/sampler heaps, and device bring-up validates the Vulkan 1.4 feature
   profile before creating the logical device;
 - fixed and Minecraft Slang implement the version-6 surface, coverage, volume, and environment interfaces.
 - the glTF viewer imports only API/Minecraft API artifacts, owns real VMA acceleration inputs behind retained
@@ -330,7 +331,8 @@ internal owner scope; the process owns no device address, pass, scene, or progra
 contribution descriptors remain deferred until a real cross-package diagnostic or ordering use case exists.
 
 The Minecraft Vulkan host negotiates one immutable required `DeviceProfile` before logical-device creation.
-The engine then creates an injected object graph, not `RtRuntime.INSTANCE`:
+The Minecraft composition root may remain one process facade for mixin entry points, but its device and
+session children form an explicit owned object graph rather than package-level "current" singletons:
 
 ```text
 Minecraft composition root
@@ -355,8 +357,8 @@ renderSession.beginFrame(new FrameInput(
 This is not extension API. It is the point where Minecraft interpolation/extraction supplies the selected
 view and optional initial volume, and the engine drains retained updates, snapshots program state, and records
 one coherent frame. The initial value identifies a registered volume plus the binding and instance words that
-its shader ABI already requires; ray generation evaluates it at the camera position and initializes the
-depth-two transport stack with air as the outer medium. Absence means air. Keep the value internal while only
+its shader ABI already requires; ray generation evaluates it at the camera position and initializes the one
+active homogeneous medium, with absence meaning vacuum/air. Keep the value internal while only
 the host can create rendered views. If a later offscreen or multi-view public API lets an extension construct a
 rendered view, expose the same typed value there with an explicit in-flight resource-lifetime contract.
 Without it, the implicit call ordering currently hidden behind the runtime singleton will reappear in a
@@ -423,8 +425,9 @@ already exist.
 | `packages/engine-nvidia` (planned) | NGX/Streamline/DLSS RR/FG and low-latency backend | Minecraft scene/content types |
 | `packages/features-builtin` | Error/default programs and built-in post/display features | Minecraft |
 | `packages/minecraft-api` | Loader-neutral dimension/world/resource epochs, Minecraft extension hooks, and Minecraft shader-data identity tokens | Renderer internals |
-| `packages/minecraft-content` | Host-free material analysis, page planning/compilation, calibration, and reusable content values | Minecraft host classes, loaders, renderer internals |
-| `packages/minecraft-adapter` | Terrain/entity/particle/material/sky/damage/overlay capture and engine composition | Loader-specific code where avoidable |
+| `packages/minecraft-content` | Host-free material analysis, page planning/compilation, and reusable content values | Minecraft host classes, loaders, renderer internals |
+| `packages/minecraft-adapter` | Loader-neutral Minecraft world-session lifecycle and its bridge to engine sessions | Minecraft host classes, loader APIs, and renderer implementation details |
+| `packages/minecraft-rendering` (planned) | Terrain/entity/particle/material/sky/damage/overlay capture, generated Minecraft shader records, and GPU publication | Loader-specific code where avoidable |
 | `packages/minecraft-vulkan` (planned) | Device interception, queue/swapchain/HDR integration | Scene/material implementation details |
 | `packages/platform-fabric` (planned) | Fabric entrypoints and discovery | NeoForge code, renderer implementation details |
 | `packages/platform-neoforge` (planned) | NeoForge entrypoints and discovery | Fabric code, renderer implementation details |
@@ -686,7 +689,7 @@ clean-room and follows this repository's data model, shader ABI, synchronization
   `:packages:engine-vulkan:check`, `:packages:shader-api:check`, and `:packages:vulkan-support:check` have
   focused green gates and import/dependency boundary checks.
 - `:packages:examples:api-showcase:check` passes against published contract artifacts only.
-- `:extensions:gltf-viewer:check` passes, including strict implementation-package rejection, retained
+- `:packages:examples:gltf-viewer-minecraft:check` passes, including strict implementation-package rejection, retained
   lifecycle tests, resource-epoch replacement, and Vulkan 1.4 Slang/SPIR-V validation.
 - Fixed/Minecraft world composition, the reflected 96-byte world root, generated shader records, API
   reflection, NEE-AT records, and Bloom's 40-byte shader-object push-data ABI validate together.

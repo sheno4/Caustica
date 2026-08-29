@@ -1,8 +1,8 @@
 package dev.comfyfluffy.caustica.rt.pipeline;
 
-import dev.comfyfluffy.caustica.rt.GpuContext;
-import dev.comfyfluffy.caustica.rt.RtDebugLabels;
-import dev.comfyfluffy.caustica.rt.GpuBuffer;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtDebugLabels;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuBuffer;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorIndex;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorRange;
 import org.lwjgl.PointerBuffer;
@@ -89,12 +89,12 @@ public final class RtToneLut {
     }
 
     /** Loads a display-transform resource from {@code /caustica/color/luts/}. */
-    public static RtToneLut load(GpuContext ctx, String resourceName) {
+    public static RtToneLut load(VulkanDeviceContext ctx, String resourceName) {
         return loadResource(ctx, "/caustica/color/luts/" + resourceName);
     }
 
     /** Loads an absolute classpath LUT resource, including an LMT owned by a look package. */
-    public static RtToneLut loadResource(GpuContext ctx, String path) {
+    public static RtToneLut loadResource(VulkanDeviceContext ctx, String path) {
         if (path == null || !path.startsWith("/")) {
             throw new IllegalArgumentException("LUT resource path must be absolute: " + path);
         }
@@ -133,7 +133,7 @@ public final class RtToneLut {
         }
     }
 
-    private static RtToneLut upload(GpuContext ctx, int size, ByteBuffer texels, String label) {
+    private static RtToneLut upload(VulkanDeviceContext ctx, int size, ByteBuffer texels, String label) {
         VkDevice vk = ctx.vk();
         long vma = ctx.vma();
         long createdImage = 0L;
@@ -156,7 +156,7 @@ public final class RtToneLut {
                     .usage(Vma.VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE);
             LongBuffer imageOut = stack.mallocLong(1);
             PointerBuffer allocationOut = stack.mallocPointer(1);
-            GpuContext.check(Vma.vmaCreateImage(vma, imageInfo, allocationInfo, imageOut, allocationOut, null),
+            VulkanDeviceContext.check(Vma.vmaCreateImage(vma, imageInfo, allocationInfo, imageOut, allocationOut, null),
                     "vmaCreateImage(tone lut " + label + ")");
             createdImage = imageOut.get(0);
             createdAllocation = allocationOut.get(0);
@@ -168,7 +168,7 @@ public final class RtToneLut {
             viewInfo.subresourceRange().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT)
                     .baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
             LongBuffer viewOut = stack.mallocLong(1);
-            GpuContext.check(VK10.vkCreateImageView(vk, viewInfo, null, viewOut),
+            VulkanDeviceContext.check(VK10.vkCreateImageView(vk, viewInfo, null, viewOut),
                     "vkCreateImageView(tone lut " + label + ")");
             createdView = viewOut.get(0);
             RtDebugLabels.nameImageView(ctx, createdView, "tone LUT " + label + " view");
@@ -185,7 +185,7 @@ public final class RtToneLut {
                     .addressModeW(VK10.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE)
                     .minLod(0f).maxLod(0f);
             LongBuffer samplerOut = stack.mallocLong(1);
-            GpuContext.check(VK10.vkCreateSampler(vk, samplerInfo, null, samplerOut),
+            VulkanDeviceContext.check(VK10.vkCreateSampler(vk, samplerInfo, null, samplerOut),
                     "vkCreateSampler(tone lut " + label + ")");
             createdSampler = samplerOut.get(0);
             RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_SAMPLER, createdSampler, "tone LUT " + label + " sampler");
@@ -235,7 +235,7 @@ public final class RtToneLut {
                             .dstImageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL).pRegions(copy));
 
                     // GENERAL, not SHADER_READ_ONLY_OPTIMAL, to match every other sampled/storage
-                    // image in this codebase (see GpuContext.createStorageImage)
+                    // image in this codebase (see VulkanDeviceContext.createStorageImage)
                     // — the descriptor write below must use the same layout or validation flags a
                     // mismatch.
                     VkImageMemoryBarrier2.Buffer toRead = VkImageMemoryBarrier2.calloc(1, uploadStack);

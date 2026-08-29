@@ -60,8 +60,12 @@ instances. A selected-slot change closes and recreates the child activation afte
 leaving the parent render session and process-scoped compiled programs live.
 
 `RtRuntime` is the process integration root. It owns lifecycle coordination and the process-scoped program
-manager; each runtime activation owns its provider manager, frame renderer and presenter. `GpuContext` owns
-device infrastructure and survives activation rotation. `RtFrameRenderer` records frames and owns motion,
+manager; each runtime activation owns its provider manager, frame renderer and presenter. `RtRuntime` owns one
+`VulkanDeviceContext` for the installed Vulkan device, while each activation only borrows it. The context owns
+device infrastructure and survives activation rotation. Bootstrap also constructs one `SlangRuntime` from the
+game-directory extraction root and optional configured runtime override, then transfers it to `RtRuntime` for
+the process lifetime. Program backends borrow that compiler explicitly; no global compiler instance exists.
+`RtFrameRenderer` records frames and owns motion,
 geometry, lights and TLAS submission state; `RtFrameResources` owns sized images, display resources and
 exposure; `RtWorldResources` owns program, material and resource-pack realization; and the presenter delegates
 generated-frame queuing, frame generation and HDR/SDR presentation to activation-owned components.

@@ -6,7 +6,7 @@ import com.mojang.blaze3d.vulkan.init.VulkanFeature;
 import com.mojang.blaze3d.vulkan.init.VulkanPNextStruct;
 import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
-import dev.comfyfluffy.caustica.rt.GpuRasterCapabilities;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuRasterCapabilities;
 import dev.comfyfluffy.caustica.engine.vulkan.VulkanProfileSupport;
 import dev.comfyfluffy.caustica.engine.vulkan.VulkanProfileValidation;
 import dev.comfyfluffy.caustica.engine.vulkan.VulkanRequiredProfile;

@@ -1,7 +1,7 @@
 package dev.comfyfluffy.caustica.rt.pipeline;
 
-import dev.comfyfluffy.caustica.rt.GpuContext;
-import dev.comfyfluffy.caustica.rt.RtDebugLabels;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.scene.RtRetainedGeometryPlan;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
@@ -16,13 +16,13 @@ import java.nio.ByteOrder;
 import java.nio.LongBuffer;
 import java.util.List;
 
-import static dev.comfyfluffy.caustica.rt.GpuContext.check;
+import static dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext.check;
 import static org.lwjgl.vulkan.EXTOpacityMicromap.VK_PIPELINE_CREATE_RAY_TRACING_OPACITY_MICROMAP_BIT_EXT;
 import static org.lwjgl.vulkan.KHRRayTracingPipeline.*;
 
 /** Descriptor-heap-native world ray-tracing pipeline and shader binding table. */
 public final class RtPipeline {
-    private final GpuContext context;
+    private final VulkanDeviceContext context;
     private final long pipeline;
     private final SbtBuffer sbt;
     private final long stride;
@@ -32,7 +32,7 @@ public final class RtPipeline {
     private final int hitCount;
     private boolean destroyed;
 
-    private RtPipeline(GpuContext context, long pipeline, SbtBuffer sbt, long stride, int handleSize,
+    private RtPipeline(VulkanDeviceContext context, long pipeline, SbtBuffer sbt, long stride, int handleSize,
                        int raygenCount, int missCount, int hitCount) {
         this.context = context;
         this.pipeline = pipeline;
@@ -45,7 +45,7 @@ public final class RtPipeline {
     }
 
     /** Creates a KHR ray-tracing pipeline whose shaders directly address the two descriptor heaps. */
-    public static RtPipeline create(GpuContext context, RtShaderCode[] raygen, RtShaderCode[] miss,
+    public static RtPipeline create(VulkanDeviceContext context, RtShaderCode[] raygen, RtShaderCode[] miss,
                                     RtShaderCode closestHit, RtShaderCode radianceAnyHit,
                                     RtShaderCode shadowAnyHit) {
         if (raygen.length == 0 || miss.length == 0) throw new IllegalArgumentException("empty RT stage array");
@@ -325,7 +325,7 @@ public final class RtPipeline {
             this.mapped = mapped;
         }
 
-        static SbtBuffer create(GpuContext context, long size, long alignment) {
+        static SbtBuffer create(VulkanDeviceContext context, long size, long alignment) {
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 VkBufferCreateInfo bufferInfo = VkBufferCreateInfo.calloc(stack).sType$Default().size(size)
                         .usage(VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR | VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT)

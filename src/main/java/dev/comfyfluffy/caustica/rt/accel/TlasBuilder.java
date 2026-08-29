@@ -1,10 +1,12 @@
 package dev.comfyfluffy.caustica.rt.accel;
 
-import dev.comfyfluffy.caustica.rt.GpuBuffer;
-import dev.comfyfluffy.caustica.rt.GpuContext;
-import dev.comfyfluffy.caustica.rt.RtDebugLabels;
-import dev.comfyfluffy.caustica.rt.RtGpuExecutor.GraphicsUse;
-import dev.comfyfluffy.caustica.rt.RtGpuExecutor.TrackedGraphicsUse;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtGpuExecutor;
+
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuBuffer;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtDebugLabels;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtGpuExecutor.GraphicsUse;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtGpuExecutor.TrackedGraphicsUse;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VK10;
@@ -152,7 +154,7 @@ public final class TlasBuilder {
     }
 
     /** Pack two instance ranges into the next reusable ring slot. */
-    public static Prepared prepare(GpuContext ctx, List<Instance> baseInstances,
+    public static Prepared prepare(VulkanDeviceContext ctx, List<Instance> baseInstances,
                                    List<Instance> dynamicInstances, Ring ring, GraphicsUse graphicsUse) {
         int baseCount = baseInstances.size();
         int count = Math.addExact(baseCount, dynamicInstances.size());
@@ -163,14 +165,14 @@ public final class TlasBuilder {
     }
 
     /** Pack staged instances into the next reusable ring slot. */
-    public static Prepared prepare(GpuContext ctx, InstanceBatch instances, Ring ring, GraphicsUse graphicsUse) {
+    public static Prepared prepare(VulkanDeviceContext ctx, InstanceBatch instances, Ring ring, GraphicsUse graphicsUse) {
         int count = instances.size();
         Ring.Slot slot = selectSlot(ctx, ring, count);
         writeInstances(instances, slot.instanceBuffer.mapped());
         return finish(slot, count, graphicsUse);
     }
 
-    private static Ring.Slot selectSlot(GpuContext ctx, Ring ring, int count) {
+    private static Ring.Slot selectSlot(VulkanDeviceContext ctx, Ring ring, int count) {
         Ring.Slot slot = ring.slots[ring.cursor];
         if (slot != null) ctx.gpuExecutor().graphicsUseWaiter().await(slot.graphicsUse);
         if (slot == null || count > slot.capacity) {
@@ -221,7 +223,7 @@ public final class TlasBuilder {
         }
     }
 
-    private static Ring.Slot createSlot(GpuContext ctx, int capacity) {
+    private static Ring.Slot createSlot(VulkanDeviceContext ctx, int capacity) {
         VkDevice vk = ctx.vk();
         String label = "TLAS ring slot (" + capacity + " instance capacity)";
         Ring.Slot slot = new Ring.Slot();
@@ -243,7 +245,7 @@ public final class TlasBuilder {
                     .sType$Default().buffer(backing.handle()).offset(0).size(sizes.accelerationStructureSize())
                     .type(VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR);
             java.nio.LongBuffer accelerationStructure = stack.mallocLong(1);
-            GpuContext.check(vkCreateAccelerationStructureKHR(vk, createInfo, null, accelerationStructure),
+            VulkanDeviceContext.check(vkCreateAccelerationStructureKHR(vk, createInfo, null, accelerationStructure),
                     "vkCreateAccelerationStructureKHR");
             long handle = accelerationStructure.get(0);
             RtDebugLabels.nameAccelerationStructure(ctx, handle, label);
@@ -273,7 +275,7 @@ public final class TlasBuilder {
     }
 
     /** Record the prepared top-level build. */
-    public static void record(GpuContext ctx, VkCommandBuffer commandBuffer, Prepared prepared) {
+    public static void record(VulkanDeviceContext ctx, VkCommandBuffer commandBuffer, Prepared prepared) {
         try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, commandBuffer, prepared.label + " build");
              MemoryStack stack = MemoryStack.stackPush()) {
             VkAccelerationStructureBuildGeometryInfoKHR.Buffer build = buildInfo(
@@ -289,13 +291,13 @@ public final class TlasBuilder {
         }
     }
 
-    private static GpuBuffer createScratchBuffer(GpuContext ctx, long requiredSize, String label) {
+    private static GpuBuffer createScratchBuffer(VulkanDeviceContext ctx, long requiredSize, String label) {
         long alignment = ctx.accelerationStructureScratchAlignment();
         return ctx.createAlignedBuffer(Math.max(requiredSize, alignment), VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                 false, label, alignment);
     }
 
-    private static long scratchAddress(GpuContext ctx, GpuBuffer scratch) {
+    private static long scratchAddress(VulkanDeviceContext ctx, GpuBuffer scratch) {
         long alignment = ctx.accelerationStructureScratchAlignment();
         if ((scratch.deviceAddress() & (alignment - 1L)) != 0L) {
             throw new IllegalStateException("Scratch device address 0x"

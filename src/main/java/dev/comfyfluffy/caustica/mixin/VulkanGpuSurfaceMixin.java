@@ -13,7 +13,7 @@ import dev.comfyfluffy.caustica.rt.RtRuntime;
 import dev.comfyfluffy.caustica.minecraft.MinecraftFrameAdapter;
 import dev.comfyfluffy.caustica.minecraft.MinecraftUiOverlay;
 import dev.comfyfluffy.caustica.minecraft.MinecraftVulkanImageBorrow;
-import dev.comfyfluffy.caustica.rt.GpuContext;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftVulkanBackend;
 import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
 import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
@@ -362,7 +362,7 @@ public abstract class VulkanGpuSurfaceMixin {
 		// misdisplay (SDR bytes reinterpreted as PQ codes). Convert sRGB -> PQ at paper white instead. Falls
 		// through to vanilla SDR if conversion resources aren't ready or the source view is not a Vulkan view.
 		if (RtRuntime.INSTANCE.isPqSdrPresentActive()) {
-			GpuContext gpu = GpuContext.currentOrNull();
+			VulkanDeviceContext gpu = RtRuntime.INSTANCE.vulkanContextOrNull();
 			if (gpu != null && textureView instanceof com.mojang.blaze3d.vulkan.VulkanGpuTextureView view
 					&& view.texture().getFormat() == com.mojang.blaze3d.GpuFormat.RGBA8_UNORM) {
 				if (caustica$sdrPresentationSource == null || !caustica$sdrPresentationSource.wraps(

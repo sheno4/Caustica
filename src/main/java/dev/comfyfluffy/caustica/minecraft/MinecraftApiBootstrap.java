@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft;
 
 import dev.comfyfluffy.caustica.CausticaMod;
+import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.config.CausticaOptions;
 import dev.comfyfluffy.caustica.api.CausticaExtension;
 import dev.comfyfluffy.caustica.builtin.BuiltinExtension;
@@ -12,9 +13,13 @@ import dev.comfyfluffy.caustica.rt.RtRuntime;
 import dev.comfyfluffy.caustica.settings.CausticaSettings;
 import dev.comfyfluffy.caustica.settings.CausticaSettingsExtension;
 import dev.comfyfluffy.caustica.settings.SettingsRegistry;
+import dev.comfyfluffy.caustica.slang.SlangRuntime;
+import dev.comfyfluffy.caustica.slang.SlangRuntimeConfig;
 
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 /** Loader-neutral process extension discovery and settings installation. */
 public final class MinecraftApiBootstrap {
@@ -37,9 +42,15 @@ public final class MinecraftApiBootstrap {
                 CausticaPlatform.current().minecraftExtensions(), extensions);
         registerMinecraftExtension(minecraftHost, settingsRegistry, new MinecraftProvidersExtension());
 
-        var shaderCache = CausticaPlatform.current().gameDir().resolve("caustica-shaders");
+        Path gameDirectory = CausticaPlatform.current().gameDir();
+        String configuredSlangPath = CausticaConfig.Slang.PATH.get();
+        Optional<Path> slangOverride = configuredSlangPath == null || configuredSlangPath.isBlank()
+                ? Optional.empty() : Optional.of(Path.of(configuredSlangPath));
+        RtRuntime.INSTANCE.installSlangRuntime(new SlangRuntime(new SlangRuntimeConfig(
+                gameDirectory.resolve("caustica-slang"), slangOverride)));
+        var shaderCache = gameDirectory.resolve("caustica-shaders");
         RtRuntime.INSTANCE.configureShaderCache(shaderCache.resolve("sources"));
-        RtRuntime.INSTANCE.telemetry().configure(CausticaPlatform.current().gameDir()
+        RtRuntime.INSTANCE.telemetry().configure(gameDirectory
                 .resolve("rt-frame-stats"), MinecraftFrameMetrics.schema());
         CausticaOptions options = CausticaOptions.load(
                 CausticaPlatform.current().configDir().resolve("caustica-options.toml"),

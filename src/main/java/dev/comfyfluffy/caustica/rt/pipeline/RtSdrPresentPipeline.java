@@ -1,10 +1,11 @@
 package dev.comfyfluffy.caustica.rt.pipeline;
 
+
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorIndex;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptorKind;
-import dev.comfyfluffy.caustica.rt.GpuContext;
-import dev.comfyfluffy.caustica.rt.RtDebugLabels;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.gen.PresentPushData;
 import dev.comfyfluffy.caustica.vulkan.ShaderObjectCompute;
 import org.lwjgl.system.MemoryStack;
@@ -19,15 +20,15 @@ import java.nio.ByteBuffer;
 /** Converts a sampled sRGB host image to a PQ/BT.2020 storage image. */
 public final class RtSdrPresentPipeline {
     private static final String SHADER = "/caustica/shaders/pipelines/sdr_present/main.comp.spv";
-    private final GpuContext context;
+    private final VulkanDeviceContext context;
     private final ShaderObjectCompute shader;
 
-    private RtSdrPresentPipeline(GpuContext context, ShaderObjectCompute shader) {
+    private RtSdrPresentPipeline(VulkanDeviceContext context, ShaderObjectCompute shader) {
         this.context = context;
         this.shader = shader;
     }
 
-    public static RtSdrPresentPipeline create(GpuContext context) {
+    public static RtSdrPresentPipeline create(VulkanDeviceContext context) {
         return new RtSdrPresentPipeline(context, load(context));
     }
 
@@ -44,7 +45,7 @@ public final class RtSdrPresentPipeline {
 
     public void destroy() { shader.close(); }
 
-    private static ShaderObjectCompute load(GpuContext context) {
+    private static ShaderObjectCompute load(VulkanDeviceContext context) {
         try (InputStream input = RtSdrPresentPipeline.class.getResourceAsStream(SHADER)) {
             if (input == null) throw new IllegalStateException("missing SPIR-V resource: " + SHADER);
             byte[] bytes = input.readAllBytes();

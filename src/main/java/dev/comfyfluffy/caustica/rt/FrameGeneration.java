@@ -1,5 +1,9 @@
 package dev.comfyfluffy.caustica.rt;
 
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuImage;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanBarriers;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
+
 import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg;
 import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
@@ -42,7 +46,7 @@ final class FrameGeneration {
         if (!RtDlssFg.enabled() || !ui.enabled() || sourceImage == 0L) {
             return;
         }
-        GpuContext context = GpuContext.currentOrNull();
+        VulkanDeviceContext context = RtRuntime.INSTANCE.vulkanContextOrNull();
         if (context == null) {
             return;
         }
@@ -68,7 +72,7 @@ final class FrameGeneration {
 
     void captureHdrHudless(VkCommandBuffer commandBuffer, MemoryStack stack,
                            dev.comfyfluffy.caustica.api.vulkan.GpuImage source) {
-        GpuContext context = GpuContext.currentOrNull();
+        VulkanDeviceContext context = RtRuntime.INSTANCE.vulkanContextOrNull();
         if (context == null) {
             return;
         }
@@ -94,7 +98,7 @@ final class FrameGeneration {
         if (frame == null || frame.depth() == null || frame.motion() == null) {
             return null;
         }
-        GpuContext context = GpuContext.currentOrNull();
+        VulkanDeviceContext context = RtRuntime.INSTANCE.vulkanContextOrNull();
         if (context == null) {
             return null;
         }
@@ -139,7 +143,7 @@ final class FrameGeneration {
         return interpolationImage;
     }
 
-    private boolean ensureFeature(GpuContext context, int width, int height,
+    private boolean ensureFeature(VulkanDeviceContext context, int width, int height,
             int renderWidth, int renderHeight, int format) {
         if (RtDlssFg.INSTANCE.featureReadyFor(width, height, renderWidth, renderHeight, format)) {
             return true;
@@ -150,7 +154,7 @@ final class FrameGeneration {
         return RtDlssFg.INSTANCE.featureReadyFor(width, height, renderWidth, renderHeight, format);
     }
 
-    private void ensureInterpolationImage(GpuContext context, int width, int height, int format) {
+    private void ensureInterpolationImage(VulkanDeviceContext context, int width, int height, int format) {
         if (interpolationImage != null && interpolationWidth == width
                 && interpolationHeight == height && interpolationFormat == format) {
             return;

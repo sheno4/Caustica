@@ -1,5 +1,11 @@
 package dev.comfyfluffy.caustica.rt;
 
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuBuffer;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtDebugLabels;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtGpuExecutor;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanBarriers;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
+
 import dev.comfyfluffy.caustica.vulkan.VulkanDiagnostics;
 
 import dev.comfyfluffy.caustica.config.CausticaConfig;
@@ -186,11 +192,11 @@ final class RtFrameRenderer {
      * @return {@code true} when a current RT frame was available and written
      */
     public boolean exportLatestResidualExposureExr(Path outputPath) throws java.io.IOException {
-        GpuContext context = GpuContext.currentOrNull();
+        VulkanDeviceContext context = RtRuntime.INSTANCE.vulkanContextOrNull();
         if (context != null) {
             context.backend().assertRenderThread();
         }
-        GpuContext ctx = GpuContext.currentOrNull();
+        VulkanDeviceContext ctx = RtRuntime.INSTANCE.vulkanContextOrNull();
         if (!enabled() || failed || ctx == null || frameResources.rrOutput == null || frameResources.exposure.image() == null
                 || frameResources.displayW <= 0 || frameResources.displayH <= 0 || pendingGraphicsUse != null) {
             return false;
@@ -244,7 +250,7 @@ final class RtFrameRenderer {
         }
     }
 
-    private void recordExrReadback(GpuContext ctx, VkCommandBuffer cmd, GpuBuffer readback, long exposureOffset) {
+    private void recordExrReadback(VulkanDeviceContext ctx, VkCommandBuffer cmd, GpuBuffer readback, long exposureOffset) {
         try (MemoryStack stack = MemoryStack.stackPush();
              RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd,
                      "residual-exposure EXR readback")) {
@@ -390,7 +396,7 @@ final class RtFrameRenderer {
         if (graphicsUse == null) {
             return;
         }
-        GpuContext ctx = GpuContext.currentOrNull();
+        VulkanDeviceContext ctx = RtRuntime.INSTANCE.vulkanContextOrNull();
         if (ctx == null) {
             throw new IllegalStateException("RT context disappeared before graphics use completed");
         }
@@ -410,7 +416,7 @@ final class RtFrameRenderer {
         if (failed) {
             return false;
         }
-        GpuContext ctx = GpuContext.get();
+        VulkanDeviceContext ctx = RtRuntime.INSTANCE.requireVulkanContext();
         if (ctx == null) {
             return false;
         }
@@ -451,7 +457,7 @@ final class RtFrameRenderer {
     }
 
     /** Build every display-sized resource while startup is still presenting the source renderer. */
-    public boolean ensurePresentationResourcesReady(GpuContext ctx, long sceneId, int width, int height) {
+    public boolean ensurePresentationResourcesReady(VulkanDeviceContext ctx, long sceneId, int width, int height) {
         if (failed || sceneId == 0L) {
             return false;
         }
@@ -464,7 +470,7 @@ final class RtFrameRenderer {
         }
     }
 
-    private boolean ensurePresentationResources(GpuContext ctx, int width, int height)
+    private boolean ensurePresentationResources(VulkanDeviceContext ctx, int width, int height)
             throws IOException {
         frameResources.ensurePresentationPipelines(ctx, LOOK);
         if (frameResources.ensureSized(ctx, width, height)) {
@@ -474,12 +480,12 @@ final class RtFrameRenderer {
         return true;
     }
 
-    private RtProgramBackend.Published ensureWorld(GpuContext ctx) {
+    private RtProgramBackend.Published ensureWorld(VulkanDeviceContext ctx) {
         ensurePushRing(ctx);
         return programs.active();
     }
 
-    private void ensurePushRing(GpuContext ctx) {
+    private void ensurePushRing(VulkanDeviceContext ctx) {
         if (pushRing != null) {
             return;
         }
@@ -568,7 +574,7 @@ final class RtFrameRenderer {
         return Math.abs(first - second) / Math.max(Math.max(Math.abs(first), Math.abs(second)), 1.0e-6f);
     }
 
-    private void recordFrame(GpuContext ctx, RtProgramBackend.Published program, long nativeColorImage,
+    private void recordFrame(VulkanDeviceContext ctx, RtProgramBackend.Published program, long nativeColorImage,
                              FrameSnapshot snapshot, boolean lightingHistoryContinuous) {
         long dstImage = nativeColorImage;
         GraphicsSubmission submission = ctx.backend().createGraphicsSubmission();

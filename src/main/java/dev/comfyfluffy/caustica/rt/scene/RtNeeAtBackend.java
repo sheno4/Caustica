@@ -1,11 +1,13 @@
 package dev.comfyfluffy.caustica.rt.scene;
 
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtGpuExecutor;
+
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.api.light.LightDescriptor;
-import dev.comfyfluffy.caustica.rt.GpuBuffer;
-import dev.comfyfluffy.caustica.rt.GpuContext;
-import dev.comfyfluffy.caustica.rt.RtGpuExecutor.GraphicsUse;
-import dev.comfyfluffy.caustica.rt.RtGpuExecutor.TrackedGraphicsUse;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuBuffer;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtGpuExecutor.GraphicsUse;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtGpuExecutor.TrackedGraphicsUse;
 import dev.comfyfluffy.caustica.rt.gen.NeeAtStateData;
 import dev.comfyfluffy.caustica.rt.pipeline.RtBindings;
 import dev.comfyfluffy.caustica.vulkan.ShaderObjectCompute;
@@ -43,11 +45,11 @@ final class RtNeeAtBackend {
     private static final int PUSH_BYTES = 40;
     private static final String SHADER = "/caustica/shaders/pipelines/nee_at/bake.comp.spv";
 
-    private final GpuContext context;
+    private final VulkanDeviceContext context;
     private final ShaderObjectCompute bake;
     private final Map<SceneId, SceneState> scenes = new IdentityHashMap<>();
 
-    RtNeeAtBackend(GpuContext context) {
+    RtNeeAtBackend(VulkanDeviceContext context) {
         this.context = Objects.requireNonNull(context, "context");
         this.bake = load(context);
     }
@@ -210,7 +212,7 @@ final class RtNeeAtBackend {
         }
     }
 
-    private static ShaderObjectCompute load(GpuContext context) {
+    private static ShaderObjectCompute load(VulkanDeviceContext context) {
         try (InputStream input = RtNeeAtBackend.class.getResourceAsStream(SHADER)) {
             if (input == null) throw new IllegalStateException("missing NEE-AT shader " + SHADER);
             byte[] bytes = input.readAllBytes();
