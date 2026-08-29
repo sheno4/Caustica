@@ -3,17 +3,26 @@ package dev.comfyfluffy.caustica.rt.pipeline;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.GpuBuffer;
+import dev.comfyfluffy.caustica.api.gpu.GpuDescriptorIndex;
+import dev.comfyfluffy.caustica.api.gpu.GpuDescriptorRange;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.util.vma.Vma;
 import org.lwjgl.util.vma.VmaAllocationCreateInfo;
 import org.lwjgl.vulkan.VK10;
-import org.lwjgl.vulkan.VkBufferImageCopy;
+import org.lwjgl.vulkan.VK13;
+import org.lwjgl.vulkan.VK14;
+import org.lwjgl.vulkan.KHRSynchronization2;
+import org.lwjgl.vulkan.VkBufferImageCopy2;
+import org.lwjgl.vulkan.VkCopyBufferToImageInfo2;
 import org.lwjgl.vulkan.VkDevice;
+import org.lwjgl.vulkan.VkDependencyInfo;
 import org.lwjgl.vulkan.VkImageCreateInfo;
-import org.lwjgl.vulkan.VkImageMemoryBarrier;
+import org.lwjgl.vulkan.VkImageMemoryBarrier2;
+import org.lwjgl.vulkan.VkImageDescriptorInfoEXT;
 import org.lwjgl.vulkan.VkImageViewCreateInfo;
+import org.lwjgl.vulkan.VkResourceDescriptorInfoEXT;
 import org.lwjgl.vulkan.VkSamplerCreateInfo;
 
 import java.io.IOException;
@@ -43,10 +52,14 @@ public final class RtToneLut {
     private final long allocation;
     private final long view;
     private final long sampler;
+    private final GpuDescriptorRange<GpuDescriptorIndex.Resource> sampledDescriptor;
+    private final GpuDescriptorRange<GpuDescriptorIndex.Sampler> samplerDescriptor;
     public final int size;
     private boolean destroyed;
 
     private RtToneLut(VkDevice vk, long vma, long image, long allocation, long view, long sampler,
+                       GpuDescriptorRange<GpuDescriptorIndex.Resource> sampledDescriptor,
+                       GpuDescriptorRange<GpuDescriptorIndex.Sampler> samplerDescriptor,
                        int size) {
         this.vk = vk;
         this.vma = vma;
@@ -54,6 +67,8 @@ public final class RtToneLut {
         this.allocation = allocation;
         this.view = view;
         this.sampler = sampler;
+        this.sampledDescriptor = sampledDescriptor;
+        this.samplerDescriptor = samplerDescriptor;
         this.size = size;
     }
 
@@ -63,6 +78,14 @@ public final class RtToneLut {
 
     public long sampler() {
         return sampler;
+    }
+
+    public GpuDescriptorIndex.Resource sampledIndex() {
+        return sampledDescriptor.firstIndex();
+    }
+
+    public GpuDescriptorIndex.Sampler samplerIndex() {
+        return samplerDescriptor.firstIndex();
     }
 
     /** Loads a display-transform resource from {@code /caustica/color/luts/}. */
@@ -117,6 +140,8 @@ public final class RtToneLut {
         long createdAllocation = 0L;
         long createdView = 0L;
         long createdSampler = 0L;
+        GpuDescriptorRange<GpuDescriptorIndex.Resource> sampledDescriptor = null;
+        GpuDescriptorRange<GpuDescriptorIndex.Sampler> samplerDescriptor = null;
         GpuBuffer staging = null;
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkImageCreateInfo imageInfo = VkImageCreateInfo.calloc(stack).sType$Default()
@@ -165,6 +190,15 @@ public final class RtToneLut {
             createdSampler = samplerOut.get(0);
             RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_SAMPLER, createdSampler, "tone LUT " + label + " sampler");
 
+            sampledDescriptor = ctx.descriptorHeap().allocateResources(1, "tone LUT " + label);
+            samplerDescriptor = ctx.descriptorHeap().allocateSamplers(1, "tone LUT " + label);
+            VkImageDescriptorInfoEXT imageDescriptor = VkImageDescriptorInfoEXT.calloc(stack).sType$Default()
+                    .pView(viewInfo).layout(VK10.VK_IMAGE_LAYOUT_GENERAL);
+            VkResourceDescriptorInfoEXT resource = VkResourceDescriptorInfoEXT.calloc(stack).sType$Default()
+                    .type(VK10.VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE).data(value -> value.pImage(imageDescriptor));
+            ctx.descriptorHeap().writer().writeResource(sampledDescriptor, 0, resource);
+            ctx.descriptorHeap().writer().writeSampler(samplerDescriptor, 0, samplerInfo);
+
             int totalBytes = texels.remaining();
             staging = ctx.createUploadBuffer(totalBytes, "tone lut " + label + " upload");
             ByteBuffer mapped = MemoryUtil.memByteBuffer(staging.mapped(), totalBytes);
@@ -175,46 +209,53 @@ public final class RtToneLut {
             long uploadBuffer = staging.handle();
             ctx.submitSync(cmd -> {
                 try (MemoryStack uploadStack = MemoryStack.stackPush()) {
-                    VkImageMemoryBarrier.Buffer toTransfer = VkImageMemoryBarrier.calloc(1, uploadStack);
+                    VkImageMemoryBarrier2.Buffer toTransfer = VkImageMemoryBarrier2.calloc(1, uploadStack);
                     toTransfer.get(0).sType$Default()
                             .oldLayout(VK10.VK_IMAGE_LAYOUT_UNDEFINED)
-                            .newLayout(VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
-                            .srcAccessMask(0).dstAccessMask(VK10.VK_ACCESS_TRANSFER_WRITE_BIT)
+                            .newLayout(VK10.VK_IMAGE_LAYOUT_GENERAL)
+                            .srcStageMask(VK13.VK_PIPELINE_STAGE_2_NONE).srcAccessMask(VK13.VK_ACCESS_2_NONE)
+                            .dstStageMask(KHRSynchronization2.VK_PIPELINE_STAGE_2_COPY_BIT_KHR)
+                            .dstAccessMask(VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT)
                             .srcQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED)
                             .dstQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED).image(uploadImage);
                     toTransfer.get(0).subresourceRange().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT)
                             .baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
-                    VK10.vkCmdPipelineBarrier(cmd, VK10.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                            VK10.VK_PIPELINE_STAGE_TRANSFER_BIT, 0, null, null, toTransfer);
+                    VK14.vkCmdPipelineBarrier2(cmd, VkDependencyInfo.calloc(uploadStack)
+                            .sType$Default().pImageMemoryBarriers(toTransfer));
 
-                    VkBufferImageCopy.Buffer copy = VkBufferImageCopy.calloc(1, uploadStack);
+                    VkBufferImageCopy2.Buffer copy = VkBufferImageCopy2.calloc(1, uploadStack);
+                    copy.get(0).sType$Default();
                     copy.get(0).bufferOffset(0).bufferRowLength(0).bufferImageHeight(0);
                     copy.get(0).imageSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT)
                             .mipLevel(0).baseArrayLayer(0).layerCount(1);
                     copy.get(0).imageOffset().set(0, 0, 0);
                     copy.get(0).imageExtent().set(size, size, size);
-                    VK10.vkCmdCopyBufferToImage(cmd, uploadBuffer, uploadImage,
-                            VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, copy);
+                    VK13.vkCmdCopyBufferToImage2(cmd, VkCopyBufferToImageInfo2.calloc(uploadStack)
+                            .sType$Default().srcBuffer(uploadBuffer).dstImage(uploadImage)
+                            .dstImageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL).pRegions(copy));
 
                     // GENERAL, not SHADER_READ_ONLY_OPTIMAL, to match every other sampled/storage
                     // image in this codebase (see GpuContext.createStorageImage)
                     // — the descriptor write below must use the same layout or validation flags a
                     // mismatch.
-                    VkImageMemoryBarrier.Buffer toRead = VkImageMemoryBarrier.calloc(1, uploadStack);
+                    VkImageMemoryBarrier2.Buffer toRead = VkImageMemoryBarrier2.calloc(1, uploadStack);
                     toRead.get(0).sType$Default()
-                            .oldLayout(VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+                            .oldLayout(VK10.VK_IMAGE_LAYOUT_GENERAL)
                             .newLayout(VK10.VK_IMAGE_LAYOUT_GENERAL)
-                            .srcAccessMask(VK10.VK_ACCESS_TRANSFER_WRITE_BIT)
-                            .dstAccessMask(VK10.VK_ACCESS_SHADER_READ_BIT)
+                            .srcStageMask(KHRSynchronization2.VK_PIPELINE_STAGE_2_COPY_BIT_KHR)
+                            .srcAccessMask(VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT)
+                            .dstStageMask(VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT).dstAccessMask(VK13.VK_ACCESS_2_SHADER_READ_BIT)
                             .srcQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED)
                             .dstQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED).image(uploadImage);
                     toRead.get(0).subresourceRange().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT)
                             .baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
-                    VK10.vkCmdPipelineBarrier(cmd, VK10.VK_PIPELINE_STAGE_TRANSFER_BIT,
-                            VK10.VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, null, null, toRead);
+                    VK14.vkCmdPipelineBarrier2(cmd, VkDependencyInfo.calloc(uploadStack)
+                            .sType$Default().pImageMemoryBarriers(toRead));
                 }
             });
         } catch (Throwable t) {
+            if (samplerDescriptor != null) samplerDescriptor.destroy();
+            if (sampledDescriptor != null) sampledDescriptor.destroy();
             if (createdSampler != 0L) VK10.vkDestroySampler(vk, createdSampler, null);
             if (createdView != 0L) VK10.vkDestroyImageView(vk, createdView, null);
             if (createdImage != 0L) Vma.vmaDestroyImage(vma, createdImage, createdAllocation);
@@ -223,6 +264,7 @@ public final class RtToneLut {
             if (staging != null) staging.destroy();
         }
         return new RtToneLut(vk, vma, createdImage, createdAllocation, createdView, createdSampler,
+                sampledDescriptor, samplerDescriptor,
                 size);
     }
 
@@ -230,6 +272,8 @@ public final class RtToneLut {
         if (destroyed) {
             return;
         }
+        samplerDescriptor.destroy();
+        sampledDescriptor.destroy();
         VK10.vkDestroySampler(vk, sampler, null);
         VK10.vkDestroyImageView(vk, view, null);
         Vma.vmaDestroyImage(vma, image, allocation);

@@ -1,408 +1,426 @@
 package dev.comfyfluffy.caustica.minecraft.sky;
 
-import dev.comfyfluffy.caustica.settings.Option;
-import dev.comfyfluffy.caustica.api.ShaderSource;
-import dev.comfyfluffy.caustica.api.pass.CausticaRenderPass;
-import dev.comfyfluffy.caustica.api.pass.PassFrame;
-import dev.comfyfluffy.caustica.settings.OptionValues;
-import dev.comfyfluffy.caustica.settings.ResourceId;
-import dev.comfyfluffy.caustica.api.pass.PassSetup;
-import dev.comfyfluffy.caustica.api.pass.RenderStage;
+import com.mojang.blaze3d.GpuFormat;
 import com.mojang.blaze3d.textures.GpuTextureView;
 import com.mojang.blaze3d.vulkan.VulkanGpuTextureView;
-import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
+import com.mojang.blaze3d.vulkan.VulkanGpuTexture;
+import dev.comfyfluffy.caustica.api.gpu.*;
+import dev.comfyfluffy.caustica.api.pass.Pass;
+import dev.comfyfluffy.caustica.api.pass.PassFrame;
+import dev.comfyfluffy.caustica.api.program.EnvironmentId;
+import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
 import dev.comfyfluffy.caustica.minecraft.MinecraftLightingCalibration;
-import dev.comfyfluffy.caustica.rt.GpuBuffer;
-import dev.comfyfluffy.caustica.api.gpu.GpuImage;
-import dev.comfyfluffy.caustica.minecraft.sky.gen.SkyInputsData;
-import dev.comfyfluffy.caustica.api.pass.ComputeDispatch;
-import dev.comfyfluffy.caustica.api.pass.PassShaderCompiler;
+import dev.comfyfluffy.caustica.minecraft.api.MinecraftEnvironmentSelector;
+import dev.comfyfluffy.caustica.minecraft.program.MinecraftProgramTypes;
+import dev.comfyfluffy.caustica.minecraft.sky.gen.*;
+import dev.comfyfluffy.caustica.settings.*;
+import dev.comfyfluffy.caustica.vulkan.*;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.texture.*;
 import net.minecraft.data.AtlasIds;
-import net.minecraft.client.renderer.texture.TextureAtlas;
-import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.attribute.EnvironmentAttributes;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.MoonPhase;
-import org.lwjgl.system.MemoryUtil;
-import org.lwjgl.vulkan.VK10;
+import org.lwjgl.PointerBuffer;
+import org.lwjgl.system.*;
+import org.lwjgl.util.vma.*;
+import org.lwjgl.vulkan.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import java.io.IOException;
-import java.io.UncheckedIOException;
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
-import java.util.List;
+import java.io.*;
+import java.nio.*;
+import java.util.*;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Supplier;
 
-/**
- * Atmospheric transmittance, multiple-scattering, and per-frame sky-view LUT generation for the Overworld
- * sky. The two scattering LUTs are static and bake once (redone on {@link #invalidate()}); the sky-view
- * LUT re-renders every frame.
- *
- * <p>This Minecraft adapter samples celestial state and publishes the same packed
- * inputs to its LUT bakes and sky slot. The Minecraft light adapter samples those host attributes
- * independently to submit the corresponding distant lights through the light-provider API.
- */
-public final class SkyLutPass implements CausticaRenderPass {
+import static org.lwjgl.vulkan.VK10.*;
+import static org.lwjgl.vulkan.VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+import static org.lwjgl.vulkan.VK12.vkGetBufferDeviceAddress;
+
+/** Owns the Overworld atmosphere LUTs and publishes immutable environment binding generations. */
+public final class SkyLutPass implements Pass<PassFrame> {
+    private static final Logger LOGGER = LoggerFactory.getLogger(SkyLutPass.class);
     public static final ResourceId ID = ResourceId.of("caustica", "sky_lut");
+    private static final String SHADER_ROOT = "/caustica/shaders/pipelines/sky/";
     private static final Identifier SUN_SPRITE_ID = Identifier.withDefaultNamespace("sun");
-    private static final Identifier[] MOON_SPRITE_IDS = createMoonSpriteIds();
-    static final int TRANSMITTANCE_WIDTH = 256;
-    static final int TRANSMITTANCE_HEIGHT = 64;
-    static final int MULTISCATTER_WIDTH = 32;
-    static final int MULTISCATTER_HEIGHT = 32;
-    static final int SKY_VIEW_WIDTH = 192;
-    static final int SKY_VIEW_HEIGHT = 216;
-    private static final ShaderSource SHADERS = ShaderSource.classpath("/caustica/shaders/minecraft", "sky");
+    private static final Identifier[] MOON_SPRITE_IDS = moonSpriteIds();
+    static final int TRANSMITTANCE_WIDTH = 256, TRANSMITTANCE_HEIGHT = 64;
+    static final int MULTISCATTER_WIDTH = 32, MULTISCATTER_HEIGHT = 32;
+    static final int SKY_VIEW_WIDTH = 192, SKY_VIEW_HEIGHT = 216;
 
-    // The sky-geometry options this pass owns are declared here so the token passed to OptionValues#get
-    // and the declaration registered by the Minecraft extension are the same
-    // object. This pass is their only reader.
-    // No enabled option: the sky slot fills every ray that escapes the world, so there is no state in which
-    // this pass does nothing. Its group collapses by the caret alone.
     public static final String GROUP = "sky";
-    public static final Option<Float> SUN_NOON_SOUTH_TILT_DEGREES =
-            Option.range("sky.sun-noon-south-tilt-degrees", -89.0f, 89.0f, 30.0f).inGroup(GROUP);
-    public static final Option<Float> SUN_ANGULAR_RADIUS_DEGREES =
-            Option.range("sky.sun-angular-radius-degrees", 0.0f, 20.0f, 0.6f).inGroup(GROUP);
-    public static final Option<Float> MOON_ANGULAR_RADIUS_DEGREES =
-            Option.range("sky.moon-angular-radius-degrees", 0.0f, 20.0f, 1.5f).inGroup(GROUP);
-    public static final Option<Float> SUN_DISC_HALF_ANGLE_DEGREES =
-            Option.range("sky.sun-disc-half-angle-degrees", 0.0f, 45.0f, 16.7f).inGroup(GROUP);
-    public static final Option<Float> MOON_DISC_HALF_ANGLE_DEGREES =
-            Option.range("sky.moon-disc-half-angle-degrees", 0.0f, 45.0f, 11.31f).inGroup(GROUP);
-    public static final Option<Float> GROUND_ALBEDO =
-            Option.range("sky.ground-albedo", 0.0f, 1.0f, 0.1f).inGroup(GROUP);
-    public static final Option<Float> HORIZON_SOFTEN_DEGREES =
-            Option.range("sky.horizon-soften-degrees", 0.0f, 90.0f, 15.0f).inGroup(GROUP);
-    public static final List<Option<?>> OPTIONS = List.of(
-            SUN_NOON_SOUTH_TILT_DEGREES, SUN_ANGULAR_RADIUS_DEGREES, MOON_ANGULAR_RADIUS_DEGREES,
-            SUN_DISC_HALF_ANGLE_DEGREES, MOON_DISC_HALF_ANGLE_DEGREES, GROUND_ALBEDO,
-            HORIZON_SOFTEN_DEGREES);
+    public static final Option<Float> SUN_NOON_SOUTH_TILT_DEGREES = option("sun-noon-south-tilt-degrees", -89, 89, 30);
+    public static final Option<Float> SUN_ANGULAR_RADIUS_DEGREES = option("sun-angular-radius-degrees", 0, 20, .6f);
+    public static final Option<Float> MOON_ANGULAR_RADIUS_DEGREES = option("moon-angular-radius-degrees", 0, 20, 1.5f);
+    public static final Option<Float> SUN_DISC_HALF_ANGLE_DEGREES = option("sun-disc-half-angle-degrees", 0, 45, 16.7f);
+    public static final Option<Float> MOON_DISC_HALF_ANGLE_DEGREES = option("moon-disc-half-angle-degrees", 0, 45, 11.31f);
+    public static final Option<Float> GROUND_ALBEDO = option("ground-albedo", 0, 1, .1f);
+    public static final Option<Float> HORIZON_SOFTEN_DEGREES = option("horizon-soften-degrees", 0, 90, 15);
+    public static final List<Option<?>> OPTIONS = List.of(SUN_NOON_SOUTH_TILT_DEGREES,
+            SUN_ANGULAR_RADIUS_DEGREES, MOON_ANGULAR_RADIUS_DEGREES, SUN_DISC_HALF_ANGLE_DEGREES,
+            MOON_DISC_HALF_ANGLE_DEGREES, GROUND_ALBEDO, HORIZON_SOFTEN_DEGREES);
 
-    static final List<ComputeDispatch.Binding> TRANSMITTANCE_BINDINGS =
-            List.of(ComputeDispatch.Binding.STORAGE);
-    static final List<ComputeDispatch.Binding> SCATTER_BINDINGS = List.of(
-            ComputeDispatch.Binding.STORAGE, ComputeDispatch.Binding.SAMPLED, ComputeDispatch.Binding.SAMPLED);
-
-    private GpuDevice ctx;
-    private PassShaderCompiler shaderCompiler;
-    private long sampler;
-    /**
-     * Point sampling for the celestials atlas only. The LUT sampler above is linear because a baked sky
-     * LUT is a smooth function; vanilla's sun and moon sprites are 32x32 pixel art drawn across a quad
-     * spanning tens of degrees, where linear magnification interpolates a handful of texels over hundreds
-     * of screen pixels and smears the disc.
-     */
-    private long celestialSampler;
-    private GpuImage transmittance;
-    private GpuImage multiScatter;
-    private GpuImage skyView;
-    private ComputeDispatch transmittanceDispatch;
-    private ComputeDispatch multiScatterDispatch;
-    private ComputeDispatch skyViewDispatch;
-    private boolean baked;
-    /** The {@code sky.ground-albedo} the current bake used, so an edit to it can invalidate that bake. */
+    private final GpuDevice gpu;
+    private final Supplier<OptionValues> options;
+    private final EnvironmentId<MinecraftProgramTypes.EnvironmentBindingData> environment;
+    private final MinecraftEnvironmentSelector selector;
+    private final VmaImage2D transmittance, multiScatter, skyView;
+    private final VulkanSampler lutSampler, celestialSampler;
+    private final ShaderObjectCompute transmittanceShader, multiScatterShader, skyViewShader;
+    private final AtomicLong resourcePackEpoch;
+    private AtlasEntry atlas;
+    private boolean initialized, baked;
     private float bakedGroundAlbedo;
-    /**
-     * This frame's {@link SkyInputsData}, published as a set-2 uniform buffer the sky slot reads. Host
-     * visible and rewritten in place each frame: it is 112 bytes read by the miss shader only, so a
-     * staging copy would cost more than the uncached read it avoids.
-     */
-    private GpuBuffer skyInputsBuffer;
-    // Vanilla's celestials atlas view and the sprite rects within it, cached because getSprite() is a
-    // registry lookup and the rects only change when the atlas is restitched or the moon phase ticks.
-    private long celestialAtlasView;
-    private int celestialUvMoonPhase = -1;
-    private float sunU0;
-    private float sunV0;
-    private float sunU1 = 1f;
-    private float sunV1 = 1f;
-    private float moonU0;
-    private float moonV0;
-    private float moonU1 = 1f;
-    private float moonV1 = 1f;
+    private int liveBindings;
 
-    @Override
-    public ResourceId id() {
-        return ID;
-    }
-
-    @Override
-    public RenderStage stage() {
-        return RenderStage.ENVIRONMENT_PREPARE;
-    }
-
-    @Override
-    public void create(PassSetup setup) {
-        ctx = setup.device();
-        shaderCompiler = setup.shaderCompiler();
-        // The pass object outlives a RenderPassManager/GPU-context instance. Force the new manager to
-        // observe and publish the Minecraft celestial atlas even when Vulkan recycles the same numeric view handle.
-        celestialAtlasView = 0L;
-        celestialUvMoonPhase = -1;
-        sampler = ComputeDispatch.createLinearClampSampler(ctx, ID + " sampler");
-        celestialSampler = ComputeDispatch.createNearestClampSampler(ctx, ID + " celestials sampler");
-        transmittance = ctx.createStorageImage(TRANSMITTANCE_WIDTH, TRANSMITTANCE_HEIGHT,
-                VK10.VK_FORMAT_R16G16B16A16_SFLOAT, ID + " transmittance");
-        multiScatter = ctx.createStorageImage(MULTISCATTER_WIDTH, MULTISCATTER_HEIGHT,
-                VK10.VK_FORMAT_R16G16B16A16_SFLOAT, ID + " multiscatter");
-        skyView = ctx.createStorageImage(SKY_VIEW_WIDTH, SKY_VIEW_HEIGHT,
-                VK10.VK_FORMAT_R16G16B16A16_SFLOAT, ID + " sky view");
-        skyInputsBuffer = ctx.createBuffer(SkyInputsData.BYTE_SIZE,
-                VK10.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true, ID + " sky inputs");
-        // Names match caustica_minecraft_sky_bindings.slang's [[vk::binding(N, 2)]] declarations exactly —
-        // that module, not this Java class, is what defines the resource's identity.
-        setup.publishWorldResource("transmittance", transmittance, sampler);
-        setup.publishWorldResource("skyView", skyView, sampler);
-        setup.publishWorldResource("skyInputs", skyInputsBuffer);
-
+    public SkyLutPass(GpuDevice gpu, Supplier<OptionValues> options,
+                      EnvironmentId<MinecraftProgramTypes.EnvironmentBindingData> environment,
+                      MinecraftEnvironmentSelector selector, long epoch) {
+        this.gpu = Objects.requireNonNull(gpu, "gpu");
+        this.options = Objects.requireNonNull(options, "options");
+        this.environment = Objects.requireNonNull(environment, "environment");
+        this.selector = Objects.requireNonNull(selector, "selector");
+        resourcePackEpoch = new AtomicLong(epoch);
+        VmaImage2D t = null, m = null, v = null;
+        VulkanSampler ls = null, cs = null;
+        ShaderObjectCompute ts = null, ms = null, vs = null;
         try {
-            transmittanceDispatch = compile("caustica_minecraft_sky_lut_transmittance",
-                    TRANSMITTANCE_BINDINGS, 0);
-            multiScatterDispatch = compile("caustica_minecraft_sky_lut_multiscatter",
-                    SCATTER_BINDINGS, SkyInputsData.BYTE_SIZE);
-            skyViewDispatch = compile("caustica_minecraft_sky_lut_view", SCATTER_BINDINGS,
-                    SkyInputsData.BYTE_SIZE);
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
+            t = VmaImage2D.create(gpu, TRANSMITTANCE_WIDTH, TRANSMITTANCE_HEIGHT,
+                    VK_FORMAT_R16G16B16A16_SFLOAT, ID + " transmittance");
+            m = VmaImage2D.create(gpu, MULTISCATTER_WIDTH, MULTISCATTER_HEIGHT,
+                    VK_FORMAT_R16G16B16A16_SFLOAT, ID + " multiscatter");
+            v = VmaImage2D.create(gpu, SKY_VIEW_WIDTH, SKY_VIEW_HEIGHT,
+                    VK_FORMAT_R16G16B16A16_SFLOAT, ID + " sky view");
+            ls = VulkanSampler.linearClamp(gpu, ID + " LUT sampler");
+            cs = VulkanSampler.nearestClamp(gpu, ID + " celestial sampler");
+            ts = load(gpu, "transmittance.comp.spv");
+            ms = load(gpu, "multiscatter.comp.spv");
+            vs = load(gpu, "view.comp.spv");
+        } catch (RuntimeException | Error failure) {
+            closeAll(vs, ms, ts, cs, ls, v, m, t);
+            throw failure;
         }
+        transmittance = t; multiScatter = m; skyView = v;
+        lutSampler = ls; celestialSampler = cs;
+        transmittanceShader = ts; multiScatterShader = ms; skyViewShader = vs;
     }
 
-    private ComputeDispatch compile(String module, List<ComputeDispatch.Binding> bindings,
-                                    int pushConstantBytes) throws IOException {
-        ResourceId programId = ResourceId.of("caustica", module);
-        PassShaderCompiler.CompiledProgram compiled = shaderCompiler.compile(
-                programId, SHADERS, module, "main");
-        shaderCompiler.validateBindings(programId, compiled.reflectionJson(), bindings,
-                pushConstantBytes, "main", 8, 8, 1);
-        return ComputeDispatch.create(ctx, programId.toString(), compiled.spirv(), "main",
-                bindings, pushConstantBytes, 1, sampler);
-    }
+    public void invalidate(long epoch) { resourcePackEpoch.accumulateAndGet(epoch, Math::max); }
 
-    @Override
-    public void record(PassFrame frame) {
-        SkyState state = gatherSkyState(frame.options());
-        // Before skyInputs(): this is what resolves the sprite rects skyInputs() then reads. Called the
-        // other way round, the buffer carries the previous frame's UVs — and on the first frame the
-        // untouched full-range defaults, which stretch the whole atlas (sun plus every moon phase) across
-        // the sun's quad.
-        refreshCelestialAtlas(frame, state);
-        // The sky slot reads every one of these values from this buffer; the bakes below read the same
-        // bytes as a push constant. One derivation, two consumers.
-        SkyInputsData inputs = skyInputs(state);
-        inputs.write(MemoryUtil.memByteBuffer(skyInputsBuffer.mapped(), SkyInputsData.BYTE_SIZE)
-                .order(ByteOrder.nativeOrder()));
-        skyInputsBuffer.flush();
-        byte[] push = pushConstants(inputs);
-        // The multi-scatter bake integrates bounces off the ground, so it is the one baked-LUT input a
-        // player can edit. Re-bake when it moves, or the option would only apply after a dimension change.
-        if (baked && bakedGroundAlbedo != state.groundAlbedo()) {
-            baked = false;
-        }
+    @Override public void record(PassFrame frame) {
+        if (!initialized) { initializeImages(frame.commandBuffer()); initialized = true; }
+        SkyState state = gather(options.get());
+        AtlasSnapshot snapshot = celestialAtlas(state);
+        if (snapshot == null) return;
+        ensureAtlas(snapshot);
+        SkyInputsData inputs = skyInputs(state, snapshot);
+        if (baked && Float.compare(bakedGroundAlbedo, state.groundAlbedo()) != 0) baked = false;
         if (!baked) {
+            dispatch(transmittanceShader, frame, transmittance, inputs);
+            barrier(frame.commandBuffer());
+            dispatch(multiScatterShader, frame, multiScatter, inputs);
+            barrier(frame.commandBuffer());
             bakedGroundAlbedo = state.groundAlbedo();
-            transmittanceDispatch.beginFrame();
-            transmittanceDispatch.dispatch(frame.commandBuffer(), new GpuImage[]{transmittance},
-                    new byte[0], groups(TRANSMITTANCE_WIDTH), groups(TRANSMITTANCE_HEIGHT), 1);
-            frame.memoryBarrier();
-
-            multiScatterDispatch.beginFrame();
-            multiScatterDispatch.dispatch(frame.commandBuffer(),
-                    new GpuImage[]{multiScatter, transmittance, multiScatter},
-                    push, groups(MULTISCATTER_WIDTH), groups(MULTISCATTER_HEIGHT), 1);
-            frame.memoryBarrier();
             baked = true;
         }
-
-        skyViewDispatch.beginFrame();
-        skyViewDispatch.dispatch(frame.commandBuffer(), new GpuImage[]{skyView, transmittance, multiScatter},
-                push, groups(SKY_VIEW_WIDTH), groups(SKY_VIEW_HEIGHT), 1);
+        dispatch(skyViewShader, frame, skyView, inputs);
+        BindingGeneration binding = createBinding(inputs, atlas.retain());
+        try {
+            selector.select(new EnvironmentBinding<>(environment,
+                    MinecraftProgramTypes.ENVIRONMENT_BINDING_DATA.data(binding.root.address), binding::retire));
+            binding.published = true;
+        } finally {
+            if (!binding.published) binding.closeStrict();
+        }
     }
 
-    @Override
-    public void onResourcePackClosing() {
+    private void ensureAtlas(AtlasSnapshot snapshot) {
+        long epoch = resourcePackEpoch.get();
+        if (atlas != null && atlas.texture == snapshot.texture() && atlas.epoch == epoch) return;
+        AtlasEntry replacement = AtlasEntry.create(
+                gpu, snapshot.texture(), snapshot.baseMipLevel(), snapshot.mipLevels(), epoch);
+        AtlasEntry previous = atlas;
+        atlas = replacement;
         baked = false;
+        if (previous != null) previous.release();
     }
 
-    private static int groups(int extent) {
-        return (extent + 7) / 8;
+    private BindingGeneration createBinding(SkyInputsData inputs, AtlasEntry atlasLease) {
+        SkyBuffer inputBuffer = null, root = null;
+        try {
+            inputBuffer = SkyBuffer.create(gpu, SkyInputsData.BYTE_SIZE, inputs::write);
+            SkyBuffer captured = inputBuffer;
+            root = SkyBuffer.create(gpu, MinecraftEnvironmentBindingData.BYTE_SIZE, bytes ->
+                    new MinecraftEnvironmentBindingData(
+                            sampled(skyView.sampledIndex()), sampled(transmittance.sampledIndex()),
+                            sampled(atlasLease.index()), sampler(lutSampler.index()),
+                            sampler(celestialSampler.index()), captured.address).write(bytes));
+            liveBindings++;
+            return new BindingGeneration(root, inputBuffer, atlasLease);
+        } catch (RuntimeException | Error failure) {
+            closeAll(root, inputBuffer);
+            atlasLease.release();
+            throw failure;
+        }
     }
 
-    /**
-     * This pass's own snapshot of Minecraft's celestial state, the look package's photometric lighting
-     * anchors, and the {@code sky.*} geometry options, gathered fresh every time it's called rather than
-     * shared with anything else. Mirrors what the frame renderer computes for the world push's
-     * sky fields — deliberately a second, independent read rather than a shared one; see the class javadoc.
-     */
-    private static SkyState gatherSkyState(OptionValues options) {
+    private static MinecraftEnvironmentBindingData.SampledTexture2DIndex sampled(GpuDescriptorIndex.Resource index) {
+        return new MinecraftEnvironmentBindingData.SampledTexture2DIndex(index.value());
+    }
+    private static MinecraftEnvironmentBindingData.SamplerIndex sampler(GpuDescriptorIndex.Sampler index) {
+        return new MinecraftEnvironmentBindingData.SamplerIndex(index.value());
+    }
+
+    private void dispatch(ShaderObjectCompute shader, PassFrame frame, VmaImage2D destination, SkyInputsData inputs) {
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            ByteBuffer push = stack.malloc(SkyLutPushData.BYTE_SIZE).order(ByteOrder.LITTLE_ENDIAN);
+            new SkyLutPushData(destination.storageIndex().value(),
+                    new SkyLutPushData.SampledTexture2DIndex(transmittance.sampledIndex().value()),
+                    new SkyLutPushData.SampledTexture2DIndex(multiScatter.sampledIndex().value()),
+                    new SkyLutPushData.SamplerIndex(lutSampler.index().value()), pushInputs(inputs)).write(push);
+            shader.dispatch(frame.commandBuffer(), push, groups(destination.width()), groups(destination.height()), 1);
+        }
+    }
+
+    private static SkyLutPushData.SkyInputs pushInputs(SkyInputsData v) {
+        return new SkyLutPushData.SkyInputs(vec(v.celestial()), vec(v.skyLook0()), vec(v.skyLook1()),
+                vec(v.skyLook2()), vec(v.skyLook3()), vec(v.sunUv()), vec(v.moonUv()));
+    }
+    private static SkyLutPushData.Float4 vec(SkyInputsData.Float4 v) {
+        return new SkyLutPushData.Float4(v.x(), v.y(), v.z(), v.w());
+    }
+    static int groups(int extent) { return (extent + 7) / 8; }
+
+    static SkyInputsData skyInputs(SkyState s, AtlasSnapshot a) {
+        return new SkyInputsData(new SkyInputsData.Float4(s.sunAngleRadians(), s.moonAngleRadians(),
+                s.starAngleRadians(), s.starBrightness()), new SkyInputsData.Float4(s.sunIlluminanceLux(),
+                s.moonIlluminanceLux(), s.nightAirglowLuminance(), s.starLuminance()),
+                new SkyInputsData.Float4(s.noonTiltRadians(), s.sunAngularRadiusRadians(),
+                        s.moonAngularRadiusRadians(), s.moonPhaseFixedFraction()),
+                new SkyInputsData.Float4(s.sunDiscHalfAngleRadians(), s.moonDiscHalfAngleRadians(),
+                        s.viewerAltitudeKm(), s.moonPhaseIndex()),
+                new SkyInputsData.Float4(s.groundAlbedo(), s.horizonSoftenRadians(), 0, 0),
+                a.sunUv(), a.moonUv());
+    }
+
+    private static SkyState gather(OptionValues options) {
         Minecraft mc = Minecraft.getInstance();
         float partial = mc.getDeltaTracker().getGameTimeDeltaPartialTick(false);
         var probe = mc.gameRenderer.mainCamera().attributeProbe();
-        int seaLevel = mc.level != null ? mc.level.getSeaLevel() : 0;
-        // No direct camera-position accessor is reachable from here the way the frame renderer reads it (its
-        // camY arrives pre-captured off the level-projection mixin hook); the render camera's entity eye
-        // height is a close enough independent read for a LUT bake, and it's what "gather it yourself"
-        // means for code that isn't in that capture path.
-        Entity cameraEntity = mc.getCameraEntity() != null ? mc.getCameraEntity() : mc.player;
-        double camY = cameraEntity != null ? cameraEntity.getEyePosition(partial).y : seaLevel;
-        float viewerAltitudeKm = Math.clamp((float) ((camY - seaLevel) / 100.0), 0.0f, 99.0f);
-        float toRadians = (float) (Math.PI / 180.0);
-        float sunAngle = probe.getValue(EnvironmentAttributes.SUN_ANGLE, partial) * toRadians;
-        float moonAngle = probe.getValue(EnvironmentAttributes.MOON_ANGLE, partial) * toRadians;
-        float starAngle = probe.getValue(EnvironmentAttributes.STAR_ANGLE, partial) * toRadians;
-        float starBrightness = probe.getValue(EnvironmentAttributes.STAR_BRIGHTNESS, partial);
-        float moonPhase = probe.getValue(EnvironmentAttributes.MOON_PHASE, partial).index(); // 0 full .. 4 new
-
-        MinecraftLightingCalibration lighting = MinecraftLightingCalibration.current();
-        float sunNoonSouthTiltDegrees = options.get(SUN_NOON_SOUTH_TILT_DEGREES);
-        float sunAngularRadiusDegrees = options.get(SUN_ANGULAR_RADIUS_DEGREES);
-        float moonAngularRadiusDegrees = options.get(MOON_ANGULAR_RADIUS_DEGREES);
-        float sunDiscHalfAngleDegrees = options.get(SUN_DISC_HALF_ANGLE_DEGREES);
-        float moonDiscHalfAngleDegrees = options.get(MOON_DISC_HALF_ANGLE_DEGREES);
-        float groundAlbedo = options.get(GROUND_ALBEDO);
-        float horizonSoftenDegrees = options.get(HORIZON_SOFTEN_DEGREES);
-        return new SkyState(
-                sunAngle, moonAngle, starAngle, starBrightness,
-                lighting.sunIlluminanceLux(), lighting.moonIlluminanceLux(),
-                lighting.nightAirglowLuminanceCdM2(), lighting.starLuminanceCdM2(),
-                sunNoonSouthTiltDegrees * toRadians,
-                sunAngularRadiusDegrees * toRadians,
-                moonAngularRadiusDegrees * toRadians,
-                lighting.moonPhaseFixedFraction(),
-                sunDiscHalfAngleDegrees * toRadians,
-                moonDiscHalfAngleDegrees * toRadians,
-                viewerAltitudeKm, moonPhase, groundAlbedo,
-                horizonSoftenDegrees * toRadians);
+        int sea = mc.level != null ? mc.level.getSeaLevel() : 0;
+        Entity entity = mc.getCameraEntity() != null ? mc.getCameraEntity() : mc.player;
+        double y = entity != null ? entity.getEyePosition(partial).y : sea;
+        float altitude = Math.clamp((float) ((y - sea) / 100.0), 0, 99);
+        float r = (float) (Math.PI / 180.0);
+        MinecraftLightingCalibration l = MinecraftLightingCalibration.current();
+        return new SkyState(probe.getValue(EnvironmentAttributes.SUN_ANGLE, partial) * r,
+                probe.getValue(EnvironmentAttributes.MOON_ANGLE, partial) * r,
+                probe.getValue(EnvironmentAttributes.STAR_ANGLE, partial) * r,
+                probe.getValue(EnvironmentAttributes.STAR_BRIGHTNESS, partial), l.sunIlluminanceLux(),
+                l.moonIlluminanceLux(), l.nightAirglowLuminanceCdM2(), l.starLuminanceCdM2(),
+                options.get(SUN_NOON_SOUTH_TILT_DEGREES) * r, options.get(SUN_ANGULAR_RADIUS_DEGREES) * r,
+                options.get(MOON_ANGULAR_RADIUS_DEGREES) * r, l.moonPhaseFixedFraction(),
+                options.get(SUN_DISC_HALF_ANGLE_DEGREES) * r,
+                options.get(MOON_DISC_HALF_ANGLE_DEGREES) * r, altitude,
+                probe.getValue(EnvironmentAttributes.MOON_PHASE, partial).index(), options.get(GROUND_ALBEDO),
+                options.get(HORIZON_SOFTEN_DEGREES) * r);
     }
 
-    /**
-     * The one packing of this frame's sky state, shared by the LUT bakes (as a push constant) and the sky
-     * slot (as the published uniform buffer), so the two cannot disagree about what frame they render.
-     */
-    SkyInputsData skyInputs(SkyState state) {
-        return new SkyInputsData(
-                new SkyInputsData.Float4(state.sunAngleRadians(), state.moonAngleRadians(),
-                        state.starAngleRadians(), state.starBrightness()),
-                new SkyInputsData.Float4(state.sunIlluminanceLux(), state.moonIlluminanceLux(),
-                        state.nightAirglowLuminance(), state.starLuminance()),
-                new SkyInputsData.Float4(state.noonTiltRadians(), state.sunAngularRadiusRadians(),
-                        state.moonAngularRadiusRadians(), state.moonPhaseFixedFraction()),
-                new SkyInputsData.Float4(state.sunDiscHalfAngleRadians(),
-                        state.moonDiscHalfAngleRadians(), state.viewerAltitudeKm(), state.moonPhaseIndex()),
-                new SkyInputsData.Float4(state.groundAlbedo(), state.horizonSoftenRadians(), 0.0f, 0.0f),
-                new SkyInputsData.Float4(sunU0, sunV0, sunU1, sunV1),
-                new SkyInputsData.Float4(moonU0, moonV0, moonU1, moonV1));
-    }
-
-    static byte[] pushConstants(SkyInputsData inputs) {
-        byte[] bytes = new byte[SkyInputsData.BYTE_SIZE];
-        inputs.write(ByteBuffer.wrap(bytes).order(ByteOrder.nativeOrder()));
-        return bytes;
-    }
-
-    /**
-     * Binds vanilla's celestials atlas (sun + moon-phase sprites) as this pass's own world resource and
-     * refreshes the sprite rects when the atlas or the moon phase changes. A sky for another dimension
-     * binds no such texture, so this belongs to the slot that draws celestial sprites.
-     */
-    private void refreshCelestialAtlas(PassFrame frame, SkyState state) {
-        long view = celestialsAtlasView();
-        int moonPhase = Math.clamp((int) state.moonPhaseIndex(), 0, MOON_SPRITE_IDS.length - 1);
-        if (view != celestialAtlasView) {
-            celestialAtlasView = view;
-            celestialUvMoonPhase = -1;
-            if (view != 0L) {
-                frame.publishWorldResource("celestialsAtlas", view, celestialSampler);
-            }
-        }
-        if (view == 0L || moonPhase == celestialUvMoonPhase) {
-            return;
-        }
-        sunU0 = 0f; sunV0 = 0f; sunU1 = 1f; sunV1 = 1f;
-        moonU0 = 0f; moonV0 = 0f; moonU1 = 1f; moonV1 = 1f;
+    private static AtlasSnapshot celestialAtlas(SkyState state) {
         try {
             TextureAtlas atlas = Minecraft.getInstance().getAtlasManager().getAtlasOrThrow(AtlasIds.CELESTIALS);
+            GpuTextureView raw = atlas.getTextureView();
+            if (!(raw instanceof VulkanGpuTextureView view) || view.texture().getFormat() != GpuFormat.RGBA8_UNORM) return null;
             TextureAtlasSprite sun = atlas.getSprite(SUN_SPRITE_ID);
-            sunU0 = sun.getU0(); sunV0 = sun.getV0(); sunU1 = sun.getU1(); sunV1 = sun.getV1();
-            TextureAtlasSprite moon = atlas.getSprite(MOON_SPRITE_IDS[moonPhase]);
-            moonU0 = moon.getU0(); moonV0 = moon.getV0(); moonU1 = moon.getU1(); moonV1 = moon.getV1();
-        } catch (Exception ignored) {
-            // Atlas not stitched yet — full-range UVs until it is; the discs sample a defined texel either
-            // way, and this runs again next frame.
-        }
-        celestialUvMoonPhase = moonPhase;
+            int phase = Math.clamp((int) state.moonPhaseIndex(), 0, MOON_SPRITE_IDS.length - 1);
+            TextureAtlasSprite moon = atlas.getSprite(MOON_SPRITE_IDS[phase]);
+            return new AtlasSnapshot(view.texture(), view.baseMipLevel(), view.mipLevels(),
+                    uv(sun), uv(moon));
+        } catch (RuntimeException unavailable) { return null; }
+    }
+    private static SkyInputsData.Float4 uv(TextureAtlasSprite s) {
+        return new SkyInputsData.Float4(s.getU0(), s.getV0(), s.getU1(), s.getV1());
     }
 
-    /** Vulkan image view of the vanilla celestials atlas, or 0 while it is unavailable. */
-    private static long celestialsAtlasView() {
-        try {
-            GpuTextureView view = Minecraft.getInstance().getAtlasManager()
-                    .getAtlasOrThrow(AtlasIds.CELESTIALS).getTextureView();
-            return view instanceof VulkanGpuTextureView vulkanView ? vulkanView.vkImageView() : 0L;
-        } catch (Exception e) {
-            return 0L;
+    private static ShaderObjectCompute load(GpuDevice gpu, String name) {
+        try (InputStream input = SkyLutPass.class.getResourceAsStream(SHADER_ROOT + name)) {
+            if (input == null) throw new IllegalStateException("missing sky shader " + name);
+            byte[] bytes = input.readAllBytes();
+            ByteBuffer spirv = MemoryUtil.memAlloc(bytes.length);
+            try { spirv.put(bytes).flip(); return ShaderObjectCompute.create(gpu, spirv, "main"); }
+            finally { MemoryUtil.memFree(spirv); }
+        } catch (IOException failure) { throw new UncheckedIOException(failure); }
+    }
+
+    private void initializeImages(VkCommandBuffer commandBuffer) {
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            List<VmaImage2D> images = List.of(transmittance, multiScatter, skyView);
+            VkImageMemoryBarrier2.Buffer barriers = VkImageMemoryBarrier2.calloc(images.size(), stack);
+            for (int i = 0; i < images.size(); i++) {
+                VmaImage2D image = images.get(i);
+                barriers.get(i).sType$Default().srcStageMask(VK13.VK_PIPELINE_STAGE_2_NONE)
+                        .srcAccessMask(VK13.VK_ACCESS_2_NONE).dstStageMask(VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT)
+                        .dstAccessMask(VK13.VK_ACCESS_2_SHADER_READ_BIT | VK13.VK_ACCESS_2_SHADER_WRITE_BIT)
+                        .oldLayout(VK_IMAGE_LAYOUT_UNDEFINED).newLayout(VK_IMAGE_LAYOUT_GENERAL)
+                        .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED).dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+                        .image(image.image());
+                barriers.get(i).subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+                        .baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
+            }
+            VK14.vkCmdPipelineBarrier2(commandBuffer,
+                    VkDependencyInfo.calloc(stack).sType$Default().pImageMemoryBarriers(barriers));
+        }
+    }
+    private static void barrier(VkCommandBuffer commandBuffer) {
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            VkMemoryBarrier2.Buffer b = VkMemoryBarrier2.calloc(1, stack);
+            b.get(0).sType$Default().srcStageMask(VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT)
+                    .srcAccessMask(VK13.VK_ACCESS_2_SHADER_WRITE_BIT)
+                    .dstStageMask(VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT)
+                    .dstAccessMask(VK13.VK_ACCESS_2_SHADER_READ_BIT | VK13.VK_ACCESS_2_SHADER_WRITE_BIT);
+            VK14.vkCmdPipelineBarrier2(commandBuffer,
+                    VkDependencyInfo.calloc(stack).sType$Default().pMemoryBarriers(b));
         }
     }
 
-    private static Identifier[] createMoonSpriteIds() {
-        MoonPhase[] phases = MoonPhase.values();
-        Identifier[] ids = new Identifier[phases.length];
-        for (int i = 0; i < phases.length; i++) {
-            ids[i] = Identifier.withDefaultNamespace("moon/" + phases[i].getSerializedName());
+    @Override public void close() {
+        if (liveBindings != 0) LOGGER.error("Sky pass closed with {} live environment bindings", liveBindings);
+        if (atlas != null) try { atlas.release(); }
+        catch (Throwable failure) { LOGGER.error("Sky atlas cleanup failed", failure); }
+        closeAll(skyViewShader, multiScatterShader, transmittanceShader, celestialSampler, lutSampler,
+                skyView, multiScatter, transmittance);
+    }
+    private static void closeAll(AutoCloseable... resources) {
+        for (AutoCloseable r : resources) if (r != null) try { r.close(); }
+        catch (Exception e) { LOGGER.error("Sky resource cleanup failed", e); }
+    }
+
+    private final class BindingGeneration {
+        final SkyBuffer root, skyInputs; final AtlasEntry atlas;
+        boolean published, closed;
+        BindingGeneration(SkyBuffer root, SkyBuffer skyInputs, AtlasEntry atlas) {
+            this.root = root; this.skyInputs = skyInputs; this.atlas = atlas;
         }
+        void closeStrict() {
+            Throwable failure = release();
+            if (failure instanceof RuntimeException runtime) throw runtime;
+            if (failure instanceof Error error) throw error;
+        }
+        void retire() {
+            Throwable failure = release();
+            if (failure != null) LOGGER.error("Sky binding retirement failed", failure);
+        }
+        synchronized Throwable release() {
+            if (closed) return null;
+            closed = true;
+            Throwable failure = cleanup(null, root::close);
+            failure = cleanup(failure, skyInputs::close);
+            failure = cleanup(failure, atlas::release);
+            liveBindings--;
+            return failure;
+        }
+    }
+
+    private static final class AtlasEntry {
+        final VulkanGpuTexture texture; final long epoch;
+        final GpuDescriptorRange<GpuDescriptorIndex.Resource> descriptor;
+        int references = 1;
+        AtlasEntry(VulkanGpuTexture texture, long epoch,
+                   GpuDescriptorRange<GpuDescriptorIndex.Resource> descriptor) {
+            this.texture = texture; this.epoch = epoch; this.descriptor = descriptor;
+        }
+        static AtlasEntry create(GpuDevice gpu, VulkanGpuTexture texture,
+                                 int baseMipLevel, int mipLevels, long epoch) {
+            texture.addViews();
+            GpuDescriptorRange<GpuDescriptorIndex.Resource> range = null;
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                range = gpu.descriptorHeap().allocateResources(
+                        1, "Minecraft celestials atlas epoch " + epoch);
+                GpuDescriptorRange<GpuDescriptorIndex.Resource> allocated = range;
+                VkImageViewCreateInfo view = VkImageViewCreateInfo.calloc(stack).sType$Default()
+                        .image(texture.vkImage())
+                        .viewType(VK_IMAGE_VIEW_TYPE_2D).format(VK_FORMAT_R8G8B8A8_UNORM);
+                view.subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).baseMipLevel(baseMipLevel)
+                        .levelCount(mipLevels).baseArrayLayer(0).layerCount(1);
+                VkImageDescriptorInfoEXT info = VkImageDescriptorInfoEXT.calloc(stack).sType$Default()
+                        .pView(view).layout(VK_IMAGE_LAYOUT_GENERAL);
+                gpu.descriptorHeap().writer().writeResource(allocated, 0,
+                        VkResourceDescriptorInfoEXT.calloc(stack).sType$Default()
+                                .type(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE).data(d -> d.pImage(info)));
+                return new AtlasEntry(texture, epoch, allocated);
+            } catch (RuntimeException | Error failure) {
+                if (range != null) range.destroy();
+                texture.removeViews();
+                throw failure;
+            }
+        }
+        synchronized AtlasEntry retain() { references++; return this; }
+        synchronized void release() {
+            if (--references != 0) return;
+            Throwable failure = cleanup(null, descriptor::destroy);
+            failure = cleanup(failure, texture::removeViews);
+            if (failure instanceof RuntimeException runtime) throw runtime;
+            if (failure instanceof Error error) throw error;
+        }
+        GpuDescriptorIndex.Resource index() { return descriptor.firstIndex(); }
+    }
+
+    private static final class SkyBuffer implements AutoCloseable {
+        final long allocator, buffer, allocation, address; boolean closed;
+        SkyBuffer(long allocator, long buffer, long allocation, long address) {
+            this.allocator = allocator; this.buffer = buffer; this.allocation = allocation; this.address = address;
+        }
+        static SkyBuffer create(GpuDevice gpu, int size, java.util.function.Consumer<ByteBuffer> writer) {
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                VkBufferCreateInfo info = VkBufferCreateInfo.calloc(stack).sType$Default().size(size)
+                        .usage(VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT)
+                        .sharingMode(VK_SHARING_MODE_EXCLUSIVE);
+                VmaAllocationCreateInfo ai = VmaAllocationCreateInfo.calloc(stack).usage(Vma.VMA_MEMORY_USAGE_AUTO)
+                        .flags(Vma.VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | Vma.VMA_ALLOCATION_CREATE_MAPPED_BIT);
+                LongBuffer outBuffer = stack.mallocLong(1); PointerBuffer outAllocation = stack.mallocPointer(1);
+                VmaAllocationInfo outInfo = VmaAllocationInfo.calloc(stack);
+                int result = Vma.vmaCreateBuffer(gpu.vmaAllocator(), info, ai, outBuffer, outAllocation, outInfo);
+                if (result != VK_SUCCESS) throw new IllegalStateException("vmaCreateBuffer failed: " + result);
+                long buffer = outBuffer.get(0), allocation = outAllocation.get(0);
+                long address = vkGetBufferDeviceAddress(gpu.vk(),
+                        VkBufferDeviceAddressInfo.calloc(stack).sType$Default().buffer(buffer));
+                if (address == 0 || outInfo.pMappedData() == 0) {
+                    Vma.vmaDestroyBuffer(gpu.vmaAllocator(), buffer, allocation);
+                    throw new IllegalStateException("sky buffer is not mapped and device-addressable");
+                }
+                writer.accept(MemoryUtil.memByteBuffer(outInfo.pMappedData(), size).order(ByteOrder.LITTLE_ENDIAN));
+                Vma.vmaFlushAllocation(gpu.vmaAllocator(), allocation, 0, size);
+                return new SkyBuffer(gpu.vmaAllocator(), buffer, allocation, address);
+            }
+        }
+        @Override public void close() { if (!closed) { closed = true; Vma.vmaDestroyBuffer(allocator, buffer, allocation); } }
+    }
+
+    record AtlasSnapshot(VulkanGpuTexture texture, int baseMipLevel, int mipLevels,
+                         SkyInputsData.Float4 sunUv, SkyInputsData.Float4 moonUv) { }
+    record SkyState(float sunAngleRadians, float moonAngleRadians, float starAngleRadians, float starBrightness,
+                    float sunIlluminanceLux, float moonIlluminanceLux, float nightAirglowLuminance,
+                    float starLuminance, float noonTiltRadians, float sunAngularRadiusRadians,
+                    float moonAngularRadiusRadians, float moonPhaseFixedFraction, float sunDiscHalfAngleRadians,
+                    float moonDiscHalfAngleRadians, float viewerAltitudeKm, float moonPhaseIndex,
+                    float groundAlbedo, float horizonSoftenRadians) { }
+
+    private static Option<Float> option(String name, float min, float max, float value) {
+        return Option.range("sky." + name, min, max, value).inGroup(GROUP);
+    }
+    private static Throwable cleanup(Throwable failure, Runnable action) {
+        try { action.run(); }
+        catch (Throwable cleanupFailure) {
+            if (failure == null) return cleanupFailure;
+            failure.addSuppressed(cleanupFailure);
+        }
+        return failure;
+    }
+    private static Identifier[] moonSpriteIds() {
+        MoonPhase[] phases = MoonPhase.values(); Identifier[] ids = new Identifier[phases.length];
+        for (int i = 0; i < phases.length; i++) ids[i] = Identifier.withDefaultNamespace("moon/" + phases[i].getSerializedName());
         return ids;
-    }
-
-    @Override
-    public void destroy() {
-        if (transmittanceDispatch != null) {
-            transmittanceDispatch.destroy();
-            transmittanceDispatch = null;
-        }
-        if (multiScatterDispatch != null) {
-            multiScatterDispatch.destroy();
-            multiScatterDispatch = null;
-        }
-        if (skyViewDispatch != null) {
-            skyViewDispatch.destroy();
-            skyViewDispatch = null;
-        }
-        if (transmittance != null) {
-            transmittance.destroy();
-            transmittance = null;
-        }
-        if (multiScatter != null) {
-            multiScatter.destroy();
-            multiScatter = null;
-        }
-        if (skyView != null) {
-            skyView.destroy();
-            skyView = null;
-        }
-        if (skyInputsBuffer != null) {
-            skyInputsBuffer.destroy();
-            skyInputsBuffer = null;
-        }
-        if (ctx != null && sampler != 0L) {
-            VK10.vkDestroySampler(ctx.vk(), sampler, null);
-            sampler = 0L;
-        }
-        if (ctx != null && celestialSampler != 0L) {
-            VK10.vkDestroySampler(ctx.vk(), celestialSampler, null);
-            celestialSampler = 0L;
-        }
-    }
-
-    /**
-     * The semantic sky inputs this pass needs for one frame, before packing into {@link SkyInputsData}.
-     */
-    record SkyState(
-            float sunAngleRadians, float moonAngleRadians, float starAngleRadians, float starBrightness,
-            float sunIlluminanceLux, float moonIlluminanceLux, float nightAirglowLuminance,
-            float starLuminance, float noonTiltRadians, float sunAngularRadiusRadians,
-            float moonAngularRadiusRadians, float moonPhaseFixedFraction, float sunDiscHalfAngleRadians,
-            float moonDiscHalfAngleRadians, float viewerAltitudeKm, float moonPhaseIndex,
-            float groundAlbedo, float horizonSoftenRadians) {
     }
 }

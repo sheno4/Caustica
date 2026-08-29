@@ -35,28 +35,18 @@ abstract class GenerateRtBindings extends DefaultTask {
              addresses: [PUSH: "worldPushAddress", COMPOSITION_DATA: "compositionDataAddress",
                          GEOMETRY_TABLE: "geometryTableAddress",
                          INSTANCE_HISTORY: "instanceHistoryAddress", MATERIAL_TABLE: "materialTableAddress",
-                         MATERIAL_SURFACE: "materialSurfaceAddress", PATH_QUEUE: "pathQueueAddress"],
+                         MATERIAL_SURFACE: "materialSurfaceAddress", PATH_QUEUE: "pathQueueAddress",
+                         NEE_AT_STATE: "neeAtStateAddress", RESERVED_NEE_AT: "reservedNeeAt"],
+             words: [INITIAL_VOLUME_BINDING: "initialVolumeBinding",
+                     INITIAL_VOLUME_INSTANCE: "initialVolumeInstance"],
+             scalars: [INITIAL_VOLUME_IMPLEMENTATION: "initialVolumeImplementation",
+                       INITIAL_VOLUME_ACTIVE: "initialVolumeActive"],
+             floats: [:],
              resources: ["topLevelAS": "AccelerationStructureIndex",
                          "outputImage": "StorageImageIndex", "normalGuide": "StorageImageIndex",
                          "albedoGuide": "StorageImageIndex", "depthGuide": "StorageImageIndex",
                          "motionGuide": "StorageImageIndex", "specularAlbedoGuide": "StorageImageIndex",
                          "specularMotionGuide": "StorageImageIndex"]],
-            [prefix: "DISPLAY", source: "pipelines/display/main.comp.slang", resources: [
-                    OUTPUT: "outputImage", RT_IMAGE: "rtImage", EXPOSURE: "exposureImage", HDR_OUTPUT: "hdrImage",
-                    SDR_TONE_LUT: "toneLut", HDR_TONE_LUT: "hdrToneLut", LOOK_LUT: "lookLut"]],
-            [prefix: "DEBUG_PRESENT", source: "pipelines/debug_present/main.comp.slang", resources: [
-                    OUTPUT: "outputImage", G_NORMAL: "gNormal", G_ALBEDO: "gAlbedo", G_DEPTH: "gDepth",
-                    G_MOTION: "gMotion", G_SPEC_ALBEDO: "gSpecAlbedo", G_SPEC_MOTION: "gSpecMotion",
-                    SCENE: "sceneImage", EXPOSURE: "exposureImage", EXPOSURE_STATE: "exposureState"]],
-            [prefix: "EXPOSURE_HIST", source: "pipelines/exposure_hist/main.comp.slang", resources: [
-                    COLOR: "colorImage", BINS: "histBins", DEPTH: "depthImage", ALBEDO: "albedoImage"]],
-            [prefix: "EXPOSURE_RESOLVE", source: "pipelines/exposure_resolve/main.comp.slang", resources: [
-                    HIST_BINS: "histBins", IMAGE: "exposureImage", STATE: "stateBuf"]],
-            [prefix: "PRESENT", source: "pipelines/hdr_composite/main.comp.slang", resources: [
-                    OUTPUT: "outputImage", SOURCE: "sourceImage"]],
-            [prefix: "OVERLAY_IMAGE", source: "pipelines/overlay_composite/glow.frag.slang", resources: [VALUE: "sourceImage"]],
-            [prefix: "OVERLAY_SAMPLER", source: "pipelines/name_tag/fragment.frag.slang", resources: [VALUE: "fontAtlas"]],
-            [prefix: "OVERLAY_TLAS", source: "pipelines/block_outline/fragment.frag.slang", resources: [VALUE: "tlas"]]
     ]
 
     // Gradle decorates this task; closure dispatch cannot resolve a private static helper through it.
@@ -105,11 +95,19 @@ abstract class GenerateRtBindings extends DefaultTask {
                 }
                 def rootFields = root.fields.collectEntries { [(it.name): it] }
                 def missingAddresses = spec.addresses.values().findAll { !rootFields.containsKey(it) }
+                def missingWords = spec.words.values().findAll { !rootFields.containsKey(it) }
+                def missingScalars = spec.scalars.values().findAll { !rootFields.containsKey(it) }
+                def missingFloats = spec.floats.values().findAll { !rootFields.containsKey(it) }
                 def unexpectedRootFields = rootFields.keySet().findAll {
                     it != "resources" && !spec.addresses.containsValue(it)
+                            && !spec.words.containsValue(it) && !spec.scalars.containsValue(it)
+                            && !spec.floats.containsValue(it)
                 }
-                if (!missingAddresses.isEmpty() || !unexpectedRootFields.isEmpty()) {
-                    throw new GradleException("${spec.source} world address roots differ; missing=${missingAddresses}, "
+                if (!missingAddresses.isEmpty() || !missingWords.isEmpty() || !missingScalars.isEmpty()
+                        || !missingFloats.isEmpty()
+                        || !unexpectedRootFields.isEmpty()) {
+                    throw new GradleException("${spec.source} world roots differ; missing="
+                            + "${missingAddresses + missingWords + missingScalars + missingFloats}, "
                             + "unexpected=${unexpectedRootFields}")
                 }
                 spec.addresses.each { constantName, name ->
@@ -118,6 +116,27 @@ abstract class GenerateRtBindings extends DefaultTask {
                         throw new GradleException("${spec.source} ${name} must be a uint64 device address")
                     }
                     constants["WORLD_${constantName}_ADDRESS_OFFSET"] = field.binding.offset as int
+                }
+                spec.words.each { constantName, name ->
+                    def field = rootFields[name]
+                    if (field.type?.kind != "scalar" || field.type?.scalarType != "uint64") {
+                        throw new GradleException("${spec.source} ${name} must be uint64")
+                    }
+                    constants["WORLD_${constantName}_OFFSET"] = field.binding.offset as int
+                }
+                spec.scalars.each { constantName, name ->
+                    def field = rootFields[name]
+                    if (field.type?.kind != "scalar" || field.type?.scalarType != "uint32") {
+                        throw new GradleException("${spec.source} ${name} must be uint32")
+                    }
+                    constants["WORLD_${constantName}_OFFSET"] = field.binding.offset as int
+                }
+                spec.floats.each { constantName, name ->
+                    def field = rootFields[name]
+                    if (field.type?.kind != "scalar" || field.type?.scalarType != "float32") {
+                        throw new GradleException("${spec.source} ${name} must be float32")
+                    }
+                    constants["WORLD_${constantName}_OFFSET"] = field.binding.offset as int
                 }
                 def resourcesField = rootFields.resources
                 def resources = resourcesField?.type

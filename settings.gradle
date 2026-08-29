@@ -19,5 +19,6 @@ plugins {
 }
 
 rootProject.name = "caustica"
-include("packages:api", "packages:engine", "packages:minecraft-api", "packages:shader-api", "packages:settings-api", "packages:api-support", "packages:vulkan-support",
-		"extensions:gltf-viewer", "packages:examples:api-showcase")
+include("packages:api", "packages:config", "packages:engine", "packages:minecraft-api", "packages:minecraft-adapter", "packages:shader-api", "packages:settings-api", "packages:api-support", "packages:vulkan-support",
+		"packages:examples:api-showcase", "packages:examples:gltf-content",
+		"packages:examples:gltf-viewer-minecraft")

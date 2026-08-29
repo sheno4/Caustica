@@ -6,6 +6,8 @@ import dev.comfyfluffy.caustica.engine.program.ProgramResolution;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.rt.accel.RtAccel;
+import dev.comfyfluffy.caustica.rt.gen.RetainedGeometryRecordData;
+import dev.comfyfluffy.caustica.rt.gen.RetainedGeometryRecordData.Float4;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -15,7 +17,7 @@ import java.util.List;
 /** Pure planning and CPU ABI packing for native retained geometry. */
 public final class RtRetainedGeometryPlan {
     public static final int HIT_RECORDS_PER_GEOMETRY = 2;
-    public static final int RECORD_BYTES = 144;
+    public static final int RECORD_BYTES = RetainedGeometryRecordData.BYTE_SIZE;
 
     public static final int SURFACE_IMPLEMENTATION_OFFSET = 0;
     public static final int COVERAGE_IMPLEMENTATION_OFFSET = 4;
@@ -27,6 +29,8 @@ public final class RtRetainedGeometryPlan {
     public static final int ALPHA_CUTOFF_OFFSET = 40;
     public static final int CURRENT_TRANSFORM_OFFSET = 48;
     public static final int PREVIOUS_TRANSFORM_OFFSET = 96;
+    public static final int EMITTER_INDEX_ADDRESS_OFFSET = 144;
+    public static final int EMITTER_PRIMITIVE_BASE_OFFSET = 152;
 
     public static final int HAS_SURFACE = 1;
     public static final int HAS_VOLUME = 2;
@@ -70,7 +74,8 @@ public final class RtRetainedGeometryPlan {
             records.add(new GeometryRecord(surface, coverage, volume, flags,
                     geometry.surface() == null ? 0L : geometry.surface().bindingData().bits(),
                     geometry.volume() == null ? 0L : geometry.volume().bindingData().bits(),
-                    placement.instanceData().bits(), alphaCutoff, placement.transform(), previousTransform));
+                    placement.instanceData().bits(), alphaCutoff, placement.transform(), previousTransform,
+                    0L, 0));
         }
         return List.copyOf(records);
     }
@@ -80,13 +85,16 @@ public final class RtRetainedGeometryPlan {
                 .order(ByteOrder.LITTLE_ENDIAN);
         for (GeometryRecord record : records) {
             int base = packed.position();
-            packed.putInt(record.surfaceImplementation()).putInt(record.coverageImplementation())
-                    .putInt(record.volumeImplementation()).putInt(record.flags())
-                    .putLong(record.surfaceBinding()).putLong(record.volumeBinding())
-                    .putLong(record.instanceData()).putFloat(record.alphaCutoff()).putInt(0);
-            putTransform(packed, record.currentTransform(), origin);
-            putTransform(packed, record.previousTransform(), origin);
-            if (packed.position() != base + RECORD_BYTES) throw new IllegalStateException("geometry ABI size changed");
+            float[] current = record.currentTransform().relativeTo(origin.x(), origin.y(), origin.z());
+            float[] previous = record.previousTransform().relativeTo(origin.x(), origin.y(), origin.z());
+            new RetainedGeometryRecordData(record.surfaceImplementation(), record.coverageImplementation(),
+                    record.volumeImplementation(), record.flags(), record.surfaceBinding(),
+                    record.volumeBinding(), record.instanceData(), record.alphaCutoff(), 0,
+                    row(current, 0), row(current, 4), row(current, 8),
+                    row(previous, 0), row(previous, 4), row(previous, 8),
+                    record.emitterIndexAddress(), record.emitterPrimitiveBase(), 0)
+                    .write(packed.slice(base, RECORD_BYTES).order(ByteOrder.LITTLE_ENDIAN));
+            packed.position(base + RECORD_BYTES);
         }
         return packed.flip();
     }
@@ -101,8 +109,8 @@ public final class RtRetainedGeometryPlan {
         return List.copyOf(groups);
     }
 
-    private static void putTransform(ByteBuffer target, GeometryTransform transform, SceneOrigin origin) {
-        for (float value : transform.relativeTo(origin.x(), origin.y(), origin.z())) target.putFloat(value);
+    private static Float4 row(float[] values, int offset) {
+        return new Float4(values[offset], values[offset + 1], values[offset + 2], values[offset + 3]);
     }
 
     private static boolean isOpaque(MeshBuild.Geometry<?> geometry) {
@@ -121,7 +129,23 @@ public final class RtRetainedGeometryPlan {
     public record GeometryRecord(int surfaceImplementation, int coverageImplementation,
                                  int volumeImplementation, int flags, long surfaceBinding,
                                  long volumeBinding, long instanceData, float alphaCutoff,
-                                 GeometryTransform currentTransform, GeometryTransform previousTransform) { }
+                                 GeometryTransform currentTransform, GeometryTransform previousTransform,
+                                 long emitterIndexAddress, int emitterPrimitiveBase) {
+        public GeometryRecord(int surfaceImplementation, int coverageImplementation,
+                              int volumeImplementation, int flags, long surfaceBinding,
+                              long volumeBinding, long instanceData, float alphaCutoff,
+                              GeometryTransform currentTransform, GeometryTransform previousTransform) {
+            this(surfaceImplementation, coverageImplementation, volumeImplementation, flags,
+                    surfaceBinding, volumeBinding, instanceData, alphaCutoff, currentTransform,
+                    previousTransform, 0L, 0);
+        }
+
+        GeometryRecord withEmitterIndex(long address, int primitiveBase) {
+            return new GeometryRecord(surfaceImplementation, coverageImplementation, volumeImplementation,
+                    flags, surfaceBinding, volumeBinding, instanceData, alphaCutoff, currentTransform,
+                    previousTransform, address, primitiveBase);
+        }
+    }
 
     public enum HitGroup {
         RADIANCE_OPAQUE,

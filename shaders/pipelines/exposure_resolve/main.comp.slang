@@ -4,7 +4,6 @@
 // scene continuity breaks; a mismatch snaps to this frame's target without a host write or fence.
 
 import display_common;
-import bindings;
 
 [[vk::push_constant]] ExposureResolvePush pc;
 
@@ -56,6 +55,9 @@ float curveEffectiveSlope(float sceneEv) {
 [shader("compute")]
 [numthreads(1, 1, 1)]
 void main() {
+    DevicePtr<uint> histBins = DevicePtr<uint>(pc.histogramAddress);
+    DevicePtr<ExposureState> stateBuf = DevicePtr<ExposureState>(pc.stateAddress);
+    [format("r32f")] RWTexture2D<float> exposureImage = ResourceDescriptorHeap[NonUniformResourceIndex(pc.exposureImageIndex)];
     float surfacePopulation = 0.0;
     float skyPopulation = 0.0;
     float emissivePopulation = 0.0;

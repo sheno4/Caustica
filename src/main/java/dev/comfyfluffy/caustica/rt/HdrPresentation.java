@@ -1,28 +1,30 @@
 package dev.comfyfluffy.caustica.rt;
 
-import dev.comfyfluffy.caustica.CausticaConfig;
+import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.api.gpu.GpuImage;
 import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg;
 import dev.comfyfluffy.caustica.rt.pipeline.RtHdrCompositePipeline;
 import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
 import org.lwjgl.system.MemoryStack;
-import org.lwjgl.vulkan.KHRSynchronization2;
+import org.lwjgl.vulkan.VK14;
+import org.lwjgl.vulkan.VK13;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkDependencyInfo;
-import org.lwjgl.vulkan.VkImageBlit;
+import org.lwjgl.vulkan.VkBlitImageInfo2;
+import org.lwjgl.vulkan.VkImageBlit2;
 import org.lwjgl.vulkan.VkImageMemoryBarrier2;
 import org.lwjgl.vulkan.VkMemoryBarrier2;
+import org.lwjgl.vulkan.KHRSwapchain;
+import org.lwjgl.vulkan.KHRSynchronization2;
 
 /** Composites the UI into a rendered PQ frame and submits its swapchain blit. */
 final class HdrPresentation {
-    private final PresentationSampler sampler;
     private final FrameGeneration generation;
     private RtHdrCompositePipeline pipeline;
 
-    HdrPresentation(PresentationSampler sampler, FrameGeneration generation) {
-        this.sampler = sampler;
+    HdrPresentation(FrameGeneration generation) {
         this.generation = generation;
     }
 
@@ -34,20 +36,26 @@ final class HdrPresentation {
         int copyHeight = Math.min(swapHeight, source.height());
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkCommandBuffer commandBuffer = submission.beginTransientCommandBuffer();
+            GpuContext context = GpuContext.get();
+            context.bindDescriptorHeaps(commandBuffer);
             if (RtDlssFg.enabled()) {
                 generation.captureHdrHudless(commandBuffer, stack, source);
             }
-            long overlayView = ui.populated() ? ui.colorView() : 0L;
-            if (overlayView != 0L) {
+            GpuImage overlay = ui.populated() ? ui.color() : null;
+            if (overlay != null) {
                 ensurePipeline();
                 if (pipeline != null) {
                     VkMemoryBarrier2.Buffer barrier = VkMemoryBarrier2.calloc(1, stack).sType$Default();
-                    barrier.get(0).srcStageMask(65536L).srcAccessMask(65536L)
-                            .dstStageMask(2048L).dstAccessMask(98304L);
-                    KHRSynchronization2.vkCmdPipelineBarrier2KHR(commandBuffer,
+                    barrier.get(0).srcStageMask(VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT)
+                            .srcAccessMask(VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT)
+                            .dstStageMask(VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT)
+                            .dstAccessMask(VK13.VK_ACCESS_2_SHADER_STORAGE_READ_BIT
+                                    | VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+                    VK14.vkCmdPipelineBarrier2(commandBuffer,
                             VkDependencyInfo.calloc(stack).sType$Default().pMemoryBarriers(barrier));
-                    pipeline.setImages(source.view(), overlayView, sampler.handle());
-                    pipeline.dispatch(commandBuffer, source.width(), source.height(), CausticaConfig.Rt.Hdr.uiNits());
+                    pipeline.dispatch(commandBuffer, source,
+                            overlay.descriptor(dev.comfyfluffy.caustica.api.gpu.GpuImageDescriptorKind.SAMPLED).index(),
+                            CausticaConfig.Rt.Hdr.uiNits());
                 }
             }
             recordSwapchainBlit(commandBuffer, stack, source.image(), swapchainImage, copyWidth, copyHeight);
@@ -64,7 +72,7 @@ final class HdrPresentation {
             return;
         }
         GpuContext context = GpuContext.get();
-        if (context == null || sampler.ensure(context) == 0L) {
+        if (context == null) {
             return;
         }
         pipeline = RtHdrCompositePipeline.create(context);
@@ -73,19 +81,25 @@ final class HdrPresentation {
     static void recordSwapchainBlit(VkCommandBuffer commandBuffer, MemoryStack stack,
             long sourceImage, long swapchainImage, int copyWidth, int copyHeight) {
         VkImageMemoryBarrier2.Buffer toDestination = VkImageMemoryBarrier2.calloc(1, stack).sType$Default();
-        toDestination.get(0).srcStageMask(0L).srcAccessMask(0L).dstStageMask(4096L).dstAccessMask(4096L)
+        toDestination.get(0).srcStageMask(VK13.VK_PIPELINE_STAGE_2_NONE).srcAccessMask(VK13.VK_ACCESS_2_NONE)
+                .dstStageMask(KHRSynchronization2.VK_PIPELINE_STAGE_2_BLIT_BIT_KHR)
+                .dstAccessMask(VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT)
                 .oldLayout(VK10.VK_IMAGE_LAYOUT_UNDEFINED).newLayout(VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
-                .srcQueueFamilyIndex(-1).dstQueueFamilyIndex(-1).image(swapchainImage);
+                .srcQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED)
+                .dstQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED).image(swapchainImage);
         toDestination.get(0).subresourceRange().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT)
                 .baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
         VkMemoryBarrier2.Buffer sourceVisibility = VkMemoryBarrier2.calloc(1, stack).sType$Default();
-        sourceVisibility.get(0).srcStageMask(65536L).srcAccessMask(65536L)
-                .dstStageMask(4096L).dstAccessMask(2048L);
-        KHRSynchronization2.vkCmdPipelineBarrier2KHR(commandBuffer,
+        sourceVisibility.get(0).srcStageMask(VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT)
+                .srcAccessMask(VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT)
+                .dstStageMask(KHRSynchronization2.VK_PIPELINE_STAGE_2_BLIT_BIT_KHR)
+                .dstAccessMask(VK13.VK_ACCESS_2_TRANSFER_READ_BIT);
+        VK14.vkCmdPipelineBarrier2(commandBuffer,
                 VkDependencyInfo.calloc(stack).sType$Default()
                         .pImageMemoryBarriers(toDestination).pMemoryBarriers(sourceVisibility));
 
-        VkImageBlit.Buffer region = VkImageBlit.calloc(1, stack);
+        VkImageBlit2.Buffer region = VkImageBlit2.calloc(1, stack);
+        region.get(0).sType$Default();
         region.get(0).srcSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT)
                 .mipLevel(0).baseArrayLayer(0).layerCount(1);
         region.get(0).dstSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT)
@@ -93,18 +107,28 @@ final class HdrPresentation {
         region.get(0).srcOffsets(1).set(copyWidth, copyHeight, 1);
         region.get(0).dstOffsets(0).set(0, copyHeight, 0);
         region.get(0).dstOffsets(1).set(copyWidth, 0, 1);
-        VK10.vkCmdBlitImage(commandBuffer, sourceImage, VK10.VK_IMAGE_LAYOUT_GENERAL,
-                swapchainImage, VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, region, VK10.VK_FILTER_NEAREST);
+        VK13.vkCmdBlitImage2(commandBuffer, VkBlitImageInfo2.calloc(stack).sType$Default()
+                .srcImage(sourceImage).srcImageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL)
+                .dstImage(swapchainImage).dstImageLayout(VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+                .filter(VK10.VK_FILTER_NEAREST).pRegions(region));
 
         VkImageMemoryBarrier2.Buffer toPresent = VkImageMemoryBarrier2.calloc(1, stack).sType$Default();
-        toPresent.get(0).srcStageMask(4096L).srcAccessMask(4096L).dstStageMask(65536L).dstAccessMask(0L)
-                .oldLayout(VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL).newLayout(1000001002)
-                .srcQueueFamilyIndex(-1).dstQueueFamilyIndex(-1).image(swapchainImage);
+        toPresent.get(0).srcStageMask(KHRSynchronization2.VK_PIPELINE_STAGE_2_BLIT_BIT_KHR)
+                .srcAccessMask(VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT)
+                .dstStageMask(VK13.VK_PIPELINE_STAGE_2_NONE).dstAccessMask(VK13.VK_ACCESS_2_NONE)
+                .oldLayout(VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+                .newLayout(KHRSwapchain.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR)
+                .srcQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED)
+                .dstQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED).image(swapchainImage);
         toPresent.get(0).subresourceRange().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT)
                 .baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
         VkMemoryBarrier2.Buffer memory = VkMemoryBarrier2.calloc(1, stack).sType$Default();
-        memory.get(0).srcStageMask(4096L).srcAccessMask(2048L).dstStageMask(65536L).dstAccessMask(98304L);
-        KHRSynchronization2.vkCmdPipelineBarrier2KHR(commandBuffer,
+        memory.get(0).srcStageMask(KHRSynchronization2.VK_PIPELINE_STAGE_2_BLIT_BIT_KHR)
+                .srcAccessMask(VK13.VK_ACCESS_2_TRANSFER_READ_BIT)
+                .dstStageMask(VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT)
+                .dstAccessMask(VK13.VK_ACCESS_2_SHADER_STORAGE_READ_BIT
+                        | VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+        VK14.vkCmdPipelineBarrier2(commandBuffer,
                 VkDependencyInfo.calloc(stack).sType$Default()
                         .pImageMemoryBarriers(toPresent).pMemoryBarriers(memory));
     }

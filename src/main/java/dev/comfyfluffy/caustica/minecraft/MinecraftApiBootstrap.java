@@ -1,11 +1,11 @@
 package dev.comfyfluffy.caustica.minecraft;
 
 import dev.comfyfluffy.caustica.CausticaMod;
-import dev.comfyfluffy.caustica.CausticaOptions;
+import dev.comfyfluffy.caustica.config.CausticaOptions;
 import dev.comfyfluffy.caustica.api.CausticaExtension;
 import dev.comfyfluffy.caustica.builtin.BuiltinExtension;
 import dev.comfyfluffy.caustica.engine.session.RenderSessionHost;
-import dev.comfyfluffy.caustica.engine.session.MinecraftWorldSessionHost;
+import dev.comfyfluffy.caustica.minecraft.adapter.session.MinecraftWorldSessionHost;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftExtension;
 import dev.comfyfluffy.caustica.platform.CausticaPlatform;
 import dev.comfyfluffy.caustica.rt.RtRuntime;

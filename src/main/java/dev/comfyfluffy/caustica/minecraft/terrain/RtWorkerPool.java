@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.terrain;
 
-import dev.comfyfluffy.caustica.CausticaConfig;
+import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 
 import java.util.concurrent.LinkedBlockingQueue;

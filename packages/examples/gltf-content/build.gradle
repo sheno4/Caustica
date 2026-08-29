@@ -1,0 +1,84 @@
+import dev.comfyfluffy.caustica.slangtooling.CompileSlangShaders
+
+plugins {
+    id "java-library"
+    id "dev.comfyfluffy.caustica.slang-tooling"
+}
+
+version = rootProject.version
+group = rootProject.group
+java.toolchain.languageVersion = JavaLanguageVersion.of(25)
+
+base {
+    archivesName = "caustica-gltf-content"
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    api project(":packages:api")
+    implementation "com.google.code.gson:gson:2.14.0"
+
+    testImplementation platform("org.junit:junit-bom:5.12.2")
+    testImplementation "org.junit.jupiter:junit-jupiter"
+    testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+}
+
+def validateContentShaders = tasks.register("validateContentShaders", CompileSlangShaders) {
+    sourceDirectory = layout.projectDirectory.dir("src/shaderValidation")
+    includeDirectories.from(layout.projectDirectory.dir("src/main/resources"),
+            rootProject.layout.projectDirectory.dir("packages/shader-api/src/main/resources"))
+    aliasSourceDirectory = layout.projectDirectory.dir("src/shaderValidation")
+    sourcePatterns = ["**/*.comp.slang"]
+    outputDirectory = layout.buildDirectory.dir("validated-shaders")
+}
+
+def checkContentBoundary = tasks.register("checkContentBoundary") {
+    group = "verification"
+    description = "Rejects Minecraft and renderer implementation dependencies from reusable glTF content."
+    inputs.files(sourceSets.main.allJava)
+    doLast {
+        def violations = []
+        sourceSets.main.allJava.files.sort().each { source ->
+            source.eachLine { line, number ->
+                if (line =~ /(?:net\.minecraft|dev\.comfyfluffy\.caustica\.minecraft)(?:\.|;)/) {
+                    violations.add("${project.relativePath(source)}:${number}: ${line.trim()}")
+                }
+                def implementationReference = line =~ /dev\.comfyfluffy\.caustica\.(?!api(?:\.|;)|example\.gltfcontent(?:\.|;))/
+                if (implementationReference.find()) {
+                    violations.add("${project.relativePath(source)}:${number}: ${line.trim()}")
+                }
+            }
+        }
+        if (!violations.empty) {
+            throw new GradleException("Reusable glTF content crossed its API boundary:\n"
+                    + violations.join("\n"))
+        }
+    }
+}
+
+tasks.named("test", Test) {
+    useJUnitPlatform()
+}
+
+tasks.named("check") {
+    dependsOn(checkContentBoundary, validateContentShaders)
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.release = 25
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_25
+    targetCompatibility = JavaVersion.VERSION_25
+    withSourcesJar()
+}
+
+tasks.named("jar", Jar).configure {
+    from(rootProject.files("LICENSE.md", "COPYING", "COPYING.LESSER", "THIRD_PARTY_NOTICES.md")) {
+        into "META-INF"
+    }
+}

@@ -5,9 +5,9 @@ Fabric or NeoForge discovery. It tests whether one API consumer can express the 
 categories without importing renderer implementation packages.
 
 It cannot run against the repository today: the 0.8 session, scene, program, pass, geometry, and light
-channels have contracts and unit tests in `packages/api`, but the Minecraft host and renderer do not yet implement
-or publish those channels. The existing `extensions/gltf-viewer` still consumes the removed registry and
-provider API.
+channels have contracts and unit tests in `packages/api`, but this probe deliberately has no loader entrypoint.
+The runnable example is split into reusable content at `packages/examples/gltf-content` and Minecraft lifecycle
+integration at `packages/examples/gltf-viewer-minecraft`.
 
 ## Use-case matrix
 

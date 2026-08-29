@@ -9,7 +9,7 @@ import dev.comfyfluffy.caustica.api.gpu.VulkanDeviceAddressRange;
 import dev.comfyfluffy.caustica.api.program.ShaderDataType;
 import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
-import dev.comfyfluffy.caustica.minecraft.MinecraftProvidersExtension;
+import dev.comfyfluffy.caustica.minecraft.program.MinecraftProgramTypes;
 import dev.comfyfluffy.caustica.minecraft.gen.MinecraftPrimitiveData;
 import dev.comfyfluffy.caustica.settings.ResourceId;
 import org.junit.jupiter.api.Test;
@@ -88,6 +88,7 @@ final class MinecraftTerrainGeometryTest {
         primitive[4] = 0.25f;
         primitive[5] = 0.5f;
         primitive[6] = 1f;
+        primitive[8] = 19f;
 
         MinecraftVulkanTerrainUploader.writePrimitiveRecords(bytes, 1,
                 new float[]{0, 0, 1, 0, 0, 1}, primitive);
@@ -97,6 +98,7 @@ final class MinecraftTerrainGeometryTest {
         assertEquals(0.25f, bytes.getFloat(80));
         assertEquals(0.5f, bytes.getFloat(84));
         assertEquals(1f, bytes.getFloat(88));
+        assertEquals(19, bytes.getInt(92));
         assertEquals(0.75f, bytes.getFloat(104));
         assertEquals(2L * MinecraftPrimitiveData.BYTE_SIZE,
                 MinecraftVulkanTerrainUploader.primitiveRecordOffset(6));
@@ -124,7 +126,7 @@ final class MinecraftTerrainGeometryTest {
     }
 
     private static MinecraftTerrainMesh.MaterialBinding material() {
-        return new MinecraftTerrainMesh.MaterialBinding(ResourceId.of("minecraft", "stone"),
+        return new MinecraftTerrainMesh.MaterialBinding(7, ResourceId.of("minecraft", "stone"),
                 ResourceId.of("minecraft", "textures/atlas/blocks.png"));
     }
 
@@ -134,22 +136,22 @@ final class MinecraftTerrainGeometryTest {
 
         private Uploaded(long address) { this.address = address; }
 
-        @Override public MeshBuild<MinecraftProvidersExtension.InstanceData> build() {
+        @Override public MeshBuild<MinecraftProgramTypes.InstanceData> build() {
             var positions = new MeshBuild.Stream(
                     new VulkanDeviceAddressRange(new VulkanDeviceAddress(address), 36), 12);
             var indices = new MeshBuild.Stream(
                     new VulkanDeviceAddressRange(new VulkanDeviceAddress(address + 0x100), 12), 4);
             var surface = new MeshBuild.SurfaceSlot<>(new dev.comfyfluffy.caustica.api.program.SurfaceId<
-                    MinecraftProvidersExtension.PrimitiveData, MinecraftProvidersExtension.InstanceData>() { },
-                    MinecraftProvidersExtension.PRIMITIVE_DATA.data(address + 0x200),
+                    MinecraftProgramTypes.PrimitiveData, MinecraftProgramTypes.InstanceData>() { },
+                    MinecraftProgramTypes.PRIMITIVE_DATA.data(address + 0x200),
                     new MeshBuild.CoveragePolicy.Opaque());
             return new MeshBuild<>(positions, null, indices, 3, new MeshBuild.IndexRevision(3),
                     List.of(new MeshBuild.Geometry<>(surface, null, 0, 3)));
         }
 
         @Override public dev.comfyfluffy.caustica.api.program.ShaderData<
-                MinecraftProvidersExtension.InstanceData> instanceData() {
-            return MinecraftProvidersExtension.INSTANCE_DATA.data(address + 0x300);
+                MinecraftProgramTypes.InstanceData> instanceData() {
+            return MinecraftProgramTypes.INSTANCE_DATA.data(address + 0x300);
         }
 
         @Override public void close() { closed = true; }

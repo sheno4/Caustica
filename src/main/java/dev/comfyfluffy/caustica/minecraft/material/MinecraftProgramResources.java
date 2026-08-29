@@ -4,9 +4,14 @@ import dev.comfyfluffy.caustica.api.gpu.GpuDescriptorIndex;
 import dev.comfyfluffy.caustica.api.gpu.GpuDescriptorRange;
 import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
 import dev.comfyfluffy.caustica.api.program.ShaderData;
-import dev.comfyfluffy.caustica.minecraft.MinecraftProvidersExtension;
+import dev.comfyfluffy.caustica.api.pass.Pass;
+import dev.comfyfluffy.caustica.api.pass.PassFrame;
+import dev.comfyfluffy.caustica.minecraft.api.ResourcePackEpoch;
 import dev.comfyfluffy.caustica.minecraft.gen.MinecraftImplementationData;
+import dev.comfyfluffy.caustica.minecraft.gen.MinecraftInstanceData;
 import dev.comfyfluffy.caustica.minecraft.gen.MinecraftMaterialData;
+import dev.comfyfluffy.caustica.minecraft.gen.MinecraftPrimitiveData;
+import dev.comfyfluffy.caustica.minecraft.program.MinecraftProgramTypes;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
@@ -24,6 +29,7 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.LongBuffer;
 import java.util.List;
+import java.util.function.Consumer;
 
 import static org.lwjgl.util.vma.Vma.vmaCreateBuffer;
 import static org.lwjgl.vulkan.VK10.*;
@@ -57,13 +63,32 @@ public final class MinecraftProgramResources implements AutoCloseable {
         }
     }
 
+    /** Compiles the currently loaded Minecraft models and resources into one immutable CPU epoch. */
+    public static MinecraftMaterialLookup compileCurrent(ResourcePackEpoch epoch,
+                                                         List<MinecraftMaterialRule> rules) {
+        List<MinecraftMaterialRule> immutableRules = List.copyOf(rules);
+        List<MaterialTextureResource> catalog = MinecraftMaterialCatalogBuilder.build(immutableRules);
+        MinecraftMaterialPageCompiler.Result pages = MinecraftMaterialPageCompiler.compile(catalog);
+        return MinecraftMaterialLookup.compile(epoch, immutableRules, catalog, pages);
+    }
+
+    /**
+     * Creates a one-shot world-resource pass. Its callback receives matching CPU and GPU epoch roots after
+     * every texture upload command has been recorded.
+     */
+    public synchronized Pass<PassFrame> createUploadPass(MinecraftMaterialLookup lookup,
+                                                         Consumer<PublishedEpoch> published) {
+        requireOpen();
+        return new MinecraftMaterialUploadPass(gpu, this, lookup, published);
+    }
+
     /**
      * Takes ownership of an uploaded image lease for every CPU texture and creates one immutable program
      * epoch. The caller publishes {@link Epoch#implementationData()} with the matching geometry IDs and
      * gives {@link Epoch#retirement()} to that atomic program registration's retirement path.
      */
-    public synchronized Epoch createEpoch(MinecraftMaterialLookup lookup,
-                                          List<? extends UploadedImage> images) {
+    synchronized Epoch createEpoch(MinecraftMaterialLookup lookup,
+                                   List<? extends UploadedImage> images) {
         requireOpen();
         java.util.Objects.requireNonNull(lookup, "lookup");
         List<UploadedImage> ownedImages = List.copyOf(images);
@@ -97,6 +122,9 @@ public final class MinecraftProgramResources implements AutoCloseable {
     private Epoch createEpoch(List<MinecraftMaterialRecord> records, List<UploadedImage> images) {
         GpuDescriptorRange<GpuDescriptorIndex.Resource> descriptors = null;
         Buffer materialTable = null;
+        Buffer implementation = null;
+        Buffer primitive = null;
+        Buffer instance = null;
         try {
             if (!images.isEmpty()) {
                 descriptors = gpu.descriptorHeap().allocateResources(images.size(), "Minecraft material textures");
@@ -114,11 +142,23 @@ public final class MinecraftProgramResources implements AutoCloseable {
                 }
             });
             Buffer table = materialTable;
-            Buffer implementation = create(MinecraftImplementationData.BYTE_SIZE,
+            implementation = create(MinecraftImplementationData.BYTE_SIZE,
                     bytes -> new MinecraftImplementationData(table.address,
                             new MinecraftImplementationData.SamplerIndex(sampler.firstIndex().value()), 0).write(bytes));
-            return new Epoch(descriptors, materialTable, implementation, images);
+            primitive = create(MinecraftPrimitiveData.BYTE_SIZE, bytes -> new MinecraftPrimitiveData(
+                    new MinecraftPrimitiveData.Float2[0], new MinecraftPrimitiveData.Float4[0],
+                    new MinecraftPrimitiveData.Float3(1.0f, 1.0f, 1.0f), 0,
+                    new MinecraftPrimitiveData.SampledTexture2DIndex(0), 0, 0.0f,
+                    new MinecraftPrimitiveData.Float3(1.0f, 0.0f, 0.0f),
+                    new MinecraftPrimitiveData.Float3(0.0f, 0.0f, 1.0f)).write(bytes));
+            instance = create(MinecraftInstanceData.BYTE_SIZE, bytes -> new MinecraftInstanceData(
+                    new MinecraftInstanceData.Float3(1.0f, 1.0f, 1.0f), 0,
+                    new MinecraftInstanceData.SampledTexture2DIndex(0), 0.0f).write(bytes));
+            return new Epoch(descriptors, materialTable, implementation, primitive, instance, images);
         } catch (RuntimeException | Error failure) {
+            if (instance != null) instance.destroy();
+            if (primitive != null) primitive.destroy();
+            if (implementation != null) implementation.destroy();
             if (materialTable != null) materialTable.destroy();
             if (descriptors != null) descriptors.destroy();
             throw failure;
@@ -161,7 +201,7 @@ public final class MinecraftProgramResources implements AutoCloseable {
     }
 
     private static void requireTexture(int ordinal, int textureCount) {
-        if (ordinal >= textureCount) {
+        if (ordinal < 0 || ordinal >= textureCount) {
             throw new IllegalArgumentException("material texture ordinal exceeds the uploaded image batch");
         }
     }
@@ -218,24 +258,45 @@ public final class MinecraftProgramResources implements AutoCloseable {
         @Override void close();
     }
 
+    /** CPU lookup and shader roots that must be activated as one resource-pack epoch. */
+    public record PublishedEpoch(MinecraftMaterialLookup lookup, Epoch gpu) {
+        public PublishedEpoch {
+            java.util.Objects.requireNonNull(lookup, "lookup");
+            java.util.Objects.requireNonNull(gpu, "gpu");
+        }
+    }
+
     /** Immutable root and all resource-pack GPU resources captured by one program registration. */
     public final class Epoch implements AutoCloseable {
         private final GpuDescriptorRange<GpuDescriptorIndex.Resource> descriptors;
         private final Buffer materialTable;
         private final Buffer implementation;
+        private final Buffer primitive;
+        private final Buffer instance;
         private final List<UploadedImage> images;
         private final Runnable retirement = this::retire;
         private boolean closed;
         private Epoch(GpuDescriptorRange<GpuDescriptorIndex.Resource> descriptors,
-                      Buffer materialTable, Buffer implementation, List<UploadedImage> images) {
+                      Buffer materialTable, Buffer implementation, Buffer primitive, Buffer instance,
+                      List<UploadedImage> images) {
             this.descriptors = descriptors;
             this.materialTable = materialTable;
             this.implementation = implementation;
+            this.primitive = primitive;
+            this.instance = instance;
             this.images = images;
         }
-        public ShaderData<MinecraftProvidersExtension.ImplementationData> implementationData() {
+        public ShaderData<MinecraftProgramTypes.ImplementationData> implementationData() {
             if (closed) throw new IllegalStateException("Minecraft material epoch is retired");
-            return MinecraftProvidersExtension.IMPLEMENTATION_DATA.data(implementation.address);
+            return MinecraftProgramTypes.IMPLEMENTATION_DATA.data(implementation.address);
+        }
+        public ShaderData<MinecraftProgramTypes.PrimitiveData> fallbackBindingData() {
+            if (closed) throw new IllegalStateException("Minecraft material epoch is retired");
+            return MinecraftProgramTypes.PRIMITIVE_DATA.data(primitive.address);
+        }
+        public ShaderData<MinecraftProgramTypes.InstanceData> fallbackInstanceData() {
+            if (closed) throw new IllegalStateException("Minecraft material epoch is retired");
+            return MinecraftProgramTypes.INSTANCE_DATA.data(instance.address);
         }
         public Runnable retirement() { return retirement; }
         @Override public void close() {
@@ -253,11 +314,15 @@ public final class MinecraftProgramResources implements AutoCloseable {
         private synchronized Throwable release() {
             if (closed) return null;
             closed = true;
-            Throwable failure = release(null, implementation::destroy);
-            failure = release(failure, materialTable::destroy);
-            if (descriptors != null) failure = release(failure, descriptors::destroy);
+            Throwable failure = MinecraftProgramResources.release(null, implementation::destroy);
+            failure = MinecraftProgramResources.release(failure, primitive::destroy);
+            failure = MinecraftProgramResources.release(failure, instance::destroy);
+            failure = MinecraftProgramResources.release(failure, materialTable::destroy);
+            if (descriptors != null) failure = MinecraftProgramResources.release(failure, descriptors::destroy);
             try {
-                for (UploadedImage image : images) failure = release(failure, image::close);
+                for (UploadedImage image : images) {
+                    failure = MinecraftProgramResources.release(failure, image::close);
+                }
             } finally {
                 synchronized (MinecraftProgramResources.this) {
                     liveEpochs--;

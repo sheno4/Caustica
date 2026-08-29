@@ -5,7 +5,8 @@ import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
 import dev.comfyfluffy.caustica.api.gpu.VulkanDeviceAddress;
 import dev.comfyfluffy.caustica.api.gpu.VulkanDeviceAddressRange;
 import dev.comfyfluffy.caustica.api.program.ShaderData;
-import dev.comfyfluffy.caustica.minecraft.MinecraftProvidersExtension;
+import dev.comfyfluffy.caustica.minecraft.program.MinecraftPrograms;
+import dev.comfyfluffy.caustica.minecraft.program.MinecraftProgramTypes;
 import dev.comfyfluffy.caustica.minecraft.gen.MinecraftInstanceData;
 import dev.comfyfluffy.caustica.minecraft.gen.MinecraftPrimitiveData;
 import org.lwjgl.PointerBuffer;
@@ -34,9 +35,9 @@ import static org.lwjgl.vulkan.VK12.vkGetBufferDeviceAddress;
 /** Host-mapped VMA upload owner for retained Minecraft terrain buffers. */
 public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUploader {
     private final GpuDevice gpu;
-    private final MinecraftProvidersExtension.Programs programs;
+    private final MinecraftPrograms programs;
 
-    public MinecraftVulkanTerrainUploader(GpuDevice gpu, MinecraftProvidersExtension.Programs programs) {
+    public MinecraftVulkanTerrainUploader(GpuDevice gpu, MinecraftPrograms programs) {
         this.gpu = java.util.Objects.requireNonNull(gpu, "gpu");
         this.programs = java.util.Objects.requireNonNull(programs, "programs");
     }
@@ -83,13 +84,13 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
         return Math.multiplyExact((long) firstIndex / 3L, MinecraftPrimitiveData.BYTE_SIZE);
     }
 
-    private UploadedSection uploaded(MinecraftTerrainMesh source, MinecraftProvidersExtension.Programs programs,
+    private UploadedSection uploaded(MinecraftTerrainMesh source, MinecraftPrograms programs,
                                      Buffer positions, Buffer indices, Buffer primitive, Buffer instance) {
-        List<MeshBuild.Geometry<MinecraftProvidersExtension.InstanceData>> geometries = new ArrayList<>();
+        List<MeshBuild.Geometry<MinecraftProgramTypes.InstanceData>> geometries = new ArrayList<>();
         for (MinecraftTerrainMesh.Geometry geometry : source.geometries()) {
             long primitiveOffset = primitiveRecordOffset(geometry.firstIndex());
-            ShaderData<MinecraftProvidersExtension.PrimitiveData> binding =
-                    MinecraftProvidersExtension.PRIMITIVE_DATA.data(primitive.addressAt(primitiveOffset));
+            ShaderData<MinecraftProgramTypes.PrimitiveData> binding =
+                    MinecraftProgramTypes.PRIMITIVE_DATA.data(primitive.addressAt(primitiveOffset));
             var policy = geometry.coverage() == MinecraftTerrainMesh.Coverage.OPAQUE
                     ? (MeshBuild.CoveragePolicy) new MeshBuild.CoveragePolicy.Opaque()
                     : new MeshBuild.CoveragePolicy.Cutout(geometry.alphaCutoff(), geometry.opacityMicromap() == null
@@ -104,10 +105,10 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
                     ? new MeshBuild.VolumeSlot<>(programs.waterVolume(), binding) : null;
             geometries.add(new MeshBuild.Geometry<>(surface, volume, geometry.firstIndex(), geometry.indexCount()));
         }
-        MeshBuild<MinecraftProvidersExtension.InstanceData> build = new MeshBuild<>(positions.stream(12), null,
+        MeshBuild<MinecraftProgramTypes.InstanceData> build = new MeshBuild<>(positions.stream(12), null,
                 indices.stream(4), source.vertexCount(), new MeshBuild.IndexRevision(source.indexRevision()), geometries);
-        ShaderData<MinecraftProvidersExtension.InstanceData> instanceData =
-                MinecraftProvidersExtension.INSTANCE_DATA.data(instance.address);
+        ShaderData<MinecraftProgramTypes.InstanceData> instanceData =
+                MinecraftProgramTypes.INSTANCE_DATA.data(instance.address);
         return new Uploaded(build, instanceData, positions, indices, primitive, instance);
     }
 
@@ -122,7 +123,8 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
             var white = new MinecraftPrimitiveData.Float4(1f, 1f, 1f, 1f);
             var record = new MinecraftPrimitiveData(uvValues, new MinecraftPrimitiveData.Float4[]{white, white, white},
                     new MinecraftPrimitiveData.Float3(primitive[data + 4], primitive[data + 5], primitive[data + 6]),
-                    0, new MinecraftPrimitiveData.SampledTexture2DIndex(0), 0, primitive[data + 3],
+                    (int) primitive[data + 8], new MinecraftPrimitiveData.SampledTexture2DIndex(0), 0,
+                    primitive[data + 3],
                     new MinecraftPrimitiveData.Float3(0f, 0f, 0f),
                     new MinecraftPrimitiveData.Float3(0f, 0f, 0f));
             record.write(bytes.slice(triangle * MinecraftPrimitiveData.BYTE_SIZE,
@@ -164,8 +166,8 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
         }
     }
 
-    private record Uploaded(MeshBuild<MinecraftProvidersExtension.InstanceData> build,
-                            ShaderData<MinecraftProvidersExtension.InstanceData> instanceData,
+    private record Uploaded(MeshBuild<MinecraftProgramTypes.InstanceData> build,
+                            ShaderData<MinecraftProgramTypes.InstanceData> instanceData,
                             Buffer positions, Buffer indices, Buffer primitive, Buffer instance)
             implements UploadedSection {
         @Override public void close() {

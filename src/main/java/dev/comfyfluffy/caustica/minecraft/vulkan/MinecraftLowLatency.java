@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.vulkan;
 
-import dev.comfyfluffy.caustica.CausticaConfig;
+import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.rt.RtRuntime;
 import dev.comfyfluffy.caustica.spi.vulkan.VulkanDeviceCapabilities;

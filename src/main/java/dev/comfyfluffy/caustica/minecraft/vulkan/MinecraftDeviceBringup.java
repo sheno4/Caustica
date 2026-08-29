@@ -4,7 +4,7 @@ import com.mojang.blaze3d.vulkan.VulkanBackend;
 import com.mojang.blaze3d.vulkan.VulkanPhysicalDevice;
 import com.mojang.blaze3d.vulkan.init.VulkanFeature;
 import com.mojang.blaze3d.vulkan.init.VulkanPNextStruct;
-import dev.comfyfluffy.caustica.CausticaConfig;
+import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.rt.GpuRasterCapabilities;
 import dev.comfyfluffy.caustica.engine.vulkan.VulkanProfileSupport;
@@ -21,6 +21,7 @@ import org.lwjgl.vulkan.VkDeviceCreateInfo;
 import org.lwjgl.vulkan.VkPhysicalDeviceAccelerationStructureFeaturesKHR;
 import org.lwjgl.vulkan.VkPhysicalDeviceFeatures;
 import org.lwjgl.vulkan.VkPhysicalDeviceFeatures2;
+import org.lwjgl.vulkan.VkPhysicalDevice;
 import org.lwjgl.vulkan.VkPhysicalDeviceDescriptorHeapFeaturesEXT;
 import org.lwjgl.vulkan.VkPhysicalDeviceDynamicRenderingFeatures;
 import org.lwjgl.vulkan.VkPhysicalDeviceOpacityMicromapFeaturesEXT;
@@ -211,8 +212,8 @@ public final class MinecraftDeviceBringup {
         return requestedInstanceApiVersion;
     }
 
-    private static synchronized Negotiation negotiation(long physicalDevice) {
-        return NEGOTIATIONS.computeIfAbsent(physicalDevice, ignored -> new Negotiation());
+    private static synchronized Negotiation negotiation(VkPhysicalDevice physicalDevice) {
+        return NEGOTIATIONS.computeIfAbsent(physicalDevice.address(), ignored -> new Negotiation());
     }
 
     public static void addExtensions(Collection<String> extensions, VulkanPhysicalDevice device) {
@@ -231,7 +232,7 @@ public final class MinecraftDeviceBringup {
 
     private static void addHdrExtension(Collection<String> extensions, VulkanPhysicalDevice device) {
         boolean supported = device.hasDeviceExtension(EXTHdrMetadata.VK_EXT_HDR_METADATA_EXTENSION_NAME);
-        negotiation(device.vkPhysicalDevice().address()).hdrMetadata = supported;
+        negotiation(device.vkPhysicalDevice()).hdrMetadata = supported;
         if (supported) {
             addOnce(extensions, EXTHdrMetadata.VK_EXT_HDR_METADATA_EXTENSION_NAME);
             CausticaMod.LOGGER.info("HDR: enabling {} for PQ swapchain mastering metadata",
@@ -244,7 +245,7 @@ public final class MinecraftDeviceBringup {
 
     @SuppressWarnings("unchecked")
     public static void addFeatures(Args args, VulkanPhysicalDevice device) {
-        Negotiation negotiation = negotiation(device.vkPhysicalDevice().address());
+        Negotiation negotiation = negotiation(device.vkPhysicalDevice());
         negotiation.capabilities = VulkanDeviceCapabilities.unavailable();
         Support support = querySupport(device);
         requireProfile(support.profile());
@@ -274,14 +275,14 @@ public final class MinecraftDeviceBringup {
 
     public static void reserveComputeQueue(VkDeviceCreateInfo createInfo, VulkanPhysicalDevice device,
                                            MemoryStack stack) {
-        Negotiation negotiation = negotiation(device.vkPhysicalDevice().address());
+        Negotiation negotiation = negotiation(device.vkPhysicalDevice());
         negotiation.computeQueue = reserveComputeQueue(createInfo, device.vkPhysicalDevice(), stack,
                 negotiation.capabilities.rayTracing());
     }
 
     /** Validates negotiated entry points and captures device limits before the backend is published. */
     public static synchronized void probe(VkDevice device) {
-        Negotiation negotiation = negotiation(device.getPhysicalDevice().address());
+        Negotiation negotiation = negotiation(device.getPhysicalDevice());
         VulkanDeviceCapabilities old = negotiation.capabilities;
         if (!old.rayTracing()) return;
         VKCapabilitiesDevice entryPoints = device.getCapabilities();

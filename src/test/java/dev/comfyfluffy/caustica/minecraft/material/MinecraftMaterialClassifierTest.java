@@ -54,9 +54,9 @@ final class MinecraftMaterialClassifierTest {
     }
 
     @Test
-    void dielectricOrderingRemainsPhysical() {
+    void dielectricDefaultsKeepIceBelowWater() {
         assertTrue(MinecraftMaterialClassifier.ICE_IOR < MinecraftMaterialClassifier.WATER_IOR);
-        assertTrue(MinecraftMaterialClassifier.WATER_IOR
-                < OpenPbrDefaults.TRANSMISSIVE_SPECULAR_IOR);
+        assertEquals(MinecraftMaterialClassifier.WATER_IOR,
+                OpenPbrDefaults.TRANSMISSIVE_SPECULAR_IOR, 1.0e-6f);
     }
 }

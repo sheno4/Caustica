@@ -10,7 +10,7 @@ import dev.comfyfluffy.caustica.api.gpu.VulkanDeviceAddressRange;
 import dev.comfyfluffy.caustica.api.program.SurfaceId;
 import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
-import dev.comfyfluffy.caustica.minecraft.MinecraftProvidersExtension;
+import dev.comfyfluffy.caustica.minecraft.program.MinecraftProgramTypes;
 import dev.comfyfluffy.caustica.settings.ResourceId;
 import org.junit.jupiter.api.Test;
 
@@ -133,22 +133,22 @@ final class MinecraftEntityGeometryTest {
 
         Uploaded(long address) { this.address = address; }
 
-        @Override public MeshBuild<MinecraftProvidersExtension.InstanceData> build() {
+        @Override public MeshBuild<MinecraftProgramTypes.InstanceData> build() {
             var positions = new MeshBuild.Stream(
                     new VulkanDeviceAddressRange(new VulkanDeviceAddress(address), 36), 12);
             var indices = new MeshBuild.Stream(
                     new VulkanDeviceAddressRange(new VulkanDeviceAddress(address + 0x100), 12), 4);
             var surface = new MeshBuild.SurfaceSlot<>(new SurfaceId<
-                    MinecraftProvidersExtension.PrimitiveData, MinecraftProvidersExtension.InstanceData>() { },
-                    MinecraftProvidersExtension.PRIMITIVE_DATA.data(address + 0x200),
+                    MinecraftProgramTypes.PrimitiveData, MinecraftProgramTypes.InstanceData>() { },
+                    MinecraftProgramTypes.PRIMITIVE_DATA.data(address + 0x200),
                     new MeshBuild.CoveragePolicy.Opaque());
             return new MeshBuild<>(positions, null, indices, 3, new MeshBuild.IndexRevision(17),
                     List.of(new MeshBuild.Geometry<>(surface, null, 0, 3)));
         }
 
         @Override public dev.comfyfluffy.caustica.api.program.ShaderData<
-                MinecraftProvidersExtension.InstanceData> instanceData() {
-            return MinecraftProvidersExtension.INSTANCE_DATA.data(address + 0x300);
+                MinecraftProgramTypes.InstanceData> instanceData() {
+            return MinecraftProgramTypes.INSTANCE_DATA.data(address + 0x300);
         }
 
         @Override public void close() { closed = true; }

@@ -62,10 +62,12 @@ public float3 transformNormal(NormalTransform transform, float3 normal) {
 public struct VolumeProperties {
     /**
      * Finite, non-negative Beer-Lambert absorption coefficient per scene unit. Vacuum is zero. This is
-     * the only public transport property because the current engine supports homogeneous absorption but
-     * not participating scattering; scattering and phase data require a future transport ABI.
+     * The current engine supports homogeneous absorption but not participating scattering; scattering
+     * and phase data require a future transport ABI.
      */
     public float3 absorptionCoefficient = float3(0.0);
+    /** Physical index of refraction for boundary reflection and transmission. Vacuum and air are 1. */
+    public float indexOfRefraction = 1.0;
 };
 
 /**

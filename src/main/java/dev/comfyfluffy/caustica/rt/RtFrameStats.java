@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.rt;
 
-import dev.comfyfluffy.caustica.CausticaConfig;
+import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.rt.RtTelemetry.Frame;
 import dev.comfyfluffy.caustica.rt.RtTelemetry.MetricSchema;

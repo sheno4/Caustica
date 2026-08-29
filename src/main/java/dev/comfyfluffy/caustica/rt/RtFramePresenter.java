@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.rt;
 
-import dev.comfyfluffy.caustica.CausticaConfig;
+import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.api.gpu.GpuImage;
 import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg;
@@ -14,10 +14,9 @@ import org.lwjgl.vulkan.VkQueue;
 final class RtFramePresenter {
     private final GeneratedFrameQueue generatedFrames = new GeneratedFrameQueue();
     private final FrameGeneration frameGeneration = new FrameGeneration();
-    private final PresentationSampler presentationSampler = new PresentationSampler();
     private final HdrPresentation hdrPresentation =
-            new HdrPresentation(presentationSampler, frameGeneration);
-    private final SdrPqPresentation sdrPqPresentation = new SdrPqPresentation(presentationSampler);
+            new HdrPresentation(frameGeneration);
+    private final SdrPqPresentation sdrPqPresentation = new SdrPqPresentation();
     private RenderedFrame renderedFrame;
 
     record RenderedFrame(GpuImage hdrDisplayImage, GpuImage motion, GpuImage depth,
@@ -79,7 +78,6 @@ final class RtFramePresenter {
         frameGeneration.destroy();
         hdrPresentation.destroy();
         sdrPqPresentation.destroy();
-        presentationSampler.destroy();
     }
 
     public boolean isHdrPresentActive() {
@@ -113,10 +111,10 @@ final class RtFramePresenter {
     }
 
     public boolean presentSdrToPq(GraphicsSubmission submission, long swapchainImage,
-            int swapWidth, int swapHeight, long sdrMainView,
+            int swapWidth, int swapHeight, GpuImage source,
             long acquireSemaphore, long presentSemaphore) {
         return sdrPqPresentation.present(submission, swapchainImage, swapWidth, swapHeight,
-                sdrMainView, acquireSemaphore, presentSemaphore);
+                source, acquireSemaphore, presentSemaphore);
     }
 
     public void captureHudless(long sourceImage, int width, int height, UiPresentationResources ui) {

@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.client.screen;
 
-import dev.comfyfluffy.caustica.CausticaOptions;
+import dev.comfyfluffy.caustica.config.CausticaOptions;
 import dev.comfyfluffy.caustica.client.screen.widget.CausticaGroupHeader;
 import dev.comfyfluffy.caustica.client.screen.widget.CausticaDropdown;
 import dev.comfyfluffy.caustica.client.screen.widget.CausticaNavItem;

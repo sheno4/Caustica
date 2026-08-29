@@ -1,8 +1,9 @@
 package dev.comfyfluffy.caustica.minecraft.terrain;
 
-import dev.comfyfluffy.caustica.api.ColorSpaces;
-import dev.comfyfluffy.caustica.minecraft.api.MinecraftEmissionFootprint;
-import dev.comfyfluffy.caustica.minecraft.api.MinecraftMaterialEmission;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftEmissionFootprint;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftEmissionFootprintFixtures;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialEmission;
+import dev.comfyfluffy.caustica.support.ColorSpaces;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import org.junit.jupiter.api.Test;
@@ -49,7 +50,7 @@ final class RtLightCollectorTest {
     }
 
     @Test
-    void sparseAndLowLuminanceCandidatesStayOutsideTheProviderSnapshot() {
+    void sparseAndLowLuminanceCandidatesStayOutsideRetainedPublication() {
         float[] sparse = {
                 0, 0, 0,
                 1, 0, 1,
@@ -98,7 +99,7 @@ final class RtLightCollectorTest {
         return new MinecraftMaterialEmission(luminance, primitiveGated, footprint);
     }
 
-    private static TestFootprint footprint(int resolution, float weight, float color) {
+    private static MinecraftEmissionFootprint footprint(int resolution, float weight, float color) {
         float[] weights = new float[resolution * resolution];
         float[] colors = new float[resolution * resolution];
         java.util.Arrays.fill(weights, weight);
@@ -106,23 +107,11 @@ final class RtLightCollectorTest {
         return footprint(resolution, weights, colors);
     }
 
-    private static TestFootprint footprint(int resolution, float[] weights, float[] colors) {
-        return new TestFootprint(resolution, weights, colors);
+    private static MinecraftEmissionFootprint footprint(int resolution, float[] weights, float[] colors) {
+        return MinecraftEmissionFootprintFixtures.footprint(resolution, weights, colors);
     }
 
     private record Result(FloatArrayList lights) {
     }
 
-    private record TestFootprint(int resolution, float[] weights, float[] colors)
-            implements MinecraftEmissionFootprint {
-        @Override
-        public int sampleIndex(float coordinate) {
-            return Math.max(0, Math.min(resolution - 1, (int) (coordinate * resolution)));
-        }
-
-        @Override public float r(int x, int y) { return colors[y * resolution + x]; }
-        @Override public float g(int x, int y) { return colors[y * resolution + x]; }
-        @Override public float b(int x, int y) { return colors[y * resolution + x]; }
-        @Override public float weight(int x, int y) { return weights[y * resolution + x]; }
-    }
 }

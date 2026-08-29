@@ -65,7 +65,8 @@ final class FrameGeneration {
         submission.execute(commandBuffer);
     }
 
-    void captureHdrHudless(VkCommandBuffer commandBuffer, MemoryStack stack, GpuImage source) {
+    void captureHdrHudless(VkCommandBuffer commandBuffer, MemoryStack stack,
+                           dev.comfyfluffy.caustica.api.gpu.GpuImage source) {
         GpuContext context = GpuContext.currentOrNull();
         if (context == null) {
             return;

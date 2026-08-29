@@ -1,14 +1,5 @@
 import world_common;
-
-struct OpacityMicromapPush {
-    uint64_t primitiveAddress;
-    uint64_t materialTableAddress;
-    uint64_t dataAddress;
-    uint64_t triangleAddress;
-    uint maskedTriangleBase;
-    uint triangleCount;
-    uint dataStride;
-};
+import opacity_micromap_common;
 
 [[vk::push_constant]] OpacityMicromapPush pc;
 

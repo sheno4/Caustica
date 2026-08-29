@@ -314,14 +314,15 @@ public final class SceneDirectory {
     }
 
     private void validateGeometry(GeometryContributionChannel channel, List<GeometryChannel.Operation> operations) {
-        Set<MeshRef> simulatedMeshes = new LinkedHashSet<>(meshes.keySet());
+        Map<MeshRef, MeshBuild<?>> simulatedMeshes = new LinkedHashMap<>();
+        meshes.forEach((mesh, value) -> simulatedMeshes.put(mesh, value.build));
         Map<InstanceRef, MeshRef> simulatedInstances = new LinkedHashMap<>();
         instances.forEach((id, value) -> simulatedInstances.put(id, value.mesh));
         for (GeometryChannel.Operation operation : operations) {
             if (operation instanceof GeometryChannel.SetMesh<?> set) {
                 MeshRef<?> mesh = requireOwnedMesh(channel, set.mesh());
                 validateBuild(mesh, set.build());
-                simulatedMeshes.add(mesh);
+                simulatedMeshes.put(mesh, set.build());
             } else if (operation instanceof GeometryChannel.DropMesh<?> drop) {
                 MeshRef<?> mesh = requireOwnedMesh(channel, drop.mesh());
                 simulatedMeshes.remove(mesh);
@@ -330,11 +331,26 @@ public final class SceneDirectory {
                 InstanceRef instance = requireOwnedInstance(channel, set.instance());
                 SceneRef scene = requireLiveScene(set.scene());
                 MeshRef<?> mesh = requireOwnedMesh(channel, set.mesh());
-                if (!simulatedMeshes.contains(mesh)) throw new IllegalArgumentException("instance names an absent mesh");
+                MeshBuild<?> build = simulatedMeshes.get(mesh);
+                if (build == null) throw new IllegalArgumentException("instance names an absent mesh");
                 mesh.instanceType.require(set.instanceData());
+                set.primitiveLights().ranges().forEach(range -> requireLightSelection(range.light()));
+                validatePrimitiveLights(build, set.primitiveLights());
                 simulatedInstances.put(instance, mesh);
             } else if (operation instanceof GeometryChannel.DropInstance drop) {
                 simulatedInstances.remove(requireOwnedInstance(channel, drop.instance()));
+            }
+        }
+    }
+
+    private static void validatePrimitiveLights(MeshBuild<?> build,
+                                                dev.comfyfluffy.caustica.api.geometry.PrimitiveLightMap map) {
+        int triangleCount = build.geometries().stream()
+                .mapToInt(geometry -> Math.addExact(geometry.firstIndex(), geometry.indexCount()) / 3)
+                .max().orElseThrow();
+        for (var range : map.ranges()) {
+            if (Math.addExact(range.firstPrimitive(), range.primitiveCount()) > triangleCount) {
+                throw new IllegalArgumentException("primitive-light range exceeds the selected mesh");
             }
         }
     }
@@ -379,7 +395,10 @@ public final class SceneDirectory {
                 instanceValues.entrySet().stream().map(entry -> new RetainedSceneSnapshot.Instance(
                         entry.getKey().identity, entry.getValue().scene, entry.getValue().mesh.identity,
                         entry.getValue().operation.transform(), entry.getValue().operation.mask(),
-                        entry.getValue().operation.instanceData())).toList(),
+                        entry.getValue().operation.instanceData(),
+                        entry.getValue().operation.primitiveLights().ranges().stream().map(range ->
+                                new RetainedSceneSnapshot.PrimitiveEmitter(range.firstPrimitive(),
+                                        range.primitiveCount(), ((LightRef) range.light()).identity)).toList())).toList(),
                 lightValues.entrySet().stream().map(entry -> new RetainedSceneSnapshot.Light(
                         entry.getKey().identity, entry.getValue().scene, entry.getValue().descriptor)).toList());
     }
@@ -427,6 +446,12 @@ public final class SceneDirectory {
     private LightRef requireOwnedLight(LightContributionChannel channel, LightId id) {
         if (!(id instanceof LightRef light) || light.directory != this || light.owner != channel)
             throw new IllegalArgumentException("light mutation id belongs to another contribution");
+        return light;
+    }
+    private LightRef requireLightSelection(LightId id) {
+        if (!(id instanceof LightRef light) || light.directory != this) {
+            throw new IllegalArgumentException("light selection belongs to another render session");
+        }
         return light;
     }
     private void requireIdentityCreation(GeometryContributionChannel channel) {

@@ -6,9 +6,10 @@ import caustica_types;
 namespace api_showcase {
 public struct AbsorbingVolume : IVolumeModel {
     public override VolumeProperties evaluateVolume(VolumeInput input) {
-        VolumeProperties volume;
+        VolumeProperties volume = {};
         volume.absorptionCoefficient = volumeAbsorptionFromTransmittance(
                 float3(0.75, 0.9, 0.98), 1.0, input.metersPerSceneUnit);
+        volume.indexOfRefraction = 1.33;
         return volume;
     }
 

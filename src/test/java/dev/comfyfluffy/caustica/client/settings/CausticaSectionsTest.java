@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.client.settings;
 
-import dev.comfyfluffy.caustica.CausticaOptions;
+import dev.comfyfluffy.caustica.config.CausticaOptions;
 import dev.comfyfluffy.caustica.settings.FeatureSettings;
 import dev.comfyfluffy.caustica.settings.Option;
 import dev.comfyfluffy.caustica.settings.ResourceId;
@@ -20,8 +20,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 final class CausticaSectionsTest {
     private static final ResourceId BUILTIN = ResourceId.of("caustica", "builtin");
     private static final ResourceId PROVIDER_ONLY = ResourceId.of("test", "provider_only");
-    private static final Option<Boolean> ENABLED = Option.bool("effect.enabled", true).asGroupHeader("effect");
-    private static final Option<Float> STRENGTH = Option.range("effect.strength", 0.5f, 0.0f, 2.0f)
+    private static final Option<Boolean> ENABLED = Option.bool("effect.enabled", true).inGroupAsHeader("effect");
+    private static final Option<Float> STRENGTH = Option.range("effect.strength", 0.0f, 2.0f, 0.5f)
             .inGroup("effect");
 
     @TempDir

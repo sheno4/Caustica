@@ -37,6 +37,10 @@ public record RetainedSceneSnapshot(long revision, List<Scene> scenes, List<Mesh
         }
     }
     public record Instance(long identity, SceneId scene, long meshIdentity,
-                           GeometryTransform transform, int mask, ShaderData<?> instanceData) { }
+                           GeometryTransform transform, int mask, ShaderData<?> instanceData,
+                           List<PrimitiveEmitter> primitiveEmitters) {
+        public Instance { primitiveEmitters = List.copyOf(primitiveEmitters); }
+    }
+    public record PrimitiveEmitter(int firstPrimitive, int primitiveCount, long lightIdentity) { }
     public record Light(long identity, SceneId scene, LightDescriptor descriptor) { }
 }

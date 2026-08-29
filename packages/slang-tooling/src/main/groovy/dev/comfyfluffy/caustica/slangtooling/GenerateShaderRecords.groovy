@@ -238,11 +238,16 @@ abstract class GenerateShaderRecords extends DefaultTask {
             ["worldPushLayoutProbe", "WorldPush", RT_GENERATED_PACKAGE, "WorldPushData", false],
             ["materialBindingLayoutProbe", "MaterialBinding", RT_GENERATED_PACKAGE, "MaterialBindingData", false],
             ["surfaceMaterialLayoutProbe", "SurfaceMaterial", RT_GENERATED_PACKAGE, "SurfaceMaterialData", false],
+            ["retainedGeometryRecordLayoutProbe", "RetainedGeometryRecord", RT_GENERATED_PACKAGE, "RetainedGeometryRecordData", false],
+            ["retainedLightRecordLayoutProbe", "RetainedLightRecord", RT_GENERATED_PACKAGE, "RetainedLightRecordData", false],
+            ["neeAtStateLayoutProbe", "NeeAtState", RT_GENERATED_PACKAGE, "NeeAtStateData", false],
+            ["packedPathSegmentLayoutProbe", "PackedPathSegment", RT_GENERATED_PACKAGE, "PackedPathSegmentData", false],
             ["exposureStateLayoutProbe", "ExposureState", RT_GENERATED_PACKAGE, "ExposureStateData", true],
             ["minecraftImplementationLayoutProbe", "MinecraftImplementationData", "dev.comfyfluffy.caustica.minecraft.gen", "MinecraftImplementationData", false],
             ["minecraftMaterialLayoutProbe", "MinecraftMaterialRecord", "dev.comfyfluffy.caustica.minecraft.gen", "MinecraftMaterialData", false],
             ["minecraftPrimitiveLayoutProbe", "MinecraftPrimitiveData", "dev.comfyfluffy.caustica.minecraft.gen", "MinecraftPrimitiveData", false],
             ["minecraftInstanceLayoutProbe", "MinecraftInstanceData", "dev.comfyfluffy.caustica.minecraft.gen", "MinecraftInstanceData", false],
+            ["minecraftEnvironmentBindingLayoutProbe", "MinecraftEnvironmentBinding", "dev.comfyfluffy.caustica.minecraft.sky.gen", "MinecraftEnvironmentBindingData", false],
     ]
 
     // (reflection parameter name, expected Slang struct name, generated Java package, generated Java class
@@ -255,8 +260,11 @@ abstract class GenerateShaderRecords extends DefaultTask {
             ["exposureResolvePushProbe", "ExposureResolvePush", RT_GENERATED_PACKAGE, "ExposureResolvePushData"],
             ["displayPushProbe", "DisplayPush", RT_GENERATED_PACKAGE, "DisplayPushData"],
             ["debugPresentPushProbe", "DebugPresentPush", RT_GENERATED_PACKAGE, "DebugPresentPushData"],
+            ["opacityMicromapPushProbe", "OpacityMicromapPush", RT_GENERATED_PACKAGE, "OpacityMicromapPushData"],
+            ["presentPushProbe", "PresentPush", RT_GENERATED_PACKAGE, "PresentPushData"],
             ["bloomPushProbe", "BloomPush", "dev.comfyfluffy.caustica.builtin.gen", "BloomPushData"],
             ["skyLutPushProbe", "SkyInputs", "dev.comfyfluffy.caustica.minecraft.sky.gen", "SkyInputsData"],
+            ["skyDispatchPushProbe", "SkyLutPush", "dev.comfyfluffy.caustica.minecraft.sky.gen", "SkyLutPushData"],
     ]
 
     // NOT private: Gradle decorates this abstract task with a generated subclass, and Groovy's

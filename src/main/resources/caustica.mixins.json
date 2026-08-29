@@ -28,6 +28,7 @@
 		"SpriteContentsAccessor",
 		"VideoSettingsScreenMixin",
 		"VulkanBackendMixin",
+		"VulkanCommandEncoderAccessor",
 		"VulkanGpuSurfaceMixin",
 		"VulkanInstanceMixin",
 		"VulkanUtilsMixin",

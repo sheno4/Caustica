@@ -1,9 +1,5 @@
 // Converts Minecraft's complete sRGB/BT.709 SDR frame to a PQ/BT.2020 image at paper white.
-import bindings;
-
-struct PresentPush {
-    float uiNits;
-};
+import presentation_common;
 [[vk::push_constant]] PresentPush pc;
 
 static const float PQ_M1 = 0.1593017578125;
@@ -36,6 +32,8 @@ static const float3x3 BT709_TO_BT2020 = float3x3(
 [shader("compute")]
 [numthreads(16, 16, 1)]
 void main(uint3 tid : SV_DispatchThreadID) {
+    [format("rgba16f")] RWTexture2D<float4> outputImage = ResourceDescriptorHeap[NonUniformResourceIndex(pc.outputImageIndex)];
+    Texture2D<float4> sourceImage = ResourceDescriptorHeap[NonUniformResourceIndex(pc.sourceImageIndex)];
     uint width, height;
     outputImage.GetDimensions(width, height);
     if (tid.x >= width || tid.y >= height) return;

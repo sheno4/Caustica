@@ -14,6 +14,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -27,6 +28,11 @@ final class WorldShaderCompilerTest {
     private static final ShaderDataType<Object> DATA = ShaderDataType.create("test-data");
     private static final ShaderDataType<Object> BINDING = ShaderDataType.create("test-binding");
     private static final ShaderDataType<Object> INSTANCE = ShaderDataType.create("test-instance");
+
+    @Test
+    void bundledWorldManifestContainsEveryTransitiveEngineImport() throws Exception {
+        assertEquals(java.util.Set.of(), WorldShaderCompiler.missingBundledWorldImports());
+    }
 
     @Test
     void assignsCategoryLocalIndicesAndBuildsImplementationDataTable(@TempDir Path cache) throws Exception {
@@ -57,7 +63,74 @@ final class WorldShaderCompilerTest {
             assertSpirv(compiler.compileClosestHit());
             assertSpirv(compiler.compileRadianceAnyHit());
             assertSpirv(compiler.compileSkyMiss());
+            assertSpirv(compiler.compilePrimary());
+            assertSpirv(compiler.compileIndirect(false));
+            assertSpirv(compiler.compileIndirect(true));
         }
+    }
+
+    @Test
+    void retainedTransportHasDistinctQueueProducerConsumersAndNonconstantGuides() throws Exception {
+        String primary = shaderSource("primary_rgen.slang");
+        String indirect = shaderSource("indirect.slang");
+        String reordered = shaderSource("indirect_ser.slang");
+        String core = shaderSource("retained_indirect.slang");
+        String closest = shaderSource("closest_hit.slang");
+        String queue = shaderSource("path_queue_types.slang");
+        String lights = shaderSource("retained_lights.slang");
+        String bake = shaderSource("nee_at_bake.slang");
+        String shadow = shaderSource("shadow_any_hit.rahit.slang");
+        String world = shaderSource("world_minimal.slang");
+        String miss = shaderSource("sky_miss.slang");
+
+        assertFalse(indirect.contains("primary_rgen"));
+        assertFalse(reordered.contains("primary_rgen"));
+        assertTrue(indirect.contains("RetainedOrdinaryTrace"));
+        assertTrue(reordered.contains("RetainedReorderedTrace"));
+        assertTrue(primary.contains("queue[pixelIndex] = packRetainedPath(emptyState, PATH_NO_NEXT)"));
+        assertTrue(primary.contains("continuation.throughput *= transmittance"));
+        assertTrue(closest.contains("queue[payload.queueRecordIndex]"));
+        assertTrue(core.contains("payload.queueRecordIndex = recordIndex"));
+        assertTrue(core.contains("payload.previousNeeProposalMode = state.proposalMode"));
+        assertTrue(core.contains("payload.currentNeeProposalMode = NEE_AT_PROPOSAL_GLOBAL"));
+        assertTrue(core.contains("bounce <= frame.maxBounces"));
+        assertTrue(core.contains("primary.xyz + indirectRadiance * frame.preExposure"));
+        assertFalse(core.contains("normalGuide"));
+        assertTrue(queue.contains("MAX_PATH_SEGMENTS = 2u"));
+
+        assertFalse(primary.contains("float4(0.0, 0.0, 1.0, 1.0)"));
+        assertTrue(primary.contains("unpackNormalOct(payload.guideNormal)"));
+        assertTrue(primary.contains("previousHitPosition"));
+        assertTrue(primary.contains("primarySpecularMotion"));
+        assertTrue(primary.contains("primary.roughness >= 0.35"));
+        assertTrue(primary.contains("secondary.pathFlags = WORLD_PATH_GUIDE"));
+        assertFalse(primary.contains("specularMotionGuide)[pixel] = motion"));
+
+        assertTrue(lights.contains("pixelIndex * 2u + 1u"));
+        assertFalse(lights.contains("asuint(RayTCurrent())"));
+        assertFalse(bake.contains("previousMotionIndex"));
+        assertFalse(bake.contains("previousDepthIndex"));
+        assertTrue(bake.contains("GroupMemoryBarrierWithGroupSync"));
+        assertTrue(bake.contains("uint2(localLights[slot], localScan[slot])"));
+        assertTrue(bake.contains("globalPowerSums[lane]"));
+        assertTrue(bake.contains("chunk += 64u"));
+        assertTrue(bake.contains("globalScanNext[lane]"));
+        assertFalse(bake.contains("if (dispatchIndex == 0u) bakeGlobal"));
+        assertTrue(bake.contains("permutedLocal = (local + jitter) % state.tileSize"));
+        assertTrue(bake.contains("bool inExtent = pixel.x < state.extentWidth"));
+        assertTrue(lights.contains("while (low < high)"));
+        assertTrue(lights.contains("neeAtLocalAvailable(state, pixel)"));
+        assertTrue(closest.contains("volumeIor = max(volume.indexOfRefraction, 1.0)"));
+        assertTrue(closest.contains("shadow.pathFlags = WORLD_PATH_SHADOW"));
+        assertTrue(closest.contains("shadow.volumeIor = currentMediumIor"));
+        assertTrue(lights.contains("isfinite(contribution)"));
+        assertTrue(shadow.contains("evaluateBoundaryLighting"));
+        assertTrue(shadow.contains("IgnoreHit()"));
+        assertTrue(world.contains("query.showEnvironmentEmitters = showEmitters"));
+        assertTrue(miss.contains("payload.previousBsdfPdf <= 0.0"));
+        assertTrue(closest.contains("abs(dot(closure.shadingNormal, light.direction))"));
+        assertTrue(closest.contains("boundaryWeight > 0.0"));
+        assertTrue(shadow.contains("surface.transmission_weight"));
     }
 
     @Test
@@ -75,5 +148,13 @@ final class WorldShaderCompilerTest {
     private static void assertSpirv(byte[] spirv) {
         assertEquals(0x07230203, ByteBuffer.wrap(spirv).order(ByteOrder.LITTLE_ENDIAN).getInt());
         assertTrue(spirv.length > 256);
+    }
+
+    private static String shaderSource(String name) throws Exception {
+        try (var input = WorldShaderCompilerTest.class.getResourceAsStream(
+                "/caustica/shaders/world/" + name)) {
+            if (input == null) throw new IllegalStateException("missing shader " + name);
+            return new String(input.readAllBytes(), StandardCharsets.UTF_8);
+        }
     }
 }

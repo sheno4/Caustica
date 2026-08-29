@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft;
 
-import dev.comfyfluffy.caustica.CausticaConfig;
+import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.api.view.Camera;
 import dev.comfyfluffy.caustica.api.view.SceneView;
@@ -8,9 +8,11 @@ import dev.comfyfluffy.caustica.engine.frame.FrameSnapshot;
 import dev.comfyfluffy.caustica.engine.frame.SceneResources;
 import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
+import dev.comfyfluffy.caustica.minecraft.api.MinecraftDimensionKey;
 import dev.comfyfluffy.caustica.rt.RtRuntime;
 import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
 import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftVulkanBackend;
+import dev.comfyfluffy.caustica.settings.ResourceId;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.LoadingOverlay;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -46,6 +48,7 @@ public final class MinecraftFrameAdapter {
         boolean startupSceneReady = level != null && client.player != null
                 && RtTerrain.isSectionReady(client.player.blockPosition());
         RtRuntime.INSTANCE.tick(captureSceneResources(client), startupSceneReady, currentSceneId,
+                dimensionKey(level),
                 target != null ? target.width : 0, target != null ? target.height : 0,
                 client::invalidateSurfaceConfiguration);
     }
@@ -82,14 +85,14 @@ public final class MinecraftFrameAdapter {
     public UiPresentationResources captureUiPresentation() {
         return snapshotUiPresentation(MinecraftUiOverlay.enabled(),
                 MinecraftUiOverlay.populatedThisFrame(),
-                MinecraftUiOverlay.overlayColorImage(), MinecraftUiOverlay.overlayColorView(),
+                MinecraftUiOverlay.presentationImage(),
                 MinecraftUiOverlay.overlayWidth(), MinecraftUiOverlay.overlayHeight());
     }
 
     static UiPresentationResources snapshotUiPresentation(boolean enabled, boolean populated,
-                                                           long colorImage, long colorView,
+                                                           dev.comfyfluffy.caustica.api.gpu.GpuImage color,
                                                            int width, int height) {
-        return new UiPresentationResources(enabled, populated, colorImage, colorView, width, height);
+        return new UiPresentationResources(enabled, populated, color, width, height);
     }
 
     private long identify(ClientLevel level) {
@@ -105,5 +108,11 @@ public final class MinecraftFrameAdapter {
         identify(level);
         if (fallbackScene == null) fallbackScene = new SceneId() {};
         return fallbackScene;
+    }
+
+    private static MinecraftDimensionKey dimensionKey(ClientLevel level) {
+        if (level == null) return null;
+        var id = level.dimension().identifier();
+        return new MinecraftDimensionKey(ResourceId.of(id.getNamespace(), id.getPath()));
     }
 }

@@ -151,6 +151,12 @@ public final class RtPipeline {
 
     /** Binds both heaps, publishes the complete world root with push data, and dispatches rays. */
     public void trace(VkCommandBuffer commandBuffer, int width, int height, ByteBuffer roots, int raygenIndex) {
+        trace(commandBuffer, width, height, roots, raygenIndex, null);
+    }
+
+    /** Dispatches with a scene-specific hit table while retaining the pipeline-owned raygen and miss tables. */
+    public void trace(VkCommandBuffer commandBuffer, int width, int height, ByteBuffer roots,
+                      int raygenIndex, HitTable retainedHits) {
         if (destroyed) throw new IllegalStateException("pipeline is destroyed");
         if (raygenIndex < 0 || raygenIndex >= raygenCount) throw new IllegalArgumentException("raygen index out of range");
         if (roots.remaining() != RtBindings.WORLD_PUSH_CONSTANT_SIZE) {
@@ -166,10 +172,25 @@ public final class RtPipeline {
                     sbt.address + (long) raygenIndex * stride, stride, stride);
             VkStridedDeviceAddressRegionKHR rmiss = region(stack,
                     sbt.address + (long) raygenCount * stride, stride, (long) missCount * stride);
-            VkStridedDeviceAddressRegionKHR hit = region(stack,
-                    sbt.address + (long) (raygenCount + missCount) * stride, stride, (long) hitCount * stride);
+            VkStridedDeviceAddressRegionKHR hit = retainedHits == null
+                    ? region(stack, sbt.address + (long) (raygenCount + missCount) * stride,
+                            stride, (long) hitCount * stride)
+                    : region(stack, retainedHits.address(), retainedHits.stride(), retainedHits.size());
             vkCmdTraceRaysKHR(commandBuffer, rgen, rmiss, hit,
                     VkStridedDeviceAddressRegionKHR.calloc(stack), width, height, 1);
+        }
+    }
+
+    public int retainedHitRecordStride() { return Math.toIntExact(stride); }
+
+    public long retainedHitTableAlignment() { return context.shaderGroupBaseAlignment(); }
+
+    /** Addressable scene-specific hit SBT region. Its owner retains the buffer through the trace use. */
+    public record HitTable(long address, long stride, long size) {
+        public HitTable {
+            if (address == 0L || stride <= 0L || size <= 0L || size % stride != 0L) {
+                throw new IllegalArgumentException("invalid retained hit table region");
+            }
         }
     }
 

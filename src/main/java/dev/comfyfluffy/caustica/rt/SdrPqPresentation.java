@@ -1,10 +1,11 @@
 package dev.comfyfluffy.caustica.rt;
 
-import dev.comfyfluffy.caustica.CausticaConfig;
+import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.rt.pipeline.RtSdrPresentPipeline;
 import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
 import org.lwjgl.system.MemoryStack;
-import org.lwjgl.vulkan.KHRSynchronization2;
+import org.lwjgl.vulkan.VK14;
+import org.lwjgl.vulkan.VK13;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkDependencyInfo;
@@ -12,22 +13,19 @@ import org.lwjgl.vulkan.VkMemoryBarrier2;
 
 /** Converts an SDR host frame to PQ and submits its swapchain blit. */
 final class SdrPqPresentation {
-    private final PresentationSampler sampler;
     private RtSdrPresentPipeline pipeline;
     private GpuImage image;
 
-    SdrPqPresentation(PresentationSampler sampler) {
-        this.sampler = sampler;
-    }
+    SdrPqPresentation() {}
 
     boolean present(GraphicsSubmission submission, long swapchainImage, int swapWidth, int swapHeight,
-            long sdrMainView, long acquireSemaphore, long presentSemaphore) {
-        if (!RtRuntime.hasSession() || sdrMainView == 0L) {
+            dev.comfyfluffy.caustica.api.gpu.GpuImage source,
+            long acquireSemaphore, long presentSemaphore) {
+        if (!RtRuntime.hasSession() || source == null) {
             return false;
         }
         GpuContext context = GpuContext.get();
-        long samplerHandle = context != null ? sampler.ensure(context) : 0L;
-        if (context == null || samplerHandle == 0L) {
+        if (context == null) {
             return false;
         }
         if (pipeline == null) {
@@ -44,14 +42,19 @@ final class SdrPqPresentation {
         int copyHeight = Math.min(swapHeight, image.height());
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkCommandBuffer commandBuffer = submission.beginTransientCommandBuffer();
+            context.bindDescriptorHeaps(commandBuffer);
             VkMemoryBarrier2.Buffer pre = VkMemoryBarrier2.calloc(1, stack).sType$Default();
-            pre.get(0).srcStageMask(65536L).srcAccessMask(65536L)
-                    .dstStageMask(2048L).dstAccessMask(98304L);
-            KHRSynchronization2.vkCmdPipelineBarrier2KHR(commandBuffer,
+            pre.get(0).srcStageMask(VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT)
+                    .srcAccessMask(VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT)
+                    .dstStageMask(VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT)
+                    .dstAccessMask(VK13.VK_ACCESS_2_SHADER_STORAGE_READ_BIT
+                            | VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+            VK14.vkCmdPipelineBarrier2(commandBuffer,
                     VkDependencyInfo.calloc(stack).sType$Default().pMemoryBarriers(pre));
 
-            pipeline.setImages(image.view(), sdrMainView, samplerHandle);
-            pipeline.dispatch(commandBuffer, image.width(), image.height(), CausticaConfig.Rt.Hdr.uiNits());
+            pipeline.dispatch(commandBuffer, image,
+                    source.descriptor(dev.comfyfluffy.caustica.api.gpu.GpuImageDescriptorKind.SAMPLED).index(),
+                    CausticaConfig.Rt.Hdr.uiNits());
             HdrPresentation.recordSwapchainBlit(
                     commandBuffer, stack, image.image(), swapchainImage, copyWidth, copyHeight);
             if (VK10.vkEndCommandBuffer(commandBuffer) != VK10.VK_SUCCESS) {

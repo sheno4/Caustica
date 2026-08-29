@@ -111,8 +111,10 @@ if (loader == "fabric") {
 				sourceSet(sourceSets.main)
 				sourceSet(project(":packages:api").sourceSets.main)
 				sourceSet(project(":packages:api-support").sourceSets.main)
+				sourceSet(project(":packages:config").sourceSets.main)
 				sourceSet(project(":packages:engine").sourceSets.main)
 				sourceSet(project(":packages:minecraft-api").sourceSets.main)
+				sourceSet(project(":packages:minecraft-adapter").sourceSets.main)
 				sourceSet(project(":packages:settings-api").sourceSets.main)
 				sourceSet(project(":packages:shader-api").sourceSets.main)
 				sourceSet(project(":packages:vulkan-support").sourceSets.main)
@@ -135,10 +137,14 @@ dependencies {
 	apiRuntime project(":packages:api")
 	compileOnly project(":packages:api-support")
 	apiRuntime project(":packages:api-support")
+	compileOnly project(":packages:config")
+	apiRuntime project(":packages:config")
 	compileOnly project(":packages:engine")
 	apiRuntime project(":packages:engine")
 	compileOnly project(":packages:minecraft-api")
 	apiRuntime project(":packages:minecraft-api")
+	compileOnly project(":packages:minecraft-adapter")
+	apiRuntime project(":packages:minecraft-adapter")
 	compileOnly project(":packages:settings-api")
 	apiRuntime project(":packages:settings-api")
 	compileOnly project(":packages:vulkan-support")
@@ -152,14 +158,18 @@ dependencies {
 	testImplementation "org.junit.jupiter:junit-jupiter"
 	testImplementation project(":packages:api")
 	testImplementation project(":packages:api-support")
+	testImplementation project(":packages:config")
 	testImplementation project(":packages:engine")
 	testImplementation project(":packages:minecraft-api")
+	testImplementation project(":packages:minecraft-adapter")
 	testImplementation project(":packages:settings-api")
 	testImplementation project(":packages:vulkan-support")
 	testRuntimeOnly project(":packages:api")
 	testRuntimeOnly project(":packages:api-support")
+	testRuntimeOnly project(":packages:config")
 	testRuntimeOnly project(":packages:engine")
 	testRuntimeOnly project(":packages:minecraft-api")
+	testRuntimeOnly project(":packages:minecraft-adapter")
 	testRuntimeOnly project(":packages:settings-api")
 	testRuntimeOnly project(":packages:vulkan-support")
 	testRuntimeOnly "org.junit.platform:junit-platform-launcher"
@@ -310,6 +320,58 @@ tasks.register("bloomSliceTest", Test) {
 	useJUnitPlatform()
 }
 
+def compileSkySlice = tasks.register("compileSkySlice", JavaCompile) {
+	group = "verification"
+	description = "Compiles the descriptor-heap Minecraft sky pass independently of legacy root consumers."
+	dependsOn(generateShaderRecords, compileShaders, project(":packages:api").tasks.named("classes"),
+			project(":packages:settings-api").tasks.named("classes"),
+			project(":packages:minecraft-api").tasks.named("classes"),
+			project(":packages:vulkan-support").tasks.named("classes"))
+	source(file("src/main/java/dev/comfyfluffy/caustica/minecraft/sky/SkyLutPass.java"),
+			file("src/main/java/dev/comfyfluffy/caustica/minecraft/MinecraftLightingCalibration.java"),
+			file("src/main/java/dev/comfyfluffy/caustica/minecraft/program/MinecraftProgramTypes.java"),
+			layout.buildDirectory.file("generated/sources/shaderRecords/dev/comfyfluffy/caustica/minecraft/sky/gen/SkyInputsData.java"),
+			layout.buildDirectory.file("generated/sources/shaderRecords/dev/comfyfluffy/caustica/minecraft/sky/gen/SkyLutPushData.java"),
+			layout.buildDirectory.file("generated/sources/shaderRecords/dev/comfyfluffy/caustica/minecraft/sky/gen/MinecraftEnvironmentBindingData.java"))
+	classpath = sourceSets.main.compileClasspath
+	destinationDirectory = layout.buildDirectory.dir("classes/sky-slice")
+	options.release = 25
+}
+
+def compileSkySliceTest = tasks.register("compileSkySliceTest", JavaCompile) {
+	group = "verification"
+	dependsOn(compileSkySlice)
+	source(file("src/test/java/dev/comfyfluffy/caustica/minecraft/sky/SkyLutPassTest.java"))
+	classpath = configurations.testCompileClasspath + files(compileSkySlice.flatMap { it.destinationDirectory })
+	destinationDirectory = layout.buildDirectory.dir("classes/sky-slice-test")
+	options.release = 25
+}
+
+tasks.register("skySliceTest", Test) {
+	group = "verification"
+	dependsOn(compileSkySliceTest)
+	testClassesDirs = files(compileSkySliceTest.flatMap { it.destinationDirectory })
+	classpath = files(compileSkySlice.flatMap { it.destinationDirectory },
+			compileSkySliceTest.flatMap { it.destinationDirectory }) + configurations.testRuntimeClasspath
+	useJUnitPlatform()
+}
+
+def compileOverlayHeapAbiTest = tasks.register("compileOverlayHeapAbiTest", JavaCompile) {
+	group = "verification"
+	source(file("src/test/java/dev/comfyfluffy/caustica/minecraft/overlay/OverlayHeapAbiTest.java"))
+	classpath = configurations.testCompileClasspath
+	destinationDirectory = layout.buildDirectory.dir("classes/overlay-heap-abi-test")
+	options.release = 25
+}
+
+tasks.register("overlayHeapAbiTest", Test) {
+	group = "verification"
+	dependsOn(compileOverlayHeapAbiTest, compileShaders)
+	testClassesDirs = files(compileOverlayHeapAbiTest.flatMap { it.destinationDirectory })
+	classpath = files(compileOverlayHeapAbiTest.flatMap { it.destinationDirectory }) + configurations.testRuntimeClasspath
+	useJUnitPlatform()
+}
+
 def rtBindingsGenRoot = layout.buildDirectory.dir("generated/sources/rtBindings")
 def generateRtBindings = tasks.register("generateRtBindings", GenerateRtBindings) {
 	group = "build"
@@ -332,10 +394,17 @@ def verifyRtBindingsGeneration = tasks.register("verifyRtBindingsGeneration") {
 		def required = [
 				"WORLD_PUSH_ADDRESS_OFFSET = 0",
 				"WORLD_COMPOSITION_DATA_ADDRESS_OFFSET = 8",
+				"WORLD_GEOMETRY_TABLE_ADDRESS_OFFSET = 16",
 				"WORLD_PATH_QUEUE_ADDRESS_OFFSET = 48",
 				"WORLD_TOP_LEVEL_AS_INDEX_OFFSET = 56",
 				"WORLD_SPECULAR_MOTION_GUIDE_INDEX_OFFSET = 84",
-				"WORLD_PUSH_CONSTANT_SIZE = 88"
+				"WORLD_INITIAL_VOLUME_IMPLEMENTATION_OFFSET = 88",
+				"WORLD_INITIAL_VOLUME_ACTIVE_OFFSET = 92",
+				"WORLD_INITIAL_VOLUME_BINDING_OFFSET = 96",
+				"WORLD_INITIAL_VOLUME_INSTANCE_OFFSET = 104",
+				"WORLD_NEE_AT_STATE_ADDRESS_OFFSET = 112",
+				"WORLD_RESERVED_NEE_AT_ADDRESS_OFFSET = 120",
+				"WORLD_PUSH_CONSTANT_SIZE = 128"
 		]
 		def missing = required.findAll { !source.contains(it) }
 		if (!missing.empty) {
@@ -347,6 +416,176 @@ def verifyRtBindingsGeneration = tasks.register("verifyRtBindingsGeneration") {
 			throw new GradleException("generated world root layout retains descriptor-set constants ${obsolete}")
 		}
 	}
+}
+
+def verifyNeeAtAbi = tasks.register("verifyNeeAtAbi") {
+	group = "verification"
+	description = "Verifies the reflected NEE-AT control record and fixed-size world root."
+	dependsOn(generateShaderRecords)
+	def generatedRecord = layout.buildDirectory.file(
+			"generated/sources/shaderRecords/dev/comfyfluffy/caustica/rt/gen/NeeAtStateData.java")
+	inputs.file(generatedRecord)
+	doLast {
+		def source = generatedRecord.get().asFile.getText("UTF-8")
+		def required = [
+			"BYTE_SIZE = 88",
+			"putLong(0, lightTableAddress())",
+			"putLong(8, globalDistributionAddress())",
+			"putLong(16, localDistributionAddress())",
+			"putLong(24, lightFeedbackAddress())",
+			"putLong(32, pixelFeedbackAddress())",
+			"putInt(40, lightCount())",
+			"putInt(64, tileSize())",
+			"putInt(68, localSlotCount())",
+			"putInt(72, candidateCount())",
+			"putFloat(80, metersPerSceneUnit())",
+			"putInt(84, frameIndex())"
+		]
+		def missing = required.findAll { !source.contains(it) }
+		if (!missing.isEmpty()) throw new GradleException("NEE-AT ABI drifted: ${missing}")
+	}
+}
+
+def verifyRetainedGeometryAbi = tasks.register("verifyRetainedGeometryAbi") {
+	group = "verification"
+	description = "Verifies the reflected retained geometry record layout consumed by hit shaders."
+	dependsOn(generateShaderRecords)
+	def generatedRecord = layout.buildDirectory.file(
+			"generated/sources/shaderRecords/dev/comfyfluffy/caustica/rt/gen/RetainedGeometryRecordData.java")
+	inputs.file(generatedRecord)
+	doLast {
+		def source = generatedRecord.get().asFile.getText("UTF-8")
+		def required = [
+				"BYTE_SIZE = 160",
+				"putInt(0, surfaceImplementation())",
+				"putInt(4, coverageImplementation())",
+				"putInt(8, volumeImplementation())",
+				"putLong(16, surfaceBinding())",
+				"putLong(24, volumeBinding())",
+				"putLong(32, instanceData())",
+				"putFloat(40, alphaCutoff())",
+				"putFloat(48, currentRow0().x())",
+				"putFloat(96, previousRow0().x())",
+				"putLong(144, emitterIndexAddress())",
+				"putInt(152, emitterPrimitiveBase())"
+		]
+		def missing = required.findAll { !source.contains(it) }
+		if (!missing.isEmpty()) {
+			throw new GradleException("Retained geometry ABI drifted: ${missing}")
+		}
+	}
+}
+
+def verifyRetainedLightAbi = tasks.register("verifyRetainedLightAbi") {
+	group = "verification"
+	description = "Verifies the reflected retained light record consumed by closest-hit sampling."
+	dependsOn(generateShaderRecords)
+	def generatedRecord = layout.buildDirectory.file(
+			"generated/sources/shaderRecords/dev/comfyfluffy/caustica/rt/gen/RetainedLightRecordData.java")
+	inputs.file(generatedRecord)
+	doLast {
+		def source = generatedRecord.get().asFile.getText("UTF-8")
+		def required = [
+				"BYTE_SIZE = 80",
+				"putInt(0, type())",
+				"putFloat(8, rangeMeters())",
+				"putFloat(12, angularRadius())",
+				"putFloat(16, positionOrDirection().x())",
+				"putFloat(32, axisU().x())",
+				"putFloat(48, axisV().x())",
+				"putFloat(64, radiometry().x())"
+		]
+		def missing = required.findAll { !source.contains(it) }
+		if (!missing.isEmpty()) throw new GradleException("Retained light ABI drifted: ${missing}")
+	}
+}
+
+def verifyRetainedLightShader = tasks.register("verifyRetainedLightShader") {
+	group = "verification"
+	description = "Verifies the retained-light sampler and two-ray-type shadow trace contract."
+	dependsOn(compileShaders)
+	def sampler = file("src/main/resources/caustica/shaders/world/retained_lights.slang")
+	def closestHit = file("src/main/resources/caustica/shaders/world/closest_hit.slang")
+	def worldMinimal = file("src/main/resources/caustica/shaders/world/world_minimal.slang")
+	def bake = file("src/main/resources/caustica/shaders/world/nee_at_bake.slang")
+	inputs.files(sampler, closestHit, worldMinimal, bake)
+	doLast {
+		def samplerSource = sampler.getText("UTF-8")
+		def hitSource = closestHit.getText("UTF-8")
+		def worldSource = worldMinimal.getText("UTF-8")
+		def bakeSource = bake.getText("UTF-8")
+		def samplerRequired = [
+				"RETAINED_LIGHT_RECTANGLE", "RETAINED_LIGHT_POINT",
+				"RETAINED_LIGHT_SPOT", "RETAINED_LIGHT_DISTANT",
+				"distance * state.metersPerSceneUnit > light.rangeMeters",
+				"neeAtSampleGlobal", "neeAtSampleLocal", "neeAtLocalPdf",
+				"radianceOverShapePdf", "neeAtWriteFeedback", "neeAtSaturatingAdd",
+				"neeAtProposalPdf", "candidateCount / 2u",
+				"NEE_AT_PROPOSAL_SCREEN_MIXTURE"
+		]
+		def hitRequired = [
+				"1u, 2u, 1u, ray, shadow", "evaluateBsdf(query)",
+				"frame[0].frameIndex", "dot(input.geometricNormal, selected.direction)",
+				"weightSum / (float(candidateCount) * selectedTarget)",
+				"neeAtWriteFeedback(worldBindings, pixel, selected.lightIndex, feedback)",
+				"emission * retainedEmissionMis(payload, record, input.position)",
+				"payload.previousNeeProposalMode"
+		]
+		def missing = samplerRequired.findAll { !samplerSource.contains(it) }
+		missing += hitRequired.findAll { !hitSource.contains(it) }
+		def bakeRequired = [
+				"state.localSlotCount", "state.tileSize * state.tileSize",
+				"previousToCurrent", "currentToPrevious", "InterlockedAdd(localMasses[slot], event.y)",
+				"GroupMemoryBarrierWithGroupSync", "uint2(localLights[slot], localScan[slot])",
+				"globalPowerSums[lane]", "chunk += 64u", "globalScanNext[lane]",
+				"index + 1u == state.lightCount ? 1.0"
+		]
+		missing += bakeRequired.findAll { !bakeSource.contains(it) }
+		if (bakeSource.contains("previousMotionIndex") || bakeSource.contains("previousDepthIndex")) {
+			missing += "same-screen-tile history without stale guide reprojection"
+		}
+		if (!worldSource.contains("records[worldInstanceCustomIndex() + GeometryIndex()]")) {
+			missing += "worldInstanceCustomIndex() + GeometryIndex()"
+		}
+		if (worldSource.contains("records[InstanceID() + GeometryIndex()]")) {
+			missing += "no InstanceID geometry-record addressing"
+		}
+		if (!worldSource.contains("HitTriangleVertexPosition(1u)")
+				|| !worldSource.contains("previousGeometricNormal = previousNormal * orientation")) {
+			missing += "position-fetch current/previous geometric normals"
+		}
+		if (!missing.isEmpty()) throw new GradleException("Retained light shader contract drifted: ${missing}")
+	}
+}
+
+def compileRetainedLightSlice = tasks.register("compileRetainedLightSlice", JavaCompile) {
+	group = "verification"
+	dependsOn(generateShaderRecords, project(":packages:engine").tasks.named("classes"))
+	source(file("src/main/java/dev/comfyfluffy/caustica/rt/scene/RtRetainedLightPlan.java"),
+			file("src/main/java/dev/comfyfluffy/caustica/engine/scene/SceneOrigin.java"),
+			layout.buildDirectory.file("generated/sources/shaderRecords/dev/comfyfluffy/caustica/rt/gen/RetainedLightRecordData.java"))
+	classpath = sourceSets.main.compileClasspath
+	destinationDirectory = layout.buildDirectory.dir("classes/retained-light-slice")
+	options.release = 25
+}
+
+def compileRetainedLightSliceTest = tasks.register("compileRetainedLightSliceTest", JavaCompile) {
+	group = "verification"
+	dependsOn(compileRetainedLightSlice)
+	source(file("src/test/java/dev/comfyfluffy/caustica/rt/scene/RtRetainedLightPlanTest.java"))
+	classpath = configurations.testCompileClasspath + files(compileRetainedLightSlice.flatMap { it.destinationDirectory })
+	destinationDirectory = layout.buildDirectory.dir("classes/retained-light-slice-test")
+	options.release = 25
+}
+
+tasks.register("retainedLightSliceTest", Test) {
+	group = "verification"
+	dependsOn(compileRetainedLightSliceTest, verifyRetainedLightAbi, verifyNeeAtAbi,
+			verifyRetainedLightShader)
+	testClassesDirs = files(compileRetainedLightSliceTest.flatMap { it.destinationDirectory })
+	classpath = files(compileRetainedLightSlice.flatMap { it.destinationDirectory },
+			compileRetainedLightSliceTest.flatMap { it.destinationDirectory }) + configurations.testRuntimeClasspath
+	useJUnitPlatform()
 }
 
 tasks.named("test", Test) {
@@ -722,8 +961,10 @@ java {
 tasks.named("jar", Jar).configure {
 	from(project(":packages:api").sourceSets.main.output)
 	from(project(":packages:api-support").sourceSets.main.output)
+	from(project(":packages:config").sourceSets.main.output)
 	from(project(":packages:engine").sourceSets.main.output)
 	from(project(":packages:minecraft-api").sourceSets.main.output)
+	from(project(":packages:minecraft-adapter").sourceSets.main.output)
 	from(project(":packages:settings-api").sourceSets.main.output)
 	from(project(":packages:shader-api").sourceSets.main.output)
 	from(project(":packages:vulkan-support").sourceSets.main.output)
@@ -735,8 +976,10 @@ tasks.named("jar", Jar).configure {
 tasks.named("sourcesJar", Jar).configure {
 	from(project(":packages:api").sourceSets.main.allSource)
 	from(project(":packages:api-support").sourceSets.main.allSource)
+	from(project(":packages:config").sourceSets.main.allSource)
 	from(project(":packages:engine").sourceSets.main.allSource)
 	from(project(":packages:minecraft-api").sourceSets.main.allSource)
+	from(project(":packages:minecraft-adapter").sourceSets.main.allSource)
 	from(project(":packages:settings-api").sourceSets.main.allSource)
 	from(project(":packages:shader-api").sourceSets.main.allSource)
 	from(project(":packages:vulkan-support").sourceSets.main.allSource)
@@ -747,16 +990,20 @@ def verifyEmbeddedApi = tasks.register("verifyEmbeddedApi") {
 	description = "Verifies that the full mod embeds the Java and Slang API artifacts exactly once."
 	dependsOn(tasks.named("jar"), project(":packages:api").tasks.named("jar"),
 			project(":packages:api-support").tasks.named("jar"),
+			project(":packages:config").tasks.named("jar"),
 			project(":packages:engine").tasks.named("jar"),
 			project(":packages:minecraft-api").tasks.named("jar"),
+			project(":packages:minecraft-adapter").tasks.named("jar"),
 			project(":packages:settings-api").tasks.named("jar"),
 			project(":packages:shader-api").tasks.named("jar"),
 			project(":packages:vulkan-support").tasks.named("jar"))
 	inputs.file(tasks.named("jar", Jar).flatMap { it.archiveFile })
 	inputs.file(project(":packages:api").tasks.named("jar", Jar).flatMap { it.archiveFile })
 	inputs.file(project(":packages:api-support").tasks.named("jar", Jar).flatMap { it.archiveFile })
+	inputs.file(project(":packages:config").tasks.named("jar", Jar).flatMap { it.archiveFile })
 	inputs.file(project(":packages:engine").tasks.named("jar", Jar).flatMap { it.archiveFile })
 	inputs.file(project(":packages:minecraft-api").tasks.named("jar", Jar).flatMap { it.archiveFile })
+	inputs.file(project(":packages:minecraft-adapter").tasks.named("jar", Jar).flatMap { it.archiveFile })
 	inputs.file(project(":packages:settings-api").tasks.named("jar", Jar).flatMap { it.archiveFile })
 	inputs.file(project(":packages:shader-api").tasks.named("jar", Jar).flatMap { it.archiveFile })
 	inputs.file(project(":packages:vulkan-support").tasks.named("jar", Jar).flatMap { it.archiveFile })
@@ -774,16 +1021,20 @@ def verifyEmbeddedApi = tasks.register("verifyEmbeddedApi") {
 		def rootEntries = names(tasks.named("jar", Jar).get().archiveFile.get().asFile)
 		def apiEntries = names(project(":packages:api").tasks.named("jar", Jar).get().archiveFile.get().asFile)
 		def supportEntries = names(project(":packages:api-support").tasks.named("jar", Jar).get().archiveFile.get().asFile)
+		def configEntries = names(project(":packages:config").tasks.named("jar", Jar).get().archiveFile.get().asFile)
 		def engineEntries = names(project(":packages:engine").tasks.named("jar", Jar).get().archiveFile.get().asFile)
 		def minecraftApiEntries = names(project(":packages:minecraft-api").tasks.named("jar", Jar).get().archiveFile.get().asFile)
+		def minecraftAdapterEntries = names(project(":packages:minecraft-adapter").tasks.named("jar", Jar).get().archiveFile.get().asFile)
 		def settingsApiEntries = names(project(":packages:settings-api").tasks.named("jar", Jar).get().archiveFile.get().asFile)
 		def shaderApiEntries = names(project(":packages:shader-api").tasks.named("jar", Jar).get().archiveFile.get().asFile)
 		def vulkanSupportEntries = names(project(":packages:vulkan-support").tasks.named("jar", Jar)
 				.get().archiveFile.get().asFile)
 		def required = apiEntries.findAll { it.endsWith(".class") }
 		required.addAll(supportEntries.findAll { it.endsWith(".class") })
+		required.addAll(configEntries.findAll { it.endsWith(".class") })
 		required.addAll(engineEntries.findAll { it.endsWith(".class") })
 		required.addAll(minecraftApiEntries.findAll { it.endsWith(".class") })
+		required.addAll(minecraftAdapterEntries.findAll { it.endsWith(".class") })
 		required.addAll(settingsApiEntries.findAll { it.endsWith(".class") })
 		required.addAll(shaderApiEntries.findAll { entry ->
 			entry.startsWith("caustica/shaders/api/") && !entry.endsWith("/")
@@ -801,7 +1052,16 @@ def verifyEmbeddedApi = tasks.register("verifyEmbeddedApi") {
 
 tasks.named("check") {
 	dependsOn(verifyEmbeddedApi, tasks.named("bloomSliceTest"),
+			project(":packages:config").tasks.named("check"),
 			project(":packages:vulkan-support").tasks.named("check"))
+}
+
+tasks.register("examplesCheck") {
+	group = "verification"
+	description = "Checks the public API showcase and both physical glTF example packages."
+	dependsOn(project(":packages:examples:api-showcase").tasks.named("check"),
+			project(":packages:examples:gltf-content").tasks.named("check"),
+			project(":packages:examples:gltf-viewer-minecraft").tasks.named("check"))
 }
 
 publishing {

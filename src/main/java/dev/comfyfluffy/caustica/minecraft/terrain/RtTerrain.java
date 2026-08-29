@@ -4,9 +4,11 @@ package dev.comfyfluffy.caustica.minecraft.terrain;
 
 import com.mojang.blaze3d.vertex.QuadInstance;
 import com.mojang.blaze3d.vertex.VertexConsumer;
-import dev.comfyfluffy.caustica.api.provider.RetainedLightCollection;
-import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialSnapshot;
-import dev.comfyfluffy.caustica.CausticaConfig;
+import dev.comfyfluffy.caustica.engine.light.RetainedLightBatch;
+import dev.comfyfluffy.caustica.engine.light.RetainedLightSnapshot;
+import dev.comfyfluffy.caustica.minecraft.api.ResourcePackEpoch;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialLookup;
+import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.minecraft.MinecraftTelemetry;
@@ -93,9 +95,9 @@ public final class RtTerrain {
     // If no render frame has driven a streaming pass for this long, the 20 TPS tick takes over (loading
     // screens / hidden window — states where render-driven streaming has stopped).
     private static final long STREAM_FALLBACK_AFTER_NANOS = 200_000_000L;
-    // Light edits and streaming completions can arrive every frame. Collapse them behind the currently
-    // building generation and cap full hierarchy snapshots/uploads without adding noticeable edit latency.
-    private static final long LIGHT_HIERARCHY_UPDATE_INTERVAL_NANOS = 50_000_000L;
+    // Light edits and streaming completions can arrive every frame. Coalesce immutable publication inputs
+    // without adding noticeable edit latency.
+    private static final long LIGHT_SNAPSHOT_UPDATE_INTERVAL_NANOS = 50_000_000L;
 
     private static int rebaseDistanceBlocks() {
         return CausticaConfig.Rt.Terrain.REBASE_DISTANCE_BLOCKS.value();
@@ -105,7 +107,7 @@ public final class RtTerrain {
     private MinecraftTerrainGeometry retainedGeometry;
 
     private boolean sceneInitialized;
-    private volatile MinecraftMaterialSnapshot.Published materials;
+    private volatile MinecraftMaterialLookup materialLookup;
     // Persistent palette snapshots for tessellation regions (render-thread only); invalidated on dirty
     // sections, column unload/window-leave, and full clears.
     private final RtSectionSnapshots snapshots = new RtSectionSnapshots();
@@ -158,12 +160,12 @@ public final class RtTerrain {
     public int blockY;
     public int blockZ;
     /** Sorted light-only snapshot, updated with section publication instead of rescanning all geometry. */
-    private final TreeMap<Long, RetainedLightCollection.Group> lightSections = new TreeMap<>();
+    private final TreeMap<Long, RetainedLightBatch> lightSections = new TreeMap<>();
     private long lightGroupRevision;
     private long retainedLightGeneration;
-    private boolean lightHierarchyDirty;
-    private long lastLightHierarchyRequestNanos;
-    private RetainedLightCollection retainedLights = RetainedLightCollection.EMPTY;
+    private boolean lightSnapshotDirty;
+    private long lastLightSnapshotNanos;
+    private RetainedLightSnapshot retainedLights = RetainedLightSnapshot.empty(0L);
     private boolean windowValid;
     private int windowPcx;
     private int windowPcz;
@@ -229,7 +231,7 @@ public final class RtTerrain {
         return INSTANCE.sceneInitialized && (INSTANCE.isPublished(key) || INSTANCE.empty.contains(key));
     }
 
-    public static RetainedLightCollection retainedLightSnapshot() {
+    public static RetainedLightSnapshot retainedLightSnapshot() {
         return INSTANCE.retainedLights;
     }
 
@@ -250,7 +252,7 @@ public final class RtTerrain {
      */
     public static void frame() {
         MinecraftTelemetry.current().max("terrainPendingGeometryGroups", INSTANCE.pendingGeometryGroups.size());
-        if (INSTANCE.materials != null) INSTANCE.frameStream();
+        if (INSTANCE.materialLookup != null) INSTANCE.frameStream();
         INSTANCE.submitPendingGeometry();
     }
 
@@ -263,12 +265,14 @@ public final class RtTerrain {
         if (INSTANCE.retainedGeometry == geometry) INSTANCE.retainedGeometry = null;
     }
 
-    public static void publishMaterials(MinecraftMaterialSnapshot.Published materials) {
-        INSTANCE.materials = materials;
+    /** Installs the immutable material lookup used by subsequently dispatched section builds. */
+    public static void publishMaterialLookup(MinecraftMaterialLookup lookup) {
+        INSTANCE.materialLookup = java.util.Objects.requireNonNull(lookup, "lookup");
+        INSTANCE.fullClearRequested = true;
     }
 
-    public static void clearMaterials() {
-        INSTANCE.materials = null;
+    public static void clearMaterialLookup() {
+        INSTANCE.materialLookup = null;
     }
 
     public static void shutdown() {
@@ -332,8 +336,8 @@ public final class RtTerrain {
             return;
         }
         noWorldClearApplied = false;
-        if (materials == null) {
-            return; // resource reload gap: keep old work dormant until the new epoch requests a full clear
+        if (materialLookup == null) {
+            return; // resource reload gap: publication resumes after an immutable lookup is installed
         }
 
         // Full clear on an explicit invalidation — vanilla's LevelExtractor.allChanged(). That fires on a
@@ -414,7 +418,7 @@ public final class RtTerrain {
         }
         if (reextract.isEmpty() && missing.isEmpty()
                 && completedBuilds.isEmpty()
-                && !lightHierarchyDirty
+                && !lightSnapshotDirty
                 && removed.isEmpty() && prepared.isEmpty()) {
             return;
         }
@@ -465,7 +469,7 @@ public final class RtTerrain {
             MinecraftTelemetry.current().endStage("terrain.snapshotDispatch", snapshotDispatchStart);
         }
 
-        flushLightHierarchyUpdate();
+        flushLightSnapshotUpdate();
 
     }
 
@@ -1024,10 +1028,10 @@ public final class RtTerrain {
         if (dirtyGroup != NO_DIRTY_GROUP && !dirtyGroups.containsKey(dirtyGroup)) {
             dirtyGroup = NO_DIRTY_GROUP;
         }
-        MinecraftMaterialSnapshot.Published materialSnapshot = materials;
-        if (materialSnapshot == null) return;
+        MinecraftMaterialLookup lookup = materialLookup;
+        if (lookup == null) return;
         SectionTask task = new SectionTask(key, token, sx << 4, sy << 4, sz << 4, dirtyGroup,
-                terrainEpoch, materialSnapshot.epoch(),
+                terrainEpoch, lookup.epoch(),
                 MinecraftTelemetry.current().extraction(MinecraftTelemetry.GeometrySource.TERRAIN, 1));
         beginActiveTask();
         try {
@@ -1041,7 +1045,7 @@ public final class RtTerrain {
                     ws.reset(dispatch.blockColors());
                     CpuSection cpu = buildCpuSection(region, dispatch.modelSet(), ws.blockRandom, ws.modelParts,
                             ws.capture, dispatch.fluidModelSet(), ws.fluidCapture, ws.mesh, ws.pos,
-                            materialSnapshot, sx, sy, sz);
+                            lookup, sx, sy, sz);
                     if (!isTaskCurrent(task)) {
                         completeEmptyTask(task);
                         return;
@@ -1139,7 +1143,7 @@ public final class RtTerrain {
             long expected = inFlight.get(task.key);
             boolean tokenValid = expected == task.token;
             boolean valid = tokenValid && task.terrainEpoch == terrainEpoch
-                    && materials != null && task.materialEpoch == materials.epoch();
+                    && materialLookup != null && task.materialEpoch.equals(materialLookup.epoch());
             if (!valid) {
                 if (tokenValid) {
                     inFlight.remove(task.key);
@@ -1255,10 +1259,10 @@ public final class RtTerrain {
         final int soz;
         final long dirtyGroup;
         final long terrainEpoch;
-        final long materialEpoch;
+        final ResourcePackEpoch materialEpoch;
         final Object extractionStamp;
         SectionTask(long key, long token, int sox, int soy, int soz, long dirtyGroup,
-                    long terrainEpoch, long materialEpoch,
+                    long terrainEpoch, ResourcePackEpoch materialEpoch,
                     Object extractionStamp) {
             this.key = key;
             this.token = token;
@@ -1284,7 +1288,8 @@ public final class RtTerrain {
         }
     }
 
-    private record PendingGeometryGroup(long groupKey, List<MinecraftTerrainGeometry.Change> operations,
+    private record PendingGeometryGroup(long groupKey, ResourcePackEpoch materialEpoch,
+                                        List<MinecraftTerrainGeometry.Change> operations,
                                         PendingPublication publication, long enqueuedNanos) { }
 
     private record PendingPublication(List<PublishedPut> puts, List<PublishedDrop> drops) { }
@@ -1313,7 +1318,6 @@ public final class RtTerrain {
             blockX = rbx;
             blockY = rby;
             blockZ = rbz;
-            markLightHierarchyDirty();
         }
     }
 
@@ -1385,18 +1389,24 @@ public final class RtTerrain {
         for (PublishedPut put : publicationPuts) {
             recordTerrainLatency("terrainWorkerToPending", put.workerCompletedNanos(), enqueuedNanos);
         }
-        pendingGeometryGroups.add(new PendingGeometryGroup(groupKey, List.copyOf(operations),
+        ResourcePackEpoch publicationEpoch = puts.isEmpty()
+                ? java.util.Objects.requireNonNull(materialLookup, "materialLookup").epoch()
+                : puts.getFirst().task().materialEpoch;
+        pendingGeometryGroups.add(new PendingGeometryGroup(groupKey, publicationEpoch,
+                List.copyOf(operations),
                 new PendingPublication(List.copyOf(publicationPuts), List.copyOf(publicationDrops)), enqueuedNanos));
         MinecraftTelemetry.current().max("terrainPendingGeometryGroups", pendingGeometryGroups.size());
     }
 
     private void submitPendingGeometry() {
-        if (pendingGeometryGroups.isEmpty() || retainedGeometry == null) return;
+        MinecraftMaterialLookup lookup = materialLookup;
+        if (pendingGeometryGroups.isEmpty() || retainedGeometry == null || lookup == null) return;
         LinkedHashMap<Long, PendingGeometryGroup> latest = new LinkedHashMap<>();
         for (PendingGeometryGroup group : pendingGeometryGroups) {
             latest.put(group.groupKey(), group);
         }
         for (PendingGeometryGroup group : latest.values()) {
+            if (!group.materialEpoch().equals(lookup.epoch())) continue;
             long submittedNanos = System.nanoTime();
             int putCount = group.publication().puts().size();
             for (int i = 0; i < putCount; i++) {
@@ -1438,7 +1448,7 @@ public final class RtTerrain {
             if (emptyAfterDrop(desired.contains(key))) empty.add(key);
             else empty.remove(key);
         }
-        if (lightsChanged) markLightHierarchyDirty();
+        if (lightsChanged) markLightSnapshotDirty();
     }
 
     private static void recordTerrainLatency(String metric, long startNanos, long endNanos) {
@@ -1478,23 +1488,23 @@ public final class RtTerrain {
         lightSections.remove(key);
     }
 
-    private void markLightHierarchyDirty() {
-        lightHierarchyDirty = true;
+    private void markLightSnapshotDirty() {
+        lightSnapshotDirty = true;
     }
 
     /** Publish a new immutable input generation after the edit-coalescing interval. */
-    private void flushLightHierarchyUpdate() {
-        if (!lightHierarchyDirty) return;
+    private void flushLightSnapshotUpdate() {
+        if (!lightSnapshotDirty) return;
         long now = System.nanoTime();
-        if (lastLightHierarchyRequestNanos != 0L
-                && now - lastLightHierarchyRequestNanos < LIGHT_HIERARCHY_UPDATE_INTERVAL_NANOS) {
+        if (lastLightSnapshotNanos != 0L
+                && now - lastLightSnapshotNanos < LIGHT_SNAPSHOT_UPDATE_INTERVAL_NANOS) {
             return;
         }
-        // Snapshot the sorted values once; unchanged generations are reused by every subsequent frame.
-        retainedLights = new RetainedLightCollection(++retainedLightGeneration,
-                List.copyOf(lightSections.values()));
-        lightHierarchyDirty = false;
-        lastLightHierarchyRequestNanos = now;
+        // Snapshot the sorted values once; unchanged generations are reused by subsequent frame updates.
+        retainedLights = new RetainedLightSnapshot(List.copyOf(lightSections.values()),
+                ++retainedLightGeneration);
+        lightSnapshotDirty = false;
+        lastLightSnapshotNanos = now;
     }
 
     /** Join outstanding CPU meshing tasks and discard their unsubmitted results. */
@@ -1547,9 +1557,9 @@ public final class RtTerrain {
         windowValid = false;
         lightSections.clear();
         lightGroupRevision = 0L;
-        lightHierarchyDirty = false;
-        lastLightHierarchyRequestNanos = 0L;
-        retainedLights = new RetainedLightCollection(++retainedLightGeneration, List.of());
+        lightSnapshotDirty = false;
+        lastLightSnapshotNanos = 0L;
+        retainedLights = RetainedLightSnapshot.empty(++retainedLightGeneration);
         empty.clear();
         removed.clear();
         prepared.clear();

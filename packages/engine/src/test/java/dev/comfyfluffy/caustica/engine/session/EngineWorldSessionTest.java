@@ -2,7 +2,6 @@ package dev.comfyfluffy.caustica.engine.session;
 
 import dev.comfyfluffy.caustica.api.gpu.GpuDescriptorHeap;
 import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
-import dev.comfyfluffy.caustica.api.gpu.GpuFrameUse;
 import dev.comfyfluffy.caustica.api.pass.PassFrame;
 import dev.comfyfluffy.caustica.api.pass.PostEffectSetup;
 import dev.comfyfluffy.caustica.api.pass.UiFrame;
@@ -14,9 +13,6 @@ import dev.comfyfluffy.caustica.engine.pass.PassSchedulerBackend;
 import dev.comfyfluffy.caustica.engine.program.ProgramBackend;
 import dev.comfyfluffy.caustica.engine.program.ProgramComposition;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot;
-import dev.comfyfluffy.caustica.minecraft.api.MinecraftDimensionKey;
-import dev.comfyfluffy.caustica.minecraft.api.MinecraftWorldSessionContribution;
-import dev.comfyfluffy.caustica.minecraft.api.ResourcePackEpoch;
 import org.junit.jupiter.api.Test;
 import org.lwjgl.vulkan.VkDevice;
 
@@ -24,56 +20,31 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class EngineWorldSessionTest {
     @Test
-    void composesBothProcessHostsOverSharedServicesAndDropsRootSceneLast() {
+    void ownsGenericRenderContributionsAndDropsRootSceneLast() {
         List<String> events = new ArrayList<>();
         List<RetainedSceneSnapshot> snapshots = new ArrayList<>();
         RenderSessionHost renderHost = new RenderSessionHost();
-        MinecraftWorldSessionHost minecraftHost = new MinecraftWorldSessionHost();
-        List<Object> programs = new ArrayList<>();
-        renderHost.api().sessions().add(context -> {
-            programs.add(context.program());
-            return contribution("core", events);
-        });
-        minecraftHost.api().sessions().add(context -> {
-            programs.add(context.renderSession().program());
-            assertEquals(MinecraftDimensionKey.of("minecraft", "overworld"), context.dimension());
-            return minecraftContribution("minecraft", events);
-        });
+        renderHost.api().sessions().add(context -> contribution("core", events));
 
-        EngineWorldSession session = new EngineWorldSession(renderHost, minecraftHost, GPU,
-                PROGRAMS, (snapshot, retired) -> { snapshots.add(snapshot); retired.run(); }, PASSES,
-                MinecraftDimensionKey.of("minecraft", "overworld"), new ResourcePackEpoch(2),
+        EngineWorldSession session = new EngineWorldSession(renderHost, GPU, PROGRAMS,
+                (snapshot, retired) -> { snapshots.add(snapshot); retired.run(); }, PASSES,
                 failure -> { throw new AssertionError(failure); });
 
-        assertNotSame(programs.get(0), programs.get(1));
         assertEquals(1, session.services().scenes().snapshot().scenes().size());
-        session.resourcePackChanged(new ResourcePackEpoch(3));
-        assertEquals(new ResourcePackEpoch(3), session.resourcePackEpoch());
+        session.progress();
         session.close();
 
-        assertEquals(List.of("minecraft:pack:3", "minecraft:stop", "minecraft:close",
-                "core:stop", "core:close"), events);
+        assertEquals(List.of("core:stop", "core:close"), events);
         assertEquals(0, snapshots.getLast().scenes().size());
         assertThrows(IllegalStateException.class, session::progress);
     }
 
     private static RenderSessionContribution contribution(String name, List<String> events) {
         return new RenderSessionContribution() {
-            @Override public void stop() { events.add(name + ":stop"); }
-            @Override public void close() { events.add(name + ":close"); }
-        };
-    }
-
-    private static MinecraftWorldSessionContribution minecraftContribution(String name, List<String> events) {
-        return new MinecraftWorldSessionContribution() {
-            @Override public void resourcePackChanged(ResourcePackEpoch epoch) {
-                events.add(name + ":pack:" + epoch.generation());
-            }
             @Override public void stop() { events.add(name + ":stop"); }
             @Override public void close() { events.add(name + ":close"); }
         };

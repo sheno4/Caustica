@@ -15,6 +15,16 @@ import com.mojang.blaze3d.systems.CommandEncoder;
 import com.mojang.blaze3d.systems.RenderPass;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.textures.FilterMode;
+import com.mojang.blaze3d.vulkan.VulkanCommandEncoder;
+import com.mojang.blaze3d.vulkan.VulkanGpuTexture;
+import com.mojang.blaze3d.vulkan.VulkanGpuTextureView;
+import dev.comfyfluffy.caustica.api.gpu.*;
+import dev.comfyfluffy.caustica.mixin.CommandEncoderAccessor;
+import dev.comfyfluffy.caustica.mixin.VulkanCommandEncoderAccessor;
+import dev.comfyfluffy.caustica.rt.GpuContext;
+import dev.comfyfluffy.caustica.rt.GpuImage;
+import org.lwjgl.system.MemoryStack;
+import org.lwjgl.vulkan.*;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.BindGroupLayouts;
@@ -63,6 +73,7 @@ public final class MinecraftUiOverlay {
     // the hand/screen-effects redirects in HDR mode, or the GUI). Reset at the start of GameRenderer.render
     // via beginFrame().
     private static boolean overlayClearedThisFrame;
+    private static BorrowedOverlayImage borrowedImage;
 
     private MinecraftUiOverlay() {
     }
@@ -121,6 +132,10 @@ public final class MinecraftUiOverlay {
         return 0L;
     }
 
+    public static GpuImage presentationImage() {
+        return borrowedImage;
+    }
+
     /**
      * Prepare the overlay (sized to {@code main}, cleared transparent with depth cleared to 0.0) and return
      * it so {@code GuiRenderer.draw} renders the GUI into it instead of the main target. Called from the
@@ -130,12 +145,23 @@ public final class MinecraftUiOverlay {
         return prepare(main);
     }
 
-    /**
-     * Prepare the shared transparent overlay for non-GUI contributors such as RT world overlays. Call before
-     * the GUI redirect so the GUI draws over those contributors in the same image.
-     */
-    public static RenderTarget beginCompositeLayer(RenderTarget main) {
-        return prepare(main);
+    /** The overlay image and Minecraft's current deferred graphics command buffer for the raw UI pass. */
+    public record UiPassTarget(VkCommandBuffer commandBuffer, GpuImage image) {}
+
+    public static UiPassTarget uiPassTarget(RenderTarget main) {
+        TextureTarget target = prepare(main);
+        GpuContext gpu = GpuContext.currentOrNull();
+        if (gpu == null || !(target.getColorTextureView() instanceof VulkanGpuTextureView view)) return null;
+        if (borrowedImage == null || borrowedImage.hostView != view) {
+            BorrowedOverlayImage replacement = BorrowedOverlayImage.create(gpu, view, target.width, target.height);
+            BorrowedOverlayImage old = borrowedImage;
+            borrowedImage = replacement;
+            if (old != null) gpu.retireAfterUse(old::destroy);
+        }
+        CommandEncoder wrapper = RenderSystem.getDevice().createCommandEncoder();
+        VulkanCommandEncoder backend = (VulkanCommandEncoder) ((CommandEncoderAccessor) wrapper).caustica$getBackend();
+        VkCommandBuffer commandBuffer = ((VulkanCommandEncoderAccessor) backend).caustica$commandBuffer();
+        return new UiPassTarget(commandBuffer, borrowedImage);
     }
 
     /** Reset the per-frame clear latch. Called at the start of {@code GameRenderer.render} (every frame). */
@@ -230,9 +256,73 @@ public final class MinecraftUiOverlay {
         usedThisFrame = false;
         overlayClearedThisFrame = false;
         compositeFailed = false;
+        if (borrowedImage != null) {
+            GpuContext gpu = GpuContext.currentOrNull();
+            if (gpu != null) gpu.retireAfterUse(borrowedImage::destroy);
+            else borrowedImage.destroy();
+            borrowedImage = null;
+        }
         if (overlay != null) {
             overlay.destroyBuffers();
             overlay = null;
         }
+    }
+
+    private static final class BorrowedOverlayImage implements GpuImage {
+        private final VulkanGpuTextureView hostView;
+        private final VulkanGpuTexture texture;
+        private final GpuDescriptorRange<GpuDescriptorIndex.Resource> descriptors;
+        private final GpuImageDescriptor storage;
+        private final GpuImageDescriptor sampled;
+        private final int width, height;
+        private boolean destroyed;
+
+        private BorrowedOverlayImage(VulkanGpuTextureView hostView, VulkanGpuTexture texture,
+                GpuDescriptorRange<GpuDescriptorIndex.Resource> descriptors, int width, int height) {
+            this.hostView = hostView; this.texture = texture; this.descriptors = descriptors;
+            this.width = width; this.height = height;
+            storage = new ImageDescriptor(descriptors.firstIndex(), GpuImageDescriptorKind.STORAGE);
+            sampled = new ImageDescriptor(new GpuDescriptorIndex.Resource(descriptors.firstIndex().value() + 1),
+                    GpuImageDescriptorKind.SAMPLED);
+        }
+
+        static BorrowedOverlayImage create(GpuDevice gpu, VulkanGpuTextureView view, int width, int height) {
+            VulkanGpuTexture texture = view.texture();
+            texture.addViews();
+            GpuDescriptorRange<GpuDescriptorIndex.Resource> range = null;
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                range = gpu.descriptorHeap().allocateResources(2, "Minecraft UI overlay");
+                VkImageViewCreateInfo viewInfo = VkImageViewCreateInfo.calloc(stack).sType$Default()
+                        .image(texture.vkImage()).viewType(VK10.VK_IMAGE_VIEW_TYPE_2D).format(VK10.VK_FORMAT_R8G8B8A8_UNORM);
+                viewInfo.subresourceRange().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT)
+                        .baseMipLevel(view.baseMipLevel()).levelCount(view.mipLevels()).baseArrayLayer(0).layerCount(1);
+                VkImageDescriptorInfoEXT image = VkImageDescriptorInfoEXT.calloc(stack).sType$Default()
+                        .pView(viewInfo).layout(VK10.VK_IMAGE_LAYOUT_GENERAL);
+                gpu.descriptorHeap().writer().writeResource(range, 0, resource(stack, VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, image));
+                gpu.descriptorHeap().writer().writeResource(range, 1, resource(stack, VK10.VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, image));
+                return new BorrowedOverlayImage(view, texture, range, width, height);
+            } catch (RuntimeException | Error failure) {
+                if (range != null) range.destroy();
+                texture.removeViews();
+                throw failure;
+            }
+        }
+
+        private static VkResourceDescriptorInfoEXT resource(MemoryStack stack, int type, VkImageDescriptorInfoEXT image) {
+            return VkResourceDescriptorInfoEXT.calloc(stack).sType$Default().type(type).data(data -> data.pImage(image));
+        }
+        @Override public long image() { return texture.vkImage(); }
+        @Override public long view() { return hostView.vkImageView(); }
+        @Override public GpuImageDescriptor descriptor(GpuImageDescriptorKind kind) { return kind == GpuImageDescriptorKind.STORAGE ? storage : sampled; }
+        @Override public int width() { return width; }
+        @Override public int height() { return height; }
+        @Override public int format() { return VK10.VK_FORMAT_R8G8B8A8_UNORM; }
+        @Override public void destroy() {
+            if (destroyed) return;
+            destroyed = true;
+            try { descriptors.destroy(); } finally { texture.removeViews(); }
+        }
+        private record ImageDescriptor(GpuDescriptorIndex.Resource index,
+                GpuImageDescriptorKind kind) implements GpuImageDescriptor {}
     }
 }

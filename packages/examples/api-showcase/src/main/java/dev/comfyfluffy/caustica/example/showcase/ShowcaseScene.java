@@ -5,6 +5,7 @@ import dev.comfyfluffy.caustica.api.geometry.GeometryTransform;
 import dev.comfyfluffy.caustica.api.geometry.InstanceId;
 import dev.comfyfluffy.caustica.api.geometry.MeshBuild;
 import dev.comfyfluffy.caustica.api.geometry.MeshId;
+import dev.comfyfluffy.caustica.api.geometry.PrimitiveLightMap;
 import dev.comfyfluffy.caustica.api.gpu.VulkanDeviceAddress;
 import dev.comfyfluffy.caustica.api.gpu.VulkanDeviceAddressRange;
 import dev.comfyfluffy.caustica.api.light.LightChannel;
@@ -63,7 +64,9 @@ final class ShowcaseScene {
                 new GeometryChannel.SetMesh<>(mesh, build),
                 new GeometryChannel.SetInstance<>(instance, scene, mesh,
                         GeometryTransform.translation(0.0, 64.0, 0.0), 0xff,
-                        ShowcasePrograms.INSTANCE.data(7L))), retired));
+                        ShowcasePrograms.INSTANCE.data(7L),
+                        new PrimitiveLightMap(List.of(
+                                new PrimitiveLightMap.Range(0, 1, lightIds.getFirst()))))), retired));
     }
 
     private static MeshBuild.Stream stream(long address, long byteSize, int byteStride) {
@@ -81,7 +84,7 @@ final class ShowcaseScene {
                         0, 66, 0, 0, -1, 0, 0, 0, 1,
                         24, 0.35, 0.2, 500, 450, 400)),
                 new LightChannel.SetLight(lightIds.get(3), scene, new LightDescriptor.Distant(
-                        0, 1, 0, 100_000, 95_000, 90_000, 0.00465)))));
+                        0, 1, 0, 100_000, 95_000, 90_000, 0.00465, false)))));
     }
 
     void stop() {

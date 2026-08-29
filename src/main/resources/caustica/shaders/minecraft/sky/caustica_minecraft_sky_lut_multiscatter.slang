@@ -15,21 +15,19 @@
 module caustica_minecraft_sky_lut_multiscatter;
 
 import caustica_minecraft_sky_atmosphere;
+import caustica_minecraft_sky_lut_types;
 
-[[vk::binding(0, 0)]] [format("rgba16f")] RWTexture2D<float4> multiScatterImage;
-[[vk::binding(1, 0)]] Sampler2D transmittanceLut;
-[[vk::binding(2, 0)]] Sampler2D multiScatterLut;
-[[vk::push_constant]] SkyInputs pc;
+[[vk::push_constant]] SkyLutPush pc;
 
 static const int SQRT_DIRS = 8; // SQRT_DIRS^2 == MULTISCATTER_DIRS
 
-[shader("compute")]
-[numthreads(8, 8, 1)]
-void main(uint3 tid : SV_DispatchThreadID) {
+public void runSkyMultiscatter(uint3 tid) {
+    RWTexture2D<float4> multiScatterImage =
+            ResourceDescriptorHeap[NonUniformResourceIndex(pc.destinationImageIndex)];
     if (tid.x >= uint(MULTISCATTER_LUT_W) || tid.y >= uint(MULTISCATTER_LUT_H)) {
         return;
     }
-    float groundAlbedo = pc.skyLook3.x;
+    float groundAlbedo = pc.inputs.skyLook3.x;
 
     float2 uv = float2(float(tid.x), float(tid.y))
               / float2(float(MULTISCATTER_LUT_W - 1), float(MULTISCATTER_LUT_H - 1));
@@ -58,7 +56,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
         ScatteringResult r = integrateScatteredLuminance(
                 origin, dir, sunDir, float3(1.0), 0.0,
                 MULTISCATTER_STEPS, false, false,
-                transmittanceLut, multiScatterLut, groundAlbedo, true);
+                pc.transmittanceImage, pc.multiScatterImage, pc.sampler, groundAlbedo, true);
         luminanceSum += r.luminance;
         multiScatSum += r.multiScatAs1;
     }

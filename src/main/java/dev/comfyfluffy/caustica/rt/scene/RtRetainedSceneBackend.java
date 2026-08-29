@@ -1,6 +1,9 @@
 package dev.comfyfluffy.caustica.rt.scene;
 
 import dev.comfyfluffy.caustica.api.geometry.MeshBuild;
+import dev.comfyfluffy.caustica.api.gpu.GpuDescriptorRange;
+import dev.comfyfluffy.caustica.api.gpu.GpuDescriptorIndex;
+import dev.comfyfluffy.caustica.api.gpu.GpuAccelerationStructureDescriptor;
 import dev.comfyfluffy.caustica.api.light.LightDescriptor;
 import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
@@ -13,8 +16,14 @@ import dev.comfyfluffy.caustica.rt.RtGpuExecutor.GraphicsUse;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor.TrackedGraphicsUse;
 import dev.comfyfluffy.caustica.rt.accel.RtAccel;
 import dev.comfyfluffy.caustica.rt.accel.TlasBuilder;
+import dev.comfyfluffy.caustica.rt.pipeline.RtPipeline;
+import dev.comfyfluffy.caustica.rt.pipeline.RtBindings;
+import org.lwjgl.system.MemoryUtil;
+import org.lwjgl.vulkan.VK10;
+import org.lwjgl.vulkan.VkCommandBuffer;
 
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.IdentityHashMap;
@@ -24,10 +33,14 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
+import static org.lwjgl.vulkan.KHRRayTracingPipeline.VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR;
+
 /** Vulkan owner for immutable retained-scene publications. */
 public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     private final GpuContext ctx;
+    private final RtNeeAtBackend neeAt;
     private final Map<SceneId, TlasBuilder.Ring> tlasRings = new IdentityHashMap<>();
+    private final Map<SceneId, TraceRing> traceRings = new IdentityHashMap<>();
     private final ArrayDeque<Publication> queued = new ArrayDeque<>();
     private final ConcurrentLinkedQueue<CompletedBuild> completed = new ConcurrentLinkedQueue<>();
     private NativeSnapshot published;
@@ -36,6 +49,37 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
 
     public RtRetainedSceneBackend(GpuContext ctx) {
         this.ctx = Objects.requireNonNull(ctx, "ctx");
+        this.neeAt = new RtNeeAtBackend(ctx);
+    }
+
+    public synchronized PreparedLighting prepareLighting(SceneId scene, LightingFrame frame,
+                                                          VkCommandBuffer commandBuffer,
+                                                          GraphicsUse graphicsUse) {
+        NativeSnapshot current = requirePublishedScene(scene);
+        current.graphicsUse.mark(graphicsUse);
+        var input = new RtNeeAtBackend.FrameInput(frame.width(), frame.height(), frame.frameIndex(),
+                frame.metersPerSceneUnit(), frame.historyContinuous());
+        return new PreparedLighting(neeAt.prepare(scene, current.content.get(scene).lights(), input,
+                commandBuffer, graphicsUse));
+    }
+
+    public synchronized void finishLighting(SceneId scene, PreparedLighting lighting,
+                                             VkCommandBuffer commandBuffer, GraphicsUse graphicsUse) {
+        Objects.requireNonNull(lighting, "lighting");
+        Objects.requireNonNull(commandBuffer, "commandBuffer");
+        if (lighting.delegate.scene() != scene) {
+            throw new IllegalArgumentException("prepared lighting belongs to another scene");
+        }
+        neeAt.finish(scene, lighting.delegate, commandBuffer, graphicsUse);
+    }
+
+    /** Invalidates feedback when a prepared frame cannot reach its trace completion point. */
+    public synchronized void abandonLighting(SceneId scene, PreparedLighting lighting) {
+        Objects.requireNonNull(lighting, "lighting");
+        if (lighting.delegate.scene() != scene) {
+            throw new IllegalArgumentException("prepared lighting belongs to another scene");
+        }
+        neeAt.abandon(scene, lighting.delegate);
     }
 
     /** Accepts a complete logical version. GPU publication remains ordered and atomic. */
@@ -127,6 +171,97 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         return RtRetainedGeometryPlan.hitGroups(records);
     }
 
+    /** Uploads this frame's rebased geometry records and pipeline-specific hit SBT into a protected ring slot. */
+    public synchronized PreparedTrace prepareTrace(SceneId scene, SceneOrigin origin, RtPipeline pipeline,
+                                                   long tlasHandle, GraphicsUse graphicsUse) {
+        Objects.requireNonNull(pipeline, "pipeline");
+        Objects.requireNonNull(graphicsUse, "graphicsUse");
+        NativeSnapshot current = requirePublishedScene(scene);
+        current.graphicsUse.mark(graphicsUse);
+        List<SceneLight> sceneLights = content(scene).lights();
+        Map<Long, Integer> lightIndices = new LinkedHashMap<>();
+        for (int index = 0; index < sceneLights.size(); index++) {
+            lightIndices.put(sceneLights.get(index).identity(), index);
+        }
+        List<RtRetainedGeometryPlan.GeometryRecord> records = new ArrayList<>();
+        List<Integer> emitterOffsets = new ArrayList<>();
+        int emitterBytes = 0;
+        for (NativeInstance instance : current.instances.get(scene)) {
+            List<RtRetainedGeometryPlan.GeometryRecord> instanceRecords = RtRetainedGeometryPlan.records(
+                    instance.mesh.logical, instance.logical, instance.previousTransform);
+            for (int geometryIndex = 0; geometryIndex < instanceRecords.size(); geometryIndex++) {
+                records.add(instanceRecords.get(geometryIndex));
+                emitterOffsets.add(emitterBytes);
+                int triangles = instance.mesh.logical.build().geometries().get(geometryIndex).triangleCount();
+                emitterBytes = Math.addExact(emitterBytes, Math.multiplyExact(triangles, Integer.BYTES));
+            }
+        }
+        List<RtRetainedGeometryPlan.HitGroup> groups = RtRetainedGeometryPlan.hitGroups(records);
+        ByteBuffer hits = pipeline.retainedHitRecords(groups);
+        TraceRing ring = traceRings.computeIfAbsent(scene, ignored -> new TraceRing());
+        int geometryBytes = Math.multiplyExact(records.size(), RtRetainedGeometryPlan.RECORD_BYTES);
+        int lightBytes = Math.multiplyExact(sceneLights.size(), RtRetainedLightPlan.RECORD_BYTES);
+        TraceSlot slot = ring.next(ctx, geometryBytes, hits.remaining(), lightBytes, emitterBytes, pipeline);
+        List<RtRetainedGeometryPlan.GeometryRecord> addressedRecords = new ArrayList<>(records.size());
+        for (int index = 0; index < records.size(); index++) {
+            addressedRecords.add(records.get(index).withEmitterIndex(
+                    slot.emitters.deviceAddress() + emitterOffsets.get(index), 0));
+        }
+        ByteBuffer geometry = RtRetainedGeometryPlan.pack(addressedRecords, origin);
+        ByteBuffer emitters = ByteBuffer.allocate(emitterBytes).order(ByteOrder.nativeOrder());
+        boolean[] linkedEmitters = new boolean[sceneLights.size()];
+        for (NativeInstance instance : current.instances.get(scene)) {
+            for (MeshBuild.Geometry<?> meshGeometry : instance.mesh.logical.build().geometries()) {
+                int primitiveBase = meshGeometry.firstIndex() / 3;
+                for (int localPrimitive = 0; localPrimitive < meshGeometry.triangleCount(); localPrimitive++) {
+                    int dense = emitterIndex(instance.logical.primitiveEmitters(),
+                            primitiveBase + localPrimitive, lightIndices);
+                    emitters.putInt(dense);
+                    if (dense >= 0) linkedEmitters[dense] = true;
+                }
+            }
+        }
+        emitters.flip();
+        ByteBuffer lights = RtRetainedLightPlan.pack(
+                sceneLights.stream().map(SceneLight::descriptor).toList(), origin, linkedEmitters);
+        if (geometry.hasRemaining()) {
+            MemoryUtil.memByteBuffer(slot.geometry.mapped(), geometry.remaining()).put(geometry.duplicate());
+            slot.geometry.flush(0L, geometry.remaining());
+        }
+        if (hits.hasRemaining()) {
+            MemoryUtil.memByteBuffer(slot.hits.mapped(), hits.remaining()).put(hits.duplicate());
+            slot.hits.flush(0L, hits.remaining());
+        }
+        if (lights.hasRemaining()) {
+            MemoryUtil.memByteBuffer(slot.lights.mapped(), lights.remaining()).put(lights.duplicate());
+            slot.lights.flush(0L, lights.remaining());
+        }
+        if (emitters.hasRemaining()) {
+            MemoryUtil.memByteBuffer(slot.emitters.mapped(), emitters.remaining()).put(emitters.duplicate());
+            slot.emitters.flush(0L, emitters.remaining());
+        }
+        ctx.descriptorHeap().writer().writeAccelerationStructure(slot.tlasDescriptor, 0, tlasHandle);
+        slot.graphicsUse.mark(graphicsUse);
+        RtPipeline.HitTable hitTable = hits.hasRemaining() ? new RtPipeline.HitTable(
+                slot.hits.deviceAddress(), pipeline.retainedHitRecordStride(), hits.remaining()) : null;
+        RtNeeAtBackend.Prepared lighting = neeAt.active(scene);
+        if (lighting == null) throw new IllegalStateException("prepareLighting must precede prepareTrace");
+        lighting.bindLightTable(slot.lights.deviceAddress());
+        return new PreparedTrace(slot.geometry.deviceAddress(), lighting.stateAddress(),
+                slot.tlasDescriptor.firstIndex().value(), hitTable);
+    }
+
+    private static int emitterIndex(List<RetainedSceneSnapshot.PrimitiveEmitter> ranges,
+                                    int primitive, Map<Long, Integer> lightIndices) {
+        for (RetainedSceneSnapshot.PrimitiveEmitter range : ranges) {
+            if (primitive < range.firstPrimitive()) break;
+            if (primitive < range.firstPrimitive() + range.primitiveCount()) {
+                return lightIndices.getOrDefault(range.lightIdentity(), -1);
+            }
+        }
+        return -1;
+    }
+
     /** Releases all native state after the GPU executor has stopped and the device has been made idle. */
     public synchronized void shutdownAfterDeviceIdle() {
         if (closed) return;
@@ -139,6 +274,12 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                 failure = releaseFailure;
             }
             published = null;
+        }
+        try {
+            neeAt.destroyAfterDeviceIdle();
+        } catch (Throwable releaseFailure) {
+            if (failure == null) failure = releaseFailure;
+            else failure.addSuppressed(releaseFailure);
         }
         while (!queued.isEmpty()) {
             Publication publication = queued.removeFirst();
@@ -164,6 +305,8 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             }
         }
         tlasRings.clear();
+        for (TraceRing ring : traceRings.values()) ring.destroy();
+        traceRings.clear();
         if (failure instanceof RuntimeException runtime) throw runtime;
         if (failure instanceof Error error) throw error;
         if (failure != null) throw new IllegalStateException("retained scene shutdown failed", failure);
@@ -253,7 +396,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                     mesh.logical.build().geometries().size()));
         }
         for (RetainedSceneSnapshot.Light light : snapshot.lights()) {
-            mutableContent.get(light.scene()).lights.add(light.descriptor());
+            mutableContent.get(light.scene()).lights.add(new SceneLight(light.identity(), light.descriptor()));
         }
         Map<SceneId, SceneContent> content = new IdentityHashMap<>();
         mutableContent.forEach((scene, value) -> content.put(scene,
@@ -273,6 +416,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         queued.removeFirst();
         NativeSnapshot previous = published;
         published = publication.candidate.publish();
+        neeAt.retainScenes(published.content.keySet());
         if (previous == null) {
             publication.retirePrevious(null);
         } else {
@@ -299,15 +443,138 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         return new IllegalStateException("accepted retained scene GPU work failed", fatalFailure);
     }
 
-    public record SceneContent(EnvironmentBinding<?> environment, List<LightDescriptor> lights) {
+    public record SceneLight(long identity, LightDescriptor descriptor) {
+        public SceneLight { Objects.requireNonNull(descriptor, "descriptor"); }
+    }
+
+    public record SceneContent(EnvironmentBinding<?> environment, List<SceneLight> lights) {
         public SceneContent {
             lights = List.copyOf(lights);
         }
     }
 
+    public record LightingFrame(int width, int height, long frameIndex, float metersPerSceneUnit,
+                                boolean historyContinuous) { }
+
+    public static final class PreparedLighting {
+        private final RtNeeAtBackend.Prepared delegate;
+        private PreparedLighting(RtNeeAtBackend.Prepared delegate) { this.delegate = delegate; }
+        public boolean historyValid() { return delegate.historyValid(); }
+    }
+
+    public record PreparedTrace(long geometryRecordsAddress, long neeAtStateAddress,
+                                int tlasDescriptorIndex,
+                                RtPipeline.HitTable hitTable) {
+        /** Borrowed view of the frame-protected TLAS descriptor for native UI passes. */
+        public GpuAccelerationStructureDescriptor tlasDescriptor() {
+            GpuDescriptorIndex.Resource index = new GpuDescriptorIndex.Resource(tlasDescriptorIndex);
+            return () -> index;
+        }
+
+        /** Writes the retained-scene roots without disturbing roots owned by the program or frame. */
+        public void writeWorldRoots(ByteBuffer roots) {
+            if (roots.remaining() != RtBindings.WORLD_PUSH_CONSTANT_SIZE) {
+                throw new IllegalArgumentException("world binding root has the wrong size");
+            }
+            ByteBuffer target = roots.duplicate().order(ByteOrder.nativeOrder());
+            int base = roots.position();
+            target.putLong(base + RtBindings.WORLD_GEOMETRY_TABLE_ADDRESS_OFFSET,
+                    geometryRecordsAddress);
+            target.putInt(base + RtBindings.WORLD_TOP_LEVEL_AS_INDEX_OFFSET, tlasDescriptorIndex);
+            target.putLong(base + RtBindings.WORLD_NEE_AT_STATE_ADDRESS_OFFSET, neeAtStateAddress);
+            target.putLong(base + RtBindings.WORLD_RESERVED_NEE_AT_ADDRESS_OFFSET, 0L);
+        }
+    }
+
+    private static final class TraceRing {
+        private static final int SIZE = 4;
+        private final TraceSlot[] slots = new TraceSlot[SIZE];
+        private int cursor;
+
+        TraceSlot next(GpuContext ctx, int geometryBytes, int hitBytes, int lightBytes, int emitterBytes,
+                       RtPipeline pipeline) {
+            TraceSlot slot = slots[cursor];
+            cursor = (cursor + 1) % SIZE;
+            if (slot != null) ctx.gpuExecutor().graphicsUseWaiter().await(slot.graphicsUse);
+            if (slot == null || slot.geometry.size() < geometryBytes || slot.hits.size() < hitBytes
+                    || slot.lights.size() < lightBytes
+                    || slot.emitters.size() < emitterBytes
+                    || slot.hitStride != pipeline.retainedHitRecordStride()) {
+                int slotIndex = (cursor + SIZE - 1) % SIZE;
+                if (slot != null) {
+                    slots[slotIndex] = null;
+                    slot.destroy();
+                }
+                int geometryCapacity = Math.max(RtRetainedGeometryPlan.RECORD_BYTES, geometryBytes);
+                int hitCapacity = Math.max(pipeline.retainedHitRecordStride(), hitBytes);
+                int lightCapacity = Math.max(RtRetainedLightPlan.RECORD_BYTES, lightBytes);
+                int emitterCapacity = Math.max(Integer.BYTES, emitterBytes);
+                GpuBuffer geometry = null;
+                GpuBuffer hits = null;
+                GpuBuffer lights = null;
+                GpuBuffer emitters = null;
+                GpuDescriptorRange<GpuDescriptorIndex.Resource> descriptor = null;
+                try {
+                    geometry = ctx.createBuffer(geometryCapacity, VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                            true, "retained geometry records");
+                    hits = ctx.createAlignedBuffer(hitCapacity, VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR,
+                            true, "retained hit SBT", pipeline.retainedHitTableAlignment());
+                    lights = ctx.createBuffer(lightCapacity, VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                            true, "retained light records");
+                    emitters = ctx.createBuffer(emitterCapacity, VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                            true, "retained primitive-light indices");
+                    descriptor = ctx.descriptorHeap().allocateResources(1, "retained scene TLAS");
+                    slot = new TraceSlot(geometry, hits, lights, emitters, descriptor,
+                            pipeline.retainedHitRecordStride());
+                    slots[slotIndex] = slot;
+                } catch (Throwable failure) {
+                    if (descriptor != null) descriptor.destroy();
+                    if (emitters != null) emitters.destroy();
+                    if (lights != null) lights.destroy();
+                    if (hits != null) hits.destroy();
+                    if (geometry != null) geometry.destroy();
+                    throw failure;
+                }
+            }
+            return slot;
+        }
+
+        void destroy() {
+            for (TraceSlot slot : slots) if (slot != null) slot.destroy();
+        }
+    }
+
+    private static final class TraceSlot {
+        final GpuBuffer geometry;
+        final GpuBuffer hits;
+        final GpuBuffer lights;
+        final GpuBuffer emitters;
+        final GpuDescriptorRange<GpuDescriptorIndex.Resource> tlasDescriptor;
+        final int hitStride;
+        final TrackedGraphicsUse graphicsUse = new TrackedGraphicsUse();
+
+        TraceSlot(GpuBuffer geometry, GpuBuffer hits, GpuBuffer lights, GpuBuffer emitters,
+                  GpuDescriptorRange<GpuDescriptorIndex.Resource> tlasDescriptor, int hitStride) {
+            this.geometry = geometry;
+            this.hits = hits;
+            this.lights = lights;
+            this.emitters = emitters;
+            this.tlasDescriptor = tlasDescriptor;
+            this.hitStride = hitStride;
+        }
+
+        void destroy() {
+            geometry.destroy();
+            hits.destroy();
+            lights.destroy();
+            emitters.destroy();
+            tlasDescriptor.destroy();
+        }
+    }
+
     private static final class MutableSceneContent {
         final EnvironmentBinding<?> environment;
-        final List<LightDescriptor> lights = new ArrayList<>();
+        final List<SceneLight> lights = new ArrayList<>();
         MutableSceneContent(EnvironmentBinding<?> environment) { this.environment = environment; }
     }
 

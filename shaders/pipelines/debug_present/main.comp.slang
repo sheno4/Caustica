@@ -7,7 +7,6 @@
 // pass shows the actual guide inputs used by RR rather than changing the renderer being inspected.
 
 import display_common;
-import bindings;
 
 [[vk::push_constant]] DebugPresentPush pc;
 
@@ -65,6 +64,7 @@ float meteringWeight(float2 uv, float depth, bool emissive) {
     float sigma = max(pc.centerWeightSigma, 0.01);
     float gaussian = exp(-0.5 * dot(centered, centered) / (sigma * sigma));
     float centerWeight = lerp(clamp(pc.centerWeightFloor, 0.0, 1.0), 1.0, gaussian);
+    DevicePtr<ExposureState> exposureState = DevicePtr<ExposureState>(pc.exposureStateAddress);
     float populationWeight = depth <= 1.0e-6 ? exposureState[0].meteringSkyScale
             : (emissive ? exposureState[0].meteringEmissiveScale : 1.0);
     return centerWeight * populationWeight;
@@ -73,6 +73,15 @@ float meteringWeight(float2 uv, float depth, bool emissive) {
 [shader("compute")]
 [numthreads(16, 16, 1)]
 void main(uint3 dispatchId : SV_DispatchThreadID) {
+    [format("rgba8")] RWTexture2D<float4> outputImage = ResourceDescriptorHeap[NonUniformResourceIndex(pc.outputImageIndex)];
+    [format("rgba16f")] RWTexture2D<float4> gNormal = ResourceDescriptorHeap[NonUniformResourceIndex(pc.normalImageIndex)];
+    [format("rgba16f")] RWTexture2D<float4> gAlbedo = ResourceDescriptorHeap[NonUniformResourceIndex(pc.albedoImageIndex)];
+    [format("r32f")] RWTexture2D<float> gDepth = ResourceDescriptorHeap[NonUniformResourceIndex(pc.depthImageIndex)];
+    [format("rg16f")] RWTexture2D<float2> gMotion = ResourceDescriptorHeap[NonUniformResourceIndex(pc.motionImageIndex)];
+    [format("rgba16f")] RWTexture2D<float4> gSpecAlbedo = ResourceDescriptorHeap[NonUniformResourceIndex(pc.specAlbedoImageIndex)];
+    [format("rg16f")] RWTexture2D<float2> gSpecMotion = ResourceDescriptorHeap[NonUniformResourceIndex(pc.specMotionImageIndex)];
+    [format("rgba16f")] RWTexture2D<float4> sceneImage = ResourceDescriptorHeap[NonUniformResourceIndex(pc.sceneImageIndex)];
+    [format("r32f")] RWTexture2D<float> exposureImage = ResourceDescriptorHeap[NonUniformResourceIndex(pc.exposureImageIndex)];
     int2 pix = int2(dispatchId.xy);
     uint w, h;
     outputImage.GetDimensions(w, h);

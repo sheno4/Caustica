@@ -3,7 +3,7 @@ package dev.comfyfluffy.caustica.rt;
 import dev.comfyfluffy.caustica.rt.RtTelemetry.MetricSchema;
 import dev.comfyfluffy.caustica.rt.RtTelemetry.StageMetric;
 
-import dev.comfyfluffy.caustica.CausticaConfig;
+import dev.comfyfluffy.caustica.config.CausticaConfig;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 

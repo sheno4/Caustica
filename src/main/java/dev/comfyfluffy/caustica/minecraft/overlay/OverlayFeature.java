@@ -4,11 +4,11 @@ import org.lwjgl.vulkan.VkCommandBuffer;
 import org.joml.Matrix4fc;
 
 import dev.comfyfluffy.caustica.api.gpu.GpuFrameUse;
-import dev.comfyfluffy.caustica.rt.GpuContext;
+import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
 
 /**
- * One world-space overlay effect (glow outline today; block outline, nametags, leash planned) rendered by
- * {@link WorldOverlayPass} at the post-upscale seam. Implementations create their pipelines through
+ * One world-space overlay effect rendered by {@link WorldOverlayPass} into the display-resolution UI
+ * layer. Implementations create their pipelines through
  * {@link OverlayPipelines} (reusing an existing vertex-format/blend combination where one fits) and take
  * per-frame vertex scratch from the shared {@link OverlayFramePool} — never own one-off pools.
  */
@@ -19,23 +19,17 @@ public interface OverlayFeature {
      * {@code graphicsUse} is the exact completion token for resources referenced by the recorded commands.
      * {@code width}/{@code height} are the composite target's (display-res) extent.
      */
-    boolean prepare(GpuContext device, OverlayFramePool pool, GpuFrameUse gpuUse,
-                    long worldTlas, Matrix4fc worldViewProjection, int width, int height);
+    boolean prepare(GpuDevice device, OverlayFramePool pool, GpuFrameUse gpuUse,
+                    int worldTlasDescriptor, Matrix4fc worldViewProjection, int width, int height);
 
     /**
-     * Record this feature's passes. {@code targetView} is {@link WorldOverlayPass}'s shared, mod-owned world-
-     * overlay buffer ({@link WorldOverlayPass#TARGET_FORMAT}, GENERAL layout, cleared to transparent black
-     * once per frame before any feature runs) — NOT the presented image directly; composite onto it with
-     * {@code loadOp = LOAD} dynamic rendering and {@code OverlayPipelines.Blend.ALPHA} (straight-alpha
-     * "over" — see that enum constant's doc for why the shared buffer ends up premultiplied once more than
-     * one feature has drawn into it). {@link WorldOverlayPass} blends the buffer onto the real presented image
-     * (or dispatches an HDR-space composite) after every feature has drawn, so features never touch
-     * vanilla's own texture (which really isn't storage-capable, unlike this shared buffer). Host vertex
-     * writes are already visible; barriers between a feature's own passes are the feature's responsibility,
-     * and {@link WorldOverlayPass} barriers between features.
+     * Record this feature's passes. {@code targetView} is the renderer-owned premultiplied-sRGB UI layer in
+     * {@code GENERAL} layout. Composite onto it with {@code loadOp = LOAD} and the straight-alpha over blend.
+     * Host vertex writes are already visible; barriers between a feature's own passes are the feature's
+     * responsibility, and {@link WorldOverlayPass} inserts barriers between features.
      */
     void record(VkCommandBuffer cmd, long targetView, int width, int height);
 
     /** Destroy GPU resources (device is idle); must tolerate never-prepared and repeated calls. */
-    void destroy();
+    void close();
 }

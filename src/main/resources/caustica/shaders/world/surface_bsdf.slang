@@ -4,9 +4,69 @@
 module surface_bsdf;
 
 import world_common;
-import world_core;
-import math;
 import caustica_types;
+
+static const float SURFACE_PI = 3.14159265359;
+static const float SURFACE_INV_PI = 0.31830988618;
+
+float surfaceGgxD(float ndh, float alpha) {
+    float a2 = alpha * alpha;
+    float d = ndh * ndh * (a2 - 1.0) + 1.0;
+    return a2 / (SURFACE_PI * d * d);
+}
+
+float surfaceGgxG1(float ndx, float alpha) {
+    float a2 = alpha * alpha;
+    return 2.0 * ndx / (ndx + sqrt(a2 + (1.0 - a2) * ndx * ndx) + 1.0e-7);
+}
+
+float3 surfaceFresnelSchlick(float cosine, float3 f0) {
+    float m = clamp(1.0 - cosine, 0.0, 1.0);
+    float m2 = m * m;
+    float grazing = clamp(50.0 * f0.g, 0.0, 1.0);
+    return f0 + (grazing - f0) * (m2 * m2 * m);
+}
+
+float3 surfaceLayerTransmission(float3 f0, float outgoingCosine, float incomingCosine) {
+    return max((1.0 - surfaceFresnelSchlick(clamp(outgoingCosine, 0.0, 1.0), f0))
+            * (1.0 - surfaceFresnelSchlick(clamp(incomingCosine, 0.0, 1.0), f0)), float3(0.0));
+}
+
+public static const uint EVENT_NONE = 0u;
+public static const uint EVENT_DIFFUSE = 1u;
+public static const uint EVENT_GLOSSY = 2u;
+public static const uint EVENT_REFLECTION = 4u;
+public static const uint EVENT_TRANSMISSION = 8u;
+
+public struct SurfaceClosure {
+    public float3 shadingNormal;
+    public float3 diffuseAlbedo;
+    public float3 diffuseTransmissionAlbedo;
+    public float3 specularF0;
+    public float alphaRoughness;
+    public float3 emissionRadiance;
+    public float3 thinTransmissionColor;
+    public float thinTransmissionWeight;
+};
+
+public struct BsdfQuery {
+    public SurfaceClosure surface;
+    public float3 outgoingDirection;
+    public float3 incomingDirection;
+};
+
+public struct BsdfEvaluation { public float3 value; public float pdf; public uint eventFlags; };
+public struct BsdfSampleQuery {
+    public SurfaceClosure surface;
+    public float3 outgoingDirection;
+    public float3 random;
+};
+public struct BsdfSample {
+    public float3 incomingDirection;
+    public float3 throughputWeight;
+    public float pdf;
+    public uint eventFlags;
+};
 
 float maxComponent(float3 value) {
     return max(value.x, max(value.y, value.z));
@@ -42,15 +102,15 @@ void thinSheetFactors(float3 fresnel, float3 transmittance,
 }
 
 /** Resolve the supported OpenPBR base into the exact albedos and sheet state its lobes consume. */
-public SurfaceClosure surfaceClosure(MaterialInput material) {
-    float roughness = clamp(material.specularRoughness, 0.0, 1.0);
-    float dielectricWeight = 1.0 - clamp(material.baseMetalness, 0.0, 1.0);
-    float transmissionWeight = clamp(material.transmissionWeight, 0.0, 1.0);
-    float subsurfaceWeight = clamp(material.subsurfaceWeight, 0.0, 1.0);
-    float anisotropy = clamp(material.subsurfaceScatterAnisotropy, -1.0, 1.0);
+public SurfaceClosure surfaceClosure(OpenPbrSurface material, float3 geometryNormal) {
+    float roughness = clamp(material.specular_roughness, 0.0, 1.0);
+    float dielectricWeight = 1.0 - clamp(material.base_metalness, 0.0, 1.0);
+    float transmissionWeight = clamp(material.transmission_weight, 0.0, 1.0);
+    float subsurfaceWeight = clamp(material.subsurface_weight, 0.0, 1.0);
+    float anisotropy = clamp(material.subsurface_scatter_anisotropy, -1.0, 1.0);
     float opaqueDielectricWeight = dielectricWeight * (1.0 - transmissionWeight);
-    float3 baseColor = clamp(material.baseColor, float3(0.0), float3(1.0));
-    float3 subsurfaceColor = clamp(material.subsurfaceColor, float3(0.0), float3(1.0));
+    float3 baseColor = clamp(material.base_color, float3(0.0), float3(1.0));
+    float3 subsurfaceColor = clamp(material.subsurface_color, float3(0.0), float3(1.0));
 
     // OpenPBR 1.1.1 thin-wall subsurface degeneration: S is split exactly between a reflected and a
     // transmitted Lambert lobe by g. Their sum is S, so the sheet remains energy conserving.
@@ -60,31 +120,18 @@ public SurfaceClosure surfaceClosure(MaterialInput material) {
             * (0.5 * (1.0 + anisotropy));
 
     SurfaceClosure surface;
-    surface.shadingNormal = normalize(material.geometryNormal);
+    surface.shadingNormal = normalize(any(material.geometry_normal != 0.0)
+            ? material.geometry_normal : geometryNormal);
     surface.diffuseAlbedo = opaqueDielectricWeight
             * (diffuseReflection + diffuseTransmission);
     surface.diffuseTransmissionAlbedo = opaqueDielectricWeight * diffuseTransmission;
     surface.specularF0 = clamp(openPbrSpecularF0(material), float3(0.0), float3(1.0));
     surface.alphaRoughness = max(roughness * roughness, 4.0e-4);
-    surface.emissionRadiance = max(material.emissionColor, float3(0.0))
-            * max(material.emissionLuminance, 0.0);
-    surface.thinTransmissionColor = clamp(material.transmissionColor,
+    surface.emissionRadiance = max(material.emission_color, float3(0.0))
+            * max(material.emission_luminance, 0.0);
+    surface.thinTransmissionColor = clamp(material.transmission_color,
             float3(0.0), float3(1.0));
     surface.thinTransmissionWeight = dielectricWeight * transmissionWeight;
-    return surface;
-}
-
-/** Rebuild the closure closest-hit serialized into the radiance payload. */
-public SurfaceClosure payloadSurfaceClosure(float3 shadingNormal) {
-    SurfaceClosure surface;
-    surface.shadingNormal = shadingNormal;
-    surface.diffuseAlbedo = payloadAlbedo();
-    surface.diffuseTransmissionAlbedo = payloadDiffuseTransmissionAlbedo();
-    surface.specularF0 = payload.f0;
-    surface.alphaRoughness = payloadAlphaRoughness();
-    surface.emissionRadiance = payloadEmissionRadiance();
-    surface.thinTransmissionColor = payloadThinTransmissionColor();
-    surface.thinTransmissionWeight = payloadThinTransmissionWeight();
     return surface;
 }
 
@@ -93,7 +140,7 @@ public SurfaceClosure payloadSurfaceClosure(float3 shadingNormal) {
 float4 surfaceLobeProbabilities(SurfaceClosure surface, float outgoingCosine) {
     float3 diffuseReflection = max(surface.diffuseAlbedo - surface.diffuseTransmissionAlbedo,
             float3(0.0));
-    float3 fresnel = fresnelSchlick(outgoingCosine, surface.specularF0);
+    float3 fresnel = surfaceFresnelSchlick(outgoingCosine, surface.specularF0);
     float3 sheetReflection;
     float3 sheetTransmission;
     thinSheetFactors(fresnel, surface.thinTransmissionColor,
@@ -126,22 +173,22 @@ public BsdfEvaluation evaluateBsdf(BsdfQuery query) {
         float3 halfVector = normalize(query.incomingDirection + query.outgoingDirection);
         float ndh = max(0.0, dot(n, halfVector));
         float vdh = max(0.0, dot(query.outgoingDirection, halfVector));
-        float distribution = ggxD(ndh, alpha);
-        float geometry = ggxG1(ndv, alpha) * ggxG1(ndl, alpha);
-        float3 fresnel = fresnelSchlick(vdh, query.surface.specularF0);
+        float distribution = surfaceGgxD(ndh, alpha);
+        float geometry = surfaceGgxG1(ndv, alpha) * surfaceGgxG1(ndl, alpha);
+        float3 fresnel = surfaceFresnelSchlick(vdh, query.surface.specularF0);
         float3 sheetReflection;
         float3 sheetTransmission;
         thinSheetFactors(fresnel, query.surface.thinTransmissionColor,
                 sheetReflection, sheetTransmission);
         float thinWeight = clamp(query.surface.thinTransmissionWeight, 0.0, 1.0);
         float3 reflectedFresnel = lerp(fresnel, sheetReflection, thinWeight);
-        float3 layerTransmission = glossyLayerTransmission(query.surface.specularF0, ndv, ndl);
+        float3 layerTransmission = surfaceLayerTransmission(query.surface.specularF0, ndv, ndl);
         float3 diffuseReflection = max(query.surface.diffuseAlbedo
                 - query.surface.diffuseTransmissionAlbedo, float3(0.0));
-        float3 diffuse = diffuseReflection * layerTransmission * INV_PI;
+        float3 diffuse = diffuseReflection * layerTransmission * SURFACE_INV_PI;
         float3 specular = distribution * geometry * reflectedFresnel
                 / max(4.0 * ndv * ndl, 1.0e-6);
-        float diffusePdf = ndl * INV_PI * probabilities.y;
+        float diffusePdf = ndl * SURFACE_INV_PI * probabilities.y;
         float specularPdf = distribution * ndh / max(4.0 * vdh, 1.0e-6)
                 * probabilities.x;
         result.value = diffuse + specular;
@@ -152,10 +199,10 @@ public BsdfEvaluation evaluateBsdf(BsdfQuery query) {
 
     float backNdl = -ndl;
     if (backNdl <= 0.0) return result;
-    float3 layerTransmission = glossyLayerTransmission(query.surface.specularF0, ndv, backNdl);
+    float3 layerTransmission = surfaceLayerTransmission(query.surface.specularF0, ndv, backNdl);
     float3 diffuse = query.surface.diffuseTransmissionAlbedo
-            * layerTransmission * INV_PI;
-    float diffusePdf = backNdl * INV_PI * probabilities.z;
+            * layerTransmission * SURFACE_INV_PI;
+    float diffusePdf = backNdl * SURFACE_INV_PI * probabilities.z;
 
     // Mirror the far-side direction into the view hemisphere. A GGX reflection around the resulting
     // half vector becomes an un-deflected straight-through event when the microfacet normal is n.
@@ -163,9 +210,9 @@ public BsdfEvaluation evaluateBsdf(BsdfQuery query) {
     float3 halfVector = normalize(mirroredIncoming + query.outgoingDirection);
     float ndh = max(0.0, dot(n, halfVector));
     float vdh = max(0.0, dot(query.outgoingDirection, halfVector));
-    float distribution = ggxD(ndh, alpha);
-    float geometry = ggxG1(ndv, alpha) * ggxG1(backNdl, alpha);
-    float3 fresnel = fresnelSchlick(vdh, query.surface.specularF0);
+    float distribution = surfaceGgxD(ndh, alpha);
+    float geometry = surfaceGgxG1(ndv, alpha) * surfaceGgxG1(backNdl, alpha);
+    float3 fresnel = surfaceFresnelSchlick(vdh, query.surface.specularF0);
     float3 sheetReflection;
     float3 sheetTransmission;
     thinSheetFactors(fresnel, query.surface.thinTransmissionColor,
@@ -204,7 +251,7 @@ public BsdfSample sampleBsdf(BsdfSampleQuery query) {
 
     if (sampleReflectionGlossy || sampleThinTransmission) {
         float alpha = query.surface.alphaRoughness;
-        float phi = 2.0 * PI * query.random.y;
+        float phi = 2.0 * SURFACE_PI * query.random.y;
         float tanTheta2 = alpha * alpha * query.random.z
                 / max(1.0 - query.random.z, 1.0e-6);
         float cosTheta = rsqrt(1.0 + tanTheta2);
@@ -213,7 +260,7 @@ public BsdfSample sampleBsdf(BsdfSampleQuery query) {
         float3 reflected = reflect(-query.outgoingDirection, halfVector);
         result.incomingDirection = sampleThinTransmission ? reflect(reflected, n) : reflected;
     } else {
-        float phi = 2.0 * PI * query.random.y;
+        float phi = 2.0 * SURFACE_PI * query.random.y;
         float sinTheta = sqrt(query.random.z);
         float cosTheta = sqrt(max(0.0, 1.0 - query.random.z));
         result.incomingDirection = surfaceLocalDirection(

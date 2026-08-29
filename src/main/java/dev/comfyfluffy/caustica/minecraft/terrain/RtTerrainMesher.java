@@ -1,18 +1,18 @@
 package dev.comfyfluffy.caustica.minecraft.terrain;
 
 import com.mojang.blaze3d.vertex.VertexConsumer;
-import dev.comfyfluffy.caustica.CausticaConfig;
-import dev.comfyfluffy.caustica.api.ColorSpaces;
-import dev.comfyfluffy.caustica.api.provider.MaterialTopology;
+import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.settings.ResourceId;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialClassification;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialKey;
-import dev.comfyfluffy.caustica.minecraft.api.MinecraftMaterialProfile;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialProfile;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialClassifier;
-import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialSnapshot;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialLookup;
-import dev.comfyfluffy.caustica.minecraft.api.MinecraftMaterialEmission;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialEmission;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialIds;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialResolution;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialTopology;
+import dev.comfyfluffy.caustica.support.ColorSpaces;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
@@ -82,9 +82,9 @@ final class RtTerrainMesher {
     static final ThreadLocal<WorkerTessState> WORKER_TESS = ThreadLocal.withInitial(WorkerTessState::new);
 
     /**
-     * Tessellate one section to a section-local CPU mesh and CPU light metadata. <b>Pure CPU + snapshot reads only</b>
+     * Tessellate one section to a section-local CPU mesh and CPU light metadata. <b>Pure CPU + lookup reads only</b>
      * — no Vulkan, no shared mutable state — so this is the unit a worker thread runs. The task captures one
-     * immutable material snapshot for light extraction; publication resolves mesh materials for its current epoch.
+     * immutable material lookup, so geometry ordinals and light extraction belong to the same resource epoch.
      * Returns the mesh (possibly empty — caller checks {@code idx}).
      */
     static CpuSection buildCpuSection(BlockAndTintGetter region, BlockStateModelSet modelSet,
@@ -92,7 +92,7 @@ final class RtTerrainMesher {
                                               QuadCapture capture,
                                               FluidStateModelSet fluidModels, FluidCapture fluidCapture,
                                               SectionMesh mesh, BlockPos.MutableBlockPos m,
-                                              MinecraftMaterialSnapshot.Published materials,
+                                              MinecraftMaterialLookup materials,
                                               int scx, int scy, int scz) {
         capture.materials = materials;
         fluidCapture.materials = materials;
@@ -127,7 +127,8 @@ final class RtTerrainMesher {
         for (int triangle = 0; triangle < geom.surfaces.size(); triangle++) {
             TerrainSurface surface = geom.surfaces.get(triangle);
             var material = new MinecraftTerrainMesh.MaterialBinding(
-                    surface.material().material(), surface.material().texture());
+                    surface.material().materialIndex(), surface.material().material(),
+                    surface.material().texture());
             var coverage = surface.coverage() == Coverage.CUTOUT
                     ? MinecraftTerrainMesh.Coverage.CUTOUT : MinecraftTerrainMesh.Coverage.OPAQUE;
             var range = surface.opacityRange();
@@ -244,7 +245,7 @@ final class RtTerrainMesher {
 
     private record OpacityRange(float transparentAlpha, float opaqueAlpha) { }
 
-    private record TerrainMaterial(ResourceId material, ResourceId texture) { }
+    private record TerrainMaterial(int materialIndex, ResourceId material, ResourceId texture) { }
 
     private record TerrainSurface(TerrainMaterial material, Coverage coverage, OpacityRange opacityRange) { }
 
@@ -290,7 +291,7 @@ final class RtTerrainMesher {
         }
     }
 
-    /** Growable reference array paired one-to-one with triangles; entries are epoch-cached snapshots. */
+    /** Growable reference array paired one-to-one with triangles; entries belong to the captured lookup epoch. */
     private static final class MaterialEmissionList {
         private MinecraftMaterialEmission[] elements;
         private int size;
@@ -355,7 +356,7 @@ final class RtTerrainMesher {
     /** Captures vanilla baked model quads into the current section's mesh. */
     private static final class QuadCapture {
         SectionMesh cur; // set before each block model emission
-        MinecraftMaterialSnapshot.Published materials;
+        MinecraftMaterialLookup materials;
 
         // Per-block context for biome tint, set before each model emission. We resolve it straight from
         // BlockColors resolves biome tint before raster lighting, so the path tracer receives unlit albedo
@@ -432,18 +433,19 @@ final class RtTerrainMesher {
                     state, MinecraftMaterialClassifier::classify);
             MinecraftMaterialKey key = new MinecraftMaterialKey(
                     MinecraftMaterialLookup.material(sprite), classification.geometry(), classification.profile(),
-                    q.translucent ? MaterialTopology.MEDIUM_BOUNDARY : MaterialTopology.SURFACE);
+                    q.translucent ? MinecraftMaterialTopology.MEDIUM_BOUNDARY
+                            : MinecraftMaterialTopology.SURFACE);
             SpriteMaterial spriteMaterial = spriteMaterials.computeIfAbsent(sprite, current ->
                     new SpriteMaterial(MinecraftMaterialLookup.material(current), ResourceId.of(
                             current.atlasLocation().getNamespace(), current.atlasLocation().getPath())));
-            MinecraftMaterialSnapshot.ResolvedTerrainMaterial terrainMaterial = materials.resolveTerrain(
-                    key, spriteMaterial.texture());
-            q.material = new TerrainMaterial(terrainMaterial.material(), terrainMaterial.texture());
+            MinecraftMaterialResolution terrainMaterial = materials.resolve(key);
+            q.material = new TerrainMaterial(terrainMaterial.materialIndex(), terrainMaterial.material(),
+                    spriteMaterial.texture());
             q.coverage = q.cutout && !q.translucent ? Coverage.CUTOUT : Coverage.OPAQUE;
             q.materialEmission = terrainMaterial.emission();
-            q.opacityMicromapRange = q.coverage == Coverage.CUTOUT && terrainMaterial.opacityRange() != null
-                    ? new OpacityRange(terrainMaterial.opacityRange().transparentAlpha(),
-                    terrainMaterial.opacityRange().opaqueAlpha()) : null;
+            q.opacityMicromapRange = q.coverage == Coverage.CUTOUT && terrainMaterial.opacityMicromap() != null
+                    ? new OpacityRange(terrainMaterial.opacityMicromap().transparentAlpha(),
+                    terrainMaterial.opacityMicromap().opaqueAlpha()) : null;
         }
 
         /** Returns true when vanilla's nominal face should be discarded. */
@@ -608,7 +610,7 @@ final class RtTerrainMesher {
                 prim.add(q.tg);
                 prim.add(q.tb);
                 prim.add(0f);
-                prim.add(0f); // the uploader resolves material indices into the shared Minecraft table
+                prim.add(q.material.materialIndex());
                 prim.add(0f); // flags
                 prim.add(0f); // aux0
                 prim.add(0f); // aux1
@@ -667,16 +669,14 @@ final class RtTerrainMesher {
      * Topology and appearance come from the resolved named material rather than a primitive semantic bit.
      */
     private static final class FluidCapture implements VertexConsumer, FluidRenderer.Output {
-        private static final TerrainMaterial WATER_MATERIAL =
-                new TerrainMaterial(MinecraftMaterialIds.WATER, null);
         private static final MinecraftMaterialKey LAVA_KEY = new MinecraftMaterialKey(
                 MinecraftMaterialIds.LAVA, null,
-                MinecraftMaterialProfile.MEDIUM_ROUGH_DIELECTRIC, MaterialTopology.SURFACE);
+                MinecraftMaterialProfile.MEDIUM_ROUGH_DIELECTRIC, MinecraftMaterialTopology.SURFACE);
         private static final ResourceId BLOCK_ATLAS = ResourceId.of(
                 TextureAtlas.LOCATION_BLOCKS.getNamespace(), TextureAtlas.LOCATION_BLOCKS.getPath());
 
         SectionMesh cur;     // set before each section
-        MinecraftMaterialSnapshot.Published materials;
+        MinecraftMaterialLookup materials;
         MinecraftMaterialEmission waterEmission;
         MinecraftMaterialEmission lavaEmission;
         TerrainMaterial lavaMaterial;
@@ -711,19 +711,21 @@ final class RtTerrainMesher {
 
         private void emitQuad() {
             Geom g = cur.geometry();
-            TerrainMaterial material = WATER_MATERIAL;
+            TerrainMaterial material;
             MinecraftMaterialEmission materialEmission;
             if (water) {
+                MinecraftMaterialResolution waterMaterial = materials.resolve(MinecraftMaterialIds.WATER);
+                material = new TerrainMaterial(waterMaterial.materialIndex(), waterMaterial.material(), null);
                 materialEmission = waterEmission;
                 if (materialEmission == null) {
-                    materialEmission = waterEmission = materials.resolveTerrain(
-                            MinecraftMaterialIds.WATER, null).emission();
+                    materialEmission = waterEmission = waterMaterial.emission();
                 }
             } else {
                 materialEmission = lavaEmission;
                 if (materialEmission == null) {
-                    var terrainMaterial = materials.resolveTerrain(LAVA_KEY, BLOCK_ATLAS);
-                    lavaMaterial = new TerrainMaterial(terrainMaterial.material(), terrainMaterial.texture());
+                    var terrainMaterial = materials.resolve(LAVA_KEY);
+                    lavaMaterial = new TerrainMaterial(terrainMaterial.materialIndex(),
+                            terrainMaterial.material(), BLOCK_ATLAS);
                     materialEmission = lavaEmission = terrainMaterial.emission();
                 }
                 material = lavaMaterial;
@@ -785,7 +787,7 @@ final class RtTerrainMesher {
                 prim.add(tg);
                 prim.add(tb);
                 prim.add(0f);
-                prim.add(0f);
+                prim.add(material.materialIndex());
                 prim.add(0f);
                 prim.add(0f);
                 prim.add(0f);

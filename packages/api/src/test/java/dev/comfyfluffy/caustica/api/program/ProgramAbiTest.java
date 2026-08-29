@@ -55,8 +55,9 @@ final class ProgramAbiTest {
         assertTrue(!volume.contains("evaluateVolumeLighting"));
         assertTrue(volume.contains("volumeAbsorptionFromTransmittance"));
         assertTrue(types.contains("float3 absorptionCoefficient = float3(0.0)"));
+        assertTrue(types.contains("float indexOfRefraction = 1.0"));
         String volumeProperties = structBody(types, "VolumeProperties");
-        assertEquals(1L, volumeProperties.lines()
+        assertEquals(2L, volumeProperties.lines()
                 .filter(line -> line.stripLeading().startsWith("public "))
                 .count());
         assertTrue(!types.contains("guideTransmittance"));

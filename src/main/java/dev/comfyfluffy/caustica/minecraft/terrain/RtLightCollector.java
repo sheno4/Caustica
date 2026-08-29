@@ -1,8 +1,8 @@
 package dev.comfyfluffy.caustica.minecraft.terrain;
 
-import dev.comfyfluffy.caustica.api.ColorSpaces;
-import dev.comfyfluffy.caustica.minecraft.api.MinecraftEmissionFootprint;
-import dev.comfyfluffy.caustica.minecraft.api.MinecraftMaterialEmission;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftEmissionFootprint;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialEmission;
+import dev.comfyfluffy.caustica.support.ColorSpaces;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 
@@ -11,7 +11,7 @@ import net.minecraft.client.renderer.texture.TextureAtlasSprite;
  * Light-provider input collection. Enumerates a section's emissive terrain quads into a
  * light-descriptor list, in <b>section-local</b> coordinates (flattened into rebased world space at
  * publish, see {@code RtTerrain.applyBuildChanges}). Runs on the meshing worker over the transient
- * per-class arrays, before packing — pure CPU + immutable Minecraft emission-snapshot reads only.
+ * per-class arrays, before packing, and reads immutable material-emission values only.
  *
  * <p><b>One rectangle light per emissive quad.</b> {@code emit()}/{@code emitQuad()} always write a quad
  * as two lockstep triangles (0,1,2)(0,2,3) over 4 consecutive verts with prim/cornerUv records in step,
@@ -28,7 +28,7 @@ import net.minecraft.client.renderer.texture.TextureAtlasSprite;
  * approximation), so total power equals the quad's true emissive integral: the rectangle contains every
  * emissive sample, hence {@code Le_rect * rectArea == quadArea * mean(albedo*mask)}.
  *
- * Emitters too weak or too sparse for a useful descriptor stay excluded from the provider snapshot.
+ * Emitters too weak or too sparse for a useful descriptor stay excluded from retained publication.
  */
 final class RtLightCollector {
     private RtLightCollector() {
@@ -48,7 +48,7 @@ final class RtLightCollector {
 
     /**
      * An emitter whose rectangle-mean radiance luminance is below this is too weak to retain as a
-     * provider descriptor.
+     * retained descriptor.
      *
      * <p>Expressed as a fraction of the emissive baseline rather than as an absolute radiance, because
      * the threshold is relative to a full-strength emitter rather than an absolute radiance, not about
@@ -74,13 +74,13 @@ final class RtLightCollector {
         for (int k = 0; k < quads; k++) {
             int pb = k * 2 * PRIM_FLOATS;
             MinecraftMaterialEmission material = materialEmissions[2 * k];
-            if (!material.emissive()) {
+            if (material.luminanceCdM2() == 0.0f) {
                 continue;
             }
             float leLuminanceEps = 0.001f * material.luminanceCdM2();
 
             float stateEmission = p[pb + 3];
-            float factor = material.usesPrimitiveEmission() ? stateEmission : 1.0f;
+            float factor = material.textureMapped() ? stateEmission : 1.0f;
             if (factor <= EMISSION_EPS) {
                 continue;
             }

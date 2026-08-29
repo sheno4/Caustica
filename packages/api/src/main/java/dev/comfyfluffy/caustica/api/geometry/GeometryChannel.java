@@ -109,16 +109,29 @@ public interface GeometryChannel {
      * transforms, so rigid per-instance motion is handled, but a word that moves geometry — vertex
      * animation, per-instance deformation — desynchronises them and ghosts the result. Geometry that
      * differs per placement is a different mesh.
+     *
+     * <p>{@code primitiveLights} uses global mesh triangle numbering and is placement-local because its
+     * retained light IDs are scene-local while a mesh is reusable. Its ranges must fit the selected mesh and
+     * accurately cover each visible emitter proxy so reverse light/BSDF MIS has the correct PDF. A light from
+     * another contribution in the same render session may be selected, but the reference grants no set/drop
+     * authority and does not pin the light. An absent light, or one currently placed in a different scene,
+     * resolves as non-sampleable.
      */
     record SetInstance<N>(InstanceId instance, SceneId scene, MeshId<N> mesh,
                           GeometryTransform transform, int mask,
-                          ShaderData<N> instanceData) implements Operation {
+                          ShaderData<N> instanceData, PrimitiveLightMap primitiveLights) implements Operation {
+        public SetInstance(InstanceId instance, SceneId scene, MeshId<N> mesh,
+                           GeometryTransform transform, int mask, ShaderData<N> instanceData) {
+            this(instance, scene, mesh, transform, mask, instanceData, PrimitiveLightMap.EMPTY);
+        }
+
         public SetInstance {
             Objects.requireNonNull(instance, "instance");
             Objects.requireNonNull(scene, "scene");
             Objects.requireNonNull(mesh, "mesh");
             Objects.requireNonNull(transform, "transform");
             Objects.requireNonNull(instanceData, "instanceData");
+            Objects.requireNonNull(primitiveLights, "primitiveLights");
             if ((mask & ~0xFF) != 0) {
                 throw new IllegalArgumentException("visibility mask must fit in eight bits");
             }

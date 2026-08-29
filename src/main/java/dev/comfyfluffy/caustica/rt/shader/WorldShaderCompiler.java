@@ -52,7 +52,10 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
     private static final List<String> WORLD_MODULES = List.of(
             "bindings.slang", "world_common.slang", "world_minimal.slang", "primary_rgen.slang",
             "indirect.slang", "indirect_ser.slang", "closest_hit.slang", "sky_miss.slang",
-            "radiance_any_hit.rahit.slang", "shadow_any_hit.rahit.slang", "guide.rmiss.slang");
+            "radiance_any_hit.rahit.slang", "shadow_any_hit.rahit.slang", "guide.rmiss.slang",
+            "retained_lights.slang", "surface_bsdf.slang", "path_queue_types.slang",
+            "retained_path_queue.slang", "retained_indirect.slang", "retained_trace_policy.slang",
+            "retained_trace_ordinary.slang", "retained_trace_reordered.slang");
     private static final List<String> API_MODULES = List.of(
             "caustica_api.slang", "caustica_color.slang", "caustica_coverage.slang",
             "caustica_environment.slang", "caustica_resources.slang", "caustica_surface.slang",
@@ -61,6 +64,22 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
             "surface/caustica_error_surface.slang", "surface/caustica_error_coverage.slang",
             "sky/caustica_builtin_sky.slang");
     private static final Set<String> PROVIDED_MODULES = moduleNames(WORLD_MODULES, API_MODULES, BUILTIN_MODULES);
+
+    static Set<String> missingBundledWorldImports() throws IOException {
+        Set<String> missing = new java.util.LinkedHashSet<>();
+        for (String file : WORLD_MODULES) {
+            try (InputStream input = WorldShaderCompiler.class.getResourceAsStream(WORLD_SHADER_ROOT + file)) {
+                if (input == null) throw new IOException("missing bundled world shader " + file);
+                String source = new String(input.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+                var imports = IMPORT.matcher(source);
+                while (imports.find()) {
+                    String module = imports.group(1);
+                    if (!PROVIDED_MODULES.contains(module)) missing.add(module);
+                }
+            }
+        }
+        return Set.copyOf(missing);
+    }
 
     private final SlangSession session;
     private final Path worldDirectory;

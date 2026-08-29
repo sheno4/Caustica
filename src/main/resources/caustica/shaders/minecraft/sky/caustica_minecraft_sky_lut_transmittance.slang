@@ -8,12 +8,13 @@
 module caustica_minecraft_sky_lut_transmittance;
 
 import caustica_minecraft_sky_atmosphere;
+import caustica_minecraft_sky_lut_types;
 
-[[vk::binding(0, 0)]] [format("rgba16f")] RWTexture2D<float4> transmittanceImage;
+[[vk::push_constant]] SkyLutPush pc;
 
-[shader("compute")]
-[numthreads(8, 8, 1)]
-void main(uint3 tid : SV_DispatchThreadID) {
+public void runSkyTransmittance(uint3 tid) {
+    RWTexture2D<float4> transmittanceImage =
+            ResourceDescriptorHeap[NonUniformResourceIndex(pc.destinationImageIndex)];
     if (tid.x >= uint(TRANSMITTANCE_LUT_W) || tid.y >= uint(TRANSMITTANCE_LUT_H)) {
         return;
     }

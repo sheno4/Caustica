@@ -1,48 +1,101 @@
 package dev.comfyfluffy.caustica.minecraft.provider;
 
-import dev.comfyfluffy.caustica.api.provider.LightDescriptor;
+import dev.comfyfluffy.caustica.api.light.LightDescriptor;
+import dev.comfyfluffy.caustica.api.light.LightChannel;
+import dev.comfyfluffy.caustica.api.light.LightId;
+import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
+import dev.comfyfluffy.caustica.api.scene.SceneId;
+import dev.comfyfluffy.caustica.engine.light.RetainedLightBatch;
+import dev.comfyfluffy.caustica.engine.light.RetainedLightSnapshot;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class MinecraftLightProviderTest {
     @Test
     void noonSubmitsOnlyTheAboveHorizonSun() {
-        List<LightDescriptor.Distant> lights = MinecraftLightProvider.celestialLights(frame(
+        MinecraftLightProvider.CelestialLights lights = MinecraftLightProvider.celestialLights(frame(
                 0.0, Math.PI, 128_000, 5, 0));
 
-        assertEquals(1, lights.size());
-        assertEquals(2, lights.getFirst().key());
-        assertEquals(128_000, lights.getFirst().illuminanceRedLux());
-        assertEquals(Math.cos(Math.PI / 6.0), lights.getFirst().directionY(), 1.0e-12);
+        assertTrue(lights.sun().isPresent());
+        assertTrue(lights.moon().isEmpty());
+        assertEquals(128_000, lights.sun().orElseThrow().illuminanceRedLux());
+        assertEquals(Math.cos(Math.PI / 6.0), lights.sun().orElseThrow().directionY(), 1.0e-12);
     }
 
     @Test
     void nightSubmitsPhaseScaledMoonAndOmitsZeroMoon() {
-        List<LightDescriptor.Distant> fullMoon = MinecraftLightProvider.celestialLights(frame(
+        MinecraftLightProvider.CelestialLights fullMoon = MinecraftLightProvider.celestialLights(frame(
                 Math.PI, 0.0, 128_000, 5, 0));
-        List<LightDescriptor.Distant> zeroMoon = MinecraftLightProvider.celestialLights(frame(
+        MinecraftLightProvider.CelestialLights zeroMoon = MinecraftLightProvider.celestialLights(frame(
                 Math.PI, 0.0, 128_000, 0, 4));
 
-        assertEquals(1, fullMoon.size());
-        assertEquals(3, fullMoon.getFirst().key());
-        assertEquals(5.0, fullMoon.getFirst().illuminanceRedLux());
-        assertEquals(List.of(), zeroMoon);
+        assertTrue(fullMoon.sun().isEmpty());
+        assertEquals(5.0, fullMoon.moon().orElseThrow().illuminanceRedLux());
+        assertTrue(zeroMoon.sun().isEmpty());
+        assertTrue(zeroMoon.moon().isEmpty());
     }
 
     @Test
     void newMoonRetainsTheConfiguredFixedFraction() {
-        List<LightDescriptor.Distant> lights = MinecraftLightProvider.celestialLights(frame(
+        MinecraftLightProvider.CelestialLights lights = MinecraftLightProvider.celestialLights(frame(
                 Math.PI, 0.0, 128_000, 5, 4));
 
-        assertEquals(0.5, lights.getFirst().illuminanceRedLux(), 1.0e-12);
+        assertEquals(0.5, lights.moon().orElseThrow().illuminanceRedLux(), 1.0e-12);
+    }
+
+    @Test
+    void terrainLightsKeepIssuedIdsUntilTheirSectionDisappears() {
+        RecordingLights channel = new RecordingLights();
+        MinecraftLightProvider provider = new MinecraftLightProvider(channel, new SceneId() { },
+                () -> new MinecraftLightProvider.CelestialSettings(30.0, 0.6, 1.5));
+        LightDescriptor.Rectangle rectangle = new LightDescriptor.Rectangle(
+                1, 2, 3, 0.5, 0, 0, 0, 0.5, 0, 4, 5, 6);
+        RetainedLightBatch section = new RetainedLightBatch(9L, 1L, List.of(rectangle));
+
+        provider.publish(emptyCelestial(), Optional.empty(),
+                new RetainedLightSnapshot(List.of(section), 1L));
+        assertEquals(4, channel.issued);
+        assertEquals(4, channel.submissions.getLast().operations().size());
+
+        provider.publish(emptyCelestial(), Optional.empty(),
+                new RetainedLightSnapshot(List.of(section), 2L));
+        assertEquals(4, channel.issued);
+        assertEquals(3, channel.submissions.getLast().operations().size());
+
+        provider.publish(emptyCelestial(), Optional.empty(), RetainedLightSnapshot.empty(3L));
+        assertEquals(4, channel.submissions.getLast().operations().size());
+        assertTrue(channel.submissions.getLast().operations().getLast() instanceof LightChannel.DropLight);
+    }
+
+    private static MinecraftLightProvider.CelestialLights emptyCelestial() {
+        return new MinecraftLightProvider.CelestialLights(Optional.empty(), Optional.empty());
     }
 
     private static MinecraftLightProvider.CelestialFrame frame(
             double sunAngle, double moonAngle, double sunLux, double moonLux, int moonPhase) {
         return new MinecraftLightProvider.CelestialFrame(sunAngle, moonAngle, Math.PI / 6.0,
                 sunLux, moonLux, moonPhase, 0.1, Math.toRadians(0.6), Math.toRadians(1.5));
+    }
+
+    private static final class RecordingLights implements LightChannel {
+        private int issued;
+        private final ArrayList<RetainedBatch<Operation>> submissions = new ArrayList<>();
+
+        @Override
+        public LightId newLight() {
+            issued++;
+            return new LightId() { };
+        }
+
+        @Override
+        public void submit(RetainedBatch<Operation> batch) {
+            submissions.add(batch);
+        }
     }
 }

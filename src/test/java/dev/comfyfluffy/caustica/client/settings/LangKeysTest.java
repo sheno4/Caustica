@@ -2,7 +2,7 @@ package dev.comfyfluffy.caustica.client.settings;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import dev.comfyfluffy.caustica.CausticaConfig;
+import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.settings.FeatureSettings;
 import dev.comfyfluffy.caustica.settings.Option;
 import dev.comfyfluffy.caustica.settings.ResourceId;
@@ -57,8 +57,8 @@ final class LangKeysTest {
         SettingsRegistry registry = new SettingsRegistry();
         registry.feature(ResourceId.of("caustica", "builtin"))
                 .group("bloom")
-                .option(Option.bool("bloom.enabled", true).asGroupHeader("bloom"))
-                .option(Option.range("bloom.strength", 0.35f, 0.0f, 2.0f).inGroup("bloom"))
+                .option(Option.bool("bloom.enabled", true).inGroupAsHeader("bloom"))
+                .option(Option.range("bloom.strength", 0.0f, 2.0f, 0.35f).inGroup("bloom"))
                 .register();
         CausticaConfig.ensureRegistered();
         List<String> missing = new ArrayList<>();

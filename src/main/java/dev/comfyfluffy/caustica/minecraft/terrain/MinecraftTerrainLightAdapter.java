@@ -1,7 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.terrain;
 
-import dev.comfyfluffy.caustica.api.provider.LightDescriptor;
-import dev.comfyfluffy.caustica.api.provider.RetainedLightCollection;
+import dev.comfyfluffy.caustica.api.light.LightDescriptor;
+import dev.comfyfluffy.caustica.engine.light.RetainedLightBatch;
 
 import java.util.ArrayList;
 
@@ -12,15 +12,13 @@ final class MinecraftTerrainLightAdapter {
     private MinecraftTerrainLightAdapter() {
     }
 
-    static RetainedLightCollection.Group describe(long groupKey, long revision,
-                                                  double originX, double originY, double originZ,
-                                                  float[] records) {
+    static RetainedLightBatch describe(long sectionKey, long revision,
+                                       double originX, double originY, double originZ,
+                                       float[] records) {
         int lightCount = records.length / RtLightCollector.FLOATS_PER_LIGHT;
         ArrayList<LightDescriptor.Finite> descriptors = new ArrayList<>(lightCount);
         for (int source = 0; source < records.length;
              source += RtLightCollector.FLOATS_PER_LIGHT) {
-            long localIndex = source / RtLightCollector.FLOATS_PER_LIGHT;
-            long key = localIndex;
             double ux = records[source + 8];
             double uy = records[source + 9];
             double uz = records[source + 10];
@@ -34,17 +32,17 @@ final class MinecraftTerrainLightAdapter {
                     + ny * records[source + 5]
                     + nz * records[source + 6];
             if (facing < 0.0) {
-                nx = -nx;
-                ny = -ny;
-                nz = -nz;
+                vx = -vx;
+                vy = -vy;
+                vz = -vz;
             }
-            descriptors.add(new LightDescriptor.Rectangle(key,
+            descriptors.add(new LightDescriptor.Rectangle(
                     records[source] + originX,
                     records[source + 1] + originY,
                     records[source + 2] + originZ,
-                    ux, uy, uz, vx, vy, vz, nx, ny, nz,
+                    ux, uy, uz, vx, vy, vz,
                     records[source + 16], records[source + 17], records[source + 18]));
         }
-        return new RetainedLightCollection.Group(groupKey, revision, descriptors);
+        return new RetainedLightBatch(sectionKey, revision, descriptors);
     }
 }

@@ -4,7 +4,7 @@ import dev.comfyfluffy.caustica.platform.CausticaPlatform;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
-import dev.comfyfluffy.caustica.CausticaConfig;
+import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 
 

@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.terrain;
 
-import dev.comfyfluffy.caustica.api.provider.LightDescriptor;
+import dev.comfyfluffy.caustica.api.light.LightDescriptor;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -8,7 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class MinecraftTerrainLightAdapterTest {
     @Test
-    void legacyShadingNormalSelectsTheGeometricRectangleFacing() {
+    void shadingNormalSelectsTheRectangleAxisWinding() {
         float[] record = new float[RtLightCollector.FLOATS_PER_LIGHT];
         record[4] = 0.8f;
         record[5] = 0.2f;
@@ -25,10 +25,8 @@ final class MinecraftTerrainLightAdapterTest {
         assertEquals(32.0, light.positionX());
         assertEquals(48.0, light.positionY());
         assertEquals(80.0, light.positionZ());
-        assertEquals(0.0, light.normalX(), 0.0);
-        assertEquals(0.0, light.normalY(), 0.0);
-        assertEquals(-6.0, light.normalZ());
-        assertEquals(4L, batch.key());
+        assertEquals(-3.0, light.halfVy());
+        assertEquals(4L, batch.sectionKey());
         assertEquals(7L, batch.revision());
         assertThrows(UnsupportedOperationException.class, () -> batch.lights().add(light));
     }

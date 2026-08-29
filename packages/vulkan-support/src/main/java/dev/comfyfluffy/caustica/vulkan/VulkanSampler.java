@@ -28,13 +28,21 @@ public final class VulkanSampler implements AutoCloseable {
     }
 
     public static VulkanSampler linearClamp(GpuDevice gpu, String label) {
+        return clamp(gpu, label, VK10.VK_FILTER_LINEAR);
+    }
+
+    public static VulkanSampler nearestClamp(GpuDevice gpu, String label) {
+        return clamp(gpu, label, VK10.VK_FILTER_NEAREST);
+    }
+
+    private static VulkanSampler clamp(GpuDevice gpu, String label, int filter) {
         Objects.requireNonNull(gpu, "gpu");
         Objects.requireNonNull(label, "label");
         long sampler = 0L;
         GpuDescriptorRange<GpuDescriptorIndex.Sampler> descriptor = null;
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkSamplerCreateInfo info = VkSamplerCreateInfo.calloc(stack).sType$Default()
-                    .magFilter(VK10.VK_FILTER_LINEAR).minFilter(VK10.VK_FILTER_LINEAR)
+                    .magFilter(filter).minFilter(filter)
                     .mipmapMode(VK10.VK_SAMPLER_MIPMAP_MODE_NEAREST)
                     .addressModeU(VK10.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE)
                     .addressModeV(VK10.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE)

@@ -10,13 +10,9 @@ import org.lwjgl.vulkan.VkCommandBuffer;
 import java.nio.ByteBuffer;
 import java.util.List;
 
-import com.mojang.blaze3d.vulkan.VulkanCommandEncoder;
-
 import dev.comfyfluffy.caustica.api.gpu.GpuFrameUse;
-import dev.comfyfluffy.caustica.rt.GpuBuffer;
-import dev.comfyfluffy.caustica.rt.GpuContext;
-import dev.comfyfluffy.caustica.rt.GpuImage;
-import dev.comfyfluffy.caustica.rt.RtDebugLabels;
+import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
+import dev.comfyfluffy.caustica.vulkan.VmaImage2D;
 import dev.comfyfluffy.caustica.minecraft.entity.RtEntities;
 
 /**
@@ -35,28 +31,28 @@ import dev.comfyfluffy.caustica.minecraft.entity.RtEntities;
  */
 final class GlowOutlineFeature implements OverlayFeature {
     // mat4 curViewProj (0, 64B) + vec3 camOffset (64, padded to 16B) + vec4 color (80, 16B) = 96B.
-    private static final int MASK_PUSH_BYTES = 96;
+    private static final int MASK_PUSH_BYTES = 112;
     private static final int MASK_FORMAT = VK10.VK_FORMAT_R8G8B8A8_UNORM;
 
-    private GpuContext device;
+    private GpuDevice device;
     private OverlayPipelines.Pipeline maskPipeline;
     private OverlayPipelines.Pipeline compositePipeline;
-    private OverlayPipelines.ReadOnlyImageSet compositeSet;
-    private GpuImage maskImage;
+    private VmaImage2D maskImage;
+    private boolean maskNeedsInitialization;
 
     // This frame's prepared draw data (valid between prepare() returning true and record()).
     private final Matrix4f viewProj = new Matrix4f();
     private float camOffX, camOffY, camOffZ;
-    private GpuBuffer vbo;
-    private GpuBuffer ibo;
+    private OverlayFramePool.Buffer vbo;
+    private OverlayFramePool.Buffer ibo;
     private int[] firstIndex;
     private int[] indexCount;
     private float[] colorRgba;
     private int drawCount;
 
     @Override
-    public boolean prepare(GpuContext device, OverlayFramePool pool, GpuFrameUse gpuUse,
-                           long worldTlas, Matrix4fc worldViewProjection, int width, int height) {
+    public boolean prepare(GpuDevice device, OverlayFramePool pool, GpuFrameUse gpuUse,
+                           int worldTlas, Matrix4fc worldViewProjection, int width, int height) {
         if (!RtEntities.glowEnabled()) {
             return false;
         }
@@ -64,7 +60,7 @@ final class GlowOutlineFeature implements OverlayFeature {
         if (batches.isEmpty()) {
             return false;
         }
-        ensureResources(device, width, height);
+        ensureResources(device, gpuUse, width, height);
 
         // Merge every glowing entity's mesh into one vertex/index pair (indices rebased onto the merged
         // vertex buffer); one draw per entity so each can push its own outline colour.
@@ -117,7 +113,7 @@ final class GlowOutlineFeature implements OverlayFeature {
         return true;
     }
 
-    private void ensureResources(GpuContext device, int width, int height) {
+    private void ensureResources(GpuDevice device, GpuFrameUse gpuUse, int width, int height) {
         this.device = device;
         if (maskPipeline == null) {
             maskPipeline = new OverlayPipelines.Spec("entity_glow/vertex.vert.spv", "entity_glow/fragment.frag.spv")
@@ -125,29 +121,32 @@ final class GlowOutlineFeature implements OverlayFeature {
                     .attachment(MASK_FORMAT)
                     .push(MASK_PUSH_BYTES, VK10.VK_SHADER_STAGE_VERTEX_BIT | VK10.VK_SHADER_STAGE_FRAGMENT_BIT)
                     .build(device, "glow mask");
-            compositeSet = OverlayPipelines.readOnlyImageSet(device, VK10.VK_SHADER_STAGE_FRAGMENT_BIT, "glow composite");
             compositePipeline = new OverlayPipelines.Spec("overlay_composite/vertex.vert.spv", "overlay_composite/glow.frag.spv")
                     .blend(OverlayPipelines.Blend.ALPHA)
                     .attachment(WorldOverlayPass.TARGET_FORMAT)
-                    .descriptorSetLayout(compositeSet.layout)
                     .build(device, "glow composite");
         }
         if (maskImage == null || maskImage.width() != width || maskImage.height() != height) {
             if (maskImage != null) {
-                maskImage.destroy();
+                VmaImage2D retired = maskImage;
+                gpuUse.retire(retired::close);
             }
-            maskImage = device.createStorageImage(width, height, MASK_FORMAT,
-                    "glow outline mask " + width + "x" + height, VK10.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
+            maskImage = VmaImage2D.create(device, width, height, MASK_FORMAT,
+                    VK10.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+                    "glow outline mask " + width + "x" + height);
+            maskNeedsInitialization = true;
         }
-        compositeSet.bind(device, maskImage.view());
     }
 
     @Override
     public void record(VkCommandBuffer cmd, long targetView, int width, int height) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            try (RtDebugLabels.Scope ignored = device.debugScope(cmd, "glow entity mask")) {
+            if (maskNeedsInitialization) {
+                WorldOverlayPass.initializeImage(cmd, stack, maskImage);
+                maskNeedsInitialization = false;
+            }
+            {
                 WorldOverlayPass.beginColorRendering(cmd, stack, maskImage.view(), width, height, true);
-                VK10.vkCmdBindPipeline(cmd, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, maskPipeline.handle);
                 VK10.vkCmdBindVertexBuffers(cmd, 0, stack.longs(vbo.handle()), stack.longs(0L));
                 VK10.vkCmdBindIndexBuffer(cmd, ibo.handle(), 0, VK10.VK_INDEX_TYPE_UINT32);
                 ByteBuffer push = stack.malloc(MASK_PUSH_BYTES);
@@ -156,20 +155,20 @@ final class GlowOutlineFeature implements OverlayFeature {
                     push.putFloat(64, camOffX).putFloat(68, camOffY).putFloat(72, camOffZ);
                     push.putFloat(80, colorRgba[i * 4]).putFloat(84, colorRgba[i * 4 + 1])
                             .putFloat(88, colorRgba[i * 4 + 2]).putFloat(92, colorRgba[i * 4 + 3]);
-                    VK10.vkCmdPushConstants(cmd, maskPipeline.layout,
-                            VK10.VK_SHADER_STAGE_VERTEX_BIT | VK10.VK_SHADER_STAGE_FRAGMENT_BIT, 0, push);
+                    push.putInt(96, 0);
+                    maskPipeline.bind(cmd, push, width, height);
                     VK10.vkCmdDrawIndexed(cmd, indexCount[i], 1, firstIndex[i], 0, 0);
                 }
                 WorldOverlayPass.endRendering(cmd);
             }
 
-            VulkanCommandEncoder.memoryBarrier(cmd, stack); // mask attachment writes visible to the composite's reads
+            WorldOverlayPass.memoryBarrier(cmd, stack);
 
-            try (RtDebugLabels.Scope ignored = device.debugScope(cmd, "glow entity composite")) {
+            {
                 WorldOverlayPass.beginColorRendering(cmd, stack, targetView, width, height, false);
-                VK10.vkCmdBindPipeline(cmd, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, compositePipeline.handle);
-                VK10.vkCmdBindDescriptorSets(cmd, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, compositePipeline.layout, 0,
-                        stack.longs(compositeSet.set), null);
+                ByteBuffer compositePush = stack.malloc(4).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                        .putInt(0, maskImage.sampledIndex().value());
+                compositePipeline.bind(cmd, compositePush, width, height);
                 VK10.vkCmdDraw(cmd, 3, 1, 0, 0);
                 WorldOverlayPass.endRendering(cmd);
             }
@@ -177,24 +176,20 @@ final class GlowOutlineFeature implements OverlayFeature {
     }
 
     @Override
-    public void destroy() {
+    public void close() {
         if (device == null) {
             return;
         }
         if (maskPipeline != null) {
-            maskPipeline.destroy(device.vk());
+            maskPipeline.close();
             maskPipeline = null;
         }
         if (compositePipeline != null) {
-            compositePipeline.destroy(device.vk());
+            compositePipeline.close();
             compositePipeline = null;
         }
-        if (compositeSet != null) {
-            compositeSet.destroy(device.vk());
-            compositeSet = null;
-        }
         if (maskImage != null) {
-            maskImage.destroy();
+            maskImage.close();
             maskImage = null;
         }
         device = null;

@@ -23,9 +23,12 @@ import org.lwjgl.vulkan.VkLayerProperties;
 import org.lwjgl.vulkan.VkPhysicalDeviceFaultFeaturesEXT;
 import org.lwjgl.vulkan.VkPhysicalDeviceFeatures2;
 import org.lwjgl.vulkan.VkPhysicalDeviceMemoryProperties;
+import org.lwjgl.vulkan.VkPhysicalDeviceMemoryProperties2;
 import org.lwjgl.vulkan.VkPhysicalDevice;
 import org.lwjgl.vulkan.VkPhysicalDeviceProperties;
+import org.lwjgl.vulkan.VkPhysicalDeviceProperties2;
 import org.lwjgl.vulkan.VkQueueFamilyProperties;
+import org.lwjgl.vulkan.VkQueueFamilyProperties2;
 import org.lwjgl.vulkan.VkCheckpointDataNV;
 import org.lwjgl.vulkan.VkQueue;
 
@@ -359,8 +362,9 @@ public final class VulkanDiagnostics {
                 System.getProperty("java.vm.name"), formatBytes(runtime.maxMemory()), Version.getVersion(), loaderVersion);
 
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkPhysicalDeviceProperties properties = VkPhysicalDeviceProperties.calloc(stack);
-            VK10.vkGetPhysicalDeviceProperties(physicalDevice, properties);
+            VkPhysicalDeviceProperties2 properties2 = VkPhysicalDeviceProperties2.calloc(stack).sType$Default();
+            VK11.vkGetPhysicalDeviceProperties2(physicalDevice, properties2);
+            VkPhysicalDeviceProperties properties = properties2.properties();
             CausticaMod.LOGGER.info(
                     "Vulkan GPU: name='{}', vendor={} (0x{}), deviceId=0x{}, type={}, api={}, driver='{}' info='{}' driverId={}, driverVersion=0x{}",
                     info.deviceName(), info.vendorName(), Integer.toHexString(properties.vendorID()),
@@ -382,8 +386,9 @@ public final class VulkanDiagnostics {
 
     private static void logMemoryAndQueues(VkPhysicalDevice physicalDevice) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkPhysicalDeviceMemoryProperties memory = VkPhysicalDeviceMemoryProperties.calloc(stack);
-            VK10.vkGetPhysicalDeviceMemoryProperties(physicalDevice, memory);
+            VkPhysicalDeviceMemoryProperties2 memory2 = VkPhysicalDeviceMemoryProperties2.calloc(stack).sType$Default();
+            VK11.vkGetPhysicalDeviceMemoryProperties2(physicalDevice, memory2);
+            VkPhysicalDeviceMemoryProperties memory = memory2.memoryProperties();
             memoryHeapCount = memory.memoryHeapCount();
             for (int i = 0; i < memory.memoryHeapCount(); i++) {
                 var heap = memory.memoryHeaps(i);
@@ -397,11 +402,12 @@ public final class VulkanDiagnostics {
             }
 
             java.nio.IntBuffer count = stack.callocInt(1);
-            VK10.vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, count, null);
-            VkQueueFamilyProperties.Buffer queues = VkQueueFamilyProperties.calloc(count.get(0), stack);
-            VK10.vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, count, queues);
+            VK11.vkGetPhysicalDeviceQueueFamilyProperties2(physicalDevice, count, null);
+            VkQueueFamilyProperties2.Buffer queues = VkQueueFamilyProperties2.calloc(count.get(0), stack);
+            for (int i = 0; i < queues.capacity(); i++) queues.get(i).sType$Default();
+            VK11.vkGetPhysicalDeviceQueueFamilyProperties2(physicalDevice, count, queues);
             for (int i = 0; i < queues.capacity(); i++) {
-                VkQueueFamilyProperties queue = queues.get(i);
+                VkQueueFamilyProperties queue = queues.get(i).queueFamilyProperties();
                 CausticaMod.LOGGER.info("Vulkan queue family[{}]: count={}, flags={}, timestampBits={}",
                         i, queue.queueCount(), queueFlags(queue.queueFlags()), queue.timestampValidBits());
             }
@@ -409,8 +415,8 @@ public final class VulkanDiagnostics {
     }
 
     private static String version(int packed) {
-        return String.format(Locale.ROOT, "%d.%d.%d", VK10.VK_VERSION_MAJOR(packed),
-                VK10.VK_VERSION_MINOR(packed), VK10.VK_VERSION_PATCH(packed));
+        return String.format(Locale.ROOT, "%d.%d.%d", VK10.VK_API_VERSION_MAJOR(packed),
+                VK10.VK_API_VERSION_MINOR(packed), VK10.VK_API_VERSION_PATCH(packed));
     }
 
     private static String formatBytes(long bytes) {

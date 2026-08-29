@@ -78,11 +78,12 @@ public sealed interface LightDescriptor {
 
     /**
      * A distant angular emitter. Direction points toward the source, illuminance is in lux, and zero
-     * angular radius is an exact directional source.
+     * angular radius is an exact directional source. {@code environmentEmitter} declares that the
+     * environment draws the same source, allowing non-camera miss rays to suppress that duplicate estimator.
      */
     record Distant(double directionX, double directionY, double directionZ,
                    double illuminanceRedLux, double illuminanceGreenLux, double illuminanceBlueLux,
-                   double angularRadiusRadians) implements LightDescriptor {
+                   double angularRadiusRadians, boolean environmentEmitter) implements LightDescriptor {
         public Distant {
             LightValidation.unit(directionX, directionY, directionZ, "distant direction");
             LightValidation.color(illuminanceRedLux, illuminanceGreenLux, illuminanceBlueLux,

@@ -2,7 +2,7 @@ package dev.comfyfluffy.caustica.minecraft.terrain;
 
 import dev.comfyfluffy.caustica.api.geometry.MeshBuild;
 import dev.comfyfluffy.caustica.api.program.ShaderData;
-import dev.comfyfluffy.caustica.minecraft.MinecraftProvidersExtension;
+import dev.comfyfluffy.caustica.minecraft.program.MinecraftProgramTypes;
 
 /** GPU upload seam between Minecraft's CPU section extraction and retained engine geometry. */
 @FunctionalInterface
@@ -15,8 +15,8 @@ public interface MinecraftTerrainUploader {
      * It must release everything it owns, return promptly, and never throw.
      */
     interface UploadedSection extends AutoCloseable {
-        MeshBuild<MinecraftProvidersExtension.InstanceData> build();
-        ShaderData<MinecraftProvidersExtension.InstanceData> instanceData();
+        MeshBuild<MinecraftProgramTypes.InstanceData> build();
+        ShaderData<MinecraftProgramTypes.InstanceData> instanceData();
         @Override void close();
     }
 }

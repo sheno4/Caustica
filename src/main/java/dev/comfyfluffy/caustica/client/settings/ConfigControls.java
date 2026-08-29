@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.client.settings;
 
-import dev.comfyfluffy.caustica.CausticaConfig;
+import dev.comfyfluffy.caustica.config.CausticaConfig;
 import net.minecraft.network.chat.Component;
 
 import java.util.List;

@@ -144,6 +144,7 @@ public struct WaterVolume : IVolumeModel {
         }
         properties.absorptionCoefficient = MEDIUM_ABSORB_FLOOR
                 + MEDIUM_DENSITY * (float3(1.0) - clamp(instance.tint, 0.0, 1.0));
+        properties.indexOfRefraction = 1.333;
         return properties;
     }
 

@@ -1,7 +1,7 @@
 package dev.comfyfluffy.caustica.client.settings;
 
-import dev.comfyfluffy.caustica.CausticaConfig;
-import dev.comfyfluffy.caustica.CausticaOptions;
+import dev.comfyfluffy.caustica.config.CausticaConfig;
+import dev.comfyfluffy.caustica.config.CausticaOptions;
 
 /**
  * Decides when edits reach disk. Every control writes in memory, so the renderer sees a change on the next

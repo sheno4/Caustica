@@ -44,8 +44,6 @@
 
 	"caustica.setting.enabled": "Ray Tracing",
 	"caustica.setting.enabled.tooltip": "Replace the raster renderer with the path tracer. Turning this off returns Minecraft to vanilla rendering.",
-	"caustica.setting.composite.spp": "Samples Per Pixel",
-	"caustica.setting.composite.spp.tooltip": "Path-tracing samples taken per pixel each frame. Higher is cleaner but more demanding.",
 	"caustica.setting.composite.max-bounces": "Path Bounces",
 	"caustica.setting.composite.max-bounces.tooltip": "Maximum secondary bounces after the primary hit. Higher captures more indirect light at more cost.",
 	"caustica.setting.composite.water-waves": "Animated Water",

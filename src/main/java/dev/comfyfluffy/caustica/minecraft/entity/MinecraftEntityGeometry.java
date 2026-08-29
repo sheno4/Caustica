@@ -6,7 +6,8 @@ import dev.comfyfluffy.caustica.api.geometry.InstanceId;
 import dev.comfyfluffy.caustica.api.geometry.MeshId;
 import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
-import dev.comfyfluffy.caustica.minecraft.MinecraftProvidersExtension;
+import dev.comfyfluffy.caustica.minecraft.program.MinecraftPrograms;
+import dev.comfyfluffy.caustica.minecraft.program.MinecraftProgramTypes;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftWorldSessionContext;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftWorldSessionContribution;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftProgramResources;
@@ -33,7 +34,7 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
     /** Opens and binds the entity producer using program exports borrowed from the core Minecraft contribution. */
     public static MinecraftEntityGeometry open(MinecraftWorldSessionContext context,
                                                MinecraftProgramResources resources,
-                                               MinecraftProvidersExtension.Programs programs,
+                                               MinecraftPrograms programs,
                                                MinecraftEntityUploader.Factory uploaderFactory) {
         Objects.requireNonNull(context, "context");
         Objects.requireNonNull(resources, "resources");
@@ -55,7 +56,7 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
         Resident prior = residents.get(key);
         Resident target = prior;
         if (target == null) {
-            target = new Resident(channel.newMesh(MinecraftProvidersExtension.INSTANCE_DATA), channel.newInstance());
+            target = new Resident(channel.newMesh(MinecraftProgramTypes.INSTANCE_DATA), channel.newInstance());
         }
         MinecraftEntityUploader.UploadedEntity uploaded = uploader.upload(mesh);
         Lease lease = new Lease(uploaded);
@@ -131,13 +132,13 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
     public record Key(long domain, long value) { }
 
     private static final class Resident {
-        final MeshId<MinecraftProvidersExtension.InstanceData> mesh;
+        final MeshId<MinecraftProgramTypes.InstanceData> mesh;
         final InstanceId instance;
         Lease lease;
         GeometryTransform transform;
         int mask;
 
-        Resident(MeshId<MinecraftProvidersExtension.InstanceData> mesh, InstanceId instance) {
+        Resident(MeshId<MinecraftProgramTypes.InstanceData> mesh, InstanceId instance) {
             this.mesh = mesh;
             this.instance = instance;
         }

@@ -2,10 +2,10 @@ package dev.comfyfluffy.caustica.engine.scene;
 
 import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
-import dev.comfyfluffy.caustica.engine.session.MinecraftEnvironmentScope;
+import dev.comfyfluffy.caustica.engine.session.EnvironmentSelectionScope;
 
 /** Owner-scoped environment mutation for one fixed host-owned scene. */
-public final class SceneEnvironmentContributionChannel implements MinecraftEnvironmentScope {
+public final class SceneEnvironmentContributionChannel implements EnvironmentSelectionScope {
     final SceneDirectory directory;
     final Object owner;
     final SceneId scene;

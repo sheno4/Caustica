@@ -4,6 +4,7 @@ import dev.comfyfluffy.caustica.api.geometry.GeometryChannel;
 import dev.comfyfluffy.caustica.api.geometry.GeometryTransform;
 import dev.comfyfluffy.caustica.api.geometry.MeshBuild;
 import dev.comfyfluffy.caustica.api.geometry.MeshId;
+import dev.comfyfluffy.caustica.api.geometry.PrimitiveLightMap;
 import dev.comfyfluffy.caustica.api.gpu.VulkanDeviceAddress;
 import dev.comfyfluffy.caustica.api.gpu.VulkanDeviceAddressRange;
 import dev.comfyfluffy.caustica.api.light.LightChannel;
@@ -111,6 +112,53 @@ final class SceneDirectoryTest {
                 new GeometryChannel.DropMesh<>(mesh)))));
         assertEquals(1, directory.snapshot().meshes().size());
         assertEquals(1, directory.snapshot().instances().size());
+    }
+
+    @Test
+    void primitiveLightMapsAreSessionScopedPlacementSelectionsBoundedByTheMesh() {
+        ProgramFixture programs = new ProgramFixture();
+        SurfaceId<Binding, Instance> surface = programs.surface(new ContributionOwner(1));
+        SceneBackend backend = new SceneBackend();
+        SceneDirectory directory = directory(programs, backend);
+        SceneId scene = directory.createScene();
+        GeometryContributionChannel geometry = directory.openGeometry(new ContributionOwner(2));
+        LightContributionChannel firstLights = directory.openLights(new ContributionOwner(3));
+        LightContributionChannel secondLights = directory.openLights(new ContributionOwner(4));
+        MeshId<Instance> mesh = geometry.newMesh(INSTANCE);
+        var firstInstance = geometry.newInstance();
+        var secondInstance = geometry.newInstance();
+        var firstLight = firstLights.newLight();
+        var secondLight = secondLights.newLight();
+
+        geometry.submit(RetainedBatch.of(List.of(
+                new GeometryChannel.SetMesh<>(mesh, mesh(surface)),
+                new GeometryChannel.SetInstance<>(firstInstance, scene, mesh,
+                        GeometryTransform.translation(0, 0, 0), 0xff, INSTANCE.data(0),
+                        new PrimitiveLightMap(List.of(new PrimitiveLightMap.Range(0, 1, firstLight)))),
+                new GeometryChannel.SetInstance<>(secondInstance, scene, mesh,
+                        GeometryTransform.translation(1, 0, 0), 0xff, INSTANCE.data(0),
+                        new PrimitiveLightMap(List.of(new PrimitiveLightMap.Range(0, 1, secondLight)))))));
+
+        List<RetainedSceneSnapshot.Instance> instances = directory.snapshot().instances();
+        assertEquals(2, instances.size());
+        assertEquals(1, instances.get(0).primitiveEmitters().size());
+        assertEquals(1, instances.get(1).primitiveEmitters().size());
+        org.junit.jupiter.api.Assertions.assertNotEquals(
+                instances.get(0).primitiveEmitters().getFirst().lightIdentity(),
+                instances.get(1).primitiveEmitters().getFirst().lightIdentity());
+
+        assertThrows(IllegalArgumentException.class, () -> geometry.submit(RetainedBatch.of(List.of(
+                new GeometryChannel.SetInstance<>(firstInstance, scene, mesh,
+                        GeometryTransform.translation(0, 0, 0), 0xff, INSTANCE.data(0),
+                        new PrimitiveLightMap(List.of(new PrimitiveLightMap.Range(1, 1, firstLight))))))));
+
+        SceneDirectory foreignDirectory = directory(new ProgramFixture(), new SceneBackend());
+        LightContributionChannel foreignLights = foreignDirectory.openLights(new ContributionOwner(5));
+        var foreignLight = foreignLights.newLight();
+        assertThrows(IllegalArgumentException.class, () -> geometry.submit(RetainedBatch.of(List.of(
+                new GeometryChannel.SetInstance<>(firstInstance, scene, mesh,
+                        GeometryTransform.translation(0, 0, 0), 0xff, INSTANCE.data(0),
+                        new PrimitiveLightMap(List.of(new PrimitiveLightMap.Range(0, 1, foreignLight))))))));
     }
 
     @Test

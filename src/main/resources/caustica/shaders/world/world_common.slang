@@ -29,6 +29,71 @@ public struct WorldPushConstants {
     public uint frameIndex;
 };
 
+// GeometryIndex-addressed retained hit state. The TLAS instance custom index is the placement's base.
+// The explicit float4 transform rows and emitter sidecar tail keep the std430 record stride stable.
+public struct RetainedGeometryRecord {
+    public uint surfaceImplementation;
+    public uint coverageImplementation;
+    public uint volumeImplementation;
+    public uint flags;
+    public uint64_t surfaceBinding;
+    public uint64_t volumeBinding;
+    public uint64_t instanceData;
+    public float alphaCutoff;
+    public uint reserved;
+    public float4 currentRow0;
+    public float4 currentRow1;
+    public float4 currentRow2;
+    public float4 previousRow0;
+    public float4 previousRow1;
+    public float4 previousRow2;
+    public uint64_t emitterIndexAddress;
+    public uint emitterPrimitiveBase;
+    public uint reservedEmitter;
+};
+
+public static const uint RETAINED_GEOMETRY_HAS_SURFACE = 1u;
+public static const uint RETAINED_GEOMETRY_HAS_VOLUME = 2u;
+public static const uint RETAINED_GEOMETRY_CUTOUT = 4u;
+
+// Scene-relative geometry and physical radiometry for one immutable retained light.
+public struct RetainedLightRecord {
+    public uint type;
+    public uint flags;
+    public float rangeMeters;
+    public float angularRadius;
+    public float4 positionOrDirection;
+    public float4 axisU;
+    public float4 axisV;
+    public float4 radiometry;
+};
+
+public struct NeeAtState {
+    public uint64_t lightTableAddress;
+    public uint64_t globalDistributionAddress;
+    public uint64_t localDistributionAddress;
+    public uint64_t lightFeedbackAddress;
+    public uint64_t pixelFeedbackAddress;
+    public uint lightCount;
+    public uint priorLightCount;
+    public uint extentWidth;
+    public uint extentHeight;
+    public uint tileCountX;
+    public uint tileCountY;
+    public uint tileSize;
+    public uint localSlotCount;
+    public uint candidateCount;
+    public uint flags;
+    public float metersPerSceneUnit;
+    public uint frameIndex;
+};
+
+public static const uint NEE_AT_ENVIRONMENT_EMITTERS_SAMPLED = 2u;
+
+public ConstPtr<NeeAtState> neeAtState(uint64_t address) {
+    return (ConstPtr<NeeAtState>)address;
+}
+
 // Per-frame world data, read through a 64-bit device address. WorldPushData.java is generated from this
 // reflected type, including its serializer, byte size, vector/matrix types, and fixed-array capacities.
 public struct WorldPush {
@@ -37,7 +102,6 @@ public struct WorldPush {
     public uint     frameIndex;
     public float4x4 prevViewProj;
     public float3   camDelta;
-    public uint     spp;
     public float2   jitter;
     // bit0 camera medium active, bit4 procedural animation, bits8..15 camera medium implementation.
     public uint     flags;

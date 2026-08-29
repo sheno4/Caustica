@@ -229,6 +229,13 @@ public float3 sampleMultiScatter(Sampler2D lut, float radiusKm, float cosSunZeni
     return lut.SampleLevel(uv, 0.0).rgb;
 }
 
+public float3 sampleMultiScatter(SampledTexture2DIndex lut, SamplerIndex samplerIndex,
+        float radiusKm, float cosSunZenith) {
+    float2 uv = multiScatterLutUv(radiusKm, cosSunZenith);
+    uv = unitToSubUv(uv, float2(float(MULTISCATTER_LUT_W), float(MULTISCATTER_LUT_H)));
+    return sampleTexture2DLod(lut, samplerIndex, uv, 0.0).rgb;
+}
+
 // Smallest viewer altitude the fp32 geometry can actually resolve, and the floor every consumer of a
 // radius here clamps to.
 //
@@ -354,7 +361,8 @@ public struct ScatteringResult {
 public ScatteringResult integrateScatteredLuminance(
         float3 originKm, float3 dir, float3 lightDir, float3 illuminance,
         float lightAngularRadius, int steps, bool applyPhase,
-        bool useMultiScatter, Sampler2D transmittanceLut, Sampler2D multiScatterLut,
+        bool useMultiScatter, SampledTexture2DIndex transmittanceLut,
+        SampledTexture2DIndex multiScatterLut, SamplerIndex samplerIndex,
         float groundAlbedo, bool clipGround) {
     ScatteringResult result;
     result.luminance = float3(0.0);
@@ -393,13 +401,15 @@ public ScatteringResult integrateScatteredLuminance(
         float lightVisibility = smoothstep(-shadowSoftness, shadowSoftness, clearance);
 
         float cosLightZenith = dot(up, lightDir);
-        float3 transmittanceToLight = sampleTransmittance(transmittanceLut, radius, cosLightZenith);
+        float3 transmittanceToLight = sampleTransmittance(
+                transmittanceLut, samplerIndex, radius, cosLightZenith);
         float3 inScatter = lightVisibility * transmittanceToLight
                 * (medium.rayleigh * phaseR + medium.mie * phaseM);
         if (useMultiScatter) {
             // Multiple scattering arrives from every direction, so it couples to the total scattering
             // coefficient rather than to a phase function.
-            inScatter += sampleMultiScatter(multiScatterLut, radius, cosLightZenith) * medium.scattering;
+            inScatter += sampleMultiScatter(
+                    multiScatterLut, samplerIndex, radius, cosLightZenith) * medium.scattering;
         }
 
         // Analytic integration of the constant-medium segment (Hillaire): exact for the step rather than
@@ -421,7 +431,8 @@ public ScatteringResult integrateScatteredLuminance(
         float3 p = originKm + dir * tMax;
         float3 up = p / max(length(p), 1.0e-6);
         float cosLightZenith = dot(up, lightDir);
-        float3 transmittanceToLight = sampleTransmittance(transmittanceLut, ATMOS_BOTTOM_KM, cosLightZenith);
+        float3 transmittanceToLight = sampleTransmittance(
+                transmittanceLut, samplerIndex, ATMOS_BOTTOM_KM, cosLightZenith);
         float ndl = max(cosLightZenith, 0.0);
         result.luminance += throughput * illuminance * transmittanceToLight * ndl
                 * (groundAlbedo / SKY_PI);
@@ -485,9 +496,9 @@ public bool celestialSquareLocal(float3 dir, float3 bodyDir, float halfAngle, ou
 // direction, colour, level and transmittance is derived from these below, so no atmosphere maths runs on
 // the CPU.
 //
-// SkyLutPass fills one of these per frame and publishes it two ways: as the push constant for its own
-// LUT bakes, and as a set-2 uniform buffer the sky slot reads (caustica_minecraft_sky_bindings). Both consumers read
-// the same bytes, so the baked LUTs and the frame they shade cannot disagree. None of it is engine state
+// SkyLutPass fills one of these per frame and publishes it two ways: inline in its LUT dispatch push data
+// and in the immutable device-address buffer captured by the environment binding. Both consumers read the
+// same fields, so the baked LUTs and the frame they shade cannot disagree. None of it is engine state
 // — a sky for another dimension needs none of these fields — so it lives with the pass that owns it.
 //
 // SkyInputsData.java is generated from this reflected type, including its serializer and byte size.
@@ -513,8 +524,7 @@ public struct SkyInputs {
 // SkyInputs carries only what the CPU alone can know: Minecraft's four eased celestial
 // angles, its star brightness, the moon phase, the photometric anchors, and SkyLutPass's sky.* options.
 // Every direction, colour, level, and transmittance is derived here so atmospheric physics has one
-// implementation — shared by the LUT bakes (which read SkyInputs as a push constant) and the sky slot
-// (which reads the same struct as a pass-published uniform buffer).
+// implementation — shared by the LUT bakes and the sky slot's binding-owned device-address buffer.
 
 public struct SkyState {
     public float3 sunDir;

@@ -3,6 +3,8 @@ package dev.comfyfluffy.caustica.minecraft.overlay;
 import com.mojang.blaze3d.textures.GpuTextureView;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.mojang.blaze3d.vulkan.VulkanGpuTextureView;
+import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
+import dev.comfyfluffy.caustica.vulkan.VulkanSampler;
 
 import org.joml.Matrix4f;
 import org.joml.Matrix4fc;
@@ -29,9 +31,6 @@ import net.minecraft.client.renderer.entity.EntityRenderer;
 import net.minecraft.util.ARGB;
 
 import dev.comfyfluffy.caustica.api.gpu.GpuFrameUse;
-import dev.comfyfluffy.caustica.rt.GpuBuffer;
-import dev.comfyfluffy.caustica.rt.GpuContext;
-import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import dev.comfyfluffy.caustica.minecraft.entity.RtEntities;
 
 /**
@@ -45,16 +44,13 @@ import dev.comfyfluffy.caustica.minecraft.entity.RtEntities;
  *
  * <p>Glyphs are grouped by font-atlas page ({@link GpuTextureView} identity: the default ASCII page vs.
  * the unicode-fallback page, say) into one merged vertex buffer per page, each drawn with its page bound
- * as a real combined-image-sampler (not bindless — this is a plain forward raster pass, not in-RT
- * shading) — one descriptor set PER page (see {@link OverlayPipelines.SampledImageSetPool}), since a
- * single set rewritten between pages would leave every draw in the command buffer sampling whichever page
- * was bound last. Non-indexed (2 triangles/quad, 6 vertices) — text volume is small enough that doubling
+ * through immutable descriptor-heap entries. Non-indexed (2 triangles/quad, 6 vertices) — text volume is small enough that doubling
  * two shared corners per quad isn't worth an index buffer.
  */
 final class NameTagFeature implements OverlayFeature {
     // mat4 curViewProj (0, 64B) + vec3 camOffset (64, padded to 16B) = 80B.
-    private static final int PUSH_BYTES = 80;
-    private static final int VERTEX_STRIDE = OverlayPipelines.VertexFormat.POSITION_TEX_COLOR.stride; // 24B
+    private static final int PUSH_BYTES = 96;
+    private static final int VERTEX_STRIDE = 24;
     // Vanilla's unoccluded name tag is actually two overlaid copies (opaque depth-tested + translucent
     // see-through-with-background) — see SubmitNodeCollection.submitNameTag. We draw a single pass
     // matching the see-through copy's look (translucent white text + dark background box), since we
@@ -62,19 +58,12 @@ final class NameTagFeature implements OverlayFeature {
     private static final int TEXT_COLOR = -2130706433; // 0x80FFFFFF
     private static final int BACKGROUND_COLOR = 0x40000000; // ~25% opaque black; vanilla's default opacity
 
-    // Generous cap on distinct font-atlas pages seen in one session (default ASCII + unicode fallback +
-    // headroom) — see SampledImageSetPool's doc for why each page needs its own descriptor set rather than
-    // one shared set rewritten per page.
-    private static final int MAX_ATLAS_PAGES = 16;
-
-    private GpuContext device;
+    private GpuDevice device;
     private OverlayPipelines.Pipeline pipeline;
-    private OverlayPipelines.SampledImageSetPool imageSetPool;
-    private long sampler;
+    private VulkanSampler sampler;
 
-    // One descriptor set per distinct font-atlas page, allocated once and reused across frames (a page's
-    // GpuTextureView is stable for the session — see SampledImageSetPool).
-    private final Map<GpuTextureView, Long> pageSets = new IdentityHashMap<>();
+    // Each atlas page remains pinned while its immutable descriptor can be referenced by a recorded frame.
+    private final Map<GpuTextureView, OverlayPipelines.FontImage> pageImages = new IdentityHashMap<>();
     private final Map<GpuTextureView, PageBuilder> pages = new IdentityHashMap<>();
     private final GlyphCapture glyphCapture = new GlyphCapture();
     private final Matrix4f pose = new Matrix4f();
@@ -82,7 +71,7 @@ final class NameTagFeature implements OverlayFeature {
     private float camOffX, camOffY, camOffZ;
     private final List<DrawPage> drawPages = new ArrayList<>();
 
-    private record DrawPage(GpuTextureView view, GpuBuffer vbo, int vertexCount) {
+    private record DrawPage(GpuTextureView view, OverlayFramePool.Buffer vbo, int vertexCount) {
     }
 
     /** One font-atlas page's accumulated glyph quads this frame: x,y,z,u,v per vertex + a packed colour. */
@@ -96,8 +85,8 @@ final class NameTagFeature implements OverlayFeature {
     }
 
     @Override
-    public boolean prepare(GpuContext device, OverlayFramePool pool, GpuFrameUse gpuUse,
-                           long worldTlas, Matrix4fc worldViewProjection, int width, int height) {
+    public boolean prepare(GpuDevice device, OverlayFramePool pool, GpuFrameUse gpuUse,
+                           int worldTlas, Matrix4fc worldViewProjection, int width, int height) {
         if (!RtEntities.nameTagsEnabled()) {
             return false;
         }
@@ -129,7 +118,7 @@ final class NameTagFeature implements OverlayFeature {
             if (vertexCount == 0) {
                 continue;
             }
-            GpuBuffer vbo = pool.acquireVertex(device, (long) vertexCount * VERTEX_STRIDE, "name tag vbo");
+            OverlayFramePool.Buffer vbo = pool.acquireVertex(device, (long) vertexCount * VERTEX_STRIDE, "name tag vbo");
             ByteBuffer buf = MemoryUtil.memByteBuffer(vbo.mapped(), vertexCount * VERTEX_STRIDE).order(ByteOrder.LITTLE_ENDIAN);
             float[] posUv = b.posUv.elements();
             for (int v = 0; v < vertexCount; v++) {
@@ -152,37 +141,32 @@ final class NameTagFeature implements OverlayFeature {
         return true;
     }
 
-    private void ensureResources(GpuContext device) {
+    private void ensureResources(GpuDevice device) {
         this.device = device;
         if (pipeline != null) {
             return;
         }
-        imageSetPool = OverlayPipelines.sampledImageSetPool(device, VK10.VK_SHADER_STAGE_FRAGMENT_BIT, MAX_ATLAS_PAGES, "name tag");
-        sampler = OverlayPipelines.createNearestClampSampler(device, "name tag font atlas");
+        sampler = VulkanSampler.nearestClamp(device, "name tag font atlas");
         pipeline = new OverlayPipelines.Spec("name_tag/vertex.vert.spv", "name_tag/fragment.frag.spv")
                 .vertex(OverlayPipelines.VertexFormat.POSITION_TEX_COLOR)
                 .blend(OverlayPipelines.Blend.ALPHA)
                 .attachment(WorldOverlayPass.TARGET_FORMAT)
-                .push(PUSH_BYTES, VK10.VK_SHADER_STAGE_VERTEX_BIT)
-                .descriptorSetLayout(imageSetPool.layout)
+                .push(PUSH_BYTES, VK10.VK_SHADER_STAGE_VERTEX_BIT | VK10.VK_SHADER_STAGE_FRAGMENT_BIT)
                 .build(device, "name tag");
     }
 
     @Override
     public void record(VkCommandBuffer cmd, long targetView, int width, int height) {
-        try (MemoryStack stack = MemoryStack.stackPush();
-             RtDebugLabels.Scope ignored = device.debugScope(cmd, "name tags")) {
+        try (MemoryStack stack = MemoryStack.stackPush()) {
             WorldOverlayPass.beginColorRendering(cmd, stack, targetView, width, height, false);
-            VK10.vkCmdBindPipeline(cmd, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle);
             ByteBuffer push = stack.malloc(PUSH_BYTES);
             viewProj.get(0, push);
             push.putFloat(64, camOffX).putFloat(68, camOffY).putFloat(72, camOffZ);
-            VK10.vkCmdPushConstants(cmd, pipeline.layout, VK10.VK_SHADER_STAGE_VERTEX_BIT, 0, push);
             for (DrawPage page : drawPages) {
-                long set = pageSets.computeIfAbsent(page.view,
-                        v -> imageSetPool.allocateAndBind(device, vkImageView(v), sampler));
-                VK10.vkCmdBindDescriptorSets(cmd, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout, 0,
-                        stack.longs(set), null);
+                OverlayPipelines.FontImage image = pageImages.computeIfAbsent(page.view, v ->
+                        OverlayPipelines.FontImage.create(device, (VulkanGpuTextureView) v, "name tag atlas"));
+                push.putInt(80, image.index()).putInt(84, sampler.index().value());
+                pipeline.bind(cmd, push, width, height);
                 VK10.vkCmdBindVertexBuffers(cmd, 0, stack.longs(page.vbo.handle()), stack.longs(0L));
                 VK10.vkCmdDraw(cmd, page.vertexCount, 1, 0, 0);
             }
@@ -191,31 +175,18 @@ final class NameTagFeature implements OverlayFeature {
     }
 
     @Override
-    public void destroy() {
+    public void close() {
         if (device == null) {
             return;
         }
         if (pipeline != null) {
-            pipeline.destroy(device.vk());
+            pipeline.close();
             pipeline = null;
         }
-        if (imageSetPool != null) {
-            imageSetPool.destroy(device.vk());
-            imageSetPool = null;
-        }
-        pageSets.clear();
-        if (sampler != 0L) {
-            VK10.vkDestroySampler(device.vk(), sampler, null);
-            sampler = 0L;
-        }
+        pageImages.values().forEach(OverlayPipelines.FontImage::close);
+        pageImages.clear();
+        if (sampler != null) { sampler.close(); sampler = null; }
         device = null;
-    }
-
-    private static long vkImageView(GpuTextureView view) {
-        if (view instanceof VulkanGpuTextureView vulkanView) {
-            return vulkanView.vkImageView();
-        }
-        return 0L;
     }
 
     /**

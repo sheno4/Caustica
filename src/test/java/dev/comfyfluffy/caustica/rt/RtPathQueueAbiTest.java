@@ -1,0 +1,15 @@
+package dev.comfyfluffy.caustica.rt;
+
+import dev.comfyfluffy.caustica.rt.gen.PackedPathSegmentData;
+import org.junit.jupiter.api.Test;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
+final class RtPathQueueAbiTest {
+    @Test
+    void queueCapacityUsesTheReflectedPackedRecordStride() {
+        assertEquals(48, PackedPathSegmentData.BYTE_SIZE);
+        assertEquals(1920L * 1080L * 2L * PackedPathSegmentData.BYTE_SIZE,
+                RtFrameResources.continuationBytes(1920, 1080));
+    }
+}

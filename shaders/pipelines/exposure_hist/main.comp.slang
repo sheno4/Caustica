@@ -2,7 +2,6 @@
 // Jensen bias that Monte-Carlo noise introduces into the logarithmic average.
 
 import display_common;
-import bindings;
 
 [[vk::push_constant]] ExposureHistPush pc;
 
@@ -19,6 +18,10 @@ groupshared uint localBins[768];
 [shader("compute")]
 [numthreads(16, 16, 1)]
 void main(uint3 dispatchId : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex) {
+    [format("rgba16f")] RWTexture2D<float4> colorImage = ResourceDescriptorHeap[NonUniformResourceIndex(pc.colorImageIndex)];
+    [format("r32f")] RWTexture2D<float> depthImage = ResourceDescriptorHeap[NonUniformResourceIndex(pc.depthImageIndex)];
+    [format("rgba16f")] RWTexture2D<float4> albedoImage = ResourceDescriptorHeap[NonUniformResourceIndex(pc.albedoImageIndex)];
+    DevicePtr<uint> histBins = DevicePtr<uint>(pc.histogramAddress);
     localBins[groupIndex] = 0u;
     localBins[256u + groupIndex] = 0u;
     localBins[512u + groupIndex] = 0u;

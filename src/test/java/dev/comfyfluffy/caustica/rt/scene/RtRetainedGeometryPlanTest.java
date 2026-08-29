@@ -8,9 +8,12 @@ import dev.comfyfluffy.caustica.api.program.ShaderDataType;
 import dev.comfyfluffy.caustica.api.program.SurfaceId;
 import dev.comfyfluffy.caustica.api.program.VolumeId;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
+import dev.comfyfluffy.caustica.rt.pipeline.RtBindings;
+import dev.comfyfluffy.caustica.rt.pipeline.RtPipeline;
 import org.junit.jupiter.api.Test;
 
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -70,7 +73,7 @@ final class RtRetainedGeometryPlanTest {
         var first = new RtRetainedGeometryPlan.GeometryRecord(3, 3, 5,
                 RtRetainedGeometryPlan.HAS_SURFACE | RtRetainedGeometryPlan.HAS_VOLUME
                         | RtRetainedGeometryPlan.CUTOUT,
-                0x1111, 0x2222, 0x3333, 0.45f, current, previous);
+                0x1111, 0x2222, 0x3333, 0.45f, current, previous, 0x4444, 6);
         var second = new RtRetainedGeometryPlan.GeometryRecord(7, 0, 0,
                 RtRetainedGeometryPlan.HAS_SURFACE, 0x4444, 0, 0x5555, 0,
                 current, current);
@@ -87,8 +90,10 @@ final class RtRetainedGeometryPlanTest {
         assertEquals(0x3333, packed.getLong(RtRetainedGeometryPlan.INSTANCE_DATA_OFFSET));
         assertEquals(10.0f, packed.getFloat(RtRetainedGeometryPlan.CURRENT_TRANSFORM_OFFSET + 3 * 4));
         assertEquals(9.0f, packed.getFloat(RtRetainedGeometryPlan.PREVIOUS_TRANSFORM_OFFSET + 3 * 4));
-        assertEquals(List.of(RtRetainedGeometryPlan.HitGroup.RADIANCE_CUTOUT,
-                        RtRetainedGeometryPlan.HitGroup.SHADOW_CUTOUT,
+        assertEquals(0x4444, packed.getLong(RtRetainedGeometryPlan.EMITTER_INDEX_ADDRESS_OFFSET));
+        assertEquals(6, packed.getInt(RtRetainedGeometryPlan.EMITTER_PRIMITIVE_BASE_OFFSET));
+        assertEquals(List.of(RtRetainedGeometryPlan.HitGroup.RADIANCE_OPAQUE,
+                        RtRetainedGeometryPlan.HitGroup.SHADOW_OPAQUE,
                         RtRetainedGeometryPlan.HitGroup.RADIANCE_OPAQUE,
                         RtRetainedGeometryPlan.HitGroup.SHADOW_OPAQUE),
                 RtRetainedGeometryPlan.hitGroups(List.of(first, second)));
@@ -115,6 +120,22 @@ final class RtRetainedGeometryPlanTest {
                         RtRetainedGeometryPlan.HitGroup.SHADOW_OPAQUE),
                 RtRetainedGeometryPlan.hitGroups(List.of(record)));
         assertTrue((record.flags() & RtRetainedGeometryPlan.CUTOUT) != 0);
+    }
+
+    @Test
+    void preparedTraceWritesOnlyItsOwnedWorldRoots() {
+        ByteBuffer roots = ByteBuffer.allocate(RtBindings.WORLD_PUSH_CONSTANT_SIZE)
+                .order(ByteOrder.nativeOrder());
+        roots.putLong(RtBindings.WORLD_COMPOSITION_DATA_ADDRESS_OFFSET, 0x7777L);
+        var trace = new RtRetainedSceneBackend.PreparedTrace(0x1234L, 0x5678L, 19,
+                new RtPipeline.HitTable(0x8000L, 64, 256));
+
+        trace.writeWorldRoots(roots);
+
+        assertEquals(0x1234L, roots.getLong(RtBindings.WORLD_GEOMETRY_TABLE_ADDRESS_OFFSET));
+        assertEquals(19, roots.getInt(RtBindings.WORLD_TOP_LEVEL_AS_INDEX_OFFSET));
+        assertEquals(0x5678L, roots.getLong(RtBindings.WORLD_NEE_AT_STATE_ADDRESS_OFFSET));
+        assertEquals(0x7777L, roots.getLong(RtBindings.WORLD_COMPOSITION_DATA_ADDRESS_OFFSET));
     }
 
     private static MeshBuild<Instance> build(MeshBuild.IndexRevision revision, long positionAddress,

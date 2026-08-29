@@ -7,7 +7,10 @@ import caustica_coverage;
 public void runRadianceAnyHit<TComposition : IComposition>(inout WorldPayload payload,
         in BuiltInTriangleIntersectionAttributes attributes) {
     TComposition.Coverages coverages = {};
-    if (coverages.evaluateCoverage(0u, worldCoverageInput(attributes)) < 0.5) {
+    var record = worldGeometryRecord();
+    if ((record.flags & 2u) != 0u) return;
+    if (coverages.evaluateCoverage(record.coverageImplementation,
+            worldCoverageInput(attributes)) < record.alphaCutoff) {
         IgnoreHit();
     }
 }

@@ -6,12 +6,14 @@ import com.mojang.blaze3d.textures.GpuTextureView;
 import com.mojang.blaze3d.vulkan.VulkanCommandEncoder;
 import com.mojang.blaze3d.vulkan.VulkanDevice;
 import com.mojang.blaze3d.vulkan.VulkanGpuSurface;
-import dev.comfyfluffy.caustica.CausticaConfig;
+import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftHdr;
 import dev.comfyfluffy.caustica.rt.RtRuntime;
 import dev.comfyfluffy.caustica.minecraft.MinecraftFrameAdapter;
 import dev.comfyfluffy.caustica.minecraft.MinecraftUiOverlay;
+import dev.comfyfluffy.caustica.minecraft.MinecraftVulkanImageBorrow;
+import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftVulkanBackend;
 import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
 import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
@@ -105,6 +107,8 @@ public abstract class VulkanGpuSurfaceMixin {
 
 	@Unique
 	private int caustica$colorSpace = 0;
+	@Unique
+	private MinecraftVulkanImageBorrow caustica$sdrPresentationSource;
 
 	@Unique
 	private long caustica$metadataSwapchain;
@@ -358,11 +362,22 @@ public abstract class VulkanGpuSurfaceMixin {
 		// misdisplay (SDR bytes reinterpreted as PQ codes). Convert sRGB -> PQ at paper white instead. Falls
 		// through to vanilla SDR if conversion resources aren't ready or the source view is not a Vulkan view.
 		if (RtRuntime.INSTANCE.isPqSdrPresentActive()) {
-			long sdrView = caustica$vkImageView(textureView);
-			if (sdrView != 0L && presentation.presentSdrToPq(
+			GpuContext gpu = GpuContext.currentOrNull();
+			if (gpu != null && textureView instanceof com.mojang.blaze3d.vulkan.VulkanGpuTextureView view
+					&& view.texture().getFormat() == com.mojang.blaze3d.GpuFormat.RGBA8_UNORM) {
+				if (caustica$sdrPresentationSource == null || !caustica$sdrPresentationSource.wraps(
+						gpu, view, this.swapchainWidth, this.swapchainHeight)) {
+					MinecraftVulkanImageBorrow old = caustica$sdrPresentationSource;
+					caustica$sdrPresentationSource = MinecraftVulkanImageBorrow.sampled(gpu, view,
+							this.swapchainWidth, this.swapchainHeight, VK10.VK_FORMAT_R8G8B8A8_UNORM);
+					if (old != null) gpu.retireAfterUse(old::destroy);
+				}
+				if (presentation.presentSdrToPq(
 					MinecraftVulkanBackend.wrap((VulkanCommandEncoder) commandEncoder), swapchainImage,
-					this.swapchainWidth, this.swapchainHeight, sdrView, acquireSem, presentSem)) {
+					this.swapchainWidth, this.swapchainHeight, caustica$sdrPresentationSource,
+					acquireSem, presentSem)) {
 				ci.cancel();
+				}
 			}
 		}
 	}

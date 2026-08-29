@@ -76,12 +76,9 @@ final class MinecraftMaterialPageCompilerImageLifetimeTest {
         MaterialTextureLevels.Level level = decoded.levels().getFirst();
 
         assertEquals(0.75f, level.surface0()[2], 1.0e-6f);
-        assertEquals(0.5f * MaterialTextureLevels.srgbToLinear(0x80 / 255.0f),
-                level.emissionColor()[0], 1.0e-6f);
-        assertEquals(0.25f * MaterialTextureLevels.srgbToLinear(0x40 / 255.0f),
-                level.emissionColor()[1], 1.0e-6f);
-        assertEquals(MaterialTextureLevels.srgbToLinear(0x20 / 255.0f),
-                level.emissionColor()[2], 1.0e-6f);
+        assertEquals(0.5f, level.emissionColor()[0], 1.0e-6f);
+        assertEquals(0.25f, level.emissionColor()[1], 1.0e-6f);
+        assertEquals(1.0f, level.emissionColor()[2], 1.0e-6f);
     }
 
     @Test

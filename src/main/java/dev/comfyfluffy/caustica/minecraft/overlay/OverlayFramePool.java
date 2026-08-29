@@ -1,57 +1,78 @@
 package dev.comfyfluffy.caustica.minecraft.overlay;
 
-import org.lwjgl.vulkan.VK10;
+import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
+import dev.comfyfluffy.caustica.api.gpu.GpuFrameUse;
+import org.lwjgl.PointerBuffer;
+import org.lwjgl.system.*;
+import org.lwjgl.util.vma.*;
+import org.lwjgl.vulkan.*;
 
+import java.nio.ByteBuffer;
+import java.nio.LongBuffer;
 import java.util.ArrayList;
 import java.util.List;
 
-import dev.comfyfluffy.caustica.api.gpu.GpuFrameUse;
-import dev.comfyfluffy.caustica.rt.GpuBuffer;
-import dev.comfyfluffy.caustica.rt.GpuContext;
+import static org.lwjgl.vulkan.VK10.*;
 
-/**
- * Per-frame host-visible vertex/index scratch for overlay passes, shared by every {@link OverlayFeature}.
- * Buffers acquired during a frame retire against that frame's exact graphics completion token, so a buffer
- * is never destroyed while the GPU can still read it.
- */
-public final class OverlayFramePool {
-    // Vulkan requires buffer size > 0; a few zero-length overlay draws could otherwise reach acquire() with
-    // bytes == 0.
+/** Frame-scoped host-visible vertex and index buffers retired by the UI frame reservation. */
+final class OverlayFramePool {
     private static final long MIN_SIZE = 256;
+    private final List<Buffer> acquired = new ArrayList<>();
 
-    private final List<GpuBuffer> acquiredThisFrame = new ArrayList<>();
-
-    /** A host-visible vertex buffer of at least {@code bytes}, valid for this frame only. */
-    public GpuBuffer acquireVertex(GpuContext device, long bytes, String label) {
-        return acquire(device, bytes, VK10.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, label);
+    Buffer acquireVertex(GpuDevice gpu, long bytes, String label) {
+        return acquire(gpu, bytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, label);
     }
-
-    /** A host-visible index buffer of at least {@code bytes}, valid for this frame only. */
-    public GpuBuffer acquireIndex(GpuContext device, long bytes, String label) {
-        return acquire(device, bytes, VK10.VK_BUFFER_USAGE_INDEX_BUFFER_BIT, label);
+    Buffer acquireIndex(GpuDevice gpu, long bytes, String label) {
+        return acquire(gpu, bytes, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, label);
     }
-
-    private GpuBuffer acquire(GpuContext device, long bytes, int usage, String label) {
-        GpuBuffer b = device.createBuffer(Math.max(bytes, MIN_SIZE), usage, true, label);
-        acquiredThisFrame.add(b);
-        return b;
+    private Buffer acquire(GpuDevice gpu, long bytes, int usage, String label) {
+        Buffer buffer = Buffer.create(gpu, Math.max(bytes, MIN_SIZE), usage, label);
+        acquired.add(buffer);
+        return buffer;
     }
+    void endFrame(GpuFrameUse use) {
+        if (acquired.isEmpty()) return;
+        List<Buffer> retired = List.copyOf(acquired);
+        acquired.clear();
+        use.retire(() -> retired.forEach(Buffer::close));
+    }
+    void close() { acquired.forEach(Buffer::close); acquired.clear(); }
 
-    /** Retire everything acquired this frame once its overlay commands have completed. */
-    public void endFrame(GpuFrameUse gpuUse) {
-        if (acquiredThisFrame.isEmpty()) {
-            return;
+    static final class Buffer implements AutoCloseable {
+        private final long allocator, handle, allocation, mapped, size;
+        private boolean closed;
+        private Buffer(long allocator, long handle, long allocation, long mapped, long size) {
+            this.allocator = allocator; this.handle = handle; this.allocation = allocation;
+            this.mapped = mapped; this.size = size;
         }
-        List<GpuBuffer> retired = List.copyOf(acquiredThisFrame);
-        gpuUse.retire(() -> retired.forEach(GpuBuffer::destroy));
-        acquiredThisFrame.clear();
-    }
-
-    /** Immediate teardown of unpublished buffers; queued buffers are owned by the GPU executor. */
-    public void destroy() {
-        for (GpuBuffer b : acquiredThisFrame) {
-            b.destroy();
+        static Buffer create(GpuDevice gpu, long size, int usage, String label) {
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                VkBufferCreateInfo info = VkBufferCreateInfo.calloc(stack).sType$Default().size(size)
+                        .usage(usage).sharingMode(VK_SHARING_MODE_EXCLUSIVE);
+                VmaAllocationCreateInfo allocationInfo = VmaAllocationCreateInfo.calloc(stack)
+                        .usage(Vma.VMA_MEMORY_USAGE_AUTO)
+                        .flags(Vma.VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
+                                | Vma.VMA_ALLOCATION_CREATE_MAPPED_BIT);
+                LongBuffer output = stack.mallocLong(1);
+                PointerBuffer allocation = stack.mallocPointer(1);
+                VmaAllocationInfo allocationOut = VmaAllocationInfo.calloc(stack);
+                int result = Vma.vmaCreateBuffer(gpu.vmaAllocator(), info, allocationInfo,
+                        output, allocation, allocationOut);
+                if (result != VK_SUCCESS) throw new IllegalStateException(label + " allocation failed: " + result);
+                return new Buffer(gpu.vmaAllocator(), output.get(0), allocation.get(0),
+                        allocationOut.pMappedData(), size);
+            }
         }
-        acquiredThisFrame.clear();
+        long handle() { return handle; }
+        long mapped() { return mapped; }
+        void flush(long offset, long bytes) {
+            if (offset < 0 || bytes < 0 || offset + bytes > size) throw new IllegalArgumentException("flush range");
+            Vma.vmaFlushAllocation(allocator, allocation, offset, bytes);
+        }
+        @Override public void close() {
+            if (closed) return;
+            closed = true;
+            Vma.vmaDestroyBuffer(allocator, handle, allocation);
+        }
     }
 }

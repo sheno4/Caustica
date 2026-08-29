@@ -6,7 +6,7 @@ import dev.comfyfluffy.caustica.api.geometry.InstanceId;
 import dev.comfyfluffy.caustica.api.geometry.MeshId;
 import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
-import dev.comfyfluffy.caustica.minecraft.MinecraftProvidersExtension;
+import dev.comfyfluffy.caustica.minecraft.program.MinecraftProgramTypes;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -42,7 +42,7 @@ public final class MinecraftTerrainGeometry implements AutoCloseable {
             for (Change change : latest.values()) {
                 if (change instanceof Put put) {
                     var ids = committedSections.computeIfAbsent(put.sectionKey(), ignored -> new SectionIds(
-                            channel.newMesh(MinecraftProvidersExtension.INSTANCE_DATA), channel.newInstance()));
+                            channel.newMesh(MinecraftProgramTypes.INSTANCE_DATA), channel.newInstance()));
                     var uploaded = uploader.upload(put.mesh());
                     uploads.add(uploaded);
                     operations.add(new GeometryChannel.SetMesh<>(ids.mesh(), uploaded.build()));
@@ -113,5 +113,5 @@ public final class MinecraftTerrainGeometry implements AutoCloseable {
 
     public record Drop(long sectionKey) implements Change { }
 
-    private record SectionIds(MeshId<MinecraftProvidersExtension.InstanceData> mesh, InstanceId instance) { }
+    private record SectionIds(MeshId<MinecraftProgramTypes.InstanceData> mesh, InstanceId instance) { }
 }

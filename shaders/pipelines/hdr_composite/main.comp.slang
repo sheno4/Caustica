@@ -1,10 +1,6 @@
 // Composites the sRGB-authored, premultiplied UI over the PQ/BT.2020 HDR world while preserving
 // Minecraft's sRGB-domain UI blend.
-import bindings;
-
-struct PresentPush {
-    float uiNits;
-};
+import presentation_common;
 [[vk::push_constant]] PresentPush pc;
 
 static const float PQ_M1 = 0.1593017578125;
@@ -58,6 +54,8 @@ static const float3x3 BT2020_TO_BT709 = float3x3(
 [shader("compute")]
 [numthreads(16, 16, 1)]
 void main(uint3 tid : SV_DispatchThreadID) {
+    [format("rgba16f")] RWTexture2D<float4> outputImage = ResourceDescriptorHeap[NonUniformResourceIndex(pc.outputImageIndex)];
+    Texture2D<float4> sourceImage = ResourceDescriptorHeap[NonUniformResourceIndex(pc.sourceImageIndex)];
     uint width, height;
     outputImage.GetDimensions(width, height);
     if (tid.x >= width || tid.y >= height) return;

@@ -1,16 +1,23 @@
-import bindings;
+import caustica_resources;
+
+struct CompositePush { uint sourceImageIndex; };
+[[vk::push_constant]] CompositePush pc;
+
+Texture2D<float4> source() {
+    return ResourceDescriptorHeap[NonUniformResourceIndex(pc.sourceImageIndex)];
+}
 
 static const float EDGE_THRESHOLD = 0.02;
 
 float coverage(int2 pixel, int2 size) {
-    return sourceImage[clamp(pixel, int2(0), size - int2(1))].a;
+    return source()[clamp(pixel, int2(0), size - int2(1))].a;
 }
 
 [shader("fragment")]
 float4 main(float4 position : SV_Position) : SV_Target0 {
     int2 pixel = int2(position.xy);
     uint width, height;
-    sourceImage.GetDimensions(width, height);
+    source().GetDimensions(width, height);
     int2 size = int2(width, height);
 
     if (coverage(pixel, size) > 0.5) return float4(0.0);
@@ -34,7 +41,7 @@ float4 main(float4 position : SV_Position) : SV_Target0 {
     for (int dy = -1; dy <= 1; dy++) {
         for (int dx = -1; dx <= 1; dx++) {
             int2 samplePixel = clamp(pixel + int2(dx, dy), int2(0), size - int2(1));
-            float4 sampleValue = sourceImage[samplePixel];
+            float4 sampleValue = source()[samplePixel];
             if (sampleValue.a > 0.5) {
                 color += sampleValue.rgb;
                 count += 1.0;

@@ -7,13 +7,22 @@
 // probe module, and per-entry-point SPIR-V allows only one push-constant block reachable from any
 // single entry point, so the probe needs one small dedicated entry point per struct.
 
+public typealias DevicePtr<T> = Ptr<T, Access.ReadWrite, AddressSpace.Device, Std430DataLayout>;
+
 public struct ExposureHistPush {
+    public uint colorImageIndex;
+    public uint depthImageIndex;
+    public uint albedoImageIndex;
+    public uint64_t histogramAddress;
     public uint stride;
     public float centerWeightSigma;
     public float centerWeightFloor;
 };
 
 public struct ExposureResolvePush {
+    public uint64_t histogramAddress;
+    public uint64_t stateAddress;
+    public uint exposureImageIndex;
     public float key;
     public float minEv;
     public float maxEv;
@@ -67,6 +76,16 @@ public struct ExposureState {
 };
 
 public struct DisplayPush {
+    public uint outputImageIndex;
+    public uint rtImageIndex;
+    public uint exposureImageIndex;
+    public uint hdrImageIndex;
+    public uint toneLutIndex;
+    public uint toneSamplerIndex;
+    public uint hdrToneLutIndex;
+    public uint hdrToneSamplerIndex;
+    public uint lookLutIndex;
+    public uint lookSamplerIndex;
     public int hdrEnabled;      // 0 = SDR only, 1 = also write the PQ HDR image
     public float lutSize;       // toneLut/hdrToneLut texels per axis; both LUTs share one size (asserted at load)
     public float gamma;         // post-display artistic gamma; below 1 brightens midtones
@@ -76,6 +95,16 @@ public struct DisplayPush {
 };
 
 public struct DebugPresentPush {
+    public uint outputImageIndex;
+    public uint normalImageIndex;
+    public uint albedoImageIndex;
+    public uint depthImageIndex;
+    public uint motionImageIndex;
+    public uint specAlbedoImageIndex;
+    public uint specMotionImageIndex;
+    public uint sceneImageIndex;
+    public uint exposureImageIndex;
+    public uint64_t exposureStateAddress;
     public uint debugView;     // 1..9; this pass is only dispatched for debugView != 0
     public float centerWeightSigma;
     public float centerWeightFloor;

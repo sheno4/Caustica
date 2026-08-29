@@ -1,18 +1,12 @@
 package dev.comfyfluffy.caustica.minecraft.overlay;
 
-import org.joml.Matrix4f;
-import org.joml.Matrix4fc;
-import org.lwjgl.system.MemoryStack;
-import org.lwjgl.system.MemoryUtil;
-import org.lwjgl.vulkan.VK10;
-import org.lwjgl.vulkan.VkCommandBuffer;
-
-import java.nio.ByteBuffer;
-
+import dev.comfyfluffy.caustica.config.CausticaConfig;
+import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
+import dev.comfyfluffy.caustica.api.gpu.GpuFrameUse;
+import dev.comfyfluffy.caustica.minecraft.entity.RtEntities;
+import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
+import dev.comfyfluffy.caustica.vulkan.VmaImage2D;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
-
-import com.mojang.blaze3d.vulkan.VulkanCommandEncoder;
-
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.state.level.BlockOutlineRenderState;
 import net.minecraft.core.BlockPos;
@@ -24,267 +18,110 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.pattern.BlockInWorld;
 import net.minecraft.world.phys.shapes.VoxelShape;
+import org.joml.Matrix4f;
+import org.joml.Matrix4fc;
+import org.lwjgl.system.MemoryStack;
+import org.lwjgl.system.MemoryUtil;
+import org.lwjgl.vulkan.VK10;
+import org.lwjgl.vulkan.VkCommandBuffer;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 
-import dev.comfyfluffy.caustica.CausticaConfig;
-import dev.comfyfluffy.caustica.api.gpu.GpuFrameUse;
-import dev.comfyfluffy.caustica.rt.GpuBuffer;
-import dev.comfyfluffy.caustica.rt.GpuContext;
-import dev.comfyfluffy.caustica.rt.GpuImage;
-import dev.comfyfluffy.caustica.rt.RtDebugLabels;
-import dev.comfyfluffy.caustica.minecraft.entity.RtEntities;
-import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
-
-/**
- * The targeted block's wireframe outline: a real {@link VoxelShape} edge list (not just a full-cube
- * approximation), raster full-res post-upscale, occluded per-fragment via an inline {@code rayQueryEXT}
- * test against the world TLAS (see {@code block_outline/fragment.frag.slang}) instead of a depth buffer — RT's own
- * {@code gDepth} is at DLSS-RR's internal render resolution, not this pass's full display resolution, and
- * outline pixels need to sit exactly on the depth surface.
- *
- * <p>Reads {@code Minecraft.gameRenderer.gameRenderState().levelRenderState.blockOutlineRenderState}
- * directly — populated every frame by vanilla's own {@code LevelExtractor.extractBlockOutline}, which runs
- * from {@code GameRenderer.extract()} independently of {@code LevelRenderer.render()} (permanently
- * cancelled under {@code cancelVanillaWorld}), the same reason entity/camera state already worked for the
- * glow-outline and name-tag features.
- *
- * <p>A native {@code LINE_LIST} draw, real width via the device's {@code wideLines} feature +
- * {@code vkCmdSetLineWidth} when the pass device supports wide lines, clamped to the device limit (Vulkan mandates
- * exactly 1.0 without the feature, so this degrades gracefully rather than failing).
- *
- * <p>Edge AA follows {@link GlowOutlineFeature}'s mask/composite split rather than drawing straight onto
- * {@code main}: the line list rasterizes at the device's preferred color sample count into a transient
- * MSAA scratch attachment that dynamic rendering resolve-averages into a single-sample mask, then a tiny
- * composite pass alpha-blends that mask onto {@code main}. Since every line pixel is the same flat colour
- * (rgb = 0,0,0), per-sample coverage averages straight into a fractional alpha with no colour-bleed risk —
- * the occlusion {@code discard} in {@code block_outline/fragment.frag.slang} still runs once per fragment (not per sample,
- * no {@code sampleShading}), so occlusion itself stays pixel-rate; only the silhouette edges get antialiased.
- */
+/** The vanilla targeted-block shape rendered at display resolution and occluded through the root TLAS. */
 final class BlockOutlineFeature implements OverlayFeature {
-    // mat4 curViewProj (0, 64B) + vec3 camOffset (64, padded to 16B) + vec4 color (80, 16B) = 96B.
-    private static final int PUSH_BYTES = 96;
-    // Vanilla's default (non-high-contrast) outline colour: ARGB.black(102) ~= rgba(0,0,0,0.4).
+    private static final int PUSH_BYTES = 112;
     private static final float OUTLINE_ALPHA = 102f / 255f;
-    // Reference thickness at REFERENCE_HEIGHT display pixels; record() scales this by the actual display
-    // height (then clamps to the device's max) so the line reads as the same relative thickness regardless
-    // of window/render resolution — a fixed pixel width looks disproportionately thick on a smaller screen.
-    private static final float LINE_WIDTH_PX_AT_REFERENCE = 2.0f;
-    private static final float REFERENCE_HEIGHT = 1080f;
-
-    private GpuContext device;
+    private GpuDevice device;
     private OverlayPipelines.Pipeline pipeline;
-    private OverlayPipelines.AccelStructureSet accelSet;
     private OverlayPipelines.Pipeline compositePipeline;
-    private OverlayPipelines.ReadOnlyImageSet compositeSet;
-    private GpuImage msaaImage;
-    private GpuImage resolvedMask;
-
+    private VmaImage2D mask;
+    private boolean maskNeedsInitialization;
     private final Matrix4f viewProj = new Matrix4f();
-    private GpuBuffer vbo;
+    private OverlayFramePool.Buffer vbo;
     private int vertexCount;
-    private long boundSet;
+    private int tlasDescriptor;
 
-    @Override
-    public boolean prepare(GpuContext device, OverlayFramePool pool, GpuFrameUse gpuUse,
-                           long tlas, Matrix4fc worldViewProjection, int width, int height) {
-        if (!CausticaConfig.Rt.Overlay.BLOCK_OUTLINE_ENABLED.value()) {
-            return false;
-        }
+    @Override public boolean prepare(GpuDevice device, OverlayFramePool pool, GpuFrameUse gpuUse,
+            int worldTlasDescriptor, Matrix4fc worldViewProjection, int width, int height) {
+        if (!CausticaConfig.Rt.Overlay.BLOCK_OUTLINE_ENABLED.value() || worldTlasDescriptor == 0) return false;
         RtTerrain terrain = RtTerrain.currentOrNull();
-        if (terrain == null) {
-            return false;
-        }
-        if (tlas == 0L) {
-            return false;
-        }
-        var gameRenderState = Minecraft.getInstance().gameRenderer.gameRenderState();
-        // Vanilla's own gate (GameRenderer.shouldRenderBlockOutline) is a *parameter* it computes right
-        // before the (in our setup, permanently cancelled) LevelRenderer.render() call — never stored
-        // anywhere we could otherwise read it — so extraction populates blockOutlineRenderState regardless
-        // of F1/game-mode. guiRenderState.isHudHidden is independently tracked in GameRenderState (F1);
-        // the rest of shouldRenderBlockOutline's logic (camera-entity/adventure-mode/spectator-menu
-        // narrowing) is replicated in shouldRenderForGameMode below.
-        if (gameRenderState.guiRenderState.isHudHidden) {
-            return false;
-        }
-        BlockOutlineRenderState state = gameRenderState.levelRenderState.blockOutlineRenderState;
-        if (state == null) {
-            return false;
-        }
+        if (terrain == null) return false;
+        var game = Minecraft.getInstance().gameRenderer.gameRenderState();
+        if (game.guiRenderState.isHudHidden) return false;
+        BlockOutlineRenderState state = game.levelRenderState.blockOutlineRenderState;
+        if (state == null || !shouldRenderForGameMode(state.pos())) return false;
         BlockPos pos = state.pos();
-        if (!shouldRenderForGameMode(pos)) {
-            return false;
-        }
         VoxelShape shape = state.shape();
-        float baseX = pos.getX() - terrain.blockX;
-        float baseY = pos.getY() - terrain.blockY;
-        float baseZ = pos.getZ() - terrain.blockZ;
-
-        FloatArrayList verts = new FloatArrayList(72);
-        shape.forAllEdges((x1, y1, z1, x2, y2, z2) -> {
-            verts.add((float) (baseX + x1));
-            verts.add((float) (baseY + y1));
-            verts.add((float) (baseZ + z1));
-            verts.add((float) (baseX + x2));
-            verts.add((float) (baseY + y2));
-            verts.add((float) (baseZ + z2));
+        float baseX = pos.getX() - terrain.blockX, baseY = pos.getY() - terrain.blockY, baseZ = pos.getZ() - terrain.blockZ;
+        FloatArrayList vertices = new FloatArrayList(72);
+        shape.forAllEdges((x1,y1,z1,x2,y2,z2) -> {
+            vertices.add((float)(baseX+x1)); vertices.add((float)(baseY+y1)); vertices.add((float)(baseZ+z1));
+            vertices.add((float)(baseX+x2)); vertices.add((float)(baseY+y2)); vertices.add((float)(baseZ+z2));
         });
-        vertexCount = verts.size() / 3;
-        if (vertexCount == 0) {
-            return false;
-        }
-
-        ensureResources(device, width, height);
-        float[] data = verts.toFloatArray();
-        vbo = pool.acquireVertex(device, (long) data.length * Float.BYTES, "block outline vbo");
+        vertexCount = vertices.size() / 3;
+        if (vertexCount == 0) return false;
+        ensureResources(device, gpuUse, width, height);
+        float[] data = vertices.toFloatArray();
+        vbo = pool.acquireVertex(device, (long)data.length * Float.BYTES, "block outline vbo");
         MemoryUtil.memFloatBuffer(vbo.mapped(), data.length).put(data);
-        vbo.flush(0L, (long) data.length * Float.BYTES);
-
+        vbo.flush(0, (long)data.length * Float.BYTES);
         viewProj.set(worldViewProjection);
-        boundSet = accelSet.bind(device, tlas, gpuUse);
+        tlasDescriptor = worldTlasDescriptor;
         return true;
     }
 
-    /**
-     * Replicates {@code GameRenderer.shouldRenderBlockOutline()}'s camera-entity/adventure-mode/
-     * spectator-menu narrowing (the one piece of vanilla's gate not already covered by the F1 check above).
-     * Survival/creative (full build permission) always shows; adventure mode only shows when the held item
-     * can actually break or place on this specific block; spectator only shows when the block has an
-     * interactable menu (chests, furnaces, etc. — so a spectator can see what they're allowed to open);
-     * spectating a non-player entity (not just flying as a spectator) shows nothing at all, matching vanilla.
-     */
-    private static boolean shouldRenderForGameMode(BlockPos pos) {
-        Minecraft mc = Minecraft.getInstance();
-        Entity cameraEntity = mc.getCameraEntity();
-        if (!(cameraEntity instanceof Player player)) {
-            return false;
-        }
-        if (player.getAbilities().mayBuild) {
-            return true;
-        }
-        Level level = mc.level;
-        if (level == null) {
-            return false;
-        }
-        BlockState blockState = level.getBlockState(pos);
-        if (mc.gameMode.getPlayerMode() == GameType.SPECTATOR) {
-            return blockState.getMenuProvider(level, pos) != null;
-        }
-        ItemStack itemStack = player.getMainHandItem();
-        BlockInWorld blockInWorld = new BlockInWorld(level, pos, false);
-        return !itemStack.isEmpty()
-                && (itemStack.canBreakBlockInAdventureMode(blockInWorld) || itemStack.canPlaceOnBlockInAdventureMode(blockInWorld));
-    }
-
-    private void ensureResources(GpuContext device, int width, int height) {
-        this.device = device;
+    private void ensureResources(GpuDevice gpu, GpuFrameUse use, int width, int height) {
+        device = gpu;
         if (pipeline == null) {
-            accelSet = OverlayPipelines.accelStructureSet(device, VK10.VK_SHADER_STAGE_FRAGMENT_BIT, "block outline");
             pipeline = new OverlayPipelines.Spec("block_outline/vertex.vert.spv", "block_outline/fragment.frag.spv")
-                    .vertex(OverlayPipelines.VertexFormat.POSITION)
-                    .topology(VK10.VK_PRIMITIVE_TOPOLOGY_LINE_LIST)
-                    // NONE (straight write), not ALPHA: ALPHA's blend factors (srcAlpha=ZERO, dstAlpha=ONE)
-                    // preserve the DESTINATION's alpha, which was fine composited straight onto opaque `main`
-                    // (only RGB mattered) but is wrong now that this pass writes into a transparent scratch
-                    // mask whose alpha IS the coverage signal the composite pass reads — ALPHA here would
-                    // leave every resolved pixel's alpha stuck at the clear value (0), invisible outline.
-                    .blend(OverlayPipelines.Blend.NONE)
-                    .attachment(WorldOverlayPass.TARGET_FORMAT)
-                    .samples(device.rasterCapabilities().preferredColorSampleCount())
-                    .push(PUSH_BYTES, VK10.VK_SHADER_STAGE_VERTEX_BIT | VK10.VK_SHADER_STAGE_FRAGMENT_BIT)
-                    .descriptorSetLayout(accelSet.layout)
-                    .build(device, "block outline");
-            compositeSet = OverlayPipelines.readOnlyImageSet(device, VK10.VK_SHADER_STAGE_FRAGMENT_BIT, "block outline composite");
+                    .vertex(OverlayPipelines.VertexFormat.POSITION).topology(VK10.VK_PRIMITIVE_TOPOLOGY_LINE_LIST)
+                    .attachment(WorldOverlayPass.TARGET_FORMAT).build(gpu, "block outline");
             compositePipeline = new OverlayPipelines.Spec("overlay_composite/vertex.vert.spv", "overlay_composite/passthrough.frag.spv")
-                    .blend(OverlayPipelines.Blend.ALPHA)
-                    .attachment(WorldOverlayPass.TARGET_FORMAT)
-                    .descriptorSetLayout(compositeSet.layout)
-                    .build(device, "block outline composite");
+                    .blend(OverlayPipelines.Blend.ALPHA).attachment(WorldOverlayPass.TARGET_FORMAT).build(gpu, "block outline composite");
         }
-        if (msaaImage == null || msaaImage.width() != width || msaaImage.height() != height) {
-            if (msaaImage != null) {
-                msaaImage.destroy();
-            }
-            msaaImage = device.createTransientMsaaColorImage(width, height, WorldOverlayPass.TARGET_FORMAT,
-                    device.rasterCapabilities().preferredColorSampleCount(),
-                    "block outline msaa " + width + "x" + height);
+        if (mask == null || mask.width() != width || mask.height() != height) {
+            if (mask != null) { VmaImage2D old = mask; use.retire(old::close); }
+            mask = VmaImage2D.create(gpu, width, height, WorldOverlayPass.TARGET_FORMAT,
+                    VK10.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, "block outline mask");
+            maskNeedsInitialization = true;
         }
-        if (resolvedMask == null || resolvedMask.width() != width || resolvedMask.height() != height) {
-            if (resolvedMask != null) {
-                resolvedMask.destroy();
-            }
-            resolvedMask = device.createStorageImage(width, height, WorldOverlayPass.TARGET_FORMAT,
-                    "block outline resolved mask " + width + "x" + height, VK10.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
-        }
-        compositeSet.bind(device, resolvedMask.view());
     }
 
-    @Override
-    public void record(VkCommandBuffer cmd, long targetView, int width, int height) {
+    @Override public void record(VkCommandBuffer cmd, long targetView, int width, int height) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            try (RtDebugLabels.Scope ignored = device.debugScope(cmd, "block outline mask")) {
-                WorldOverlayPass.beginMsaaColorRendering(cmd, stack, msaaImage.view(), resolvedMask.view(), width, height);
-                VK10.vkCmdBindPipeline(cmd, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle);
-                VK10.vkCmdBindDescriptorSets(cmd, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout, 0,
-                        stack.longs(boundSet), null);
-                VK10.vkCmdBindVertexBuffers(cmd, 0, stack.longs(vbo.handle()), stack.longs(0L));
-                float desiredWidthPx = LINE_WIDTH_PX_AT_REFERENCE * (height / REFERENCE_HEIGHT);
-                float lineWidth = device.rasterCapabilities().wideLines()
-                        ? Math.min(desiredWidthPx, device.rasterCapabilities().maxLineWidth()) : 1.0f;
-                VK10.vkCmdSetLineWidth(cmd, lineWidth);
-                ByteBuffer push = stack.malloc(PUSH_BYTES);
-                viewProj.get(0, push);
-                RtEntities entities = RtEntities.INSTANCE;
-                push.putFloat(64, entities.glowCamOffsetX()).putFloat(68, entities.glowCamOffsetY())
-                        .putFloat(72, entities.glowCamOffsetZ());
-                push.putFloat(80, 0f).putFloat(84, 0f).putFloat(88, 0f).putFloat(92, OUTLINE_ALPHA);
-                VK10.vkCmdPushConstants(cmd, pipeline.layout,
-                        VK10.VK_SHADER_STAGE_VERTEX_BIT | VK10.VK_SHADER_STAGE_FRAGMENT_BIT, 0, push);
-                VK10.vkCmdDraw(cmd, vertexCount, 1, 0, 0);
-                WorldOverlayPass.endRendering(cmd);
-            }
-
-            VulkanCommandEncoder.memoryBarrier(cmd, stack); // resolved mask writes visible to the composite's reads
-
-            try (RtDebugLabels.Scope ignored = device.debugScope(cmd, "block outline composite")) {
-                WorldOverlayPass.beginColorRendering(cmd, stack, targetView, width, height, false);
-                VK10.vkCmdBindPipeline(cmd, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, compositePipeline.handle);
-                VK10.vkCmdBindDescriptorSets(cmd, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, compositePipeline.layout, 0,
-                        stack.longs(compositeSet.set), null);
-                VK10.vkCmdDraw(cmd, 3, 1, 0, 0);
-                WorldOverlayPass.endRendering(cmd);
-            }
+            if (maskNeedsInitialization) { WorldOverlayPass.initializeImage(cmd, stack, mask); maskNeedsInitialization = false; }
+            WorldOverlayPass.beginColorRendering(cmd, stack, mask.view(), width, height, true);
+            VK10.vkCmdBindVertexBuffers(cmd, 0, stack.longs(vbo.handle()), stack.longs(0));
+            VK10.vkCmdSetLineWidth(cmd, 1f);
+            ByteBuffer push = stack.malloc(PUSH_BYTES).order(ByteOrder.LITTLE_ENDIAN);
+            viewProj.get(0, push);
+            RtEntities entities = RtEntities.INSTANCE;
+            push.putFloat(64, entities.glowCamOffsetX()).putFloat(68, entities.glowCamOffsetY()).putFloat(72, entities.glowCamOffsetZ());
+            push.putFloat(80, 0).putFloat(84, 0).putFloat(88, 0).putFloat(92, OUTLINE_ALPHA).putInt(96, tlasDescriptor);
+            pipeline.bind(cmd, push, width, height);
+            VK10.vkCmdDraw(cmd, vertexCount, 1, 0, 0);
+            WorldOverlayPass.endRendering(cmd);
+            WorldOverlayPass.memoryBarrier(cmd, stack);
+            WorldOverlayPass.beginColorRendering(cmd, stack, targetView, width, height, false);
+            compositePipeline.bind(cmd, stack.malloc(4).order(ByteOrder.LITTLE_ENDIAN).putInt(0, mask.sampledIndex().value()), width, height);
+            VK10.vkCmdDraw(cmd, 3, 1, 0, 0);
+            WorldOverlayPass.endRendering(cmd);
         }
     }
 
-    @Override
-    public void destroy() {
-        if (device == null) {
-            return;
-        }
-        if (pipeline != null) {
-            pipeline.destroy(device.vk());
-            pipeline = null;
-        }
-        if (accelSet != null) {
-            accelSet.destroy(device.vk());
-            accelSet = null;
-        }
-        if (compositePipeline != null) {
-            compositePipeline.destroy(device.vk());
-            compositePipeline = null;
-        }
-        if (compositeSet != null) {
-            compositeSet.destroy(device.vk());
-            compositeSet = null;
-        }
-        if (msaaImage != null) {
-            msaaImage.destroy();
-            msaaImage = null;
-        }
-        if (resolvedMask != null) {
-            resolvedMask.destroy();
-            resolvedMask = null;
-        }
-        device = null;
+    private static boolean shouldRenderForGameMode(BlockPos pos) {
+        Minecraft mc = Minecraft.getInstance(); Entity camera = mc.getCameraEntity();
+        if (!(camera instanceof Player player)) return false;
+        if (player.getAbilities().mayBuild) return true;
+        Level level = mc.level; if (level == null) return false;
+        BlockState state = level.getBlockState(pos);
+        if (mc.gameMode.getPlayerMode() == GameType.SPECTATOR) return state.getMenuProvider(level, pos) != null;
+        ItemStack item = player.getMainHandItem(); BlockInWorld block = new BlockInWorld(level, pos, false);
+        return !item.isEmpty() && (item.canBreakBlockInAdventureMode(block) || item.canPlaceOnBlockInAdventureMode(block));
+    }
+
+    @Override public void close() {
+        if (pipeline != null) pipeline.close(); if (compositePipeline != null) compositePipeline.close(); if (mask != null) mask.close();
+        pipeline = null; compositePipeline = null; mask = null; device = null;
     }
 }

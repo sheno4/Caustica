@@ -23,13 +23,12 @@ float3 skyDome(float3 dir, SkyState state, MinecraftEnvironmentBinding binding) 
             lightViewCosine(dir, state.sunDir), SKY_VIEW_BODY_SUN);
     float2 moonUv = skyViewLutUv(state.viewerRadiusKm, dir.y,
             lightViewCosine(dir, state.moonDir), SKY_VIEW_BODY_MOON);
-    return sampleMinecraftEnvironment(binding, binding.skyView, sunUv).rgb
-            + sampleMinecraftEnvironment(binding, binding.skyView, moonUv).rgb;
+    return sampleMinecraftEnvironment(binding, binding.skyView, binding.lutSampler, sunUv).rgb
+            + sampleMinecraftEnvironment(binding, binding.skyView, binding.lutSampler, moonUv).rgb;
 }
 
 float3 lutSkyEvaluateEnvironment(EnvironmentQuery query) {
-    // Derives SkyState from this pass's OWN uniform buffer rather than through EnvironmentQuery — see
-    // the module header on why.
+    // Derives SkyState from the immutable device-address buffer captured by this environment binding.
     MinecraftEnvironmentBinding binding = minecraftEnvironmentBinding(query);
     SkyState state = skyState(ShaderDataPtr<SkyInputs>(binding.skyInputsAddress)[0]);
     float3 dir = query.direction;
@@ -42,7 +41,7 @@ float3 lutSkyEvaluateEnvironment(EnvironmentQuery query) {
     // Extinction along the view ray: stars redden and dim into the horizon on exactly the curve the sky
     // itself follows, because it is the same LUT that produced the sky. Zero angular radius — a star is a
     // point, so it sets at the horizon line.
-    float3 extinction = transmittanceToSpace(binding.transmittance, binding.sampler,
+    float3 extinction = transmittanceToSpace(binding.transmittance, binding.lutSampler,
             state.viewerRadiusKm, dir, 0.0);
     // Negative angle: rotating the LOOKUP direction is the inverse of rotating star geometry, so
     // -starAngle makes the field wheel the SAME way the sun and moon do.
@@ -57,11 +56,12 @@ float3 lutSkyEvaluateEnvironment(EnvironmentQuery query) {
             // lower limb by several stops relative to its upper one — an accurate answer to a question
             // about a body that is 60x too large. The centre keeps the sprite one colour, as vanilla
             // draws it.
-            float3 sunExtinction = transmittanceToSpace(binding.transmittance, binding.sampler,
+            float3 sunExtinction = transmittanceToSpace(binding.transmittance, binding.lutSampler,
                     state.viewerRadiusKm,
                     state.sunDir, state.sunAngularRadius);
             float2 uv = lerp(state.sunUv.xy, state.sunUv.zw, local * 0.5 + 0.5);
-            float3 texel = sampleMinecraftEnvironment(binding, binding.celestialsAtlas, uv).rgb;
+            float3 texel = sampleMinecraftEnvironment(binding, binding.celestialsAtlas,
+                    binding.celestialSampler, uv).rgb;
             // Vanilla's sun sprite bakes a soft glow gradient into its texels; scaling that raw to HDR
             // makes a huge ring around the disc. Raising the texture luminance to a high power keeps only
             // the bright core and collapses the painted halo to ~0 — the real halo comes from the Mie
@@ -72,8 +72,9 @@ float3 lutSkyEvaluateEnvironment(EnvironmentQuery query) {
         if (celestialSquareLocal(dir, state.moonDir, state.moonDiscHalfAngle, local)) {
             float2 uv = lerp(state.moonUv.xy, state.moonUv.zw, local * 0.5 + 0.5);
             float3 texel = srgbToLinear(
-                    sampleMinecraftEnvironment(binding, binding.celestialsAtlas, uv).rgb);
-            float3 moonExtinction = transmittanceToSpace(binding.transmittance, binding.sampler,
+                    sampleMinecraftEnvironment(binding, binding.celestialsAtlas,
+                            binding.celestialSampler, uv).rgb);
+            float3 moonExtinction = transmittanceToSpace(binding.transmittance, binding.lutSampler,
                     state.viewerRadiusKm,
                     state.moonDir, state.moonAngularRadius);
             // The phase sprite already carries the lit shape; a contrast ramp suppresses its faint

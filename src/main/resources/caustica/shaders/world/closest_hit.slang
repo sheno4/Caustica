@@ -4,15 +4,247 @@ import world_minimal;
 import caustica_api;
 import caustica_surface;
 import caustica_types;
+import retained_lights;
+import surface_bsdf;
+import bindings;
+import world_common;
+import caustica_volume;
+import retained_path_queue;
+import path_queue_types;
+
+float3 retainedDirectLighting(OpenPbrSurface material, SurfaceInput input, bool allowLocal,
+                              float3 currentMediumAbsorption, float currentMediumIor,
+                              bool currentMediumActive) {
+    uint2 pixel = DispatchRaysIndex().xy;
+    ConstPtr<WorldPush> frame = (ConstPtr<WorldPush>)worldBindings.worldPushAddress;
+    uint seed = pixel.x ^ (pixel.y * 0x9e3779b9u) ^ (PrimitiveIndex() * 0x85ebca6bu)
+            ^ (InstanceID() * 0xc2b2ae35u) ^ (frame[0].frameIndex * 0x27d4eb2du);
+    SurfaceClosure closure = surfaceClosure(material, input.geometricNormal);
+    NeeAtState state = neeAtState(worldBindings.neeAtStateAddress)[0];
+    uint candidateCount = clamp(state.candidateCount, 1u, 8u);
+    DirectLightSample selected = invalidDirectLight();
+    float3 selectedContribution = float3(0.0);
+    float selectedTarget = 0.0;
+    float weightSum = 0.0;
+    for (uint candidate = 0u; candidate < candidateCount; candidate++) {
+        DirectLightSample light = sampleRetainedLight(worldBindings, input.position, pixel,
+                candidate, candidateCount, allowLocal, seed);
+        if (!light.valid) continue;
+        float cosine = abs(dot(closure.shadingNormal, light.direction));
+        if (cosine <= 0.0) continue;
+        BsdfQuery query;
+        query.surface = closure;
+        query.outgoingDirection = input.outgoingDirection;
+        query.incomingDirection = light.direction;
+        BsdfEvaluation evaluation = evaluateBsdf(query);
+        float3 contribution = evaluation.value * cosine * light.radianceOverShapePdf;
+        if (light.linkedEmitter && light.shapePdf > 0.0) {
+            float lightPdf = light.proposalPdf * light.shapePdf;
+            contribution *= lightPdf / max(lightPdf + evaluation.pdf, 1.0e-20);
+        }
+        float target = max(dot(max(contribution, float3(0.0)),
+                float3(0.27222872, 0.67408177, 0.05368952)), 0.0);
+        float weight = target / light.proposalPdf;
+        weightSum += weight;
+        if (weight > 0.0 && retainedLightRandom(seed) * weightSum <= weight) {
+            selected = light;
+            selectedContribution = contribution;
+            selectedTarget = target;
+        }
+    }
+    if (!selected.valid || selectedTarget <= 0.0 || weightSum <= 0.0) return float3(0.0);
+    float3 estimator = selectedContribution * (weightSum / (float(candidateCount) * selectedTarget));
+
+    WorldPayload shadow = {};
+    shadow.radiance = float3(1.0);
+    shadow.hitDistance = 0.0;
+    shadow.previousBsdfPdf = selected.maximumDistance;
+    shadow.volumeAbsorption = currentMediumAbsorption;
+    shadow.volumeIor = currentMediumIor;
+    shadow.pathFlags = WORLD_PATH_SHADOW
+            | (currentMediumActive ? WORLD_PATH_VOLUME_ACTIVE : 0u);
+    RayDesc ray;
+    float rayEpsilon = 0.002 / max(state.metersPerSceneUnit, 1.0e-8);
+    float3 offsetNormal = dot(input.geometricNormal, selected.direction) >= 0.0
+            ? input.geometricNormal : -input.geometricNormal;
+    ray.Origin = input.position + offsetNormal * rayEpsilon;
+    ray.Direction = selected.direction;
+    ray.TMin = 0.5 * rayEpsilon;
+    ray.TMax = selected.maximumDistance;
+    TraceRay(worldAccelerationStructure(worldBindings),
+            RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
+            0xFFu, 1u, 2u, 1u, ray, shadow);
+    if (shadow.hitDistance >= 0.0 || !any(shadow.radiance > 0.0)) return float3(0.0);
+    estimator *= shadow.radiance;
+    float feedback = dot(max(estimator, float3(0.0)),
+            float3(0.27222872, 0.67408177, 0.05368952));
+    neeAtWriteFeedback(worldBindings, pixel, selected.lightIndex, feedback);
+    return estimator;
+}
+
+VolumeProperties retainedVolumeProperties<TComposition : IComposition>(RetainedGeometryRecord record,
+                                                                        SurfaceInput surfaceInput) {
+    TComposition.Volumes volumes = {};
+    VolumeInput input = {};
+    input.shaderRoot = surfaceInput.shaderRoot;
+    input.bindingData = record.volumeBinding;
+    input.instanceData = record.instanceData;
+    input.boundaryPosition = surfaceInput.position;
+    input.proceduralPosition = surfaceInput.proceduralPosition;
+    input.metersPerSceneUnit = surfaceInput.metersPerSceneUnit;
+    input.time = surfaceInput.time;
+    input.previousTime = surfaceInput.previousTime;
+    input.evaluationFlags = surfaceInput.evaluationFlags & EVALUATION_ANIMATION_ENABLED;
+    return volumes.evaluateVolume(record.volumeImplementation, input);
+}
+
+float retainedDielectricFresnel(float cosine, float etaIncident, float etaTransmitted) {
+    float sineTransmittedSquared = (etaIncident * etaIncident) / (etaTransmitted * etaTransmitted)
+            * max(0.0, 1.0 - cosine * cosine);
+    if (sineTransmittedSquared >= 1.0) return 1.0;
+    float transmittedCosine = sqrt(1.0 - sineTransmittedSquared);
+    float rs = (etaIncident * cosine - etaTransmitted * transmittedCosine)
+            / (etaIncident * cosine + etaTransmitted * transmittedCosine);
+    float rp = (etaIncident * transmittedCosine - etaTransmitted * cosine)
+            / (etaIncident * transmittedCosine + etaTransmitted * cosine);
+    return 0.5 * (rs * rs + rp * rp);
+}
+
+BsdfSample retainedSampleContinuation<TComposition : IComposition>(inout uint seed, WorldPayload payload,
+        RetainedGeometryRecord record, SurfaceInput input, OpenPbrSurface surface,
+        SurfaceClosure closure, out bool refractedBoundary, out float reversePdf) {
+    refractedBoundary = false;
+    reversePdf = 0.0;
+    float boundaryWeight = (record.flags & RETAINED_GEOMETRY_HAS_VOLUME) != 0u
+            ? clamp(surface.transmission_weight, 0.0, 1.0) : 0.0;
+    if (boundaryWeight > 0.0 && retainedLightRandom(seed) < boundaryWeight) {
+        bool entering = worldHitEntering();
+        float etaIncident = (payload.pathFlags & WORLD_PATH_VOLUME_ACTIVE) != 0u
+                ? max(payload.volumeIor, 1.0) : 1.0;
+        VolumeProperties targetVolume = {};
+        if (entering) targetVolume = retainedVolumeProperties<TComposition>(record, input);
+        float etaTransmitted = entering ? max(targetVolume.indexOfRefraction, 1.0) : 1.0;
+        float3 normal = closure.shadingNormal;
+        float3 incident = -input.outgoingDirection;
+        float cosine = max(dot(normal, input.outgoingDirection), 0.0);
+        float fresnel = retainedDielectricFresnel(cosine, etaIncident, etaTransmitted);
+        float3 transmitted = refract(incident, normal, etaIncident / etaTransmitted);
+        bool reflectEvent = dot(transmitted, transmitted) == 0.0
+                || retainedLightRandom(seed) < fresnel;
+        BsdfSample result = {};
+        result.pdf = 1.0;
+        if (reflectEvent) {
+            result.incomingDirection = normalize(reflect(incident, normal));
+            result.throughputWeight = float3(1.0);
+            result.eventFlags = EVENT_GLOSSY | EVENT_REFLECTION;
+        } else {
+            result.incomingDirection = normalize(transmitted);
+            float etaScale = (etaIncident * etaIncident) / (etaTransmitted * etaTransmitted);
+            result.throughputWeight = clamp(surface.transmission_color, float3(0.0), float3(1.0))
+                    * etaScale;
+            result.eventFlags = EVENT_GLOSSY | EVENT_TRANSMISSION;
+            refractedBoundary = true;
+        }
+        return result;
+    }
+
+    OpenPbrSurface opaqueSurface = surface;
+    opaqueSurface.transmission_weight = 0.0;
+    BsdfSampleQuery query;
+    query.surface = surfaceClosure(opaqueSurface, input.geometricNormal);
+    query.outgoingDirection = input.outgoingDirection;
+    query.random = float3(retainedLightRandom(seed), retainedLightRandom(seed),
+            retainedLightRandom(seed));
+    BsdfSample result = sampleBsdf(query);
+    reversePdf = (1.0 - boundaryWeight) * result.pdf;
+    return result;
+}
+
+void retainedWriteContinuation<TComposition : IComposition>(inout WorldPayload payload,
+        RetainedGeometryRecord record, SurfaceInput input, OpenPbrSurface surface,
+        SurfaceClosure closure) {
+    if ((payload.pathFlags & WORLD_PATH_REQUEST_CONTINUATION) == 0u) return;
+    uint seed = payload.seed;
+    bool refractedBoundary;
+    float reversePdf;
+    BsdfSample sample = retainedSampleContinuation<TComposition>(seed, payload, record, input, surface, closure,
+            refractedBoundary, reversePdf);
+    if (sample.pdf <= 0.0 || !any(sample.throughputWeight > 0.0)) return;
+
+    bool volumeActive = (payload.pathFlags & WORLD_PATH_VOLUME_ACTIVE) != 0u;
+    float3 absorption = payload.volumeAbsorption;
+    float volumeIor = payload.volumeIor;
+    bool crossesVolume = refractedBoundary;
+    if (crossesVolume) {
+        if (worldHitEntering()) {
+            VolumeProperties volume = retainedVolumeProperties<TComposition>(record, input);
+            absorption = max(volume.absorptionCoefficient, float3(0.0));
+            volumeIor = max(volume.indexOfRefraction, 1.0);
+            volumeActive = true;
+        } else {
+            absorption = float3(0.0);
+            volumeIor = 1.0;
+            volumeActive = false;
+        }
+    }
+
+    float epsilon = 0.002 / max(input.metersPerSceneUnit, 1.0e-8);
+    float3 offsetNormal = dot(input.geometricNormal, sample.incomingDirection) >= 0.0
+            ? input.geometricNormal : -input.geometricNormal;
+    RetainedPathState next;
+    next.origin = input.position + offsetNormal * epsilon;
+    next.direction = normalize(sample.incomingDirection);
+    next.throughput = max(sample.throughputWeight, float3(0.0));
+    next.absorption = absorption;
+    next.previousBsdfPdf = reversePdf;
+    next.volumeIor = volumeIor;
+    next.seed = seed;
+    next.proposalMode = payload.currentNeeProposalMode;
+    next.candidateCount = payload.currentNeeCandidateCount;
+    next.volumeActive = volumeActive;
+    next.valid = true;
+    DevicePtr<PackedPathSegment> queue = (DevicePtr<PackedPathSegment>)worldBindings.pathQueueAddress;
+    queue[payload.queueRecordIndex] = packRetainedPath(next, PATH_NO_NEXT);
+}
+
+float retainedEmissionMis(WorldPayload payload, RetainedGeometryRecord record, float3 hitPosition) {
+    if (payload.previousBsdfPdf <= 0.0) return 1.0;
+    uint lightIndex = worldEmitterLightIndex(record);
+    if (lightIndex == NEE_AT_NO_LIGHT) return 1.0;
+    float lightPdf = neeAtReverseRectanglePdf(worldBindings, DispatchRaysIndex().xy, lightIndex,
+            payload.previousPosition, hitPosition, payload.previousNeeProposalMode,
+            payload.previousNeeCandidateCount);
+    return payload.previousBsdfPdf / max(payload.previousBsdfPdf + lightPdf, 1.0e-20);
+}
 
 public void runClosestHit<TComposition : IComposition>(inout WorldPayload payload,
         in BuiltInTriangleIntersectionAttributes attributes) {
     TComposition.Surfaces surfaces = {};
-    OpenPbrSurface surface = surfaces.evaluateSurface(0u, worldSurfaceInput(attributes));
+    var record = worldGeometryRecord();
+    SurfaceInput input = worldSurfaceInput(attributes);
+    OpenPbrSurface surface = surfaces.evaluateSurface(record.surfaceImplementation, input);
+    surface.geometry_thin_walled = (record.flags & RETAINED_GEOMETRY_HAS_VOLUME) == 0u;
+    SurfaceClosure closure = surfaceClosure(surface, input.geometricNormal);
+    payload.hitDistance = RayTCurrent();
+    payload.hitPosition = input.position;
+    payload.previousHitPosition = worldPreviousHitPosition(attributes, record);
+    payload.roughness = clamp(surface.specular_roughness, 0.0, 1.0);
+    payload.guideNormal = packNormalOct(closure.shadingNormal);
+    float3 previousNormal = any(surface.previous_geometry_normal != 0.0)
+            ? normalize(surface.previous_geometry_normal) : input.previousGeometricNormal;
+    payload.previousGuideNormal = packNormalOct(previousNormal);
+    payload.guideAlbedo = retainedPackRgb9e5(clamp(surface.base_color, 0.0, 1.0));
+    payload.guideSpecularAlbedo = retainedPackRgb9e5(closure.specularF0);
+    payload.pathFlags &= ~WORLD_PATH_MISS;
+    if ((payload.pathFlags & WORLD_PATH_GUIDE) != 0u) return;
     float3 emission = max(surface.emission_color, float3(0.0))
             * max(surface.emission_luminance, 0.0);
-    payload.radiance = max(surface.base_color, float3(0.0)) + emission;
-    payload.hitDistance = RayTCurrent();
+    payload.radiance = emission * retainedEmissionMis(payload, record, input.position)
+            + retainedDirectLighting(surface, input,
+                    payload.currentNeeProposalMode == NEE_AT_PROPOSAL_SCREEN_MIXTURE,
+                    payload.volumeAbsorption, payload.volumeIor,
+                    (payload.pathFlags & WORLD_PATH_VOLUME_ACTIVE) != 0u);
+    retainedWriteContinuation<TComposition>(payload, record, input, surface, closure);
 }
 
 [shader("closesthit")]

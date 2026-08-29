@@ -9,13 +9,39 @@ repositories { mavenCentral() }
 
 dependencies {
     api project(":packages:api")
-    api project(":packages:minecraft-api")
     testImplementation platform("org.junit:junit-bom:5.12.2")
     testImplementation "org.junit.jupiter:junit-jupiter"
     testRuntimeOnly "org.junit.platform:junit-platform-launcher"
 }
 
+def verifyEngineDependencies = tasks.register("verifyEngineDependencies") {
+    group = "verification"
+    description = "Verifies that the generic engine has no platform-adapter imports."
+    inputs.files(sourceSets.main.allJava)
+    doLast {
+        def forbidden = [
+                "dev.comfyfluffy.caustica.minecraft.api",
+                "net.minecraft",
+                "net.fabricmc",
+                "net.neoforged",
+                "dev.comfyfluffy.caustica.ngx"
+        ]
+        def violations = []
+        sourceSets.main.allJava.files.sort().each { file ->
+            file.eachLine { line, number ->
+                if (line.stripLeading().startsWith("import ") && forbidden.any { line.contains(it) }) {
+                    violations.add("${file}:${number}: ${line.trim()}")
+                }
+            }
+        }
+        if (!violations.empty) {
+            throw new GradleException("engine platform dependency violations:\n${violations.join('\n')}")
+        }
+    }
+}
+
 tasks.named("test", Test) { useJUnitPlatform() }
+tasks.named("check") { dependsOn(verifyEngineDependencies) }
 tasks.withType(JavaCompile).configureEach { options.release = 25 }
 
 java {

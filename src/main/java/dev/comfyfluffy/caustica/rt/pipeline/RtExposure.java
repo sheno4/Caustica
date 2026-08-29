@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.rt.pipeline;
 
-import dev.comfyfluffy.caustica.CausticaConfig;
+import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.VulkanBarriers;
@@ -14,10 +14,15 @@ import dev.comfyfluffy.caustica.rt.gen.ExposureStateData;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.VK10;
-import org.lwjgl.vulkan.VkBufferCopy;
-import org.lwjgl.vulkan.VkBufferMemoryBarrier;
+import org.lwjgl.vulkan.VK13;
+import org.lwjgl.vulkan.VK14;
+import org.lwjgl.vulkan.KHRSynchronization2;
+import org.lwjgl.vulkan.VkBufferCopy2;
+import org.lwjgl.vulkan.VkCopyBufferInfo2;
+import org.lwjgl.vulkan.VkBufferMemoryBarrier2;
 import org.lwjgl.vulkan.VkClearColorValue;
 import org.lwjgl.vulkan.VkCommandBuffer;
+import org.lwjgl.vulkan.VkDependencyInfo;
 import org.lwjgl.vulkan.VkImageSubresourceRange;
 
 import java.nio.ByteBuffer;
@@ -214,16 +219,14 @@ public final class RtExposure {
         if (pipeline == null || histogram == null || state == null) {
             throw new IllegalStateException("RT auto exposure resources not created");
         }
-        pipeline.setResources(traceColor.view(), guideDepth.view(), guideAlbedo.view(),
-                histogram, image.view(), state);
         try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "exposure histogram clear")) {
             VK10.vkCmdFillBuffer(cmd, histogram.handle(), 0, histogram.size(), 0);
         }
         VulkanBarriers.memoryBarrier(cmd, stack);
         AutoConfig config = autoConfig();
-        pipeline.dispatchHistogram(cmd, traceColor.width(), traceColor.height(), config);
+        pipeline.dispatchHistogram(cmd, traceColor, guideDepth, guideAlbedo, histogram, config);
         VulkanBarriers.memoryBarrier(cmd, stack);
-        pipeline.dispatchResolve(cmd, config, frameTimeSeconds());
+        pipeline.dispatchResolve(cmd, histogram, image, state, config, frameTimeSeconds());
         logDiagnosticsIfDue();
     }
 
@@ -235,21 +238,24 @@ public final class RtExposure {
         if (mode() != Mode.AUTO || pendingStateReadback == null) {
             return;
         }
-        VkBufferMemoryBarrier.Buffer toTransfer = VkBufferMemoryBarrier.calloc(1, stack);
+        VkBufferMemoryBarrier2.Buffer toTransfer = VkBufferMemoryBarrier2.calloc(1, stack);
         toTransfer.get(0).sType$Default()
-                .srcAccessMask(VK10.VK_ACCESS_SHADER_WRITE_BIT)
-                .dstAccessMask(VK10.VK_ACCESS_TRANSFER_READ_BIT)
+                .srcStageMask(VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT)
+                .srcAccessMask(VK13.VK_ACCESS_2_SHADER_WRITE_BIT)
+                .dstStageMask(KHRSynchronization2.VK_PIPELINE_STAGE_2_COPY_BIT_KHR)
+                .dstAccessMask(VK13.VK_ACCESS_2_TRANSFER_READ_BIT)
                 .srcQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED)
                 .dstQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED)
                 .buffer(state.handle())
                 .offset(0L)
                 .size(ExposureStateData.BYTE_SIZE);
-        VK10.vkCmdPipelineBarrier(cmd, VK10.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                VK10.VK_PIPELINE_STAGE_TRANSFER_BIT, 0, null, toTransfer, null);
+        VK14.vkCmdPipelineBarrier2(cmd, VkDependencyInfo.calloc(stack)
+                .sType$Default().pBufferMemoryBarriers(toTransfer));
 
-        VkBufferCopy.Buffer copy = VkBufferCopy.calloc(1, stack)
-                .srcOffset(0L).dstOffset(0L).size(ExposureStateData.BYTE_SIZE);
-        VK10.vkCmdCopyBuffer(cmd, state.handle(), pendingStateReadback.buffer.handle(), copy);
+        VkBufferCopy2.Buffer copy = VkBufferCopy2.calloc(1, stack);
+        copy.get(0).sType$Default().srcOffset(0L).dstOffset(0L).size(ExposureStateData.BYTE_SIZE);
+        VK13.vkCmdCopyBuffer2(cmd, VkCopyBufferInfo2.calloc(stack).sType$Default()
+                .srcBuffer(state.handle()).dstBuffer(pendingStateReadback.buffer.handle()).pRegions(copy));
     }
 
     /** Attach the readback copy only after the command buffer has been accepted for frame submission. */
@@ -380,7 +386,7 @@ public final class RtExposure {
                 + ", centerWeight=" + autoConfig.centerWeightSigma + "/" + autoConfig.centerWeightFloor
                 + ", skyCap=" + autoConfig.skyWeightCap
                 + ", emissiveCap=" + autoConfig.emissiveWeightCap
-                + ", curve=" + CausticaConfig.Rt.Exposure.curve() + ")"
+                + ", curve=" + RtLookPackage.current().exposure().curve() + ")"
                 : Float.toString(manualExposureScale());
         CausticaMod.LOGGER.info("RT display exposure: mode={}, exposure={}, "
                         + "tonemap=aces2.0(lookPackage={},gamma={}), DLSS-RR exposure=NGX auto",
@@ -399,8 +405,8 @@ public final class RtExposure {
     private AutoConfig autoConfig() {
         return new AutoConfig(
                 CausticaConfig.Rt.Exposure.KEY.value(),
-                CausticaConfig.Rt.Exposure.minEv(),
-                CausticaConfig.Rt.Exposure.maxEv(),
+                RtLookPackage.current().exposure().minEv(),
+                RtLookPackage.current().exposure().maxEv(),
                 CausticaConfig.Rt.Exposure.ADAPT_DARKEN.value(),
                 CausticaConfig.Rt.Exposure.ADAPT_BRIGHTEN.value(),
                 manualEv(),
@@ -517,7 +523,7 @@ public final class RtExposure {
     }
 
     private ExposureCurve curveConfig() {
-        String spec = CausticaConfig.Rt.Exposure.curve();
+        String spec = RtLookPackage.current().exposure().curve();
         if (cachedCurve != null && Objects.equals(cachedCurveSpec, spec)) {
             return cachedCurve;
         }

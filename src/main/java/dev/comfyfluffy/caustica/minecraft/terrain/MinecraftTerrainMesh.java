@@ -90,9 +90,12 @@ public record MinecraftTerrainMesh(float[] positions, int[] indices, float[] cor
         }
     }
 
-    /** Minecraft resource identity needed to build the shader-visible primitive record during upload. */
-    public record MaterialBinding(ResourceId material, ResourceId texture) {
-        public MaterialBinding { java.util.Objects.requireNonNull(material, "material"); }
+    /** Epoch-local material ordinal plus resource identity for shader records and pending texture binding. */
+    public record MaterialBinding(int materialIndex, ResourceId material, ResourceId texture) {
+        public MaterialBinding {
+            if (materialIndex < 0) throw new IllegalArgumentException("materialIndex must be non-negative");
+            java.util.Objects.requireNonNull(material, "material");
+        }
     }
 
     public record OpacityMicromap(float transparentAlpha, float opaqueAlpha, int subdivisionLevel) {

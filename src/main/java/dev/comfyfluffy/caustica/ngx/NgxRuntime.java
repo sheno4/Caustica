@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.ngx;
 
-import dev.comfyfluffy.caustica.CausticaConfig;
+import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.platform.CausticaPlatform;
 

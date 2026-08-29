@@ -1,9 +1,10 @@
 module indirect;
 
-import primary_rgen;
 import caustica_api;
+import retained_indirect;
+import retained_trace_ordinary;
 
 [shader("raygeneration")]
 void main<TComposition : IComposition>() {
-    runPrimary<TComposition>();
+    runRetainedIndirect<TComposition, RetainedOrdinaryTrace>();
 }

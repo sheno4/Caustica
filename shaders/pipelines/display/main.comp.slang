@@ -4,7 +4,6 @@
 // scene-referred ACES look (LMT), then the shared ACES 2.0 output transform for each display.
 
 import display_common;
-import bindings;
 
 [[vk::push_constant]] DisplayPush pc;
 
@@ -40,7 +39,9 @@ float3 applyLook(float3 exposedAcesCg) {
         return exposedAcesCg;
     }
     float3 uvw = shaperEncode(exposedAcesCg);
-    float3 shaped = lookLut.SampleLevel(lutTexCoord(uvw, pc.lookLutSize), 0.0).rgb;
+    Texture3D<float4> lookLut = ResourceDescriptorHeap[NonUniformResourceIndex(pc.lookLutIndex)];
+    SamplerState lookSampler = SamplerDescriptorHeap[NonUniformResourceIndex(pc.lookSamplerIndex)];
+    float3 shaped = lookLut.SampleLevel(lookSampler, lutTexCoord(uvw, pc.lookLutSize), 0.0).rgb;
     return shaperDecode(shaped);
 }
 
@@ -126,19 +127,27 @@ float3 displayGammaHdr(float3 pqColor) {
 // explicit level-0 SampleLevel is exact, not an approximation.
 float3 tonemap(float3 lookedAcesCg) {
     float3 uvw = shaperEncode(lookedAcesCg);
-    return displayGammaSdr(toneLut.SampleLevel(lutTexCoord(uvw, pc.lutSize), 0.0).rgb);
+    Texture3D<float4> toneLut = ResourceDescriptorHeap[NonUniformResourceIndex(pc.toneLutIndex)];
+    SamplerState toneSampler = SamplerDescriptorHeap[NonUniformResourceIndex(pc.toneSamplerIndex)];
+    return displayGammaSdr(toneLut.SampleLevel(toneSampler, lutTexCoord(uvw, pc.lutSize), 0.0).rgb);
 }
 
 // Same shaper as tonemap() but sampling the HDR LUT, whose range is already PQ-encoded BT.2020 -- no
 // separate encode or UI-brightness mapping needed.
 float3 tonemapHdr(float3 lookedAcesCg) {
     float3 uvw = shaperEncode(lookedAcesCg);
-    return displayGammaHdr(hdrToneLut.SampleLevel(lutTexCoord(uvw, pc.lutSize), 0.0).rgb);
+    Texture3D<float4> hdrToneLut = ResourceDescriptorHeap[NonUniformResourceIndex(pc.hdrToneLutIndex)];
+    SamplerState hdrToneSampler = SamplerDescriptorHeap[NonUniformResourceIndex(pc.hdrToneSamplerIndex)];
+    return displayGammaHdr(hdrToneLut.SampleLevel(hdrToneSampler, lutTexCoord(uvw, pc.lutSize), 0.0).rgb);
 }
 
 [shader("compute")]
 [numthreads(16, 16, 1)]
 void main(uint3 dispatchId : SV_DispatchThreadID) {
+    [format("rgba8")] RWTexture2D<float4> outputImage = ResourceDescriptorHeap[NonUniformResourceIndex(pc.outputImageIndex)];
+    [format("rgba16f")] RWTexture2D<float4> rtImage = ResourceDescriptorHeap[NonUniformResourceIndex(pc.rtImageIndex)];
+    [format("r32f")] RWTexture2D<float> exposureImage = ResourceDescriptorHeap[NonUniformResourceIndex(pc.exposureImageIndex)];
+    [format("rgba16f")] RWTexture2D<float4> hdrImage = ResourceDescriptorHeap[NonUniformResourceIndex(pc.hdrImageIndex)];
     int2 pix = int2(dispatchId.xy);
     uint w, h;
     outputImage.GetDimensions(w, h);

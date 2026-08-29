@@ -4,7 +4,8 @@ package dev.comfyfluffy.caustica.engine.session;
 public final class ContributionOwner {
     private final long sequence;
 
-    ContributionOwner(long sequence) {
+    public ContributionOwner(long sequence) {
+        if (sequence <= 0) throw new IllegalArgumentException("sequence must be positive");
         this.sequence = sequence;
     }
 

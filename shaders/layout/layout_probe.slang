@@ -5,7 +5,12 @@ import world_common;
 import display_common;
 import caustica_bloom_types;
 import caustica_minecraft_sky_atmosphere;
+import caustica_minecraft_sky_bindings;
+import caustica_minecraft_sky_lut_types;
 import caustica_minecraft_material;
+import opacity_micromap_common;
+import presentation_common;
+import path_queue_types;
 
 struct WorldPushLayoutProbe {
     WorldPush values[2]; // array stride is the complete, tail-padded WorldPush byte size
@@ -19,6 +24,11 @@ struct SurfaceMaterialLayoutProbe {
     SurfaceMaterial values[2]; // array stride is the complete, tail-padded SurfaceMaterial byte size
 };
 
+struct RetainedGeometryRecordLayoutProbe { RetainedGeometryRecord values[2]; };
+struct RetainedLightRecordLayoutProbe { RetainedLightRecord values[2]; };
+struct NeeAtStateLayoutProbe { NeeAtState values[2]; };
+struct PackedPathSegmentLayoutProbe { PackedPathSegment values[2]; };
+
 struct ExposureStateLayoutProbe {
     ExposureState values[2]; // array stride is the complete, tail-padded ExposureState byte size
 };
@@ -27,6 +37,7 @@ struct MinecraftImplementationLayoutProbe { MinecraftImplementationData values[2
 struct MinecraftMaterialLayoutProbe { MinecraftMaterialRecord values[2]; };
 struct MinecraftPrimitiveLayoutProbe { MinecraftPrimitiveData values[2]; };
 struct MinecraftInstanceLayoutProbe { MinecraftInstanceData values[2]; };
+struct MinecraftEnvironmentBindingLayoutProbe { MinecraftEnvironmentBinding values[2]; };
 
 [[vk::binding(0, 0)]] StructuredBuffer<WorldPushLayoutProbe, Std430DataLayout> worldPushLayoutProbe;
 [[vk::binding(1, 0)]] StructuredBuffer<MaterialBindingLayoutProbe, Std430DataLayout> materialBindingLayoutProbe;
@@ -36,6 +47,11 @@ struct MinecraftInstanceLayoutProbe { MinecraftInstanceData values[2]; };
 [[vk::binding(5, 0)]] StructuredBuffer<MinecraftMaterialLayoutProbe, Std430DataLayout> minecraftMaterialLayoutProbe;
 [[vk::binding(6, 0)]] StructuredBuffer<MinecraftPrimitiveLayoutProbe, Std430DataLayout> minecraftPrimitiveLayoutProbe;
 [[vk::binding(7, 0)]] StructuredBuffer<MinecraftInstanceLayoutProbe, Std430DataLayout> minecraftInstanceLayoutProbe;
+[[vk::binding(8, 0)]] StructuredBuffer<RetainedGeometryRecordLayoutProbe, Std430DataLayout> retainedGeometryRecordLayoutProbe;
+[[vk::binding(9, 0)]] StructuredBuffer<MinecraftEnvironmentBindingLayoutProbe, Std430DataLayout> minecraftEnvironmentBindingLayoutProbe;
+[[vk::binding(10, 0)]] StructuredBuffer<RetainedLightRecordLayoutProbe, Std430DataLayout> retainedLightRecordLayoutProbe;
+[[vk::binding(11, 0)]] StructuredBuffer<NeeAtStateLayoutProbe, Std430DataLayout> neeAtStateLayoutProbe;
+[[vk::binding(12, 0)]] StructuredBuffer<PackedPathSegmentLayoutProbe, Std430DataLayout> packedPathSegmentLayoutProbe;
 [[vk::push_constant]] WorldPushConstants pushConstantsLayoutProbe;
 
 [shader("compute")]
@@ -51,6 +67,11 @@ void main(uint3 id : SV_DispatchThreadID) {
                 + minecraftMaterialLayoutProbe[0].values[0].specularRoughness
                 + minecraftPrimitiveLayoutProbe[0].values[0].primitiveEmission
                 + minecraftInstanceLayoutProbe[0].values[0].damageStrength
+                + float(minecraftEnvironmentBindingLayoutProbe[0].values[0].skyInputsAddress)
+                + float(retainedGeometryRecordLayoutProbe[0].values[0].surfaceImplementation)
+                + float(retainedLightRecordLayoutProbe[0].values[0].type)
+                + float(neeAtStateLayoutProbe[0].values[0].lightCount)
+                + float(packedPathSegmentLayoutProbe[0].values[0].nextRecord)
                 + float(pushConstantsLayoutProbe.frameIndex);
     }
 }
@@ -106,6 +127,16 @@ void probeSkyLutPush(uint3 id : SV_DispatchThreadID) {
     }
 }
 
+[[vk::push_constant]] SkyLutPush skyDispatchPushProbe;
+[shader("compute")]
+[numthreads(1, 1, 1)]
+void probeSkyDispatchPush(uint3 id : SV_DispatchThreadID) {
+    if (id.x == 0xFFFFFFFFu) {
+        float sink = float(skyDispatchPushProbe.destinationImageIndex)
+                + skyDispatchPushProbe.inputs.celestial.x;
+    }
+}
+
 [[vk::push_constant]] BloomPush bloomPushProbe;
 [shader("compute")]
 [numthreads(1, 1, 1)]
@@ -114,5 +145,24 @@ void probeBloomPush(uint3 id : SV_DispatchThreadID) {
         float sink = float(bloomPushProbe.destinationImageIndex)
                 + float(bloomPushProbe.samplerIndex)
                 + float(bloomPushProbe.mode) + bloomPushProbe.radius;
+    }
+}
+
+[[vk::push_constant]] OpacityMicromapPush opacityMicromapPushProbe;
+[shader("compute")]
+[numthreads(1, 1, 1)]
+void probeOpacityMicromapPush(uint3 id : SV_DispatchThreadID) {
+    if (id.x == 0xFFFFFFFFu) {
+        uint64_t sink = opacityMicromapPushProbe.primitiveAddress
+                + uint64_t(opacityMicromapPushProbe.triangleCount);
+    }
+}
+
+[[vk::push_constant]] PresentPush presentPushProbe;
+[shader("compute")]
+[numthreads(1, 1, 1)]
+void probePresentPush(uint3 id : SV_DispatchThreadID) {
+    if (id.x == 0xFFFFFFFFu) {
+        float sink = float(presentPushProbe.outputImageIndex) + presentPushProbe.uiNits;
     }
 }

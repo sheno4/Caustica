@@ -11,19 +11,17 @@
 module caustica_minecraft_sky_lut_view;
 
 import caustica_minecraft_sky_atmosphere;
+import caustica_minecraft_sky_lut_types;
 
-[[vk::binding(0, 0)]] [format("rgba16f")] RWTexture2D<float4> skyViewImage;
-[[vk::binding(1, 0)]] Sampler2D transmittanceLut;
-[[vk::binding(2, 0)]] Sampler2D multiScatterLut;
-[[vk::push_constant]] SkyInputs pc;
+[[vk::push_constant]] SkyLutPush pc;
 
-[shader("compute")]
-[numthreads(8, 8, 1)]
-void main(uint3 tid : SV_DispatchThreadID) {
+public void runSkyView(uint3 tid) {
+    RWTexture2D<float4> skyViewImage =
+            ResourceDescriptorHeap[NonUniformResourceIndex(pc.destinationImageIndex)];
     if (tid.x >= uint(SKY_VIEW_LUT_W) || tid.y >= uint(SKY_VIEW_LUT_TOTAL_H)) {
         return;
     }
-    SkyState sky = skyState(pc);
+    SkyState sky = skyState(pc.inputs);
 
     int body = int(tid.y) / SKY_VIEW_LUT_H;
     int row = int(tid.y) - body * SKY_VIEW_LUT_H;
@@ -48,7 +46,8 @@ void main(uint3 tid : SV_DispatchThreadID) {
     float3 luminance = integrateScatteredLuminance(
             origin, viewDir, lightDir, illuminance, angularRadius,
             SKY_VIEW_STEPS, true, true,
-            transmittanceLut, multiScatterLut, sky.groundAlbedo, true).luminance;
+            pc.transmittanceImage, pc.multiScatterImage, pc.sampler,
+            sky.groundAlbedo, true).luminance;
 
     // Horizon softening. The planet's surface is a real discontinuity in the model: a ray one arcminute
     // above the tangent direction escapes the atmosphere, and one arcminute below it terminates on the
@@ -75,7 +74,8 @@ void main(uint3 tid : SV_DispatchThreadID) {
         float3 skyward = integrateScatteredLuminance(
                 origin, tangentDir, tangentLight, illuminance, angularRadius,
                 SKY_VIEW_STEPS, true, true,
-                transmittanceLut, multiScatterLut, sky.groundAlbedo, false).luminance;
+                pc.transmittanceImage, pc.multiScatterImage, pc.sampler,
+                sky.groundAlbedo, false).luminance;
         // Interpolate in LOG luminance, not linearly. The two ends can be 5 EV apart at a low sun, and a
         // linear blend spends most of its angular range near the bright end and then falls off a cliff in
         // the last few degrees — trading one hard edge for a slightly softer one. In log space the same

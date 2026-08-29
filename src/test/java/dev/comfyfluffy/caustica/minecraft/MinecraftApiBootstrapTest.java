@@ -10,9 +10,10 @@ import dev.comfyfluffy.caustica.api.program.ProgramChannel;
 import dev.comfyfluffy.caustica.api.session.RenderSessionContribution;
 import dev.comfyfluffy.caustica.engine.session.ContributionScope;
 import dev.comfyfluffy.caustica.engine.session.EngineRenderSession;
-import dev.comfyfluffy.caustica.engine.session.EngineMinecraftWorldSession;
-import dev.comfyfluffy.caustica.engine.session.MinecraftWorldSessionHost;
 import dev.comfyfluffy.caustica.engine.session.RenderSessionHost;
+import dev.comfyfluffy.caustica.minecraft.adapter.session.MinecraftEnvironmentScope;
+import dev.comfyfluffy.caustica.minecraft.adapter.session.MinecraftWorldSession;
+import dev.comfyfluffy.caustica.minecraft.adapter.session.MinecraftWorldSessionHost;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftApi;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftDimensionKey;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftExtension;
@@ -51,8 +52,8 @@ final class MinecraftApiBootstrapTest {
         MinecraftApiBootstrap.registerMinecraftExtensions(
                 minecraftHost, settings, List.of(new MinecraftOnly(), dual), generic);
 
-        EngineMinecraftWorldSession session = minecraftHost.openSession(
-                owner -> new EmptyScope(), (owner, scene) -> new dev.comfyfluffy.caustica.engine.session.MinecraftEnvironmentScope() {
+        MinecraftWorldSession session = minecraftHost.openSession(
+                owner -> new EmptyScope(), (owner, scene) -> new MinecraftEnvironmentScope() {
                     @Override public void select(dev.comfyfluffy.caustica.api.scene.EnvironmentBinding<?> binding) { }
                     @Override public void invalidate() { }
                     @Override public void drain() { }
@@ -96,8 +97,8 @@ final class MinecraftApiBootstrapTest {
             throw new AssertionError(failure);
         });
         session.processPendingChanges();
-        EngineMinecraftWorldSession minecraftSession = minecraftHost.openSession(
-                owner -> new EmptyScope(), (owner, scene) -> new dev.comfyfluffy.caustica.engine.session.MinecraftEnvironmentScope() {
+        MinecraftWorldSession minecraftSession = minecraftHost.openSession(
+                owner -> new EmptyScope(), (owner, scene) -> new MinecraftEnvironmentScope() {
                     @Override public void select(dev.comfyfluffy.caustica.api.scene.EnvironmentBinding<?> binding) { }
                     @Override public void invalidate() { }
                     @Override public void drain() { }

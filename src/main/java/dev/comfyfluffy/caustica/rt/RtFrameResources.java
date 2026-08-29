@@ -1,13 +1,12 @@
 package dev.comfyfluffy.caustica.rt;
 
-import dev.comfyfluffy.caustica.CausticaConfig;
+import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDebugPresentPipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDisplayPipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtExposure;
-import dev.comfyfluffy.caustica.rt.pipeline.RtPipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDlssRr;
 import dev.comfyfluffy.caustica.rt.pipeline.RtToneLut;
-import dev.comfyfluffy.caustica.rt.pass.RenderPassManager;
+import dev.comfyfluffy.caustica.rt.gen.PackedPathSegmentData;
 import org.lwjgl.vulkan.VK10;
 
 import java.io.IOException;
@@ -15,7 +14,8 @@ import java.io.IOException;
 /** Owns images, buffers, LUTs, and pipelines whose validity is tied to the current frame extent. */
 final class RtFrameResources {
     private final RtFramePresenter presenter;
-    private static final long PATH_RECORD_BYTES = 48L;
+    private static final int PATH_QUEUE_RING = 6;
+    private static final int PATH_RECORDS_PER_PIXEL = 2;
     RtDisplayPipeline displayPipeline;
     RtDebugPresentPipeline debugPresentPipeline;
     RtToneLut sdrToneLut;
@@ -24,7 +24,9 @@ final class RtFrameResources {
     int loadedHdrLutNits = -1;
 
     GpuImage output;
-    GpuBuffer continuationQueue;
+    private final GpuBuffer[] continuationQueues = new GpuBuffer[PATH_QUEUE_RING];
+    private final RtGpuExecutor.TrackedGraphicsUse[] continuationUses = new RtGpuExecutor.TrackedGraphicsUse[PATH_QUEUE_RING];
+    private int continuationIndex = -1;
     GpuImage displayImage;
     GpuImage hdrDisplayImage;
     GpuImage gNormal;
@@ -47,18 +49,9 @@ final class RtFrameResources {
 
     RtFrameResources(RtFramePresenter presenter) {
         this.presenter = presenter;
-    }
-
-    void bindGuideImages(RtPipeline pipeline) {
-        if (pipeline == null || gNormal == null) {
-            return;
+        for (int i = 0; i < continuationUses.length; i++) {
+            continuationUses[i] = new RtGpuExecutor.TrackedGraphicsUse();
         }
-        pipeline.setExtraStorageImage(0, gNormal.view());
-        pipeline.setExtraStorageImage(1, gAlbedo.view());
-        pipeline.setExtraStorageImage(2, gDepth.view());
-        pipeline.setExtraStorageImage(3, gMotion.view());
-        pipeline.setExtraStorageImage(4, gSpecAlbedo.view());
-        pipeline.setExtraStorageImage(5, gSpecMotion.view());
     }
 
     void ensurePresentationPipelines(GpuContext context, RtLookPackage look) throws IOException {
@@ -93,11 +86,10 @@ final class RtFrameResources {
     }
 
     /** Ensure the complete extent-keyed resource set, replacing it only after all prior GPU use drains. */
-    boolean ensureSized(GpuContext context, int width, int height, RenderPassManager passManager,
-            RtPipeline worldPipeline) {
+    boolean ensureSized(GpuContext context, int width, int height) {
         boolean rrEnabled = RtDlssRr.configured();
         int rrQuality = rrEnabled ? RtDlssRr.quality() : Integer.MIN_VALUE;
-        if (output != null && continuationQueue != null && displayImage != null && hdrDisplayImage != null
+        if (output != null && continuationQueues[0] != null && displayImage != null && hdrDisplayImage != null
                 && rrOutput != null && postColorA != null && postColorB != null && exposure.ready()
                 && displayW == width && displayH == height
                 && renderSizeRrEnabled == rrEnabled && renderSizeRrQuality == rrQuality) {
@@ -117,10 +109,13 @@ final class RtFrameResources {
 
         output = context.createStorageImage(renderW, renderH, VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
                 "trace color " + renderW + "x" + renderH);
-        long pixelRecords = Math.multiplyExact((long) renderW, (long) renderH);
-        long continuationBytes = Math.multiplyExact(Math.multiplyExact(pixelRecords, 2L), PATH_RECORD_BYTES);
-        continuationQueue = context.createBuffer(continuationBytes, VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                false, "path continuation queue " + renderW + "x" + renderH + "x2");
+        long continuationBytes = continuationBytes(renderW, renderH);
+        for (int i = 0; i < continuationQueues.length; i++) {
+            continuationQueues[i] = context.createBuffer(continuationBytes,
+                    VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                    false, "path continuation queue " + i + " " + renderW + "x" + renderH
+                            + "x" + PATH_RECORDS_PER_PIXEL);
+        }
         displayImage = context.createStorageImage(width, height, VK10.VK_FORMAT_R8G8B8A8_UNORM,
                 "RT display image " + width + "x" + height);
         hdrDisplayImage = context.createStorageImage(width, height, VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
@@ -145,18 +140,6 @@ final class RtFrameResources {
                 "post chain B " + width + "x" + height);
 
         exposure.ensureResources(context);
-        passManager.resize(width, height);
-        passManager.setReconstructedColor(rrOutput);
-        passManager.setSceneColorTargets(postColorA, postColorB);
-        passManager.setExposureImage(exposure.image());
-        displayPipeline.invalidateImages();
-        if (worldPipeline != null) {
-            worldPipeline.setStorageImage(output.view());
-            bindGuideImages(worldPipeline);
-        }
-        debugPresentPipeline.setImages(displayImage.view(), gNormal.view(), gAlbedo.view(), gDepth.view(),
-                gMotion.view(), gSpecAlbedo.view(), gSpecMotion.view(), rrOutput.view(), exposure.image().view(),
-                exposure.stateBuffer());
         return true;
     }
 
@@ -164,10 +147,14 @@ final class RtFrameResources {
         displayImage = destroy(displayImage);
         hdrDisplayImage = destroy(hdrDisplayImage);
         output = destroy(output);
-        if (continuationQueue != null) {
-            continuationQueue.destroy();
-            continuationQueue = null;
+        for (int i = 0; i < continuationQueues.length; i++) {
+            if (continuationQueues[i] != null) {
+                continuationQueues[i].destroy();
+                continuationQueues[i] = null;
+            }
+            continuationUses[i].clear();
         }
+        continuationIndex = -1;
         gNormal = destroy(gNormal);
         gAlbedo = destroy(gAlbedo);
         gDepth = destroy(gDepth);
@@ -216,5 +203,21 @@ final class RtFrameResources {
             image.destroy();
         }
         return null;
+    }
+
+    GpuBuffer acquireContinuationQueue(RtGpuExecutor.GraphicsUseWaiter waiter) {
+        continuationIndex = (continuationIndex + 1) % continuationQueues.length;
+        waiter.await(continuationUses[continuationIndex]);
+        return continuationQueues[continuationIndex];
+    }
+
+    void markContinuationUse(RtGpuExecutor.GraphicsUse graphicsUse) {
+        continuationUses[continuationIndex].mark(graphicsUse);
+    }
+
+    static long continuationBytes(int width, int height) {
+        long pixels = Math.multiplyExact((long) width, (long) height);
+        return Math.multiplyExact(Math.multiplyExact(pixels, PATH_RECORDS_PER_PIXEL),
+                PackedPathSegmentData.BYTE_SIZE);
     }
 }

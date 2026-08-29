@@ -56,6 +56,30 @@ public final class VulkanBarriers {
         VK13.vkCmdPipelineBarrier2(commandBuffer, passDependency(stack));
     }
 
+    public static void continuationUploadToPrimary(VkCommandBuffer commandBuffer, MemoryStack stack) {
+        memoryBarrier(commandBuffer, stack,
+                VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT);
+    }
+
+    public static void primaryToIndirect(VkCommandBuffer commandBuffer, MemoryStack stack) {
+        memoryBarrier(commandBuffer, stack,
+                VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR, VK_ACCESS_2_SHADER_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT);
+    }
+
+    private static void memoryBarrier(VkCommandBuffer commandBuffer, MemoryStack stack,
+                                      long sourceStage, long sourceAccess,
+                                      long destinationStage, long destinationAccess) {
+        VkMemoryBarrier2.Buffer barrier = VkMemoryBarrier2.calloc(1, stack).sType$Default()
+                .srcStageMask(sourceStage).srcAccessMask(sourceAccess)
+                .dstStageMask(destinationStage).dstAccessMask(destinationAccess);
+        VK13.vkCmdPipelineBarrier2(commandBuffer,
+                VkDependencyInfo.calloc(stack).sType$Default().pMemoryBarriers(barrier));
+    }
+
     static VkDependencyInfo passDependency(MemoryStack stack) {
         VkMemoryBarrier2.Buffer barrier = VkMemoryBarrier2.calloc(1, stack).sType$Default()
                 .srcStageMask(PASS_STAGES)

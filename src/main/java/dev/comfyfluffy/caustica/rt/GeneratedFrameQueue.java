@@ -7,7 +7,7 @@ import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
 import it.unimi.dsi.fastutil.longs.LongList;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.KHRSwapchain;
-import org.lwjgl.vulkan.KHRSynchronization2;
+import org.lwjgl.vulkan.VK14;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkDependencyInfo;
@@ -101,40 +101,7 @@ final class GeneratedFrameQueue {
             long acquireSem, long presentSem) {
         VkCommandBuffer cmd = submission.beginTransientCommandBuffer();
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkImageMemoryBarrier2.Buffer toDst = VkImageMemoryBarrier2.calloc(1, stack).sType$Default();
-            toDst.get(0).srcStageMask(0L).srcAccessMask(0L).dstStageMask(4096L).dstAccessMask(4096L)
-                    .oldLayout(VK10.VK_IMAGE_LAYOUT_UNDEFINED).newLayout(VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
-                    .srcQueueFamilyIndex(-1).dstQueueFamilyIndex(-1).image(dstImage);
-            toDst.get(0).subresourceRange().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT)
-                    .baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
-            VkMemoryBarrier2.Buffer srcVis = VkMemoryBarrier2.calloc(1, stack).sType$Default();
-            srcVis.get(0).srcStageMask(65536L).srcAccessMask(65536L).dstStageMask(4096L).dstAccessMask(2048L);
-            KHRSynchronization2.vkCmdPipelineBarrier2KHR(cmd,
-                    VkDependencyInfo.calloc(stack).sType$Default()
-                            .pImageMemoryBarriers(toDst).pMemoryBarriers(srcVis));
-
-            VkImageBlit.Buffer region = VkImageBlit.calloc(1, stack);
-            region.get(0).srcSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT)
-                    .mipLevel(0).baseArrayLayer(0).layerCount(1);
-            region.get(0).dstSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT)
-                    .mipLevel(0).baseArrayLayer(0).layerCount(1);
-            region.get(0).srcOffsets(1).set(copyW, copyH, 1);
-            region.get(0).dstOffsets(0).set(0, copyH, 0);
-            region.get(0).dstOffsets(1).set(copyW, 0, 1);
-            VK10.vkCmdBlitImage(cmd, srcImage, VK10.VK_IMAGE_LAYOUT_GENERAL, dstImage,
-                    VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, region, VK10.VK_FILTER_NEAREST);
-
-            VkImageMemoryBarrier2.Buffer toPresent = VkImageMemoryBarrier2.calloc(1, stack).sType$Default();
-            toPresent.get(0).srcStageMask(4096L).srcAccessMask(4096L).dstStageMask(65536L).dstAccessMask(0L)
-                    .oldLayout(VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL).newLayout(1000001002)
-                    .srcQueueFamilyIndex(-1).dstQueueFamilyIndex(-1).image(dstImage);
-            toPresent.get(0).subresourceRange().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT)
-                    .baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
-            VkMemoryBarrier2.Buffer mem = VkMemoryBarrier2.calloc(1, stack).sType$Default();
-            mem.get(0).srcStageMask(4096L).srcAccessMask(2048L).dstStageMask(65536L).dstAccessMask(98304L);
-            KHRSynchronization2.vkCmdPipelineBarrier2KHR(cmd,
-                    VkDependencyInfo.calloc(stack).sType$Default()
-                            .pImageMemoryBarriers(toPresent).pMemoryBarriers(mem));
+            HdrPresentation.recordSwapchainBlit(cmd, stack, srcImage, dstImage, copyW, copyH);
         }
         if (VK10.vkEndCommandBuffer(cmd) != VK10.VK_SUCCESS) {
             throw new IllegalStateException("vkEndCommandBuffer(fg blit) failed");

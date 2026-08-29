@@ -1,7 +1,7 @@
 package dev.comfyfluffy.caustica.mixin;
 
 import com.mojang.blaze3d.pipeline.RenderTarget;
-import dev.comfyfluffy.caustica.CausticaConfig;
+import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.client.RtScreenshotExporter;
 import dev.comfyfluffy.caustica.rt.RtRuntime;
 import net.minecraft.client.Screenshot;

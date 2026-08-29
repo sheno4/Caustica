@@ -172,9 +172,9 @@ records, event bits, and response-stylization hooks are engine transport details
 the public shader ABI. This keeps value/PDF agreement under one engine-owned BSDF instead of allowing an
 extension-only hook to affect one lighting path but not another.
 
-`VolumeProperties` contains exactly one field: a finite, non-negative homogeneous
-`absorptionCoefficient` per scene unit. Guide tint, ray epsilon, miss termination, and whether to invoke the
-identity-default boundary-lighting hook are renderer policies, not material properties. The boundary hook
+`VolumeProperties` contains a finite, non-negative homogeneous `absorptionCoefficient` per scene unit and
+a physical index of refraction used at thick boundary crossings. Guide tint, ray epsilon, miss termination,
+and whether to invoke the identity-default boundary-lighting hook are renderer policies. The boundary hook
 is named `evaluateBoundaryLighting` so it cannot be confused with future participating-medium or froxel
 transport. Scattering coefficients and phase functions are intentionally absent until the engine has an
 actual heterogeneous-volume consumer; adding them will require a shader ABI revision.
