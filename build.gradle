@@ -13,6 +13,7 @@ plugins {
 }
 
 evaluationDependsOn(":packages:api")
+evaluationDependsOn(":packages:renderer-raytracing")
 evaluationDependsOn(":packages:slang-runtime")
 
 def loader = (findProperty("loader") ?: "fabric").toString().toLowerCase(Locale.ROOT)
@@ -119,6 +120,7 @@ if (loader == "fabric") {
 				sourceSet(project(":packages:minecraft-api").sourceSets.main)
 				sourceSet(project(":packages:minecraft-adapter").sourceSets.main)
 				sourceSet(project(":packages:minecraft-content").sourceSets.main)
+				sourceSet(project(":packages:renderer-raytracing").sourceSets.main)
 				sourceSet(project(":packages:settings-api").sourceSets.main)
 				sourceSet(project(":packages:shader-api").sourceSets.main)
 				sourceSet(project(":packages:slang-runtime").sourceSets.main)
@@ -156,6 +158,8 @@ dependencies {
 	apiRuntime project(":packages:minecraft-adapter")
 	compileOnly project(":packages:minecraft-content")
 	apiRuntime project(":packages:minecraft-content")
+	compileOnly project(":packages:renderer-raytracing")
+	apiRuntime project(":packages:renderer-raytracing")
 	compileOnly project(":packages:settings-api")
 	apiRuntime project(":packages:settings-api")
 	compileOnly project(":packages:slang-runtime")
@@ -179,6 +183,7 @@ dependencies {
 	testImplementation project(":packages:minecraft-adapter")
 	testImplementation project(":packages:minecraft-content")
 	testImplementation(testFixtures(project(":packages:minecraft-content")))
+	testImplementation project(":packages:renderer-raytracing")
 	testImplementation project(":packages:settings-api")
 	testImplementation project(":packages:slang-runtime")
 	testImplementation project(":packages:vulkan-support")
@@ -191,6 +196,7 @@ dependencies {
 	testRuntimeOnly project(":packages:minecraft-api")
 	testRuntimeOnly project(":packages:minecraft-adapter")
 	testRuntimeOnly project(":packages:minecraft-content")
+	testRuntimeOnly project(":packages:renderer-raytracing")
 	testRuntimeOnly project(":packages:settings-api")
 	testRuntimeOnly project(":packages:slang-runtime")
 	testRuntimeOnly project(":packages:vulkan-support")
@@ -226,7 +232,8 @@ processResources {
 // Compile Slang sources to SPIR-V at build time instead of tracking binaries. Requires slangc and
 // spirv-val from the Vulkan SDK or PATH.
 def shaderGenRoot = layout.buildDirectory.dir("generated/shaders") // classpath root -> /caustica/shaders/*.spv
-def runtimeWorldSourceDir = file("src/main/resources/caustica/shaders/world")
+def runtimeWorldSourceDir = project(":packages:renderer-raytracing")
+		.file("src/main/resources/caustica/shaders/world")
 def runtimeBuiltinSourceDir = project(":packages:features-builtin").file("src/main/resources/caustica/shaders/builtin")
 def runtimeApiSourceDir = project(":packages:shader-api").file("src/main/resources/caustica/shaders/api")
 def runtimeMinecraftSourceDir = file("src/main/resources/caustica/shaders/minecraft")
@@ -475,10 +482,10 @@ def verifyRetainedLightShader = tasks.register("verifyRetainedLightShader") {
 	group = "verification"
 	description = "Verifies the retained-light sampler and two-ray-type shadow trace contract."
 	dependsOn(compileShaders)
-	def sampler = file("src/main/resources/caustica/shaders/world/retained_lights.slang")
-	def closestHit = file("src/main/resources/caustica/shaders/world/closest_hit.slang")
-	def worldMinimal = file("src/main/resources/caustica/shaders/world/world_minimal.slang")
-	def bake = file("src/main/resources/caustica/shaders/world/nee_at_bake.slang")
+	def sampler = new File(runtimeWorldSourceDir, "retained_lights.slang")
+	def closestHit = new File(runtimeWorldSourceDir, "closest_hit.slang")
+	def worldMinimal = new File(runtimeWorldSourceDir, "world_minimal.slang")
+	def bake = new File(runtimeWorldSourceDir, "nee_at_bake.slang")
 	inputs.files(sampler, closestHit, worldMinimal, bake)
 	doLast {
 		def samplerSource = sampler.getText("UTF-8")
@@ -765,6 +772,7 @@ tasks.named("jar", Jar).configure {
 	from(project(":packages:minecraft-api").sourceSets.main.output)
 	from(project(":packages:minecraft-adapter").sourceSets.main.output)
 	from(project(":packages:minecraft-content").sourceSets.main.output)
+	from(project(":packages:renderer-raytracing").sourceSets.main.output)
 	from(project(":packages:settings-api").sourceSets.main.output)
 	from(project(":packages:shader-api").sourceSets.main.output)
 	from(project(":packages:slang-runtime").sourceSets.main.output)
@@ -785,6 +793,7 @@ tasks.named("sourcesJar", Jar).configure {
 	from(project(":packages:minecraft-api").sourceSets.main.allSource)
 	from(project(":packages:minecraft-adapter").sourceSets.main.allSource)
 	from(project(":packages:minecraft-content").sourceSets.main.allSource)
+	from(project(":packages:renderer-raytracing").sourceSets.main.allSource)
 	from(project(":packages:settings-api").sourceSets.main.allSource)
 	from(project(":packages:shader-api").sourceSets.main.allSource)
 	from(project(":packages:slang-runtime").sourceSets.main.allJava)
@@ -804,6 +813,7 @@ def verifyEmbeddedApi = tasks.register("verifyEmbeddedApi") {
 			project(":packages:minecraft-api").tasks.named("jar"),
 			project(":packages:minecraft-adapter").tasks.named("jar"),
 			project(":packages:minecraft-content").tasks.named("jar"),
+			project(":packages:renderer-raytracing").tasks.named("jar"),
 			project(":packages:settings-api").tasks.named("jar"),
 			project(":packages:shader-api").tasks.named("jar"),
 			project(":packages:slang-runtime").tasks.named("jar"),
@@ -818,6 +828,7 @@ def verifyEmbeddedApi = tasks.register("verifyEmbeddedApi") {
 	inputs.file(project(":packages:minecraft-api").tasks.named("jar", Jar).flatMap { it.archiveFile })
 	inputs.file(project(":packages:minecraft-adapter").tasks.named("jar", Jar).flatMap { it.archiveFile })
 	inputs.file(project(":packages:minecraft-content").tasks.named("jar", Jar).flatMap { it.archiveFile })
+	inputs.file(project(":packages:renderer-raytracing").tasks.named("jar", Jar).flatMap { it.archiveFile })
 	inputs.file(project(":packages:settings-api").tasks.named("jar", Jar).flatMap { it.archiveFile })
 	inputs.file(project(":packages:shader-api").tasks.named("jar", Jar).flatMap { it.archiveFile })
 	inputs.file(project(":packages:slang-runtime").tasks.named("jar", Jar).flatMap { it.archiveFile })
@@ -844,6 +855,8 @@ def verifyEmbeddedApi = tasks.register("verifyEmbeddedApi") {
 		def minecraftApiEntries = names(project(":packages:minecraft-api").tasks.named("jar", Jar).get().archiveFile.get().asFile)
 		def minecraftAdapterEntries = names(project(":packages:minecraft-adapter").tasks.named("jar", Jar).get().archiveFile.get().asFile)
 		def minecraftContentEntries = names(project(":packages:minecraft-content").tasks.named("jar", Jar).get().archiveFile.get().asFile)
+		def rendererRayTracingEntries = names(project(":packages:renderer-raytracing").tasks.named("jar", Jar)
+				.get().archiveFile.get().asFile)
 		def settingsApiEntries = names(project(":packages:settings-api").tasks.named("jar", Jar).get().archiveFile.get().asFile)
 		def shaderApiEntries = names(project(":packages:shader-api").tasks.named("jar", Jar).get().archiveFile.get().asFile)
 		def slangRuntimeEntries = names(project(":packages:slang-runtime").tasks.named("jar", Jar)
@@ -860,6 +873,8 @@ def verifyEmbeddedApi = tasks.register("verifyEmbeddedApi") {
 		required.addAll(minecraftApiEntries.findAll { it.endsWith(".class") })
 		required.addAll(minecraftAdapterEntries.findAll { it.endsWith(".class") })
 		required.addAll(minecraftContentEntries.findAll { it.endsWith(".class") })
+		required.addAll(rendererRayTracingEntries.findAll { it.endsWith(".class")
+				|| it.startsWith("caustica/shaders/world/") && !it.endsWith("/") })
 		required.addAll(settingsApiEntries.findAll { it.endsWith(".class") })
 		required.addAll(shaderApiEntries.findAll { entry ->
 			entry.startsWith("caustica/shaders/api/") && !entry.endsWith("/")
@@ -904,6 +919,7 @@ tasks.named("check") {
 			project(":packages:config").tasks.named("check"),
 			project(":packages:engine-vulkan").tasks.named("check"),
 			project(":packages:minecraft-content").tasks.named("check"),
+			project(":packages:renderer-raytracing").tasks.named("check"),
 			project(":packages:slang-runtime").tasks.named("check"),
 			project(":packages:vulkan-support").tasks.named("check"))
 }

@@ -148,9 +148,13 @@ public abstract class GameRendererMixin {
 		}
 
 		var cameraState = this.gameRenderState().levelRenderState.cameraRenderState;
-		RtRuntime.INSTANCE.captureFrame(MinecraftFrameAdapter.INSTANCE.capture(
+		var snapshot = MinecraftFrameAdapter.INSTANCE.capture(
 				Minecraft.getInstance(), projection, cameraState.viewRotationMatrix,
-				cameraState.pos.x, cameraState.pos.y, cameraState.pos.z));
+				cameraState.pos.x, cameraState.pos.y, cameraState.pos.z);
+		if (snapshot == null) {
+			return projection;
+		}
+		RtRuntime.INSTANCE.captureFrame(snapshot);
 		VanillaRenderController.INSTANCE.markProjectionCaptured();
 		return projection;
 	}

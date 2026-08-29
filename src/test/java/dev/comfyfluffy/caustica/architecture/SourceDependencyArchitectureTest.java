@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.function.Predicate;
 
 import static org.junit.jupiter.api.Assertions.fail;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
 final class SourceDependencyArchitectureTest {
     private static final Path PROJECT_ROOT = findProjectRoot();
@@ -37,6 +38,16 @@ final class SourceDependencyArchitectureTest {
         assertNoImportsMatching(List.of(API), imported ->
                 (imported.equals(rootPackage) || imported.startsWith(rootPackage + "."))
                         && !(imported.equals(apiPackage) || imported.startsWith(apiPackage + ".")));
+    }
+
+    @Test
+    void minecraftFrameSelectionUsesOnlyEngineIssuedSceneIds() throws IOException {
+        Path adapter = MINECRAFT.resolve("MinecraftFrameAdapter.java");
+        Path selector = MINECRAFT.resolve("MinecraftFrameSelector.java");
+        assertFalse(Files.readString(adapter).contains("new SceneId"),
+                "MinecraftFrameAdapter must not fabricate a SceneId");
+        assertFalse(Files.readString(selector).contains("static volatile"),
+                "MinecraftFrameSelector must not own static epoch state");
     }
 
     private static void assertNoImports(List<Path> sourceRoots, List<String> forbiddenPackages)

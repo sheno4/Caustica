@@ -4,6 +4,7 @@ import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.api.pass.*;
 import dev.comfyfluffy.caustica.api.program.*;
 import dev.comfyfluffy.caustica.minecraft.MinecraftFrameSelector;
+import dev.comfyfluffy.caustica.minecraft.MinecraftFrameSelectionInstaller;
 import dev.comfyfluffy.caustica.minecraft.MinecraftProvidersExtension;
 import dev.comfyfluffy.caustica.minecraft.api.*;
 import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
@@ -25,6 +26,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
 
     private final MinecraftWorldSessionContext context;
     private final MinecraftProgramResources resources;
+    private final MinecraftFrameSelectionInstaller frameSelections;
     private final MinecraftLightProvider lights;
     private final PassRegistration lightRegistration;
     private final PassRegistration overlayRegistration;
@@ -33,16 +35,20 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
     private boolean stopped;
 
     private MinecraftProgramSession(MinecraftWorldSessionContext context, MinecraftProgramResources resources,
+                                    MinecraftFrameSelectionInstaller frameSelections,
                                     MinecraftLightProvider lights, PassRegistration lightRegistration,
                                     PassRegistration overlayRegistration) {
         this.context = context;
         this.resources = resources;
+        this.frameSelections = frameSelections;
         this.lights = lights;
         this.lightRegistration = lightRegistration;
         this.overlayRegistration = overlayRegistration;
     }
 
-    public static MinecraftProgramSession open(MinecraftWorldSessionContext context) {
+    public static MinecraftProgramSession open(MinecraftWorldSessionContext context,
+                                               MinecraftFrameSelectionInstaller frameSelections) {
+        java.util.Objects.requireNonNull(frameSelections, "frameSelections");
         MinecraftProgramResources resources = new MinecraftProgramResources(context.renderSession().gpu());
         MinecraftLightProvider lights = null;
         PassRegistration lightRegistration = null;
@@ -55,7 +61,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
                     setup -> new LightUpdatePass(installedLights));
             overlayRegistration = context.renderSession().passes().addUiPass(WorldOverlayPass::new);
             MinecraftProgramSession session = new MinecraftProgramSession(
-                    context, resources, lights, lightRegistration, overlayRegistration);
+                    context, resources, frameSelections, lights, lightRegistration, overlayRegistration);
             session.beginReplacement(context.resourcePackEpoch());
             return session;
         } catch (RuntimeException | Error failure) {
@@ -148,13 +154,16 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         if (displaced != null) displaced.stopSceneProducers();
 
         MinecraftTerrainSession terrain = new MinecraftTerrainSession(context.renderSession().gpu());
-        MinecraftFrameSelector.Lease frameSelection = null;
+        MinecraftFrameSelectionInstaller.Lease frameSelection = null;
+        MinecraftFrameSelector frameSelector = null;
         try {
             terrain.bind(programs, context.renderSession().geometry(), context.scene());
             terrain.publishMaterialLookup(request.lookup);
-            frameSelection = MinecraftFrameSelector.install(context.scene(), programs.waterVolume(),
+            frameSelector = new MinecraftFrameSelector(context.scene(), programs.waterVolume(),
                     request.published.gpu().fallbackBindingData(),
                     request.published.gpu().fallbackInstanceData());
+            frameSelection = java.util.Objects.requireNonNull(frameSelections.install(frameSelector),
+                    "frame selection lease");
         } catch (RuntimeException | Error failure) {
             if (frameSelection != null) frameSelection.close();
             terrain.stop();
@@ -168,7 +177,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
             delayed.add(new RetiredPrograms(displaced.sky, displaced.registration));
         }
         Active replacement = new Active(request.generation, registration, terrain,
-                frameSelection, sky, delayed);
+                frameSelector, frameSelection, sky, delayed);
         request.registration = null;
         request.published = null;
         pending = null;
@@ -285,16 +294,19 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         final long generation;
         final ProgramRegistration<MinecraftPrograms> registration;
         final MinecraftTerrainSession terrain;
-        final MinecraftFrameSelector.Lease frameSelection;
+        final MinecraftFrameSelector frameSelector;
+        final MinecraftFrameSelectionInstaller.Lease frameSelection;
         final PassRegistration sky;
         final ArrayList<RetiredPrograms> delayed;
         boolean producersStopped;
         Active(long generation, ProgramRegistration<MinecraftPrograms> registration,
-               MinecraftTerrainSession terrain, MinecraftFrameSelector.Lease frameSelection,
+               MinecraftTerrainSession terrain, MinecraftFrameSelector frameSelector,
+               MinecraftFrameSelectionInstaller.Lease frameSelection,
                PassRegistration sky, ArrayList<RetiredPrograms> delayed) {
             this.generation = generation;
             this.registration = registration;
             this.terrain = terrain;
+            this.frameSelector = frameSelector;
             this.frameSelection = frameSelection;
             this.sky = sky;
             this.delayed = delayed;

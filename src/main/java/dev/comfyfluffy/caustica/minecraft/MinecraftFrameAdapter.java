@@ -3,7 +3,6 @@ package dev.comfyfluffy.caustica.minecraft;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuImage;
 
 import dev.comfyfluffy.caustica.config.CausticaConfig;
-import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.api.view.Camera;
 import dev.comfyfluffy.caustica.api.view.SceneView;
 import dev.comfyfluffy.caustica.engine.frame.FrameSnapshot;
@@ -32,9 +31,9 @@ public final class MinecraftFrameAdapter {
 
     private static final double METERS_PER_WORLD_UNIT = 1.0;
     private ClientLevel identifiedLevel;
-    private SceneId fallbackScene;
     private long nextSceneId;
     private long sceneId;
+    private volatile MinecraftFrameSelector frameSelector;
 
     private MinecraftFrameAdapter() {
     }
@@ -55,6 +54,7 @@ public final class MinecraftFrameAdapter {
                 client::invalidateSurfaceConfiguration);
     }
 
+    /** Returns no snapshot while a world/program epoch has not installed its engine-issued scene. */
     public FrameSnapshot capture(Minecraft client, Matrix4fc projection, Matrix4fc viewRotation,
                                  double cameraX, double cameraY, double cameraZ) {
         ClientLevel level = client.level;
@@ -65,16 +65,29 @@ public final class MinecraftFrameAdapter {
             submerged = fluid.is(FluidTags.WATER)
                     && cameraY < cameraBlockPos.getY() + fluid.getHeight(level, cameraBlockPos);
         }
-        MinecraftFrameSelector.Selection selection = MinecraftFrameSelector.select(submerged);
-        SceneId scene = selection != null ? selection.scene() : fallbackScene(level);
+        MinecraftFrameSelector.Selection selection = selection(submerged);
+        if (selection == null) return null;
         Camera camera = new Camera(cameraX, cameraY, cameraZ,
                 projection.get(new float[16]), viewRotation.get(new float[16]));
         RtTerrain terrain = RtTerrain.currentOrNull();
         SceneOrigin sceneOrigin = terrain != null ? terrain.sceneOrigin() : SceneOrigin.ZERO;
-        return new FrameSnapshot(new SceneView(scene, camera), sceneOrigin,
-                selection != null ? selection.initialVolume() : null,
+        return new FrameSnapshot(new SceneView(selection.scene(), camera), sceneOrigin,
+                selection.initialVolume(),
                 CausticaConfig.Rt.Composite.WATER_WAVES.value(),
                 System.nanoTime() / 1.0e9, METERS_PER_WORLD_UNIT);
+    }
+
+    MinecraftFrameSelectionInstaller.Lease installFrameSelector(MinecraftFrameSelector selector) {
+        java.util.Objects.requireNonNull(selector, "selector");
+        frameSelector = selector;
+        return () -> {
+            if (frameSelector == selector) frameSelector = null;
+        };
+    }
+
+    MinecraftFrameSelector.Selection selection(boolean submerged) {
+        MinecraftFrameSelector selector = frameSelector;
+        return selector == null ? null : selector.select(submerged);
     }
 
     public SceneResources captureSceneResources(Minecraft client) {
@@ -100,16 +113,9 @@ public final class MinecraftFrameAdapter {
     private long identify(ClientLevel level) {
         if (level != identifiedLevel) {
             identifiedLevel = level;
-            fallbackScene = level == null ? null : new SceneId() {};
             sceneId = level == null ? 0L : ++nextSceneId;
         }
         return sceneId;
-    }
-
-    private SceneId fallbackScene(ClientLevel level) {
-        identify(level);
-        if (fallbackScene == null) fallbackScene = new SceneId() {};
-        return fallbackScene;
     }
 
     private static MinecraftDimensionKey dimensionKey(ClientLevel level) {

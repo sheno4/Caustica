@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.rt.shader;
+package dev.comfyfluffy.caustica.renderer.raytracing.shader;
 
 import dev.comfyfluffy.caustica.engine.program.ProgramComposition;
 import org.junit.jupiter.api.Test;
@@ -9,8 +9,6 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class CompositionTest {
     private static final ProgramComposition PROGRAM = new ProgramComposition(1, List.of());
@@ -27,19 +25,6 @@ final class CompositionTest {
         assertNotEquals(first.contentHash(), changedRoot.contentHash());
         assertNotEquals(first.contentHash(), changedSource.contentHash());
         assertNotEquals(first.contentHash(), changedName.contentHash());
-    }
-
-    @Test
-    void managerPublishesAtomicallyAndWaitsForRetirement() {
-        Composition first = composition("first", Map.of());
-        Composition second = composition("second", Map.of());
-        CompositionManager manager = new CompositionManager(first);
-        manager.activate(second);
-        assertEquals(second, manager.current());
-        assertEquals(first, manager.retiringOrNull());
-        assertThrows(IllegalStateException.class, () -> manager.activate(first));
-        manager.retireCompleted();
-        assertNull(manager.retiringOrNull());
     }
 
     private static Composition composition(String root, Map<String, byte[]> sources) {

@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.rt.shader;
+package dev.comfyfluffy.caustica.renderer.raytracing.shader;
 
 import org.junit.jupiter.api.Test;
 

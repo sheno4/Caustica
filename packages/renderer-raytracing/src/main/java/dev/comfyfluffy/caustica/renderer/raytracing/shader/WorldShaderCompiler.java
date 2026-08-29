@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.rt.shader;
+package dev.comfyfluffy.caustica.renderer.raytracing.shader;
 
 import dev.comfyfluffy.caustica.api.program.ShaderDefinition;
 import dev.comfyfluffy.caustica.api.program.ShaderSource;
@@ -169,8 +169,13 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
         }
     }
 
-    public Composition composition() {
+    Composition composition() {
         return composition;
+    }
+
+    /** Returns the packed implementation constants consumed by the compiled composition. */
+    public List<Long> implementationData() {
+        return composition.implementationData();
     }
 
     @Override

@@ -7,45 +7,24 @@ import dev.comfyfluffy.caustica.engine.frame.FrameSnapshot;
 
 import java.util.Objects;
 
-/** Session-to-render-thread handoff for the root scene and Minecraft water volume binding. */
+/** Immutable root-scene and camera-volume selection for one active Minecraft program epoch. */
 public final class MinecraftFrameSelector {
-    private static volatile Binding<?, ?> binding;
+    private final SceneId scene;
+    private final FrameSnapshot.InitialVolume<?, ?> submergedVolume;
 
-    private MinecraftFrameSelector() {}
-
-    public static <B, N> Lease install(SceneId scene, VolumeId<B, N> waterVolume,
-                                       ShaderData<B> bindingData, ShaderData<N> instanceData) {
-        Binding<B, N> installed = new Binding<>(scene, waterVolume, bindingData, instanceData);
-        binding = installed;
-        return () -> {
-            if (binding == installed) binding = null;
-        };
+    public <B, N> MinecraftFrameSelector(SceneId scene, VolumeId<B, N> waterVolume,
+                                         ShaderData<B> bindingData, ShaderData<N> instanceData) {
+        this.scene = Objects.requireNonNull(scene, "scene");
+        Objects.requireNonNull(waterVolume, "waterVolume");
+        Objects.requireNonNull(bindingData, "bindingData");
+        Objects.requireNonNull(instanceData, "instanceData");
+        submergedVolume = bindingData.bits() == 0L || instanceData.bits() == 0L
+                ? null : new FrameSnapshot.InitialVolume<>(waterVolume, bindingData, instanceData);
     }
 
-    static Selection select(boolean submerged) {
-        Binding<?, ?> current = binding;
-        if (current == null) return null;
-        return new Selection(current.scene, submerged ? current.initialVolumeOrNull() : null);
-    }
-
-    public interface Lease extends AutoCloseable {
-        @Override void close();
+    Selection select(boolean submerged) {
+        return new Selection(scene, submerged ? submergedVolume : null);
     }
 
     record Selection(SceneId scene, FrameSnapshot.InitialVolume<?, ?> initialVolume) {}
-
-    private record Binding<B, N>(SceneId scene, VolumeId<B, N> volume,
-                                 ShaderData<B> bindingData, ShaderData<N> instanceData) {
-        Binding {
-            Objects.requireNonNull(scene, "scene");
-            Objects.requireNonNull(volume, "volume");
-            Objects.requireNonNull(bindingData, "bindingData");
-            Objects.requireNonNull(instanceData, "instanceData");
-        }
-
-        FrameSnapshot.InitialVolume<B, N> initialVolumeOrNull() {
-            if (bindingData.bits() == 0L || instanceData.bits() == 0L) return null;
-            return new FrameSnapshot.InitialVolume<>(volume, bindingData, instanceData);
-        }
-    }
 }

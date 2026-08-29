@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.rt.shader;
+package dev.comfyfluffy.caustica.renderer.raytracing.shader;
 
 import dev.comfyfluffy.caustica.api.program.EnvironmentDefinition;
 import dev.comfyfluffy.caustica.api.program.ShaderDataType;
@@ -17,6 +17,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -39,7 +40,7 @@ final class WorldShaderCompilerTest {
     static void createRuntime() {
         runtime = new SlangRuntime(new SlangRuntimeConfig(
                 Path.of("build/test-slang-extraction"),
-                Optional.of(Path.of(System.getProperty("caustica.slang.path")))));
+                Optional.empty()));
     }
 
     @AfterAll
@@ -82,8 +83,12 @@ final class WorldShaderCompilerTest {
             assertSpirv(compiler.compileRadianceAnyHit());
             assertSpirv(compiler.compileSkyMiss());
             assertSpirv(compiler.compilePrimary());
-            assertSpirv(compiler.compileIndirect(false));
-            assertSpirv(compiler.compileIndirect(true));
+            byte[] ordinary = compiler.compileIndirect(false);
+            byte[] reordered = compiler.compileIndirect(true);
+            assertSpirv(ordinary);
+            assertSpirv(reordered);
+            assertVulkan14(cache.resolve("indirect-ordinary.spv"), ordinary);
+            assertVulkan14(cache.resolve("indirect-ser.spv"), reordered);
         }
     }
 
@@ -170,6 +175,14 @@ final class WorldShaderCompilerTest {
     private static void assertSpirv(byte[] spirv) {
         assertEquals(0x07230203, ByteBuffer.wrap(spirv).order(ByteOrder.LITTLE_ENDIAN).getInt());
         assertTrue(spirv.length > 256);
+    }
+
+    private static void assertVulkan14(Path output, byte[] spirv) throws Exception {
+        Files.write(output, spirv);
+        Process validator = new ProcessBuilder(System.getProperty("caustica.test.spirvVal"),
+                "--target-env", "vulkan1.4", output.toString()).redirectErrorStream(true).start();
+        String diagnostics = new String(validator.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+        assertEquals(0, validator.waitFor(), diagnostics);
     }
 
     private static String shaderSource(String name) throws Exception {

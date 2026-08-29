@@ -1,0 +1,169 @@
+plugins {
+    id "java-library"
+    id "maven-publish"
+}
+
+version = project.api_version
+group = project.maven_group
+java.toolchain.languageVersion = JavaLanguageVersion.of(25)
+
+base { archivesName = "caustica-renderer-raytracing" }
+repositories { mavenCentral() }
+
+dependencies {
+    api project(":packages:engine")
+    api project(":packages:slang-runtime")
+    implementation "org.slf4j:slf4j-api:2.0.17"
+
+    runtimeOnly project(":packages:shader-api")
+    runtimeOnly project(":packages:features-builtin")
+
+    testImplementation platform("org.junit:junit-bom:5.12.2")
+    testImplementation "org.junit.jupiter:junit-jupiter"
+    testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+}
+
+def worldShaderNames = [
+        "bindings.slang", "closest_hit.slang", "fixed_composition.slang", "guide.rmiss.slang",
+        "indirect.slang", "indirect_ser.slang", "nee_at_bake.slang", "path_queue_types.slang",
+        "primary_reflection.rgen.slang", "primary_rgen.slang", "radiance_any_hit.rahit.slang",
+        "retained_indirect.slang", "retained_lights.slang", "retained_path_queue.slang",
+        "retained_trace_ordinary.slang", "retained_trace_policy.slang",
+        "retained_trace_reordered.slang", "shadow_any_hit.rahit.slang", "sky_miss.slang",
+        "surface_bsdf.slang", "world_common.slang", "world_minimal.slang"
+] as Set
+
+def verifyRendererRayTracingDependencies = tasks.register("verifyRendererRayTracingDependencies") {
+    group = "verification"
+    description = "Verifies the ray-tracing shader compiler's physical package dependencies."
+    doLast {
+        def allowedProjects = [project.path, ":packages:engine", ":packages:slang-runtime",
+                               ":packages:shader-api", ":packages:features-builtin"] as Set
+        def violations = []
+        configurations.matching { it.canBeResolved }.each { configuration ->
+            configuration.allDependencies.withType(ProjectDependency).each { dependency ->
+                if (!allowedProjects.contains(dependency.path)) {
+                    violations.add("${configuration.name}: ${dependency.path}")
+                }
+            }
+        }
+        if (!violations.empty) {
+            throw new GradleException("renderer-raytracing dependency violations:\n${violations.join('\n')}")
+        }
+    }
+}
+
+def verifyRendererRayTracingImports = tasks.register("verifyRendererRayTracingImports") {
+    group = "verification"
+    description = "Verifies that renderer shader compilation has no Minecraft or root-mod imports."
+    inputs.files(sourceSets.main.allJava)
+    doLast {
+        def forbidden = [
+                "dev.comfyfluffy.caustica.CausticaMod",
+                "dev.comfyfluffy.caustica.config",
+                "dev.comfyfluffy.caustica.minecraft",
+                "dev.comfyfluffy.caustica.platform",
+                "dev.comfyfluffy.caustica.fabric",
+                "dev.comfyfluffy.caustica.neoforge",
+                "dev.comfyfluffy.caustica.ngx",
+                "dev.comfyfluffy.caustica.rt",
+                "net.minecraft",
+                "net.fabricmc",
+                "net.neoforged"
+        ]
+        def violations = []
+        sourceSets.main.allJava.files.sort().each { file ->
+            file.eachLine { line, number ->
+                if (line.stripLeading().startsWith("import ") && forbidden.any { line.contains(it) }) {
+                    violations.add("${file}:${number}: ${line.trim()}")
+                }
+            }
+        }
+        if (!violations.empty) {
+            throw new GradleException("renderer-raytracing import violations:\n${violations.join('\n')}")
+        }
+    }
+}
+
+def verifyRendererRayTracingResources = tasks.register("verifyRendererRayTracingResources") {
+    group = "verification"
+    description = "Verifies that the package owns the complete world Slang resource set."
+    def resourceRoot = file("src/main/resources")
+    def legacyWorldRoot = rootProject.file("src/main/resources/caustica/shaders/world")
+    inputs.dir(resourceRoot)
+    inputs.files(fileTree(legacyWorldRoot))
+    doLast {
+        def actual = fileTree(new File(resourceRoot, "caustica/shaders/world")) {
+            include "**/*"
+        }.files.collect { it.name } as Set
+        def foreign = fileTree(resourceRoot).files.findAll { file ->
+            !file.toPath().toString().replace('\\', '/').contains("/caustica/shaders/world/")
+        }
+        def duplicateRootResources = fileTree(legacyWorldRoot).files
+        if (actual != worldShaderNames || !foreign.empty || !duplicateRootResources.empty) {
+            throw new GradleException("renderer-raytracing resource mismatch; missing="
+                    + "${worldShaderNames - actual}, unexpected=${actual - worldShaderNames}, "
+                    + "foreign=${foreign}, duplicateRootResources=${duplicateRootResources}")
+        }
+    }
+}
+
+def verifyRendererRayTracingJar = tasks.register("verifyRendererRayTracingJar") {
+    group = "verification"
+    dependsOn(tasks.named("jar"))
+    doLast {
+        def artifact = tasks.named("jar", Jar).get().archiveFile.get().asFile
+        def names = []
+        new java.util.jar.JarFile(artifact).withCloseable { jar ->
+            def entries = jar.entries()
+            while (entries.hasMoreElements()) names.add(entries.nextElement().name)
+        }
+        def classRoot = "dev/comfyfluffy/caustica/renderer/raytracing/shader/"
+        def foreignClasses = names.findAll { it.endsWith(".class") && !it.startsWith(classRoot) }
+        def packagedShaders = names.findAll {
+            it.startsWith("caustica/shaders/world/") && it.endsWith(".slang")
+        }.collect { it.substring("caustica/shaders/world/".length()) } as Set
+        def foreignResources = names.findAll {
+            it.startsWith("caustica/") && !it.endsWith("/")
+                    && !it.startsWith("caustica/shaders/world/")
+        }
+        if (!foreignClasses.empty || packagedShaders != worldShaderNames || !foreignResources.empty) {
+            throw new GradleException("renderer-raytracing JAR mismatch; foreignClasses=${foreignClasses}, "
+                    + "missingShaders=${worldShaderNames - packagedShaders}, "
+                    + "unexpectedShaders=${packagedShaders - worldShaderNames}, foreignResources=${foreignResources}")
+        }
+    }
+}
+
+tasks.named("test", Test) {
+    dependsOn(project(":packages:slang-runtime").tasks.named("bundleSlangRuntime"))
+    useJUnitPlatform()
+    jvmArgs "--enable-native-access=ALL-UNNAMED"
+    systemProperty "caustica.test.spirvVal", rootProject.slangTooling.spirvVal.get()
+}
+tasks.named("check") {
+    dependsOn(verifyRendererRayTracingDependencies, verifyRendererRayTracingImports,
+            verifyRendererRayTracingResources, verifyRendererRayTracingJar)
+}
+tasks.withType(JavaCompile).configureEach { options.release = 25 }
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_25
+    targetCompatibility = JavaVersion.VERSION_25
+    withSourcesJar()
+}
+
+tasks.named("jar", Jar).configure {
+    from(rootProject.files("LICENSE.md", "COPYING", "COPYING.LESSER", "THIRD_PARTY_NOTICES.md")) {
+        into "META-INF"
+    }
+}
+
+publishing {
+    publications {
+        create("mavenJava", MavenPublication) {
+            artifactId = "caustica-renderer-raytracing"
+            from components.java
+        }
+    }
+}

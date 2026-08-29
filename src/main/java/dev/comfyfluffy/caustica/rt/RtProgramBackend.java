@@ -9,7 +9,7 @@ import dev.comfyfluffy.caustica.engine.program.ProgramKey;
 import dev.comfyfluffy.caustica.rt.pipeline.RtBindings;
 import dev.comfyfluffy.caustica.rt.pipeline.RtPipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtShaderCode;
-import dev.comfyfluffy.caustica.rt.shader.WorldShaderCompiler;
+import dev.comfyfluffy.caustica.renderer.raytracing.shader.WorldShaderCompiler;
 import dev.comfyfluffy.caustica.slang.SlangRuntime;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
@@ -169,7 +169,7 @@ public final class RtProgramBackend implements ProgramBackend, AutoCloseable {
         RtPipeline pipeline = null;
         try {
             shaderCompiler = WorldShaderCompiler.createIsolated(slangRuntime, cacheRoot, composition);
-            List<Long> data = shaderCompiler.composition().implementationData();
+            List<Long> data = shaderCompiler.implementationData();
             table = ImplementationTable.create(context, data);
             boolean reordered = context.backend().capabilities().shaderExecutionReordering();
             RtShaderCode primary = RtShaderCode.of("primary", shaderCompiler.compilePrimary());

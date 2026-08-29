@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.rt.shader;
+package dev.comfyfluffy.caustica.renderer.raytracing.shader;
 
 import dev.comfyfluffy.caustica.engine.program.ProgramComposition;
 import dev.comfyfluffy.caustica.engine.program.ProgramKey;
@@ -13,7 +13,7 @@ import java.util.Objects;
 import java.util.TreeMap;
 
 /** Immutable engine-program input and generated Slang composition identity. */
-public record Composition(ProgramComposition program, Map<ProgramKey, Integer> implementationIndices,
+record Composition(ProgramComposition program, Map<ProgramKey, Integer> implementationIndices,
                           List<Long> implementationData, String rootModule, String rootType,
                           String rootSource, String contentHash) {
     public Composition {

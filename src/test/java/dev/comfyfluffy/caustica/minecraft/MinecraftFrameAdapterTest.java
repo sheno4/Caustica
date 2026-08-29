@@ -5,12 +5,39 @@ import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptor;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptorKind;
+import dev.comfyfluffy.caustica.api.program.ShaderDataType;
+import dev.comfyfluffy.caustica.api.program.VolumeId;
+import dev.comfyfluffy.caustica.api.scene.SceneId;
 import org.junit.jupiter.api.Test;
 
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 
 final class MinecraftFrameAdapterTest {
+    @Test
+    void epochLeasePublishesAndRemovesOnlyItsOwnSelection() {
+        MinecraftFrameAdapter adapter = MinecraftFrameAdapter.INSTANCE;
+        var binding = ShaderDataType.create("water binding");
+        var instance = ShaderDataType.create("water instance");
+        SceneId firstScene = new TestScene();
+        SceneId secondScene = new TestScene();
+        var first = new MinecraftFrameSelector(firstScene, new TestVolume<>(),
+                binding.data(1L), instance.data(2L));
+        var second = new MinecraftFrameSelector(secondScene, new TestVolume<>(),
+                binding.data(3L), instance.data(4L));
+
+        assertNull(adapter.selection(false));
+        var firstLease = adapter.installFrameSelector(first);
+        assertSame(firstScene, adapter.selection(false).scene());
+        var secondLease = adapter.installFrameSelector(second);
+        firstLease.close();
+        assertSame(secondScene, adapter.selection(false).scene());
+        secondLease.close();
+        assertNull(adapter.selection(false));
+    }
+
     @Test
     void uiSnapshotDoesNotRetainPriorFrameResources() {
         UiPresentationResources first = MinecraftFrameAdapter.snapshotUiPresentation(
@@ -35,4 +62,7 @@ final class MinecraftFrameAdapterTest {
             @Override public int format() { return 0; }
         };
     }
+
+    private static final class TestScene implements SceneId { }
+    private static final class TestVolume<B, N> implements VolumeId<B, N> { }
 }

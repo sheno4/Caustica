@@ -40,7 +40,8 @@ public final class MinecraftApiBootstrap {
         registerExtensions(host, minecraftHost, settingsRegistry, extensions);
         registerMinecraftExtensions(minecraftHost, settingsRegistry,
                 CausticaPlatform.current().minecraftExtensions(), extensions);
-        registerMinecraftExtension(minecraftHost, settingsRegistry, new MinecraftProvidersExtension());
+        registerMinecraftExtension(minecraftHost, settingsRegistry,
+                new MinecraftProvidersExtension(MinecraftFrameAdapter.INSTANCE::installFrameSelector));
 
         Path gameDirectory = CausticaPlatform.current().gameDir();
         String configuredSlangPath = CausticaConfig.Slang.PATH.get();
