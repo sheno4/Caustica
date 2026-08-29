@@ -289,11 +289,17 @@ final class SceneDirectoryTest {
     private static final class ImmediateProgramBackend implements ProgramBackend {
         @Override public void compile(ProgramComposition composition,
                                       java.util.function.Consumer<? super Compilation> completion) {
-            completion.accept(new Compilation.Succeeded(key -> (int) key.sequence()));
+            completion.accept(new Compilation.Succeeded(program()));
         }
         @Override public void publish(CompiledProgram program, Runnable previousRetired) { previousRetired.run(); }
         @Override public void drainPublishedUses() { }
-        @Override public void discard(CompiledProgram program) { }
+
+        private static CompiledProgram program() {
+            return new CompiledProgram() {
+                @Override public int implementationIndex(ProgramKey key) { return (int) key.sequence(); }
+                @Override public void close() { }
+            };
+        }
     }
 
     private static final class SceneBackend implements RetainedSceneBackend {

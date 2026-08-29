@@ -1,6 +1,8 @@
 package dev.comfyfluffy.caustica.minecraft.vulkan;
 
 import java.nio.IntBuffer;
+import java.util.ArrayList;
+import java.util.List;
 
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.EXTHdrMetadata;
@@ -105,6 +107,14 @@ public final class MinecraftHdr {
             float maxFrameAverageLightLevel) {
     }
 
+    public record SurfaceFormat(int format, int colorSpace) {
+    }
+
+    @FunctionalInterface
+    interface SurfaceFormatQuery {
+        int query(IntBuffer count, VkSurfaceFormatKHR.Buffer formats);
+    }
+
     /** Logs the resolved HDR config once (cheap; safe to call repeatedly — guarded by the surface log). */
     public static void logConfig() {
         CausticaMod.LOGGER.info(
@@ -125,22 +135,18 @@ public final class MinecraftHdr {
         }
         surfaceLogged = true;
         logConfig();
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            IntBuffer count = stack.callocInt(1);
-            int r = KHRSurface.vkGetPhysicalDeviceSurfaceFormatsKHR(phys, surface, count, null);
-            if (r < 0 || count.get(0) == 0) {
-                CausticaMod.LOGGER.warn("HDR: could not enumerate surface formats (result={}, count={})", r, count.get(0));
+        try {
+            List<SurfaceFormat> formats = surfaceFormats(phys, surface);
+            if (formats.isEmpty()) {
+                CausticaMod.LOGGER.warn("HDR: surface advertises no formats");
                 return;
             }
-            int n = count.get(0);
-            VkSurfaceFormatKHR.Buffer formats = VkSurfaceFormatKHR.calloc(n, stack);
-            KHRSurface.vkGetPhysicalDeviceSurfaceFormatsKHR(phys, surface, count, formats);
 
             boolean anyHdr = false;
             CausticaMod.LOGGER.info("HDR: chosen swapchain image format={} ({}); surface advertises {} (format,colorSpace) pair(s):",
-                    chosenFormat, formatName(chosenFormat), n);
-            for (int i = 0; i < n; i++) {
-                VkSurfaceFormatKHR f = formats.get(i);
+                    chosenFormat, formatName(chosenFormat), formats.size());
+            for (int i = 0; i < formats.size(); i++) {
+                SurfaceFormat f = formats.get(i);
                 int cs = f.colorSpace();
                 boolean hdr = isHdrColorSpace(cs);
                 anyHdr |= hdr;
@@ -154,6 +160,40 @@ public final class MinecraftHdr {
             }
         } catch (Throwable t) {
             CausticaMod.LOGGER.warn("HDR: surface capability enumeration failed: {}", t.toString());
+        }
+    }
+
+    public static List<SurfaceFormat> surfaceFormats(VkPhysicalDevice physicalDevice, long surface) {
+        return surfaceFormats((count, formats) -> KHRSurface.vkGetPhysicalDeviceSurfaceFormatsKHR(
+                physicalDevice, surface, count, formats));
+    }
+
+    static List<SurfaceFormat> surfaceFormats(SurfaceFormatQuery query) {
+        while (true) {
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                IntBuffer count = stack.callocInt(1);
+                int result = query.query(count, null);
+                if (result != org.lwjgl.vulkan.VK10.VK_SUCCESS
+                        && result != org.lwjgl.vulkan.VK10.VK_INCOMPLETE) {
+                    throw new IllegalStateException("vkGetPhysicalDeviceSurfaceFormatsKHR(count) failed: " + result);
+                }
+                if (count.get(0) == 0) return List.of();
+
+                VkSurfaceFormatKHR.Buffer formats = VkSurfaceFormatKHR.calloc(count.get(0), stack);
+                result = query.query(count, formats);
+                if (result == org.lwjgl.vulkan.VK10.VK_INCOMPLETE) continue;
+                if (result != org.lwjgl.vulkan.VK10.VK_SUCCESS) {
+                    throw new IllegalStateException("vkGetPhysicalDeviceSurfaceFormatsKHR(data) failed: " + result);
+                }
+
+                int formatCount = Math.min(count.get(0), formats.capacity());
+                List<SurfaceFormat> resultFormats = new ArrayList<>(formatCount);
+                for (int index = 0; index < formatCount; index++) {
+                    VkSurfaceFormatKHR format = formats.get(index);
+                    resultFormats.add(new SurfaceFormat(format.format(), format.colorSpace()));
+                }
+                return List.copyOf(resultFormats);
+            }
         }
     }
 

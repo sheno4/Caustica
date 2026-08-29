@@ -263,7 +263,8 @@ public final class SkyLutPass implements Pass<PassFrame> {
                 VmaImage2D image = images.get(i);
                 barriers.get(i).sType$Default().srcStageMask(VK13.VK_PIPELINE_STAGE_2_NONE)
                         .srcAccessMask(VK13.VK_ACCESS_2_NONE).dstStageMask(VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT)
-                        .dstAccessMask(VK13.VK_ACCESS_2_SHADER_READ_BIT | VK13.VK_ACCESS_2_SHADER_WRITE_BIT)
+                        .dstAccessMask(VK13.VK_ACCESS_2_SHADER_STORAGE_READ_BIT
+                                | VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT)
                         .oldLayout(VK_IMAGE_LAYOUT_UNDEFINED).newLayout(VK_IMAGE_LAYOUT_GENERAL)
                         .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED).dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
                         .image(image.image());
@@ -278,9 +279,10 @@ public final class SkyLutPass implements Pass<PassFrame> {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkMemoryBarrier2.Buffer b = VkMemoryBarrier2.calloc(1, stack);
             b.get(0).sType$Default().srcStageMask(VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT)
-                    .srcAccessMask(VK13.VK_ACCESS_2_SHADER_WRITE_BIT)
+                    .srcAccessMask(VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT)
                     .dstStageMask(VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT)
-                    .dstAccessMask(VK13.VK_ACCESS_2_SHADER_READ_BIT | VK13.VK_ACCESS_2_SHADER_WRITE_BIT);
+                    .dstAccessMask(VK13.VK_ACCESS_2_SHADER_STORAGE_READ_BIT
+                            | VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
             VK14.vkCmdPipelineBarrier2(commandBuffer,
                     VkDependencyInfo.calloc(stack).sType$Default().pMemoryBarriers(b));
         }

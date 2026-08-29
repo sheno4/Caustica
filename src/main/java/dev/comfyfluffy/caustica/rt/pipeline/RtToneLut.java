@@ -244,7 +244,8 @@ public final class RtToneLut {
                             .newLayout(VK10.VK_IMAGE_LAYOUT_GENERAL)
                             .srcStageMask(KHRSynchronization2.VK_PIPELINE_STAGE_2_COPY_BIT_KHR)
                             .srcAccessMask(VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT)
-                            .dstStageMask(VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT).dstAccessMask(VK13.VK_ACCESS_2_SHADER_READ_BIT)
+                            .dstStageMask(VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT)
+                            .dstAccessMask(VK13.VK_ACCESS_2_SHADER_SAMPLED_READ_BIT)
                             .srcQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED)
                             .dstQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED).image(uploadImage);
                     toRead.get(0).subresourceRange().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT)

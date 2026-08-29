@@ -241,7 +241,7 @@ public final class RtExposure {
         VkBufferMemoryBarrier2.Buffer toTransfer = VkBufferMemoryBarrier2.calloc(1, stack);
         toTransfer.get(0).sType$Default()
                 .srcStageMask(VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT)
-                .srcAccessMask(VK13.VK_ACCESS_2_SHADER_WRITE_BIT)
+                .srcAccessMask(VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT)
                 .dstStageMask(KHRSynchronization2.VK_PIPELINE_STAGE_2_COPY_BIT_KHR)
                 .dstAccessMask(VK13.VK_ACCESS_2_TRANSFER_READ_BIT)
                 .srcQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED)

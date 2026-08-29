@@ -10,6 +10,7 @@ import dev.comfyfluffy.caustica.ngx.NgxLibrary;
 import dev.comfyfluffy.caustica.ngx.NgxRuntime;
 import org.joml.Matrix4fc;
 import org.lwjgl.vulkan.VK10;
+import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkDevice;
 
 import java.lang.foreign.Arena;
@@ -89,7 +90,7 @@ public final class RtDlssRr {
      * sub-pixel camera jitter applied to the primary ray this frame, in render pixels. Returns false
      * (disabling RR) on failure. MVs are already in render-pixel space (scale 1).
      */
-    public boolean evaluate(long cmd, GpuImage color, GpuImage depth, GpuImage motion,
+    public boolean evaluate(VkCommandBuffer commandBuffer, GpuImage color, GpuImage depth, GpuImage motion,
                             GpuImage diffuseAlbedo, GpuImage specularAlbedo, GpuImage normals,
                             GpuImage specularMotion, GpuImage out,
                             int renderWidth, int renderHeight, int displayWidth, int displayHeight,
@@ -109,7 +110,7 @@ public final class RtDlssRr {
                 MemorySegment viewToClipMatrix = arena.allocate(ValueLayout.JAVA_FLOAT, 16);
                 putNgxLeftMultiplyMatrix(worldToView, worldToViewMatrix);
                 putNgxLeftMultiplyMatrix(viewToClip, viewToClipMatrix);
-                rc = lib.evaluateDlssd(cmd, feature,
+                rc = lib.evaluateDlssd(commandBuffer.address(), feature,
                         color.view(), color.image(), VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
                         depth.view(), depth.image(), VK10.VK_FORMAT_R32_SFLOAT,
                         motion.view(), motion.image(), VK10.VK_FORMAT_R16G16_SFLOAT,
@@ -179,7 +180,8 @@ public final class RtDlssRr {
      * the supplied recording command buffer. Returns false (and disables itself) on any failure so the
      * caller falls back to the non-RR path.
      */
-    public boolean ensureFeature(long cmd, int renderWidth, int renderHeight, int displayWidth, int displayHeight) {
+    public boolean ensureFeature(VkCommandBuffer commandBuffer, int renderWidth, int renderHeight,
+                                 int displayWidth, int displayHeight) {
         if (!enabled() || failed) {
             return false;
         }
@@ -197,7 +199,8 @@ public final class RtDlssRr {
                     || featureQuality != quality || featurePreset != preset
                     || isNull(feature)) {
                 releaseFeature(device);
-                feature = lib.createDlssd(cmd, renderWidth, renderHeight, displayWidth, displayHeight,
+                feature = lib.createDlssd(commandBuffer.address(), renderWidth, renderHeight,
+                        displayWidth, displayHeight,
                         quality, FEATURE_FLAGS, preset);
                 if (isNull(feature)) {
                     throw new IllegalStateException("ngxshim_create_dlssd failed: last=0x"

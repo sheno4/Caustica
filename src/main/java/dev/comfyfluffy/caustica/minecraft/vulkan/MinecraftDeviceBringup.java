@@ -118,16 +118,6 @@ public final class MinecraftDeviceBringup {
             "synchronization2", VkPhysicalDeviceSynchronization2Features.SYNCHRONIZATION2);
     private static final VulkanFeature DYNAMIC_RENDERING = new VulkanFeature(VulkanBackend.DYNAMIC_RENDERING_FEATURES_STRUCT,
             "dynamicRendering", VkPhysicalDeviceDynamicRenderingFeatures.DYNAMICRENDERING);
-    private static final VulkanFeature RUNTIME_ARRAY = new VulkanFeature(VulkanBackend.VK12_FEATURES_STRUCT,
-            "runtimeDescriptorArray", VkPhysicalDeviceVulkan12Features.RUNTIMEDESCRIPTORARRAY);
-    private static final VulkanFeature NON_UNIFORM_IMAGE = new VulkanFeature(VulkanBackend.VK12_FEATURES_STRUCT,
-            "shaderSampledImageArrayNonUniformIndexing",
-            VkPhysicalDeviceVulkan12Features.SHADERSAMPLEDIMAGEARRAYNONUNIFORMINDEXING);
-    private static final VulkanFeature PARTIALLY_BOUND = new VulkanFeature(VulkanBackend.VK12_FEATURES_STRUCT,
-            "descriptorBindingPartiallyBound", VkPhysicalDeviceVulkan12Features.DESCRIPTORBINDINGPARTIALLYBOUND);
-    private static final VulkanFeature UPDATE_AFTER_BIND = new VulkanFeature(VulkanBackend.VK12_FEATURES_STRUCT,
-            "descriptorBindingSampledImageUpdateAfterBind",
-            VkPhysicalDeviceVulkan12Features.DESCRIPTORBINDINGSAMPLEDIMAGEUPDATEAFTERBIND);
     private static final VulkanFeature SHADER_INT64 = new VulkanFeature(VulkanBackend.VK10_FEATURES_STRUCT,
             "shaderInt64", VkPhysicalDeviceFeatures.SHADERINT64);
     private static final VulkanFeature UNIFIED_IMAGE_LAYOUTS = new VulkanFeature(UNIFIED_LAYOUTS_STRUCT,
@@ -174,9 +164,6 @@ public final class MinecraftDeviceBringup {
             new ProfileFeature(dev.comfyfluffy.caustica.engine.vulkan.VulkanFeature.RAY_TRACING_PIPELINE, RAY_PIPELINE),
             new ProfileFeature(dev.comfyfluffy.caustica.engine.vulkan.VulkanFeature.RAY_QUERY, RAY_QUERY),
             new ProfileFeature(dev.comfyfluffy.caustica.engine.vulkan.VulkanFeature.RAY_TRACING_POSITION_FETCH, POSITION_FETCH));
-    private static final List<VulkanFeature> RENDERER_FEATURES = List.of(
-            RUNTIME_ARRAY, NON_UNIFORM_IMAGE, PARTIALLY_BOUND, UPDATE_AFTER_BIND);
-
     private static volatile int loaderApiVersion;
     private static volatile int requestedInstanceApiVersion;
     private static final Map<Long, Negotiation> NEGOTIATIONS = new HashMap<>();
@@ -252,7 +239,6 @@ public final class MinecraftDeviceBringup {
         requireProfile(support.profile());
         Set<VulkanFeature> features = new HashSet<>((Set<VulkanFeature>) args.get(2));
         PROFILE_FEATURES.stream().map(ProfileFeature::device).forEach(features::add);
-        features.addAll(RENDERER_FEATURES);
         if (support.ser()) features.add(SER);
         if (support.omm()) features.add(OMM);
         if (support.wideLines()) features.add(WIDE_LINES);
@@ -407,7 +393,6 @@ public final class MinecraftDeviceBringup {
             VkPhysicalDeviceFeatures2 available = VkPhysicalDeviceFeatures2.calloc(stack).sType$Default();
             PROFILE_FEATURES.stream().map(ProfileFeature::device).forEach(
                     feature -> feature.struct().findOrCreateStructInPNextChain(available, stack));
-            RENDERER_FEATURES.forEach(feature -> feature.struct().findOrCreateStructInPNextChain(available, stack));
             boolean querySer = device.hasDeviceExtension(VK_EXT_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME);
             boolean queryOmm = device.hasDeviceExtension(VK_EXT_OPACITY_MICROMAP_EXTENSION_NAME);
             boolean queryPresent = CausticaConfig.Rt.Reflex.ENABLED.value()

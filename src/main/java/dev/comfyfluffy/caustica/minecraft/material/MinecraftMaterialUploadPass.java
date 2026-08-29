@@ -27,11 +27,11 @@ import java.util.function.Consumer;
 import static org.lwjgl.util.vma.Vma.vmaCreateBuffer;
 import static org.lwjgl.util.vma.Vma.vmaCreateImage;
 import static org.lwjgl.vulkan.VK10.*;
+import static org.lwjgl.vulkan.KHRSynchronization2.VK_PIPELINE_STAGE_2_COPY_BIT_KHR;
+import static org.lwjgl.vulkan.KHRSynchronization2.VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
 import static org.lwjgl.vulkan.VK13.VK_ACCESS_2_NONE;
-import static org.lwjgl.vulkan.VK13.VK_ACCESS_2_SHADER_READ_BIT;
+import static org.lwjgl.vulkan.VK13.VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
 import static org.lwjgl.vulkan.VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT;
-import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT;
 import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_NONE;
 
 /** One-shot transfer pass for an immutable Minecraft material lookup. */
@@ -81,7 +81,7 @@ final class MinecraftMaterialUploadPass implements Pass<PassFrame> {
                 toTransfer.get(index).sType$Default()
                         .srcStageMask(VK_PIPELINE_STAGE_2_NONE)
                         .srcAccessMask(VK_ACCESS_2_NONE)
-                        .dstStageMask(VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT)
+                        .dstStageMask(VK_PIPELINE_STAGE_2_COPY_BIT_KHR)
                         .dstAccessMask(VK_ACCESS_2_TRANSFER_WRITE_BIT)
                         .oldLayout(VK_IMAGE_LAYOUT_UNDEFINED).newLayout(VK_IMAGE_LAYOUT_GENERAL)
                         .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
@@ -119,10 +119,10 @@ final class MinecraftMaterialUploadPass implements Pass<PassFrame> {
             for (int index = 0; index < uploads.size(); index++) {
                 Image image = uploads.get(index).image();
                 toRead.get(index).sType$Default()
-                        .srcStageMask(VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT)
+                        .srcStageMask(VK_PIPELINE_STAGE_2_COPY_BIT_KHR)
                         .srcAccessMask(VK_ACCESS_2_TRANSFER_WRITE_BIT)
-                        .dstStageMask(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT)
-                        .dstAccessMask(VK_ACCESS_2_SHADER_READ_BIT)
+                        .dstStageMask(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR)
+                        .dstAccessMask(VK_ACCESS_2_SHADER_SAMPLED_READ_BIT)
                         .oldLayout(VK_IMAGE_LAYOUT_GENERAL).newLayout(VK_IMAGE_LAYOUT_GENERAL)
                         .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
                         .dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)

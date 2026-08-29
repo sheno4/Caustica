@@ -92,8 +92,8 @@ final class RtNeeAtBackend {
         writeState(target.state, control);
 
         barrier(commandBuffer, KHRSynchronization2.VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-                VK13.VK_ACCESS_2_SHADER_WRITE_BIT, VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK13.VK_ACCESS_2_SHADER_READ_BIT | VK13.VK_ACCESS_2_SHADER_WRITE_BIT);
+                VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK13.VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
         dispatch(commandBuffer, target, previous, input, continuous, 0, 1);
         computeBarrier(commandBuffer);
         int localTiles = Math.multiplyExact(tileCountX, tileCountY);
@@ -102,9 +102,9 @@ final class RtNeeAtBackend {
         int pixels = Math.multiplyExact(input.width(), input.height());
         dispatch(commandBuffer, target, previous, input, continuous, 2, divideRoundUp(pixels, 64));
         barrier(commandBuffer, VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK13.VK_ACCESS_2_SHADER_WRITE_BIT,
+                VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
                 KHRSynchronization2.VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-                VK13.VK_ACCESS_2_SHADER_READ_BIT | VK13.VK_ACCESS_2_SHADER_WRITE_BIT);
+                VK13.VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
 
         target.use.mark(use);
         state.cursor = targetIndex;
@@ -121,8 +121,8 @@ final class RtNeeAtBackend {
         SceneState state = require(scene);
         if (state.active != prepared) throw new IllegalArgumentException("lighting frame is not active");
         barrier(commandBuffer, KHRSynchronization2.VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-                VK13.VK_ACCESS_2_SHADER_WRITE_BIT, VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK13.VK_ACCESS_2_SHADER_READ_BIT);
+                VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK13.VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
         prepared.frame.use.mark(use);
         state.hasHistory = true;
         state.active = null;
@@ -196,8 +196,8 @@ final class RtNeeAtBackend {
 
     private static void computeBarrier(VkCommandBuffer commandBuffer) {
         barrier(commandBuffer, VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK13.VK_ACCESS_2_SHADER_WRITE_BIT, VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                VK13.VK_ACCESS_2_SHADER_READ_BIT | VK13.VK_ACCESS_2_SHADER_WRITE_BIT);
+                VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK13.VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
     }
 
     private static void barrier(VkCommandBuffer commandBuffer, long sourceStage, long sourceAccess,

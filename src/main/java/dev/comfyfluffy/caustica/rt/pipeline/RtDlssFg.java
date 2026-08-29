@@ -9,6 +9,7 @@ import dev.comfyfluffy.caustica.ngx.NgxRuntime;
 
 import org.joml.Matrix4fc;
 import org.lwjgl.vulkan.VK10;
+import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkDevice;
 
 import java.lang.foreign.Arena;
@@ -89,7 +90,8 @@ public final class RtDlssFg {
      * Ensure a DLSSG feature exists for the given backbuffer/render size + native backbuffer format, creating
      * it into the supplied recording command buffer. Returns false (and disables itself) on failure.
      */
-    public boolean ensureFeature(long cmd, int width, int height, int renderWidth, int renderHeight, int backbufferFormat) {
+    public boolean ensureFeature(VkCommandBuffer commandBuffer, int width, int height,
+                                 int renderWidth, int renderHeight, int backbufferFormat) {
         if (!enabled() || failed) {
             return false;
         }
@@ -115,7 +117,8 @@ public final class RtDlssFg {
                     || featureRenderWidth != renderWidth || featureRenderHeight != renderHeight
                     || featureBackbufferFormat != backbufferFormat || isNull(feature)) {
                 releaseFeature(device);
-                feature = lib.createDlssg(cmd, width, height, renderWidth, renderHeight, backbufferFormat);
+                feature = lib.createDlssg(commandBuffer.address(), width, height,
+                        renderWidth, renderHeight, backbufferFormat);
                 if (isNull(feature)) {
                     throw new IllegalStateException("ngxshim_create_dlssg failed: last=0x"
                             + Integer.toHexString(lib.lastResult()));
@@ -146,7 +149,7 @@ public final class RtDlssFg {
      * (view/image/format) to skip, same as {@code outputReal}. Matrices are jitter-free (NGX left-multiply
      * layout); pass {@code null} to leave one out. Returns false on failure.
      */
-    public boolean evaluate(long cmd,
+    public boolean evaluate(VkCommandBuffer commandBuffer,
             long backbufferView, long backbufferImage, int backbufferFormat,
             long depthView, long depthImage, int depthFormat,
             long mvecView, long mvecImage, int mvecFormat,
@@ -163,7 +166,7 @@ public final class RtDlssFg {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment clipToPrev = matrixSegment(arena, clipToPrevClip);
             MemorySegment prevToClip = matrixSegment(arena, prevClipToClip);
-            int rc = lib.evaluateDlssg(cmd, feature,
+            int rc = lib.evaluateDlssg(commandBuffer.address(), feature,
                     backbufferView, backbufferImage, backbufferFormat,
                     depthView, depthImage, depthFormat,
                     mvecView, mvecImage, mvecFormat,

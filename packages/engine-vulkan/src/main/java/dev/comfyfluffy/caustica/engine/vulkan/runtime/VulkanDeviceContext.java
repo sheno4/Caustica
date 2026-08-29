@@ -32,7 +32,6 @@ import org.lwjgl.vulkan.VkImageViewCreateInfo;
 import org.lwjgl.vulkan.VkPhysicalDevice;
 import org.lwjgl.vulkan.VkPhysicalDeviceImageFormatInfo2;
 import org.lwjgl.vulkan.VkPhysicalDeviceAccelerationStructurePropertiesKHR;
-import org.lwjgl.vulkan.VkPhysicalDeviceDescriptorIndexingProperties;
 import org.lwjgl.vulkan.VkPhysicalDeviceProperties2;
 import org.lwjgl.vulkan.VkPhysicalDeviceRayTracingPipelinePropertiesKHR;
 import org.lwjgl.vulkan.VkCommandBufferSubmitInfo;
@@ -70,12 +69,11 @@ public final class VulkanDeviceContext implements GpuDevice {
     private final int shaderGroupHandleAlignment;
     private final int maxShaderGroupStride;
     private final int accelerationStructureScratchAlignment;
-    private final long updateAfterBindCombinedImageSamplerLimit;
     private long commandPool;
 
     private VulkanDeviceContext(VulkanRendererBackend host, long vma, VulkanDescriptorHeap descriptorHeap,
                       int handleSize, int baseAlign, int handleAlign,
-                      int maxSbtStride, int scratchAlign, long updateAfterBindCombinedImageSamplerLimit) {
+                      int maxSbtStride, int scratchAlign) {
         this.host = host;
         this.vk = host.device();
         this.vma = vma;
@@ -87,7 +85,6 @@ public final class VulkanDeviceContext implements GpuDevice {
         this.shaderGroupHandleAlignment = handleAlign;
         this.maxShaderGroupStride = maxSbtStride;
         this.accelerationStructureScratchAlignment = scratchAlign;
-        this.updateAfterBindCombinedImageSamplerLimit = updateAfterBindCombinedImageSamplerLimit;
         this.gpuExecutor = new RtGpuExecutor(this);
     }
 
@@ -115,31 +112,16 @@ public final class VulkanDeviceContext implements GpuDevice {
                     .calloc(stack).sType(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR);
             VkPhysicalDeviceAccelerationStructurePropertiesKHR asProps =
                     VkPhysicalDeviceAccelerationStructurePropertiesKHR.calloc(stack).sType$Default();
-            VkPhysicalDeviceDescriptorIndexingProperties descriptorProps =
-                    VkPhysicalDeviceDescriptorIndexingProperties.calloc(stack).sType$Default();
             rtProps.pNext(asProps.address());
-            asProps.pNext(descriptorProps.address());
             VkPhysicalDeviceProperties2 props2 = VkPhysicalDeviceProperties2.calloc(stack).sType$Default().pNext(rtProps.address());
             VK12.vkGetPhysicalDeviceProperties2(phys, props2);
 
-            var limits = props2.properties().limits();
-            long combinedImageSamplerLimit = minUnsigned(
-                    limits.maxPerStageDescriptorSamplers(),
-                    limits.maxPerStageDescriptorSampledImages(),
-                    limits.maxDescriptorSetSamplers(),
-                    limits.maxDescriptorSetSampledImages(),
-                    descriptorProps.maxPerStageDescriptorUpdateAfterBindSamplers(),
-                    descriptorProps.maxPerStageDescriptorUpdateAfterBindSampledImages(),
-                    descriptorProps.maxDescriptorSetUpdateAfterBindSamplers(),
-                    descriptorProps.maxDescriptorSetUpdateAfterBindSampledImages(),
-                    descriptorProps.maxUpdateAfterBindDescriptorsInAllPools());
-
             LOGGER.info(
                     "RT portability limits: SBT handleAlignment={}, baseAlignment={}, maxStride={}; "
-                            + "AS scratchAlignment={}; update-after-bind combined-sampler limit={}",
+                            + "AS scratchAlignment={}",
                     rtProps.shaderGroupHandleAlignment(), rtProps.shaderGroupBaseAlignment(),
                     Integer.toUnsignedLong(rtProps.maxShaderGroupStride()),
-                    asProps.minAccelerationStructureScratchOffsetAlignment(), combinedImageSamplerLimit);
+                    asProps.minAccelerationStructureScratchOffsetAlignment());
 
             long allocator = pVma.get(0);
             VulkanDescriptorHeap descriptorHeap = null;
@@ -149,7 +131,7 @@ public final class VulkanDeviceContext implements GpuDevice {
                 return new VulkanDeviceContext(host, allocator, descriptorHeap,
                         rtProps.shaderGroupHandleSize(), rtProps.shaderGroupBaseAlignment(),
                         rtProps.shaderGroupHandleAlignment(), rtProps.maxShaderGroupStride(),
-                        asProps.minAccelerationStructureScratchOffsetAlignment(), combinedImageSamplerLimit);
+                        asProps.minAccelerationStructureScratchOffsetAlignment());
             } catch (Throwable failure) {
                 if (descriptorHeap != null) descriptorHeap.close();
                 VulkanDiagnostics.registerAllocator(0L);
@@ -157,14 +139,6 @@ public final class VulkanDeviceContext implements GpuDevice {
                 throw failure;
             }
         }
-    }
-
-    private static long minUnsigned(int... values) {
-        long result = Long.MAX_VALUE;
-        for (int value : values) {
-            result = Math.min(result, Integer.toUnsignedLong(value));
-        }
-        return result;
     }
 
     public VulkanRendererBackend backend() {
@@ -251,11 +225,6 @@ public final class VulkanDeviceContext implements GpuDevice {
 
     public int maxShaderGroupStride() {
         return maxShaderGroupStride;
-    }
-
-    /** Conservative combined-image-sampler limit for a descriptor set using update-after-bind. */
-    public long updateAfterBindCombinedImageSamplerLimit() {
-        return updateAfterBindCombinedImageSamplerLimit;
     }
 
     public int accelerationStructureScratchAlignment() {
@@ -406,12 +375,16 @@ public final class VulkanDeviceContext implements GpuDevice {
         long imageFinal = image;
         submitSync(cmd -> {
             try (MemoryStack stack = MemoryStack.stackPush(); RtDebugLabels.Scope ignored = RtDebugLabels.scope(this, cmd, "init " + label)) {
-                long destinationStages = VK13.VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT
+                long destinationStages = VK13.VK_PIPELINE_STAGE_2_COPY_BIT
+                        | VK13.VK_PIPELINE_STAGE_2_BLIT_BIT
+                        | VK13.VK_PIPELINE_STAGE_2_CLEAR_BIT
                         | VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
                         | VK13.VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT
                         | org.lwjgl.vulkan.KHRSynchronization2.VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
                 long destinationAccess = VK13.VK_ACCESS_2_TRANSFER_READ_BIT | VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT
-                        | VK13.VK_ACCESS_2_SHADER_READ_BIT | VK13.VK_ACCESS_2_SHADER_WRITE_BIT;
+                        | VK13.VK_ACCESS_2_SHADER_SAMPLED_READ_BIT
+                        | VK13.VK_ACCESS_2_SHADER_STORAGE_READ_BIT
+                        | VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
                 if ((extraUsage & VK10.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) != 0) {
                     destinationStages |= VK13.VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
                     destinationAccess |= VK13.VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT

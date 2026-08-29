@@ -1,6 +1,12 @@
 package dev.comfyfluffy.caustica.minecraft.vulkan;
 
 import org.junit.jupiter.api.Test;
+import org.lwjgl.system.MemoryUtil;
+import org.lwjgl.vulkan.VK10;
+import org.lwjgl.vulkan.VkSurfaceFormatKHR;
+
+import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -27,8 +33,47 @@ final class MinecraftHdrTest {
         assertThrows(IllegalArgumentException.class, () -> MinecraftHdr.masteringMetadata(0));
     }
 
+    @Test
+    void retriesSurfaceFormatEnumerationUntilTheReturnedListIsComplete() {
+        AtomicInteger calls = new AtomicInteger();
+        List<MinecraftHdr.SurfaceFormat> formats = MinecraftHdr.surfaceFormats((count, output) -> {
+            return switch (calls.incrementAndGet()) {
+                case 1 -> {
+                    count.put(0, 1);
+                    yield VK10.VK_SUCCESS;
+                }
+                case 2 -> {
+                    putFormat(output.get(0), 44, 0);
+                    count.put(0, 2);
+                    yield VK10.VK_INCOMPLETE;
+                }
+                case 3 -> {
+                    count.put(0, 2);
+                    yield VK10.VK_SUCCESS;
+                }
+                case 4 -> {
+                    putFormat(output.get(0), 44, 0);
+                    putFormat(output.get(1), 64, 1000104008);
+                    count.put(0, 2);
+                    yield VK10.VK_SUCCESS;
+                }
+                default -> throw new AssertionError("unexpected query call");
+            };
+        });
+
+        assertEquals(4, calls.get());
+        assertEquals(List.of(
+                new MinecraftHdr.SurfaceFormat(44, 0),
+                new MinecraftHdr.SurfaceFormat(64, 1000104008)), formats);
+    }
+
     private static void assertChromaticity(MinecraftHdr.Chromaticity actual, float x, float y) {
         assertEquals(x, actual.x(), EPSILON);
         assertEquals(y, actual.y(), EPSILON);
+    }
+
+    private static void putFormat(VkSurfaceFormatKHR destination, int format, int colorSpace) {
+        MemoryUtil.memPutInt(destination.address() + VkSurfaceFormatKHR.FORMAT, format);
+        MemoryUtil.memPutInt(destination.address() + VkSurfaceFormatKHR.COLORSPACE, colorSpace);
     }
 }

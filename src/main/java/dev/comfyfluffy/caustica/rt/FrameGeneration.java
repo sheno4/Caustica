@@ -121,7 +121,7 @@ final class FrameGeneration {
                 && ui.colorView() != 0L && ui.colorImage() != 0L;
 
         VkCommandBuffer commandBuffer = submission.beginTransientCommandBuffer();
-        boolean evaluated = RtDlssFg.INSTANCE.evaluate(commandBuffer.address(),
+        boolean evaluated = RtDlssFg.INSTANCE.evaluate(commandBuffer,
                 backbufferView, backbufferImage, format,
                 frame.depth().view(), frame.depth().image(), VK10.VK_FORMAT_R32_SFLOAT,
                 frame.motion().view(), frame.motion().image(), VK10.VK_FORMAT_R16G16_SFLOAT,
@@ -149,7 +149,7 @@ final class FrameGeneration {
             return true;
         }
         context.submitSync(commandBuffer -> RtDlssFg.INSTANCE.ensureFeature(
-                commandBuffer.address(), width, height, renderWidth, renderHeight, format));
+                commandBuffer, width, height, renderWidth, renderHeight, format));
         reset = true;
         return RtDlssFg.INSTANCE.featureReadyFor(width, height, renderWidth, renderHeight, format);
     }

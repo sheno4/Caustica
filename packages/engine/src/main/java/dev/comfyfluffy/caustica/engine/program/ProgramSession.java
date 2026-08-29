@@ -240,7 +240,7 @@ public final class ProgramSession {
         synchronized (this) {
             if (inFlight != event.request) {
                 if (event.result instanceof ProgramBackend.Compilation.Succeeded succeeded) {
-                    backend.discard(succeeded.program());
+                    succeeded.program().close();
                 }
                 return;
             }
@@ -264,7 +264,7 @@ public final class ProgramSession {
             ProgramBackend.CompiledProgram candidate =
                     ((ProgramBackend.Compilation.Succeeded) event.result).program();
             if (!valid(event.request)) {
-                backend.discard(candidate);
+                candidate.close();
                 return;
             }
 

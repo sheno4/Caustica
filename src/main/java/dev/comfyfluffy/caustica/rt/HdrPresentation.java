@@ -86,7 +86,7 @@ final class HdrPresentation {
         toDestination.get(0).srcStageMask(VK13.VK_PIPELINE_STAGE_2_NONE).srcAccessMask(VK13.VK_ACCESS_2_NONE)
                 .dstStageMask(KHRSynchronization2.VK_PIPELINE_STAGE_2_BLIT_BIT_KHR)
                 .dstAccessMask(VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT)
-                .oldLayout(VK10.VK_IMAGE_LAYOUT_UNDEFINED).newLayout(VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+                .oldLayout(VK10.VK_IMAGE_LAYOUT_UNDEFINED).newLayout(VK10.VK_IMAGE_LAYOUT_GENERAL)
                 .srcQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED)
                 .dstQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED).image(swapchainImage);
         toDestination.get(0).subresourceRange().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT)
@@ -111,14 +111,14 @@ final class HdrPresentation {
         region.get(0).dstOffsets(1).set(copyWidth, 0, 1);
         VK13.vkCmdBlitImage2(commandBuffer, VkBlitImageInfo2.calloc(stack).sType$Default()
                 .srcImage(sourceImage).srcImageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL)
-                .dstImage(swapchainImage).dstImageLayout(VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+                .dstImage(swapchainImage).dstImageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL)
                 .filter(VK10.VK_FILTER_NEAREST).pRegions(region));
 
         VkImageMemoryBarrier2.Buffer toPresent = VkImageMemoryBarrier2.calloc(1, stack).sType$Default();
         toPresent.get(0).srcStageMask(KHRSynchronization2.VK_PIPELINE_STAGE_2_BLIT_BIT_KHR)
                 .srcAccessMask(VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT)
                 .dstStageMask(VK13.VK_PIPELINE_STAGE_2_NONE).dstAccessMask(VK13.VK_ACCESS_2_NONE)
-                .oldLayout(VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+                .oldLayout(VK10.VK_IMAGE_LAYOUT_GENERAL)
                 .newLayout(KHRSwapchain.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR)
                 .srcQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED)
                 .dstQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED).image(swapchainImage);

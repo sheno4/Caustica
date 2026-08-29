@@ -27,11 +27,8 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.LongBuffer;
 import java.nio.file.Path;
-import java.util.Collections;
-import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Objects;
-import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -52,7 +49,6 @@ public final class RtProgramBackend implements ProgramBackend, AutoCloseable {
         thread.setDaemon(true);
         return thread;
     });
-    private final Set<Candidate> candidates = Collections.newSetFromMap(new IdentityHashMap<>());
     private Candidate active;
     private boolean closed;
 
@@ -88,7 +84,6 @@ public final class RtProgramBackend implements ProgramBackend, AutoCloseable {
         Candidate previous;
         synchronized (this) {
             if (closed) throw new IllegalStateException("program backend is closed");
-            if (next.disposed) throw new IllegalStateException("program candidate is disposed");
             if (next.state != CandidateState.CANDIDATE) {
                 throw new IllegalStateException("program candidate is already published or retiring");
             }
@@ -101,22 +96,10 @@ public final class RtProgramBackend implements ProgramBackend, AutoCloseable {
             previousRetired.run();
         } else {
             context.retireAfterUse(() -> {
-                previous.destroy();
+                previous.close();
                 previousRetired.run();
             });
         }
-    }
-
-    @Override
-    public void discard(CompiledProgram program) {
-        Candidate candidate = requireCandidate(program);
-        synchronized (this) {
-            if (candidate == active) throw new IllegalStateException("cannot discard the active program");
-            if (candidate.state == CandidateState.RETIRING) {
-                throw new IllegalStateException("cannot discard a program pending GPU retirement");
-            }
-        }
-        candidate.destroy();
     }
 
     @Override
@@ -141,14 +124,7 @@ public final class RtProgramBackend implements ProgramBackend, AutoCloseable {
         }
         compiler.shutdown();
         awaitTerminationUninterruptibly(compiler);
-        List<Candidate> unpublished;
-        synchronized (this) {
-            unpublished = candidates.stream()
-                    .filter(candidate -> candidate.state == CandidateState.CANDIDATE)
-                    .toList();
-        }
-        unpublished.forEach(Candidate::destroy);
-        if (previous != null) context.retireAfterUse(previous::destroy);
+        if (previous != null) context.retireAfterUse(previous::close);
     }
 
     static void awaitTerminationUninterruptibly(ExecutorService executor) {
@@ -182,11 +158,7 @@ public final class RtProgramBackend implements ProgramBackend, AutoCloseable {
             RtShaderCode shadow = RtShaderCode.of("shadow-any-hit", shaderCompiler.compileShadowAnyHit());
             pipeline = RtPipeline.create(context, new RtShaderCode[]{primary, indirect},
                     new RtShaderCode[]{environment, guide}, closest, radiance, shadow);
-            Candidate candidate = new Candidate(shaderCompiler, table, pipeline);
-            synchronized (this) {
-                candidates.add(candidate);
-            }
-            return candidate;
+            return new Candidate(shaderCompiler, table, pipeline);
         } catch (IOException | RuntimeException | Error failure) {
             if (pipeline != null) pipeline.destroy();
             if (table != null) table.destroy();
@@ -230,7 +202,6 @@ public final class RtProgramBackend implements ProgramBackend, AutoCloseable {
         private final ImplementationTable table;
         private final RtPipeline pipeline;
         private CandidateState state = CandidateState.CANDIDATE;
-        private boolean disposed;
 
         private Candidate(WorldShaderCompiler compiler, ImplementationTable table, RtPipeline pipeline) {
             this.compiler = compiler;
@@ -242,15 +213,16 @@ public final class RtProgramBackend implements ProgramBackend, AutoCloseable {
         @Override public RtPipeline pipeline() { return pipeline; }
         @Override public long compositionDataAddress() { return table.address; }
 
-        void destroy() {
+        @Override public void close() {
             synchronized (RtProgramBackend.this) {
-                if (disposed) return;
+                if (state == CandidateState.DISPOSED) return;
+                if (state == CandidateState.ACTIVE) {
+                    throw new IllegalStateException("cannot close the active program");
+                }
                 state = CandidateState.DISPOSED;
-                candidates.remove(this);
                 pipeline.destroy();
                 table.destroy();
                 compiler.close();
-                disposed = true;
             }
         }
     }

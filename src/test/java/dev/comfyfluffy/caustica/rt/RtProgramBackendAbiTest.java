@@ -91,6 +91,7 @@ final class RtProgramBackendAbiTest {
             @Override public RtPipeline pipeline() { return null; }
             @Override public long compositionDataAddress() { return address; }
             @Override public int implementationIndex(ProgramKey key) { return 0; }
+            @Override public void close() { }
         };
     }
 }

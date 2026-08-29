@@ -139,7 +139,7 @@ final class ProgramSessionTest {
         assertEquals(ProgramRegistration.State.CANCELLED, cancelled.state());
         assertFalse(session.isDrained(channel), "the stale compiler completion still belongs to this owner");
         session.progress();
-        assertEquals(1, backend.discarded);
+        assertEquals(1, backend.closedCandidates);
         assertEquals(List.of("cancelled"), retired);
         assertTrue(session.isDrained(channel));
         assertInstanceOf(ProgramResolution.ErrorSurface.class, session.resolve(cancelled.exports()));
@@ -297,7 +297,7 @@ final class ProgramSessionTest {
         private ProgramComposition activeComposition;
         private final List<ProgramComposition> requested = new ArrayList<>();
         private final List<Runnable> previousRetirements = new ArrayList<>();
-        private int discarded;
+        private int closedCandidates;
         private int publishedUseDrains;
 
         @Override
@@ -319,11 +319,6 @@ final class ProgramSessionTest {
         public void drainPublishedUses() {
             publishedUseDrains++;
             while (!previousRetirements.isEmpty()) previousRetirements.removeFirst().run();
-        }
-
-        @Override
-        public void discard(CompiledProgram program) {
-            discarded++;
         }
 
         void succeed() {
@@ -349,9 +344,10 @@ final class ProgramSessionTest {
         private record Pending(ProgramComposition composition,
                                java.util.function.Consumer<? super Compilation> completion) { }
 
-        private static final class TestProgram implements CompiledProgram {
+        private final class TestProgram implements CompiledProgram {
             private final ProgramComposition composition;
             private final Map<ProgramKey, Integer> indices = new LinkedHashMap<>();
+            private boolean closed;
 
             private TestProgram(ProgramComposition composition) {
                 this.composition = composition;
@@ -362,6 +358,12 @@ final class ProgramSessionTest {
             @Override
             public int implementationIndex(ProgramKey key) {
                 return indices.get(key);
+            }
+
+            @Override public void close() {
+                if (closed) return;
+                closed = true;
+                closedCandidates++;
             }
         }
     }

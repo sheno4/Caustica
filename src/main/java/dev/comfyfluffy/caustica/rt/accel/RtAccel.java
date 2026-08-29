@@ -1526,7 +1526,7 @@ public final class RtAccel {
         VkMemoryBarrier2.Buffer barrier = VkMemoryBarrier2.calloc(1, stack);
         barrier.get(0).sType$Default()
                 .srcStageMask(VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT)
-                .srcAccessMask(VK13.VK_ACCESS_2_SHADER_WRITE_BIT)
+                .srcAccessMask(VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT)
                 .dstStageMask(VK_PIPELINE_STAGE_2_MICROMAP_BUILD_BIT_EXT)
                 .dstAccessMask(VK_ACCESS_2_MICROMAP_READ_BIT_EXT);
         VK13.vkCmdPipelineBarrier2(cmd, VkDependencyInfo.calloc(stack).sType$Default().pMemoryBarriers(barrier));

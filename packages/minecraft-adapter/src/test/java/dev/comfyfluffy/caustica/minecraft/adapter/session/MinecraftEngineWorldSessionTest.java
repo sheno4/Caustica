@@ -13,6 +13,7 @@ import dev.comfyfluffy.caustica.engine.pass.PassKey;
 import dev.comfyfluffy.caustica.engine.pass.PassSchedulerBackend;
 import dev.comfyfluffy.caustica.engine.program.ProgramBackend;
 import dev.comfyfluffy.caustica.engine.program.ProgramComposition;
+import dev.comfyfluffy.caustica.engine.program.ProgramKey;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot;
 import dev.comfyfluffy.caustica.engine.session.RenderSessionHost;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftDimensionKey;
@@ -90,11 +91,17 @@ final class MinecraftEngineWorldSessionTest {
     private static final ProgramBackend PROGRAMS = new ProgramBackend() {
         @Override public void compile(ProgramComposition composition,
                                       java.util.function.Consumer<? super Compilation> completion) {
-            completion.accept(new Compilation.Succeeded(key -> (int) key.sequence()));
+            completion.accept(new Compilation.Succeeded(program()));
         }
         @Override public void publish(CompiledProgram program, Runnable retired) { retired.run(); }
         @Override public void drainPublishedUses() { }
-        @Override public void discard(CompiledProgram program) { }
+
+        private CompiledProgram program() {
+            return new CompiledProgram() {
+                @Override public int implementationIndex(ProgramKey key) { return (int) key.sequence(); }
+                @Override public void close() { }
+            };
+        }
     };
 
     private static final PassSchedulerBackend PASSES = new PassSchedulerBackend() {

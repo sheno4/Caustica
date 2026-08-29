@@ -13,6 +13,7 @@ import org.lwjgl.vulkan.VkMemoryBarrier2;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class VulkanBarriersTest {
     @Test
@@ -29,6 +30,15 @@ final class VulkanBarriersTest {
             assertEquals(VulkanBarriers.PASS_STAGES, barrier.dstStageMask());
             assertEquals(VulkanBarriers.PASS_READ_WRITE_ACCESS, barrier.dstAccessMask());
             assertNotEquals(VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, barrier.srcStageMask());
+            assertEquals(0L, barrier.srcStageMask() & VK13.VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT);
+            assertTrue((barrier.srcStageMask() & VK13.VK_PIPELINE_STAGE_2_COPY_BIT) != 0L);
+            assertTrue((barrier.srcStageMask() & VK13.VK_PIPELINE_STAGE_2_BLIT_BIT) != 0L);
+            assertTrue((barrier.srcStageMask() & VK13.VK_PIPELINE_STAGE_2_CLEAR_BIT) != 0L);
+            assertEquals(0L, barrier.srcAccessMask() & VK13.VK_ACCESS_2_SHADER_WRITE_BIT);
+            assertEquals(0L, barrier.dstAccessMask() & VK13.VK_ACCESS_2_SHADER_READ_BIT);
+            assertTrue((barrier.srcAccessMask() & VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT) != 0L);
+            assertTrue((barrier.dstAccessMask() & VK13.VK_ACCESS_2_SHADER_SAMPLED_READ_BIT) != 0L);
+            assertTrue((barrier.dstAccessMask() & VK13.VK_ACCESS_2_SHADER_STORAGE_READ_BIT) != 0L);
         }
     }
 
@@ -36,8 +46,8 @@ final class VulkanBarriersTest {
     void undefinedImageTransitionUsesNoneAsItsEmptySourceScope() {
         long image = 0x1234L;
         long destinationStages = VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
-                | VK13.VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT;
-        long destinationAccess = VK13.VK_ACCESS_2_SHADER_WRITE_BIT
+                | VK13.VK_PIPELINE_STAGE_2_COPY_BIT;
+        long destinationAccess = VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT
                 | VK13.VK_ACCESS_2_TRANSFER_READ_BIT;
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkDependencyInfo dependency = VulkanBarriers.undefinedImageDependency(

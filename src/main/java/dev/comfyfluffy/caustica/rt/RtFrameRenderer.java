@@ -258,7 +258,8 @@ final class RtFrameRenderer {
             imageBarriers.get(0).sType$Default()
                     .oldLayout(VK10.VK_IMAGE_LAYOUT_GENERAL).newLayout(VK10.VK_IMAGE_LAYOUT_GENERAL)
                     .srcStageMask(VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT)
-                    .srcAccessMask(VK13.VK_ACCESS_2_SHADER_WRITE_BIT | VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT)
+                    .srcAccessMask(VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT
+                            | VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT)
                     .dstStageMask(KHRSynchronization2.VK_PIPELINE_STAGE_2_COPY_BIT_KHR)
                     .dstAccessMask(VK13.VK_ACCESS_2_TRANSFER_READ_BIT)
                     .srcQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED)
@@ -269,7 +270,8 @@ final class RtFrameRenderer {
             imageBarriers.get(1).sType$Default()
                     .oldLayout(VK10.VK_IMAGE_LAYOUT_GENERAL).newLayout(VK10.VK_IMAGE_LAYOUT_GENERAL)
                     .srcStageMask(VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT)
-                    .srcAccessMask(VK13.VK_ACCESS_2_SHADER_WRITE_BIT | VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT)
+                    .srcAccessMask(VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT
+                            | VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT)
                     .dstStageMask(KHRSynchronization2.VK_PIPELINE_STAGE_2_COPY_BIT_KHR)
                     .dstAccessMask(VK13.VK_ACCESS_2_TRANSFER_READ_BIT)
                     .srcQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED)
@@ -697,10 +699,12 @@ final class RtFrameRenderer {
             }
             // DLSS-RR denoise + upscale. The RT pass wrote noisy color (render res) + guides;
             // RR reads them and writes the display-res denoised result straight into rrOutput.
-            if (rrPath && RtDlssRr.INSTANCE.ensureFeature(cmd.address(), frameResources.renderW, frameResources.renderH, frameResources.displayW, frameResources.displayH)) {
+            if (rrPath && RtDlssRr.INSTANCE.ensureFeature(cmd, frameResources.renderW,
+                    frameResources.renderH, frameResources.displayW, frameResources.displayH)) {
                 try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "DLSS-RR evaluate");
                      RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.dlssRr")) {
-                    rrDone = RtDlssRr.INSTANCE.evaluate(cmd.address(), frameResources.output, frameResources.gDepth, frameResources.gMotion, frameResources.gAlbedo,
+                    rrDone = RtDlssRr.INSTANCE.evaluate(cmd, frameResources.output, frameResources.gDepth,
+                            frameResources.gMotion, frameResources.gAlbedo,
                             frameResources.gSpecAlbedo, frameResources.gNormal, frameResources.gSpecMotion, frameResources.rrOutput, frameResources.renderW, frameResources.renderH, frameResources.displayW, frameResources.displayH,
                             -jitterX, -jitterY, frameViewRotation, frameProjection);
                 }

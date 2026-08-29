@@ -11,7 +11,7 @@ public interface ProgramBackend {
     void compile(ProgramComposition composition, Consumer<? super Compilation> completion);
 
     /**
-     * Makes {@code program} active at a renderer publication boundary. The backend invokes
+     * Takes ownership of {@code program} and makes it active at a renderer publication boundary. The backend invokes
      * {@code previousRetired} after the displaced program has no active or in-flight GPU use.
      */
     void publish(CompiledProgram program, Runnable previousRetired);
@@ -23,12 +23,13 @@ public interface ProgramBackend {
      */
     void drainPublishedUses();
 
-    /** Releases a successfully compiled candidate which lost a close/publication race. */
-    void discard(CompiledProgram program);
-
-    interface CompiledProgram {
+    /** Caller-owned successful compilation. Publication transfers ownership to the backend. */
+    interface CompiledProgram extends AutoCloseable {
         /** Renderer-assigned dispatch index for a declaration in this exact composition. */
         int implementationIndex(ProgramKey key);
+
+        /** Releases a candidate which was not published. */
+        @Override void close();
     }
 
     sealed interface Compilation permits Compilation.Succeeded, Compilation.Failed {

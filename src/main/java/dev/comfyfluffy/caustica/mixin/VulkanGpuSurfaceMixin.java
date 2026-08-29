@@ -21,7 +21,6 @@ import dev.comfyfluffy.caustica.spi.vulkan.VulkanLowLatency;
 import it.unimi.dsi.fastutil.longs.LongList;
 import net.minecraft.client.Minecraft;
 import org.lwjgl.system.MemoryStack;
-import org.lwjgl.vulkan.KHRSurface;
 import org.lwjgl.vulkan.KHRSwapchain;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkAllocationCallbacks;
@@ -44,8 +43,8 @@ import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
-import java.nio.IntBuffer;
 import java.nio.LongBuffer;
+import java.util.List;
 
 /**
  * HDR capability logging and PQ swapchain selection.
@@ -149,27 +148,11 @@ public abstract class VulkanGpuSurfaceMixin {
 	 */
 	@Inject(method = "configure", at = @At("HEAD"))
 	private void caustica$refreshFormatForConfigure(GpuSurface.Configuration config, CallbackInfo ci) {
-		try (MemoryStack stack = MemoryStack.stackPush()) {
-			IntBuffer count = stack.callocInt(1);
-			int countResult = KHRSurface.vkGetPhysicalDeviceSurfaceFormatsKHR(
-					this.device.vkDevice().getPhysicalDevice(), this.surface, count, null);
-			if (countResult != VK10.VK_SUCCESS || count.get(0) <= 0) {
-				CausticaMod.LOGGER.warn("HDR: failed to enumerate swapchain formats during recreation: {}",
-						countResult);
-				return;
-			}
-			VkSurfaceFormatKHR.Buffer formats = VkSurfaceFormatKHR.calloc(count.get(0), stack);
-			int formatsResult = KHRSurface.vkGetPhysicalDeviceSurfaceFormatsKHR(
-					this.device.vkDevice().getPhysicalDevice(), this.surface, count, formats);
-			if (formatsResult != VK10.VK_SUCCESS) {
-				CausticaMod.LOGGER.warn("HDR: failed to read swapchain formats during recreation: {}",
-						formatsResult);
-				return;
-			}
-			formats.limit(Math.min(formats.capacity(), count.get(0)));
-
-			VkSurfaceFormatKHR pq = caustica$findPq(formats);
-			VkSurfaceFormatKHR sdr = caustica$findSdr(formats);
+		try {
+			List<MinecraftHdr.SurfaceFormat> formats = MinecraftHdr.surfaceFormats(
+					this.device.vkDevice().getPhysicalDevice(), this.surface);
+			MinecraftHdr.SurfaceFormat pq = caustica$findPqValue(formats);
+			MinecraftHdr.SurfaceFormat sdr = caustica$findSdrValue(formats);
 			CausticaConfig.Rt.Hdr.setSwapchainPqAvailable(pq != null);
 			boolean usePq = RtRuntime.wantsPqSwapchain() && pq != null;
 			if (!usePq && sdr == null && pq != null) {
@@ -193,7 +176,21 @@ public abstract class VulkanGpuSurfaceMixin {
 			CausticaMod.LOGGER.info("HDR: recreating swapchain as {} (format={}, colorSpace={})",
 					usePq ? "PQ" : "native SDR", this.swapchainImageFormat,
 					usePq ? "HDR10_ST2084" : "SRGB_NONLINEAR");
+		} catch (RuntimeException failure) {
+			CausticaMod.LOGGER.warn("HDR: failed to enumerate swapchain formats during recreation", failure);
 		}
+	}
+
+	@Unique
+	private static MinecraftHdr.SurfaceFormat caustica$findPqValue(List<MinecraftHdr.SurfaceFormat> formats) {
+		return formats.stream().filter(format -> format.colorSpace() == VK_COLOR_SPACE_HDR10_ST2084_EXT)
+				.findFirst().orElse(null);
+	}
+
+	@Unique
+	private static MinecraftHdr.SurfaceFormat caustica$findSdrValue(List<MinecraftHdr.SurfaceFormat> formats) {
+		return formats.stream().filter(format -> format.colorSpace() == 0
+				&& (format.format() == 37 || format.format() == 44)).findFirst().orElse(null);
 	}
 
 	@Unique

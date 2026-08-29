@@ -122,7 +122,6 @@ final class EngineSessionServicesTest {
                 previousRetired.run();
             }
             @Override public void drainPublishedUses() { }
-            @Override public void discard(CompiledProgram program) { }
         };
         return new EngineSessionServices(GPU, programs,
                 (snapshot, previousRetired) -> previousRetired.run(), passes,
