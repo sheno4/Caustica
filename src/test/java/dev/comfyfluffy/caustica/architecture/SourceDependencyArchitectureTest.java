@@ -11,6 +11,7 @@ import java.util.function.Predicate;
 
 import static org.junit.jupiter.api.Assertions.fail;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 final class SourceDependencyArchitectureTest {
     private static final Path PROJECT_ROOT = findProjectRoot();
@@ -63,6 +64,39 @@ final class SourceDependencyArchitectureTest {
             assertFalse(text.contains("Minecraft.getInstance()"), source + " samples Minecraft during recording");
             assertFalse(text.contains("import net.minecraft"), source + " imports live Minecraft state");
         }
+    }
+
+    @Test
+    void entityCaptureHasOneInjectedIngressAndNoEntitySingletons() throws IOException {
+        Path entities = MINECRAFT.resolve("entity/RtEntities.java");
+        Path textures = MINECRAFT.resolve("entity/RtEntityTextures.java");
+        Path adapter = MINECRAFT.resolve("MinecraftFrameAdapter.java");
+        String entitySource = Files.readString(entities);
+        String textureSource = Files.readString(textures);
+        String adapterSource = Files.readString(adapter);
+        assertFalse(entitySource.contains("static final RtEntities"), "RtEntities must be session-owned");
+        assertFalse(textureSource.contains("static final RtEntityTextures"),
+                "RtEntityTextures must be client-owned");
+        assertEquals(1, occurrences(adapterSource, "entities.submitFrame("),
+                "MinecraftFrameAdapter must have exactly one entity publication ingress");
+        assertFalse(readJavaSources(MAIN_JAVA).contains("RtEntities.INSTANCE"));
+        assertFalse(readJavaSources(MAIN_JAVA).contains("RtEntityTextures.INSTANCE"));
+    }
+
+    private static int occurrences(String text, String value) {
+        int count = 0;
+        for (int offset = 0; (offset = text.indexOf(value, offset)) >= 0; offset += value.length()) count++;
+        return count;
+    }
+
+    private static String readJavaSources(Path root) throws IOException {
+        StringBuilder combined = new StringBuilder();
+        try (var files = Files.walk(root)) {
+            for (Path file : files.filter(path -> path.toString().endsWith(".java")).toList()) {
+                combined.append(Files.readString(file));
+            }
+        }
+        return combined.toString();
     }
 
     private static void assertNoImports(List<Path> sourceRoots, List<String> forbiddenPackages)

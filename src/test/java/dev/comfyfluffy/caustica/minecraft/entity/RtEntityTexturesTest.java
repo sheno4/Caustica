@@ -64,7 +64,7 @@ final class RtEntityTexturesTest {
         try {
             var method = RtEntityCollectorBase.class.getDeclaredMethod("standaloneMaterial", RenderType.class);
             assertTrue(method.trySetAccessible(), "standaloneMaterial must be accessible to the test");
-            return (MinecraftEntityMesh.Material) method.invoke(null, renderType);
+            return (MinecraftEntityMesh.Material) method.invoke(new RtEntityCollectorBase(new RtEntityTextures()), renderType);
         } catch (ReflectiveOperationException exception) {
             throw new AssertionError("failed to resolve the entity material", exception);
         }

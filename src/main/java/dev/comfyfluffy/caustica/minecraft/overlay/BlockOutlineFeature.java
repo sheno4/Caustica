@@ -29,6 +29,8 @@ import java.nio.ByteOrder;
 
 /** The vanilla targeted-block shape rendered at display resolution and occluded through the root TLAS. */
 final class BlockOutlineFeature implements OverlayFeature {
+    private final RtEntities entities;
+    BlockOutlineFeature(RtEntities entities) { this.entities = entities; }
     private static final int PUSH_BYTES = 112;
     private static final float OUTLINE_ALPHA = 102f / 255f;
     private GpuDevice device;
@@ -95,7 +97,6 @@ final class BlockOutlineFeature implements OverlayFeature {
             VK10.vkCmdSetLineWidth(cmd, 1f);
             ByteBuffer push = stack.malloc(PUSH_BYTES).order(ByteOrder.LITTLE_ENDIAN);
             viewProj.get(0, push);
-            RtEntities entities = RtEntities.INSTANCE;
             push.putFloat(64, entities.glowCamOffsetX()).putFloat(68, entities.glowCamOffsetY()).putFloat(72, entities.glowCamOffsetZ());
             push.putFloat(80, 0).putFloat(84, 0).putFloat(88, 0).putFloat(92, OUTLINE_ALPHA).putInt(96, tlasDescriptor);
             pipeline.bind(cmd, push, width, height);

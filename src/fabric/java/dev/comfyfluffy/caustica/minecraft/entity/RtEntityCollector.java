@@ -7,6 +7,7 @@ import net.fabricmc.fabric.api.client.rendering.v1.SubmitRenderPhase;
 
 /** Fabric collector adapter for the shared entity capture implementation. */
 public final class RtEntityCollector extends RtEntityCollectorBase implements SubmitNodeCollector {
+    public RtEntityCollector(RtEntityTextures textures) { super(textures); }
     public OrderedSubmitNodeCollector order(int order) {
         setOrder(order);
         return this;

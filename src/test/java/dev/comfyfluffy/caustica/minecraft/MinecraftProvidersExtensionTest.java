@@ -41,7 +41,10 @@ final class MinecraftProvidersExtensionTest {
 
     private static MinecraftProvidersExtension extension() {
         MinecraftMaterialEpochCompiler materials = (epoch, rules) -> null;
+        var textures = new dev.comfyfluffy.caustica.minecraft.entity.RtEntityTextures();
+        var entities = new dev.comfyfluffy.caustica.minecraft.entity.RtEntities(textures);
         return new MinecraftProvidersExtension(selector -> () -> { }, (sink, calibration) -> () -> { },
-                materials, new MinecraftLightingCalibration(1, 1, 1, 0, 0, 0));
+                materials, new MinecraftLightingCalibration(1, 1, 1, 0, 0, 0),
+                entities, textures, entities);
     }
 }

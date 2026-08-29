@@ -48,6 +48,8 @@ import dev.comfyfluffy.caustica.minecraft.entity.RtEntities;
  * two shared corners per quad isn't worth an index buffer.
  */
 final class NameTagFeature implements OverlayFeature {
+    private final RtEntities entities;
+    NameTagFeature(RtEntities entities) { this.entities = entities; }
     // mat4 curViewProj (0, 64B) + vec3 camOffset (64, padded to 16B) = 80B.
     private static final int PUSH_BYTES = 96;
     private static final int VERTEX_STRIDE = 24;
@@ -90,14 +92,14 @@ final class NameTagFeature implements OverlayFeature {
         if (!RtEntities.nameTagsEnabled()) {
             return false;
         }
-        List<RtEntities.NameTagEntity> tags = RtEntities.INSTANCE.nameTagBatches();
+        List<RtEntities.NameTagEntity> tags = entities.nameTagBatches();
         if (tags.isEmpty()) {
             return false;
         }
         ensureResources(device);
 
         Font font = Minecraft.getInstance().font;
-        Quaternionf billboard = RtEntities.INSTANCE.cameraOrientation();
+        Quaternionf billboard = entities.cameraOrientation();
         pages.clear();
         for (RtEntities.NameTagEntity tag : tags) {
             pose.identity().translate(tag.x(), tag.y(), tag.z()).rotate(billboard)
@@ -135,9 +137,9 @@ final class NameTagFeature implements OverlayFeature {
         }
 
         viewProj.set(worldViewProjection);
-        camOffX = RtEntities.INSTANCE.glowCamOffsetX();
-        camOffY = RtEntities.INSTANCE.glowCamOffsetY();
-        camOffZ = RtEntities.INSTANCE.glowCamOffsetZ();
+        camOffX = entities.glowCamOffsetX();
+        camOffY = entities.glowCamOffsetY();
+        camOffZ = entities.glowCamOffsetZ();
         return true;
     }
 

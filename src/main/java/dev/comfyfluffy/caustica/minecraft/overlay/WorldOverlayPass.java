@@ -36,15 +36,16 @@ public final class WorldOverlayPass implements Pass<UiFrame> {
     public static final int TARGET_FORMAT = VK10.VK_FORMAT_R8G8B8A8_UNORM;
 
     private final OverlayFramePool framePool = new OverlayFramePool();
-    private final List<OverlayFeature> features =
-            List.of(new GlowOutlineFeature(), new NameTagFeature(), new BlockOutlineFeature());
+    private final List<OverlayFeature> features;
     private final GpuDevice device;
 
-    public WorldOverlayPass(UiSetup setup) {
+    public WorldOverlayPass(UiSetup setup, dev.comfyfluffy.caustica.minecraft.entity.RtEntities entities) {
         if (setup.layerFormat() != TARGET_FORMAT) {
             throw new IllegalArgumentException("Minecraft overlay requires RGBA8_UNORM UI layer");
         }
         device = setup.gpu();
+        features = List.of(new GlowOutlineFeature(entities), new NameTagFeature(entities),
+                new BlockOutlineFeature(entities));
     }
 
     @Override

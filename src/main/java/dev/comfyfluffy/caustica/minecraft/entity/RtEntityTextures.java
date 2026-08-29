@@ -2,6 +2,7 @@ package dev.comfyfluffy.caustica.minecraft.entity;
 
 import com.mojang.blaze3d.textures.GpuTextureView;
 import com.mojang.blaze3d.vulkan.VulkanGpuTextureView;
+import com.mojang.blaze3d.GpuFormat;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.minecraft.MinecraftResourceIds;
 import dev.comfyfluffy.caustica.settings.ResourceId;
@@ -28,17 +29,16 @@ import java.util.WeakHashMap;
  * bindings). Resolution is cached per {@code
  * RenderType} (they are stable singletons), so the prepare() cost is paid once per distinct texture.
  */
-public final class RtEntityTextures {
-    public static final RtEntityTextures INSTANCE = new RtEntityTextures();
+public final class RtEntityTextures implements EntityTextureResolver {
 
     // RenderType identity → resolved primary image-view handle. WEAK: some render types are rebuilt
     // every frame with a fresh identity (e.g. the charged-creeper energy-swirl layer, whose scrolling
     // texture transform makes RenderTypes.energySwirl() allocate a new RenderType each frame). A weak map
     // lets those dead identities be collected instead of accumulating; stable singletons (zombie.png, …)
     // stay cached and skip the costly RenderType.prepare().
-    private final Map<RenderType, Long> viewCache = new WeakHashMap<>();
+    private final Map<RenderType, VulkanGpuTextureView> viewCache = new WeakHashMap<>();
     private final Map<RenderType, Identifier> locationCache = new WeakHashMap<>();
-    private final Map<MinecraftEntityMesh.Texture, BorrowedTextureView> contributions = new HashMap<>();
+    private final Map<MinecraftEntityMesh.Texture, VulkanGpuTextureView> contributions = new HashMap<>();
     private boolean loggedFailure;
     private boolean loggedMaterialFailure;
     // 1x1 solid-white DynamicTexture for untextured geometry (leash/line ribbons).
@@ -48,7 +48,7 @@ public final class RtEntityTextures {
     // Cached RenderSetup.TextureBinding#location() (the class is package-private, the method public).
     private Method locationMethod;
 
-    private RtEntityTextures() {
+    public RtEntityTextures() {
     }
 
     /** Contribute the primary texture of a render type under its stable source-local reference. */
@@ -73,11 +73,11 @@ public final class RtEntityTextures {
         MinecraftEntityMesh.Texture reference = MinecraftEntityMesh.Texture.atlas(
                 ResourceId.of(atlasLocation.getNamespace(), atlasLocation.getPath()));
         if (!contributions.containsKey(reference)) {
-            long view = 0L;
+            VulkanGpuTextureView view = null;
             try {
                 GpuTextureView textureView = Minecraft.getInstance().getTextureManager()
                         .getTexture(atlasLocation).getTextureView();
-                view = vkImageView(textureView);
+                view = vkView(textureView);
             } catch (Throwable failure) {
                 if (!loggedFailure) {
                     loggedFailure = true;
@@ -89,19 +89,18 @@ public final class RtEntityTextures {
         return reference;
     }
 
-    private void contribute(MinecraftEntityMesh.Texture reference, long imageView) {
-        if (imageView == 0L) return;
-        contributions.put(reference, new BorrowedTextureView(
-                imageView, org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_GENERAL));
+    private void contribute(MinecraftEntityMesh.Texture reference, VulkanGpuTextureView view) {
+        if (view == null || view.texture().getFormat() != GpuFormat.RGBA8_UNORM) return;
+        contributions.put(reference, view);
     }
 
     /** Borrow the current Vulkan view for upload-time descriptor allocation, or {@code null} if unresolved. */
-    public BorrowedTextureView borrow(MinecraftEntityMesh.Texture texture) {
-        return contributions.get(texture);
+    @Override public BorrowedTexture resolve(MinecraftEntityMesh.Texture texture) {
+        VulkanGpuTextureView view = contributions.get(texture);
+        if (view == null) return null;
+        view.texture().addViews();
+        return new Borrow(view);
     }
-
-    /** Minecraft-owned image view borrowed only for descriptor encoding in the active resource epoch. */
-    public record BorrowedTextureView(long imageView, int imageLayout) { }
 
     /** Stable source identity for the registered white texture used by untextured geometry. */
     public MinecraftEntityMesh.Texture whiteTexture() {
@@ -161,15 +160,15 @@ public final class RtEntityTextures {
     }
 
     /** The Vulkan image-view handle of {@code renderType}'s primary texture, or 0 if it can't be resolved. */
-    public long resolveView(RenderType renderType) {
+    public VulkanGpuTextureView resolveView(RenderType renderType) {
         if (renderType == null) {
-            return 0L;
+            return null;
         }
-        Long cached = viewCache.get(renderType);
+        VulkanGpuTextureView cached = viewCache.get(renderType);
         if (cached != null) {
             return cached;
         }
-        long handle = 0L;
+        VulkanGpuTextureView handle = null;
         try {
             PreparedRenderType prepared = renderType.prepare();
             String wanted = "Sampler0";
@@ -189,7 +188,7 @@ public final class RtEntityTextures {
                 chosen = firstNonAux;
             }
             if (chosen != null) {
-                handle = vkImageView(chosen);
+                handle = vkView(chosen);
             }
         } catch (Throwable t) {
             if (!loggedFailure) {
@@ -201,10 +200,23 @@ public final class RtEntityTextures {
         return handle;
     }
 
-    private static long vkImageView(GpuTextureView view) {
-        if (view instanceof VulkanGpuTextureView vulkanView) {
-            return vulkanView.vkImageView();
+    private static VulkanGpuTextureView vkView(GpuTextureView view) {
+        return view instanceof VulkanGpuTextureView vulkanView ? vulkanView : null;
+    }
+
+    private static final class Borrow implements BorrowedTexture {
+        private final VulkanGpuTextureView view;
+        private boolean closed;
+        private Borrow(VulkanGpuTextureView view) { this.view = view; }
+        @Override public long vkImage() { return view.texture().vkImage(); }
+        @Override public int format() { return org.lwjgl.vulkan.VK10.VK_FORMAT_R8G8B8A8_UNORM; }
+        @Override public int baseMipLevel() { return view.baseMipLevel(); }
+        @Override public int mipLevels() { return view.mipLevels(); }
+        @Override public int imageLayout() { return org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_GENERAL; }
+        @Override public void close() {
+            if (closed) return;
+            closed = true;
+            view.texture().removeViews();
         }
-        return 0L;
     }
 }

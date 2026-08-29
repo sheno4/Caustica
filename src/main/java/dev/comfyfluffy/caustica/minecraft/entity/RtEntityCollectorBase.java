@@ -61,6 +61,11 @@ import java.util.ArrayList;
  * EntityRenderDispatcher.submit} fans out into {@code submitModel} here. Reused across entities.
  */
 class RtEntityCollectorBase {
+    private final RtEntityTextures textures;
+
+    RtEntityCollectorBase(RtEntityTextures textures) {
+        this.textures = java.util.Objects.requireNonNull(textures, "textures");
+    }
     private static final Direction[] DIRECTIONS = Direction.values();
     // Vanilla leash constants (LeashFeatureRenderer.LEASH_RENDER_STEPS / LEASH_WIDTH).
     private static final int LEASH_STEPS = 24;
@@ -136,7 +141,7 @@ class RtEntityCollectorBase {
                     : hasCutoutDefine(renderType) ? MinecraftEntityMesh.Coverage.CUTOUT : MinecraftEntityMesh.Coverage.OPAQUE;
             if (sprite != null) {
                 capture.setUvRemap(sprite.getU0(), sprite.getV0(), sprite.getU1(), sprite.getV1());
-                RtEntityTextures.INSTANCE.contributeAtlas(sprite.atlasLocation());
+                textures.contributeAtlas(sprite.atlasLocation());
                 setSpriteMaterial(sprite, MinecraftEntityMesh.MaterialProfile.ROUGH_DIELECTRIC, false,
                         stochasticAlpha);
             } else {
@@ -242,7 +247,7 @@ class RtEntityCollectorBase {
     /** Capture one baked quad with its atlas texture and source-level surface selector. */
     private void addQuad(Matrix4f pose, BakedQuad q, int[] tintLayers) {
         TextureAtlasSprite sprite = q.materialInfo().sprite();
-        if (sprite != null) RtEntityTextures.INSTANCE.contributeAtlas(sprite.atlasLocation());
+        if (sprite != null) textures.contributeAtlas(sprite.atlasLocation());
         // Baked item quads retain the block model's material layer. Mirror terrain's classification so
         // dropped and held translucent block items (glass, ice, etc.) use the thin-dielectric variant
         // instead of the opaque DEFAULT variant. No BlockState reaches submitItem, so the layer is the
@@ -283,9 +288,9 @@ class RtEntityCollectorBase {
                 : MinecraftEntityMesh.Coverage.OPAQUE;
     }
 
-    private static MinecraftEntityMesh.Material standaloneMaterial(RenderType renderType) {
+    private MinecraftEntityMesh.Material standaloneMaterial(RenderType renderType) {
         if (isEndPortal(renderType)) return END_PORTAL_MATERIAL;
-        var texture = RtEntityTextures.INSTANCE.textureLocation(renderType);
+        var texture = textures.textureLocation(renderType);
         if (texture == null) return missingMaterial();
         ResourceId logicalTexture = MinecraftResourceIds.logicalTexture(texture);
         return new MinecraftEntityMesh.Material(MinecraftEntityMesh.PARTICLE_BILLBOARD_MATERIAL,
@@ -294,7 +299,7 @@ class RtEntityCollectorBase {
 
     private void setStandaloneMaterial(RenderType renderType) {
         MinecraftEntityMesh.Material material = standaloneMaterial(renderType);
-        if (material.texture() != null) RtEntityTextures.INSTANCE.contribute(renderType, material.texture());
+        if (material.texture() != null) textures.contribute(renderType, material.texture());
         capture.currentMaterial = material;
     }
 
@@ -524,7 +529,7 @@ class RtEntityCollectorBase {
         capture.clearUvRemap();
         capture.currentOrder = 0;
         capture.currentMaterial = new MinecraftEntityMesh.Material(
-                MinecraftEntityMesh.VERTEX_COLOR_MATERIAL, RtEntityTextures.INSTANCE.whiteTexture(),
+                MinecraftEntityMesh.VERTEX_COLOR_MATERIAL, textures.whiteTexture(),
                 MinecraftEntityMesh.Program.MATERIAL);
         capture.currentCoverage = MinecraftEntityMesh.Coverage.OPAQUE;
         Matrix4f pose = poseStack.last().pose();
@@ -689,7 +694,7 @@ class RtEntityCollectorBase {
         // the block atlas, whose (0,0) texel would tint the ribbon arbitrarily).
         if (lines) {
             capture.currentMaterial = new MinecraftEntityMesh.Material(
-                    MinecraftEntityMesh.VERTEX_COLOR_MATERIAL, RtEntityTextures.INSTANCE.whiteTexture(),
+                    MinecraftEntityMesh.VERTEX_COLOR_MATERIAL, textures.whiteTexture(),
                     MinecraftEntityMesh.Program.MATERIAL);
         } else {
             setStandaloneMaterial(renderType);

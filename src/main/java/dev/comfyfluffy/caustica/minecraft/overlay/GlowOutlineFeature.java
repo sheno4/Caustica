@@ -30,6 +30,8 @@ import dev.comfyfluffy.caustica.minecraft.entity.RtEntities;
  * entity itself emissive.
  */
 final class GlowOutlineFeature implements OverlayFeature {
+    private final RtEntities entities;
+    GlowOutlineFeature(RtEntities entities) { this.entities = entities; }
     // mat4 curViewProj (0, 64B) + vec3 camOffset (64, padded to 16B) + vec4 color (80, 16B) = 96B.
     private static final int MASK_PUSH_BYTES = 112;
     private static final int MASK_FORMAT = VK10.VK_FORMAT_R8G8B8A8_UNORM;
@@ -56,7 +58,7 @@ final class GlowOutlineFeature implements OverlayFeature {
         if (!RtEntities.glowEnabled()) {
             return false;
         }
-        List<RtEntities.GlowEntity> batches = RtEntities.INSTANCE.glowBatches();
+        List<RtEntities.GlowEntity> batches = entities.glowBatches();
         if (batches.isEmpty()) {
             return false;
         }
@@ -107,9 +109,9 @@ final class GlowOutlineFeature implements OverlayFeature {
         ibo.flush(0L, (long) mergedIdx.length * Integer.BYTES);
 
         viewProj.set(worldViewProjection);
-        camOffX = RtEntities.INSTANCE.glowCamOffsetX();
-        camOffY = RtEntities.INSTANCE.glowCamOffsetY();
-        camOffZ = RtEntities.INSTANCE.glowCamOffsetZ();
+        camOffX = entities.glowCamOffsetX();
+        camOffY = entities.glowCamOffsetY();
+        camOffZ = entities.glowCamOffsetZ();
         return true;
     }
 

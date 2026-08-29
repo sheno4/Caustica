@@ -12,6 +12,8 @@ import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftDimensionKey;
 import dev.comfyfluffy.caustica.rt.RtRuntime;
 import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
+import dev.comfyfluffy.caustica.minecraft.entity.RtEntities;
+import dev.comfyfluffy.caustica.minecraft.entity.RtEntityTextures;
 import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftVulkanBackend;
 import dev.comfyfluffy.caustica.settings.ResourceId;
 import net.minecraft.client.Minecraft;
@@ -35,6 +37,9 @@ public final class MinecraftFrameAdapter {
     private long sceneId;
     private volatile MinecraftFrameSelector frameSelector;
     private volatile FrameCaptureBinding frameCapture;
+    private final RtEntityTextures entityTextures = new RtEntityTextures();
+    private final RtEntities entities = new RtEntities(entityTextures);
+    private long renderedWorldFrameIndex;
 
     private MinecraftFrameAdapter() {
     }
@@ -77,10 +82,17 @@ public final class MinecraftFrameAdapter {
                 projection.get(new float[16]), viewRotation.get(new float[16]));
         RtTerrain terrain = RtTerrain.currentOrNull();
         SceneOrigin sceneOrigin = terrain != null ? terrain.sceneOrigin() : SceneOrigin.ZERO;
-        return new FrameSnapshot(new SceneView(selection.scene(), camera, selection.medium()), sceneOrigin,
+        FrameSnapshot snapshot = new FrameSnapshot(new SceneView(selection.scene(), camera, selection.medium()), sceneOrigin,
                 CausticaConfig.Rt.Composite.WATER_WAVES.value(),
                 System.nanoTime() / 1.0e9, METERS_PER_WORLD_UNIT);
+        entities.submitFrame(snapshot.sceneOrigin(), cameraX, cameraY, cameraZ,
+                new org.joml.Matrix4f(projection), new org.joml.Matrix4f(viewRotation),
+                renderedWorldFrameIndex++);
+        return snapshot;
     }
+
+    RtEntities entities() { return entities; }
+    RtEntityTextures entityTextures() { return entityTextures; }
 
     MinecraftFrameSelectionInstaller.Lease installFrameSelector(MinecraftFrameSelector selector) {
         java.util.Objects.requireNonNull(selector, "selector");

@@ -61,8 +61,7 @@ import java.util.UUID;
  * <p>Per-frame capture is capped by {@code -Dcaustica.rt.maxEntities}. Stable index revisions allow the
  * retained backend to derive compatible acceleration updates.
  */
-public final class RtEntities {
-    public static final RtEntities INSTANCE = new RtEntities();
+public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.MinecraftEntityCaptureBinding {
     private static final long ENTITY_GEOMETRY = 1L;
     private static final long BLOCK_ENTITY_GEOMETRY = 2L;
     private static final long PARTICLE_GEOMETRY = 3L;
@@ -135,7 +134,8 @@ public final class RtEntities {
     private static final float[] IDENTITY = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
 
     // Reusable capture pipeline (single-threaded on the render thread).
-    private final RtEntityCollector collector = new RtEntityCollector();
+    private final RtEntityTextures textures;
+    private final RtEntityCollector collector;
     private final RtEntityCapture capture = new RtEntityCapture();
     private final PoseStack entityPoseStack = new PoseStack();
     private final PoseStack blockEntityPoseStack = new PoseStack();
@@ -198,12 +198,25 @@ public final class RtEntities {
     private final Set<MinecraftEntityGeometry.Key> pendingDrops = new java.util.LinkedHashSet<>();
     private MinecraftEntityGeometry geometry;
 
-    private RtEntities() {
+    public RtEntities(RtEntityTextures textures) {
+        this.textures = java.util.Objects.requireNonNull(textures, "textures");
+        collector = new RtEntityCollector(textures);
     }
 
     public synchronized void bindGeometry(MinecraftEntityGeometry geometry) {
         if (this.geometry != null) throw new IllegalStateException("entity geometry is already bound");
         this.geometry = java.util.Objects.requireNonNull(geometry, "geometry");
+    }
+
+    @Override public synchronized Lease install(MinecraftEntityGeometry geometry) {
+        bindGeometry(geometry);
+        return () -> uninstall(geometry);
+    }
+
+    private synchronized void uninstall(MinecraftEntityGeometry installed) {
+        if (geometry != installed) return;
+        geometry = null;
+        shutdown();
     }
 
     public synchronized void unbindGeometry(MinecraftEntityGeometry geometry) {
@@ -667,7 +680,7 @@ public final class RtEntities {
                     particleScratch.clear();
                     sq.extract(particleScratch, cam, partial);
                     for (SingleQuadParticle.Layer layer : particleScratch.layers()) {
-                        RtEntityTextures.INSTANCE.contributeAtlas(layer.textureAtlasLocation());
+                        textures.contributeAtlas(layer.textureAtlasLocation());
                         capture.currentMaterial = new MinecraftEntityMesh.Material(
                                 MinecraftEntityMesh.PARTICLE_BILLBOARD_MATERIAL,
                                 MinecraftEntityMesh.Texture.atlas(ResourceId.of(
