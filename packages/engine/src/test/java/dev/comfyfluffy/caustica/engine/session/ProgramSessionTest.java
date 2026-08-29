@@ -62,18 +62,18 @@ final class ProgramSessionTest {
                 builder.environment(new EnvironmentDefinition<>(
                         shader("environment", "sample.Environment"), ENVIRONMENT_BINDING))));
         registration.whenComplete(completion -> {
+            assertInstanceOf(ProgramRegistration.Ready.class, completion);
             assertTrue(backend.active != null);
             events.add("ready");
         });
 
-        assertEquals(ProgramRegistration.State.PENDING, registration.state());
+        assertTrue(events.isEmpty());
         assertInstanceOf(ProgramResolution.ErrorSurface.class, session.resolve(registration.exports().surface()));
         session.progress();
         assertEquals(3, backend.pending.composition.registrations().getFirst().declarations().size());
         backend.succeed();
         session.progress();
 
-        assertEquals(ProgramRegistration.State.READY, registration.state());
         assertEquals(List.of("ready"), events);
         assertInstanceOf(ProgramResolution.ActiveSurface.class, session.resolve(registration.exports().surface()));
         assertInstanceOf(ProgramResolution.ActiveVolume.class, session.resolve(registration.exports().volume()));
@@ -100,17 +100,24 @@ final class ProgramSessionTest {
                 builder -> builder.surface(surface("sample.Broken", () -> retired.add("broken"))));
         ProgramRegistration<SurfaceId<Binding, Instance>> later = channel.register(
                 builder -> builder.surface(surface("sample.Later", () -> retired.add("later"))));
+        List<ProgramRegistration.Completion> firstCompletion = new ArrayList<>();
+        List<ProgramRegistration.Completion> brokenCompletion = new ArrayList<>();
+        List<ProgramRegistration.Completion> laterCompletion = new ArrayList<>();
+        first.whenComplete(firstCompletion::add);
+        broken.whenComplete(brokenCompletion::add);
+        later.whenComplete(laterCompletion::add);
 
         session.progress();
         backend.succeed();
         session.progress();
-        assertEquals(ProgramRegistration.State.READY, first.state());
+        assertInstanceOf(ProgramRegistration.Ready.class, firstCompletion.getFirst());
         assertEquals(2, backend.pendingRegistrationCount());
 
         backend.fail("broken shader");
         session.progress();
-        assertEquals(ProgramRegistration.State.FAILED, broken.state());
-        assertEquals("broken shader", broken.failure().orElseThrow().summary());
+        ProgramRegistration.Failed failed = assertInstanceOf(
+                ProgramRegistration.Failed.class, brokenCompletion.getFirst());
+        assertEquals("broken shader", failed.failure().summary());
         assertEquals(List.of("broken"), retired);
         assertInstanceOf(ProgramResolution.ErrorSurface.class, session.resolve(broken.exports()));
         assertInstanceOf(ProgramResolution.ActiveSurface.class, session.resolve(first.exports()));
@@ -119,7 +126,7 @@ final class ProgramSessionTest {
 
         backend.succeed();
         session.progress();
-        assertEquals(ProgramRegistration.State.READY, later.state());
+        assertInstanceOf(ProgramRegistration.Ready.class, laterCompletion.getFirst());
         assertEquals(2, backend.activeComposition.registrations().size());
         assertInstanceOf(ProgramResolution.ActiveSurface.class, session.resolve(later.exports()));
     }
@@ -133,12 +140,15 @@ final class ProgramSessionTest {
 
         ProgramRegistration<SurfaceId<Binding, Instance>> cancelled = channel.register(
                 builder -> builder.surface(surface("sample.Cancelled", () -> retired.add("cancelled"))));
+        List<ProgramRegistration.Completion> cancelledCompletion = new ArrayList<>();
+        cancelled.whenComplete(cancelledCompletion::add);
         session.progress();
         backend.succeed();
         cancelled.close();
-        assertEquals(ProgramRegistration.State.CANCELLED, cancelled.state());
+        assertTrue(cancelledCompletion.isEmpty(), "close must not invoke callbacks inline");
         assertFalse(session.isDrained(channel), "the stale compiler completion still belongs to this owner");
         session.progress();
+        assertInstanceOf(ProgramRegistration.Cancelled.class, cancelledCompletion.getFirst());
         assertEquals(1, backend.closedCandidates);
         assertEquals(List.of("cancelled"), retired);
         assertTrue(session.isDrained(channel));
@@ -146,11 +156,13 @@ final class ProgramSessionTest {
 
         ProgramRegistration<SurfaceId<Binding, Instance>> ready = channel.register(
                 builder -> builder.surface(surface("sample.Ready", () -> retired.add("ready"))));
+        List<ProgramRegistration.Completion> readyCompletion = new ArrayList<>();
+        ready.whenComplete(readyCompletion::add);
         session.progress();
         backend.succeed();
         session.progress();
+        assertInstanceOf(ProgramRegistration.Ready.class, readyCompletion.getFirst());
         ready.close();
-        assertEquals(ProgramRegistration.State.READY, ready.state());
         assertInstanceOf(ProgramResolution.ActiveSurface.class, session.resolve(ready.exports()));
 
         session.progress();
@@ -229,13 +241,16 @@ final class ProgramSessionTest {
         AtomicInteger retired = new AtomicInteger();
         ProgramRegistration<?> registration = channel.register(
                 builder -> builder.surface(surface("sample.Pending", retired::incrementAndGet)));
+        List<ProgramRegistration.Completion> completion = new ArrayList<>();
+        registration.whenComplete(completion::add);
 
         channel.invalidate();
 
-        assertEquals(ProgramRegistration.State.CANCELLED, registration.state());
+        assertTrue(completion.isEmpty(), "invalidation must not invoke callbacks inline");
         assertFalse(session.isDrained(channel));
         assertThrows(IllegalStateException.class, () -> channel.register(builder -> "late"));
         session.progress();
+        assertInstanceOf(ProgramRegistration.Cancelled.class, completion.getFirst());
         assertEquals(1, retired.get());
         assertTrue(session.isDrained(channel));
     }
@@ -270,7 +285,7 @@ final class ProgramSessionTest {
 
     private static SurfaceDefinition<Implementation, Binding, Instance> surface(
             String type, Runnable retired) {
-        return new SurfaceDefinition<>(shader(type.substring(type.lastIndexOf(':') + 1).toLowerCase(), type),
+        return new SurfaceDefinition<>(shader(type.substring(type.lastIndexOf('.') + 1).toLowerCase(), type),
                 null, IMPLEMENTATION.data(1), BINDING, INSTANCE, retired);
     }
 

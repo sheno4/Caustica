@@ -243,21 +243,19 @@ interface ProgramBuilder {
 
 interface ProgramRegistration<E> extends AutoCloseable {
     E exports();
-    State state();
-    Optional<ProgramFailure> failure();
     void whenComplete(Consumer<? super Completion> callback);
 }
 ```
 
 The declaration callback is synchronous and valid only during registration. `E` is a package-defined record
 holding its typed IDs, so heterogeneous generic exports need no untyped map. Registration accepts the set
-atomically and produces one non-blocking `PENDING`, `READY`, `FAILED`, or `CANCELLED` outcome. Closing removes
+atomically and reports one non-blocking `Ready`, `Failed`, or `Cancelled` completion. Closing removes
 the set; session teardown closes it automatically. Coverage stays part of a surface definition, not a fourth
 registration category.
 
-Readiness is folded into `ProgramRegistration` itself: `state`, `failure`, and `whenComplete` describe the
-same owner capability and share one linearization point with `close`. A separate ticket/readiness object added
-no lifetime or consumer value and is therefore absent from the API.
+Readiness is folded into `ProgramRegistration` itself: `whenComplete` reports its single terminal result and
+shares one linearization point with `close`. A separate ticket or polling state added no lifetime or consumer
+value and is therefore absent from the API.
 
 Hot replacement remains simple: register the replacement, wait for readiness, atomically republish retained
 geometry/environment bindings to its IDs, then close the old registration. Resource-only reloads update the

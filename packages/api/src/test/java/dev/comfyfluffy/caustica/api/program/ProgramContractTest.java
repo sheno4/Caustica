@@ -21,13 +21,10 @@ final class ProgramContractTest {
         ProgramRegistration.Completion completion = new ProgramRegistration.Cancelled();
 
         assertInstanceOf(ProgramRegistration.Cancelled.class, completion);
-        assertSame(ProgramRegistration.State.CANCELLED, ProgramRegistration.State.valueOf("CANCELLED"));
     }
 
     @Test
     void readinessHasOnlyOwnerOutcomes() {
-        assertEquals(Set.of("PENDING", "READY", "FAILED", "CANCELLED"),
-                Arrays.stream(ProgramRegistration.State.values()).map(Enum::name).collect(Collectors.toSet()));
         assertEquals(Set.of(ProgramRegistration.Ready.class, ProgramRegistration.Failed.class,
                         ProgramRegistration.Cancelled.class),
                 Set.of(ProgramRegistration.Completion.class.getPermittedSubclasses()));
@@ -48,7 +45,8 @@ final class ProgramContractTest {
         Method exports = ProgramRegistration.class.getMethod("exports");
         assertSame(Object.class, exports.getReturnType());
         assertEquals("E", exports.getGenericReturnType().getTypeName());
-        assertSame(ProgramRegistration.State.class, ProgramRegistration.class.getMethod("state").getReturnType());
+        assertThrows(NoSuchMethodException.class, () -> ProgramRegistration.class.getMethod("state"));
+        assertThrows(NoSuchMethodException.class, () -> ProgramRegistration.class.getMethod("failure"));
         assertSame(void.class, ProgramRegistration.class.getMethod("close").getReturnType());
 
         Set<String> channelMethods = Arrays.stream(ProgramChannel.class.getMethods())

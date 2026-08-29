@@ -4,7 +4,6 @@ import dev.comfyfluffy.caustica.api.program.EnvironmentDefinition;
 import dev.comfyfluffy.caustica.api.program.EnvironmentId;
 import dev.comfyfluffy.caustica.api.program.ProgramBuilder;
 import dev.comfyfluffy.caustica.api.program.ProgramChannel;
-import dev.comfyfluffy.caustica.api.program.ProgramFailure;
 import dev.comfyfluffy.caustica.api.program.ProgramRegistration;
 import dev.comfyfluffy.caustica.api.program.SurfaceDefinition;
 import dev.comfyfluffy.caustica.api.program.SurfaceId;
@@ -14,7 +13,6 @@ import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -51,8 +49,6 @@ final class GltfProgramContentTest {
             E exports = declaration.apply(this);
             return new ProgramRegistration<>() {
                 @Override public E exports() { return exports; }
-                @Override public State state() { return State.READY; }
-                @Override public Optional<ProgramFailure> failure() { return Optional.empty(); }
                 @Override public void whenComplete(Consumer<? super Completion> callback) {
                     callback.accept(new Ready());
                 }

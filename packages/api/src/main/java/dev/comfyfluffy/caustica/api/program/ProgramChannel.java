@@ -11,7 +11,7 @@ import java.util.function.Function;
  * A rejected declaration does not take any definition retirement callback.
  *
  * <p>Compilation and publication remain asynchronous because all owners' accepted sets form one world
- * program. {@link ProgramRegistration#state()} reports whether this complete set became part of an
+ * program. {@link ProgramRegistration#whenComplete} reports whether this complete set became part of an
  * active composition. Accepted registrations have a deterministic logical order. Their observable outcomes
  * are the same as compiling and publishing each set independently in that order: a failing set publishes
  * none of its declarations, while unaffected later sets are retried against the last successful composition.

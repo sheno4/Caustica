@@ -20,7 +20,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.function.Consumer;
@@ -203,7 +202,7 @@ public final class ProgramSession {
                 target = retained;
             } else {
                 introduced = accepted.stream()
-                        .filter(registration -> registration.state == ProgramRegistration.State.PENDING
+                        .filter(registration -> registration.status == RegistrationStatus.PENDING
                                 && !registration.closed && !published.contains(registration))
                         .findFirst().orElse(null);
                 if (introduced == null) return;
@@ -248,7 +247,7 @@ public final class ProgramSession {
             if (event.result instanceof ProgramBackend.Compilation.Failed failed) {
                 if (event.request.introduced != null) {
                     Registration<?> registration = event.request.introduced;
-                    if (!registration.closed && registration.state == ProgramRegistration.State.PENDING) {
+                    if (!registration.closed && registration.status == RegistrationStatus.PENDING) {
                         registration.fail(failed.failure());
                         accepted.remove(registration);
                         retire(registration);
@@ -281,7 +280,7 @@ public final class ProgramSession {
     private boolean valid(BuildRequest request) {
         if (request.target.stream().anyMatch(registration -> registration.closed)) return false;
         if (request.introduced != null) {
-            return request.introduced.state == ProgramRegistration.State.PENDING
+            return request.introduced.status == RegistrationStatus.PENDING
                     && request.target.equals(append(published, request.introduced));
         }
         return request.target.equals(published.stream().filter(registration -> !registration.closed).toList());
@@ -361,6 +360,8 @@ public final class ProgramSession {
                                 Registration<?> introduced) { }
     private record CompletionEvent(BuildRequest request, ProgramBackend.Compilation result) { }
     private record CallbackTask(ProgramContributionChannel channel, Runnable action) { }
+
+    private enum RegistrationStatus { PENDING, READY, FAILED, CANCELLED }
 
     private record ShaderIdentity(Class<?> anchor, String root, List<String> subdirectories,
                                   String module, String type) {
@@ -492,8 +493,7 @@ public final class ProgramSession {
         private final E exports;
         private final List<Declaration> declarations;
         private final List<Consumer<? super Completion>> observers = new ArrayList<>();
-        private State state = State.PENDING;
-        private ProgramFailure failure;
+        private RegistrationStatus status = RegistrationStatus.PENDING;
         private Completion completion;
         private boolean closed;
         private boolean retired;
@@ -508,10 +508,6 @@ public final class ProgramSession {
         }
 
         @Override public E exports() { return exports; }
-        @Override public State state() { synchronized (session) { return state; } }
-        @Override public Optional<ProgramFailure> failure() {
-            synchronized (session) { return Optional.ofNullable(failure); }
-        }
 
         @Override
         public void whenComplete(Consumer<? super Completion> observer) {
@@ -527,25 +523,24 @@ public final class ProgramSession {
             synchronized (session) {
                 if (closed) return;
                 closed = true;
-                if (state == State.PENDING) {
-                    complete(State.CANCELLED, null, new Cancelled());
+                if (status == RegistrationStatus.PENDING) {
+                    complete(RegistrationStatus.CANCELLED, new Cancelled());
                     session.retire(this);
                 }
             }
         }
 
         private void ready() {
-            complete(State.READY, null, new Ready());
+            complete(RegistrationStatus.READY, new Ready());
         }
 
         private void fail(ProgramFailure failure) {
-            complete(State.FAILED, failure, new Failed(failure));
+            complete(RegistrationStatus.FAILED, new Failed(failure));
         }
 
-        private void complete(State state, ProgramFailure failure, Completion completion) {
-            if (this.state != State.PENDING) return;
-            this.state = state;
-            this.failure = failure;
+        private void complete(RegistrationStatus status, Completion completion) {
+            if (this.status != RegistrationStatus.PENDING) return;
+            this.status = status;
             this.completion = completion;
             observers.forEach(observer -> session.enqueue(channel, () -> observer.accept(completion)));
             observers.clear();

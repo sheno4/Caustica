@@ -1,16 +1,14 @@
 package dev.comfyfluffy.caustica.api.program;
 
-import java.util.Optional;
 import java.util.function.Consumer;
 
 /**
  * Owner capability, typed exports, and readiness observation for one atomic program set.
  *
- * <p>The registration becomes {@link State#READY} only after an active world program contains the complete
- * set, {@link State#FAILED} if none of that set can publish, or {@link State#CANCELLED} if it closes or its
- * contribution ends first. A failed set leaves the last ready world program active. Failure is isolated per
- * registration in acceptance order, and unaffected later sets are retried against the last successful
- * composition.
+ * <p>The registration completes with {@link Ready} only after an active world program contains the complete
+ * set, {@link Failed} if none of that set can publish, or {@link Cancelled} if it closes or its contribution
+ * ends first. A failed set leaves the last ready world program active. Failure is isolated per registration
+ * in acceptance order, and unaffected later sets are retried against the last successful composition.
  *
  * <p>The render-session contribution owns guaranteed cleanup. Closing explicitly requests earlier removal
  * of the complete set and is idempotent. Terminal transitions, callback registration, close, and publication
@@ -19,12 +17,6 @@ import java.util.function.Consumer;
 public interface ProgramRegistration<E> extends AutoCloseable {
     /** The source-defined value returned by the synchronous declaration callback. */
     E exports();
-
-    /** Current publication state of this complete set. */
-    State state();
-
-    /** Present exactly when {@link #state()} is {@link State#FAILED}. */
-    Optional<ProgramFailure> failure();
 
     /**
      * Registers one completion callback. Calling this more than once registers independent callbacks.
@@ -41,10 +33,10 @@ public interface ProgramRegistration<E> extends AutoCloseable {
     /**
      * Request removal of the complete set.
      *
-     * <p>If readiness is still pending, it becomes cancelled and the set never publishes. If it is ready,
-     * the state remains ready—it records successful publication—and removal occurs at a later publication
-     * boundary. Failed and cancelled registrations have no live implementation to remove. In every case,
-     * accepted definition callbacks retain their ordinary asynchronous retirement guarantees.
+     * <p>If completion is still pending, observers receive {@link Cancelled} and the set never publishes. If
+     * it is ready, removal occurs at a later publication boundary. Failed and cancelled registrations have
+     * no live implementation to remove. In every case, accepted definition callbacks retain their ordinary
+     * asynchronous retirement guarantees.
      *
      * <p>Close and readiness publication are linearized. If close wins, it returns after the registration has
      * become cancelled and the set can no longer publish. If publication wins, the registration becomes ready and
@@ -52,13 +44,6 @@ public interface ProgramRegistration<E> extends AutoCloseable {
      */
     @Override
     void close();
-
-    enum State {
-        PENDING,
-        READY,
-        FAILED,
-        CANCELLED
-    }
 
     sealed interface Completion permits Ready, Failed, Cancelled { }
 

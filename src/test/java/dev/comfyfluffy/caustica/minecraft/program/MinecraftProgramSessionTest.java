@@ -4,7 +4,6 @@ import dev.comfyfluffy.caustica.api.program.EnvironmentDefinition;
 import dev.comfyfluffy.caustica.api.program.EnvironmentId;
 import dev.comfyfluffy.caustica.api.program.ProgramBuilder;
 import dev.comfyfluffy.caustica.api.program.ProgramChannel;
-import dev.comfyfluffy.caustica.api.program.ProgramFailure;
 import dev.comfyfluffy.caustica.api.program.ProgramRegistration;
 import dev.comfyfluffy.caustica.api.program.SurfaceDefinition;
 import dev.comfyfluffy.caustica.api.program.SurfaceId;
@@ -17,7 +16,6 @@ import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -104,8 +102,6 @@ final class MinecraftProgramSessionTest {
             E exports = declaration.apply(this);
             return new ProgramRegistration<>() {
                 @Override public E exports() { return exports; }
-                @Override public State state() { return State.PENDING; }
-                @Override public Optional<ProgramFailure> failure() { return Optional.empty(); }
                 @Override public void whenComplete(
                         java.util.function.Consumer<? super Completion> callback) { }
                 @Override public void close() { }

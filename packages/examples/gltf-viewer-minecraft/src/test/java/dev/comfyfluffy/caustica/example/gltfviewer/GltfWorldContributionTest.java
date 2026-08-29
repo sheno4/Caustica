@@ -11,7 +11,6 @@ import dev.comfyfluffy.caustica.api.light.LightChannel;
 import dev.comfyfluffy.caustica.api.pass.PassChannel;
 import dev.comfyfluffy.caustica.api.program.ProgramChannel;
 import dev.comfyfluffy.caustica.api.program.ProgramRegistration;
-import dev.comfyfluffy.caustica.api.program.ProgramFailure;
 import dev.comfyfluffy.caustica.api.program.ShaderDataType;
 import dev.comfyfluffy.caustica.api.program.SurfaceId;
 import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
@@ -32,7 +31,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -89,8 +87,6 @@ final class GltfWorldContributionTest {
         GltfProgramExports exports = new GltfProgramExports(new SurfaceId<>() { }, new SurfaceId<>() { });
         return new ProgramRegistration<>() {
             @Override public GltfProgramExports exports() { return exports; }
-            @Override public State state() { return State.READY; }
-            @Override public Optional<ProgramFailure> failure() { return Optional.empty(); }
             @Override public void whenComplete(
                     java.util.function.Consumer<? super Completion> callback) { }
             @Override public void close() { closes.incrementAndGet(); stopOrder.add("program"); }
