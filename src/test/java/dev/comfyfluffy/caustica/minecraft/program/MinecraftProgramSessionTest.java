@@ -12,6 +12,9 @@ import dev.comfyfluffy.caustica.api.program.VolumeId;
 import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
 import dev.comfyfluffy.caustica.api.pass.Pass;
 import dev.comfyfluffy.caustica.api.pass.PassFrame;
+import dev.comfyfluffy.caustica.minecraft.sky.SkyLutPass;
+import dev.comfyfluffy.caustica.settings.Option;
+import dev.comfyfluffy.caustica.settings.OptionValues;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -87,6 +90,23 @@ final class MinecraftProgramSessionTest {
 
         assertThrows(IllegalStateException.class, () -> pass.record(null));
         assertEquals(0, releases.get());
+    }
+
+    @Test
+    void celestialSettingsComeFromTheInjectedFeatureValues() {
+        OptionValues values = new OptionValues() {
+            @Override @SuppressWarnings("unchecked") public <T> T get(Option<T> option) {
+                Object value = option == SkyLutPass.SUN_NOON_SOUTH_TILT_DEGREES ? 11.0f
+                        : option == SkyLutPass.SUN_ANGULAR_RADIUS_DEGREES ? 0.3f : 0.7f;
+                return (T) value;
+            }
+        };
+
+        var settings = MinecraftProgramSession.celestialSettings(values);
+
+        assertEquals(11.0, settings.noonTiltDegrees());
+        assertEquals(0.3, settings.sunAngularRadiusDegrees(), 1.0e-6);
+        assertEquals(0.7, settings.moonAngularRadiusDegrees(), 1.0e-6);
     }
 
     private static final class CapturingChannel implements ProgramChannel, ProgramBuilder {

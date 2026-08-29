@@ -34,7 +34,6 @@ public final class CausticaOptions implements OptionLookup {
     private static final Logger LOGGER = LoggerFactory.getLogger("Caustica");
     private static final String SYSTEM_PROPERTY_PREFIX = "caustica.option.";
     private static final String FILE_NAME = "caustica-options.toml";
-    private static CausticaOptions installed;
 
     /** Per feature, its declared options by id — built once so a read is a map lookup, not a list scan. */
     private final Map<ResourceId, Map<String, Option<?>>> declared;
@@ -77,14 +76,7 @@ public final class CausticaOptions implements OptionLookup {
             }
             declared.put(feature.id(), Map.copyOf(byId));
         }
-        CausticaOptions loaded = new CausticaOptions(Map.copyOf(declared), file, Map.copyOf(values));
-        installed = loaded;
-        return loaded;
-    }
-
-    /** The store installed by the host bootstrap for its settings UI. */
-    public static CausticaOptions installed() {
-        return Objects.requireNonNull(installed, "Caustica options have not been loaded");
+        return new CausticaOptions(Map.copyOf(declared), file, Map.copyOf(values));
     }
 
     /** A live view scoped to one feature's declared options; reads whatever is current at each call. */

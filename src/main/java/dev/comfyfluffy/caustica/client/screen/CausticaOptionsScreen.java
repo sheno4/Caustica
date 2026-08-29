@@ -14,7 +14,7 @@ import dev.comfyfluffy.caustica.client.settings.SettingControl;
 import dev.comfyfluffy.caustica.client.settings.SettingGroup;
 import dev.comfyfluffy.caustica.client.settings.SettingsCommit;
 import dev.comfyfluffy.caustica.client.settings.SettingsSection;
-import dev.comfyfluffy.caustica.settings.CausticaSettings;
+import dev.comfyfluffy.caustica.settings.SettingsRegistry;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.screens.Screen;
@@ -42,12 +42,11 @@ public final class CausticaOptionsScreen extends Screen {
     /** The one open dropdown, held here because its list is drawn and hit-tested outside the pane. */
     private CausticaDropdown<?> openDropdown;
 
-    public CausticaOptionsScreen(Screen parent) {
+    public CausticaOptionsScreen(Screen parent, SettingsRegistry registry, CausticaOptions options) {
         super(Component.translatable("caustica.screen.title"));
         this.parent = parent;
-        CausticaOptions options = CausticaOptions.installed();
-        this.commit = new SettingsCommit(options);
-        this.sections = CausticaSections.build(CausticaSettings.getInstance().registry(), options);
+        this.commit = new SettingsCommit(java.util.Objects.requireNonNull(options, "options"));
+        this.sections = CausticaSections.build(java.util.Objects.requireNonNull(registry, "registry"), options);
     }
 
     private SettingsSection section() {

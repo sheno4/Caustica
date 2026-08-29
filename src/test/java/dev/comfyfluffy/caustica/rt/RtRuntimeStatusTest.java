@@ -46,7 +46,8 @@ final class RtRuntimeStatusTest {
     }
 
     private RtRuntime runtime() {
-        return new RtRuntime(new RenderSessionHost(), new MinecraftWorldSessionHost(),
+        dev.comfyfluffy.caustica.settings.OptionLookup options = id -> { throw new AssertionError(id); };
+        return new RtRuntime(new RenderSessionHost(options), new MinecraftWorldSessionHost(options),
                 new SlangRuntime(new SlangRuntimeConfig(temporaryDirectory.resolve("slang"), Optional.empty())),
                 temporaryDirectory.resolve("shaders"), new RtTelemetryImpl(),
                 new NgxRuntime.Settings(temporaryDirectory.resolve("ngx"), Optional.empty()));

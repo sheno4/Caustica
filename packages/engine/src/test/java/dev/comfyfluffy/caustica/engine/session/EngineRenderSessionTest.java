@@ -18,11 +18,13 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class EngineRenderSessionTest {
+    private static final dev.comfyfluffy.caustica.settings.OptionLookup OPTIONS = id -> { throw new AssertionError(id); };
     @Test
     void opensFreshOwnerScopesAndTearsDownInGlobalPhases() {
         List<String> events = new ArrayList<>();
         List<TestScope> created = new ArrayList<>();
-        RenderSessionHost host = new RenderSessionHost();
+        RenderSessionHost host = new RenderSessionHost(OPTIONS);
+        assertSame(OPTIONS, host.api().options());
         host.api().sessions().add(context -> {
             assertSame(created.get(0).program, context.program());
             return contribution("one", events);
@@ -53,7 +55,7 @@ final class EngineRenderSessionTest {
     @Test
     void registrationCloseQueuesOneFullyDrainedRemovalAndPreventsFutureOpen() {
         List<String> events = new ArrayList<>();
-        RenderSessionHost host = new RenderSessionHost();
+        RenderSessionHost host = new RenderSessionHost(OPTIONS);
         RenderSessionRegistration registration = host.api().sessions().add(
                 context -> contribution("owner", events));
         EngineRenderSession first = host.openSession(
@@ -79,7 +81,7 @@ final class EngineRenderSessionTest {
     void failedFactoryCleansOnlyItsAcceptedScopeAndDoesNotRunContributionHooks() {
         List<String> events = new ArrayList<>();
         List<SessionFailure> failures = new ArrayList<>();
-        RenderSessionHost host = new RenderSessionHost();
+        RenderSessionHost host = new RenderSessionHost(OPTIONS);
         host.api().sessions().add(context -> {
             throw new IllegalStateException("broken extension");
         });
@@ -100,7 +102,7 @@ final class EngineRenderSessionTest {
     void teardownFailuresAreReportedWithoutSkippingLaterPhasesOrOwners() {
         List<String> events = new ArrayList<>();
         List<SessionFailure> failures = new ArrayList<>();
-        RenderSessionHost host = new RenderSessionHost();
+        RenderSessionHost host = new RenderSessionHost(OPTIONS);
         host.api().sessions().add(context -> new RenderSessionContribution() {
             @Override public void stop() { throw new IllegalStateException("stop"); }
             @Override public void close() { events.add("contribution:close"); }

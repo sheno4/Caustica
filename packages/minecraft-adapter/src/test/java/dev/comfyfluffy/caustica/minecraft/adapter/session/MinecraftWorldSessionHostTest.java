@@ -26,6 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class MinecraftWorldSessionHostTest {
+    private static final dev.comfyfluffy.caustica.settings.OptionLookup OPTIONS = id -> { throw new AssertionError(id); };
     @Test
     void borrowsOneWorldEpochAndOwnsDistinctCoreScopesThroughFullLifecycle() {
         List<String> events = new ArrayList<>();
@@ -34,7 +35,8 @@ final class MinecraftWorldSessionHostTest {
         List<EnvironmentBinding<?>> selected = new ArrayList<>();
         SceneId scene = new SceneId() { };
         MinecraftDimensionKey dimension = MinecraftDimensionKey.of("minecraft", "overworld");
-        MinecraftWorldSessionHost host = new MinecraftWorldSessionHost();
+        MinecraftWorldSessionHost host = new MinecraftWorldSessionHost(OPTIONS);
+        assertSame(OPTIONS, host.api().options());
 
         host.api().sessions().add(context -> {
             assertSame(scene, context.scene());
@@ -83,7 +85,7 @@ final class MinecraftWorldSessionHostTest {
     void registrationRemovalAndFailedOpenDrainOnlyTheirOwnedScope() {
         List<String> events = new ArrayList<>();
         List<MinecraftSessionFailure.Stage> failures = new ArrayList<>();
-        MinecraftWorldSessionHost host = new MinecraftWorldSessionHost();
+        MinecraftWorldSessionHost host = new MinecraftWorldSessionHost(OPTIONS);
         var registration = host.api().sessions().add(context -> contribution("live", events, false));
         host.api().sessions().add(context -> {
             throw new IllegalStateException("open failed");

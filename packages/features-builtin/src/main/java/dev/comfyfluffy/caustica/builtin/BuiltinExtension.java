@@ -11,7 +11,6 @@ import dev.comfyfluffy.caustica.api.program.SurfaceDefinition;
 import dev.comfyfluffy.caustica.api.program.SurfaceId;
 import dev.comfyfluffy.caustica.api.pass.PassRegistration;
 import dev.comfyfluffy.caustica.api.session.RenderSessionContribution;
-import dev.comfyfluffy.caustica.settings.CausticaSettings;
 import dev.comfyfluffy.caustica.settings.CausticaSettingsExtension;
 import dev.comfyfluffy.caustica.settings.DisplayText;
 import dev.comfyfluffy.caustica.settings.FeatureCategory;
@@ -41,6 +40,7 @@ public final class BuiltinExtension implements CausticaExtension, CausticaSettin
 
     @Override
     public void register(CausticaApi api) {
+        var options = api.options();
         api.sessions().add(context -> {
             ProgramRegistration<Programs> registration = context.program().register(builder -> new Programs(
                     builder.surface(SurfaceDefinition.of(
@@ -52,7 +52,7 @@ public final class BuiltinExtension implements CausticaExtension, CausticaSettin
                             ENVIRONMENT_BINDING_DATA))));
             try {
                 PassRegistration bloom = context.passes().addPostEffectPass(BloomPass.ID, setup -> new BloomPass(setup,
-                        () -> CausticaSettings.getInstance().lookup().snapshot().options(ID)));
+                        () -> options.snapshot().options(ID)));
                 return contribution(registration, bloom);
             } catch (RuntimeException | Error failure) {
                 registration.close();

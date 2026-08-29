@@ -24,11 +24,12 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class EngineWorldSessionTest {
+    private static final dev.comfyfluffy.caustica.settings.OptionLookup OPTIONS = id -> { throw new AssertionError(id); };
     @Test
     void ownsGenericRenderContributionsAndDropsRootSceneLast() {
         List<String> events = new ArrayList<>();
         List<RetainedSceneSnapshot> snapshots = new ArrayList<>();
-        RenderSessionHost renderHost = new RenderSessionHost();
+        RenderSessionHost renderHost = new RenderSessionHost(OPTIONS);
         renderHost.api().sessions().add(context -> contribution("core", events));
 
         EngineWorldSession session = new EngineWorldSession(renderHost, GPU, PROGRAMS,

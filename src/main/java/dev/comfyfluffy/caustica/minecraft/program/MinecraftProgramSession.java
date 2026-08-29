@@ -42,6 +42,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
     private final dev.comfyfluffy.caustica.minecraft.MinecraftEntityCaptureBinding entityCapture;
     private final dev.comfyfluffy.caustica.minecraft.entity.RtEntityTextures entityTextures;
     private final RtTerrain terrain;
+    private final OptionLookup options;
     private Pending pending;
     private Active active;
     private boolean stopped;
@@ -55,7 +56,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
                                     PassRegistration overlayRegistration,
                                     dev.comfyfluffy.caustica.minecraft.MinecraftEntityCaptureBinding entityCapture,
                                     dev.comfyfluffy.caustica.minecraft.entity.RtEntityTextures entityTextures,
-                                    RtTerrain terrain) {
+                                    RtTerrain terrain, OptionLookup options) {
         this.context = context;
         this.resources = resources;
         this.materialEpochs = materialEpochs;
@@ -68,6 +69,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         this.entityCapture = entityCapture;
         this.entityTextures = entityTextures;
         this.terrain = terrain;
+        this.options = options;
     }
 
     public static MinecraftProgramSession open(MinecraftWorldSessionContext context,
@@ -78,12 +80,13 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
                                                dev.comfyfluffy.caustica.minecraft.MinecraftEntityCaptureBinding entityCapture,
                                                dev.comfyfluffy.caustica.minecraft.entity.RtEntityTextures entityTextures,
                                                dev.comfyfluffy.caustica.minecraft.entity.RtEntities entities,
-                                               RtTerrain terrain) {
+                                               RtTerrain terrain, OptionLookup options) {
         java.util.Objects.requireNonNull(frameSelections, "frameSelections");
         java.util.Objects.requireNonNull(frameCaptures, "frameCaptures");
         java.util.Objects.requireNonNull(materialEpochs, "materialEpochs");
         java.util.Objects.requireNonNull(calibration, "calibration");
         java.util.Objects.requireNonNull(terrain, "terrain");
+        java.util.Objects.requireNonNull(options, "options");
         MinecraftProgramResources resources = new MinecraftProgramResources(context.renderSession().gpu());
         MinecraftFrameCaptureState frames = new MinecraftFrameCaptureState();
         MinecraftFrameCaptureInstaller.Lease frameCapture = null;
@@ -94,7 +97,8 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
             frameCapture = java.util.Objects.requireNonNull(frameCaptures.install(frames, calibration),
                     "frame capture lease");
             lights = new MinecraftLightProvider(context.renderSession().lights(), context.scene(),
-                    MinecraftProgramSession::celestialSettings, frames::lightFrame);
+                    () -> celestialSettings(options.snapshot().options(MinecraftProvidersExtension.ID)),
+                    frames::lightFrame);
             MinecraftLightProvider installedLights = lights;
             lightRegistration = context.renderSession().passes().addWorldResourcePass(
                     setup -> new LightUpdatePass(installedLights));
@@ -102,7 +106,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
                     WorldOverlayPass.ID, setup -> new WorldOverlayPass(setup, entities, terrain));
             MinecraftProgramSession session = new MinecraftProgramSession(
                     context, resources, materialEpochs, frameSelections, frames, frameCapture,
-                    lights, lightRegistration, overlayRegistration, entityCapture, entityTextures, terrain);
+                    lights, lightRegistration, overlayRegistration, entityCapture, entityTextures, terrain, options);
             session.beginReplacement(context.resourcePackEpoch());
             return session;
         } catch (RuntimeException | Error failure) {
@@ -240,7 +244,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
     private PassRegistration createSky(MinecraftPrograms programs, long generation) {
         if (!SKIES.supports(context.dimension())) return null;
         return context.renderSession().passes().addWorldResourcePass(setup -> {
-            SkyLutPass sky = SKIES.create(context.dimension(), setup.gpu(), MinecraftProgramSession::options,
+            SkyLutPass sky = SKIES.create(context.dimension(), setup.gpu(), this::options,
                     frames::skyFrame, programs.environment(), context.environment(), generation);
             return new FirstRecordPass(sky, () -> skySelected(generation));
         });
@@ -281,12 +285,11 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         });
     }
 
-    private static OptionValues options() {
-        return CausticaSettings.getInstance().lookup().snapshot().options(MinecraftProvidersExtension.ID);
+    private OptionValues options() {
+        return options.snapshot().options(MinecraftProvidersExtension.ID);
     }
 
-    private static MinecraftLightProvider.CelestialSettings celestialSettings() {
-        OptionValues values = options();
+    static MinecraftLightProvider.CelestialSettings celestialSettings(OptionValues values) {
         return new MinecraftLightProvider.CelestialSettings(
                 values.get(SkyLutPass.SUN_NOON_SOUTH_TILT_DEGREES),
                 values.get(SkyLutPass.SUN_ANGULAR_RADIUS_DEGREES),

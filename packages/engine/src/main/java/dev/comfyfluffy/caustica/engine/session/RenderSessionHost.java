@@ -3,11 +3,16 @@ package dev.comfyfluffy.caustica.engine.session;
 import dev.comfyfluffy.caustica.api.CausticaApi;
 
 import java.util.Objects;
+import dev.comfyfluffy.caustica.settings.OptionLookup;
 
 /** Process-scoped extension registration and creation of renderer-owned session controllers. */
 public final class RenderSessionHost implements AutoCloseable {
     private final EngineRenderSessionChannel sessions = new EngineRenderSessionChannel();
-    private final CausticaApi api = new CausticaApi(sessions);
+    private final CausticaApi api;
+
+    public RenderSessionHost(OptionLookup options) {
+        api = new CausticaApi(sessions, Objects.requireNonNull(options, "options"));
+    }
 
     /** Immutable process capability passed to discovered extensions. */
     public CausticaApi api() {

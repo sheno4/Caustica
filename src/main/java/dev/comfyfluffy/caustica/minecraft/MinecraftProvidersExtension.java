@@ -44,7 +44,7 @@ public final class MinecraftProvidersExtension implements MinecraftExtension, Ca
     @Override public void registerMinecraft(MinecraftApi api) {
         api.sessions().add(context -> MinecraftProgramSession.open(
                 context, frameSelections, frameCaptures, materialEpochs, calibration,
-                entityCapture, entityTextures, entities, terrain));
+                entityCapture, entityTextures, entities, terrain, api.options()));
     }
 
     @Override public void registerSettings(SettingsRegistry registry) {

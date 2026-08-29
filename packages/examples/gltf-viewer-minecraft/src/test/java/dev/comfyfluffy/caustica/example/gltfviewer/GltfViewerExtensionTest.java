@@ -34,7 +34,7 @@ final class GltfViewerExtensionTest {
         extension.registerMinecraft(new MinecraftApi(factory -> {
             minecraftFactory.set(factory);
             return () -> { };
-        }));
+        }, id -> { throw new AssertionError(id); }));
         CaptureProgram programs = new CaptureProgram();
 
         ProgramRegistration<GltfProgramExports> registration = GltfProgramContent.register(programs);

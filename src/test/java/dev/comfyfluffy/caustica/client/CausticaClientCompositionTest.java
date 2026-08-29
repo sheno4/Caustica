@@ -13,6 +13,7 @@ import dev.comfyfluffy.caustica.nvidia.ngx.NgxRuntime;
 import dev.comfyfluffy.caustica.rt.RtRuntime;
 import dev.comfyfluffy.caustica.rt.RtTelemetryImpl;
 import dev.comfyfluffy.caustica.settings.SettingsRegistry;
+import dev.comfyfluffy.caustica.config.CausticaOptions;
 import dev.comfyfluffy.caustica.slang.SlangRuntime;
 import dev.comfyfluffy.caustica.slang.SlangRuntimeConfig;
 import org.junit.jupiter.api.Test;
@@ -29,15 +30,17 @@ final class CausticaClientCompositionTest {
 
     @Test
     void publishesOneEagerlyConstructedRootExactlyOnce() {
-        RenderSessionHost renderHost = new RenderSessionHost();
-        MinecraftWorldSessionHost minecraftHost = new MinecraftWorldSessionHost();
+        SettingsRegistry settings = new SettingsRegistry();
+        CausticaOptions options = CausticaOptions.load(temporaryDirectory.resolve("options.toml"), settings);
+        RenderSessionHost renderHost = new RenderSessionHost(options);
+        MinecraftWorldSessionHost minecraftHost = new MinecraftWorldSessionHost(options);
         SlangRuntime slang = new SlangRuntime(new SlangRuntimeConfig(
                 temporaryDirectory.resolve("slang"), Optional.empty()));
         Path shaderCache = temporaryDirectory.resolve("shaders");
         NgxRuntime.Settings ngx = new NgxRuntime.Settings(temporaryDirectory.resolve("ngx"), Optional.empty());
         RtTelemetryImpl telemetry = new RtTelemetryImpl();
         MinecraftApiBootstrap.ApiServices services = new MinecraftApiBootstrap.ApiServices(
-                renderHost, minecraftHost, new SettingsRegistry(), slang, shaderCache, ngx);
+                renderHost, minecraftHost, settings, options, slang, shaderCache, ngx);
         RtRuntime runtime = new RtRuntime(renderHost, minecraftHost, slang, shaderCache, telemetry, ngx);
         RtWorkerPool terrainWorkers = new RtWorkerPool();
         RtTerrain terrain = new RtTerrain(terrainWorkers);
@@ -55,6 +58,7 @@ final class CausticaClientCompositionTest {
 
         assertSame(composition, CausticaClientComposition.current());
         assertSame(runtime, CausticaClientComposition.current().runtime());
+        assertSame(options, composition.apiServices().options());
         assertSame(frameAdapter, composition.frameAdapter());
         assertSame(runtimeHost, composition.runtimeHost());
         assertSame(renderController, composition.renderController());

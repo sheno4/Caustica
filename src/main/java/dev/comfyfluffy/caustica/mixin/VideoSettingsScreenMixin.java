@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.mixin;
 
 import dev.comfyfluffy.caustica.client.screen.CausticaOptionsScreen;
+import dev.comfyfluffy.caustica.client.CausticaClientComposition;
 import dev.comfyfluffy.caustica.client.screen.CausticaTheme;
 import dev.comfyfluffy.caustica.client.screen.widget.CausticaTextButton;
 import net.minecraft.client.Minecraft;
@@ -26,6 +27,10 @@ public abstract class VideoSettingsScreenMixin {
                 Component.translatable("caustica.options.open"),
                 Minecraft.getInstance().font,
                 CausticaTheme.ACCENT_ENGINE,
-                () -> Minecraft.getInstance().setScreenAndShow(new CausticaOptionsScreen(self))));
+                () -> {
+                    var services = CausticaClientComposition.current().apiServices();
+                    Minecraft.getInstance().setScreenAndShow(
+                            new CausticaOptionsScreen(self, services.settings(), services.options()));
+                }));
     }
 }

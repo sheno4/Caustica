@@ -31,11 +31,12 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class EngineSessionServicesTest {
+    private static final dev.comfyfluffy.caustica.settings.OptionLookup OPTIONS = id -> { throw new AssertionError(id); };
     @Test
     void twoContributionsShareTheRendererServicesButRetireTheirPassesIndependently() {
         ImmediatePassBackend passBackend = new ImmediatePassBackend();
         EngineSessionServices services = services(passBackend);
-        RenderSessionHost host = new RenderSessionHost();
+        RenderSessionHost host = new RenderSessionHost(OPTIONS);
         List<String> events = new ArrayList<>();
         List<Object> programChannels = new ArrayList<>();
 

@@ -30,12 +30,13 @@ import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class MinecraftEngineWorldSessionTest {
+    private static final dev.comfyfluffy.caustica.settings.OptionLookup OPTIONS = id -> { throw new AssertionError(id); };
     @Test
     void composesBothProcessHostsOverSharedServicesAndDropsRootSceneLast() {
         List<String> events = new ArrayList<>();
         List<RetainedSceneSnapshot> snapshots = new ArrayList<>();
-        RenderSessionHost renderHost = new RenderSessionHost();
-        MinecraftWorldSessionHost minecraftHost = new MinecraftWorldSessionHost();
+        RenderSessionHost renderHost = new RenderSessionHost(OPTIONS);
+        MinecraftWorldSessionHost minecraftHost = new MinecraftWorldSessionHost(OPTIONS);
         List<Object> programs = new ArrayList<>();
         renderHost.api().sessions().add(context -> {
             programs.add(context.program());

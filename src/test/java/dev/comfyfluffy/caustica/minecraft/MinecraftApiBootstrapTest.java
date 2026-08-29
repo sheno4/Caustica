@@ -22,19 +22,26 @@ import dev.comfyfluffy.caustica.minecraft.api.ResourcePackEpoch;
 import dev.comfyfluffy.caustica.settings.CausticaSettingsExtension;
 import dev.comfyfluffy.caustica.settings.ResourceId;
 import dev.comfyfluffy.caustica.settings.SettingsRegistry;
+import dev.comfyfluffy.caustica.settings.OptionLookup;
+import dev.comfyfluffy.caustica.settings.Option;
+import dev.comfyfluffy.caustica.config.CausticaOptions;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Path;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class MinecraftApiBootstrapTest {
+    @TempDir Path temporaryDirectory;
     @Test
     void registersMinecraftOnlyDiscoveryAndDeduplicatesDualCapabilityInstances() {
-        RenderSessionHost renderHost = new RenderSessionHost();
-        MinecraftWorldSessionHost minecraftHost = new MinecraftWorldSessionHost();
         SettingsRegistry settings = new SettingsRegistry();
+        OptionLookup options = id -> { throw new AssertionError(id); };
+        RenderSessionHost renderHost = new RenderSessionHost(options);
+        MinecraftWorldSessionHost minecraftHost = new MinecraftWorldSessionHost(options);
         class MinecraftOnly implements MinecraftExtension {
             @Override public void registerMinecraft(MinecraftApi api) {
                 api.sessions().add(context -> MinecraftWorldSessionContribution.EMPTY);
@@ -48,9 +55,9 @@ final class MinecraftApiBootstrapTest {
         }
         Dual dual = new Dual();
         List<CausticaExtension> generic = List.of(dual);
-        MinecraftApiBootstrap.registerExtensions(renderHost, minecraftHost, settings, generic);
+        MinecraftApiBootstrap.registerExtensions(renderHost, minecraftHost, generic);
         MinecraftApiBootstrap.registerMinecraftExtensions(
-                minecraftHost, settings, List.of(new MinecraftOnly(), dual), generic);
+                minecraftHost, List.of(new MinecraftOnly(), dual), generic);
 
         MinecraftWorldSession session = minecraftHost.openSession(
                 owner -> new EmptyScope(), (owner, scene) -> new MinecraftEnvironmentScope() {
@@ -68,9 +75,10 @@ final class MinecraftApiBootstrapTest {
 
     @Test
     void sessionAndSettingsFailuresAreIsolatedForEachDiscoveredExtension() {
-        RenderSessionHost host = new RenderSessionHost();
-        MinecraftWorldSessionHost minecraftHost = new MinecraftWorldSessionHost();
         SettingsRegistry settings = new SettingsRegistry();
+        OptionLookup options = id -> { throw new AssertionError(id); };
+        RenderSessionHost host = new RenderSessionHost(options);
+        MinecraftWorldSessionHost minecraftHost = new MinecraftWorldSessionHost(options);
         ResourceId settingsSurvived = ResourceId.of("test", "settings-survived");
 
         class SessionFails implements CausticaExtension, CausticaSettingsExtension {
@@ -91,8 +99,9 @@ final class MinecraftApiBootstrapTest {
             }
         }
 
-        MinecraftApiBootstrap.registerExtensions(
-                host, minecraftHost, settings, List.of(new SessionFails(), new SettingsFails()));
+        List<CausticaExtension> generic = List.of(new SessionFails(), new SettingsFails());
+        MinecraftApiBootstrap.registerSettings(settings, generic, List.of());
+        MinecraftApiBootstrap.registerExtensions(host, minecraftHost, generic);
         EngineRenderSession session = host.openSession(owner -> new EmptyScope(), failure -> {
             throw new AssertionError(failure);
         });
@@ -112,6 +121,39 @@ final class MinecraftApiBootstrapTest {
         assertEquals(1, minecraftSession.contributionCount());
         minecraftSession.close();
         session.close();
+    }
+
+    @Test
+    void settingsAreDeclaredBeforeEitherProcessApiIsPublishedToExtensions() {
+        SettingsRegistry settings = new SettingsRegistry();
+        ResourceId feature = ResourceId.of("test", "ordered");
+        Option<Boolean> enabled = Option.bool("enabled", true);
+        boolean[] genericSawOptions = {false};
+        boolean[] minecraftSawOptions = {false};
+        class Ordered implements CausticaExtension, MinecraftExtension, CausticaSettingsExtension {
+            @Override public void registerSettings(SettingsRegistry registry) {
+                registry.feature(feature).option(enabled).register();
+            }
+            @Override public void register(CausticaApi api) {
+                genericSawOptions[0] = api.options().options(feature).get(enabled);
+            }
+            @Override public void registerMinecraft(MinecraftApi api) {
+                minecraftSawOptions[0] = api.options().options(feature).get(enabled);
+            }
+        }
+        Ordered extension = new Ordered();
+        List<CausticaExtension> generic = List.of(extension);
+        List<MinecraftExtension> minecraft = List.of(extension);
+        MinecraftApiBootstrap.registerSettings(settings, generic, minecraft);
+        OptionLookup options = CausticaOptions.load(temporaryDirectory.resolve("options.toml"), settings);
+        RenderSessionHost host = new RenderSessionHost(options);
+        MinecraftWorldSessionHost minecraftHost = new MinecraftWorldSessionHost(options);
+
+        MinecraftApiBootstrap.registerExtensions(host, minecraftHost, generic);
+        MinecraftApiBootstrap.registerMinecraftExtensions(minecraftHost, minecraft, generic);
+
+        assertTrue(genericSawOptions[0]);
+        assertTrue(minecraftSawOptions[0]);
     }
 
     private static final class EmptyScope implements ContributionScope {

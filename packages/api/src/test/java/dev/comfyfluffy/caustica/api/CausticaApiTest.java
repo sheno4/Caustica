@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.api;
 
 import dev.comfyfluffy.caustica.api.session.RenderSessionChannel;
+import dev.comfyfluffy.caustica.settings.OptionLookup;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertNotSame;
@@ -11,13 +12,16 @@ final class CausticaApiTest {
     @Test
     void constructorCreatesIndependentImmutableApiValues() {
         RenderSessionChannel sessions = stub(RenderSessionChannel.class);
-        CausticaApi first = new CausticaApi(sessions);
-        CausticaApi second = new CausticaApi(sessions);
+        OptionLookup options = feature -> { throw new AssertionError(feature); };
+        CausticaApi first = new CausticaApi(sessions, options);
+        CausticaApi second = new CausticaApi(sessions, options);
 
         assertSame(sessions, first.sessions());
         assertSame(sessions, second.sessions());
+        assertSame(options, first.options());
         assertNotSame(first, second);
-        assertThrows(NullPointerException.class, () -> new CausticaApi(null));
+        assertThrows(NullPointerException.class, () -> new CausticaApi(null, options));
+        assertThrows(NullPointerException.class, () -> new CausticaApi(sessions, null));
     }
 
     @SuppressWarnings("unchecked")

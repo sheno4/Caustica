@@ -19,7 +19,8 @@ final class SourceDependencyArchitectureTest {
     private static final Path MINECRAFT = MAIN_JAVA.resolve("dev/comfyfluffy/caustica/minecraft");
     private static final Path MINECRAFT_RENDERING = PROJECT_ROOT.resolve(
             "packages/minecraft-rendering/src/main/java/dev/comfyfluffy/caustica/minecraft");
-    private static final Path API = PROJECT_ROOT.resolve("api/src/main/java/dev/comfyfluffy/caustica/api");
+    private static final Path API = PROJECT_ROOT.resolve(
+            "packages/api/src/main/java/dev/comfyfluffy/caustica/api");
 
     @Test
     void minecraftSceneProducersDoNotImportRendererInternals() throws IOException {
@@ -41,9 +42,11 @@ final class SourceDependencyArchitectureTest {
     void supportedApiDoesNotImportHostOrImplementationPackages() throws IOException {
         String rootPackage = "dev.comfyfluffy.caustica";
         String apiPackage = rootPackage + ".api";
+        String settingsPackage = rootPackage + ".settings";
         assertNoImportsMatching(List.of(API), imported ->
                 (imported.equals(rootPackage) || imported.startsWith(rootPackage + "."))
-                        && !(imported.equals(apiPackage) || imported.startsWith(apiPackage + ".")));
+                        && !(imported.equals(apiPackage) || imported.startsWith(apiPackage + "."))
+                        && !(imported.equals(settingsPackage) || imported.startsWith(settingsPackage + ".")));
     }
 
     @Test
@@ -81,6 +84,18 @@ final class SourceDependencyArchitectureTest {
                 "MinecraftFrameAdapter must have exactly one entity publication ingress");
         assertFalse(readJavaSources(MAIN_JAVA).contains("RtEntities.INSTANCE"));
         assertFalse(readJavaSources(MAIN_JAVA).contains("RtEntityTextures.INSTANCE"));
+    }
+
+    @Test
+    void extensionSettingsHaveNoProcessLocator() throws IOException {
+        Path locator = PROJECT_ROOT.resolve(
+                "packages/settings-api/src/main/java/dev/comfyfluffy/caustica/settings/CausticaSettings.java");
+        String production = readJavaSources(PROJECT_ROOT.resolve("packages"))
+                + readJavaSources(MAIN_JAVA);
+
+        assertFalse(Files.exists(locator), "settings values must be supplied through process APIs");
+        assertFalse(production.contains("CausticaOptions.installed()"));
+        assertFalse(production.contains("CausticaSettings.getInstance()"));
     }
 
     private static int occurrences(String text, String value) {
