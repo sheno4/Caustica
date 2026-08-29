@@ -1,48 +1,49 @@
 package dev.comfyfluffy.caustica.example.showcase;
 
 import dev.comfyfluffy.caustica.api.pass.PassRegistration;
-import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.api.session.RenderSessionContext;
-import dev.comfyfluffy.caustica.api.session.RenderSessionContribution;
 import dev.comfyfluffy.caustica.api.view.Camera;
 import dev.comfyfluffy.caustica.api.view.SceneView;
 import dev.comfyfluffy.caustica.api.view.ViewMedium;
+import dev.comfyfluffy.caustica.minecraft.api.MinecraftEnvironmentSelector;
+import dev.comfyfluffy.caustica.minecraft.api.MinecraftWorldSessionContext;
+import dev.comfyfluffy.caustica.minecraft.api.MinecraftWorldSessionContribution;
 import dev.comfyfluffy.caustica.settings.OptionLookup;
 
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
-final class ShowcaseSession implements RenderSessionContribution {
-    private final RenderSessionContext context;
+final class ShowcaseSession implements MinecraftWorldSessionContribution {
+    private final MinecraftEnvironmentSelector environment;
     private final ShowcasePrograms programs;
     private final List<PassRegistration> passes;
-    private ShowcaseScene scene;
+    private final ShowcaseScene scene;
+    private final AtomicBoolean environmentPublished = new AtomicBoolean();
     private boolean stopped;
 
-    ShowcaseSession(RenderSessionContext context, OptionLookup options) {
-        this.context = context;
-        programs = new ShowcasePrograms(context.program(), System.err::println);
+    ShowcaseSession(MinecraftWorldSessionContext context, OptionLookup options) {
+        environment = context.environment();
+        RenderSessionContext renderSession = context.renderSession();
+        programs = new ShowcasePrograms(renderSession.program(), System.err::println);
+        scene = new ShowcaseScene(programs.exports(), context.scene(),
+                renderSession.geometry(), renderSession.lights());
         passes = List.of(
-                context.passes().addWorldResourcePass(setup -> ShowcasePasses.worldResource(setup.gpu())),
-                context.passes().addPostEffectPass(
+                renderSession.passes().addWorldResourcePass(
+                        setup -> ShowcasePasses.worldResource(setup.gpu(), this::publishEnvironmentWhenReady)),
+                renderSession.passes().addPostEffectPass(
                         ShowcasePasses.POST_EFFECT, ShowcasePasses.POST_EFFECT_PLACEMENT,
                         setup -> ShowcasePasses.postEffect(setup.gpu(), options)),
-                context.passes().addUiPass(
-                        ShowcasePasses.UI, ShowcasePasses.UI_PLACEMENT,
-                        setup -> ShowcasePasses.ui(setup.gpu())));
-    }
-
-    /** Called by the Minecraft-facing package when its host-owned scene becomes available. */
-    void openScene(SceneId sceneId) {
-        scene = new ShowcaseScene(programs.exports(), sceneId, context.geometry(), context.lights());
+                renderSession.passes().addUiPass(
+                        ShowcasePasses.UI, setup -> ShowcasePasses.ui(setup.gpu())));
     }
 
     SceneView vacuumView(Camera camera) {
-        return vacuumView(requireScene().identity(), camera);
+        return vacuumView(scene.identity(), camera);
     }
 
     SceneView underwaterView(Camera camera, long volumeBindingWord, long volumeInstanceWord) {
-        return volumeView(requireScene().identity(), camera, programs.exports().volume(),
+        return volumeView(scene.identity(), camera, programs.exports().volume(),
                 ShowcasePrograms.VOLUME_BINDING.data(volumeBindingWord),
                 ShowcasePrograms.INSTANCE.data(volumeInstanceWord));
     }
@@ -58,29 +59,16 @@ final class ShowcaseSession implements RenderSessionContribution {
         return new SceneView(scene, camera, new ViewMedium.Volume<>(volume, bindingData, instanceData));
     }
 
-    private ShowcaseScene requireScene() {
-        if (scene == null) throw new IllegalStateException("the host scene is not open");
-        return scene;
-    }
-
-    /** Binding exported to the Minecraft scene selector; this contribution receives no scene authority. */
-    EnvironmentBinding<ShowcasePrograms.EnvironmentBindingData> environment(
-            long bindingWord, Runnable retired) {
-        return programs.environmentBinding(bindingWord, retired);
-    }
-
-    /** Called by the Minecraft-facing package before its host-owned scene disappears. */
-    void closeScene() {
-        scene.stop();
-        scene = null;
+    private void publishEnvironmentWhenReady() {
+        if (programs.ready() && environmentPublished.compareAndSet(false, true)) {
+            environment.select(programs.environmentBinding(0L, () -> { }));
+        }
     }
 
     @Override
     public void stop() {
         passes.forEach(PassRegistration::close);
-        if (scene != null) {
-            closeScene();
-        }
+        scene.stop();
         programs.close();
         stopped = true;
     }

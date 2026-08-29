@@ -2,13 +2,9 @@ package dev.comfyfluffy.caustica.minecraft.overlay;
 
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.api.vulkan.GpuFrameUse;
-import org.lwjgl.PointerBuffer;
-import org.lwjgl.system.*;
-import org.lwjgl.util.vma.*;
-import org.lwjgl.vulkan.*;
+import dev.comfyfluffy.caustica.vulkan.VmaMappedHostBuffer;
 
 import java.nio.ByteBuffer;
-import java.nio.LongBuffer;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -39,40 +35,25 @@ final class OverlayFramePool {
     void close() { acquired.forEach(Buffer::close); acquired.clear(); }
 
     static final class Buffer implements AutoCloseable {
-        private final long allocator, handle, allocation, mapped, size;
-        private boolean closed;
-        private Buffer(long allocator, long handle, long allocation, long mapped, long size) {
-            this.allocator = allocator; this.handle = handle; this.allocation = allocation;
-            this.mapped = mapped; this.size = size;
+        private final VmaMappedHostBuffer allocation;
+
+        private Buffer(VmaMappedHostBuffer allocation) {
+            this.allocation = allocation;
         }
+
         static Buffer create(GpuDevice gpu, long size, int usage, String label) {
-            try (MemoryStack stack = MemoryStack.stackPush()) {
-                VkBufferCreateInfo info = VkBufferCreateInfo.calloc(stack).sType$Default().size(size)
-                        .usage(usage).sharingMode(VK_SHARING_MODE_EXCLUSIVE);
-                VmaAllocationCreateInfo allocationInfo = VmaAllocationCreateInfo.calloc(stack)
-                        .usage(Vma.VMA_MEMORY_USAGE_AUTO)
-                        .flags(Vma.VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
-                                | Vma.VMA_ALLOCATION_CREATE_MAPPED_BIT);
-                LongBuffer output = stack.mallocLong(1);
-                PointerBuffer allocation = stack.mallocPointer(1);
-                VmaAllocationInfo allocationOut = VmaAllocationInfo.calloc(stack);
-                int result = Vma.vmaCreateBuffer(gpu.vmaAllocator(), info, allocationInfo,
-                        output, allocation, allocationOut);
-                if (result != VK_SUCCESS) throw new IllegalStateException(label + " allocation failed: " + result);
-                return new Buffer(gpu.vmaAllocator(), output.get(0), allocation.get(0),
-                        allocationOut.pMappedData(), size);
-            }
+            return new Buffer(VmaMappedHostBuffer.create(gpu, size, usage, label));
         }
-        long handle() { return handle; }
-        long mapped() { return mapped; }
+
+        long handle() { return allocation.buffer(); }
+        ByteBuffer mapped() { return allocation.mapped(); }
+
         void flush(long offset, long bytes) {
-            if (offset < 0 || bytes < 0 || offset + bytes > size) throw new IllegalArgumentException("flush range");
-            Vma.vmaFlushAllocation(allocator, allocation, offset, bytes);
+            allocation.flush(offset, bytes);
         }
+
         @Override public void close() {
-            if (closed) return;
-            closed = true;
-            Vma.vmaDestroyBuffer(allocator, handle, allocation);
+            allocation.close();
         }
     }
 }

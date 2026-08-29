@@ -33,6 +33,7 @@ final class MinecraftWorldSessionHostTest {
         List<TestScope> scopes = new ArrayList<>();
         List<MinecraftSessionFailure> failures = new ArrayList<>();
         List<EnvironmentBinding<?>> selected = new ArrayList<>();
+        List<ContributionOwner> environmentOwners = new ArrayList<>();
         SceneId scene = new SceneId() { };
         MinecraftDimensionKey dimension = MinecraftDimensionKey.of("minecraft", "overworld");
         MinecraftWorldSessionHost host = new MinecraftWorldSessionHost(OPTIONS);
@@ -49,6 +50,8 @@ final class MinecraftWorldSessionHostTest {
         });
         host.api().sessions().add(context -> {
             assertSame(scopes.get(1).program, context.renderSession().program());
+            var type = ShaderDataType.<Object>create("second environment test");
+            context.environment().select(EnvironmentBinding.of(new EnvironmentId<>() { }, type.data(8)));
             return contribution("two", events, true);
         });
 
@@ -56,13 +59,17 @@ final class MinecraftWorldSessionHostTest {
             TestScope scope = new TestScope(Long.toString(owner.sequence()), events);
             scopes.add(scope);
             return scope;
-        }, (owner, borrowedScene) -> environmentScope(selected),
+        }, (owner, borrowedScene) -> {
+            environmentOwners.add(owner);
+            return environmentScope(selected);
+        },
                 scene, dimension, new ResourcePackEpoch(4), failures::add);
         session.processPendingChanges();
 
         assertEquals(2, session.contributionCount());
         assertNotSame(scopes.get(0).program, scopes.get(1).program);
-        assertEquals(1, selected.size());
+        assertEquals(2, selected.size());
+        assertEquals(List.of(1L, 2L), environmentOwners.stream().map(ContributionOwner::sequence).toList());
         session.resourcePackChanged(new ResourcePackEpoch(5));
         assertEquals(List.of("one:pack:5", "two:pack:5"), events);
         assertEquals(List.of(MinecraftSessionFailure.Stage.RESOURCE_PACK_CHANGED),

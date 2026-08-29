@@ -18,12 +18,20 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class ShowcasePassContractTest {
     @Test
-    void passPlacementsUseOnlyStageLocalOptionalAnchors() {
+    void postPlacementUsesTheProvenStageLocalBloomAnchor() {
         var post = (PassPlacement.After) ShowcasePasses.POST_EFFECT_PLACEMENT;
-        var ui = (PassPlacement.Before) ShowcasePasses.UI_PLACEMENT;
 
         assertSame(ShowcasePasses.BLOOM, post.anchor());
-        assertSame(ShowcasePasses.WORLD_OVERLAY, ui.anchor());
+    }
+
+    @Test
+    void worldResourcePassRunsReadyPublicationOutsideTheGpuRecordingProbe() {
+        AtomicBoolean published = new AtomicBoolean();
+        var pass = ShowcasePasses.worldResource(null, () -> published.set(true));
+
+        pass.record(null);
+
+        assertTrue(published.get());
     }
 
     @Test

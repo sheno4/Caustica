@@ -4,7 +4,6 @@ import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuImage;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 
 import dev.comfyfluffy.caustica.config.CausticaConfig;
-import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.engine.session.RenderSessionHost;
 import dev.comfyfluffy.caustica.minecraft.adapter.session.MinecraftEngineWorldSession;
 import dev.comfyfluffy.caustica.engine.frame.FrameSnapshot;
@@ -30,9 +29,12 @@ import java.io.IOException;
 import java.nio.file.Path;
 import org.lwjgl.vulkan.VkDevice;
 import org.lwjgl.vulkan.VkQueue;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /** Owns the live RT session and publishes one immutable rendering mode for each frame. */
 public final class RtRuntime {
+    private static final Logger LOGGER = LoggerFactory.getLogger(RtRuntime.class);
     enum State {
         OFF,
         STARTING,
@@ -197,10 +199,9 @@ public final class RtRuntime {
         return lifecycle.resourcePackEpoch() != null && lifecycle.pendingResourcePackEpoch() == null;
     }
 
-    /** Route host-side capture to the current scoped render pass when it exists. */
-    /** Monotonic index of RT composite attempts across runtime activations. */
+    /** Monotonic index of RT composite attempts in the current renderer instance. */
     public long frameCounter() {
-        return RtFrameRenderer.frameCounter();
+        return session != null && session.renderer != null ? session.renderer.frameCounter() : 0L;
     }
 
     public boolean rendererFailed() {
@@ -213,7 +214,7 @@ public final class RtRuntime {
     }
 
     public boolean exportLatestResidualExposureExr(Path outputPath) throws IOException {
-        return session != null && session.renderer != null
+        return frameActive && session != null && session.renderer != null
                 && session.renderer.exportLatestResidualExposureExr(outputPath);
     }
 
@@ -343,7 +344,7 @@ public final class RtRuntime {
             sessionReady = session.tick(sceneResources, worldEpoch, dimension,
                     displayWidth, displayHeight, starting);
         } catch (Throwable failure) {
-            CausticaMod.LOGGER.error("RT runtime scene work failed; source presentation remains active", failure);
+            LOGGER.error("RT runtime scene work failed; source presentation remains active", failure);
             fail(reconfigureSurface);
             return;
         }
@@ -368,7 +369,7 @@ public final class RtRuntime {
         if (CausticaConfig.Rt.Hdr.ENABLED.value()) {
             reconfigureSurface.run();
         }
-        CausticaMod.LOGGER.info("RT runtime active");
+        LOGGER.info("RT runtime active");
     }
 
     /** Latch the session state consumed by every hook in this render frame. */
@@ -472,7 +473,7 @@ public final class RtRuntime {
         VulkanRendererBackend backend = vulkanBackend;
         if (backend == null || !backend.capabilities().rayTracing()) {
             state = State.FAILED;
-            CausticaMod.LOGGER.warn("RT runtime unavailable: the Vulkan device was not provisioned for ray tracing");
+            LOGGER.warn("RT runtime unavailable: the Vulkan device was not provisioned for ray tracing");
             return;
         }
         RtLifecycleCoordinator.RenderSessionEpoch epoch = lifecycle.beginRenderSession();
@@ -491,7 +492,7 @@ public final class RtRuntime {
                     java.util.Objects.requireNonNull(
                     shaderCacheRoot, "shader cache is not configured"));
             state = State.STARTING;
-            CausticaMod.LOGGER.info("RT runtime starting; source presentation remains active");
+            LOGGER.info("RT runtime starting; source presentation remains active");
         } catch (Throwable failure) {
             try {
                 if (session != null) {
@@ -502,7 +503,7 @@ public final class RtRuntime {
                 lifecycle.closeRuntimeActivation(activationEpoch);
                 lifecycle.closeRenderSession(renderSessionEpoch);
                 state = State.FAILED;
-                CausticaMod.LOGGER.error("RT runtime could not create its render session", failure);
+                LOGGER.error("RT runtime could not create its render session", failure);
             }
         }
     }
@@ -513,12 +514,12 @@ public final class RtRuntime {
      */
     private void stop(Runnable reconfigureSurface) {
         closeSession(reconfigureSurface, State.OFF);
-        CausticaMod.LOGGER.info("RT runtime off; source presentation restored");
+        LOGGER.info("RT runtime off; source presentation restored");
     }
 
     private void fail(Runnable reconfigureSurface) {
         closeSession(reconfigureSurface, State.FAILED);
-        CausticaMod.LOGGER.warn("RT runtime startup failed; source presentation remains active");
+        LOGGER.warn("RT runtime startup failed; source presentation remains active");
     }
 
     private void closeSession(Runnable reconfigureSurface, State terminalState) {
@@ -603,14 +604,14 @@ public final class RtRuntime {
             scenes.progress();
             boolean resourcesReady = programs.active() != null;
             if (resourcesReady) {
-                RtFrameStats.FRAME.beginIfInactive();
+                telemetry.beginFrameIfInactive();
             }
             if (!sceneResources.sceneReady()) {
                 return false;
             }
             if (starting && (displayWidth <= 0 || displayHeight <= 0
                     || !renderer.ensurePresentationResourcesReady(
-                    context, requestedWorldEpoch, displayWidth, displayHeight))) {
+                    requestedWorldEpoch, displayWidth, displayHeight))) {
                 return false;
             }
             if (frameGeneration.enabled()) {
@@ -635,9 +636,9 @@ public final class RtRuntime {
                 world = new MinecraftEngineWorldSession(apiHost(),
                         minecraftSessionHost, context,
                         programs, scenes, passes, dimension, resourcePackEpoch,
-                        failure -> CausticaMod.LOGGER.error("Engine world-session failure", failure));
-                renderer = new RtFrameRenderer(programs, scenes, passes,
-                        world.services(), presenter, rayReconstruction);
+                        failure -> LOGGER.error("Engine world-session failure", failure));
+                renderer = new RtFrameRenderer(context, programs, scenes, passes,
+                        world.services(), presenter, rayReconstruction, telemetry);
                 worldEpoch = epoch;
             } catch (Throwable failure) {
                 closeWorld();
@@ -656,7 +657,7 @@ public final class RtRuntime {
         }
 
         private void resourceReloadFailed(Throwable failure) {
-            CausticaMod.LOGGER.warn("Resource-pack reload failed; keeping the active engine epoch", failure);
+            LOGGER.warn("Resource-pack reload failed; keeping the active engine epoch", failure);
         }
 
         private void closeWorld() {

@@ -23,16 +23,15 @@ final class ShowcasePasses {
     static final PassId BLOOM = PassId.of("caustica", "bloom");
     static final PassId POST_EFFECT = PassId.of("caustica_showcase", "colour_grade");
     static final PassId UI = PassId.of("caustica_showcase", "world_marker");
-    static final PassId WORLD_OVERLAY = PassId.of("caustica", "world_overlay");
     static final PassPlacement POST_EFFECT_PLACEMENT = PassPlacement.after(BLOOM);
-    static final PassPlacement UI_PLACEMENT = PassPlacement.before(WORLD_OVERLAY);
 
     private ShowcasePasses() { }
 
-    static Pass<PassFrame> worldResource(GpuDevice gpu) {
+    static Pass<PassFrame> worldResource(GpuDevice gpu, Runnable publishReadyEnvironment) {
         return new Pass<>() {
             @Override
             public void record(PassFrame frame) {
+                publishReadyEnvironment.run();
                 if (runtimeGpuRecordingEnabled()) {
                     var view = frame.view();
                     double shaderTime = frame.timeSeconds();

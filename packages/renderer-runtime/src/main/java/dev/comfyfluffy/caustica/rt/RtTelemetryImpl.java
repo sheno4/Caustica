@@ -7,7 +7,12 @@ import java.util.function.LongConsumer;
 
 /** Renderer-owned telemetry implementation. */
 public final class RtTelemetryImpl implements RtTelemetry {
+    private final RtFrameStats frameStats;
+    private final RtGeometryProfiling geometryProfiling;
+
     public RtTelemetryImpl() {
+        frameStats = new RtFrameStats();
+        geometryProfiling = new RtGeometryProfiling(frameStats);
     }
 
     @Override
@@ -17,23 +22,38 @@ public final class RtTelemetryImpl implements RtTelemetry {
 
     @Override
     public long frameSerial() {
-        return RtFrameStats.frameSerial();
+        return frameStats.frameSerial();
     }
 
     @Override
     public Frame frame() {
-        return RtFrameStats.FRAME;
+        return frameStats.frame();
+    }
+
+    @Override
+    public void beginRenderFrame() {
+        frameStats.beginRenderFrame();
+    }
+
+    @Override
+    public void beginFrameIfInactive() {
+        frameStats.frame().beginIfInactive();
+    }
+
+    @Override
+    public void endFrame() {
+        frameStats.frame().end();
     }
 
     @Override
     public void configure(Path outputDirectory, MetricSchema minecraftMetrics) {
-        RtFrameStats.configureOutputDirectory(outputDirectory);
-        RtFrameStats.configureFrameMetrics(minecraftMetrics);
+        frameStats.configureOutputDirectory(outputDirectory);
+        frameStats.configureFrameMetrics(minecraftMetrics);
     }
 
     @Override
     public ExtractionStamp extraction(GeometrySource source, int geometryCount) {
-        return RtGeometryProfiling.extraction(switch (source) {
+        return geometryProfiling.extraction(switch (source) {
             case TERRAIN -> RtGeometryProfiling.SourceKind.TERRAIN;
             case TERRAIN_READY -> RtGeometryProfiling.SourceKind.TERRAIN_READY;
             case ENTITY -> RtGeometryProfiling.SourceKind.ENTITY;
@@ -45,11 +65,11 @@ public final class RtTelemetryImpl implements RtTelemetry {
 
     @Override
     public void published(ExtractionStamp stamp) {
-        RtGeometryProfiling.published((RtGeometryProfiling.ExtractionStamp) stamp);
+        geometryProfiling.published((RtGeometryProfiling.ExtractionStamp) stamp);
     }
 
     @Override
     public void afterPublicationVisible(LongConsumer action) {
-        RtGeometryProfiling.afterPublicationVisible(action);
+        geometryProfiling.afterPublicationVisible(action);
     }
 }

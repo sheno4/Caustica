@@ -3,11 +3,11 @@ package dev.comfyfluffy.caustica.minecraft.overlay;
 import org.joml.Matrix4f;
 import org.joml.Matrix4fc;
 import org.lwjgl.system.MemoryStack;
-import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkCommandBuffer;
 
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.List;
 
 import dev.comfyfluffy.caustica.api.vulkan.GpuFrameUse;
@@ -103,8 +103,8 @@ final class GlowOutlineFeature implements OverlayFeature {
 
         vbo = pool.acquireVertex(device, (long) mergedVerts.length * Float.BYTES, "glow vbo");
         ibo = pool.acquireIndex(device, (long) mergedIdx.length * Integer.BYTES, "glow ibo");
-        MemoryUtil.memFloatBuffer(vbo.mapped(), mergedVerts.length).put(mergedVerts);
-        MemoryUtil.memIntBuffer(ibo.mapped(), mergedIdx.length).put(mergedIdx);
+        vbo.mapped().order(ByteOrder.nativeOrder()).asFloatBuffer().put(mergedVerts);
+        ibo.mapped().order(ByteOrder.nativeOrder()).asIntBuffer().put(mergedIdx);
         vbo.flush(0L, (long) mergedVerts.length * Float.BYTES);
         ibo.flush(0L, (long) mergedIdx.length * Integer.BYTES);
 

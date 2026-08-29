@@ -66,9 +66,8 @@ final class RtNeeAtBackend {
         if (state.active != null) throw new IllegalStateException("lighting frame is already active");
         state.ensure(input.width(), input.height(),
                 Math.max(lights.size(), state.previousLights.size()));
-        boolean continuous = input.historyContinuous() && state.hasHistory
-                && input.frameIndex() == state.lastFrameIndex + 1
-                && input.width() == state.width && input.height() == state.height;
+        boolean continuous = historyValid(input, state.hasHistory, state.lastFrameIndex,
+                state.width, state.height);
         int targetIndex = state.cursor ^ 1;
         Frame target = state.frames[targetIndex];
         Frame previous = state.frames[state.cursor];
@@ -193,6 +192,13 @@ final class RtNeeAtBackend {
 
     private static int divideRoundUp(int value, int divisor) {
         return Math.max(1, (value + divisor - 1) / divisor);
+    }
+
+    static boolean historyValid(FrameInput input, boolean hasHistory, long lastFrameIndex,
+                                int historyWidth, int historyHeight) {
+        return input.historyContinuous() && hasHistory
+                && input.frameIndex() == lastFrameIndex + 1
+                && input.width() == historyWidth && input.height() == historyHeight;
     }
 
     private static void computeBarrier(VkCommandBuffer commandBuffer) {

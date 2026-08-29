@@ -13,7 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class RtWorldPassSeparationTest {
     private static final Path WORLD = Path.of(
-            "packages/renderer-raytracing/src/main/resources/caustica/shaders/world");
+            "../renderer-raytracing/src/main/resources/caustica/shaders/world");
 
     @Test
     void indirectRaygensDoNotReusePrimaryOrWriteGuides() throws IOException {

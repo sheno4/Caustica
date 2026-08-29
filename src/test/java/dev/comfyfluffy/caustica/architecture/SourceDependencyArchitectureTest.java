@@ -52,7 +52,7 @@ final class SourceDependencyArchitectureTest {
     @Test
     void minecraftFrameSelectionUsesOnlyEngineIssuedSceneIds() throws IOException {
         Path adapter = MINECRAFT.resolve("MinecraftFrameAdapter.java");
-        Path selector = MINECRAFT.resolve("MinecraftFrameSelector.java");
+        Path selector = MINECRAFT_RENDERING.resolve("MinecraftFrameSelector.java");
         assertFalse(Files.readString(adapter).contains("new SceneId"),
                 "MinecraftFrameAdapter must not fabricate a SceneId");
         assertFalse(Files.readString(selector).contains("static volatile"),

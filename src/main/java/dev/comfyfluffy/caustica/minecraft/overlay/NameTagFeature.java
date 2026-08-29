@@ -10,7 +10,6 @@ import org.joml.Matrix4f;
 import org.joml.Matrix4fc;
 import org.joml.Quaternionf;
 import org.lwjgl.system.MemoryStack;
-import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkCommandBuffer;
 
@@ -121,7 +120,7 @@ final class NameTagFeature implements OverlayFeature {
                 continue;
             }
             OverlayFramePool.Buffer vbo = pool.acquireVertex(device, (long) vertexCount * VERTEX_STRIDE, "name tag vbo");
-            ByteBuffer buf = MemoryUtil.memByteBuffer(vbo.mapped(), vertexCount * VERTEX_STRIDE).order(ByteOrder.LITTLE_ENDIAN);
+            ByteBuffer buf = vbo.mapped().order(ByteOrder.LITTLE_ENDIAN);
             float[] posUv = b.posUv.elements();
             for (int v = 0; v < vertexCount; v++) {
                 int o = v * 5;

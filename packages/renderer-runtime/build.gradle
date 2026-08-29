@@ -1,0 +1,152 @@
+plugins {
+    id "java-library"
+    id "maven-publish"
+}
+
+version = project.api_version
+group = project.maven_group
+java.toolchain.languageVersion = JavaLanguageVersion.of(25)
+
+base { archivesName = "caustica-renderer-runtime" }
+repositories { mavenCentral() }
+
+dependencies {
+    api project(":packages:api")
+    api project(":packages:engine")
+    api project(":packages:engine-vulkan")
+    api project(":packages:minecraft-api")
+    api project(":packages:minecraft-adapter")
+    api project(":packages:nvidia-ngx")
+    api project(":packages:slang-runtime")
+    implementation project(":packages:config")
+    implementation project(":packages:renderer-presentation")
+    implementation project(":packages:renderer-raytracing")
+    implementation project(":packages:vulkan-support")
+    implementation "org.slf4j:slf4j-api:2.0.17"
+
+    testImplementation platform("org.junit:junit-bom:5.12.2")
+    testImplementation "org.junit.jupiter:junit-jupiter"
+    testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+}
+
+def verifyRendererRuntimeImports = tasks.register("verifyRendererRuntimeImports") {
+    group = "verification"
+    description = "Verifies that renderer orchestration has no root-mod, client, loader, or Minecraft runtime imports."
+    inputs.files(sourceSets.main.allJava)
+    doLast {
+        def forbidden = [
+                "dev.comfyfluffy.caustica.CausticaMod",
+                "dev.comfyfluffy.caustica.client",
+                "dev.comfyfluffy.caustica.platform",
+                "dev.comfyfluffy.caustica.fabric",
+                "dev.comfyfluffy.caustica.neoforge",
+                "net.minecraft",
+                "com.mojang",
+                "net.fabricmc",
+                "net.neoforged"
+        ]
+        def violations = []
+        sourceSets.main.allJava.files.sort().each { source ->
+            source.eachLine { line, number ->
+                def minecraftImplementation = line.contains("dev.comfyfluffy.caustica.minecraft.")
+                        && !line.contains("dev.comfyfluffy.caustica.minecraft.api.")
+                        && !line.contains("dev.comfyfluffy.caustica.minecraft.adapter.")
+                if (line.stripLeading().startsWith("import ")
+                        && (forbidden.any { line.contains(it) } || minecraftImplementation)) {
+                    violations += "${source}:${number}: ${line.trim()}"
+                }
+            }
+        }
+        if (!violations.empty) {
+            throw new GradleException("renderer-runtime import violations:\n${violations.join('\n')}")
+        }
+    }
+}
+
+def verifyRendererRuntimeDependencies = tasks.register("verifyRendererRuntimeDependencies") {
+    group = "verification"
+    doLast {
+        def allowed = [project.path, ":packages:api", ":packages:config", ":packages:engine",
+                       ":packages:engine-vulkan", ":packages:minecraft-api",
+                       ":packages:minecraft-adapter", ":packages:nvidia-ngx",
+                       ":packages:renderer-presentation", ":packages:renderer-raytracing",
+                       ":packages:slang-runtime", ":packages:vulkan-support"] as Set
+        def violations = []
+        configurations.matching { it.canBeResolved }.each { configuration ->
+            configuration.allDependencies.withType(ProjectDependency).each { dependency ->
+                if (!allowed.contains(dependency.path)) {
+                    violations += "${configuration.name}: ${dependency.path}"
+                }
+            }
+        }
+        if (!violations.empty) {
+            throw new GradleException("renderer-runtime dependency violations:\n${violations.join('\n')}")
+        }
+    }
+}
+
+def verifyRendererRuntimeJar = tasks.register("verifyRendererRuntimeJar") {
+    group = "verification"
+    dependsOn tasks.named("jar")
+    doLast {
+        def names = []
+        new java.util.jar.JarFile(tasks.named("jar", Jar).get().archiveFile.get().asFile).withCloseable { jar ->
+            def entries = jar.entries()
+            while (entries.hasMoreElements()) names += entries.nextElement().name
+        }
+        def rtRoot = "dev/comfyfluffy/caustica/rt/"
+        def hostRoot = "dev/comfyfluffy/caustica/spi/host/"
+        def foreign = names.findAll { it.endsWith(".class")
+                && !it.startsWith(rtRoot) && !it.startsWith(hostRoot) }
+        def required = ["RtRuntime.class", "RtTelemetry.class", "RtTelemetryImpl.class",
+                        "RtLifecycleCoordinator.class", "pass/RtPassSchedulerBackend.class",
+                        "pipeline/RtJitter.class"].collect { rtRoot + it }
+        required += [hostRoot + "RuntimeHost.class"]
+        if (!foreign.empty || !names.containsAll(required)) {
+            throw new GradleException("renderer-runtime JAR mismatch: foreign=${foreign}, missing=${required - names}")
+        }
+    }
+}
+
+def verifyRendererRuntimeOwnership = tasks.register("verifyRendererRuntimeOwnership") {
+    group = "verification"
+    doLast {
+        def legacyRoots = [rootProject.file("src/main/java/dev/comfyfluffy/caustica/rt"),
+                           rootProject.file("src/main/java/dev/comfyfluffy/caustica/spi/host/RuntimeHost.java")]
+        def legacy = legacyRoots.findAll { it.isFile() || it.isDirectory() && !fileTree(it).files.empty }
+        if (!legacy.empty) {
+            throw new GradleException("legacy renderer-runtime ownership remains: ${legacy}")
+        }
+    }
+}
+
+tasks.named("test", Test) {
+    useJUnitPlatform()
+    jvmArgs "--enable-native-access=ALL-UNNAMED"
+}
+tasks.named("check") {
+    dependsOn verifyRendererRuntimeImports, verifyRendererRuntimeDependencies,
+            verifyRendererRuntimeJar, verifyRendererRuntimeOwnership
+}
+tasks.withType(JavaCompile).configureEach { options.release = 25 }
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_25
+    targetCompatibility = JavaVersion.VERSION_25
+    withSourcesJar()
+}
+
+tasks.named("jar", Jar).configure {
+    from(rootProject.files("LICENSE.md", "COPYING", "COPYING.LESSER", "THIRD_PARTY_NOTICES.md")) {
+        into "META-INF"
+    }
+}
+
+publishing {
+    publications {
+        create("mavenJava", MavenPublication) {
+            artifactId = "caustica-renderer-runtime"
+            from components.java
+        }
+    }
+}

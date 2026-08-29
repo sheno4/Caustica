@@ -169,7 +169,7 @@ final class VulkanDescriptorHeap implements GpuDescriptorHeap, DescriptorHeapNat
     public void writeSampler(long destinationHostAddress, VkSamplerCreateInfo sampler) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkHostAddressRangeEXT.Buffer destination = destination(stack, destinationHostAddress,
-                    properties.samplerDescriptorStride());
+                    properties.samplerDescriptorStrideBytes());
             VulkanDeviceContext.check(EXTDescriptorHeap.nvkWriteSamplerDescriptorsEXT(
                     vk, 1, sampler.address(), destination.address()), "vkWriteSamplerDescriptorsEXT");
         }
@@ -179,7 +179,7 @@ final class VulkanDescriptorHeap implements GpuDescriptorHeap, DescriptorHeapNat
     public void writeSamplers(long destinationHostAddress, VkSamplerCreateInfo.Buffer samplers) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkHostAddressRangeEXT.Buffer destinations = destinations(stack, destinationHostAddress,
-                    properties.samplerDescriptorStride(), samplers.remaining());
+                    properties.samplerDescriptorStrideBytes(), samplers.remaining());
             VulkanDeviceContext.check(EXTDescriptorHeap.nvkWriteSamplerDescriptorsEXT(
                     vk, samplers.remaining(), samplers.address(), destinations.address()),
                     "vkWriteSamplerDescriptorsEXT");
@@ -191,7 +191,7 @@ final class VulkanDescriptorHeap implements GpuDescriptorHeap, DescriptorHeapNat
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkResourceDescriptorInfoEXT.Buffer resources = imageResources(stack, images);
             VkHostAddressRangeEXT.Buffer destinations = destinations(stack, destinationHostAddress,
-                    properties.resourceDescriptorStride(), images.size());
+                    properties.resourceDescriptorStrideBytes(), images.size());
             VulkanDeviceContext.check(EXTDescriptorHeap.nvkWriteResourceDescriptorsEXT(
                     vk, images.size(), resources.address(), destinations.address()),
                     "vkWriteResourceDescriptorsEXT");
@@ -217,7 +217,7 @@ final class VulkanDescriptorHeap implements GpuDescriptorHeap, DescriptorHeapNat
     public void writeResource(long destinationHostAddress, VkResourceDescriptorInfoEXT resource) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkHostAddressRangeEXT.Buffer destination = destination(stack, destinationHostAddress,
-                    properties.resourceDescriptorStride());
+                    properties.resourceDescriptorStrideBytes());
             VulkanDeviceContext.check(EXTDescriptorHeap.nvkWriteResourceDescriptorsEXT(
                     vk, 1, resource.address(), destination.address()), "vkWriteResourceDescriptorsEXT");
         }

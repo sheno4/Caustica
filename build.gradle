@@ -15,6 +15,7 @@ evaluationDependsOn(":packages:minecraft-rendering")
 evaluationDependsOn(":packages:nvidia-ngx")
 evaluationDependsOn(":packages:renderer-presentation")
 evaluationDependsOn(":packages:renderer-raytracing")
+evaluationDependsOn(":packages:renderer-runtime")
 evaluationDependsOn(":packages:slang-runtime")
 
 def loader = (findProperty("loader") ?: "fabric").toString().toLowerCase(Locale.ROOT)
@@ -125,6 +126,7 @@ if (loader == "fabric") {
 				sourceSet(project(":packages:nvidia-ngx").sourceSets.main)
 				sourceSet(project(":packages:renderer-presentation").sourceSets.main)
 				sourceSet(project(":packages:renderer-raytracing").sourceSets.main)
+				sourceSet(project(":packages:renderer-runtime").sourceSets.main)
 				sourceSet(project(":packages:settings-api").sourceSets.main)
 				sourceSet(project(":packages:shader-api").sourceSets.main)
 				sourceSet(project(":packages:slang-runtime").sourceSets.main)
@@ -170,6 +172,8 @@ dependencies {
 	apiRuntime project(":packages:renderer-presentation")
 	compileOnly project(":packages:renderer-raytracing")
 	apiRuntime project(":packages:renderer-raytracing")
+	compileOnly project(":packages:renderer-runtime")
+	apiRuntime project(":packages:renderer-runtime")
 	compileOnly project(":packages:settings-api")
 	apiRuntime project(":packages:settings-api")
 	compileOnly project(":packages:slang-runtime")
@@ -197,6 +201,7 @@ dependencies {
 	testImplementation project(":packages:nvidia-ngx")
 	testImplementation project(":packages:renderer-presentation")
 	testImplementation project(":packages:renderer-raytracing")
+	testImplementation project(":packages:renderer-runtime")
 	testImplementation project(":packages:settings-api")
 	testImplementation project(":packages:slang-runtime")
 	testImplementation project(":packages:vulkan-support")
@@ -213,6 +218,7 @@ dependencies {
 	testRuntimeOnly project(":packages:nvidia-ngx")
 	testRuntimeOnly project(":packages:renderer-presentation")
 	testRuntimeOnly project(":packages:renderer-raytracing")
+	testRuntimeOnly project(":packages:renderer-runtime")
 	testRuntimeOnly project(":packages:settings-api")
 	testRuntimeOnly project(":packages:slang-runtime")
 	testRuntimeOnly project(":packages:vulkan-support")
@@ -292,59 +298,6 @@ def verifyRtBindingsGeneration = tasks.register("verifyRtBindingsGeneration") {
 	dependsOn(project(":packages:renderer-raytracing").tasks.named("verifyRayTracingAbi"))
 }
 
-def verifyNeeAtAbi = tasks.register("verifyNeeAtAbi") {
-	group = "verification"
-	description = "Verifies the renderer package's reflected NEE-AT record."
-	dependsOn(project(":packages:renderer-raytracing").tasks.named("verifyRayTracingAbi"))
-}
-
-def verifyRetainedGeometryAbi = tasks.register("verifyRetainedGeometryAbi") {
-	group = "verification"
-	description = "Verifies the renderer package's reflected retained geometry record."
-	dependsOn(project(":packages:renderer-raytracing").tasks.named("verifyRayTracingAbi"))
-}
-
-def verifyRetainedLightAbi = tasks.register("verifyRetainedLightAbi") {
-	group = "verification"
-	description = "Verifies the renderer package's reflected retained light record."
-	dependsOn(project(":packages:renderer-raytracing").tasks.named("verifyRayTracingAbi"))
-}
-
-def verifyRetainedLightShader = tasks.register("verifyRetainedLightShader") {
-	group = "verification"
-	description = "Verifies the renderer package's retained-light shader contract."
-	dependsOn(project(":packages:renderer-raytracing").tasks.named("verifyRetainedLightShader"))
-}
-
-def compileRetainedLightSlice = tasks.register("compileRetainedLightSlice", JavaCompile) {
-	group = "verification"
-	dependsOn(project(":packages:engine").tasks.named("classes"),
-			project(":packages:renderer-raytracing").tasks.named("classes"))
-	source(file("src/main/java/dev/comfyfluffy/caustica/rt/scene/RtRetainedLightPlan.java"))
-	classpath = sourceSets.main.compileClasspath
-	destinationDirectory = layout.buildDirectory.dir("classes/retained-light-slice")
-	options.release = 25
-}
-
-def compileRetainedLightSliceTest = tasks.register("compileRetainedLightSliceTest", JavaCompile) {
-	group = "verification"
-	dependsOn(compileRetainedLightSlice)
-	source(file("src/test/java/dev/comfyfluffy/caustica/rt/scene/RtRetainedLightPlanTest.java"))
-	classpath = configurations.testCompileClasspath + files(compileRetainedLightSlice.flatMap { it.destinationDirectory })
-	destinationDirectory = layout.buildDirectory.dir("classes/retained-light-slice-test")
-	options.release = 25
-}
-
-tasks.register("retainedLightSliceTest", Test) {
-	group = "verification"
-	dependsOn(compileRetainedLightSliceTest, verifyRetainedLightAbi, verifyNeeAtAbi,
-			verifyRetainedLightShader)
-	testClassesDirs = files(compileRetainedLightSliceTest.flatMap { it.destinationDirectory })
-	classpath = files(compileRetainedLightSlice.flatMap { it.destinationDirectory },
-			compileRetainedLightSliceTest.flatMap { it.destinationDirectory }) + configurations.testRuntimeClasspath
-	useJUnitPlatform()
-}
-
 tasks.named("test", Test) {
 	useJUnitPlatform()
 }
@@ -396,6 +349,7 @@ tasks.named("jar", Jar).configure {
 	from(project(":packages:nvidia-ngx").sourceSets.main.output)
 	from(project(":packages:renderer-presentation").sourceSets.main.output)
 	from(project(":packages:renderer-raytracing").sourceSets.main.output)
+	from(project(":packages:renderer-runtime").sourceSets.main.output)
 	from(project(":packages:settings-api").sourceSets.main.output)
 	from(project(":packages:shader-api").sourceSets.main.output)
 	from(project(":packages:slang-runtime").sourceSets.main.output)
@@ -423,6 +377,7 @@ tasks.named("sourcesJar", Jar).configure {
 	from(project(":packages:renderer-presentation").sourceSets.main.allSource)
 	from(project(":packages:renderer-presentation").file("shaders")) { into "shaders/presentation" }
 	from(project(":packages:renderer-raytracing").sourceSets.main.allSource)
+	from(project(":packages:renderer-runtime").sourceSets.main.allSource)
 	from(project(":packages:settings-api").sourceSets.main.allSource)
 	from(project(":packages:shader-api").sourceSets.main.allSource)
 	from(project(":packages:slang-runtime").sourceSets.main.allJava)
@@ -446,6 +401,7 @@ def verifyEmbeddedApi = tasks.register("verifyEmbeddedApi") {
 			project(":packages:nvidia-ngx").tasks.named("jar"),
 			project(":packages:renderer-presentation").tasks.named("jar"),
 			project(":packages:renderer-raytracing").tasks.named("jar"),
+			project(":packages:renderer-runtime").tasks.named("jar"),
 			project(":packages:settings-api").tasks.named("jar"),
 			project(":packages:shader-api").tasks.named("jar"),
 			project(":packages:slang-runtime").tasks.named("jar"),
@@ -464,6 +420,7 @@ def verifyEmbeddedApi = tasks.register("verifyEmbeddedApi") {
 	inputs.file(project(":packages:nvidia-ngx").tasks.named("jar", Jar).flatMap { it.archiveFile })
 	inputs.file(project(":packages:renderer-presentation").tasks.named("jar", Jar).flatMap { it.archiveFile })
 	inputs.file(project(":packages:renderer-raytracing").tasks.named("jar", Jar).flatMap { it.archiveFile })
+	inputs.file(project(":packages:renderer-runtime").tasks.named("jar", Jar).flatMap { it.archiveFile })
 	inputs.file(project(":packages:settings-api").tasks.named("jar", Jar).flatMap { it.archiveFile })
 	inputs.file(project(":packages:shader-api").tasks.named("jar", Jar).flatMap { it.archiveFile })
 	inputs.file(project(":packages:slang-runtime").tasks.named("jar", Jar).flatMap { it.archiveFile })
@@ -496,6 +453,8 @@ def verifyEmbeddedApi = tasks.register("verifyEmbeddedApi") {
 				.get().archiveFile.get().asFile)
 		def rendererRayTracingEntries = names(project(":packages:renderer-raytracing").tasks.named("jar", Jar)
 				.get().archiveFile.get().asFile)
+		def rendererRuntimeEntries = names(project(":packages:renderer-runtime").tasks.named("jar", Jar)
+				.get().archiveFile.get().asFile)
 		def settingsApiEntries = names(project(":packages:settings-api").tasks.named("jar", Jar).get().archiveFile.get().asFile)
 		def shaderApiEntries = names(project(":packages:shader-api").tasks.named("jar", Jar).get().archiveFile.get().asFile)
 		def slangRuntimeEntries = names(project(":packages:slang-runtime").tasks.named("jar", Jar)
@@ -521,8 +480,8 @@ def verifyEmbeddedApi = tasks.register("verifyEmbeddedApi") {
 				|| it.startsWith("caustica/color/") && !it.endsWith("/") })
 		required.addAll(rendererRayTracingEntries.findAll { it.endsWith(".class")
 				|| it.startsWith("caustica/shaders/world/") && !it.endsWith("/")
-				|| it.startsWith("caustica/shaders/pipelines/nee_at/") && !it.endsWith("/")
-				|| it.startsWith("caustica/shaders/pipelines/opacity_micromap/") && !it.endsWith("/") })
+				|| it.startsWith("caustica/shaders/pipelines/nee_at/") && !it.endsWith("/") })
+		required.addAll(rendererRuntimeEntries.findAll { it.endsWith(".class") })
 		required.addAll(settingsApiEntries.findAll { it.endsWith(".class") })
 		required.addAll(shaderApiEntries.findAll { entry ->
 			entry.startsWith("caustica/shaders/api/") && !entry.endsWith("/")
@@ -544,6 +503,8 @@ def verifySlangRuntimeOwnership = tasks.register("verifySlangRuntimeOwnership") 
 	group = "verification"
 	description = "Verifies that renderer compilation receives Slang through explicit ownership."
 	inputs.files(sourceSets.main.allJava, sourceSets.test.allJava,
+			project(":packages:renderer-runtime").sourceSets.main.allJava,
+			project(":packages:renderer-runtime").sourceSets.test.allJava,
 			project(":packages:slang-runtime").sourceSets.main.allJava,
 			project(":packages:slang-runtime").sourceSets.test.allJava)
 	doLast {
@@ -571,6 +532,7 @@ tasks.named("check") {
 			project(":packages:nvidia-ngx").tasks.named("check"),
 			project(":packages:renderer-presentation").tasks.named("check"),
 			project(":packages:renderer-raytracing").tasks.named("check"),
+			project(":packages:renderer-runtime").tasks.named("check"),
 			project(":packages:slang-runtime").tasks.named("check"),
 			project(":packages:vulkan-support").tasks.named("check"))
 }

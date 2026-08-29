@@ -18,7 +18,6 @@ dependencies {
     api project(":packages:api")
     api project(":packages:minecraft-api")
     api project(":packages:settings-api")
-    implementation project(":packages:engine")
     implementation project(":packages:vulkan-support")
     api project(":packages:minecraft-content")
     implementation "org.slf4j:slf4j-api:2.0.17"
@@ -142,7 +141,7 @@ def verifyMinecraftRenderingGenerationReproducible = tasks.register("verifyMinec
 def verifyMinecraftRenderingDependencies = tasks.register("verifyMinecraftRenderingDependencies") {
     group = "verification"
     doLast {
-        def allowed = [project.path, ":packages:api", ":packages:shader-api", ":packages:engine",
+        def allowed = [project.path, ":packages:api", ":packages:shader-api",
                        ":packages:minecraft-api", ":packages:minecraft-content", ":packages:settings-api",
                        ":packages:vulkan-support"] as Set
         def violations = []
@@ -162,7 +161,7 @@ def verifyMinecraftRenderingImports = tasks.register("verifyMinecraftRenderingIm
         def forbidden = ["com.mojang", "net.minecraft", "net.fabricmc", "net.neoforged",
                          "dev.comfyfluffy.caustica.CausticaMod", "dev.comfyfluffy.caustica.rt",
                          "dev.comfyfluffy.caustica.platform", "dev.comfyfluffy.caustica.mixin",
-                         "dev.comfyfluffy.caustica.renderer"]
+                         "dev.comfyfluffy.caustica.renderer", "dev.comfyfluffy.caustica.engine"]
         def violations = []
         sourceSets.main.allJava.files.sort().each { file ->
             file.eachLine { line, number ->
@@ -213,6 +212,11 @@ def verifyMinecraftRenderingJar = tasks.register("verifyMinecraftRenderingJar") 
                 "dev/comfyfluffy/caustica/minecraft/material/MinecraftMaterialUploadPass",
                 "dev/comfyfluffy/caustica/minecraft/material/MinecraftProgramResources",
                 "dev/comfyfluffy/caustica/minecraft/MinecraftLightingCalibration",
+                "dev/comfyfluffy/caustica/minecraft/MinecraftFrameSelector",
+                "dev/comfyfluffy/caustica/minecraft/MinecraftFrameSelectionInstaller",
+                "dev/comfyfluffy/caustica/minecraft/MinecraftFrameCaptureInstaller",
+                "dev/comfyfluffy/caustica/minecraft/MinecraftFrameCaptureState",
+                "dev/comfyfluffy/caustica/minecraft/MinecraftEntityCaptureBinding",
                 "dev/comfyfluffy/caustica/minecraft/terrain/MinecraftTerrainGeometry",
                 "dev/comfyfluffy/caustica/minecraft/terrain/MinecraftTerrainLightAdapter",
                 "dev/comfyfluffy/caustica/minecraft/terrain/MinecraftTerrainMesh",
@@ -232,6 +236,7 @@ def verifyMinecraftRenderingJar = tasks.register("verifyMinecraftRenderingJar") 
                 ,"dev/comfyfluffy/caustica/minecraft/MinecraftCelestialFrame"
                 ,"dev/comfyfluffy/caustica/minecraft/MinecraftLightFrame"
                 ,"dev/comfyfluffy/caustica/minecraft/MinecraftSkyFrame"
+                ,"dev/comfyfluffy/caustica/minecraft/light/"
                 ,"dev/comfyfluffy/caustica/minecraft/provider/MinecraftLightProvider"
                 ,"dev/comfyfluffy/caustica/minecraft/sky/MinecraftSkyCatalog"
                 ,"dev/comfyfluffy/caustica/minecraft/sky/SkyLutPass"

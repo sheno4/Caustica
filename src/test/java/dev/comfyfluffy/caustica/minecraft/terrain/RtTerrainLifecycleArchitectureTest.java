@@ -27,7 +27,8 @@ final class RtTerrainLifecycleArchitectureTest {
         assertTrue(stop >= 0 && producers > stop && shutdown > producers);
         assertEquals(1, occurrences(session, "terrain.shutdown();"));
 
-        String runtime = source("rt/RtRuntime.java");
+        String runtime = Files.readString(Path.of(
+                "packages/renderer-runtime/src/main/java/dev/comfyfluffy/caustica/rt/RtRuntime.java"));
         int worldClose = runtime.indexOf("world.close()");
         int gpuDrain = runtime.indexOf("gpuExecutor().drainAndWaitIdle()", worldClose);
         assertTrue(worldClose >= 0 && gpuDrain > worldClose);

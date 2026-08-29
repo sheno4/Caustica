@@ -3,7 +3,7 @@ package dev.comfyfluffy.caustica.minecraft;
 import com.mojang.blaze3d.GpuFormat;
 import com.mojang.blaze3d.vulkan.VulkanGpuTextureView;
 import dev.comfyfluffy.caustica.api.light.LightDescriptor;
-import dev.comfyfluffy.caustica.engine.light.RetainedLightSnapshot;
+import dev.comfyfluffy.caustica.minecraft.light.MinecraftTerrainLightSnapshot;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.texture.TextureAtlas;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
@@ -28,7 +28,7 @@ final class MinecraftClientFrameCapture {
 
     static MinecraftCapturedFrame capture(Minecraft minecraft, double cameraY, double metersPerSceneUnit,
                                           MinecraftLightingCalibration calibration,
-                                          RetainedLightSnapshot terrainLights) {
+                                          MinecraftTerrainLightSnapshot terrainLights) {
         Optional<MinecraftCelestialFrame> celestial = celestial(
                 minecraft, cameraY, metersPerSceneUnit, calibration);
         MinecraftLightFrame light = new MinecraftLightFrame(celestial, helmet(minecraft),

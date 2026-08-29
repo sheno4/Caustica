@@ -4,8 +4,8 @@ package dev.comfyfluffy.caustica.minecraft.terrain;
 
 import com.mojang.blaze3d.vertex.QuadInstance;
 import com.mojang.blaze3d.vertex.VertexConsumer;
-import dev.comfyfluffy.caustica.engine.light.RetainedLightBatch;
-import dev.comfyfluffy.caustica.engine.light.RetainedLightSnapshot;
+import dev.comfyfluffy.caustica.minecraft.light.MinecraftTerrainLightBatch;
+import dev.comfyfluffy.caustica.minecraft.light.MinecraftTerrainLightSnapshot;
 import dev.comfyfluffy.caustica.minecraft.api.ResourcePackEpoch;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialLookup;
 import dev.comfyfluffy.caustica.config.CausticaConfig;
@@ -161,12 +161,12 @@ public final class RtTerrain {
     public int blockY;
     public int blockZ;
     /** Sorted light-only snapshot, updated with section publication instead of rescanning all geometry. */
-    private final TreeMap<Long, RetainedLightBatch> lightSections = new TreeMap<>();
+    private final TreeMap<Long, MinecraftTerrainLightBatch> lightSections = new TreeMap<>();
     private long lightGroupRevision;
     private long retainedLightGeneration;
     private boolean lightSnapshotDirty;
     private long lastLightSnapshotNanos;
-    private RetainedLightSnapshot retainedLights = RetainedLightSnapshot.empty(0L);
+    private MinecraftTerrainLightSnapshot retainedLights = MinecraftTerrainLightSnapshot.empty(0L);
     private boolean windowValid;
     private int windowPcx;
     private int windowPcz;
@@ -235,7 +235,7 @@ public final class RtTerrain {
         return sceneInitialized && (isPublished(key) || empty.contains(key));
     }
 
-    public RetainedLightSnapshot retainedLightSnapshot() {
+    public MinecraftTerrainLightSnapshot retainedLightSnapshot() {
         return retainedLights;
     }
 
@@ -1505,7 +1505,7 @@ public final class RtTerrain {
             return;
         }
         // Snapshot the sorted values once; unchanged generations are reused by subsequent frame updates.
-        retainedLights = new RetainedLightSnapshot(List.copyOf(lightSections.values()),
+        retainedLights = new MinecraftTerrainLightSnapshot(List.copyOf(lightSections.values()),
                 ++retainedLightGeneration);
         lightSnapshotDirty = false;
         lastLightSnapshotNanos = now;
@@ -1563,7 +1563,7 @@ public final class RtTerrain {
         lightGroupRevision = 0L;
         lightSnapshotDirty = false;
         lastLightSnapshotNanos = 0L;
-        retainedLights = RetainedLightSnapshot.empty(++retainedLightGeneration);
+        retainedLights = MinecraftTerrainLightSnapshot.empty(++retainedLightGeneration);
         empty.clear();
         removed.clear();
         prepared.clear();

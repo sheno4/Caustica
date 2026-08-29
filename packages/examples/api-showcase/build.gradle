@@ -13,8 +13,10 @@ repositories {
 
 dependencies {
     compileOnly project(":packages:api")
+    compileOnly project(":packages:minecraft-api")
     compileOnly project(":packages:vulkan-support")
     testImplementation project(":packages:api")
+    testImplementation project(":packages:minecraft-api")
     testImplementation project(":packages:vulkan-support")
     testImplementation platform("org.junit:junit-bom:5.12.2")
     testImplementation "org.junit.jupiter:junit-jupiter"

@@ -19,12 +19,14 @@ changes while the renderer is being built.
 ## Features
 
 - Vulkan hardware path-traced world rendering
+- Vulkan 1.4 with unified image layouts, descriptor heaps, and shader-object compute/raster passes
 - DLSS Ray Reconstruction support
 - DLSS Frame Generation support (experimental)
 - HDR output
 - Dynamic entity rendering in the ray-traced scene
 - LabPBR-style material support
-- OMM (Opacity Micro-Map) + SER (Shader Execution Reordering) optimizations
+- Vulkan opacity-micromap acceleration and SER (Shader Execution Reordering) optimizations
+- RTXPT-style adaptive next-event estimation implemented independently for retained rectangle, spot, and distant lights
 
 ## Requirements
 

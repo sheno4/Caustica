@@ -3,34 +3,34 @@ package dev.comfyfluffy.caustica.api.vulkan;
 /**
  * Allocation and shader-addressing facts for the renderer's bound Vulkan descriptor heaps.
  *
- * @param resourceDescriptorStride byte stride of one image, buffer, or acceleration-structure slot
- * @param samplerDescriptorStride byte stride of one sampler slot
+ * @param resourceDescriptorStrideBytes byte stride of one image, buffer, or acceleration-structure slot
+ * @param samplerDescriptorStrideBytes byte stride of one sampler slot
  * @param resourceDescriptorCapacity number of application-visible resource slots
  * @param samplerDescriptorCapacity number of application-visible sampler slots
  * @param maximumResourceAllocation largest resource range accepted by one allocation
  * @param maximumSamplerAllocation largest sampler range accepted by one allocation
- * @param resourceHeapAlignment required byte alignment of the bound resource-heap device address
- * @param samplerHeapAlignment required byte alignment of the bound sampler-heap device address
+ * @param resourceHeapAlignmentBytes required byte alignment of the bound resource-heap device address
+ * @param samplerHeapAlignmentBytes required byte alignment of the bound sampler-heap device address
  */
 public record GpuDescriptorHeapProperties(
-        long resourceDescriptorStride,
-        long samplerDescriptorStride,
+        long resourceDescriptorStrideBytes,
+        long samplerDescriptorStrideBytes,
         int resourceDescriptorCapacity,
         int samplerDescriptorCapacity,
         int maximumResourceAllocation,
         int maximumSamplerAllocation,
-        long resourceHeapAlignment,
-        long samplerHeapAlignment
+        long resourceHeapAlignmentBytes,
+        long samplerHeapAlignmentBytes
 ) {
     public GpuDescriptorHeapProperties {
-        requirePositive(resourceDescriptorStride, "resourceDescriptorStride");
-        requirePositive(samplerDescriptorStride, "samplerDescriptorStride");
+        requirePositive(resourceDescriptorStrideBytes, "resourceDescriptorStrideBytes");
+        requirePositive(samplerDescriptorStrideBytes, "samplerDescriptorStrideBytes");
         requirePositive(resourceDescriptorCapacity, "resourceDescriptorCapacity");
         requirePositive(samplerDescriptorCapacity, "samplerDescriptorCapacity");
         requireAllocation(maximumResourceAllocation, resourceDescriptorCapacity, "maximumResourceAllocation");
         requireAllocation(maximumSamplerAllocation, samplerDescriptorCapacity, "maximumSamplerAllocation");
-        requirePowerOfTwo(resourceHeapAlignment, "resourceHeapAlignment");
-        requirePowerOfTwo(samplerHeapAlignment, "samplerHeapAlignment");
+        requirePowerOfTwo(resourceHeapAlignmentBytes, "resourceHeapAlignmentBytes");
+        requirePowerOfTwo(samplerHeapAlignmentBytes, "samplerHeapAlignmentBytes");
     }
 
     private static void requirePositive(long value, String name) {

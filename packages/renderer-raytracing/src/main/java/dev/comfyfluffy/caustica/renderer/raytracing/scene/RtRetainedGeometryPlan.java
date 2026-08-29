@@ -2,6 +2,7 @@ package dev.comfyfluffy.caustica.renderer.raytracing.scene;
 
 import dev.comfyfluffy.caustica.api.geometry.GeometryTransform;
 import dev.comfyfluffy.caustica.api.geometry.MeshBuild;
+import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 import dev.comfyfluffy.caustica.engine.program.ProgramResolution;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
@@ -75,7 +76,7 @@ public final class RtRetainedGeometryPlan {
                     geometry.surface() == null ? 0L : geometry.surface().bindingData().bits(),
                     geometry.volume() == null ? 0L : geometry.volume().bindingData().bits(),
                     placement.instanceData().bits(), alphaCutoff, placement.transform(), previousTransform,
-                    0L, 0));
+                    null, 0));
         }
         return List.copyOf(records);
     }
@@ -92,7 +93,8 @@ public final class RtRetainedGeometryPlan {
                     record.volumeBinding(), record.instanceData(), record.alphaCutoff(), 0,
                     row(current, 0), row(current, 4), row(current, 8),
                     row(previous, 0), row(previous, 4), row(previous, 8),
-                    record.emitterIndexAddress(), record.emitterPrimitiveBase(), 0)
+                    record.emitterIndexAddress() == null ? 0L : record.emitterIndexAddress().value(),
+                    record.emitterPrimitiveBase(), 0)
                     .write(packed.slice(base, RECORD_BYTES).order(ByteOrder.LITTLE_ENDIAN));
             packed.position(base + RECORD_BYTES);
         }
@@ -130,20 +132,20 @@ public final class RtRetainedGeometryPlan {
                                  int volumeImplementation, int flags, long surfaceBinding,
                                  long volumeBinding, long instanceData, float alphaCutoff,
                                  GeometryTransform currentTransform, GeometryTransform previousTransform,
-                                 long emitterIndexAddress, int emitterPrimitiveBase) {
+                                 VulkanDeviceAddress emitterIndexAddress, int emitterPrimitiveBase) {
         public GeometryRecord(int surfaceImplementation, int coverageImplementation,
                               int volumeImplementation, int flags, long surfaceBinding,
                               long volumeBinding, long instanceData, float alphaCutoff,
                               GeometryTransform currentTransform, GeometryTransform previousTransform) {
             this(surfaceImplementation, coverageImplementation, volumeImplementation, flags,
                     surfaceBinding, volumeBinding, instanceData, alphaCutoff, currentTransform,
-                    previousTransform, 0L, 0);
+                    previousTransform, null, 0);
         }
 
-        GeometryRecord withEmitterIndex(long address, int primitiveBase) {
+        GeometryRecord withEmitterIndex(VulkanDeviceAddress address, int primitiveBase) {
             return new GeometryRecord(surfaceImplementation, coverageImplementation, volumeImplementation,
                     flags, surfaceBinding, volumeBinding, instanceData, alphaCutoff, currentTransform,
-                    previousTransform, address, primitiveBase);
+                    previousTransform, java.util.Objects.requireNonNull(address, "address"), primitiveBase);
         }
     }
 

@@ -58,7 +58,6 @@ def worldShaderNames = [
 def apiShaderModules = project(":packages:shader-api").file("src/main/resources/caustica/shaders/api")
 def builtinShaderModules = project(":packages:features-builtin").file("src/main/resources/caustica/shaders/builtin")
 def worldShaderModules = file("src/main/resources/caustica/shaders/world")
-def opacityMicromapModule = file("shaders/common/opacity_micromap_common.slang")
 def generatedShaderResources = layout.buildDirectory.dir("generated/resources")
 def compileRayTracingShaders = tasks.register("compileRayTracingShaders", CompileSlangShaders) {
     group = "build"
@@ -73,7 +72,6 @@ def prepareRayTracingReflectionSources = tasks.register("prepareRayTracingReflec
     from(worldShaderModules) { into "pipelines/world" }
     from(apiShaderModules) { into "api" }
     from(builtinShaderModules) { into "builtin" }
-    from(opacityMicromapModule) { into "common" }
     from(file("src/shaderReflection")) { into "layout" }
     into(reflectionRoot)
 }
@@ -83,8 +81,7 @@ def rayTracingRecordSpecs = [
         "buffer|retainedGeometryRecordLayoutProbe|RetainedGeometryRecord|dev.comfyfluffy.caustica.renderer.raytracing.gen|RetainedGeometryRecordData|false",
         "buffer|retainedLightRecordLayoutProbe|RetainedLightRecord|dev.comfyfluffy.caustica.renderer.raytracing.gen|RetainedLightRecordData|false",
         "buffer|neeAtStateLayoutProbe|NeeAtState|dev.comfyfluffy.caustica.renderer.raytracing.gen|NeeAtStateData|false",
-        "buffer|packedPathSegmentLayoutProbe|PackedPathSegment|dev.comfyfluffy.caustica.renderer.raytracing.gen|PackedPathSegmentData|false",
-        "push|opacityMicromapPushProbe|OpacityMicromapPush|dev.comfyfluffy.caustica.renderer.raytracing.gen|OpacityMicromapPushData|false"
+        "buffer|packedPathSegmentLayoutProbe|PackedPathSegment|dev.comfyfluffy.caustica.renderer.raytracing.gen|PackedPathSegmentData|false"
 ]
 def generatedRecordRoot = layout.buildDirectory.dir("generated/sources/shaderRecords")
 def generateRayTracingRecords = tasks.register("generateRayTracingRecords", GenerateShaderRecords) {
@@ -133,10 +130,7 @@ def verifyRayTracingAbi = tasks.register("verifyRayTracingAbi") {
                     "putInt(64, tileSize())", "putInt(72, candidateCount())",
                     "putFloat(80, metersPerSceneUnit())", "putInt(84, frameIndex())"],
             PackedPathSegmentData: ["BYTE_SIZE = 48", "putFloat(0, ro().x())",
-                    "putInt(12, rd())", "putInt(44, nextRecord())"],
-            OpacityMicromapPushData: ["BYTE_SIZE = 48", "putLong(0, primitiveAddress())",
-                    "putLong(24, triangleAddress())", "putInt(32, maskedTriangleBase())",
-                    "putInt(40, dataStride())"]
+                    "putInt(12, rd())", "putInt(44, nextRecord())"]
     ]
     inputs.dir(generatedRecordRoot)
     inputs.dir(generatedBindingsRoot)
@@ -372,15 +366,13 @@ def verifyRendererRayTracingJar = tasks.register("verifyRendererRayTracingJar") 
             it.startsWith(generatedRecordClassRoot) && it.endsWith("Data.class")
         } as Set
         def expectedGeneratedTopLevelClasses = ["WorldPushData", "RetainedGeometryRecordData",
-                "RetainedLightRecordData", "NeeAtStateData", "PackedPathSegmentData",
-                "OpacityMicromapPushData"].collect { "${generatedRecordClassRoot}${it}.class" } as Set
+                "RetainedLightRecordData", "NeeAtStateData", "PackedPathSegmentData"].collect {
+            "${generatedRecordClassRoot}${it}.class"
+        } as Set
         def packagedShaders = names.findAll {
             it.startsWith("caustica/shaders/world/") && it.endsWith(".slang")
         }.collect { it.substring("caustica/shaders/world/".length()) } as Set
-        def expectedPipelineShaders = [
-                "caustica/shaders/pipelines/nee_at/bake.comp.spv",
-                "caustica/shaders/pipelines/opacity_micromap/main.comp.spv"
-        ] as Set
+        def expectedPipelineShaders = ["caustica/shaders/pipelines/nee_at/bake.comp.spv"] as Set
         def packagedPipelineShaders = names.findAll {
             it.startsWith("caustica/shaders/pipelines/") && it.endsWith(".spv")
         } as Set

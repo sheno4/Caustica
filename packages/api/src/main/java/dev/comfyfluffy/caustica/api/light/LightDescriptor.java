@@ -57,7 +57,10 @@ public sealed interface LightDescriptor {
     /**
      * A distant angular emitter. Direction points toward the source, illuminance is in lux, and zero
      * angular radius is an exact directional source. {@code environmentEmitter} declares that the
-     * environment draws the same source, allowing non-camera miss rays to suppress that duplicate estimator.
+     * environment draws the same source. If any sampled distant light makes that declaration, non-camera
+     * miss queries ask the active environment to hide all of its discrete emitter lobes. The scene must then
+     * provide a sampled distant-light descriptor for every lobe the environment hides; continuous background
+     * radiance remains visible.
      */
     record Distant(double directionX, double directionY, double directionZ,
                    double illuminanceRedLux, double illuminanceGreenLux, double illuminanceBlueLux,

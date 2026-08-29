@@ -21,7 +21,6 @@ import net.minecraft.world.phys.shapes.VoxelShape;
 import org.joml.Matrix4f;
 import org.joml.Matrix4fc;
 import org.lwjgl.system.MemoryStack;
-import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import java.nio.ByteBuffer;
@@ -71,7 +70,7 @@ final class BlockOutlineFeature implements OverlayFeature {
         ensureResources(device, gpuUse, width, height);
         float[] data = vertices.toFloatArray();
         vbo = pool.acquireVertex(device, (long)data.length * Float.BYTES, "block outline vbo");
-        MemoryUtil.memFloatBuffer(vbo.mapped(), data.length).put(data);
+        vbo.mapped().order(ByteOrder.nativeOrder()).asFloatBuffer().put(data);
         vbo.flush(0, (long)data.length * Float.BYTES);
         viewProj.set(worldViewProjection);
         tlasDescriptor = worldTlasDescriptor;

@@ -1,6 +1,5 @@
 import world_common;
 import path_queue_types;
-import opacity_micromap_common;
 
 struct WorldPushLayoutProbe { WorldPush values[2]; };
 struct RetainedGeometryRecordLayoutProbe { RetainedGeometryRecord values[2]; };
@@ -23,15 +22,5 @@ void main(uint3 id : SV_DispatchThreadID) {
                 + float(retainedLightRecordLayoutProbe[0].values[0].type)
                 + float(neeAtStateLayoutProbe[0].values[0].lightCount)
                 + float(packedPathSegmentLayoutProbe[0].values[0].nextRecord);
-    }
-}
-
-[[vk::push_constant]] OpacityMicromapPush opacityMicromapPushProbe;
-[shader("compute")]
-[numthreads(1, 1, 1)]
-void probeOpacityMicromapPush(uint3 id : SV_DispatchThreadID) {
-    if (id.x == 0xFFFFFFFFu) {
-        uint64_t sink = opacityMicromapPushProbe.primitiveAddress
-                + uint64_t(opacityMicromapPushProbe.triangleCount);
     }
 }

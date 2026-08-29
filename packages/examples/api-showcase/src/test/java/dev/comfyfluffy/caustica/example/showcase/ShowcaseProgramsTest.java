@@ -17,9 +17,20 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class ShowcaseProgramsTest {
+    @Test
+    void publishesReadinessWithoutWaitingForTheCompletionCallback() {
+        CapturePrograms channel = new CapturePrograms();
+        ShowcasePrograms programs = new ShowcasePrograms(channel, message -> { });
+
+        assertFalse(programs.ready());
+        channel.complete(new ProgramRegistration.Ready());
+        assertTrue(programs.ready());
+    }
+
     @Test
     void acceptsDottedSlangTypesWhenOpeningTheShowcasePrograms() throws Exception {
         CapturePrograms channel = new CapturePrograms();
@@ -48,6 +59,7 @@ final class ShowcaseProgramsTest {
         private final List<SurfaceDefinition<?, ?>> surfaces = new ArrayList<>();
         private final List<VolumeDefinition<?, ?>> volumes = new ArrayList<>();
         private final List<EnvironmentDefinition<?>> environments = new ArrayList<>();
+        private Consumer<ProgramRegistration.Completion> completionCallback;
         private boolean closed;
 
         @Override
@@ -56,10 +68,14 @@ final class ShowcaseProgramsTest {
             return new ProgramRegistration<>() {
                 @Override public E exports() { return exports; }
                 @Override public void whenComplete(Consumer<? super Completion> callback) {
-                    callback.accept(new Ready());
+                    completionCallback = callback::accept;
                 }
                 @Override public void close() { closed = true; }
             };
+        }
+
+        private void complete(ProgramRegistration.Completion completion) {
+            completionCallback.accept(completion);
         }
 
         @Override

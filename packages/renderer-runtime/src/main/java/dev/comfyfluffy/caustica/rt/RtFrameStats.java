@@ -1,7 +1,6 @@
 package dev.comfyfluffy.caustica.rt;
 
 import dev.comfyfluffy.caustica.config.CausticaConfig;
-import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.rt.RtTelemetry.Frame;
 import dev.comfyfluffy.caustica.rt.RtTelemetry.MetricSchema;
 import dev.comfyfluffy.caustica.rt.RtTelemetry.StageMetric;
@@ -18,6 +17,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Opt-in render-frame timing and hitch detection. Gated by {@code -Dcaustica.rt.frameStats}; every method
@@ -29,10 +30,9 @@ import java.util.Objects;
  * includes all detailed stage timings and counters recorded during the frame.
  */
 public final class RtFrameStats {
+    private static final Logger LOGGER = LoggerFactory.getLogger(RtFrameStats.class);
     private static final int MEDIAN_WINDOW = 64;
     private static final double HITCH_MULTIPLIER = 1.5;
-    private static final OutputLocation OUTPUT = new OutputLocation(defaultOutputDirectory());
-
     private static final MetricSchema RENDERER_FRAME_METRICS = new MetricSchema(List.of(
             new StageMetric("geometry.providerCollect", false),
             new StageMetric("geometry.providerConvert", true),
@@ -64,16 +64,17 @@ public final class RtFrameStats {
 
     // Per-frame GC deltas help distinguish JVM pauses from uninstrumented render work when a hitch's
     // unaccounted time is large. Minecraft appends its producer metrics during bootstrap.
-    public static final Profile FRAME = new Profile("frame", RENDERER_FRAME_METRICS, true);
-    private static volatile long frameSerial;
+    private final OutputLocation output = new OutputLocation(defaultOutputDirectory());
+    private final Profile frame = new Profile("frame", RENDERER_FRAME_METRICS, true, output);
+    private volatile long frameSerial;
 
     /** Monotonic identifier for the frame envelope currently collecting producer and renderer work. */
-    public static long frameSerial() {
+    public long frameSerial() {
         return frameSerial;
     }
 
     /** Advance the serial once at the Minecraft render-frame boundary. */
-    public static void beginRenderFrame() {
+    public void beginRenderFrame() {
         frameSerial++;
     }
 
@@ -101,12 +102,16 @@ public final class RtFrameStats {
         return total;
     }
 
-    private RtFrameStats() {
+    RtFrameStats() {
     }
 
     /** Append Minecraft frame metrics before the frame profile is first used. */
-    public static void configureFrameMetrics(MetricSchema metrics) {
-        FRAME.configureMetrics(metrics);
+    public void configureFrameMetrics(MetricSchema metrics) {
+        frame.configureMetrics(metrics);
+    }
+
+    public Profile frame() {
+        return frame;
     }
 
     static MetricSchema rendererFrameMetrics() {
@@ -117,8 +122,8 @@ public final class RtFrameStats {
      * Select the directory profiles lazily create their CSV files in. Bootstrap must call this before any
      * profile attempts to open its writer; changing the directory after that point is an error.
      */
-    public static void configureOutputDirectory(Path directory) {
-        OUTPUT.configure(directory);
+    public void configureOutputDirectory(Path directory) {
+        output.configure(directory);
     }
 
     static Path defaultOutputDirectory() {
@@ -169,6 +174,7 @@ public final class RtFrameStats {
         private final String name;
         private final MetricSchema baseMetrics;
         private final boolean trackGc;
+        private final OutputLocation output;
         private MetricSchema metrics;
         private String[] stageNames;
         private String[] counterNames;
@@ -190,9 +196,14 @@ public final class RtFrameStats {
         private volatile boolean metricsUsed;
 
         Profile(String name, MetricSchema metrics, boolean trackGc) {
+            this(name, metrics, trackGc, new OutputLocation(defaultOutputDirectory()));
+        }
+
+        private Profile(String name, MetricSchema metrics, boolean trackGc, OutputLocation output) {
             this.name = name;
             this.baseMetrics = Objects.requireNonNull(metrics, "metrics");
             this.trackGc = trackGc;
+            this.output = Objects.requireNonNull(output, "output");
             applyMetrics(metrics);
         }
 
@@ -357,7 +368,7 @@ public final class RtFrameStats {
                 return;
             }
             csvOpenAttempted = true;
-            Path dir = OUTPUT.beginWriterInitialization();
+            Path dir = output.beginWriterInitialization();
             Path file = dir.resolve(name + ".csv");
             try {
                 Files.createDirectories(dir);
@@ -375,7 +386,7 @@ public final class RtFrameStats {
                 csv.println(header);
                 csv.flush();
             } catch (IOException e) {
-                CausticaMod.LOGGER.warn("RtFrameStats: failed to open CSV {} for profile {}: {}", file, name, e.toString());
+                LOGGER.warn("RtFrameStats: failed to open CSV {} for profile {}: {}", file, name, e.toString());
                 csv = null;
             }
         }
@@ -396,7 +407,7 @@ public final class RtFrameStats {
             if (trackGc) {
                 sb.append(" gcCount=").append(gcCount).append(" gcPauseMs=").append(gcMs);
             }
-            CausticaMod.LOGGER.info(sb.toString());
+            LOGGER.info(sb.toString());
         }
 
         private static double ms(long nanos) {

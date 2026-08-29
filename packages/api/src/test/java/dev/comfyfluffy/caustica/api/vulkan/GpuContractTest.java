@@ -21,14 +21,14 @@ class GpuContractTest {
         GpuDescriptorHeapProperties properties = new GpuDescriptorHeapProperties(
                 32, 8, 1024, 256, 128, 64, 256, 64);
 
-        assertEquals(32, properties.resourceDescriptorStride());
-        assertEquals(8, properties.samplerDescriptorStride());
+        assertEquals(32, properties.resourceDescriptorStrideBytes());
+        assertEquals(8, properties.samplerDescriptorStrideBytes());
         assertEquals(1024, properties.resourceDescriptorCapacity());
         assertEquals(256, properties.samplerDescriptorCapacity());
         assertEquals(128, properties.maximumResourceAllocation());
         assertEquals(64, properties.maximumSamplerAllocation());
-        assertEquals(256, properties.resourceHeapAlignment());
-        assertEquals(64, properties.samplerHeapAlignment());
+        assertEquals(256, properties.resourceHeapAlignmentBytes());
+        assertEquals(64, properties.samplerHeapAlignmentBytes());
     }
 
     @Test

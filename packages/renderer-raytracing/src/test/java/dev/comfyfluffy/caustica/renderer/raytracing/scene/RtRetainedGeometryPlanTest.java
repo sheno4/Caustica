@@ -74,7 +74,8 @@ final class RtRetainedGeometryPlanTest {
         var first = new RtRetainedGeometryPlan.GeometryRecord(3, 3, 5,
                 RtRetainedGeometryPlan.HAS_SURFACE | RtRetainedGeometryPlan.HAS_VOLUME
                         | RtRetainedGeometryPlan.CUTOUT,
-                0x1111, 0x2222, 0x3333, 0.45f, current, previous, 0x4444, 6);
+                0x1111, 0x2222, 0x3333, 0.45f, current, previous,
+                new VulkanDeviceAddress(0x4444), 6);
         var second = new RtRetainedGeometryPlan.GeometryRecord(7, 0, 0,
                 RtRetainedGeometryPlan.HAS_SURFACE, 0x4444, 0, 0x5555, 0,
                 current, current);

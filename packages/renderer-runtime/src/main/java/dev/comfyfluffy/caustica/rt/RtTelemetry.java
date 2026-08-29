@@ -97,6 +97,12 @@ public interface RtTelemetry {
 
     Frame frame();
 
+    void beginRenderFrame();
+
+    void beginFrameIfInactive();
+
+    void endFrame();
+
     void configure(Path outputDirectory, MetricSchema minecraftMetrics);
 
     ExtractionStamp extraction(GeometrySource source, int geometryCount);

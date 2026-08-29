@@ -16,14 +16,14 @@ public interface GpuDescriptorHeap {
     /**
      * Allocate consecutive shader-visible resource slots. Pass shaders own their compilation; SPIR-V
      * descriptor-heap access must target Vulkan 1.4 with {@code spvDescriptorHeapEXT} and
-     * {@link GpuDescriptorHeapProperties#resourceDescriptorStride()}. The range is uninitialized until
+     * {@link GpuDescriptorHeapProperties#resourceDescriptorStrideBytes()}. The range is uninitialized until
      * written through {@link #writer()}.
      */
     GpuDescriptorRange<GpuDescriptorIndex.Resource> allocateResources(int descriptorCount, String label);
 
     /**
      * Allocate consecutive shader-visible sampler slots using
-     * {@link GpuDescriptorHeapProperties#samplerDescriptorStride()}.
+     * {@link GpuDescriptorHeapProperties#samplerDescriptorStrideBytes()}.
      */
     GpuDescriptorRange<GpuDescriptorIndex.Sampler> allocateSamplers(int descriptorCount, String label);
 

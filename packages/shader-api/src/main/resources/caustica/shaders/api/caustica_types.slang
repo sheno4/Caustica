@@ -273,7 +273,7 @@ public struct VolumeBoundaryLightingInput {
 public struct EnvironmentQuery {
     public ShaderRootData shaderRoot;
     public float3 direction;
-    /** Whether environment emitters already represented by direct-light sampling remain visible. */
+    /** Whether discrete environment-emitter lobes represented by direct-light sampling remain visible. */
     public bool showEnvironmentEmitters;
     /**
      * The word the scene carried when it named this implementation, copied verbatim. The engine assigns it

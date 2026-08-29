@@ -34,6 +34,8 @@ public final class SceneDirectory {
     private Map<InstanceRef, InstanceValue> instances = new LinkedHashMap<>();
     private Map<LightRef, LightValue> lights = new LinkedHashMap<>();
     private Map<SceneRef, EnvironmentValue> environments = new LinkedHashMap<>();
+    private Map<SceneRef, LinkedHashMap<SceneEnvironmentContributionChannel, EnvironmentValue>>
+            environmentSelections = new LinkedHashMap<>();
     private final Queue<CallbackTask> callbacks = new ArrayDeque<>();
     private final Set<BatchToken> batches = new LinkedHashSet<>();
     private long nextIdentity;
@@ -65,6 +67,8 @@ public final class SceneDirectory {
         Map<InstanceRef, InstanceValue> nextInstances = new LinkedHashMap<>(instances);
         Map<LightRef, LightValue> nextLights = new LinkedHashMap<>(lights);
         Map<SceneRef, EnvironmentValue> nextEnvironments = new LinkedHashMap<>(environments);
+        Map<SceneRef, LinkedHashMap<SceneEnvironmentContributionChannel, EnvironmentValue>>
+                nextEnvironmentSelections = new LinkedHashMap<>(environmentSelections);
         List<RetainedValue> removed = new ArrayList<>();
         nextInstances.entrySet().removeIf(entry -> {
             if (entry.getValue().scene != scene) return false;
@@ -78,13 +82,20 @@ public final class SceneDirectory {
         });
         EnvironmentValue environment = nextEnvironments.remove(scene);
         if (environment != null) removed.add(environment);
+        LinkedHashMap<SceneEnvironmentContributionChannel, EnvironmentValue> selections =
+                nextEnvironmentSelections.remove(scene);
+        List<EnvironmentValue> dormant = selections == null ? List.of() : selections.values().stream()
+                .filter(value -> value != environment).toList();
         Map<InstanceRef, InstanceValue> previousInstances = instances;
         Map<LightRef, LightValue> previousLights = lights;
         Map<SceneRef, EnvironmentValue> previousEnvironments = environments;
+        Map<SceneRef, LinkedHashMap<SceneEnvironmentContributionChannel, EnvironmentValue>>
+                previousEnvironmentSelections = environmentSelections;
         scenes.remove(scene);
         instances = nextInstances;
         lights = nextLights;
         environments = nextEnvironments;
+        environmentSelections = nextEnvironmentSelections;
         try {
             publish(removed, null);
         } catch (Throwable failure) {
@@ -92,8 +103,10 @@ public final class SceneDirectory {
             instances = previousInstances;
             lights = previousLights;
             environments = previousEnvironments;
+            environmentSelections = previousEnvironmentSelections;
             throw failure;
         }
+        dormant.forEach(value -> value.token.release(this));
     }
 
     public synchronized GeometryContributionChannel openGeometry(ContributionOwner owner) {
@@ -228,15 +241,34 @@ public final class SceneDirectory {
         programs.validateEnvironment(binding.implementation(), binding.bindingData());
         BatchToken token = new BatchToken(channel, binding.retired());
         token.retain();
+        LinkedHashMap<SceneEnvironmentContributionChannel, EnvironmentValue> selections =
+                new LinkedHashMap<>(environmentSelections.getOrDefault(scene, new LinkedHashMap<>()));
+        EnvironmentValue replaced = selections.remove(channel);
+        EnvironmentValue selected = new EnvironmentValue(token, binding);
+        selections.put(channel, selected);
+        EnvironmentValue previous = environments.get(scene);
+        boolean previousSurvives = previous != null && selections.containsValue(previous);
+        // A surviving slot and the retiring publication independently keep the displaced binding alive.
+        if (previousSurvives) previous.token.retain();
         Map<SceneRef, EnvironmentValue> nextEnvironments = new LinkedHashMap<>(environments);
-        EnvironmentValue previous = nextEnvironments.put(scene, new EnvironmentValue(token, binding));
+        nextEnvironments.put(scene, selected);
         List<RetainedValue> removed = previous != null ? List.of(previous) : List.of();
         RetainedSceneSnapshot next = snapshot(revision + 1, meshes, instances, lights, nextEnvironments);
-        backend.publish(next, () -> enqueueRelease(removed));
+        try {
+            backend.publish(next, () -> enqueueRelease(removed));
+        } catch (Throwable failure) {
+            if (previousSurvives) previous.token.release(this);
+            throw failure;
+        }
         batches.add(token);
+        Map<SceneRef, LinkedHashMap<SceneEnvironmentContributionChannel, EnvironmentValue>> nextSelections =
+                new LinkedHashMap<>(environmentSelections);
+        nextSelections.put(scene, selections);
+        environmentSelections = nextSelections;
         environments = nextEnvironments;
         revision++;
         token.seal(this);
+        if (replaced != null && replaced != previous) replaced.token.release(this);
     }
 
     synchronized void quiesce(GeometryContributionChannel channel) {
@@ -288,12 +320,34 @@ public final class SceneDirectory {
         requireEnvironmentChannel(channel);
         channel.accepting = false;
         SceneRef scene = requireLiveScene(channel.scene);
+        LinkedHashMap<SceneEnvironmentContributionChannel, EnvironmentValue> currentSelections =
+                environmentSelections.get(scene);
+        if (currentSelections == null || !currentSelections.containsKey(channel)) return;
+        LinkedHashMap<SceneEnvironmentContributionChannel, EnvironmentValue> nextSceneSelections =
+                new LinkedHashMap<>(currentSelections);
+        EnvironmentValue removed = nextSceneSelections.remove(channel);
         EnvironmentValue current = environments.get(scene);
-        if (current == null || current.token.owner != channel) return;
+        Map<SceneRef, LinkedHashMap<SceneEnvironmentContributionChannel, EnvironmentValue>> nextSelections =
+                new LinkedHashMap<>(environmentSelections);
+        if (nextSceneSelections.isEmpty()) nextSelections.remove(scene);
+        else nextSelections.put(scene, nextSceneSelections);
+        if (removed != current) {
+            environmentSelections = nextSelections;
+            removed.token.release(this);
+            return;
+        }
         Map<SceneRef, EnvironmentValue> nextEnvironments = new LinkedHashMap<>(environments);
-        nextEnvironments.remove(scene);
+        EnvironmentValue restored = lastValue(nextSceneSelections);
+        if (restored == null) nextEnvironments.remove(scene);
+        else nextEnvironments.put(scene, restored);
         RetainedSceneSnapshot next = snapshot(revision + 1, meshes, instances, lights, nextEnvironments);
-        backend.publish(next, () -> enqueueRelease(List.of(current)));
+        try {
+            backend.publish(next, () -> enqueueRelease(List.of(current)));
+        } catch (Throwable failure) {
+            channel.accepting = true;
+            throw failure;
+        }
+        environmentSelections = nextSelections;
         environments = nextEnvironments;
         revision++;
     }
@@ -491,6 +545,12 @@ public final class SceneDirectory {
                                                              List<RetainedValue> removed) {
         V previous = map.remove(key);
         if (previous != null) removed.add(previous);
+    }
+
+    private static <K, V> V lastValue(LinkedHashMap<K, V> values) {
+        V last = null;
+        for (V value : values.values()) last = value;
+        return last;
     }
 
     private static final class BatchToken {

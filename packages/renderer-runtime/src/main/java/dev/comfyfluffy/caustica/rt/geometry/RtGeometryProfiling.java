@@ -44,59 +44,62 @@ public final class RtGeometryProfiling {
     private static final EventType VISIBILITY_EVENT = EventType.getEventType(GeometryVisibilityEvent.class);
     private static final EventType BUILD_READY_EVENT = EventType.getEventType(GeometryBuildReadyLatencyEvent.class);
     private static final EventType COMMAND_RECORD_EVENT = EventType.getEventType(BlasCommandRecordEvent.class);
-    private static final ConcurrentLinkedQueue<ExtractionStamp> PUBLISHED = new ConcurrentLinkedQueue<>();
-    private static final ConcurrentLinkedQueue<LongConsumer> PUBLICATION_VISIBLE = new ConcurrentLinkedQueue<>();
+    private final RtFrameStats frameStats;
+    private final ConcurrentLinkedQueue<ExtractionStamp> published = new ConcurrentLinkedQueue<>();
+    private final ConcurrentLinkedQueue<LongConsumer> publicationVisible = new ConcurrentLinkedQueue<>();
 
-    private RtGeometryProfiling() {
+    public RtGeometryProfiling(RtFrameStats frameStats) {
+        this.frameStats = java.util.Objects.requireNonNull(frameStats, "frameStats");
     }
 
-    public static ExtractionStamp extraction(SourceKind kind, int geometryCount) {
+    public ExtractionStamp extraction(SourceKind kind, int geometryCount) {
         if (!RtFrameStats.enabled() && !VISIBILITY_EVENT.isEnabled()) {
             return null;
         }
-        return new ExtractionStamp(kind, RtFrameStats.frameSerial(), System.nanoTime(), geometryCount);
+        return new ExtractionStamp(kind, frameStats.frameSerial(), System.nanoTime(), geometryCount);
     }
 
     /** Called by a source acknowledgment after the retained maps contain this geometry. */
-    public static void published(ExtractionStamp stamp) {
+    public void published(ExtractionStamp stamp) {
         if (stamp == null) {
             return;
         }
         stamp.publishedNanos = System.nanoTime();
-        PUBLISHED.add(stamp);
+        published.add(stamp);
     }
 
     /** Completes publication samples after the first FrameUpdate containing them has been assembled. */
-    public static void frameVisible() {
+    public void frameVisible() {
         ExtractionStamp stamp;
-        while ((stamp = PUBLISHED.poll()) != null) {
+        while ((stamp = published.poll()) != null) {
             recordVisible(stamp);
         }
-        long frame = RtFrameStats.frameSerial();
+        long frame = frameStats.frameSerial();
         LongConsumer action;
-        while ((action = PUBLICATION_VISIBLE.poll()) != null) action.accept(frame);
+        while ((action = publicationVisible.poll()) != null) action.accept(frame);
     }
 
-    public static void afterPublicationVisible(LongConsumer action) {
-        if (action != null) PUBLICATION_VISIBLE.add(action);
+    public void afterPublicationVisible(LongConsumer action) {
+        if (action != null) publicationVisible.add(action);
     }
 
-    public static void resetPublications() {
-        PUBLISHED.clear();
-        PUBLICATION_VISIBLE.clear();
+    public void resetPublications() {
+        published.clear();
+        publicationVisible.clear();
     }
 
-    private static void recordVisible(ExtractionStamp stamp) {
-        long frame = RtFrameStats.frameSerial();
+    private void recordVisible(ExtractionStamp stamp) {
+        long frame = frameStats.frameSerial();
         long now = System.nanoTime();
         long frames = Math.max(0L, frame - stamp.frame);
         long micros = Math.max(0L, now - stamp.nanos) / 1_000L;
         String prefix = stamp.kind.metricPrefix;
-        RtFrameStats.FRAME.count(prefix + "VisibilitySamples", stamp.geometryCount);
-        RtFrameStats.FRAME.count(prefix + "ExtractionToVisibleFramesTotal", frames * stamp.geometryCount);
-        RtFrameStats.FRAME.max(prefix + "ExtractionToVisibleFramesMax", frames);
-        RtFrameStats.FRAME.count(prefix + "ExtractionToVisibleMicrosTotal", micros * stamp.geometryCount);
-        RtFrameStats.FRAME.max(prefix + "ExtractionToVisibleMicrosMax", micros);
+        RtFrameStats.Profile frameProfile = frameStats.frame();
+        frameProfile.count(prefix + "VisibilitySamples", stamp.geometryCount);
+        frameProfile.count(prefix + "ExtractionToVisibleFramesTotal", frames * stamp.geometryCount);
+        frameProfile.max(prefix + "ExtractionToVisibleFramesMax", frames);
+        frameProfile.count(prefix + "ExtractionToVisibleMicrosTotal", micros * stamp.geometryCount);
+        frameProfile.max(prefix + "ExtractionToVisibleMicrosMax", micros);
         if (VISIBILITY_EVENT.isEnabled() && frames > 1L) {
             GeometryVisibilityEvent event = new GeometryVisibilityEvent();
             event.source = prefix;

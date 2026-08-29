@@ -1,7 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.terrain;
 
 import dev.comfyfluffy.caustica.api.light.LightDescriptor;
-import dev.comfyfluffy.caustica.engine.light.RetainedLightBatch;
+import dev.comfyfluffy.caustica.minecraft.light.MinecraftTerrainLightBatch;
 
 import java.util.ArrayList;
 
@@ -13,7 +13,7 @@ final class MinecraftTerrainLightAdapter {
     private MinecraftTerrainLightAdapter() {
     }
 
-    static RetainedLightBatch describe(long sectionKey, long revision,
+    static MinecraftTerrainLightBatch describe(long sectionKey, long revision,
                                        double originX, double originY, double originZ,
                                        float[] records) {
         int lightCount = records.length / FLOATS_PER_LIGHT;
@@ -44,6 +44,6 @@ final class MinecraftTerrainLightAdapter {
                     ux, uy, uz, vx, vy, vz,
                     records[source + 16], records[source + 17], records[source + 18]));
         }
-        return new RetainedLightBatch(sectionKey, revision, descriptors);
+        return new MinecraftTerrainLightBatch(sectionKey, revision, descriptors);
     }
 }

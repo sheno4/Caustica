@@ -111,13 +111,16 @@ final class RtFrameStatsBoundaryTest {
     }
 
     @Test
-    void renderFrameSerialAdvancesOnlyAtTheExplicitBoundary() {
-        long before = RtFrameStats.frameSerial();
+    void renderFrameSerialAdvancesOnlyAtTheExplicitBoundaryAndIsInstanceOwned() {
+        RtTelemetryImpl telemetry = new RtTelemetryImpl();
+        RtTelemetryImpl other = new RtTelemetryImpl();
+        long before = telemetry.frameSerial();
         RtFrameStats.Profile profile = new RtFrameStats.Profile("serial-boundary",
                 new MetricSchema(List.of(), List.of()), false);
         profile.begin();
-        assertEquals(before, RtFrameStats.frameSerial());
-        RtFrameStats.beginRenderFrame();
-        assertEquals(before + 1L, RtFrameStats.frameSerial());
+        assertEquals(before, telemetry.frameSerial());
+        telemetry.beginRenderFrame();
+        assertEquals(before + 1L, telemetry.frameSerial());
+        assertEquals(0L, other.frameSerial());
     }
 }

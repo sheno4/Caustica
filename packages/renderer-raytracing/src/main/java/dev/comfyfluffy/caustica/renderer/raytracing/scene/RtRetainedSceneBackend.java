@@ -209,7 +209,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         List<RtRetainedGeometryPlan.GeometryRecord> addressedRecords = new ArrayList<>(records.size());
         for (int index = 0; index < records.size(); index++) {
             addressedRecords.add(records.get(index).withEmitterIndex(
-                    slot.emitters.deviceAddress().addBytes(emitterOffsets.get(index)).value(), 0));
+                    slot.emitters.deviceAddress().addBytes(emitterOffsets.get(index)), 0));
         }
         ByteBuffer geometry = RtRetainedGeometryPlan.pack(addressedRecords, origin);
         ByteBuffer emitters = ByteBuffer.allocate(emitterBytes).order(ByteOrder.nativeOrder());

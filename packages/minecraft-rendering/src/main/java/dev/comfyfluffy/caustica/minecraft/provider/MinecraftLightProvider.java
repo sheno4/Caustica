@@ -5,8 +5,8 @@ import dev.comfyfluffy.caustica.api.light.LightDescriptor;
 import dev.comfyfluffy.caustica.api.light.LightId;
 import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
-import dev.comfyfluffy.caustica.engine.light.RetainedLightBatch;
-import dev.comfyfluffy.caustica.engine.light.RetainedLightSnapshot;
+import dev.comfyfluffy.caustica.minecraft.light.MinecraftTerrainLightBatch;
+import dev.comfyfluffy.caustica.minecraft.light.MinecraftTerrainLightSnapshot;
 import dev.comfyfluffy.caustica.minecraft.MinecraftCelestialFrame;
 import dev.comfyfluffy.caustica.minecraft.MinecraftLightFrame;
 
@@ -57,7 +57,7 @@ public final class MinecraftLightProvider implements AutoCloseable {
     }
 
     void publish(CelestialLights celestial, Optional<LightDescriptor.Spot> helmet,
-                 RetainedLightSnapshot terrain) {
+                 MinecraftTerrainLightSnapshot terrain) {
         ArrayList<LightChannel.Operation> operations = new ArrayList<>();
         setOrDrop(operations, sunLight, celestial.sun());
         setOrDrop(operations, moonLight, celestial.moon());
@@ -70,9 +70,9 @@ public final class MinecraftLightProvider implements AutoCloseable {
     }
 
     private void reconcileTerrain(List<LightChannel.Operation> operations,
-                                  List<RetainedLightBatch> batches) {
+                                  List<MinecraftTerrainLightBatch> batches) {
         Set<Long> current = new HashSet<>();
-        for (RetainedLightBatch batch : batches) {
+        for (MinecraftTerrainLightBatch batch : batches) {
             current.add(batch.sectionKey());
             TerrainSection previous = terrainSections.get(batch.sectionKey());
             if (previous != null && previous.revision() == batch.revision()) continue;

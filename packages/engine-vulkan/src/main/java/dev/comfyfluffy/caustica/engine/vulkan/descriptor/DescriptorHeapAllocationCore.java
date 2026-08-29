@@ -17,12 +17,12 @@ public final class DescriptorHeapAllocationCore {
     ) {
         DescriptorHeapLayout resourceLayout = DescriptorHeapLayout.create(
                 DescriptorHeapKind.RESOURCE,
-                properties.resourceDescriptorStride(), properties.resourceHeapAlignment(),
+                properties.resourceDescriptorStrideBytes(), properties.resourceHeapAlignmentBytes(),
                 minimumResourceReservedBytes, maximumResourceHeapBytes,
                 properties.resourceDescriptorCapacity(), properties.maximumResourceAllocation());
         DescriptorHeapLayout samplerLayout = DescriptorHeapLayout.create(
                 DescriptorHeapKind.SAMPLER,
-                properties.samplerDescriptorStride(), properties.samplerHeapAlignment(),
+                properties.samplerDescriptorStrideBytes(), properties.samplerHeapAlignmentBytes(),
                 minimumSamplerReservedBytes, maximumSamplerHeapBytes,
                 properties.samplerDescriptorCapacity(), properties.maximumSamplerAllocation());
         resources = new DescriptorHeapAllocator<>(resourceLayout, GpuDescriptorIndex.Resource::new);

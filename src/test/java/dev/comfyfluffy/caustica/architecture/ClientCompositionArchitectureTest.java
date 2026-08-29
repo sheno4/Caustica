@@ -15,7 +15,7 @@ final class ClientCompositionArchitectureTest {
     @Test
     void runtimeAndPlatformDoNotExposeLegacyStaticLocators() throws IOException {
         String runtime = Files.readString(PROJECT_ROOT.resolve(
-                "src/main/java/dev/comfyfluffy/caustica/rt/RtRuntime.java"));
+                "packages/renderer-runtime/src/main/java/dev/comfyfluffy/caustica/rt/RtRuntime.java"));
         String platform = Files.readString(PROJECT_ROOT.resolve(
                 "src/main/java/dev/comfyfluffy/caustica/platform/CausticaPlatform.java"));
 

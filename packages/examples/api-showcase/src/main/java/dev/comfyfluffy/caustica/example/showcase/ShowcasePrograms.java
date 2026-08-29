@@ -12,6 +12,7 @@ import dev.comfyfluffy.caustica.api.program.VolumeDefinition;
 import dev.comfyfluffy.caustica.api.program.VolumeId;
 import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
 
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 final class ShowcasePrograms {
@@ -36,6 +37,7 @@ final class ShowcasePrograms {
                    EnvironmentId<EnvironmentBindingData> environment) { }
 
     private final ProgramRegistration<Exports> registration;
+    private final AtomicBoolean ready = new AtomicBoolean();
 
     ShowcasePrograms(ProgramChannel programs, Consumer<String> diagnosticSink) {
         registration = programs.register(builder -> new Exports(
@@ -53,7 +55,9 @@ final class ShowcasePrograms {
                         SOURCE.definition("showcase_environment", "api_showcase.GradientEnvironment"),
                         ENVIRONMENT_BINDING))));
         registration.whenComplete(completion -> {
-            if (completion instanceof ProgramRegistration.Failed failed) {
+            if (completion instanceof ProgramRegistration.Ready) {
+                ready.set(true);
+            } else if (completion instanceof ProgramRegistration.Failed failed) {
                 diagnosticSink.accept(failed.failure().summary() + "\n" + failed.failure().diagnostics());
             }
         });
@@ -61,6 +65,10 @@ final class ShowcasePrograms {
 
     Exports exports() {
         return registration.exports();
+    }
+
+    boolean ready() {
+        return ready.get();
     }
 
     EnvironmentBinding<EnvironmentBindingData> environmentBinding(long bindingWord, Runnable retired) {

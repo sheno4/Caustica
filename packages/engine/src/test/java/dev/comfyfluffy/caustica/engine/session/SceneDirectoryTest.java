@@ -90,6 +90,74 @@ final class SceneDirectoryTest {
     }
 
     @Test
+    void environmentSelectionsUseLatestOwnerPrecedenceAndRestoreTheLatestSurvivor() {
+        ProgramFixture programs = new ProgramFixture();
+        EnvironmentId<EnvironmentBindingData> environment =
+                programs.environment(new ContributionOwner(1)).exports();
+        SceneBackend backend = new SceneBackend();
+        SceneDirectory directory = directory(programs, backend);
+        SceneId scene = directory.createScene();
+        SceneEnvironmentContributionChannel first =
+                directory.openEnvironment(new ContributionOwner(2), scene);
+        SceneEnvironmentContributionChannel second =
+                directory.openEnvironment(new ContributionOwner(3), scene);
+        AtomicInteger firstOriginalRetired = new AtomicInteger();
+
+        first.select(new EnvironmentBinding<>(environment, ENVIRONMENT_BINDING.data(10),
+                firstOriginalRetired::incrementAndGet));
+        second.select(EnvironmentBinding.of(environment, ENVIRONMENT_BINDING.data(20)));
+        assertEquals(20, selectedEnvironmentBits(directory));
+
+        first.select(EnvironmentBinding.of(environment, ENVIRONMENT_BINDING.data(11)));
+        assertEquals(11, selectedEnvironmentBits(directory));
+        first.invalidate();
+        assertEquals(20, selectedEnvironmentBits(directory));
+
+        backend.retire(2);
+        directory.progressCallbacks();
+        assertEquals(1, firstOriginalRetired.get());
+        backend.retireLatest();
+        directory.progressCallbacks();
+        first.drain();
+        backend.retire(3);
+        directory.progressCallbacks();
+
+        second.invalidate();
+        assertEquals(null, directory.snapshot().scenes().getFirst().environment());
+        backend.retireLatest();
+        directory.progressCallbacks();
+        second.drain();
+    }
+
+    @Test
+    void invalidatingDormantEnvironmentWaitsForItsOlderGpuSnapshot() {
+        ProgramFixture programs = new ProgramFixture();
+        EnvironmentId<EnvironmentBindingData> environment =
+                programs.environment(new ContributionOwner(1)).exports();
+        SceneBackend backend = new SceneBackend();
+        SceneDirectory directory = directory(programs, backend);
+        SceneId scene = directory.createScene();
+        SceneEnvironmentContributionChannel first =
+                directory.openEnvironment(new ContributionOwner(2), scene);
+        SceneEnvironmentContributionChannel second =
+                directory.openEnvironment(new ContributionOwner(3), scene);
+        AtomicInteger retired = new AtomicInteger();
+
+        first.select(new EnvironmentBinding<>(environment, ENVIRONMENT_BINDING.data(10),
+                retired::incrementAndGet));
+        second.select(EnvironmentBinding.of(environment, ENVIRONMENT_BINDING.data(20)));
+        first.invalidate();
+        directory.progressCallbacks();
+        assertEquals(0, retired.get());
+
+        backend.retire(2);
+        directory.progressCallbacks();
+        first.drain();
+        assertEquals(1, retired.get());
+        assertEquals(20, selectedEnvironmentBits(directory));
+    }
+
+    @Test
     void crossContributionProgramReferencesWorkButMutationCapabilitiesDoNot() {
         ProgramFixture programs = new ProgramFixture();
         SurfaceId<Binding, Instance> surface = programs.surface(new ContributionOwner(1));
@@ -252,6 +320,10 @@ final class SceneDirectoryTest {
                 List.of(new MeshBuild.Geometry<>(slot, null, 0, 3)));
     }
 
+    private static long selectedEnvironmentBits(SceneDirectory directory) {
+        return directory.snapshot().scenes().getFirst().environment().bindingData().bits();
+    }
+
     @SuppressWarnings({"rawtypes", "unchecked"})
     private static EnvironmentBinding<?> mismatchedBinding(EnvironmentId<?> environment) {
         return new EnvironmentBinding((EnvironmentId) environment,
@@ -313,6 +385,7 @@ final class SceneDirectoryTest {
             }
             snapshots.add(snapshot); retirements.add(previousRetired);
         }
+        void retire(int publication) { retirements.get(publication).run(); }
         void retireLatest() { retirements.getLast().run(); }
     }
 }
