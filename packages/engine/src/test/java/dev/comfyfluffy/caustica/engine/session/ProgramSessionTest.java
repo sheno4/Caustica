@@ -57,10 +57,10 @@ final class ProgramSessionTest {
                        VolumeId<Binding, Instance> volume,
                        EnvironmentId<EnvironmentBinding> environment) { }
         ProgramRegistration<Exports> registration = channel.register(builder -> new Exports(
-                builder.surface(surface("sample::Surface", () -> events.add("surface-retired"))),
-                builder.volume(volume("sample::Volume", () -> events.add("volume-retired"))),
+                builder.surface(surface("sample.Surface", () -> events.add("surface-retired"))),
+                builder.volume(volume("sample.Volume", () -> events.add("volume-retired"))),
                 builder.environment(new EnvironmentDefinition<>(
-                        shader("environment", "sample::Environment"), ENVIRONMENT_BINDING))));
+                        shader("environment", "sample.Environment"), ENVIRONMENT_BINDING))));
         registration.whenComplete(completion -> {
             assertTrue(backend.active != null);
             events.add("ready");
@@ -95,11 +95,11 @@ final class ProgramSessionTest {
         ProgramContributionChannel channel = session.openChannel(new ContributionOwner(1));
         List<String> retired = new ArrayList<>();
         ProgramRegistration<SurfaceId<Binding, Instance>> first = channel.register(
-                builder -> builder.surface(surface("sample::First", () -> retired.add("first"))));
+                builder -> builder.surface(surface("sample.First", () -> retired.add("first"))));
         ProgramRegistration<SurfaceId<Binding, Instance>> broken = channel.register(
-                builder -> builder.surface(surface("sample::Broken", () -> retired.add("broken"))));
+                builder -> builder.surface(surface("sample.Broken", () -> retired.add("broken"))));
         ProgramRegistration<SurfaceId<Binding, Instance>> later = channel.register(
-                builder -> builder.surface(surface("sample::Later", () -> retired.add("later"))));
+                builder -> builder.surface(surface("sample.Later", () -> retired.add("later"))));
 
         session.progress();
         backend.succeed();
@@ -132,7 +132,7 @@ final class ProgramSessionTest {
         List<String> retired = new ArrayList<>();
 
         ProgramRegistration<SurfaceId<Binding, Instance>> cancelled = channel.register(
-                builder -> builder.surface(surface("sample::Cancelled", () -> retired.add("cancelled"))));
+                builder -> builder.surface(surface("sample.Cancelled", () -> retired.add("cancelled"))));
         session.progress();
         backend.succeed();
         cancelled.close();
@@ -145,7 +145,7 @@ final class ProgramSessionTest {
         assertInstanceOf(ProgramResolution.ErrorSurface.class, session.resolve(cancelled.exports()));
 
         ProgramRegistration<SurfaceId<Binding, Instance>> ready = channel.register(
-                builder -> builder.surface(surface("sample::Ready", () -> retired.add("ready"))));
+                builder -> builder.surface(surface("sample.Ready", () -> retired.add("ready"))));
         session.progress();
         backend.succeed();
         session.progress();
@@ -169,7 +169,7 @@ final class ProgramSessionTest {
         ProgramSession session = new ProgramSession(backend, failure -> { throw new AssertionError(failure); });
         ProgramContributionChannel channel = session.openChannel(new ContributionOwner(1));
         AtomicInteger retired = new AtomicInteger();
-        channel.register(builder -> builder.surface(surface("sample::Ready", retired::incrementAndGet)));
+        channel.register(builder -> builder.surface(surface("sample.Ready", retired::incrementAndGet)));
         session.progress();
         backend.succeed();
         session.progress();
@@ -200,13 +200,13 @@ final class ProgramSessionTest {
             entered.countDown();
             await(release);
             inside.decrementAndGet();
-            return builder.surface(surface("sample::One", () -> { }));
+            return builder.surface(surface("sample.One", () -> { }));
         }));
         entered.await();
         Thread two = Thread.ofPlatform().start(() -> second.register(builder -> {
             maximum.accumulateAndGet(inside.incrementAndGet(), Math::max);
             inside.decrementAndGet();
-            return builder.surface(surface("sample::Two", () -> { }));
+            return builder.surface(surface("sample.Two", () -> { }));
         }));
         release.countDown();
         one.join();
@@ -215,7 +215,7 @@ final class ProgramSessionTest {
 
         AtomicInteger notOwned = new AtomicInteger();
         assertThrows(IllegalStateException.class, () -> first.register(builder -> builder.surface(
-                new SurfaceDefinition<>(shader("different_module", "sample::One"), null,
+                new SurfaceDefinition<>(shader("different_module", "sample.One"), null,
                         IMPLEMENTATION.data(0), BINDING, INSTANCE, notOwned::incrementAndGet))));
         session.progress();
         assertEquals(0, notOwned.get());
@@ -228,7 +228,7 @@ final class ProgramSessionTest {
         ProgramContributionChannel channel = session.openChannel(new ContributionOwner(1));
         AtomicInteger retired = new AtomicInteger();
         ProgramRegistration<?> registration = channel.register(
-                builder -> builder.surface(surface("sample::Pending", retired::incrementAndGet)));
+                builder -> builder.surface(surface("sample.Pending", retired::incrementAndGet)));
 
         channel.invalidate();
 
@@ -248,10 +248,10 @@ final class ProgramSessionTest {
         ProgramContributionChannel channel = session.openChannel(new ContributionOwner(1));
         List<String> callbacks = new ArrayList<>();
         ProgramRegistration<?> registration = channel.register(builder -> {
-            builder.surface(surface("sample::Throwing", () -> {
+            builder.surface(surface("sample.Throwing", () -> {
                 throw new IllegalStateException("retirement");
             }));
-            return builder.volume(volume("sample::Following", () -> callbacks.add("retirement")));
+            return builder.volume(volume("sample.Following", () -> callbacks.add("retirement")));
         });
         registration.whenComplete(ignored -> {
             throw new IllegalStateException("readiness");

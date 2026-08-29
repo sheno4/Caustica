@@ -14,7 +14,7 @@ final class SlangIdentifier {
     }
 
     public static String requireType(String value) {
-        return requireCompound(value, "type", "::");
+        return requireCompound(value, "type", "\\.");
     }
 
     private static String requireCompound(String value, String label, String separator) {

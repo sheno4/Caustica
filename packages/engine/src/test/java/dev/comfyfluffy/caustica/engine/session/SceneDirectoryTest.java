@@ -269,7 +269,7 @@ final class SceneDirectoryTest {
             ProgramContributionChannel channel = session.openChannel(owner);
             var registration = channel.register(builder -> builder.surface(new SurfaceDefinition<>(
                     new ShaderDefinition(ShaderSource.classpath(SceneDirectoryTest.class, "/shaders"),
-                            "surface", "test::Surface"), null, IMPLEMENTATION.data(0), BINDING, INSTANCE, () -> { })));
+                            "surface", "test.Surface"), null, IMPLEMENTATION.data(0), BINDING, INSTANCE, () -> { })));
             session.progress();
             session.progress();
             return registration.exports();
@@ -279,7 +279,7 @@ final class SceneDirectoryTest {
             ProgramRegistration<EnvironmentId<EnvironmentBindingData>> registration = channel.register(
                     builder -> builder.environment(new EnvironmentDefinition<>(new ShaderDefinition(
                             ShaderSource.classpath(SceneDirectoryTest.class, "/shaders"),
-                            "environment", "test::Environment"), ENVIRONMENT_BINDING)));
+                            "environment", "test.Environment"), ENVIRONMENT_BINDING)));
             session.progress();
             session.progress();
             return registration;
