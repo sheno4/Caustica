@@ -93,7 +93,7 @@ final class GltfWorldContribution implements MinecraftWorldSessionContribution {
                         : new MeshBuild.CoveragePolicy.Opaque();
                 MeshBuild.SurfaceSlot<GltfProgramExports.PrimitiveData, GltfProgramExports.InstanceData> slot =
                         new MeshBuild.SurfaceSlot<>(programs.material(),
-                                GltfProgramExports.PRIMITIVE.data(upload.primitiveDataAddress()), coverage);
+                                GltfProgramExports.PRIMITIVE.data(upload.primitiveDataAddress().value()), coverage);
                 MeshBuild<GltfProgramExports.InstanceData> build = new MeshBuild<>(
                         upload.positionsStream(), null, upload.indexStream(), upload.vertexCount(),
                         new MeshBuild.IndexRevision(INDEX_REVISIONS.incrementAndGet()),
@@ -117,7 +117,7 @@ final class GltfWorldContribution implements MinecraftWorldSessionContribution {
             MeshId<GltfProgramExports.InstanceData> portalMesh = geometry.newMesh(GltfProgramExports.INSTANCE);
             meshes.add(portalMesh);
             var portalSlot = new MeshBuild.SurfaceSlot<>(programs.portal(),
-                    GltfProgramExports.PRIMITIVE.data(portalUpload.primitiveDataAddress()),
+                    GltfProgramExports.PRIMITIVE.data(portalUpload.primitiveDataAddress().value()),
                     new MeshBuild.CoveragePolicy.Opaque());
             operations.add(new GeometryChannel.SetMesh<>(portalMesh, new MeshBuild<>(
                     portalUpload.positionsStream(), null, portalUpload.indexStream(), portalUpload.vertexCount(),

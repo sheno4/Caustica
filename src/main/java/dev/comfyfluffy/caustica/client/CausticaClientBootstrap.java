@@ -2,7 +2,6 @@ package dev.comfyfluffy.caustica.client;
 
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.minecraft.MinecraftRuntimeHost;
-import dev.comfyfluffy.caustica.rt.RtRuntime;
 
 /** Shared client initialization and lifecycle hooks used by each loader entrypoint. */
 public final class CausticaClientBootstrap {
@@ -11,8 +10,8 @@ public final class CausticaClientBootstrap {
 
     public static void initialize() {
         CausticaMod.LOGGER.info("Caustica client initialized");
-        RtRuntime.INSTANCE.installHost(MinecraftRuntimeHost.INSTANCE);
-        RtRuntime.INSTANCE.startProcess();
+        CausticaClientComposition.current().runtime().installHost(MinecraftRuntimeHost.INSTANCE);
+        CausticaClientComposition.current().runtime().startProcess();
 
         // Class-init runs DebugScreenEntries.register(...) via its ID field; touching the class here
         // makes the entry discoverable in F3's entry list. Off by default -- the player opts in the
@@ -22,7 +21,7 @@ public final class CausticaClientBootstrap {
     }
 
     public static void invalidateRenderState() {
-        RtRuntime.INSTANCE.resetRendererFailure();
+        CausticaClientComposition.current().runtime().resetRendererFailure();
         VanillaRenderController.INSTANCE.resetFailureLatch();
     }
 }

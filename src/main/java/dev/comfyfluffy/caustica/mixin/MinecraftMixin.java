@@ -3,7 +3,7 @@ package dev.comfyfluffy.caustica.mixin;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vulkan.VulkanDevice;
 
-import dev.comfyfluffy.caustica.rt.RtRuntime;
+import dev.comfyfluffy.caustica.client.CausticaClientComposition;
 import dev.comfyfluffy.caustica.minecraft.MinecraftFrameAdapter;
 import dev.comfyfluffy.caustica.minecraft.MinecraftUiOverlay;
 import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftVulkanBackend;
@@ -34,7 +34,7 @@ public abstract class MinecraftMixin {
 	@Inject(method = "close", at = @At("HEAD"))
 	private void caustica$destroyUiOverlayBeforeRendererShutdown(CallbackInfo ci) {
 		MinecraftUiOverlay.destroy();
-		RtRuntime.INSTANCE.shutdown();
+		CausticaClientComposition.current().runtime().shutdown();
 	}
 
 	// Client-tick cadence, matching where the runtime tick has always run. runTick's HEAD would raise this

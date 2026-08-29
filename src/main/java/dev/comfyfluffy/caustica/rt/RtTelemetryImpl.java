@@ -6,10 +6,8 @@ import java.nio.file.Path;
 import java.util.function.LongConsumer;
 
 /** Renderer-owned telemetry implementation. */
-final class RtTelemetryImpl implements RtTelemetry {
-    static final RtTelemetryImpl INSTANCE = new RtTelemetryImpl();
-
-    private RtTelemetryImpl() {
+public final class RtTelemetryImpl implements RtTelemetry {
+    public RtTelemetryImpl() {
     }
 
     @Override

@@ -124,7 +124,9 @@ final class GltfWorldContributionTest {
             return new Uploaded() {
                 @Override public MeshBuild.Stream positionsStream() { return stream(base, 36, 12); }
                 @Override public MeshBuild.Stream indexStream() { return stream(base + 0x100, 12, 4); }
-                @Override public long primitiveDataAddress() { return base + 0x200; }
+                @Override public VulkanDeviceAddress primitiveDataAddress() {
+                    return new VulkanDeviceAddress(base + 0x200);
+                }
                 @Override public int vertexCount() { return 3; }
                 @Override public int indexCount() { return 3; }
                 @Override public void destroy() { destroyed.incrementAndGet(); }

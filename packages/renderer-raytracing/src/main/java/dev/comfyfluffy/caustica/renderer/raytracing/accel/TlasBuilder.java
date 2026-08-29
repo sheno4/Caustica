@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.renderer.raytracing.accel;
 
+import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtGpuExecutor;
 
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuBuffer;
@@ -45,13 +46,13 @@ public final class TlasBuilder {
     }
 
     /** One top-level instance with its transform, BLAS address, visibility, and hit-record selection. */
-    public record Instance(float[] transform3x4, long blasDeviceAddress, int customIndex, int mask,
+    public record Instance(float[] transform3x4, VulkanDeviceAddress blasDeviceAddress, int customIndex, int mask,
                            int sbtRecordOffset) {
-        public Instance(float[] transform3x4, long blasDeviceAddress, int customIndex) {
+        public Instance(float[] transform3x4, VulkanDeviceAddress blasDeviceAddress, int customIndex) {
             this(transform3x4, blasDeviceAddress, customIndex, 0xFF, 0);
         }
 
-        public Instance(float[] transform3x4, long blasDeviceAddress, int customIndex, int mask) {
+        public Instance(float[] transform3x4, VulkanDeviceAddress blasDeviceAddress, int customIndex, int mask) {
             this(transform3x4, blasDeviceAddress, customIndex, mask, 0);
         }
     }
@@ -60,7 +61,7 @@ public final class TlasBuilder {
     public static final class InstanceBatch {
         private static final int TRANSFORM_FLOATS = 12;
         float[] transforms = new float[0];
-        long[] blasDeviceAddresses = new long[0];
+        VulkanDeviceAddress[] blasDeviceAddresses = new VulkanDeviceAddress[0];
         int[] customIndices = new int[0];
         int[] masks = new int[0];
         int[] sbtRecordOffsets = new int[0];
@@ -72,7 +73,7 @@ public final class TlasBuilder {
         }
 
         public void append(float[] transform3x4, float translationX, float translationY, float translationZ,
-                           long blasDeviceAddress, int customIndex, int mask, int sbtRecordOffset) {
+                           VulkanDeviceAddress blasDeviceAddress, int customIndex, int mask, int sbtRecordOffset) {
             ensureCapacity(size + 1);
             int transformOffset = size * TRANSFORM_FLOATS;
             System.arraycopy(transform3x4, 0, transforms, transformOffset, TRANSFORM_FLOATS);
@@ -204,7 +205,7 @@ public final class TlasBuilder {
                     .mask(instance.mask())
                     .instanceShaderBindingTableRecordOffset(instance.sbtRecordOffset())
                     .flags(VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR)
-                    .accelerationStructureReference(instance.blasDeviceAddress());
+                    .accelerationStructureReference(instance.blasDeviceAddress().value());
         }
     }
 
@@ -219,7 +220,7 @@ public final class TlasBuilder {
                     .mask(instances.masks[i])
                     .instanceShaderBindingTableRecordOffset(instances.sbtRecordOffsets[i])
                     .flags(VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR)
-                    .accelerationStructureReference(instances.blasDeviceAddresses[i]);
+                    .accelerationStructureReference(instances.blasDeviceAddresses[i].value());
         }
     }
 
@@ -254,18 +255,18 @@ public final class TlasBuilder {
                     VkAccelerationStructureDeviceAddressInfoKHR.calloc(stack).sType$Default()
                             .accelerationStructure(handle);
             slot.accel = new RtAccel(vk, handle,
-                    vkGetAccelerationStructureDeviceAddressKHR(vk, addressInfo), backing);
+                    new VulkanDeviceAddress(vkGetAccelerationStructureDeviceAddressKHR(vk, addressInfo)), backing);
         }
         return slot;
     }
 
     private static VkAccelerationStructureBuildGeometryInfoKHR.Buffer buildInfo(
-            MemoryStack stack, long instanceBufferAddress) {
+            MemoryStack stack, VulkanDeviceAddress instanceBufferAddress) {
         VkAccelerationStructureGeometryKHR.Buffer geometry = VkAccelerationStructureGeometryKHR.calloc(1, stack);
         geometry.sType$Default().geometryType(VK_GEOMETRY_TYPE_INSTANCES_KHR)
                 .flags(VK_GEOMETRY_OPAQUE_BIT_KHR);
         geometry.geometry().instances().sType$Default().arrayOfPointers(false);
-        geometry.geometry().instances().data().deviceAddress(instanceBufferAddress);
+        geometry.geometry().instances().data().deviceAddress(instanceBufferAddress.value());
         VkAccelerationStructureBuildGeometryInfoKHR.Buffer build =
                 VkAccelerationStructureBuildGeometryInfoKHR.calloc(1, stack);
         build.sType$Default().type(VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR)
@@ -281,7 +282,7 @@ public final class TlasBuilder {
             VkAccelerationStructureBuildGeometryInfoKHR.Buffer build = buildInfo(
                     stack, prepared.instanceBuffer.deviceAddress());
             build.get(0).dstAccelerationStructure(prepared.accel.handle);
-            build.get(0).scratchData().deviceAddress(scratchAddress(ctx, prepared.scratch));
+            build.get(0).scratchData().deviceAddress(scratchAddress(ctx, prepared.scratch).value());
             VkAccelerationStructureBuildRangeInfoKHR.Buffer range =
                     VkAccelerationStructureBuildRangeInfoKHR.calloc(1, stack);
             range.get(0).primitiveCount(prepared.instanceCount).primitiveOffset(0).firstVertex(0)
@@ -297,11 +298,10 @@ public final class TlasBuilder {
                 false, label, alignment);
     }
 
-    private static long scratchAddress(VulkanDeviceContext ctx, GpuBuffer scratch) {
+    private static VulkanDeviceAddress scratchAddress(VulkanDeviceContext ctx, GpuBuffer scratch) {
         long alignment = ctx.accelerationStructureScratchAlignment();
-        if ((scratch.deviceAddress() & (alignment - 1L)) != 0L) {
-            throw new IllegalStateException("Scratch device address 0x"
-                    + Long.toUnsignedString(scratch.deviceAddress(), 16) + " is not aligned to " + alignment);
+        if (!scratch.deviceAddress().isAlignedTo(alignment)) {
+            throw new IllegalStateException("Scratch device address is not aligned to " + alignment);
         }
         return scratch.deviceAddress();
     }

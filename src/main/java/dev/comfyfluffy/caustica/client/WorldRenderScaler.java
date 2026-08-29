@@ -2,7 +2,6 @@ package dev.comfyfluffy.caustica.client;
 
 import com.mojang.blaze3d.pipeline.RenderTarget;
 import com.mojang.blaze3d.vulkan.VulkanGpuTexture;
-import dev.comfyfluffy.caustica.rt.RtRuntime;
 
 /**
  * RT composite seam. Brackets vanilla's level-rendering section in {@code GameRenderer.render}: the
@@ -51,7 +50,7 @@ public final class WorldRenderScaler {
 			}
 			long image = mainTarget.getColorTexture() instanceof VulkanGpuTexture texture ? texture.vkImage() : 0L;
 			boolean success = image != 0L
-					&& RtRuntime.INSTANCE.composite(image, mainTarget.width, mainTarget.height);
+					&& CausticaClientComposition.current().runtime().composite(image, mainTarget.width, mainTarget.height);
 			VanillaRenderController.INSTANCE.markRtFrameResult(success);
 		}
 	}

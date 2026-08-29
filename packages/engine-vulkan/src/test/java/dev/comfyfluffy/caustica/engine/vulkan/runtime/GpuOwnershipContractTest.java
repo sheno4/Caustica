@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.engine.vulkan.runtime;
 
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
+import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 import dev.comfyfluffy.caustica.spi.vulkan.VulkanRendererBackend;
 import org.junit.jupiter.api.Test;
 import org.lwjgl.vulkan.VK10;
@@ -46,5 +47,13 @@ final class GpuOwnershipContractTest {
                 .filter(field -> Modifier.isStatic(field.getModifiers()))
                 .anyMatch(field -> field.getType() == VulkanDeviceContext.class
                         || field.getType() == VulkanRendererBackend.class));
+    }
+
+    @Test
+    void rendererBufferKeepsDeviceAddressesTyped() throws Exception {
+        assertEquals(VulkanDeviceAddress.class,
+                GpuBuffer.class.getMethod("deviceAddress").getReturnType());
+        assertEquals(long.class, GpuBuffer.class.getMethod("handle").getReturnType());
+        assertEquals(long.class, GpuBuffer.class.getMethod("mapped").getReturnType());
     }
 }

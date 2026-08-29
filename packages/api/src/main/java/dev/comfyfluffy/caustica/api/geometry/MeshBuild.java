@@ -90,9 +90,6 @@ public record MeshBuild<N>(Stream positions,
             }
         }
 
-        /** Vulkan address of the first stream element, for acceleration-structure command marshaling. */
-        public long deviceAddress() { return bytes.address().value(); }
-
         public long byteSize() { return bytes.byteSize(); }
     }
 

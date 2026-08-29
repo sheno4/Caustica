@@ -53,7 +53,7 @@ public final class RtDebugPresentPipeline {
             ByteBuffer push = stack.malloc(DebugPresentPushData.BYTE_SIZE);
             new DebugPresentPushData(storage(output), storage(normal), storage(albedo), storage(depth),
                     storage(motion), storage(specAlbedo), storage(specMotion), storage(scene),
-                    storage(exposure), exposureState.deviceAddress(), debugView,
+                    storage(exposure), exposureState.deviceAddress().value(), debugView,
                     centerWeightSigma, centerWeightFloor).write(push);
             shader.dispatch(command, push, (output.width() + 15) / 16, (output.height() + 15) / 16, 1);
         }

@@ -15,10 +15,10 @@ import net.neoforged.neoforge.registries.RegisterEvent;
 @Mod(value = CausticaMod.MOD_ID, dist = Dist.CLIENT)
 public final class NeoForgeCausticaMod {
     public NeoForgeCausticaMod(IEventBus modBus) {
-        CausticaPlatform.install(new NeoForgePlatform());
+        CausticaPlatform platform = new NeoForgePlatform();
         modBus.addListener(this::registerItems);
         modBus.addListener(this::clientSetup);
-        CausticaMod.initialize();
+        CausticaMod.initialize(platform);
     }
 
     // Mod constructors run in parallel; client bootstrap registers a vanilla debug-screen entry into a

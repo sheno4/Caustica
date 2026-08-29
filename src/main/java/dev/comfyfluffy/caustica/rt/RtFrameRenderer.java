@@ -1,5 +1,7 @@
 package dev.comfyfluffy.caustica.rt;
 
+import dev.comfyfluffy.caustica.client.CausticaClientComposition;
+
 import dev.comfyfluffy.caustica.renderer.presentation.RtFramePresenter;
 
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuBuffer;
@@ -13,6 +15,7 @@ import dev.comfyfluffy.caustica.vulkan.VulkanDiagnostics;
 import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptorKind;
+import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.api.view.ViewMedium;
 import dev.comfyfluffy.caustica.engine.frame.FrameSnapshot;
@@ -80,7 +83,7 @@ import java.util.Objects;
  */
 final class RtFrameRenderer {
     public static boolean enabled() {
-        return RtRuntime.frameActive();
+        return CausticaClientComposition.current().runtime().frameActive();
     }
 
     // WorldPushData and its serializer are generated from Slang's reflected Std430DataLayout. Java never
@@ -238,11 +241,11 @@ final class RtFrameRenderer {
      * @return {@code true} when a current RT frame was available and written
      */
     public boolean exportLatestResidualExposureExr(Path outputPath) throws java.io.IOException {
-        VulkanDeviceContext context = RtRuntime.INSTANCE.vulkanContextOrNull();
+        VulkanDeviceContext context = CausticaClientComposition.current().runtime().vulkanContextOrNull();
         if (context != null) {
             context.backend().assertRenderThread();
         }
-        VulkanDeviceContext ctx = RtRuntime.INSTANCE.vulkanContextOrNull();
+        VulkanDeviceContext ctx = CausticaClientComposition.current().runtime().vulkanContextOrNull();
         if (!enabled() || failed || ctx == null || presentationResources().exposure().image() == null
                 || pendingGraphicsUse != null) {
             return false;
@@ -445,7 +448,7 @@ final class RtFrameRenderer {
         if (graphicsUse == null) {
             return;
         }
-        VulkanDeviceContext ctx = RtRuntime.INSTANCE.vulkanContextOrNull();
+        VulkanDeviceContext ctx = CausticaClientComposition.current().runtime().vulkanContextOrNull();
         if (ctx == null) {
             throw new IllegalStateException("RT context disappeared before graphics use completed");
         }
@@ -465,7 +468,7 @@ final class RtFrameRenderer {
         if (failed) {
             return false;
         }
-        VulkanDeviceContext ctx = RtRuntime.INSTANCE.requireVulkanContext();
+        VulkanDeviceContext ctx = CausticaClientComposition.current().runtime().requireVulkanContext();
         if (ctx == null) {
             return false;
         }
@@ -866,13 +869,13 @@ final class RtFrameRenderer {
                 presentationResources().postColorB(), ui);
     }
 
-    private void writeFrameRoots(ByteBuffer roots, long worldPushAddress, FrameSnapshot snapshot,
+    private void writeFrameRoots(ByteBuffer roots, VulkanDeviceAddress worldPushAddress, FrameSnapshot snapshot,
                                  GpuBuffer continuationQueue) {
         ByteBuffer target = roots.duplicate().order(ByteOrder.nativeOrder());
         int base = roots.position();
-        target.putLong(base + RtBindings.WORLD_PUSH_ADDRESS_OFFSET, worldPushAddress);
+        target.putLong(base + RtBindings.WORLD_PUSH_ADDRESS_OFFSET, worldPushAddress.value());
         target.putLong(base + RtBindings.WORLD_PATH_QUEUE_ADDRESS_OFFSET,
-                continuationQueue.deviceAddress());
+                continuationQueue.deviceAddress().value());
         target.putInt(base + RtBindings.WORLD_OUTPUT_IMAGE_INDEX_OFFSET, storageIndex(traceImages().traceColor()));
         target.putInt(base + RtBindings.WORLD_NORMAL_GUIDE_INDEX_OFFSET, storageIndex(traceImages().normalRoughness()));
         target.putInt(base + RtBindings.WORLD_ALBEDO_GUIDE_INDEX_OFFSET, storageIndex(traceImages().diffuseAlbedo()));

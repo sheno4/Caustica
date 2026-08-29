@@ -10,7 +10,8 @@ import dev.comfyfluffy.caustica.minecraft.adapter.session.MinecraftWorldSessionH
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftExtension;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftClientMaterialEpochCompiler;
 import dev.comfyfluffy.caustica.platform.CausticaPlatform;
-import dev.comfyfluffy.caustica.rt.RtRuntime;
+import dev.comfyfluffy.caustica.rt.RtTelemetry;
+import dev.comfyfluffy.caustica.nvidia.ngx.NgxRuntime;
 import dev.comfyfluffy.caustica.settings.CausticaSettings;
 import dev.comfyfluffy.caustica.settings.CausticaSettingsExtension;
 import dev.comfyfluffy.caustica.settings.SettingsRegistry;
@@ -24,23 +25,19 @@ import java.util.Optional;
 
 /** Loader-neutral process extension discovery and settings installation. */
 public final class MinecraftApiBootstrap {
-    private static RenderSessionHost sessionHost;
-    private static MinecraftWorldSessionHost minecraftSessionHost;
-    private static SettingsRegistry settings;
-
     private MinecraftApiBootstrap() { }
 
-    public static void initialize() {
-        MinecraftTelemetry.install(RtRuntime.INSTANCE.telemetry());
+    public static ApiServices initialize(CausticaPlatform platform, RtTelemetry telemetry) {
+        MinecraftTelemetry.install(telemetry);
         RenderSessionHost host = new RenderSessionHost();
         MinecraftWorldSessionHost minecraftHost = new MinecraftWorldSessionHost();
         SettingsRegistry settingsRegistry = new SettingsRegistry();
         List<CausticaExtension> extensions = new ArrayList<>();
         extensions.add(new BuiltinExtension());
-        extensions.addAll(CausticaPlatform.current().extensions());
+        extensions.addAll(platform.extensions());
         registerExtensions(host, minecraftHost, settingsRegistry, extensions);
         registerMinecraftExtensions(minecraftHost, settingsRegistry,
-                CausticaPlatform.current().minecraftExtensions(), extensions);
+                platform.minecraftExtensions(), extensions);
         MinecraftLightingCalibration calibration = MinecraftLightingCalibrationLoader.loadDefault();
         registerMinecraftExtension(minecraftHost, settingsRegistry,
                 new MinecraftProvidersExtension(MinecraftFrameAdapter.INSTANCE::installFrameSelector,
@@ -50,27 +47,27 @@ public final class MinecraftApiBootstrap {
                         MinecraftFrameAdapter.INSTANCE.entityTextures(),
                         MinecraftFrameAdapter.INSTANCE.entities()));
 
-        Path gameDirectory = CausticaPlatform.current().gameDir();
+        Path gameDirectory = platform.gameDir();
         String configuredSlangPath = CausticaConfig.Slang.PATH.get();
         Optional<Path> slangOverride = configuredSlangPath == null || configuredSlangPath.isBlank()
                 ? Optional.empty() : Optional.of(Path.of(configuredSlangPath));
-        RtRuntime.INSTANCE.installSlangRuntime(new SlangRuntime(new SlangRuntimeConfig(
-                gameDirectory.resolve("caustica-slang"), slangOverride)));
+        SlangRuntime slangRuntime = new SlangRuntime(new SlangRuntimeConfig(
+                gameDirectory.resolve("caustica-slang"), slangOverride));
         var shaderCache = gameDirectory.resolve("caustica-shaders");
-        RtRuntime.INSTANCE.configureShaderCache(shaderCache.resolve("sources"));
-        RtRuntime.INSTANCE.telemetry().configure(gameDirectory
-                .resolve("rt-frame-stats"), MinecraftFrameMetrics.schema());
+        Path shaderCacheRoot = shaderCache.resolve("sources").toAbsolutePath().normalize();
+        telemetry.configure(gameDirectory.resolve("rt-frame-stats"), MinecraftFrameMetrics.schema());
         CausticaOptions options = CausticaOptions.load(
-                CausticaPlatform.current().configDir().resolve("caustica-options.toml"),
+                platform.configDir().resolve("caustica-options.toml"),
                 settingsRegistry);
         CausticaSettings.initialize(settingsRegistry, options);
 
-        sessionHost = host;
-        minecraftSessionHost = minecraftHost;
-        settings = settingsRegistry;
-        RtRuntime.INSTANCE.installApiHost(host);
         CausticaMod.LOGGER.info("Caustica extension API {} initialized with {} settings feature(s)",
                 dev.comfyfluffy.caustica.api.CausticaApi.VERSION, settingsRegistry.all().size());
+        String configuredNgxPath = CausticaConfig.Ngx.PATH.get();
+        Optional<Path> ngxOverride = configuredNgxPath == null || configuredNgxPath.isBlank()
+                ? Optional.empty() : Optional.of(Path.of(configuredNgxPath));
+        return new ApiServices(host, minecraftHost, settingsRegistry, slangRuntime, shaderCacheRoot,
+                new NgxRuntime.Settings(gameDirectory.resolve("caustica-ngx"), ngxOverride));
     }
 
     static void registerMinecraftExtensions(MinecraftWorldSessionHost host, SettingsRegistry settingsRegistry,
@@ -136,21 +133,10 @@ public final class MinecraftApiBootstrap {
         }
     }
 
-    public static RenderSessionHost sessionHost() {
-        RenderSessionHost current = sessionHost;
-        if (current == null) throw new IllegalStateException("Caustica extension API is not initialized");
-        return current;
-    }
-
-    public static SettingsRegistry settings() {
-        SettingsRegistry current = settings;
-        if (current == null) throw new IllegalStateException("Caustica settings are not initialized");
-        return current;
-    }
-
-    public static MinecraftWorldSessionHost minecraftSessionHost() {
-        MinecraftWorldSessionHost current = minecraftSessionHost;
-        if (current == null) throw new IllegalStateException("Minecraft session API is not initialized");
-        return current;
-    }
+    public record ApiServices(RenderSessionHost renderSessionHost,
+                              MinecraftWorldSessionHost minecraftWorldSessionHost,
+                              SettingsRegistry settings,
+                              SlangRuntime slangRuntime,
+                              Path shaderCacheRoot,
+                              NgxRuntime.Settings ngxSettings) { }
 }

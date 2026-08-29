@@ -30,7 +30,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.BindGroupLayouts;
 import net.minecraft.client.renderer.RenderPipelines;
 
-import dev.comfyfluffy.caustica.rt.RtRuntime;
+import dev.comfyfluffy.caustica.client.CausticaClientComposition;
 
 /**
  * Transparent final-UI overlay. World-space overlay features and the vanilla GUI/HUD
@@ -87,7 +87,7 @@ public final class MinecraftUiOverlay {
      * GUI on the normal path.
      */
     public static boolean enabled() {
-        return RtRuntime.frameActive()
+        return CausticaClientComposition.current().runtime().frameActive()
                 && !compositeFailed && Minecraft.getInstance().isGameLoadFinished();
     }
 
@@ -150,7 +150,7 @@ public final class MinecraftUiOverlay {
 
     public static UiPassTarget uiPassTarget(RenderTarget main) {
         TextureTarget target = prepare(main);
-        VulkanDeviceContext gpu = RtRuntime.INSTANCE.vulkanContextOrNull();
+        VulkanDeviceContext gpu = CausticaClientComposition.current().runtime().vulkanContextOrNull();
         if (gpu == null || !(target.getColorTextureView() instanceof VulkanGpuTextureView view)) return null;
         if (borrowedImage == null || borrowedImage.hostView != view) {
             BorrowedOverlayImage replacement = BorrowedOverlayImage.create(gpu, view, target.width, target.height);
@@ -217,7 +217,7 @@ public final class MinecraftUiOverlay {
             usedThisFrame = false;
             return;
         }
-        if (RtRuntime.INSTANCE.isHdrPresentActive()) {
+        if (CausticaClientComposition.current().runtime().isHdrPresentActive()) {
             // HDR path composites the overlay over the PQ HDR image at present; leave usedThisFrame set so
             // presentHdr can consume it. Do NOT composite over the SDR main target (it isn't presented).
             return;
@@ -257,7 +257,7 @@ public final class MinecraftUiOverlay {
         overlayClearedThisFrame = false;
         compositeFailed = false;
         if (borrowedImage != null) {
-            VulkanDeviceContext gpu = RtRuntime.INSTANCE.vulkanContextOrNull();
+            VulkanDeviceContext gpu = CausticaClientComposition.current().runtime().vulkanContextOrNull();
             if (gpu != null) gpu.retireAfterUse(borrowedImage::destroy);
             else borrowedImage.destroy();
             borrowedImage = null;

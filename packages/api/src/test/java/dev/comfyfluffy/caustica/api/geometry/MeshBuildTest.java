@@ -11,6 +11,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class MeshBuildTest {
@@ -22,8 +23,14 @@ final class MeshBuildTest {
     @Test
     void streamOffsetParticipatesInTheEffectiveAddress() {
         var stream = new MeshBuild.Stream(range(0x1000L, 96L).slice(32L, 64L), 16);
-        assertEquals(0x1020L, stream.deviceAddress());
+        assertEquals(new VulkanDeviceAddress(0x1020L), stream.bytes().address());
         assertEquals(64L, stream.byteSize());
+    }
+
+    @Test
+    void streamDoesNotReExposeItsTypedRangeAsRawAddressBits() {
+        assertFalse(java.util.Arrays.stream(MeshBuild.Stream.class.getDeclaredMethods())
+                .anyMatch(method -> method.getName().equals("deviceAddress")));
     }
 
     @Test

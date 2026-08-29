@@ -128,8 +128,10 @@ final class RtRetainedGeometryPlanTest {
         ByteBuffer roots = ByteBuffer.allocate(RtBindings.WORLD_PUSH_CONSTANT_SIZE)
                 .order(ByteOrder.nativeOrder());
         roots.putLong(RtBindings.WORLD_COMPOSITION_DATA_ADDRESS_OFFSET, 0x7777L);
-        var trace = new RtRetainedSceneBackend.PreparedTrace(0x1234L, 0x5678L, 19,
-                new RtPipeline.HitTable(0x8000L, 64, 256));
+        var trace = new RtRetainedSceneBackend.PreparedTrace(
+                new VulkanDeviceAddress(0x1234L), new VulkanDeviceAddress(0x5678L), 19,
+                new RtPipeline.HitTable(new VulkanDeviceAddressRange(
+                        new VulkanDeviceAddress(0x8000L), 256), 64));
 
         trace.writeWorldRoots(roots);
 

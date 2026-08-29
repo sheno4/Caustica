@@ -6,6 +6,8 @@ import dev.comfyfluffy.caustica.api.geometry.MeshBuild;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorRange;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorIndex;
 import dev.comfyfluffy.caustica.api.vulkan.GpuAccelerationStructureDescriptor;
+import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
+import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
 import dev.comfyfluffy.caustica.api.light.LightDescriptor;
 import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
@@ -207,7 +209,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         List<RtRetainedGeometryPlan.GeometryRecord> addressedRecords = new ArrayList<>(records.size());
         for (int index = 0; index < records.size(); index++) {
             addressedRecords.add(records.get(index).withEmitterIndex(
-                    slot.emitters.deviceAddress() + emitterOffsets.get(index), 0));
+                    slot.emitters.deviceAddress().addBytes(emitterOffsets.get(index)).value(), 0));
         }
         ByteBuffer geometry = RtRetainedGeometryPlan.pack(addressedRecords, origin);
         ByteBuffer emitters = ByteBuffer.allocate(emitterBytes).order(ByteOrder.nativeOrder());
@@ -245,7 +247,8 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         ctx.descriptorHeap().writer().writeAccelerationStructure(slot.tlasDescriptor, 0, tlasHandle);
         slot.graphicsUse.mark(graphicsUse);
         RtPipeline.HitTable hitTable = hits.hasRemaining() ? new RtPipeline.HitTable(
-                slot.hits.deviceAddress(), pipeline.retainedHitRecordStride(), hits.remaining()) : null;
+                new VulkanDeviceAddressRange(slot.hits.deviceAddress(), hits.remaining()),
+                pipeline.retainedHitRecordStride()) : null;
         RtNeeAtBackend.Prepared lighting = neeAt.active(scene);
         if (lighting == null) throw new IllegalStateException("prepareLighting must precede prepareTrace");
         lighting.bindLightTable(slot.lights.deviceAddress());
@@ -366,8 +369,8 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     private NativeMesh prepareMesh(RetainedSceneSnapshot.Mesh mesh) {
         MeshBuild<?> build = mesh.build();
         RtAccel.PersistentBuild nativeBuild = RtAccel.preparePersistentBlasBuild(ctx,
-                build.positions().deviceAddress(), build.positions().byteStride(), build.vertexCount(),
-                build.indices().deviceAddress(),
+                build.positions().bytes().address(), build.positions().byteStride(), build.vertexCount(),
+                build.indices().bytes().address(),
                 RtRetainedGeometryPlan.blasRanges(build), "retained mesh " + mesh.identity());
         return new NativeMesh(mesh, nativeBuild.op(), nativeBuild.accel(), nativeBuild.backing());
     }
@@ -464,7 +467,8 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         public boolean historyValid() { return delegate.historyValid(); }
     }
 
-    public record PreparedTrace(long geometryRecordsAddress, long neeAtStateAddress,
+    public record PreparedTrace(VulkanDeviceAddress geometryRecordsAddress,
+                                VulkanDeviceAddress neeAtStateAddress,
                                 int tlasDescriptorIndex,
                                 RtPipeline.HitTable hitTable) {
         /** Borrowed view of the frame-protected TLAS descriptor for native UI passes. */
@@ -481,9 +485,9 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             ByteBuffer target = roots.duplicate().order(ByteOrder.nativeOrder());
             int base = roots.position();
             target.putLong(base + RtBindings.WORLD_GEOMETRY_TABLE_ADDRESS_OFFSET,
-                    geometryRecordsAddress);
+                    geometryRecordsAddress.value());
             target.putInt(base + RtBindings.WORLD_TOP_LEVEL_AS_INDEX_OFFSET, tlasDescriptorIndex);
-            target.putLong(base + RtBindings.WORLD_NEE_AT_STATE_ADDRESS_OFFSET, neeAtStateAddress);
+            target.putLong(base + RtBindings.WORLD_NEE_AT_STATE_ADDRESS_OFFSET, neeAtStateAddress.value());
         }
     }
 

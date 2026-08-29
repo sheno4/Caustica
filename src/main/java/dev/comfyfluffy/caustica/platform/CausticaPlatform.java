@@ -15,40 +15,4 @@ public interface CausticaPlatform {
 
     List<MinecraftExtension> minecraftExtensions();
 
-    static CausticaPlatform current() {
-        return Holder.current;
-    }
-
-    static void install(CausticaPlatform platform) {
-        Holder.current = platform;
-    }
-
-    final class Holder {
-        private static CausticaPlatform current = new StandalonePlatform();
-
-        private Holder() {
-        }
-    }
-
-    final class StandalonePlatform implements CausticaPlatform {
-        @Override
-        public Path gameDir() {
-            return Path.of(".");
-        }
-
-        @Override
-        public Path configDir() {
-            return Path.of("config");
-        }
-
-        @Override
-        public List<CausticaExtension> extensions() {
-            return List.of();
-        }
-
-        @Override
-        public List<MinecraftExtension> minecraftExtensions() {
-            return List.of();
-        }
-    }
 }

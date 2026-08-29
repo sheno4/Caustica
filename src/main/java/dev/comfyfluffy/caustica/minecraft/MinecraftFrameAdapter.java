@@ -10,7 +10,7 @@ import dev.comfyfluffy.caustica.engine.frame.SceneResources;
 import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftDimensionKey;
-import dev.comfyfluffy.caustica.rt.RtRuntime;
+import dev.comfyfluffy.caustica.client.CausticaClientComposition;
 import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
 import dev.comfyfluffy.caustica.minecraft.entity.RtEntities;
 import dev.comfyfluffy.caustica.minecraft.entity.RtEntityTextures;
@@ -49,12 +49,12 @@ public final class MinecraftFrameAdapter {
         ClientLevel level = client.level;
         long currentSceneId = identify(level);
         if (!(client.gui.overlay() instanceof LoadingOverlay)) {
-            RtRuntime.INSTANCE.observeResourcePackAvailable();
+            CausticaClientComposition.current().runtime().observeResourcePackAvailable();
         }
         var target = client.gameRenderer.mainRenderTarget();
         boolean startupSceneReady = level != null && client.player != null
                 && RtTerrain.isSectionReady(client.player.blockPosition());
-        RtRuntime.INSTANCE.tick(captureSceneResources(client), startupSceneReady, currentSceneId,
+        CausticaClientComposition.current().runtime().tick(captureSceneResources(client), startupSceneReady, currentSceneId,
                 dimensionKey(level),
                 target != null ? target.width : 0, target != null ? target.height : 0,
                 client::invalidateSurfaceConfiguration);

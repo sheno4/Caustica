@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.renderer.raytracing.accel;
 
+import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtGpuExecutor;
 
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuBuffer;
@@ -89,17 +90,16 @@ public final class RtAccel {
                 false, label, alignment);
     }
 
-    private static long scratchAddress(VulkanDeviceContext ctx, GpuBuffer scratch) {
+    private static VulkanDeviceAddress scratchAddress(VulkanDeviceContext ctx, GpuBuffer scratch) {
         long alignment = ctx.accelerationStructureScratchAlignment();
-        if ((scratch.deviceAddress() & (alignment - 1L)) != 0L) {
-            throw new IllegalStateException("Scratch device address 0x"
-                    + Long.toUnsignedString(scratch.deviceAddress(), 16) + " is not aligned to " + alignment);
+        if (!scratch.deviceAddress().isAlignedTo(alignment)) {
+            throw new IllegalStateException("Scratch device address is not aligned to " + alignment);
         }
         return scratch.deviceAddress();
     }
 
     public final long handle;
-    public final long deviceAddress;
+    public final VulkanDeviceAddress deviceAddress;
 
     private final GpuBuffer backing;
     private final boolean ownsBacking;
@@ -108,15 +108,16 @@ public final class RtAccel {
     private final VkDevice vk;
     private boolean destroyed;
 
-    RtAccel(VkDevice vk, long handle, long deviceAddress, GpuBuffer backing) {
+    RtAccel(VkDevice vk, long handle, VulkanDeviceAddress deviceAddress, GpuBuffer backing) {
         this(vk, handle, deviceAddress, backing, true);
     }
 
-    private RtAccel(VkDevice vk, long handle, long deviceAddress, GpuBuffer backing, boolean ownsBacking) {
+    private RtAccel(VkDevice vk, long handle, VulkanDeviceAddress deviceAddress, GpuBuffer backing,
+                    boolean ownsBacking) {
         this(vk, handle, deviceAddress, backing, ownsBacking, null);
     }
 
-    private RtAccel(VkDevice vk, long handle, long deviceAddress, GpuBuffer backing, boolean ownsBacking,
+    private RtAccel(VkDevice vk, long handle, VulkanDeviceAddress deviceAddress, GpuBuffer backing, boolean ownsBacking,
                     OpacityMicromap opacityMicromap) {
         this.vk = vk;
         this.handle = handle;
@@ -161,7 +162,8 @@ public final class RtAccel {
 
     @FunctionalInterface
     public interface OpacityMicromapEncoder {
-        void record(VkCommandBuffer command, long dataAddress, long triangleAddress, int dataStride);
+        void record(VkCommandBuffer command, VulkanDeviceAddress dataAddress,
+                    VulkanDeviceAddress triangleAddress, int dataStride);
     }
 
     /** Device-generated opacity input. One encoder invocation owns each triangle's padded data block. */
@@ -213,9 +215,9 @@ public final class RtAccel {
         GpuBuffer data;
         GpuBuffer triangles;
         GpuBuffer scratch;
-        final long scratchAddress;
-        final long dataAddress;
-        final long triangleArrayAddress;
+        final VulkanDeviceAddress scratchAddress;
+        final VulkanDeviceAddress dataAddress;
+        final VulkanDeviceAddress triangleArrayAddress;
         final int triangleCount;
         final int subdivisionLevel;
         final int bytesPerTriangle;
@@ -224,7 +226,8 @@ public final class RtAccel {
         boolean destroyed;
 
         OpacityMicromap(VkDevice vk, long handle, GpuBuffer backing, GpuBuffer data, GpuBuffer triangles,
-                        GpuBuffer scratch, long scratchAddress, long dataAddress, long triangleArrayAddress, int triangleCount,
+                        GpuBuffer scratch, VulkanDeviceAddress scratchAddress, VulkanDeviceAddress dataAddress,
+                        VulkanDeviceAddress triangleArrayAddress, int triangleCount,
                         int subdivisionLevel, int bytesPerTriangle, OpacityMicromapEncoder encoder, int dataStride) {
             this.vk = vk;
             this.handle = handle;
@@ -283,9 +286,9 @@ public final class RtAccel {
         // Non-null only when the AS backing buffer is caller-owned, so releaseTransientBlas destroys it
         // explicitly rather than accel.destroy() doing so.
         private final GpuBuffer externalBacking;
-        private final long vertexAddr;
+        private final VulkanDeviceAddress vertexAddr;
         private final int vertexStride;
-        private final long indexAddr;
+        private final VulkanDeviceAddress indexAddr;
         private final int maxVertex;
         private final int triangleCount;
         private final boolean opaque;
@@ -310,13 +313,15 @@ public final class RtAccel {
         private final List<GeometryRange> geometryRanges;
         private final OpacityMicromap opacityMicromap; // optional, retained masked class only
 
-        private PreparedBlas(RtAccel accel, GpuBuffer scratch, GpuBuffer externalBacking, long vertexAddr, long indexAddr,
+        private PreparedBlas(RtAccel accel, GpuBuffer scratch, GpuBuffer externalBacking,
+                             VulkanDeviceAddress vertexAddr, VulkanDeviceAddress indexAddr,
                              int maxVertex, int triangleCount, boolean opaque, String label, boolean updatable, boolean update) {
             this(accel, scratch, externalBacking, vertexAddr, indexAddr, maxVertex, triangleCount, opaque, label,
                     updatable, update, null, false, false, null, false, null, null);
         }
 
-        private PreparedBlas(RtAccel accel, GpuBuffer scratch, GpuBuffer externalBacking, long vertexAddr, long indexAddr,
+        private PreparedBlas(RtAccel accel, GpuBuffer scratch, GpuBuffer externalBacking,
+                             VulkanDeviceAddress vertexAddr, VulkanDeviceAddress indexAddr,
                              int maxVertex, int triangleCount, boolean opaque, String label, boolean updatable, boolean update,
                              RtAccel updateSource, boolean fastBuild, boolean retainedSplit, int[] retainedClassTriangles,
                              boolean externalClassSplit, int[] externalClassTriangles,
@@ -344,7 +349,7 @@ public final class RtAccel {
         }
 
         private PreparedBlas(RtAccel accel, GpuBuffer scratch, GpuBuffer externalBacking,
-                             long vertexAddr, long indexAddr, int maxVertex,
+                             VulkanDeviceAddress vertexAddr, VulkanDeviceAddress indexAddr, int maxVertex,
                              int vertexStride, List<GeometryRange> geometryRanges, String label) {
             this.accel = accel;
             this.scratch = scratch;
@@ -369,7 +374,8 @@ public final class RtAccel {
         }
 
         /** A retained packed BLAS split into fixed per-class geometries in {@link RtAccel#SBT_CLASSES} order. */
-        static PreparedBlas retained(RtAccel accel, GpuBuffer scratch, GpuBuffer externalBacking, long vertexAddr, long indexAddr, int maxVertex,
+        static PreparedBlas retained(RtAccel accel, GpuBuffer scratch, GpuBuffer externalBacking,
+                                    VulkanDeviceAddress vertexAddr, VulkanDeviceAddress indexAddr, int maxVertex,
                                     int[] retainedClassTriangles, OpacityMicromap opacityMicromap, String label) {
             int total = 0;
             for (int t : retainedClassTriangles) {
@@ -380,7 +386,7 @@ public final class RtAccel {
         }
 
         static PreparedBlas externalClassified(RtAccel accel, GpuBuffer scratch, GpuBuffer externalBacking,
-                                               long vertexAddr, long indexAddr, int maxVertex,
+                                               VulkanDeviceAddress vertexAddr, VulkanDeviceAddress indexAddr, int maxVertex,
                                                int[] classTriangles, String label,
                                                boolean updatable, boolean update) {
             return externalClassified(accel, scratch, externalBacking, vertexAddr, indexAddr, maxVertex,
@@ -388,7 +394,7 @@ public final class RtAccel {
         }
 
         static PreparedBlas externalClassified(RtAccel accel, GpuBuffer scratch, GpuBuffer externalBacking,
-                                               long vertexAddr, long indexAddr, int maxVertex,
+                                               VulkanDeviceAddress vertexAddr, VulkanDeviceAddress indexAddr, int maxVertex,
                                                int[] classTriangles, String label,
                                                boolean updatable, boolean update, boolean fastBuild) {
             return externalClassified(accel, scratch, externalBacking, vertexAddr, indexAddr, maxVertex,
@@ -396,7 +402,7 @@ public final class RtAccel {
         }
 
         static PreparedBlas externalClassified(RtAccel accel, GpuBuffer scratch, GpuBuffer externalBacking,
-                                               long vertexAddr, long indexAddr, int maxVertex,
+                                               VulkanDeviceAddress vertexAddr, VulkanDeviceAddress indexAddr, int maxVertex,
                                                int[] classTriangles, String label,
                                                boolean updatable, boolean update, RtAccel updateSource,
                                                boolean fastBuild) {
@@ -607,18 +613,19 @@ public final class RtAccel {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             data = ctx.createAsyncAlignedBuffer(input.data().length, inputUsage, true, label + " data",
                     MICROMAP_INPUT_ADDRESS_ALIGNMENT);
-            long dataAddress = data.deviceAddress();
+            VulkanDeviceAddress dataAddress = data.deviceAddress();
             MemoryUtil.memByteBuffer(data.mapped(), input.data().length).put(input.data());
             long triangleBytes = input.triangles().length;
             triangles = ctx.createAsyncAlignedBuffer(triangleBytes, inputUsage, true, label + " triangles",
                     MICROMAP_INPUT_ADDRESS_ALIGNMENT);
-            long triangleArrayAddress = triangles.deviceAddress();
+            VulkanDeviceAddress triangleArrayAddress = triangles.deviceAddress();
             MemoryUtil.memByteBuffer(triangles.mapped(), input.triangles().length).put(input.triangles());
             data.flush();
             triangles.flush();
 
             VkMicromapUsageEXT.Buffer usage = micromapUsage(stack, input.triangleCount(), input.subdivisionLevel());
-            VkMicromapBuildInfoEXT build = micromapBuildInfo(stack, dataAddress, 0L, triangleArrayAddress, 0L, usage);
+            VkMicromapBuildInfoEXT build = micromapBuildInfo(stack, dataAddress, 0L,
+                    triangleArrayAddress, 0L, usage);
             VkMicromapBuildSizesInfoEXT sizes = VkMicromapBuildSizesInfoEXT.calloc(stack).sType$Default();
             vkGetMicromapBuildSizesEXT(vk, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, build, sizes);
 
@@ -632,7 +639,7 @@ public final class RtAccel {
             RtDebugLabels.nameMicromap(ctx, handle, label);
 
             scratch = createScratchBuffer(ctx, sizes.buildScratchSize(), label + " build scratch");
-            long scratchAddress = scratchAddress(ctx, scratch);
+            VulkanDeviceAddress scratchAddress = scratchAddress(ctx, scratch);
             return new OpacityMicromap(vk, handle, backing, data, triangles, scratch, scratchAddress,
                     dataAddress, triangleArrayAddress, input.triangleCount(), input.subdivisionLevel(),
                     input.bytesPerTriangle(), null, input.bytesPerTriangle());
@@ -664,8 +671,8 @@ public final class RtAccel {
                     inputUsage, false, label + " data", MICROMAP_INPUT_ADDRESS_ALIGNMENT);
             triangles = ctx.createAsyncAlignedBuffer((long) input.triangleCount() * VkMicromapTriangleEXT.SIZEOF,
                     inputUsage, false, label + " triangles", MICROMAP_INPUT_ADDRESS_ALIGNMENT);
-            long dataAddress = data.deviceAddress();
-            long triangleAddress = triangles.deviceAddress();
+            VulkanDeviceAddress dataAddress = data.deviceAddress();
+            VulkanDeviceAddress triangleAddress = triangles.deviceAddress();
             VkMicromapUsageEXT.Buffer usage = micromapUsage(stack, input.triangleCount(), input.subdivisionLevel());
             VkMicromapBuildInfoEXT build = micromapBuildInfo(stack, dataAddress, 0L, triangleAddress, 0L, usage);
             VkMicromapBuildSizesInfoEXT sizes = VkMicromapBuildSizesInfoEXT.calloc(stack).sType$Default();
@@ -705,8 +712,9 @@ public final class RtAccel {
     }
 
     /** Address-based variant for transient geometry packed into sub-regions of one owner buffer. */
-    public static PreparedBlas prepareTransientBlas(VulkanDeviceContext ctx, long vertexAddr, int vertexCount,
-                                                    long indexAddr, int indexCount, boolean opaque, String label) {
+    public static PreparedBlas prepareTransientBlas(VulkanDeviceContext ctx, VulkanDeviceAddress vertexAddr,
+                                                    int vertexCount, VulkanDeviceAddress indexAddr,
+                                                    int indexCount, boolean opaque, String label) {
         VkDevice vk = ctx.vk();
         String debugLabel = labelOr(label, "transient BLAS");
         try (MemoryStack stack = MemoryStack.stackPush()) {
@@ -722,8 +730,9 @@ public final class RtAccel {
     }
 
     /** Caller-owned classified BLAS with packed indices in fixed {@link #SBT_CLASSES} order. */
-    public static PreparedBlas prepareTransientBlas(VulkanDeviceContext ctx, long vertexAddr, int vertexCount,
-                                                    long indexAddr, int[] classTriangles, String label) {
+    public static PreparedBlas prepareTransientBlas(VulkanDeviceContext ctx, VulkanDeviceAddress vertexAddr,
+                                                    int vertexCount, VulkanDeviceAddress indexAddr,
+                                                    int[] classTriangles, String label) {
         return prepareTransientBlas(ctx, vertexAddr, vertexCount, indexAddr, classTriangles, label, false);
     }
 
@@ -732,8 +741,9 @@ public final class RtAccel {
      * selects PREFER_FAST_BUILD instead of PREFER_FAST_TRACE, for geometry rebuilt from scratch every frame
      * (e.g. particles) where build latency dominates over trace quality.
      */
-    public static PreparedBlas prepareTransientBlas(VulkanDeviceContext ctx, long vertexAddr, int vertexCount,
-                                                    long indexAddr, int[] classTriangles, String label,
+    public static PreparedBlas prepareTransientBlas(VulkanDeviceContext ctx, VulkanDeviceAddress vertexAddr,
+                                                    int vertexCount, VulkanDeviceAddress indexAddr,
+                                                    int[] classTriangles, String label,
                                                     boolean fastBuild) {
         requireClassTriangles(classTriangles);
         VkDevice vk = ctx.vk();
@@ -751,22 +761,26 @@ public final class RtAccel {
     }
 
     /** Prepare a non-updatable persistent BLAS over packed caller-owned geometry. */
-    public static PersistentBuild preparePersistentBlasBuild(VulkanDeviceContext ctx, long vertexAddr, int vertexCount,
-                                                             long indexAddr, int indexCount, boolean opaque,
+    public static PersistentBuild preparePersistentBlasBuild(VulkanDeviceContext ctx,
+                                                             VulkanDeviceAddress vertexAddr, int vertexCount,
+                                                             VulkanDeviceAddress indexAddr, int indexCount, boolean opaque,
                                                              String label) {
         PreparedBlas op = prepareTransientBlas(ctx, vertexAddr, vertexCount, indexAddr, indexCount, opaque, label);
         return new PersistentBuild(op, op.accel, op.externalBacking, op.scratch);
     }
 
-    public static PersistentBuild preparePersistentBlasBuild(VulkanDeviceContext ctx, long vertexAddr, int vertexCount,
-                                                             long indexAddr, int[] classTriangles, String label) {
+    public static PersistentBuild preparePersistentBlasBuild(VulkanDeviceContext ctx,
+                                                             VulkanDeviceAddress vertexAddr, int vertexCount,
+                                                             VulkanDeviceAddress indexAddr, int[] classTriangles,
+                                                             String label) {
         PreparedBlas op = prepareTransientBlas(ctx, vertexAddr, vertexCount, indexAddr, classTriangles, label);
         return new PersistentBuild(op, op.accel, op.externalBacking, op.scratch);
     }
 
     /** Prepare a non-updatable persistent BLAS whose Vulkan geometry order matches {@code ranges}. */
-    public static PersistentBuild preparePersistentBlasBuild(VulkanDeviceContext ctx, long vertexAddr, int vertexStride,
-                                                             int vertexCount, long indexAddr,
+    public static PersistentBuild preparePersistentBlasBuild(VulkanDeviceContext ctx,
+                                                             VulkanDeviceAddress vertexAddr, int vertexStride,
+                                                             int vertexCount, VulkanDeviceAddress indexAddr,
                                                              List<GeometryRange> ranges,
                                                              String label) {
         List<GeometryRange> ordered = List.copyOf(ranges);
@@ -796,8 +810,10 @@ public final class RtAccel {
     }
 
     /** Prepare an immutable classified BLAS that writes a compacted-size query after its BUILD. */
-    public static CompactableBuild prepareCompactableBlasBuild(VulkanDeviceContext ctx, long vertexAddr, int vertexCount,
-                                                               long indexAddr, int[] classTriangles, String label) {
+    public static CompactableBuild prepareCompactableBlasBuild(VulkanDeviceContext ctx,
+                                                               VulkanDeviceAddress vertexAddr, int vertexCount,
+                                                               VulkanDeviceAddress indexAddr, int[] classTriangles,
+                                                               String label) {
         requireClassTriangles(classTriangles);
         VkDevice vk = ctx.vk();
         String debugLabel = labelOr(label, "compactable classified BLAS");
@@ -832,7 +848,8 @@ public final class RtAccel {
 
     /** Fresh immutable classified BUILD with GPU-generated opacity data for the masked geometry. */
     public static CompactableBuild prepareOpacityMicromapBlasBuild(
-            VulkanDeviceContext ctx, long vertexAddr, int vertexCount, long indexAddr, int[] classTriangles,
+            VulkanDeviceContext ctx, VulkanDeviceAddress vertexAddr, int vertexCount,
+            VulkanDeviceAddress indexAddr, int[] classTriangles,
             OpacityMicromapGpuInput opacityInput, boolean compact, String label) {
         requireClassTriangles(classTriangles);
         if (opacityInput.triangleCount() != classTriangles[CLASS_MASKED]) {
@@ -873,8 +890,10 @@ public final class RtAccel {
         }
     }
 
-    public static UpdatableBuild prepareUpdatableBlasBuild(VulkanDeviceContext ctx, long vertexAddr, int vertexCount,
-                                                           long indexAddr, int[] classTriangles, String label) {
+    public static UpdatableBuild prepareUpdatableBlasBuild(VulkanDeviceContext ctx,
+                                                           VulkanDeviceAddress vertexAddr, int vertexCount,
+                                                           VulkanDeviceAddress indexAddr, int[] classTriangles,
+                                                           String label) {
         requireClassTriangles(classTriangles);
         VkDevice vk = ctx.vk();
         String debugLabel = labelOr(label, "updatable classified BLAS");
@@ -905,8 +924,10 @@ public final class RtAccel {
     }
 
     /** Address-based variant for geometry packed into sub-regions of one owner buffer. */
-    public static UpdatableBuild prepareUpdatableBlasBuild(VulkanDeviceContext ctx, long vertexAddr, int vertexCount,
-                                                           long indexAddr, int indexCount, boolean opaque, String label) {
+    public static UpdatableBuild prepareUpdatableBlasBuild(VulkanDeviceContext ctx,
+                                                           VulkanDeviceAddress vertexAddr, int vertexCount,
+                                                           VulkanDeviceAddress indexAddr, int indexCount,
+                                                           boolean opaque, String label) {
         VkDevice vk = ctx.vk();
         String debugLabel = labelOr(label, "updatable BLAS");
         try (MemoryStack stack = MemoryStack.stackPush()) {
@@ -930,14 +951,16 @@ public final class RtAccel {
      * per-frame transients; the {@code accel} persists. Records nothing on its own — returned to {@link
      * #recordBlasBuilds} like a BUILD.
      */
-    public static PreparedBlas refitUpdate(RtAccel accel, GpuBuffer scratch, long vertexAddr, long indexAddr,
+    public static PreparedBlas refitUpdate(RtAccel accel, GpuBuffer scratch, VulkanDeviceAddress vertexAddr,
+                                           VulkanDeviceAddress indexAddr,
                                            int vertexCount, int indexCount, boolean opaque, String label) {
         String debugLabel = labelOr(label, "BLAS refit");
         return new PreparedBlas(accel, scratch, null, vertexAddr, indexAddr, vertexCount - 1, indexCount / 3,
                 opaque, debugLabel, true, true);
     }
 
-    public static PreparedBlas refitUpdate(RtAccel accel, GpuBuffer scratch, long vertexAddr, long indexAddr,
+    public static PreparedBlas refitUpdate(RtAccel accel, GpuBuffer scratch, VulkanDeviceAddress vertexAddr,
+                                           VulkanDeviceAddress indexAddr,
                                            int vertexCount, int[] classTriangles, String label) {
         requireClassTriangles(classTriangles);
         return PreparedBlas.externalClassified(accel, scratch, null, vertexAddr, indexAddr, vertexCount - 1,
@@ -949,7 +972,8 @@ public final class RtAccel {
      * with ALLOW_UPDATE using the same classified topology and build flags.
      */
     public static UpdatableBuild prepareOutOfPlaceUpdate(VulkanDeviceContext ctx, RtAccel source,
-                                                         long vertexAddr, int vertexCount, long indexAddr,
+                                                         VulkanDeviceAddress vertexAddr, int vertexCount,
+                                                         VulkanDeviceAddress indexAddr,
                                                          int[] classTriangles, String label) {
         requireClassTriangles(classTriangles);
         String debugLabel = labelOr(label, "classified BLAS update");
@@ -1015,7 +1039,8 @@ public final class RtAccel {
     }
 
     private static VkAccelerationStructureBuildSizesInfoKHR queryBlasSizes(VkDevice vk, MemoryStack stack,
-                                                                           long vertexAddr, long indexAddr,
+                                                                           VulkanDeviceAddress vertexAddr,
+                                                                           VulkanDeviceAddress indexAddr,
                                                                            int vertexCount, int indexCount,
                                                                            boolean opaque, boolean allowUpdate) {
         VkAccelerationStructureGeometryKHR.Buffer geom = triangleGeometry(stack, vertexAddr, indexAddr,
@@ -1075,7 +1100,8 @@ public final class RtAccel {
             RtDebugLabels.nameAccelerationStructure(ctx, handle, label);
             VkAccelerationStructureDeviceAddressInfoKHR addrInfo = VkAccelerationStructureDeviceAddressInfoKHR.calloc(stack)
                     .sType$Default().accelerationStructure(handle);
-            long deviceAddress = vkGetAccelerationStructureDeviceAddressKHR(vk, addrInfo);
+            VulkanDeviceAddress deviceAddress = new VulkanDeviceAddress(
+                    vkGetAccelerationStructureDeviceAddressKHR(vk, addrInfo));
             return new RtAccel(vk, handle, deviceAddress, backing, ownsBacking, opacityMicromap);
         } catch (Throwable t) {
             vkDestroyAccelerationStructureKHR(vk, handle, null);
@@ -1083,18 +1109,24 @@ public final class RtAccel {
         }
     }
 
-    private static VkAccelerationStructureGeometryKHR.Buffer triangleGeometry(MemoryStack stack, long vertexAddr, long indexAddr, int vertexCount, boolean opaque) {
+    private static VkAccelerationStructureGeometryKHR.Buffer triangleGeometry(MemoryStack stack,
+                                                                               VulkanDeviceAddress vertexAddr,
+                                                                               VulkanDeviceAddress indexAddr,
+                                                                               int vertexCount, boolean opaque) {
         VkAccelerationStructureGeometryKHR.Buffer geom = VkAccelerationStructureGeometryKHR.calloc(1, stack);
         fillTriangleGeometry(geom.get(0), vertexAddr, indexAddr, vertexCount, opaque);
         return geom;
     }
 
-    private static void fillTriangleGeometry(VkAccelerationStructureGeometryKHR geom, long vertexAddr, long indexAddr, int vertexCount, boolean opaque) {
+    private static void fillTriangleGeometry(VkAccelerationStructureGeometryKHR geom,
+                                             VulkanDeviceAddress vertexAddr,
+                                             VulkanDeviceAddress indexAddr, int vertexCount, boolean opaque) {
         fillTriangleGeometry(geom, vertexAddr, 3 * Float.BYTES, indexAddr, vertexCount, opaque);
     }
 
-    private static void fillTriangleGeometry(VkAccelerationStructureGeometryKHR geom, long vertexAddr,
-                                             int vertexStride, long indexAddr, int vertexCount,
+    private static void fillTriangleGeometry(VkAccelerationStructureGeometryKHR geom,
+                                             VulkanDeviceAddress vertexAddr,
+                                             int vertexStride, VulkanDeviceAddress indexAddr, int vertexCount,
                                              boolean opaque) {
         geom.sType$Default().geometryType(VK_GEOMETRY_TYPE_TRIANGLES_KHR)
                 .flags(opaque ? VK_GEOMETRY_OPAQUE_BIT_KHR : VK_GEOMETRY_NO_DUPLICATE_ANY_HIT_INVOCATION_BIT_KHR);
@@ -1102,12 +1134,13 @@ public final class RtAccel {
         tri.sType$Default()
                 .vertexFormat(VK10.VK_FORMAT_R32G32B32_SFLOAT).vertexStride(vertexStride)
                 .maxVertex(vertexCount - 1).indexType(VK10.VK_INDEX_TYPE_UINT32);
-        tri.vertexData().deviceAddress(vertexAddr);
-        tri.indexData().deviceAddress(indexAddr);
+        tri.vertexData().deviceAddress(vertexAddr.value());
+        tri.indexData().deviceAddress(indexAddr.value());
     }
 
     private static VkAccelerationStructureGeometryKHR.Buffer geometryRangeGeometries(
-            MemoryStack stack, long vertexAddr, int vertexStride, long indexAddr, int vertexCount,
+            MemoryStack stack, VulkanDeviceAddress vertexAddr, int vertexStride,
+            VulkanDeviceAddress indexAddr, int vertexCount,
             List<GeometryRange> ranges) {
         VkAccelerationStructureGeometryKHR.Buffer geometries =
                 VkAccelerationStructureGeometryKHR.calloc(ranges.size(), stack);
@@ -1132,7 +1165,8 @@ public final class RtAccel {
     }
 
     private static VkAccelerationStructureBuildSizesInfoKHR queryGeometryRangeBlasSizes(
-            VkDevice vk, MemoryStack stack, long vertexAddr, int vertexStride, long indexAddr,
+            VkDevice vk, MemoryStack stack, VulkanDeviceAddress vertexAddr, int vertexStride,
+            VulkanDeviceAddress indexAddr,
             int vertexCount,
             List<GeometryRange> ranges) {
         VkAccelerationStructureGeometryKHR.Buffer geometries = geometryRangeGeometries(stack,
@@ -1154,8 +1188,8 @@ public final class RtAccel {
 
     /** Fixed class geometry order; empty classes remain present so GeometryIndex/SBT routing is stable. */
     private static VkAccelerationStructureGeometryKHR.Buffer classifiedGeometries(MemoryStack stack,
-                                                                                   long vertexAddr,
-                                                                                   long indexAddr,
+                                                                                   VulkanDeviceAddress vertexAddr,
+                                                                                   VulkanDeviceAddress indexAddr,
                                                                                    int vertexCount) {
         VkAccelerationStructureGeometryKHR.Buffer geometries =
                 VkAccelerationStructureGeometryKHR.calloc(SBT_CLASSES, stack);
@@ -1183,8 +1217,8 @@ public final class RtAccel {
 
     private static VkAccelerationStructureBuildSizesInfoKHR queryClassifiedBlasSizes(VkDevice vk,
                                                                                      MemoryStack stack,
-                                                                                     long vertexAddr,
-                                                                                     long indexAddr,
+                                                                                     VulkanDeviceAddress vertexAddr,
+                                                                                     VulkanDeviceAddress indexAddr,
                                                                                      int vertexCount,
                                                                                      int[] classTriangles,
                                                                                      boolean allowUpdate) {
@@ -1194,8 +1228,8 @@ public final class RtAccel {
 
     private static VkAccelerationStructureBuildSizesInfoKHR queryClassifiedBlasSizes(VkDevice vk,
                                                                                      MemoryStack stack,
-                                                                                     long vertexAddr,
-                                                                                     long indexAddr,
+                                                                                     VulkanDeviceAddress vertexAddr,
+                                                                                     VulkanDeviceAddress indexAddr,
                                                                                      int vertexCount,
                                                                                      int[] classTriangles,
                                                                                      boolean allowUpdate,
@@ -1206,8 +1240,8 @@ public final class RtAccel {
 
     private static VkAccelerationStructureBuildSizesInfoKHR queryClassifiedBlasSizes(VkDevice vk,
                                                                                      MemoryStack stack,
-                                                                                     long vertexAddr,
-                                                                                     long indexAddr,
+                                                                                     VulkanDeviceAddress vertexAddr,
+                                                                                     VulkanDeviceAddress indexAddr,
                                                                                      int vertexCount,
                                                                                      int[] classTriangles,
                                                                                      boolean allowUpdate,
@@ -1236,8 +1270,9 @@ public final class RtAccel {
         return usage;
     }
 
-    private static VkMicromapBuildInfoEXT micromapBuildInfo(MemoryStack stack, long dataAddr, long scratchAddr,
-                                                            long triangleArrayAddr, long dstMicromap,
+    private static VkMicromapBuildInfoEXT micromapBuildInfo(MemoryStack stack,
+                                                            VulkanDeviceAddress dataAddr, long scratchAddr,
+                                                            VulkanDeviceAddress triangleArrayAddr, long dstMicromap,
                                                             VkMicromapUsageEXT.Buffer usage) {
         VkMicromapBuildInfoEXT build = VkMicromapBuildInfoEXT.calloc(stack).sType$Default()
                 .type(VK_MICROMAP_TYPE_OPACITY_MICROMAP_EXT)
@@ -1247,15 +1282,16 @@ public final class RtAccel {
                 .usageCountsCount(usage.capacity())
                 .pUsageCounts(usage)
                 .triangleArrayStride(VkMicromapTriangleEXT.SIZEOF);
-        build.data().deviceAddress(dataAddr);
+        build.data().deviceAddress(dataAddr.value());
         build.scratchData().deviceAddress(scratchAddr);
-        build.triangleArray().deviceAddress(triangleArrayAddr);
+        build.triangleArray().deviceAddress(triangleArrayAddr.value());
         return build;
     }
 
     /** One triangle geometry per SBT class, in {@link #SBT_CLASSES} order; only opaque is flagged opaque. */
-    private static VkAccelerationStructureGeometryKHR.Buffer retainedGeometries(MemoryStack stack, long vertexAddr,
-                                                                                long indexAddr, int vertexCount, int[] classTris,
+    private static VkAccelerationStructureGeometryKHR.Buffer retainedGeometries(
+            MemoryStack stack, VulkanDeviceAddress vertexAddr, VulkanDeviceAddress indexAddr,
+            int vertexCount, int[] classTris,
                                                                                 OpacityMicromap opacityMicromap) {
         VkAccelerationStructureGeometryKHR.Buffer geom = VkAccelerationStructureGeometryKHR.calloc(classTris.length, stack);
         VkAccelerationStructureTrianglesOpacityMicromapEXT ommAttachment = null;
@@ -1313,7 +1349,8 @@ public final class RtAccel {
     }
 
     private static VkAccelerationStructureBuildSizesInfoKHR queryRetainedBlasSizes(
-            VkDevice vk, MemoryStack stack, long vertexAddress, long indexAddress, int vertexCount,
+            VkDevice vk, MemoryStack stack, VulkanDeviceAddress vertexAddress,
+            VulkanDeviceAddress indexAddress, int vertexCount,
             int[] classTris, OpacityMicromap opacityMicromap, boolean compact) {
         VkAccelerationStructureGeometryKHR.Buffer geom = retainedGeometries(stack, vertexAddress, indexAddress,
                 vertexCount, classTris, opacityMicromap);
@@ -1413,7 +1450,7 @@ public final class RtAccel {
         if (b.update) {
             build.get(0).srcAccelerationStructure((b.updateSource == null ? b.accel : b.updateSource).handle);
         }
-        build.get(0).scratchData().deviceAddress(scratchAddress(ctx, b.scratch));
+        build.get(0).scratchData().deviceAddress(scratchAddress(ctx, b.scratch).value());
         VkAccelerationStructureBuildRangeInfoKHR.Buffer range = VkAccelerationStructureBuildRangeInfoKHR.calloc(1, stack);
         range.get(0).primitiveCount(b.triangleCount).primitiveOffset(0).firstVertex(0).transformOffset(0);
         PointerBuffer ppRange = stack.mallocPointer(1).put(0, range.address());
@@ -1430,7 +1467,7 @@ public final class RtAccel {
                 .flags(buildFlags(false)).mode(VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR)
                 .geometryCount(geometries.capacity()).pGeometries(geometries)
                 .dstAccelerationStructure(b.accel.handle);
-        build.get(0).scratchData().deviceAddress(scratchAddress(ctx, b.scratch));
+        build.get(0).scratchData().deviceAddress(scratchAddress(ctx, b.scratch).value());
         VkAccelerationStructureBuildRangeInfoKHR.Buffer ranges =
                 geometryRangeBuildRanges(stack, b.geometryRanges);
         PointerBuffer ppRanges = stack.mallocPointer(1).put(0, ranges.address());
@@ -1455,7 +1492,7 @@ public final class RtAccel {
         if (b.update) {
             build.get(0).srcAccelerationStructure((b.updateSource == null ? b.accel : b.updateSource).handle);
         }
-        build.get(0).scratchData().deviceAddress(scratchAddress(ctx, b.scratch));
+        build.get(0).scratchData().deviceAddress(scratchAddress(ctx, b.scratch).value());
         VkAccelerationStructureBuildRangeInfoKHR.Buffer ranges = classifiedBuildRanges(stack,
                 b.externalClassTriangles);
         PointerBuffer ppRanges = stack.mallocPointer(1).put(0, ranges.address());
@@ -1491,7 +1528,7 @@ public final class RtAccel {
                 .mode(VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR)
                 .geometryCount(geom.capacity()).pGeometries(geom)
                 .dstAccelerationStructure(b.accel.handle);
-        build.get(0).scratchData().deviceAddress(scratchAddress(ctx, b.scratch));
+        build.get(0).scratchData().deviceAddress(scratchAddress(ctx, b.scratch).value());
         VkAccelerationStructureBuildRangeInfoKHR.Buffer range = retainedBuildRanges(stack, b.retainedClassTriangles);
         PointerBuffer ppRange = stack.mallocPointer(1).put(0, range.address());
         vkCmdBuildAccelerationStructuresKHR(cmd, build, ppRange);
@@ -1506,7 +1543,8 @@ public final class RtAccel {
     private static void recordMicromapBuild(VkCommandBuffer cmd, MemoryStack stack, OpacityMicromap opacityMicromap) {
         VkMicromapUsageEXT.Buffer usage = micromapUsage(stack, opacityMicromap.triangleCount, opacityMicromap.subdivisionLevel);
         VkMicromapBuildInfoEXT.Buffer build = VkMicromapBuildInfoEXT.calloc(1, stack);
-        build.get(0).set(micromapBuildInfo(stack, opacityMicromap.dataAddress, opacityMicromap.scratchAddress,
+        build.get(0).set(micromapBuildInfo(stack, opacityMicromap.dataAddress,
+                opacityMicromap.scratchAddress.value(),
                 opacityMicromap.triangleArrayAddress, opacityMicromap.handle, usage));
         vkCmdBuildMicromapsEXT(cmd, build);
     }

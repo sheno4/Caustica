@@ -30,7 +30,7 @@ public final class VanillaRenderController {
 		this.worldSkipped = false;
 		this.baseReady = false;
 		this.inactiveReason = null;
-		this.rtActive = RtRuntime.frameActive();
+		this.rtActive = CausticaClientComposition.current().runtime().frameActive();
 
 		if (!Boolean.valueOf(this.rtActive).equals(this.lastLoggedRtActive)) {
 			this.lastLoggedRtActive = this.rtActive;
@@ -117,7 +117,7 @@ public final class VanillaRenderController {
 
 	/** Runtime work switch for per-frame RT work. */
 	public static boolean rtRuntimeWorkRequested() {
-		return RtRuntime.frameActive();
+		return CausticaClientComposition.current().runtime().frameActive();
 	}
 
 	/**
@@ -125,7 +125,7 @@ public final class VanillaRenderController {
 	 * mixins, including the loader-specific ones whose injection points differ.
 	 */
 	public static boolean rtOwnsWorldRendering() {
-		return RtRuntime.active() && INSTANCE.replacedVanillaWorldLastFrame();
+		return CausticaClientComposition.current().runtime().active() && INSTANCE.replacedVanillaWorldLastFrame();
 	}
 
 	public void markRtFrameResult(boolean success) {
@@ -149,7 +149,7 @@ public final class VanillaRenderController {
 	}
 
 	private String findInactiveReason(RenderTarget mainTarget) {
-		RtRuntime.WorldReplacement replacement = RtRuntime.INSTANCE.worldReplacement();
+		RtRuntime.WorldReplacement replacement = CausticaClientComposition.current().runtime().worldReplacement();
 		if (this.failureLatched || replacement == RtRuntime.WorldReplacement.RENDERER_FAILED) {
 			return "RT composite failure latch is set";
 		}

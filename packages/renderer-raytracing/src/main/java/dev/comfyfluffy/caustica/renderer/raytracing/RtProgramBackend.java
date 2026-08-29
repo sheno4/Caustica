@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.renderer.raytracing;
 
+import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 
 import dev.comfyfluffy.caustica.api.program.ProgramFailure;
@@ -182,7 +183,7 @@ public final class RtProgramBackend implements ProgramBackend, AutoCloseable {
     /** Renderer-facing immutable state of one published program. */
     public interface Published extends CompiledProgram {
         RtPipeline pipeline();
-        long compositionDataAddress();
+        VulkanDeviceAddress compositionDataAddress();
 
         /** Writes this program's implementation table address into a complete world binding root. */
         default void writeCompositionDataAddress(ByteBuffer roots) {
@@ -192,7 +193,7 @@ public final class RtProgramBackend implements ProgramBackend, AutoCloseable {
             }
             roots.duplicate().order(ByteOrder.nativeOrder()).putLong(
                     roots.position() + RtBindings.WORLD_COMPOSITION_DATA_ADDRESS_OFFSET,
-                    compositionDataAddress());
+                    compositionDataAddress().value());
         }
     }
 
@@ -211,7 +212,7 @@ public final class RtProgramBackend implements ProgramBackend, AutoCloseable {
 
         @Override public int implementationIndex(ProgramKey key) { return compiler.implementationIndex(key); }
         @Override public RtPipeline pipeline() { return pipeline; }
-        @Override public long compositionDataAddress() { return table.address; }
+        @Override public VulkanDeviceAddress compositionDataAddress() { return table.address; }
 
         @Override public void close() {
             synchronized (RtProgramBackend.this) {
@@ -233,9 +234,10 @@ public final class RtProgramBackend implements ProgramBackend, AutoCloseable {
         final VulkanDeviceContext context;
         final long buffer;
         final long allocation;
-        final long address;
+        final VulkanDeviceAddress address;
 
-        private ImplementationTable(VulkanDeviceContext context, long buffer, long allocation, long address) {
+        private ImplementationTable(VulkanDeviceContext context, long buffer, long allocation,
+                                    VulkanDeviceAddress address) {
             this.context = context;
             this.buffer = buffer;
             this.allocation = allocation;
@@ -270,7 +272,7 @@ public final class RtProgramBackend implements ProgramBackend, AutoCloseable {
                 for (Long word : words) mapped.putLong(word);
                 if (words.isEmpty()) mapped.putLong(0L);
                 Vma.vmaFlushAllocation(context.vmaAllocator(), allocation, 0, VK10.VK_WHOLE_SIZE);
-                return new ImplementationTable(context, buffer, allocation, address);
+                return new ImplementationTable(context, buffer, allocation, new VulkanDeviceAddress(address));
             }
         }
 

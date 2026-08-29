@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.renderer.raytracing.accel;
 
+import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtDebugLabels;
 import dev.comfyfluffy.caustica.renderer.raytracing.gen.OpacityMicromapPushData;
@@ -43,13 +44,15 @@ final class RtOpacityMicromapPipeline {
     }
 
     public void record(VkCommandBuffer command, long primitiveAddress, long materialTableAddress,
-                       long dataAddress, long triangleAddress, int maskedTriangleBase,
+                       VulkanDeviceAddress dataAddress, VulkanDeviceAddress triangleAddress,
+                       int maskedTriangleBase,
                        int triangleCount, int dataStride) {
         try (MemoryStack stack = MemoryStack.stackPush();
              RtDebugLabels.Scope ignored = RtDebugLabels.scope(context, command, "opacity micromap classify")) {
             ByteBuffer push = stack.malloc(OpacityMicromapPushData.BYTE_SIZE);
             new OpacityMicromapPushData(primitiveAddress, materialTableAddress,
-                    dataAddress, triangleAddress, maskedTriangleBase, triangleCount, dataStride).write(push);
+                    dataAddress.value(), triangleAddress.value(), maskedTriangleBase, triangleCount,
+                    dataStride).write(push);
             shader.dispatch(command, push, (triangleCount + 63) / 64, 1, 1);
         }
     }

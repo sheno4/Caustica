@@ -1,12 +1,14 @@
 package dev.comfyfluffy.caustica.engine.vulkan.runtime;
 
+import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
+
 /** Renderer-owned Vulkan buffer allocation with a stable device address. */
 public interface GpuBuffer {
     /** Raw {@code VkBuffer}; LWJGL represents the non-dispatchable handle as {@code long}. */
     long handle();
 
     /** {@code VkDeviceAddress} for the first byte of the allocation. */
-    long deviceAddress();
+    VulkanDeviceAddress deviceAddress();
 
     /** Persistently mapped host address, or zero for device-only memory. */
     long mapped();

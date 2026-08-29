@@ -99,7 +99,9 @@ public final class GltfMeshUploader implements GltfPrimitiveUploader {
                              int vertexCount, int indexCount) implements GltfPrimitiveUploader.Uploaded {
         @Override public MeshBuild.Stream positionsStream() { return positions.stream(3 * Float.BYTES); }
         @Override public MeshBuild.Stream indexStream() { return indices.stream(Integer.BYTES); }
-        @Override public long primitiveDataAddress() { return primitiveData.address; }
+        @Override public VulkanDeviceAddress primitiveDataAddress() {
+            return new VulkanDeviceAddress(primitiveData.address);
+        }
         @Override public void destroy() {
             primitiveData.destroy();
             indices.destroy();

@@ -1,5 +1,7 @@
 package dev.comfyfluffy.caustica.renderer.raytracing.pipeline;
 
+import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
+import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtDebugLabels;
 import dev.comfyfluffy.caustica.renderer.raytracing.accel.RtAccel;
@@ -171,13 +173,14 @@ public final class RtPipeline {
             context.pushData(commandBuffer, 0, roots);
             VK10.vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, pipeline);
             VkStridedDeviceAddressRegionKHR rgen = region(stack,
-                    sbt.address + (long) raygenIndex * stride, stride, stride);
+                    sbt.address.addBytes((long) raygenIndex * stride), stride, stride);
             VkStridedDeviceAddressRegionKHR rmiss = region(stack,
-                    sbt.address + (long) raygenCount * stride, stride, (long) missCount * stride);
+                    sbt.address.addBytes((long) raygenCount * stride), stride, (long) missCount * stride);
             VkStridedDeviceAddressRegionKHR hit = retainedHits == null
-                    ? region(stack, sbt.address + (long) (raygenCount + missCount) * stride,
+                    ? region(stack, sbt.address.addBytes((long) (raygenCount + missCount) * stride),
                             stride, (long) hitCount * stride)
-                    : region(stack, retainedHits.address(), retainedHits.stride(), retainedHits.size());
+                    : region(stack, retainedHits.bytes().address(), retainedHits.stride(),
+                            retainedHits.bytes().byteSize());
             vkCmdTraceRaysKHR(commandBuffer, rgen, rmiss, hit,
                     VkStridedDeviceAddressRegionKHR.calloc(stack), width, height, 1);
         }
@@ -188,9 +191,9 @@ public final class RtPipeline {
     public long retainedHitTableAlignment() { return context.shaderGroupBaseAlignment(); }
 
     /** Addressable scene-specific hit SBT region. Its owner retains the buffer through the trace use. */
-    public record HitTable(long address, long stride, long size) {
+    public record HitTable(VulkanDeviceAddressRange bytes, long stride) {
         public HitTable {
-            if (address == 0L || stride <= 0L || size <= 0L || size % stride != 0L) {
+            if (stride <= 0L || bytes.byteSize() % stride != 0L) {
                 throw new IllegalArgumentException("invalid retained hit table region");
             }
         }
@@ -278,8 +281,9 @@ public final class RtPipeline {
         }
     }
 
-    private static VkStridedDeviceAddressRegionKHR region(MemoryStack stack, long address, long stride, long size) {
-        return VkStridedDeviceAddressRegionKHR.calloc(stack).deviceAddress(address).stride(stride).size(size);
+    private static VkStridedDeviceAddressRegionKHR region(MemoryStack stack, VulkanDeviceAddress address,
+                                                           long stride, long size) {
+        return VkStridedDeviceAddressRegionKHR.calloc(stack).deviceAddress(address.value()).stride(stride).size(size);
     }
 
     private static void stage(VkPipelineShaderStageCreateInfo info, int stage, long module, ByteBuffer entry) {
@@ -313,10 +317,10 @@ public final class RtPipeline {
     private static final class SbtBuffer {
         final long buffer;
         final long allocation;
-        final long address;
+        final VulkanDeviceAddress address;
         final long mapped;
 
-        private SbtBuffer(long buffer, long allocation, long address, long mapped) {
+        private SbtBuffer(long buffer, long allocation, VulkanDeviceAddress address, long mapped) {
             this.buffer = buffer;
             this.allocation = allocation;
             this.address = address;
@@ -344,7 +348,8 @@ public final class RtPipeline {
                     Vma.vmaDestroyBuffer(context.vmaAllocator(), buffer, outAllocation.get(0));
                     throw new IllegalStateException("SBT buffer is not addressable and mapped");
                 }
-                return new SbtBuffer(buffer, outAllocation.get(0), address, allocation.pMappedData());
+                return new SbtBuffer(buffer, outAllocation.get(0), new VulkanDeviceAddress(address),
+                        allocation.pMappedData());
             }
         }
 

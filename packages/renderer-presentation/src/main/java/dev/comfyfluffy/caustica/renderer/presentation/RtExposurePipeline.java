@@ -49,7 +49,7 @@ final class RtExposurePipeline {
              RtDebugLabels.Scope ignored = RtDebugLabels.scope(context, command, "exposure histogram")) {
             ByteBuffer push = stack.malloc(ExposureHistPushData.BYTE_SIZE);
             new ExposureHistPushData(storage(color), storage(depth), storage(albedo),
-                    histogram.deviceAddress(), config.stride(), config.centerWeightSigma(),
+                    histogram.deviceAddress().value(), config.stride(), config.centerWeightSigma(),
                     config.centerWeightFloor()).write(push);
             int sampleWidth = (color.width() + config.stride() - 1) / config.stride();
             int sampleHeight = (color.height() + config.stride() - 1) / config.stride();
@@ -64,7 +64,7 @@ final class RtExposurePipeline {
              RtDebugLabels.Scope ignored = RtDebugLabels.scope(context, command, "exposure resolve")) {
             RtExposure.ExposureCurve curve = config.curve();
             ByteBuffer push = stack.malloc(ExposureResolvePushData.BYTE_SIZE);
-            new ExposureResolvePushData(histogram.deviceAddress(), state.deviceAddress(), storage(exposure),
+            new ExposureResolvePushData(histogram.deviceAddress().value(), state.deviceAddress().value(), storage(exposure),
                     config.key(), config.minEv(), config.maxEv(), config.adaptDarken(), config.adaptBrighten(),
                     frameTimeSeconds, config.evBias(), config.lowPercentile(), config.highPercentile(),
                     config.skyWeightCap(), curve.scene0(), curve.compensation0(), curve.scene1(),

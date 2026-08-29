@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.mixin;
 
-import dev.comfyfluffy.caustica.rt.RtRuntime;
+import dev.comfyfluffy.caustica.client.CausticaClientComposition;
 import net.minecraft.client.Minecraft;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
@@ -28,7 +28,7 @@ public class MinecraftReloadMixin {
 
     @Inject(method = "reloadResourcePacks()Ljava/util/concurrent/CompletableFuture;", at = @At("HEAD"))
     private void caustica$rtReloadStart(CallbackInfoReturnable<CompletableFuture<Void>> cir) {
-        caustica$pendingResourcePackReload = RtRuntime.INSTANCE.beginResourcePackReload();
+        caustica$pendingResourcePackReload = CausticaClientComposition.current().runtime().beginResourcePackReload();
     }
 
     @Inject(method = "reloadResourcePacks()Ljava/util/concurrent/CompletableFuture;", at = @At("RETURN"))
@@ -36,7 +36,7 @@ public class MinecraftReloadMixin {
         long pending = caustica$pendingResourcePackReload;
         caustica$pendingResourcePackReload = 0L;
         if (pending != 0L) {
-            RtRuntime.INSTANCE.trackResourcePackReload(pending, cir.getReturnValue());
+            CausticaClientComposition.current().runtime().trackResourcePackReload(pending, cir.getReturnValue());
         }
     }
 }

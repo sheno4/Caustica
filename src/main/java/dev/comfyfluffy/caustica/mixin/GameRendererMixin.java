@@ -7,12 +7,12 @@ import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vulkan.VulkanDevice;
 import com.mojang.blaze3d.vulkan.VulkanGpuTexture;
 import dev.comfyfluffy.caustica.client.VanillaRenderController;
+import dev.comfyfluffy.caustica.client.CausticaClientComposition;
 import dev.comfyfluffy.caustica.client.WorldRenderScaler;
 import dev.comfyfluffy.caustica.minecraft.MinecraftFrameAdapter;
 import dev.comfyfluffy.caustica.minecraft.MinecraftUiOverlay;
 import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftVulkanBackend;
 import dev.comfyfluffy.caustica.spi.vulkan.VulkanLowLatency;
-import dev.comfyfluffy.caustica.rt.RtRuntime;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.GameRenderer;
@@ -46,14 +46,14 @@ public abstract class GameRendererMixin {
 	// or GUI render into it).
 	@Inject(method = "render(Lnet/minecraft/client/DeltaTracker;Z)V", at = @At("HEAD"))
 	private void caustica$beginOverlayFrame(DeltaTracker deltaTracker, boolean advanceGameTime, CallbackInfo ci) {
-		RtRuntime.INSTANCE.beginRenderFrame();
-		if (!RtRuntime.frameActive()) {
+		CausticaClientComposition.current().runtime().beginRenderFrame();
+		if (!CausticaClientComposition.current().runtime().frameActive()) {
 			return;
 		}
 		MinecraftUiOverlay.beginFrame();
 		// Clear the stale HDR-present flag every frame: composite() only runs while a level renders, so on
 		// menu frames it would otherwise stay true from the last world frame and present a black HDR image.
-		RtRuntime.INSTANCE.beginFrame();
+		CausticaClientComposition.current().runtime().beginFrame();
 		// Reflex RENDERSUBMIT_START: render-graph recording begins here; RENDERSUBMIT_END is set at
 		// VulkanGpuSurface.present() HEAD (VulkanGpuSurfaceMixin), just before the real present.
 		MinecraftVulkanBackend backend = MinecraftVulkanBackend.current();
@@ -70,7 +70,7 @@ public abstract class GameRendererMixin {
 
 	@Inject(method = "render(Lnet/minecraft/client/DeltaTracker;Z)V", at = @At("TAIL"))
 	private void caustica$endRtFrameStats(DeltaTracker deltaTracker, boolean advanceGameTime, CallbackInfo ci) {
-		RtRuntime.INSTANCE.endFrame();
+		CausticaClientComposition.current().runtime().endFrame();
 	}
 
 	@Inject(method = "render(Lnet/minecraft/client/DeltaTracker;Z)V",
@@ -154,7 +154,7 @@ public abstract class GameRendererMixin {
 		if (snapshot == null) {
 			return projection;
 		}
-		RtRuntime.INSTANCE.captureFrame(snapshot);
+		CausticaClientComposition.current().runtime().captureFrame(snapshot);
 		VanillaRenderController.INSTANCE.markProjectionCaptured();
 		return projection;
 	}
@@ -172,17 +172,17 @@ public abstract class GameRendererMixin {
 					shift = At.Shift.AFTER))
 	private void caustica$endWorldScaleBeforeHand(DeltaTracker deltaTracker, CallbackInfo ci) {
 		WorldRenderScaler.INSTANCE.end(this.mainRenderTarget);
-		if (!RtRuntime.frameActive()) {
+		if (!CausticaClientComposition.current().runtime().frameActive()) {
 			return;
 		}
 		// Fold RT world overlays into the shared transparent UI image before hand/screen effects and the GUI
 		// add their own layers. MinecraftUiOverlay then performs the single final blend to SDR/HDR.
 		try {
 			MinecraftUiOverlay.UiPassTarget target = MinecraftUiOverlay.uiPassTarget(this.mainRenderTarget);
-			if (target != null) RtRuntime.INSTANCE.recordUiPasses(target.commandBuffer(), target.image());
+			if (target != null) CausticaClientComposition.current().runtime().recordUiPasses(target.commandBuffer(), target.image());
 		} finally {
 			// The UI pass is recorded in Minecraft's deferred graphics command buffer before this token is finished.
-			RtRuntime.INSTANCE.finishGraphicsUse();
+			CausticaClientComposition.current().runtime().finishGraphicsUse();
 		}
 	}
 
@@ -194,14 +194,14 @@ public abstract class GameRendererMixin {
 					target = "Lnet/minecraft/client/gui/render/GuiRenderer;render()V",
 					shift = At.Shift.AFTER))
 	private void caustica$compositeUiOverlay(DeltaTracker deltaTracker, boolean advanceGameTime, CallbackInfo ci) {
-		if (!RtRuntime.frameActive()) {
+		if (!CausticaClientComposition.current().runtime().frameActive()) {
 			return;
 		}
 		// DLSS-FG quality: snapshot the main target before the combined UI overlay composites back below.
 		// Hand/screen effects, world overlays and GUI are carried by the optional DLSSG UI resource.
         long mainImage = this.mainRenderTarget.getColorTexture() instanceof VulkanGpuTexture texture
                 ? texture.vkImage() : 0L;
-        RtRuntime.INSTANCE.captureHudless(mainImage,
+        CausticaClientComposition.current().runtime().captureHudless(mainImage,
                 this.mainRenderTarget.width, this.mainRenderTarget.height,
                 MinecraftFrameAdapter.INSTANCE.captureUiPresentation());
 		MinecraftUiOverlay.compositeIfUsed();

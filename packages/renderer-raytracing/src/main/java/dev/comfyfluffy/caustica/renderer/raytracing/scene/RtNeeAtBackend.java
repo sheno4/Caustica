@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.renderer.raytracing.scene;
 
+import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtGpuExecutor;
 
 import dev.comfyfluffy.caustica.api.scene.SceneId;
@@ -82,9 +83,9 @@ final class RtNeeAtBackend {
                 | (lights.stream().anyMatch(light -> light.descriptor() instanceof LightDescriptor.Distant distant
                         && distant.environmentEmitter())
                 ? ENVIRONMENT_EMITTERS_SAMPLED : 0);
-        NeeAtStateData control = new NeeAtStateData(0L, target.global.deviceAddress(),
-                target.local.deviceAddress(), target.lightFeedback.deviceAddress(),
-                target.pixelFeedback.deviceAddress(), lights.size(),
+        NeeAtStateData control = new NeeAtStateData(0L, target.global.deviceAddress().value(),
+                target.local.deviceAddress().value(), target.lightFeedback.deviceAddress().value(),
+                target.pixelFeedback.deviceAddress().value(), lights.size(),
                 continuous ? state.previousLights.size() : 0,
                 input.width(), input.height(), tileCountX, tileCountY, TILE_SIZE, LOCAL_SLOTS,
                 CANDIDATES, flags, input.metersPerSceneUnit(),
@@ -167,9 +168,9 @@ final class RtNeeAtBackend {
                           FrameInput input, boolean continuous, int phase, int groups) {
         ByteBuffer push = MemoryUtil.memAlloc(PUSH_BYTES).order(ByteOrder.nativeOrder());
         try {
-            push.putLong(target.state.deviceAddress()).putLong(target.plan.deviceAddress())
-                    .putLong(previous.lightFeedback.deviceAddress())
-                    .putLong(previous.pixelFeedback.deviceAddress())
+            push.putLong(target.state.deviceAddress().value()).putLong(target.plan.deviceAddress().value())
+                    .putLong(previous.lightFeedback.deviceAddress().value())
+                    .putLong(previous.pixelFeedback.deviceAddress().value())
                     .putInt(phase).putInt(continuous ? 1 : 0).flip();
             bake.dispatch(commandBuffer, push, groups, 1, 1);
         } finally {
@@ -254,8 +255,8 @@ final class RtNeeAtBackend {
             this.use = use;
         }
 
-        void bindLightTable(long address) {
-            control = new NeeAtStateData(address, control.globalDistributionAddress(),
+        void bindLightTable(VulkanDeviceAddress address) {
+            control = new NeeAtStateData(address.value(), control.globalDistributionAddress(),
                     control.localDistributionAddress(), control.lightFeedbackAddress(),
                     control.pixelFeedbackAddress(), control.lightCount(), control.priorLightCount(),
                     control.extentWidth(), control.extentHeight(), control.tileCountX(), control.tileCountY(),
@@ -264,7 +265,7 @@ final class RtNeeAtBackend {
             writeState(frame.state, control);
         }
 
-        long stateAddress() { return frame.state.deviceAddress(); }
+        VulkanDeviceAddress stateAddress() { return frame.state.deviceAddress(); }
         boolean historyValid() { return historyValid; }
         SceneId scene() { return scene; }
     }

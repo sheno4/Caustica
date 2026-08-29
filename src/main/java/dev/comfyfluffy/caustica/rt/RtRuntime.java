@@ -10,13 +10,12 @@ import dev.comfyfluffy.caustica.minecraft.adapter.session.MinecraftEngineWorldSe
 import dev.comfyfluffy.caustica.engine.frame.FrameSnapshot;
 import dev.comfyfluffy.caustica.engine.frame.SceneResources;
 import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
-import dev.comfyfluffy.caustica.minecraft.MinecraftApiBootstrap;
+import dev.comfyfluffy.caustica.minecraft.adapter.session.MinecraftWorldSessionHost;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftDimensionKey;
 import dev.comfyfluffy.caustica.minecraft.api.ResourcePackEpoch;
 import dev.comfyfluffy.caustica.nvidia.ngx.NgxRuntime;
 import dev.comfyfluffy.caustica.nvidia.ngx.DlssFrameGeneration;
 import dev.comfyfluffy.caustica.nvidia.ngx.DlssRayReconstruction;
-import dev.comfyfluffy.caustica.platform.CausticaPlatform;
 import dev.comfyfluffy.caustica.rt.pass.RtPassSchedulerBackend;
 import dev.comfyfluffy.caustica.renderer.raytracing.RtProgramBackend;
 import dev.comfyfluffy.caustica.renderer.raytracing.scene.RtRetainedSceneBackend;
@@ -29,14 +28,11 @@ import dev.comfyfluffy.caustica.slang.SlangRuntime;
 
 import java.io.IOException;
 import java.nio.file.Path;
-import java.util.Optional;
 import org.lwjgl.vulkan.VkDevice;
 import org.lwjgl.vulkan.VkQueue;
 
 /** Owns the live RT session and publishes one immutable rendering mode for each frame. */
 public final class RtRuntime {
-    public static final RtRuntime INSTANCE = new RtRuntime();
-
     enum State {
         OFF,
         STARTING,
@@ -57,9 +53,12 @@ public final class RtRuntime {
     private Session session;
     private boolean frameActive;
     private RuntimeHost host;
-    private RenderSessionHost apiHost;
-    private Path shaderCacheRoot;
-    private SlangRuntime slangRuntime;
+    private final RenderSessionHost apiHost;
+    private final MinecraftWorldSessionHost minecraftSessionHost;
+    private final Path shaderCacheRoot;
+    private final SlangRuntime slangRuntime;
+    private final RtTelemetry telemetry;
+    private final NgxRuntime.Settings ngxSettings;
     private VulkanRendererBackend vulkanBackend;
     private VulkanDeviceContext vulkanContext;
     private NgxRuntime ngxRuntime;
@@ -89,12 +88,21 @@ public final class RtRuntime {
 
             });
 
-    private RtRuntime() {
+    public RtRuntime(RenderSessionHost apiHost, MinecraftWorldSessionHost minecraftSessionHost,
+                     SlangRuntime slangRuntime, Path shaderCacheRoot, RtTelemetry telemetry,
+                     NgxRuntime.Settings ngxSettings) {
+        this.apiHost = java.util.Objects.requireNonNull(apiHost, "apiHost");
+        this.minecraftSessionHost = java.util.Objects.requireNonNull(minecraftSessionHost, "minecraftSessionHost");
+        this.slangRuntime = java.util.Objects.requireNonNull(slangRuntime, "slangRuntime");
+        this.shaderCacheRoot = java.util.Objects.requireNonNull(shaderCacheRoot, "shaderCacheRoot")
+                .toAbsolutePath().normalize();
+        this.telemetry = java.util.Objects.requireNonNull(telemetry, "telemetry");
+        this.ngxSettings = java.util.Objects.requireNonNull(ngxSettings, "ngxSettings");
     }
 
     /** Renderer telemetry integration backed by renderer-owned collectors and sinks. */
     public RtTelemetry telemetry() {
-        return RtTelemetryImpl.INSTANCE;
+        return telemetry;
     }
 
     /** Attach the host backend whose device lifetime encloses every RT activation. */
@@ -121,7 +129,7 @@ public final class RtRuntime {
         VulkanDeviceContext created = VulkanDeviceContext.create(backend);
         try {
             lifecycle.observeDevice(created);
-            NgxRuntime createdNgxRuntime = new NgxRuntime(created, ngxRuntimeSettings());
+            NgxRuntime createdNgxRuntime = new NgxRuntime(created, ngxSettings);
             vulkanContext = created;
             ngxRuntime = createdNgxRuntime;
             return created;
@@ -140,23 +148,16 @@ public final class RtRuntime {
         return java.util.Objects.requireNonNull(ngxRuntime, "NGX runtime was not created with the Vulkan device");
     }
 
-    private static NgxRuntime.Settings ngxRuntimeSettings() {
-        String configuredPath = CausticaConfig.Ngx.PATH.get();
-        Optional<Path> override = configuredPath == null || configuredPath.isBlank()
-                ? Optional.empty() : Optional.of(Path.of(configuredPath));
-        return new NgxRuntime.Settings(CausticaPlatform.current().gameDir().resolve("caustica-ngx"), override);
-    }
-
-    private static DlssRayReconstruction.Settings rayReconstructionSettings() {
+    private DlssRayReconstruction.Settings rayReconstructionSettings() {
         return new DlssRayReconstruction.Settings(CausticaConfig.Rt.DlssRr.ENABLED.value(),
                 CausticaConfig.Rt.DlssRr.QUALITY.value(), CausticaConfig.Rt.DlssRr.PRESET.value());
     }
 
-    private static DlssFrameGeneration.Settings frameGenerationSettings() {
+    private DlssFrameGeneration.Settings frameGenerationSettings() {
         return new DlssFrameGeneration.Settings(CausticaConfig.Rt.Fg.ENABLED.value());
     }
 
-    private static RtFramePresenter.Settings presentationSettings() {
+    private RtFramePresenter.Settings presentationSettings() {
         return new RtFramePresenter.Settings(CausticaConfig.Rt.Hdr.enabled(),
                 CausticaConfig.Rt.Hdr.swapchainPqActive(), CausticaConfig.Rt.Hdr.uiNits());
     }
@@ -165,29 +166,9 @@ public final class RtRuntime {
         host = installedHost;
     }
 
-    /** Install process-scoped extension factories before the first renderer session opens. */
-    public void installApiHost(RenderSessionHost installedHost) {
-        apiHost = java.util.Objects.requireNonNull(installedHost, "installedHost");
-    }
-
-    /** Install the process-scoped shader compiler before a render session starts. */
-    public synchronized void installSlangRuntime(SlangRuntime installedRuntime) {
-        if (session != null) throw new IllegalStateException("Cannot replace Slang while a render session is live");
-        if (slangRuntime != null && slangRuntime != installedRuntime) {
-            throw new IllegalStateException("Slang runtime is already installed");
-        }
-        slangRuntime = java.util.Objects.requireNonNull(installedRuntime, "installedRuntime");
-    }
-
     /** Process-scoped extension host used when the renderer creates its engine session services. */
     public RenderSessionHost apiHost() {
         return java.util.Objects.requireNonNull(apiHost, "Caustica API host is not installed");
-    }
-
-    /** Configure the process shader cache before the first runtime activation. */
-    public void configureShaderCache(Path cacheRoot) {
-        shaderCacheRoot = java.util.Objects.requireNonNull(cacheRoot, "cacheRoot")
-                .toAbsolutePath().normalize();
     }
 
     /** Start process-scoped lifecycle tracking after the host has installed its extensions and options. */
@@ -218,7 +199,7 @@ public final class RtRuntime {
 
     /** Route host-side capture to the current scoped render pass when it exists. */
     /** Monotonic index of RT composite attempts across runtime activations. */
-    public static long frameCounter() {
+    public long frameCounter() {
         return RtFrameRenderer.frameCounter();
     }
 
@@ -326,8 +307,8 @@ public final class RtRuntime {
         if (session != null) session.presenter.captureHudless(sourceImage, width, height, ui);
     }
 
-    public static RuntimeHost host() {
-        RuntimeHost installedHost = INSTANCE.host;
+    public RuntimeHost host() {
+        RuntimeHost installedHost = host;
         if (installedHost == null) {
             throw new IllegalStateException("RT runtime host is not installed");
         }
@@ -468,22 +449,22 @@ public final class RtRuntime {
      * {@code GameRenderer.extract} and {@code GameRenderer.render}. The extract-side and render-side hooks
      * that must agree on scene ownership therefore never disagree within one frame.</p>
      */
-    public static boolean active() {
-        return INSTANCE.state == State.ACTIVE;
+    public boolean active() {
+        return state == State.ACTIVE;
     }
 
     /** True only for hooks participating in the current, already-latched render frame. */
-    public static boolean frameActive() {
-        return INSTANCE.frameActive;
+    public boolean frameActive() {
+        return frameActive;
     }
 
     /** True while a session exists, including source-rendered startup. */
-    public static boolean hasSession() {
-        return INSTANCE.session != null;
+    public boolean hasSession() {
+        return session != null;
     }
 
     /** PQ belongs to an active RT session; Off and Starting use the host's native SDR swapchain. */
-    public static boolean wantsPqSwapchain() {
+    public boolean wantsPqSwapchain() {
         return active() && CausticaConfig.Rt.Hdr.ENABLED.value();
     }
 
@@ -506,7 +487,7 @@ public final class RtRuntime {
                     requireNgxRuntime(), frameGenerationSettings());
             session = new Session(renderSessionEpoch, activationEpoch,
                     context, frameGeneration,
-                    new RtFramePresenter(context, frameGeneration, RtRuntime::presentationSettings),
+                    new RtFramePresenter(context, frameGeneration, this::presentationSettings),
                     java.util.Objects.requireNonNull(
                     shaderCacheRoot, "shader cache is not configured"));
             state = State.STARTING;
@@ -568,7 +549,7 @@ public final class RtRuntime {
         }
     }
 
-    private static final class Session {
+    private final class Session {
         private final RtLifecycleCoordinator.RenderSessionEpoch renderSessionEpoch;
         private final RtLifecycleCoordinator.RuntimeActivationEpoch activationEpoch;
         private final DlssFrameGeneration frameGeneration;
@@ -607,7 +588,7 @@ public final class RtRuntime {
                      MinecraftDimensionKey dimension, int displayWidth, int displayHeight,
                      boolean starting) {
             frameGeneration.configure(frameGenerationSettings());
-            RtLifecycleCoordinator.ResourcePackEpoch applied = INSTANCE.lifecycle.resourcePackEpoch();
+            RtLifecycleCoordinator.ResourcePackEpoch applied = lifecycle.resourcePackEpoch();
             if (requestedWorldEpoch == 0L || dimension == null || applied == null) {
                 closeWorld();
                 return false;
@@ -641,7 +622,7 @@ public final class RtRuntime {
         private void openWorld(long epoch, MinecraftDimensionKey dimension,
                                ResourcePackEpoch resourcePackEpoch) {
             programs = new RtProgramBackend(context,
-                    java.util.Objects.requireNonNull(INSTANCE.slangRuntime, "Slang runtime is not installed"),
+                    slangRuntime,
                     shaderCacheRoot);
             scenes = new RtRetainedSceneBackend(context);
             passes = new RtPassSchedulerBackend(context,
@@ -649,10 +630,10 @@ public final class RtRuntime {
                     org.lwjgl.vulkan.VK10.VK_FORMAT_R32_SFLOAT,
                     org.lwjgl.vulkan.VK10.VK_FORMAT_R8G8B8A8_UNORM);
             rayReconstruction = new DlssRayReconstruction(
-                    INSTANCE.requireNgxRuntime(), rayReconstructionSettings());
+                    requireNgxRuntime(), rayReconstructionSettings());
             try {
-                world = new MinecraftEngineWorldSession(INSTANCE.apiHost(),
-                        MinecraftApiBootstrap.minecraftSessionHost(), context,
+                world = new MinecraftEngineWorldSession(apiHost(),
+                        minecraftSessionHost, context,
                         programs, scenes, passes, dimension, resourcePackEpoch,
                         failure -> CausticaMod.LOGGER.error("Engine world-session failure", failure));
                 renderer = new RtFrameRenderer(programs, scenes, passes,

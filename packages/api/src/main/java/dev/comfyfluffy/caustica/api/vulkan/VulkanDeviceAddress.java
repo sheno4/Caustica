@@ -24,4 +24,12 @@ public record VulkanDeviceAddress(long value) {
         }
         return new VulkanDeviceAddress(result);
     }
+
+    /** Returns whether this address satisfies a positive power-of-two byte alignment. */
+    public boolean isAlignedTo(long byteAlignment) {
+        if (byteAlignment <= 0L || (byteAlignment & (byteAlignment - 1L)) != 0L) {
+            throw new IllegalArgumentException("byteAlignment must be a positive power of two");
+        }
+        return (value & (byteAlignment - 1L)) == 0L;
+    }
 }

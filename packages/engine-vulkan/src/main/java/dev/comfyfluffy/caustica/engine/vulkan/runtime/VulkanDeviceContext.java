@@ -1,5 +1,7 @@
 package dev.comfyfluffy.caustica.engine.vulkan.runtime;
 
+import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
+
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorHeap;
 import dev.comfyfluffy.caustica.engine.vulkan.VulkanRequiredProfile;
@@ -313,7 +315,7 @@ public final class VulkanDeviceContext implements GpuDevice {
             VulkanDiagnostics.registerBuffer(address, size, handle, label);
             long registeredAddress = address;
             long registeredHandle = handle;
-            return new VmaGpuBuffer(vma, handle, allocation, address, hostVisible ? info.pMappedData() : 0L,
+            return new VmaGpuBuffer(vma, handle, allocation, new VulkanDeviceAddress(address), hostVisible ? info.pMappedData() : 0L,
                     size, hostVisible,
                     () -> VulkanDiagnostics.unregisterBuffer(registeredAddress, registeredHandle));
         } catch (Throwable t) {

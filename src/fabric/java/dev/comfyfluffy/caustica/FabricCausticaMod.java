@@ -11,8 +11,8 @@ import net.minecraft.core.registries.BuiltInRegistries;
 public final class FabricCausticaMod implements ModInitializer {
     @Override
     public void onInitialize() {
-        CausticaPlatform.install(new FabricPlatform());
+        CausticaPlatform platform = new FabricPlatform();
         CausticaItems.register((key, item) -> Registry.register(BuiltInRegistries.ITEM, key, item));
-        CausticaMod.initialize();
+        CausticaMod.initialize(platform);
     }
 }
