@@ -24,16 +24,36 @@ public interface PassChannel {
     PassRegistration addWorldResourcePass(PassFactory<WorldResourceSetup, PassFrame> factory);
 
     /**
-     * Record after reconstruction and before the display transform. Effects compose in registration
-     * order, but must work when surrounding effects are absent. A pass joins the scene-colour chain for a
-     * frame only by acquiring and fully writing its output.
+     * Record after reconstruction and before the display transform. Effects compose in constrained order,
+     * with global acceptance order breaking otherwise-unconstrained ties. A pass joins the scene-colour
+     * chain for a frame only by acquiring and fully writing its output.
      */
-    PassRegistration addPostEffectPass(PassFactory<PostEffectSetup, PostEffectFrame> factory);
+    PassRegistration addPostEffectPass(
+            PassId id, PassFactory<PostEffectSetup, PostEffectFrame> factory);
 
     /**
-     * Record after the display transform into the display-resolution UI layer. The layer remains separate
-     * from the scene input consumed by reconstruction and frame generation; a recorded layer may therefore
-     * be reused for more than one presented frame.
+     * Record an effect with one optional relationship to another post effect. A missing anchor leaves the
+     * effect unconstrained so either effect may be installed independently; the relationship becomes active
+     * if the anchor is registered later. A duplicate live id, self-reference, or cycle is rejected without
+     * publishing the new pass. If a late anchor activates a cycle, that arriving registration is rejected.
      */
-    PassRegistration addUiPass(PassFactory<UiSetup, UiFrame> factory);
+    PassRegistration addPostEffectPass(
+            PassId id, PassPlacement placement, PassFactory<PostEffectSetup, PostEffectFrame> factory);
+
+    /**
+     * Record after the display transform into the display-resolution UI layer. Otherwise-unconstrained
+     * passes compose in global acceptance order. The layer remains separate from the scene input consumed
+     * by reconstruction and frame generation; a recorded layer may therefore be reused for more than one
+     * presented frame.
+     */
+    PassRegistration addUiPass(PassId id, PassFactory<UiSetup, UiFrame> factory);
+
+    /**
+     * Record a UI pass with one optional relationship to another UI pass. A missing anchor leaves the pass
+     * unconstrained so either pass may be installed independently; the relationship becomes active if the
+     * anchor is registered later. A duplicate live id, self-reference, or cycle is rejected without
+     * publishing the new pass. If a late anchor activates a cycle, that arriving registration is rejected.
+     */
+    PassRegistration addUiPass(
+            PassId id, PassPlacement placement, PassFactory<UiSetup, UiFrame> factory);
 }

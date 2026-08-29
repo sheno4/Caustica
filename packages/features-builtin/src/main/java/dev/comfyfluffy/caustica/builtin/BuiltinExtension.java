@@ -52,7 +52,7 @@ public final class BuiltinExtension implements CausticaExtension, CausticaSettin
                             shader("caustica_builtin_sky", "BuiltinEnvironment"),
                             ENVIRONMENT_BINDING_DATA))));
             try {
-                PassRegistration bloom = context.passes().addPostEffectPass(setup -> new BloomPass(setup,
+                PassRegistration bloom = context.passes().addPostEffectPass(BloomPass.ID, setup -> new BloomPass(setup,
                         () -> CausticaSettings.getInstance().lookup().snapshot().options(ID)));
                 return contribution(registration, bloom);
             } catch (RuntimeException | Error failure) {

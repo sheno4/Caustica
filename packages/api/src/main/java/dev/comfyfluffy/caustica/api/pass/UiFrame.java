@@ -16,8 +16,8 @@ import dev.comfyfluffy.caustica.api.vulkan.GpuAccelerationStructureDescriptor;
 public interface UiFrame extends PassFrame {
     /**
      * The layer this pass draws into, sized to the display and cleared to transparent black once per frame
-     * before the first pass runs. Passes compose onto it in registration order, so it holds whatever
-     * earlier passes already drew.
+     * before the first pass runs. Passes compose onto it in their constrained stage order, so it holds
+     * whatever earlier passes already drew.
      *
      * <p>sRGB with <b>premultiplied</b> alpha. Draw with the ordinary straight-alpha "over" blend
      * ({@code SRC_ALPHA, ONE_MINUS_SRC_ALPHA} for colour and {@code ONE, ONE_MINUS_SRC_ALPHA} for alpha)

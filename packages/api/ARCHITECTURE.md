@@ -261,8 +261,12 @@ handles such as `VkImage`, `VkImageView`, and
 ## Post effects and UI
 
 A post effect reads `sceneColor()` and joins the chain only by calling
-`acquireSceneColorOutput()`. The output is distinct from the input and must be fully written. Effects
-compose in registration order; there are no first/last anchor sentinels.
+`acquireSceneColorOutput()`. The output is distinct from the input and must be fully written. Every post
+effect has a stage-local `PassId` and may declare one `PassPlacement.before` or `after` relationship. A
+missing anchor leaves the effect unconstrained so optional effects remain independently installable, then
+activates if that anchor arrives later; global acceptance order breaks otherwise-unconstrained ties. The
+registration that would create a cycle is rejected, as are duplicate live ids. UI passes use the same narrow
+ordering contract, without first/last sentinels or a public render graph.
 
 UI is a separate display-resolution layer. `UiFrame` includes the immutable `SceneView`, an unjittered
 world-view-projection matrix, and a borrowed TLAS for entry-scene occlusion queries by world-anchored

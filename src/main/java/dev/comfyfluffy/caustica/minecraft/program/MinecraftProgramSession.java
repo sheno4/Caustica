@@ -82,7 +82,8 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
             MinecraftLightProvider installedLights = lights;
             lightRegistration = context.renderSession().passes().addWorldResourcePass(
                     setup -> new LightUpdatePass(installedLights));
-            overlayRegistration = context.renderSession().passes().addUiPass(WorldOverlayPass::new);
+            overlayRegistration = context.renderSession().passes().addUiPass(
+                    WorldOverlayPass.ID, WorldOverlayPass::new);
             MinecraftProgramSession session = new MinecraftProgramSession(
                     context, resources, materialEpochs, frameSelections, frames, frameCapture,
                     lights, lightRegistration, overlayRegistration);

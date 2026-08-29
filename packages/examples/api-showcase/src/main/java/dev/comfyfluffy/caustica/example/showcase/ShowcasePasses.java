@@ -8,12 +8,18 @@ import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptorKind;
 import dev.comfyfluffy.caustica.api.pass.Pass;
 import dev.comfyfluffy.caustica.api.pass.PassFrame;
+import dev.comfyfluffy.caustica.api.pass.PassId;
 import dev.comfyfluffy.caustica.api.pass.PostEffectFrame;
 import dev.comfyfluffy.caustica.api.pass.UiFrame;
 import org.lwjgl.vulkan.VkResourceDescriptorInfoEXT;
 import org.lwjgl.vulkan.VkSamplerCreateInfo;
 
 final class ShowcasePasses {
+    static final PassId BLOOM = PassId.of("caustica", "bloom");
+    static final PassId POST_EFFECT = PassId.of("caustica_showcase", "colour_grade");
+    static final PassId UI = PassId.of("caustica_showcase", "world_marker");
+    static final PassId WORLD_OVERLAY = PassId.of("caustica", "world_overlay");
+
     private ShowcasePasses() { }
 
     static Pass<PassFrame> worldResource(GpuDevice gpu) {

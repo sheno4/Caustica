@@ -3,10 +3,10 @@ package dev.comfyfluffy.caustica.minecraft.overlay;
 import com.mojang.blaze3d.vulkan.VulkanCommandEncoder;
 import dev.comfyfluffy.caustica.api.vulkan.GpuFrameUse;
 import dev.comfyfluffy.caustica.api.pass.Pass;
+import dev.comfyfluffy.caustica.api.pass.PassId;
 import dev.comfyfluffy.caustica.api.pass.UiFrame;
 import dev.comfyfluffy.caustica.api.pass.UiSetup;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
-import dev.comfyfluffy.caustica.settings.ResourceId;
 import org.joml.Matrix4f;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VK10;
@@ -30,7 +30,7 @@ import java.util.List;
  * reservation through {@link UiFrame}; the pass owns only feature pipelines and transient vertex storage.
  */
 public final class WorldOverlayPass implements Pass<UiFrame> {
-    public static final ResourceId ID = ResourceId.of("caustica", "world_overlay");
+    public static final PassId ID = PassId.of("caustica", "world_overlay");
 
     /** Renderer UI-layer VkFormat. */
     public static final int TARGET_FORMAT = VK10.VK_FORMAT_R8G8B8A8_UNORM;

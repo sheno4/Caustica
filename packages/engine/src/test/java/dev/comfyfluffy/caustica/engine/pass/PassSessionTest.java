@@ -5,6 +5,9 @@ import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.api.vulkan.GpuFrameUse;
 import dev.comfyfluffy.caustica.api.pass.Pass;
 import dev.comfyfluffy.caustica.api.pass.PassFrame;
+import dev.comfyfluffy.caustica.api.pass.PassId;
+import dev.comfyfluffy.caustica.api.pass.PassPlacement;
+import dev.comfyfluffy.caustica.api.pass.PassRegistration;
 import dev.comfyfluffy.caustica.api.pass.PostEffectFrame;
 import dev.comfyfluffy.caustica.api.pass.PostEffectSetup;
 import dev.comfyfluffy.caustica.api.pass.UiFrame;
@@ -35,9 +38,12 @@ final class PassSessionTest {
         List<String> events = new ArrayList<>();
 
         first.addWorldResourcePass(setup -> pass(frame -> events.add("world-a"), () -> events.add("close-a")));
-        second.addPostEffectPass(setup -> pass(frame -> events.add("post-b"), () -> events.add("close-b")));
-        first.addPostEffectPass(setup -> pass(frame -> events.add("post-a"), () -> events.add("close-c")));
-        second.addUiPass(setup -> pass(frame -> events.add("ui-b"), () -> events.add("close-d")));
+        second.addPostEffectPass(id("post-b"),
+                setup -> pass(frame -> events.add("post-b"), () -> events.add("close-b")));
+        first.addPostEffectPass(id("post-a"),
+                setup -> pass(frame -> events.add("post-a"), () -> events.add("close-c")));
+        second.addUiPass(id("ui-b"),
+                setup -> pass(frame -> events.add("ui-b"), () -> events.add("close-d")));
 
         session.recordWorldResources();
         session.recordPostEffects();
@@ -102,7 +108,8 @@ final class PassSessionTest {
         PassSession session = new PassSession(backend, (pass, failure) -> failures.add(failure));
         PassContributionChannel channel = session.openChannel("owner");
         AtomicInteger records = new AtomicInteger();
-        channel.addPostEffectPass(setup -> pass(frame -> records.incrementAndGet(), () -> { }));
+        channel.addPostEffectPass(id("post"),
+                setup -> pass(frame -> records.incrementAndGet(), () -> { }));
 
         session.recordPostEffects();
         session.recordPostEffects();
@@ -110,6 +117,125 @@ final class PassSessionTest {
         assertEquals(1, records.get());
         assertEquals(1, failures.size());
         assertEquals(1, backend.abandoned);
+    }
+
+    @Test
+    void resolvesPresentAnchorsAndUsesAcceptanceOrderForOtherTies() {
+        ManualBackend backend = new ManualBackend();
+        PassSession session = new PassSession(backend, (pass, failure) -> { });
+        PassContributionChannel first = session.openChannel("first");
+        PassContributionChannel second = session.openChannel("second");
+        List<String> events = new ArrayList<>();
+        PassId bloom = id("bloom");
+        PassId grade = id("grade");
+        PassId prefilter = id("prefilter");
+
+        first.addPostEffectPass(grade, PassPlacement.after(bloom),
+                setup -> pass(frame -> events.add("grade"), () -> { }));
+        second.addPostEffectPass(id("unconstrained"),
+                setup -> pass(frame -> events.add("unconstrained"), () -> { }));
+        second.addPostEffectPass(bloom,
+                setup -> pass(frame -> events.add("bloom"), () -> { }));
+        first.addPostEffectPass(prefilter, PassPlacement.before(bloom),
+                setup -> pass(frame -> events.add("prefilter"), () -> { }));
+
+        session.recordPostEffects();
+
+        assertEquals(List.of("unconstrained", "prefilter", "bloom", "grade"), events);
+        assertEquals(List.of(1L, 3L, 2L, 0L), backend.begun);
+    }
+
+    @Test
+    void ignoresAnAbsentAnchor() {
+        ManualBackend backend = new ManualBackend();
+        PassSession session = new PassSession(backend, (pass, failure) -> { });
+        PassContributionChannel channel = session.openChannel("owner");
+        List<String> events = new ArrayList<>();
+
+        channel.addUiPass(id("marker"), PassPlacement.before(id("absent-hud")),
+                setup -> pass(frame -> events.add("marker"), () -> { }));
+        channel.addUiPass(id("overlay"),
+                setup -> pass(frame -> events.add("overlay"), () -> { }));
+
+        session.recordUi();
+
+        assertEquals(List.of("marker", "overlay"), events);
+    }
+
+    @Test
+    void rejectsTheRegistrationThatMakesAnExistingMissingAnchorCycle() {
+        ManualBackend backend = new ManualBackend();
+        PassSession session = new PassSession(backend, (pass, failure) -> { });
+        PassContributionChannel channel = session.openChannel("owner");
+        AtomicInteger rejectedClose = new AtomicInteger();
+        PassId first = id("first");
+        PassId second = id("second");
+        channel.addPostEffectPass(first, PassPlacement.after(second),
+                setup -> pass(frame -> { }, () -> { }));
+
+        assertThrows(IllegalArgumentException.class,
+                () -> channel.addPostEffectPass(second, PassPlacement.after(first),
+                        setup -> pass(frame -> { }, rejectedClose::incrementAndGet)));
+
+        assertEquals(1, rejectedClose.get());
+        session.recordPostEffects();
+        assertEquals(List.of(0L), backend.begun);
+    }
+
+    @Test
+    void rejectsDuplicateLiveIdsAndReusesAnIdAsSoonAsTheOldRegistrationStops() {
+        ManualBackend backend = new ManualBackend();
+        PassSession session = new PassSession(backend, (pass, failure) -> { });
+        PassContributionChannel channel = session.openChannel("owner");
+        AtomicInteger rejectedClose = new AtomicInteger();
+        PassId shared = id("shared");
+        PassRegistration first = channel.addUiPass(shared, setup -> pass(frame -> { }, () -> { }));
+
+        assertThrows(IllegalStateException.class,
+                () -> channel.addUiPass(shared,
+                        setup -> pass(frame -> { }, rejectedClose::incrementAndGet)));
+        assertEquals(1, rejectedClose.get());
+
+        first.close();
+        channel.addUiPass(shared, setup -> pass(frame -> { }, () -> { }));
+        session.recordUi();
+
+        assertEquals(List.of(1L), backend.begun);
+    }
+
+    @Test
+    void rejectsSelfAnchorsBeforeCreatingThePass() {
+        ManualBackend backend = new ManualBackend();
+        PassSession session = new PassSession(backend, (pass, failure) -> { });
+        PassContributionChannel channel = session.openChannel("owner");
+        AtomicInteger factories = new AtomicInteger();
+        PassId self = id("self");
+
+        assertThrows(IllegalArgumentException.class,
+                () -> channel.addPostEffectPass(self, PassPlacement.before(self), setup -> {
+                    factories.incrementAndGet();
+                    return pass(frame -> { }, () -> { });
+                }));
+        assertEquals(0, factories.get());
+    }
+
+    @Test
+    void idsAreStageLocalAndBecomeReusableWhenFailureDisablesAPass() {
+        ManualBackend backend = new ManualBackend();
+        PassSession session = new PassSession(backend, (pass, failure) -> { });
+        PassContributionChannel channel = session.openChannel("owner");
+        PassId shared = id("cross-stage");
+        channel.addPostEffectPass(shared, setup -> pass(frame -> {
+            throw new IllegalStateException("disable this post pass");
+        }, () -> { }));
+        channel.addUiPass(shared, setup -> pass(frame -> { }, () -> { }));
+
+        session.recordPostEffects();
+        channel.addPostEffectPass(shared, setup -> pass(frame -> { }, () -> { }));
+        session.recordPostEffects();
+        session.recordUi();
+
+        assertEquals(List.of(0L, 2L, 1L), backend.begun);
     }
 
     @Test
@@ -180,6 +306,10 @@ final class PassSessionTest {
                 close.run();
             }
         };
+    }
+
+    private static PassId id(String path) {
+        return PassId.of("test", path);
     }
 
     private static void await(CountDownLatch latch) {

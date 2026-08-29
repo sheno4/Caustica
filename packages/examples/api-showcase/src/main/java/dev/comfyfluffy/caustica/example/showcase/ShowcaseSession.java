@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.example.showcase;
 
 import dev.comfyfluffy.caustica.api.pass.PassRegistration;
+import dev.comfyfluffy.caustica.api.pass.PassPlacement;
 import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.api.session.RenderSessionContext;
@@ -20,8 +21,12 @@ final class ShowcaseSession implements RenderSessionContribution {
         programs = new ShowcasePrograms(context.program(), System.err::println);
         passes = List.of(
                 context.passes().addWorldResourcePass(setup -> ShowcasePasses.worldResource(setup.gpu())),
-                context.passes().addPostEffectPass(setup -> ShowcasePasses.postEffect(setup.gpu())),
-                context.passes().addUiPass(setup -> ShowcasePasses.ui(setup.gpu())));
+                context.passes().addPostEffectPass(
+                        ShowcasePasses.POST_EFFECT, PassPlacement.after(ShowcasePasses.BLOOM),
+                        setup -> ShowcasePasses.postEffect(setup.gpu())),
+                context.passes().addUiPass(
+                        ShowcasePasses.UI, PassPlacement.before(ShowcasePasses.WORLD_OVERLAY),
+                        setup -> ShowcasePasses.ui(setup.gpu())));
     }
 
     /** Called by the Minecraft-facing package when its host-owned scene becomes available. */

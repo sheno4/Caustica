@@ -3,6 +3,8 @@ package dev.comfyfluffy.caustica.engine.pass;
 import dev.comfyfluffy.caustica.api.pass.Pass;
 import dev.comfyfluffy.caustica.api.pass.PassFactory;
 import dev.comfyfluffy.caustica.api.pass.PassFrame;
+import dev.comfyfluffy.caustica.api.pass.PassId;
+import dev.comfyfluffy.caustica.api.pass.PassPlacement;
 import dev.comfyfluffy.caustica.api.pass.PassRegistration;
 import dev.comfyfluffy.caustica.api.pass.PostEffectFrame;
 import dev.comfyfluffy.caustica.api.pass.PostEffectSetup;
@@ -12,8 +14,12 @@ import dev.comfyfluffy.caustica.api.pass.WorldResourceSetup;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.PriorityQueue;
 
 /** Deterministic owner-scoped pass registry and renderer dispatch controller for one session. */
 public final class PassSession implements AutoCloseable {
@@ -43,30 +49,57 @@ public final class PassSession implements AutoCloseable {
     }
 
     PassRegistration addPostEffect(
-            PassContributionChannel channel, PassFactory<PostEffectSetup, PostEffectFrame> factory) {
-        return add(channel, PassKey.Stage.POST_EFFECT, factory, backend.postEffectSetup());
+            PassContributionChannel channel, PassId id, PassPlacement placement,
+            PassFactory<PostEffectSetup, PostEffectFrame> factory) {
+        return add(channel, PassKey.Stage.POST_EFFECT, id, placement, factory, backend.postEffectSetup());
     }
 
-    PassRegistration addUi(PassContributionChannel channel, PassFactory<UiSetup, UiFrame> factory) {
-        return add(channel, PassKey.Stage.UI, factory, backend.uiSetup());
+    PassRegistration addUi(
+            PassContributionChannel channel, PassId id, PassPlacement placement,
+            PassFactory<UiSetup, UiFrame> factory) {
+        return add(channel, PassKey.Stage.UI, id, placement, factory, backend.uiSetup());
     }
 
     private <S extends dev.comfyfluffy.caustica.api.pass.PassSetup, F extends PassFrame> PassRegistration add(
             PassContributionChannel channel, PassKey.Stage stage, PassFactory<S, F> factory, S setup) {
+        return add(channel, stage, null, null, factory, setup);
+    }
+
+    private <S extends dev.comfyfluffy.caustica.api.pass.PassSetup, F extends PassFrame> PassRegistration add(
+            PassContributionChannel channel, PassKey.Stage stage, PassId id, PassPlacement placement,
+            PassFactory<S, F> factory, S setup) {
         Objects.requireNonNull(factory, "factory");
+        if (stage != PassKey.Stage.WORLD_RESOURCE) {
+            Objects.requireNonNull(id, "id");
+            if (placement != null && placement.anchor().equals(id)) {
+                throw new IllegalArgumentException("pass " + id + " cannot be ordered relative to itself");
+            }
+        }
         synchronized (this) {
             requireAccepting(channel);
         }
         Pass<F> pass = Objects.requireNonNull(factory.create(setup), "factory returned null pass");
-        synchronized (this) {
-            if (!accepting || !channel.accepting) {
-                pass.close();
-                throw new IllegalStateException("pass channel stopped during factory creation");
+        try {
+            synchronized (this) {
+                if (!accepting || !channel.accepting) {
+                    throw new IllegalStateException("pass channel stopped during factory creation");
+                }
+                Registration<F> registration = new Registration<>(
+                        this, channel, new PassKey(nextSequence, stage), id, placement, pass);
+                if (stage != PassKey.Stage.WORLD_RESOURCE) {
+                    ordered(stage, registration);
+                }
+                nextSequence++;
+                registrations.add(registration);
+                return registration;
             }
-            Registration<F> registration = new Registration<>(
-                    this, channel, new PassKey(nextSequence++, stage), pass);
-            registrations.add(registration);
-            return registration;
+        } catch (RuntimeException | Error rejection) {
+            try {
+                pass.close();
+            } catch (Throwable closeFailure) {
+                rejection.addSuppressed(closeFailure);
+            }
+            throw rejection;
         }
     }
 
@@ -75,12 +108,12 @@ public final class PassSession implements AutoCloseable {
         dispatch(PassKey.Stage.WORLD_RESOURCE);
     }
 
-    /** Records and composes all active post effects in global acceptance order. */
+    /** Records and composes all active post effects in constrained order. */
     public void recordPostEffects() {
         dispatch(PassKey.Stage.POST_EFFECT);
     }
 
-    /** Records all active UI passes in global acceptance order. */
+    /** Records all active UI passes in constrained order. */
     public void recordUi() {
         dispatch(PassKey.Stage.UI);
     }
@@ -88,12 +121,83 @@ public final class PassSession implements AutoCloseable {
     private void dispatch(PassKey.Stage stage) {
         List<Registration<?>> ordered;
         synchronized (this) {
-            ordered = registrations.stream().filter(registration -> registration.key.stage() == stage).toList();
+            ordered = stage == PassKey.Stage.WORLD_RESOURCE
+                    ? registrations.stream().filter(registration -> registration.key.stage() == stage).toList()
+                    : ordered(stage, null);
         }
         for (Registration<?> registration : ordered) {
             dispatchOne(registration);
         }
         progress();
+    }
+
+    private List<Registration<?>> ordered(PassKey.Stage stage, Registration<?> candidate) {
+        List<Registration<?>> nodes = new ArrayList<>();
+        for (Registration<?> registration : registrations) {
+            if (registration.recording && registration.key.stage() == stage) {
+                nodes.add(registration);
+            }
+        }
+        if (candidate != null) nodes.add(candidate);
+
+        Map<PassId, Registration<?>> byId = new HashMap<>();
+        for (Registration<?> registration : nodes) {
+            Registration<?> duplicate = byId.putIfAbsent(registration.id, registration);
+            if (duplicate != null) {
+                throw new IllegalStateException("duplicate live " + stageName(stage) + " pass id " + registration.id);
+            }
+        }
+
+        Map<Registration<?>, List<Registration<?>>> outgoing = new HashMap<>();
+        Map<Registration<?>, Integer> incoming = new HashMap<>();
+        for (Registration<?> registration : nodes) {
+            outgoing.put(registration, new ArrayList<>());
+            incoming.put(registration, 0);
+        }
+        for (Registration<?> registration : nodes) {
+            if (registration.placement == null) continue;
+            Registration<?> anchor = byId.get(registration.placement.anchor());
+            if (anchor == null) continue;
+            Registration<?> before = registration.placement instanceof PassPlacement.Before
+                    ? registration : anchor;
+            Registration<?> after = before == registration ? anchor : registration;
+            outgoing.get(before).add(after);
+            incoming.put(after, incoming.get(after) + 1);
+        }
+
+        PriorityQueue<Registration<?>> ready = new PriorityQueue<>(
+                Comparator.comparingLong(registration -> registration.key.sequence()));
+        for (Registration<?> registration : nodes) {
+            if (incoming.get(registration) == 0) ready.add(registration);
+        }
+        List<Registration<?>> result = new ArrayList<>(nodes.size());
+        while (!ready.isEmpty()) {
+            Registration<?> registration = ready.remove();
+            result.add(registration);
+            for (Registration<?> dependent : outgoing.get(registration)) {
+                int remaining = incoming.compute(dependent, (ignored, count) -> count - 1);
+                if (remaining == 0) ready.add(dependent);
+            }
+        }
+        if (result.size() != nodes.size()) {
+            String ids = nodes.stream()
+                    .filter(registration -> incoming.get(registration) != 0)
+                    .map(registration -> registration.id)
+                    .sorted()
+                    .map(PassId::toString)
+                    .reduce((left, right) -> left + ", " + right)
+                    .orElse("unknown");
+            throw new IllegalArgumentException(stageName(stage) + " pass ordering cycle: " + ids);
+        }
+        return List.copyOf(result);
+    }
+
+    private static String stageName(PassKey.Stage stage) {
+        return switch (stage) {
+            case WORLD_RESOURCE -> "world-resource";
+            case POST_EFFECT -> "post-effect";
+            case UI -> "ui";
+        };
     }
 
     @SuppressWarnings("unchecked")
@@ -277,6 +381,8 @@ public final class PassSession implements AutoCloseable {
         private final PassSession session;
         private final PassContributionChannel channel;
         private final PassKey key;
+        private final PassId id;
+        private final PassPlacement placement;
         private final Pass<F> pass;
         private boolean recording = true;
         private boolean closeRequested;
@@ -286,10 +392,13 @@ public final class PassSession implements AutoCloseable {
         private int uses;
 
         private Registration(
-                PassSession session, PassContributionChannel channel, PassKey key, Pass<F> pass) {
+                PassSession session, PassContributionChannel channel, PassKey key,
+                PassId id, PassPlacement placement, Pass<F> pass) {
             this.session = session;
             this.channel = channel;
             this.key = key;
+            this.id = id;
+            this.placement = placement;
             this.pass = pass;
         }
 

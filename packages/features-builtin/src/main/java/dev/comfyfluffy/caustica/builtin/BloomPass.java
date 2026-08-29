@@ -4,12 +4,12 @@ import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptorKind;
 import dev.comfyfluffy.caustica.api.pass.Pass;
+import dev.comfyfluffy.caustica.api.pass.PassId;
 import dev.comfyfluffy.caustica.api.pass.PostEffectFrame;
 import dev.comfyfluffy.caustica.api.pass.PostEffectSetup;
 import dev.comfyfluffy.caustica.builtin.gen.BloomPushData;
 import dev.comfyfluffy.caustica.settings.Option;
 import dev.comfyfluffy.caustica.settings.OptionValues;
-import dev.comfyfluffy.caustica.settings.ResourceId;
 import dev.comfyfluffy.caustica.vulkan.ComputeSynchronization;
 import dev.comfyfluffy.caustica.vulkan.ShaderObjectCompute;
 import dev.comfyfluffy.caustica.vulkan.VmaImage2D;
@@ -31,7 +31,7 @@ import java.util.function.Supplier;
 
 /** Scene-referred Bloom implemented as a descriptor-heap-native shader-object compute pass. */
 public final class BloomPass implements Pass<PostEffectFrame> {
-    public static final ResourceId ID = ResourceId.of("caustica", "bloom");
+    public static final PassId ID = PassId.of("caustica", "bloom");
     private static final String SHADER = "/caustica/shaders/pipelines/bloom/main.comp.spv";
     private static final int MAX_LEVELS = 8;
     private static final int MODE_PREFILTER = 0;

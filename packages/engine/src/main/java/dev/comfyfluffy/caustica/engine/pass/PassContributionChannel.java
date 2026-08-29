@@ -3,6 +3,8 @@ package dev.comfyfluffy.caustica.engine.pass;
 import dev.comfyfluffy.caustica.api.pass.PassChannel;
 import dev.comfyfluffy.caustica.api.pass.PassFactory;
 import dev.comfyfluffy.caustica.api.pass.PassFrame;
+import dev.comfyfluffy.caustica.api.pass.PassId;
+import dev.comfyfluffy.caustica.api.pass.PassPlacement;
 import dev.comfyfluffy.caustica.api.pass.PassRegistration;
 import dev.comfyfluffy.caustica.api.pass.PostEffectFrame;
 import dev.comfyfluffy.caustica.api.pass.PostEffectSetup;
@@ -27,13 +29,26 @@ public final class PassContributionChannel implements PassChannel {
     }
 
     @Override
-    public PassRegistration addPostEffectPass(PassFactory<PostEffectSetup, PostEffectFrame> factory) {
-        return session.addPostEffect(this, factory);
+    public PassRegistration addPostEffectPass(
+            PassId id, PassFactory<PostEffectSetup, PostEffectFrame> factory) {
+        return session.addPostEffect(this, id, null, factory);
     }
 
     @Override
-    public PassRegistration addUiPass(PassFactory<UiSetup, UiFrame> factory) {
-        return session.addUi(this, factory);
+    public PassRegistration addPostEffectPass(
+            PassId id, PassPlacement placement, PassFactory<PostEffectSetup, PostEffectFrame> factory) {
+        return session.addPostEffect(this, id, placement, factory);
+    }
+
+    @Override
+    public PassRegistration addUiPass(PassId id, PassFactory<UiSetup, UiFrame> factory) {
+        return session.addUi(this, id, null, factory);
+    }
+
+    @Override
+    public PassRegistration addUiPass(
+            PassId id, PassPlacement placement, PassFactory<UiSetup, UiFrame> factory) {
+        return session.addUi(this, id, placement, factory);
     }
 
     /** Rejects new registrations, stops future callbacks, and waits for callbacks already running. */
