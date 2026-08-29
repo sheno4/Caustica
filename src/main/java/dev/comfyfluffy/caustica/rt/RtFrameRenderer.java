@@ -146,6 +146,8 @@ final class RtFrameRenderer {
     private final EngineSessionServices services;
     private final RtFramePresenter presenter;
     private final DlssRayReconstruction rayReconstruction;
+    // recordFrame mutates this only on the render thread; each renderer owns an independent sequence.
+    private final RtJitter jitter;
     // World push data lives in a host-visible BDA ring; only the slot address and a small hot subset are
     // pushed inline (the full generated structure exceeds NVIDIA's 256-byte push-constant ceiling).
     // Exact graphics completion guards host writes; ring depth only avoids routine waits.
@@ -202,6 +204,7 @@ final class RtFrameRenderer {
         this.services = Objects.requireNonNull(services, "services");
         this.presenter = Objects.requireNonNull(presenter, "presenter");
         this.rayReconstruction = Objects.requireNonNull(rayReconstruction, "rayReconstruction");
+        this.jitter = new RtJitter();
         this.frameResources = new RtFrameResources(presenter, rayReconstruction, LOOK, exposureSettings());
     }
 
@@ -656,10 +659,10 @@ final class RtFrameRenderer {
             float jitterX = 0f;
             float jitterY = 0f;
             if (rrPath) {
-                RtJitter.INSTANCE.prepare(traceExtent().renderWidth(), traceExtent().renderHeight(),
+                jitter.prepare(traceExtent().renderWidth(), traceExtent().renderHeight(),
                         traceExtent().displayWidth());
-                jitterX = RtJitter.INSTANCE.jitterPixelsX() * jitterSignX();
-                jitterY = RtJitter.INSTANCE.jitterPixelsY() * jitterSignY();
+                jitterX = jitter.jitterPixelsX() * jitterSignX();
+                jitterY = jitter.jitterPixelsY() * jitterSignY();
             }
 
             boolean rrDone = false;

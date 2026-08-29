@@ -2,13 +2,11 @@ package dev.comfyfluffy.caustica.rt.pipeline;
 
 /** Sub-pixel Halton jitter in render-pixel space for temporal reconstruction. */
 public final class RtJitter {
-    public static final RtJitter INSTANCE = new RtJitter();
-
     private int frameIndex;
     private float pixelsX;
     private float pixelsY;
 
-    private RtJitter() {
+    public RtJitter() {
     }
 
     public void prepare(int renderWidth, int renderHeight, int displayWidth) {
