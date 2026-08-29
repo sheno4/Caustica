@@ -1,5 +1,6 @@
 import dev.comfyfluffy.caustica.slangtooling.GenerateRtBindings
 import dev.comfyfluffy.caustica.slangtooling.GenerateShaderRecords
+import dev.comfyfluffy.caustica.slangtooling.CompileSlangShaders
 
 plugins {
     id "java-library"
@@ -14,9 +15,23 @@ java.toolchain.languageVersion = JavaLanguageVersion.of(25)
 base { archivesName = "caustica-renderer-raytracing" }
 repositories { mavenCentral() }
 
+def osName = System.getProperty("os.name").toLowerCase(Locale.ROOT)
+def osArch = System.getProperty("os.arch").toLowerCase(Locale.ROOT)
+def lwjglTestNatives = null
+if (osName.contains("windows")) {
+    lwjglTestNatives = osArch.contains("aarch64") ? "natives-windows-arm64" : "natives-windows"
+} else if (osName.contains("mac")) {
+    lwjglTestNatives = osArch.contains("aarch64") ? "natives-macos-arm64" : "natives-macos"
+} else if (osName.contains("linux")) {
+    lwjglTestNatives = osArch.contains("aarch64") ? "natives-linux-arm64"
+            : osArch.startsWith("arm") ? "natives-linux-arm32" : "natives-linux"
+}
+
 dependencies {
     api project(":packages:engine")
+    api project(":packages:engine-vulkan")
     api project(":packages:slang-runtime")
+    implementation project(":packages:vulkan-support")
     implementation "org.slf4j:slf4j-api:2.0.17"
 
     runtimeOnly project(":packages:shader-api")
@@ -25,6 +40,9 @@ dependencies {
     testImplementation platform("org.junit:junit-bom:5.12.2")
     testImplementation "org.junit.jupiter:junit-jupiter"
     testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+    if (lwjglTestNatives != null) {
+        testRuntimeOnly "org.lwjgl:lwjgl:${project.lwjgl_version}:${lwjglTestNatives}"
+    }
 }
 
 def worldShaderNames = [
@@ -40,7 +58,16 @@ def worldShaderNames = [
 def apiShaderModules = project(":packages:shader-api").file("src/main/resources/caustica/shaders/api")
 def builtinShaderModules = project(":packages:features-builtin").file("src/main/resources/caustica/shaders/builtin")
 def worldShaderModules = file("src/main/resources/caustica/shaders/world")
-def opacityMicromapModule = rootProject.file("shaders/common/opacity_micromap_common.slang")
+def opacityMicromapModule = file("shaders/common/opacity_micromap_common.slang")
+def generatedShaderResources = layout.buildDirectory.dir("generated/resources")
+def compileRayTracingShaders = tasks.register("compileRayTracingShaders", CompileSlangShaders) {
+    group = "build"
+    description = "Compiles and validates the ray renderer's compute shaders."
+    sourceDirectory = file("shaders")
+    includeDirectories.from(worldShaderModules, apiShaderModules, builtinShaderModules)
+    aliasSourceDirectory = worldShaderModules
+    outputDirectory = generatedShaderResources.map { it.dir("caustica/shaders") }
+}
 def reflectionRoot = layout.buildDirectory.dir("generated/reflection-sources")
 def prepareRayTracingReflectionSources = tasks.register("prepareRayTracingReflectionSources", Sync) {
     from(worldShaderModules) { into "pipelines/world" }
@@ -81,6 +108,7 @@ def generateRayTracingBindings = tasks.register("generateRayTracingBindings", Ge
 
 sourceSets.main.java.srcDir(files(generatedRecordRoot).builtBy(generateRayTracingRecords))
 sourceSets.main.java.srcDir(files(generatedBindingsRoot).builtBy(generateRayTracingBindings))
+sourceSets.main.resources.srcDir(files(generatedShaderResources).builtBy(compileRayTracingShaders))
 
 def verifyRayTracingAbi = tasks.register("verifyRayTracingAbi") {
     group = "verification"
@@ -246,7 +274,8 @@ def verifyRendererRayTracingDependencies = tasks.register("verifyRendererRayTrac
     group = "verification"
     description = "Verifies the ray-tracing shader compiler's physical package dependencies."
     doLast {
-        def allowedProjects = [project.path, ":packages:engine", ":packages:slang-runtime",
+        def allowedProjects = [project.path, ":packages:engine", ":packages:engine-vulkan",
+                               ":packages:slang-runtime", ":packages:vulkan-support",
                                ":packages:shader-api", ":packages:features-builtin"] as Set
         def violations = []
         configurations.matching { it.canBeResolved }.each { configuration ->
@@ -275,7 +304,6 @@ def verifyRendererRayTracingImports = tasks.register("verifyRendererRayTracingIm
                 "dev.comfyfluffy.caustica.fabric",
                 "dev.comfyfluffy.caustica.neoforge",
                 "dev.comfyfluffy.caustica.ngx",
-                "dev.comfyfluffy.caustica.rt",
                 "net.minecraft",
                 "net.fabricmc",
                 "net.neoforged"
@@ -283,7 +311,11 @@ def verifyRendererRayTracingImports = tasks.register("verifyRendererRayTracingIm
         def violations = []
         sourceSets.main.allJava.files.sort().each { file ->
             file.eachLine { line, number ->
-                if (line.stripLeading().startsWith("import ") && forbidden.any { line.contains(it) }) {
+                def rootRayImport = line.contains("dev.comfyfluffy.caustica.rt.")
+                        && !line.contains("dev.comfyfluffy.caustica.rt.gen.")
+                        && !line.contains("dev.comfyfluffy.caustica.rt.pipeline.RtBindings")
+                if (line.stripLeading().startsWith("import ")
+                        && (forbidden.any { line.contains(it) } || rootRayImport)) {
                     violations.add("${file}:${number}: ${line.trim()}")
                 }
             }
@@ -327,11 +359,11 @@ def verifyRendererRayTracingJar = tasks.register("verifyRendererRayTracingJar") 
             def entries = jar.entries()
             while (entries.hasMoreElements()) names.add(entries.nextElement().name)
         }
-        def shaderClassRoot = "dev/comfyfluffy/caustica/renderer/raytracing/shader/"
+        def rendererClassRoot = "dev/comfyfluffy/caustica/renderer/raytracing/"
         def generatedRecordClassRoot = "dev/comfyfluffy/caustica/rt/gen/"
         def generatedBindingsClass = "dev/comfyfluffy/caustica/rt/pipeline/RtBindings.class"
         def foreignClasses = names.findAll {
-            it.endsWith(".class") && !it.startsWith(shaderClassRoot)
+            it.endsWith(".class") && !it.startsWith(rendererClassRoot)
                     && !it.startsWith(generatedRecordClassRoot) && it != generatedBindingsClass
         }
         def generatedTopLevelClasses = names.findAll {
@@ -343,17 +375,26 @@ def verifyRendererRayTracingJar = tasks.register("verifyRendererRayTracingJar") 
         def packagedShaders = names.findAll {
             it.startsWith("caustica/shaders/world/") && it.endsWith(".slang")
         }.collect { it.substring("caustica/shaders/world/".length()) } as Set
+        def expectedPipelineShaders = [
+                "caustica/shaders/pipelines/nee_at/bake.comp.spv",
+                "caustica/shaders/pipelines/opacity_micromap/main.comp.spv"
+        ] as Set
+        def packagedPipelineShaders = names.findAll {
+            it.startsWith("caustica/shaders/pipelines/") && it.endsWith(".spv")
+        } as Set
         def foreignResources = names.findAll {
             it.startsWith("caustica/") && !it.endsWith("/")
-                    && !it.startsWith("caustica/shaders/world/")
+                    && !it.startsWith("caustica/shaders/world/") && !expectedPipelineShaders.contains(it)
         }
         if (!foreignClasses.empty || generatedTopLevelClasses != expectedGeneratedTopLevelClasses
                 || !names.contains(generatedBindingsClass)
-                || packagedShaders != worldShaderNames || !foreignResources.empty) {
+                || packagedShaders != worldShaderNames || packagedPipelineShaders != expectedPipelineShaders
+                || !foreignResources.empty) {
             throw new GradleException("renderer-raytracing JAR mismatch; foreignClasses=${foreignClasses}, "
                     + "generatedClasses=${generatedTopLevelClasses}, "
                     + "missingShaders=${worldShaderNames - packagedShaders}, "
-                    + "unexpectedShaders=${packagedShaders - worldShaderNames}, foreignResources=${foreignResources}")
+                    + "unexpectedShaders=${packagedShaders - worldShaderNames}, "
+                    + "pipelineShaders=${packagedPipelineShaders}, foreignResources=${foreignResources}")
         }
     }
 }
@@ -382,6 +423,11 @@ tasks.named("jar", Jar).configure {
     from(rootProject.files("LICENSE.md", "COPYING", "COPYING.LESSER", "THIRD_PARTY_NOTICES.md")) {
         into "META-INF"
     }
+}
+
+tasks.named("sourcesJar", Jar).configure {
+    from("shaders") { into "shaders" }
+    from("src/shaderReflection") { into "shaderReflection" }
 }
 
 publishing {

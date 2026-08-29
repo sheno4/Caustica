@@ -711,7 +711,9 @@ def verifyEmbeddedApi = tasks.register("verifyEmbeddedApi") {
 		required.addAll(minecraftAdapterEntries.findAll { it.endsWith(".class") })
 		required.addAll(minecraftContentEntries.findAll { it.endsWith(".class") })
 		required.addAll(rendererRayTracingEntries.findAll { it.endsWith(".class")
-				|| it.startsWith("caustica/shaders/world/") && !it.endsWith("/") })
+				|| it.startsWith("caustica/shaders/world/") && !it.endsWith("/")
+				|| it.startsWith("caustica/shaders/pipelines/nee_at/") && !it.endsWith("/")
+				|| it.startsWith("caustica/shaders/pipelines/opacity_micromap/") && !it.endsWith("/") })
 		required.addAll(settingsApiEntries.findAll { it.endsWith(".class") })
 		required.addAll(shaderApiEntries.findAll { entry ->
 			entry.startsWith("caustica/shaders/api/") && !entry.endsWith("/")
