@@ -38,6 +38,7 @@ abstract class CompileSlangShaders extends DefaultTask {
     @Input abstract Property<String> getSpirvVal()
     @Input abstract Property<String> getSpirvProfile()
     @Input abstract Property<String> getVulkanTarget()
+    @Input abstract Property<Boolean> getDescriptorHeapNative()
     @OutputDirectory abstract DirectoryProperty getOutputDirectory()
 
     @Inject abstract ExecOperations getExecOps()
@@ -47,6 +48,7 @@ abstract class CompileSlangShaders extends DefaultTask {
                 "**/*.rmiss.slang", "**/*.rcall.slang", "**/*.comp.slang",
                 "**/*.vert.slang", "**/*.frag.slang"])
         moduleAliases.convention([:])
+        descriptorHeapNative.convention(false)
     }
 
     @TaskAction
@@ -85,13 +87,18 @@ abstract class CompileSlangShaders extends DefaultTask {
             output.parentFile.mkdirs()
             List<String> includes = ([source.parentFile] + includeRoots.findAll { it != source.parentFile })
                     .collectMany { ["-I", it.absolutePath] }
+            List<String> descriptorHeapOptions = descriptorHeapNative.get()
+                    ? ["-capability", "spvDescriptorHeapEXT", "-spirv-unified-descriptor-heap-stride"]
+                    : []
             execOps.exec {
-                commandLine([slangc.get(), source.absolutePath, "-target", "spirv",
+                commandLine([slangc.get(), source.absolutePath, "-target", "spirv"]
+                        + descriptorHeapOptions + [
                         "-profile", spirvProfile.get(), "-matrix-layout-column-major",
                         "-warnings-as-errors", "all", "-warnings-disable", "41012", "-g"]
                         + includes + ["-o", output.absolutePath])
             }
             execOps.exec { commandLine spirvVal.get(), "--target-env", vulkanTarget.get(), output.absolutePath }
+            if (descriptorHeapNative.get()) DescriptorHeapSpirv.validate(output)
         }
 
         File published = outputDirectory.get().asFile

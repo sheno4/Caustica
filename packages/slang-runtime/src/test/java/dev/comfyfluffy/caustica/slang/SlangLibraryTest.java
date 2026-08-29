@@ -8,6 +8,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.lang.foreign.MemorySegment;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -59,6 +60,29 @@ final class SlangLibraryTest {
             assertEquals(0x07230203, ByteBuffer.wrap(spirv).order(ByteOrder.LITTLE_ENDIAN).getInt());
             assertFalse(result.reflectionJson().isBlank());
             assertTrue(result.reflectionJson().contains("output"));
+        } finally {
+            library.destroySession(session);
+        }
+    }
+
+    @Test
+    void lowersDirectHeapAccessToDescriptorHeapSpirv(@TempDir Path sourceDirectory) {
+        MemorySegment session = library.createSession(runtime, List.of(sourceDirectory),
+                SlangLibrary.SESSION_WARNINGS_AS_ERRORS);
+        try {
+            SlangCompileResult result = library.compile(session, "heap_module", "heap_module.slang", """
+                    struct PushData { uint outputIndex; };
+                    [[vk::push_constant]] PushData pushData;
+
+                    [shader("compute")]
+                    [numthreads(1, 1, 1)]
+                    void main(uint3 id : SV_DispatchThreadID) {
+                        RWTexture2D<float4> output = ResourceDescriptorHeap[pushData.outputIndex];
+                        output[id.xy] = float4(1.0);
+                    }
+                    """, "main");
+
+            assertDescriptorHeapSpirv(result.spirv());
         } finally {
             library.destroySession(session);
         }
@@ -221,5 +245,33 @@ final class SlangLibraryTest {
     private static Path resourceDirectory(String resource) throws Exception {
         return Path.of(Objects.requireNonNull(SlangLibraryTest.class.getResource(resource), resource).toURI())
                 .getParent();
+    }
+
+    private static void assertDescriptorHeapSpirv(byte[] spirv) {
+        ByteBuffer words = ByteBuffer.wrap(spirv).order(ByteOrder.LITTLE_ENDIAN);
+        boolean extension = false;
+        int wordCount = spirv.length / Integer.BYTES;
+        for (int word = 5; word < wordCount;) {
+            int instruction = words.getInt(word * Integer.BYTES);
+            int instructionWords = instruction >>> 16;
+            int opcode = instruction & 0xffff;
+            assertTrue(instructionWords > 0 && instructionWords <= wordCount - word);
+            if (opcode == 10) {
+                byte[] name = new byte[(instructionWords - 1) * Integer.BYTES];
+                ByteBuffer operand = words.duplicate();
+                operand.position((word + 1) * Integer.BYTES);
+                operand.get(name);
+                int length = 0;
+                while (length < name.length && name[length] != 0) length++;
+                extension |= new String(name, 0, length, StandardCharsets.UTF_8)
+                        .equals("SPV_EXT_descriptor_heap");
+            } else if (opcode == 71 && instructionWords >= 3) {
+                int decoration = words.getInt((word + 2) * Integer.BYTES);
+                assertFalse(decoration == 33 || decoration == 34,
+                        "descriptor-heap SPIR-V must not contain set/binding decorations");
+            }
+            word += instructionWords;
+        }
+        assertTrue(extension, "descriptor-heap SPIR-V extension is missing");
     }
 }

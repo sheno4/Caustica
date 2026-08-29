@@ -273,6 +273,7 @@ def compileShaders = tasks.register("compileShaders", CompileSlangShaders) {
 			"radiance_any_hit_rahit.slang": "radiance_any_hit.rahit.slang",
 			"shadow_any_hit_rahit.slang": "shadow_any_hit.rahit.slang"
 	]
+	descriptorHeapNative = true
 	outputDirectory = layout.buildDirectory.dir("generated/shaders/caustica/shaders")
 }
 

@@ -236,6 +236,20 @@ int32_t caustica_slang_session_create(
         options.push_back(int_option(slang::CompilerOptionName::EmitSpirvDirectly, 1));
         options.push_back(int_option(slang::CompilerOptionName::DiagnosticColor, SLANG_DIAGNOSTIC_COLOR_NEVER));
         options.push_back(string_option(slang::CompilerOptionName::DisableWarnings, "41012"));
+        const SlangCapabilityID descriptor_heap =
+            runtime->global_session->findCapability("spvDescriptorHeapEXT");
+        if (descriptor_heap == SLANG_CAPABILITY_UNKNOWN)
+        {
+            if (out_diagnostics)
+                *out_diagnostics = copy_string("Slang does not expose spvDescriptorHeapEXT");
+            return SLANG_FAIL;
+        }
+        options.push_back(int_option(
+            slang::CompilerOptionName::Capability,
+            static_cast<int32_t>(descriptor_heap)));
+        options.push_back(int_option(
+            slang::CompilerOptionName::SPIRVUnifiedDescriptorHeapStride,
+            1));
         if ((flags & CAUSTICA_SLANG_SESSION_DEBUG_INFO) != 0)
             options.push_back(int_option(slang::CompilerOptionName::DebugInformation, SLANG_DEBUG_INFO_LEVEL_STANDARD));
         if ((flags & CAUSTICA_SLANG_SESSION_WARNINGS_AS_ERRORS) != 0)

@@ -33,6 +33,7 @@ def compileBloomShaders = tasks.register("compileBloomShaders", CompileSlangShad
     sourceDirectory = file("shaders")
     includeDirectories.from(builtinShaderModules, apiShaderModules)
     aliasSourceDirectory = file("shaders")
+    descriptorHeapNative = true
     outputDirectory = generatedShaderResources.map { it.dir("caustica/shaders") }
 }
 
@@ -58,6 +59,7 @@ def reflectBloomShader = tasks.register("reflectBloomShader", ReflectSlang) {
     description = "Reflects and validates the descriptor-heap-native Bloom compute ABI."
     sourceFile = file("shaders/pipelines/bloom/main.comp.slang")
     includeDirectories.from(builtinShaderModules, apiShaderModules)
+    descriptorHeapNative = true
     reflectionJson = layout.buildDirectory.file("generated/shader-reflection/bloom.json")
     spirv = layout.buildDirectory.file("generated/shader-reflection/bloom.spv")
 }

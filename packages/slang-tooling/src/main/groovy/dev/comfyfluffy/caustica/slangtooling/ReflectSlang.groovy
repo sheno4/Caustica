@@ -26,10 +26,15 @@ abstract class ReflectSlang extends DefaultTask {
     @Input abstract Property<String> getSpirvVal()
     @Input abstract Property<String> getSpirvProfile()
     @Input abstract Property<String> getVulkanTarget()
+    @Input abstract Property<Boolean> getDescriptorHeapNative()
     @OutputFile abstract RegularFileProperty getReflectionJson()
     @OutputFile abstract RegularFileProperty getSpirv()
 
     @Inject abstract ExecOperations getExecOps()
+
+    ReflectSlang() {
+        descriptorHeapNative.convention(false)
+    }
 
     @TaskAction
     void reflect() {
@@ -44,14 +49,18 @@ abstract class ReflectSlang extends DefaultTask {
         File output = spirv.get().asFile
         json.parentFile.mkdirs()
         output.parentFile.mkdirs()
+        List<String> descriptorHeapOptions = descriptorHeapNative.get()
+                ? ["-capability", "spvDescriptorHeapEXT", "-spirv-unified-descriptor-heap-stride"]
+                : []
         execOps.exec {
             commandLine([slangc.get(), source.absolutePath]
                     + directories.collectMany { ["-I", it.absolutePath] }
-                    + ["-target", "spirv", "-profile", spirvProfile.get(),
+                    + ["-target", "spirv"] + descriptorHeapOptions + ["-profile", spirvProfile.get(),
                        "-matrix-layout-column-major", "-warnings-as-errors", "all",
                        "-warnings-disable", "41012", "-reflection-json", json.absolutePath,
                        "-o", output.absolutePath])
         }
         execOps.exec { commandLine spirvVal.get(), "--target-env", vulkanTarget.get(), output.absolutePath }
+        if (descriptorHeapNative.get()) DescriptorHeapSpirv.validate(output)
     }
 }

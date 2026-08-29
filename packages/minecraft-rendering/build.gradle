@@ -37,6 +37,7 @@ def compileMinecraftSkyShaders = tasks.register("compileMinecraftSkyShaders", Co
     sourceDirectory = file("shaders/pipelines/sky")
     includeDirectories.from(minecraftShaderModules, apiShaderModules)
     aliasSourceDirectory = file("shaders/pipelines/sky")
+    descriptorHeapNative = true
     outputDirectory = generatedShaderResources.map { it.dir("caustica/shaders/pipelines/sky") }
 }
 sourceSets.main.resources.srcDir(files(generatedShaderResources).builtBy(compileMinecraftSkyShaders))

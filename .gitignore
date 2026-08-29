@@ -5,6 +5,7 @@
 /buildSrc/build/
 native/ngx_shim/build/
 run/
+run-gltf-viewer/
 out/
 *.log
 *.class

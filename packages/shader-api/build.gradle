@@ -64,6 +64,7 @@ def validateShaderApiTooling = tasks.register("validateShaderApiTooling",
     sourceDirectory = file("src/toolingTest/slang")
     includeDirectories.from(file("src/main/resources/caustica/shaders/api"))
     aliasSourceDirectory = file("src/main/resources/caustica/shaders/api")
+    descriptorHeapNative = true
     outputDirectory = layout.buildDirectory.dir("tooling-test")
 }
 
@@ -73,6 +74,7 @@ def reflectShaderApiTooling = tasks.register("reflectShaderApiTooling",
     description = "Reflects a miniature consumer through the reusable Slang tooling plugin."
     sourceFile = file("src/toolingTest/slang/public_api.comp.slang")
     includeDirectories.from(file("src/main/resources/caustica/shaders/api"))
+    descriptorHeapNative = true
     reflectionJson = layout.buildDirectory.file("tooling-test/public-api-reflection.json")
     spirv = layout.buildDirectory.file("tooling-test/public-api-reflection.spv")
 }

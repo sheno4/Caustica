@@ -50,7 +50,7 @@ if (loader == "fabric") {
             client {
                 client()
                 setConfigName("glTF Viewer Extension Client")
-                runDir = rootProject.file("run")
+                runDir = rootProject.file("run-gltf-viewer")
                 vmArg "--enable-native-access=ALL-UNNAMED"
                 vmArg "-Xss16m"
                 vmArg "-Xmx8G"
@@ -65,7 +65,7 @@ if (loader == "fabric") {
         runs {
             client {
                 client()
-                gameDirectory = rootProject.file("run")
+                gameDirectory = rootProject.file("run-gltf-viewer")
                 jvmArgument "--enable-native-access=ALL-UNNAMED"
                 jvmArgument "-Xss16m"
                 jvmArgument "-Xmx8G"

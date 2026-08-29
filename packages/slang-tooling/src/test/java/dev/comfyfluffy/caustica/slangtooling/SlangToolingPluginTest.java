@@ -23,8 +23,9 @@ final class SlangToolingPluginTest {
                     sourceDirectory = layout.projectDirectory.dir('shaders')
                     aliasSourceDirectory = layout.projectDirectory.dir('shaders')
                     outputDirectory = layout.buildDirectory.dir('spirv')
+                    descriptorHeapNative = true
                     doLast {
-                        println "profile=${spirvProfile.get()} target=${vulkanTarget.get()}"
+                        println "profile=${spirvProfile.get()} target=${vulkanTarget.get()} heap=${descriptorHeapNative.get()}"
                     }
                 }
                 """);
@@ -34,7 +35,7 @@ final class SlangToolingPluginTest {
                 .withArguments("inspectTooling", "--stacktrace").build();
 
         assertEquals(SUCCESS, result.task(":inspectTooling").getOutcome());
-        assertTrue(result.getOutput().contains("profile=spirv_1_6 target=vulkan1.4"));
+        assertTrue(result.getOutput().contains("profile=spirv_1_6 target=vulkan1.4 heap=true"));
     }
 
     @Test

@@ -31,6 +31,7 @@ def validateShowcaseShaders = tasks.register("validateShowcaseShaders", CompileS
             layout.projectDirectory.dir("src/main/resources/api_showcase/shaders"),
             project(":packages:shader-api").layout.projectDirectory.dir("src/main/resources/caustica/shaders/api"))
     aliasSourceDirectory = layout.projectDirectory.dir("src/main/resources/api_showcase/shaders")
+    descriptorHeapNative = true
     outputDirectory = layout.buildDirectory.dir("validated-shaders")
 }
 
