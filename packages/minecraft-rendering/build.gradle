@@ -221,6 +221,8 @@ def verifyMinecraftRenderingJar = tasks.register("verifyMinecraftRenderingJar") 
                 "dev/comfyfluffy/caustica/minecraft/entity/MinecraftEntityMesh",
                 "dev/comfyfluffy/caustica/minecraft/entity/MinecraftEntityGeometry",
                 "dev/comfyfluffy/caustica/minecraft/entity/MinecraftEntityUploader",
+                "dev/comfyfluffy/caustica/minecraft/entity/EntityTextureResolver",
+                "dev/comfyfluffy/caustica/minecraft/entity/MinecraftVulkanEntityUploader",
                 "dev/comfyfluffy/caustica/minecraft/gen/MinecraftMaterialData",
                 "dev/comfyfluffy/caustica/minecraft/gen/MinecraftImplementationData",
                 "dev/comfyfluffy/caustica/minecraft/gen/MinecraftPrimitiveData",
