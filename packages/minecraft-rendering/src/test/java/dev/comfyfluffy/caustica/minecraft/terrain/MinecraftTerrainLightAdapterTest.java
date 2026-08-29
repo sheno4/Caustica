@@ -9,7 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 final class MinecraftTerrainLightAdapterTest {
     @Test
     void shadingNormalSelectsTheRectangleAxisWinding() {
-        float[] record = new float[RtLightCollector.FLOATS_PER_LIGHT];
+        float[] record = new float[MinecraftTerrainLightAdapter.FLOATS_PER_LIGHT];
         record[4] = 0.8f;
         record[5] = 0.2f;
         record[6] = -0.4f;

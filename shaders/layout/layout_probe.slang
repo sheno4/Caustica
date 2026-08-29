@@ -7,15 +7,9 @@ import caustica_minecraft_sky_lut_types;
 import caustica_minecraft_material;
 
 struct MinecraftImplementationLayoutProbe { MinecraftImplementationData values[2]; };
-struct MinecraftMaterialLayoutProbe { MinecraftMaterialRecord values[2]; };
-struct MinecraftPrimitiveLayoutProbe { MinecraftPrimitiveData values[2]; };
-struct MinecraftInstanceLayoutProbe { MinecraftInstanceData values[2]; };
 struct MinecraftEnvironmentBindingLayoutProbe { MinecraftEnvironmentBinding values[2]; };
 
 [[vk::binding(4, 0)]] StructuredBuffer<MinecraftImplementationLayoutProbe, Std430DataLayout> minecraftImplementationLayoutProbe;
-[[vk::binding(5, 0)]] StructuredBuffer<MinecraftMaterialLayoutProbe, Std430DataLayout> minecraftMaterialLayoutProbe;
-[[vk::binding(6, 0)]] StructuredBuffer<MinecraftPrimitiveLayoutProbe, Std430DataLayout> minecraftPrimitiveLayoutProbe;
-[[vk::binding(7, 0)]] StructuredBuffer<MinecraftInstanceLayoutProbe, Std430DataLayout> minecraftInstanceLayoutProbe;
 [[vk::binding(9, 0)]] StructuredBuffer<MinecraftEnvironmentBindingLayoutProbe, Std430DataLayout> minecraftEnvironmentBindingLayoutProbe;
 [shader("compute")]
 [numthreads(1, 1, 1)]
@@ -23,9 +17,6 @@ void main(uint3 id : SV_DispatchThreadID) {
     // Keep the parameter reachable without requiring a writable output resource.
     if (id.x == 0xFFFFFFFFu) {
         float sink = float(minecraftImplementationLayoutProbe[0].values[0].materialsAddress)
-                + minecraftMaterialLayoutProbe[0].values[0].specularRoughness
-                + minecraftPrimitiveLayoutProbe[0].values[0].primitiveEmission
-                + minecraftInstanceLayoutProbe[0].values[0].damageStrength
                 + float(minecraftEnvironmentBindingLayoutProbe[0].values[0].skyInputsAddress);
     }
 }

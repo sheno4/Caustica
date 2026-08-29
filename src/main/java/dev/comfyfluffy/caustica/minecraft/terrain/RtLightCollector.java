@@ -35,7 +35,7 @@ final class RtLightCollector {
     }
 
     /** Floats per packed light record — see {@link #append} for the 5-vec4 layout. */
-    static final int FLOATS_PER_LIGHT = 20;
+    static final int FLOATS_PER_LIGHT = MinecraftTerrainLightAdapter.FLOATS_PER_LIGHT;
 
     /** Block-light levels below this are non-emissive (smallest real level is 1/15). */
     private static final float EMISSION_EPS = 0.5f / 255f;

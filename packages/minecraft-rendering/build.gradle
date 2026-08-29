@@ -1,0 +1,212 @@
+import dev.comfyfluffy.caustica.slangtooling.GenerateShaderRecords
+
+plugins {
+    id "java-library"
+    id "maven-publish"
+    id "dev.comfyfluffy.caustica.slang-tooling"
+}
+
+version = project.api_version
+group = project.maven_group
+java.toolchain.languageVersion = JavaLanguageVersion.of(25)
+
+base { archivesName = "caustica-minecraft-rendering" }
+repositories { mavenCentral() }
+
+dependencies {
+    api project(":packages:api")
+    api project(":packages:minecraft-api")
+    api project(":packages:settings-api")
+    implementation project(":packages:engine")
+    implementation project(":packages:minecraft-content")
+
+    testImplementation platform("org.junit:junit-bom:5.12.2")
+    testImplementation "org.junit.jupiter:junit-jupiter"
+    testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+}
+
+def minecraftShaderModules = file("src/main/resources/caustica/shaders/minecraft")
+def apiShaderModules = project(":packages:shader-api").file("src/main/resources/caustica/shaders/api")
+def reflectionRoot = layout.buildDirectory.dir("generated/reflection-sources")
+def prepareMinecraftRenderingReflectionSources = tasks.register("prepareMinecraftRenderingReflectionSources", Sync) {
+    from(minecraftShaderModules) { into "minecraft" }
+    from(apiShaderModules) { into "api" }
+    from(file("src/shaderReflection")) { into "layout" }
+    into(reflectionRoot)
+}
+
+def minecraftRenderingRecordSpecs = [
+        "buffer|minecraftMaterialLayoutProbe|MinecraftMaterialRecord|dev.comfyfluffy.caustica.minecraft.gen|MinecraftMaterialData|false",
+        "buffer|minecraftPrimitiveLayoutProbe|MinecraftPrimitiveData|dev.comfyfluffy.caustica.minecraft.gen|MinecraftPrimitiveData|false",
+        "buffer|minecraftInstanceLayoutProbe|MinecraftInstanceData|dev.comfyfluffy.caustica.minecraft.gen|MinecraftInstanceData|false"
+]
+def generatedRecordRoot = layout.buildDirectory.dir("generated/sources/shaderRecords")
+def generateMinecraftRenderingRecords = tasks.register("generateMinecraftRenderingRecords", GenerateShaderRecords) {
+    group = "build"
+    description = "Generates Minecraft rendering records from the package-owned Slang module."
+    dependsOn(prepareMinecraftRenderingReflectionSources)
+    shaderRoot = reflectionRoot
+    probeSource = reflectionRoot.map { it.file("layout/minecraft_rendering_probe.slang") }
+    recordSpecs = minecraftRenderingRecordSpecs
+    outDir = generatedRecordRoot
+}
+
+def reproducedRecordRoot = layout.buildDirectory.dir("generated/reproducibility/shaderRecords")
+def reproduceMinecraftRenderingRecords = tasks.register("reproduceMinecraftRenderingRecords", GenerateShaderRecords) {
+    dependsOn(prepareMinecraftRenderingReflectionSources)
+    shaderRoot = reflectionRoot
+    probeSource = reflectionRoot.map { it.file("layout/minecraft_rendering_probe.slang") }
+    recordSpecs = minecraftRenderingRecordSpecs
+    outDir = reproducedRecordRoot
+}
+
+sourceSets.main.java.srcDir(files(generatedRecordRoot).builtBy(generateMinecraftRenderingRecords))
+
+def verifyMinecraftRenderingAbi = tasks.register("verifyMinecraftRenderingAbi") {
+    group = "verification"
+    dependsOn(generateMinecraftRenderingRecords)
+    inputs.dir(generatedRecordRoot)
+    doLast {
+        def expected = [
+                MinecraftMaterialData: ["BYTE_SIZE = 112", "putInt(0, features())", "putFloat(32, materialUv().x())", "putFloat(108, emissionLuminance())"],
+                MinecraftPrimitiveData: ["BYTE_SIZE = 144", "putFloat(0 + i0 * 8, textureCoordinates()[i0].x())", "putInt(92, materialIndex())", "putFloat(128, bitangent().x())"],
+                MinecraftInstanceData: ["BYTE_SIZE = 32", "putFloat(0, tint().x())", "putInt(16, damageTexture().value())", "putFloat(20, damageStrength())"]
+        ]
+        expected.each { name, fragments ->
+            def source = generatedRecordRoot.get().file(
+                    "dev/comfyfluffy/caustica/minecraft/gen/${name}.java").asFile.getText("UTF-8")
+            def missing = fragments.findAll { !source.contains(it) }
+            if (!missing.empty) throw new GradleException("${name} ABI drifted: ${missing}")
+        }
+    }
+}
+
+def verifyMinecraftRenderingGenerationReproducible = tasks.register("verifyMinecraftRenderingGenerationReproducible") {
+    group = "verification"
+    dependsOn(generateMinecraftRenderingRecords, reproduceMinecraftRenderingRecords)
+    doLast {
+        def relativeFiles = { File root ->
+            fileTree(root).files.collect { root.toPath().relativize(it.toPath()).toString().replace('\\', '/') }.sort()
+        }
+        def expectedRoot = generatedRecordRoot.get().asFile
+        def actualRoot = reproducedRecordRoot.get().asFile
+        def expectedFiles = relativeFiles(expectedRoot)
+        def actualFiles = relativeFiles(actualRoot)
+        if (expectedFiles != actualFiles) throw new GradleException("generated file sets differ: ${expectedFiles} != ${actualFiles}")
+        expectedFiles.each { path ->
+            if (!java.util.Arrays.equals(new File(expectedRoot, path).bytes, new File(actualRoot, path).bytes)) {
+                throw new GradleException("generated source is not reproducible: ${path}")
+            }
+        }
+    }
+}
+
+def verifyMinecraftRenderingDependencies = tasks.register("verifyMinecraftRenderingDependencies") {
+    group = "verification"
+    doLast {
+        def allowed = [project.path, ":packages:api", ":packages:shader-api", ":packages:engine",
+                       ":packages:minecraft-api", ":packages:minecraft-content", ":packages:settings-api"] as Set
+        def violations = []
+        configurations.matching { it.canBeResolved }.each { configuration ->
+            configuration.allDependencies.withType(ProjectDependency).each { dependency ->
+                if (!allowed.contains(dependency.path)) violations.add("${configuration.name}: ${dependency.path}")
+            }
+        }
+        if (!violations.empty) throw new GradleException("minecraft-rendering dependency violations:\n${violations.join('\n')}")
+    }
+}
+
+def verifyMinecraftRenderingImports = tasks.register("verifyMinecraftRenderingImports") {
+    group = "verification"
+    inputs.files(sourceSets.main.allJava)
+    doLast {
+        def forbidden = ["com.mojang", "net.minecraft", "net.fabricmc", "net.neoforged",
+                         "dev.comfyfluffy.caustica.CausticaMod", "dev.comfyfluffy.caustica.rt",
+                         "dev.comfyfluffy.caustica.platform", "dev.comfyfluffy.caustica.mixin",
+                         "dev.comfyfluffy.caustica.renderer"]
+        def violations = []
+        sourceSets.main.allJava.files.sort().each { file ->
+            file.eachLine { line, number ->
+                if (line.stripLeading().startsWith("import ") && forbidden.any { line.contains(it) }) {
+                    violations.add("${file}:${number}: ${line.trim()}")
+                }
+            }
+        }
+        if (!violations.empty) throw new GradleException("minecraft-rendering import violations:\n${violations.join('\n')}")
+    }
+}
+
+def verifyMinecraftRenderingResources = tasks.register("verifyMinecraftRenderingResources") {
+    group = "verification"
+    dependsOn(tasks.named("processResources"))
+    doLast {
+        def files = fileTree(sourceSets.main.output.resourcesDir).matching {
+            include "caustica/shaders/minecraft/**"
+        }.files.collect { sourceSets.main.output.resourcesDir.toPath().relativize(it.toPath()).toString().replace('\\', '/') }
+        def expected = ["caustica/shaders/minecraft/surface/caustica_minecraft_material.slang"]
+        if (files.sort() != expected) throw new GradleException("minecraft-rendering resource ownership mismatch: ${files.sort()}")
+    }
+}
+
+def verifyMinecraftRenderingJar = tasks.register("verifyMinecraftRenderingJar") {
+    group = "verification"
+    dependsOn(tasks.named("jar"))
+    doLast {
+        def allowedClassPrefixes = [
+                "dev/comfyfluffy/caustica/minecraft/program/MinecraftPrograms",
+                "dev/comfyfluffy/caustica/minecraft/material/MinecraftMaterialRecord",
+                "dev/comfyfluffy/caustica/minecraft/terrain/MinecraftTerrainGeometry",
+                "dev/comfyfluffy/caustica/minecraft/terrain/MinecraftTerrainLightAdapter",
+                "dev/comfyfluffy/caustica/minecraft/terrain/MinecraftTerrainMesh",
+                "dev/comfyfluffy/caustica/minecraft/terrain/MinecraftTerrainUploader",
+                "dev/comfyfluffy/caustica/minecraft/terrain/MinecraftVulkanTerrainUploader",
+                "dev/comfyfluffy/caustica/minecraft/entity/MinecraftEntityMesh",
+                "dev/comfyfluffy/caustica/minecraft/gen/MinecraftMaterialData",
+                "dev/comfyfluffy/caustica/minecraft/gen/MinecraftPrimitiveData",
+                "dev/comfyfluffy/caustica/minecraft/gen/MinecraftInstanceData"
+        ]
+        def foreign = []
+        def shaderResources = []
+        new java.util.jar.JarFile(tasks.named("jar", Jar).get().archiveFile.get().asFile).withCloseable { jar ->
+            jar.entries().each { entry ->
+                if (entry.name.endsWith(".class") && !allowedClassPrefixes.any { entry.name.startsWith(it) }) {
+                    foreign.add(entry.name)
+                }
+                if (entry.name.startsWith("caustica/shaders/minecraft/") && !entry.name.endsWith("/")) {
+                    shaderResources.add(entry.name)
+                }
+            }
+        }
+        def expectedResources = ["caustica/shaders/minecraft/surface/caustica_minecraft_material.slang"]
+        if (!foreign.empty || shaderResources.sort() != expectedResources) {
+            throw new GradleException("minecraft-rendering JAR mismatch; foreign=${foreign}, resources=${shaderResources.sort()}")
+        }
+    }
+}
+
+tasks.named("test", Test) { useJUnitPlatform() }
+tasks.named("check") {
+    dependsOn(verifyMinecraftRenderingAbi, verifyMinecraftRenderingGenerationReproducible,
+            verifyMinecraftRenderingDependencies, verifyMinecraftRenderingImports,
+            verifyMinecraftRenderingResources, verifyMinecraftRenderingJar)
+}
+tasks.withType(JavaCompile).configureEach { options.release = 25 }
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_25
+    targetCompatibility = JavaVersion.VERSION_25
+    withSourcesJar()
+}
+
+tasks.named("jar", Jar).configure {
+    from(rootProject.files("LICENSE.md", "COPYING", "COPYING.LESSER")) { into "META-INF" }
+}
+
+publishing {
+    publications {
+        create("mavenJava", MavenPublication) {
+            artifactId = "caustica-minecraft-rendering"
+            from components.java
+        }
+    }
+}

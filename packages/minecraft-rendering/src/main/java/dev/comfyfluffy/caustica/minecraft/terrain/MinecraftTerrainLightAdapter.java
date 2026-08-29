@@ -7,6 +7,7 @@ import java.util.ArrayList;
 
 /** Converts Minecraft terrain-emitter sidecars into engine light descriptors. */
 final class MinecraftTerrainLightAdapter {
+    static final int FLOATS_PER_LIGHT = 20;
     static final double METERS_PER_WORLD_UNIT = 1.0;
 
     private MinecraftTerrainLightAdapter() {
@@ -15,10 +16,10 @@ final class MinecraftTerrainLightAdapter {
     static RetainedLightBatch describe(long sectionKey, long revision,
                                        double originX, double originY, double originZ,
                                        float[] records) {
-        int lightCount = records.length / RtLightCollector.FLOATS_PER_LIGHT;
+        int lightCount = records.length / FLOATS_PER_LIGHT;
         ArrayList<LightDescriptor.Finite> descriptors = new ArrayList<>(lightCount);
         for (int source = 0; source < records.length;
-             source += RtLightCollector.FLOATS_PER_LIGHT) {
+             source += FLOATS_PER_LIGHT) {
             double ux = records[source + 8];
             double uy = records[source + 9];
             double uz = records[source + 10];
