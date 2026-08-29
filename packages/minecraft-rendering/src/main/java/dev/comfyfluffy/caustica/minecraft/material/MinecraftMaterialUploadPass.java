@@ -3,13 +3,9 @@ package dev.comfyfluffy.caustica.minecraft.material;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.api.pass.Pass;
 import dev.comfyfluffy.caustica.api.pass.PassFrame;
-import org.lwjgl.PointerBuffer;
+import dev.comfyfluffy.caustica.vulkan.VmaImageAllocation;
+import dev.comfyfluffy.caustica.vulkan.VmaMappedHostBuffer;
 import org.lwjgl.system.MemoryStack;
-import org.lwjgl.system.MemoryUtil;
-import org.lwjgl.util.vma.Vma;
-import org.lwjgl.util.vma.VmaAllocationCreateInfo;
-import org.lwjgl.util.vma.VmaAllocationInfo;
-import org.lwjgl.vulkan.VkBufferCreateInfo;
 import org.lwjgl.vulkan.VkBufferImageCopy2;
 import org.lwjgl.vulkan.VkCopyBufferToImageInfo2;
 import org.lwjgl.vulkan.VkImageCreateInfo;
@@ -18,14 +14,10 @@ import org.lwjgl.vulkan.VkImageMemoryBarrier2;
 import org.lwjgl.vulkan.VK13;
 import org.lwjgl.vulkan.VK14;
 
-import java.nio.ByteBuffer;
-import java.nio.LongBuffer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
 
-import static org.lwjgl.util.vma.Vma.vmaCreateBuffer;
-import static org.lwjgl.util.vma.Vma.vmaCreateImage;
 import static org.lwjgl.vulkan.VK10.*;
 import static org.lwjgl.vulkan.KHRSynchronization2.VK_PIPELINE_STAGE_2_COPY_BIT_KHR;
 import static org.lwjgl.vulkan.KHRSynchronization2.VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
@@ -62,9 +54,9 @@ final class MinecraftMaterialUploadPass implements Pass<PassFrame> {
         List<MinecraftProgramResources.UploadedImage> images = uploads.stream()
                 .map(upload -> (MinecraftProgramResources.UploadedImage) upload.image()).toList();
         MinecraftProgramResources.Epoch epoch = resources.createEpoch(lookup, images);
-        List<StagingBuffer> staging = uploads.stream().map(ImageUpload::staging).toList();
+        List<VmaMappedHostBuffer> staging = uploads.stream().map(ImageUpload::staging).toList();
         uploads = List.of();
-        frame.gpuUse().whenComplete(() -> staging.forEach(StagingBuffer::destroy));
+        frame.gpuUse().whenComplete(() -> staging.forEach(VmaMappedHostBuffer::close));
         try {
             published.accept(new MinecraftProgramResources.PublishedEpoch(lookup, epoch));
         } catch (RuntimeException | Error failure) {
@@ -109,7 +101,7 @@ final class MinecraftMaterialUploadPass implements Pass<PassFrame> {
                 }
                 VK13.vkCmdCopyBufferToImage2(frame.commandBuffer(),
                         VkCopyBufferToImageInfo2.calloc(stack).sType$Default()
-                                .srcBuffer(upload.staging().buffer)
+                                .srcBuffer(upload.staging().buffer())
                                 .dstImage(upload.image().image())
                                 .dstImageLayout(VK_IMAGE_LAYOUT_GENERAL)
                                 .pRegions(copies));
@@ -164,42 +156,23 @@ final class MinecraftMaterialUploadPass implements Pass<PassFrame> {
                     .tiling(VK_IMAGE_TILING_OPTIMAL)
                     .usage(VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT)
                     .sharingMode(VK_SHARING_MODE_EXCLUSIVE).initialLayout(VK_IMAGE_LAYOUT_UNDEFINED);
-            VmaAllocationCreateInfo allocationInfo = VmaAllocationCreateInfo.calloc(stack)
-                    .usage(Vma.VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE);
-            LongBuffer imageOut = stack.mallocLong(1);
-            PointerBuffer allocationOut = stack.mallocPointer(1);
-            int result = vmaCreateImage(gpu.vmaAllocator(), imageInfo, allocationInfo,
-                    imageOut, allocationOut, null);
-            if (result != VK_SUCCESS) throw new IllegalStateException("Minecraft material image allocation failed: " + result);
-            return new Image(imageOut.get(0), allocationOut.get(0), texture.levels().size());
+            return new Image(VmaImageAllocation.create(gpu, imageInfo, "Minecraft material texture"),
+                    texture.levels().size());
         }
     }
 
-    private StagingBuffer createStaging(MinecraftMaterialTexture texture) {
+    private VmaMappedHostBuffer createStaging(MinecraftMaterialTexture texture) {
         long size = byteSize(texture);
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkBufferCreateInfo bufferInfo = VkBufferCreateInfo.calloc(stack).sType$Default().size(size)
-                    .usage(VK_BUFFER_USAGE_TRANSFER_SRC_BIT).sharingMode(VK_SHARING_MODE_EXCLUSIVE);
-            VmaAllocationCreateInfo allocationInfo = VmaAllocationCreateInfo.calloc(stack)
-                    .usage(Vma.VMA_MEMORY_USAGE_AUTO)
-                    .flags(Vma.VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
-                            | Vma.VMA_ALLOCATION_CREATE_MAPPED_BIT);
-            LongBuffer bufferOut = stack.mallocLong(1);
-            PointerBuffer allocationOut = stack.mallocPointer(1);
-            VmaAllocationInfo allocationResult = VmaAllocationInfo.calloc(stack);
-            int result = vmaCreateBuffer(gpu.vmaAllocator(), bufferInfo, allocationInfo,
-                    bufferOut, allocationOut, allocationResult);
-            if (result != VK_SUCCESS) throw new IllegalStateException("Minecraft material staging allocation failed: " + result);
-            long buffer = bufferOut.get(0);
-            long allocation = allocationOut.get(0);
-            if (allocationResult.pMappedData() == 0L) {
-                Vma.vmaDestroyBuffer(gpu.vmaAllocator(), buffer, allocation);
-                throw new IllegalStateException("Minecraft material staging buffer is not mapped");
-            }
-            ByteBuffer bytes = MemoryUtil.memByteBuffer(allocationResult.pMappedData(), Math.toIntExact(size));
+        VmaMappedHostBuffer staging = VmaMappedHostBuffer.create(
+                gpu, size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, "Minecraft material staging");
+        try {
+            var bytes = staging.mapped();
             texture.levels().forEach(level -> bytes.put(level.rgba8()));
-            Vma.vmaFlushAllocation(gpu.vmaAllocator(), allocation, 0, size);
-            return new StagingBuffer(buffer, allocation);
+            staging.flush(0L, size);
+            return staging;
+        } catch (RuntimeException | Error failure) {
+            staging.close();
+            throw failure;
         }
     }
 
@@ -228,49 +201,25 @@ final class MinecraftMaterialUploadPass implements Pass<PassFrame> {
         uploads = List.of();
     }
 
-    private record ImageUpload(MinecraftMaterialTexture texture, Image image, StagingBuffer staging) {
+    private record ImageUpload(MinecraftMaterialTexture texture, Image image, VmaMappedHostBuffer staging) {
         void destroy() {
-            staging.destroy();
+            staging.close();
             image.close();
         }
     }
 
-    private final class Image implements MinecraftProgramResources.UploadedImage {
-        private final long image;
-        private final long allocation;
+    private static final class Image implements MinecraftProgramResources.UploadedImage {
+        private final VmaImageAllocation allocation;
         private final int mipLevels;
-        private boolean destroyed;
 
-        private Image(long image, long allocation, int mipLevels) {
-            this.image = image;
+        private Image(VmaImageAllocation allocation, int mipLevels) {
             this.allocation = allocation;
             this.mipLevels = mipLevels;
         }
 
-        @Override public long image() { return image; }
+        @Override public long image() { return allocation.image(); }
         @Override public int format() { return VK_FORMAT_R8G8B8A8_UNORM; }
         @Override public int mipLevels() { return mipLevels; }
-        @Override public void close() {
-            if (destroyed) return;
-            Vma.vmaDestroyImage(gpu.vmaAllocator(), image, allocation);
-            destroyed = true;
-        }
-    }
-
-    private final class StagingBuffer {
-        private final long buffer;
-        private final long allocation;
-        private boolean destroyed;
-
-        private StagingBuffer(long buffer, long allocation) {
-            this.buffer = buffer;
-            this.allocation = allocation;
-        }
-
-        private void destroy() {
-            if (destroyed) return;
-            Vma.vmaDestroyBuffer(gpu.vmaAllocator(), buffer, allocation);
-            destroyed = true;
-        }
+        @Override public void close() { allocation.close(); }
     }
 }

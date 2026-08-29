@@ -4,10 +4,7 @@ import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorIndex;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorRange;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorWriter;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
-import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
-import org.lwjgl.util.vma.Vma;
-import org.lwjgl.util.vma.VmaAllocationCreateInfo;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkImageCreateInfo;
 import org.lwjgl.vulkan.VkImageDescriptorInfoEXT;
@@ -24,9 +21,7 @@ import java.util.Objects;
  * {@link ComputeSynchronization#initializeImages} before its first shader access.
  */
 public final class VmaImage2D implements AutoCloseable {
-    private final long allocator;
-    private final long image;
-    private final long allocation;
+    private final VmaImageAllocation imageAllocation;
     private final long view;
     private final GpuDescriptorRange<GpuDescriptorIndex.Resource> descriptors;
     private final int width;
@@ -34,12 +29,10 @@ public final class VmaImage2D implements AutoCloseable {
     private final int format;
     private final ResourceLifetime lifetime;
 
-    private VmaImage2D(VkDevice device, long allocator, long image, long allocation, long view,
+    private VmaImage2D(VkDevice device, VmaImageAllocation imageAllocation, long view,
                        GpuDescriptorRange<GpuDescriptorIndex.Resource> descriptors,
                        int width, int height, int format) {
-        this.allocator = allocator;
-        this.image = image;
-        this.allocation = allocation;
+        this.imageAllocation = imageAllocation;
         this.view = view;
         this.descriptors = descriptors;
         this.width = width;
@@ -47,7 +40,7 @@ public final class VmaImage2D implements AutoCloseable {
         this.format = format;
         this.lifetime = new ResourceLifetime(descriptors::destroy,
                 () -> VK10.vkDestroyImageView(device, view, null),
-                () -> Vma.vmaDestroyImage(allocator, image, allocation));
+                imageAllocation::close);
     }
 
     /** Allocate a single-mip image usable for both sampled reads and storage reads/writes. */
@@ -62,8 +55,7 @@ public final class VmaImage2D implements AutoCloseable {
         Objects.requireNonNull(label, "label");
         if (width <= 0 || height <= 0) throw new IllegalArgumentException("image extent must be positive");
 
-        long image = 0L;
-        long allocation = 0L;
+        VmaImageAllocation imageAllocation = null;
         long viewHandle = 0L;
         GpuDescriptorRange<GpuDescriptorIndex.Resource> descriptors = null;
         try (MemoryStack stack = MemoryStack.stackPush()) {
@@ -74,18 +66,11 @@ public final class VmaImage2D implements AutoCloseable {
                     .sharingMode(VK10.VK_SHARING_MODE_EXCLUSIVE)
                     .initialLayout(VK10.VK_IMAGE_LAYOUT_UNDEFINED);
             imageInfo.extent().set(width, height, 1);
-            VmaAllocationCreateInfo allocationInfo = VmaAllocationCreateInfo.calloc(stack)
-                    .usage(Vma.VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE);
-            LongBuffer imageOut = stack.mallocLong(1);
-            PointerBuffer allocationOut = stack.mallocPointer(1);
-            VulkanChecks.check(Vma.vmaCreateImage(gpu.vmaAllocator(), imageInfo, allocationInfo,
-                    imageOut, allocationOut, null), "vmaCreateImage(" + label + ")");
-            image = imageOut.get(0);
-            allocation = allocationOut.get(0);
+            imageAllocation = VmaImageAllocation.create(gpu, imageInfo, label);
 
             descriptors = gpu.descriptorHeap().allocateResources(2, label);
             VkImageViewCreateInfo view = VkImageViewCreateInfo.calloc(stack).sType$Default()
-                    .image(image).viewType(VK10.VK_IMAGE_VIEW_TYPE_2D).format(format);
+                    .image(imageAllocation.image()).viewType(VK10.VK_IMAGE_VIEW_TYPE_2D).format(format);
             view.subresourceRange().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT)
                     .baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
             LongBuffer viewOut = stack.mallocLong(1);
@@ -99,12 +84,12 @@ public final class VmaImage2D implements AutoCloseable {
                     imageDescriptor));
             writer.writeResource(descriptors, 1, resource(stack, VK10.VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
                     imageDescriptor));
-            return new VmaImage2D(gpu.vk(), gpu.vmaAllocator(), image, allocation, viewHandle,
+            return new VmaImage2D(gpu.vk(), imageAllocation, viewHandle,
                     descriptors, width, height, format);
         } catch (RuntimeException | Error failure) {
             if (descriptors != null) descriptors.destroy();
             if (viewHandle != 0L) VK10.vkDestroyImageView(gpu.vk(), viewHandle, null);
-            if (image != 0L) Vma.vmaDestroyImage(gpu.vmaAllocator(), image, allocation);
+            if (imageAllocation != null) imageAllocation.close();
             throw failure;
         }
     }
@@ -115,7 +100,7 @@ public final class VmaImage2D implements AutoCloseable {
                 .data(data -> data.pImage(image));
     }
 
-    public long image() { return image; }
+    public long image() { return imageAllocation.image(); }
     public long view() { return view; }
     public int width() { return width; }
     public int height() { return height; }
