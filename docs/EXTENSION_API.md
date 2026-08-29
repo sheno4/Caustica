@@ -1,6 +1,10 @@
 # Caustica extension API
 
-Status: current API at `CausticaApi.VERSION`. This document uses exact current Java and Slang names.
+Status: legacy pre-0.8 API document. It does not describe the current contract.
+
+Use [`packages/api/ARCHITECTURE.md`](../packages/api/ARCHITECTURE.md) for the current ownership and lifecycle
+contract and [`packages/examples/api-showcase`](../packages/examples/api-showcase) for compiling usage. The
+remaining sections below are retained only as evidence for the engine rewrite still in progress.
 
 ## Standalone example extension
 

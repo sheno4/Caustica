@@ -25,7 +25,7 @@ import org.joml.Matrix4fc;
 
 
 
-/** Converts Minecraft lifecycle and camera state into host-neutral renderer inputs. */
+/** Converts Minecraft lifecycle and camera state into coherent engine frame inputs. */
 public final class MinecraftFrameAdapter {
     public static final MinecraftFrameAdapter INSTANCE = new MinecraftFrameAdapter();
 

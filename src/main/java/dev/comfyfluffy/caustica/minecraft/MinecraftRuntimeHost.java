@@ -5,7 +5,7 @@ import dev.comfyfluffy.caustica.client.WorldRenderScaler;
 import dev.comfyfluffy.caustica.spi.host.RuntimeHost;
 
 
-/** Minecraft lifecycle and material-policy adapter for the host-neutral renderer runtime. */
+/** Minecraft lifecycle and material-policy adapter for the renderer runtime. */
 public final class MinecraftRuntimeHost implements RuntimeHost {
     public static final MinecraftRuntimeHost INSTANCE = new MinecraftRuntimeHost();
 

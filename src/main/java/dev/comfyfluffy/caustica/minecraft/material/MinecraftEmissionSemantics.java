@@ -18,7 +18,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-/** Analyzes Minecraft baked models into a host-neutral material emission index for one resource epoch. */
+/** Analyzes Minecraft baked models into the material emission index for one resource epoch. */
 public final class MinecraftEmissionSemantics {
     private static final Direction[] DIRECTIONS = Direction.values();
     private static final int VARIANT_PROBES = 8;

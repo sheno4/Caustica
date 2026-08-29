@@ -5,7 +5,7 @@ import dev.comfyfluffy.caustica.api.provider.RetainedLightCollection;
 
 import java.util.ArrayList;
 
-/** Converts Minecraft terrain-emitter sidecars into host-neutral engine light descriptors. */
+/** Converts Minecraft terrain-emitter sidecars into engine light descriptors. */
 final class MinecraftTerrainLightAdapter {
     static final double METERS_PER_WORLD_UNIT = 1.0;
 

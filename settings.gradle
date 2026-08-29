@@ -18,4 +18,5 @@ plugins {
 }
 
 rootProject.name = "caustica"
-include("api", "extensions:gltf-viewer")
+include("packages:api", "packages:settings-api", "packages:api-support",
+		"extensions:gltf-viewer", "packages:examples:api-showcase")

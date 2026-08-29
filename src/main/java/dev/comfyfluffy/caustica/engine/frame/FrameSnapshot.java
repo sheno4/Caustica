@@ -7,7 +7,7 @@ import org.joml.Matrix4fc;
 
 import java.util.Objects;
 
-/** Immutable host-neutral state consumed while recording one rendered scene frame. */
+/** Immutable engine state consumed while recording one rendered scene frame. */
 public final class FrameSnapshot {
     /** Linear ACEScg colour used when the camera starts inside a participating medium. */
     public record LinearRgb(float red, float green, float blue) {

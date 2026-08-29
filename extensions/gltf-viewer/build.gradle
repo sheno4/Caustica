@@ -74,7 +74,7 @@ if (loader == "fabric") {
         mods {
             caustica {
                 sourceSet(rootProject.sourceSets.main)
-                sourceSet(project(":api").sourceSets.main)
+                sourceSet(project(":packages:api").sourceSets.main)
             }
             caustica_gltf_viewer {
                 sourceSet(sourceSets.main)
@@ -88,8 +88,8 @@ if (loader == "fabric") {
 }
 
 dependencies {
-    compileOnly project(":api")
-    runtimeOnly project(":api")
+    compileOnly project(":packages:api")
+    runtimeOnly project(":packages:api")
     if (loader == "fabric") {
         minecraft "com.mojang:minecraft:${project.minecraft_version}"
         implementation "net.fabricmc:fabric-loader:${project.loader_version}"
@@ -99,7 +99,7 @@ dependencies {
 
     testImplementation platform("org.junit:junit-bom:5.12.2")
     testImplementation "org.junit.jupiter:junit-jupiter"
-    testImplementation project(":api")
+    testImplementation project(":packages:api")
     testImplementation rootProject
     testRuntimeOnly "org.junit.platform:junit-platform-launcher"
 }

@@ -3,7 +3,7 @@ package dev.comfyfluffy.caustica.minecraft;
 import dev.comfyfluffy.caustica.api.DisplayText;
 import net.minecraft.network.chat.Component;
 
-/** Converts host-neutral API display text at the Minecraft UI boundary. */
+/** Converts API display text at the Minecraft UI boundary. */
 public final class MinecraftDisplayText {
     private MinecraftDisplayText() {
     }

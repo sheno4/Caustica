@@ -17,7 +17,7 @@ import dev.comfyfluffy.caustica.minecraft.provider.MinecraftSceneProvider;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialState;
 import dev.comfyfluffy.caustica.minecraft.sky.SkyLutPass;
 
-/** Installs Minecraft as scene, light, and material input to the host-neutral renderer API. */
+/** Installs Minecraft scene, light, and material input into the renderer API. */
 public final class MinecraftProvidersExtension implements CausticaExtension {
     public static final ResourceId ID = ResourceId.of("caustica", "minecraft");
     public static final ResourceId MATERIAL_SURFACE = ResourceId.of("caustica", "minecraft_material");

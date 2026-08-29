@@ -12,7 +12,7 @@ import net.minecraft.world.level.block.state.BlockState;
 import java.util.Map;
 import java.util.Set;
 
-/** Translates Minecraft block and texture semantics into host-neutral OpenPBR compile inputs. */
+/** Translates Minecraft block and texture semantics into renderer OpenPBR compile inputs. */
 public final class MinecraftMaterialClassifier {
     public static final float ICE_IOR = 1.309f;
     public static final float WATER_IOR = 1.333f;
