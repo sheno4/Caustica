@@ -16,9 +16,10 @@ public interface PassChannel {
     /**
      * Record before the trace, for resources that world shaders consume: dirty texture, environment,
      * lookup-table, or buffer updates. The callback may record nothing when asynchronously prepared source
-     * data has not changed. Order between pre-trace passes is meaningless; do not depend on it.
+     * data has not changed. Accepted retained changes are consumed independently at renderer publication
+     * boundaries. Order between pre-trace passes is meaningless; do not depend on it.
      */
-    PassRegistration addWorldResourcePass(PassFactory<PassSetup, PassFrame> factory);
+    PassRegistration addWorldResourcePass(PassFactory<WorldResourceSetup, PassFrame> factory);
 
     /**
      * Record after reconstruction and before the display transform. Effects compose in registration

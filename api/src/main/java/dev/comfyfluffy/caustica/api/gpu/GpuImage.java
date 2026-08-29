@@ -26,9 +26,12 @@ public interface GpuImage {
 
     /**
      * Engine-owned shader descriptor with the requested image interpretation. The returned view follows
-     * this frame borrow; the extension does not allocate or retire it.
+     * this frame borrow; the extension does not allocate or retire it. Read-only versus read-write storage
+     * access is a shader declaration and synchronization property, not a different Vulkan descriptor.
+     *
+     * @throws IllegalArgumentException if this image was not created for the requested interpretation
      */
-    GpuResourceDescriptor descriptor(GpuImageDescriptorKind kind);
+    GpuImageDescriptor descriptor(GpuImageDescriptorKind kind);
 
     int width();
 

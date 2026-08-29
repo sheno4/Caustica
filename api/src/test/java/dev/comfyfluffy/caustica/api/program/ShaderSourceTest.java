@@ -21,6 +21,28 @@ final class ShaderSourceTest {
     }
 
     @Test
+    void resolvesCompoundSlangModuleNamesAsNestedResourcePaths() throws IOException {
+        ShaderSource source = ShaderSource.classpath(
+                ShaderSourceTest.class, "/caustica/shaders");
+
+        try (var module = source.openModule("api.caustica_api")) {
+            assertNotNull(module);
+        }
+    }
+
+    @Test
+    void acceptsQualifiedTypesAndRejectsTraversalShapedNames() {
+        ShaderSource source = ShaderSource.classpath(ShaderSourceTest.class, "/caustica/shaders/api");
+
+        new ShaderDefinition(source, "caustica_api", "comfyfluffy::example::Sky");
+        assertThrows(IllegalArgumentException.class, () -> source.openModule("example..foreign"));
+        assertThrows(IllegalArgumentException.class,
+                () -> new ShaderDefinition(source, "../foreign", "example::Sky"));
+        assertThrows(IllegalArgumentException.class,
+                () -> new ShaderDefinition(source, "example", "example::::Sky"));
+    }
+
+    @Test
     void rejectsUnnormalizedSubdirectories() {
         assertThrows(IllegalArgumentException.class, () -> ShaderSource.classpath(
                 ShaderSourceTest.class, "/caustica-test/shaders", "../foreign"));

@@ -17,11 +17,11 @@ public interface GpuDescriptorWriter {
     /** Encode one sampler descriptor at an index relative to a sampler range. */
     void writeSampler(GpuDescriptorRange destination, int relativeIndex, VkSamplerCreateInfo sampler);
 
-    /** Encode one image resource descriptor at an index relative to a resource range. */
-    void writeImage(GpuDescriptorRange destination, int relativeIndex, VkResourceDescriptorInfoEXT image);
-
-    /** Encode one buffer or acceleration-structure descriptor into a resource range. */
-    void writeBuffer(GpuDescriptorRange destination, int relativeIndex, VkResourceDescriptorInfoEXT buffer);
+    /**
+     * Encode one image, buffer, or other resource descriptor at an index relative to a resource range.
+     * {@link VkResourceDescriptorInfoEXT#type()} selects the encoded descriptor type.
+     */
+    void writeResource(GpuDescriptorRange destination, int relativeIndex, VkResourceDescriptorInfoEXT resource);
 
     /**
      * Encode an extension-owned acceleration structure. LWJGL represents the non-dispatchable

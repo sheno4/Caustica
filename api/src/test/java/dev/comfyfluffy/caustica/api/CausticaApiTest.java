@@ -4,19 +4,21 @@ import dev.comfyfluffy.caustica.api.session.RenderSessionChannel;
 import dev.comfyfluffy.caustica.api.host.CausticaBootstrap;
 import org.junit.jupiter.api.Test;
 
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class CausticaApiTest {
     @Test
-    void exposesTheHostInstalledSessionFactoryChannelAndRefusesASecondInstall() {
+    void bootstrapCreatesIndependentImmutableApiValues() {
         RenderSessionChannel sessions = stub(RenderSessionChannel.class);
-        CausticaBootstrap.install(sessions);
+        CausticaApi first = CausticaBootstrap.create(sessions);
+        CausticaApi second = CausticaBootstrap.create(sessions);
 
-        CausticaApi api = CausticaApi.getInstance();
-
-        assertSame(sessions, api.sessions());
-        assertThrows(IllegalStateException.class, () -> CausticaBootstrap.install(sessions));
+        assertSame(sessions, first.sessions());
+        assertSame(sessions, second.sessions());
+        assertNotSame(first, second);
+        assertThrows(NullPointerException.class, () -> CausticaBootstrap.create(null));
     }
 
     @SuppressWarnings("unchecked")

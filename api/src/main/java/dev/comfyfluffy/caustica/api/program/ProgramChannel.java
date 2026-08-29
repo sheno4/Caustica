@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.api.program;
 
-import dev.comfyfluffy.caustica.api.scene.SceneEnvironment;
+import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
 import dev.comfyfluffy.caustica.api.scene.SceneHandle;
 
 /**
@@ -18,7 +18,7 @@ import dev.comfyfluffy.caustica.api.scene.SceneHandle;
  * <ul>
  * <li>A surface or volume becomes selected when mesh geometry naming it is published. An error-free reload
  * waits for readiness and publishes the affected mesh changes atomically.</li>
- * <li>An environment becomes selected when a {@link SceneHandle} receives a {@link SceneEnvironment}
+ * <li>An environment becomes selected when a {@link SceneHandle} receives an {@link EnvironmentBinding}
  * naming it. Wait for readiness before that replacement when an error environment is unacceptable.</li>
  * </ul>
  *
@@ -31,74 +31,87 @@ import dev.comfyfluffy.caustica.api.scene.SceneHandle;
  * to schedule. The renderer rebuilds at most once per boundary, so a run of additions costs one rebuild —
  * and it coalesces across extensions, which a caller-side batch could never do.
  *
- * <p>Tickets do not prevent renderer-wide coalescing. Additions and removals made before the same program
- * boundary may share one compilation and complete together.
+ * <p>Each ticket identifies the exact requested composition after its accepted operation. A later accepted
+ * operation may coalesce the work and make that exact intermediate composition unnecessary; its ticket then
+ * becomes {@link ProgramTicket.State#SUPERSEDED}. The later ticket observes the combined composition.
+ * Superseding a ticket does not itself retire an addition: the combined candidate may still publish that
+ * implementation, whose callback then follows its ordinary live lifetime.
+ * Publication is transactional: a candidate composition becomes active as one unit only after successful
+ * compilation. Failure leaves the last ready composition active and fails the final ticket for that
+ * candidate; it does not partially publish additions or removals. Additions introduced by the failed
+ * candidate are abandoned, permanently resolve to their fallback, and retire their accepted data. Drops
+ * in the failed candidate do not take effect and may be requested again. A later request starts from the
+ * last ready composition, so failed source never poisons an unrelated future composition.
  *
  * <p>All methods are thread-safe. They accept the requested composition change synchronously; compilation
- * and publication proceed asynchronously as the returned ticket describes. A drop transfers its callback
- * only after synchronous acceptance. Each accepted callback is scheduled exactly once and never inline;
- * a rejected or duplicate drop leaves the callback caller-owned.
+ * and publication proceed asynchronously as the returned ticket describes. Adding a surface or volume
+ * transfers its data-root callback only after synchronous acceptance. Each accepted callback is scheduled
+ * exactly once and never inline; a rejected add leaves the callback caller-owned.
  */
 public interface ProgramChannel {
     /**
-     * Add a surface implementation and the coverage type that goes with it, returning an id usable
-     * immediately. Both are required: closest-hit evaluates the surface type while any-hit and opacity
-     * micromap classification evaluate the separately named, narrow coverage type. Mesh geometries in this
-     * contribution select the returned id directly.
+     * Add a surface implementation and its optional coverage type, returning a typed id usable immediately.
+     * Closest-hit evaluates the surface type; a geometry using {@code CoveragePolicy.Cutout} requires and
+     * evaluates the separately named, narrow coverage type, while opaque-only surfaces omit it. Mesh
+     * geometries in this contribution select the returned id directly. Synchronous acceptance takes
+     * ownership of the definition's data-root retirement callback, including when compilation later fails
+     * or is superseded.
      *
-     * @throws IllegalStateException if another live implementation declares this type name from a different
-     *         module — extension shader type names are global to the composition
+     * @throws IllegalStateException if either present qualified type name is already associated with a
+     *         different shader source
      */
-    ProgramUpdate<SurfaceId> addSurface(SurfaceDefinition definition);
+    <I, B, N> ProgramUpdate<SurfaceId<B, N>> addSurface(SurfaceDefinition<I, B, N> definition);
 
     /**
-     * Stop using a surface implementation, and learn when data reachable from its source-owned root is free.
+     * Stop using a surface implementation.
      *
      * <p>The id stops resolving at the next program publication boundary. Geometry which still names it
-     * then uses the visible error surface; those non-owning references do not delay removal. {@code retired}
-     * runs exactly once after no active or in-flight program can execute the implementation and no submitted
-     * GPU work can read its data. A rejected call does not take the callback.
+     * then uses the visible error surface; those non-owning references do not delay removal. The retirement
+     * callback accepted with the definition runs after no active or in-flight program can execute the
+     * implementation and no submitted GPU work can read its implementation data.
      *
-     * @throws IllegalStateException if this surface was already dropped
+     * @throws IllegalStateException if this surface is not live or awaiting a previously accepted drop
      */
-    ProgramTicket dropSurface(SurfaceId surface, Runnable retired);
+    ProgramTicket dropSurface(SurfaceId<?, ?> surface);
 
     /**
-     * Add a volume implementation, returning an id usable immediately. A mesh geometry may use the id as
-     * its interior slot independently of whether that boundary also has a visible surface.
+     * Add a volume implementation, returning a typed id usable immediately. A mesh geometry may use the id as
+     * its interior slot independently of whether that boundary also has a visible surface. Synchronous
+     * acceptance takes ownership of the definition's data-root retirement callback, including when
+     * compilation later fails or is superseded.
      *
-     * @throws IllegalStateException if another live implementation declares this type name from a different
-     *         module — extension shader type names are global to the composition
+     * @throws IllegalStateException if the qualified type name is already associated with different shader
+     *         source
      */
-    ProgramUpdate<VolumeId> addVolume(VolumeDefinition definition);
+    <I, B, N> ProgramUpdate<VolumeId<B, N>> addVolume(VolumeDefinition<I, B, N> definition);
 
     /**
-     * Stop using a volume implementation, and learn when its source-owned data is free.
+     * Stop using a volume implementation.
      *
      * <p>The id stops resolving at the next program publication boundary. Geometry which still names it
-     * then bounds vacuum; those non-owning references do not delay removal. {@code retired} runs exactly
-     * once after no active or in-flight program can execute the implementation and no submitted GPU work
-     * can read its data. A rejected call does not take the callback.
+     * then bounds vacuum; those non-owning references do not delay removal. The retirement callback accepted
+     * with the definition runs after no active or in-flight program can execute the implementation and no
+     * submitted GPU work can read its implementation data.
      *
-     * @throws IllegalStateException if this volume was already dropped
+     * @throws IllegalStateException if this volume is not live or awaiting a previously accepted drop
      */
-    ProgramTicket dropVolume(VolumeId volume, Runnable retired);
+    ProgramTicket dropVolume(VolumeId<?, ?> volume);
 
     /**
-     * Add an environment implementation. A scene names one; several may be live at once. For an error-free
+     * Add an environment implementation and its required scene-binding data schema. A scene names one;
+     * several may be live at once. For an error-free
      * switch, wait for the returned ticket and then call {@link SceneHandle#setEnvironment} with a binding
-     * that owns the new parameter data's retirement callback.
+     * that owns the new binding data's retirement callback. Environment implementations have no separate
+     * data root or retirement callback.
      */
-    ProgramUpdate<EnvironmentId> addEnvironment(ShaderDefinition definition);
+    <B> ProgramUpdate<EnvironmentId<B>> addEnvironment(EnvironmentDefinition<B> definition);
 
     /**
      * Stop using an environment. Scene bindings which still name the id switch to the visible error
-     * environment and retire their own parameter callbacks; those non-owning references do not delay
-     * removal. {@code retired} runs after no active or in-flight program can execute the implementation and
-     * follows the serialized, non-blocking, must-not-throw retained-callback policy.
+     * environment and retire their own data callbacks; those non-owning references do not delay removal.
      *
-     * @throws IllegalStateException if this environment was already dropped
+     * @throws IllegalStateException if this environment is not live or awaiting a previously accepted drop
      */
-    ProgramTicket dropEnvironment(EnvironmentId environment, Runnable retired);
+    ProgramTicket dropEnvironment(EnvironmentId<?> environment);
 
 }

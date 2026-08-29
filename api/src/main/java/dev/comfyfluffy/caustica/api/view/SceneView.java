@@ -4,10 +4,10 @@ import dev.comfyfluffy.caustica.api.scene.SceneId;
 
 import java.util.Objects;
 
-/** One camera drawing from one selected scene. A scene never owns a camera. */
-public record SceneView(SceneId scene, Camera camera) {
+/** One camera drawing from one root scene. A scene never owns a camera. */
+public record SceneView(SceneId rootScene, Camera camera) {
     public SceneView {
-        Objects.requireNonNull(scene, "scene");
+        Objects.requireNonNull(rootScene, "rootScene");
         Objects.requireNonNull(camera, "camera");
     }
 }

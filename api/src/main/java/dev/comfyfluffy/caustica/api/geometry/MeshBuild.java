@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.api.geometry;
 
 import dev.comfyfluffy.caustica.api.program.SurfaceId;
+import dev.comfyfluffy.caustica.api.program.ShaderData;
 import dev.comfyfluffy.caustica.api.program.VolumeId;
 
 import java.util.List;
@@ -17,36 +18,38 @@ import java.util.Objects;
  * <p>The position ABI is deliberately fixed: each vertex begins with three little-endian IEEE-754
  * {@code float32} components at {@link Stream#byteOffset()}, in mesh-local coordinates. The
  * stride may include trailing source-owned attributes, but the acceleration build reads only those twelve
- * bytes. Indices are tightly packed little-endian unsigned 32-bit values.
+ * bytes. Indices are tightly packed little-endian unsigned 32-bit values. Every referenced index is less
+ * than {@code vertexCount}; this is a source assertion because the renderer cannot inspect source-owned
+ * buffers while validating the build description.
+ *
+ * @param <N> data schema accepted by every surface and volume slot for each mesh placement
  */
-public record MeshBuild(Stream positions,
-                        Stream previousPositions,
-                        Stream indices,
-                        int vertexCount,
-                        UpdateIntent updateIntent,
-                        TopologyRevision revision,
-                        List<Geometry> geometries) {
+public record MeshBuild<N>(Stream positions,
+                           Stream previousPositions,
+                           Stream indices,
+                           int vertexCount,
+                           IndexRevision indexRevision,
+                           List<Geometry<N>> geometries) {
 
     public MeshBuild {
         Objects.requireNonNull(positions, "positions");
         Objects.requireNonNull(indices, "indices");
-        Objects.requireNonNull(updateIntent, "updateIntent");
-        if (updateIntent == UpdateIntent.ALLOW_UPDATE) Objects.requireNonNull(revision, "revision");
         geometries = List.copyOf(geometries);
         if (vertexCount <= 0) throw new IllegalArgumentException("vertexCount must be positive");
         if (geometries.isEmpty()) throw new IllegalArgumentException("a mesh needs at least one geometry");
-        if (positions.byteStride() < PositionFormat.FLOAT3.bytes()) {
+        if (positions.byteStride() < 3 * Float.BYTES || positions.byteStride() % Float.BYTES != 0) {
             throw new IllegalArgumentException("position stride must contain a float3 position");
         }
-        if (positions.byteSize() < requiredBytes(vertexCount, positions.byteStride(), PositionFormat.FLOAT3.bytes())) {
+        if (positions.byteSize() < requiredBytes(vertexCount, positions.byteStride(), 3 * Float.BYTES)) {
             throw new IllegalArgumentException("position stream is too small for vertexCount");
         }
         if (previousPositions != null) {
-            if (previousPositions.byteStride() < PositionFormat.FLOAT3.bytes()) {
+            if (previousPositions.byteStride() < 3 * Float.BYTES
+                    || previousPositions.byteStride() % Float.BYTES != 0) {
                 throw new IllegalArgumentException("previous-position stride must contain a float3 position");
             }
             if (previousPositions.byteSize()
-                    < requiredBytes(vertexCount, previousPositions.byteStride(), PositionFormat.FLOAT3.bytes())) {
+                    < requiredBytes(vertexCount, previousPositions.byteStride(), 3 * Float.BYTES)) {
                 throw new IllegalArgumentException("previous-position stream is too small for vertexCount");
             }
         }
@@ -55,7 +58,7 @@ public record MeshBuild(Stream positions,
         }
 
         long previousEnd = 0;
-        for (Geometry geometry : geometries) {
+        for (Geometry<N> geometry : geometries) {
             long end = Math.addExact((long) geometry.firstIndex(), geometry.indexCount());
             if (geometry.firstIndex() < previousEnd) {
                 throw new IllegalArgumentException("geometry index slices must be ordered and disjoint");
@@ -69,23 +72,6 @@ public record MeshBuild(Stream positions,
 
     private static long requiredBytes(int count, int stride, int elementBytes) {
         return Math.addExact(Math.multiplyExact((long) count - 1L, stride), elementBytes);
-    }
-
-    /** The only public position format in the current shader ABI. */
-    public enum PositionFormat {
-        FLOAT3(12);
-
-        private final int bytes;
-
-        PositionFormat(int bytes) { this.bytes = bytes; }
-
-        public int bytes() { return bytes; }
-    }
-
-    /** Whether the renderer may update a previous acceleration structure instead of rebuilding it. */
-    public enum UpdateIntent {
-        FORCE_REBUILD,
-        ALLOW_UPDATE
     }
 
     /**
@@ -140,25 +126,46 @@ public record MeshBuild(Stream positions,
         }
     }
 
+    /** Traversal behavior for a surface slot, independent of the surface's optical transmission. */
+    public sealed interface CoveragePolicy {
+        /** Coverage is uniformly one, so traversal may skip any-hit. */
+        record Opaque() implements CoveragePolicy { }
+
+        /**
+         * Coverage is evaluated by the surface's coverage implementation and compared with
+         * {@code alphaCutoff}. The nullable micromap is only an acceleration of that required fallback.
+         */
+        record Cutout(float alphaCutoff, OpacityMicromapHint opacityMicromap) implements CoveragePolicy {
+            public Cutout {
+                if (!Float.isFinite(alphaCutoff) || alphaCutoff < 0.0f || alphaCutoff > 1.0f) {
+                    throw new IllegalArgumentException("alphaCutoff must be in [0,1]");
+                }
+            }
+        }
+    }
+
     /**
-     * The visible surface slot of a geometry and the traversal policy of that surface. A volume-only
-     * boundary has no surface slot, so none of these surface-only values exist for it.
-     *
-     * <p>{@code alphaCutoff} is renderer-visible traversal policy rather than a renderer-owned material.
-     * The opacity micromap remains an optional acceleration of the surface's required coverage program.
-     * {@code opaque} means coverage is uniformly one and traversal may skip any-hit; it says nothing about
-     * the surface's optical transmission.
+     * The visible surface selected for a geometry, its typed implementation-owned binding word, and its
+     * complete traversal policy. The ID and binding word carry the same {@code B} schema; {@code N} is the
+     * instance schema shared by the whole mesh. A volume-only boundary has no surface slot.
      */
-    public record SurfaceSlot(SurfaceId surface, float alphaCutoff, boolean opaque,
-                              OpacityMicromapHint opacityMicromap) {
+    public record SurfaceSlot<B, N>(SurfaceId<B, N> surface, ShaderData<B> bindingData,
+                                    CoveragePolicy coverage) {
         public SurfaceSlot {
             Objects.requireNonNull(surface, "surface");
-            if (!Float.isFinite(alphaCutoff) || alphaCutoff < 0.0f || alphaCutoff > 1.0f) {
-                throw new IllegalArgumentException("alphaCutoff must be in [0,1]");
-            }
-            if (opaque && opacityMicromap != null) {
-                throw new IllegalArgumentException("opaque geometry cannot need an opacity micromap");
-            }
+            Objects.requireNonNull(bindingData, "bindingData");
+            Objects.requireNonNull(coverage, "coverage");
+        }
+    }
+
+    /**
+     * The homogeneous interior selected at a geometry boundary and its typed implementation-owned binding
+     * word. The ID and word carry the same {@code B} schema; {@code N} is shared by the whole mesh.
+     */
+    public record VolumeSlot<B, N>(VolumeId<B, N> volume, ShaderData<B> bindingData) {
+        public VolumeSlot {
+            Objects.requireNonNull(volume, "volume");
+            Objects.requireNonNull(bindingData, "bindingData");
         }
     }
 
@@ -174,12 +181,12 @@ public record MeshBuild(Stream positions,
      * opening with boundary geometry that has no volume slot. A surface paired with a volume returns
      * {@code geometry_thin_walled = false}; a thin sheet does not enclose an interior.
      *
-     * <p>{@code data} reaches the selected surface, coverage, and volume programs unchanged. It commonly
-     * addresses an extension-owned geometry record containing primitive attributes and indices into the
-     * extension's own shading tables.
+     * Each slot's {@code bindingData} reaches only that slot's implementation and commonly addresses an
+     * extension-owned geometry record containing primitive attributes. Both slots accept the mesh's same
+     * {@code N} instance schema because one placement supplies one instance word to every geometry it can hit.
      */
-    public record Geometry(SurfaceSlot surface, VolumeId volume,
-                           int firstIndex, int indexCount, long data) {
+    public record Geometry<N>(SurfaceSlot<?, N> surface, VolumeSlot<?, N> volume,
+                              int firstIndex, int indexCount) {
         public Geometry {
             if (surface == null && volume == null) {
                 throw new IllegalArgumentException("geometry needs a surface or volume slot");
@@ -196,12 +203,10 @@ public record MeshBuild(Stream positions,
     }
 
     /**
-     * Source-owned topology identity. Reusing a non-null revision asserts that vertex count, index bytes, ordered
-     * geometry slices, position format and stride, selected surface and volume slots, coverage policy, and
-     * opacity-micromap topology are unchanged. Only position bytes and uninterpreted data words may differ.
-     * Breaking this assertion
-     * is a contract violation the renderer cannot detect. {@code FORCE_REBUILD} may use a null revision;
-     * {@code ALLOW_UPDATE} requires one.
+     * Opaque identity for source-owned index contents. Reusing a non-null revision makes exactly one
+     * assertion: every index byte referenced by this build is unchanged. The renderer compares all visible
+     * acceleration-structure inputs itself before deciding whether an existing structure can be updated.
+     * A null revision makes no index-content assertion and therefore requires a rebuild.
      */
-    public record TopologyRevision(long value) { }
+    public record IndexRevision(long value) { }
 }

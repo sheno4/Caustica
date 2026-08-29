@@ -17,6 +17,12 @@ public record GeometryTransform(
                 || !Double.isFinite(translationZ)) {
             throw new IllegalArgumentException("geometry transform must be finite");
         }
+        double determinant = (double) m00 * ((double) m11 * m22 - (double) m12 * m21)
+                - (double) m01 * ((double) m10 * m22 - (double) m12 * m20)
+                + (double) m02 * ((double) m10 * m21 - (double) m11 * m20);
+        if (!Double.isFinite(determinant) || determinant == 0.0) {
+            throw new IllegalArgumentException("geometry transform basis must be invertible");
+        }
     }
 
     public static GeometryTransform translation(double x, double y, double z) {

@@ -1,26 +1,19 @@
 module caustica_types;
 
 /** Must equal dev.comfyfluffy.caustica.api.program.ProgramAbi.VERSION. */
-public static const uint CAUSTICA_SHADER_ABI_VERSION = 5u;
+public static const uint CAUSTICA_SHADER_ABI_VERSION = 6u;
 
 // Extension colours and radiance are scene-linear ACEScg. Spatial shader values are in scene units unless
 // documented otherwise. metersPerSceneUnit converts them to physical distance. Directions are normalized
 // and point away from the shaded position.
-public static const uint EVENT_NONE = 0x0u;
-public static const uint EVENT_DIFFUSE = 0x1u;
-public static const uint EVENT_GLOSSY = 0x2u;
-public static const uint EVENT_SPECULAR = 0x4u;
-public static const uint EVENT_REFLECTION = 0x8u;
-public static const uint EVENT_TRANSMISSION = 0x10u;
-
 /**
- * SurfaceInput.surfaceFlags: this hit is the one the reconstructor sees, so a surface whose normal
+ * SurfaceInput.evaluationFlags: this hit is the one the reconstructor sees, so a surface whose normal
  * animates should also fill `previous_geometry_normal` — that pair is what a reflection reprojects with.
  * Unset on every other hit, where the previous normal is never read and evaluating it would be waste.
  */
 public static const uint SURFACE_RECONSTRUCTION_ANCHOR = 0x1u;
 /** Enables optional time-varying procedural surface and volume evaluation for this frame. */
-public static const uint SURFACE_ANIMATION_ENABLED = 0x2u;
+public static const uint EVALUATION_ANIMATION_ENABLED = 0x2u;
 
 /**
  * Stable pushed root available to every extension shader stage. `compositionData` addresses the generated
@@ -62,35 +55,14 @@ public float3 transformNormal(NormalTransform transform, float3 normal) {
     return float3(dot(transform.row0, normal), dot(transform.row1, normal), dot(transform.row2, normal));
 }
 
-public static const uint VOLUME_TERMINATE_ON_MISS = 0x1u;
-public static const uint VOLUME_BOUNDARY_LIGHTING = 0x2u;
-
-/** Host-neutral homogeneous transport properties produced by a volume implementation at its boundary. */
+/** Homogeneous transport properties produced by a volume implementation at its boundary. */
 public struct VolumeProperties {
-    /** Beer-Lambert extinction coefficient per scene unit. */
-    public float3 extinction;
-    /** Filter used only while reconstruction guides walk through the volume. */
-    public float3 guideTransmittance;
-    /** Boundary offset in scene units. */
-    public float boundaryRayBias;
-    /** VOLUME_* bits retained with the path's volume stack. */
-    public uint flags;
-};
-
-/** Inputs for a volume's optional multiplicative direct-light response at its exit boundary. */
-public struct VolumeLightingInput {
-    /** Position in the current scene-origin coordinate system. */
-    public float3 boundaryPosition;
-    /** Precision-safe scene-unit position which compensates for scene-origin rebases. */
-    public float3 proceduralPosition;
-    public float3 lightDirection;
-    /** Distance in scene units. */
-    public float boundaryDistance;
-    /** Stable conversion supplied when this scene was created. */
-    public float metersPerSceneUnit;
-    public float interiorIor;
-    public float time;
-    public uint surfaceFlags;
+    /**
+     * Finite, non-negative Beer-Lambert absorption coefficient per scene unit. Vacuum is zero. This is
+     * the only public transport property because the current engine supports homogeneous absorption but
+     * not participating scattering; scattering and phase data require a future transport ABI.
+     */
+    public float3 absorptionCoefficient = float3(0.0);
 };
 
 /**
@@ -173,9 +145,10 @@ public struct OpenPbrSurface {
     /**
      * `geometry_normal` one frame ago. NOT an OpenPBR parameter: reconstruction reprojects a reflection
      * through the surface plane and needs to know where that plane was, which only the function that
-     * produced the normal can answer. Zero, the default, means "unchanged since last frame" and resolves
-     * to `geometry_normal`; write it only when SURFACE_RECONSTRUCTION_ANCHOR is set and the normal
-     * animates.
+     * produced the normal can answer. Zero, the default, asks the engine to use
+     * `SurfaceInput.previousGeometricNormal`. A surface which writes `geometry_normal` also writes this
+     * field when SURFACE_RECONSTRUCTION_ANCHOR is set, using `previousNormalToScene` and `previousTime` as
+     * needed. No previous evaluation is required elsewhere.
      */
     public float3 previous_geometry_normal = float3(0.0);
 };
@@ -205,13 +178,13 @@ public struct SurfaceInput {
      * The registered surface implementation's word, commonly the address of the extension's session-wide
      * material and texture table. Copied verbatim from SurfaceDefinition.
      */
-    public uint64_t surfaceData;
+    public uint64_t implementationData;
     /**
-     * This geometry's word, copied verbatim from MeshBuild.Geometry. Normally the address of the geometry's
-     * own attribute slice — per geometry rather than per mesh precisely so that
+     * This surface slot's word, copied verbatim from MeshBuild.SurfaceSlot. Normally the address of the
+     * geometry's own attribute slice — per geometry rather than per mesh precisely so that
      * `attributes[primitiveIndex]` is correct with no base to add.
      */
-    public uint64_t geometryData;
+    public uint64_t bindingData;
     /**
      * This placement's word, copied verbatim from SetInstance. What lets one mesh be placed many times and
      * still shade differently: a team colour, an animation frame, an index into a buffer the source
@@ -220,7 +193,7 @@ public struct SurfaceInput {
     public uint64_t instanceData;
     /**
      * Index of the hit triangle within its geometry. Geometry-local: it restarts at zero for each
-     * geometry, which is what makes `geometryData` a usable base pointer.
+     * geometry, which is what makes `bindingData` a usable base pointer.
      */
     public uint primitiveIndex;
     /** Weights for triangle vertices one and two; vertex zero has weight `1 - x - y`. */
@@ -231,12 +204,16 @@ public struct SurfaceInput {
     public AffineTransform previousObjectToScene;
     /** Inverse-transpose object-to-scene transform for normal-map vectors. */
     public NormalTransform normalToScene;
+    /** Previous-frame inverse-transpose transform; equal to normalToScene when no history exists. */
+    public NormalTransform previousNormalToScene;
     /** Hit position in the current scene-origin coordinate system, in scene units. */
     public float3 position;
     /** Stable conversion supplied when this scene was created. */
     public float metersPerSceneUnit;
     /** The triangle's own normal, oriented toward the viewer. Unperturbed by any normal map. */
     public float3 geometricNormal;
+    /** Previous-frame triangle normal in previous scene coordinates, or geometricNormal without history. */
+    public float3 previousGeometricNormal;
     public float3 outgoingDirection;
     /**
      * Ray footprint width at the hit, in scene units. Engine-produced from the ray cone, which is
@@ -255,17 +232,17 @@ public struct SurfaceInput {
     public float time;
     /** `time` one frame ago; equal to `time` when no adjacent frame exists to reproject from. */
     public float previousTime;
-    /** SURFACE_* bits describing this hit. */
-    public uint surfaceFlags;
+    /** SURFACE_* and EVALUATION_* bits describing this evaluation. */
+    public uint evaluationFlags;
 };
 
 /** Inputs used to describe the homogeneous interior selected by one geometry volume slot. */
 public struct VolumeInput {
     public ShaderRootData shaderRoot;
     /** The registered volume implementation's word, copied verbatim from VolumeDefinition. */
-    public uint64_t volumeData;
-    /** The same geometry and placement words supplied to the boundary's surface implementation. */
-    public uint64_t geometryData;
+    public uint64_t implementationData;
+    /** This volume slot's binding word; the placement word follows it. */
+    public uint64_t bindingData;
     public uint64_t instanceData;
     /** Boundary position in the current scene-origin coordinate system. */
     public float3 boundaryPosition;
@@ -275,55 +252,17 @@ public struct VolumeInput {
     public float metersPerSceneUnit;
     public float time;
     public float previousTime;
-    /** SURFACE_* frame facts shared with evaluation at the boundary. */
-    public uint surfaceFlags;
+    /** Shared EVALUATION_* frame facts supplied at the boundary. */
+    public uint evaluationFlags;
 };
 
-/**
- * Exactly what the engine's BSDF evaluates with. Unlike OpenPbrSurface this is not authored vocabulary
- * and nothing outside the engine produces one: reflectance is already F0 and roughness is already GGX
- * alpha (the square of OpenPbrSurface.specular_roughness). It reaches an extension only as the surface
- * `evaluateResponse` is stylizing, and it is exactly the state the payload carries between stages.
- */
-public struct SurfaceClosure {
-    public float3 shadingNormal;
-    /** Sum of diffuse reflection and transmission albedos; used directly by reconstruction guides. */
-    public float3 diffuseAlbedo;
-    /** The diffuse part of `diffuseAlbedo` that leaves through the far hemisphere. */
-    public float3 diffuseTransmissionAlbedo;
-    public float3 specularF0;
-    public float alphaRoughness;
-    /** Emitted radiance in scene-linear ACEScg, after emission_color and luminance are combined. */
-    public float3 emissionRadiance;
-    /** OpenPBR transmission_color used by the thin dielectric sheet. */
-    public float3 thinTransmissionColor;
-    /** OpenPBR transmission_weight after the dielectric share of the base has been applied. */
-    public float thinTransmissionWeight;
-};
-
-public struct BsdfQuery {
-    public SurfaceClosure surface;
-    public float3 outgoingDirection;
-    public float3 incomingDirection;
-};
-
-public struct BsdfEvaluation {
-    public float3 value;
-    public float pdf;
-    public uint eventFlags;
-};
-
-public struct BsdfSampleQuery {
-    public SurfaceClosure surface;
-    public float3 outgoingDirection;
-    public float3 random;
-};
-
-public struct BsdfSample {
-    public float3 incomingDirection;
-    public float3 throughputWeight;
-    public float pdf;
-    public uint eventFlags;
+/** Direct-light context for a volume's optional response to a tracked boundary crossing. */
+public struct VolumeBoundaryLightingInput {
+    public VolumeInput volume;
+    public float3 lightDirection;
+    /** Distance through the volume in scene units. */
+    public float boundaryDistance;
+    public float interiorIor;
 };
 
 public struct EnvironmentQuery {
@@ -336,5 +275,5 @@ public struct EnvironmentQuery {
      * no meaning: it is whatever the extension put there — a bindless slot, packed bits, or the address of
      * a buffer holding this scene's atmosphere.
      */
-    public uint64_t parameters;
+    public uint64_t bindingData;
 };

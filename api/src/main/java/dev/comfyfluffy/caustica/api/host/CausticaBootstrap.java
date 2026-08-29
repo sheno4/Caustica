@@ -8,8 +8,8 @@ public final class CausticaBootstrap {
     private CausticaBootstrap() {
     }
 
-    /** Installs process-time session-factory registration before invoking any extension. */
-    public static void install(RenderSessionChannel sessions) {
-        CausticaApi.install(sessions);
+    /** Creates the immutable process capabilities supplied directly to discovered extensions. */
+    public static CausticaApi create(RenderSessionChannel sessions) {
+        return new CausticaApi(sessions);
     }
 }

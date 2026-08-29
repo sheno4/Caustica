@@ -5,14 +5,37 @@ import java.util.Objects;
 /**
  * One volume implementation and its extension-owned session data root.
  *
- * <p>{@code data} reaches the implementation unchanged. It is commonly a device address for a table of
- * density fields and texture descriptors, but may be any packed 64-bit value. Keep resources reachable
- * from this word alive until the volume's retirement callback runs.
+ * <p>{@code implementationData} reaches the implementation unchanged. It is commonly a device address for a table of
+ * density fields and texture descriptors, but may be any packed 64-bit value. The binding and instance
+ * schema tokens declare the typed words accepted by volume slots and placements and are validated when
+ * geometry is submitted. Keep resources reachable
+ * from this word alive until {@code retired} runs. The callback runs exactly once after the definition is
+ * dropped, abandoned by a failed coalesced composition, or removed with its session, once no active or
+ * in-flight program can execute it and no submitted GPU work can read the root. Retirement callbacks are
+ * serialized by the session, never run inline with {@link ProgramChannel#addVolume}, and must return
+ * promptly without throwing.
+ *
+ * @param <I> implementation data schema
+ * @param <B> geometry-slot binding data schema
+ * @param <N> mesh-placement instance data schema
  */
-public record VolumeDefinition(ShaderSource source, String module, String type, long data) {
+public record VolumeDefinition<I, B, N>(ShaderDefinition implementation, ShaderData<I> implementationData,
+                                        ShaderDataType<B> bindingDataType,
+                                        ShaderDataType<N> instanceDataType,
+                                        Runnable retired) {
     public VolumeDefinition {
-        Objects.requireNonNull(source, "source");
-        SlangIdentifier.require(module, "module");
-        SlangIdentifier.require(type, "type");
+        Objects.requireNonNull(implementation, "implementation");
+        Objects.requireNonNull(implementationData, "implementationData");
+        Objects.requireNonNull(bindingDataType, "bindingDataType");
+        Objects.requireNonNull(instanceDataType, "instanceDataType");
+        Objects.requireNonNull(retired, "retired");
+    }
+
+    /** A definition whose source requires no separate retirement notification. */
+    public static <I, B, N> VolumeDefinition<I, B, N> of(
+            ShaderDefinition implementation, ShaderData<I> implementationData,
+            ShaderDataType<B> bindingDataType, ShaderDataType<N> instanceDataType) {
+        return new VolumeDefinition<>(implementation, implementationData, bindingDataType,
+                instanceDataType, () -> { });
     }
 }

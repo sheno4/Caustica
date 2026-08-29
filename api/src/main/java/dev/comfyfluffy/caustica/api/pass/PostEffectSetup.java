@@ -1,14 +1,18 @@
 package dev.comfyfluffy.caustica.api.pass;
 
+import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
+
+import java.util.Objects;
+
 /**
  * Fixed formats needed to create a post-effect pipeline for one render session.
  *
- * @param common common pass services
+ * @param gpu session GPU services
  * @param sceneColorFormat scene colour/output VkFormat
  * @param exposureFormat exposure-image VkFormat
  */
-public record PostEffectSetup(PassSetup common, int sceneColorFormat, int exposureFormat) {
+public record PostEffectSetup(GpuDevice gpu, int sceneColorFormat, int exposureFormat) implements PassSetup {
     public PostEffectSetup {
-        if (common == null) throw new NullPointerException("common");
+        Objects.requireNonNull(gpu, "gpu");
     }
 }

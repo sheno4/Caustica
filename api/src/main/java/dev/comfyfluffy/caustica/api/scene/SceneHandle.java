@@ -2,7 +2,8 @@ package dev.comfyfluffy.caustica.api.scene;
 
 /**
  * Administration capability for one session-owned scene. {@link #id()} returns the separate, non-owning
- * reference shared with views and contributors; receiving that reference does not grant this capability.
+ * reference shared with views and retained scene content; receiving that reference does not grant this
+ * capability.
  * The session guarantees cleanup; closing this handle requests earlier removal.
  */
 public interface SceneHandle extends AutoCloseable {
@@ -16,12 +17,14 @@ public interface SceneHandle extends AutoCloseable {
      * Replaces this scene's environment binding. The displaced binding's own retirement callback runs
      * after no submitted GPU work can select or read it. The operation is thread-safe, accepted
      * synchronously, and becomes visible at a renderer update boundary. A rejected replacement does not
-     * take ownership of the new binding's callback. The environment implementation must belong to the same
-     * contribution which owns this scene.
+     * take ownership of the new binding's callback. The environment implementation may be shared by another
+     * contribution in this render session; the handle remains the authority to mutate this scene.
      *
      * @throws IllegalStateException if this scene has already closed
+     * @throws IllegalArgumentException if the environment id belongs to another render session or its
+     *         binding data carries a different schema token
      */
-    void setEnvironment(SceneEnvironment environment);
+    void setEnvironment(EnvironmentBinding<?> environment);
 
     /**
      * Requests early removal and cascades removal of the scene's current placements and lights.

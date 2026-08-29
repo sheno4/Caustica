@@ -6,9 +6,19 @@ import java.util.function.Consumer;
 /**
  * Non-blocking observation of one requested world-program composition.
  *
- * <p>The renderer may coalesce several changes into the same compilation; their tickets then complete
- * together. A failed composition leaves the last ready composition active. A newly issued id which never
- * became ready continues to resolve to the visible error implementation.
+ * <p>The ticket names the exact composition requested by one accepted operation. If a later operation is
+ * accepted before that exact composition becomes active, the renderer may coalesce the changes and complete
+ * the earlier ticket as {@link State#SUPERSEDED}; the later ticket observes the combined composition. A
+ * successful candidate is published atomically. A failed candidate publishes none of its changes and leaves
+ * the last ready composition active. Additions introduced by that candidate are abandoned: their ids remain
+ * permanent fallback references and their accepted retirement callbacks are scheduled. Drops in that
+ * candidate leave their implementations live and become requestable again. Earlier tickets coalesced into
+ * the candidate are already {@link State#SUPERSEDED}; its final ticket is {@link State#FAILED}. A later
+ * request starts from the last ready composition rather than inheriting failed changes.
+ *
+ * <p>If an addition is dropped before either change publishes, coalescing may reduce both to a no-op: the
+ * addition ticket is superseded, the drop ticket becomes ready, the id remains a fallback reference, and
+ * the addition's retirement callback is scheduled.
  * A ticket still pending when its contribution begins teardown becomes {@link State#CANCELLED}.
  *
  * <p>There is deliberately no wait method. Compilation completion can depend on render-thread progress,
@@ -33,10 +43,11 @@ public interface ProgramTicket {
         PENDING,
         READY,
         FAILED,
+        SUPERSEDED,
         CANCELLED
     }
 
-    sealed interface Completion permits Ready, Failed, Cancelled { }
+    sealed interface Completion permits Ready, Failed, Superseded, Cancelled { }
 
     record Ready() implements Completion { }
 
@@ -45,6 +56,12 @@ public interface ProgramTicket {
             java.util.Objects.requireNonNull(failure, "failure");
         }
     }
+
+    /**
+     * A later accepted request made this exact intermediate composition unnecessary. This says nothing
+     * about object lifetime: the later combined candidate may still contain this ticket's change.
+     */
+    record Superseded() implements Completion { }
 
     /** The contribution ended before this requested composition could become active. */
     record Cancelled() implements Completion { }

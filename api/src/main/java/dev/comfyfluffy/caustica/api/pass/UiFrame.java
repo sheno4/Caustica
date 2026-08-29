@@ -1,7 +1,7 @@
 package dev.comfyfluffy.caustica.api.pass;
 
 import dev.comfyfluffy.caustica.api.gpu.GpuImage;
-import dev.comfyfluffy.caustica.api.gpu.GpuResourceDescriptor;
+import dev.comfyfluffy.caustica.api.gpu.GpuAccelerationStructureDescriptor;
 import dev.comfyfluffy.caustica.api.view.SceneView;
 
 /**
@@ -9,7 +9,7 @@ import dev.comfyfluffy.caustica.api.view.SceneView;
  * for a generated frame; presentation may reuse or separately interpolate the recorded layer.
  *
  * <p>Scene-linear colour and exposure are not reachable here. The only borrowed world resource is the
- * selected scene's TLAS for occlusion ray queries by world-anchored overlays.
+ * root scene's TLAS for occlusion ray queries by world-anchored overlays.
  *
  * <p>The camera is the exception, because world-anchored UI is still UI — see
  * {@link #worldViewProjection()}.
@@ -44,21 +44,14 @@ public interface UiFrame extends PassFrame {
      */
     float[] worldViewProjection();
 
-    /** The camera and selected scene for this rendered frame. Never retain it past this callback. */
+    /** The camera and root scene for this rendered frame. Never retain it past this callback. */
     SceneView view();
 
     /**
-     * Shader-visible descriptor for {@link #view()}'s selected-scene TLAS. Pass the descriptor index to the
+     * Shader-visible descriptor for {@link #view()}'s root-scene TLAS. Pass the descriptor index to the
      * UI shader and resolve it as a {@code RaytracingAccelerationStructure}; the engine supplies the build-to-
      * shader barrier and retains both the descriptor and TLAS through this frame's GPU completion.
      */
-    GpuResourceDescriptor sceneTlasDescriptor();
-
-    int displayWidth();
-
-    int displayHeight();
-
-    /** The sRGB VkFormat the layer is created with, for building a pipeline compatible with it. */
-    int layerFormat();
+    GpuAccelerationStructureDescriptor rootSceneTlasDescriptor();
 
 }

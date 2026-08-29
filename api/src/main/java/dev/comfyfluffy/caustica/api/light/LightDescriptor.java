@@ -15,27 +15,23 @@ public sealed interface LightDescriptor {
         double positionZ();
     }
 
-    /** A one-sided rectangular emitter; radiance is in cd/m². */
+    /**
+     * A one-sided rectangular emitter whose emitting normal is {@code normalize(halfU × halfV)};
+     * radiance is in cd/m².
+     */
     record Rectangle(double positionX, double positionY, double positionZ,
                      double halfUx, double halfUy, double halfUz,
                      double halfVx, double halfVy, double halfVz,
-                     double normalX, double normalY, double normalZ,
                      double radianceRedCdM2, double radianceGreenCdM2, double radianceBlueCdM2)
             implements Finite {
         public Rectangle {
             LightValidation.position(positionX, positionY, positionZ);
             LightValidation.nonzero(halfUx, halfUy, halfUz, "rectangle half-U axis");
             LightValidation.nonzero(halfVx, halfVy, halfVz, "rectangle half-V axis");
-            LightValidation.unit(normalX, normalY, normalZ, "rectangle normal");
             double cx = halfUy * halfVz - halfUz * halfVy;
             double cy = halfUz * halfVx - halfUx * halfVz;
             double cz = halfUx * halfVy - halfUy * halfVx;
             LightValidation.nonzero(cx, cy, cz, "rectangle axes");
-            double inverseLength = 1.0 / Math.sqrt(cx * cx + cy * cy + cz * cz);
-            double alignment = (cx * normalX + cy * normalY + cz * normalZ) * inverseLength;
-            if (!Double.isFinite(alignment) || alignment < 1.0 - LightValidation.UNIT_TOLERANCE) {
-                throw new IllegalArgumentException("rectangle normal must match half-U cross half-V");
-            }
             LightValidation.color(radianceRedCdM2, radianceGreenCdM2, radianceBlueCdM2, "radiance");
         }
     }

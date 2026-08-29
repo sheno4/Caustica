@@ -2,13 +2,8 @@ package dev.comfyfluffy.caustica.api.pass;
 
 import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
 
-/**
- * Immutable services shared by every pass created for one render session.
- *
- * @param gpu session GPU services
- */
-public record PassSetup(GpuDevice gpu) {
-    public PassSetup {
-        if (gpu == null) throw new NullPointerException();
-    }
+/** Services present in the immutable setup for every pass stage in one render session. */
+public interface PassSetup {
+    /** Session GPU services. */
+    GpuDevice gpu();
 }

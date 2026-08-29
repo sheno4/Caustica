@@ -12,7 +12,7 @@ final class ViewContractTest {
         SceneId scene = new SceneId() { };
         SceneView view = new SceneView(scene, Camera.IDENTITY);
 
-        assertSame(scene, view.scene());
+        assertSame(scene, view.rootScene());
         assertSame(Camera.IDENTITY, view.camera());
     }
 

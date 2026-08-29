@@ -1,10 +1,8 @@
 package dev.comfyfluffy.caustica.api.geometry;
 
-import dev.comfyfluffy.caustica.api.retained.RetainedId;
-
 /**
  * One placement of a retained mesh, in one scene and that scene's coordinate system. Issued by
- * {@link GeometryChannel#newInstance()}. Opaque — see {@link RetainedId}.
+ * {@link GeometryChannel#newInstance()}. The identity is opaque and meaningful only to its issuing context.
  */
-public interface InstanceId extends RetainedId {
+public interface InstanceId {
 }

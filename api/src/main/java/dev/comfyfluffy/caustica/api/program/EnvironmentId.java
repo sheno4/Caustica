@@ -1,10 +1,12 @@
 package dev.comfyfluffy.caustica.api.program;
 
-import dev.comfyfluffy.caustica.api.retained.RetainedId;
-
 /**
- * An environment implementation compiled into the world program, issued by
- * {@link ProgramChannel#addEnvironment}. A scene names one. Opaque — see {@link RetainedId}.
+ * A non-owning environment implementation reference compiled into one render session's world program and
+ * issued by {@link ProgramChannel#addEnvironment}. It may be shared across contributions in that session so
+ * their scenes can bind the same implementation; the issuing contribution retains drop authority and owns
+ * its lifetime. The identity is opaque and meaningful only within that render session.
+ *
+ * @param <B> required scene-binding data schema
  */
-public interface EnvironmentId extends RetainedId {
+public interface EnvironmentId<B> {
 }

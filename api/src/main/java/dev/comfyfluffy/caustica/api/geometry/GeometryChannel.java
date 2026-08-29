@@ -1,10 +1,11 @@
 package dev.comfyfluffy.caustica.api.geometry;
 
 import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
+import dev.comfyfluffy.caustica.api.program.ShaderData;
+import dev.comfyfluffy.caustica.api.program.ShaderDataType;
 import dev.comfyfluffy.caustica.api.session.RenderSessionContext;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 
-import java.util.List;
 import java.util.Objects;
 
 /**
@@ -27,15 +28,18 @@ import java.util.Objects;
  * owning session scope.
  */
 public interface GeometryChannel {
-    /** A fresh mesh id. Cheap, thread-safe, and does nothing until a {@link SetMesh} uses it. */
-    MeshId newMesh();
+    /**
+     * A fresh mesh id with an immutable placement-data schema. Cheap, thread-safe, and does nothing until a
+     * {@link SetMesh} uses it. Naming the schema here preserves its runtime identity before type erasure and
+     * lets {@code var mesh = geometry.newMesh(INSTANCE_DATA)} infer a useful Java type.
+     */
+    <N> MeshId<N> newMesh(ShaderDataType<N> instanceDataType);
 
     /** A fresh placement id. Cheap, thread-safe, and does not choose a scene; {@link SetInstance} does. */
     InstanceId newInstance();
 
     /**
-     * Apply operations. Each {@link RetainedBatch} publishes independently of the others; the call itself is
-     * only a way to hand over several at once.
+     * Apply one atomic batch of operations.
      *
      * <p>A batch may span scenes. That is the point of batching over one collection rather than one per
      * scene: two placements that must not be seen apart — the two sides of a linked pair, a model handed
@@ -43,8 +47,10 @@ public interface GeometryChannel {
      *
      * <p><b>Validation is synchronous.</b> Every way a batch can be invalid — an unknown or stale id, a
      * placement naming a mesh that neither exists nor is created earlier in the same batch, a placement
-     * naming a scene that was never issued or has been dropped, a mesh naming a surface or volume outside
-     * its own contribution, a malformed build — is decided before this returns, and throws. A mesh, its
+     * naming a scene that was never issued or has been dropped, a shader-data token which does not match
+     * the schema carried by its program or mesh id, a mesh naming a surface or volume outside its own
+     * contribution, cutout geometry naming a surface with no coverage implementation, a malformed
+     * build — is decided before this returns, and throws. A mesh, its
      * placements, and its shading programs belong to one contribution scope; {@link SceneId} is the
      * deliberate cross-contribution reference. Nothing is applied if anything throws.
      *
@@ -61,10 +67,10 @@ public interface GeometryChannel {
      * buffers the same way it would for any other release.
      *
      * @throws IllegalArgumentException if any operation names an id this session did not issue, a stale
-     *         scene reference, an identity from another render session, or a non-scene identity from another
-     *         contribution
+     *         scene reference, an identity from another render session, a non-scene identity from another
+     *         contribution, or shader data with a mismatched schema token
      */
-    void submit(List<RetainedBatch<Operation>> batches);
+    void submit(RetainedBatch<Operation> batch);
 
     sealed interface Operation permits SetMesh, DropMesh, SetInstance, DropInstance { }
 
@@ -74,7 +80,7 @@ public interface GeometryChannel {
      * a scene removes placements in that scene, never this scene-independent mesh.
      * A rejected submission changes nothing and does not take ownership of the callback.
      */
-    record SetMesh(MeshId mesh, MeshBuild build) implements Operation {
+    record SetMesh<N>(MeshId<N> mesh, MeshBuild<N> build) implements Operation {
         public SetMesh {
             Objects.requireNonNull(mesh, "mesh");
             Objects.requireNonNull(build, "build");
@@ -85,7 +91,7 @@ public interface GeometryChannel {
      * Remove a mesh and every placement of it, in every scene. The batch that retained its current build
      * reports when those buffers are free.
      */
-    record DropMesh(MeshId mesh) implements Operation {
+    record DropMesh<N>(MeshId<N> mesh) implements Operation {
         public DropMesh {
             Objects.requireNonNull(mesh, "mesh");
         }
@@ -104,10 +110,12 @@ public interface GeometryChannel {
      * what a ray sees within a scene and has nothing to do with which scene that is — scene membership is
      * this operation's {@link SceneId}, so it is not bounded by eight.
      *
-     * <p>{@code properties} is an uninterpreted 64-bit word reaching the surface for this placement only —
-     * the third and last of them, beside the per-geometry and per-surface words. It is what lets one mesh
+     * <p>{@code instanceData} is a typed 64-bit word reaching the selected surface and volume for
+     * this placement only — the last of the implementation, slot-binding, and instance words. It is what lets one mesh
      * be placed many times and still shade differently: a team colour, an animation frame, a per-chunk
-     * light sample, an index into a buffer the source published. Without it a source would have to
+     * light sample, an index into a buffer the source published. Its schema must be the one carried by the
+     * mesh ID and every shader slot in that mesh; the renderer checks token identity synchronously even
+     * when raw Java types bypass compile-time checking. Without it a source would have to
      * duplicate the mesh per placement, which defeats the point of placing it.
      * The callback of the batch containing this operation follows that word until the placement is replaced,
      * dropped, or removed with its scene.
@@ -117,13 +125,15 @@ public interface GeometryChannel {
      * animation, per-instance deformation — desynchronises them and ghosts the result. Geometry that
      * differs per placement is a different mesh.
      */
-    record SetInstance(InstanceId instance, SceneId scene, MeshId mesh, GeometryTransform transform,
-                       int mask, long properties) implements Operation {
+    record SetInstance<N>(InstanceId instance, SceneId scene, MeshId<N> mesh,
+                          GeometryTransform transform, int mask,
+                          ShaderData<N> instanceData) implements Operation {
         public SetInstance {
             Objects.requireNonNull(instance, "instance");
             Objects.requireNonNull(scene, "scene");
             Objects.requireNonNull(mesh, "mesh");
             Objects.requireNonNull(transform, "transform");
+            Objects.requireNonNull(instanceData, "instanceData");
             if ((mask & ~0xFF) != 0) {
                 throw new IllegalArgumentException("visibility mask must fit in eight bits");
             }

@@ -11,27 +11,14 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class GpuContractTest {
     @Test
-    void descriptorPropertiesRejectNonPowerOfTwoAlignment() {
+    void descriptorPropertiesRejectNonPositiveStrides() {
         assertThrows(IllegalArgumentException.class,
-                () -> new GpuDescriptorHeapProperties(32, 32, 16, 3, 16, 16, 128));
-    }
-
-    @Test
-    void descriptorPropertiesRejectNonPowerOfTwoSizes() {
-        assertThrows(IllegalArgumentException.class,
-                () -> new GpuDescriptorHeapProperties(24, 32, 16, 8, 16, 16, 128));
-    }
-
-    @Test
-    void descriptorPropertiesRejectAlignmentLargerThanDescriptor() {
-        assertThrows(IllegalArgumentException.class,
-                () -> new GpuDescriptorHeapProperties(8, 32, 16, 16, 16, 16, 128));
+                () -> new GpuDescriptorHeapProperties(0, 8));
     }
 
     @Test
     void resourceStrideIsUnifiedAcrossImageAndBufferDescriptors() {
-        GpuDescriptorHeapProperties properties =
-                new GpuDescriptorHeapProperties(8, 32, 16, 8, 16, 16, 128);
+        GpuDescriptorHeapProperties properties = new GpuDescriptorHeapProperties(32, 8);
 
         assertEquals(32, properties.resourceDescriptorStride());
         assertEquals(8, properties.samplerDescriptorStride());
@@ -39,10 +26,14 @@ class GpuContractTest {
 
     @Test
     void engineResourcesExposeBorrowedDescriptorViews() throws ReflectiveOperationException {
-        assertEquals(GpuResourceDescriptor.class,
+        assertEquals(GpuImageDescriptor.class,
                 GpuImage.class.getMethod("descriptor", GpuImageDescriptorKind.class).getReturnType());
-        assertEquals(GpuResourceDescriptor.class,
-                UiFrame.class.getMethod("sceneTlasDescriptor").getReturnType());
+        assertEquals(GpuImageDescriptorKind.class,
+                GpuImageDescriptor.class.getMethod("kind").getReturnType());
+        assertEquals(java.util.Set.of(GpuImageDescriptorKind.SAMPLED, GpuImageDescriptorKind.STORAGE),
+                java.util.Set.of(GpuImageDescriptorKind.values()));
+        assertEquals(GpuAccelerationStructureDescriptor.class,
+                UiFrame.class.getMethod("rootSceneTlasDescriptor").getReturnType());
     }
 
     @Test

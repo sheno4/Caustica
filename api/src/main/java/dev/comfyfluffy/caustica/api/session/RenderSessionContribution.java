@@ -5,7 +5,7 @@ public interface RenderSessionContribution extends AutoCloseable {
     RenderSessionContribution EMPTY = new RenderSessionContribution() { };
 
     /**
-     * Stops producers and joins their threads. The host has already stopped frame callbacks and refuses
+     * Stops producers and joins their threads. The host has already stopped pass callbacks and refuses
      * new registrations, but existing identities and retained submission/drop operations remain valid
      * while this method runs. Nothing may be submitted by this contribution after it returns. Called at
      * most once.

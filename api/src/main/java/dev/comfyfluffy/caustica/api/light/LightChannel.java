@@ -4,7 +4,6 @@ import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
 import dev.comfyfluffy.caustica.api.session.RenderSessionContext;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 
-import java.util.List;
 import java.util.Objects;
 
 /**
@@ -33,7 +32,7 @@ public interface LightChannel {
      *         scene reference, an identity from another render session, or a non-scene identity from another
      *         contribution
      */
-    void submit(List<RetainedBatch<Operation>> batches);
+    void submit(RetainedBatch<Operation> batch);
 
     sealed interface Operation permits SetLight, DropLight { }
 

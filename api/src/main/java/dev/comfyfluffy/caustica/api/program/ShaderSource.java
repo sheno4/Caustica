@@ -7,7 +7,8 @@ import java.util.Objects;
 /**
  * Where a feature's {@code .slang} modules resolve from. The resource anchor owns the class loader;
  * this is required when an extension is isolated in a separate mod jar. Module lookup checks the
- * classpath root, then each declared subdirectory in order.
+ * classpath root, then each declared subdirectory in order. Dotted Slang module names map to nested
+ * classpath paths.
  */
 public final class ShaderSource {
     private final Class<?> resourceAnchor;
@@ -44,14 +45,15 @@ public final class ShaderSource {
     }
 
     public InputStream openModule(String module) {
-        SlangIdentifier.require(module, "module");
-        InputStream direct = resourceAnchor.getResourceAsStream(classpathRoot + '/' + module + ".slang");
+        SlangIdentifier.requireModule(module);
+        String modulePath = module.replace('.', '/');
+        InputStream direct = resourceAnchor.getResourceAsStream(classpathRoot + '/' + modulePath + ".slang");
         if (direct != null) {
             return direct;
         }
         for (String subdirectory : subdirectories) {
             InputStream nested = resourceAnchor.getResourceAsStream(
-                    classpathRoot + '/' + subdirectory + '/' + module + ".slang");
+                    classpathRoot + '/' + subdirectory + '/' + modulePath + ".slang");
             if (nested != null) {
                 return nested;
             }

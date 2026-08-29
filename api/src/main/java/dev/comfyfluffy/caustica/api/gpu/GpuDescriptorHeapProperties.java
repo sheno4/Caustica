@@ -1,70 +1,23 @@
 package dev.comfyfluffy.caustica.api.gpu;
 
 /**
- * Descriptor sizes and alignments, in bytes, for the renderer's bound Vulkan descriptor heaps.
+ * Effective shader-visible descriptor strides, in bytes, for the renderer's bound Vulkan descriptor heaps.
  *
- * @param samplerDescriptorSize size of one sampler descriptor
- * @param imageDescriptorSize size of one image descriptor
- * @param bufferDescriptorSize size of one buffer or acceleration-structure descriptor
- * @param samplerDescriptorAlignment required alignment of a sampler descriptor
- * @param imageDescriptorAlignment required alignment of an image descriptor
- * @param bufferDescriptorAlignment required alignment of a buffer or acceleration-structure descriptor
- * @param maxPushDataSize maximum bytes accepted by {@code vkCmdPushDataEXT}
+ * @param resourceDescriptorStride byte stride of one image, buffer, or acceleration-structure slot
+ * @param samplerDescriptorStride byte stride of one sampler slot
  */
 public record GpuDescriptorHeapProperties(
-        long samplerDescriptorSize,
-        long imageDescriptorSize,
-        long bufferDescriptorSize,
-        long samplerDescriptorAlignment,
-        long imageDescriptorAlignment,
-        long bufferDescriptorAlignment,
-        long maxPushDataSize
+        long resourceDescriptorStride,
+        long samplerDescriptorStride
 ) {
     public GpuDescriptorHeapProperties {
-        requirePowerOfTwo(samplerDescriptorSize, "samplerDescriptorSize");
-        requirePowerOfTwo(imageDescriptorSize, "imageDescriptorSize");
-        requirePowerOfTwo(bufferDescriptorSize, "bufferDescriptorSize");
-        requirePowerOfTwo(samplerDescriptorAlignment, "samplerDescriptorAlignment");
-        requirePowerOfTwo(imageDescriptorAlignment, "imageDescriptorAlignment");
-        requirePowerOfTwo(bufferDescriptorAlignment, "bufferDescriptorAlignment");
-        requireAtMost(samplerDescriptorAlignment, samplerDescriptorSize,
-                "samplerDescriptorAlignment", "samplerDescriptorSize");
-        requireAtMost(imageDescriptorAlignment, imageDescriptorSize,
-                "imageDescriptorAlignment", "imageDescriptorSize");
-        requireAtMost(bufferDescriptorAlignment, bufferDescriptorSize,
-                "bufferDescriptorAlignment", "bufferDescriptorSize");
-        requirePositive(maxPushDataSize, "maxPushDataSize");
-    }
-
-    /**
-     * Byte stride of one shader-visible resource slot. Pass shaders using {@code spvDescriptorHeapEXT}
-     * must emit this unified image/buffer stride; in Slang, enable the unified descriptor-heap-stride
-     * option rather than supplying a renderer-specific compiler service.
-     */
-    public long resourceDescriptorStride() {
-        return Math.max(imageDescriptorSize, bufferDescriptorSize);
-    }
-
-    /** Byte stride of one shader-visible sampler slot. */
-    public long samplerDescriptorStride() {
-        return samplerDescriptorSize;
+        requirePositive(resourceDescriptorStride, "resourceDescriptorStride");
+        requirePositive(samplerDescriptorStride, "samplerDescriptorStride");
     }
 
     private static void requirePositive(long value, String name) {
         if (value <= 0) {
             throw new IllegalArgumentException(name + " must be positive");
-        }
-    }
-
-    private static void requirePowerOfTwo(long value, String name) {
-        if (value <= 0 || Long.bitCount(value) != 1) {
-            throw new IllegalArgumentException(name + " must be a positive power of two");
-        }
-    }
-
-    private static void requireAtMost(long value, long limit, String name, String limitName) {
-        if (value > limit) {
-            throw new IllegalArgumentException(name + " must not exceed " + limitName);
         }
     }
 }

@@ -7,7 +7,7 @@ package dev.comfyfluffy.caustica.api.pass;
  * @param <F> frame capabilities supplied when the pass records
  */
 @FunctionalInterface
-public interface PassFactory<S, F extends PassFrame> {
+public interface PassFactory<S extends PassSetup, F extends PassFrame> {
     /**
      * Create one pass. Raw resources remain factory-owned until this method returns successfully. If
      * construction throws, the factory releases its partial allocations because no {@link Pass#close()}

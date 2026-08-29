@@ -9,7 +9,7 @@ final class LightDescriptorTest {
     @Test
     void acceptsCanonicalLights() {
         assertDoesNotThrow(() -> new LightDescriptor.Rectangle(
-                0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 2, 3, 4));
+                0, 0, 0, 1, 0, 0, 0, 1, 0, 2, 3, 4));
         assertDoesNotThrow(() -> new LightDescriptor.Point(0, 0, 0, 10, 1, 2, 3));
         assertDoesNotThrow(() -> new LightDescriptor.Spot(
                 0, 0, 0, 0, 0, -1, 0, 1, 0, 10, 0.5, 0.4, 1, 2, 3));
@@ -35,10 +35,8 @@ final class LightDescriptorTest {
     }
 
     @Test
-    void rejectsDegenerateOrMisorientedRectangle() {
+    void rejectsDegenerateRectangle() {
         assertThrows(IllegalArgumentException.class, () -> new LightDescriptor.Rectangle(
-                0, 0, 0, 1, 0, 0, 2, 0, 0, 0, 0, 1, 1, 1, 1));
-        assertThrows(IllegalArgumentException.class, () -> new LightDescriptor.Rectangle(
-                0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, -1, 1, 1, 1));
+                0, 0, 0, 1, 0, 0, 2, 0, 0, 1, 1, 1));
     }
 }

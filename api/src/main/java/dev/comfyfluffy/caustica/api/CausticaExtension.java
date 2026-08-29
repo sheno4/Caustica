@@ -1,7 +1,8 @@
 package dev.comfyfluffy.caustica.api;
 
 /**
- * Process entry point for an extension.
+ * Process entry point for an extension. The host supplies the immutable process capabilities directly;
+ * extensions do not discover them through global state.
  */
 public interface CausticaExtension {
     /**
