@@ -9,4 +9,14 @@ public final class MinecraftFrameCaptureState implements MinecraftFrameCaptureIn
     }
 
     public MinecraftCapturedFrame current() { return current; }
+
+    public MinecraftLightFrame lightFrame() {
+        MinecraftCapturedFrame frame = current;
+        return frame == null ? null : frame.light();
+    }
+
+    public MinecraftSkyFrame skyFrame() {
+        MinecraftCapturedFrame frame = current;
+        return frame == null ? null : frame.sky().orElse(null);
+    }
 }

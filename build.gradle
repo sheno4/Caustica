@@ -1,7 +1,6 @@
 import groovy.json.JsonOutput
 import java.security.MessageDigest
 import dev.comfyfluffy.caustica.slangtooling.CompileSlangShaders
-import dev.comfyfluffy.caustica.slangtooling.GenerateShaderRecords
 import dev.comfyfluffy.caustica.slangtooling.ReflectSlang
 
 plugins {
@@ -265,75 +264,6 @@ def compileShaders = tasks.register("compileShaders", CompileSlangShaders) {
 	outputDirectory = layout.buildDirectory.dir("generated/shaders/caustica/shaders")
 }
 
-def shaderReflectionRoot = layout.buildDirectory.dir("generated/shader-reflection-sources")
-def prepareShaderReflectionSources = tasks.register("prepareShaderReflectionSources", Sync) {
-	from(file("shaders"))
-	from(runtimeWorldSourceDir) {
-		into "pipelines/world"
-	}
-	from(runtimeBuiltinSourceDir) {
-		into "builtin"
-	}
-	from(runtimeApiSourceDir) {
-		into "api"
-	}
-	from(runtimeMinecraftSourceDir) {
-		into "minecraft"
-	}
-	from(runtimeMinecraftRenderingSourceDir) {
-		into "minecraft"
-	}
-	into(shaderReflectionRoot)
-}
-
-def generateShaderRecords = tasks.register("generateShaderRecords", GenerateShaderRecords) {
-	group = "build"
-	description = "Generates typed Java shader records and serializers from Slang reflection."
-	dependsOn(prepareShaderReflectionSources)
-	shaderRoot = shaderReflectionRoot
-	probeSource = shaderReflectionRoot.map { it.file("layout/layout_probe.slang") }
-	recordSpecs = [
-			"buffer|minecraftEnvironmentBindingLayoutProbe|MinecraftEnvironmentBinding|dev.comfyfluffy.caustica.minecraft.sky.gen|MinecraftEnvironmentBindingData|false",
-			"push|skyLutPushProbe|SkyInputs|dev.comfyfluffy.caustica.minecraft.sky.gen|SkyInputsData|false",
-			"push|skyDispatchPushProbe|SkyLutPush|dev.comfyfluffy.caustica.minecraft.sky.gen|SkyLutPushData|false",
-	]
-	outDir = layout.buildDirectory.dir("generated/sources/rootShaderRecords")
-}
-
-def compileSkySlice = tasks.register("compileSkySlice", JavaCompile) {
-	group = "verification"
-	description = "Compiles the descriptor-heap Minecraft sky pass independently of legacy root consumers."
-	dependsOn(generateShaderRecords, compileShaders, project(":packages:api").tasks.named("classes"),
-			project(":packages:settings-api").tasks.named("classes"),
-			project(":packages:minecraft-api").tasks.named("classes"),
-			project(":packages:vulkan-support").tasks.named("classes"))
-	source(file("src/main/java/dev/comfyfluffy/caustica/minecraft/sky/SkyLutPass.java"),
-			layout.buildDirectory.file("generated/sources/rootShaderRecords/dev/comfyfluffy/caustica/minecraft/sky/gen/SkyInputsData.java"),
-			layout.buildDirectory.file("generated/sources/rootShaderRecords/dev/comfyfluffy/caustica/minecraft/sky/gen/SkyLutPushData.java"),
-			layout.buildDirectory.file("generated/sources/rootShaderRecords/dev/comfyfluffy/caustica/minecraft/sky/gen/MinecraftEnvironmentBindingData.java"))
-	classpath = sourceSets.main.compileClasspath
-	destinationDirectory = layout.buildDirectory.dir("classes/sky-slice")
-	options.release = 25
-}
-
-def compileSkySliceTest = tasks.register("compileSkySliceTest", JavaCompile) {
-	group = "verification"
-	dependsOn(compileSkySlice)
-	source(file("src/test/java/dev/comfyfluffy/caustica/minecraft/sky/SkyLutPassTest.java"))
-	classpath = configurations.testCompileClasspath + files(compileSkySlice.flatMap { it.destinationDirectory })
-	destinationDirectory = layout.buildDirectory.dir("classes/sky-slice-test")
-	options.release = 25
-}
-
-tasks.register("skySliceTest", Test) {
-	group = "verification"
-	dependsOn(compileSkySliceTest)
-	testClassesDirs = files(compileSkySliceTest.flatMap { it.destinationDirectory })
-	classpath = files(compileSkySlice.flatMap { it.destinationDirectory },
-			compileSkySliceTest.flatMap { it.destinationDirectory }) + configurations.testRuntimeClasspath
-	useJUnitPlatform()
-}
-
 def compileOverlayHeapAbiTest = tasks.register("compileOverlayHeapAbiTest", JavaCompile) {
 	group = "verification"
 	source(file("src/test/java/dev/comfyfluffy/caustica/minecraft/overlay/OverlayHeapAbiTest.java"))
@@ -413,7 +343,6 @@ tasks.named("test", Test) {
 	useJUnitPlatform()
 }
 
-sourceSets.main.java.srcDir(files(layout.buildDirectory.dir("generated/sources/rootShaderRecords")).builtBy(generateShaderRecords))
 
 // Emit the .spv into the main resources so they land in the jar / on the runClient classpath at the
 // same /caustica/shaders/ path the pipeline loaders read. builtBy wires the dependency.

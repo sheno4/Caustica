@@ -16,6 +16,8 @@ final class SourceDependencyArchitectureTest {
     private static final Path PROJECT_ROOT = findProjectRoot();
     private static final Path MAIN_JAVA = PROJECT_ROOT.resolve("src/main/java");
     private static final Path MINECRAFT = MAIN_JAVA.resolve("dev/comfyfluffy/caustica/minecraft");
+    private static final Path MINECRAFT_RENDERING = PROJECT_ROOT.resolve(
+            "packages/minecraft-rendering/src/main/java/dev/comfyfluffy/caustica/minecraft");
     private static final Path API = PROJECT_ROOT.resolve("api/src/main/java/dev/comfyfluffy/caustica/api");
 
     @Test
@@ -52,8 +54,8 @@ final class SourceDependencyArchitectureTest {
 
     @Test
     void minecraftSkyAndLightPublicationDoNotSampleClientState() throws IOException {
-        for (Path source : List.of(MINECRAFT.resolve("sky/SkyLutPass.java"),
-                MINECRAFT.resolve("provider/MinecraftLightProvider.java"))) {
+        for (Path source : List.of(MINECRAFT_RENDERING.resolve("sky/SkyLutPass.java"),
+                MINECRAFT_RENDERING.resolve("provider/MinecraftLightProvider.java"))) {
             String text = Files.readString(source);
             assertFalse(text.contains("Minecraft.getInstance()"), source + " samples Minecraft during recording");
             assertFalse(text.contains("import net.minecraft"), source + " imports live Minecraft state");

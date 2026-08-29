@@ -7,7 +7,8 @@ import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.engine.light.RetainedLightBatch;
 import dev.comfyfluffy.caustica.engine.light.RetainedLightSnapshot;
-import dev.comfyfluffy.caustica.minecraft.MinecraftCapturedFrame;
+import dev.comfyfluffy.caustica.minecraft.MinecraftCelestialFrame;
+import dev.comfyfluffy.caustica.minecraft.MinecraftLightFrame;
 import dev.comfyfluffy.caustica.minecraft.MinecraftLightingCalibration;
 import org.junit.jupiter.api.Test;
 
@@ -20,15 +21,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class MinecraftLightProviderTest {
-    @Test
-    void helmetUsesTheCircularSpotContract() {
-        LightDescriptor.Spot spot = MinecraftLightProvider.helmetSpot(1, 2, 3, 0, 0, -1);
-
-        assertEquals(48.0, spot.rangeMeters());
-        assertEquals(Math.toRadians(22.0), spot.halfAngleRadians());
-        assertEquals(-1.0, spot.directionZ());
-    }
-
     @Test
     void noonSubmitsOnlyTheAboveHorizonSun() {
         MinecraftLightProvider.CelestialLights lights = MinecraftLightProvider.celestialLights(frame(
@@ -89,9 +81,9 @@ final class MinecraftLightProviderTest {
     void updateConsumesOneCoherentCapturedFrame() {
         RecordingLights channel = new RecordingLights();
         AtomicInteger reads = new AtomicInteger();
-        var celestial = new MinecraftCapturedFrame.Celestial(0, (float) Math.PI, 0, 0,
+        var celestial = new MinecraftCelestialFrame(0, (float) Math.PI, 0, 0,
                 0, 63, 63, 1, new MinecraftLightingCalibration(128_000, 5, 1, 0, 0, .1f));
-        var frame = new MinecraftCapturedFrame(Optional.of(celestial), Optional.empty(), Optional.empty(),
+        var frame = new MinecraftLightFrame(Optional.of(celestial), Optional.empty(),
                 RetainedLightSnapshot.empty(1));
         MinecraftLightProvider provider = new MinecraftLightProvider(channel, new SceneId() { },
                 () -> new MinecraftLightProvider.CelestialSettings(30, .6, 1.5),

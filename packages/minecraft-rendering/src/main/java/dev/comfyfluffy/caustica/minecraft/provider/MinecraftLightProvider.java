@@ -7,7 +7,8 @@ import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.engine.light.RetainedLightBatch;
 import dev.comfyfluffy.caustica.engine.light.RetainedLightSnapshot;
-import dev.comfyfluffy.caustica.minecraft.MinecraftCapturedFrame;
+import dev.comfyfluffy.caustica.minecraft.MinecraftCelestialFrame;
+import dev.comfyfluffy.caustica.minecraft.MinecraftLightFrame;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -26,7 +27,7 @@ public final class MinecraftLightProvider implements AutoCloseable {
     private final LightChannel lights;
     private final SceneId scene;
     private final Supplier<CelestialSettings> celestialSettings;
-    private final Supplier<MinecraftCapturedFrame> frames;
+    private final Supplier<MinecraftLightFrame> frames;
     private final LightId helmetLight;
     private final LightId sunLight;
     private final LightId moonLight;
@@ -35,7 +36,7 @@ public final class MinecraftLightProvider implements AutoCloseable {
 
     public MinecraftLightProvider(LightChannel lights, SceneId scene,
                                   Supplier<CelestialSettings> celestialSettings,
-                                  Supplier<MinecraftCapturedFrame> frames) {
+                                  Supplier<MinecraftLightFrame> frames) {
         this.lights = lights;
         this.scene = scene;
         this.celestialSettings = celestialSettings;
@@ -47,7 +48,7 @@ public final class MinecraftLightProvider implements AutoCloseable {
 
     /** Publishes one already-captured Minecraft frame as an atomic retained-light update. */
     public void update() {
-        MinecraftCapturedFrame frame = frames.get();
+        MinecraftLightFrame frame = frames.get();
         if (frame == null) return;
         CelestialLights celestial = frame.celestial()
                 .map(value -> celestialLights(celestialFrame(value, celestialSettings.get())))
@@ -129,7 +130,7 @@ public final class MinecraftLightProvider implements AutoCloseable {
         return new CelestialLights(sun, moon);
     }
 
-    static CelestialFrame celestialFrame(MinecraftCapturedFrame.Celestial captured, CelestialSettings settings) {
+    static CelestialFrame celestialFrame(MinecraftCelestialFrame captured, CelestialSettings settings) {
         var lighting = captured.lighting();
         return new CelestialFrame(
                 captured.sunAngleRadians(), captured.moonAngleRadians(),
@@ -152,12 +153,6 @@ public final class MinecraftLightProvider implements AutoCloseable {
         if (y <= 0.0 || illuminance <= 0.0) return Optional.empty();
         return Optional.of(new LightDescriptor.Distant(x, y, z,
                 illuminance, illuminance, illuminance, angularRadius, true));
-    }
-
-    public static LightDescriptor.Spot helmetSpot(double x, double y, double z,
-                                                  double directionX, double directionY, double directionZ) {
-        return new LightDescriptor.Spot(x, y, z, directionX, directionY, directionZ,
-                48.0, Math.toRadians(22.0), 720.0, 690.0, 610.0);
     }
 
     record CelestialLights(Optional<LightDescriptor.Distant> sun,

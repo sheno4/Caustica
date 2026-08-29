@@ -1,13 +1,14 @@
 package dev.comfyfluffy.caustica.minecraft.sky;
 
-import com.mojang.blaze3d.vulkan.VulkanGpuTexture;
 import dev.comfyfluffy.caustica.api.vulkan.*;
 import dev.comfyfluffy.caustica.api.pass.Pass;
 import dev.comfyfluffy.caustica.api.pass.PassFrame;
 import dev.comfyfluffy.caustica.api.program.EnvironmentId;
 import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
 import dev.comfyfluffy.caustica.minecraft.MinecraftLightingCalibration;
-import dev.comfyfluffy.caustica.minecraft.MinecraftCapturedFrame;
+import dev.comfyfluffy.caustica.minecraft.CelestialAtlasImage;
+import dev.comfyfluffy.caustica.minecraft.MinecraftCelestialFrame;
+import dev.comfyfluffy.caustica.minecraft.MinecraftSkyFrame;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftEnvironmentSelector;
 import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
 import dev.comfyfluffy.caustica.minecraft.sky.gen.*;
@@ -53,7 +54,7 @@ public final class SkyLutPass implements Pass<PassFrame> {
 
     private final GpuDevice gpu;
     private final Supplier<OptionValues> options;
-    private final Supplier<MinecraftCapturedFrame> frames;
+    private final Supplier<MinecraftSkyFrame> frames;
     private final EnvironmentId<MinecraftProgramTypes.EnvironmentBindingData> environment;
     private final MinecraftEnvironmentSelector selector;
     private final VmaImage2D transmittance, multiScatter, skyView;
@@ -66,7 +67,7 @@ public final class SkyLutPass implements Pass<PassFrame> {
     private int liveBindings;
 
     public SkyLutPass(GpuDevice gpu, Supplier<OptionValues> options,
-                      Supplier<MinecraftCapturedFrame> frames,
+                      Supplier<MinecraftSkyFrame> frames,
                       EnvironmentId<MinecraftProgramTypes.EnvironmentBindingData> environment,
                       MinecraftEnvironmentSelector selector, long epoch) {
         this.gpu = Objects.requireNonNull(gpu, "gpu");
@@ -103,10 +104,10 @@ public final class SkyLutPass implements Pass<PassFrame> {
 
     @Override public void record(PassFrame frame) {
         if (!initialized) { initializeImages(frame.commandBuffer()); initialized = true; }
-        MinecraftCapturedFrame captured = frames.get();
-        if (captured == null || captured.celestial().isEmpty() || captured.atlas().isEmpty()) return;
-        SkyState state = gather(options.get(), captured.celestial().orElseThrow());
-        AtlasSnapshot snapshot = atlasSnapshot(captured.atlas().orElseThrow());
+        MinecraftSkyFrame captured = frames.get();
+        if (captured == null) return;
+        SkyState state = gather(options.get(), captured.celestial());
+        AtlasSnapshot snapshot = atlasSnapshot(captured.atlas());
         ensureAtlas(snapshot);
         SkyInputsData inputs = skyInputs(state, snapshot);
         if (baked && Float.compare(bakedGroundAlbedo, state.groundAlbedo()) != 0) baked = false;
@@ -131,9 +132,9 @@ public final class SkyLutPass implements Pass<PassFrame> {
 
     private void ensureAtlas(AtlasSnapshot snapshot) {
         long epoch = resourcePackEpoch.get();
-        if (atlas != null && atlas.texture == snapshot.texture() && atlas.epoch == epoch) return;
+        if (atlas != null && atlas.image.vkImage() == snapshot.image().vkImage() && atlas.epoch == epoch) return;
         AtlasEntry replacement = AtlasEntry.create(
-                gpu, snapshot.texture(), snapshot.baseMipLevel(), snapshot.mipLevels(), epoch);
+                gpu, snapshot.image(), snapshot.baseMipLevel(), snapshot.mipLevels(), epoch);
         AtlasEntry previous = atlas;
         atlas = replacement;
         baked = false;
@@ -198,7 +199,7 @@ public final class SkyLutPass implements Pass<PassFrame> {
                 a.sunUv(), a.moonUv());
     }
 
-    static SkyState gather(OptionValues options, MinecraftCapturedFrame.Celestial captured) {
+    static SkyState gather(OptionValues options, MinecraftCelestialFrame captured) {
         float altitude = viewerAltitudeKm(captured.cameraY(), captured.seaLevel(),
                 captured.metersPerSceneUnit());
         float r = (float) (Math.PI / 180.0);
@@ -218,11 +219,11 @@ public final class SkyLutPass implements Pass<PassFrame> {
         return Math.clamp((float) ((cameraY - seaLevel) * metersPerSceneUnit / 1000.0), 0, 99);
     }
 
-    private static AtlasSnapshot atlasSnapshot(MinecraftCapturedFrame.CelestialAtlas atlas) {
-        return new AtlasSnapshot(atlas.texture(), atlas.baseMipLevel(), atlas.mipLevels(),
+    private static AtlasSnapshot atlasSnapshot(MinecraftSkyFrame.CelestialAtlas atlas) {
+        return new AtlasSnapshot(atlas.image(), atlas.baseMipLevel(), atlas.mipLevels(),
                 uv(atlas.sunUv()), uv(atlas.moonUv()));
     }
-    private static SkyInputsData.Float4 uv(MinecraftCapturedFrame.Uv uv) {
+    private static SkyInputsData.Float4 uv(MinecraftSkyFrame.Uv uv) {
         return new SkyInputsData.Float4(uv.u0(), uv.v0(), uv.u1(), uv.v1());
     }
 
@@ -308,23 +309,23 @@ public final class SkyLutPass implements Pass<PassFrame> {
     }
 
     private static final class AtlasEntry {
-        final VulkanGpuTexture texture; final long epoch;
+        final CelestialAtlasImage image; final long epoch;
         final GpuDescriptorRange<GpuDescriptorIndex.Resource> descriptor;
         int references = 1;
-        AtlasEntry(VulkanGpuTexture texture, long epoch,
+        AtlasEntry(CelestialAtlasImage image, long epoch,
                    GpuDescriptorRange<GpuDescriptorIndex.Resource> descriptor) {
-            this.texture = texture; this.epoch = epoch; this.descriptor = descriptor;
+            this.image = image; this.epoch = epoch; this.descriptor = descriptor;
         }
-        static AtlasEntry create(GpuDevice gpu, VulkanGpuTexture texture,
+        static AtlasEntry create(GpuDevice gpu, CelestialAtlasImage image,
                                  int baseMipLevel, int mipLevels, long epoch) {
-            texture.addViews();
+            image.retainViews();
             GpuDescriptorRange<GpuDescriptorIndex.Resource> range = null;
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 range = gpu.descriptorHeap().allocateResources(
                         1, "Minecraft celestials atlas epoch " + epoch);
                 GpuDescriptorRange<GpuDescriptorIndex.Resource> allocated = range;
                 VkImageViewCreateInfo view = VkImageViewCreateInfo.calloc(stack).sType$Default()
-                        .image(texture.vkImage())
+                        .image(image.vkImage())
                         .viewType(VK_IMAGE_VIEW_TYPE_2D).format(VK_FORMAT_R8G8B8A8_UNORM);
                 view.subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).baseMipLevel(baseMipLevel)
                         .levelCount(mipLevels).baseArrayLayer(0).layerCount(1);
@@ -333,10 +334,10 @@ public final class SkyLutPass implements Pass<PassFrame> {
                 gpu.descriptorHeap().writer().writeResource(allocated, 0,
                         VkResourceDescriptorInfoEXT.calloc(stack).sType$Default()
                                 .type(VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE).data(d -> d.pImage(info)));
-                return new AtlasEntry(texture, epoch, allocated);
+                return new AtlasEntry(image, epoch, allocated);
             } catch (RuntimeException | Error failure) {
                 if (range != null) range.destroy();
-                texture.removeViews();
+                image.releaseViews();
                 throw failure;
             }
         }
@@ -344,7 +345,7 @@ public final class SkyLutPass implements Pass<PassFrame> {
         synchronized void release() {
             if (--references != 0) return;
             Throwable failure = cleanup(null, descriptor::destroy);
-            failure = cleanup(failure, texture::removeViews);
+            failure = cleanup(failure, image::releaseViews);
             if (failure instanceof RuntimeException runtime) throw runtime;
             if (failure instanceof Error error) throw error;
         }
@@ -382,7 +383,7 @@ public final class SkyLutPass implements Pass<PassFrame> {
         @Override public void close() { if (!closed) { closed = true; Vma.vmaDestroyBuffer(allocator, buffer, allocation); } }
     }
 
-    record AtlasSnapshot(VulkanGpuTexture texture, int baseMipLevel, int mipLevels,
+    record AtlasSnapshot(CelestialAtlasImage image, int baseMipLevel, int mipLevels,
                          SkyInputsData.Float4 sunUv, SkyInputsData.Float4 moonUv) { }
     record SkyState(float sunAngleRadians, float moonAngleRadians, float starAngleRadians, float starBrightness,
                     float sunIlluminanceLux, float moonIlluminanceLux, float nightAirglowLuminance,

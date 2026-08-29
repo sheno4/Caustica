@@ -3,7 +3,7 @@ package dev.comfyfluffy.caustica.minecraft.sky;
 import dev.comfyfluffy.caustica.minecraft.sky.gen.MinecraftEnvironmentBindingData;
 import dev.comfyfluffy.caustica.minecraft.sky.gen.SkyInputsData;
 import dev.comfyfluffy.caustica.minecraft.sky.gen.SkyLutPushData;
-import dev.comfyfluffy.caustica.minecraft.MinecraftCapturedFrame;
+import dev.comfyfluffy.caustica.minecraft.MinecraftCelestialFrame;
 import dev.comfyfluffy.caustica.minecraft.MinecraftLightingCalibration;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftDimensionKey;
 import dev.comfyfluffy.caustica.settings.Option;
@@ -64,7 +64,7 @@ final class SkyLutPassTest {
 
     @Test void skyStateUsesOneCapturedHostFrame() {
         var lighting = new MinecraftLightingCalibration(100, 2, 3, 4, 5, .25f);
-        var captured = new MinecraftCapturedFrame.Celestial(.1f, .2f, .3f, .4f,
+        var captured = new MinecraftCelestialFrame(.1f, .2f, .3f, .4f,
                 6, 63, 1063, 1, lighting);
         OptionValues defaults = new OptionValues() {
             @Override public <T> T get(Option<T> option) { return option.defaultValue(); }

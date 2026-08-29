@@ -78,7 +78,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
             frameCapture = java.util.Objects.requireNonNull(frameCaptures.install(frames, calibration),
                     "frame capture lease");
             lights = new MinecraftLightProvider(context.renderSession().lights(), context.scene(),
-                    MinecraftProgramSession::celestialSettings, frames::current);
+                    MinecraftProgramSession::celestialSettings, frames::lightFrame);
             MinecraftLightProvider installedLights = lights;
             lightRegistration = context.renderSession().passes().addWorldResourcePass(
                     setup -> new LightUpdatePass(installedLights));
@@ -214,7 +214,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         if (!SKIES.supports(context.dimension())) return null;
         return context.renderSession().passes().addWorldResourcePass(setup -> {
             SkyLutPass sky = SKIES.create(context.dimension(), setup.gpu(), MinecraftProgramSession::options,
-                    frames::current, programs.environment(), context.environment(), generation);
+                    frames::skyFrame, programs.environment(), context.environment(), generation);
             return new FirstRecordPass(sky, () -> skySelected(generation));
         });
     }

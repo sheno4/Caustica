@@ -28,20 +28,23 @@ final class MinecraftClientFrameCapture {
 
     static MinecraftCapturedFrame capture(Minecraft minecraft, double cameraY, double metersPerSceneUnit,
                                           MinecraftLightingCalibration calibration) {
-        Optional<MinecraftCapturedFrame.Celestial> celestial = celestial(
+        Optional<MinecraftCelestialFrame> celestial = celestial(
                 minecraft, cameraY, metersPerSceneUnit, calibration);
-        return new MinecraftCapturedFrame(celestial, celestial.flatMap(value -> atlas(minecraft, value)),
-                helmet(minecraft), RtTerrain.retainedLightSnapshot());
+        MinecraftLightFrame light = new MinecraftLightFrame(celestial, helmet(minecraft),
+                RtTerrain.retainedLightSnapshot());
+        Optional<MinecraftSkyFrame> sky = celestial.flatMap(value -> atlas(minecraft, value)
+                .map(atlas -> new MinecraftSkyFrame(value, atlas)));
+        return new MinecraftCapturedFrame(light, sky);
     }
 
-    private static Optional<MinecraftCapturedFrame.Celestial> celestial(
+    private static Optional<MinecraftCelestialFrame> celestial(
             Minecraft minecraft, double cameraY, double metersPerSceneUnit,
             MinecraftLightingCalibration calibration) {
         if (minecraft.player == null || minecraft.level == null
                 || !Level.OVERWORLD.equals(minecraft.level.dimension())) return Optional.empty();
         float partial = minecraft.getDeltaTracker().getGameTimeDeltaPartialTick(false);
         var probe = minecraft.gameRenderer.mainCamera().attributeProbe();
-        return Optional.of(new MinecraftCapturedFrame.Celestial(
+        return Optional.of(new MinecraftCelestialFrame(
                 probe.getValue(EnvironmentAttributes.SUN_ANGLE, partial) * TO_RADIANS,
                 probe.getValue(EnvironmentAttributes.MOON_ANGLE, partial) * TO_RADIANS,
                 probe.getValue(EnvironmentAttributes.STAR_ANGLE, partial) * TO_RADIANS,
@@ -51,8 +54,8 @@ final class MinecraftClientFrameCapture {
                 calibration));
     }
 
-    private static Optional<MinecraftCapturedFrame.CelestialAtlas> atlas(
-            Minecraft minecraft, MinecraftCapturedFrame.Celestial celestial) {
+    private static Optional<MinecraftSkyFrame.CelestialAtlas> atlas(
+            Minecraft minecraft, MinecraftCelestialFrame celestial) {
         try {
             TextureAtlas atlas = minecraft.getAtlasManager().getAtlasOrThrow(AtlasIds.CELESTIALS);
             if (!(atlas.getTextureView() instanceof VulkanGpuTextureView view)
@@ -60,7 +63,8 @@ final class MinecraftClientFrameCapture {
             TextureAtlasSprite sun = atlas.getSprite(SUN_SPRITE_ID);
             int phase = Math.clamp(celestial.moonPhaseIndex(), 0, MOON_SPRITE_IDS.length - 1);
             TextureAtlasSprite moon = atlas.getSprite(MOON_SPRITE_IDS[phase]);
-            return Optional.of(new MinecraftCapturedFrame.CelestialAtlas(view.texture(), view.baseMipLevel(),
+            return Optional.of(new MinecraftSkyFrame.CelestialAtlas(
+                    new MinecraftCelestialAtlasImage(view.texture()), view.baseMipLevel(),
                     view.mipLevels(), uv(sun), uv(moon)));
         } catch (RuntimeException unavailable) {
             return Optional.empty();
@@ -74,13 +78,14 @@ final class MinecraftClientFrameCapture {
         }
         Vec3 eye = minecraft.player.getEyePosition();
         Vector3fc forward = minecraft.gameRenderer.mainCamera().forwardVector();
-        return Optional.of(dev.comfyfluffy.caustica.minecraft.provider.MinecraftLightProvider.helmetSpot(
+        return Optional.of(new LightDescriptor.Spot(
                 eye.x + forward.x() * 0.18, eye.y - 0.08 + forward.y() * 0.18,
-                eye.z + forward.z() * 0.18, forward.x(), forward.y(), forward.z()));
+                eye.z + forward.z() * 0.18, forward.x(), forward.y(), forward.z(),
+                48.0, Math.toRadians(22.0), 720.0, 690.0, 610.0));
     }
 
-    private static MinecraftCapturedFrame.Uv uv(TextureAtlasSprite sprite) {
-        return new MinecraftCapturedFrame.Uv(sprite.getU0(), sprite.getV0(), sprite.getU1(), sprite.getV1());
+    private static MinecraftSkyFrame.Uv uv(TextureAtlasSprite sprite) {
+        return new MinecraftSkyFrame.Uv(sprite.getU0(), sprite.getV0(), sprite.getU1(), sprite.getV1());
     }
 
     private static Identifier[] moonSpriteIds() {

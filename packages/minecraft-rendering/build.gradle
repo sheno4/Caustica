@@ -1,3 +1,4 @@
+import dev.comfyfluffy.caustica.slangtooling.CompileSlangShaders
 import dev.comfyfluffy.caustica.slangtooling.GenerateShaderRecords
 
 plugins {
@@ -18,6 +19,7 @@ dependencies {
     api project(":packages:minecraft-api")
     api project(":packages:settings-api")
     implementation project(":packages:engine")
+    implementation project(":packages:vulkan-support")
     api project(":packages:minecraft-content")
     implementation "org.slf4j:slf4j-api:2.0.17"
 
@@ -29,6 +31,31 @@ dependencies {
 def minecraftShaderModules = file("src/main/resources/caustica/shaders/minecraft")
 def apiShaderModules = project(":packages:shader-api").file("src/main/resources/caustica/shaders/api")
 def reflectionRoot = layout.buildDirectory.dir("generated/reflection-sources")
+
+def generatedShaderResources = layout.buildDirectory.dir("generated/resources")
+def compileMinecraftSkyShaders = tasks.register("compileMinecraftSkyShaders", CompileSlangShaders) {
+    group = "build"
+    sourceDirectory = file("shaders/pipelines/sky")
+    includeDirectories.from(minecraftShaderModules, apiShaderModules)
+    aliasSourceDirectory = file("shaders/pipelines/sky")
+    outputDirectory = generatedShaderResources.map { it.dir("caustica/shaders/pipelines/sky") }
+}
+sourceSets.main.resources.srcDir(files(generatedShaderResources).builtBy(compileMinecraftSkyShaders))
+
+def verifyMinecraftSkyShaders = tasks.register("verifyMinecraftSkyShaders") {
+    group = "verification"
+    dependsOn(compileMinecraftSkyShaders)
+    doLast {
+        def task = compileMinecraftSkyShaders.get()
+        if (task.spirvProfile.get() != "spirv_1_6" || task.vulkanTarget.get() != "vulkan1.4") {
+            throw new GradleException("sky shaders target ${task.spirvProfile.get()}/${task.vulkanTarget.get()}")
+        }
+        def names = fileTree(generatedShaderResources).matching { include "**/*.spv" }.files*.name.sort()
+        if (names != ["multiscatter.comp.spv", "transmittance.comp.spv", "view.comp.spv"]) {
+            throw new GradleException("sky SPIR-V outputs drifted: ${names}")
+        }
+    }
+}
 def prepareMinecraftRenderingReflectionSources = tasks.register("prepareMinecraftRenderingReflectionSources", Sync) {
     from(minecraftShaderModules) { into "minecraft" }
     from(apiShaderModules) { into "api" }
@@ -40,7 +67,10 @@ def minecraftRenderingRecordSpecs = [
         "buffer|minecraftImplementationLayoutProbe|MinecraftImplementationData|dev.comfyfluffy.caustica.minecraft.gen|MinecraftImplementationData|false",
         "buffer|minecraftMaterialLayoutProbe|MinecraftMaterialRecord|dev.comfyfluffy.caustica.minecraft.gen|MinecraftMaterialData|false",
         "buffer|minecraftPrimitiveLayoutProbe|MinecraftPrimitiveData|dev.comfyfluffy.caustica.minecraft.gen|MinecraftPrimitiveData|false",
-        "buffer|minecraftInstanceLayoutProbe|MinecraftInstanceData|dev.comfyfluffy.caustica.minecraft.gen|MinecraftInstanceData|false"
+        "buffer|minecraftInstanceLayoutProbe|MinecraftInstanceData|dev.comfyfluffy.caustica.minecraft.gen|MinecraftInstanceData|false",
+        "buffer|minecraftEnvironmentBindingLayoutProbe|MinecraftEnvironmentBinding|dev.comfyfluffy.caustica.minecraft.sky.gen|MinecraftEnvironmentBindingData|false",
+        "push|skyLutPushProbe|SkyInputs|dev.comfyfluffy.caustica.minecraft.sky.gen|SkyInputsData|false",
+        "push|skyDispatchPushProbe|SkyLutPush|dev.comfyfluffy.caustica.minecraft.sky.gen|SkyLutPushData|false"
 ]
 def generatedRecordRoot = layout.buildDirectory.dir("generated/sources/shaderRecords")
 def generateMinecraftRenderingRecords = tasks.register("generateMinecraftRenderingRecords", GenerateShaderRecords) {
@@ -73,11 +103,16 @@ def verifyMinecraftRenderingAbi = tasks.register("verifyMinecraftRenderingAbi") 
                 MinecraftImplementationData: ["BYTE_SIZE = 16", "putLong(0, materialsAddress())", "putInt(8, samplerIndex().value())", "putInt(12, reserved())"],
                 MinecraftMaterialData: ["BYTE_SIZE = 112", "putInt(0, features())", "putFloat(32, materialUv().x())", "putFloat(108, emissionLuminance())"],
                 MinecraftPrimitiveData: ["BYTE_SIZE = 144", "putFloat(0 + i0 * 8, textureCoordinates()[i0].x())", "putInt(92, materialIndex())", "putFloat(128, bitangent().x())"],
-                MinecraftInstanceData: ["BYTE_SIZE = 32", "putFloat(0, tint().x())", "putInt(16, damageTexture().value())", "putFloat(20, damageStrength())"]
+                MinecraftInstanceData: ["BYTE_SIZE = 32", "putFloat(0, tint().x())", "putInt(16, damageTexture().value())", "putFloat(20, damageStrength())"],
+                MinecraftEnvironmentBindingData: ["BYTE_SIZE = 32"],
+                SkyInputsData: ["BYTE_SIZE = 112"],
+                SkyLutPushData: ["BYTE_SIZE = 128"]
         ]
         expected.each { name, fragments ->
             def source = generatedRecordRoot.get().file(
-                    "dev/comfyfluffy/caustica/minecraft/gen/${name}.java").asFile.getText("UTF-8")
+                    (name.startsWith("Sky") || name.startsWith("MinecraftEnvironment")
+                            ? "dev/comfyfluffy/caustica/minecraft/sky/gen/${name}.java"
+                            : "dev/comfyfluffy/caustica/minecraft/gen/${name}.java")).asFile.getText("UTF-8")
             def missing = fragments.findAll { !source.contains(it) }
             if (!missing.empty) throw new GradleException("${name} ABI drifted: ${missing}")
         }
@@ -108,7 +143,8 @@ def verifyMinecraftRenderingDependencies = tasks.register("verifyMinecraftRender
     group = "verification"
     doLast {
         def allowed = [project.path, ":packages:api", ":packages:shader-api", ":packages:engine",
-                       ":packages:minecraft-api", ":packages:minecraft-content", ":packages:settings-api"] as Set
+                       ":packages:minecraft-api", ":packages:minecraft-content", ":packages:settings-api",
+                       ":packages:vulkan-support"] as Set
         def violations = []
         configurations.matching { it.canBeResolved }.each { configuration ->
             configuration.allDependencies.withType(ProjectDependency).each { dependency ->
@@ -152,8 +188,16 @@ def verifyMinecraftRenderingResources = tasks.register("verifyMinecraftRendering
                 "caustica/shaders/minecraft/surface/caustica_minecraft_surface.slang",
                 "caustica/shaders/minecraft/surface/caustica_portal_surface.slang",
                 "caustica/shaders/minecraft/surface/caustica_water_surface.slang"
+                ,"caustica/shaders/minecraft/sky/caustica_minecraft_celestial_dressing.slang"
+                ,"caustica/shaders/minecraft/sky/caustica_minecraft_overworld_sky.slang"
+                ,"caustica/shaders/minecraft/sky/caustica_minecraft_sky_atmosphere.slang"
+                ,"caustica/shaders/minecraft/sky/caustica_minecraft_sky_bindings.slang"
+                ,"caustica/shaders/minecraft/sky/caustica_minecraft_sky_lut_multiscatter.slang"
+                ,"caustica/shaders/minecraft/sky/caustica_minecraft_sky_lut_transmittance.slang"
+                ,"caustica/shaders/minecraft/sky/caustica_minecraft_sky_lut_types.slang"
+                ,"caustica/shaders/minecraft/sky/caustica_minecraft_sky_lut_view.slang"
         ]
-        if (files.sort() != expected) throw new GradleException("minecraft-rendering resource ownership mismatch: ${files.sort()}")
+        if (files.sort() != expected.sort()) throw new GradleException("minecraft-rendering resource ownership mismatch: ${files.sort()}")
     }
 }
 
@@ -179,6 +223,15 @@ def verifyMinecraftRenderingJar = tasks.register("verifyMinecraftRenderingJar") 
                 "dev/comfyfluffy/caustica/minecraft/gen/MinecraftImplementationData",
                 "dev/comfyfluffy/caustica/minecraft/gen/MinecraftPrimitiveData",
                 "dev/comfyfluffy/caustica/minecraft/gen/MinecraftInstanceData"
+                ,"dev/comfyfluffy/caustica/minecraft/CelestialAtlasImage"
+                ,"dev/comfyfluffy/caustica/minecraft/MinecraftCapturedFrame"
+                ,"dev/comfyfluffy/caustica/minecraft/MinecraftCelestialFrame"
+                ,"dev/comfyfluffy/caustica/minecraft/MinecraftLightFrame"
+                ,"dev/comfyfluffy/caustica/minecraft/MinecraftSkyFrame"
+                ,"dev/comfyfluffy/caustica/minecraft/provider/MinecraftLightProvider"
+                ,"dev/comfyfluffy/caustica/minecraft/sky/MinecraftSkyCatalog"
+                ,"dev/comfyfluffy/caustica/minecraft/sky/SkyLutPass"
+                ,"dev/comfyfluffy/caustica/minecraft/sky/gen/"
         ]
         def foreign = []
         def shaderResources = []
@@ -198,8 +251,16 @@ def verifyMinecraftRenderingJar = tasks.register("verifyMinecraftRenderingJar") 
                 "caustica/shaders/minecraft/surface/caustica_minecraft_surface.slang",
                 "caustica/shaders/minecraft/surface/caustica_portal_surface.slang",
                 "caustica/shaders/minecraft/surface/caustica_water_surface.slang"
+                ,"caustica/shaders/minecraft/sky/caustica_minecraft_celestial_dressing.slang"
+                ,"caustica/shaders/minecraft/sky/caustica_minecraft_overworld_sky.slang"
+                ,"caustica/shaders/minecraft/sky/caustica_minecraft_sky_atmosphere.slang"
+                ,"caustica/shaders/minecraft/sky/caustica_minecraft_sky_bindings.slang"
+                ,"caustica/shaders/minecraft/sky/caustica_minecraft_sky_lut_multiscatter.slang"
+                ,"caustica/shaders/minecraft/sky/caustica_minecraft_sky_lut_transmittance.slang"
+                ,"caustica/shaders/minecraft/sky/caustica_minecraft_sky_lut_types.slang"
+                ,"caustica/shaders/minecraft/sky/caustica_minecraft_sky_lut_view.slang"
         ]
-        if (!foreign.empty || shaderResources.sort() != expectedResources) {
+        if (!foreign.empty || shaderResources.sort() != expectedResources.sort()) {
             throw new GradleException("minecraft-rendering JAR mismatch; foreign=${foreign}, resources=${shaderResources.sort()}")
         }
     }
@@ -209,7 +270,7 @@ tasks.named("test", Test) { useJUnitPlatform() }
 tasks.named("check") {
     dependsOn(verifyMinecraftRenderingAbi, verifyMinecraftRenderingGenerationReproducible,
             verifyMinecraftRenderingDependencies, verifyMinecraftRenderingImports,
-            verifyMinecraftRenderingResources, verifyMinecraftRenderingJar)
+            verifyMinecraftRenderingResources, verifyMinecraftRenderingJar, verifyMinecraftSkyShaders)
 }
 tasks.withType(JavaCompile).configureEach { options.release = 25 }
 
