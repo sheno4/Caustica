@@ -5,6 +5,8 @@ import dev.comfyfluffy.caustica.minecraft.MinecraftFrameAdapter;
 import dev.comfyfluffy.caustica.minecraft.MinecraftRuntimeHost;
 import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftDeviceBringup;
 import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftVulkanBackend;
+import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
+import dev.comfyfluffy.caustica.minecraft.terrain.RtWorkerPool;
 import dev.comfyfluffy.caustica.rt.RtRuntime;
 
 import java.util.Objects;
@@ -21,11 +23,14 @@ public final class CausticaClientComposition {
     private final WorldRenderScaler renderScaler;
     private final MinecraftDeviceBringup deviceBringup;
     private final MinecraftVulkanBackend vulkanBackend;
+    private final RtWorkerPool terrainWorkers;
+    private final RtTerrain terrain;
 
     public CausticaClientComposition(RtRuntime runtime, MinecraftApiBootstrap.ApiServices apiServices,
                                      MinecraftFrameAdapter frameAdapter, MinecraftRuntimeHost runtimeHost,
                                      VanillaRenderController renderController, WorldRenderScaler renderScaler,
-                                     MinecraftDeviceBringup deviceBringup, MinecraftVulkanBackend vulkanBackend) {
+                                     MinecraftDeviceBringup deviceBringup, MinecraftVulkanBackend vulkanBackend,
+                                     RtWorkerPool terrainWorkers, RtTerrain terrain) {
         this.runtime = Objects.requireNonNull(runtime, "runtime");
         this.apiServices = Objects.requireNonNull(apiServices, "apiServices");
         this.frameAdapter = Objects.requireNonNull(frameAdapter, "frameAdapter");
@@ -34,6 +39,8 @@ public final class CausticaClientComposition {
         this.renderScaler = Objects.requireNonNull(renderScaler, "renderScaler");
         this.deviceBringup = Objects.requireNonNull(deviceBringup, "deviceBringup");
         this.vulkanBackend = Objects.requireNonNull(vulkanBackend, "vulkanBackend");
+        this.terrainWorkers = Objects.requireNonNull(terrainWorkers, "terrainWorkers");
+        this.terrain = Objects.requireNonNull(terrain, "terrain");
     }
 
     public RtRuntime runtime() {
@@ -50,6 +57,8 @@ public final class CausticaClientComposition {
     public WorldRenderScaler renderScaler() { return renderScaler; }
     public MinecraftDeviceBringup deviceBringup() { return deviceBringup; }
     public MinecraftVulkanBackend vulkanBackend() { return vulkanBackend; }
+    public RtWorkerPool terrainWorkers() { return terrainWorkers; }
+    public RtTerrain terrain() { return terrain; }
 
     /** Advances client integration after the renderer backend has observed Minecraft's live device. */
     public void tickRuntime(net.minecraft.client.Minecraft client) {

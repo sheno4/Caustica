@@ -6,6 +6,7 @@ import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
 import dev.comfyfluffy.caustica.rt.RtRuntime;
 
 public final class VanillaRenderController {
+	private final RtTerrain terrain;
 	private boolean frameStarted;
 	private boolean baseReady;
 	private boolean projectionCaptured;
@@ -19,7 +20,8 @@ public final class VanillaRenderController {
 	private String inactiveReason;
 	private String lastLoggedInactiveReason;
 
-	public VanillaRenderController() {
+	public VanillaRenderController(RtTerrain terrain) {
+		this.terrain = java.util.Objects.requireNonNull(terrain, "terrain");
 	}
 
 	public void beginFrame(RenderTarget mainTarget) {
@@ -157,7 +159,7 @@ public final class VanillaRenderController {
 		if (replacement == RtRuntime.WorldReplacement.DEVICE_UNAVAILABLE) {
 			return "RT context is not ready";
 		}
-		if (RtTerrain.currentOrNull() == null) {
+		if (terrain.currentOrNull() == null) {
 			return "RT terrain is not ready";
 		}
 		if (replacement == RtRuntime.WorldReplacement.RESOURCE_TRANSITION) {

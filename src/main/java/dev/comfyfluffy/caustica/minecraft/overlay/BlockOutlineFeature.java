@@ -30,7 +30,11 @@ import java.nio.ByteOrder;
 /** The vanilla targeted-block shape rendered at display resolution and occluded through the root TLAS. */
 final class BlockOutlineFeature implements OverlayFeature {
     private final RtEntities entities;
-    BlockOutlineFeature(RtEntities entities) { this.entities = entities; }
+    private final RtTerrain terrain;
+    BlockOutlineFeature(RtEntities entities, RtTerrain terrain) {
+        this.entities = entities;
+        this.terrain = java.util.Objects.requireNonNull(terrain, "terrain");
+    }
     private static final int PUSH_BYTES = 112;
     private static final float OUTLINE_ALPHA = 102f / 255f;
     private GpuDevice device;
@@ -46,15 +50,17 @@ final class BlockOutlineFeature implements OverlayFeature {
     @Override public boolean prepare(GpuDevice device, OverlayFramePool pool, GpuFrameUse gpuUse,
             int worldTlasDescriptor, Matrix4fc worldViewProjection, int width, int height) {
         if (!CausticaConfig.Rt.Overlay.BLOCK_OUTLINE_ENABLED.value() || worldTlasDescriptor == 0) return false;
-        RtTerrain terrain = RtTerrain.currentOrNull();
-        if (terrain == null) return false;
+        RtTerrain currentTerrain = terrain.currentOrNull();
+        if (currentTerrain == null) return false;
         var game = Minecraft.getInstance().gameRenderer.gameRenderState();
         if (game.guiRenderState.isHudHidden) return false;
         BlockOutlineRenderState state = game.levelRenderState.blockOutlineRenderState;
         if (state == null || !shouldRenderForGameMode(state.pos())) return false;
         BlockPos pos = state.pos();
         VoxelShape shape = state.shape();
-        float baseX = pos.getX() - terrain.blockX, baseY = pos.getY() - terrain.blockY, baseZ = pos.getZ() - terrain.blockZ;
+        float baseX = pos.getX() - currentTerrain.blockX;
+        float baseY = pos.getY() - currentTerrain.blockY;
+        float baseZ = pos.getZ() - currentTerrain.blockZ;
         FloatArrayList vertices = new FloatArrayList(72);
         shape.forAllEdges((x1,y1,z1,x2,y2,z2) -> {
             vertices.add((float)(baseX+x1)); vertices.add((float)(baseY+y1)); vertices.add((float)(baseZ+z1));

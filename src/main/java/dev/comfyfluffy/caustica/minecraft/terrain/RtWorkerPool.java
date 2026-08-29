@@ -23,11 +23,17 @@ import java.util.concurrent.atomic.AtomicInteger;
  * never block JVM exit.
  */
 public final class RtWorkerPool {
-    public static final RtWorkerPool INSTANCE = new RtWorkerPool();
-
+    private final int threads;
     private ThreadPoolExecutor exec;
 
-    private RtWorkerPool() {}
+    public RtWorkerPool() {
+        this(resolveThreads());
+    }
+
+    RtWorkerPool(int threads) {
+        if (threads <= 0) throw new IllegalArgumentException("threads must be positive");
+        this.threads = threads;
+    }
 
     private static int resolveThreads() {
         return CausticaConfig.Rt.WORKER_THREADS.value();
@@ -35,7 +41,6 @@ public final class RtWorkerPool {
 
     private synchronized ThreadPoolExecutor executor() {
         if (exec == null) {
-            int threads = resolveThreads();
             ThreadFactory factory = new ThreadFactory() {
                 private final AtomicInteger n = new AtomicInteger();
                 @Override

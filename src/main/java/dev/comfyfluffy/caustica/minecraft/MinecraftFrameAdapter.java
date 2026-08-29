@@ -29,6 +29,7 @@ import org.joml.Matrix4fc;
 /** Converts Minecraft lifecycle and camera state into coherent engine frame inputs. */
 public final class MinecraftFrameAdapter {
     private static final double METERS_PER_WORLD_UNIT = 1.0;
+    private final RtTerrain terrain;
     private ClientLevel identifiedLevel;
     private long nextSceneId;
     private long sceneId;
@@ -38,10 +39,12 @@ public final class MinecraftFrameAdapter {
     private final RtEntities entities = new RtEntities(entityTextures);
     private long renderedWorldFrameIndex;
 
-    public MinecraftFrameAdapter() {
+    public MinecraftFrameAdapter(RtTerrain terrain) {
+        this.terrain = java.util.Objects.requireNonNull(terrain, "terrain");
     }
 
     public void tickRuntime(Minecraft client) {
+        terrain.update();
         ClientLevel level = client.level;
         long currentSceneId = identify(level);
         if (!(client.gui.overlay() instanceof LoadingOverlay)) {
@@ -49,7 +52,7 @@ public final class MinecraftFrameAdapter {
         }
         var target = client.gameRenderer.mainRenderTarget();
         boolean startupSceneReady = level != null && client.player != null
-                && RtTerrain.isSectionReady(client.player.blockPosition());
+                && terrain.isSectionReady(client.player.blockPosition());
         CausticaClientComposition.current().runtime().tick(captureSceneResources(client), startupSceneReady, currentSceneId,
                 dimensionKey(level),
                 target != null ? target.width : 0, target != null ? target.height : 0,
@@ -59,6 +62,7 @@ public final class MinecraftFrameAdapter {
     /** Returns no snapshot while a world/program epoch has not installed its engine-issued scene. */
     public FrameSnapshot capture(Minecraft client, Matrix4fc projection, Matrix4fc viewRotation,
                                  double cameraX, double cameraY, double cameraZ) {
+        terrain.frame();
         ClientLevel level = client.level;
         BlockPos cameraBlockPos = new BlockPos(Mth.floor(cameraX), Mth.floor(cameraY), Mth.floor(cameraZ));
         boolean submerged = false;
@@ -70,14 +74,15 @@ public final class MinecraftFrameAdapter {
         FrameCaptureBinding capture = frameCapture;
         if (capture != null) {
             capture.sink.update(MinecraftClientFrameCapture.capture(
-                    client, cameraY, METERS_PER_WORLD_UNIT, capture.calibration));
+                    client, cameraY, METERS_PER_WORLD_UNIT, capture.calibration,
+                    terrain.retainedLightSnapshot()));
         }
         MinecraftFrameSelector.Selection selection = selection(submerged);
         if (selection == null) return null;
         Camera camera = new Camera(cameraX, cameraY, cameraZ,
                 projection.get(new float[16]), viewRotation.get(new float[16]));
-        RtTerrain terrain = RtTerrain.currentOrNull();
-        SceneOrigin sceneOrigin = terrain != null ? terrain.sceneOrigin() : SceneOrigin.ZERO;
+        RtTerrain currentTerrain = terrain.currentOrNull();
+        SceneOrigin sceneOrigin = currentTerrain != null ? currentTerrain.sceneOrigin() : SceneOrigin.ZERO;
         FrameSnapshot snapshot = new FrameSnapshot(new SceneView(selection.scene(), camera, selection.medium()), sceneOrigin,
                 CausticaConfig.Rt.Composite.WATER_WAVES.value(),
                 System.nanoTime() / 1.0e9, METERS_PER_WORLD_UNIT);

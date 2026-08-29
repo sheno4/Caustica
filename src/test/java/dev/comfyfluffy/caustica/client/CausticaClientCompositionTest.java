@@ -7,6 +7,8 @@ import dev.comfyfluffy.caustica.minecraft.MinecraftRuntimeHost;
 import dev.comfyfluffy.caustica.minecraft.adapter.session.MinecraftWorldSessionHost;
 import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftDeviceBringup;
 import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftVulkanBackend;
+import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
+import dev.comfyfluffy.caustica.minecraft.terrain.RtWorkerPool;
 import dev.comfyfluffy.caustica.nvidia.ngx.NgxRuntime;
 import dev.comfyfluffy.caustica.rt.RtRuntime;
 import dev.comfyfluffy.caustica.rt.RtTelemetryImpl;
@@ -37,14 +39,17 @@ final class CausticaClientCompositionTest {
         MinecraftApiBootstrap.ApiServices services = new MinecraftApiBootstrap.ApiServices(
                 renderHost, minecraftHost, new SettingsRegistry(), slang, shaderCache, ngx);
         RtRuntime runtime = new RtRuntime(renderHost, minecraftHost, slang, shaderCache, telemetry, ngx);
-        MinecraftFrameAdapter frameAdapter = new MinecraftFrameAdapter();
-        VanillaRenderController renderController = new VanillaRenderController();
+        RtWorkerPool terrainWorkers = new RtWorkerPool();
+        RtTerrain terrain = new RtTerrain(terrainWorkers);
+        MinecraftFrameAdapter frameAdapter = new MinecraftFrameAdapter(terrain);
+        VanillaRenderController renderController = new VanillaRenderController(terrain);
         WorldRenderScaler renderScaler = new WorldRenderScaler(renderController);
         MinecraftRuntimeHost runtimeHost = new MinecraftRuntimeHost(renderController, renderScaler);
         MinecraftDeviceBringup deviceBringup = new MinecraftDeviceBringup();
         MinecraftVulkanBackend vulkanBackend = new MinecraftVulkanBackend(deviceBringup, runtime);
         CausticaClientComposition composition = new CausticaClientComposition(runtime, services, frameAdapter,
-                runtimeHost, renderController, renderScaler, deviceBringup, vulkanBackend);
+                runtimeHost, renderController, renderScaler, deviceBringup, vulkanBackend,
+                terrainWorkers, terrain);
 
         CausticaClientComposition.publish(composition);
 
@@ -56,8 +61,11 @@ final class CausticaClientCompositionTest {
         assertSame(renderScaler, composition.renderScaler());
         assertSame(deviceBringup, composition.deviceBringup());
         assertSame(vulkanBackend, composition.vulkanBackend());
+        assertSame(terrainWorkers, composition.terrainWorkers());
+        assertSame(terrain, composition.terrain());
         assertThrows(IllegalStateException.class,
                 () -> CausticaClientComposition.publish(new CausticaClientComposition(runtime, services,
-                        frameAdapter, runtimeHost, renderController, renderScaler, deviceBringup, vulkanBackend)));
+                        frameAdapter, runtimeHost, renderController, renderScaler, deviceBringup, vulkanBackend,
+                        terrainWorkers, terrain)));
     }
 }

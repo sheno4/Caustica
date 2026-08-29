@@ -9,10 +9,12 @@ import dev.comfyfluffy.caustica.minecraft.program.MinecraftPrograms;
 /** Session-owned construction hook for the retained terrain producer. */
 public final class MinecraftTerrainSession {
     private final GpuDevice gpu;
+    private final RtTerrain terrain;
     private MinecraftTerrainGeometry geometry;
 
-    public MinecraftTerrainSession(GpuDevice gpu) {
+    public MinecraftTerrainSession(GpuDevice gpu, RtTerrain terrain) {
         this.gpu = java.util.Objects.requireNonNull(gpu, "gpu");
+        this.terrain = java.util.Objects.requireNonNull(terrain, "terrain");
     }
 
     /**
@@ -20,12 +22,12 @@ public final class MinecraftTerrainSession {
      * Section material indices are valid only against that matching epoch.
      */
     public void publishMaterialLookup(MinecraftMaterialLookup lookup) {
-        RtTerrain.publishMaterialLookup(lookup);
+        terrain.publishMaterialLookup(lookup);
     }
 
     /** Suspends new section extraction while resource-pack material records are replaced. */
     public void clearMaterialLookup() {
-        RtTerrain.clearMaterialLookup();
+        terrain.clearMaterialLookup();
     }
 
     /** Installs the atomic program exports and begins targeting the borrowed world scene. */
@@ -33,15 +35,15 @@ public final class MinecraftTerrainSession {
         if (geometry != null) throw new IllegalStateException("terrain session is already bound");
         var uploader = new MinecraftVulkanTerrainUploader(gpu, programs);
         geometry = new MinecraftTerrainGeometry(channel, scene, uploader);
-        RtTerrain.bindGeometry(geometry);
+        terrain.bindGeometry(geometry);
     }
 
     /** Stops publication and atomically removes every retained terrain section. */
     public void stop() {
-        RtTerrain.clearMaterialLookup();
+        terrain.clearMaterialLookup();
         if (geometry == null) return;
         geometry.close();
-        RtTerrain.unbindGeometry(geometry);
+        terrain.unbindGeometry(geometry);
         geometry = null;
     }
 

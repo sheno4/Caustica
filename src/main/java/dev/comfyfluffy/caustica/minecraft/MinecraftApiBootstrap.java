@@ -9,6 +9,7 @@ import dev.comfyfluffy.caustica.engine.session.RenderSessionHost;
 import dev.comfyfluffy.caustica.minecraft.adapter.session.MinecraftWorldSessionHost;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftExtension;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftClientMaterialEpochCompiler;
+import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
 import dev.comfyfluffy.caustica.platform.CausticaPlatform;
 import dev.comfyfluffy.caustica.rt.RtTelemetry;
 import dev.comfyfluffy.caustica.nvidia.ngx.NgxRuntime;
@@ -28,7 +29,7 @@ public final class MinecraftApiBootstrap {
     private MinecraftApiBootstrap() { }
 
     public static ApiServices initialize(CausticaPlatform platform, RtTelemetry telemetry,
-                                         MinecraftFrameAdapter frameAdapter) {
+                                         MinecraftFrameAdapter frameAdapter, RtTerrain terrain) {
         MinecraftTelemetry.install(telemetry);
         RenderSessionHost host = new RenderSessionHost();
         MinecraftWorldSessionHost minecraftHost = new MinecraftWorldSessionHost();
@@ -46,7 +47,7 @@ public final class MinecraftApiBootstrap {
                         new MinecraftClientMaterialEpochCompiler(calibration), calibration,
                         frameAdapter.entities(),
                         frameAdapter.entityTextures(),
-                        frameAdapter.entities()));
+                        frameAdapter.entities(), terrain));
 
         Path gameDirectory = platform.gameDir();
         String configuredSlangPath = CausticaConfig.Slang.PATH.get();

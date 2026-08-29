@@ -5,6 +5,8 @@ import dev.comfyfluffy.caustica.minecraft.api.MinecraftApi;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftWorldSessionFactory;
 import dev.comfyfluffy.caustica.minecraft.sky.SkyLutPass;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialEpochCompiler;
+import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
+import dev.comfyfluffy.caustica.minecraft.terrain.RtWorkerPool;
 import dev.comfyfluffy.caustica.settings.SettingsRegistry;
 import org.junit.jupiter.api.Test;
 
@@ -45,6 +47,6 @@ final class MinecraftProvidersExtensionTest {
         var entities = new dev.comfyfluffy.caustica.minecraft.entity.RtEntities(textures);
         return new MinecraftProvidersExtension(selector -> () -> { }, (sink, calibration) -> () -> { },
                 materials, new MinecraftLightingCalibration(1, 1, 1, 0, 0, 0),
-                entities, textures, entities);
+                entities, textures, entities, new RtTerrain(new RtWorkerPool()));
     }
 }

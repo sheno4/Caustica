@@ -43,19 +43,21 @@ public class LevelExtractorMixin {
     @Inject(method = "allChanged", at = @At("HEAD"))
     private void caustica$invalidateRenderState(CallbackInfo ci) {
         CausticaClientBootstrap.invalidateRenderState();
+        CausticaClientComposition.current().terrain().requestFullClear();
     }
 
     @Inject(method = "blockChanged(Lnet/minecraft/core/BlockPos;I)V", at = @At("HEAD"))
     private void caustica$rtBlockChanged(BlockPos pos, int updateFlags, CallbackInfo ci) {
         if (CausticaClientComposition.current().runtime().hasSession()) {
-            RtTerrain.markBlocksDirty(pos.getX(), pos.getY(), pos.getZ(), pos.getX(), pos.getY(), pos.getZ());
+            CausticaClientComposition.current().terrain().markBlocksDirty(
+                    pos.getX(), pos.getY(), pos.getZ(), pos.getX(), pos.getY(), pos.getZ());
         }
     }
 
     @Inject(method = "setBlocksDirty(IIIIII)V", at = @At("HEAD"))
     private void caustica$rtBlocksDirty(int minX, int minY, int minZ, int maxX, int maxY, int maxZ, CallbackInfo ci) {
         if (CausticaClientComposition.current().runtime().hasSession()) {
-            RtTerrain.markBlocksDirty(minX, minY, minZ, maxX, maxY, maxZ);
+            CausticaClientComposition.current().terrain().markBlocksDirty(minX, minY, minZ, maxX, maxY, maxZ);
         }
     }
 

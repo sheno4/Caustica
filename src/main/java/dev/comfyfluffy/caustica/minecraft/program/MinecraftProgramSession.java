@@ -17,6 +17,7 @@ import dev.comfyfluffy.caustica.minecraft.provider.MinecraftLightProvider;
 import dev.comfyfluffy.caustica.minecraft.sky.SkyLutPass;
 import dev.comfyfluffy.caustica.minecraft.sky.MinecraftSkyCatalog;
 import dev.comfyfluffy.caustica.minecraft.terrain.MinecraftTerrainSession;
+import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
 import dev.comfyfluffy.caustica.minecraft.entity.*;
 import dev.comfyfluffy.caustica.settings.*;
 
@@ -40,6 +41,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
     private final PassRegistration overlayRegistration;
     private final dev.comfyfluffy.caustica.minecraft.MinecraftEntityCaptureBinding entityCapture;
     private final dev.comfyfluffy.caustica.minecraft.entity.RtEntityTextures entityTextures;
+    private final RtTerrain terrain;
     private Pending pending;
     private Active active;
     private boolean stopped;
@@ -52,7 +54,8 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
                                     MinecraftLightProvider lights, PassRegistration lightRegistration,
                                     PassRegistration overlayRegistration,
                                     dev.comfyfluffy.caustica.minecraft.MinecraftEntityCaptureBinding entityCapture,
-                                    dev.comfyfluffy.caustica.minecraft.entity.RtEntityTextures entityTextures) {
+                                    dev.comfyfluffy.caustica.minecraft.entity.RtEntityTextures entityTextures,
+                                    RtTerrain terrain) {
         this.context = context;
         this.resources = resources;
         this.materialEpochs = materialEpochs;
@@ -64,6 +67,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         this.overlayRegistration = overlayRegistration;
         this.entityCapture = entityCapture;
         this.entityTextures = entityTextures;
+        this.terrain = terrain;
     }
 
     public static MinecraftProgramSession open(MinecraftWorldSessionContext context,
@@ -73,11 +77,13 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
                                                MinecraftLightingCalibration calibration,
                                                dev.comfyfluffy.caustica.minecraft.MinecraftEntityCaptureBinding entityCapture,
                                                dev.comfyfluffy.caustica.minecraft.entity.RtEntityTextures entityTextures,
-                                               dev.comfyfluffy.caustica.minecraft.entity.RtEntities entities) {
+                                               dev.comfyfluffy.caustica.minecraft.entity.RtEntities entities,
+                                               RtTerrain terrain) {
         java.util.Objects.requireNonNull(frameSelections, "frameSelections");
         java.util.Objects.requireNonNull(frameCaptures, "frameCaptures");
         java.util.Objects.requireNonNull(materialEpochs, "materialEpochs");
         java.util.Objects.requireNonNull(calibration, "calibration");
+        java.util.Objects.requireNonNull(terrain, "terrain");
         MinecraftProgramResources resources = new MinecraftProgramResources(context.renderSession().gpu());
         MinecraftFrameCaptureState frames = new MinecraftFrameCaptureState();
         MinecraftFrameCaptureInstaller.Lease frameCapture = null;
@@ -93,10 +99,10 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
             lightRegistration = context.renderSession().passes().addWorldResourcePass(
                     setup -> new LightUpdatePass(installedLights));
             overlayRegistration = context.renderSession().passes().addUiPass(
-                    WorldOverlayPass.ID, setup -> new WorldOverlayPass(setup, entities));
+                    WorldOverlayPass.ID, setup -> new WorldOverlayPass(setup, entities, terrain));
             MinecraftProgramSession session = new MinecraftProgramSession(
                     context, resources, materialEpochs, frameSelections, frames, frameCapture,
-                    lights, lightRegistration, overlayRegistration, entityCapture, entityTextures);
+                    lights, lightRegistration, overlayRegistration, entityCapture, entityTextures, terrain);
             session.beginReplacement(context.resourcePackEpoch());
             return session;
         } catch (RuntimeException | Error failure) {
@@ -190,14 +196,14 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         Active displaced = active;
         if (displaced != null) displaced.stopSceneProducers();
 
-        MinecraftTerrainSession terrain = new MinecraftTerrainSession(context.renderSession().gpu());
+        MinecraftTerrainSession terrainSession = new MinecraftTerrainSession(context.renderSession().gpu(), terrain);
         MinecraftFrameSelectionInstaller.Lease frameSelection = null;
         MinecraftEntityGeometry entityGeometry = null;
         dev.comfyfluffy.caustica.minecraft.MinecraftEntityCaptureBinding.Lease entityLease = null;
         MinecraftFrameSelector frameSelector = null;
         try {
-            terrain.bind(programs, context.renderSession().geometry(), context.scene());
-            terrain.publishMaterialLookup(request.lookup);
+            terrainSession.bind(programs, context.renderSession().geometry(), context.scene());
+            terrainSession.publishMaterialLookup(request.lookup);
             frameSelector = new MinecraftFrameSelector(context.scene(), programs.waterVolume(),
                     request.published.gpu().fallbackBindingData(),
                     request.published.gpu().fallbackInstanceData());
@@ -212,7 +218,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
             if (entityLease != null) entityLease.close();
             if (entityGeometry != null) { entityGeometry.stop(); entityGeometry.close(); }
             if (frameSelection != null) frameSelection.close();
-            terrain.stop();
+            terrainSession.stop();
             if (sky != null) sky.close();
             throw failure;
         }
@@ -222,7 +228,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
             delayed.addAll(displaced.delayed);
             delayed.add(new RetiredPrograms(displaced.sky, displaced.registration));
         }
-        Active replacement = new Active(request.generation, registration, terrain,
+        Active replacement = new Active(request.generation, registration, terrainSession,
                 frameSelector, frameSelection, entityGeometry, entityLease, sky, delayed);
         request.registration = null;
         request.published = null;
@@ -301,6 +307,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         pending = null;
         if (active != null) active.closePrograms();
         active = null;
+        terrain.shutdown();
     }
 
     @Override public void close() { resources.close(); }

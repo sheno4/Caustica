@@ -52,8 +52,8 @@ import static dev.comfyfluffy.caustica.minecraft.terrain.RtTerrainMesher.buildCp
 import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrainMesher.CpuSection;
 import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrainMesher.WorkerTessState;
 /**
- * Per-section terrain residency synced to vanilla's loaded chunks. A singleton manager
- * keeps a map of resident 16³ sections. The 20 TPS tick maintains the desired window around the player
+ * Per-section terrain residency synced to vanilla's loaded chunks. One root-owned manager keeps a map
+ * of resident 16³ sections. The 20 TPS tick maintains the desired window around the player
  * (slid incrementally on section-boundary crossings) and drains dirty events; the actual streaming —
  * snapshot dispatch, completion drain, and publish — runs once per render frame from
  * the RT frame renderer with count-bounded completion and dispatch passes rather than a per-tick burst.
@@ -103,7 +103,7 @@ public final class RtTerrain {
         return CausticaConfig.Rt.Terrain.REBASE_DISTANCE_BLOCKS.value();
     }
 
-    private static final RtTerrain INSTANCE = new RtTerrain();
+    private final RtWorkerPool workers;
     private MinecraftTerrainGeometry retainedGeometry;
 
     private boolean sceneInitialized;
@@ -205,7 +205,8 @@ public final class RtTerrain {
         return desired;
     }
 
-    private RtTerrain() {
+    public RtTerrain(RtWorkerPool workers) {
+        this.workers = java.util.Objects.requireNonNull(workers, "workers");
         missingIndex.defaultReturnValue(NO_MISSING_INDEX);
         queuedDirtyGroup.defaultReturnValue(NO_DIRTY_GROUP);
         inFlight.defaultReturnValue(NO_TESS_TOKEN);
@@ -219,20 +220,20 @@ public final class RtTerrain {
      * window (world join, dimension change, a full evict) still returns non-null so the RT frame keeps
      * tracing (sky/entities only) instead of a caller falling back to vanilla.
      */
-    public static RtTerrain currentOrNull() {
-        return INSTANCE.sceneInitialized ? INSTANCE : null;
+    public RtTerrain currentOrNull() {
+        return sceneInitialized ? this : null;
     }
 
-    public static boolean isSectionReady(BlockPos blockPos) {
+    public boolean isSectionReady(BlockPos blockPos) {
         int scx = SectionPos.blockToSectionCoord(blockPos.getX());
         int scy = SectionPos.blockToSectionCoord(blockPos.getY());
         int scz = SectionPos.blockToSectionCoord(blockPos.getZ());
         long key = sectionKey(scx, scy, scz);
-        return INSTANCE.sceneInitialized && (INSTANCE.isPublished(key) || INSTANCE.empty.contains(key));
+        return sceneInitialized && (isPublished(key) || empty.contains(key));
     }
 
-    public static RetainedLightSnapshot retainedLightSnapshot() {
-        return INSTANCE.retainedLights;
+    public RetainedLightSnapshot retainedLightSnapshot() {
+        return retainedLights;
     }
 
     /** Stable renderer frame origin selected by the terrain streaming window. */
@@ -241,43 +242,42 @@ public final class RtTerrain {
     }
 
     /** Per-tick residency update: window sync + dirty drain (plus the streaming fallback, see {@link #frame}). */
-    public static void update() {
-        INSTANCE.sceneInitialized = true;
-        INSTANCE.tick();
+    public void update() {
+        tick();
     }
 
     /**
      * Per-render-frame streaming pass driven by the RT frame renderer: publish completed builds
      * and dispatch immutable snapshots to workers, bounded by configured per-pass counts.
      */
-    public static void frame() {
-        MinecraftTelemetry.current().max("terrainPendingGeometryGroups", INSTANCE.pendingGeometryGroups.size());
-        if (INSTANCE.materialLookup != null) INSTANCE.frameStream();
-        INSTANCE.submitPendingGeometry();
+    public void frame() {
+        MinecraftTelemetry.current().max("terrainPendingGeometryGroups", pendingGeometryGroups.size());
+        if (materialLookup != null) frameStream();
+        submitPendingGeometry();
     }
 
-    public static void bindGeometry(MinecraftTerrainGeometry geometry) {
-        if (INSTANCE.retainedGeometry != null) throw new IllegalStateException("terrain geometry is already bound");
-        INSTANCE.retainedGeometry = java.util.Objects.requireNonNull(geometry, "geometry");
+    public void bindGeometry(MinecraftTerrainGeometry geometry) {
+        if (retainedGeometry != null) throw new IllegalStateException("terrain geometry is already bound");
+        retainedGeometry = java.util.Objects.requireNonNull(geometry, "geometry");
     }
 
-    public static void unbindGeometry(MinecraftTerrainGeometry geometry) {
-        if (INSTANCE.retainedGeometry == geometry) INSTANCE.retainedGeometry = null;
+    public void unbindGeometry(MinecraftTerrainGeometry geometry) {
+        if (retainedGeometry == geometry) retainedGeometry = null;
     }
 
     /** Installs the immutable material lookup used by subsequently dispatched section builds. */
-    public static void publishMaterialLookup(MinecraftMaterialLookup lookup) {
-        INSTANCE.materialLookup = java.util.Objects.requireNonNull(lookup, "lookup");
-        INSTANCE.fullClearRequested = true;
+    public void publishMaterialLookup(MinecraftMaterialLookup lookup) {
+        materialLookup = java.util.Objects.requireNonNull(lookup, "lookup");
+        fullClearRequested = true;
     }
 
-    public static void clearMaterialLookup() {
-        INSTANCE.materialLookup = null;
+    public void clearMaterialLookup() {
+        materialLookup = null;
     }
 
-    public static void shutdown() {
-        INSTANCE.clear(true);
-        INSTANCE.sceneInitialized = false;
+    public void shutdown() {
+        clear(true);
+        sceneInitialized = false;
     }
 
     /**
@@ -293,9 +293,8 @@ public final class RtTerrain {
      * it the neighbour keeps stale geometry — opaque holes and a disconnected water surface at the seam.
      * Interior edits stay within one section (±1 doesn't cross a 16-block boundary).
      */
-    public static void markBlocksDirty(int minX, int minY, int minZ, int maxX, int maxY, int maxZ) {
-        RtTerrain terrain = INSTANCE;
-        synchronized (terrain.dirtyLock) {
+    public void markBlocksDirty(int minX, int minY, int minZ, int maxX, int maxY, int maxZ) {
+        synchronized (dirtyLock) {
             LongArrayList keys = new LongArrayList();
             for (int scx = (minX - 1) >> 4; scx <= (maxX + 1) >> 4; scx++) {
                 for (int scy = (minY - 1) >> 4; scy <= (maxY + 1) >> 4; scy++) {
@@ -305,12 +304,12 @@ public final class RtTerrain {
                 }
             }
             if (!keys.isEmpty()) {
-                long groupId = ++terrain.dirtyGroupSeq;
+                long groupId = ++dirtyGroupSeq;
                 if (groupId == NO_DIRTY_GROUP) {
-                    groupId = ++terrain.dirtyGroupSeq;
+                    groupId = ++dirtyGroupSeq;
                 }
-                terrain.dirtyEvents.add(new DirtyEvent(groupId, keys));
-                terrain.dirtyPending = true;
+                dirtyEvents.add(new DirtyEvent(groupId, keys));
+                dirtyPending = true;
             }
         }
     }
@@ -320,8 +319,8 @@ public final class RtTerrain {
      * {@link net.minecraft.client.renderer.extract.LevelExtractor#allChanged()}, which fires on a
      * dimension change (via {@code setLevel}), a render-distance change, and F3+A. Thread-safe.
      */
-    public static void requestFullClear() {
-        INSTANCE.fullClearRequested = true;
+    public void requestFullClear() {
+        fullClearRequested = true;
     }
 
     private void tick() {
@@ -329,12 +328,14 @@ public final class RtTerrain {
         Minecraft mc = Minecraft.getInstance();
         ClientLevel level = mc.level;
         if (level == null || mc.player == null) {
+            sceneInitialized = false;
             if (!noWorldClearApplied) {
                 clear(false);
                 noWorldClearApplied = true;
             }
             return;
         }
+        sceneInitialized = true;
         noWorldClearApplied = false;
         if (materialLookup == null) {
             return; // resource reload gap: publication resumes after an immutable lookup is installed
@@ -1035,7 +1036,7 @@ public final class RtTerrain {
                 MinecraftTelemetry.current().extraction(MinecraftTelemetry.GeometrySource.TERRAIN, 1));
         beginActiveTask();
         try {
-            RtWorkerPool.INSTANCE.submit(() -> {
+            workers.submit(() -> {
                 try {
                     if (!isTaskCurrent(task)) {
                         completeEmptyTask(task);
@@ -1528,7 +1529,7 @@ public final class RtTerrain {
     private void clear(boolean shutdown) {
         terrainEpoch++;
         if (shutdown) {
-            RtWorkerPool.INSTANCE.shutdown();
+            workers.shutdown();
             drainTasksForClear();
         }
         cancelAllDirtyGroups();

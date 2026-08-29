@@ -20,6 +20,7 @@ import org.lwjgl.vulkan.VkRect2D;
 import org.lwjgl.vulkan.VkRenderingAttachmentInfo;
 import org.lwjgl.vulkan.VkRenderingInfo;
 import dev.comfyfluffy.caustica.vulkan.VmaImage2D;
+import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -39,13 +40,14 @@ public final class WorldOverlayPass implements Pass<UiFrame> {
     private final List<OverlayFeature> features;
     private final GpuDevice device;
 
-    public WorldOverlayPass(UiSetup setup, dev.comfyfluffy.caustica.minecraft.entity.RtEntities entities) {
+    public WorldOverlayPass(UiSetup setup, dev.comfyfluffy.caustica.minecraft.entity.RtEntities entities,
+                            RtTerrain terrain) {
         if (setup.layerFormat() != TARGET_FORMAT) {
             throw new IllegalArgumentException("Minecraft overlay requires RGBA8_UNORM UI layer");
         }
         device = setup.gpu();
         features = List.of(new GlowOutlineFeature(entities), new NameTagFeature(entities),
-                new BlockOutlineFeature(entities));
+                new BlockOutlineFeature(entities, terrain));
     }
 
     @Override

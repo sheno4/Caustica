@@ -5,6 +5,7 @@ import dev.comfyfluffy.caustica.minecraft.api.MinecraftExtension;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialEpochCompiler;
 import dev.comfyfluffy.caustica.minecraft.program.MinecraftProgramSession;
 import dev.comfyfluffy.caustica.minecraft.sky.SkyLutPass;
+import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
 import dev.comfyfluffy.caustica.settings.CausticaSettingsExtension;
 import dev.comfyfluffy.caustica.settings.DisplayText;
 import dev.comfyfluffy.caustica.settings.ResourceId;
@@ -20,6 +21,7 @@ public final class MinecraftProvidersExtension implements MinecraftExtension, Ca
     private final MinecraftEntityCaptureBinding entityCapture;
     private final dev.comfyfluffy.caustica.minecraft.entity.RtEntityTextures entityTextures;
     private final dev.comfyfluffy.caustica.minecraft.entity.RtEntities entities;
+    private final RtTerrain terrain;
 
     public MinecraftProvidersExtension(MinecraftFrameSelectionInstaller frameSelections,
                                        MinecraftFrameCaptureInstaller frameCaptures,
@@ -27,7 +29,8 @@ public final class MinecraftProvidersExtension implements MinecraftExtension, Ca
                                        MinecraftLightingCalibration calibration,
                                        MinecraftEntityCaptureBinding entityCapture,
                                        dev.comfyfluffy.caustica.minecraft.entity.RtEntityTextures entityTextures,
-                                       dev.comfyfluffy.caustica.minecraft.entity.RtEntities entities) {
+                                       dev.comfyfluffy.caustica.minecraft.entity.RtEntities entities,
+                                       RtTerrain terrain) {
         this.frameSelections = java.util.Objects.requireNonNull(frameSelections, "frameSelections");
         this.frameCaptures = java.util.Objects.requireNonNull(frameCaptures, "frameCaptures");
         this.materialEpochs = java.util.Objects.requireNonNull(materialEpochs, "materialEpochs");
@@ -35,12 +38,13 @@ public final class MinecraftProvidersExtension implements MinecraftExtension, Ca
         this.entityCapture = entityCapture;
         this.entityTextures = entityTextures;
         this.entities = entities;
+        this.terrain = java.util.Objects.requireNonNull(terrain, "terrain");
     }
 
     @Override public void registerMinecraft(MinecraftApi api) {
         api.sessions().add(context -> MinecraftProgramSession.open(
                 context, frameSelections, frameCaptures, materialEpochs, calibration,
-                entityCapture, entityTextures, entities));
+                entityCapture, entityTextures, entities, terrain));
     }
 
     @Override public void registerSettings(SettingsRegistry registry) {

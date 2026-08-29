@@ -8,6 +8,8 @@ import dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptorKind;
 import dev.comfyfluffy.caustica.api.program.ShaderDataType;
 import dev.comfyfluffy.caustica.api.program.VolumeId;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
+import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
+import dev.comfyfluffy.caustica.minecraft.terrain.RtWorkerPool;
 import org.junit.jupiter.api.Test;
 
 
@@ -18,7 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 final class MinecraftFrameAdapterTest {
     @Test
     void epochLeasePublishesAndRemovesOnlyItsOwnSelection() {
-        MinecraftFrameAdapter adapter = new MinecraftFrameAdapter();
+        MinecraftFrameAdapter adapter = adapter();
         var binding = ShaderDataType.create("water binding");
         var instance = ShaderDataType.create("water instance");
         SceneId firstScene = new TestScene();
@@ -61,6 +63,10 @@ final class MinecraftFrameAdapterTest {
             @Override public int height() { return 1080; }
             @Override public int format() { return 0; }
         };
+    }
+
+    private static MinecraftFrameAdapter adapter() {
+        return new MinecraftFrameAdapter(new RtTerrain(new RtWorkerPool()));
     }
 
     private static final class TestScene implements SceneId { }

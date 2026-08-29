@@ -1,0 +1,43 @@
+package dev.comfyfluffy.caustica.minecraft.terrain;
+
+import org.junit.jupiter.api.Test;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+final class RtTerrainLifecycleArchitectureTest {
+    @Test
+    void frameAdapterDrivesOneTickAndOneRenderPass() throws IOException {
+        String source = source("minecraft/MinecraftFrameAdapter.java");
+
+        assertEquals(1, occurrences(source, "terrain.update();"));
+        assertEquals(1, occurrences(source, "terrain.frame();"));
+    }
+
+    @Test
+    void worldStopJoinsTerrainWorkersBeforeRuntimeGpuDrain() throws IOException {
+        String session = source("minecraft/program/MinecraftProgramSession.java");
+        int stop = session.indexOf("@Override public synchronized void stop()");
+        int producers = session.indexOf("active.stopSceneProducers();", stop);
+        int shutdown = session.indexOf("terrain.shutdown();", stop);
+        assertTrue(stop >= 0 && producers > stop && shutdown > producers);
+        assertEquals(1, occurrences(session, "terrain.shutdown();"));
+
+        String runtime = source("rt/RtRuntime.java");
+        int worldClose = runtime.indexOf("world.close()");
+        int gpuDrain = runtime.indexOf("gpuExecutor().drainAndWaitIdle()", worldClose);
+        assertTrue(worldClose >= 0 && gpuDrain > worldClose);
+    }
+
+    private static String source(String relative) throws IOException {
+        return Files.readString(Path.of("src/main/java/dev/comfyfluffy/caustica").resolve(relative));
+    }
+
+    private static int occurrences(String source, String needle) {
+        return (source.length() - source.replace(needle, "").length()) / needle.length();
+    }
+}

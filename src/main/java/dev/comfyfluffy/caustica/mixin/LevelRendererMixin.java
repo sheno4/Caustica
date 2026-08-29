@@ -3,8 +3,6 @@ package dev.comfyfluffy.caustica.mixin;
 import com.mojang.blaze3d.buffers.GpuBufferSlice;
 import com.mojang.blaze3d.resource.GraphicsResourceAllocator;
 import dev.comfyfluffy.caustica.client.CausticaClientComposition;
-import dev.comfyfluffy.caustica.client.CausticaClientComposition;
-import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraft.client.renderer.state.OptionsRenderState;
@@ -42,7 +40,7 @@ public abstract class LevelRendererMixin {
 		Runnable playerCompiledSectionCallback = this.levelRenderState.playerCompiledSectionCallback;
 		boolean waitingForRtPlayerSection = false;
 		if (CausticaClientComposition.current().renderController().rtRuntimeWorkRequested() && playerCompiledSectionCallback != null) {
-			if (RtTerrain.isSectionReady(cameraState.blockPos)) {
+			if (CausticaClientComposition.current().terrain().isSectionReady(cameraState.blockPos)) {
 				playerCompiledSectionCallback.run();
 				CausticaClientComposition.current().renderController().markRtPlayerSectionReady();
 			} else {
