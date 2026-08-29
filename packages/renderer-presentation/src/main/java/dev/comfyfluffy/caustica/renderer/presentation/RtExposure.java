@@ -4,10 +4,9 @@ import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanBarriers;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtDebugLabels;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtGpuExecutor;
-import dev.comfyfluffy.caustica.renderer.raytracing.RtSceneUnits;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuBuffer;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuImage;
-import dev.comfyfluffy.caustica.rt.gen.ExposureStateData;
+import dev.comfyfluffy.caustica.renderer.presentation.gen.ExposureStateData;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.VK10;
@@ -31,6 +30,8 @@ import org.slf4j.LoggerFactory;
 /** Owns the display exposure value shared by the RT compositor's display-mapping passes. */
 public final class RtExposure {
     private static final Logger LOGGER = LoggerFactory.getLogger(RtExposure.class);
+    /** {@code log2(100 / 12.5)} maps scene luminance in cd/m² onto the EV100 metering scale. */
+    private static final float EV100_OFFSET = (float) (Math.log(8.0) / Math.log(2.0));
     private final RtLookPackage look;
     private Settings settings;
     private GpuImage image;
@@ -535,7 +536,7 @@ public final class RtExposure {
          * unit convention's offset applies.
          */
         float evOffset() {
-            return RtSceneUnits.EV100_OFFSET - (float) (Math.log(Math.max(preExposure, 1.0e-12f)) / Math.log(2.0));
+            return EV100_OFFSET - (float) (Math.log(Math.max(preExposure, 1.0e-12f)) / Math.log(2.0));
         }
     }
 

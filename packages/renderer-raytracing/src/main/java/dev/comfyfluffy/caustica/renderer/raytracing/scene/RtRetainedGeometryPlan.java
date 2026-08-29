@@ -6,8 +6,8 @@ import dev.comfyfluffy.caustica.engine.program.ProgramResolution;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.renderer.raytracing.accel.RtAccel;
-import dev.comfyfluffy.caustica.rt.gen.RetainedGeometryRecordData;
-import dev.comfyfluffy.caustica.rt.gen.RetainedGeometryRecordData.Float4;
+import dev.comfyfluffy.caustica.renderer.raytracing.gen.RetainedGeometryRecordData;
+import dev.comfyfluffy.caustica.renderer.raytracing.gen.RetainedGeometryRecordData.Float4;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;

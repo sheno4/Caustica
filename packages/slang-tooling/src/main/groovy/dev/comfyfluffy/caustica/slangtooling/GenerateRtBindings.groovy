@@ -25,6 +25,7 @@ abstract class GenerateRtBindings extends DefaultTask {
     @Input abstract Property<String> getSpirvVal()
     @Input abstract Property<String> getSpirvProfile()
     @Input abstract Property<String> getVulkanTarget()
+    @Input abstract Property<String> getJavaPackage()
     @OutputDirectory abstract DirectoryProperty getOutDir()
 
     @Inject abstract ExecOperations getExecOps()
@@ -199,10 +200,15 @@ abstract class GenerateRtBindings extends DefaultTask {
             }
         }
 
-        def output = outDir.get().file("dev/comfyfluffy/caustica/rt/pipeline/RtBindings.java").asFile
+        def generatedRoot = outDir.get().asFile
+        if (generatedRoot.exists() && !generatedRoot.deleteDir()) {
+            throw new GradleException("failed to clear generated binding output ${generatedRoot}")
+        }
+        def packageName = javaPackage.get()
+        def output = outDir.get().file(packageName.replace('.', '/') + "/RtBindings.java").asFile
         output.parentFile.mkdirs()
         output.setText("""// Generated from Slang descriptor reflection. Do not edit.
-package dev.comfyfluffy.caustica.rt.pipeline;
+package ${packageName};
 
 public final class RtBindings {
 ${constants.collect { name, value -> "    public static final int ${name} = ${value};" }.join('\n')}

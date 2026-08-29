@@ -1,7 +1,7 @@
 package dev.comfyfluffy.caustica.renderer.raytracing;
 
 import dev.comfyfluffy.caustica.engine.program.ProgramKey;
-import dev.comfyfluffy.caustica.rt.pipeline.RtBindings;
+import dev.comfyfluffy.caustica.renderer.raytracing.layout.RtBindings;
 import dev.comfyfluffy.caustica.renderer.raytracing.pipeline.RtPipeline;
 import org.junit.jupiter.api.Test;
 import org.lwjgl.system.MemoryUtil;

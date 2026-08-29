@@ -2,8 +2,8 @@ package dev.comfyfluffy.caustica.renderer.raytracing.scene;
 
 import dev.comfyfluffy.caustica.api.light.LightDescriptor;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
-import dev.comfyfluffy.caustica.rt.gen.RetainedLightRecordData;
-import dev.comfyfluffy.caustica.rt.gen.RetainedLightRecordData.Float4;
+import dev.comfyfluffy.caustica.renderer.raytracing.gen.RetainedLightRecordData;
+import dev.comfyfluffy.caustica.renderer.raytracing.gen.RetainedLightRecordData.Float4;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;

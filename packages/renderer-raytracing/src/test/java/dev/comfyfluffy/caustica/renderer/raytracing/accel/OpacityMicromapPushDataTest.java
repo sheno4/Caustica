@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.renderer.raytracing.accel;
 
-import dev.comfyfluffy.caustica.rt.gen.OpacityMicromapPushData;
+import dev.comfyfluffy.caustica.renderer.raytracing.gen.OpacityMicromapPushData;
 import org.junit.jupiter.api.Test;
 
 import java.nio.ByteBuffer;

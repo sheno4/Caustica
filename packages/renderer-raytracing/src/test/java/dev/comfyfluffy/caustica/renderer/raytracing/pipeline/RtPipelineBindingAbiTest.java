@@ -1,16 +1,16 @@
 package dev.comfyfluffy.caustica.renderer.raytracing.pipeline;
 
-import dev.comfyfluffy.caustica.rt.pipeline.RtBindings;
+import dev.comfyfluffy.caustica.renderer.raytracing.layout.RtBindings;
 import org.junit.jupiter.api.Test;
 
-import static dev.comfyfluffy.caustica.rt.pipeline.RtBindings.WORLD_COMPOSITION_DATA_ADDRESS_OFFSET;
-import static dev.comfyfluffy.caustica.rt.pipeline.RtBindings.WORLD_GEOMETRY_TABLE_ADDRESS_OFFSET;
-import static dev.comfyfluffy.caustica.rt.pipeline.RtBindings.WORLD_OUTPUT_IMAGE_INDEX_OFFSET;
-import static dev.comfyfluffy.caustica.rt.pipeline.RtBindings.WORLD_PATH_QUEUE_ADDRESS_OFFSET;
-import static dev.comfyfluffy.caustica.rt.pipeline.RtBindings.WORLD_PUSH_ADDRESS_OFFSET;
-import static dev.comfyfluffy.caustica.rt.pipeline.RtBindings.WORLD_PUSH_CONSTANT_SIZE;
-import static dev.comfyfluffy.caustica.rt.pipeline.RtBindings.WORLD_SPECULAR_MOTION_GUIDE_INDEX_OFFSET;
-import static dev.comfyfluffy.caustica.rt.pipeline.RtBindings.WORLD_TOP_LEVEL_AS_INDEX_OFFSET;
+import static dev.comfyfluffy.caustica.renderer.raytracing.layout.RtBindings.WORLD_COMPOSITION_DATA_ADDRESS_OFFSET;
+import static dev.comfyfluffy.caustica.renderer.raytracing.layout.RtBindings.WORLD_GEOMETRY_TABLE_ADDRESS_OFFSET;
+import static dev.comfyfluffy.caustica.renderer.raytracing.layout.RtBindings.WORLD_OUTPUT_IMAGE_INDEX_OFFSET;
+import static dev.comfyfluffy.caustica.renderer.raytracing.layout.RtBindings.WORLD_PATH_QUEUE_ADDRESS_OFFSET;
+import static dev.comfyfluffy.caustica.renderer.raytracing.layout.RtBindings.WORLD_PUSH_ADDRESS_OFFSET;
+import static dev.comfyfluffy.caustica.renderer.raytracing.layout.RtBindings.WORLD_PUSH_CONSTANT_SIZE;
+import static dev.comfyfluffy.caustica.renderer.raytracing.layout.RtBindings.WORLD_SPECULAR_MOTION_GUIDE_INDEX_OFFSET;
+import static dev.comfyfluffy.caustica.renderer.raytracing.layout.RtBindings.WORLD_TOP_LEVEL_AS_INDEX_OFFSET;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 

@@ -4,7 +4,7 @@ import dev.comfyfluffy.caustica.api.program.ShaderDataType;
 import dev.comfyfluffy.caustica.api.program.VolumeId;
 import dev.comfyfluffy.caustica.api.view.ViewMedium;
 import dev.comfyfluffy.caustica.engine.program.ProgramResolution;
-import dev.comfyfluffy.caustica.rt.pipeline.RtBindings;
+import dev.comfyfluffy.caustica.renderer.raytracing.layout.RtBindings;
 import org.junit.jupiter.api.Test;
 
 import java.nio.ByteBuffer;

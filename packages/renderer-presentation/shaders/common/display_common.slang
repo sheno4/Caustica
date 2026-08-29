@@ -46,7 +46,7 @@ public struct ExposureResolvePush {
     public float curveCompensation3;
     public float emissiveWeightCap;
     // evOffset takes log2(metered stored luminance) to EV100:
-    // RtSceneUnits.EV100_OFFSET - log2(preExposure). preExposure is the scalar raygen already
+    // EV100_OFFSET - log2(preExposure). preExposure is the scalar raygen already
     // multiplied into the stored radiance (1.0 when pre-exposure is disabled), so the metered
     // buffer holds L*preExposure and the resolve divides it back out to recover absolute scene EV --
     // and to keep minEv/maxEv bounding ABSOLUTE exposure rather than the residual.

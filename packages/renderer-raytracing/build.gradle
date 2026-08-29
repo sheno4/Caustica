@@ -79,12 +79,12 @@ def prepareRayTracingReflectionSources = tasks.register("prepareRayTracingReflec
 }
 
 def rayTracingRecordSpecs = [
-        "buffer|worldPushLayoutProbe|WorldPush|dev.comfyfluffy.caustica.rt.gen|WorldPushData|false",
-        "buffer|retainedGeometryRecordLayoutProbe|RetainedGeometryRecord|dev.comfyfluffy.caustica.rt.gen|RetainedGeometryRecordData|false",
-        "buffer|retainedLightRecordLayoutProbe|RetainedLightRecord|dev.comfyfluffy.caustica.rt.gen|RetainedLightRecordData|false",
-        "buffer|neeAtStateLayoutProbe|NeeAtState|dev.comfyfluffy.caustica.rt.gen|NeeAtStateData|false",
-        "buffer|packedPathSegmentLayoutProbe|PackedPathSegment|dev.comfyfluffy.caustica.rt.gen|PackedPathSegmentData|false",
-        "push|opacityMicromapPushProbe|OpacityMicromapPush|dev.comfyfluffy.caustica.rt.gen|OpacityMicromapPushData|false"
+        "buffer|worldPushLayoutProbe|WorldPush|dev.comfyfluffy.caustica.renderer.raytracing.gen|WorldPushData|false",
+        "buffer|retainedGeometryRecordLayoutProbe|RetainedGeometryRecord|dev.comfyfluffy.caustica.renderer.raytracing.gen|RetainedGeometryRecordData|false",
+        "buffer|retainedLightRecordLayoutProbe|RetainedLightRecord|dev.comfyfluffy.caustica.renderer.raytracing.gen|RetainedLightRecordData|false",
+        "buffer|neeAtStateLayoutProbe|NeeAtState|dev.comfyfluffy.caustica.renderer.raytracing.gen|NeeAtStateData|false",
+        "buffer|packedPathSegmentLayoutProbe|PackedPathSegment|dev.comfyfluffy.caustica.renderer.raytracing.gen|PackedPathSegmentData|false",
+        "push|opacityMicromapPushProbe|OpacityMicromapPush|dev.comfyfluffy.caustica.renderer.raytracing.gen|OpacityMicromapPushData|false"
 ]
 def generatedRecordRoot = layout.buildDirectory.dir("generated/sources/shaderRecords")
 def generateRayTracingRecords = tasks.register("generateRayTracingRecords", GenerateShaderRecords) {
@@ -103,6 +103,7 @@ def generateRayTracingBindings = tasks.register("generateRayTracingBindings", Ge
     description = "Generates the descriptor-heap world roots from primary ray reflection."
     dependsOn(prepareRayTracingReflectionSources)
     shaderRoot = reflectionRoot
+    javaPackage = "dev.comfyfluffy.caustica.renderer.raytracing.layout"
     outDir = generatedBindingsRoot
 }
 
@@ -142,12 +143,12 @@ def verifyRayTracingAbi = tasks.register("verifyRayTracingAbi") {
     doLast {
         expectedFragments.each { className, fragments ->
             def source = generatedRecordRoot.get().file(
-                    "dev/comfyfluffy/caustica/rt/gen/${className}.java").asFile.getText("UTF-8")
+                    "dev/comfyfluffy/caustica/renderer/raytracing/gen/${className}.java").asFile.getText("UTF-8")
             def missing = fragments.findAll { !source.contains(it) }
             if (!missing.empty) throw new GradleException("${className} ABI drifted: ${missing}")
         }
         def bindings = generatedBindingsRoot.get().file(
-                "dev/comfyfluffy/caustica/rt/pipeline/RtBindings.java").asFile.getText("UTF-8")
+                "dev/comfyfluffy/caustica/renderer/raytracing/layout/RtBindings.java").asFile.getText("UTF-8")
         def requiredBindings = [
                 "WORLD_PUSH_ADDRESS_OFFSET = 0", "WORLD_COMPOSITION_DATA_ADDRESS_OFFSET = 8",
                 "WORLD_GEOMETRY_TABLE_ADDRESS_OFFSET = 16", "WORLD_PATH_QUEUE_ADDRESS_OFFSET = 24",
@@ -177,6 +178,7 @@ def reproducibleBindingsRoot = layout.buildDirectory.dir("generated/reproducibil
 def reproduceRayTracingBindings = tasks.register("reproduceRayTracingBindings", GenerateRtBindings) {
     dependsOn(prepareRayTracingReflectionSources)
     shaderRoot = reflectionRoot
+    javaPackage = "dev.comfyfluffy.caustica.renderer.raytracing.layout"
     outDir = reproducibleBindingsRoot
 }
 def verifyRayTracingGenerationReproducible = tasks.register("verifyRayTracingGenerationReproducible") {
@@ -312,8 +314,6 @@ def verifyRendererRayTracingImports = tasks.register("verifyRendererRayTracingIm
         sourceSets.main.allJava.files.sort().each { file ->
             file.eachLine { line, number ->
                 def rootRayImport = line.contains("dev.comfyfluffy.caustica.rt.")
-                        && !line.contains("dev.comfyfluffy.caustica.rt.gen.")
-                        && !line.contains("dev.comfyfluffy.caustica.rt.pipeline.RtBindings")
                 if (line.stripLeading().startsWith("import ")
                         && (forbidden.any { line.contains(it) } || rootRayImport)) {
                     violations.add("${file}:${number}: ${line.trim()}")
@@ -360,11 +360,10 @@ def verifyRendererRayTracingJar = tasks.register("verifyRendererRayTracingJar") 
             while (entries.hasMoreElements()) names.add(entries.nextElement().name)
         }
         def rendererClassRoot = "dev/comfyfluffy/caustica/renderer/raytracing/"
-        def generatedRecordClassRoot = "dev/comfyfluffy/caustica/rt/gen/"
-        def generatedBindingsClass = "dev/comfyfluffy/caustica/rt/pipeline/RtBindings.class"
+        def generatedRecordClassRoot = "dev/comfyfluffy/caustica/renderer/raytracing/gen/"
+        def generatedBindingsClass = "dev/comfyfluffy/caustica/renderer/raytracing/layout/RtBindings.class"
         def foreignClasses = names.findAll {
             it.endsWith(".class") && !it.startsWith(rendererClassRoot)
-                    && !it.startsWith(generatedRecordClassRoot) && it != generatedBindingsClass
         }
         def generatedTopLevelClasses = names.findAll {
             it.startsWith(generatedRecordClassRoot) && it.endsWith("Data.class")

@@ -12,7 +12,7 @@ import dev.comfyfluffy.caustica.renderer.presentation.RtExposure;
 import dev.comfyfluffy.caustica.renderer.presentation.RtLookPackage;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDlssRr;
 import dev.comfyfluffy.caustica.renderer.presentation.RtToneLut;
-import dev.comfyfluffy.caustica.rt.gen.PackedPathSegmentData;
+import dev.comfyfluffy.caustica.renderer.raytracing.gen.PackedPathSegmentData;
 import org.lwjgl.vulkan.VK10;
 
 import java.io.IOException;

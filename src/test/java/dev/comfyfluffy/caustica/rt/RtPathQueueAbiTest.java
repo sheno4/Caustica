@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.rt;
 
-import dev.comfyfluffy.caustica.rt.gen.PackedPathSegmentData;
+import dev.comfyfluffy.caustica.renderer.raytracing.gen.PackedPathSegmentData;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;

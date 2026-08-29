@@ -14,7 +14,7 @@ base { archivesName = "caustica-renderer-presentation" }
 repositories { mavenCentral() }
 
 dependencies {
-    api project(":packages:renderer-raytracing")
+    api project(":packages:api")
     implementation project(":packages:engine-vulkan")
     implementation project(":packages:vulkan-support")
     implementation "com.google.code.gson:gson:2.14.0"
@@ -43,12 +43,12 @@ def preparePresentationReflectionSources = tasks.register("preparePresentationRe
     into(reflectionRoot)
 }
 def presentationRecordSpecs = [
-        "buffer|exposureStateLayoutProbe|ExposureState|dev.comfyfluffy.caustica.rt.gen|ExposureStateData|true",
-        "push|exposureHistPushProbe|ExposureHistPush|dev.comfyfluffy.caustica.rt.gen|ExposureHistPushData|false",
-        "push|exposureResolvePushProbe|ExposureResolvePush|dev.comfyfluffy.caustica.rt.gen|ExposureResolvePushData|false",
-        "push|displayPushProbe|DisplayPush|dev.comfyfluffy.caustica.rt.gen|DisplayPushData|false",
-        "push|debugPresentPushProbe|DebugPresentPush|dev.comfyfluffy.caustica.rt.gen|DebugPresentPushData|false",
-        "push|presentPushProbe|PresentPush|dev.comfyfluffy.caustica.rt.gen|PresentPushData|false"
+        "buffer|exposureStateLayoutProbe|ExposureState|dev.comfyfluffy.caustica.renderer.presentation.gen|ExposureStateData|true",
+        "push|exposureHistPushProbe|ExposureHistPush|dev.comfyfluffy.caustica.renderer.presentation.gen|ExposureHistPushData|false",
+        "push|exposureResolvePushProbe|ExposureResolvePush|dev.comfyfluffy.caustica.renderer.presentation.gen|ExposureResolvePushData|false",
+        "push|displayPushProbe|DisplayPush|dev.comfyfluffy.caustica.renderer.presentation.gen|DisplayPushData|false",
+        "push|debugPresentPushProbe|DebugPresentPush|dev.comfyfluffy.caustica.renderer.presentation.gen|DebugPresentPushData|false",
+        "push|presentPushProbe|PresentPush|dev.comfyfluffy.caustica.renderer.presentation.gen|PresentPushData|false"
 ]
 def generatedRecordRoot = layout.buildDirectory.dir("generated/sources/shaderRecords")
 def generatePresentationRecords = tasks.register("generatePresentationRecords", GenerateShaderRecords) {
@@ -85,7 +85,7 @@ def verifyPresentationAbi = tasks.register("verifyPresentationAbi") {
     doLast {
         expected.each { name, fragments ->
             def source = generatedRecordRoot.get().file(
-                    "dev/comfyfluffy/caustica/rt/gen/${name}.java").asFile.getText("UTF-8")
+                    "dev/comfyfluffy/caustica/renderer/presentation/gen/${name}.java").asFile.getText("UTF-8")
             def missing = fragments.findAll { !source.contains(it) }
             if (!missing.empty) throw new GradleException("${name} ABI drifted: ${missing}")
         }
@@ -145,15 +145,19 @@ def verifyRendererPresentationJar = tasks.register("verifyRendererPresentationJa
         }
         def generated = ["ExposureStateData", "ExposureHistPushData", "ExposureResolvePushData",
                          "DisplayPushData", "DebugPresentPushData", "PresentPushData"].collect {
-            "dev/comfyfluffy/caustica/rt/gen/${it}.class"
+            "dev/comfyfluffy/caustica/renderer/presentation/gen/${it}.class"
         } as Set
-        def actualGenerated = names.findAll { it.startsWith("dev/comfyfluffy/caustica/rt/gen/")
+        def actualGenerated = names.findAll { it.startsWith("dev/comfyfluffy/caustica/renderer/presentation/gen/")
                 && it.endsWith("Data.class") } as Set
+        def foreignClasses = names.findAll { it.endsWith(".class")
+                && !it.startsWith("dev/comfyfluffy/caustica/renderer/presentation/") }
         def pipelines = names.findAll { it.startsWith("caustica/shaders/pipelines/")
                 && it.endsWith("/main.comp.spv") }.collect { it.split('/')[3] } as Set
         def colors = names.findAll { it.startsWith("caustica/color/") && !it.endsWith('/') }
-        if (actualGenerated != generated || pipelines != expectedPipelines || colors.size() != 7) {
-            throw new GradleException("presentation JAR mismatch: generated=${actualGenerated}, pipelines=${pipelines}, colors=${colors}")
+        if (!foreignClasses.empty || actualGenerated != generated
+                || pipelines != expectedPipelines || colors.size() != 7) {
+            throw new GradleException("presentation JAR mismatch: foreignClasses=${foreignClasses}, "
+                    + "generated=${actualGenerated}, pipelines=${pipelines}, colors=${colors}")
         }
     }
 }
@@ -164,7 +168,10 @@ def verifyRendererPresentationImports = tasks.register("verifyRendererPresentati
     doLast {
         def forbidden = ["dev.comfyfluffy.caustica.CausticaMod", "dev.comfyfluffy.caustica.config",
                 "dev.comfyfluffy.caustica.minecraft", "dev.comfyfluffy.caustica.platform",
-                "dev.comfyfluffy.caustica.rt.RtRuntime", "net.minecraft", "net.fabricmc", "net.neoforged"]
+                "dev.comfyfluffy.caustica.rt.RtRuntime", "dev.comfyfluffy.caustica.rt.gen",
+                "dev.comfyfluffy.caustica.rt.pipeline.RtBindings",
+                "dev.comfyfluffy.caustica.renderer.raytracing",
+                "net.minecraft", "net.fabricmc", "net.neoforged"]
         def violations = []
         sourceSets.main.allJava.files.sort().each { source ->
             source.eachLine { line, number ->
@@ -180,7 +187,7 @@ def verifyRendererPresentationImports = tasks.register("verifyRendererPresentati
 def verifyRendererPresentationDependencies = tasks.register("verifyRendererPresentationDependencies") {
     group = "verification"
     doLast {
-        def allowed = [project.path, ":packages:renderer-raytracing", ":packages:engine-vulkan",
+        def allowed = [project.path, ":packages:api", ":packages:engine-vulkan",
                        ":packages:vulkan-support"] as Set
         def violations = []
         configurations.matching { it.canBeResolved }.each { configuration ->
