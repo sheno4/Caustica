@@ -19,6 +19,17 @@ final class RtTerrainLifecycleArchitectureTest {
     }
 
     @Test
+    void tickFallbackPublishesGeometryBeforeFrameCaptureCanStart() throws IOException {
+        String source = source("minecraft/terrain/RtTerrain.java");
+        int fallback = source.indexOf("System.nanoTime() - lastFrameStreamNanos > STREAM_FALLBACK_AFTER_NANOS");
+        int stream = source.indexOf("stream();", fallback);
+        int submit = source.indexOf("submitPendingGeometry();", stream);
+        int fallbackEnd = source.indexOf("\n        }", stream);
+
+        assertTrue(fallback >= 0 && stream > fallback && submit > stream && submit < fallbackEnd);
+    }
+
+    @Test
     void worldStopJoinsTerrainWorkersBeforeRuntimeGpuDrain() throws IOException {
         String session = source("minecraft/program/MinecraftProgramSession.java");
         int stop = session.indexOf("@Override public synchronized void stop()");

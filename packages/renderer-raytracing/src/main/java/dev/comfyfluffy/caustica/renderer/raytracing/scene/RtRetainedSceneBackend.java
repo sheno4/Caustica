@@ -35,7 +35,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.concurrent.ConcurrentLinkedQueue;
 
 import static org.lwjgl.vulkan.KHRRayTracingPipeline.VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR;
 
@@ -46,7 +45,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     private final Map<SceneId, TlasBuilder.Ring> tlasRings = new IdentityHashMap<>();
     private final Map<SceneId, TraceRing> traceRings = new IdentityHashMap<>();
     private final ArrayDeque<Publication> queued = new ArrayDeque<>();
-    private final ConcurrentLinkedQueue<CompletedBuild> completed = new ConcurrentLinkedQueue<>();
+    private final RetainedSceneProgressQueue<CompletedBuild> completed = new RetainedSceneProgressQueue<>();
     private NativeSnapshot published;
     private Throwable fatalFailure;
     private boolean closed;
@@ -111,7 +110,13 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         }
     }
 
+    @Override
+    public synchronized void onProgressAvailable(Runnable wakeup) {
+        completed.onProgressAvailable(wakeup);
+    }
+
     /** Publishes completed snapshots in accepted revision order. */
+    @Override
     public synchronized void progress() {
         requireOpen();
         CompletedBuild terminal;
@@ -353,7 +358,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         if (candidate.builds.isEmpty()) {
             candidate.accepted = true;
             candidate.unsubmitted = List.of();
-            completed.add(new CompletedBuild(publication, null));
+            completeLater(publication, null);
             return;
         }
         ctx.gpuExecutor().submit(cmd -> RtAccel.recordBlasBuilds(ctx, cmd, candidate.builds),
@@ -361,9 +366,13 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                     RtAccel.freeBlasScratch(candidate.builds);
                     candidate.buildResourcesReleased = true;
                 },
-                (ignored, failure) -> completed.add(new CompletedBuild(publication, failure)));
+                (ignored, failure) -> completeLater(publication, failure));
         candidate.accepted = true;
         candidate.unsubmitted = List.of();
+    }
+
+    private void completeLater(Publication publication, Throwable failure) {
+        completed.add(new CompletedBuild(publication, failure));
     }
 
     private NativeMesh prepareMesh(RetainedSceneSnapshot.Mesh mesh) {

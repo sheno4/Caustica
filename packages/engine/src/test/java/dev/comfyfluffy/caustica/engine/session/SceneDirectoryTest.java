@@ -36,10 +36,17 @@ import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class SceneDirectoryTest {
     interface Implementation { }
@@ -51,6 +58,67 @@ final class SceneDirectoryTest {
     private static final ShaderDataType<Instance> INSTANCE = ShaderDataType.create("instance");
     private static final ShaderDataType<EnvironmentBindingData> ENVIRONMENT_BINDING =
             ShaderDataType.create("environment binding");
+
+    @Test
+    void ownerDrainWakesAndProgressesAcceptedBackendPublications() throws InterruptedException {
+        ProgramFixture programs = new ProgramFixture();
+        SurfaceId<Binding, Instance> surface = programs.surface(new ContributionOwner(1));
+        AsyncSceneBackend backend = new AsyncSceneBackend();
+        SceneDirectory directory = directory(programs, backend);
+        directory.createScene();
+        GeometryContributionChannel geometry = directory.openGeometry(new ContributionOwner(2));
+        MeshId<Instance> mesh = geometry.newMesh(INSTANCE);
+        geometry.submit(RetainedBatch.of(List.of(new GeometryChannel.SetMesh<>(mesh, mesh(surface)))));
+        geometry.invalidate();
+        AtomicReference<Throwable> drainFailure = new AtomicReference<>();
+
+        Thread drain = Thread.ofVirtual().name("retained-owner-drain").start(() -> {
+            try {
+                geometry.drain();
+            } catch (Throwable failure) {
+                drainFailure.set(failure);
+            }
+        });
+        assertTrue(backend.awaitProgress());
+        assertTrue(drain.isAlive());
+
+        backend.completeAll();
+        drain.join(2_000L);
+
+        assertFalse(drain.isAlive());
+        assertNull(drainFailure.get());
+    }
+
+    @Test
+    void ownerDrainPropagatesFatalAcceptedPublicationFailureAfterWakeup() throws InterruptedException {
+        ProgramFixture programs = new ProgramFixture();
+        SurfaceId<Binding, Instance> surface = programs.surface(new ContributionOwner(1));
+        AsyncSceneBackend backend = new AsyncSceneBackend();
+        SceneDirectory directory = directory(programs, backend);
+        directory.createScene();
+        GeometryContributionChannel geometry = directory.openGeometry(new ContributionOwner(2));
+        MeshId<Instance> mesh = geometry.newMesh(INSTANCE);
+        geometry.submit(RetainedBatch.of(List.of(new GeometryChannel.SetMesh<>(mesh, mesh(surface)))));
+        geometry.invalidate();
+        AtomicReference<Throwable> drainFailure = new AtomicReference<>();
+        OutOfMemoryError fatal = new OutOfMemoryError("native BLAS publication failed");
+
+        Thread drain = Thread.ofVirtual().name("failed-retained-owner-drain").start(() -> {
+            try {
+                geometry.drain();
+            } catch (Throwable failure) {
+                drainFailure.set(failure);
+            }
+        });
+        assertTrue(backend.awaitProgress());
+        assertTrue(drain.isAlive());
+
+        backend.fail(fatal);
+        drain.join(2_000L);
+
+        assertFalse(drain.isAlive());
+        assertSame(fatal, drainFailure.get());
+    }
 
     @Test
     void environmentSelectionValidatesSessionAndSchemaAndRetiresAfterPublication() {
@@ -79,12 +147,12 @@ final class SceneDirectoryTest {
         programs.session.progress();
         channel.select(EnvironmentBinding.of(environment, ENVIRONMENT_BINDING.data(9)));
         backend.retireLatest();
-        directory.progressCallbacks();
+        directory.progress();
         assertEquals(1, firstRetired.get());
 
         channel.invalidate();
         backend.retireLatest();
-        directory.progressCallbacks();
+        directory.progress();
         channel.drain();
         assertEquals(null, directory.snapshot().scenes().getFirst().environment());
     }
@@ -114,18 +182,18 @@ final class SceneDirectoryTest {
         assertEquals(20, selectedEnvironmentBits(directory));
 
         backend.retire(2);
-        directory.progressCallbacks();
+        directory.progress();
         assertEquals(1, firstOriginalRetired.get());
         backend.retireLatest();
-        directory.progressCallbacks();
+        directory.progress();
         first.drain();
         backend.retire(3);
-        directory.progressCallbacks();
+        directory.progress();
 
         second.invalidate();
         assertEquals(null, directory.snapshot().scenes().getFirst().environment());
         backend.retireLatest();
-        directory.progressCallbacks();
+        directory.progress();
         second.drain();
     }
 
@@ -147,11 +215,11 @@ final class SceneDirectoryTest {
                 retired::incrementAndGet));
         second.select(EnvironmentBinding.of(environment, ENVIRONMENT_BINDING.data(20)));
         first.invalidate();
-        directory.progressCallbacks();
+        directory.progress();
         assertEquals(0, retired.get());
 
         backend.retire(2);
-        directory.progressCallbacks();
+        directory.progress();
         first.drain();
         assertEquals(1, retired.get());
         assertEquals(20, selectedEnvironmentBits(directory));
@@ -269,7 +337,7 @@ final class SceneDirectoryTest {
                 List.of(new GeometryChannel.SetMesh<>(mesh, mesh(surface))), retired::incrementAndGet)));
 
         assertEquals(0, directory.snapshot().meshes().size());
-        directory.progressCallbacks();
+        directory.progress();
         assertEquals(0, retired.get());
     }
 
@@ -300,13 +368,13 @@ final class SceneDirectoryTest {
         assertEquals(0, directory.snapshot().instances().size());
         assertEquals(0, directory.snapshot().lights().size());
         backend.retireLatest();
-        directory.progressCallbacks();
+        directory.progress();
         assertEquals(0, geometryRetired.get(), "mesh from the same batch is still retained");
         assertEquals(1, lightRetired.get());
 
         geometry.submit(RetainedBatch.of(List.of(new GeometryChannel.DropMesh<>(mesh))));
         backend.retireLatest();
-        directory.progressCallbacks();
+        directory.progress();
         assertEquals(1, geometryRetired.get());
     }
 
@@ -330,7 +398,7 @@ final class SceneDirectoryTest {
                 ShaderDataType.create("wrong").data(0), () -> { });
     }
 
-    private static SceneDirectory directory(ProgramFixture programs, SceneBackend backend) {
+    private static SceneDirectory directory(ProgramFixture programs, RetainedSceneBackend backend) {
         return new SceneDirectory(programs.session, backend, failure -> { throw new AssertionError(failure); });
     }
 
@@ -387,5 +455,61 @@ final class SceneDirectoryTest {
         }
         void retire(int publication) { retirements.get(publication).run(); }
         void retireLatest() { retirements.getLast().run(); }
+    }
+
+    private static final class AsyncSceneBackend implements RetainedSceneBackend {
+        private final List<Runnable> pending = new ArrayList<>();
+        private final List<Runnable> completed = new ArrayList<>();
+        private final CountDownLatch progressAttempted = new CountDownLatch(1);
+        private Runnable progressAvailable = () -> { };
+        private Throwable fatalFailure;
+
+        @Override
+        public synchronized void publish(RetainedSceneSnapshot snapshot, Runnable previousRetired) {
+            pending.add(previousRetired);
+        }
+
+        @Override
+        public synchronized void onProgressAvailable(Runnable wakeup) {
+            progressAvailable = wakeup;
+        }
+
+        @Override
+        public void progress() {
+            List<Runnable> retirements;
+            Throwable fatal;
+            synchronized (this) {
+                progressAttempted.countDown();
+                fatal = fatalFailure;
+                retirements = List.copyOf(completed);
+                completed.clear();
+            }
+            if (fatal instanceof RuntimeException runtime) throw runtime;
+            if (fatal instanceof Error error) throw error;
+            retirements.forEach(Runnable::run);
+        }
+
+        boolean awaitProgress() throws InterruptedException {
+            return progressAttempted.await(2, TimeUnit.SECONDS);
+        }
+
+        void completeAll() {
+            Runnable signal;
+            synchronized (this) {
+                completed.addAll(pending);
+                pending.clear();
+                signal = progressAvailable;
+            }
+            signal.run();
+        }
+
+        void fail(Throwable failure) {
+            Runnable signal;
+            synchronized (this) {
+                fatalFailure = failure;
+                signal = progressAvailable;
+            }
+            signal.run();
+        }
     }
 }

@@ -38,6 +38,7 @@ public final class SceneDirectory {
             environmentSelections = new LinkedHashMap<>();
     private final Queue<CallbackTask> callbacks = new ArrayDeque<>();
     private final Set<BatchToken> batches = new LinkedHashSet<>();
+    private boolean backendProgressAvailable;
     private long nextIdentity;
     private long revision;
 
@@ -46,6 +47,7 @@ public final class SceneDirectory {
         this.programs = Objects.requireNonNull(programs, "programs");
         this.backend = Objects.requireNonNull(backend, "backend");
         this.failures = Objects.requireNonNull(failures, "failures");
+        backend.onProgressAvailable(this::signalBackendProgress);
     }
 
     /** Host-only scene creation. Public extension contexts never receive this authority. */
@@ -126,8 +128,10 @@ public final class SceneDirectory {
 
     public synchronized RetainedSceneSnapshot snapshot() { return snapshot(revision); }
 
-    /** Runs serialized retirement callbacks. Never called inline by a submission or scene mutation. */
-    public void progressCallbacks() {
+    /** Advances native publications and runs their serialized retirement callbacks. */
+    public void progress() {
+        synchronized (this) { backendProgressAvailable = false; }
+        backend.progress();
         while (true) {
             CallbackTask callback;
             synchronized (this) { callback = callbacks.poll(); }
@@ -358,13 +362,19 @@ public final class SceneDirectory {
 
     private void drainOwner(Object owner) {
         while (true) {
-            progressCallbacks();
+            progress();
             synchronized (this) {
                 if (batches.stream().noneMatch(batch -> batch.owner == owner)) return;
                 if (!callbacks.isEmpty()) continue;
+                if (backendProgressAvailable) continue;
                 awaitChange();
             }
         }
+    }
+
+    private synchronized void signalBackendProgress() {
+        backendProgressAvailable = true;
+        notifyAll();
     }
 
     private void validateGeometry(GeometryContributionChannel channel, List<GeometryChannel.Operation> operations) {

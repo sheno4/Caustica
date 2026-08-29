@@ -601,7 +601,6 @@ public final class RtRuntime {
             rayReconstruction.configure(rayReconstructionSettings());
 
             world.progress();
-            scenes.progress();
             boolean resourcesReady = programs.active() != null;
             if (resourcesReady) {
                 telemetry.beginFrameIfInactive();

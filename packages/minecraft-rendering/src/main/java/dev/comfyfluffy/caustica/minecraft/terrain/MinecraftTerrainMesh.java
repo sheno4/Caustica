@@ -1,7 +1,5 @@
 package dev.comfyfluffy.caustica.minecraft.terrain;
 
-import dev.comfyfluffy.caustica.settings.ResourceId;
-
 import java.util.List;
 
 /** Immutable, section-local source geometry produced by Minecraft terrain extraction. */
@@ -72,8 +70,7 @@ public record MinecraftTerrainMesh(float[] positions, int[] indices, float[] cor
 
     /** One shader-homogeneous range in the source index stream. */
     public record Geometry(ProgramCategory program, Coverage coverage, int firstIndex, int indexCount,
-                           float alphaCutoff, OpacityMicromap opacityMicromap,
-                           MaterialBinding material) {
+                           float alphaCutoff, OpacityMicromap opacityMicromap) {
         public Geometry {
             java.util.Objects.requireNonNull(program, "program");
             java.util.Objects.requireNonNull(coverage, "coverage");
@@ -86,15 +83,6 @@ public record MinecraftTerrainMesh(float[] positions, int[] indices, float[] cor
             if (coverage == Coverage.OPAQUE && opacityMicromap != null) {
                 throw new IllegalArgumentException("opaque geometry cannot carry an opacity micromap");
             }
-            java.util.Objects.requireNonNull(material, "material");
-        }
-    }
-
-    /** Epoch-local material ordinal plus resource identity for shader records and pending texture binding. */
-    public record MaterialBinding(int materialIndex, ResourceId material, ResourceId texture) {
-        public MaterialBinding {
-            if (materialIndex < 0) throw new IllegalArgumentException("materialIndex must be non-negative");
-            java.util.Objects.requireNonNull(material, "material");
         }
     }
 

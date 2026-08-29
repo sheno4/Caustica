@@ -54,6 +54,7 @@ import net.minecraft.world.phys.Vec3;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -124,12 +125,9 @@ final class RtTerrainMesher {
 
     private static MinecraftTerrainMesh packSection(SectionMesh mesh) {
         Geom geom = mesh.geometry();
-        ArrayList<MinecraftTerrainMesh.Geometry> geometries = new ArrayList<>(geom.surfaces.size());
+        ArrayList<TriangleRouting> routing = new ArrayList<>(geom.surfaces.size());
         for (int triangle = 0; triangle < geom.surfaces.size(); triangle++) {
             TerrainSurface surface = geom.surfaces.get(triangle);
-            var material = new MinecraftTerrainMesh.MaterialBinding(
-                    surface.material().materialIndex(), surface.material().material(),
-                    surface.material().texture());
             var coverage = surface.coverage() == Coverage.CUTOUT
                     ? MinecraftTerrainMesh.Coverage.CUTOUT : MinecraftTerrainMesh.Coverage.OPAQUE;
             var range = surface.opacityRange();
@@ -138,23 +136,55 @@ final class RtTerrainMesher {
             var program = surface.material().material().equals(MinecraftMaterialIds.WATER)
                     ? MinecraftTerrainMesh.ProgramCategory.WATER
                     : MinecraftTerrainMesh.ProgramCategory.MATERIAL;
-            if (!geometries.isEmpty()) {
-                var previous = geometries.getLast();
-                if (previous.program() == program && previous.coverage() == coverage
-                        && java.util.Objects.equals(previous.opacityMicromap(), micromap)
-                        && previous.material().equals(material)) {
-                    geometries.set(geometries.size() - 1, new MinecraftTerrainMesh.Geometry(program, coverage,
-                            previous.firstIndex(), previous.indexCount() + 3, 0.5f, micromap, material));
-                    continue;
-                }
-            }
-            geometries.add(new MinecraftTerrainMesh.Geometry(program, coverage, triangle * 3, 3,
-                    0.5f, micromap, material));
+            routing.add(new TriangleRouting(program, coverage, 0.5f, micromap));
         }
-        int[] indices = java.util.Arrays.copyOf(geom.idx.elements(), geom.idx.size());
-        return new MinecraftTerrainMesh(java.util.Arrays.copyOf(geom.verts.elements(), geom.verts.size()), indices,
+        var packed = bucketTriangles(
+                java.util.Arrays.copyOf(geom.idx.elements(), geom.idx.size()),
                 java.util.Arrays.copyOf(geom.cornerUv.elements(), geom.cornerUv.size()),
-                java.util.Arrays.copyOf(geom.prim.elements(), geom.prim.size()), geometries, 0L);
+                java.util.Arrays.copyOf(geom.prim.elements(), geom.prim.size()), routing);
+        return new MinecraftTerrainMesh(java.util.Arrays.copyOf(geom.verts.elements(), geom.verts.size()),
+                packed.indices(), packed.cornerUvs(), packed.primitiveData(), packed.geometries(), 0L);
+    }
+
+    /** Vulkan routing shared by triangles that may occupy one contiguous acceleration-geometry range. */
+    record TriangleRouting(MinecraftTerrainMesh.ProgramCategory program,
+                           MinecraftTerrainMesh.Coverage coverage,
+                           float alphaCutoff,
+                           MinecraftTerrainMesh.OpacityMicromap opacityMicromap) { }
+
+    /** Triangle streams packed in stable routing-bucket order. */
+    record PackedTriangles(int[] indices, float[] cornerUvs, float[] primitiveData,
+                           List<MinecraftTerrainMesh.Geometry> geometries) { }
+
+    static PackedTriangles bucketTriangles(int[] sourceIndices, float[] sourceCornerUvs,
+                                           float[] sourcePrimitiveData, List<TriangleRouting> routing) {
+        var buckets = new LinkedHashMap<TriangleRouting, IntArrayList>();
+        for (int triangle = 0; triangle < routing.size(); triangle++) {
+            buckets.computeIfAbsent(routing.get(triangle), ignored -> new IntArrayList()).add(triangle);
+        }
+
+        int[] indices = new int[sourceIndices.length];
+        float[] cornerUvs = new float[sourceCornerUvs.length];
+        float[] primitiveData = new float[sourcePrimitiveData.length];
+        ArrayList<MinecraftTerrainMesh.Geometry> geometries = new ArrayList<>(buckets.size());
+        int destinationTriangle = 0;
+        for (var bucket : buckets.entrySet()) {
+            int firstIndex = destinationTriangle * 3;
+            IntArrayList sourceTriangles = bucket.getValue();
+            for (int i = 0; i < sourceTriangles.size(); i++) {
+                int sourceTriangle = sourceTriangles.getInt(i);
+                System.arraycopy(sourceIndices, sourceTriangle * 3, indices, destinationTriangle * 3, 3);
+                System.arraycopy(sourceCornerUvs, sourceTriangle * 6, cornerUvs, destinationTriangle * 6, 6);
+                System.arraycopy(sourcePrimitiveData, sourceTriangle * MinecraftTerrainMesh.PRIMITIVE_FLOATS,
+                        primitiveData, destinationTriangle * MinecraftTerrainMesh.PRIMITIVE_FLOATS,
+                        MinecraftTerrainMesh.PRIMITIVE_FLOATS);
+                destinationTriangle++;
+            }
+            TriangleRouting route = bucket.getKey();
+            geometries.add(new MinecraftTerrainMesh.Geometry(route.program(), route.coverage(), firstIndex,
+                    sourceTriangles.size() * 3, route.alphaCutoff(), route.opacityMicromap()));
+        }
+        return new PackedTriangles(indices, cornerUvs, primitiveData, geometries);
     }
 
     private static void tessellate(BlockAndTintGetter region, BlockStateModelSet modelSet,

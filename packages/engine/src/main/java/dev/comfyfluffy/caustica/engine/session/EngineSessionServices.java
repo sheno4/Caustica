@@ -67,7 +67,7 @@ public final class EngineSessionServices implements ContributionScopeFactory, Au
     /** Advances compiler publication, retained retirements, and eligible pass closes. */
     public void progress() {
         programs.progress();
-        scenes.progressCallbacks();
+        scenes.progress();
         passes.progress();
     }
 

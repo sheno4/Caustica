@@ -1138,52 +1138,68 @@ public final class RtAccel {
         tri.indexData().deviceAddress(indexAddr.value());
     }
 
-    private static VkAccelerationStructureGeometryKHR.Buffer geometryRangeGeometries(
-            MemoryStack stack, VulkanDeviceAddress vertexAddr, int vertexStride,
+    static VkAccelerationStructureGeometryKHR.Buffer geometryRangeGeometries(
+            VulkanDeviceAddress vertexAddr, int vertexStride,
             VulkanDeviceAddress indexAddr, int vertexCount,
             List<GeometryRange> ranges) {
         VkAccelerationStructureGeometryKHR.Buffer geometries =
-                VkAccelerationStructureGeometryKHR.calloc(ranges.size(), stack);
-        for (int i = 0; i < ranges.size(); i++) {
-            fillTriangleGeometry(geometries.get(i), vertexAddr, vertexStride, indexAddr, vertexCount,
-                    ranges.get(i).opaque());
+                VkAccelerationStructureGeometryKHR.calloc(ranges.size());
+        try {
+            for (int i = 0; i < ranges.size(); i++) {
+                fillTriangleGeometry(geometries.get(i), vertexAddr, vertexStride, indexAddr, vertexCount,
+                        ranges.get(i).opaque());
+            }
+            return geometries;
+        } catch (Throwable failure) {
+            geometries.free();
+            throw failure;
         }
-        return geometries;
     }
 
     static VkAccelerationStructureBuildRangeInfoKHR.Buffer geometryRangeBuildRanges(
-            MemoryStack stack, List<GeometryRange> ranges) {
+            List<GeometryRange> ranges) {
         VkAccelerationStructureBuildRangeInfoKHR.Buffer nativeRanges =
-                VkAccelerationStructureBuildRangeInfoKHR.calloc(ranges.size(), stack);
-        for (int i = 0; i < ranges.size(); i++) {
-            GeometryRange range = ranges.get(i);
-            nativeRanges.get(i).primitiveCount(range.triangleCount())
-                    .primitiveOffset(Math.multiplyExact(range.firstIndex(), Integer.BYTES))
-                    .firstVertex(0).transformOffset(0);
+                VkAccelerationStructureBuildRangeInfoKHR.calloc(ranges.size());
+        try {
+            for (int i = 0; i < ranges.size(); i++) {
+                GeometryRange range = ranges.get(i);
+                nativeRanges.get(i).primitiveCount(range.triangleCount())
+                        .primitiveOffset(Math.multiplyExact(range.firstIndex(), Integer.BYTES))
+                        .firstVertex(0).transformOffset(0);
+            }
+            return nativeRanges;
+        } catch (Throwable failure) {
+            nativeRanges.free();
+            throw failure;
         }
-        return nativeRanges;
     }
 
     private static VkAccelerationStructureBuildSizesInfoKHR queryGeometryRangeBlasSizes(
             VkDevice vk, MemoryStack stack, VulkanDeviceAddress vertexAddr, int vertexStride,
             VulkanDeviceAddress indexAddr,
             int vertexCount,
-            List<GeometryRange> ranges) {
-        VkAccelerationStructureGeometryKHR.Buffer geometries = geometryRangeGeometries(stack,
+        List<GeometryRange> ranges) {
+        VkAccelerationStructureGeometryKHR.Buffer geometries = geometryRangeGeometries(
                 vertexAddr, vertexStride, indexAddr, vertexCount, ranges);
-        VkAccelerationStructureBuildGeometryInfoKHR.Buffer build =
-                VkAccelerationStructureBuildGeometryInfoKHR.calloc(1, stack);
-        build.get(0).sType$Default().type(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR)
-                .flags(buildFlags(false)).mode(VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR)
-                .geometryCount(geometries.capacity()).pGeometries(geometries);
-        java.nio.IntBuffer maxPrimitives = stack.mallocInt(ranges.size());
-        for (GeometryRange range : ranges) maxPrimitives.put(range.triangleCount());
-        maxPrimitives.flip();
-        VkAccelerationStructureBuildSizesInfoKHR sizes =
-                VkAccelerationStructureBuildSizesInfoKHR.calloc(stack).sType$Default();
-        vkGetAccelerationStructureBuildSizesKHR(vk, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
-                build.get(0), maxPrimitives, sizes);
-        return sizes;
+        java.nio.IntBuffer maxPrimitives = null;
+        try {
+            maxPrimitives = MemoryUtil.memAllocInt(ranges.size());
+            VkAccelerationStructureBuildGeometryInfoKHR.Buffer build =
+                    VkAccelerationStructureBuildGeometryInfoKHR.calloc(1, stack);
+            build.get(0).sType$Default().type(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR)
+                    .flags(buildFlags(false)).mode(VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR)
+                    .geometryCount(geometries.capacity()).pGeometries(geometries);
+            for (GeometryRange range : ranges) maxPrimitives.put(range.triangleCount());
+            maxPrimitives.flip();
+            VkAccelerationStructureBuildSizesInfoKHR sizes =
+                    VkAccelerationStructureBuildSizesInfoKHR.calloc(stack).sType$Default();
+            vkGetAccelerationStructureBuildSizesKHR(vk, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+                    build.get(0), maxPrimitives, sizes);
+            return sizes;
+        } finally {
+            if (maxPrimitives != null) MemoryUtil.memFree(maxPrimitives);
+            geometries.free();
+        }
     }
 
     /** Fixed class geometry order; empty classes remain present so GeometryIndex/SBT routing is stable. */
@@ -1459,19 +1475,20 @@ public final class RtAccel {
 
     private static void recordGeometryRangeBlasBuild(VulkanDeviceContext ctx, VkCommandBuffer cmd,
                                                      MemoryStack stack, PreparedBlas b) {
-        VkAccelerationStructureGeometryKHR.Buffer geometries = geometryRangeGeometries(stack,
+        try (VkAccelerationStructureGeometryKHR.Buffer geometries = geometryRangeGeometries(
                 b.vertexAddr, b.vertexStride, b.indexAddr, b.maxVertex + 1, b.geometryRanges);
-        VkAccelerationStructureBuildGeometryInfoKHR.Buffer build =
-                VkAccelerationStructureBuildGeometryInfoKHR.calloc(1, stack);
-        build.get(0).sType$Default().type(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR)
-                .flags(buildFlags(false)).mode(VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR)
-                .geometryCount(geometries.capacity()).pGeometries(geometries)
-                .dstAccelerationStructure(b.accel.handle);
-        build.get(0).scratchData().deviceAddress(scratchAddress(ctx, b.scratch).value());
-        VkAccelerationStructureBuildRangeInfoKHR.Buffer ranges =
-                geometryRangeBuildRanges(stack, b.geometryRanges);
-        PointerBuffer ppRanges = stack.mallocPointer(1).put(0, ranges.address());
-        vkCmdBuildAccelerationStructuresKHR(cmd, build, ppRanges);
+             VkAccelerationStructureBuildRangeInfoKHR.Buffer ranges =
+                     geometryRangeBuildRanges(b.geometryRanges)) {
+            VkAccelerationStructureBuildGeometryInfoKHR.Buffer build =
+                    VkAccelerationStructureBuildGeometryInfoKHR.calloc(1, stack);
+            build.get(0).sType$Default().type(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR)
+                    .flags(buildFlags(false)).mode(VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR)
+                    .geometryCount(geometries.capacity()).pGeometries(geometries)
+                    .dstAccelerationStructure(b.accel.handle);
+            build.get(0).scratchData().deviceAddress(scratchAddress(ctx, b.scratch).value());
+            PointerBuffer ppRanges = stack.mallocPointer(1).put(0, ranges.address());
+            vkCmdBuildAccelerationStructuresKHR(cmd, build, ppRanges);
+        }
     }
 
     /** Record the fixed classified geometries as one BUILD or UPDATE. */

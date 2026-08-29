@@ -11,7 +11,7 @@ import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
 import dev.comfyfluffy.caustica.minecraft.gen.MinecraftPrimitiveData;
-import dev.comfyfluffy.caustica.settings.ResourceId;
+import dev.comfyfluffy.caustica.minecraft.program.MinecraftPrograms;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -63,7 +63,7 @@ final class MinecraftTerrainGeometryTest {
                 new float[]{0, 0, 0}, new int[]{0, 0, 0}, new float[0],
                 new float[MinecraftTerrainMesh.PRIMITIVE_FLOATS],
                 List.of(new MinecraftTerrainMesh.Geometry(MinecraftTerrainMesh.ProgramCategory.MATERIAL,
-                        MinecraftTerrainMesh.Coverage.OPAQUE, 0, 3, 0.5f, null, material())), 1L));
+                        MinecraftTerrainMesh.Coverage.OPAQUE, 0, 3, 0.5f, null)), 1L));
     }
 
     @Test
@@ -105,29 +105,45 @@ final class MinecraftTerrainGeometryTest {
     }
 
     @Test
-    void multiProgramTerrainWaitsForNativeMultiGeometryPacking() {
+    void uploaderPreservesEveryProgramRangeAsOneNativeGeometry() {
         var first = new MinecraftTerrainMesh.Geometry(MinecraftTerrainMesh.ProgramCategory.MATERIAL,
-                MinecraftTerrainMesh.Coverage.OPAQUE, 0, 3, 0.5f, null, material());
+                MinecraftTerrainMesh.Coverage.OPAQUE, 0, 3, 0.5f, null);
         var second = new MinecraftTerrainMesh.Geometry(MinecraftTerrainMesh.ProgramCategory.WATER,
-                MinecraftTerrainMesh.Coverage.OPAQUE, 3, 3, 0.5f, null, material());
+                MinecraftTerrainMesh.Coverage.OPAQUE, 3, 3, 0.5f, null);
         var source = new MinecraftTerrainMesh(new float[]{0, 0, 0, 1, 0, 0, 0, 1, 0},
                 new int[]{0, 1, 2, 0, 2, 1}, new float[12],
                 new float[2 * MinecraftTerrainMesh.PRIMITIVE_FLOATS], List.of(first, second), 0L);
+        var materialSurface = new dev.comfyfluffy.caustica.api.program.SurfaceId<
+                MinecraftProgramTypes.PrimitiveData, MinecraftProgramTypes.InstanceData>() { };
+        var waterSurface = new dev.comfyfluffy.caustica.api.program.SurfaceId<
+                MinecraftProgramTypes.PrimitiveData, MinecraftProgramTypes.InstanceData>() { };
+        var portalSurface = new dev.comfyfluffy.caustica.api.program.SurfaceId<
+                MinecraftProgramTypes.PrimitiveData, MinecraftProgramTypes.InstanceData>() { };
+        var waterVolume = new dev.comfyfluffy.caustica.api.program.VolumeId<
+                MinecraftProgramTypes.PrimitiveData, MinecraftProgramTypes.InstanceData>() { };
+        var environment = new dev.comfyfluffy.caustica.api.program.EnvironmentId<
+                MinecraftProgramTypes.EnvironmentBindingData>() { };
+        var programs = new MinecraftPrograms(materialSurface, waterSurface, portalSurface, waterVolume, environment);
 
-        assertThrows(IllegalStateException.class,
-                () -> MinecraftVulkanTerrainUploader.requireBackendShape(source));
+        var geometries = MinecraftVulkanTerrainUploader.geometries(
+                source, programs, new VulkanDeviceAddress(0x4000L));
+
+        assertEquals(2, geometries.size());
+        assertSame(materialSurface, geometries.get(0).surface().surface());
+        assertEquals(0x4000L, geometries.get(0).surface().bindingData().bits());
+        assertSame(waterSurface, geometries.get(1).surface().surface());
+        assertSame(waterVolume, geometries.get(1).volume().volume());
+        assertEquals(0x4000L + MinecraftPrimitiveData.BYTE_SIZE,
+                geometries.get(1).surface().bindingData().bits());
+        assertEquals(3, geometries.get(1).firstIndex());
+        assertEquals(3, geometries.get(1).indexCount());
     }
 
     private static MinecraftTerrainMesh mesh() {
         return new MinecraftTerrainMesh(new float[]{0, 0, 0, 1, 0, 0, 0, 1, 0}, new int[]{0, 1, 2},
                 new float[6], new float[MinecraftTerrainMesh.PRIMITIVE_FLOATS],
                 List.of(new MinecraftTerrainMesh.Geometry(MinecraftTerrainMesh.ProgramCategory.MATERIAL,
-                        MinecraftTerrainMesh.Coverage.OPAQUE, 0, 3, 0.5f, null, material())), 3L);
-    }
-
-    private static MinecraftTerrainMesh.MaterialBinding material() {
-        return new MinecraftTerrainMesh.MaterialBinding(7, ResourceId.of("minecraft", "stone"),
-                ResourceId.of("minecraft", "textures/atlas/blocks.png"));
+                        MinecraftTerrainMesh.Coverage.OPAQUE, 0, 3, 0.5f, null)), 3L);
     }
 
     private static final class Uploaded implements MinecraftTerrainUploader.UploadedSection {

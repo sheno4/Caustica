@@ -391,11 +391,13 @@ public final class RtTerrain {
         } finally {
             instrumentation.endStage("terrain.dirtyDrain", dirtyDrainStart);
         }
-        // Dispatch/drain/build normally runs per render frame. If no frame has
-        // streamed recently — loading screen, no world rendering — drive it from here with the bigger
-        // bounded fallback pass so the world still fills.
+        // Dispatch/drain/build normally runs per render frame. If no frame has streamed recently — startup,
+        // loading screen, or a hidden window — drive and publish the same bounded work from the tick. Startup
+        // cannot wait for frame-driven publication because frame capture begins only after a nearby section is
+        // published.
         if (System.nanoTime() - lastFrameStreamNanos > STREAM_FALLBACK_AFTER_NANOS) {
             stream();
+            submitPendingGeometry();
         }
     }
 
