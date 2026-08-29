@@ -16,7 +16,6 @@ import org.lwjgl.vulkan.VkImageBlit2;
 import org.lwjgl.vulkan.VkImageMemoryBarrier2;
 import org.lwjgl.vulkan.VkMemoryBarrier2;
 import org.lwjgl.vulkan.KHRSwapchain;
-import org.lwjgl.vulkan.KHRSynchronization2;
 
 import java.util.function.Supplier;
 
@@ -83,7 +82,7 @@ final class HdrPresentation {
             long sourceImage, long swapchainImage, int copyWidth, int copyHeight) {
         VkImageMemoryBarrier2.Buffer toDestination = VkImageMemoryBarrier2.calloc(1, stack).sType$Default();
         toDestination.get(0).srcStageMask(VK13.VK_PIPELINE_STAGE_2_NONE).srcAccessMask(VK13.VK_ACCESS_2_NONE)
-                .dstStageMask(KHRSynchronization2.VK_PIPELINE_STAGE_2_BLIT_BIT_KHR)
+                .dstStageMask(VK13.VK_PIPELINE_STAGE_2_BLIT_BIT)
                 .dstAccessMask(VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT)
                 .oldLayout(VK10.VK_IMAGE_LAYOUT_UNDEFINED).newLayout(VK10.VK_IMAGE_LAYOUT_GENERAL)
                 .srcQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED)
@@ -93,7 +92,7 @@ final class HdrPresentation {
         VkMemoryBarrier2.Buffer sourceVisibility = VkMemoryBarrier2.calloc(1, stack).sType$Default();
         sourceVisibility.get(0).srcStageMask(VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT)
                 .srcAccessMask(VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT)
-                .dstStageMask(KHRSynchronization2.VK_PIPELINE_STAGE_2_BLIT_BIT_KHR)
+                .dstStageMask(VK13.VK_PIPELINE_STAGE_2_BLIT_BIT)
                 .dstAccessMask(VK13.VK_ACCESS_2_TRANSFER_READ_BIT);
         VK14.vkCmdPipelineBarrier2(commandBuffer,
                 VkDependencyInfo.calloc(stack).sType$Default()
@@ -114,7 +113,7 @@ final class HdrPresentation {
                 .filter(VK10.VK_FILTER_NEAREST).pRegions(region));
 
         VkImageMemoryBarrier2.Buffer toPresent = VkImageMemoryBarrier2.calloc(1, stack).sType$Default();
-        toPresent.get(0).srcStageMask(KHRSynchronization2.VK_PIPELINE_STAGE_2_BLIT_BIT_KHR)
+        toPresent.get(0).srcStageMask(VK13.VK_PIPELINE_STAGE_2_BLIT_BIT)
                 .srcAccessMask(VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT)
                 .dstStageMask(VK13.VK_PIPELINE_STAGE_2_NONE).dstAccessMask(VK13.VK_ACCESS_2_NONE)
                 .oldLayout(VK10.VK_IMAGE_LAYOUT_GENERAL)
@@ -124,7 +123,7 @@ final class HdrPresentation {
         toPresent.get(0).subresourceRange().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT)
                 .baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
         VkMemoryBarrier2.Buffer memory = VkMemoryBarrier2.calloc(1, stack).sType$Default();
-        memory.get(0).srcStageMask(KHRSynchronization2.VK_PIPELINE_STAGE_2_BLIT_BIT_KHR)
+        memory.get(0).srcStageMask(VK13.VK_PIPELINE_STAGE_2_BLIT_BIT)
                 .srcAccessMask(VK13.VK_ACCESS_2_TRANSFER_READ_BIT)
                 .dstStageMask(VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT)
                 .dstAccessMask(VK13.VK_ACCESS_2_SHADER_STORAGE_READ_BIT

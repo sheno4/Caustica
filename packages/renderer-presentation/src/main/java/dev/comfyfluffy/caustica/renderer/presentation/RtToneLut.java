@@ -5,15 +5,12 @@ import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtDebugLabels;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuBuffer;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorIndex;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorRange;
-import org.lwjgl.PointerBuffer;
+import dev.comfyfluffy.caustica.vulkan.VmaImageAllocation;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
-import org.lwjgl.util.vma.Vma;
-import org.lwjgl.util.vma.VmaAllocationCreateInfo;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VK13;
 import org.lwjgl.vulkan.VK14;
-import org.lwjgl.vulkan.KHRSynchronization2;
 import org.lwjgl.vulkan.VkBufferImageCopy2;
 import org.lwjgl.vulkan.VkCopyBufferToImageInfo2;
 import org.lwjgl.vulkan.VkDevice;
@@ -47,9 +44,7 @@ public final class RtToneLut {
     private static final float SHADER_SHAPER_HI_STOPS = 12.0f;
 
     private final VkDevice vk;
-    private final long vma;
-    private final long image;
-    private final long allocation;
+    private final VmaImageAllocation imageAllocation;
     private final long view;
     private final long sampler;
     private final GpuDescriptorRange<GpuDescriptorIndex.Resource> sampledDescriptor;
@@ -57,14 +52,12 @@ public final class RtToneLut {
     public final int size;
     private boolean destroyed;
 
-    private RtToneLut(VkDevice vk, long vma, long image, long allocation, long view, long sampler,
+    private RtToneLut(VkDevice vk, VmaImageAllocation imageAllocation, long view, long sampler,
                        GpuDescriptorRange<GpuDescriptorIndex.Resource> sampledDescriptor,
                        GpuDescriptorRange<GpuDescriptorIndex.Sampler> samplerDescriptor,
                        int size) {
         this.vk = vk;
-        this.vma = vma;
-        this.image = image;
-        this.allocation = allocation;
+        this.imageAllocation = imageAllocation;
         this.view = view;
         this.sampler = sampler;
         this.sampledDescriptor = sampledDescriptor;
@@ -135,9 +128,7 @@ public final class RtToneLut {
 
     private static RtToneLut upload(VulkanDeviceContext ctx, int size, ByteBuffer texels, String label) {
         VkDevice vk = ctx.vk();
-        long vma = ctx.vma();
-        long createdImage = 0L;
-        long createdAllocation = 0L;
+        VmaImageAllocation createdImage = null;
         long createdView = 0L;
         long createdSampler = 0L;
         GpuDescriptorRange<GpuDescriptorIndex.Resource> sampledDescriptor = null;
@@ -152,18 +143,11 @@ public final class RtToneLut {
                     .sharingMode(VK10.VK_SHARING_MODE_EXCLUSIVE)
                     .initialLayout(VK10.VK_IMAGE_LAYOUT_UNDEFINED);
             imageInfo.extent().set(size, size, size);
-            VmaAllocationCreateInfo allocationInfo = VmaAllocationCreateInfo.calloc(stack)
-                    .usage(Vma.VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE);
-            LongBuffer imageOut = stack.mallocLong(1);
-            PointerBuffer allocationOut = stack.mallocPointer(1);
-            VulkanDeviceContext.check(Vma.vmaCreateImage(vma, imageInfo, allocationInfo, imageOut, allocationOut, null),
-                    "vmaCreateImage(tone lut " + label + ")");
-            createdImage = imageOut.get(0);
-            createdAllocation = allocationOut.get(0);
-            RtDebugLabels.nameImage(ctx, createdImage, "tone LUT " + label);
+            createdImage = VmaImageAllocation.create(ctx, imageInfo, "tone lut " + label);
+            RtDebugLabels.nameImage(ctx, createdImage.image(), "tone LUT " + label);
 
             VkImageViewCreateInfo viewInfo = VkImageViewCreateInfo.calloc(stack).sType$Default()
-                    .image(createdImage).viewType(VK10.VK_IMAGE_VIEW_TYPE_3D)
+                    .image(createdImage.image()).viewType(VK10.VK_IMAGE_VIEW_TYPE_3D)
                     .format(VK10.VK_FORMAT_R16G16B16A16_SFLOAT);
             viewInfo.subresourceRange().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT)
                     .baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
@@ -205,7 +189,7 @@ public final class RtToneLut {
             mapped.put(texels.duplicate());
             staging.flush();
 
-            long uploadImage = createdImage;
+            long uploadImage = createdImage.image();
             long uploadBuffer = staging.handle();
             ctx.submitSync(cmd -> {
                 try (MemoryStack uploadStack = MemoryStack.stackPush()) {
@@ -214,7 +198,7 @@ public final class RtToneLut {
                             .oldLayout(VK10.VK_IMAGE_LAYOUT_UNDEFINED)
                             .newLayout(VK10.VK_IMAGE_LAYOUT_GENERAL)
                             .srcStageMask(VK13.VK_PIPELINE_STAGE_2_NONE).srcAccessMask(VK13.VK_ACCESS_2_NONE)
-                            .dstStageMask(KHRSynchronization2.VK_PIPELINE_STAGE_2_COPY_BIT_KHR)
+                            .dstStageMask(VK13.VK_PIPELINE_STAGE_2_COPY_BIT)
                             .dstAccessMask(VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT)
                             .srcQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED)
                             .dstQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED).image(uploadImage);
@@ -242,7 +226,7 @@ public final class RtToneLut {
                     toRead.get(0).sType$Default()
                             .oldLayout(VK10.VK_IMAGE_LAYOUT_GENERAL)
                             .newLayout(VK10.VK_IMAGE_LAYOUT_GENERAL)
-                            .srcStageMask(KHRSynchronization2.VK_PIPELINE_STAGE_2_COPY_BIT_KHR)
+                            .srcStageMask(VK13.VK_PIPELINE_STAGE_2_COPY_BIT)
                             .srcAccessMask(VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT)
                             .dstStageMask(VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT)
                             .dstAccessMask(VK13.VK_ACCESS_2_SHADER_SAMPLED_READ_BIT)
@@ -259,12 +243,12 @@ public final class RtToneLut {
             if (sampledDescriptor != null) sampledDescriptor.destroy();
             if (createdSampler != 0L) VK10.vkDestroySampler(vk, createdSampler, null);
             if (createdView != 0L) VK10.vkDestroyImageView(vk, createdView, null);
-            if (createdImage != 0L) Vma.vmaDestroyImage(vma, createdImage, createdAllocation);
+            if (createdImage != null) createdImage.close();
             throw t;
         } finally {
             if (staging != null) staging.destroy();
         }
-        return new RtToneLut(vk, vma, createdImage, createdAllocation, createdView, createdSampler,
+        return new RtToneLut(vk, createdImage, createdView, createdSampler,
                 sampledDescriptor, samplerDescriptor,
                 size);
     }
@@ -277,7 +261,7 @@ public final class RtToneLut {
         sampledDescriptor.destroy();
         VK10.vkDestroySampler(vk, sampler, null);
         VK10.vkDestroyImageView(vk, view, null);
-        Vma.vmaDestroyImage(vma, image, allocation);
+        imageAllocation.close();
         destroyed = true;
     }
 

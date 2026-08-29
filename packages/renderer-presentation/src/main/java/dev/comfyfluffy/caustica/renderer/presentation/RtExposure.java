@@ -12,7 +12,6 @@ import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VK13;
 import org.lwjgl.vulkan.VK14;
-import org.lwjgl.vulkan.KHRSynchronization2;
 import org.lwjgl.vulkan.VkBufferCopy2;
 import org.lwjgl.vulkan.VkCopyBufferInfo2;
 import org.lwjgl.vulkan.VkBufferMemoryBarrier2;
@@ -261,7 +260,7 @@ public final class RtExposure {
         toTransfer.get(0).sType$Default()
                 .srcStageMask(VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT)
                 .srcAccessMask(VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT)
-                .dstStageMask(KHRSynchronization2.VK_PIPELINE_STAGE_2_COPY_BIT_KHR)
+                .dstStageMask(VK13.VK_PIPELINE_STAGE_2_COPY_BIT)
                 .dstAccessMask(VK13.VK_ACCESS_2_TRANSFER_READ_BIT)
                 .srcQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED)
                 .dstQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED)
