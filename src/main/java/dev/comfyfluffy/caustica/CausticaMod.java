@@ -3,6 +3,8 @@ package dev.comfyfluffy.caustica;
 import dev.comfyfluffy.caustica.minecraft.MinecraftApiBootstrap;
 import dev.comfyfluffy.caustica.minecraft.MinecraftFrameAdapter;
 import dev.comfyfluffy.caustica.minecraft.MinecraftRuntimeHost;
+import dev.comfyfluffy.caustica.minecraft.MinecraftTelemetry;
+import dev.comfyfluffy.caustica.minecraft.MinecraftUiOverlay;
 import dev.comfyfluffy.caustica.client.CausticaClientComposition;
 import dev.comfyfluffy.caustica.client.VanillaRenderController;
 import dev.comfyfluffy.caustica.client.WorldRenderScaler;
@@ -30,20 +32,22 @@ public final class CausticaMod {
         CausticaConfig.ensureRegistered();
         CausticaConfig.saveIfMissing();
         RtTelemetryImpl telemetry = new RtTelemetryImpl();
+        MinecraftTelemetry.Instrumentation minecraftTelemetry = MinecraftTelemetry.renderer(telemetry);
         RtWorkerPool terrainWorkers = new RtWorkerPool();
-        RtTerrain terrain = new RtTerrain(terrainWorkers);
-        MinecraftFrameAdapter frameAdapter = new MinecraftFrameAdapter(terrain);
+        RtTerrain terrain = new RtTerrain(terrainWorkers, minecraftTelemetry);
+        MinecraftFrameAdapter frameAdapter = new MinecraftFrameAdapter(terrain, minecraftTelemetry);
         MinecraftApiBootstrap.ApiServices apiServices = MinecraftApiBootstrap.initialize(
                 platform, telemetry, frameAdapter, terrain);
         RtRuntime runtime = new RtRuntime(apiServices.renderSessionHost(), apiServices.minecraftWorldSessionHost(),
                 apiServices.slangRuntime(), apiServices.shaderCacheRoot(), telemetry, apiServices.ngxSettings());
         VanillaRenderController renderController = new VanillaRenderController(terrain);
         WorldRenderScaler renderScaler = new WorldRenderScaler(renderController);
-        MinecraftRuntimeHost runtimeHost = new MinecraftRuntimeHost(renderController, renderScaler);
+        MinecraftUiOverlay uiOverlay = new MinecraftUiOverlay(runtime);
+        MinecraftRuntimeHost runtimeHost = new MinecraftRuntimeHost(renderController, renderScaler, uiOverlay);
         MinecraftDeviceBringup deviceBringup = new MinecraftDeviceBringup();
         MinecraftVulkanBackend vulkanBackend = new MinecraftVulkanBackend(deviceBringup, runtime);
         CausticaClientComposition.publish(new CausticaClientComposition(runtime, apiServices, frameAdapter,
-                runtimeHost, renderController, renderScaler, deviceBringup, vulkanBackend,
+                runtimeHost, uiOverlay, renderController, renderScaler, deviceBringup, vulkanBackend,
                 terrainWorkers, terrain));
         LOGGER.info("Caustica initialized (common); config: {}", CausticaConfig.configPath());
     }

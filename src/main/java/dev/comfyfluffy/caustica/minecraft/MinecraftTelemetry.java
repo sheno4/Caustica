@@ -31,17 +31,15 @@ public final class MinecraftTelemetry {
         void afterPublicationVisible(LongConsumer action);
     }
 
-    private static volatile Instrumentation instrumentation = Disabled.INSTANCE;
-
     private MinecraftTelemetry() {
     }
 
-    public static void install(RtTelemetry telemetry) {
-        instrumentation = new RendererBridge(Objects.requireNonNull(telemetry, "telemetry"));
+    public static Instrumentation renderer(RtTelemetry telemetry) {
+        return new RendererBridge(Objects.requireNonNull(telemetry, "telemetry"));
     }
 
-    public static Instrumentation current() {
-        return instrumentation;
+    public static Instrumentation disabled() {
+        return Disabled.INSTANCE;
     }
 
     private record RendererBridge(RtTelemetry telemetry) implements Instrumentation {

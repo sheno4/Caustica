@@ -3,6 +3,7 @@ package dev.comfyfluffy.caustica.client;
 import dev.comfyfluffy.caustica.minecraft.MinecraftApiBootstrap;
 import dev.comfyfluffy.caustica.minecraft.MinecraftFrameAdapter;
 import dev.comfyfluffy.caustica.minecraft.MinecraftRuntimeHost;
+import dev.comfyfluffy.caustica.minecraft.MinecraftUiOverlay;
 import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftDeviceBringup;
 import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftVulkanBackend;
 import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
@@ -19,6 +20,7 @@ public final class CausticaClientComposition {
     private final MinecraftApiBootstrap.ApiServices apiServices;
     private final MinecraftFrameAdapter frameAdapter;
     private final MinecraftRuntimeHost runtimeHost;
+    private final MinecraftUiOverlay uiOverlay;
     private final VanillaRenderController renderController;
     private final WorldRenderScaler renderScaler;
     private final MinecraftDeviceBringup deviceBringup;
@@ -28,6 +30,7 @@ public final class CausticaClientComposition {
 
     public CausticaClientComposition(RtRuntime runtime, MinecraftApiBootstrap.ApiServices apiServices,
                                      MinecraftFrameAdapter frameAdapter, MinecraftRuntimeHost runtimeHost,
+                                     MinecraftUiOverlay uiOverlay,
                                      VanillaRenderController renderController, WorldRenderScaler renderScaler,
                                      MinecraftDeviceBringup deviceBringup, MinecraftVulkanBackend vulkanBackend,
                                      RtWorkerPool terrainWorkers, RtTerrain terrain) {
@@ -35,6 +38,7 @@ public final class CausticaClientComposition {
         this.apiServices = Objects.requireNonNull(apiServices, "apiServices");
         this.frameAdapter = Objects.requireNonNull(frameAdapter, "frameAdapter");
         this.runtimeHost = Objects.requireNonNull(runtimeHost, "runtimeHost");
+        this.uiOverlay = Objects.requireNonNull(uiOverlay, "uiOverlay");
         this.renderController = Objects.requireNonNull(renderController, "renderController");
         this.renderScaler = Objects.requireNonNull(renderScaler, "renderScaler");
         this.deviceBringup = Objects.requireNonNull(deviceBringup, "deviceBringup");
@@ -53,6 +57,7 @@ public final class CausticaClientComposition {
 
     public MinecraftFrameAdapter frameAdapter() { return frameAdapter; }
     public MinecraftRuntimeHost runtimeHost() { return runtimeHost; }
+    public MinecraftUiOverlay uiOverlay() { return uiOverlay; }
     public VanillaRenderController renderController() { return renderController; }
     public WorldRenderScaler renderScaler() { return renderScaler; }
     public MinecraftDeviceBringup deviceBringup() { return deviceBringup; }

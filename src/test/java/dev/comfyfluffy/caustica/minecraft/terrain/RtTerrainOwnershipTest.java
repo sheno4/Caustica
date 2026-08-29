@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.terrain;
 
+import dev.comfyfluffy.caustica.minecraft.MinecraftTelemetry;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Modifier;
@@ -13,8 +14,8 @@ final class RtTerrainOwnershipTest {
     void terrainAndWorkersAreIndependentRootOwnedInstances() {
         RtWorkerPool firstWorkers = new RtWorkerPool(1);
         RtWorkerPool secondWorkers = new RtWorkerPool(1);
-        RtTerrain firstTerrain = new RtTerrain(firstWorkers);
-        RtTerrain secondTerrain = new RtTerrain(secondWorkers);
+        RtTerrain firstTerrain = new RtTerrain(firstWorkers, MinecraftTelemetry.disabled());
+        RtTerrain secondTerrain = new RtTerrain(secondWorkers, MinecraftTelemetry.disabled());
 
         assertNotSame(firstWorkers, secondWorkers);
         assertNotSame(firstTerrain, secondTerrain);

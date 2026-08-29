@@ -4,6 +4,8 @@ import dev.comfyfluffy.caustica.engine.session.RenderSessionHost;
 import dev.comfyfluffy.caustica.minecraft.MinecraftApiBootstrap;
 import dev.comfyfluffy.caustica.minecraft.MinecraftFrameAdapter;
 import dev.comfyfluffy.caustica.minecraft.MinecraftRuntimeHost;
+import dev.comfyfluffy.caustica.minecraft.MinecraftTelemetry;
+import dev.comfyfluffy.caustica.minecraft.MinecraftUiOverlay;
 import dev.comfyfluffy.caustica.minecraft.adapter.session.MinecraftWorldSessionHost;
 import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftDeviceBringup;
 import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftVulkanBackend;
@@ -43,15 +45,16 @@ final class CausticaClientCompositionTest {
                 renderHost, minecraftHost, settings, options, slang, shaderCache, ngx);
         RtRuntime runtime = new RtRuntime(renderHost, minecraftHost, slang, shaderCache, telemetry, ngx);
         RtWorkerPool terrainWorkers = new RtWorkerPool();
-        RtTerrain terrain = new RtTerrain(terrainWorkers);
-        MinecraftFrameAdapter frameAdapter = new MinecraftFrameAdapter(terrain);
+        RtTerrain terrain = new RtTerrain(terrainWorkers, MinecraftTelemetry.disabled());
+        MinecraftFrameAdapter frameAdapter = new MinecraftFrameAdapter(terrain, MinecraftTelemetry.disabled());
         VanillaRenderController renderController = new VanillaRenderController(terrain);
         WorldRenderScaler renderScaler = new WorldRenderScaler(renderController);
-        MinecraftRuntimeHost runtimeHost = new MinecraftRuntimeHost(renderController, renderScaler);
+        MinecraftUiOverlay uiOverlay = new MinecraftUiOverlay(runtime);
+        MinecraftRuntimeHost runtimeHost = new MinecraftRuntimeHost(renderController, renderScaler, uiOverlay);
         MinecraftDeviceBringup deviceBringup = new MinecraftDeviceBringup();
         MinecraftVulkanBackend vulkanBackend = new MinecraftVulkanBackend(deviceBringup, runtime);
         CausticaClientComposition composition = new CausticaClientComposition(runtime, services, frameAdapter,
-                runtimeHost, renderController, renderScaler, deviceBringup, vulkanBackend,
+                runtimeHost, uiOverlay, renderController, renderScaler, deviceBringup, vulkanBackend,
                 terrainWorkers, terrain);
 
         CausticaClientComposition.publish(composition);
@@ -61,6 +64,7 @@ final class CausticaClientCompositionTest {
         assertSame(options, composition.apiServices().options());
         assertSame(frameAdapter, composition.frameAdapter());
         assertSame(runtimeHost, composition.runtimeHost());
+        assertSame(uiOverlay, composition.uiOverlay());
         assertSame(renderController, composition.renderController());
         assertSame(renderScaler, composition.renderScaler());
         assertSame(deviceBringup, composition.deviceBringup());
@@ -69,7 +73,7 @@ final class CausticaClientCompositionTest {
         assertSame(terrain, composition.terrain());
         assertThrows(IllegalStateException.class,
                 () -> CausticaClientComposition.publish(new CausticaClientComposition(runtime, services,
-                        frameAdapter, runtimeHost, renderController, renderScaler, deviceBringup, vulkanBackend,
+                        frameAdapter, runtimeHost, uiOverlay, renderController, renderScaler, deviceBringup, vulkanBackend,
                         terrainWorkers, terrain)));
     }
 }

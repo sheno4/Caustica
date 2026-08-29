@@ -31,7 +31,6 @@ public final class MinecraftApiBootstrap {
 
     public static ApiServices initialize(CausticaPlatform platform, RtTelemetry telemetry,
                                          MinecraftFrameAdapter frameAdapter, RtTerrain terrain) {
-        MinecraftTelemetry.install(telemetry);
         SettingsRegistry settingsRegistry = new SettingsRegistry();
         List<CausticaExtension> extensions = new ArrayList<>();
         extensions.add(new BuiltinExtension());

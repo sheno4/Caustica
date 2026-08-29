@@ -136,6 +136,7 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.Mine
     // Reusable capture pipeline (single-threaded on the render thread).
     private final RtEntityTextures textures;
     private final RtEntityCollector collector;
+    private final MinecraftTelemetry.Instrumentation instrumentation;
     private final RtEntityCapture capture = new RtEntityCapture();
     private final PoseStack entityPoseStack = new PoseStack();
     private final PoseStack blockEntityPoseStack = new PoseStack();
@@ -198,9 +199,10 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.Mine
     private final Set<MinecraftEntityGeometry.Key> pendingDrops = new java.util.LinkedHashSet<>();
     private MinecraftEntityGeometry geometry;
 
-    public RtEntities(RtEntityTextures textures) {
+    public RtEntities(RtEntityTextures textures, MinecraftTelemetry.Instrumentation instrumentation) {
         this.textures = java.util.Objects.requireNonNull(textures, "textures");
-        collector = new RtEntityCollector(textures);
+        this.instrumentation = java.util.Objects.requireNonNull(instrumentation, "instrumentation");
+        collector = new RtEntityCollector(textures, instrumentation);
     }
 
     public synchronized void bindGeometry(MinecraftEntityGeometry geometry) {
@@ -423,7 +425,7 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.Mine
     private void beginFrame(MinecraftEntityGeometry geometry, SceneOrigin origin,
                            double camX, double camY, double camZ, Matrix4f projection, Matrix4f viewRotation,
                            long frameIndex) {
-        FrameBuild build = new FrameBuild(geometry, origin, frameIndex, MinecraftTelemetry.current());
+        FrameBuild build = new FrameBuild(geometry, origin, frameIndex, instrumentation);
         int rbx = (int) origin.x();
         int rby = (int) origin.y();
         int rbz = (int) origin.z();

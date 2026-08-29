@@ -47,7 +47,7 @@ public abstract class GameRendererMixin {
 		if (!CausticaClientComposition.current().runtime().frameActive()) {
 			return;
 		}
-		MinecraftUiOverlay.beginFrame();
+		CausticaClientComposition.current().uiOverlay().beginFrame();
 		// Clear the stale HDR-present flag every frame: composite() only runs while a level renders, so on
 		// menu frames it would otherwise stay true from the last world frame and present a black HDR image.
 		CausticaClientComposition.current().runtime().beginFrame();
@@ -85,15 +85,16 @@ public abstract class GameRendererMixin {
 					target = "Lnet/minecraft/client/renderer/GameRenderer;renderItemInHand(Lnet/minecraft/client/renderer/state/level/CameraRenderState;FLorg/joml/Matrix4fc;)V"))
 	private void caustica$redirectHandToOverlay(GameRenderer self, CameraRenderState cameraState, float deltaPartialTick,
 			Matrix4fc modelViewMatrix, Operation<Void> original) {
-		boolean redirect = MinecraftUiOverlay.enabled();
+		MinecraftUiOverlay overlay = CausticaClientComposition.current().uiOverlay();
+		boolean redirect = overlay.enabled();
 		if (redirect) {
-			MinecraftUiOverlay.beginOutputRedirect(this.mainRenderTarget);
+			overlay.beginOutputRedirect(this.mainRenderTarget);
 		}
 		try {
 			original.call(self, cameraState, deltaPartialTick, modelViewMatrix);
 		} finally {
 			if (redirect) {
-				MinecraftUiOverlay.endOutputRedirect();
+				overlay.endOutputRedirect();
 			}
 		}
 	}
@@ -108,15 +109,16 @@ public abstract class GameRendererMixin {
 					target = "Lnet/minecraft/client/renderer/feature/FeatureRenderDispatcher;renderAllFeatures(Lnet/minecraft/client/renderer/SubmitNodeStorage;)V"))
 	private void caustica$redirectScreenEffectsToOverlay(FeatureRenderDispatcher self, SubmitNodeStorage storage,
 			Operation<Void> original) {
-		boolean redirect = MinecraftUiOverlay.enabled();
+		MinecraftUiOverlay overlay = CausticaClientComposition.current().uiOverlay();
+		boolean redirect = overlay.enabled();
 		if (redirect) {
-			MinecraftUiOverlay.beginOutputRedirect(this.mainRenderTarget);
+			overlay.beginOutputRedirect(this.mainRenderTarget);
 		}
 		try {
 			original.call(self, storage);
 		} finally {
 			if (redirect) {
-				MinecraftUiOverlay.endOutputRedirect();
+				overlay.endOutputRedirect();
 			}
 		}
 	}
@@ -175,7 +177,8 @@ public abstract class GameRendererMixin {
 		// Fold RT world overlays into the shared transparent UI image before hand/screen effects and the GUI
 		// add their own layers. MinecraftUiOverlay then performs the single final blend to SDR/HDR.
 		try {
-			MinecraftUiOverlay.UiPassTarget target = MinecraftUiOverlay.uiPassTarget(this.mainRenderTarget);
+			MinecraftUiOverlay.UiPassTarget target = CausticaClientComposition.current().uiOverlay()
+					.uiPassTarget(this.mainRenderTarget);
 			if (target != null) CausticaClientComposition.current().runtime().recordUiPasses(target.commandBuffer(), target.image());
 		} finally {
 			// The UI pass is recorded in Minecraft's deferred graphics command buffer before this token is finished.
@@ -200,8 +203,8 @@ public abstract class GameRendererMixin {
                 ? texture.vkImage() : 0L;
         CausticaClientComposition.current().runtime().captureHudless(mainImage,
                 this.mainRenderTarget.width, this.mainRenderTarget.height,
-				CausticaClientComposition.current().frameAdapter().captureUiPresentation());
-		MinecraftUiOverlay.compositeIfUsed();
+				CausticaClientComposition.current().uiOverlay().capturePresentation());
+		CausticaClientComposition.current().uiOverlay().compositeIfUsed();
 	}
 
 	@Shadow

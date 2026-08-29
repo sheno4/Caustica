@@ -104,13 +104,14 @@ public final class RtTerrain {
     }
 
     private final RtWorkerPool workers;
+    private final MinecraftTelemetry.Instrumentation instrumentation;
     private MinecraftTerrainGeometry retainedGeometry;
 
     private boolean sceneInitialized;
     private volatile MinecraftMaterialLookup materialLookup;
     // Persistent palette snapshots for tessellation regions (render-thread only); invalidated on dirty
     // sections, column unload/window-leave, and full clears.
-    private final RtSectionSnapshots snapshots = new RtSectionSnapshots();
+    private final RtSectionSnapshots snapshots;
     private final LongOpenHashSet empty = new LongOpenHashSet(); // loaded, in-window sections with no geometry
     private final Object dirtyLock = new Object();
     private final LongOpenHashSet dirty = new LongOpenHashSet(); // edited sections to re-extract
@@ -205,8 +206,10 @@ public final class RtTerrain {
         return desired;
     }
 
-    public RtTerrain(RtWorkerPool workers) {
+    public RtTerrain(RtWorkerPool workers, MinecraftTelemetry.Instrumentation instrumentation) {
         this.workers = java.util.Objects.requireNonNull(workers, "workers");
+        this.instrumentation = java.util.Objects.requireNonNull(instrumentation, "instrumentation");
+        snapshots = new RtSectionSnapshots(instrumentation);
         missingIndex.defaultReturnValue(NO_MISSING_INDEX);
         queuedDirtyGroup.defaultReturnValue(NO_DIRTY_GROUP);
         inFlight.defaultReturnValue(NO_TESS_TOKEN);
@@ -251,7 +254,7 @@ public final class RtTerrain {
      * and dispatch immutable snapshots to workers, bounded by configured per-pass counts.
      */
     public void frame() {
-        MinecraftTelemetry.current().max("terrainPendingGeometryGroups", pendingGeometryGroups.size());
+        instrumentation.max("terrainPendingGeometryGroups", pendingGeometryGroups.size());
         if (materialLookup != null) frameStream();
         submitPendingGeometry();
     }
@@ -363,15 +366,15 @@ public final class RtTerrain {
         int hiY = maxSecY;
 
         // Evicted geometry lands in `removed` and is consumed by the next streaming pass's build kick.
-        long windowSyncStart = MinecraftTelemetry.current().startStage();
+        long windowSyncStart = instrumentation.startStage();
         try {
             syncDesiredWindow(chunkSource, pcx, psy, pcz, r, loY, hiY, removed);
         } finally {
-            MinecraftTelemetry.current().endStage("terrain.windowSync", windowSyncStart);
+            instrumentation.endStage("terrain.windowSync", windowSyncStart);
         }
 
         // Re-extract edited sections. Drain under a short lock so concurrent block updates are not lost.
-        long dirtyDrainStart = MinecraftTelemetry.current().startStage();
+        long dirtyDrainStart = instrumentation.startStage();
         try {
             drainDirty();
             if (!dirtyDrain.isEmpty()) {
@@ -386,7 +389,7 @@ public final class RtTerrain {
                 }
             }
         } finally {
-            MinecraftTelemetry.current().endStage("terrain.dirtyDrain", dirtyDrainStart);
+            instrumentation.endStage("terrain.dirtyDrain", dirtyDrainStart);
         }
         // Dispatch/drain/build normally runs per render frame. If no frame has
         // streamed recently — loading screen, no world rendering — drive it from here with the bigger
@@ -431,26 +434,26 @@ public final class RtTerrain {
         ClientChunkCache chunkSource = level.getChunkSource();
 
         // Drain completed CPU builds first — publication is visible fill progress, so it gets priority.
-        long completionStart = MinecraftTelemetry.current().startStage();
+        long completionStart = instrumentation.startStage();
         try {
             drainCompletedBuilds(prepared, removed, completionResultsPerPass());
         } finally {
-            MinecraftTelemetry.current().endStage("terrain.drainCompletion", completionStart);
+            instrumentation.endStage("terrain.drainCompletion", completionStart);
         }
 
         if (!removed.isEmpty() || !prepared.isEmpty()) {
-            long publishStart = MinecraftTelemetry.current().startStage();
+            long publishStart = instrumentation.startStage();
             try {
                 applyBuildChanges(prepared, removed, shouldRebase(pbx, pby, pbz), pbx, pby, pbz);
                 removed.clear();
                 prepared.clear();
             } finally {
-                MinecraftTelemetry.current().endStage("terrain.publish", publishStart);
+                instrumentation.endStage("terrain.publish", publishStart);
             }
         }
 
         // Snapshot and dispatch a bounded number of new worker-owned section builds.
-        long snapshotDispatchStart = MinecraftTelemetry.current().startStage();
+        long snapshotDispatchStart = instrumentation.startStage();
         try {
             DispatchContext dispatch = null;
             int dispatchSlots = Math.min(asyncDispatchPerPass(), Math.max(0, maxInflight() - inFlight.size()));
@@ -467,7 +470,7 @@ public final class RtTerrain {
                 dispatchMissingBuilds(dispatch, chunkSource, dispatchSlots, pcx, psy, pcz);
             }
         } finally {
-            MinecraftTelemetry.current().endStage("terrain.snapshotDispatch", snapshotDispatchStart);
+            instrumentation.endStage("terrain.snapshotDispatch", snapshotDispatchStart);
         }
 
         flushLightSnapshotUpdate();
@@ -1022,7 +1025,7 @@ public final class RtTerrain {
 
     /** Snapshot one section and dispatch CPU-only meshing to the worker pool. */
     private void dispatchSectionBuild(DispatchContext dispatch, long key, int sx, int sy, int sz) {
-        MinecraftTelemetry.current().count("sectionsSnapshotted", 1);
+        instrumentation.count("sectionsSnapshotted", 1);
         RtSectionSnapshots.Region region = snapshots.createRegion(dispatch.level(), sx, sy, sz);
         long token = ++buildToken;
         long dirtyGroup = queuedDirtyGroup.remove(key);
@@ -1033,7 +1036,7 @@ public final class RtTerrain {
         if (lookup == null) return;
         SectionTask task = new SectionTask(key, token, sx << 4, sy << 4, sz << 4, dirtyGroup,
                 terrainEpoch, lookup.epoch(),
-                MinecraftTelemetry.current().extraction(MinecraftTelemetry.GeometrySource.TERRAIN, 1));
+                instrumentation.extraction(MinecraftTelemetry.GeometrySource.TERRAIN, 1));
         beginActiveTask();
         try {
             workers.submit(() -> {
@@ -1086,7 +1089,7 @@ public final class RtTerrain {
         try {
             if (isTaskCurrent(result.task())) {
                 completedBuilds.add(result.withWorkerCompletion(System.nanoTime(),
-                        MinecraftTelemetry.current().extraction(MinecraftTelemetry.GeometrySource.TERRAIN_READY, 1)));
+                        instrumentation.extraction(MinecraftTelemetry.GeometrySource.TERRAIN_READY, 1)));
             }
         } finally {
             finishActiveTask();
@@ -1152,7 +1155,7 @@ public final class RtTerrain {
                     long staleGroup = task.dirtyGroup;
                     if (staleGroup != NO_DIRTY_GROUP) cancelDirtyGroup(staleGroup);
                     enqueueMissingIfNeeded(task.key);
-                    MinecraftTelemetry.current().count("terrainMaterialEpochRejects", 1);
+                    instrumentation.count("terrainMaterialEpochRejects", 1);
                 }
                 continue;
             }
@@ -1396,7 +1399,7 @@ public final class RtTerrain {
         pendingGeometryGroups.add(new PendingGeometryGroup(groupKey, publicationEpoch,
                 List.copyOf(operations),
                 new PendingPublication(List.copyOf(publicationPuts), List.copyOf(publicationDrops)), enqueuedNanos));
-        MinecraftTelemetry.current().max("terrainPendingGeometryGroups", pendingGeometryGroups.size());
+        instrumentation.max("terrainPendingGeometryGroups", pendingGeometryGroups.size());
     }
 
     private void submitPendingGeometry() {
@@ -1433,8 +1436,8 @@ public final class RtTerrain {
             PublishedSection previous = publishedSections.put(key, new PublishedSection(
                     put.originX(), put.originY(), put.originZ(), lights));
             clearPendingPublication(key, put.token());
-            MinecraftTelemetry.current().published(put.extractionStamp());
-            MinecraftTelemetry.current().published(put.readyStamp());
+            instrumentation.published(put.extractionStamp());
+            instrumentation.published(put.readyStamp());
             recordTerrainLatency("terrainSubmitToPublication", submittedNanos, System.nanoTime());
             empty.remove(key);
             lightsChanged |= !sameLightRecords(previous == null ? null : previous.lights(), lights);
@@ -1452,11 +1455,11 @@ public final class RtTerrain {
         if (lightsChanged) markLightSnapshotDirty();
     }
 
-    private static void recordTerrainLatency(String metric, long startNanos, long endNanos) {
+    private void recordTerrainLatency(String metric, long startNanos, long endNanos) {
         long micros = Math.max(0L, endNanos - startNanos) / 1_000L;
-        MinecraftTelemetry.current().count(metric + "Samples", 1);
-        MinecraftTelemetry.current().count(metric + "MicrosTotal", micros);
-        MinecraftTelemetry.current().max(metric + "MicrosMax", micros);
+        instrumentation.count(metric + "Samples", 1);
+        instrumentation.count(metric + "MicrosTotal", micros);
+        instrumentation.max(metric + "MicrosMax", micros);
     }
 
     private void clearPendingPublication(long key, long token) {

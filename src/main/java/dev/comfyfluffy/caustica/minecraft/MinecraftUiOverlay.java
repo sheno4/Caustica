@@ -23,14 +23,14 @@ import dev.comfyfluffy.caustica.mixin.CommandEncoderAccessor;
 import dev.comfyfluffy.caustica.mixin.VulkanCommandEncoderAccessor;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuImage;
+import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
+import dev.comfyfluffy.caustica.rt.RtRuntime;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.*;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.BindGroupLayouts;
 import net.minecraft.client.renderer.RenderPipelines;
-
-import dev.comfyfluffy.caustica.client.CausticaClientComposition;
 
 /**
  * Transparent final-UI overlay. World-space overlay features and the vanilla GUI/HUD
@@ -66,16 +66,18 @@ public final class MinecraftUiOverlay {
             .withPrimitiveTopology(PrimitiveTopology.TRIANGLES)
             .build();
 
-    private static TextureTarget overlay;
-    private static boolean usedThisFrame;
-    private static boolean compositeFailed;
+    private final RtRuntime runtime;
+    private TextureTarget overlay;
+    private boolean usedThisFrame;
+    private boolean compositeFailed;
     // The overlay is cleared once per frame, before the first thing that renders into it (RT world overlays,
     // the hand/screen-effects redirects in HDR mode, or the GUI). Reset at the start of GameRenderer.render
     // via beginFrame().
-    private static boolean overlayClearedThisFrame;
-    private static BorrowedOverlayImage borrowedImage;
+    private boolean overlayClearedThisFrame;
+    private BorrowedOverlayImage borrowedImage;
 
-    private MinecraftUiOverlay() {
+    public MinecraftUiOverlay(RtRuntime runtime) {
+        this.runtime = java.util.Objects.requireNonNull(runtime, "runtime");
     }
 
     /**
@@ -86,31 +88,31 @@ public final class MinecraftUiOverlay {
      * with "Couldn't find source for core/screenquad"). Gating the redirect here keeps the loading-screen
      * GUI on the normal path.
      */
-    public static boolean enabled() {
-        return CausticaClientComposition.current().runtime().frameActive()
+    public boolean enabled() {
+        return runtime.frameActive()
                 && !compositeFailed && Minecraft.getInstance().isGameLoadFinished();
     }
 
     /** Whether the overlay holds this frame's UI (for the HDR present path to composite + consume). */
-    public static boolean populatedThisFrame() {
+    public boolean populatedThisFrame() {
         return usedThisFrame && overlay != null;
     }
 
     /** Mark the overlay consumed by the HDR present composite (so it isn't reused next frame). */
-    public static void markConsumed() {
+    public void markConsumed() {
         usedThisFrame = false;
     }
 
-    public static int overlayWidth() {
+    public int overlayWidth() {
         return overlay != null ? overlay.width : 0;
     }
 
-    public static int overlayHeight() {
+    public int overlayHeight() {
         return overlay != null ? overlay.height : 0;
     }
 
     /** The overlay color image view, for the HDR composite compute pass (0 if not available). */
-    public static long overlayColorView() {
+    public long overlayColorView() {
         if (overlay == null || overlay.getColorTextureView() == null) {
             return 0L;
         }
@@ -122,7 +124,7 @@ public final class MinecraftUiOverlay {
 
     /** The overlay color image (0 if not available) — pairs with {@link #overlayColorView()} for callers
      * (e.g. the DLSSG "ui" optional resource) that need both the view and the raw image. */
-    public static long overlayColorImage() {
+    public long overlayColorImage() {
         if (overlay == null || overlay.getColorTexture() == null) {
             return 0L;
         }
@@ -132,8 +134,19 @@ public final class MinecraftUiOverlay {
         return 0L;
     }
 
-    public static GpuImage presentationImage() {
+    public GpuImage presentationImage() {
         return borrowedImage;
+    }
+
+    public UiPresentationResources capturePresentation() {
+        return snapshotPresentation(enabled(), populatedThisFrame(), presentationImage(),
+                overlayWidth(), overlayHeight());
+    }
+
+    static UiPresentationResources snapshotPresentation(boolean enabled, boolean populated,
+                                                          dev.comfyfluffy.caustica.api.vulkan.GpuImage color,
+                                                          int width, int height) {
+        return new UiPresentationResources(enabled, populated, color, width, height);
     }
 
     /**
@@ -141,16 +154,16 @@ public final class MinecraftUiOverlay {
      * it so {@code GuiRenderer.draw} renders the GUI into it instead of the main target. Called from the
      * {@code GuiRendererMixin} redirect on the render thread.
      */
-    public static RenderTarget beginAndRedirect(RenderTarget main) {
+    public RenderTarget beginAndRedirect(RenderTarget main) {
         return prepare(main);
     }
 
     /** The overlay image and Minecraft's current deferred graphics command buffer for the raw UI pass. */
     public record UiPassTarget(VkCommandBuffer commandBuffer, GpuImage image) {}
 
-    public static UiPassTarget uiPassTarget(RenderTarget main) {
+    public UiPassTarget uiPassTarget(RenderTarget main) {
         TextureTarget target = prepare(main);
-        VulkanDeviceContext gpu = CausticaClientComposition.current().runtime().vulkanContextOrNull();
+        VulkanDeviceContext gpu = runtime.vulkanContextOrNull();
         if (gpu == null || !(target.getColorTextureView() instanceof VulkanGpuTextureView view)) return null;
         if (borrowedImage == null || borrowedImage.hostView != view) {
             BorrowedOverlayImage replacement = BorrowedOverlayImage.create(gpu, view, target.width, target.height);
@@ -165,7 +178,7 @@ public final class MinecraftUiOverlay {
     }
 
     /** Reset the per-frame clear latch. Called at the start of {@code GameRenderer.render} (every frame). */
-    public static void beginFrame() {
+    public void beginFrame() {
         overlayClearedThisFrame = false;
     }
 
@@ -174,7 +187,7 @@ public final class MinecraftUiOverlay {
      * this frame, then mark it used. Both the hand redirect and the GUI redirect funnel through here so the
      * overlay is cleared before the hand (which renders first) and not wiped before the GUI.
      */
-    private static TextureTarget prepare(RenderTarget main) {
+    private TextureTarget prepare(RenderTarget main) {
         TextureTarget target = ensureSized(main);
         if (!overlayClearedThisFrame) {
             CommandEncoder enc = RenderSystem.getDevice().createCommandEncoder();
@@ -196,13 +209,13 @@ public final class MinecraftUiOverlay {
      * color+depth (cleared once per frame), matching vanilla where hand and screen effects share the main
      * target's depth without a clear between them. Must be paired with {@link #endOutputRedirect()}.
      */
-    public static void beginOutputRedirect(RenderTarget main) {
+    public void beginOutputRedirect(RenderTarget main) {
         TextureTarget target = prepare(main);
         RenderSystem.outputColorTextureOverride = target.getColorTextureView();
         RenderSystem.outputDepthTextureOverride = target.getDepthTextureView();
     }
 
-    public static void endOutputRedirect() {
+    public void endOutputRedirect() {
         RenderSystem.outputColorTextureOverride = null;
         RenderSystem.outputDepthTextureOverride = null;
     }
@@ -212,12 +225,12 @@ public final class MinecraftUiOverlay {
      * after {@code GuiRenderer.render} returns (the {@code GuiRenderer.draw} TAIL did not fire on in-game HUD
      * frames). A compile/render failure latches the overlay off rather than crashing the frame.
      */
-    public static void compositeIfUsed() {
+    public void compositeIfUsed() {
         if (!usedThisFrame || overlay == null) {
             usedThisFrame = false;
             return;
         }
-        if (CausticaClientComposition.current().runtime().isHdrPresentActive()) {
+        if (runtime.isHdrPresentActive()) {
             // HDR path composites the overlay over the PQ HDR image at present; leave usedThisFrame set so
             // presentHdr can consume it. Do NOT composite over the SDR main target (it isn't presented).
             return;
@@ -241,7 +254,7 @@ public final class MinecraftUiOverlay {
         }
     }
 
-    private static TextureTarget ensureSized(RenderTarget main) {
+    private TextureTarget ensureSized(RenderTarget main) {
         if (overlay == null) {
             overlay = new TextureTarget("caustica UI overlay", main.width, main.height, true, GpuFormat.RGBA8_UNORM);
         } else if (overlay.width != main.width || overlay.height != main.height) {
@@ -250,14 +263,14 @@ public final class MinecraftUiOverlay {
         return overlay;
     }
 
-    public static void destroy() {
+    public void destroy() {
         RenderSystem.outputColorTextureOverride = null;
         RenderSystem.outputDepthTextureOverride = null;
         usedThisFrame = false;
         overlayClearedThisFrame = false;
         compositeFailed = false;
         if (borrowedImage != null) {
-            VulkanDeviceContext gpu = CausticaClientComposition.current().runtime().vulkanContextOrNull();
+            VulkanDeviceContext gpu = runtime.vulkanContextOrNull();
             if (gpu != null) gpu.retireAfterUse(borrowedImage::destroy);
             else borrowedImage.destroy();
             borrowedImage = null;

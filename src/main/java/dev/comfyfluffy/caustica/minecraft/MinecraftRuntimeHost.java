@@ -9,10 +9,13 @@ import dev.comfyfluffy.caustica.spi.host.RuntimeHost;
 public final class MinecraftRuntimeHost implements RuntimeHost {
     private final VanillaRenderController renderController;
     private final WorldRenderScaler renderScaler;
+    private final MinecraftUiOverlay uiOverlay;
 
-    public MinecraftRuntimeHost(VanillaRenderController renderController, WorldRenderScaler renderScaler) {
+    public MinecraftRuntimeHost(VanillaRenderController renderController, WorldRenderScaler renderScaler,
+            MinecraftUiOverlay uiOverlay) {
         this.renderController = java.util.Objects.requireNonNull(renderController, "renderController");
         this.renderScaler = java.util.Objects.requireNonNull(renderScaler, "renderScaler");
+        this.uiOverlay = java.util.Objects.requireNonNull(uiOverlay, "uiOverlay");
     }
 
     @Override
@@ -27,7 +30,7 @@ public final class MinecraftRuntimeHost implements RuntimeHost {
 
     @Override
     public void destroyUiPresentation() {
-        MinecraftUiOverlay.destroy();
+        uiOverlay.destroy();
     }
 
 }

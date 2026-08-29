@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.entity;
 
+import dev.comfyfluffy.caustica.minecraft.MinecraftTelemetry;
 import net.minecraft.SharedConstants;
 import net.minecraft.client.renderer.rendertype.RenderSetup;
 import net.minecraft.client.renderer.rendertype.RenderType;
@@ -64,7 +65,8 @@ final class RtEntityTexturesTest {
         try {
             var method = RtEntityCollectorBase.class.getDeclaredMethod("standaloneMaterial", RenderType.class);
             assertTrue(method.trySetAccessible(), "standaloneMaterial must be accessible to the test");
-            return (MinecraftEntityMesh.Material) method.invoke(new RtEntityCollectorBase(new RtEntityTextures()), renderType);
+            return (MinecraftEntityMesh.Material) method.invoke(
+                    new RtEntityCollectorBase(new RtEntityTextures(), MinecraftTelemetry.disabled()), renderType);
         } catch (ReflectiveOperationException exception) {
             throw new AssertionError("failed to resolve the entity material", exception);
         }

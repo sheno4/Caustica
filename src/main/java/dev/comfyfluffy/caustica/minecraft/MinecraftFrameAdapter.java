@@ -7,7 +7,6 @@ import dev.comfyfluffy.caustica.api.view.Camera;
 import dev.comfyfluffy.caustica.api.view.SceneView;
 import dev.comfyfluffy.caustica.engine.frame.FrameSnapshot;
 import dev.comfyfluffy.caustica.engine.frame.SceneResources;
-import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftDimensionKey;
 import dev.comfyfluffy.caustica.client.CausticaClientComposition;
@@ -36,11 +35,13 @@ public final class MinecraftFrameAdapter {
     private volatile MinecraftFrameSelector frameSelector;
     private volatile FrameCaptureBinding frameCapture;
     private final RtEntityTextures entityTextures = new RtEntityTextures();
-    private final RtEntities entities = new RtEntities(entityTextures);
+    private final RtEntities entities;
     private long renderedWorldFrameIndex;
 
-    public MinecraftFrameAdapter(RtTerrain terrain) {
+    public MinecraftFrameAdapter(RtTerrain terrain, MinecraftTelemetry.Instrumentation instrumentation) {
         this.terrain = java.util.Objects.requireNonNull(terrain, "terrain");
+        entities = new RtEntities(entityTextures,
+                java.util.Objects.requireNonNull(instrumentation, "instrumentation"));
     }
 
     public void tickRuntime(Minecraft client) {
@@ -127,19 +128,6 @@ public final class MinecraftFrameAdapter {
             return SceneResources.EMPTY;
         }
         return new SceneResources(true);
-    }
-
-    public UiPresentationResources captureUiPresentation() {
-        return snapshotUiPresentation(MinecraftUiOverlay.enabled(),
-                MinecraftUiOverlay.populatedThisFrame(),
-                MinecraftUiOverlay.presentationImage(),
-                MinecraftUiOverlay.overlayWidth(), MinecraftUiOverlay.overlayHeight());
-    }
-
-    static UiPresentationResources snapshotUiPresentation(boolean enabled, boolean populated,
-                                                           dev.comfyfluffy.caustica.api.vulkan.GpuImage color,
-                                                           int width, int height) {
-        return new UiPresentationResources(enabled, populated, color, width, height);
     }
 
     private long identify(ClientLevel level) {

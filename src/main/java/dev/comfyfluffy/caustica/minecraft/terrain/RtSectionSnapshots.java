@@ -45,7 +45,12 @@ final class RtSectionSnapshots {
     /** Cache/region marker for a section with no copyable states (all air, unloaded, or out of range). */
     private static final Object AIR = new Object();
 
+    private final MinecraftTelemetry.Instrumentation instrumentation;
     private final Long2ObjectLinkedOpenHashMap<Object> cache = new Long2ObjectLinkedOpenHashMap<>();
+
+    RtSectionSnapshots(MinecraftTelemetry.Instrumentation instrumentation) {
+        this.instrumentation = java.util.Objects.requireNonNull(instrumentation, "instrumentation");
+    }
 
     /** Snapshot the 3×3×3 neighbourhood of a section, reusing cached palette copies (render thread). */
     Region createRegion(ClientLevel level, int scx, int scy, int scz) {
@@ -83,7 +88,7 @@ final class RtSectionSnapshots {
         return copy;
     }
 
-    private static Object copySection(ClientLevel level, int scx, int scy, int scz) {
+    private Object copySection(ClientLevel level, int scx, int scy, int scz) {
         LevelChunk chunk = level.getChunk(scx, scz);
         if (chunk instanceof EmptyLevelChunk) {
             return AIR;
@@ -97,7 +102,7 @@ final class RtSectionSnapshots {
         if (section.hasOnlyAir()) {
             return AIR;
         }
-        MinecraftTelemetry.current().count("sectionCopies", 1);
+        instrumentation.count("sectionCopies", 1);
         return section.getStates().copy();
     }
 

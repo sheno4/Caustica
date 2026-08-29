@@ -62,9 +62,11 @@ import java.util.ArrayList;
  */
 class RtEntityCollectorBase {
     private final RtEntityTextures textures;
+    private final MinecraftTelemetry.Instrumentation instrumentation;
 
-    RtEntityCollectorBase(RtEntityTextures textures) {
+    RtEntityCollectorBase(RtEntityTextures textures, MinecraftTelemetry.Instrumentation instrumentation) {
         this.textures = java.util.Objects.requireNonNull(textures, "textures");
+        this.instrumentation = java.util.Objects.requireNonNull(instrumentation, "instrumentation");
     }
     private static final Direction[] DIRECTIONS = Direction.values();
     // Vanilla leash constants (LeashFeatureRenderer.LEASH_RENDER_STEPS / LEASH_WIDTH).
@@ -131,9 +133,9 @@ class RtEntityCollectorBase {
         capture.currentOrder = pendingOrder + (isBannerPattern(renderType) ? 1 : 0);
         pendingOrder = 0;
         if (profileDynamicEntity) {
-            MinecraftTelemetry.current().count("entityModelSubmissions", 1);
+            instrumentation.count("entityModelSubmissions", 1);
         }
-        long materialStart = profileDynamicEntity ? MinecraftTelemetry.current().startStage() : 0L;
+        long materialStart = profileDynamicEntity ? instrumentation.startStage() : 0L;
         boolean stochasticAlpha = isTranslucent(renderType);
         // Block-entity models texture from an atlas sprite; mobs use a standalone texture.
         try {
@@ -150,23 +152,23 @@ class RtEntityCollectorBase {
                 capture.clearUvRemap();
             }
         } finally {
-            MinecraftTelemetry.current().endStage("entity.capture.submit.material", materialStart);
+            instrumentation.endStage("entity.capture.submit.material", materialStart);
         }
         // Pose the model from its render state (idempotent re-pose; mirrors what the renderer does for
         // its feature layers), then render the posed parts into the capture. renderToBuffer applies the
         // PoseStack to every vertex/normal, so the capture receives world-/camera-relative geometry.
-        long setupStart = profileDynamicEntity ? MinecraftTelemetry.current().startStage() : 0L;
+        long setupStart = profileDynamicEntity ? instrumentation.startStage() : 0L;
         try {
             model.setupAnim(state);
         } finally {
-            MinecraftTelemetry.current().endStage("entity.capture.submit.setupAnim", setupStart);
+            instrumentation.endStage("entity.capture.submit.setupAnim", setupStart);
         }
-        if (profileDynamicEntity && MinecraftTelemetry.current().enabled()) {
-            long metricsStart = MinecraftTelemetry.current().startStage();
+        if (profileDynamicEntity && instrumentation.enabled()) {
+            long metricsStart = instrumentation.startStage();
             try {
-                MinecraftTelemetry.current().count("entityCuboids", countVisibleCuboids(model.root()));
+                instrumentation.count("entityCuboids", countVisibleCuboids(model.root()));
             } finally {
-                MinecraftTelemetry.current().endStage("entity.capture.submit.metrics", metricsStart);
+                instrumentation.endStage("entity.capture.submit.metrics", metricsStart);
             }
         }
         int color = tintedColor == 0 ? -1 : tintedColor; // vanilla uses 0 as the no-tint sentinel in some submit paths
@@ -174,7 +176,7 @@ class RtEntityCollectorBase {
         int idxStart = capture.idx.size();
         RtCuboidEmitter.ModelTemplate directTemplate = cuboidEmitter.prepare(model);
         long directCubeCounts = 0L;
-        long drawStart = profileDynamicEntity ? MinecraftTelemetry.current().startStage() : 0L;
+        long drawStart = profileDynamicEntity ? instrumentation.startStage() : 0L;
         try {
             if (directTemplate != null) {
                 directCubeCounts = cuboidEmitter.emit(directTemplate, poseStack, capture, color);
@@ -182,22 +184,22 @@ class RtEntityCollectorBase {
                 model.renderToBuffer(poseStack, capture, lightCoords, overlayCoords, color);
             }
         } finally {
-            MinecraftTelemetry.current().endStage(directTemplate != null
+            instrumentation.endStage(directTemplate != null
                     ? "entity.capture.submit.modelDraw.direct"
                     : "entity.capture.submit.modelDraw.fallback", drawStart);
-            MinecraftTelemetry.current().endStage("entity.capture.submit.modelDraw", drawStart);
+            instrumentation.endStage("entity.capture.submit.modelDraw", drawStart);
         }
         int addedVertices = (capture.verts.size() - vertStart) / 3;
         int addedQuads = (capture.idx.size() - idxStart) / 6;
         if (profileDynamicEntity) {
-            MinecraftTelemetry.current().count("entityModelVertices", addedVertices);
-            MinecraftTelemetry.current().count("entityModelQuads", addedQuads);
-            MinecraftTelemetry.current().count(directTemplate != null ? "entityDirectSubmissions" : "entityDirectFallbacks", 1);
+            instrumentation.count("entityModelVertices", addedVertices);
+            instrumentation.count("entityModelQuads", addedQuads);
+            instrumentation.count(directTemplate != null ? "entityDirectSubmissions" : "entityDirectFallbacks", 1);
             if (directTemplate != null) {
-                MinecraftTelemetry.current().count("entityDirectVertices", addedVertices);
-                MinecraftTelemetry.current().count("entityDirectQuads", addedQuads);
-                MinecraftTelemetry.current().count("entitySpecializedCuboids", directCubeCounts >>> 32);
-                MinecraftTelemetry.current().count("entityGenericCuboids", directCubeCounts & 0xffffffffL);
+                instrumentation.count("entityDirectVertices", addedVertices);
+                instrumentation.count("entityDirectQuads", addedQuads);
+                instrumentation.count("entitySpecializedCuboids", directCubeCounts >>> 32);
+                instrumentation.count("entityGenericCuboids", directCubeCounts & 0xffffffffL);
             }
         }
     }
@@ -224,13 +226,13 @@ class RtEntityCollectorBase {
     /** Capture a list of baked quads (items / block models), each textured from its sprite's atlas. */
     private void addQuads(Matrix4f pose, List<BakedQuad> quads, int[] tintLayers) {
         int idxStart = capture.idx.size();
-        long started = profileDynamicEntity ? MinecraftTelemetry.current().startStage() : 0L;
+        long started = profileDynamicEntity ? instrumentation.startStage() : 0L;
         try {
             for (BakedQuad q : quads) {
                 addQuad(pose, q, tintLayers);
             }
         } finally {
-            MinecraftTelemetry.current().endStage("entity.capture.submit.bakedQuads", started);
+            instrumentation.endStage("entity.capture.submit.bakedQuads", started);
             countBakedOutput(idxStart);
         }
     }
@@ -240,8 +242,8 @@ class RtEntityCollectorBase {
             return;
         }
         int quads = (capture.idx.size() - idxStart) / 6;
-        MinecraftTelemetry.current().count("entityBakedQuads", quads);
-        MinecraftTelemetry.current().count("entityBakedVertices", (long) quads * 4L);
+        instrumentation.count("entityBakedQuads", quads);
+        instrumentation.count("entityBakedVertices", (long) quads * 4L);
     }
 
     /** Capture one baked quad with its atlas texture and source-level surface selector. */
@@ -618,7 +620,7 @@ class RtEntityCollectorBase {
             poseStack.translate(offset.x, offset.y, offset.z);
         }
         int idxStart = capture.idx.size();
-        long started = profileDynamicEntity ? MinecraftTelemetry.current().startStage() : 0L;
+        long started = profileDynamicEntity ? instrumentation.startStage() : 0L;
         try {
             RandomSource random = RandomSource.create();
             random.setSeed(seed);
@@ -632,7 +634,7 @@ class RtEntityCollectorBase {
                 }
             }
         } finally {
-            MinecraftTelemetry.current().endStage("entity.capture.submit.bakedQuads", started);
+            instrumentation.endStage("entity.capture.submit.bakedQuads", started);
             countBakedOutput(idxStart);
             if (applyBlockOffset) {
                 poseStack.popPose();

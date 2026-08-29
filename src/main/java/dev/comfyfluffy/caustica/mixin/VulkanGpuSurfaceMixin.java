@@ -11,7 +11,6 @@ import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftHdr;
 import dev.comfyfluffy.caustica.rt.RtRuntime;
 import dev.comfyfluffy.caustica.client.CausticaClientComposition;
-import dev.comfyfluffy.caustica.minecraft.MinecraftUiOverlay;
 import dev.comfyfluffy.caustica.minecraft.MinecraftVulkanImageBorrow;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftVulkanBackend;
@@ -345,11 +344,11 @@ public abstract class VulkanGpuSurfaceMixin {
 		if (CausticaClientComposition.current().runtime().isHdrPresentActive()) {
 			VulkanCommandEncoder enc = (VulkanCommandEncoder) commandEncoder;
 			GraphicsSubmission submission = MinecraftVulkanBackend.wrap(enc);
-			UiPresentationResources ui = CausticaClientComposition.current().frameAdapter().captureUiPresentation();
+			UiPresentationResources ui = CausticaClientComposition.current().uiOverlay().capturePresentation();
 			presentation.presentHdr(submission, swapchainImage, this.swapchainWidth, this.swapchainHeight,
 					acquireSem, presentSem, ui);
 			if (ui.populated() && ui.colorView() != 0L) {
-				MinecraftUiOverlay.markConsumed();
+				CausticaClientComposition.current().uiOverlay().markConsumed();
 			}
 			caustica$prepareGeneratedFrameHdr(submission, ui);
 			ci.cancel();
@@ -426,7 +425,7 @@ public abstract class VulkanGpuSurfaceMixin {
 				this.swapchain, this.swapchainImages.toLongArray(), this.presentSemaphores,
 				this.swapchainWidth, this.swapchainHeight,
 				srcView, srcImage, false,
-				CausticaClientComposition.current().frameAdapter().captureUiPresentation());
+				CausticaClientComposition.current().uiOverlay().capturePresentation());
 	}
 
 	/**

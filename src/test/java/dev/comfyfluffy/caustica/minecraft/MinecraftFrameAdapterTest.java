@@ -42,9 +42,9 @@ final class MinecraftFrameAdapterTest {
 
     @Test
     void uiSnapshotDoesNotRetainPriorFrameResources() {
-        UiPresentationResources first = MinecraftFrameAdapter.snapshotUiPresentation(
+        UiPresentationResources first = MinecraftUiOverlay.snapshotPresentation(
                 true, true, image(), 1920, 1080);
-        UiPresentationResources second = MinecraftFrameAdapter.snapshotUiPresentation(
+        UiPresentationResources second = MinecraftUiOverlay.snapshotPresentation(
                 false, false, null, 0, 0);
 
         assertEquals(11, first.colorImage());
@@ -66,7 +66,8 @@ final class MinecraftFrameAdapterTest {
     }
 
     private static MinecraftFrameAdapter adapter() {
-        return new MinecraftFrameAdapter(new RtTerrain(new RtWorkerPool()));
+        MinecraftTelemetry.Instrumentation instrumentation = MinecraftTelemetry.disabled();
+        return new MinecraftFrameAdapter(new RtTerrain(new RtWorkerPool(), instrumentation), instrumentation);
     }
 
     private static final class TestScene implements SceneId { }
