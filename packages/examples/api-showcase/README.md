@@ -16,13 +16,13 @@ integration at `packages/examples/gltf-viewer-minecraft`.
 | process registration and session contribution | device recreation creates a fresh `ShowcaseSession` | Vulkan session ownership | Necessary; process objects must not retain handles from an old device. |
 | surface plus coverage | opaque metal and alpha-cut foliage | world-program composition | Separate coverage is necessary for traversal; an opaque surface should not pay for it. |
 | volume | glass boundary with absorption and an invisible fog-boundary proposal | world-program composition | The narrow absorption ABI fits; independent registration and volume-only geometry remain provisional until rendered. |
-| initial view volume | camera beginning underwater | internal frame ingress plus generic volume dispatch | Required by the existing renderer. Minecraft chooses water; engine transport consumes it. It is intentionally not public while extensions cannot submit rendered views. |
+| initial view medium | camera beginning underwater | generic view state plus volume dispatch | Required by the existing renderer. Minecraft chooses water; `SceneView` carries the typed volume or explicit vacuum. |
 | environment | one exported gradient-sky binding | scene/program boundary | Necessary; the Minecraft dimension selector applies the binding to its host-owned scene. |
 | retained geometry | one mesh with opaque, cutout, surface+volume, and volume-only slices | geometry channel | Issued IDs and atomic batches fit shared resident meshes and many placements. |
 | retained lights | rectangle, circular spot, and distant descriptors | light channel | The three shapes map directly to emissive faces, the helmet light, and sun/moon. |
 | world-resource pass | publish a replacement descriptor/table root before tracing | pass/GPU boundary | Stage is necessary. The current frame lacks `SceneView` and time, which a camera-dependent atmosphere upload needs. |
 | post effect | read scene color/exposure and acquire a distinct output | pass boundary | Necessary for bloom. Cross-extension registration order is not a stable ordering contract. |
-| UI pass | draw a world marker using camera and root-scene TLAS | pass boundary | Necessary for outlines/name tags and correctly separate from scene-linear color. |
+| UI pass | draw a world marker using camera and entry-scene TLAS | pass boundary | Necessary for outlines/name tags and correctly separate from scene-linear color. |
 | descriptor heap and retirement | typed resource/sampler ranges, borrowed descriptors, per-frame and prior-use cleanup | Vulkan boundary | Necessary for independent passes; raw VMA allocation still benefits from an optional Vulkan support package. |
 
 ## Refactor decisions proven by the probe
@@ -53,11 +53,10 @@ integration at `packages/examples/gltf-viewer-minecraft`.
 - Public scene creation remains deferred. A future ray portal justifies keeping `SceneId` in geometry, lights,
   and views, but it will also need a destination transform, lifetime link, hop policy, and shader-visible TLAS
   selection. Add scene creation and a retained portal-link capability together with that implementation.
-- Public `SceneView` does not express that primary rays start inside water, even though the current Minecraft
-  adapter and renderer implement that case. Add one optional typed initial-volume binding to internal
-  `FrameInput`, carrying the registered volume plus its binding and instance words. Keep it out of `Camera`,
-  because camera pose/projection and the host's sampled containing medium have different ownership. Do not add
-  a public volume-selection feature channel while only the host can create a rendered view.
+- Public `SceneView` carries the typed medium containing the camera origin. It remains separate from `Camera`
+  because camera pose/projection and the host's sampled containing medium have different ownership. The host
+  selects Minecraft water; no public volume-selection feature channel is needed while only the host creates
+  rendered views.
 ## Deliberate runtime guards
 
 `ShowcasePasses.runtimeGpuRecordingEnabled()` always returns false. The guarded branches touch the borrowed

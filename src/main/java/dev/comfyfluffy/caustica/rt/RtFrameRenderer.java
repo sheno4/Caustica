@@ -12,6 +12,7 @@ import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptorKind;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
+import dev.comfyfluffy.caustica.api.view.ViewMedium;
 import dev.comfyfluffy.caustica.engine.frame.FrameSnapshot;
 import dev.comfyfluffy.caustica.engine.program.ProgramResolution;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
@@ -134,7 +135,6 @@ final class RtFrameRenderer {
     private final RtRetainedSceneBackend scenes;
     private final RtPassSchedulerBackend passes;
     private final EngineSessionServices services;
-    private final SceneId rootScene;
     private final RtFramePresenter presenter;
     // World push data lives in a host-visible BDA ring; only the slot address and a small hot subset are
     // pushed inline (the full generated structure exceeds NVIDIA's 256-byte push-constant ceiling).
@@ -167,6 +167,7 @@ final class RtFrameRenderer {
     private boolean mvHasPrev;
     private long lastLightingFrame = -1L;
     private SceneOrigin lastLightingOrigin;
+    private SceneId lastEntryScene;
     private float previousProceduralTime;
     private boolean proceduralTimeValid;
     private boolean failed;
@@ -184,12 +185,11 @@ final class RtFrameRenderer {
 
     RtFrameRenderer(RtProgramBackend programs, RtRetainedSceneBackend scenes,
                     RtPassSchedulerBackend passes, EngineSessionServices services,
-                    SceneId rootScene, RtFramePresenter presenter) {
+                    RtFramePresenter presenter) {
         this.programs = Objects.requireNonNull(programs, "programs");
         this.scenes = Objects.requireNonNull(scenes, "scenes");
         this.passes = Objects.requireNonNull(passes, "passes");
         this.services = Objects.requireNonNull(services, "services");
-        this.rootScene = Objects.requireNonNull(rootScene, "rootScene");
         this.presenter = Objects.requireNonNull(presenter, "presenter");
         this.frameResources = new RtFrameResources(presenter, LOOK, exposureSettings());
     }
@@ -459,6 +459,11 @@ final class RtFrameRenderer {
             if (active == null) {
                 return false;
             }
+            SceneId entryScene = snapshot.view().entryScene();
+            if (entryScene != lastEntryScene) {
+                resetSceneHistory();
+                lastEntryScene = entryScene;
+            }
             SceneOrigin lightingOrigin = snapshot.sceneOrigin();
             boolean lightingHistoryContinuous = mvHasPrev && lastLightingFrame + 1L == frameCounter
                     && Objects.equals(lastLightingOrigin, lightingOrigin) && !isLightingCameraCut(snapshot);
@@ -614,6 +619,7 @@ final class RtFrameRenderer {
         RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_COMMAND_BUFFER, cmd.address(), "composite command buffer");
         int debugView = debugView();
         SceneOrigin sceneOrigin = snapshot.sceneOrigin();
+        SceneId entryScene = snapshot.view().entryScene();
         boolean passFrameOpen = false;
         try (MemoryStack stack = MemoryStack.stackPush(); RtDebugLabels.Scope frameLabel = RtDebugLabels.scope(ctx, cmd, "composite frame")) {
             // RR drives the upscale: trace + jitter at render res, DLSS-RR denoises+upscales to display.
@@ -677,19 +683,19 @@ final class RtFrameRenderer {
             pushBuf.flush(0L, WORLD_PUSH_SIZE);
             TlasBuilder.Prepared frameTlas;
             try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("frame.prepareTlas")) {
-                frameTlas = scenes.prepareTlas(rootScene, sceneOrigin, graphicsUse);
+                frameTlas = scenes.prepareTlas(entryScene, sceneOrigin, graphicsUse);
             }
             try (RtFrameStats.Scope ignored = RtFrameStats.FRAME.stage("frame.recordTlas")) {
                 TlasBuilder.record(ctx, cmd, frameTlas);
             }
             VulkanBarriers.memoryBarrier(cmd, stack);
-            RtRetainedSceneBackend.PreparedLighting lighting = scenes.prepareLighting(rootScene,
+            RtRetainedSceneBackend.PreparedLighting lighting = scenes.prepareLighting(entryScene,
                     new RtRetainedSceneBackend.LightingFrame(frameResources.renderW, frameResources.renderH,
                             frameCounter, (float) snapshot.metersPerWorldUnit(),
                             lightingHistoryContinuous), cmd, graphicsUse);
             boolean lightingFinished = false;
             try {
-                RtRetainedSceneBackend.PreparedTrace trace = scenes.prepareTrace(rootScene, sceneOrigin,
+                RtRetainedSceneBackend.PreparedTrace trace = scenes.prepareTrace(entryScene, sceneOrigin,
                         program.pipeline(), frameTlas.accel.handle, graphicsUse);
                 currentTrace = trace;
                 ByteBuffer roots = stack.calloc(RtBindings.WORLD_PUSH_CONSTANT_SIZE).order(ByteOrder.nativeOrder());
@@ -714,10 +720,10 @@ final class RtFrameRenderer {
                             roots, 1, trace.hitTable());
                 }
                 VulkanBarriers.memoryBarrier(cmd, stack); // RT writes visible to DLSS reads
-                scenes.finishLighting(rootScene, lighting, cmd, graphicsUse);
+                scenes.finishLighting(entryScene, lighting, cmd, graphicsUse);
                 lightingFinished = true;
             } catch (Throwable failure) {
-                if (!lightingFinished) scenes.abandonLighting(rootScene, lighting);
+                if (!lightingFinished) scenes.abandonLighting(entryScene, lighting);
                 throw failure;
             }
             // DLSS-RR denoise + upscale. The RT pass wrote noisy color (render res) + guides;
@@ -843,15 +849,16 @@ final class RtFrameRenderer {
                 storageIndex(frameResources.gSpecAlbedo));
         target.putInt(base + RtBindings.WORLD_SPECULAR_MOTION_GUIDE_INDEX_OFFSET,
                 storageIndex(frameResources.gSpecMotion));
-        FrameSnapshot.InitialVolume<?, ?> initial = snapshot.initialVolume();
-        ProgramResolution.Volume resolution = initial == null
-                ? ProgramResolution.Vacuum.INSTANCE : services.programs().resolve(initial.volume());
-        writeInitialVolumeRoots(roots, initial, resolution);
+        ViewMedium medium = snapshot.view().medium();
+        ProgramResolution.Volume resolution = medium instanceof ViewMedium.Volume<?, ?> volume
+                ? services.programs().resolve(volume.implementation()) : ProgramResolution.Vacuum.INSTANCE;
+        writeInitialVolumeRoots(roots, medium, resolution);
     }
 
-    static void writeInitialVolumeRoots(ByteBuffer roots, FrameSnapshot.InitialVolume<?, ?> initial,
+    static void writeInitialVolumeRoots(ByteBuffer roots, ViewMedium medium,
                                         ProgramResolution.Volume resolution) {
         Objects.requireNonNull(roots, "roots");
+        Objects.requireNonNull(medium, "medium");
         Objects.requireNonNull(resolution, "resolution");
         if (roots.remaining() != RtBindings.WORLD_PUSH_CONSTANT_SIZE) {
             throw new IllegalArgumentException("world binding root has the wrong size");
@@ -863,14 +870,16 @@ final class RtFrameRenderer {
         target.putLong(base + RtBindings.WORLD_INITIAL_VOLUME_BINDING_OFFSET, 0L);
         target.putLong(base + RtBindings.WORLD_INITIAL_VOLUME_INSTANCE_OFFSET, 0L);
         if (resolution instanceof ProgramResolution.ActiveVolume active) {
-            if (initial == null) throw new IllegalArgumentException("active initial volume has no typed data");
+            if (!(medium instanceof ViewMedium.Volume<?, ?> volume)) {
+                throw new IllegalArgumentException("active initial volume has no typed data");
+            }
             target.putInt(base + RtBindings.WORLD_INITIAL_VOLUME_IMPLEMENTATION_OFFSET,
                     active.implementationIndex());
             target.putInt(base + RtBindings.WORLD_INITIAL_VOLUME_ACTIVE_OFFSET, 1);
             target.putLong(base + RtBindings.WORLD_INITIAL_VOLUME_BINDING_OFFSET,
-                    initial.bindingData().bits());
+                    volume.bindingData().bits());
             target.putLong(base + RtBindings.WORLD_INITIAL_VOLUME_INSTANCE_OFFSET,
-                    initial.instanceData().bits());
+                    volume.instanceData().bits());
         }
     }
 
@@ -893,6 +902,7 @@ final class RtFrameRenderer {
         mvHasPrev = false;
         lastLightingFrame = -1L;
         lastLightingOrigin = null;
+        lastEntryScene = null;
         proceduralTimeValid = false;
         failed = false;
         loggedActive = false;

@@ -77,8 +77,7 @@ public final class MinecraftFrameAdapter {
                 projection.get(new float[16]), viewRotation.get(new float[16]));
         RtTerrain terrain = RtTerrain.currentOrNull();
         SceneOrigin sceneOrigin = terrain != null ? terrain.sceneOrigin() : SceneOrigin.ZERO;
-        return new FrameSnapshot(new SceneView(selection.scene(), camera), sceneOrigin,
-                selection.initialVolume(),
+        return new FrameSnapshot(new SceneView(selection.scene(), camera, selection.medium()), sceneOrigin,
                 CausticaConfig.Rt.Composite.WATER_WAVES.value(),
                 System.nanoTime() / 1.0e9, METERS_PER_WORLD_UNIT);
     }

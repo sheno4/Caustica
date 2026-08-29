@@ -321,7 +321,7 @@ final class PassSessionTest {
         @Override public dev.comfyfluffy.caustica.api.vulkan.GpuImage layer() { return null; }
         @Override public float[] worldViewProjection() { return new float[16]; }
         @Override public dev.comfyfluffy.caustica.api.view.SceneView view() { return null; }
-        @Override public dev.comfyfluffy.caustica.api.vulkan.GpuAccelerationStructureDescriptor rootSceneTlasDescriptor() { return null; }
+        @Override public dev.comfyfluffy.caustica.api.vulkan.GpuAccelerationStructureDescriptor entrySceneTlasDescriptor() { return null; }
         @Override public VkCommandBuffer commandBuffer() { return null; }
         @Override public GpuFrameUse gpuUse() { return null; }
         @Override public long frameIndex() { return 1; }

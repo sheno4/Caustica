@@ -1,5 +1,5 @@
 /**
- * Immutable camera state and the root scene for one rendered view.
+ * Immutable camera state, entry scene, and containing medium for one rendered view.
  *
  * <p>Views reference scenes without administering them, and scenes never own cameras.
  */

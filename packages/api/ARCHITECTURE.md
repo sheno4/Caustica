@@ -57,11 +57,12 @@ it does not mutate scenes directly.
 The camera is not scene state. A rendered view is:
 
 ```java
-SceneView view = new SceneView(rootScene, camera);
+SceneView view = new SceneView(entryScene, camera, containingMedium);
 ```
 
 This permits a host to keep several dimensions resident and select one for a camera without moving the
-camera into the scene object. Host-specific lookup such as `MinecraftDimensionKey -> SceneId` belongs in a
+camera into the scene object. The view also carries the volume or vacuum containing the camera origin.
+Host-specific lookup such as `MinecraftDimensionKey -> SceneId` belongs in a
 Minecraft package. The API sees only the resulting `SceneId` and `SceneView`.
 
 The API does not expose traversal links between scenes. Such a contract needs concrete engine behavior for
@@ -231,7 +232,7 @@ The renderer binds one resource heap and one sampler heap before extension passe
 rebind either heap. `GpuDescriptorHeap` assigns resource and sampler ranges with distinct
 `GpuDescriptorIndex` types; `GpuDescriptorWriter` encodes
 descriptors for extension-owned resources and makes non-coherent writes visible. Engine-owned images and
-the root-scene TLAS expose typed immutable `GpuImageDescriptor` and
+the entry-scene TLAS expose typed immutable `GpuImageDescriptor` and
 `GpuAccelerationStructureDescriptor` views whose entries and resources the engine retains through the
 current frame. `GpuDescriptorHeapProperties` exposes the unified resource and sampler strides required
 when independently compiling pass shaders for `spvDescriptorHeapEXT`.
@@ -264,7 +265,7 @@ A post effect reads `sceneColor()` and joins the chain only by calling
 compose in registration order; there are no first/last anchor sentinels.
 
 UI is a separate display-resolution layer. `UiFrame` includes the immutable `SceneView`, an unjittered
-world-view-projection matrix, and a borrowed TLAS for root-scene occlusion queries by world-anchored
+world-view-projection matrix, and a borrowed TLAS for entry-scene occlusion queries by world-anchored
 overlays. Its layer supplies the display extent and format. It does not expose scene-linear colour or
 general scene mutation.
 
@@ -276,7 +277,7 @@ The main artifact is Vulkan-native while remaining independent of Minecraft and 
 - `api.retained`: opaque retained identities and atomic retained batches.
 - `api.scene`: non-owning scene identity and environment-binding values.
 - `api.geometry`, `api.light`: session-retained world contributions.
-- `api.view`: immutable camera state associated with one root scene.
+- `api.view`: immutable camera state associated with one entry scene and containing medium.
 - `api.program`: composed-world Slang inputs and non-blocking compilation observation.
 - `api.pass`: GPU frame-recording stages, including post effects and UI.
 - `api.vulkan`: Vulkan services an extension cannot recreate independently.

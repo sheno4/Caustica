@@ -26,7 +26,7 @@ final class ShowcasePasses {
                     double metresPerUnit = frame.metersPerSceneUnit();
                     frame.gpuUse().whenComplete(() -> { });
                     gpu.retireAfterUse(() -> { });
-                    throw missingCommands(view.rootScene(), shaderTime, metresPerUnit,
+                    throw missingCommands(view.entryScene(), shaderTime, metresPerUnit,
                             frame.renderWidth(), frame.renderHeight());
                 }
             }
@@ -60,7 +60,7 @@ final class ShowcasePasses {
             public void record(UiFrame frame) {
                 if (runtimeGpuRecordingEnabled()) {
                     int layer = frame.layer().descriptor(GpuImageDescriptorKind.STORAGE).index().value();
-                    GpuAccelerationStructureDescriptor tlas = frame.rootSceneTlasDescriptor();
+                    GpuAccelerationStructureDescriptor tlas = frame.entrySceneTlasDescriptor();
                     float[] worldViewProjection = frame.worldViewProjection();
                     var view = frame.view();
                     throw missingCommands(layer, tlas.index().value(), worldViewProjection.length,

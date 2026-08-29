@@ -12,8 +12,19 @@ final class ViewContractTest {
         SceneId scene = new SceneId() { };
         SceneView view = new SceneView(scene, Camera.IDENTITY);
 
-        assertSame(scene, view.rootScene());
+        assertSame(scene, view.entryScene());
         assertSame(Camera.IDENTITY, view.camera());
+        assertSame(ViewMedium.Vacuum.INSTANCE, view.medium());
+    }
+
+    @Test
+    void viewCarriesTypedContainingVolumeIncludingZeroData() {
+        var binding = dev.comfyfluffy.caustica.api.program.ShaderDataType.<Object>create("binding");
+        var instance = dev.comfyfluffy.caustica.api.program.ShaderDataType.<Object>create("instance");
+        var volume = new dev.comfyfluffy.caustica.api.program.VolumeId<Object, Object>() { };
+        var medium = new ViewMedium.Volume<>(volume, binding.data(0L), instance.data(0L));
+
+        assertSame(medium, new SceneView(new SceneId() { }, Camera.IDENTITY, medium).medium());
     }
 
     @Test

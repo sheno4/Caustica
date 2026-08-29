@@ -2,7 +2,7 @@ package dev.comfyfluffy.caustica.rt;
 
 import dev.comfyfluffy.caustica.api.program.ShaderDataType;
 import dev.comfyfluffy.caustica.api.program.VolumeId;
-import dev.comfyfluffy.caustica.engine.frame.FrameSnapshot;
+import dev.comfyfluffy.caustica.api.view.ViewMedium;
 import dev.comfyfluffy.caustica.engine.program.ProgramResolution;
 import dev.comfyfluffy.caustica.rt.pipeline.RtBindings;
 import org.junit.jupiter.api.Test;
@@ -17,7 +17,7 @@ final class RtFrameRendererWorldRootsTest {
     void activeInitialVolumeWritesTypedImplementationAndData() {
         ShaderDataType<Object> binding = ShaderDataType.create("binding");
         ShaderDataType<Object> instance = ShaderDataType.create("instance");
-        FrameSnapshot.InitialVolume<Object, Object> initial = new FrameSnapshot.InitialVolume<>(
+        ViewMedium.Volume<Object, Object> initial = new ViewMedium.Volume<>(
                 new VolumeId<>() { }, binding.data(0x1234L), instance.data(0x5678L));
         ByteBuffer roots = roots((byte) 0x5a);
 
@@ -35,7 +35,8 @@ final class RtFrameRendererWorldRootsTest {
     void staleInitialVolumeResolvesToExplicitVacuum() {
         ByteBuffer roots = roots((byte) 0x5a);
 
-        RtFrameRenderer.writeInitialVolumeRoots(roots, null, ProgramResolution.Vacuum.INSTANCE);
+        RtFrameRenderer.writeInitialVolumeRoots(
+                roots, ViewMedium.Vacuum.INSTANCE, ProgramResolution.Vacuum.INSTANCE);
 
         assertEquals(0, roots.getInt(RtBindings.WORLD_INITIAL_VOLUME_IMPLEMENTATION_OFFSET));
         assertEquals(0, roots.getInt(RtBindings.WORLD_INITIAL_VOLUME_ACTIVE_OFFSET));

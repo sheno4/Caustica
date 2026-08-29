@@ -7,6 +7,7 @@ import dev.comfyfluffy.caustica.api.program.VolumeId;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.api.view.Camera;
 import dev.comfyfluffy.caustica.api.view.SceneView;
+import dev.comfyfluffy.caustica.api.view.ViewMedium;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 
 
@@ -22,7 +23,7 @@ class FrameSnapshotTest {
         ShaderDataType<Object> instanceType = ShaderDataType.create("instance");
         VolumeId<Object, Object> volume = new VolumeId<>() {};
 
-        assertDoesNotThrow(() -> new FrameSnapshot.InitialVolume<>(
+        assertDoesNotThrow(() -> new ViewMedium.Volume<>(
                 volume, bindingType.data(0L), instanceType.data(0L)));
     }
 
@@ -35,9 +36,10 @@ class FrameSnapshotTest {
         ShaderDataType<Object> instanceType = ShaderDataType.create("instance");
         VolumeId<Object, Object> volume = new VolumeId<>() {};
         SceneId scene = new SceneId() {};
+        ViewMedium.Volume<Object, Object> medium = new ViewMedium.Volume<>(
+                volume, bindingType.data(11L), instanceType.data(12L));
         FrameSnapshot snapshot = new FrameSnapshot(new SceneView(scene,
-                new Camera(1.0, 2.0, 3.0, projection.get(new float[16]), view.get(new float[16]))), origin,
-                new FrameSnapshot.InitialVolume<>(volume, bindingType.data(11L), instanceType.data(12L)),
+                new Camera(1.0, 2.0, 3.0, projection.get(new float[16]), view.get(new float[16])), medium), origin,
                 true, 4.0, 1.0);
 
         float capturedProjectionM00 = snapshot.copyProjection().m00();
@@ -51,9 +53,9 @@ class FrameSnapshotTest {
         assertNotSame(firstProjectionCopy, secondProjectionCopy);
         assertEquals(capturedProjectionM00, secondProjectionCopy.m00());
         assertEquals(capturedViewM00, snapshot.copyViewRotation().m00());
-        assertEquals(scene, snapshot.view().rootScene());
-        assertEquals(11L, snapshot.initialVolume().bindingData().bits());
-        assertEquals(12L, snapshot.initialVolume().instanceData().bits());
+        assertEquals(scene, snapshot.view().entryScene());
+        assertEquals(11L, medium.bindingData().bits());
+        assertEquals(12L, medium.instanceData().bits());
         assertEquals(origin, snapshot.sceneOrigin());
         assertTrue(snapshot.proceduralSurfaceAnimationEnabled());
     }

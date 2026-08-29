@@ -3,8 +3,8 @@ package dev.comfyfluffy.caustica.api.view;
 import java.util.Arrays;
 
 /**
- * Immutable camera pose and projection. Position is absolute in the root scene's coordinate units;
- * the root-scene reference is carried separately by {@link SceneView}.
+ * Immutable camera pose and projection. Position is absolute in the entry scene's coordinate units;
+ * the entry-scene reference and containing medium are carried separately by {@link SceneView}.
  *
  * <p>Matrices contain 16 column-major floats and multiply column vectors. {@code viewFromSceneRotation}
  * is a rigid right-handed rotation from scene axes into view axes, with zero translation; view +X is

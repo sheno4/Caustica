@@ -8,7 +8,7 @@ import dev.comfyfluffy.caustica.api.vulkan.GpuAccelerationStructureDescriptor;
  * for a generated frame; presentation may reuse or separately interpolate the recorded layer.
  *
  * <p>Scene-linear colour and exposure are not reachable here. The only borrowed world resource is the
- * root scene's TLAS for occlusion ray queries by world-anchored overlays.
+ * entry scene's TLAS for occlusion ray queries by world-anchored overlays.
  *
  * <p>The camera is the exception, because world-anchored UI is still UI — see
  * {@link #worldViewProjection()}.
@@ -44,10 +44,10 @@ public interface UiFrame extends PassFrame {
     float[] worldViewProjection();
 
     /**
-     * Shader-visible descriptor for {@link #view()}'s root-scene TLAS. Pass the descriptor index to the
+     * Shader-visible descriptor for {@link #view()}'s entry-scene TLAS. Pass the descriptor index to the
      * UI shader and resolve it as a {@code RaytracingAccelerationStructure}; the engine supplies the build-to-
      * shader barrier and retains both the descriptor and TLAS through this frame's GPU completion.
      */
-    GpuAccelerationStructureDescriptor rootSceneTlasDescriptor();
+    GpuAccelerationStructureDescriptor entrySceneTlasDescriptor();
 
 }

@@ -161,10 +161,10 @@ public final class RtPassSchedulerBackend implements PassSchedulerBackend {
     public record UiState(
             GpuImage layer,
             float[] worldViewProjection,
-            GpuAccelerationStructureDescriptor rootSceneTlasDescriptor) {
+            GpuAccelerationStructureDescriptor entrySceneTlasDescriptor) {
         public UiState {
             Objects.requireNonNull(layer, "layer");
-            Objects.requireNonNull(rootSceneTlasDescriptor, "rootSceneTlasDescriptor");
+            Objects.requireNonNull(entrySceneTlasDescriptor, "entrySceneTlasDescriptor");
             if (worldViewProjection == null || worldViewProjection.length != 16) {
                 throw new IllegalArgumentException("worldViewProjection must contain 16 values");
             }
@@ -336,9 +336,9 @@ public final class RtPassSchedulerBackend implements PassSchedulerBackend {
             UiBorrow(InvocationBase<?> owner, FrameState state) { super(owner, state); }
             @Override public GpuImage layer() { requireLive(); return state.ui().layer(); }
             @Override public float[] worldViewProjection() { requireLive(); return state.ui().worldViewProjection(); }
-            @Override public GpuAccelerationStructureDescriptor rootSceneTlasDescriptor() {
+            @Override public GpuAccelerationStructureDescriptor entrySceneTlasDescriptor() {
                 requireLive();
-                return state.ui().rootSceneTlasDescriptor();
+                return state.ui().entrySceneTlasDescriptor();
             }
         }
     }

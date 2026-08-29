@@ -26,7 +26,7 @@ import java.util.List;
 
 /**
  * Minecraft world-space overlays recorded directly into the renderer-owned display-resolution UI layer.
- * The engine supplies the rendered camera, root-scene TLAS descriptor, command buffer, and completion
+ * The engine supplies the rendered camera, entry-scene TLAS descriptor, command buffer, and completion
  * reservation through {@link UiFrame}; the pass owns only feature pipelines and transient vertex storage.
  */
 public final class WorldOverlayPass implements Pass<UiFrame> {
@@ -56,7 +56,7 @@ public final class WorldOverlayPass implements Pass<UiFrame> {
             List<OverlayFeature> ready = new ArrayList<>(features.size());
             for (OverlayFeature f : features) {
                 if (f.prepare(device, framePool, gpuUse,
-                        frame.rootSceneTlasDescriptor().index().value(),
+                        frame.entrySceneTlasDescriptor().index().value(),
                         new Matrix4f().set(frame.worldViewProjection()),
                         width, height)) {
                     ready.add(f);

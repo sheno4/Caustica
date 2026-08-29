@@ -40,13 +40,13 @@ public interface PassFrame {
      */
     long frameIndex();
 
-    /** The immutable camera and root scene coherently sampled for this rendered frame. */
+    /** The immutable camera, entry scene, and containing medium sampled for this rendered frame. */
     SceneView view();
 
     /** Renderer time coherently sampled for this rendered frame, in seconds. */
     double timeSeconds();
 
-    /** Physical metres represented by one coordinate unit in {@link #view()}'s root scene. */
+    /** Physical metres represented by one coordinate unit in {@link #view()}'s entry scene. */
     double metersPerSceneUnit();
 
     /**

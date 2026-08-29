@@ -606,7 +606,7 @@ public final class RtRuntime {
                         programs, scenes, passes, dimension, resourcePackEpoch,
                         failure -> CausticaMod.LOGGER.error("Engine world-session failure", failure));
                 renderer = new RtFrameRenderer(programs, scenes, passes,
-                        world.services(), world.rootScene(), presenter);
+                        world.services(), presenter);
                 worldEpoch = epoch;
             } catch (Throwable failure) {
                 closeWorld();

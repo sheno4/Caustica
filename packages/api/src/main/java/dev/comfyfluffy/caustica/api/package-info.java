@@ -14,7 +14,8 @@
  * {@link dev.comfyfluffy.caustica.api.scene.SceneId} is a non-owning target reference used by geometry,
  * lights, and views. Scene creation, environment selection, and removal are host authority rather than
  * extension capabilities. Multiple scenes may remain resident, while a
- * {@link dev.comfyfluffy.caustica.api.view.SceneView} associates one camera with the root scene. A scene
+ * {@link dev.comfyfluffy.caustica.api.view.SceneView} associates one camera with its entry scene and
+ * containing medium. A scene
  * never owns a camera.
  *
  * <h2>Contributions</h2>

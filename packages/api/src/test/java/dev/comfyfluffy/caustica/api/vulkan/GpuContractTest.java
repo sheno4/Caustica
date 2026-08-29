@@ -48,7 +48,7 @@ class GpuContractTest {
         assertEquals(java.util.Set.of(GpuImageDescriptorKind.SAMPLED, GpuImageDescriptorKind.STORAGE),
                 java.util.Set.of(GpuImageDescriptorKind.values()));
         assertEquals(GpuAccelerationStructureDescriptor.class,
-                UiFrame.class.getMethod("rootSceneTlasDescriptor").getReturnType());
+                UiFrame.class.getMethod("entrySceneTlasDescriptor").getReturnType());
         assertEquals(GpuDescriptorIndex.Resource.class,
                 GpuResourceDescriptor.class.getMethod("index").getReturnType());
         assertEquals(GpuDescriptorIndex.class,
