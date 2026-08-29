@@ -48,8 +48,8 @@ final class RtWorldPassSeparationTest {
         String renderer = Files.readString(Path.of(
                 "src/main/java/dev/comfyfluffy/caustica/rt/RtFrameRenderer.java"));
         assertTrue(renderer.contains(
-                "frameResources.renderW, frameResources.renderH, frameResources.rrOutput"));
+                "traceExtent().renderWidth(), traceExtent().renderHeight(), traceImages().reconstructedColor()"));
         assertFalse(renderer.contains(
-                "frameResources.displayW, frameResources.displayH, frameResources.rrOutput"));
+                "traceExtent().displayWidth(), traceExtent().displayHeight(), traceImages().reconstructedColor()"));
     }
 }

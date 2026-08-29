@@ -362,6 +362,9 @@ def verifyRendererRayTracingJar = tasks.register("verifyRendererRayTracingJar") 
         def rendererClassRoot = "dev/comfyfluffy/caustica/renderer/raytracing/"
         def generatedRecordClassRoot = "dev/comfyfluffy/caustica/renderer/raytracing/gen/"
         def generatedBindingsClass = "dev/comfyfluffy/caustica/renderer/raytracing/layout/RtBindings.class"
+        def ownedResourceClasses = ["TraceExtent", "TraceImages", "TraceResources"].collect {
+            rendererClassRoot + it + ".class"
+        }
         def foreignClasses = names.findAll {
             it.endsWith(".class") && !it.startsWith(rendererClassRoot)
         }
@@ -386,11 +389,11 @@ def verifyRendererRayTracingJar = tasks.register("verifyRendererRayTracingJar") 
                     && !it.startsWith("caustica/shaders/world/") && !expectedPipelineShaders.contains(it)
         }
         if (!foreignClasses.empty || generatedTopLevelClasses != expectedGeneratedTopLevelClasses
-                || !names.contains(generatedBindingsClass)
+                || !names.contains(generatedBindingsClass) || !names.containsAll(ownedResourceClasses)
                 || packagedShaders != worldShaderNames || packagedPipelineShaders != expectedPipelineShaders
                 || !foreignResources.empty) {
             throw new GradleException("renderer-raytracing JAR mismatch; foreignClasses=${foreignClasses}, "
-                    + "generatedClasses=${generatedTopLevelClasses}, "
+                    + "generatedClasses=${generatedTopLevelClasses}, ownedResources=${ownedResourceClasses - names}, "
                     + "missingShaders=${worldShaderNames - packagedShaders}, "
                     + "unexpectedShaders=${packagedShaders - worldShaderNames}, "
                     + "pipelineShaders=${packagedPipelineShaders}, foreignResources=${foreignResources}")

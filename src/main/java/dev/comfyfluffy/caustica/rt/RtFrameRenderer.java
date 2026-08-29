@@ -45,6 +45,10 @@ import dev.comfyfluffy.caustica.rt.pipeline.RtDlssRr;
 import dev.comfyfluffy.caustica.rt.pipeline.RtJitter;
 import dev.comfyfluffy.caustica.renderer.presentation.RtExposure;
 import dev.comfyfluffy.caustica.renderer.presentation.RtLookPackage;
+import dev.comfyfluffy.caustica.renderer.presentation.PresentationResources;
+import dev.comfyfluffy.caustica.renderer.raytracing.TraceExtent;
+import dev.comfyfluffy.caustica.renderer.raytracing.TraceImages;
+import dev.comfyfluffy.caustica.renderer.raytracing.TraceResources;
 import dev.comfyfluffy.caustica.rt.pass.RtPassSchedulerBackend;
 import dev.comfyfluffy.caustica.renderer.raytracing.pipeline.RtPipeline;
 import dev.comfyfluffy.caustica.renderer.raytracing.scene.RtRetainedSceneBackend;
@@ -200,7 +204,23 @@ final class RtFrameRenderer {
 
     /** Read-only access to the auto-exposure controller, for diagnostics (F3 entry, frame stats log). */
     public RtExposure exposure() {
-        return frameResources.exposure;
+        return presentationResources().exposure();
+    }
+
+    private TraceResources traceResources() {
+        return frameResources.trace();
+    }
+
+    private TraceImages traceImages() {
+        return traceResources().images();
+    }
+
+    private TraceExtent traceExtent() {
+        return traceResources().extent();
+    }
+
+    private PresentationResources presentationResources() {
+        return frameResources.presentation();
     }
 
     /**
@@ -219,17 +239,18 @@ final class RtFrameRenderer {
             context.backend().assertRenderThread();
         }
         VulkanDeviceContext ctx = RtRuntime.INSTANCE.vulkanContextOrNull();
-        if (!enabled() || failed || ctx == null || frameResources.rrOutput == null || frameResources.exposure.image() == null
-                || frameResources.displayW <= 0 || frameResources.displayH <= 0 || pendingGraphicsUse != null) {
+        if (!enabled() || failed || ctx == null || presentationResources().exposure().image() == null
+                || pendingGraphicsUse != null) {
             return false;
         }
 
-        long pixelCount = Math.multiplyExact((long) frameResources.displayW, (long) frameResources.displayH);
+        TraceExtent extent = traceExtent();
+        long pixelCount = Math.multiplyExact((long) extent.displayWidth(), (long) extent.displayHeight());
         long rgbaBytes = Math.multiplyExact(pixelCount, 4L * Short.BYTES);
         long totalBytes = Math.addExact(rgbaBytes, Float.BYTES);
         if (pixelCount > Integer.MAX_VALUE / 4L) {
             throw new IllegalArgumentException("EXR capture is too large for a Java array: "
-                    + frameResources.displayW + "x" + frameResources.displayH);
+                    + extent.displayWidth() + "x" + extent.displayHeight());
         }
 
         // All ordinary frame commands have been submitted before the F2 key is handled. Drain them before
@@ -241,7 +262,7 @@ final class RtFrameRenderer {
             readback.invalidate();
 
             float residualExposure = MemoryUtil.memGetFloat(readback.mapped() + rgbaBytes);
-            RtExposure.CaptureMetadata exposureMetadata = frameResources.exposure.captureMetadata(residualExposure);
+            RtExposure.CaptureMetadata exposureMetadata = presentationResources().exposure().captureMetadata(residualExposure);
             short[] exposedRgba = new short[Math.toIntExact(pixelCount * 4L)];
             for (int sample = 0; sample < exposedRgba.length; sample++) {
                 short storedHalf = MemoryUtil.memGetShort(readback.mapped() + (long) sample * Short.BYTES);
@@ -255,7 +276,7 @@ final class RtFrameRenderer {
                 exposedRgba[sample] = Float.floatToFloat16(value);
             }
 
-            RtOpenExrWriter.write(outputPath, frameResources.displayW, frameResources.displayH, exposedRgba,
+            RtOpenExrWriter.write(outputPath, extent.displayWidth(), extent.displayHeight(), exposedRgba,
                     new RtOpenExrWriter.Metadata(
                             exposureMetadata.preExposure(),
                             exposureMetadata.residualExposure(),
@@ -286,7 +307,7 @@ final class RtFrameRenderer {
                     .dstAccessMask(VK13.VK_ACCESS_2_TRANSFER_READ_BIT)
                     .srcQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED)
                     .dstQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED)
-                    .image(frameResources.rrOutput.image());
+                    .image(traceImages().reconstructedColor().image());
             imageBarriers.get(0).subresourceRange().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT)
                     .levelCount(1).layerCount(1);
             imageBarriers.get(1).sType$Default()
@@ -298,7 +319,7 @@ final class RtFrameRenderer {
                     .dstAccessMask(VK13.VK_ACCESS_2_TRANSFER_READ_BIT)
                     .srcQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED)
                     .dstQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED)
-                    .image(frameResources.exposure.image().image());
+                    .image(presentationResources().exposure().image().image());
             imageBarriers.get(1).subresourceRange().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT)
                     .levelCount(1).layerCount(1);
             VK14.vkCmdPipelineBarrier2(cmd, VkDependencyInfo.calloc(stack).sType$Default()
@@ -308,9 +329,9 @@ final class RtFrameRenderer {
             sceneCopy.get(0).sType$Default();
             sceneCopy.get(0).bufferOffset(0L);
             sceneCopy.get(0).imageSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).layerCount(1);
-            sceneCopy.get(0).imageExtent().set(frameResources.displayW, frameResources.displayH, 1);
+            sceneCopy.get(0).imageExtent().set(traceExtent().displayWidth(), traceExtent().displayHeight(), 1);
             VK13.vkCmdCopyImageToBuffer2(cmd, VkCopyImageToBufferInfo2.calloc(stack).sType$Default()
-                    .srcImage(frameResources.rrOutput.image()).srcImageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL)
+                    .srcImage(traceImages().reconstructedColor().image()).srcImageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL)
                     .dstBuffer(readback.handle()).pRegions(sceneCopy));
 
             VkBufferImageCopy2.Buffer exposureCopy = VkBufferImageCopy2.calloc(1, stack);
@@ -319,7 +340,7 @@ final class RtFrameRenderer {
             exposureCopy.get(0).imageSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).layerCount(1);
             exposureCopy.get(0).imageExtent().set(1, 1, 1);
             VK13.vkCmdCopyImageToBuffer2(cmd, VkCopyImageToBufferInfo2.calloc(stack).sType$Default()
-                    .srcImage(frameResources.exposure.image().image()).srcImageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL)
+                    .srcImage(presentationResources().exposure().image().image()).srcImageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL)
                     .dstBuffer(readback.handle()).pRegions(exposureCopy));
 
             VkMemoryBarrier2.Buffer hostBarrier = VkMemoryBarrier2.calloc(1, stack);
@@ -374,7 +395,7 @@ final class RtFrameRenderer {
 
     /** Reset exposure filtering after an explicit render-state invalidation such as F3+A. */
     public void resetExposureHistory() {
-        frameResources.exposure.requestReset();
+        presentationResources().exposure().requestReset();
     }
 
     /**
@@ -501,7 +522,7 @@ final class RtFrameRenderer {
 
     private boolean ensurePresentationResources(VulkanDeviceContext ctx, int width, int height)
             throws IOException {
-        frameResources.exposure.configure(exposureSettings());
+        presentationResources().configureExposure(exposureSettings());
         frameResources.ensurePresentationPipelines(ctx);
         if (frameResources.ensureSized(ctx, width, height)) {
             mvHasPrev = false;
@@ -611,7 +632,7 @@ final class RtFrameRenderer {
         RtGpuExecutor gpuExecutor = ctx.gpuExecutor();
         RtGpuExecutor.GraphicsUse graphicsUse = gpuExecutor.beginGraphicsUse(submission);
         RtGpuExecutor.GraphicsUseWaiter graphicsUseWaiter = gpuExecutor.graphicsUseWaiter();
-        frameResources.exposure.beginFrame(graphicsUseWaiter);
+        presentationResources().exposure().beginFrame(graphicsUseWaiter);
         pendingGraphicsUse = graphicsUse;
         PushSlot framePushSlot = null;
         GpuBuffer continuationQueue = null;
@@ -628,7 +649,8 @@ final class RtFrameRenderer {
             float jitterX = 0f;
             float jitterY = 0f;
             if (rrPath) {
-                RtJitter.INSTANCE.prepare(frameResources.renderW, frameResources.renderH, frameResources.displayW);
+                RtJitter.INSTANCE.prepare(traceExtent().renderWidth(), traceExtent().renderHeight(),
+                        traceExtent().displayWidth());
                 jitterX = RtJitter.INSTANCE.jitterPixelsX() * jitterSignX();
                 jitterY = RtJitter.INSTANCE.jitterPixelsY() * jitterSignY();
             }
@@ -638,7 +660,7 @@ final class RtFrameRenderer {
             PushSlot selectedPushSlot = pushRing[pushSlot];
             graphicsUseWaiter.await(selectedPushSlot.graphicsUse);
             framePushSlot = selectedPushSlot;
-            continuationQueue = frameResources.acquireContinuationQueue(graphicsUseWaiter);
+            continuationQueue = traceResources().acquireContinuationQueue(graphicsUseWaiter);
             VK10.vkCmdFillBuffer(cmd, continuationQueue.handle(), 0L, continuationQueue.size(), 0);
             GpuBuffer pushBuf = selectedPushSlot.buffer;
             ByteBuffer push = MemoryUtil.memByteBuffer(pushBuf.mapped(), WORLD_PUSH_SIZE);
@@ -678,7 +700,7 @@ final class RtFrameRenderer {
                     previousTime,
                     // Must be the SAME value the exposure resolve divides out this frame (it reads it
                     // from the same RtExposure accessor), or the two stop cancelling.
-                    frameResources.exposure.preExposure()
+                    presentationResources().exposure().preExposure()
             ).write(push);
             pushBuf.flush(0L, WORLD_PUSH_SIZE);
             TlasBuilder.Prepared frameTlas;
@@ -690,7 +712,7 @@ final class RtFrameRenderer {
             }
             VulkanBarriers.memoryBarrier(cmd, stack);
             RtRetainedSceneBackend.PreparedLighting lighting = scenes.prepareLighting(entryScene,
-                    new RtRetainedSceneBackend.LightingFrame(frameResources.renderW, frameResources.renderH,
+                    new RtRetainedSceneBackend.LightingFrame(traceExtent().renderWidth(), traceExtent().renderHeight(),
                             frameCounter, (float) snapshot.metersPerWorldUnit(),
                             lightingHistoryContinuous), cmd, graphicsUse);
             boolean lightingFinished = false;
@@ -710,13 +732,13 @@ final class RtFrameRenderer {
 
                 try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "world primary trace");
                      RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.tracePrimary")) {
-                    program.pipeline().trace(cmd, frameResources.renderW, frameResources.renderH,
+                    program.pipeline().trace(cmd, traceExtent().renderWidth(), traceExtent().renderHeight(),
                             roots, 0, trace.hitTable());
                 }
                 VulkanBarriers.primaryToIndirect(cmd, stack);
                 try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "world indirect trace");
                      RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.traceIndirect")) {
-                    program.pipeline().trace(cmd, frameResources.renderW, frameResources.renderH,
+                    program.pipeline().trace(cmd, traceExtent().renderWidth(), traceExtent().renderHeight(),
                             roots, 1, trace.hitTable());
                 }
                 VulkanBarriers.memoryBarrier(cmd, stack); // RT writes visible to DLSS reads
@@ -728,13 +750,16 @@ final class RtFrameRenderer {
             }
             // DLSS-RR denoise + upscale. The RT pass wrote noisy color (render res) + guides;
             // RR reads them and writes the display-res denoised result straight into rrOutput.
-            if (rrPath && RtDlssRr.INSTANCE.ensureFeature(cmd, frameResources.renderW,
-                    frameResources.renderH, frameResources.displayW, frameResources.displayH)) {
+            if (rrPath && RtDlssRr.INSTANCE.ensureFeature(cmd, traceExtent().renderWidth(),
+                    traceExtent().renderHeight(), traceExtent().displayWidth(), traceExtent().displayHeight())) {
                 try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "DLSS-RR evaluate");
                      RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.dlssRr")) {
-                    rrDone = RtDlssRr.INSTANCE.evaluate(cmd, frameResources.output, frameResources.gDepth,
-                            frameResources.gMotion, frameResources.gAlbedo,
-                            frameResources.gSpecAlbedo, frameResources.gNormal, frameResources.gSpecMotion, frameResources.rrOutput, frameResources.renderW, frameResources.renderH, frameResources.displayW, frameResources.displayH,
+                    rrDone = RtDlssRr.INSTANCE.evaluate(cmd, traceImages().traceColor(), traceImages().linearDepth(),
+                            traceImages().motion(), traceImages().diffuseAlbedo(),
+                            traceImages().specularAlbedo(), traceImages().normalRoughness(),
+                            traceImages().specularMotion(), traceImages().reconstructedColor(),
+                            traceExtent().renderWidth(), traceExtent().renderHeight(),
+                            traceExtent().displayWidth(), traceExtent().displayHeight(),
                             -jitterX, -jitterY, frameViewRotation, frameProjection);
                 }
             }
@@ -747,7 +772,7 @@ final class RtFrameRenderer {
                 VulkanBarriers.memoryBarrier(cmd, stack);
                 try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "fallback upscale");
                      RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.upscale")) {
-                    blitUpscale(cmd, stack, frameResources.output, frameResources.rrOutput);
+                    blitUpscale(cmd, stack, traceImages().traceColor(), traceImages().reconstructedColor());
                 }
             }
             VulkanBarriers.memoryBarrier(cmd, stack); // reconstructed output visible to exposure histogram
@@ -759,8 +784,9 @@ final class RtFrameRenderer {
             // the histogram's log-luminance average; the reconstructed output is the stable metering input.
             try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "exposure");
                  RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.exposure")) {
-                frameResources.exposure.record(ctx, cmd, stack, frameResources.rrOutput, frameResources.gDepth, frameResources.gAlbedo);
-                frameResources.exposure.recordStateReadback(cmd, stack);
+                presentationResources().exposure().record(ctx, cmd, stack, traceImages().reconstructedColor(),
+                        traceImages().linearDepth(), traceImages().diffuseAlbedo());
+                presentationResources().exposure().recordStateReadback(cmd, stack);
             }
             VulkanBarriers.memoryBarrier(cmd, stack); // exposure image visible to downstream passes
 
@@ -768,14 +794,15 @@ final class RtFrameRenderer {
                  RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.postChain")) {
                 services.passes().recordPostEffects();
             }
-            RtToneLut displayLookLut = frameResources.lookLut;
+            RtToneLut displayLookLut = presentationResources().lookLut();
             try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "map RT to display");
                  RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.displayMap")) {
-                frameResources.displayPipeline.dispatch(cmd, frameResources.displayImage, passes.sceneColor(),
-                        frameResources.exposure.image(), frameResources.hdrDisplayImage,
-                        frameResources.sdrToneLut, frameResources.hdrToneLut, displayLookLut,
+                presentationResources().displayPipeline().dispatch(cmd, presentationResources().displayImage(),
+                        passes.sceneColor(), presentationResources().exposure().image(),
+                        presentationResources().hdrDisplayImage(), presentationResources().sdrToneLut(),
+                        presentationResources().hdrToneLut(), displayLookLut,
                         CausticaConfig.Rt.Hdr.enabled(), CausticaConfig.Rt.Tonemap.GAMMA.value(),
-                        frameResources.loadedHdrLutNits, true);
+                        presentationResources().loadedHdrLutNits(), true);
             }
             VulkanBarriers.memoryBarrier(cmd, stack); // display output visible to debug composite
 
@@ -786,11 +813,12 @@ final class RtFrameRenderer {
                 // remains SDR for now; a PQ swapchain uses the existing SDR->PQ conversion path.
                 try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "debug present");
                      RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.debugPresent")) {
-                    frameResources.debugPresentPipeline.dispatch(cmd, frameResources.displayImage,
-                            frameResources.gNormal, frameResources.gAlbedo, frameResources.gDepth,
-                            frameResources.gMotion, frameResources.gSpecAlbedo, frameResources.gSpecMotion,
-                            frameResources.rrOutput, frameResources.exposure.image(),
-                            frameResources.exposure.stateBuffer(), debugView,
+                    presentationResources().debugPresentPipeline().dispatch(cmd,
+                            presentationResources().displayImage(), traceImages().normalRoughness(),
+                            traceImages().diffuseAlbedo(), traceImages().linearDepth(), traceImages().motion(),
+                            traceImages().specularAlbedo(), traceImages().specularMotion(),
+                            traceImages().reconstructedColor(), presentationResources().exposure().image(),
+                            presentationResources().exposure().stateBuffer(), debugView,
                             CausticaConfig.Rt.Exposure.CENTER_WEIGHT_SIGMA.value(),
                             CausticaConfig.Rt.Exposure.CENTER_WEIGHT_FLOOR.value());
                 }
@@ -800,9 +828,9 @@ final class RtFrameRenderer {
             try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "copy composite to main target");
                  RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.copyOutput")) {
                 VK13.vkCmdCopyImage2(cmd, VkCopyImageInfo2.calloc(stack).sType$Default()
-                        .srcImage(frameResources.displayImage.image()).srcImageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL)
+                        .srcImage(presentationResources().displayImage().image()).srcImageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL)
                         .dstImage(dstImage).dstImageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL)
-                        .pRegions(copyRegion(stack, frameResources.displayW, frameResources.displayH)));
+                        .pRegions(copyRegion(stack, traceExtent().displayWidth(), traceExtent().displayHeight())));
             }
             VulkanBarriers.memoryBarrier(cmd, stack);
             passes.endFrame();
@@ -816,11 +844,11 @@ final class RtFrameRenderer {
         submission.execute(cmd);
         // Submission makes every frame-owned address reachable until the final overlay consumer.
         framePushSlot.graphicsUse.mark(graphicsUse);
-        frameResources.markContinuationUse(graphicsUse);
-        frameResources.exposure.markStateReadbackUse(graphicsUse);
+        traceResources().markContinuationUse(graphicsUse);
+        presentationResources().exposure().markStateReadbackUse(graphicsUse);
         presenter.publish(new RtFramePresenter.RenderedFrame(
-                frameResources.hdrDisplayImage, frameResources.gMotion, frameResources.gDepth,
-                frameResources.renderW, frameResources.renderH, mvCurProjView, mvPushMatrix,
+                presentationResources().hdrDisplayImage(), traceImages().motion(), traceImages().linearDepth(),
+                traceExtent().renderWidth(), traceExtent().renderHeight(), mvCurProjView, mvPushMatrix,
                 CausticaConfig.Rt.Hdr.enabled() && debugView == 0));
     }
 
@@ -829,8 +857,9 @@ final class RtFrameRenderer {
             RtPassSchedulerBackend.UiState ui) {
         return new RtPassSchedulerBackend.FrameState(commandBuffer, graphicsUse, frameCounter,
                 frameSnapshot.view(), frameSnapshot.timeSeconds(), frameSnapshot.metersPerWorldUnit(),
-                frameResources.renderW, frameResources.renderH, frameResources.rrOutput,
-                frameResources.exposure.image(), frameResources.postColorA, frameResources.postColorB, ui);
+                traceExtent().renderWidth(), traceExtent().renderHeight(), traceImages().reconstructedColor(),
+                presentationResources().exposure().image(), presentationResources().postColorA(),
+                presentationResources().postColorB(), ui);
     }
 
     private void writeFrameRoots(ByteBuffer roots, long worldPushAddress, FrameSnapshot snapshot,
@@ -840,15 +869,15 @@ final class RtFrameRenderer {
         target.putLong(base + RtBindings.WORLD_PUSH_ADDRESS_OFFSET, worldPushAddress);
         target.putLong(base + RtBindings.WORLD_PATH_QUEUE_ADDRESS_OFFSET,
                 continuationQueue.deviceAddress());
-        target.putInt(base + RtBindings.WORLD_OUTPUT_IMAGE_INDEX_OFFSET, storageIndex(frameResources.output));
-        target.putInt(base + RtBindings.WORLD_NORMAL_GUIDE_INDEX_OFFSET, storageIndex(frameResources.gNormal));
-        target.putInt(base + RtBindings.WORLD_ALBEDO_GUIDE_INDEX_OFFSET, storageIndex(frameResources.gAlbedo));
-        target.putInt(base + RtBindings.WORLD_DEPTH_GUIDE_INDEX_OFFSET, storageIndex(frameResources.gDepth));
-        target.putInt(base + RtBindings.WORLD_MOTION_GUIDE_INDEX_OFFSET, storageIndex(frameResources.gMotion));
+        target.putInt(base + RtBindings.WORLD_OUTPUT_IMAGE_INDEX_OFFSET, storageIndex(traceImages().traceColor()));
+        target.putInt(base + RtBindings.WORLD_NORMAL_GUIDE_INDEX_OFFSET, storageIndex(traceImages().normalRoughness()));
+        target.putInt(base + RtBindings.WORLD_ALBEDO_GUIDE_INDEX_OFFSET, storageIndex(traceImages().diffuseAlbedo()));
+        target.putInt(base + RtBindings.WORLD_DEPTH_GUIDE_INDEX_OFFSET, storageIndex(traceImages().linearDepth()));
+        target.putInt(base + RtBindings.WORLD_MOTION_GUIDE_INDEX_OFFSET, storageIndex(traceImages().motion()));
         target.putInt(base + RtBindings.WORLD_SPECULAR_ALBEDO_GUIDE_INDEX_OFFSET,
-                storageIndex(frameResources.gSpecAlbedo));
+                storageIndex(traceImages().specularAlbedo()));
         target.putInt(base + RtBindings.WORLD_SPECULAR_MOTION_GUIDE_INDEX_OFFSET,
-                storageIndex(frameResources.gSpecMotion));
+                storageIndex(traceImages().specularMotion()));
         ViewMedium medium = snapshot.view().medium();
         ProgramResolution.Volume resolution = medium instanceof ViewMedium.Volume<?, ?> volume
                 ? services.programs().resolve(volume.implementation()) : ProgramResolution.Vacuum.INSTANCE;

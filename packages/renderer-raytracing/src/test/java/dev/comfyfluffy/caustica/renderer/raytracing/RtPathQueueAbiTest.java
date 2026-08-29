@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.rt;
+package dev.comfyfluffy.caustica.renderer.raytracing;
 
 import dev.comfyfluffy.caustica.renderer.raytracing.gen.PackedPathSegmentData;
 import org.junit.jupiter.api.Test;
@@ -10,6 +10,6 @@ final class RtPathQueueAbiTest {
     void queueCapacityUsesTheReflectedPackedRecordStride() {
         assertEquals(48, PackedPathSegmentData.BYTE_SIZE);
         assertEquals(1920L * 1080L * 2L * PackedPathSegmentData.BYTE_SIZE,
-                RtFrameResources.continuationBytes(1920, 1080));
+                TraceResources.continuationBytes(1920, 1080));
     }
 }

@@ -154,10 +154,12 @@ def verifyRendererPresentationJar = tasks.register("verifyRendererPresentationJa
         def pipelines = names.findAll { it.startsWith("caustica/shaders/pipelines/")
                 && it.endsWith("/main.comp.spv") }.collect { it.split('/')[3] } as Set
         def colors = names.findAll { it.startsWith("caustica/color/") && !it.endsWith('/') }
-        if (!foreignClasses.empty || actualGenerated != generated
+        def presentationResources = "dev/comfyfluffy/caustica/renderer/presentation/PresentationResources.class"
+        if (!foreignClasses.empty || actualGenerated != generated || !names.contains(presentationResources)
                 || pipelines != expectedPipelines || colors.size() != 7) {
             throw new GradleException("presentation JAR mismatch: foreignClasses=${foreignClasses}, "
-                    + "generated=${actualGenerated}, pipelines=${pipelines}, colors=${colors}")
+                    + "generated=${actualGenerated}, presentationResources=${names.contains(presentationResources)}, "
+                    + "pipelines=${pipelines}, colors=${colors}")
         }
     }
 }
