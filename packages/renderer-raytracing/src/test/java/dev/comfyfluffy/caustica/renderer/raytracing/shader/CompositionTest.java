@@ -1,6 +1,5 @@
 package dev.comfyfluffy.caustica.renderer.raytracing.shader;
 
-import dev.comfyfluffy.caustica.engine.program.ProgramComposition;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
@@ -11,8 +10,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 
 final class CompositionTest {
-    private static final ProgramComposition PROGRAM = new ProgramComposition(1, List.of());
-
     @Test
     void contentHashCoversSourceNamesBytesAndGeneratedRoot() {
         Composition first = composition("root-a", Map.of("a.slang", bytes("same")));
@@ -28,7 +25,7 @@ final class CompositionTest {
     }
 
     private static Composition composition(String root, Map<String, byte[]> sources) {
-        return Composition.create(PROGRAM, Map.of(), List.of(), "test_composition", "Composition", root, sources);
+        return Composition.create(Map.of(), List.of(), "test_composition", "Composition", root, sources);
     }
 
     private static byte[] bytes(String value) {

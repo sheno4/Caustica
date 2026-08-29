@@ -19,15 +19,14 @@ import java.util.Objects;
  * submitted GPU work can read the root. Retirement callbacks are serialized by the session, never run
  * inline with {@link ProgramBuilder#surface}, and must return promptly without throwing.
  *
- * @param <I> implementation data schema
  * @param <B> geometry-slot binding data schema
  * @param <N> mesh-placement instance data schema
  */
-public record SurfaceDefinition<I, B, N>(ShaderDefinition surface, ShaderDefinition coverage,
-                                         ShaderData<I> implementationData,
-                                         ShaderDataType<B> bindingDataType,
-                                         ShaderDataType<N> instanceDataType,
-                                         Runnable retired) {
+public record SurfaceDefinition<B, N>(ShaderDefinition surface, ShaderDefinition coverage,
+                                      ShaderData<?> implementationData,
+                                      ShaderDataType<B> bindingDataType,
+                                      ShaderDataType<N> instanceDataType,
+                                      Runnable retired) {
     public SurfaceDefinition {
         Objects.requireNonNull(surface, "surface");
         Objects.requireNonNull(implementationData, "implementationData");
@@ -37,9 +36,9 @@ public record SurfaceDefinition<I, B, N>(ShaderDefinition surface, ShaderDefinit
     }
 
     /** A definition whose source requires no separate retirement notification. */
-    public static <I, B, N> SurfaceDefinition<I, B, N> of(
+    public static <B, N> SurfaceDefinition<B, N> of(
             ShaderDefinition surface, ShaderDefinition coverage,
-            ShaderData<I> implementationData, ShaderDataType<B> bindingDataType,
+            ShaderData<?> implementationData, ShaderDataType<B> bindingDataType,
             ShaderDataType<N> instanceDataType) {
         Objects.requireNonNull(coverage, "coverage");
         return new SurfaceDefinition<>(surface, coverage, implementationData, bindingDataType,
@@ -47,8 +46,8 @@ public record SurfaceDefinition<I, B, N>(ShaderDefinition surface, ShaderDefinit
     }
 
     /** An opaque-only definition whose source requires no separate retirement notification. */
-    public static <I, B, N> SurfaceDefinition<I, B, N> opaque(
-            ShaderDefinition surface, ShaderData<I> implementationData,
+    public static <B, N> SurfaceDefinition<B, N> opaque(
+            ShaderDefinition surface, ShaderData<?> implementationData,
             ShaderDataType<B> bindingDataType, ShaderDataType<N> instanceDataType) {
         return new SurfaceDefinition<>(surface, null, implementationData, bindingDataType,
                 instanceDataType, () -> { });

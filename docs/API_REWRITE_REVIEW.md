@@ -236,8 +236,8 @@ interface ProgramChannel {
 }
 
 interface ProgramBuilder {
-    <I, B, N> SurfaceId<B, N> surface(SurfaceDefinition<I, B, N> definition);
-    <I, B, N> VolumeId<B, N> volume(VolumeDefinition<I, B, N> definition);
+    <B, N> SurfaceId<B, N> surface(SurfaceDefinition<B, N> definition);
+    <B, N> VolumeId<B, N> volume(VolumeDefinition<B, N> definition);
     <B> EnvironmentId<B> environment(EnvironmentDefinition<B> definition);
 }
 

@@ -41,9 +41,7 @@ public final class ProgramSession {
     private List<Registration<?>> published = List.of();
     private ProgramBackend.CompiledProgram activeProgram;
     private BuildRequest inFlight;
-    private long nextAcceptanceSequence;
     private long nextDeclarationSequence;
-    private long nextCompositionRevision;
     private boolean declarationActive;
 
     public ProgramSession(ProgramBackend backend, ProgramEngineFailureHandler failures) {
@@ -173,8 +171,7 @@ public final class ProgramSession {
         }
         requireNoTypeConflicts(builder.declarations);
 
-        Registration<E> registration = new Registration<>(this, channel, ++nextAcceptanceSequence,
-                exports, builder.declarations);
+        Registration<E> registration = new Registration<>(this, channel, exports, builder.declarations);
         builder.declarations.forEach(declarationValue -> declarationValue.reference().registration = registration);
         accepted.add(registration);
         return registration;
@@ -210,7 +207,7 @@ public final class ProgramSession {
                 target.add(introduced);
                 target = List.copyOf(target);
             }
-            request = new BuildRequest(++nextCompositionRevision, target, introduced);
+            request = new BuildRequest(target, introduced);
             inFlight = request;
         }
         ProgramComposition composition = composition(request);
@@ -228,10 +225,9 @@ public final class ProgramSession {
     }
 
     private ProgramComposition composition(BuildRequest request) {
-        return new ProgramComposition(request.revision, request.target.stream()
-                .map(registration -> new ProgramComposition.RegistrationSet(
-                        registration.acceptanceSequence,
-                        registration.declarations.stream().map(Declaration::external).toList()))
+        return new ProgramComposition(request.target.stream()
+                .flatMap(registration -> registration.declarations.stream())
+                .map(Declaration::external)
                 .toList());
     }
 
@@ -356,8 +352,7 @@ public final class ProgramSession {
         }
     }
 
-    private record BuildRequest(long revision, List<Registration<?>> target,
-                                Registration<?> introduced) { }
+    private record BuildRequest(List<Registration<?>> target, Registration<?> introduced) { }
     private record CompletionEvent(BuildRequest request, ProgramBackend.Compilation result) { }
     private record CallbackTask(ProgramContributionChannel channel, Runnable action) { }
 
@@ -383,15 +378,15 @@ public final class ProgramSession {
     }
 
     private static final class SurfaceReference extends Reference implements SurfaceId<Object, Object> {
-        private final SurfaceDefinition<?, ?, ?> definition;
-        SurfaceReference(ProgramSession session, ProgramKey key, SurfaceDefinition<?, ?, ?> definition) {
+        private final SurfaceDefinition<?, ?> definition;
+        SurfaceReference(ProgramSession session, ProgramKey key, SurfaceDefinition<?, ?> definition) {
             super(session, key);
             this.definition = definition;
         }
     }
     private static final class VolumeReference extends Reference implements VolumeId<Object, Object> {
-        private final VolumeDefinition<?, ?, ?> definition;
-        VolumeReference(ProgramSession session, ProgramKey key, VolumeDefinition<?, ?, ?> definition) {
+        private final VolumeDefinition<?, ?> definition;
+        VolumeReference(ProgramSession session, ProgramKey key, VolumeDefinition<?, ?> definition) {
             super(session, key);
             this.definition = definition;
         }
@@ -411,7 +406,7 @@ public final class ProgramSession {
         Runnable retired();
     }
 
-    private record SurfaceDeclaration(SurfaceReference reference, SurfaceDefinition<?, ?, ?> definition)
+    private record SurfaceDeclaration(SurfaceReference reference, SurfaceDefinition<?, ?> definition)
             implements Declaration {
         @Override public ProgramComposition.Declaration external() {
             return new ProgramComposition.Surface(reference.key, definition);
@@ -423,7 +418,7 @@ public final class ProgramSession {
         @Override public Runnable retired() { return definition.retired(); }
     }
 
-    private record VolumeDeclaration(VolumeReference reference, VolumeDefinition<?, ?, ?> definition)
+    private record VolumeDeclaration(VolumeReference reference, VolumeDefinition<?, ?> definition)
             implements Declaration {
         @Override public ProgramComposition.Declaration external() {
             return new ProgramComposition.Volume(reference.key, definition);
@@ -450,7 +445,7 @@ public final class ProgramSession {
 
         @Override
         @SuppressWarnings("unchecked")
-        public <I, B, N> SurfaceId<B, N> surface(SurfaceDefinition<I, B, N> definition) {
+        public <B, N> SurfaceId<B, N> surface(SurfaceDefinition<B, N> definition) {
             requireActive();
             Objects.requireNonNull(definition, "definition");
             SurfaceReference reference = new SurfaceReference(session,
@@ -461,7 +456,7 @@ public final class ProgramSession {
 
         @Override
         @SuppressWarnings("unchecked")
-        public <I, B, N> VolumeId<B, N> volume(VolumeDefinition<I, B, N> definition) {
+        public <B, N> VolumeId<B, N> volume(VolumeDefinition<B, N> definition) {
             requireActive();
             Objects.requireNonNull(definition, "definition");
             VolumeReference reference = new VolumeReference(session,
@@ -489,7 +484,6 @@ public final class ProgramSession {
     private static final class Registration<E> implements ProgramRegistration<E> {
         private final ProgramSession session;
         private final ProgramContributionChannel channel;
-        private final long acceptanceSequence;
         private final E exports;
         private final List<Declaration> declarations;
         private final List<Consumer<? super Completion>> observers = new ArrayList<>();
@@ -499,10 +493,9 @@ public final class ProgramSession {
         private boolean retired;
 
         private Registration(ProgramSession session, ProgramContributionChannel channel,
-                             long acceptanceSequence, E exports, List<Declaration> declarations) {
+                             E exports, List<Declaration> declarations) {
             this.session = session;
             this.channel = channel;
-            this.acceptanceSequence = acceptanceSequence;
             this.exports = exports;
             this.declarations = List.copyOf(declarations);
         }

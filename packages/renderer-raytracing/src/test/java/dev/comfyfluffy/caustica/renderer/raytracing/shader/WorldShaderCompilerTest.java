@@ -25,7 +25,6 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class WorldShaderCompilerTest {
@@ -58,21 +57,19 @@ final class WorldShaderCompilerTest {
         ProgramKey surfaceKey = new ProgramKey(ProgramKey.Kind.SURFACE, 1);
         ProgramKey volumeKey = new ProgramKey(ProgramKey.Kind.VOLUME, 2);
         ProgramKey environmentKey = new ProgramKey(ProgramKey.Kind.ENVIRONMENT, 3);
-        ProgramComposition program = new ProgramComposition(7, List.of(new ProgramComposition.RegistrationSet(4,
+        ProgramComposition program = new ProgramComposition(
                 List.of(new ProgramComposition.Surface(surfaceKey, SurfaceDefinition.of(
                                 shader("caustica_error_surface", "ErrorSurface"),
                                 shader("caustica_error_coverage", "ErrorCoverage"), DATA.data(41), BINDING, INSTANCE)),
                         new ProgramComposition.Volume(volumeKey, VolumeDefinition.of(
                                 shader("caustica_water_surface", "WaterVolume"), DATA.data(42), BINDING, INSTANCE)),
                         new ProgramComposition.Environment(environmentKey, new EnvironmentDefinition<>(
-                                shader("caustica_builtin_sky", "BuiltinEnvironment"), BINDING))))));
+                                shader("caustica_builtin_sky", "BuiltinEnvironment"), BINDING))));
 
         // Use the builtin surface as a stand-in volume only for source-generation assertions; the
         // generated volume type is not specialized in this test.
-        ProgramComposition sourceOnly = new ProgramComposition(program.revision(), List.of(
-                new ProgramComposition.RegistrationSet(4, List.of(
-                        program.registrations().getFirst().declarations().get(0),
-                        program.registrations().getFirst().declarations().get(2)))));
+        ProgramComposition sourceOnly = new ProgramComposition(List.of(
+                program.declarations().get(0), program.declarations().get(2)));
         try (WorldShaderCompiler compiler = WorldShaderCompiler.create(runtime, cache, sourceOnly)) {
             assertEquals(1, compiler.implementationIndex(surfaceKey));
             assertEquals(1, compiler.implementationIndex(environmentKey));
@@ -158,14 +155,6 @@ final class WorldShaderCompilerTest {
         assertTrue(closest.contains("abs(dot(closure.shadingNormal, light.direction))"));
         assertTrue(closest.contains("boundaryWeight > 0.0"));
         assertTrue(shadow.contains("surface.transmission_weight"));
-    }
-
-    @Test
-    void rejectsRegistrationSetsOutsideAcceptanceOrder(@TempDir Path cache) {
-        ProgramComposition program = new ProgramComposition(1, List.of(
-                new ProgramComposition.RegistrationSet(2, List.of()),
-                new ProgramComposition.RegistrationSet(1, List.of())));
-        assertThrows(IllegalArgumentException.class, () -> WorldShaderCompiler.create(runtime, cache, program));
     }
 
     private static ShaderDefinition shader(String module, String type) {

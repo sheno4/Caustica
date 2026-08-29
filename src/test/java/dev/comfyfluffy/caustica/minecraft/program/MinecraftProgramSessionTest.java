@@ -90,8 +90,8 @@ final class MinecraftProgramSessionTest {
     }
 
     private static final class CapturingChannel implements ProgramChannel, ProgramBuilder {
-        final List<SurfaceDefinition<?, ?, ?>> surfaces = new ArrayList<>();
-        final List<VolumeDefinition<?, ?, ?>> volumes = new ArrayList<>();
+        final List<SurfaceDefinition<?, ?>> surfaces = new ArrayList<>();
+        final List<VolumeDefinition<?, ?>> volumes = new ArrayList<>();
         final List<EnvironmentDefinition<?>> environments = new ArrayList<>();
         final EnvironmentId<?> environmentId = new EnvironmentId<>() { };
         int registrations;
@@ -107,11 +107,11 @@ final class MinecraftProgramSessionTest {
                 @Override public void close() { }
             };
         }
-        @Override public <I, B, N> SurfaceId<B, N> surface(SurfaceDefinition<I, B, N> definition) {
+        @Override public <B, N> SurfaceId<B, N> surface(SurfaceDefinition<B, N> definition) {
             surfaces.add(definition);
             return new SurfaceId<>() { };
         }
-        @Override public <I, B, N> VolumeId<B, N> volume(VolumeDefinition<I, B, N> definition) {
+        @Override public <B, N> VolumeId<B, N> volume(VolumeDefinition<B, N> definition) {
             volumes.add(definition);
             return new VolumeId<>() { };
         }

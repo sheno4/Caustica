@@ -44,6 +44,11 @@ public final class ShaderSource {
         return subdirectories;
     }
 
+    /** Defines one Slang type resolved through this source. */
+    public ShaderDefinition definition(String module, String type) {
+        return new ShaderDefinition(this, module, type);
+    }
+
     public InputStream openModule(String module) {
         SlangIdentifier.requireModule(module);
         String modulePath = module.replace('.', '/');

@@ -1,6 +1,5 @@
 package dev.comfyfluffy.caustica.renderer.raytracing.shader;
 
-import dev.comfyfluffy.caustica.engine.program.ProgramComposition;
 import dev.comfyfluffy.caustica.engine.program.ProgramKey;
 
 import java.nio.charset.StandardCharsets;
@@ -12,12 +11,10 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.TreeMap;
 
-/** Immutable engine-program input and generated Slang composition identity. */
-record Composition(ProgramComposition program, Map<ProgramKey, Integer> implementationIndices,
-                          List<Long> implementationData, String rootModule, String rootType,
-                          String rootSource, String contentHash) {
+/** Immutable generated Slang composition identity. */
+record Composition(Map<ProgramKey, Integer> implementationIndices, List<Long> implementationData,
+                   String rootModule, String rootType, String rootSource, String contentHash) {
     public Composition {
-        Objects.requireNonNull(program, "program");
         implementationIndices = Map.copyOf(implementationIndices);
         implementationData = List.copyOf(implementationData);
         Objects.requireNonNull(rootModule, "rootModule");
@@ -32,8 +29,8 @@ record Composition(ProgramComposition program, Map<ProgramKey, Integer> implemen
         return index;
     }
 
-    static Composition create(ProgramComposition program, Map<ProgramKey, Integer> indices,
-                              List<Long> implementationData, String rootModule, String rootType,
+    static Composition create(Map<ProgramKey, Integer> indices, List<Long> implementationData,
+                              String rootModule, String rootType,
                               String rootSource, Map<String, byte[]> sources) {
         TreeMap<String, byte[]> ordered = new TreeMap<>(sources);
         ordered.put("generated/" + rootModule + ".slang", rootSource.getBytes(StandardCharsets.UTF_8));
@@ -45,7 +42,7 @@ record Composition(ProgramComposition program, Map<ProgramKey, Integer> implemen
                 digest.update(entry.getValue());
                 digest.update((byte) 0);
             }
-            return new Composition(program, indices, implementationData, rootModule, rootType, rootSource,
+            return new Composition(indices, implementationData, rootModule, rootType, rootSource,
                     HexFormat.of().formatHex(digest.digest()));
         } catch (NoSuchAlgorithmException e) {
             throw new AssertionError("SHA-256 is required by the Java platform", e);

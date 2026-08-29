@@ -15,6 +15,8 @@ final class ShaderSourceTest {
                 ShaderSourceTest.class, "/caustica/shaders/api");
 
         assertSame(ShaderSourceTest.class, source.resourceAnchor());
+        ShaderDefinition definition = source.definition("caustica_api", "Example");
+        assertSame(source, definition.source());
         try (var module = source.openModule("caustica_api")) {
             assertNotNull(module);
         }

@@ -123,7 +123,6 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
         Objects.requireNonNull(runtime, "runtime");
         Objects.requireNonNull(cacheDirectory, "cacheDirectory");
         Objects.requireNonNull(program, "program");
-        validateRegistrationOrder(program);
         Path worldDirectory = cacheDirectory.resolve("world");
         Path apiDirectory = cacheDirectory.resolve("api");
         Path builtinDirectory = cacheDirectory.resolve("builtin");
@@ -137,7 +136,7 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
         extractClasspath(API_ROOT, API_MODULES, apiDirectory, "api", sources);
         extractClasspath(BUILTIN_ROOT, BUILTIN_MODULES, builtinDirectory, "builtin", sources);
 
-        List<ProgramComposition.Declaration> declarations = declarations(program);
+        List<ProgramComposition.Declaration> declarations = program.declarations();
         Map<String, ResolvedModule> modules = resolveModules(declarations);
         Files.createDirectories(extensionDirectory);
         for (ResolvedModule module : modules.values()) {
@@ -154,19 +153,9 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
         List<Path> searchPaths = List.of(worldDirectory, apiDirectory, builtinDirectory,
                 extensionDirectory, compositionDirectory);
         SlangSession session = runtime.openSession(searchPaths, false, true);
-        Composition composition = Composition.create(program, generated.indices(), generated.data(),
+        Composition composition = Composition.create(generated.indices(), generated.data(),
                 COMPOSITION_MODULE, COMPOSITION_TYPE, generated.source(), sources);
         return new WorldShaderCompiler(session, worldDirectory, cleanupDirectory, composition);
-    }
-
-    private static void validateRegistrationOrder(ProgramComposition program) {
-        long previous = Long.MIN_VALUE;
-        for (ProgramComposition.RegistrationSet registration : program.registrations()) {
-            if (registration.acceptanceSequence() <= previous) {
-                throw new IllegalArgumentException("program registrations are not in acceptance order");
-            }
-            previous = registration.acceptanceSequence();
-        }
     }
 
     Composition composition() {
@@ -229,7 +218,7 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
         List<ProgramComposition.Surface> surfaces = new ArrayList<>();
         List<ProgramComposition.Volume> volumes = new ArrayList<>();
         List<ProgramComposition.Environment> environments = new ArrayList<>();
-        declarations(program).forEach(declaration -> {
+        program.declarations().forEach(declaration -> {
             switch (declaration) {
                 case ProgramComposition.Surface surface -> surfaces.add(surface);
                 case ProgramComposition.Volume volume -> volumes.add(volume);
@@ -260,7 +249,7 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
                 .append("import caustica_coverage;\nimport caustica_volume;\nimport caustica_environment;\n")
                 .append("import caustica_error_surface;\nimport caustica_error_coverage;\n")
                 .append("import caustica_builtin_sky;\n");
-        declarations(program).stream().flatMap(WorldShaderCompiler::definitions).map(ShaderDefinition::module)
+        program.declarations().stream().flatMap(WorldShaderCompiler::definitions).map(ShaderDefinition::module)
                 .distinct().sorted().forEach(module -> source.append("import ").append(module).append(";\n"));
 
         source.append("\npublic struct SurfaceDispatch : ISurfaceDispatch {\n")
@@ -331,11 +320,6 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
                     .append(value.definition().implementation().type()).append(" value; return value.")
                     .append(lighting ? "evaluateBoundaryLighting" : "evaluateVolume").append("(input); }\n");
         }
-    }
-
-    private static List<ProgramComposition.Declaration> declarations(ProgramComposition program) {
-        return program.registrations().stream().flatMap(registration -> registration.declarations().stream())
-                .toList();
     }
 
     private static java.util.stream.Stream<ShaderDefinition> definitions(

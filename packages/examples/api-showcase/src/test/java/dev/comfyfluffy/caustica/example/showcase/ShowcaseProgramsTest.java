@@ -34,7 +34,7 @@ final class ShowcaseProgramsTest {
         assertEquals("api_showcase.AbsorbingVolume", channel.volumes.getFirst().implementation().type());
         assertEquals("api_showcase.GradientEnvironment",
                 channel.environments.getFirst().implementation().type());
-        for (SurfaceDefinition<?, ?, ?> surface : channel.surfaces) {
+        for (SurfaceDefinition<?, ?> surface : channel.surfaces) {
             try (var module = surface.surface().source().openModule(surface.surface().module())) {
                 assertTrue(module != null);
             }
@@ -45,8 +45,8 @@ final class ShowcaseProgramsTest {
     }
 
     private static final class CapturePrograms implements ProgramChannel, ProgramBuilder {
-        private final List<SurfaceDefinition<?, ?, ?>> surfaces = new ArrayList<>();
-        private final List<VolumeDefinition<?, ?, ?>> volumes = new ArrayList<>();
+        private final List<SurfaceDefinition<?, ?>> surfaces = new ArrayList<>();
+        private final List<VolumeDefinition<?, ?>> volumes = new ArrayList<>();
         private final List<EnvironmentDefinition<?>> environments = new ArrayList<>();
         private boolean closed;
 
@@ -63,13 +63,13 @@ final class ShowcaseProgramsTest {
         }
 
         @Override
-        public <I, B, N> SurfaceId<B, N> surface(SurfaceDefinition<I, B, N> definition) {
+        public <B, N> SurfaceId<B, N> surface(SurfaceDefinition<B, N> definition) {
             surfaces.add(definition);
             return new SurfaceId<>() { };
         }
 
         @Override
-        public <I, B, N> VolumeId<B, N> volume(VolumeDefinition<I, B, N> definition) {
+        public <B, N> VolumeId<B, N> volume(VolumeDefinition<B, N> definition) {
             volumes.add(definition);
             return new VolumeId<>() { };
         }

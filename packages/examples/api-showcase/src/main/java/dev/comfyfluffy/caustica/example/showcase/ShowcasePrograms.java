@@ -5,7 +5,6 @@ import dev.comfyfluffy.caustica.api.program.EnvironmentId;
 import dev.comfyfluffy.caustica.api.program.ProgramChannel;
 import dev.comfyfluffy.caustica.api.program.ProgramRegistration;
 import dev.comfyfluffy.caustica.api.program.ShaderDataType;
-import dev.comfyfluffy.caustica.api.program.ShaderDefinition;
 import dev.comfyfluffy.caustica.api.program.ShaderSource;
 import dev.comfyfluffy.caustica.api.program.SurfaceDefinition;
 import dev.comfyfluffy.caustica.api.program.SurfaceId;
@@ -41,17 +40,17 @@ final class ShowcasePrograms {
     ShowcasePrograms(ProgramChannel programs, Consumer<String> diagnosticSink) {
         registration = programs.register(builder -> new Exports(
                 builder.surface(SurfaceDefinition.opaque(
-                        shader("showcase_surface", "api_showcase.OpaqueSurface"),
+                        SOURCE.definition("showcase_surface", "api_showcase.OpaqueSurface"),
                         IMPLEMENTATION.data(0L), SURFACE_BINDING, INSTANCE)),
                 builder.surface(SurfaceDefinition.of(
-                        shader("showcase_surface", "api_showcase.TexturedSurface"),
-                        shader("showcase_coverage", "api_showcase.TextureCoverage"),
+                        SOURCE.definition("showcase_surface", "api_showcase.TexturedSurface"),
+                        SOURCE.definition("showcase_coverage", "api_showcase.TextureCoverage"),
                         IMPLEMENTATION.data(0L), SURFACE_BINDING, INSTANCE)),
                 builder.volume(VolumeDefinition.of(
-                        shader("showcase_volume", "api_showcase.AbsorbingVolume"),
+                        SOURCE.definition("showcase_volume", "api_showcase.AbsorbingVolume"),
                         IMPLEMENTATION.data(0L), VOLUME_BINDING, INSTANCE)),
                 builder.environment(new EnvironmentDefinition<>(
-                        shader("showcase_environment", "api_showcase.GradientEnvironment"),
+                        SOURCE.definition("showcase_environment", "api_showcase.GradientEnvironment"),
                         ENVIRONMENT_BINDING))));
         registration.whenComplete(completion -> {
             if (completion instanceof ProgramRegistration.Failed failed) {
@@ -71,9 +70,5 @@ final class ShowcasePrograms {
 
     void close() {
         registration.close();
-    }
-
-    private static ShaderDefinition shader(String module, String type) {
-        return new ShaderDefinition(SOURCE, module, type);
     }
 }

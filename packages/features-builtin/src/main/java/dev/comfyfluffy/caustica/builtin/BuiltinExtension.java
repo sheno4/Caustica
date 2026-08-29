@@ -6,7 +6,6 @@ import dev.comfyfluffy.caustica.api.program.EnvironmentDefinition;
 import dev.comfyfluffy.caustica.api.program.EnvironmentId;
 import dev.comfyfluffy.caustica.api.program.ProgramRegistration;
 import dev.comfyfluffy.caustica.api.program.ShaderDataType;
-import dev.comfyfluffy.caustica.api.program.ShaderDefinition;
 import dev.comfyfluffy.caustica.api.program.ShaderSource;
 import dev.comfyfluffy.caustica.api.program.SurfaceDefinition;
 import dev.comfyfluffy.caustica.api.program.SurfaceId;
@@ -45,11 +44,11 @@ public final class BuiltinExtension implements CausticaExtension, CausticaSettin
         api.sessions().add(context -> {
             ProgramRegistration<Programs> registration = context.program().register(builder -> new Programs(
                     builder.surface(SurfaceDefinition.of(
-                            shader("caustica_error_surface", "ErrorSurface"),
-                            shader("caustica_error_coverage", "ErrorCoverage"),
+                            SHADERS.definition("caustica_error_surface", "ErrorSurface"),
+                            SHADERS.definition("caustica_error_coverage", "ErrorCoverage"),
                             IMPLEMENTATION_DATA.data(0), BINDING_DATA, INSTANCE_DATA)),
                     builder.environment(new EnvironmentDefinition<>(
-                            shader("caustica_builtin_sky", "BuiltinEnvironment"),
+                            SHADERS.definition("caustica_builtin_sky", "BuiltinEnvironment"),
                             ENVIRONMENT_BINDING_DATA))));
             try {
                 PassRegistration bloom = context.passes().addPostEffectPass(BloomPass.ID, setup -> new BloomPass(setup,
@@ -71,10 +70,6 @@ public final class BuiltinExtension implements CausticaExtension, CausticaSettin
                 .group(BloomPass.GROUP)
                 .options(BloomPass.OPTIONS)
                 .register();
-    }
-
-    private static ShaderDefinition shader(String module, String type) {
-        return new ShaderDefinition(SHADERS, module, type);
     }
 
     private static RenderSessionContribution contribution(ProgramRegistration<?> registration,

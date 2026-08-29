@@ -129,7 +129,7 @@ The opaque 64-bit vocabulary follows ownership depth consistently:
 | Name | Owner and Java source | Shader use |
 |---|---|---|
 | `compositionData` | Engine-generated `ShaderRootData` | Root table for the active composed program |
-| `implementationData` | `ShaderData<I>` in `SurfaceDefinition<I, B, N>` / `VolumeDefinition<I, B, N>` | State shared by every binding of one registered implementation |
+| `implementationData` | `ShaderData<?>` in `SurfaceDefinition<B, N>` / `VolumeDefinition<B, N>` | State shared by every binding of one registered implementation |
 | `bindingData` | `ShaderData<B>` in a typed surface/volume slot or environment binding | State for one geometry slot or scene environment binding |
 | `instanceData` | `ShaderData<N>` in `GeometryChannel.SetInstance<N>` | State for one mesh placement; `newMesh(ShaderDataType<N>)` fixes the ID's runtime schema and `MeshId<N>` ensures all slots accept it |
 

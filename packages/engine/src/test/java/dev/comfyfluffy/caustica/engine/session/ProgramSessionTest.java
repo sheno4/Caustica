@@ -70,7 +70,9 @@ final class ProgramSessionTest {
         assertTrue(events.isEmpty());
         assertInstanceOf(ProgramResolution.ErrorSurface.class, session.resolve(registration.exports().surface()));
         session.progress();
-        assertEquals(3, backend.pending.composition.registrations().getFirst().declarations().size());
+        assertEquals(3, backend.pending.composition.declarations().size());
+        assertThrows(UnsupportedOperationException.class,
+                () -> backend.pending.composition.declarations().clear());
         backend.succeed();
         session.progress();
 
@@ -127,7 +129,7 @@ final class ProgramSessionTest {
         backend.succeed();
         session.progress();
         assertInstanceOf(ProgramRegistration.Ready.class, laterCompletion.getFirst());
-        assertEquals(2, backend.activeComposition.registrations().size());
+        assertEquals(2, backend.activeComposition.declarations().size());
         assertInstanceOf(ProgramResolution.ActiveSurface.class, session.resolve(later.exports()));
     }
 
@@ -283,13 +285,13 @@ final class ProgramSessionTest {
         assertTrue(session.isDrained(channel));
     }
 
-    private static SurfaceDefinition<Implementation, Binding, Instance> surface(
+    private static SurfaceDefinition<Binding, Instance> surface(
             String type, Runnable retired) {
         return new SurfaceDefinition<>(shader(type.substring(type.lastIndexOf('.') + 1).toLowerCase(), type),
                 null, IMPLEMENTATION.data(1), BINDING, INSTANCE, retired);
     }
 
-    private static VolumeDefinition<Implementation, Binding, Instance> volume(String type, Runnable retired) {
+    private static VolumeDefinition<Binding, Instance> volume(String type, Runnable retired) {
         return new VolumeDefinition<>(shader("volume", type), IMPLEMENTATION.data(2), BINDING, INSTANCE, retired);
     }
 
@@ -353,7 +355,7 @@ final class ProgramSessionTest {
         }
 
         int pendingRegistrationCount() {
-            return pending.composition.registrations().size();
+            return pending.composition.declarations().size();
         }
 
         private record Pending(ProgramComposition composition,
@@ -366,8 +368,7 @@ final class ProgramSessionTest {
 
             private TestProgram(ProgramComposition composition) {
                 this.composition = composition;
-                composition.registrations().stream().flatMap(set -> set.declarations().stream())
-                        .forEach(declaration -> indices.put(declaration.key(), indices.size()));
+                composition.declarations().forEach(declaration -> indices.put(declaration.key(), indices.size()));
             }
 
             @Override

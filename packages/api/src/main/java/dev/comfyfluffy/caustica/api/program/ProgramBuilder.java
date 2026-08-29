@@ -12,10 +12,10 @@ public interface ProgramBuilder {
      * Declare one surface implementation and its optional coverage implementation.
      * A geometry using cutout coverage may select the returned id only when the definition supplies coverage.
      */
-    <I, B, N> SurfaceId<B, N> surface(SurfaceDefinition<I, B, N> definition);
+    <B, N> SurfaceId<B, N> surface(SurfaceDefinition<B, N> definition);
 
     /** Declare one homogeneous interior-volume implementation. */
-    <I, B, N> VolumeId<B, N> volume(VolumeDefinition<I, B, N> definition);
+    <B, N> VolumeId<B, N> volume(VolumeDefinition<B, N> definition);
 
     /** Declare one environment implementation selected by a scene binding. */
     <B> EnvironmentId<B> environment(EnvironmentDefinition<B> definition);

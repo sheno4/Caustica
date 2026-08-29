@@ -39,7 +39,7 @@ final class GltfProgramContentTest {
     }
 
     private static final class CapturePrograms implements ProgramChannel, ProgramBuilder {
-        private final List<SurfaceDefinition<?, ?, ?>> surfaces = new ArrayList<>();
+        private final List<SurfaceDefinition<?, ?>> surfaces = new ArrayList<>();
         private int registrationCount;
         private boolean open = true;
 
@@ -56,12 +56,12 @@ final class GltfProgramContentTest {
             };
         }
 
-        @Override public <I, B, N> SurfaceId<B, N> surface(SurfaceDefinition<I, B, N> definition) {
+        @Override public <B, N> SurfaceId<B, N> surface(SurfaceDefinition<B, N> definition) {
             surfaces.add(definition);
             return new SurfaceId<>() { };
         }
 
-        @Override public <I, B, N> VolumeId<B, N> volume(VolumeDefinition<I, B, N> definition) {
+        @Override public <B, N> VolumeId<B, N> volume(VolumeDefinition<B, N> definition) {
             throw new AssertionError();
         }
 

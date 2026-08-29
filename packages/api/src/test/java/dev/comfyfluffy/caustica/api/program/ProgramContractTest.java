@@ -69,6 +69,8 @@ final class ProgramContractTest {
 
     @Test
     void implementationDefinitionsOwnTheirRetirementCallbacks() throws NoSuchMethodException {
+        assertEquals(2, SurfaceDefinition.class.getTypeParameters().length);
+        assertEquals(2, VolumeDefinition.class.getTypeParameters().length);
         assertSame(ShaderDefinition.class, SurfaceDefinition.class.getMethod("surface").getReturnType());
         assertSame(ShaderDefinition.class, SurfaceDefinition.class.getMethod("coverage").getReturnType());
         assertSame(ShaderData.class, SurfaceDefinition.class.getMethod("implementationData").getReturnType());

@@ -251,22 +251,26 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
 
     static ProgramRegistration<MinecraftPrograms> registerPrograms(ProgramChannel channel, Roots roots) {
         return channel.register(builder -> {
-            var coverage = shader("caustica_minecraft_coverage", "MinecraftCoverage");
-            var material = new SurfaceDefinition<>(shader("caustica_minecraft_surface", "MinecraftSurface"),
+            var coverage = SHADERS.definition("caustica_minecraft_coverage", "MinecraftCoverage");
+            var material = new SurfaceDefinition<>(
+                    SHADERS.definition("caustica_minecraft_surface", "MinecraftSurface"),
                     coverage, roots.implementation(), MinecraftProgramTypes.PRIMITIVE_DATA,
                     MinecraftProgramTypes.INSTANCE_DATA, roots.retirement());
             return new MinecraftPrograms(builder.surface(material),
-                    builder.surface(SurfaceDefinition.of(shader("caustica_water_surface", "WaterSurface"),
+                    builder.surface(SurfaceDefinition.of(
+                            SHADERS.definition("caustica_water_surface", "WaterSurface"),
                             coverage, roots.implementation(), MinecraftProgramTypes.PRIMITIVE_DATA,
                             MinecraftProgramTypes.INSTANCE_DATA)),
-                    builder.surface(SurfaceDefinition.of(shader("caustica_portal_surface", "PortalSurface"),
+                    builder.surface(SurfaceDefinition.of(
+                            SHADERS.definition("caustica_portal_surface", "PortalSurface"),
                             coverage, roots.implementation(), MinecraftProgramTypes.PRIMITIVE_DATA,
                             MinecraftProgramTypes.INSTANCE_DATA)),
-                    builder.volume(VolumeDefinition.of(shader("caustica_water_surface", "WaterVolume"),
+                    builder.volume(VolumeDefinition.of(
+                            SHADERS.definition("caustica_water_surface", "WaterVolume"),
                             roots.implementation(), MinecraftProgramTypes.PRIMITIVE_DATA,
                             MinecraftProgramTypes.INSTANCE_DATA)),
                     builder.environment(new EnvironmentDefinition<>(
-                            shader("caustica_minecraft_overworld_sky", "MinecraftOverworldSky"),
+                            SHADERS.definition("caustica_minecraft_overworld_sky", "MinecraftOverworldSky"),
                             MinecraftProgramTypes.ENVIRONMENT_BINDING_DATA)));
         });
     }
@@ -300,10 +304,6 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
     }
 
     @Override public void close() { resources.close(); }
-
-    private static ShaderDefinition shader(String module, String type) {
-        return new ShaderDefinition(SHADERS, module, type);
-    }
 
     record Roots(ShaderData<MinecraftProgramTypes.ImplementationData> implementation,
                  ShaderData<MinecraftProgramTypes.PrimitiveData> fallbackBinding,

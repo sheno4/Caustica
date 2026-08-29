@@ -15,14 +15,13 @@ import java.util.Objects;
  * serialized by the session, never run inline with {@link ProgramBuilder#volume}, and must return
  * promptly without throwing.
  *
- * @param <I> implementation data schema
  * @param <B> geometry-slot binding data schema
  * @param <N> mesh-placement instance data schema
  */
-public record VolumeDefinition<I, B, N>(ShaderDefinition implementation, ShaderData<I> implementationData,
-                                        ShaderDataType<B> bindingDataType,
-                                        ShaderDataType<N> instanceDataType,
-                                        Runnable retired) {
+public record VolumeDefinition<B, N>(ShaderDefinition implementation, ShaderData<?> implementationData,
+                                     ShaderDataType<B> bindingDataType,
+                                     ShaderDataType<N> instanceDataType,
+                                     Runnable retired) {
     public VolumeDefinition {
         Objects.requireNonNull(implementation, "implementation");
         Objects.requireNonNull(implementationData, "implementationData");
@@ -32,8 +31,8 @@ public record VolumeDefinition<I, B, N>(ShaderDefinition implementation, ShaderD
     }
 
     /** A definition whose source requires no separate retirement notification. */
-    public static <I, B, N> VolumeDefinition<I, B, N> of(
-            ShaderDefinition implementation, ShaderData<I> implementationData,
+    public static <B, N> VolumeDefinition<B, N> of(
+            ShaderDefinition implementation, ShaderData<?> implementationData,
             ShaderDataType<B> bindingDataType, ShaderDataType<N> instanceDataType) {
         return new VolumeDefinition<>(implementation, implementationData, bindingDataType,
                 instanceDataType, () -> { });
