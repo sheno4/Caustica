@@ -22,4 +22,23 @@ final class MinecraftMaterialLookupTest {
         assertEquals(OpenPbrDefaults.TRANSMISSIVE_SPECULAR_IOR, record.specularIor());
         assertEquals(1.0f, record.transmissionWeight());
     }
+
+    @Test
+    void captureSurfacesUseTheNeutralMaterialRecord() {
+        MinecraftMaterialLookup lookup = MinecraftMaterialLookup.compile(
+                new ResourcePackEpoch(7), List.of(), List.of(), MinecraftMaterialPageCompiler.compile(List.of()));
+
+        for (var material : MinecraftMaterialIds.CAPTURE_SURFACES) {
+            MinecraftMaterialResolution byId = lookup.resolve(material);
+            MinecraftMaterialResolution byKey = lookup.resolve(new MinecraftMaterialKey(material, null,
+                    MinecraftMaterialProfile.ROUGH_DIELECTRIC, MinecraftMaterialTopology.SURFACE));
+
+            assertEquals(byId, byKey);
+            assertEquals(0, byId.materialIndex());
+            assertEquals(material, byId.material());
+            assertEquals(MinecraftMaterialTopology.SURFACE, byId.topology());
+            assertEquals(MinecraftMaterialEmission.NONE, byId.emission());
+            assertEquals(MinecraftMaterialRecord.fallback(), lookup.records().get(byId.materialIndex()));
+        }
+    }
 }

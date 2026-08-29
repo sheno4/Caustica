@@ -8,10 +8,6 @@ import java.util.Objects;
 /** Immutable CPU geometry captured from one Minecraft entity, block entity, or particle group. */
 public record MinecraftEntityMesh(float[] positions, int[] indices, float[] uvs,
                                   List<Triangle> triangles, long indexRevision) {
-    public static final ResourceId END_PORTAL_MATERIAL = ResourceId.of("minecraft", "end_portal");
-    public static final ResourceId PARTICLE_BILLBOARD_MATERIAL =
-            ResourceId.of("caustica", "minecraft_particle_billboard");
-    public static final ResourceId VERTEX_COLOR_MATERIAL = ResourceId.of("caustica", "minecraft_vertex_color");
     public MinecraftEntityMesh {
         positions = positions.clone();
         indices = indices.clone();

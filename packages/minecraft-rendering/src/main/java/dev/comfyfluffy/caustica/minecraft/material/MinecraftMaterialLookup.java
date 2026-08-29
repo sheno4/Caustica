@@ -79,6 +79,13 @@ public final class MinecraftMaterialLookup {
                 }
             }
         }
+        for (ResourceId material : MinecraftMaterialIds.CAPTURE_SURFACES) {
+            MinecraftMaterialResolution resolution = new MinecraftMaterialResolution(0, material,
+                    MinecraftMaterialTopology.SURFACE, MinecraftMaterialEmission.NONE, null);
+            resolutions.put(new MinecraftMaterialKey(material, null,
+                    MinecraftMaterialProfile.ROUGH_DIELECTRIC, MinecraftMaterialTopology.SURFACE), resolution);
+            defaults.put(material, resolution);
+        }
         return new MinecraftMaterialLookup(epoch, resolutions, defaults, records, pages.textures());
     }
 

@@ -5,6 +5,7 @@ import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.mixin.ParticleEngineAccessor;
 import dev.comfyfluffy.caustica.mixin.ParticleGroupAccessor;
 import dev.comfyfluffy.caustica.minecraft.MinecraftTelemetry;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialIds;
 import dev.comfyfluffy.caustica.api.geometry.GeometryTransform;
 import dev.comfyfluffy.caustica.settings.ResourceId;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
@@ -650,7 +651,7 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.Mine
             submitParticles(build);
             return;
         }
-        capture.currentMaterial = new MinecraftEntityMesh.Material(MinecraftEntityMesh.PARTICLE_BILLBOARD_MATERIAL,
+        capture.currentMaterial = new MinecraftEntityMesh.Material(MinecraftMaterialIds.PARTICLE_BILLBOARD,
                 null, MinecraftEntityMesh.Program.MATERIAL);
         capture.currentCoverage = MinecraftEntityMesh.Coverage.CUTOUT;
         // extract() emits camera-relative positions; shift them into rebased space (identity instance).
@@ -684,7 +685,7 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.Mine
                     for (SingleQuadParticle.Layer layer : particleScratch.layers()) {
                         textures.contributeAtlas(layer.textureAtlasLocation());
                         capture.currentMaterial = new MinecraftEntityMesh.Material(
-                                MinecraftEntityMesh.PARTICLE_BILLBOARD_MATERIAL,
+                                MinecraftMaterialIds.PARTICLE_BILLBOARD,
                                 MinecraftEntityMesh.Texture.atlas(ResourceId.of(
                                         layer.textureAtlasLocation().getNamespace(), layer.textureAtlasLocation().getPath())),
                                 MinecraftEntityMesh.Program.MATERIAL);

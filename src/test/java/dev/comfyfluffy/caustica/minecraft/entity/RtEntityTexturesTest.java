@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.entity;
 
 import dev.comfyfluffy.caustica.minecraft.MinecraftTelemetry;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialIds;
 import net.minecraft.SharedConstants;
 import net.minecraft.client.renderer.rendertype.RenderSetup;
 import net.minecraft.client.renderer.rendertype.RenderType;
@@ -33,7 +34,7 @@ final class RtEntityTexturesTest {
     void endPortalRenderTypesUseTheTexturelessProceduralMaterial() {
         for (RenderType renderType : new RenderType[]{RenderTypes.endPortal(), RenderTypes.endGateway()}) {
             MinecraftEntityMesh.Material material = standaloneMaterial(renderType);
-            assertEquals(MinecraftEntityMesh.END_PORTAL_MATERIAL, material.material());
+            assertEquals(MinecraftMaterialIds.END_PORTAL, material.material());
             assertEquals(MinecraftEntityMesh.Program.PORTAL, material.program());
             assertNull(material.texture());
         }

@@ -2,6 +2,7 @@ package dev.comfyfluffy.caustica.minecraft.entity;
 
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import dev.comfyfluffy.caustica.support.ColorSpaces;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialIds;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 import net.minecraft.client.resources.model.geometry.BakedQuad;
@@ -250,7 +251,7 @@ public final class RtEntityCapture implements VertexConsumer {
     }
 
     private static MinecraftEntityMesh.Material fallbackMaterial() {
-        return new MinecraftEntityMesh.Material(MinecraftEntityMesh.PARTICLE_BILLBOARD_MATERIAL, null,
+        return new MinecraftEntityMesh.Material(MinecraftMaterialIds.PARTICLE_BILLBOARD, null,
                 MinecraftEntityMesh.Program.MATERIAL);
     }
 

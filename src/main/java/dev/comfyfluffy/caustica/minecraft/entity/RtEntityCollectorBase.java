@@ -11,6 +11,7 @@ import dev.comfyfluffy.caustica.mixin.RenderSetupAccessor;
 import dev.comfyfluffy.caustica.mixin.RenderTypeAccessor;
 import dev.comfyfluffy.caustica.minecraft.MinecraftTelemetry;
 import dev.comfyfluffy.caustica.minecraft.MinecraftResourceIds;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialIds;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.font.TextRenderable;
@@ -75,7 +76,7 @@ class RtEntityCollectorBase {
     // Shared all-zero UV quad for untextured geometry (leash/line ribbons on the white slot).
     private static final float[] ZERO_UV = new float[4];
     private static final MinecraftEntityMesh.Material END_PORTAL_MATERIAL = new MinecraftEntityMesh.Material(
-            MinecraftEntityMesh.END_PORTAL_MATERIAL, null, MinecraftEntityMesh.Program.PORTAL);
+            MinecraftMaterialIds.END_PORTAL, null, MinecraftEntityMesh.Program.PORTAL);
 
     private RtEntityCapture capture;
     private boolean profileDynamicEntity;
@@ -283,7 +284,7 @@ class RtEntityCollectorBase {
                         texture, MinecraftEntityMesh.Program.MATERIAL, profile, transmissive);
             } else {
                 capture.currentMaterial = new MinecraftEntityMesh.Material(
-                        MinecraftEntityMesh.PARTICLE_BILLBOARD_MATERIAL, texture, MinecraftEntityMesh.Program.MATERIAL);
+                        MinecraftMaterialIds.PARTICLE_BILLBOARD, texture, MinecraftEntityMesh.Program.MATERIAL);
             }
         }
         capture.currentCoverage = stochasticAlpha ? MinecraftEntityMesh.Coverage.STOCHASTIC
@@ -295,7 +296,7 @@ class RtEntityCollectorBase {
         var texture = textures.textureLocation(renderType);
         if (texture == null) return missingMaterial();
         ResourceId logicalTexture = MinecraftResourceIds.logicalTexture(texture);
-        return new MinecraftEntityMesh.Material(MinecraftEntityMesh.PARTICLE_BILLBOARD_MATERIAL,
+        return new MinecraftEntityMesh.Material(MinecraftMaterialIds.PARTICLE_BILLBOARD,
                 MinecraftEntityMesh.Texture.standalone(logicalTexture), MinecraftEntityMesh.Program.MATERIAL);
     }
 
@@ -310,7 +311,7 @@ class RtEntityCollectorBase {
     }
 
     private static MinecraftEntityMesh.Material missingMaterial() {
-        return new MinecraftEntityMesh.Material(MinecraftEntityMesh.PARTICLE_BILLBOARD_MATERIAL, null,
+        return new MinecraftEntityMesh.Material(MinecraftMaterialIds.PARTICLE_BILLBOARD, null,
                 MinecraftEntityMesh.Program.MATERIAL);
     }
 
@@ -531,7 +532,7 @@ class RtEntityCollectorBase {
         capture.clearUvRemap();
         capture.currentOrder = 0;
         capture.currentMaterial = new MinecraftEntityMesh.Material(
-                MinecraftEntityMesh.VERTEX_COLOR_MATERIAL, textures.whiteTexture(),
+                MinecraftMaterialIds.VERTEX_COLOR, textures.whiteTexture(),
                 MinecraftEntityMesh.Program.MATERIAL);
         capture.currentCoverage = MinecraftEntityMesh.Coverage.OPAQUE;
         Matrix4f pose = poseStack.last().pose();
@@ -696,7 +697,7 @@ class RtEntityCollectorBase {
         // the block atlas, whose (0,0) texel would tint the ribbon arbitrarily).
         if (lines) {
             capture.currentMaterial = new MinecraftEntityMesh.Material(
-                    MinecraftEntityMesh.VERTEX_COLOR_MATERIAL, textures.whiteTexture(),
+                    MinecraftMaterialIds.VERTEX_COLOR, textures.whiteTexture(),
                     MinecraftEntityMesh.Program.MATERIAL);
         } else {
             setStandaloneMaterial(renderType);
