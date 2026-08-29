@@ -6,42 +6,32 @@ import java.util.Objects;
 /**
  * A set of operations against one retained collection that becomes visible together or not at all.
  *
- * <p><b>Scene contents take these, and nothing else does.</b> Geometry and lights are what a frame's
- * picture is made of, so a half-applied change to them is a frame someone sees wrong. A surface
- * implementation or environment is a program entry, and an entry nothing names changes nothing.
- * They are added synchronously with no batch, and the atomicity their replacement needs is carried by the
- * geometry batch that starts naming them.
+ * <p>Geometry and light channels accept batches. A batch may span scenes because each operation identifies
+ * its target scene.
  *
- * <p>A batch may span scenes: it is a set of operations against one collection, and which scene each
- * operation names is part of the operation, not of the batch.
+ * <h2>Atomic publication</h2>
  *
- * <h2>Atomicity is the source's choice, and it is not free</h2>
- *
- * A mesh cannot publish until its acceleration structure is built, so the slowest member gates the rest.
- * Group what must not be seen apart — two sections sharing a seam, every mesh in a resource reload — and
- * keep everything else in its own batch. Placement-only batches especially: they need no build and publish
- * at the next update boundary unless something heavier is mixed in to hold them back.
+ * A mesh cannot publish until its acceleration structure is built, so the slowest operation delays the
+ * entire batch. Group only operations that must become visible together. Placement-only batches publish at
+ * the next update boundary unless grouped with work that requires a build.
  *
  * <h2>Acceptance is synchronous; retirement follows what the batch retained</h2>
  *
- * Whether a batch was accepted is decided before {@code submit} returns and reported by throwing, so a
- * source knows on the calling thread whether it may update its own bookkeeping. That is what makes it safe
- * to drop something and immediately forget its id. A rejected submission does not take the callback or any
- * source resource. Every accepted callback is scheduled exactly once, never inline, including when session
- * teardown or a later GPU build failure removes the introduced values.
+ * Acceptance is decided before {@code submit} returns and rejection is reported by throwing. After an
+ * accepted drop returns, the caller may discard its id. Rejection does not transfer the callback or source
+ * resources. Every accepted callback is scheduled exactly once and never runs inline.
  *
  * <p>{@link #retired()} is the one asynchronous signal: it runs once every value this batch introduced has
  * later been replaced, dropped, discarded because a GPU build failed, or removed by a scene cascade, and no
  * submitted GPU work still reads it. Those are different instants, usually frames apart. A batch that
- * only drops values introduces no resource borrow and may use a no-op callback; the callbacks belonging to
- * the earlier batches that introduced those values report their retirement.
+ * only drops values may use a no-op callback; the earlier batches that introduced those values report their
+ * retirement.
  *
- * <h2>Why retirement is batch-scoped</h2>
+ * <h2>Batch-scoped retirement</h2>
  *
- * Atomic publication already ties the introduced values together. One callback keeps that same lifetime:
- * it runs after the last value from the batch retires. If two resources should be reclaimed independently,
- * submit them in separate batches; if an allocation is shared across batches, the source refcounts those
- * borrows in their callbacks.
+ * The callback runs after the last value introduced by the batch retires. If two resources should be
+ * reclaimed independently, submit them in separate batches; if an allocation is shared across batches,
+ * the source refcounts those borrows in their callbacks.
  *
  * <h2>Ordering</h2>
  *
@@ -50,9 +40,8 @@ import java.util.Objects;
  * retires exactly once after the data it introduced can no longer be read.
  *
  * <p>Retirement callbacks from one session are serialized in retirement order on an
- * implementation-selected callback thread. They are non-blocking notifications, not render-thread work:
- * a callback must return promptly and must not throw. There is no waiting API because retirement may
- * require render-thread progress.
+ * implementation-selected callback thread. A callback must return promptly and must not throw. Retirement
+ * may require render-thread progress, so callers must use callbacks instead of blocking waits.
  *
  * @param <O> the operation type of the channel this batch is submitted to
  */

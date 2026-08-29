@@ -15,7 +15,7 @@ import java.util.Objects;
  * {@code VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR} and
  * {@code VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT} usage.
  *
- * <p>The position ABI is deliberately fixed: each vertex begins with three little-endian IEEE-754
+ * <p>The position ABI requires each vertex to begin with three little-endian IEEE-754
  * {@code float32} components at {@link Stream#byteOffset()}, in mesh-local coordinates. The
  * stride may include trailing source-owned attributes, but the acceleration build reads only those twelve
  * bytes. Indices are tightly packed little-endian unsigned 32-bit values. Every referenced index is less

@@ -21,11 +21,11 @@ import java.util.function.Consumer;
  * the addition's retirement callback is scheduled.
  * A ticket still pending when its contribution begins teardown becomes {@link State#CANCELLED}.
  *
- * <p>There is deliberately no wait method. Compilation completion can depend on render-thread progress,
- * so blocking that thread would deadlock. {@link #whenComplete} registers once and returns immediately.
+ * <p>Observe completion with {@link #whenComplete}; compilation may require render-thread progress and must
+ * not be awaited by blocking that thread.
  * Completion callbacks from one session are serialized in completion order on an implementation-selected
  * callback thread, never assumed to be the render thread. If already complete, the implementation schedules
- * the callback rather than invoking extension code inline. A callback must return promptly and must not
+ * the callback without invoking extension code inline. A callback must return promptly and must not
  * throw; one callback cannot prevent later notifications. Every accepted ticket reaches exactly one
  * terminal state, and callbacks registered before contribution teardown return before
  * {@code RenderSessionContribution.close()} begins.

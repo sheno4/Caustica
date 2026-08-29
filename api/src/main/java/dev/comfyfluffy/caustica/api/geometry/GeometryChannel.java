@@ -11,21 +11,15 @@ import java.util.Objects;
 /**
  * Retained meshes and their placements, reached from {@link RenderSessionContext#geometry()}.
  *
- * <p>One collection, renderer-owned. Extensions do not get their own — ids are issued, so they cannot
- * collide, and there is nothing for a per-source namespace to protect. A {@link SceneId} is not a
- * namespace either: it is where a placement <em>is</em>, not who submitted it, and several sources fill one
- * scene. Thread-safe and long-lived: submit from a chunk-build worker, an entity tick, or the render
- * thread.
+ * <p>The renderer owns one collection per session and issues collision-free ids. A {@link SceneId} selects
+ * a placement's target scene. The channel is thread-safe and may be used from worker, tick, or render
+ * threads.
  *
- * <p><b>A mesh belongs to no scene.</b> It is an acceleration-structure input, and a build does not know
- * which top-level structure will reference it; only {@link SetInstance} names a scene. So a model placed in
- * two scenes is built once.
+ * <p>Meshes are session-scoped acceleration-structure inputs. Only {@link SetInstance} assigns a scene, so
+ * one mesh may be placed in multiple scenes.
  *
- * <p><b>The renderer never clears the collection.</b> Retained objects persist until whoever submitted them
- * drops them, so one extension reloading cannot disturb another's. There is deliberately no "clear
- * everything" call: a source drops the ids it holds, which is exactly the bookkeeping it already has. The
- * placements are also removed when their target scene closes, and everything remaining is removed by the
- * owning session scope.
+ * <p>Retained objects persist until their owner drops them. Placements are also removed when their target
+ * scene closes, and the session removes all remaining objects during teardown.
  */
 public interface GeometryChannel {
     /**
@@ -41,30 +35,24 @@ public interface GeometryChannel {
     /**
      * Apply one atomic batch of operations.
      *
-     * <p>A batch may span scenes. That is the point of batching over one collection rather than one per
-     * scene: two placements that must not be seen apart — the two sides of a linked pair, a model handed
-     * from one scene to another — publish together.
+     * <p>A batch may span scenes. Use one batch for placements that must become visible together.
      *
-     * <p><b>Validation is synchronous.</b> Every way a batch can be invalid — an unknown or stale id, a
+     * <p>Validation is synchronous. Invalid input includes an unknown or stale id, a
      * placement naming a mesh that neither exists nor is created earlier in the same batch, a placement
      * naming a scene that was never issued or has been dropped, a shader-data token which does not match
      * the schema carried by its program or mesh id, a mesh naming a surface or volume outside its own
      * contribution, cutout geometry naming a surface with no coverage implementation, a malformed
-     * build — is decided before this returns, and throws. A mesh, its
+     * build. Validation completes before this method returns. A mesh, its
      * placements, and its shading programs belong to one contribution scope; {@link SceneId} is the
-     * deliberate cross-contribution reference. Nothing is applied if anything throws.
+     * supported cross-contribution reference. Nothing is applied if anything throws.
      *
      * <p>See {@link RetainedBatch} for what a batch guarantees, how to choose its granularity, and how its
      * retirement callback follows the retained data that batch introduces.
      *
-     * <p>Acceptance is deliberately not a callback, because the question it answers is "may I update my own
-     * bookkeeping now". Dropping a mesh and then forgetting the id is only safe if the drop is known to
-     * have been accepted; learning that asynchronously would mean either holding every id until a callback
-     * or orphaning meshes whose batch was refused.
+     * <p>Acceptance is synchronous, so callers may update their bookkeeping after this method returns.
      *
-     * <p>A failure the renderer only discovers later — an acceleration build that fails on the GPU — is not
-     * reported here. The mesh does not appear and its batch's retirement runs, so the source reclaims its
-     * buffers the same way it would for any other release.
+     * <p>Asynchronous GPU build failures are not reported by this method. A failed mesh remains unpublished,
+     * and its batch's retirement callback runs after its buffers are no longer in use.
      *
      * @throws IllegalArgumentException if any operation names an id this session did not issue, a stale
      *         scene reference, an identity from another render session, a non-scene identity from another
@@ -99,24 +87,19 @@ public interface GeometryChannel {
 
     /**
      * Create or replace one placement of a mesh, in one scene. Setting an instance that already exists
-     * moves it, so there is no separate transform operation; setting it with a different scene moves it
-     * between scenes, because a placement exists in exactly one.
+     * moves it. Setting it with a different scene moves it between scenes; a placement exists in one scene.
      *
      * <p>{@code transform} is expressed in {@code scene}'s coordinate system. Each scene has its own, and
      * the renderer rebases each against its own origin, so a position means nothing without the scene it
      * was submitted with.
      *
      * <p>{@code mask} is the 8-bit ray visibility mask compared against a trace's cull mask. It selects
-     * what a ray sees within a scene and has nothing to do with which scene that is — scene membership is
-     * this operation's {@link SceneId}, so it is not bounded by eight.
+     * what a ray sees within a scene. The {@link SceneId} controls scene membership independently.
      *
      * <p>{@code instanceData} is a typed 64-bit word reaching the selected surface and volume for
-     * this placement only — the last of the implementation, slot-binding, and instance words. It is what lets one mesh
-     * be placed many times and still shade differently: a team colour, an animation frame, a per-chunk
-     * light sample, an index into a buffer the source published. Its schema must be the one carried by the
-     * mesh ID and every shader slot in that mesh; the renderer checks token identity synchronously even
-     * when raw Java types bypass compile-time checking. Without it a source would have to
-     * duplicate the mesh per placement, which defeats the point of placing it.
+     * this placement only. It lets placements of one mesh use different shading data. Its schema must match
+     * the one carried by the mesh ID and every shader slot in that mesh; the renderer checks token identity
+     * synchronously even when raw Java types bypass compile-time checking.
      * The callback of the batch containing this operation follows that word until the placement is replaced,
      * dropped, or removed with its scene.
      *

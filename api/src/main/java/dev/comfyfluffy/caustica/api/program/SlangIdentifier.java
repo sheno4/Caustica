@@ -3,10 +3,7 @@ package dev.comfyfluffy.caustica.api.program;
 import java.util.Objects;
 
 /**
- * Validation for the Slang module and type names an extension contributes to program composition.
- *
- * <p>Here rather than on any one caller because surfaces, coverage, volumes, and environments all name
- * Slang symbols.
+ * Validates Slang module and type names used by program definitions.
  */
 final class SlangIdentifier {
     private SlangIdentifier() {

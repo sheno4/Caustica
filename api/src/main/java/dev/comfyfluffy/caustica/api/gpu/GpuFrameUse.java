@@ -3,10 +3,8 @@ package dev.comfyfluffy.caustica.api.gpu;
 /**
  * Completion reservation for GPU resources referenced by the current frame.
  *
- * <p>The renderer owns the underlying synchronization. This type is deliberately callback-only: waiting
- * on the reservation supplied while its frame is still being recorded would prevent that frame from ever
- * being submitted. The reservation is borrowed with its {@code PassFrame}; register callbacks during the
- * pass callback and do not retain it.
+ * <p>The renderer owns the underlying synchronization. Register callbacks during the pass callback; do not
+ * block on or retain the reservation because its frame has not been submitted yet.
  */
 public interface GpuFrameUse {
     /**

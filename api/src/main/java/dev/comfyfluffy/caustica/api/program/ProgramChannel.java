@@ -4,11 +4,8 @@ import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
 import dev.comfyfluffy.caustica.api.scene.SceneHandle;
 
 /**
- * Everything an extension compiles into one render session's world ray-tracing program.
- *
- * <p>An implementation is not declared once at startup — it is added and dropped at any time, which is what
- * makes switching a feature off mean <em>not present</em> rather than present-but-disabled. There is no gate
- * to consult and no way to name something that is not there.
+ * Manages an extension's contributions to one render session's world ray-tracing program. Implementations
+ * may be added and dropped while the session is live.
  *
  * <h2>Ids are synchronous; compilation is observable without blocking</h2>
  *
@@ -22,14 +19,10 @@ import dev.comfyfluffy.caustica.api.scene.SceneHandle;
  * naming it. Wait for readiness before that replacement when an error environment is unacceptable.</li>
  * </ul>
  *
- * <p>There is no general program batch. Surface, volume, and environment switching already occurs at the
- * external publication boundary that names them.
- *
  * <h2>Recompiles are coalesced by the renderer</h2>
  *
- * Adding or dropping recompiles the world program, which is expensive, but that is not the caller's problem
- * to schedule. The renderer rebuilds at most once per boundary, so a run of additions costs one rebuild —
- * and it coalesces across extensions, which a caller-side batch could never do.
+ * Adding or dropping recompiles the world program. The renderer coalesces accepted changes across
+ * extensions and rebuilds at most once per publication boundary.
  *
  * <p>Each ticket identifies the exact requested composition after its accepted operation. A later accepted
  * operation may coalesce the work and make that exact intermediate composition unnecessary; its ticket then
@@ -41,7 +34,7 @@ import dev.comfyfluffy.caustica.api.scene.SceneHandle;
  * candidate; it does not partially publish additions or removals. Additions introduced by the failed
  * candidate are abandoned, permanently resolve to their fallback, and retire their accepted data. Drops
  * in the failed candidate do not take effect and may be requested again. A later request starts from the
- * last ready composition, so failed source never poisons an unrelated future composition.
+ * last ready composition.
  *
  * <p>All methods are thread-safe. They accept the requested composition change synchronously; compilation
  * and publication proceed asynchronously as the returned ticket describes. Adding a surface or volume

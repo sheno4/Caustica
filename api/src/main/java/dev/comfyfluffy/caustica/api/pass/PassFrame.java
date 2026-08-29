@@ -9,10 +9,8 @@ import org.lwjgl.vulkan.VkCommandBuffer;
  * <p>The command buffer is mid-recording: the engine owns submission and the barriers into and out of each
  * stage, but barriers <em>between one pass's own dispatches</em> are that pass's job.
  *
- * <p>Subtypes add what the stage itself produces — {@link PostEffectFrame} the scene image and the chain,
- * {@link UiFrame} the layer and the camera. A stage that produces nothing
- * for a pass to read takes this type unchanged, which is the honest statement that at that point in the
- * frame there is nothing to offer.
+ * <p>Subtypes expose stage-specific resources: {@link PostEffectFrame} provides the scene image and effect
+ * chain, while {@link UiFrame} provides the UI layer and camera.
  *
  * <p>The frame, command buffer, completion reservation, images, descriptor views, and subtype capabilities
  * are borrowed only for the current {@link Pass#record} invocation on that thread. Do not retain any of
@@ -35,10 +33,7 @@ public interface PassFrame {
     /**
      * The renderer's frame counter, increasing by one per rendered frame.
      *
-     * <p>Here so that two passes of one extension can tell they are in the same frame — anything that must
-     * not change between stages is snapshotted when this value moves. The engine cannot do that snapshotting
-     * itself, since it does not know what the state is, but it is the only thing that knows where a frame
-     * begins.
+     * <p>Use this value to share a stable snapshot across an extension's passes in the same frame.
      */
     long frameIndex();
 
@@ -46,10 +41,8 @@ public interface PassFrame {
      * The resolution the world was traced at this frame, which is not the display resolution: an upscaler
      * reconstructs to display size afterwards.
      *
-     * <p>Per frame rather than announced at a boundary, because there is no boundary that covers it. It
-     * moves when the display resizes, and equally when the upscaler's quality mode changes, which no resize
-     * callback would have fired for. A pass sizing anything to the trace compares this against what it last
-     * built from and rebuilds when it differs.
+     * <p>The value may change after a display resize or an upscaler quality change. Rebuild trace-sized
+     * resources when it differs from the size used to create them.
      */
     int renderWidth();
 

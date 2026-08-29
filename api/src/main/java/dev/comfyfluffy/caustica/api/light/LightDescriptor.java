@@ -3,8 +3,8 @@ package dev.comfyfluffy.caustica.api.light;
 /**
  * One engine-sampled light. Positions and rectangle axes use the target scene's coordinate units; fields
  * explicitly named in metres remain physical. Colours use scene-linear ACEScg and every vector named as a
- * direction or normal is unit length. Custom light emission is intentionally absent until a matching
- * public shader ABI and a demonstrated engine consumer exist.
+ * direction or normal is unit length. The supported light types are {@link Rectangle}, {@link Point},
+ * {@link Spot}, and {@link Distant}.
  */
 public sealed interface LightDescriptor {
 

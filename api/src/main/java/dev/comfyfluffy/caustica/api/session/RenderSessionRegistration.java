@@ -9,9 +9,8 @@ public interface RenderSessionRegistration extends AutoCloseable {
      * callback. Concurrent calls and calls racing ordinary session shutdown have the same single effect; this
      * method is idempotent.
      *
-     * <p>There is deliberately no wait method. Teardown completion can depend on render-thread progress. If
-     * completion observation is added, it must use asynchronously scheduled callbacks and must not invoke
-     * extension code inline.
+     * <p>This API does not expose teardown completion. Teardown may depend on render-thread progress, so
+     * callers must not block the render thread after closing the registration.
      */
     @Override
     void close();

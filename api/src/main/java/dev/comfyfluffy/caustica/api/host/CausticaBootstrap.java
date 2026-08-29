@@ -3,7 +3,7 @@ package dev.comfyfluffy.caustica.api.host;
 import dev.comfyfluffy.caustica.api.CausticaApi;
 import dev.comfyfluffy.caustica.api.session.RenderSessionChannel;
 
-/** Host-adapter bootstrap kept separate from the extension-facing API entry point. */
+/** Creates extension API capabilities for a host adapter. */
 public final class CausticaBootstrap {
     private CausticaBootstrap() {
     }

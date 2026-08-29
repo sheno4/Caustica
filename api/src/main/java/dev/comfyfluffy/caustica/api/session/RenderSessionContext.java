@@ -29,7 +29,7 @@ import dev.comfyfluffy.caustica.api.scene.SceneChannel;
  * </ol>
  *
  * <p>{@link dev.comfyfluffy.caustica.api.scene.SceneId SceneId} and
- * {@link dev.comfyfluffy.caustica.api.program.EnvironmentId EnvironmentId} are deliberately shareable across
+ * {@link dev.comfyfluffy.caustica.api.program.EnvironmentId EnvironmentId} may be shared across
  * contributions within this render session. Other operations may name only identities issued through the same
  * context. The issuer owns mutation and removal; copying an id never extends its lifetime. A shared environment
  * id grants no authority over a scene; only its {@link dev.comfyfluffy.caustica.api.scene.SceneHandle} does.
