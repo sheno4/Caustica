@@ -5,6 +5,8 @@ import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorHeapProperties;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorIndex;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorRange;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorWriter;
+import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
+import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
 import dev.comfyfluffy.caustica.engine.vulkan.descriptor.DescriptorHeapAllocationCore;
 import dev.comfyfluffy.caustica.engine.vulkan.descriptor.DescriptorHeapBinding;
 import dev.comfyfluffy.caustica.engine.vulkan.descriptor.DescriptorHeapKind;
@@ -247,7 +249,8 @@ final class VulkanDescriptorHeap implements GpuDescriptorHeap, DescriptorHeapNat
     private static VkBindHeapInfoEXT bindInfo(DescriptorHeapBinding binding, MemoryStack stack) {
         DescriptorHeapLayout layout = binding.layout();
         return VkBindHeapInfoEXT.calloc(stack).sType$Default()
-                .heapRange(range -> range.address$(binding.storage().deviceAddress()).size(layout.heapSizeBytes()))
+                .heapRange(range -> range.address$(binding.storage().deviceRange().address().value())
+                        .size(layout.heapSizeBytes()))
                 .reservedRangeOffset(0L)
                 .reservedRangeSize(layout.reservedRangeBytes());
     }
@@ -304,22 +307,20 @@ final class VulkanDescriptorHeap implements GpuDescriptorHeap, DescriptorHeapNat
         private final DescriptorHeapKind kind;
         private final long buffer;
         private final long allocation;
-        private final long deviceAddress;
+        private final VulkanDeviceAddressRange deviceRange;
         private final long mappedAddress;
-        private final long sizeBytes;
         private final long allocationSize;
         private final long atomSize;
 
         private NativeStorage(long vma, DescriptorHeapKind kind, long buffer, long allocation,
-                              long deviceAddress, long mappedAddress, long sizeBytes,
+                              VulkanDeviceAddressRange deviceRange, long mappedAddress,
                               long allocationSize, long atomSize) {
             this.vma = vma;
             this.kind = kind;
             this.buffer = buffer;
             this.allocation = allocation;
-            this.deviceAddress = deviceAddress;
+            this.deviceRange = deviceRange;
             this.mappedAddress = mappedAddress;
-            this.sizeBytes = sizeBytes;
             this.allocationSize = allocationSize;
             this.atomSize = atomSize;
         }
@@ -351,13 +352,18 @@ final class VulkanDescriptorHeap implements GpuDescriptorHeap, DescriptorHeapNat
                 try {
                     VkBufferDeviceAddressInfo addressInfo = VkBufferDeviceAddressInfo.calloc(stack)
                             .sType$Default().buffer(buffer);
-                    long deviceAddress = VK12.vkGetBufferDeviceAddress(vk, addressInfo);
-                    layout.validateStorage(deviceAddress, layout.heapSizeBytes());
+                    long rawDeviceAddress = VK12.vkGetBufferDeviceAddress(vk, addressInfo);
+                    if (rawDeviceAddress == 0L) {
+                        throw new IllegalStateException(layout.kind() + " descriptor heap has a null device address");
+                    }
+                    VulkanDeviceAddressRange deviceRange = new VulkanDeviceAddressRange(
+                            new VulkanDeviceAddress(rawDeviceAddress), layout.heapSizeBytes());
+                    layout.validateStorage(deviceRange);
                     if (info.pMappedData() == 0L) {
                         throw new IllegalStateException(layout.kind() + " descriptor heap is not mapped");
                     }
-                    return new NativeStorage(vma, layout.kind(), buffer, allocation, deviceAddress,
-                            info.pMappedData(), layout.heapSizeBytes(), info.size(), atomSize);
+                    return new NativeStorage(vma, layout.kind(), buffer, allocation, deviceRange,
+                            info.pMappedData(), info.size(), atomSize);
                 } catch (Throwable failure) {
                     Vma.vmaDestroyBuffer(vma, buffer, allocation);
                     throw failure;
@@ -366,13 +372,12 @@ final class VulkanDescriptorHeap implements GpuDescriptorHeap, DescriptorHeapNat
         }
 
         @Override public DescriptorHeapKind kind() { return kind; }
-        @Override public long deviceAddress() { return deviceAddress; }
+        @Override public VulkanDeviceAddressRange deviceRange() { return deviceRange; }
         @Override public long mappedAddress() { return mappedAddress; }
-        @Override public long sizeBytes() { return sizeBytes; }
 
         @Override
         public void flush(long byteOffset, long byteSize) {
-            if (byteOffset < 0 || byteSize <= 0 || byteOffset > sizeBytes - byteSize) {
+            if (byteOffset < 0 || byteSize <= 0 || byteOffset > deviceRange.byteSize() - byteSize) {
                 throw new IllegalArgumentException("flush range is outside the descriptor heap");
             }
             long[] range = alignedFlushRange(byteOffset, byteSize, allocationSize, atomSize);

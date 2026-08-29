@@ -1,9 +1,9 @@
 package dev.comfyfluffy.caustica.engine.vulkan.runtime;
 
-import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
-
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorHeap;
+import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
+import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
 import dev.comfyfluffy.caustica.engine.vulkan.VulkanRequiredProfile;
 import dev.comfyfluffy.caustica.spi.vulkan.VulkanQueueRef;
 import dev.comfyfluffy.caustica.spi.vulkan.VulkanRendererBackend;
@@ -304,18 +304,19 @@ public final class VulkanDeviceContext implements GpuDevice {
             allocation = pAlloc.get(0);
             RtDebugLabels.nameBuffer(this, handle, label);
             VkBufferDeviceAddressInfo bdai = VkBufferDeviceAddressInfo.calloc(stack).sType$Default().buffer(handle);
-            long address = VK12.vkGetBufferDeviceAddress(vk, bdai);
-            if (address == 0L) {
+            long rawDeviceAddress = VK12.vkGetBufferDeviceAddress(vk, bdai);
+            if (rawDeviceAddress == 0L) {
                 throw new IllegalStateException(label + " returned a null device address");
             }
-            if (addressAlignment != 0L && (address & (addressAlignment - 1L)) != 0L) {
+            VulkanDeviceAddress deviceAddress = new VulkanDeviceAddress(rawDeviceAddress);
+            if (addressAlignment != 0L && !deviceAddress.isAlignedTo(addressAlignment)) {
                 throw new IllegalStateException(label + " device address 0x"
-                        + Long.toUnsignedString(address, 16) + " is not aligned to " + addressAlignment);
+                        + Long.toUnsignedString(deviceAddress.value(), 16) + " is not aligned to " + addressAlignment);
             }
-            VulkanDiagnostics.registerBuffer(address, size, handle, label);
-            long registeredAddress = address;
+            VulkanDiagnostics.registerBuffer(new VulkanDeviceAddressRange(deviceAddress, size), handle, label);
+            VulkanDeviceAddress registeredAddress = deviceAddress;
             long registeredHandle = handle;
-            return new VmaGpuBuffer(vma, handle, allocation, new VulkanDeviceAddress(address), hostVisible ? info.pMappedData() : 0L,
+            return new VmaGpuBuffer(vma, handle, allocation, deviceAddress, hostVisible ? info.pMappedData() : 0L,
                     size, hostVisible,
                     () -> VulkanDiagnostics.unregisterBuffer(registeredAddress, registeredHandle));
         } catch (Throwable t) {

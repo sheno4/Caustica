@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.vulkan;
 
-
+import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
+import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.Version;
 import org.lwjgl.system.MemoryStack;
@@ -49,8 +50,8 @@ public final class VulkanDiagnostics {
     private static final int MAX_FAULT_RECORDS = 64;
     private static final AtomicBoolean FAULT_REPORTED = new AtomicBoolean();
     private static final ConcurrentHashMap<String, String> IN_FLIGHT = new ConcurrentHashMap<>();
-    private static final ConcurrentSkipListMap<Long, BufferRange> BUFFERS =
-            new ConcurrentSkipListMap<>(Long::compareUnsigned);
+    private static final ConcurrentSkipListMap<VulkanDeviceAddress, BufferRange> BUFFERS =
+            new ConcurrentSkipListMap<>((left, right) -> Long.compareUnsigned(left.value(), right.value()));
     private static volatile boolean deviceFaultRequested;
     private static volatile boolean deviceFaultEnabled;
     private static volatile VkQueue lastCausticaQueue;
@@ -66,10 +67,11 @@ public final class VulkanDiagnostics {
                               String selectedQueues) {
     }
 
-    private record BufferRange(long address, long size, long handle, String label) {
-        boolean contains(long value) {
-            return Long.compareUnsigned(value, address) >= 0
-                    && Long.compareUnsigned(value - address, size) < 0;
+    private record BufferRange(VulkanDeviceAddressRange bytes, long handle, String label) {
+        boolean contains(VulkanDeviceAddress value) {
+            long address = bytes.address().value();
+            return Long.compareUnsigned(value.value(), address) >= 0
+                    && Long.compareUnsigned(value.value() - address, bytes.byteSize()) < 0;
         }
     }
 
@@ -176,13 +178,11 @@ public final class VulkanDiagnostics {
         lastCausticaQueueLabel = label;
     }
 
-    public static void registerBuffer(long address, long size, long handle, String label) {
-        if (address != 0L && size > 0L) {
-            BUFFERS.put(address, new BufferRange(address, size, handle, label));
-        }
+    public static void registerBuffer(VulkanDeviceAddressRange bytes, long handle, String label) {
+        BUFFERS.put(bytes.address(), new BufferRange(bytes, handle, label));
     }
 
-    public static void unregisterBuffer(long address, long handle) {
+    public static void unregisterBuffer(VulkanDeviceAddress address, long handle) {
         BUFFERS.computeIfPresent(address, (ignored, range) -> range.handle == handle ? null : range);
     }
 
@@ -259,7 +259,7 @@ public final class VulkanDiagnostics {
 
     private static void logRuntimeSnapshot() {
         LOGGER.error("Vulkan in-flight state: {}", IN_FLIGHT);
-        long totalBytes = BUFFERS.values().stream().mapToLong(BufferRange::size).sum();
+        long totalBytes = BUFFERS.values().stream().mapToLong(range -> range.bytes().byteSize()).sum();
         LOGGER.error("Caustica live BDA buffers: count={}, bytes={}", BUFFERS.size(), formatBytes(totalBytes));
         long liveAllocator = allocator;
         if (liveAllocator != 0L && memoryHeapCount > 0) {
@@ -314,18 +314,24 @@ public final class VulkanDiagnostics {
     }
 
     private static String resolveBuffer(long address) {
-        var entry = BUFFERS.floorEntry(address);
-        if (entry != null && entry.getValue().contains(address)) {
-            BufferRange range = entry.getValue();
-            return "'" + range.label + "' handle=0x" + Long.toUnsignedString(range.handle, 16)
-                    + " range=0x" + Long.toUnsignedString(range.address, 16) + "+" + range.size
-                    + " offset=" + Long.toUnsignedString(address - range.address);
+        if (address == 0L) {
+            return "unresolved (reported null address)";
         }
-        var next = BUFFERS.ceilingEntry(address);
+        VulkanDeviceAddress reportedAddress = new VulkanDeviceAddress(address);
+        var entry = BUFFERS.floorEntry(reportedAddress);
+        if (entry != null && entry.getValue().contains(reportedAddress)) {
+            BufferRange range = entry.getValue();
+            long rangeAddress = range.bytes().address().value();
+            return "'" + range.label + "' handle=0x" + Long.toUnsignedString(range.handle, 16)
+                    + " range=0x" + Long.toUnsignedString(rangeAddress, 16) + "+" + range.bytes().byteSize()
+                    + " offset=" + Long.toUnsignedString(address - rangeAddress);
+        }
+        var next = BUFFERS.ceilingEntry(reportedAddress);
         String nearest = entry == null ? "none" : "prev='" + entry.getValue().label + "'@0x"
-                + Long.toUnsignedString(entry.getKey(), 16);
+                + Long.toUnsignedString(entry.getKey().value(), 16);
         if (next != null) {
-            nearest += ", next='" + next.getValue().label + "'@0x" + Long.toUnsignedString(next.getKey(), 16);
+            nearest += ", next='" + next.getValue().label + "'@0x"
+                    + Long.toUnsignedString(next.getKey().value(), 16);
         }
         return "unresolved (" + nearest + ")";
     }

@@ -1,5 +1,8 @@
 package dev.comfyfluffy.caustica.engine.vulkan.descriptor;
 
+import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
+import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
+
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -34,10 +37,14 @@ final class DescriptorHeapLayoutTest {
         DescriptorHeapLayout layout = DescriptorHeapLayout.create(
                 DescriptorHeapKind.SAMPLER, 8, 64, 8, 1024, 8, 4);
 
-        layout.validateStorage(0x1000, layout.heapSizeBytes());
+        layout.validateStorage(range(0x1000, layout.heapSizeBytes()));
         assertThrows(IllegalArgumentException.class,
-                () -> layout.validateStorage(0x1008, layout.heapSizeBytes()));
+                () -> layout.validateStorage(range(0x1008, layout.heapSizeBytes())));
         assertThrows(IllegalArgumentException.class,
-                () -> layout.validateStorage(0x1000, layout.heapSizeBytes() - 1));
+                () -> layout.validateStorage(range(0x1000, layout.heapSizeBytes() - 1)));
+    }
+
+    private static VulkanDeviceAddressRange range(long address, long byteSize) {
+        return new VulkanDeviceAddressRange(new VulkanDeviceAddress(address), byteSize);
     }
 }

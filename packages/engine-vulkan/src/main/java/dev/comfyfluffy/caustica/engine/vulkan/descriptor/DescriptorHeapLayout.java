@@ -1,5 +1,7 @@
 package dev.comfyfluffy.caustica.engine.vulkan.descriptor;
 
+import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
+
 /** Byte and slot layout for one bound descriptor heap, including its implementation-reserved prefix. */
 public record DescriptorHeapLayout(
         DescriptorHeapKind kind,
@@ -84,11 +86,11 @@ public record DescriptorHeapLayout(
         return multiplyExact(descriptorStrideBytes, absoluteIndex, "descriptor byte offset overflow");
     }
 
-    public void validateStorage(long deviceAddress, long storageBytes) {
-        if (deviceAddress == 0 || Long.remainderUnsigned(deviceAddress, heapAddressAlignmentBytes) != 0) {
-            throw new IllegalArgumentException("heap device address is null or misaligned");
+    public void validateStorage(VulkanDeviceAddressRange storage) {
+        if (!storage.address().isAlignedTo(heapAddressAlignmentBytes)) {
+            throw new IllegalArgumentException("heap device address is misaligned");
         }
-        if (storageBytes < heapSizeBytes) {
+        if (storage.byteSize() < heapSizeBytes) {
             throw new IllegalArgumentException("heap storage is smaller than the required layout");
         }
     }

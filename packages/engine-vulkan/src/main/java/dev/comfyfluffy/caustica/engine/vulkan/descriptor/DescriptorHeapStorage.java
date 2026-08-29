@@ -1,14 +1,14 @@
 package dev.comfyfluffy.caustica.engine.vulkan.descriptor;
 
+import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
+
 /** Native heap memory supplied by the Vulkan device integration. */
 public interface DescriptorHeapStorage extends AutoCloseable {
     DescriptorHeapKind kind();
 
-    long deviceAddress();
+    VulkanDeviceAddressRange deviceRange();
 
     long mappedAddress();
-
-    long sizeBytes();
 
     void flush(long byteOffset, long byteSize);
 

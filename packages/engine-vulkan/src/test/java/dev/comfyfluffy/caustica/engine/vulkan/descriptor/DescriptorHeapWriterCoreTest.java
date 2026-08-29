@@ -3,6 +3,8 @@ package dev.comfyfluffy.caustica.engine.vulkan.descriptor;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorHeapProperties;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorWriter;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptorKind;
+import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
+import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
 import org.junit.jupiter.api.Test;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VK10;
@@ -28,8 +30,8 @@ final class DescriptorHeapWriterCoreTest {
     @Test
     void validatesOffsetsThenFlushesExactlyOneDescriptorSlot() {
         DescriptorHeapAllocationCore allocations = allocations();
-        RecordingStorage resources = new RecordingStorage(DescriptorHeapKind.RESOURCE, 0x1000, 0x10000, 4096);
-        RecordingStorage samplers = new RecordingStorage(DescriptorHeapKind.SAMPLER, 0x2000, 0x20000, 1024);
+        RecordingStorage resources = resourceStorage();
+        RecordingStorage samplers = samplerStorage();
         RecordingWriter nativeWriter = new RecordingWriter();
         DescriptorHeapWriterCore writer = new DescriptorHeapWriterCore(
                 allocations, resources, samplers, nativeWriter);
@@ -52,8 +54,8 @@ final class DescriptorHeapWriterCoreTest {
         RecordingWriter nativeWriter = new RecordingWriter();
         DescriptorHeapWriterCore writer = new DescriptorHeapWriterCore(
                 allocations,
-                new RecordingStorage(DescriptorHeapKind.RESOURCE, 0x1000, 0x10000, 4096),
-                new RecordingStorage(DescriptorHeapKind.SAMPLER, 0x2000, 0x20000, 1024),
+                resourceStorage(),
+                samplerStorage(),
                 nativeWriter);
         var retired = allocations.allocateResources(1);
         retired.destroy();
@@ -67,8 +69,8 @@ final class DescriptorHeapWriterCoreTest {
     @Test
     void contiguousBatchesUseOneNativeCallAndOneFlush() {
         DescriptorHeapAllocationCore allocations = allocations();
-        RecordingStorage resources = new RecordingStorage(DescriptorHeapKind.RESOURCE, 0x1000, 0x10000, 4096);
-        RecordingStorage samplers = new RecordingStorage(DescriptorHeapKind.SAMPLER, 0x2000, 0x20000, 1024);
+        RecordingStorage resources = resourceStorage();
+        RecordingStorage samplers = samplerStorage();
         RecordingWriter nativeWriter = new RecordingWriter();
         DescriptorHeapWriterCore writer = new DescriptorHeapWriterCore(
                 allocations, resources, samplers, nativeWriter);
@@ -109,8 +111,8 @@ final class DescriptorHeapWriterCoreTest {
         RecordingWriter nativeWriter = new RecordingWriter();
         DescriptorHeapWriterCore writer = new DescriptorHeapWriterCore(
                 allocations,
-                new RecordingStorage(DescriptorHeapKind.RESOURCE, 0x1000, 0x10000, 4096),
-                new RecordingStorage(DescriptorHeapKind.SAMPLER, 0x2000, 0x20000, 1024),
+                resourceStorage(),
+                samplerStorage(),
                 nativeWriter);
         var resources = allocations.allocateResources(2);
         var samplers = allocations.allocateSamplers(2);
@@ -142,8 +144,8 @@ final class DescriptorHeapWriterCoreTest {
         };
         DescriptorHeapWriterCore writer = new DescriptorHeapWriterCore(
                 allocations,
-                new RecordingStorage(DescriptorHeapKind.RESOURCE, 0x1000, 0x10000, 4096),
-                new RecordingStorage(DescriptorHeapKind.SAMPLER, 0x2000, 0x20000, 1024),
+                resourceStorage(),
+                samplerStorage(),
                 nativeWriter);
         var allocation = allocations.allocateResources(1);
         ExecutorService workers = Executors.newFixedThreadPool(2);
@@ -178,27 +180,35 @@ final class DescriptorHeapWriterCoreTest {
                 64, 16, 4096, 1024);
     }
 
+    private static RecordingStorage resourceStorage() {
+        return new RecordingStorage(DescriptorHeapKind.RESOURCE,
+                new VulkanDeviceAddressRange(new VulkanDeviceAddress(0x1000), 4096), 0x10000);
+    }
+
+    private static RecordingStorage samplerStorage() {
+        return new RecordingStorage(DescriptorHeapKind.SAMPLER,
+                new VulkanDeviceAddressRange(new VulkanDeviceAddress(0x2000), 1024), 0x20000);
+    }
+
     private record Flush(long offset, long size) {
     }
 
     private static final class RecordingStorage implements DescriptorHeapStorage {
         private final DescriptorHeapKind kind;
-        private final long deviceAddress;
+        private final VulkanDeviceAddressRange deviceRange;
         private final long mappedAddress;
-        private final long size;
         private final List<Flush> flushes = new ArrayList<>();
 
-        private RecordingStorage(DescriptorHeapKind kind, long deviceAddress, long mappedAddress, long size) {
+        private RecordingStorage(DescriptorHeapKind kind, VulkanDeviceAddressRange deviceRange,
+                                 long mappedAddress) {
             this.kind = kind;
-            this.deviceAddress = deviceAddress;
+            this.deviceRange = deviceRange;
             this.mappedAddress = mappedAddress;
-            this.size = size;
         }
 
         @Override public DescriptorHeapKind kind() { return kind; }
-        @Override public long deviceAddress() { return deviceAddress; }
+        @Override public VulkanDeviceAddressRange deviceRange() { return deviceRange; }
         @Override public long mappedAddress() { return mappedAddress; }
-        @Override public long sizeBytes() { return size; }
         @Override public void flush(long byteOffset, long byteSize) { flushes.add(new Flush(byteOffset, byteSize)); }
         @Override public void close() { }
     }
