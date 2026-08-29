@@ -6,8 +6,6 @@ import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
 import dev.comfyfluffy.caustica.rt.RtRuntime;
 
 public final class VanillaRenderController {
-	public static final VanillaRenderController INSTANCE = new VanillaRenderController();
-
 	private boolean frameStarted;
 	private boolean baseReady;
 	private boolean projectionCaptured;
@@ -21,7 +19,7 @@ public final class VanillaRenderController {
 	private String inactiveReason;
 	private String lastLoggedInactiveReason;
 
-	private VanillaRenderController() {
+	public VanillaRenderController() {
 	}
 
 	public void beginFrame(RenderTarget mainTarget) {
@@ -116,7 +114,7 @@ public final class VanillaRenderController {
 	}
 
 	/** Runtime work switch for per-frame RT work. */
-	public static boolean rtRuntimeWorkRequested() {
+	public boolean rtRuntimeWorkRequested() {
 		return CausticaClientComposition.current().runtime().frameActive();
 	}
 
@@ -124,8 +122,8 @@ public final class VanillaRenderController {
 	 * Whether extraction work can be dropped because RT owns the world. Shared by the extraction-skipping
 	 * mixins, including the loader-specific ones whose injection points differ.
 	 */
-	public static boolean rtOwnsWorldRendering() {
-		return CausticaClientComposition.current().runtime().active() && INSTANCE.replacedVanillaWorldLastFrame();
+	public boolean rtOwnsWorldRendering() {
+		return CausticaClientComposition.current().runtime().active() && replacedVanillaWorldLastFrame();
 	}
 
 	public void markRtFrameResult(boolean success) {

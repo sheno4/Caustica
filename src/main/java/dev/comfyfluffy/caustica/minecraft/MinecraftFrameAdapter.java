@@ -14,7 +14,6 @@ import dev.comfyfluffy.caustica.client.CausticaClientComposition;
 import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
 import dev.comfyfluffy.caustica.minecraft.entity.RtEntities;
 import dev.comfyfluffy.caustica.minecraft.entity.RtEntityTextures;
-import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftVulkanBackend;
 import dev.comfyfluffy.caustica.settings.ResourceId;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.LoadingOverlay;
@@ -29,8 +28,6 @@ import org.joml.Matrix4fc;
 
 /** Converts Minecraft lifecycle and camera state into coherent engine frame inputs. */
 public final class MinecraftFrameAdapter {
-    public static final MinecraftFrameAdapter INSTANCE = new MinecraftFrameAdapter();
-
     private static final double METERS_PER_WORLD_UNIT = 1.0;
     private ClientLevel identifiedLevel;
     private long nextSceneId;
@@ -41,11 +38,10 @@ public final class MinecraftFrameAdapter {
     private final RtEntities entities = new RtEntities(entityTextures);
     private long renderedWorldFrameIndex;
 
-    private MinecraftFrameAdapter() {
+    public MinecraftFrameAdapter() {
     }
 
     public void tickRuntime(Minecraft client) {
-        MinecraftVulkanBackend.installCurrent();
         ClientLevel level = client.level;
         long currentSceneId = identify(level);
         if (!(client.gui.overlay() instanceof LoadingOverlay)) {

@@ -6,10 +6,7 @@ import com.mojang.blaze3d.pipeline.RenderTarget;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vulkan.VulkanDevice;
 import com.mojang.blaze3d.vulkan.VulkanGpuTexture;
-import dev.comfyfluffy.caustica.client.VanillaRenderController;
 import dev.comfyfluffy.caustica.client.CausticaClientComposition;
-import dev.comfyfluffy.caustica.client.WorldRenderScaler;
-import dev.comfyfluffy.caustica.minecraft.MinecraftFrameAdapter;
 import dev.comfyfluffy.caustica.minecraft.MinecraftUiOverlay;
 import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftVulkanBackend;
 import dev.comfyfluffy.caustica.spi.vulkan.VulkanLowLatency;
@@ -56,7 +53,7 @@ public abstract class GameRendererMixin {
 		CausticaClientComposition.current().runtime().beginFrame();
 		// Reflex RENDERSUBMIT_START: render-graph recording begins here; RENDERSUBMIT_END is set at
 		// VulkanGpuSurface.present() HEAD (VulkanGpuSurfaceMixin), just before the real present.
-		MinecraftVulkanBackend backend = MinecraftVulkanBackend.current();
+		MinecraftVulkanBackend backend = CausticaClientComposition.current().vulkanBackend().currentOrNull();
 		VulkanLowLatency lowLatency = backend == null ? null : backend.lowLatency();
 		if (lowLatency != null && lowLatency.active()) {
 			long swapchain = lowLatency.appliedSwapchain();
@@ -77,7 +74,7 @@ public abstract class GameRendererMixin {
 			at = @At(value = "INVOKE",
 					target = "Lnet/minecraft/client/renderer/GameRenderer;renderLevel(Lnet/minecraft/client/DeltaTracker;)V"))
 	private void caustica$beginWorldScale(DeltaTracker deltaTracker, boolean advanceGameTime, CallbackInfo ci) {
-		WorldRenderScaler.INSTANCE.begin(this.mainRenderTarget);
+		CausticaClientComposition.current().renderScaler().begin(this.mainRenderTarget);
 	}
 
 	// Redirect the held-item/hand render into the combined UI overlay. SDR and HDR then feed DLSS-FG the same
@@ -132,7 +129,7 @@ public abstract class GameRendererMixin {
 					target = "Lnet/minecraft/client/renderer/fog/FogRenderer;endFrame()V",
 					shift = At.Shift.AFTER))
 	private void caustica$endWorldScale(DeltaTracker deltaTracker, boolean advanceGameTime, CallbackInfo ci) {
-		WorldRenderScaler.INSTANCE.endSafetyNet(this.mainRenderTarget);
+		CausticaClientComposition.current().renderScaler().endSafetyNet(this.mainRenderTarget);
 	}
 
 	// Capture the frame's camera for the RT composite at the exact point the level projection is built
@@ -143,19 +140,19 @@ public abstract class GameRendererMixin {
 					target = "Lnet/minecraft/client/renderer/ProjectionMatrixBuffer;getBuffer(Lorg/joml/Matrix4f;)Lcom/mojang/blaze3d/buffers/GpuBufferSlice;"),
 			index = 0)
 	private Matrix4f caustica$captureLevelProjection(Matrix4f projection) {
-		if (!VanillaRenderController.rtRuntimeWorkRequested()) {
+		if (!CausticaClientComposition.current().renderController().rtRuntimeWorkRequested()) {
 			return projection;
 		}
 
 		var cameraState = this.gameRenderState().levelRenderState.cameraRenderState;
-		var snapshot = MinecraftFrameAdapter.INSTANCE.capture(
+		var snapshot = CausticaClientComposition.current().frameAdapter().capture(
 				Minecraft.getInstance(), projection, cameraState.viewRotationMatrix,
 				cameraState.pos.x, cameraState.pos.y, cameraState.pos.z);
 		if (snapshot == null) {
 			return projection;
 		}
 		CausticaClientComposition.current().runtime().captureFrame(snapshot);
-		VanillaRenderController.INSTANCE.markProjectionCaptured();
+		CausticaClientComposition.current().renderController().markProjectionCaptured();
 		return projection;
 	}
 
@@ -171,7 +168,7 @@ public abstract class GameRendererMixin {
 					ordinal = 1,
 					shift = At.Shift.AFTER))
 	private void caustica$endWorldScaleBeforeHand(DeltaTracker deltaTracker, CallbackInfo ci) {
-		WorldRenderScaler.INSTANCE.end(this.mainRenderTarget);
+		CausticaClientComposition.current().renderScaler().end(this.mainRenderTarget);
 		if (!CausticaClientComposition.current().runtime().frameActive()) {
 			return;
 		}
@@ -203,7 +200,7 @@ public abstract class GameRendererMixin {
                 ? texture.vkImage() : 0L;
         CausticaClientComposition.current().runtime().captureHudless(mainImage,
                 this.mainRenderTarget.width, this.mainRenderTarget.height,
-                MinecraftFrameAdapter.INSTANCE.captureUiPresentation());
+				CausticaClientComposition.current().frameAdapter().captureUiPresentation());
 		MinecraftUiOverlay.compositeIfUsed();
 	}
 

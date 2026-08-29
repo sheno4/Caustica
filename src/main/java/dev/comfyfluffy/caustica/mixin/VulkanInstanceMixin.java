@@ -3,7 +3,7 @@ package dev.comfyfluffy.caustica.mixin;
 import com.llamalad7.mixinextras.sugar.Local;
 import com.mojang.blaze3d.vulkan.VulkanInstance;
 import dev.comfyfluffy.caustica.CausticaMod;
-import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftDeviceBringup;
+import dev.comfyfluffy.caustica.client.CausticaClientComposition;
 import dev.comfyfluffy.caustica.vulkan.VulkanDiagnostics;
 import java.util.Set;
 import org.lwjgl.vulkan.VkInstanceCreateInfo;
@@ -37,7 +37,7 @@ public abstract class VulkanInstanceMixin {
 			at = @At(value = "INVOKE", target = "Lorg/lwjgl/vulkan/VkApplicationInfo;apiVersion(I)Lorg/lwjgl/vulkan/VkApplicationInfo;"),
 			index = 0)
 	private int caustica$requireVulkan14(int hostVersion) {
-		return MinecraftDeviceBringup.requestInstanceApiVersion();
+		return CausticaClientComposition.current().deviceBringup().requestInstanceApiVersion();
 	}
 
 	@Inject(method = "<init>", at = @At(value = "INVOKE", target = "Ljava/util/Set;size()I"))

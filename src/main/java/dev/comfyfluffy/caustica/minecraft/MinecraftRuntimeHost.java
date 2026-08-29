@@ -7,19 +7,22 @@ import dev.comfyfluffy.caustica.spi.host.RuntimeHost;
 
 /** Minecraft lifecycle and material-policy adapter for the renderer runtime. */
 public final class MinecraftRuntimeHost implements RuntimeHost {
-    public static final MinecraftRuntimeHost INSTANCE = new MinecraftRuntimeHost();
+    private final VanillaRenderController renderController;
+    private final WorldRenderScaler renderScaler;
 
-    private MinecraftRuntimeHost() {
+    public MinecraftRuntimeHost(VanillaRenderController renderController, WorldRenderScaler renderScaler) {
+        this.renderController = java.util.Objects.requireNonNull(renderController, "renderController");
+        this.renderScaler = java.util.Objects.requireNonNull(renderScaler, "renderScaler");
     }
 
     @Override
     public void resetPresentationFailure() {
-        VanillaRenderController.INSTANCE.resetFailureLatch();
+        renderController.resetFailureLatch();
     }
 
     @Override
     public void resetFrameBridge() {
-        WorldRenderScaler.INSTANCE.destroy();
+        renderScaler.destroy();
     }
 
     @Override

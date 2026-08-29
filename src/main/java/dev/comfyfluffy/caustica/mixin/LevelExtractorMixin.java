@@ -2,7 +2,6 @@ package dev.comfyfluffy.caustica.mixin;
 
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
-import dev.comfyfluffy.caustica.client.VanillaRenderController;
 import dev.comfyfluffy.caustica.client.CausticaClientBootstrap;
 import dev.comfyfluffy.caustica.client.CausticaClientComposition;
 import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
@@ -91,7 +90,7 @@ public class LevelExtractorMixin {
     @Inject(method = "extractVisibleEntities", at = @At("HEAD"), cancellable = true)
     private void caustica$skipVanillaEntityExtraction(Camera camera, Frustum frustum, DeltaTracker deltaTracker,
             LevelRenderState output, CallbackInfo ci) {
-        if (VanillaRenderController.rtOwnsWorldRendering()) {
+        if (CausticaClientComposition.current().renderController().rtOwnsWorldRendering()) {
             ci.cancel();
         }
     }
@@ -114,7 +113,7 @@ public class LevelExtractorMixin {
                             + "Lnet/minecraft/client/Camera;F)V"))
     private void caustica$skipVanillaParticleExtraction(ParticleEngine engine, ParticlesRenderState particles,
             Frustum frustum, Camera camera, float partialTick, Operation<Void> original) {
-        if (!VanillaRenderController.rtOwnsWorldRendering()) {
+        if (!CausticaClientComposition.current().renderController().rtOwnsWorldRendering()) {
             original.call(engine, particles, frustum, camera, partialTick);
         }
     }
@@ -133,7 +132,7 @@ public class LevelExtractorMixin {
                             + "Lnet/minecraft/client/renderer/state/level/WeatherRenderState;)V"))
     private void caustica$skipVanillaWeatherExtraction(WeatherEffectRenderer renderer, ClientLevel level,
             float partialTicks, Vec3 cameraPos, WeatherRenderState state, Operation<Void> original) {
-        if (!VanillaRenderController.rtOwnsWorldRendering()) {
+        if (!CausticaClientComposition.current().renderController().rtOwnsWorldRendering()) {
             original.call(renderer, level, partialTicks, cameraPos, state);
         }
     }

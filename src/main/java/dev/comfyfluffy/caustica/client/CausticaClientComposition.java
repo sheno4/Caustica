@@ -1,6 +1,10 @@
 package dev.comfyfluffy.caustica.client;
 
 import dev.comfyfluffy.caustica.minecraft.MinecraftApiBootstrap;
+import dev.comfyfluffy.caustica.minecraft.MinecraftFrameAdapter;
+import dev.comfyfluffy.caustica.minecraft.MinecraftRuntimeHost;
+import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftDeviceBringup;
+import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftVulkanBackend;
 import dev.comfyfluffy.caustica.rt.RtRuntime;
 
 import java.util.Objects;
@@ -11,10 +15,25 @@ public final class CausticaClientComposition {
 
     private final RtRuntime runtime;
     private final MinecraftApiBootstrap.ApiServices apiServices;
+    private final MinecraftFrameAdapter frameAdapter;
+    private final MinecraftRuntimeHost runtimeHost;
+    private final VanillaRenderController renderController;
+    private final WorldRenderScaler renderScaler;
+    private final MinecraftDeviceBringup deviceBringup;
+    private final MinecraftVulkanBackend vulkanBackend;
 
-    public CausticaClientComposition(RtRuntime runtime, MinecraftApiBootstrap.ApiServices apiServices) {
+    public CausticaClientComposition(RtRuntime runtime, MinecraftApiBootstrap.ApiServices apiServices,
+                                     MinecraftFrameAdapter frameAdapter, MinecraftRuntimeHost runtimeHost,
+                                     VanillaRenderController renderController, WorldRenderScaler renderScaler,
+                                     MinecraftDeviceBringup deviceBringup, MinecraftVulkanBackend vulkanBackend) {
         this.runtime = Objects.requireNonNull(runtime, "runtime");
         this.apiServices = Objects.requireNonNull(apiServices, "apiServices");
+        this.frameAdapter = Objects.requireNonNull(frameAdapter, "frameAdapter");
+        this.runtimeHost = Objects.requireNonNull(runtimeHost, "runtimeHost");
+        this.renderController = Objects.requireNonNull(renderController, "renderController");
+        this.renderScaler = Objects.requireNonNull(renderScaler, "renderScaler");
+        this.deviceBringup = Objects.requireNonNull(deviceBringup, "deviceBringup");
+        this.vulkanBackend = Objects.requireNonNull(vulkanBackend, "vulkanBackend");
     }
 
     public RtRuntime runtime() {
@@ -23,6 +42,19 @@ public final class CausticaClientComposition {
 
     public MinecraftApiBootstrap.ApiServices apiServices() {
         return apiServices;
+    }
+
+    public MinecraftFrameAdapter frameAdapter() { return frameAdapter; }
+    public MinecraftRuntimeHost runtimeHost() { return runtimeHost; }
+    public VanillaRenderController renderController() { return renderController; }
+    public WorldRenderScaler renderScaler() { return renderScaler; }
+    public MinecraftDeviceBringup deviceBringup() { return deviceBringup; }
+    public MinecraftVulkanBackend vulkanBackend() { return vulkanBackend; }
+
+    /** Advances client integration after the renderer backend has observed Minecraft's live device. */
+    public void tickRuntime(net.minecraft.client.Minecraft client) {
+        vulkanBackend.installCurrent();
+        frameAdapter.tickRuntime(client);
     }
 
     public static synchronized void publish(CausticaClientComposition composition) {

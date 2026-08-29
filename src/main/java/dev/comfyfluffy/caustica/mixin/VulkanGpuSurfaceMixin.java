@@ -11,7 +11,6 @@ import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftHdr;
 import dev.comfyfluffy.caustica.rt.RtRuntime;
 import dev.comfyfluffy.caustica.client.CausticaClientComposition;
-import dev.comfyfluffy.caustica.minecraft.MinecraftFrameAdapter;
 import dev.comfyfluffy.caustica.minecraft.MinecraftUiOverlay;
 import dev.comfyfluffy.caustica.minecraft.MinecraftVulkanImageBorrow;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
@@ -241,7 +240,7 @@ public abstract class VulkanGpuSurfaceMixin {
 					target = "Lorg/lwjgl/vulkan/KHRSwapchain;vkCreateSwapchainKHR(Lorg/lwjgl/vulkan/VkDevice;Lorg/lwjgl/vulkan/VkSwapchainCreateInfoKHR;Lorg/lwjgl/vulkan/VkAllocationCallbacks;Ljava/nio/LongBuffer;)I"))
 	private int caustica$createSwapchainWithReflex(VkDevice device, VkSwapchainCreateInfoKHR pCreateInfo,
 			VkAllocationCallbacks pAllocator, LongBuffer pSwapchain) {
-		MinecraftVulkanBackend backend = MinecraftVulkanBackend.current();
+		MinecraftVulkanBackend backend = CausticaClientComposition.current().vulkanBackend().currentOrNull();
 		if (backend == null || !backend.capabilities().lowLatency()) {
 			return KHRSwapchain.vkCreateSwapchainKHR(device, pCreateInfo, pAllocator, pSwapchain);
 		}
@@ -263,7 +262,7 @@ public abstract class VulkanGpuSurfaceMixin {
 	@Inject(method = "configure", at = @At("TAIL"))
 	private void caustica$applySwapchainExtensionState(GpuSurface.Configuration config, CallbackInfo ci) {
 		caustica$applyHdrMetadataIfNeeded();
-		MinecraftVulkanBackend backend = MinecraftVulkanBackend.current();
+		MinecraftVulkanBackend backend = CausticaClientComposition.current().vulkanBackend().currentOrNull();
 		if (backend != null && backend.capabilities().lowLatency()) {
 			backend.lowLatency().applySleepMode(this.device.vkDevice(), this.swapchain);
 		}
@@ -290,7 +289,7 @@ public abstract class VulkanGpuSurfaceMixin {
 			at = @At(value = "INVOKE",
 					target = "Lorg/lwjgl/vulkan/KHRSwapchain;vkQueuePresentKHR(Lorg/lwjgl/vulkan/VkQueue;Lorg/lwjgl/vulkan/VkPresentInfoKHR;)I"))
 	private int caustica$presentWithReflex(VkQueue queue, VkPresentInfoKHR presentInfo) {
-		MinecraftVulkanBackend backend = MinecraftVulkanBackend.current();
+		MinecraftVulkanBackend backend = CausticaClientComposition.current().vulkanBackend().currentOrNull();
 		VulkanLowLatency lowLatency = backend == null ? null : backend.lowLatency();
 		boolean reflexActive = lowLatency != null && lowLatency.active()
 				&& this.swapchain == lowLatency.appliedSwapchain();
@@ -346,7 +345,7 @@ public abstract class VulkanGpuSurfaceMixin {
 		if (CausticaClientComposition.current().runtime().isHdrPresentActive()) {
 			VulkanCommandEncoder enc = (VulkanCommandEncoder) commandEncoder;
 			GraphicsSubmission submission = MinecraftVulkanBackend.wrap(enc);
-			UiPresentationResources ui = MinecraftFrameAdapter.INSTANCE.captureUiPresentation();
+			UiPresentationResources ui = CausticaClientComposition.current().frameAdapter().captureUiPresentation();
 			presentation.presentHdr(submission, swapchainImage, this.swapchainWidth, this.swapchainHeight,
 					acquireSem, presentSem, ui);
 			if (ui.populated() && ui.colorView() != 0L) {
@@ -382,7 +381,7 @@ public abstract class VulkanGpuSurfaceMixin {
 
 	@Unique
 	private void caustica$applyHdrMetadataIfNeeded() {
-		MinecraftVulkanBackend backend = MinecraftVulkanBackend.current();
+		MinecraftVulkanBackend backend = CausticaClientComposition.current().vulkanBackend().currentOrNull();
 		if (this.caustica$colorSpace != VK_COLOR_SPACE_HDR10_ST2084_EXT || backend == null
 				|| !backend.capabilities().hdrMetadata() || this.swapchain == 0L) {
 			return;
@@ -427,7 +426,7 @@ public abstract class VulkanGpuSurfaceMixin {
 				this.swapchain, this.swapchainImages.toLongArray(), this.presentSemaphores,
 				this.swapchainWidth, this.swapchainHeight,
 				srcView, srcImage, false,
-				MinecraftFrameAdapter.INSTANCE.captureUiPresentation());
+				CausticaClientComposition.current().frameAdapter().captureUiPresentation());
 	}
 
 	/**

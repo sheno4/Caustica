@@ -2,7 +2,6 @@ package dev.comfyfluffy.caustica.mixin;
 
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
-import dev.comfyfluffy.caustica.client.VanillaRenderController;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderDispatcher;
 import net.minecraft.client.renderer.blockentity.state.BlockEntityRenderState;
 import net.minecraft.client.renderer.culling.Frustum;
@@ -36,7 +35,7 @@ public class NeoForgeLevelExtractorBlockEntityMixin {
             BlockEntityRenderDispatcher dispatcher, BlockEntity blockEntity, float partialTicks,
             ModelFeatureRenderer.CrumblingOverlay breakProgress, boolean isGloballyRendered, Frustum frustum,
             Operation<BlockEntityRenderState> original) {
-        return VanillaRenderController.rtOwnsWorldRendering()
+        return dev.comfyfluffy.caustica.client.CausticaClientComposition.current().renderController().rtOwnsWorldRendering()
                 ? null
                 : original.call(dispatcher, blockEntity, partialTicks, breakProgress, isGloballyRendered,
                         frustum);

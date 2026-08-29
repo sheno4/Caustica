@@ -4,7 +4,6 @@ import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vulkan.VulkanDevice;
 
 import dev.comfyfluffy.caustica.client.CausticaClientComposition;
-import dev.comfyfluffy.caustica.minecraft.MinecraftFrameAdapter;
 import dev.comfyfluffy.caustica.minecraft.MinecraftUiOverlay;
 import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftVulkanBackend;
 import dev.comfyfluffy.caustica.spi.vulkan.VulkanLowLatency;
@@ -41,7 +40,7 @@ public abstract class MinecraftMixin {
 	// to frame rate and place session/resize work ahead of the Reflex sleep below.
 	@Inject(method = "tick", at = @At("HEAD"))
 	private void caustica$tickRuntime(CallbackInfo ci) {
-		MinecraftFrameAdapter.INSTANCE.tickRuntime((Minecraft) (Object) this);
+		CausticaClientComposition.current().tickRuntime((Minecraft) (Object) this);
 	}
 
 	@Inject(method = "runTick", at = @At("HEAD"))
@@ -71,7 +70,7 @@ public abstract class MinecraftMixin {
 	}
 
 	private static VulkanLowLatency caustica$lowLatency() {
-		MinecraftVulkanBackend backend = MinecraftVulkanBackend.current();
+		MinecraftVulkanBackend backend = CausticaClientComposition.current().vulkanBackend().currentOrNull();
 		return backend != null && backend.lowLatency().active() ? backend.lowLatency() : null;
 	}
 

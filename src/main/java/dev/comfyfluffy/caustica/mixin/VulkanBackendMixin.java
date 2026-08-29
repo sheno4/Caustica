@@ -11,7 +11,6 @@ import com.mojang.blaze3d.vulkan.VulkanPhysicalDevice;
 import com.mojang.blaze3d.vulkan.init.VulkanFeature;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.engine.vulkan.VulkanRequiredProfile;
-import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftDeviceBringup;
 import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftVulkanDiagnostics;
 import dev.comfyfluffy.caustica.vulkan.VulkanDiagnostics;
 import org.lwjgl.system.MemoryStack;
@@ -111,12 +110,14 @@ public abstract class VulkanBackendMixin {
 			}
 		}
 		MinecraftVulkanDiagnostics.addExtensions(augmented, physicalDevice);
-		MinecraftDeviceBringup.addExtensions(augmented, physicalDevice);
+		dev.comfyfluffy.caustica.client.CausticaClientComposition.current().deviceBringup()
+				.addExtensions(augmented, physicalDevice);
 		args.set(0, augmented);
 
 		caustica$addCoreDeviceFeatures(args, physicalDevice);
 		MinecraftVulkanDiagnostics.addFeatures(args);
-		MinecraftDeviceBringup.addFeatures(args, physicalDevice);
+		dev.comfyfluffy.caustica.client.CausticaClientComposition.current().deviceBringup()
+				.addFeatures(args, physicalDevice);
 		VulkanDiagnostics.logEnabledExtensions(augmented);
 	}
 
@@ -163,7 +164,7 @@ public abstract class VulkanBackendMixin {
 	private void caustica$probeRayTracing(long window, ShaderSource defaultShaderSource, GpuDebugOptions debugOptions,
 			Runnable criticalShaderLoader, CallbackInfoReturnable<GpuDevice> cir, @Local VkDevice device) {
 		VulkanDiagnostics.probe(device);
-		MinecraftDeviceBringup.probe(device);
+		dev.comfyfluffy.caustica.client.CausticaClientComposition.current().deviceBringup().probe(device);
 	}
 
 	@Inject(
@@ -172,6 +173,7 @@ public abstract class VulkanBackendMixin {
 	private static void caustica$augmentDeviceCreateInfo(Collection<String> extensions,
 			VulkanPhysicalDevice physicalDevice, Set<VulkanFeature> features,
 			CallbackInfoReturnable<VkDevice> cir, @Local VkDeviceCreateInfo deviceCreateInfo) {
-		MinecraftDeviceBringup.reserveComputeQueue(deviceCreateInfo, physicalDevice, MemoryStack.stackGet());
+		dev.comfyfluffy.caustica.client.CausticaClientComposition.current().deviceBringup()
+				.reserveComputeQueue(deviceCreateInfo, physicalDevice, MemoryStack.stackGet());
 	}
 }

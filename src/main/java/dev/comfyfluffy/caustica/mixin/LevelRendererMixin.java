@@ -2,7 +2,8 @@ package dev.comfyfluffy.caustica.mixin;
 
 import com.mojang.blaze3d.buffers.GpuBufferSlice;
 import com.mojang.blaze3d.resource.GraphicsResourceAllocator;
-import dev.comfyfluffy.caustica.client.VanillaRenderController;
+import dev.comfyfluffy.caustica.client.CausticaClientComposition;
+import dev.comfyfluffy.caustica.client.CausticaClientComposition;
 import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.renderer.LevelRenderer;
@@ -40,22 +41,22 @@ public abstract class LevelRendererMixin {
 			CallbackInfo ci) {
 		Runnable playerCompiledSectionCallback = this.levelRenderState.playerCompiledSectionCallback;
 		boolean waitingForRtPlayerSection = false;
-		if (VanillaRenderController.rtRuntimeWorkRequested() && playerCompiledSectionCallback != null) {
+		if (CausticaClientComposition.current().renderController().rtRuntimeWorkRequested() && playerCompiledSectionCallback != null) {
 			if (RtTerrain.isSectionReady(cameraState.blockPos)) {
 				playerCompiledSectionCallback.run();
-				VanillaRenderController.INSTANCE.markRtPlayerSectionReady();
+				CausticaClientComposition.current().renderController().markRtPlayerSectionReady();
 			} else {
 				waitingForRtPlayerSection = true;
 			}
 		}
 
-		if (!VanillaRenderController.INSTANCE.shouldCancelLevelRenderer(waitingForRtPlayerSection)) {
+		if (!CausticaClientComposition.current().renderController().shouldCancelLevelRenderer(waitingForRtPlayerSection)) {
 			return;
 		}
 
 		caustica$maintainVanillaSections(cameraState);
 		caustica$drainVanillaGizmos();
-		VanillaRenderController.INSTANCE.markWorldSkipped();
+		CausticaClientComposition.current().renderController().markWorldSkipped();
 		ci.cancel();
 	}
 

@@ -1,7 +1,13 @@
 package dev.comfyfluffy.caustica;
 
 import dev.comfyfluffy.caustica.minecraft.MinecraftApiBootstrap;
+import dev.comfyfluffy.caustica.minecraft.MinecraftFrameAdapter;
+import dev.comfyfluffy.caustica.minecraft.MinecraftRuntimeHost;
 import dev.comfyfluffy.caustica.client.CausticaClientComposition;
+import dev.comfyfluffy.caustica.client.VanillaRenderController;
+import dev.comfyfluffy.caustica.client.WorldRenderScaler;
+import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftDeviceBringup;
+import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftVulkanBackend;
 import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.platform.CausticaPlatform;
 import dev.comfyfluffy.caustica.rt.RtRuntime;
@@ -22,10 +28,17 @@ public final class CausticaMod {
         CausticaConfig.ensureRegistered();
         CausticaConfig.saveIfMissing();
         RtTelemetryImpl telemetry = new RtTelemetryImpl();
-        MinecraftApiBootstrap.ApiServices apiServices = MinecraftApiBootstrap.initialize(platform, telemetry);
+        MinecraftFrameAdapter frameAdapter = new MinecraftFrameAdapter();
+        MinecraftApiBootstrap.ApiServices apiServices = MinecraftApiBootstrap.initialize(platform, telemetry, frameAdapter);
         RtRuntime runtime = new RtRuntime(apiServices.renderSessionHost(), apiServices.minecraftWorldSessionHost(),
                 apiServices.slangRuntime(), apiServices.shaderCacheRoot(), telemetry, apiServices.ngxSettings());
-        CausticaClientComposition.publish(new CausticaClientComposition(runtime, apiServices));
+        VanillaRenderController renderController = new VanillaRenderController();
+        WorldRenderScaler renderScaler = new WorldRenderScaler(renderController);
+        MinecraftRuntimeHost runtimeHost = new MinecraftRuntimeHost(renderController, renderScaler);
+        MinecraftDeviceBringup deviceBringup = new MinecraftDeviceBringup();
+        MinecraftVulkanBackend vulkanBackend = new MinecraftVulkanBackend(deviceBringup, runtime);
+        CausticaClientComposition.publish(new CausticaClientComposition(runtime, apiServices, frameAdapter,
+                runtimeHost, renderController, renderScaler, deviceBringup, vulkanBackend));
         LOGGER.info("Caustica initialized (common); config: {}", CausticaConfig.configPath());
     }
 }

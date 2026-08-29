@@ -27,7 +27,8 @@ import java.util.Optional;
 public final class MinecraftApiBootstrap {
     private MinecraftApiBootstrap() { }
 
-    public static ApiServices initialize(CausticaPlatform platform, RtTelemetry telemetry) {
+    public static ApiServices initialize(CausticaPlatform platform, RtTelemetry telemetry,
+                                         MinecraftFrameAdapter frameAdapter) {
         MinecraftTelemetry.install(telemetry);
         RenderSessionHost host = new RenderSessionHost();
         MinecraftWorldSessionHost minecraftHost = new MinecraftWorldSessionHost();
@@ -40,12 +41,12 @@ public final class MinecraftApiBootstrap {
                 platform.minecraftExtensions(), extensions);
         MinecraftLightingCalibration calibration = MinecraftLightingCalibrationLoader.loadDefault();
         registerMinecraftExtension(minecraftHost, settingsRegistry,
-                new MinecraftProvidersExtension(MinecraftFrameAdapter.INSTANCE::installFrameSelector,
-                        MinecraftFrameAdapter.INSTANCE::installFrameCapture,
+                new MinecraftProvidersExtension(frameAdapter::installFrameSelector,
+                        frameAdapter::installFrameCapture,
                         new MinecraftClientMaterialEpochCompiler(calibration), calibration,
-                        MinecraftFrameAdapter.INSTANCE.entities(),
-                        MinecraftFrameAdapter.INSTANCE.entityTextures(),
-                        MinecraftFrameAdapter.INSTANCE.entities()));
+                        frameAdapter.entities(),
+                        frameAdapter.entityTextures(),
+                        frameAdapter.entities()));
 
         Path gameDirectory = platform.gameDir();
         String configuredSlangPath = CausticaConfig.Slang.PATH.get();

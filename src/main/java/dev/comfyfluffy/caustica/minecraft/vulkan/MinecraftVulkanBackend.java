@@ -6,7 +6,6 @@ import com.mojang.blaze3d.vulkan.VulkanDevice;
 import com.mojang.blaze3d.vulkan.VulkanQueue;
 import dev.comfyfluffy.caustica.mixin.CommandEncoderAccessor;
 import dev.comfyfluffy.caustica.mixin.GpuDeviceAccessor;
-import dev.comfyfluffy.caustica.client.CausticaClientComposition;
 import dev.comfyfluffy.caustica.spi.vulkan.DebugMarkers;
 import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
 import dev.comfyfluffy.caustica.spi.vulkan.VulkanQueueRef;
@@ -18,15 +17,22 @@ import org.lwjgl.vulkan.VkDevice;
 
 /** Adapts Blaze3D's deferred Vulkan encoder and device wrappers to renderer-owned interfaces. */
 public final class MinecraftVulkanBackend implements VulkanRendererBackend {
-    private static MinecraftVulkanBackend current;
-    private final VulkanDevice device;
-    private final VulkanQueueRef graphicsQueue;
-    private final VulkanQueueRef computeQueue;
-    private final DebugMarkers debugMarkers;
-    private final VulkanDeviceCapabilities capabilities;
-    private final VulkanLowLatency lowLatency;
+    private final MinecraftDeviceBringup deviceBringup;
+    private final dev.comfyfluffy.caustica.rt.RtRuntime runtime;
+    private VulkanDevice device;
+    private VulkanQueueRef graphicsQueue;
+    private VulkanQueueRef computeQueue;
+    private DebugMarkers debugMarkers;
+    private VulkanDeviceCapabilities capabilities;
+    private VulkanLowLatency lowLatency;
 
-    private MinecraftVulkanBackend(VulkanDevice device, MinecraftDeviceBringup.NegotiatedDevice negotiated) {
+    public MinecraftVulkanBackend(MinecraftDeviceBringup deviceBringup,
+                                  dev.comfyfluffy.caustica.rt.RtRuntime runtime) {
+        this.deviceBringup = java.util.Objects.requireNonNull(deviceBringup, "deviceBringup");
+        this.runtime = java.util.Objects.requireNonNull(runtime, "runtime");
+    }
+
+    private void initialize(VulkanDevice device, MinecraftDeviceBringup.NegotiatedDevice negotiated) {
         this.device = device;
         VulkanQueue graphics = device.graphicsQueue();
         VulkanQueue compute = new VulkanQueue(device, negotiated.computeQueue().familyIndex(),
@@ -38,19 +44,19 @@ public final class MinecraftVulkanBackend implements VulkanRendererBackend {
         this.lowLatency = new MinecraftLowLatency(capabilities);
     }
 
-    public static void installCurrent() {
-        if (current != null) return;
+    public void installCurrent() {
+        if (device != null) return;
         Object backend = ((GpuDeviceAccessor) RenderSystem.getDevice()).caustica$getBackend();
         if (backend instanceof VulkanDevice device) {
-            MinecraftDeviceBringup.NegotiatedDevice negotiated = MinecraftDeviceBringup.consume(device.vkDevice());
+            MinecraftDeviceBringup.NegotiatedDevice negotiated = deviceBringup.consume(device.vkDevice());
             if (negotiated != null && negotiated.capabilities().rayTracing()) {
-                current = new MinecraftVulkanBackend(device, negotiated);
-                CausticaClientComposition.current().runtime().installVulkanBackend(current);
+                initialize(device, negotiated);
+                runtime.installVulkanBackend(this);
             }
         }
     }
 
-    public static MinecraftVulkanBackend current() { return current; }
+    public MinecraftVulkanBackend currentOrNull() { return device == null ? null : this; }
 
     public static GraphicsSubmission wrap(VulkanCommandEncoder encoder) {
         return new Submission(encoder);

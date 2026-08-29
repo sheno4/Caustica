@@ -18,7 +18,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 final class MinecraftFrameAdapterTest {
     @Test
     void epochLeasePublishesAndRemovesOnlyItsOwnSelection() {
-        MinecraftFrameAdapter adapter = MinecraftFrameAdapter.INSTANCE;
+        MinecraftFrameAdapter adapter = new MinecraftFrameAdapter();
         var binding = ShaderDataType.create("water binding");
         var instance = ShaderDataType.create("water instance");
         SceneId firstScene = new TestScene();

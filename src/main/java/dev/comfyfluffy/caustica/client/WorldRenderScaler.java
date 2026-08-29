@@ -13,18 +13,18 @@ import com.mojang.blaze3d.vulkan.VulkanGpuTexture;
  * {@code -Dcaustica.rt=false} this is an inert passthrough.
  */
 public final class WorldRenderScaler {
-	public static final WorldRenderScaler INSTANCE = new WorldRenderScaler();
-
+	private final VanillaRenderController renderController;
 	// Tracks that the level-render window is open so the safety-net end() does not composite twice.
 	private boolean rtWindowOpen;
 
-	private WorldRenderScaler() {
+	public WorldRenderScaler(VanillaRenderController renderController) {
+		this.renderController = java.util.Objects.requireNonNull(renderController, "renderController");
 	}
 
 	/** Open the level-render window. Called right before level rendering. */
 	public void begin(RenderTarget mainTarget) {
-		VanillaRenderController.INSTANCE.beginFrame(mainTarget);
-		if (VanillaRenderController.INSTANCE.shouldCompositeRt()) {
+		renderController.beginFrame(mainTarget);
+		if (renderController.shouldCompositeRt()) {
 			this.rtWindowOpen = true;
 		}
 	}
@@ -44,14 +44,14 @@ public final class WorldRenderScaler {
 	private void end(RenderTarget mainTarget, boolean beforeHandSeam) {
 		if (this.rtWindowOpen) {
 			this.rtWindowOpen = false;
-			if (!beforeHandSeam && VanillaRenderController.INSTANCE.wasWorldSkippedThisFrame()) {
-				VanillaRenderController.INSTANCE.markMissedBeforeHandSeam();
+			if (!beforeHandSeam && renderController.wasWorldSkippedThisFrame()) {
+				renderController.markMissedBeforeHandSeam();
 				return;
 			}
 			long image = mainTarget.getColorTexture() instanceof VulkanGpuTexture texture ? texture.vkImage() : 0L;
 			boolean success = image != 0L
 					&& CausticaClientComposition.current().runtime().composite(image, mainTarget.width, mainTarget.height);
-			VanillaRenderController.INSTANCE.markRtFrameResult(success);
+			renderController.markRtFrameResult(success);
 		}
 	}
 

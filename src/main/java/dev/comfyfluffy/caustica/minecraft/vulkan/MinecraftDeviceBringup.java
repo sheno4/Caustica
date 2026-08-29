@@ -164,9 +164,9 @@ public final class MinecraftDeviceBringup {
             new ProfileFeature(dev.comfyfluffy.caustica.engine.vulkan.VulkanFeature.RAY_TRACING_PIPELINE, RAY_PIPELINE),
             new ProfileFeature(dev.comfyfluffy.caustica.engine.vulkan.VulkanFeature.RAY_QUERY, RAY_QUERY),
             new ProfileFeature(dev.comfyfluffy.caustica.engine.vulkan.VulkanFeature.RAY_TRACING_POSITION_FETCH, POSITION_FETCH));
-    private static volatile int loaderApiVersion;
-    private static volatile int requestedInstanceApiVersion;
-    private static final Map<Long, Negotiation> NEGOTIATIONS = new HashMap<>();
+    private volatile int loaderApiVersion;
+    private volatile int requestedInstanceApiVersion;
+    private final Map<Long, Negotiation> negotiations = new HashMap<>();
 
     public record NegotiatedDevice(VulkanDeviceCapabilities capabilities, VulkanQueueReservation computeQueue) {
     }
@@ -181,17 +181,18 @@ public final class MinecraftDeviceBringup {
                            boolean presentId, boolean wideLines) {
     }
 
-    private MinecraftDeviceBringup() {
+    public MinecraftDeviceBringup() {
     }
 
     /** Captures the loader version and returns the hard instance version requested from Vulkan. */
-    public static int requestInstanceApiVersion() {
-        return requestInstanceApiVersion(VK.getInstanceVersionSupported());
+    public int requestInstanceApiVersion() {
+        loaderApiVersion = VK.getInstanceVersionSupported();
+        requestedInstanceApiVersion = requestInstanceApiVersion(loaderApiVersion);
+        return requestedInstanceApiVersion;
     }
 
     static int requestInstanceApiVersion(int loaderVersion) {
-        loaderApiVersion = loaderVersion;
-        requestedInstanceApiVersion = REQUIRED_PROFILE.apiVersion();
+        int requestedInstanceApiVersion = REQUIRED_PROFILE.apiVersion();
         VulkanProfileSupport versionSupport = new VulkanProfileSupport(
                 loaderVersion, requestedInstanceApiVersion, requestedInstanceApiVersion,
                 REQUIRED_PROFILE.deviceExtensions(), REQUIRED_PROFILE.features());
@@ -200,11 +201,11 @@ public final class MinecraftDeviceBringup {
         return requestedInstanceApiVersion;
     }
 
-    private static synchronized Negotiation negotiation(VkPhysicalDevice physicalDevice) {
-        return NEGOTIATIONS.computeIfAbsent(physicalDevice.address(), ignored -> new Negotiation());
+    private synchronized Negotiation negotiation(VkPhysicalDevice physicalDevice) {
+        return negotiations.computeIfAbsent(physicalDevice.address(), ignored -> new Negotiation());
     }
 
-    public static void addExtensions(Collection<String> extensions, VulkanPhysicalDevice device) {
+    public void addExtensions(Collection<String> extensions, VulkanPhysicalDevice device) {
         addHdrExtension(extensions, device);
         Support support = querySupport(device);
         requireProfile(support.profile());
@@ -218,7 +219,7 @@ public final class MinecraftDeviceBringup {
         }
     }
 
-    private static void addHdrExtension(Collection<String> extensions, VulkanPhysicalDevice device) {
+    private void addHdrExtension(Collection<String> extensions, VulkanPhysicalDevice device) {
         boolean supported = device.hasDeviceExtension(EXTHdrMetadata.VK_EXT_HDR_METADATA_EXTENSION_NAME);
         negotiation(device.vkPhysicalDevice()).hdrMetadata = supported;
         if (supported) {
@@ -232,7 +233,7 @@ public final class MinecraftDeviceBringup {
     }
 
     @SuppressWarnings("unchecked")
-    public static void addFeatures(Args args, VulkanPhysicalDevice device) {
+    public void addFeatures(Args args, VulkanPhysicalDevice device) {
         Negotiation negotiation = negotiation(device.vkPhysicalDevice());
         negotiation.capabilities = VulkanDeviceCapabilities.unavailable();
         Support support = querySupport(device);
@@ -260,7 +261,7 @@ public final class MinecraftDeviceBringup {
                 device.deviceName(), support.ser(), support.omm(), lowLatency, presentIds, samples);
     }
 
-    public static void reserveComputeQueue(VkDeviceCreateInfo createInfo, VulkanPhysicalDevice device,
+    public void reserveComputeQueue(VkDeviceCreateInfo createInfo, VulkanPhysicalDevice device,
                                            MemoryStack stack) {
         Negotiation negotiation = negotiation(device.vkPhysicalDevice());
         negotiation.computeQueue = reserveComputeQueue(createInfo, device.vkPhysicalDevice(), stack,
@@ -268,7 +269,7 @@ public final class MinecraftDeviceBringup {
     }
 
     /** Validates negotiated entry points and captures device limits before the backend is published. */
-    public static synchronized void probe(VkDevice device) {
+    public synchronized void probe(VkDevice device) {
         Negotiation negotiation = negotiation(device.getPhysicalDevice());
         VulkanDeviceCapabilities old = negotiation.capabilities;
         if (!old.rayTracing()) return;
@@ -315,8 +316,8 @@ public final class MinecraftDeviceBringup {
     }
 
     /** Removes the negotiation result once the matching live backend has captured it. */
-    public static synchronized NegotiatedDevice consume(VkDevice device) {
-        Negotiation negotiation = NEGOTIATIONS.remove(device.getPhysicalDevice().address());
+    public synchronized NegotiatedDevice consume(VkDevice device) {
+        Negotiation negotiation = negotiations.remove(device.getPhysicalDevice().address());
         if (negotiation == null || negotiation.computeQueue == null) return null;
         return new NegotiatedDevice(negotiation.capabilities, negotiation.computeQueue);
     }
@@ -388,7 +389,7 @@ public final class MinecraftDeviceBringup {
         return selected;
     }
 
-    private static Support querySupport(VulkanPhysicalDevice device) {
+    private Support querySupport(VulkanPhysicalDevice device) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkPhysicalDeviceFeatures2 available = VkPhysicalDeviceFeatures2.calloc(stack).sType$Default();
             PROFILE_FEATURES.stream().map(ProfileFeature::device).forEach(
