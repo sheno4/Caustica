@@ -31,6 +31,9 @@ final class SourceDependencyArchitectureTest {
                         "dev.comfyfluffy.caustica.spi.host",
                         "dev.comfyfluffy.caustica.spi.vulkan",
                         "dev.comfyfluffy.caustica.rt"));
+        assertNoImports(List.of(MINECRAFT_RENDERING.resolve("entity")),
+                List.of("dev.comfyfluffy.caustica.spi.host", "dev.comfyfluffy.caustica.spi.vulkan",
+                        "dev.comfyfluffy.caustica.rt", "net.minecraft", "com.mojang"));
     }
 
     @Test

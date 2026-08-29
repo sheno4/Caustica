@@ -6,11 +6,8 @@ import dev.comfyfluffy.caustica.api.geometry.InstanceId;
 import dev.comfyfluffy.caustica.api.geometry.MeshId;
 import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
-import dev.comfyfluffy.caustica.minecraft.program.MinecraftPrograms;
 import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
-import dev.comfyfluffy.caustica.minecraft.api.MinecraftWorldSessionContext;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftWorldSessionContribution;
-import dev.comfyfluffy.caustica.minecraft.material.MinecraftProgramResources;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -29,22 +26,6 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
         this.channel = Objects.requireNonNull(channel, "channel");
         this.scene = Objects.requireNonNull(scene, "scene");
         this.uploader = Objects.requireNonNull(uploader, "uploader");
-    }
-
-    /** Opens and binds the entity producer using program exports borrowed from the core Minecraft contribution. */
-    public static MinecraftEntityGeometry open(MinecraftWorldSessionContext context,
-                                               MinecraftProgramResources resources,
-                                               MinecraftPrograms programs,
-                                               MinecraftEntityUploader.Factory uploaderFactory) {
-        Objects.requireNonNull(context, "context");
-        Objects.requireNonNull(resources, "resources");
-        Objects.requireNonNull(programs, "programs");
-        Objects.requireNonNull(uploaderFactory, "uploaderFactory");
-        MinecraftEntityUploader uploader = uploaderFactory.open(context.renderSession().gpu(), resources, programs);
-        MinecraftEntityGeometry geometry = new MinecraftEntityGeometry(
-                context.renderSession().geometry(), context.scene(), uploader);
-        RtEntities.INSTANCE.bindGeometry(geometry);
-        return geometry;
     }
 
     /** Atomically installs a mesh and its current rigid placement. */
@@ -116,7 +97,6 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
             }
             channel.submit(RetainedBatch.of(operations));
         }
-        RtEntities.INSTANCE.unbindGeometry(this);
         residents.clear();
         stopped = true;
     }
