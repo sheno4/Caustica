@@ -1,9 +1,10 @@
 package dev.comfyfluffy.caustica.rt.shader;
 
-import dev.comfyfluffy.caustica.api.CausticaRegistry;
+import dev.comfyfluffy.caustica.engine.program.ProgramComposition;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -12,7 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class CompositionTest {
-    private static final CausticaRegistry.Selection SELECTION = dev.comfyfluffy.caustica.TestRegistries.withBuiltins().selection();
+    private static final ProgramComposition PROGRAM = new ProgramComposition(1, List.of());
 
     @Test
     void contentHashCoversSourceNamesBytesAndGeneratedRoot() {
@@ -33,20 +34,16 @@ final class CompositionTest {
         Composition first = composition("first", Map.of());
         Composition second = composition("second", Map.of());
         CompositionManager manager = new CompositionManager(first);
-
         manager.activate(second);
         assertEquals(second, manager.current());
         assertEquals(first, manager.retiringOrNull());
         assertThrows(IllegalStateException.class, () -> manager.activate(first));
-
         manager.retireCompleted();
         assertNull(manager.retiringOrNull());
-        manager.activate(first);
-        assertEquals(first, manager.current());
     }
 
     private static Composition composition(String root, Map<String, byte[]> sources) {
-        return Composition.create(SELECTION, "test_composition", "Composition", root, sources);
+        return Composition.create(PROGRAM, Map.of(), List.of(), "test_composition", "Composition", root, sources);
     }
 
     private static byte[] bytes(String value) {

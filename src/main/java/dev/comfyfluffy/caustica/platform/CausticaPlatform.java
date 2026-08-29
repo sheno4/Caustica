@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.platform;
 
 import dev.comfyfluffy.caustica.api.CausticaExtension;
+import dev.comfyfluffy.caustica.minecraft.api.MinecraftExtension;
 import java.nio.file.Path;
 import java.util.List;
 
@@ -11,6 +12,8 @@ public interface CausticaPlatform {
     Path configDir();
 
     List<CausticaExtension> extensions();
+
+    List<MinecraftExtension> minecraftExtensions();
 
     static CausticaPlatform current() {
         return Holder.current;
@@ -40,6 +43,11 @@ public interface CausticaPlatform {
 
         @Override
         public List<CausticaExtension> extensions() {
+            return List.of();
+        }
+
+        @Override
+        public List<MinecraftExtension> minecraftExtensions() {
             return List.of();
         }
     }

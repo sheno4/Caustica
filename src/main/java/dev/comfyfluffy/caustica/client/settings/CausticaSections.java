@@ -2,14 +2,12 @@ package dev.comfyfluffy.caustica.client.settings;
 
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaOptions;
-import dev.comfyfluffy.caustica.api.CausticaRegistry;
-import dev.comfyfluffy.caustica.api.Feature;
-import dev.comfyfluffy.caustica.api.Option;
-import dev.comfyfluffy.caustica.api.Slot;
-import dev.comfyfluffy.caustica.api.Slots;
 import dev.comfyfluffy.caustica.minecraft.MinecraftDisplayText;
+import dev.comfyfluffy.caustica.settings.FeatureSettings;
+import dev.comfyfluffy.caustica.settings.Option;
+import dev.comfyfluffy.caustica.settings.ResourceId;
+import dev.comfyfluffy.caustica.settings.SettingsRegistry;
 import net.minecraft.network.chat.Component;
-import dev.comfyfluffy.caustica.api.ResourceId;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -17,13 +15,10 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Builds the screen's pages from the two stores and the registry. Nothing here knows about widgets, so the
+ * Builds the screen's pages from engine settings and extension settings. Nothing here knows about widgets, so the
  * whole model is exercised in tests without a GUI stack.
  */
 public final class CausticaSections {
-    /** The screen prepends the frame diagram to this section; nothing else distinguishes it. */
-    public static final String COMPOSITION_ID = "composition";
-
     /**
      * Engine groups in the order they appear. Explicit because {@code RuntimeSetting.group()} carries the
      * membership but not the ordering, and a screen that reorders itself between launches is worse than a
@@ -33,7 +28,6 @@ public final class CausticaSections {
             List.of("general", "quality", "upscaling", "exposure", "look", "output", "entities", "debug");
 
     private static final int ACCENT_ENGINE = 0xFF4FC3F7;
-    private static final int ACCENT_COMPOSITION = 0xFFB388FF;
     private static final int ACCENT_BUILTIN = 0xFFFFB74D;
     /**
      * Accents for third-party features, picked by a stable hash so a given extension keeps its colour across
@@ -46,11 +40,10 @@ public final class CausticaSections {
     private CausticaSections() {
     }
 
-    public static List<SettingsSection> build(CausticaRegistry registry, CausticaOptions options) {
+    public static List<SettingsSection> build(SettingsRegistry registry, CausticaOptions options) {
         List<SettingsSection> sections = new ArrayList<>();
         sections.add(engine());
-        sections.add(composition(registry));
-        for (Feature feature : registry.features().values()) {
+        for (FeatureSettings feature : registry.all()) {
             SettingsSection section = feature(feature, options);
             if (section != null) {
                 sections.add(section);
@@ -85,22 +78,8 @@ public final class CausticaSections {
                 ACCENT_ENGINE, groups);
     }
 
-    /**
-     * One group per slot rather than one group of slots: the group title is what names the slot its
-     * candidates belong to, so a page of radio rows stays readable once more than one slot has a choice.
-     */
-    static SettingsSection composition(CausticaRegistry registry) {
-        List<SettingGroup> groups = new ArrayList<>();
-        for (Slot slot : Slots.ALL) {
-            groups.add(new SettingGroup(slot.id().path(), LangKeys.slotLabel(slot), null,
-                    List.of(SlotControls.of(registry, slot))));
-        }
-        return new SettingsSection(COMPOSITION_ID, Component.translatable("caustica.section.composition"),
-                ACCENT_COMPOSITION, groups);
-    }
-
     /** Null for a feature that declares no options — a provider-only extension has nothing to show. */
-    static SettingsSection feature(Feature feature, CausticaOptions options) {
+    static SettingsSection feature(FeatureSettings feature, CausticaOptions options) {
         if (feature.options().isEmpty()) {
             return null;
         }

@@ -3,11 +3,10 @@ package dev.comfyfluffy.caustica.client.settings;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import dev.comfyfluffy.caustica.CausticaConfig;
-import dev.comfyfluffy.caustica.api.CausticaRegistry;
-import dev.comfyfluffy.caustica.api.Feature;
-import dev.comfyfluffy.caustica.api.Option;
-import dev.comfyfluffy.caustica.api.Slot;
-import dev.comfyfluffy.caustica.api.Slots;
+import dev.comfyfluffy.caustica.settings.FeatureSettings;
+import dev.comfyfluffy.caustica.settings.Option;
+import dev.comfyfluffy.caustica.settings.ResourceId;
+import dev.comfyfluffy.caustica.settings.SettingsRegistry;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.contents.TranslatableContents;
 import org.junit.jupiter.api.Test;
@@ -55,7 +54,12 @@ final class LangKeysTest {
     @Test
     void everyDerivedKeyHasAnEnglishEntry() throws IOException {
         JsonObject lang = lang();
-        CausticaRegistry registry = dev.comfyfluffy.caustica.TestRegistries.withBuiltins();
+        SettingsRegistry registry = new SettingsRegistry();
+        registry.feature(ResourceId.of("caustica", "builtin"))
+                .group("bloom")
+                .option(Option.bool("bloom.enabled", true).asGroupHeader("bloom"))
+                .option(Option.range("bloom.strength", 0.35f, 0.0f, 2.0f).inGroup("bloom"))
+                .register();
         CausticaConfig.ensureRegistered();
         List<String> missing = new ArrayList<>();
 
@@ -74,7 +78,7 @@ final class LangKeysTest {
             }
         }
 
-        for (Feature feature : registry.features().values()) {
+        for (FeatureSettings feature : registry.all()) {
             for (Option<?> option : feature.options()) {
                 require(lang, missing, LangKeys.optionLabel(feature.id(), option));
                 require(lang, missing, LangKeys.optionTooltip(feature.id(), option));
@@ -84,17 +88,11 @@ final class LangKeysTest {
             }
         }
 
-        for (Slot slot : Slots.ALL) {
-            require(lang, missing, LangKeys.slotLabel(slot));
-            require(lang, missing, LangKeys.slotTooltip(slot));
-        }
-
         assertTrue(missing.isEmpty(), "missing en_us.json entries: " + missing);
         // Guards against the loops above silently iterating nothing and passing vacuously.
-        assertTrue(checked.size() > 50, "only checked " + checked.size() + " keys");
+        assertTrue(checked.size() > 20, "only checked " + checked.size() + " keys");
         assertTrue(checked.contains("caustica.setting.composite.max-bounces"), checked.toString());
         assertTrue(checked.contains("caustica.option.caustica.builtin.bloom.strength"), checked.toString());
-        assertTrue(checked.contains("caustica.slot.caustica.sky"), checked.toString());
     }
 
     /** The shell's own strings, which no derivation reaches. */
@@ -107,34 +105,12 @@ final class LangKeysTest {
                 "caustica.screen.reset_section", "caustica.screen.close",
                 "caustica.screen.group.expanded", "caustica.screen.group.collapsed",
                 "caustica.nav.engine", "caustica.nav.extensions",
-                "caustica.section.engine", "caustica.section.composition",
-                "caustica.group.other", "caustica.slot.default_suffix")) {
+                "caustica.section.engine", "caustica.group.other")) {
             if (!lang.has(key)) {
                 missing.add(key);
             }
         }
         assertTrue(missing.isEmpty(), "missing en_us.json entries: " + missing);
-    }
-
-    /** Stage and anchor titles are derived from the RenderStage enum, so adding a stage needs a key. */
-    @Test
-    void everyFrameSummaryRowHasATitle() throws IOException {
-        JsonObject lang = lang();
-        List<String> missing = new ArrayList<>();
-        CompositionSummary summary = CompositionSummary.of(dev.comfyfluffy.caustica.TestRegistries.withBuiltins());
-
-        summary.lanes().forEach(lane -> require(lang, missing, lane.title()));
-        summary.providers().forEach(row -> require(lang, missing, row.title()));
-        for (String key : List.of("caustica.summary.title", "caustica.summary.providers",
-                "caustica.summary.none")) {
-            if (!lang.has(key)) {
-                missing.add(key);
-            }
-        }
-
-        assertTrue(missing.isEmpty(), "missing en_us.json entries: " + missing);
-        assertTrue(checked.size() >= dev.comfyfluffy.caustica.api.pass.RenderStage.values().length,
-                "every stage should contribute a lane");
     }
 
     /** Engine group titles come from a list in CausticaSections, not from any setting's own declaration. */

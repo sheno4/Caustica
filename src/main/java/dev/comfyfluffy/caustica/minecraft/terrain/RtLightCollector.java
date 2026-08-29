@@ -1,13 +1,11 @@
 package dev.comfyfluffy.caustica.minecraft.terrain;
 
 import dev.comfyfluffy.caustica.api.ColorSpaces;
-import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftEmissionFootprint;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftMaterialEmission;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 
-import java.util.List;
 
 /**
  * Light-provider input collection. Enumerates a section's emissive terrain quads into a
@@ -66,7 +64,6 @@ final class RtLightCollector {
      * in the opaque class).
      */
     static void collectClass(FloatArrayList out, FloatArrayList verts, FloatArrayList prim,
-                              List<SceneMesh.TriangleSurface> surfaces,
                               FloatArrayList cornerUv, TextureAtlasSprite[] sprites,
                               MinecraftMaterialEmission[] materialEmissions,
                               float minFillRatio) {
@@ -179,8 +176,8 @@ final class RtLightCollector {
             // Rectangle-mean radiance: every emissive sample lies inside the rectangle, so
             // sum/rectSamples preserves the quad's total emissive power at rectArea. luminanceCdM2()
             // is the final Minecraft material luminance after its matching resource rule.
-            // Footprint averages are linear BT.709; triangle tint already crossed the SceneMesh boundary
-            // as ACEScg. Convert the footprint before combining them in the transport basis.
+            // Footprint averages are linear BT.709; terrain extraction stores triangle tint as ACEScg.
+            // Convert the footprint before combining them in the transport basis.
             float[] footprintAcesCg = ColorSpaces.linearBt709ToAcesCg(sumR, sumG, sumB);
             float scale = factor * material.luminanceCdM2() / rectSamples;
             float leR = footprintAcesCg[0] * scale * p[pb + 4];

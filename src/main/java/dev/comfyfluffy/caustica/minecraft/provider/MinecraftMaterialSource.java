@@ -4,7 +4,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import dev.comfyfluffy.caustica.CausticaMod;
-import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.settings.ResourceId;
 import dev.comfyfluffy.caustica.api.provider.MaterialDefinition;
 import dev.comfyfluffy.caustica.api.provider.MaterialHandle;
 import dev.comfyfluffy.caustica.api.provider.MaterialSink;

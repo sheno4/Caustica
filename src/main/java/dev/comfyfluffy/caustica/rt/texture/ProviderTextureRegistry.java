@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.rt.texture;
 
-import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.settings.ResourceId;
 import dev.comfyfluffy.caustica.api.gpu.BorrowedVulkanTexture;
 import dev.comfyfluffy.caustica.api.provider.CpuTextureResource;
 import dev.comfyfluffy.caustica.api.provider.SceneMesh;

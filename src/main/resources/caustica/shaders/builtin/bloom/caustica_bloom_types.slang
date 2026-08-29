@@ -1,6 +1,11 @@
 module caustica_bloom_types;
 
 public struct BloomPush {
+    public uint destinationImageIndex;
+    public uint sourceImageIndex;
+    public uint samplerIndex;
+    public uint exposureImageIndex;
+    public uint sceneImageIndex;
     public int mode;
     public float threshold;
     public float softKnee;

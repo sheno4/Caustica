@@ -26,11 +26,11 @@ import net.minecraft.world.level.block.state.pattern.BlockInWorld;
 import net.minecraft.world.phys.shapes.VoxelShape;
 
 import dev.comfyfluffy.caustica.CausticaConfig;
-import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
 import dev.comfyfluffy.caustica.api.gpu.GpuFrameUse;
-import dev.comfyfluffy.caustica.api.gpu.GpuDebugScope;
-import dev.comfyfluffy.caustica.api.gpu.GpuBuffer;
-import dev.comfyfluffy.caustica.api.gpu.GpuImage;
+import dev.comfyfluffy.caustica.rt.GpuBuffer;
+import dev.comfyfluffy.caustica.rt.GpuContext;
+import dev.comfyfluffy.caustica.rt.GpuImage;
+import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import dev.comfyfluffy.caustica.minecraft.entity.RtEntities;
 import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
 
@@ -70,7 +70,7 @@ final class BlockOutlineFeature implements OverlayFeature {
     private static final float LINE_WIDTH_PX_AT_REFERENCE = 2.0f;
     private static final float REFERENCE_HEIGHT = 1080f;
 
-    private GpuDevice device;
+    private GpuContext device;
     private OverlayPipelines.Pipeline pipeline;
     private OverlayPipelines.AccelStructureSet accelSet;
     private OverlayPipelines.Pipeline compositePipeline;
@@ -84,7 +84,7 @@ final class BlockOutlineFeature implements OverlayFeature {
     private long boundSet;
 
     @Override
-    public boolean prepare(GpuDevice device, OverlayFramePool pool, GpuFrameUse gpuUse,
+    public boolean prepare(GpuContext device, OverlayFramePool pool, GpuFrameUse gpuUse,
                            long tlas, Matrix4fc worldViewProjection, int width, int height) {
         if (!CausticaConfig.Rt.Overlay.BLOCK_OUTLINE_ENABLED.value()) {
             return false;
@@ -175,7 +175,7 @@ final class BlockOutlineFeature implements OverlayFeature {
                 && (itemStack.canBreakBlockInAdventureMode(blockInWorld) || itemStack.canPlaceOnBlockInAdventureMode(blockInWorld));
     }
 
-    private void ensureResources(GpuDevice device, int width, int height) {
+    private void ensureResources(GpuContext device, int width, int height) {
         this.device = device;
         if (pipeline == null) {
             accelSet = OverlayPipelines.accelStructureSet(device, VK10.VK_SHADER_STAGE_FRAGMENT_BIT, "block outline");
@@ -221,7 +221,7 @@ final class BlockOutlineFeature implements OverlayFeature {
     @Override
     public void record(VkCommandBuffer cmd, long targetView, int width, int height) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            try (GpuDebugScope ignored = device.debugScope(cmd, "block outline mask")) {
+            try (RtDebugLabels.Scope ignored = device.debugScope(cmd, "block outline mask")) {
                 WorldOverlayPass.beginMsaaColorRendering(cmd, stack, msaaImage.view(), resolvedMask.view(), width, height);
                 VK10.vkCmdBindPipeline(cmd, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle);
                 VK10.vkCmdBindDescriptorSets(cmd, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.layout, 0,
@@ -245,7 +245,7 @@ final class BlockOutlineFeature implements OverlayFeature {
 
             VulkanCommandEncoder.memoryBarrier(cmd, stack); // resolved mask writes visible to the composite's reads
 
-            try (GpuDebugScope ignored = device.debugScope(cmd, "block outline composite")) {
+            try (RtDebugLabels.Scope ignored = device.debugScope(cmd, "block outline composite")) {
                 WorldOverlayPass.beginColorRendering(cmd, stack, targetView, width, height, false);
                 VK10.vkCmdBindPipeline(cmd, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, compositePipeline.handle);
                 VK10.vkCmdBindDescriptorSets(cmd, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, compositePipeline.layout, 0,

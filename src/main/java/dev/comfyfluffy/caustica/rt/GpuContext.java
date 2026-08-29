@@ -2,7 +2,8 @@ package dev.comfyfluffy.caustica.rt;
 
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
-import dev.comfyfluffy.caustica.api.gpu.GpuDebugScope;
+import dev.comfyfluffy.caustica.api.gpu.GpuDescriptorHeap;
+import dev.comfyfluffy.caustica.engine.vulkan.VulkanRequiredProfile;
 import dev.comfyfluffy.caustica.spi.vulkan.VulkanQueueRef;
 import dev.comfyfluffy.caustica.spi.vulkan.VulkanRendererBackend;
 import dev.comfyfluffy.caustica.vulkan.VulkanDiagnostics;
@@ -16,6 +17,7 @@ import org.lwjgl.util.vma.VmaVulkanFunctions;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VK11;
 import org.lwjgl.vulkan.VK12;
+import org.lwjgl.vulkan.VK13;
 import org.lwjgl.vulkan.VkBufferCreateInfo;
 import org.lwjgl.vulkan.VkBufferDeviceAddressInfo;
 import org.lwjgl.vulkan.VkCommandBuffer;
@@ -27,19 +29,17 @@ import org.lwjgl.vulkan.VkFenceCreateInfo;
 import org.lwjgl.vulkan.VkFormatProperties;
 import org.lwjgl.vulkan.VkImageCreateInfo;
 import org.lwjgl.vulkan.VkImageFormatProperties;
-import org.lwjgl.vulkan.VkImageMemoryBarrier;
 import org.lwjgl.vulkan.VkImageViewCreateInfo;
 import org.lwjgl.vulkan.VkPhysicalDevice;
 import org.lwjgl.vulkan.VkPhysicalDeviceAccelerationStructurePropertiesKHR;
 import org.lwjgl.vulkan.VkPhysicalDeviceDescriptorIndexingProperties;
 import org.lwjgl.vulkan.VkPhysicalDeviceProperties2;
 import org.lwjgl.vulkan.VkPhysicalDeviceRayTracingPipelinePropertiesKHR;
-import org.lwjgl.vulkan.VkSubmitInfo;
-
-import dev.comfyfluffy.caustica.api.gpu.GpuBuffer;
-import dev.comfyfluffy.caustica.api.gpu.GpuImage;
+import org.lwjgl.vulkan.VkCommandBufferSubmitInfo;
+import org.lwjgl.vulkan.VkSubmitInfo2;
 
 import java.nio.LongBuffer;
+import java.nio.ByteBuffer;
 import java.util.function.Consumer;
 
 import static org.lwjgl.vulkan.KHRRayTracingPipeline.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR;
@@ -48,8 +48,8 @@ import static org.lwjgl.vulkan.KHRRayTracingPipeline.VK_STRUCTURE_TYPE_PHYSICAL_
  * Shared per-device GPU resources: a buffer-device-address-enabled VMA allocator (the host's
  * lacks the flag), the graphics queue + a transient command pool for synchronous one-shot
  * submits, and the RT pipeline limits (SBT handle size / alignment). Single owner for the
- * plumbing every RT module needs — and, since {@link dev.comfyfluffy.caustica.api.pass.CausticaRenderPass}
- * hands a narrow device view to every registered pass via {@code PassSetup.device()}, raster passes too.
+ * plumbing every renderer module needs. The public {@link GpuDevice} view exposes only extension-safe
+ * Vulkan allocation and retirement services; renderer resource ownership remains on this concrete type.
  * Obtained lazily via {@link #get}.
  */
 public final class GpuContext implements GpuDevice {
@@ -59,6 +59,7 @@ public final class GpuContext implements GpuDevice {
     private final VulkanRendererBackend host;
     private final VkDevice vk;
     private final long vma;
+    private final VulkanDescriptorHeap descriptorHeap;
     private final VulkanQueueRef graphicsQueue;
     private final VulkanQueueRef computeQueue;
     /** Serializes device-wide host waits against submissions from the Caustica compute thread. */
@@ -72,11 +73,13 @@ public final class GpuContext implements GpuDevice {
     private final long updateAfterBindCombinedImageSamplerLimit;
     private long commandPool;
 
-    private GpuContext(VulkanRendererBackend host, long vma, int handleSize, int baseAlign, int handleAlign,
+    private GpuContext(VulkanRendererBackend host, long vma, VulkanDescriptorHeap descriptorHeap,
+                      int handleSize, int baseAlign, int handleAlign,
                       int maxSbtStride, int scratchAlign, long updateAfterBindCombinedImageSamplerLimit) {
         this.host = host;
         this.vk = host.device();
         this.vma = vma;
+        this.descriptorHeap = descriptorHeap;
         this.graphicsQueue = host.graphicsQueue();
         this.computeQueue = host.computeQueue();
         this.shaderGroupHandleSize = handleSize;
@@ -134,7 +137,7 @@ public final class GpuContext implements GpuDevice {
             VmaAllocatorCreateInfo aci = VmaAllocatorCreateInfo.calloc(stack)
                     .flags(Vma.VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT)
                     .instance(phys.getInstance())
-                    .vulkanApiVersion(VK12.VK_API_VERSION_1_2)
+                    .vulkanApiVersion(VulkanRequiredProfile.VULKAN_1_4)
                     .device(vk)
                     .physicalDevice(phys)
                     .pVulkanFunctions(fns);
@@ -173,9 +176,21 @@ public final class GpuContext implements GpuDevice {
                     Integer.toUnsignedLong(rtProps.maxShaderGroupStride()),
                     asProps.minAccelerationStructureScratchOffsetAlignment(), combinedImageSamplerLimit);
 
-            return new GpuContext(host, pVma.get(0), rtProps.shaderGroupHandleSize(), rtProps.shaderGroupBaseAlignment(),
-                    rtProps.shaderGroupHandleAlignment(), rtProps.maxShaderGroupStride(),
-                    asProps.minAccelerationStructureScratchOffsetAlignment(), combinedImageSamplerLimit);
+            long allocator = pVma.get(0);
+            VulkanDescriptorHeap descriptorHeap = null;
+            try {
+                descriptorHeap = VulkanDescriptorHeap.create(vk, allocator,
+                        host.graphicsQueue().familyIndex(), host.computeQueue().familyIndex());
+                return new GpuContext(host, allocator, descriptorHeap,
+                        rtProps.shaderGroupHandleSize(), rtProps.shaderGroupBaseAlignment(),
+                        rtProps.shaderGroupHandleAlignment(), rtProps.maxShaderGroupStride(),
+                        asProps.minAccelerationStructureScratchOffsetAlignment(), combinedImageSamplerLimit);
+            } catch (Throwable failure) {
+                if (descriptorHeap != null) descriptorHeap.close();
+                VulkanDiagnostics.registerAllocator(0L);
+                Vma.vmaDestroyAllocator(allocator);
+                throw failure;
+            }
         }
     }
 
@@ -196,20 +211,16 @@ public final class GpuContext implements GpuDevice {
         return vk;
     }
 
-    @Override
-    public dev.comfyfluffy.caustica.api.gpu.GpuRasterCapabilities rasterCapabilities() {
+    public GpuRasterCapabilities rasterCapabilities() {
         return host.capabilities().raster();
     }
 
-    @Override
     public void nameObject(int objectType, long handle, String label) {
         RtDebugLabels.name(this, objectType, handle, label);
     }
 
-    @Override
-    public GpuDebugScope debugScope(VkCommandBuffer commandBuffer, String label) {
-        RtDebugLabels.Scope scope = RtDebugLabels.scope(this, commandBuffer, label);
-        return scope::close;
+    public RtDebugLabels.Scope debugScope(VkCommandBuffer commandBuffer, String label) {
+        return RtDebugLabels.scope(this, commandBuffer, label);
     }
 
     public int graphicsQueueFamilyIndex() {
@@ -222,6 +233,31 @@ public final class GpuContext implements GpuDevice {
 
     public long vma() {
         return vma;
+    }
+
+    @Override
+    public long vmaAllocator() {
+        return vma;
+    }
+
+    @Override
+    public GpuDescriptorHeap descriptorHeap() {
+        return descriptorHeap;
+    }
+
+    /** Bind the renderer-owned resource and sampler heaps before heap-native commands are recorded. */
+    public void bindDescriptorHeaps(VkCommandBuffer commandBuffer) {
+        descriptorHeap.bind(commandBuffer);
+    }
+
+    /** Populate descriptor-heap push-data storage without introducing pipeline-layout state. */
+    public void pushData(VkCommandBuffer commandBuffer, int offset, ByteBuffer data) {
+        descriptorHeap.pushData(commandBuffer, offset, data);
+    }
+
+    @Override
+    public void retireAfterUse(Runnable cleanup) {
+        gpuExecutor.retireAfterLatestGraphicsUse(cleanup);
     }
 
     public RtGpuExecutor gpuExecutor() {
@@ -262,7 +298,6 @@ public final class GpuContext implements GpuDevice {
     }
 
     /** Create a VMA buffer; {@code SHADER_DEVICE_ADDRESS} is always added so it has a device address. */
-    @Override
     public GpuBuffer createBuffer(long size, int usage, boolean hostVisible, String label) {
         return createBuffer(size, usage, hostVisible, label, false,
                 hostVisible ? Vma.VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT : 0, 0L);
@@ -361,7 +396,6 @@ public final class GpuContext implements GpuDevice {
      * preserved for the tonemap seam; the world-target copy stays R8G8B8A8 to match the host LDR target
      * for the vkCmdCopyImage round-trip (copy requires texel-size-compatible formats).
      */
-    @Override
     public GpuImage createStorageImage(int width, int height, int format, String label) {
         return createStorageImage(width, height, format, label, 0);
     }
@@ -372,7 +406,6 @@ public final class GpuContext implements GpuDevice {
      * dynamic rendering (a plain storage image is invalid as a {@code VkRenderingInfo} colour attachment;
      * see {@code VUID-VkRenderingInfo-colorAttachmentCount-06087}).
      */
-    @Override
     public GpuImage createStorageImage(int width, int height, int format, String label, int extraUsage) {
         int usage = VK10.VK_IMAGE_USAGE_STORAGE_BIT | VK10.VK_IMAGE_USAGE_SAMPLED_BIT
                 | VK10.VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK10.VK_IMAGE_USAGE_TRANSFER_DST_BIT | extraUsage;
@@ -408,18 +441,29 @@ public final class GpuContext implements GpuDevice {
         long imageFinal = image;
         submitSync(cmd -> {
             try (MemoryStack stack = MemoryStack.stackPush(); RtDebugLabels.Scope ignored = RtDebugLabels.scope(this, cmd, "init " + label)) {
-                VkImageMemoryBarrier.Buffer b = VkImageMemoryBarrier.calloc(1, stack);
-                b.get(0).sType$Default().oldLayout(VK10.VK_IMAGE_LAYOUT_UNDEFINED).newLayout(VK10.VK_IMAGE_LAYOUT_GENERAL)
-                        .srcAccessMask(0).dstAccessMask(VK10.VK_ACCESS_SHADER_READ_BIT | VK10.VK_ACCESS_SHADER_WRITE_BIT
-                                | VK10.VK_ACCESS_TRANSFER_READ_BIT | VK10.VK_ACCESS_TRANSFER_WRITE_BIT)
-                        .srcQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED).dstQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED)
-                        .image(imageFinal);
-                b.get(0).subresourceRange().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).levelCount(1).layerCount(1);
-                VK10.vkCmdPipelineBarrier(cmd, VK10.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK10.VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                        0, null, null, b);
+                long destinationStages = VK13.VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT
+                        | VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
+                        | VK13.VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT
+                        | org.lwjgl.vulkan.KHRSynchronization2.VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+                long destinationAccess = VK13.VK_ACCESS_2_TRANSFER_READ_BIT | VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT
+                        | VK13.VK_ACCESS_2_SHADER_READ_BIT | VK13.VK_ACCESS_2_SHADER_WRITE_BIT;
+                if ((extraUsage & VK10.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) != 0) {
+                    destinationStages |= VK13.VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+                    destinationAccess |= VK13.VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT
+                            | VK13.VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+                }
+                VulkanBarriers.transitionUndefinedImage(cmd, stack, imageFinal,
+                        destinationStages, destinationAccess);
             }
         });
-        return new VmaGpuImage(vma, vk, image, allocation, view, width, height, format);
+        try {
+            return new VmaGpuImage(vma, vk, descriptorHeap, image, allocation, view,
+                    width, height, format, usage, label);
+        } catch (Throwable failure) {
+            VK10.vkDestroyImageView(vk, view, null);
+            Vma.vmaDestroyImage(vma, image, allocation);
+            throw failure;
+        }
     }
 
     private void requireStorageImageSupport(int width, int height, int format, int usage, String label) {
@@ -497,17 +541,19 @@ public final class GpuContext implements GpuDevice {
         long imageFinal = image;
         submitSync(cmd -> {
             try (MemoryStack stack = MemoryStack.stackPush(); RtDebugLabels.Scope ignored = RtDebugLabels.scope(this, cmd, "init " + label)) {
-                VkImageMemoryBarrier.Buffer b = VkImageMemoryBarrier.calloc(1, stack);
-                b.get(0).sType$Default().oldLayout(VK10.VK_IMAGE_LAYOUT_UNDEFINED).newLayout(VK10.VK_IMAGE_LAYOUT_GENERAL)
-                        .srcAccessMask(0).dstAccessMask(VK10.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT)
-                        .srcQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED).dstQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED)
-                        .image(imageFinal);
-                b.get(0).subresourceRange().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT).levelCount(1).layerCount(1);
-                VK10.vkCmdPipelineBarrier(cmd, VK10.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK10.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                        0, null, null, b);
+                VulkanBarriers.transitionUndefinedImage(cmd, stack, imageFinal,
+                        VK13.VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                        VK13.VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
             }
         });
-        return new VmaGpuImage(vma, vk, image, allocation, view, width, height, format);
+        try {
+            return new VmaGpuImage(vma, vk, descriptorHeap, image, allocation, view,
+                    width, height, format, usage, label);
+        } catch (Throwable failure) {
+            VK10.vkDestroyImageView(vk, view, null);
+            Vma.vmaDestroyImage(vma, image, allocation);
+            throw failure;
+        }
     }
 
     /**
@@ -537,8 +583,13 @@ public final class GpuContext implements GpuDevice {
             long fence = pFence.get(0);
             RtDebugLabels.name(this, VK10.VK_OBJECT_TYPE_FENCE, fence, "submitSync fence");
 
-            VkSubmitInfo si = VkSubmitInfo.calloc(stack).sType$Default().pCommandBuffers(stack.pointers(cmd));
-            check(VK10.vkQueueSubmit(graphicsQueue.queue(), si, fence), "vkQueueSubmit");
+            VkCommandBufferSubmitInfo.Buffer command = VkCommandBufferSubmitInfo.calloc(1, stack)
+                    .sType$Default().commandBuffer(cmd);
+            VkSubmitInfo2.Buffer submit = VkSubmitInfo2.calloc(1, stack)
+                    .sType$Default().pCommandBufferInfos(command);
+            synchronized (deviceQueueHostLock) {
+                check(VK13.vkQueueSubmit2(graphicsQueue.queue(), submit, fence), "vkQueueSubmit2");
+            }
             check(VK10.vkWaitForFences(vk, pFence, true, Long.MAX_VALUE), "vkWaitForFences");
 
             VK10.vkDestroyFence(vk, fence, null);
@@ -559,6 +610,7 @@ public final class GpuContext implements GpuDevice {
             VK10.vkDestroyCommandPool(vk, commandPool, null);
             commandPool = 0L;
         }
+        descriptorHeap.close();
         if (vma != 0L) {
             VulkanDiagnostics.registerAllocator(0L);
             Vma.vmaDestroyAllocator(vma);

@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.rt.texture;
 
-import dev.comfyfluffy.caustica.api.gpu.GpuBuffer;
+import dev.comfyfluffy.caustica.rt.GpuBuffer;
 import dev.comfyfluffy.caustica.api.provider.CpuTextureResource;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;

@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.rt.accel;
 
-import dev.comfyfluffy.caustica.api.gpu.GpuBuffer;
+import dev.comfyfluffy.caustica.rt.GpuBuffer;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
@@ -284,6 +284,7 @@ public final class RtAccel {
         // explicitly rather than accel.destroy() doing so.
         private final GpuBuffer externalBacking;
         private final long vertexAddr;
+        private final int vertexStride;
         private final long indexAddr;
         private final int maxVertex;
         private final int triangleCount;
@@ -306,6 +307,7 @@ public final class RtAccel {
         private final int[] retainedClassTriangles; // per-class triangle counts in SBT_CLASSES order (null if !retainedSplit)
         private final boolean externalClassSplit;
         private final int[] externalClassTriangles;
+        private final List<GeometryRange> geometryRanges;
         private final OpacityMicromap opacityMicromap; // optional, retained masked class only
 
         private PreparedBlas(RtAccel accel, GpuBuffer scratch, GpuBuffer externalBacking, long vertexAddr, long indexAddr,
@@ -323,6 +325,7 @@ public final class RtAccel {
             this.scratch = scratch;
             this.externalBacking = externalBacking;
             this.vertexAddr = vertexAddr;
+            this.vertexStride = 3 * Float.BYTES;
             this.indexAddr = indexAddr;
             this.maxVertex = maxVertex;
             this.triangleCount = triangleCount;
@@ -336,7 +339,33 @@ public final class RtAccel {
             this.retainedClassTriangles = retainedClassTriangles;
             this.externalClassSplit = externalClassSplit;
             this.externalClassTriangles = externalClassTriangles;
+            this.geometryRanges = null;
             this.opacityMicromap = opacityMicromap;
+        }
+
+        private PreparedBlas(RtAccel accel, GpuBuffer scratch, GpuBuffer externalBacking,
+                             long vertexAddr, long indexAddr, int maxVertex,
+                             int vertexStride, List<GeometryRange> geometryRanges, String label) {
+            this.accel = accel;
+            this.scratch = scratch;
+            this.externalBacking = externalBacking;
+            this.vertexAddr = vertexAddr;
+            this.vertexStride = vertexStride;
+            this.indexAddr = indexAddr;
+            this.maxVertex = maxVertex;
+            this.triangleCount = geometryRanges.stream().mapToInt(GeometryRange::triangleCount).sum();
+            this.opaque = false;
+            this.label = label;
+            this.updatable = false;
+            this.update = false;
+            this.updateSource = null;
+            this.fastBuild = false;
+            this.retainedSplit = false;
+            this.retainedClassTriangles = null;
+            this.externalClassSplit = false;
+            this.externalClassTriangles = null;
+            this.geometryRanges = List.copyOf(geometryRanges);
+            this.opacityMicromap = null;
         }
 
         /** A retained packed BLAS split into fixed per-class geometries in {@link RtAccel#SBT_CLASSES} order. */
@@ -429,6 +458,20 @@ public final class RtAccel {
      * immutable cached geometry.
      */
     public record PersistentBuild(PreparedBlas op, RtAccel accel, GpuBuffer backing, GpuBuffer scratch) {
+    }
+
+    /** One ordered indexed geometry in a multi-geometry BLAS. */
+    public record GeometryRange(int firstIndex, int indexCount, boolean opaque) {
+        public GeometryRange {
+            if (firstIndex < 0 || firstIndex % 3 != 0) {
+                throw new IllegalArgumentException("firstIndex must be a non-negative triangle boundary");
+            }
+            if (indexCount <= 0 || indexCount % 3 != 0) {
+                throw new IllegalArgumentException("indexCount must contain complete triangles");
+            }
+        }
+
+        public int triangleCount() { return indexCount / 3; }
     }
 
     /** Immutable classified build whose source allocation is replaced by a compact copy before publication. */
@@ -719,6 +762,37 @@ public final class RtAccel {
                                                              long indexAddr, int[] classTriangles, String label) {
         PreparedBlas op = prepareTransientBlas(ctx, vertexAddr, vertexCount, indexAddr, classTriangles, label);
         return new PersistentBuild(op, op.accel, op.externalBacking, op.scratch);
+    }
+
+    /** Prepare a non-updatable persistent BLAS whose Vulkan geometry order matches {@code ranges}. */
+    public static PersistentBuild preparePersistentBlasBuild(GpuContext ctx, long vertexAddr, int vertexStride,
+                                                             int vertexCount, long indexAddr,
+                                                             List<GeometryRange> ranges,
+                                                             String label) {
+        List<GeometryRange> ordered = List.copyOf(ranges);
+        if (ordered.isEmpty()) throw new IllegalArgumentException("a BLAS needs at least one geometry");
+        VkDevice vk = ctx.vk();
+        String debugLabel = labelOr(label, "multi-geometry BLAS");
+        GpuBuffer backing = null;
+        GpuBuffer scratch = null;
+        RtAccel accel = null;
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            VkAccelerationStructureBuildSizesInfoKHR sizes = queryGeometryRangeBlasSizes(vk, stack,
+                    vertexAddr, vertexStride, indexAddr, vertexCount, ordered);
+            backing = ctx.createAsyncBuffer(sizes.accelerationStructureSize(),
+                    VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, false, debugLabel + " backing");
+            scratch = createScratchBuffer(ctx, sizes.buildScratchSize(), debugLabel + " build scratch");
+            accel = createBlasOn(ctx, stack, backing, sizes.accelerationStructureSize(), false,
+                    debugLabel);
+            PreparedBlas op = new PreparedBlas(accel, scratch, backing, vertexAddr, indexAddr,
+                    vertexCount - 1, vertexStride, ordered, debugLabel);
+            return new PersistentBuild(op, accel, backing, scratch);
+        } catch (Throwable failure) {
+            if (accel != null) accel.destroy();
+            if (scratch != null) scratch.destroy();
+            if (backing != null) backing.destroy();
+            throw failure;
+        }
     }
 
     /** Prepare an immutable classified BLAS that writes a compacted-size query after its BUILD. */
@@ -1016,14 +1090,66 @@ public final class RtAccel {
     }
 
     private static void fillTriangleGeometry(VkAccelerationStructureGeometryKHR geom, long vertexAddr, long indexAddr, int vertexCount, boolean opaque) {
+        fillTriangleGeometry(geom, vertexAddr, 3 * Float.BYTES, indexAddr, vertexCount, opaque);
+    }
+
+    private static void fillTriangleGeometry(VkAccelerationStructureGeometryKHR geom, long vertexAddr,
+                                             int vertexStride, long indexAddr, int vertexCount,
+                                             boolean opaque) {
         geom.sType$Default().geometryType(VK_GEOMETRY_TYPE_TRIANGLES_KHR)
                 .flags(opaque ? VK_GEOMETRY_OPAQUE_BIT_KHR : VK_GEOMETRY_NO_DUPLICATE_ANY_HIT_INVOCATION_BIT_KHR);
         var tri = geom.geometry().triangles();
         tri.sType$Default()
-                .vertexFormat(VK10.VK_FORMAT_R32G32B32_SFLOAT).vertexStride(3L * Float.BYTES)
+                .vertexFormat(VK10.VK_FORMAT_R32G32B32_SFLOAT).vertexStride(vertexStride)
                 .maxVertex(vertexCount - 1).indexType(VK10.VK_INDEX_TYPE_UINT32);
         tri.vertexData().deviceAddress(vertexAddr);
         tri.indexData().deviceAddress(indexAddr);
+    }
+
+    private static VkAccelerationStructureGeometryKHR.Buffer geometryRangeGeometries(
+            MemoryStack stack, long vertexAddr, int vertexStride, long indexAddr, int vertexCount,
+            List<GeometryRange> ranges) {
+        VkAccelerationStructureGeometryKHR.Buffer geometries =
+                VkAccelerationStructureGeometryKHR.calloc(ranges.size(), stack);
+        for (int i = 0; i < ranges.size(); i++) {
+            fillTriangleGeometry(geometries.get(i), vertexAddr, vertexStride, indexAddr, vertexCount,
+                    ranges.get(i).opaque());
+        }
+        return geometries;
+    }
+
+    static VkAccelerationStructureBuildRangeInfoKHR.Buffer geometryRangeBuildRanges(
+            MemoryStack stack, List<GeometryRange> ranges) {
+        VkAccelerationStructureBuildRangeInfoKHR.Buffer nativeRanges =
+                VkAccelerationStructureBuildRangeInfoKHR.calloc(ranges.size(), stack);
+        for (int i = 0; i < ranges.size(); i++) {
+            GeometryRange range = ranges.get(i);
+            nativeRanges.get(i).primitiveCount(range.triangleCount())
+                    .primitiveOffset(Math.multiplyExact(range.firstIndex(), Integer.BYTES))
+                    .firstVertex(0).transformOffset(0);
+        }
+        return nativeRanges;
+    }
+
+    private static VkAccelerationStructureBuildSizesInfoKHR queryGeometryRangeBlasSizes(
+            VkDevice vk, MemoryStack stack, long vertexAddr, int vertexStride, long indexAddr,
+            int vertexCount,
+            List<GeometryRange> ranges) {
+        VkAccelerationStructureGeometryKHR.Buffer geometries = geometryRangeGeometries(stack,
+                vertexAddr, vertexStride, indexAddr, vertexCount, ranges);
+        VkAccelerationStructureBuildGeometryInfoKHR.Buffer build =
+                VkAccelerationStructureBuildGeometryInfoKHR.calloc(1, stack);
+        build.get(0).sType$Default().type(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR)
+                .flags(buildFlags(false)).mode(VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR)
+                .geometryCount(geometries.capacity()).pGeometries(geometries);
+        java.nio.IntBuffer maxPrimitives = stack.mallocInt(ranges.size());
+        for (GeometryRange range : ranges) maxPrimitives.put(range.triangleCount());
+        maxPrimitives.flip();
+        VkAccelerationStructureBuildSizesInfoKHR sizes =
+                VkAccelerationStructureBuildSizesInfoKHR.calloc(stack).sType$Default();
+        vkGetAccelerationStructureBuildSizesKHR(vk, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+                build.get(0), maxPrimitives, sizes);
+        return sizes;
     }
 
     /** Fixed class geometry order; empty classes remain present so GeometryIndex/SBT routing is stable. */
@@ -1265,6 +1391,10 @@ public final class RtAccel {
     }
 
     private static void recordBlasBuild(GpuContext ctx, VkCommandBuffer cmd, MemoryStack stack, PreparedBlas b) {
+        if (b.geometryRanges != null) {
+            recordGeometryRangeBlasBuild(ctx, cmd, stack, b);
+            return;
+        }
         if (b.retainedSplit) {
             recordRetainedBlasBuild(ctx, cmd, stack, b);
             return;
@@ -1288,6 +1418,23 @@ public final class RtAccel {
         range.get(0).primitiveCount(b.triangleCount).primitiveOffset(0).firstVertex(0).transformOffset(0);
         PointerBuffer ppRange = stack.mallocPointer(1).put(0, range.address());
         vkCmdBuildAccelerationStructuresKHR(cmd, build, ppRange);
+    }
+
+    private static void recordGeometryRangeBlasBuild(GpuContext ctx, VkCommandBuffer cmd,
+                                                     MemoryStack stack, PreparedBlas b) {
+        VkAccelerationStructureGeometryKHR.Buffer geometries = geometryRangeGeometries(stack,
+                b.vertexAddr, b.vertexStride, b.indexAddr, b.maxVertex + 1, b.geometryRanges);
+        VkAccelerationStructureBuildGeometryInfoKHR.Buffer build =
+                VkAccelerationStructureBuildGeometryInfoKHR.calloc(1, stack);
+        build.get(0).sType$Default().type(VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR)
+                .flags(buildFlags(false)).mode(VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR)
+                .geometryCount(geometries.capacity()).pGeometries(geometries)
+                .dstAccelerationStructure(b.accel.handle);
+        build.get(0).scratchData().deviceAddress(scratchAddress(ctx, b.scratch));
+        VkAccelerationStructureBuildRangeInfoKHR.Buffer ranges =
+                geometryRangeBuildRanges(stack, b.geometryRanges);
+        PointerBuffer ppRanges = stack.mallocPointer(1).put(0, ranges.address());
+        vkCmdBuildAccelerationStructuresKHR(cmd, build, ppRanges);
     }
 
     /** Record the fixed classified geometries as one BUILD or UPDATE. */

@@ -28,7 +28,6 @@ import org.lwjgl.vulkan.VkMemoryBarrier;
 
 import dev.comfyfluffy.caustica.rt.accel.RtAccel;
 import dev.comfyfluffy.caustica.rt.accel.TlasBuilder;
-import dev.comfyfluffy.caustica.api.gpu.GpuBuffer;
 import dev.comfyfluffy.caustica.api.gpu.GpuImage;
 import dev.comfyfluffy.caustica.rt.geometry.RtGeometryMaterialResolution;
 import dev.comfyfluffy.caustica.rt.geometry.RtSceneGeometryManager;
@@ -83,10 +82,6 @@ final class RtFrameRenderer {
 
     private static int maxBounces() {
         return CausticaConfig.Rt.Composite.MAX_BOUNCES.value();
-    }
-
-    private static int packHalf2(float x, float y) {
-        return (Float.floatToFloat16(y) << 16) | (Float.floatToFloat16(x) & 0xffff);
     }
 
     // Modulus of the world-pinned procedural domain anchor. Documented engine constant, not a per-surface
@@ -448,7 +443,7 @@ final class RtFrameRenderer {
             return false;
         }
         try {
-            if (!ensurePresentationResources(ctx, snapshot.sceneId(), width, height)) {
+            if (!ensurePresentationResources(ctx, width, height)) {
                 return false;
             }
             RtPipeline active = ensureWorld(ctx);
@@ -481,7 +476,7 @@ final class RtFrameRenderer {
             return false;
         }
         try {
-            return ensurePresentationResources(ctx, sceneId, width, height);
+            return ensurePresentationResources(ctx, width, height);
         } catch (Throwable t) {
             failed = true;
             CausticaMod.LOGGER.error("RT presentation resource bring-up failed; reverting to host presentation", t);
@@ -489,7 +484,7 @@ final class RtFrameRenderer {
         }
     }
 
-    private boolean ensurePresentationResources(GpuContext ctx, long sceneId, int width, int height)
+    private boolean ensurePresentationResources(GpuContext ctx, int width, int height)
             throws IOException {
         ensureRenderPassManager(ctx);
         frameResources.ensurePresentationPipelines(ctx, LOOK);
@@ -658,15 +653,8 @@ final class RtFrameRenderer {
             int flags = snapshot.proceduralSurfaceAnimationEnabled() ? 0b10000 : 0;
             int cameraMediumIorTransmission = 0;
             Float3 cameraMedium = new Float3(0.0f, 0.0f, 0.0f);
-            FrameSnapshot.CameraMedium frameMedium = snapshot.cameraMedium();
-            if (frameMedium != null) {
-                var materialSnapshot = worldResources.materialEpoch.snapshot();
-                int materialId = materialSnapshot.bindingId(frameMedium.material().id());
-                var material = materialSnapshot.material(materialId);
-                flags |= 0b01 | (material.surfaceImplementation() << 8);
-                cameraMediumIorTransmission = packHalf2(material.specularIor(), material.transmissionWeight());
-                FrameSnapshot.LinearRgb sourceColor = frameMedium.sourceColor();
-                cameraMedium = new Float3(sourceColor.red(), sourceColor.green(), sourceColor.blue());
+            if (snapshot.initialVolume() != null) {
+                throw new IllegalStateException("The world push ABI cannot resolve a typed initial volume");
             }
             float time = (float) (snapshot.timeSeconds() % 3600.0);
             float delta = time - previousProceduralTime;

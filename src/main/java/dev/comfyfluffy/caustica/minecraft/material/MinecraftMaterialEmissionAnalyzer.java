@@ -1,12 +1,13 @@
 package dev.comfyfluffy.caustica.minecraft.material;
 
+import dev.comfyfluffy.caustica.api.geometry.MeshBuild;
 
 /** Scans canonical Minecraft pixels into the fixed emission footprints used by terrain light derivation. */
 final class MinecraftMaterialEmissionAnalyzer {
     static final int FOOTPRINT_RESOLUTION = 16;
 
     record Scan(MinecraftEmissionFootprint masked, MinecraftEmissionFootprint uniform,
-                dev.comfyfluffy.caustica.api.provider.SceneMesh.OpacityMicromapRange opacityRange) {
+                MeshBuild.OpacityMicromapHint opacityHint) {
     }
 
     private MinecraftMaterialEmissionAnalyzer() {
@@ -46,7 +47,7 @@ final class MinecraftMaterialEmissionAnalyzer {
         }
     }
 
-    private static dev.comfyfluffy.caustica.api.provider.SceneMesh.OpacityMicromapRange scanAlpha(
+    private static MeshBuild.OpacityMicromapHint scanAlpha(
             MaterialTextureAnalysisSource source, MaterialTextureImage image) {
         if (source.alphaFrameCount() == 0) return null;
         int minimum = 255;
@@ -60,8 +61,7 @@ final class MinecraftMaterialEmissionAnalyzer {
                 }
             }
         }
-        return new dev.comfyfluffy.caustica.api.provider.SceneMesh.OpacityMicromapRange(
-                minimum / 255.0f, maximum / 255.0f);
+        return new MeshBuild.OpacityMicromapHint(minimum / 255.0f, maximum / 255.0f, 4);
     }
 
     static MinecraftEmissionFootprint constant(float r, float g, float b) {

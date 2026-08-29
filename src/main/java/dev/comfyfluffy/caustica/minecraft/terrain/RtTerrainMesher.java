@@ -4,9 +4,7 @@ import com.mojang.blaze3d.vertex.VertexConsumer;
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.api.ColorSpaces;
 import dev.comfyfluffy.caustica.api.provider.MaterialTopology;
-import dev.comfyfluffy.caustica.api.provider.MaterialHandle;
-import dev.comfyfluffy.caustica.api.provider.SceneMesh;
-import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.settings.ResourceId;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialClassification;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialKey;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftMaterialProfile;
@@ -14,7 +12,7 @@ import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialClassifier;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialSnapshot;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialLookup;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftMaterialEmission;
-import dev.comfyfluffy.caustica.minecraft.provider.MinecraftMaterialSource;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialIds;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
@@ -118,17 +116,43 @@ final class RtTerrainMesher {
 
     private static void collectLights(FloatArrayList out, Geom geom, float minFillRatio) {
         if (geom != null && !geom.idx.isEmpty()) {
-            RtLightCollector.collectClass(out, geom.verts, geom.prim, geom.surfaces, geom.cornerUv,
+            RtLightCollector.collectClass(out, geom.verts, geom.prim, geom.cornerUv,
                     geom.lightSprites.elements(), geom.materialEmissions.elements(), minFillRatio);
         }
     }
 
-    private static SceneMesh packSection(SectionMesh mesh) {
+    private static MinecraftTerrainMesh packSection(SectionMesh mesh) {
         Geom geom = mesh.geometry();
-        return new SceneMesh(java.util.Arrays.copyOf(geom.verts.elements(), geom.verts.size()),
-                java.util.Arrays.copyOf(geom.idx.elements(), geom.idx.size()), SceneMesh.UvLayout.PER_TRIANGLE_CORNER,
-                java.util.Arrays.copyOf(geom.cornerUv.elements(), geom.cornerUv.size()), geom.surfaces,
-                java.util.Set.of(SceneMesh.Semantic.RECEIVES_PROJECTED_SURFACE_MODIFIERS));
+        ArrayList<MinecraftTerrainMesh.Geometry> geometries = new ArrayList<>(geom.surfaces.size());
+        for (int triangle = 0; triangle < geom.surfaces.size(); triangle++) {
+            TerrainSurface surface = geom.surfaces.get(triangle);
+            var material = new MinecraftTerrainMesh.MaterialBinding(
+                    surface.material().material(), surface.material().texture());
+            var coverage = surface.coverage() == Coverage.CUTOUT
+                    ? MinecraftTerrainMesh.Coverage.CUTOUT : MinecraftTerrainMesh.Coverage.OPAQUE;
+            var range = surface.opacityRange();
+            var micromap = range == null ? null : new MinecraftTerrainMesh.OpacityMicromap(
+                    range.transparentAlpha(), range.opaqueAlpha(), 2);
+            var program = surface.material().material().equals(MinecraftMaterialIds.WATER)
+                    ? MinecraftTerrainMesh.ProgramCategory.WATER
+                    : MinecraftTerrainMesh.ProgramCategory.MATERIAL;
+            if (!geometries.isEmpty()) {
+                var previous = geometries.getLast();
+                if (previous.program() == program && previous.coverage() == coverage
+                        && java.util.Objects.equals(previous.opacityMicromap(), micromap)
+                        && previous.material().equals(material)) {
+                    geometries.set(geometries.size() - 1, new MinecraftTerrainMesh.Geometry(program, coverage,
+                            previous.firstIndex(), previous.indexCount() + 3, 0.5f, micromap, material));
+                    continue;
+                }
+            }
+            geometries.add(new MinecraftTerrainMesh.Geometry(program, coverage, triangle * 3, 3,
+                    0.5f, micromap, material));
+        }
+        int[] indices = java.util.Arrays.copyOf(geom.idx.elements(), geom.idx.size());
+        return new MinecraftTerrainMesh(java.util.Arrays.copyOf(geom.verts.elements(), geom.verts.size()), indices,
+                java.util.Arrays.copyOf(geom.cornerUv.elements(), geom.cornerUv.size()),
+                java.util.Arrays.copyOf(geom.prim.elements(), geom.prim.size()), geometries, 0L);
     }
 
     private static void tessellate(BlockAndTintGetter region, BlockStateModelSet modelSet,
@@ -196,7 +220,7 @@ final class RtTerrainMesher {
 
 
     /** Pure-CPU worker result: tessellated mesh and CPU-only light metadata. */
-    record CpuSection(SceneMesh mesh, float[] lights) {
+    record CpuSection(MinecraftTerrainMesh mesh, float[] lights) {
     }
 
 
@@ -216,6 +240,14 @@ final class RtTerrainMesher {
         }
     }
 
+    private enum Coverage { OPAQUE, CUTOUT }
+
+    private record OpacityRange(float transparentAlpha, float opaqueAlpha) { }
+
+    private record TerrainMaterial(ResourceId material, ResourceId texture) { }
+
+    private record TerrainSurface(TerrainMaterial material, Coverage coverage, OpacityRange opacityRange) { }
+
     /** One geometry class's packed, section-local mesh data. */
     private static final class Geom {
         final FloatArrayList verts;
@@ -226,7 +258,7 @@ final class RtTerrainMesher {
         final FloatArrayList cornerUv;
         // 12 CPU lanes/triangle: normal/emission float4, tint float4, then reserved scratch lanes.
         final FloatArrayList prim;
-        final List<SceneMesh.TriangleSurface> surfaces;
+        final List<TerrainSurface> surfaces;
         // One sprite per triangle for CPU light extraction.
         final SpriteList lightSprites;
         final MaterialEmissionList materialEmissions;
@@ -348,8 +380,6 @@ final class RtTerrainMesher {
         private final List<PendingQuad> pending = new ArrayList<>(8);
         private final Map<BlockState, MinecraftMaterialClassification> classifications = new IdentityHashMap<>();
         private final Map<TextureAtlasSprite, SpriteMaterial> spriteMaterials = new IdentityHashMap<>();
-        private final Map<MinecraftMaterialKey, MinecraftMaterialSnapshot.ResolvedMaterial> resolvedMaterials =
-                new HashMap<>();
         private int pendingCount;
         private int[] gidScratch = new int[0];
 
@@ -404,15 +434,16 @@ final class RtTerrainMesher {
                     MinecraftMaterialLookup.material(sprite), classification.geometry(), classification.profile(),
                     q.translucent ? MaterialTopology.MEDIUM_BOUNDARY : MaterialTopology.SURFACE);
             SpriteMaterial spriteMaterial = spriteMaterials.computeIfAbsent(sprite, current ->
-                    new SpriteMaterial(MinecraftMaterialLookup.material(current), new SceneMesh.AtlasTexture(
-                            ResourceId.of(current.atlasLocation().getNamespace(), current.atlasLocation().getPath()))));
-            MinecraftMaterialSnapshot.ResolvedMaterial resolved = resolvedMaterials.computeIfAbsent(
-                    key, ignored -> materials.resolve(key, spriteMaterial.texture));
-            q.material = resolved.material();
-            q.coverage = q.cutout && !q.translucent ? SceneMesh.Coverage.CUTOUT : SceneMesh.Coverage.OPAQUE;
-            q.materialEmission = resolved.emission();
-            q.opacityMicromapRange = q.coverage == SceneMesh.Coverage.CUTOUT
-                    ? resolved.opacityMicromapRange() : null;
+                    new SpriteMaterial(MinecraftMaterialLookup.material(current), ResourceId.of(
+                            current.atlasLocation().getNamespace(), current.atlasLocation().getPath())));
+            MinecraftMaterialSnapshot.ResolvedTerrainMaterial terrainMaterial = materials.resolveTerrain(
+                    key, spriteMaterial.texture());
+            q.material = new TerrainMaterial(terrainMaterial.material(), terrainMaterial.texture());
+            q.coverage = q.cutout && !q.translucent ? Coverage.CUTOUT : Coverage.OPAQUE;
+            q.materialEmission = terrainMaterial.emission();
+            q.opacityMicromapRange = q.coverage == Coverage.CUTOUT && terrainMaterial.opacityRange() != null
+                    ? new OpacityRange(terrainMaterial.opacityRange().transparentAlpha(),
+                    terrainMaterial.opacityRange().opaqueAlpha()) : null;
         }
 
         /** Returns true when vanilla's nominal face should be discarded. */
@@ -437,7 +468,6 @@ final class RtTerrainMesher {
             discardBlock();
             classifications.clear();
             spriteMaterials.clear();
-            resolvedMaterials.clear();
         }
 
         /** Drop the current block's buffered quads without emitting. */
@@ -445,7 +475,7 @@ final class RtTerrainMesher {
             pendingCount = 0;
         }
 
-        private record SpriteMaterial(ResourceId material, SceneMesh.AtlasTexture texture) {
+        private record SpriteMaterial(ResourceId material, ResourceId texture) {
         }
 
         /** Resolve coplanar ties among the current block's quads, then emit them into the section classes. */
@@ -578,14 +608,13 @@ final class RtTerrainMesher {
                 prim.add(q.tg);
                 prim.add(q.tb);
                 prim.add(0f);
-                prim.add(0f); // renderer material IDs are resolved only when the neutral SceneMesh is packed
+                prim.add(0f); // the uploader resolves material indices into the shared Minecraft table
                 prim.add(0f); // flags
                 prim.add(0f); // aux0
                 prim.add(0f); // aux1
                 g.lightSprites.add(q.sprite);
                 g.materialEmissions.add(q.materialEmission);
-                g.surfaces.add(new SceneMesh.TriangleSurface(q.material, q.coverage, q.nx, q.ny, q.nz,
-                        q.emission, q.tr, q.tg, q.tb, q.opacityMicromapRange, false));
+                g.surfaces.add(new TerrainSurface(q.material, q.coverage, q.opacityMicromapRange));
             }
         }
     }
@@ -600,9 +629,9 @@ final class RtTerrainMesher {
         boolean tinted; // tintIndex >= 0 — the tinted member of a base+overlay pair
         float tr, tg, tb, emission;
         MinecraftMaterialEmission materialEmission;
-        SceneMesh.MaterialReference material;
-        SceneMesh.Coverage coverage;
-        SceneMesh.OpacityMicromapRange opacityMicromapRange;
+        TerrainMaterial material;
+        Coverage coverage;
+        OpacityRange opacityMicromapRange;
         TextureAtlasSprite sprite;
     }
 
@@ -638,19 +667,19 @@ final class RtTerrainMesher {
      * Topology and appearance come from the resolved named material rather than a primitive semantic bit.
      */
     private static final class FluidCapture implements VertexConsumer, FluidRenderer.Output {
-        private static final SceneMesh.MaterialReference WATER_MATERIAL =
-                new SceneMesh.NamedMaterial(new MaterialHandle(MinecraftMaterialSource.WATER));
+        private static final TerrainMaterial WATER_MATERIAL =
+                new TerrainMaterial(MinecraftMaterialIds.WATER, null);
         private static final MinecraftMaterialKey LAVA_KEY = new MinecraftMaterialKey(
-                MinecraftMaterialSource.LAVA_MATERIAL, null,
+                MinecraftMaterialIds.LAVA, null,
                 MinecraftMaterialProfile.MEDIUM_ROUGH_DIELECTRIC, MaterialTopology.SURFACE);
-        private static final SceneMesh.AtlasTexture BLOCK_ATLAS = new SceneMesh.AtlasTexture(ResourceId.of(
-                TextureAtlas.LOCATION_BLOCKS.getNamespace(), TextureAtlas.LOCATION_BLOCKS.getPath()));
+        private static final ResourceId BLOCK_ATLAS = ResourceId.of(
+                TextureAtlas.LOCATION_BLOCKS.getNamespace(), TextureAtlas.LOCATION_BLOCKS.getPath());
 
         SectionMesh cur;     // set before each section
         MinecraftMaterialSnapshot.Published materials;
         MinecraftMaterialEmission waterEmission;
         MinecraftMaterialEmission lavaEmission;
-        SceneMesh.NamedMaterial lavaMaterial;
+        TerrainMaterial lavaMaterial;
         float emission;      // set per fluid block (lava = 1, water = 0)
         boolean water;       // set per fluid block: true for water (dielectric), false for lava
         private int n;
@@ -682,19 +711,20 @@ final class RtTerrainMesher {
 
         private void emitQuad() {
             Geom g = cur.geometry();
-            SceneMesh.MaterialReference material = WATER_MATERIAL;
+            TerrainMaterial material = WATER_MATERIAL;
             MinecraftMaterialEmission materialEmission;
             if (water) {
                 materialEmission = waterEmission;
                 if (materialEmission == null) {
-                    materialEmission = waterEmission = materials.resolve(WATER_MATERIAL);
+                    materialEmission = waterEmission = materials.resolveTerrain(
+                            MinecraftMaterialIds.WATER, null).emission();
                 }
             } else {
                 materialEmission = lavaEmission;
                 if (materialEmission == null) {
-                    var resolved = materials.resolve(LAVA_KEY, BLOCK_ATLAS);
-                    lavaMaterial = resolved.material();
-                    materialEmission = lavaEmission = resolved.emission();
+                    var terrainMaterial = materials.resolveTerrain(LAVA_KEY, BLOCK_ATLAS);
+                    lavaMaterial = new TerrainMaterial(terrainMaterial.material(), terrainMaterial.texture());
+                    materialEmission = lavaEmission = terrainMaterial.emission();
                 }
                 material = lavaMaterial;
             }
@@ -761,8 +791,7 @@ final class RtTerrainMesher {
                 prim.add(0f);
                 g.lightSprites.add(null);
                 g.materialEmissions.add(materialEmission);
-                g.surfaces.add(new SceneMesh.TriangleSurface(material, SceneMesh.Coverage.OPAQUE,
-                        nx, ny, nz, emission, tr, tg, tb));
+                g.surfaces.add(new TerrainSurface(material, Coverage.OPAQUE, null));
             }
         }
 

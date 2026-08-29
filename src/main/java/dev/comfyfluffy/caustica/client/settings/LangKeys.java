@@ -1,10 +1,9 @@
 package dev.comfyfluffy.caustica.client.settings;
 
 import dev.comfyfluffy.caustica.CausticaConfig;
-import dev.comfyfluffy.caustica.api.Option;
-import dev.comfyfluffy.caustica.api.Slot;
+import dev.comfyfluffy.caustica.settings.Option;
 import net.minecraft.network.chat.Component;
-import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.settings.ResourceId;
 
 /**
  * Every translation key the settings screen uses, derived rather than declared. An extension gets labelled
@@ -57,19 +56,6 @@ public final class LangKeys {
     public static Component optionGroup(ResourceId featureId, String groupId) {
         return Component.translatable(
                 "caustica.group." + featureId.namespace() + "." + featureId.path() + "." + groupId);
-    }
-
-    /** {@code caustica.slot.<namespace>.<path>}. */
-    public static Component slotLabel(Slot slot) {
-        return Component.translatable(slotKey(slot));
-    }
-
-    public static Component slotTooltip(Slot slot) {
-        return Component.translatable(slotKey(slot) + ".tooltip");
-    }
-
-    private static String slotKey(Slot slot) {
-        return "caustica.slot." + slot.id().namespace() + "." + slot.id().path();
     }
 
     /** A feature's own name, reusing the convention {@code BuiltinExtension} already declares. */

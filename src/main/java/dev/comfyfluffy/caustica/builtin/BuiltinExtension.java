@@ -1,40 +1,93 @@
 package dev.comfyfluffy.caustica.builtin;
 
+import dev.comfyfluffy.caustica.api.CausticaApi;
 import dev.comfyfluffy.caustica.api.CausticaExtension;
-import dev.comfyfluffy.caustica.api.CausticaRegistry;
-import dev.comfyfluffy.caustica.api.DisplayText;
-import dev.comfyfluffy.caustica.api.FeatureCategory;
-import dev.comfyfluffy.caustica.api.FeatureBuilder;
-import dev.comfyfluffy.caustica.api.ResourceId;
-import dev.comfyfluffy.caustica.api.RuntimeActivation;
-import dev.comfyfluffy.caustica.api.ShaderSource;
-import dev.comfyfluffy.caustica.api.Slots;
-import dev.comfyfluffy.caustica.api.pass.RenderStage;
+import dev.comfyfluffy.caustica.api.program.EnvironmentDefinition;
+import dev.comfyfluffy.caustica.api.program.EnvironmentId;
+import dev.comfyfluffy.caustica.api.program.ProgramRegistration;
+import dev.comfyfluffy.caustica.api.program.ShaderDataType;
+import dev.comfyfluffy.caustica.api.program.ShaderDefinition;
+import dev.comfyfluffy.caustica.api.program.ShaderSource;
+import dev.comfyfluffy.caustica.api.program.SurfaceDefinition;
+import dev.comfyfluffy.caustica.api.program.SurfaceId;
+import dev.comfyfluffy.caustica.api.pass.PassRegistration;
+import dev.comfyfluffy.caustica.api.session.RenderSessionContribution;
+import dev.comfyfluffy.caustica.settings.CausticaSettings;
+import dev.comfyfluffy.caustica.settings.CausticaSettingsExtension;
+import dev.comfyfluffy.caustica.settings.DisplayText;
+import dev.comfyfluffy.caustica.settings.FeatureCategory;
+import dev.comfyfluffy.caustica.settings.ResourceId;
+import dev.comfyfluffy.caustica.settings.SettingsRegistry;
 
-/** Registers core renderer effects and the diagnostic material implementation. */
-public final class BuiltinExtension implements CausticaExtension {
+/** Registers the renderer's diagnostic program implementations and settings. */
+public final class BuiltinExtension implements CausticaExtension, CausticaSettingsExtension {
     public static final ResourceId ID = ResourceId.of("caustica", "builtin");
-    /** The visible failure surface at reserved implementation index 0. */
-    public static final ResourceId ERROR_SURFACE = ResourceId.of("caustica", "error_surface");
-    /** Conservative failure coverage paired with {@link #ERROR_SURFACE}. */
-    public static final ResourceId ERROR_COVERAGE = ResourceId.of("caustica", "error_coverage");
+
+    public interface ImplementationData { }
+    public interface BindingData { }
+    public interface InstanceData { }
+    public interface EnvironmentBindingData { }
+
+    public static final ShaderDataType<ImplementationData> IMPLEMENTATION_DATA =
+            ShaderDataType.create("builtin implementation data");
+    public static final ShaderDataType<BindingData> BINDING_DATA =
+            ShaderDataType.create("builtin binding data");
+    public static final ShaderDataType<InstanceData> INSTANCE_DATA =
+            ShaderDataType.create("builtin instance data");
+    public static final ShaderDataType<EnvironmentBindingData> ENVIRONMENT_BINDING_DATA =
+            ShaderDataType.create("builtin environment binding data");
+
+    private static final ShaderSource SHADERS = ShaderSource.classpath(
+            BuiltinExtension.class, "/caustica/shaders/builtin", "surface", "sky");
 
     @Override
-    public void register(CausticaRegistry registry) {
+    public void register(CausticaApi api) {
+        api.sessions().add(context -> {
+            ProgramRegistration<Programs> registration = context.program().register(builder -> new Programs(
+                    builder.surface(SurfaceDefinition.of(
+                            shader("caustica_error_surface", "ErrorSurface"),
+                            shader("caustica_error_coverage", "ErrorCoverage"),
+                            IMPLEMENTATION_DATA.data(0), BINDING_DATA, INSTANCE_DATA)),
+                    builder.environment(new EnvironmentDefinition<>(
+                            shader("caustica_builtin_sky", "BuiltinEnvironment"),
+                            ENVIRONMENT_BINDING_DATA))));
+            try {
+                PassRegistration bloom = context.passes().addPostEffectPass(setup -> new BloomPass(setup,
+                        () -> CausticaSettings.getInstance().lookup().snapshot().options(ID)));
+                return contribution(registration, bloom);
+            } catch (RuntimeException | Error failure) {
+                registration.close();
+                throw failure;
+            }
+        });
+    }
+
+    @Override
+    public void registerSettings(SettingsRegistry registry) {
         registry.feature(ID)
                 .title(DisplayText.translatable("feature.caustica.builtin"))
                 .description(DisplayText.translatable("feature.caustica.builtin.description"))
                 .category(FeatureCategory.GENERAL)
-                .shaderSource(ShaderSource.classpath(
-                        "/caustica/shaders/builtin", "sky", "surface", "bloom"))
-                .runtimeActivation(RuntimeActivation.ALWAYS)
-                .bind(Slots.SKY, "caustica_builtin_sky", "BuiltinSky")
-                .surface(ERROR_SURFACE, "caustica_error_surface", "ErrorSurface",
-                        ERROR_COVERAGE, "caustica_error_coverage", "ErrorCoverage")
                 .group(BloomPass.GROUP)
                 .options(BloomPass.OPTIONS)
-                .renderPass(BloomPass.ID, RenderStage.AFTER_RECONSTRUCTION, BloomPass::new)
                 .register();
-        registry.setDefault(Slots.SKY, ID);
     }
+
+    private static ShaderDefinition shader(String module, String type) {
+        return new ShaderDefinition(SHADERS, module, type);
+    }
+
+    private static RenderSessionContribution contribution(ProgramRegistration<?> registration,
+                                                           PassRegistration bloom) {
+        return new RenderSessionContribution() {
+            @Override
+            public void stop() {
+                bloom.close();
+                registration.close();
+            }
+        };
+    }
+
+    public record Programs(SurfaceId<BindingData, InstanceData> errorSurface,
+                           EnvironmentId<EnvironmentBindingData> environment) { }
 }

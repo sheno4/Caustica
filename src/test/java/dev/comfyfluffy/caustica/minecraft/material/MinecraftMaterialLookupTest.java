@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.material;
 
-import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.settings.ResourceId;
 import net.minecraft.resources.Identifier;
 import org.junit.jupiter.api.Test;
 

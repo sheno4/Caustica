@@ -1,6 +1,5 @@
 package dev.comfyfluffy.caustica.rt;
 
-import dev.comfyfluffy.caustica.api.gpu.GpuImage;
 import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg;
 import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;

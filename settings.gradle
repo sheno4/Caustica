@@ -1,4 +1,5 @@
 pluginManagement {
+	includeBuild("packages/slang-tooling")
 	repositories {
 		maven {
 			name = "Fabric"
@@ -18,5 +19,5 @@ plugins {
 }
 
 rootProject.name = "caustica"
-include("packages:api", "packages:settings-api", "packages:api-support",
+include("packages:api", "packages:engine", "packages:minecraft-api", "packages:shader-api", "packages:settings-api", "packages:api-support", "packages:vulkan-support",
 		"extensions:gltf-viewer", "packages:examples:api-showcase")

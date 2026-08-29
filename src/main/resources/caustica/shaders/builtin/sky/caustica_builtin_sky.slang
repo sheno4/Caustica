@@ -1,10 +1,10 @@
 module caustica_builtin_sky;
 
-import caustica_sky;
+import caustica_environment;
 import caustica_types;
 
 /** Resource-free reference environment used when no host sky model is selected. */
-public struct BuiltinSky : ISkyModel {
+public struct BuiltinEnvironment : IEnvironmentModel {
     public float3 evaluateEnvironment(EnvironmentQuery query) {
         float horizon = 1.0 - abs(clamp(query.direction.y, -1.0, 1.0));
         float upper = max(query.direction.y, 0.0);

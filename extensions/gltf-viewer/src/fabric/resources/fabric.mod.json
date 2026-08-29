@@ -11,7 +11,7 @@
     "main": [
       "dev.comfyfluffy.caustica.example.gltfviewer.FabricGltfViewerMod"
     ],
-    "caustica": [
+    "caustica-minecraft": [
       "dev.comfyfluffy.caustica.example.gltfviewer.GltfViewerExtension"
     ]
   },

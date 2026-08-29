@@ -1,89 +1,127 @@
 package dev.comfyfluffy.caustica.minecraft;
 
-import dev.comfyfluffy.caustica.api.CausticaRegistry;
-import dev.comfyfluffy.caustica.minecraft.api.MinecraftApiExtension;
-import dev.comfyfluffy.caustica.minecraft.api.MinecraftExtensionRegistry;
-import dev.comfyfluffy.caustica.api.DisplayText;
-import dev.comfyfluffy.caustica.api.ResourceId;
-import dev.comfyfluffy.caustica.api.ShaderSource;
-import dev.comfyfluffy.caustica.api.Slots;
-import dev.comfyfluffy.caustica.builtin.BuiltinExtension;
+import dev.comfyfluffy.caustica.api.CausticaApi;
+import dev.comfyfluffy.caustica.api.CausticaExtension;
+import dev.comfyfluffy.caustica.api.geometry.GeometryChannel;
+import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
+import dev.comfyfluffy.caustica.api.light.LightChannel;
+import dev.comfyfluffy.caustica.api.pass.PassChannel;
+import dev.comfyfluffy.caustica.api.program.ProgramChannel;
+import dev.comfyfluffy.caustica.api.session.RenderSessionContribution;
+import dev.comfyfluffy.caustica.engine.session.ContributionScope;
+import dev.comfyfluffy.caustica.engine.session.EngineRenderSession;
+import dev.comfyfluffy.caustica.engine.session.EngineMinecraftWorldSession;
+import dev.comfyfluffy.caustica.engine.session.MinecraftWorldSessionHost;
+import dev.comfyfluffy.caustica.engine.session.RenderSessionHost;
+import dev.comfyfluffy.caustica.minecraft.api.MinecraftApi;
+import dev.comfyfluffy.caustica.minecraft.api.MinecraftDimensionKey;
+import dev.comfyfluffy.caustica.minecraft.api.MinecraftExtension;
+import dev.comfyfluffy.caustica.minecraft.api.MinecraftWorldSessionContribution;
+import dev.comfyfluffy.caustica.minecraft.api.ResourcePackEpoch;
+import dev.comfyfluffy.caustica.settings.CausticaSettingsExtension;
+import dev.comfyfluffy.caustica.settings.ResourceId;
+import dev.comfyfluffy.caustica.settings.SettingsRegistry;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class MinecraftApiBootstrapTest {
     @Test
-    void persistedSelectionAppliesOnlyToAnInstalledFeatureBindingTheSlot() {
-        CausticaRegistry registry = new CausticaRegistry();
-        new BuiltinExtension().register(registry);
-        ResourceId featureId = ResourceId.of("test", "sky");
-        registry.feature(featureId)
-                .title(DisplayText.literal("Test sky"))
-                .shaderSource(ShaderSource.classpath("/test/shaders"))
-                .bind(Slots.SKY, "test_sky", "TestSky")
-                .register();
+    void registersMinecraftOnlyDiscoveryAndDeduplicatesDualCapabilityInstances() {
+        RenderSessionHost renderHost = new RenderSessionHost();
+        MinecraftWorldSessionHost minecraftHost = new MinecraftWorldSessionHost();
+        SettingsRegistry settings = new SettingsRegistry();
+        class MinecraftOnly implements MinecraftExtension {
+            @Override public void registerMinecraft(MinecraftApi api) {
+                api.sessions().add(context -> MinecraftWorldSessionContribution.EMPTY);
+            }
+        }
+        class Dual implements CausticaExtension, MinecraftExtension {
+            @Override public void register(CausticaApi api) { }
+            @Override public void registerMinecraft(MinecraftApi api) {
+                api.sessions().add(context -> MinecraftWorldSessionContribution.EMPTY);
+            }
+        }
+        Dual dual = new Dual();
+        List<CausticaExtension> generic = List.of(dual);
+        MinecraftApiBootstrap.registerExtensions(renderHost, minecraftHost, settings, generic);
+        MinecraftApiBootstrap.registerMinecraftExtensions(
+                minecraftHost, settings, List.of(new MinecraftOnly(), dual), generic);
 
-        MinecraftApiBootstrap.applyPersistedSelection(
-                registry, Slots.SKY, featureId.toString(), BuiltinExtension.ID);
-        assertEquals(featureId, registry.selectedFeature(Slots.SKY));
+        EngineMinecraftWorldSession session = minecraftHost.openSession(
+                owner -> new EmptyScope(), (owner, scene) -> new dev.comfyfluffy.caustica.engine.session.MinecraftEnvironmentScope() {
+                    @Override public void select(dev.comfyfluffy.caustica.api.scene.EnvironmentBinding<?> binding) { }
+                    @Override public void invalidate() { }
+                    @Override public void drain() { }
+                }, new dev.comfyfluffy.caustica.api.scene.SceneId() { },
+                MinecraftDimensionKey.of("minecraft", "overworld"), new ResourcePackEpoch(0),
+                failure -> { throw new AssertionError(failure); });
+        session.processPendingChanges();
 
-        registry.selectDefault(Slots.SKY);
-        MinecraftApiBootstrap.applyPersistedSelection(
-                registry, Slots.SKY, "test:not_installed", featureId);
-        MinecraftApiBootstrap.applyPersistedSelection(
-                registry, Slots.SKY, "NOT AN ID", featureId);
-        assertTrue(registry.isDefaultSelected(Slots.SKY));
+        assertEquals(2, session.contributionCount());
+        session.close();
     }
 
     @Test
-    void minecraftSkyIsTheHostDefaultButAnExplicitBuiltinSelectionIsPreserved() {
-        CausticaRegistry registry = new CausticaRegistry();
-        new BuiltinExtension().register(registry);
-        new MinecraftProvidersExtension().register(registry);
+    void sessionAndSettingsFailuresAreIsolatedForEachDiscoveredExtension() {
+        RenderSessionHost host = new RenderSessionHost();
+        MinecraftWorldSessionHost minecraftHost = new MinecraftWorldSessionHost();
+        SettingsRegistry settings = new SettingsRegistry();
+        ResourceId settingsSurvived = ResourceId.of("test", "settings-survived");
 
-        MinecraftApiBootstrap.applyPersistedSelection(
-                registry, Slots.SKY, null, MinecraftProvidersExtension.ID);
-        assertEquals(MinecraftProvidersExtension.ID, registry.selectedFeature(Slots.SKY));
+        class SessionFails implements CausticaExtension, CausticaSettingsExtension {
+            @Override public void register(CausticaApi api) { throw new IllegalStateException("session"); }
+            @Override public void registerSettings(SettingsRegistry registry) {
+                registry.feature(settingsSurvived).register();
+            }
+        }
+        class SettingsFails implements CausticaExtension, MinecraftExtension, CausticaSettingsExtension {
+            @Override public void register(CausticaApi api) {
+                api.sessions().add(context -> RenderSessionContribution.EMPTY);
+            }
+            @Override public void registerSettings(SettingsRegistry registry) {
+                throw new IllegalStateException("settings");
+            }
+            @Override public void registerMinecraft(MinecraftApi api) {
+                api.sessions().add(context -> MinecraftWorldSessionContribution.EMPTY);
+            }
+        }
 
-        MinecraftApiBootstrap.applyPersistedSelection(
-                registry, Slots.SKY, BuiltinExtension.ID.toString(), MinecraftProvidersExtension.ID);
-        assertEquals(BuiltinExtension.ID, registry.selectedFeature(Slots.SKY));
+        MinecraftApiBootstrap.registerExtensions(
+                host, minecraftHost, settings, List.of(new SessionFails(), new SettingsFails()));
+        EngineRenderSession session = host.openSession(owner -> new EmptyScope(), failure -> {
+            throw new AssertionError(failure);
+        });
+        session.processPendingChanges();
+        EngineMinecraftWorldSession minecraftSession = minecraftHost.openSession(
+                owner -> new EmptyScope(), (owner, scene) -> new dev.comfyfluffy.caustica.engine.session.MinecraftEnvironmentScope() {
+                    @Override public void select(dev.comfyfluffy.caustica.api.scene.EnvironmentBinding<?> binding) { }
+                    @Override public void invalidate() { }
+                    @Override public void drain() { }
+                }, new dev.comfyfluffy.caustica.api.scene.SceneId() { },
+                MinecraftDimensionKey.of("minecraft", "overworld"), new ResourcePackEpoch(0),
+                failure -> { throw new AssertionError(failure); });
+        minecraftSession.processPendingChanges();
+
+        assertTrue(settings.declared(settingsSurvived));
+        assertEquals(1, session.contributionCount());
+        assertEquals(1, minecraftSession.contributionCount());
+        minecraftSession.close();
+        session.close();
     }
 
-    @Test
-    void featureAndMinecraftEntrypointsFailIndependentlyBeforeRegistryFreeze() {
-        CausticaRegistry features = new CausticaRegistry();
-        MinecraftExtensionRegistry minecraft = new MinecraftExtensionRegistry();
-        ResourceId ordinaryFeature = ResourceId.of("test", "ordinary_survives");
-        MinecraftApiExtension ordinaryFails = new MinecraftApiExtension() {
-            @Override public void register(CausticaRegistry registry) {
-                throw new IllegalStateException("ordinary failure");
-            }
-            @Override public void registerMinecraft(MinecraftExtensionRegistry registry) {
-                registry.registerMaterialResolver(ResourceId.of("test", "host_survives"), 0,
-                        java.util.List.of(new dev.comfyfluffy.caustica.minecraft.api.MinecraftMaterialSelector(
-                                null, null)), request -> null);
-            }
-        };
-        MinecraftApiExtension hostFails = new MinecraftApiExtension() {
-            @Override public void register(CausticaRegistry registry) {
-                registry.feature(ordinaryFeature).register();
-            }
-            @Override public void registerMinecraft(MinecraftExtensionRegistry registry) {
-                throw new IllegalStateException("host failure");
-            }
-        };
-
-        MinecraftApiBootstrap.registerExtensions(features, minecraft, java.util.List.of(ordinaryFails, hostFails));
-
-        assertTrue(features.features().containsKey(ordinaryFeature));
-        assertTrue(minecraft.frozen());
-        assertThrows(IllegalStateException.class, () -> minecraft.registerMaterialResolver(
-                ResourceId.of("test", "late"), 0,
-                java.util.List.of(new dev.comfyfluffy.caustica.minecraft.api.MinecraftMaterialSelector(null, null)),
-                request -> null));
+    private static final class EmptyScope implements ContributionScope {
+        @Override public GpuDevice gpu() { return null; }
+        @Override public ProgramChannel program() { return null; }
+        @Override public PassChannel passes() { return null; }
+        @Override public GeometryChannel geometry() { return null; }
+        @Override public LightChannel lights() { return null; }
+        @Override public void quiesce() { }
+        @Override public void invalidate() { }
+        @Override public void drain() { }
+        @Override public void close() { }
     }
 }

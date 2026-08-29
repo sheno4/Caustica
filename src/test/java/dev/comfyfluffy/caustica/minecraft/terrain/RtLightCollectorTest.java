@@ -1,15 +1,12 @@
 package dev.comfyfluffy.caustica.minecraft.terrain;
 
 import dev.comfyfluffy.caustica.api.ColorSpaces;
-import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftEmissionFootprint;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftMaterialEmission;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import org.junit.jupiter.api.Test;
 
-import java.util.ArrayList;
-import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -25,9 +22,7 @@ final class RtLightCollectorTest {
         Result full = collect(emission, 1.0f, 0.0f);
 
         assertTrue(zero.lights.isEmpty());
-        assertFalse(zero.surfaces.getFirst().emitterInLightScene());
         assertEquals(RtLightCollector.FLOATS_PER_LIGHT, half.lights.size());
-        assertFalse(half.surfaces.getFirst().emitterInLightScene());
         assertEquals(full.lights.getFloat(16) * 0.5f, half.lights.getFloat(16), 1.0e-5f);
         assertEquals(full.lights.getFloat(17) * 0.5f, half.lights.getFloat(17), 1.0e-5f);
         assertEquals(full.lights.getFloat(18) * 0.5f, half.lights.getFloat(18), 1.0e-5f);
@@ -38,8 +33,6 @@ final class RtLightCollectorTest {
         Result result = collect(emission(80.0f, false, footprint(1, 1.0f, 1.0f)), 0.0f, 0.0f);
 
         assertEquals(RtLightCollector.FLOATS_PER_LIGHT, result.lights.size());
-        assertFalse(result.surfaces.getFirst().emitterInLightScene());
-        assertFalse(result.surfaces.getLast().emitterInLightScene());
     }
 
     @Test
@@ -67,9 +60,7 @@ final class RtLightCollectorTest {
                 footprint(1, new float[]{1.0f}, new float[]{0.0001f})), 0.0f, 0.0f);
 
         assertTrue(belowFill.lights.isEmpty());
-        assertFalse(belowFill.surfaces.getFirst().emitterInLightScene());
         assertTrue(belowLuminance.lights.isEmpty());
-        assertFalse(belowLuminance.surfaces.getFirst().emitterInLightScene());
     }
 
     private static Result collect(MinecraftMaterialEmission emission,
@@ -95,15 +86,11 @@ final class RtLightCollectorTest {
                 0, 0, 1, 0, 1, 1,
                 0, 0, 1, 1, 0, 1
         });
-        SceneMesh.TriangleSurface surface = new SceneMesh.TriangleSurface(
-                new SceneMesh.FallbackMaterial(null), SceneMesh.Coverage.OPAQUE,
-                0, 0, 1, stateEmission, 1, 1, 1);
-        List<SceneMesh.TriangleSurface> surfaces = new ArrayList<>(List.of(surface, surface));
         FloatArrayList lights = new FloatArrayList();
-        RtLightCollector.collectClass(lights, verts, prim, surfaces, cornerUv,
+        RtLightCollector.collectClass(lights, verts, prim, cornerUv,
                 new TextureAtlasSprite[2], new MinecraftMaterialEmission[]{emission, emission},
                 minFillRatio);
-        return new Result(lights, surfaces);
+        return new Result(lights);
     }
 
     private static MinecraftMaterialEmission emission(
@@ -123,7 +110,7 @@ final class RtLightCollectorTest {
         return new TestFootprint(resolution, weights, colors);
     }
 
-    private record Result(FloatArrayList lights, List<SceneMesh.TriangleSurface> surfaces) {
+    private record Result(FloatArrayList lights) {
     }
 
     private record TestFootprint(int resolution, float[] weights, float[] colors)

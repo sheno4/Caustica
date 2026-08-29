@@ -1,7 +1,7 @@
 package dev.comfyfluffy.caustica.rt.material;
 
 import dev.comfyfluffy.caustica.api.CausticaApi;
-import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.settings.ResourceId;
 import dev.comfyfluffy.caustica.api.provider.MaterialHandle;
 import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import dev.comfyfluffy.caustica.rt.GpuContext;

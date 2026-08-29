@@ -2,7 +2,7 @@ package dev.comfyfluffy.caustica.rt.pipeline;
 
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
-import dev.comfyfluffy.caustica.api.gpu.GpuBuffer;
+import dev.comfyfluffy.caustica.rt.GpuBuffer;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;

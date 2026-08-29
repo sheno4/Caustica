@@ -2,13 +2,15 @@
 
 Date: 2026-08-29
 Scope: architecture and API review before implementation
-Status: review result, not an implementation plan or compatibility promise
+Status: living review checked against the rewrite implementation
 
 ## Implemented API slice
 
-The public-contract refactor described by this review is now applied. The renderer rewrite is not:
+The public-contract refactor and its engine/Vulkan foundations are applied. The live Minecraft frame path
+is being replaced from retained source producers inward:
 
-- the API, settings API, and pure-Java API support artifacts now live under `packages/`;
+- API, API support, settings, shader API, Minecraft API, engine, Vulkan support, and reusable Slang tooling
+  now live under `packages/`;
 - program implementations are declared through one atomic owner-scoped `ProgramRegistration`, with typed
   exports and one pending/ready/failed/cancelled readiness result; compiler failure is isolated per accepted
   registration, and close is linearized against readiness publication;
@@ -17,24 +19,77 @@ The public-contract refactor described by this review is now applied. The render
   surface, volume, and environment IDs are same-session non-owning references;
 - Vulkan device-address ranges and resource/sampler descriptor indices are typed Java values, while LWJGL
   non-dispatchable handles remain documented `long` values;
+- the engine implements render-session, program-publication, retained scene/light, pass, Minecraft world,
+  descriptor-heap, and teardown lifecycles with owner-scoped tests;
+- the fixed and Minecraft ray shader compositions implement ABI 6 and validate as Vulkan 1.4 SPIR-V using
+  direct descriptor-heap access;
+- the root owns one mapped resource heap and one mapped sampler heap, and its ray pipeline uses heap-native
+  push data with no descriptor-set compatibility path;
 - the compile-only API showcase uses the new registration, host-issued scene, cross-contribution export, and
-  Vulkan range/index contracts.
+  Vulkan range/index contracts;
+- the glTF viewer is a strict public-artifact consumer: its Minecraft world contribution owns one atomic
+  program set, VMA uploads, retained meshes/placements, resource-epoch replacement, and drained teardown;
+- the native retained-scene backend now accepts complete snapshots in revision order, builds reusable BLAS
+  candidates, keeps a TLAS ring per `SceneId`, and retires displaced snapshots after their tracked graphics use.
+- frame ingress now carries `SceneView`/`Camera` and an optional typed initial volume; Minecraft performs only
+  the water-containment policy and hands a session-scoped selection to the renderer;
+- the native pass scheduler now borrows the live `VkCommandBuffer` and frame reservation, rebinds descriptor
+  heaps per invocation, validates the two-image post chain, and drains pass uses through frame retirement.
 
-The relocated API checks and showcase compilation pass. The existing renderer and glTF extension still target
-the removed registry/provider API and remain work for the package-by-package engine rewrite.
+All package checks, the API showcase, the glTF extension boundary/lifecycle tests, shader compilation and
+reflection gates, and focused engine/runtime tests pass together. Minecraft terrain and entity retained
+source/upload boundaries now exist; connecting their live capture paths, material/texture data, frame ingress,
+presentation passes, and runtime ownership is the current migration frontier.
+
+## Feedback proven during implementation
+
+- Program composition needs one explicit GPU implementation-data table. Aliasing it with another root hid a
+  lifetime and ABI dependency, so `WorldBindingRoots` now carries a dedicated device address and reflects to
+  88 bytes. Surface, volume, and environment implementation indices remain category-local and deterministic.
+- Settings declaration is process state; active composition is render-session state. The settings screen now
+  reads only `settings-api` and no longer recreates a global slot registry. A future diagnostic can display a
+  session snapshot without becoming a mutation API.
+- Core correctly cannot hand every contribution an invented "root scene." The physical Minecraft API now
+  supplies a borrowed host-owned `SceneId` with dimension and resource-pack epochs, and owns dimension-keyed
+  environment selection. This is the concrete handoff required by terrain, sky, and anchored extension content.
+- `VK_EXT_shader_object` is the compute/graphics pass path, not the ray-stage path. Current Vulkan valid usage
+  rejects raygen, hit, miss, intersection, and callable stages in `VkShaderCreateInfoEXT`; the world renderer
+  therefore keeps `VK_KHR_ray_tracing_pipeline` while using the descriptor-heap pipeline flag, null layout,
+  and `vkCmdPushDataEXT`.
+- Current world SPIR-V declares `SPV_EXT_descriptor_heap` and has no `DescriptorSet` or `Binding` decorations,
+  so the ray pipeline needs no descriptor mapping structures. This is checked from disassembly rather than
+  assumed from source syntax.
+- Camera submersion proves an internal initial-volume frame input, not a public camera-volume feature. The
+  Minecraft adapter now selects water at frame ingress after its volume ID and binding resources are live.
+  Core cannot reject a zero `ShaderData` word generically because a schema may encode descriptor index zero or
+  a packed scalar; the Minecraft selector separately requires its address-backed records to be live.
+- The general surface-modifier hook remained unjustified. Block damage moved into explicit Minecraft instance
+  data, removing the cross-owner modifier dispatch and its separate world table pass.
+- Rounded clouds were removed from the rewrite and its test surface as requested.
+- A generic/Minecraft dual contribution originally needed a global current-session reference in the glTF
+  consumer. Moving its program registration into the Minecraft world contribution removed that correlation
+  entirely and proved that no public session key is needed for this use case.
+- Minecraft-only extension discovery is now separate for Fabric and NeoForge. Dual-capability objects are
+  deduplicated by identity; a Minecraft extension no longer has to pretend to be a generic extension merely
+  to be discovered.
+- Descriptor-heap compute helpers reject SPIR-V carrying `DescriptorSet` or `Binding` decorations before
+  calling Vulkan. This turns a mapping-related validation error into a synchronous package invariant.
+- Retained native publication is accepted or rejected synchronously. A device/execution failure discovered
+  after submit acceptance is session-fatal; the API does not expose an unproven per-mesh recovery graph.
 
 ## Executive decision
 
-Do not refactor the renderer directly onto the current `api` module unchanged.
+Continue the rewrite against the implemented package APIs, while keeping them experimental until a complete
+live frame and every retained-light/pass consumer is verified.
 
 The draft API has a good low-level core: process registration is separated from render-session lifetime,
 session-owned objects have explicit retirement, retained geometry and lights publish atomically, and shader
 data has a useful typed-but-opaque representation. Those decisions should survive the rewrite.
 
-The draft is not yet a proven public boundary. The current renderer and the glTF example still target the
-removed registry/provider API, while no production consumer implements or calls the new session, scene,
-program, geometry, light, pass, or descriptor-heap contracts. `:packages:api:check` passes, but that verifies the
-contract artifact in isolation rather than its fit to the engine.
+The boundary is now proven for session/program ownership, strict external-style glTF geometry, Vulkan upload
+lifetime, descriptor-heap compute, and engine-side retained publication. It is not yet proven by a complete
+Minecraft render because material/texture producers, frame ingress, retained-light consumption, and several
+presentation/UI pipelines still cross the removed provider and descriptor-set designs.
 
 Five changes are required before the API should steer implementation:
 
@@ -50,7 +105,7 @@ Five changes are required before the API should steer implementation:
    readiness result for the complete set and remove `SUPERSEDED`, individual drop methods, and exact
    intermediate-composition semantics from the public API.
 5. Establish the Vulkan 1.4 device profile and reusable Slang build/reflection tooling before rewriting
-   pipelines. The current implementation does not satisfy the baseline already promised by `GpuDevice`.
+   pipelines. This foundation is now implemented; presentation and extension pass pipelines remain to move.
 
 The rewrite should be organized as physical Gradle projects under `packages/...`, with dependency tests
 enforcing the boundaries. Package names may change freely; preserving the current `rt`/`spi` layout has no
@@ -61,7 +116,7 @@ value by itself.
 This review used these consumers and implementation areas as evidence:
 
 - the public Java and Slang contract under `packages/api/`;
-- the old glTF viewer under `extensions/gltf-viewer`;
+- the rewritten strict-boundary glTF viewer under `extensions/gltf-viewer`;
 - Minecraft terrain, entity, particle, cloud, material, sky, damage, and overlay implementations;
 - renderer lifecycle, geometry, acceleration, material, shader-composition, pass, presentation, and GPU
   lifetime code under `src/main/java`;
@@ -82,21 +137,27 @@ The reflection recommendation follows Slang's
 
 ## What the repository currently proves
 
-### The new API is a contract skeleton
+### The new API has an implemented session core
 
-`packages/api/src/main` is internally buildable and has useful contract tests. It is not connected to the runtime:
+The contract is now exercised by production bootstrap/program registration and engine implementations:
 
-- `MinecraftApiBootstrap`, `RtRuntime`, `BuiltinExtension`, `MinecraftProvidersExtension`, and the glTF
-  viewer still import deleted types such as `CausticaRegistry`, `FeatureBuilder`, provider interfaces, and
-  the old render-pass API.
-- No production code opens a `RenderSessionContribution`, adds a program through the new
-  `ProgramChannel`, or submits a new `RetainedBatch` to the new geometry/light channels.
-- `GpuContext implements GpuDevice`, but it does not implement the promised descriptor heap and the device
-  bring-up does not negotiate the documented feature profile.
-- Existing extension Slang implements the old interfaces and signatures, not the new version-6 shader ABI.
+- `MinecraftApiBootstrap`, `BuiltinExtension`, and `MinecraftProvidersExtension` use process registration,
+  generic render sessions, Minecraft world sessions, separate settings registration, and atomic program sets;
+- engine tests execute contribution teardown, program compilation/publication, same-session cross-owner
+  selection, retained geometry/light retirement, pass scheduling, dimension scenes, environment selection,
+  and resource-pack epochs;
+- `GpuContext` owns the required resource/sampler heaps, and device bring-up validates the Vulkan 1.4 feature
+  profile before creating the logical device;
+- fixed and Minecraft Slang implement the version-6 surface, coverage, volume, and environment interfaces.
+- the glTF viewer imports only API/Minecraft API artifacts, owns real VMA acceleration inputs behind retained
+  callbacks, and drops geometry before closing its same-contribution program registration.
+- Bloom is an executing-shape post-effect implementation using a compute `VkShaderEXT`, descriptor-heap
+  indices, `vkCmdPushDataEXT`, unified `GENERAL` images, and synchronization2 barriers.
 
-This is a useful rewrite position: there is no compatibility reason to compromise the new boundary. It also
-means API documentation cannot be treated as evidence that the implementation supports the contract.
+The gap is now the remaining live-frame integration: legacy CPU material producers and presentation passes
+still use removed provider and descriptor-set types, and raygen does not yet resolve the typed initial-volume
+selection. Their compile failures are useful boundary evidence, but the API and engine tests alone still do
+not prove a rendered frame until that last path launches cleanly.
 
 ### Existing engine features used as proof cases
 
@@ -104,7 +165,7 @@ means API documentation cannot be treated as evidence that the implementation su
 |---|---|---|
 | Terrain/chunk meshes | Minecraft adapter -> retained engine geometry | Thread-safe retained updates, atomic batches, double-precision placement, replacement and retirement |
 | Entities and particles | Minecraft adapter, with host frame extraction | Rigid previous transforms, camera-coherent host snapshotting, textures/coverage, frequent placement updates |
-| Rounded clouds | Minecraft adapter using ordinary geometry | Generic meshes are sufficient; cloud identity and generation remain Minecraft-specific |
+| Rounded clouds | Removed from this rewrite | No API pressure; the requested rewrite intentionally omits the feature and its tests |
 | Minecraft material/resource packs | Minecraft adapter plus reusable GPU upload support | Resource-pack epochs, source decoding, table replacement, descriptor retirement; not a core material registry |
 | glTF content | Reusable glTF scene package plus a Minecraft anchor package | Core geometry/surface APIs should not require Minecraft; anchors and reload are Minecraft lifecycle |
 | Opaque/cutout surfaces | Shader API and program composition | Narrow any-hit coverage and full closest-hit material evaluation are both justified |
@@ -132,7 +193,7 @@ requires it and whether a narrower alternative is worse.
 | `SceneId` as a non-owning target | Keep | Geometry, lights, and a view need one identity for a TLAS-backed coordinate/lifetime domain. Keeping this target in retained operations avoids a later geometry API break when rays can traverse another scene. It must be issued by the engine/session that owns the scene. |
 | Public `SceneChannel.create` / `SceneHandle.close` | Move internal for this rewrite | An extension-created scene cannot currently become a rendered view or a ray-traversal target. Future ray portals justify the multi-scene data model, but not this administration contract: portals also need a link transform, destination lifetime, shader-visible traversal target, hop policy, and environment/light rules. Keep the engine implementation multi-scene-capable and add the correct public creation/link capability with the portal feature. |
 | `SceneView` and `Camera` values | Keep, expose where consumed | View is a useful per-frame engine fact. Put it on internal frame ingress and on world-resource/UI stages that prove a use. A common pass-frame location is a possible consistency choice, not yet a requirement for post effects. Do not put Minecraft dimension keys in it. |
-| Initial camera/view volume | Add to internal frame ingress, not as a new feature channel | The existing underwater path proves that ray generation sometimes starts inside a volume. Keep `Camera` as pose/projection only. Minecraft detects submersion and selects the water binding; the engine accepts one optional initial volume and defaults its exterior to air. Do not publish an arbitrary medium stack until nested camera-start volumes have a real producer. |
+| Initial camera/view volume | Implemented in internal frame ingress, not a new feature channel | The existing underwater path proves that ray generation sometimes starts inside a volume. `Camera` remains pose/projection only. Minecraft detects submersion and selects the water binding; the engine accepts one optional typed initial volume and defaults to vacuum. Raygen resolution is the remaining implementation seam. Do not publish an arbitrary medium stack until nested camera-start volumes have a real producer. |
 | `GeometryChannel` + issued ids + `RetainedBatch` | Keep | Terrain, glTF, entities, and clouds all need retained, atomic replacement. Keep meshes scene-independent and placements scene-targeted. Add a support library for upload/build authoring rather than expanding core with Minecraft materials. |
 | Geometry cross-contribution restrictions | Remove the same-owner selection restriction | Keep mesh/instance/light mutation IDs owner-local, but allow `SceneId`, `SurfaceId`, `VolumeId`, and `EnvironmentId` to cross contributions as same-session, non-owning references. The issuer retains removal authority; stale program IDs use the documented error/vacuum fallback and do not pin another contribution. Validate session identity and generated shader-data schema tokens. No implicit lease or global registry is needed. |
 | `LightChannel` and four physical light shapes | Experimental until consumed | Minecraft provides proof producers, but current architecture documentation says the renderer does not sample the resulting light snapshots. Implement the direct-light buffer/distribution consumer and verify units before freezing the API. |
@@ -379,7 +440,7 @@ Make the following a fail-fast renderer profile rather than public runtime boole
 
 - Vulkan API version 1.4;
 - required Vulkan 1.2/1.3/1.4 feature booleans actually used, including buffer device address,
-  synchronization2, and dynamic rendering;
+  shader float16, synchronization2, and dynamic rendering;
 - timeline semaphores and `shaderInt64`, used by retirement and the shader ABI;
 - `VK_KHR_unified_image_layouts` with `unifiedImageLayouts` enabled;
 - `VK_EXT_descriptor_heap` with the heap features used by the shader ABI;
@@ -413,8 +474,9 @@ The existing implementation mixes modern and legacy mechanisms. The rewrite shou
 - `vkCmdCopyBuffer2`, `vkCmdCopyImage2`, and `vkCmdBlitImage2`;
 - dynamic rendering for raster work;
 - one resource heap and one sampler heap bound for the command stream;
-- descriptor heaps instead of descriptor sets, pools, and descriptor layouts; retain ordinary push constants
-  when they are the simplest valid small per-dispatch data path;
+- descriptor heaps instead of descriptor sets, pools, and descriptor layouts; use `vkCmdPushDataEXT` for
+  small per-dispatch data because ordinary push constants depend on pipeline-layout state and invalidate,
+  and are invalidated by, descriptor-heap state;
 - shader objects for compute/raster; ray-tracing pipelines remain;
 - where [`VK_KHR_device_address_commands`](https://docs.vulkan.org/features/latest/features/proposals/VK_KHR_device_address_commands.html)
   is explicitly added to the required profile, use its device-address commands; otherwise retain the modern
@@ -461,7 +523,8 @@ document it as an engine packing policy rather than a single Vulkan-provided res
 Heap-native pipelines and shaders must carry the descriptor-heap creation flags
 (`VK_PIPELINE_CREATE_2_DESCRIPTOR_HEAP_BIT_EXT` through flags2, or
 `VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT` for shader objects), and command buffers must bind both heaps
-before heap access. If secondary command buffers are introduced, their inheritance uses
+before heap access. Their pipeline layout is null, and their push-constant storage is populated with
+`vkCmdPushDataEXT`; recording `vkCmdPushConstants` would invalidate heap state. If secondary command buffers are introduced, their inheritance uses
 `VkCommandBufferInheritanceDescriptorHeapInfoEXT`.
 
 ## Reusable compile-time Slang reflection
@@ -568,15 +631,20 @@ the old code to discover requirements and algorithms, not as the structural temp
 
 ## Validation performed
 
-- `:packages:api:check`, `:packages:settings-api:check`, and `:packages:api-support:check` pass.
-- `:packages:examples:api-showcase:compileJava` passes against the public draft only.
-- The showcase model-conformance probe and world-resource/post/UI Slang programs compile with
-  `spvDescriptorHeapEXT` capability and validate with `spirv-val --target-env vulkan1.4`.
-- `:extensions:gltf-viewer:compileJava` fails with 100 reported stale-API errors, confirming that the existing
-  example has not pressure-tested the 0.8 session/channel design.
+- `:packages:api:check`, `:packages:api-support:check`, `:packages:settings-api:check`,
+  `:packages:minecraft-api:check`, `:packages:engine:check`, `:packages:shader-api:check`, and
+  `:packages:vulkan-support:check` pass in one gate.
+- `:packages:examples:api-showcase:check` passes against published contract artifacts only.
+- `:extensions:gltf-viewer:check` passes, including strict implementation-package rejection, retained
+  lifecycle tests, resource-epoch replacement, and Vulkan 1.4 Slang/SPIR-V validation.
+- Fixed/Minecraft world composition, generated RT binding records, generated shader records, API reflection,
+  and Bloom's 40-byte shader-object push-data ABI validate together.
+- Root `compileJava` deliberately remains red at the active rewrite frontier: legacy Minecraft material,
+  entity, terrain, provider, frame, and presentation sources still reference removed provider-era types.
 
-The showcase is compile-only. These checks do not claim that the renderer implements the draft API or that
-its Vulkan device currently enables the profile.
+The showcase remains compile-only, and the glTF viewer does not yet upload textures or implement true alpha
+blend traversal. These checks prove the implemented ownership and Vulkan package boundaries, not a complete
+rendered Minecraft frame or visual/performance acceptance.
 
 ## Final high-level decisions
 

@@ -1,7 +1,6 @@
 package dev.comfyfluffy.caustica.rt;
 
 import dev.comfyfluffy.caustica.CausticaConfig;
-import dev.comfyfluffy.caustica.api.gpu.GpuImage;
 import dev.comfyfluffy.caustica.rt.pipeline.RtSdrPresentPipeline;
 import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
 import org.lwjgl.system.MemoryStack;

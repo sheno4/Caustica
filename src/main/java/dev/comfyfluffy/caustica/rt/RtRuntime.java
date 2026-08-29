@@ -2,9 +2,11 @@ package dev.comfyfluffy.caustica.rt;
 
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
+import dev.comfyfluffy.caustica.engine.session.RenderSessionHost;
+import dev.comfyfluffy.caustica.engine.session.EngineWorldSession;
 import dev.comfyfluffy.caustica.api.CausticaApi;
 import dev.comfyfluffy.caustica.api.CausticaRegistry;
-import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.settings.ResourceId;
 import dev.comfyfluffy.caustica.api.pass.CausticaRenderPass;
 import dev.comfyfluffy.caustica.engine.frame.FrameSnapshot;
 import dev.comfyfluffy.caustica.engine.frame.SceneResources;
@@ -49,6 +51,8 @@ public final class RtRuntime {
     private Session session;
     private boolean frameActive;
     private RuntimeHost host;
+    private RenderSessionHost apiHost;
+    private EngineWorldSession engineWorldSession;
     private final RtProgramManager programManager = new RtProgramManager();
     private final RtLifecycleCoordinator lifecycle = new RtLifecycleCoordinator(
             new RtLifecycleCoordinator.Listener() {
@@ -98,6 +102,28 @@ public final class RtRuntime {
 
     public void installHost(RuntimeHost installedHost) {
         host = installedHost;
+    }
+
+    /** Install process-scoped extension factories before the first renderer session opens. */
+    public void installApiHost(RenderSessionHost installedHost) {
+        apiHost = java.util.Objects.requireNonNull(installedHost, "installedHost");
+    }
+
+    /** Process-scoped extension host used when the renderer creates its engine session services. */
+    public RenderSessionHost apiHost() {
+        return java.util.Objects.requireNonNull(apiHost, "Caustica API host is not installed");
+    }
+
+    /** Installs the concrete engine world epoch created by the renderer's native backend owner. */
+    public void installEngineWorldSession(EngineWorldSession installedSession) {
+        if (engineWorldSession != null) throw new IllegalStateException("engine world session is already installed");
+        engineWorldSession = java.util.Objects.requireNonNull(installedSession, "installedSession");
+    }
+
+    /** Removes the installed epoch after it has been closed and before its device is destroyed. */
+    public void clearEngineWorldSession(EngineWorldSession expectedSession) {
+        if (engineWorldSession != expectedSession) throw new IllegalArgumentException("engine world session mismatch");
+        engineWorldSession = null;
     }
 
     /** Configure the process shader cache before the first runtime activation. */

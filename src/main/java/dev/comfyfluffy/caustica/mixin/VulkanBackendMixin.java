@@ -10,6 +10,7 @@ import com.mojang.blaze3d.vulkan.VulkanBackend;
 import com.mojang.blaze3d.vulkan.VulkanPhysicalDevice;
 import com.mojang.blaze3d.vulkan.init.VulkanFeature;
 import dev.comfyfluffy.caustica.CausticaMod;
+import dev.comfyfluffy.caustica.engine.vulkan.VulkanRequiredProfile;
 import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftDeviceBringup;
 import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftVulkanDiagnostics;
 import dev.comfyfluffy.caustica.vulkan.VulkanDiagnostics;
@@ -19,10 +20,10 @@ import org.lwjgl.vulkan.VkDevice;
 import org.lwjgl.vulkan.VkDeviceCreateInfo;
 import org.lwjgl.vulkan.VkPhysicalDeviceFeatures;
 import org.lwjgl.vulkan.VkPhysicalDeviceFeatures2;
-import org.lwjgl.vulkan.VkPhysicalDeviceVulkan12Features;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.ModifyArg;
 import org.spongepowered.asm.mixin.injection.ModifyArgs;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import org.spongepowered.asm.mixin.injection.invoke.arg.Args;
@@ -52,8 +53,7 @@ public abstract class VulkanBackendMixin {
 					VkPhysicalDeviceFeatures.SHADERSTORAGEIMAGEWRITEWITHOUTFORMAT);
 	private static final List<VulkanFeature> SDK_SHADER_FEATURES = List.of(
 			STORAGE_IMAGE_WRITE_WITHOUT_FORMAT,
-			new VulkanFeature(VulkanBackend.VK10_FEATURES_STRUCT, "shaderInt16", VkPhysicalDeviceFeatures.SHADERINT16),
-			new VulkanFeature(VulkanBackend.VK12_FEATURES_STRUCT, "shaderFloat16", VkPhysicalDeviceVulkan12Features.SHADERFLOAT16));
+			new VulkanFeature(VulkanBackend.VK10_FEATURES_STRUCT, "shaderInt16", VkPhysicalDeviceFeatures.SHADERINT16));
 
 	private static final List<String> CAUSTICA_WANTED_EXTENSIONS = List.of(
 			// FFX (FSR)
@@ -67,6 +67,14 @@ public abstract class VulkanBackendMixin {
 			"VK_KHR_push_descriptor");
 
 	private static final Set<String> loggedMissingSdkFeatures = new HashSet<>();
+
+	@ModifyArg(
+			method = "createVma",
+			at = @At(value = "INVOKE", target = "Lorg/lwjgl/util/vma/VmaAllocatorCreateInfo;vulkanApiVersion(I)Lorg/lwjgl/util/vma/VmaAllocatorCreateInfo;"),
+			index = 0)
+	private static int caustica$useVulkan14ForVma(int hostVersion) {
+		return VulkanRequiredProfile.VULKAN_1_4;
+	}
 
 	/** NVIDIA advertises AMD markers too, but its native diagnostic checkpoints contain better fault context. */
 	@WrapOperation(

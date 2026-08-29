@@ -28,10 +28,10 @@ import net.minecraft.client.gui.font.TextRenderable;
 import net.minecraft.client.renderer.entity.EntityRenderer;
 import net.minecraft.util.ARGB;
 
-import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
 import dev.comfyfluffy.caustica.api.gpu.GpuFrameUse;
-import dev.comfyfluffy.caustica.api.gpu.GpuDebugScope;
-import dev.comfyfluffy.caustica.api.gpu.GpuBuffer;
+import dev.comfyfluffy.caustica.rt.GpuBuffer;
+import dev.comfyfluffy.caustica.rt.GpuContext;
+import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import dev.comfyfluffy.caustica.minecraft.entity.RtEntities;
 
 /**
@@ -67,7 +67,7 @@ final class NameTagFeature implements OverlayFeature {
     // one shared set rewritten per page.
     private static final int MAX_ATLAS_PAGES = 16;
 
-    private GpuDevice device;
+    private GpuContext device;
     private OverlayPipelines.Pipeline pipeline;
     private OverlayPipelines.SampledImageSetPool imageSetPool;
     private long sampler;
@@ -96,7 +96,7 @@ final class NameTagFeature implements OverlayFeature {
     }
 
     @Override
-    public boolean prepare(GpuDevice device, OverlayFramePool pool, GpuFrameUse gpuUse,
+    public boolean prepare(GpuContext device, OverlayFramePool pool, GpuFrameUse gpuUse,
                            long worldTlas, Matrix4fc worldViewProjection, int width, int height) {
         if (!RtEntities.nameTagsEnabled()) {
             return false;
@@ -152,7 +152,7 @@ final class NameTagFeature implements OverlayFeature {
         return true;
     }
 
-    private void ensureResources(GpuDevice device) {
+    private void ensureResources(GpuContext device) {
         this.device = device;
         if (pipeline != null) {
             return;
@@ -171,7 +171,7 @@ final class NameTagFeature implements OverlayFeature {
     @Override
     public void record(VkCommandBuffer cmd, long targetView, int width, int height) {
         try (MemoryStack stack = MemoryStack.stackPush();
-             GpuDebugScope ignored = device.debugScope(cmd, "name tags")) {
+             RtDebugLabels.Scope ignored = device.debugScope(cmd, "name tags")) {
             WorldOverlayPass.beginColorRendering(cmd, stack, targetView, width, height, false);
             VK10.vkCmdBindPipeline(cmd, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline.handle);
             ByteBuffer push = stack.malloc(PUSH_BYTES);

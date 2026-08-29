@@ -1,57 +1,42 @@
 package dev.comfyfluffy.caustica.example.gltfviewer;
 
-import dev.comfyfluffy.caustica.api.provider.CpuTextureResource;
-import dev.comfyfluffy.caustica.api.provider.GeometryTransform;
-import dev.comfyfluffy.caustica.api.provider.MaterialDefinition;
-import dev.comfyfluffy.caustica.api.provider.SceneGeometryKey;
-import dev.comfyfluffy.caustica.api.provider.SceneMesh;
+import dev.comfyfluffy.caustica.api.geometry.GeometryTransform;
 import net.minecraft.core.BlockPos;
 
 import java.util.List;
-import java.util.Objects;
 
-/** Immutable renderer-facing view of one authored glTF scene. */
-record GltfViewerScene(List<Resident> residents, List<Placement> placements,
-                       List<Material> materials, List<Texture> textures) {
+/** Immutable CPU geometry and authored node placements for one glTF resource epoch. */
+record GltfViewerScene(List<Primitive> primitives, List<Placement> placements) {
     GltfViewerScene {
-        residents = List.copyOf(residents);
+        primitives = List.copyOf(primitives);
         placements = List.copyOf(placements);
-        materials = List.copyOf(materials);
-        textures = List.copyOf(textures);
     }
 
-    /** Uniform OpenPBR definition and the glTF textures its registered implementation samples. */
-    record Material(MaterialDefinition definition, CpuTextureResource metallicRoughness,
-                    CpuTextureResource normal, CpuTextureResource emissive, float normalScale) {
-        Material {
-            Objects.requireNonNull(definition, "definition");
-            if (!Float.isFinite(normalScale) || normalScale < 0.0f) {
-                throw new IllegalArgumentException("glTF normal scale must be finite and non-negative");
+    record Primitive(float[] positions, int[] indices, float red, float green, float blue, float alpha,
+                     float roughness, float metallic, boolean cutout, float alphaCutoff) {
+        Primitive {
+            positions = positions.clone();
+            indices = indices.clone();
+            if (positions.length < 9 || positions.length % 3 != 0) {
+                throw new IllegalArgumentException("glTF primitive positions must contain float3 vertices");
+            }
+            if (indices.length == 0 || indices.length % 3 != 0) {
+                throw new IllegalArgumentException("glTF primitive indices must contain triangles");
             }
         }
-    }
 
-    record Resident(SceneGeometryKey key, SceneMesh mesh) {
-        Resident {
-            Objects.requireNonNull(key, "key");
-            Objects.requireNonNull(mesh, "mesh");
-        }
+        @Override public float[] positions() { return positions.clone(); }
+        @Override public int[] indices() { return indices.clone(); }
     }
 
     /** A primitive instance with its authored glTF node-world matrix in column-major order. */
-    record Placement(SceneGeometryKey resident, float[] nodeWorldMatrix) {
+    record Placement(int primitive, float[] nodeWorldMatrix) {
         Placement {
-            Objects.requireNonNull(resident, "resident");
             nodeWorldMatrix = nodeWorldMatrix.clone();
-            if (nodeWorldMatrix.length != 16) {
-                throw new IllegalArgumentException("glTF node matrix must have 16 elements");
-            }
+            if (nodeWorldMatrix.length != 16) throw new IllegalArgumentException("node matrix must be 4x4");
         }
 
-        @Override
-        public float[] nodeWorldMatrix() {
-            return nodeWorldMatrix.clone();
-        }
+        @Override public float[] nodeWorldMatrix() { return nodeWorldMatrix.clone(); }
 
         GeometryTransform at(BlockPos anchor) {
             return new GeometryTransform(
@@ -61,13 +46,6 @@ record GltfViewerScene(List<Resident> residents, List<Placement> placements,
                     anchor.getX() + (double) nodeWorldMatrix[12],
                     anchor.getY() + (double) nodeWorldMatrix[13],
                     anchor.getZ() + (double) nodeWorldMatrix[14]);
-        }
-    }
-
-    record Texture(SceneMesh.TextureReference reference, CpuTextureResource content) {
-        Texture {
-            Objects.requireNonNull(reference, "reference");
-            Objects.requireNonNull(content, "content");
         }
     }
 }

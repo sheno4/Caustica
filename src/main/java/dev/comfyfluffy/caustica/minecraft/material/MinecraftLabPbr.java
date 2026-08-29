@@ -1,7 +1,5 @@
 package dev.comfyfluffy.caustica.minecraft.material;
 
-import dev.comfyfluffy.caustica.api.provider.OpenPbrMaterialDefaults;
-
 /**
  * Adapter from the LabPBR 1.3 specular texture into the engine's OpenPBR vocabulary. LabPBR is a source
  * format, not a material model: it authors normal-incidence reflectance and perceptual smoothness, where
@@ -66,7 +64,7 @@ public final class MinecraftLabPbr {
             // metal/dielectric border then blends toward the ordinary dielectric reflectance rather than
             // toward none at all.
             metalness = 1.0f;
-            specularIor = OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR;
+            specularIor = OpenPbrDefaults.SPECULAR_IOR;
             if (g < 237.5f) {
                 int metal = Math.round(g) - 230;
                 metalBaseColorR = metalF0(metal, 0);

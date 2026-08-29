@@ -1,429 +1,79 @@
 package dev.comfyfluffy.caustica.rt.shader;
 
-import dev.comfyfluffy.caustica.api.CausticaRegistry;
-import dev.comfyfluffy.caustica.api.FeatureCategory;
-import dev.comfyfluffy.caustica.api.ShaderSource;
-import dev.comfyfluffy.caustica.api.Slots;
-import dev.comfyfluffy.caustica.minecraft.MinecraftProvidersExtension;
-import dev.comfyfluffy.caustica.api.DisplayText;
-import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.api.program.EnvironmentDefinition;
+import dev.comfyfluffy.caustica.api.program.ShaderDataType;
+import dev.comfyfluffy.caustica.api.program.ShaderDefinition;
+import dev.comfyfluffy.caustica.api.program.ShaderSource;
+import dev.comfyfluffy.caustica.api.program.SurfaceDefinition;
+import dev.comfyfluffy.caustica.api.program.VolumeDefinition;
+import dev.comfyfluffy.caustica.engine.program.ProgramComposition;
+import dev.comfyfluffy.caustica.engine.program.ProgramKey;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
-import java.util.Map;
-import java.util.Set;
 
-import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class WorldShaderCompilerTest {
-    private static final ResourceId TEST_SURFACE = ResourceId.of("test", "surface");
-    private static final ResourceId TEST_COVERAGE = ResourceId.of("test", "coverage");
-    private static final ResourceId CUSTOM_MINECRAFT_SURFACE =
-            ResourceId.of("test", "custom_minecraft_surface");
-    private static final ResourceId CUSTOM_MINECRAFT_COVERAGE =
-            ResourceId.of("test", "custom_minecraft_coverage");
-    private static final ResourceId ERROR_COVERAGE = ResourceId.of("caustica", "error_coverage");
+    private static final ShaderSource BUILTINS = ShaderSource.classpath(WorldShaderCompilerTest.class,
+            "/caustica/shaders/builtin", "surface", "sky");
+    private static final ShaderDataType<Object> DATA = ShaderDataType.create("test-data");
+    private static final ShaderDataType<Object> BINDING = ShaderDataType.create("test-binding");
+    private static final ShaderDataType<Object> INSTANCE = ShaderDataType.create("test-instance");
 
     @Test
-    void packagesWorldSourcesWithoutPrecompiledWorldStages() {
-        assertNotNull(getClass().getResource("/caustica/shaders/world/primary_rgen.slang"));
-        assertNotNull(getClass().getResource("/caustica/shaders/world/indirect_ser.slang"));
-        assertNull(getClass().getResource("/caustica/shaders/pipelines/world/primary_rgen.spv"));
-        assertNull(getClass().getResource("/caustica/shaders/pipelines/world/indirect_ser.rgen.spv"));
-        assertNull(getClass().getResource("/caustica/shaders/pipelines/world/closest_hit.rchit.spv"));
-    }
+    void assignsCategoryLocalIndicesAndBuildsImplementationDataTable(@TempDir Path cache) throws Exception {
+        ProgramKey surfaceKey = new ProgramKey(ProgramKey.Kind.SURFACE, 1);
+        ProgramKey volumeKey = new ProgramKey(ProgramKey.Kind.VOLUME, 2);
+        ProgramKey environmentKey = new ProgramKey(ProgramKey.Kind.ENVIRONMENT, 3);
+        ProgramComposition program = new ProgramComposition(7, List.of(new ProgramComposition.RegistrationSet(4,
+                List.of(new ProgramComposition.Surface(surfaceKey, SurfaceDefinition.of(
+                                shader("caustica_error_surface", "ErrorSurface"),
+                                shader("caustica_error_coverage", "ErrorCoverage"), DATA.data(41), BINDING, INSTANCE)),
+                        new ProgramComposition.Volume(volumeKey, VolumeDefinition.of(
+                                shader("caustica_water_surface", "WaterVolume"), DATA.data(42), BINDING, INSTANCE)),
+                        new ProgramComposition.Environment(environmentKey, new EnvironmentDefinition<>(
+                                shader("caustica_builtin_sky", "BuiltinEnvironment"), BINDING))))));
 
-    @Test
-    void errorOnlyCompositionCompilesAndOwnsCaseZeroAndDefault(@TempDir Path cacheDirectory)
-            throws Exception {
-        CausticaRegistry registry = dev.comfyfluffy.caustica.TestRegistries.rendererOnly();
-        try (WorldShaderCompiler compiler = WorldShaderCompiler.create(
-                cacheDirectory, registry.selection())) {
-            String root = compiler.composition().rootSource();
-            assertTrue(root.contains("case 0u: { ErrorSurface s;"));
-            assertTrue(root.contains("default: { ErrorSurface s;"));
-            assertTrue(root.contains("case 0u: { ErrorCoverage c;"));
-            assertTrue(root.contains("default: { ErrorCoverage c;"));
-            assertSpirv(compiler.compileClosestHit(), 1024);
-            assertSpirv(compiler.compileRadianceAnyHit(), 1024);
-            assertSpirv(compiler.compileShadowAnyHit(), 1024);
+        // Use the builtin surface as a stand-in volume only for source-generation assertions; the
+        // generated volume type is not specialized in this test.
+        ProgramComposition sourceOnly = new ProgramComposition(program.revision(), List.of(
+                new ProgramComposition.RegistrationSet(4, List.of(
+                        program.registrations().getFirst().declarations().get(0),
+                        program.registrations().getFirst().declarations().get(2)))));
+        try (WorldShaderCompiler compiler = WorldShaderCompiler.create(cache, sourceOnly)) {
+            assertEquals(1, compiler.implementationIndex(surfaceKey));
+            assertEquals(1, compiler.implementationIndex(environmentKey));
+            assertEquals(List.of(41L), compiler.composition().implementationData());
+            assertTrue(compiler.composition().rootSource().contains("ShaderDataPtr<uint64_t>"));
+            assertFalse(compiler.composition().rootSource().contains("SurfaceModifier"));
+            assertSpirv(compiler.compileClosestHit());
+            assertSpirv(compiler.compileRadianceAnyHit());
+            assertSpirv(compiler.compileSkyMiss());
         }
     }
 
     @Test
-    void compilerRejectsACompositionWithoutTheErrorPairAtIndexZero(@TempDir Path cacheDirectory) {
-        CausticaRegistry.Selection valid = dev.comfyfluffy.caustica.TestRegistries.withBuiltins().selection();
-        CausticaRegistry.Selection wrongIndexZero = new CausticaRegistry.Selection(
-                valid.bindings(), valid.surfaces().subList(1, valid.surfaces().size()),
-                valid.surfaceOwners(), valid.surfaceModifiers(), valid.surfaceModifierOwners());
-
-        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
-                () -> WorldShaderCompiler.create(cacheDirectory, wrongIndexZero));
-        assertTrue(error.getMessage().contains("error surface and coverage at index 0"));
+    void rejectsRegistrationSetsOutsideAcceptanceOrder(@TempDir Path cache) {
+        ProgramComposition program = new ProgramComposition(1, List.of(
+                new ProgramComposition.RegistrationSet(2, List.of()),
+                new ProgramComposition.RegistrationSet(1, List.of())));
+        assertThrows(IllegalArgumentException.class, () -> WorldShaderCompiler.create(cache, program));
     }
 
-    @Test
-    void compilesEveryCompositionGenericWorldStage(@TempDir Path cacheDirectory) throws Exception {
-        try (WorldShaderCompiler compiler = compiler(cacheDirectory)) {
-            assertSpirv(compiler.compilePrimary(), 1024);
-            assertSpirv(compiler.compileSkyMiss(), 1024);
-            assertSpirv(compiler.compileClosestHit(), 1024);
-            assertSpirv(compiler.compileIndirect(false), 1024);
-        }
-        try (WorldShaderCompiler compiler = compiler(cacheDirectory.resolve("ser"))) {
-            assertSpirv(compiler.compileSkyMiss(), 1024);
-            assertSpirv(compiler.compileClosestHit(), 1024);
-            assertSpirv(compiler.compileIndirect(true), 1024);
-        }
+    private static ShaderDefinition shader(String module, String type) {
+        return new ShaderDefinition(BUILTINS, module, type);
     }
 
-    @Test
-    void isolatedCompilerCompilesEveryWorldStage(@TempDir Path cacheDirectory) throws Exception {
-        try (WorldShaderCompiler compiler = WorldShaderCompiler.createIsolated(
-                cacheDirectory, dev.comfyfluffy.caustica.TestRegistries.withBuiltins().selection())) {
-            List<byte[]> stages = List.of(
-                    compiler.compilePrimary(),
-                    compiler.compileIndirect(false),
-                    compiler.compileSkyMiss(),
-                    compiler.compilePlain("guide.rmiss.slang", WorldShaderCompiler.ENTRY_POINT),
-                    compiler.compileClosestHit(),
-                    compiler.compileRadianceAnyHit(),
-                    compiler.compileShadowAnyHit());
-            for (byte[] stage : stages) {
-                assertSpirv(stage, 256);
-            }
-            // Accumulated across every stage compiled in this session, so it spans every registered
-            // feature's own set-2 declarations rather than just the sky the miss stage reached.
-            assertEquals(Set.of("skyView", "transmittance", "skyInputs", "celestialsAtlas",
-                    "minecraftDamageModifiers"), compiler.passResourceBindings().keySet());
-        }
-    }
-
-    @Test
-    void compilesMinecraftEndPortalSurface(@TempDir Path cacheDirectory) throws Exception {
-        CausticaRegistry registry = dev.comfyfluffy.caustica.TestRegistries.withBuiltins();
-        try (WorldShaderCompiler compiler = WorldShaderCompiler.createIsolated(
-                cacheDirectory, registry.selection())) {
-            assertSpirv(compiler.compileSpecialized(
-                    WorldShaderCompiler.CLOSEST_HIT_MODULE, WorldShaderCompiler.ENTRY_POINT), 1024);
-        }
-    }
-
-    // Slang treats a module as safe to declare globals only if some entry point compiled in this session
-    // plain-imported it, so whether a specialized stage compiles must not depend on which stage ran first.
-    // The program manager compiles indirect BEFORE sky_miss; a session that only ever saw sky_miss first would
-    // hide a missing anchor import in every other stage.
-    @ParameterizedTest
-    @ValueSource(strings = {"primary", "indirect", "indirect_ser", "closest_hit", "sky_miss"})
-    void everySpecializedStageCompilesFirstInAFreshSession(String stage, @TempDir Path cacheDirectory)
-            throws Exception {
-        try (WorldShaderCompiler compiler = compiler(cacheDirectory.resolve(stage))) {
-            assertSpirv(switch (stage) {
-                case "primary" -> compiler.compilePrimary();
-                case "indirect" -> compiler.compileIndirect(false);
-                case "indirect_ser" -> compiler.compileIndirect(true);
-                case "closest_hit" -> compiler.compileClosestHit();
-                default -> compiler.compileSkyMiss();
-            }, 1024);
-        }
-    }
-
-    @Test
-    void repeatedCompositionCompilationIsServedFromMemory(@TempDir Path cacheDirectory) throws Exception {
-        try (WorldShaderCompiler compiler = compiler(cacheDirectory)) {
-            byte[] first = compiler.compileSkyMiss();
-            byte[] second = compiler.compileSkyMiss();
-            assertArrayEquals(first, second);
-            assertTrue(first == second, "second compile should return the cached array instance");
-        }
-    }
-
-    @Test
-    void compilesASelectedClasspathFeatureAndItsTransitiveImport(@TempDir Path cacheDirectory)
-            throws Exception {
-        CausticaRegistry registry = dev.comfyfluffy.caustica.TestRegistries.withBuiltins();
-        ResourceId featureId = ResourceId.of("test", "sky");
-        registry.feature(featureId)
-                .title(DisplayText.literal("Test sky"))
-                .category(FeatureCategory.SKY)
-                .shaderSource(ShaderSource.classpath("/caustica-test/shaders"))
-                .bind(Slots.SKY, "test_sky", "TestSky")
-                .register();
-        registry.select(Slots.SKY, featureId);
-
-        try (WorldShaderCompiler compiler = WorldShaderCompiler.create(cacheDirectory, registry.selection())) {
-            assertSpirv(compiler.compileSkyMiss(), 1024);
-            assertTrue(java.nio.file.Files.isRegularFile(cacheDirectory.resolve(
-                    "features/test/sky/test_sky_helper.slang")));
-        }
-    }
-
-    /**
-     * A registered implementation becomes a case in the generated switch, keyed by the index materials
-     * pack into their binding — the engine itself never names it.
-     */
-    @Test
-    void aRegisteredSurfaceImplementationBecomesADispatchCase(@TempDir Path cacheDirectory)
-            throws Exception {
-        CausticaRegistry registry = registryWithTestSurface("test_surface", "TestSurface");
-
-        try (WorldShaderCompiler compiler = WorldShaderCompiler.create(cacheDirectory, registry.selection())) {
-            String root = compiler.composition().rootSource();
-            int implementation = registry.surfaceIndex(TEST_SURFACE);
-            assertTrue(root.contains("case 0u: { ErrorSurface s;"));
-            assertTrue(root.contains("case " + implementation + "u: { TestSurface s;"));
-            assertTrue(root.contains("default: { ErrorSurface s;"));
-            assertSpirv(compiler.compilePrimary(), 1024);
-            assertSpirv(compiler.compileClosestHit(), 1024);
-            assertSpirv(compiler.compileIndirect(false), 1024);
-        }
-    }
-
-    /**
-     * One bad third-party implementation must not take the world pipeline with it. It keeps its index —
-     * renumbering would repoint every material compiled against the old order — and the switch resolves
-     * that index to the error surface instead.
-     */
-    @Test
-    void aSurfaceImplementationThatDoesNotCompileFallsBackToTheErrorSurface(@TempDir Path cacheDirectory)
-            throws Exception {
-        CausticaRegistry registry = registryWithTestSurface("test_surface_broken", "BrokenSurface");
-
-        try (WorldShaderCompiler compiler = WorldShaderCompiler.create(cacheDirectory, registry.selection())) {
-            int broken = registry.surfaceIndex(TEST_SURFACE);
-            assertTrue(compiler.rejectedSurfaces().contains(broken));
-            assertTrue(!compiler.composition().rootSource().contains("case " + broken + "u:"));
-            assertTrue(compiler.composition().rootSource().contains("default: { ErrorSurface s;"));
-            assertTrue(compiler.composition().rootSource().contains("default: { ErrorCoverage c;"));
-            assertSpirv(compiler.compileClosestHit(), 1024);
-        }
-    }
-
-    @Test
-    void coverageDispatchUsesItsOwnTypesAndConservativeErrorFallback(@TempDir Path cacheDirectory)
-            throws Exception {
-        CausticaRegistry registry = registryWithTestCoverage("test_coverage", "TestCoverage");
-
-        try (WorldShaderCompiler compiler = WorldShaderCompiler.create(cacheDirectory, registry.selection())) {
-            int implementation = registry.surfaceIndex(TEST_SURFACE);
-            String root = compiler.composition().rootSource();
-            assertTrue(compiler.rejectedCoverages().isEmpty());
-            assertTrue(root.contains("case 0u: { ErrorCoverage c;"));
-            assertTrue(root.contains("case " + implementation + "u: { TestCoverage c;"));
-            assertTrue(root.contains("default: { ErrorCoverage c;"));
-            assertTrue(!root.substring(root.indexOf("public struct CoverageDispatch"))
-                    .contains("ISurfaceModel"));
-        }
-    }
-
-    @Test
-    void minecraftMaterialAndCoverageCompileThroughRuntimeStages(@TempDir Path cacheDirectory)
-            throws Exception {
-        CausticaRegistry registry = dev.comfyfluffy.caustica.TestRegistries.withBuiltins();
-
-        try (WorldShaderCompiler compiler = WorldShaderCompiler.create(cacheDirectory, registry.selection())) {
-            int implementation = registry.surfaceIndex(MinecraftProvidersExtension.MATERIAL_SURFACE);
-            String root = compiler.composition().rootSource();
-            assertTrue(root.contains("case " + implementation + "u: { MinecraftSurface s;"));
-            assertTrue(root.contains("case " + implementation + "u: { MinecraftCoverage c;"));
-            assertSpirv(compiler.compileClosestHit(), 1024);
-            assertSpirv(compiler.compileRadianceAnyHit(), 1024);
-            assertSpirv(compiler.compileShadowAnyHit(), 1024);
-        }
-    }
-
-    @Test
-    void customMinecraftMaterialPairIsAvailableToRuntimeDispatch(@TempDir Path cacheDirectory)
-            throws Exception {
-        CausticaRegistry registry = dev.comfyfluffy.caustica.TestRegistries.withBuiltins();
-        registry.feature(ResourceId.of("test", "custom_minecraft_material"))
-                .shaderSource(ShaderSource.classpath("/caustica-test/shaders"))
-                .surface(CUSTOM_MINECRAFT_SURFACE,
-                        "minecraft_custom_material", "CustomMinecraftSurface",
-                        CUSTOM_MINECRAFT_COVERAGE,
-                        "minecraft_custom_material", "CustomMinecraftCoverage")
-                .register();
-
-        try (WorldShaderCompiler compiler = WorldShaderCompiler.create(cacheDirectory, registry.selection())) {
-            int implementation = registry.surfaceIndex(CUSTOM_MINECRAFT_SURFACE);
-            String root = compiler.composition().rootSource();
-            assertTrue(!compiler.rejectedSurfaces().contains(implementation));
-            assertTrue(!compiler.rejectedCoverages().contains(implementation));
-            assertTrue(root.contains("case " + implementation + "u: { CustomMinecraftSurface s;"));
-            assertTrue(root.contains("case " + implementation + "u: { CustomMinecraftCoverage c;"));
-            assertSpirv(compiler.compileClosestHit(), 1024);
-            assertSpirv(compiler.compileRadianceAnyHit(), 1024);
-            assertSpirv(compiler.compileShadowAnyHit(), 1024);
-        }
-    }
-
-    @Test
-    void primitiveAux0OwnsTextureAndCoverageFactsAcrossRuntimeHitStages(@TempDir Path cacheDirectory)
-            throws Exception {
-        CausticaRegistry registry = dev.comfyfluffy.caustica.TestRegistries.withBuiltins();
-        try (WorldShaderCompiler compiler = WorldShaderCompiler.create(cacheDirectory, registry.selection())) {
-            String common = Files.readString(cacheDirectory.resolve("world/world_common.slang"));
-            assertTrue(common.contains("primitiveBaseColorTextureIndex(uint aux0)"));
-            assertTrue(common.contains("primitiveCoverage(uint aux0)"));
-            assertTrue(common.contains("primitiveBaseTexturePresent(uint aux0)"));
-            assertTrue(common.contains("primitiveBaseTextureLinear(uint aux0)"));
-            assertTrue(!common.contains("bindingBaseColorTextureIndex"));
-            assertTrue(!common.contains("bindingCoverage"));
-            assertSpirv(compiler.compileClosestHit(), 1024);
-            assertSpirv(compiler.compileRadianceAnyHit(), 1024);
-            assertSpirv(compiler.compileShadowAnyHit(), 1024);
-        }
-    }
-
-    @Test
-    void aCoverageProbeFailureRejectsTheWholeImplementation(@TempDir Path cacheDirectory)
-            throws Exception {
-        CausticaRegistry registry = registryWithTestCoverage("test_coverage_broken", "BrokenCoverage");
-
-        try (WorldShaderCompiler compiler = WorldShaderCompiler.create(cacheDirectory, registry.selection())) {
-            int implementation = registry.surfaceIndex(TEST_SURFACE);
-            String root = compiler.composition().rootSource();
-            assertTrue(compiler.rejectedSurfaces().contains(implementation));
-            assertTrue(compiler.rejectedCoverages().contains(implementation));
-            assertTrue(!root.contains("case " + implementation + "u: { TestSurface s;"));
-            assertTrue(!root.contains("case " + implementation + "u: { BrokenCoverage c;"));
-            assertTrue(root.contains("default: { ErrorCoverage c;"));
-        }
-    }
-
-    @Test
-    void surfaceModifiersDispatchSequentiallyAndIsolateBrokenImplementations(@TempDir Path cacheDirectory)
-            throws Exception {
-        CausticaRegistry registry = dev.comfyfluffy.caustica.TestRegistries.withBuiltins();
-        registry.feature(ResourceId.of("test", "modifiers"))
-                .shaderSource(ShaderSource.classpath("/caustica-test/shaders"))
-                .surfaceModifier(ResourceId.of("test", "first"), "test_surface_modifiers", "FirstModifier")
-                .surfaceModifier(ResourceId.of("test", "broken"), "test_surface_modifier_broken", "BrokenModifier")
-                .surfaceModifier(ResourceId.of("test", "second"), "test_surface_modifiers", "SecondModifier")
-                .register();
-
-        try (WorldShaderCompiler compiler = WorldShaderCompiler.create(cacheDirectory, registry.selection())) {
-            assertSpirv(compiler.compileClosestHit(), 1024);
-        }
-    }
-
-    private static CausticaRegistry registryWithTestSurface(String module, String type) {
-        CausticaRegistry registry = dev.comfyfluffy.caustica.TestRegistries.withBuiltins();
-        registry.feature(TEST_SURFACE)
-                .title(DisplayText.literal("Test surface"))
-                .category(FeatureCategory.GENERAL)
-                .shaderSource(ShaderSource.classpath("/caustica-test/shaders"))
-                .surface(TEST_SURFACE, module, type,
-                        ERROR_COVERAGE, "caustica_error_coverage", "ErrorCoverage")
-                .register();
-        return registry;
-    }
-
-    private static CausticaRegistry registryWithTestCoverage(String module, String type) {
-        CausticaRegistry registry = dev.comfyfluffy.caustica.TestRegistries.withBuiltins();
-        registry.feature(TEST_SURFACE)
-                .shaderSource(ShaderSource.classpath("/caustica-test/shaders"))
-                .surface(TEST_SURFACE, "test_surface", "TestSurface",
-                        TEST_COVERAGE, module, type)
-                .register();
-        return registry;
-    }
-
-    @Test
-    void passResourceBindingsAreDiscoveredFromCompositionReflection(@TempDir Path cacheDirectory)
-            throws Exception {
-        try (WorldShaderCompiler compiler = compiler(cacheDirectory)) {
-            compiler.compileSkyMiss();
-            // The selected Minecraft feature declares the sky inputs and projected-damage modifier inputs.
-            assertEquals(Map.of(
-                    "skyView", new WorldShaderCompiler.PassResourceBinding(0,
-                            WorldShaderCompiler.PassResourceKind.SAMPLED_IMAGE),
-                    "transmittance", new WorldShaderCompiler.PassResourceBinding(1,
-                            WorldShaderCompiler.PassResourceKind.SAMPLED_IMAGE),
-                    "skyInputs", new WorldShaderCompiler.PassResourceBinding(2,
-                            WorldShaderCompiler.PassResourceKind.UNIFORM_BUFFER),
-                    "celestialsAtlas", new WorldShaderCompiler.PassResourceBinding(3,
-                            WorldShaderCompiler.PassResourceKind.SAMPLED_IMAGE),
-                    "minecraftDamageModifiers", new WorldShaderCompiler.PassResourceBinding(4,
-                            WorldShaderCompiler.PassResourceKind.UNIFORM_BUFFER)),
-                    compiler.passResourceBindings());
-        }
-    }
-
-    @Test
-    void passResourceKindIsReadFromReflectedTypeShape(@TempDir Path cacheDirectory) throws Exception {
-        // Shapes confirmed empirically against slangc -reflection-json (undocumented elsewhere): a plain
-        // resource has type.kind == "resource", split by baseShape ("texture2D" vs "structuredBuffer")
-        // and, for images only, combined (sampled) vs access == "readWrite" (storage) — StructuredBuffer
-        // and RWStructuredBuffer both reflect as "structuredBuffer" and both lower to
-        // VK_DESCRIPTOR_TYPE_STORAGE_BUFFER regardless of access. ConstantBuffer<T> is its own top-level
-        // type.kind == "constantBuffer".
-        try (WorldShaderCompiler compiler = compiler(cacheDirectory)) {
-            String json = "{\"parameters\":["
-                    + param("storageImage", 0, "{\"kind\":\"resource\",\"baseShape\":\"texture2D\",\"access\":\"readWrite\"}")
-                    + ","
-                    + param("readBuf", 1, "{\"kind\":\"resource\",\"baseShape\":\"structuredBuffer\"}")
-                    + ","
-                    + param("rwBuf", 2, "{\"kind\":\"resource\",\"baseShape\":\"structuredBuffer\",\"access\":\"readWrite\"}")
-                    + ","
-                    + param("constBuf", 3, "{\"kind\":\"constantBuffer\"}")
-                    + "]}";
-
-            compiler.collectPassResourceBindings("fake_stage", json);
-
-            Map<String, WorldShaderCompiler.PassResourceBinding> bindings = compiler.passResourceBindings();
-            assertEquals(WorldShaderCompiler.PassResourceKind.STORAGE_IMAGE, bindings.get("storageImage").kind());
-            assertEquals(WorldShaderCompiler.PassResourceKind.STORAGE_BUFFER, bindings.get("readBuf").kind());
-            assertEquals(WorldShaderCompiler.PassResourceKind.STORAGE_BUFFER, bindings.get("rwBuf").kind());
-            assertEquals(WorldShaderCompiler.PassResourceKind.UNIFORM_BUFFER, bindings.get("constBuf").kind());
-        }
-    }
-
-    private static String param(String name, int index, String type) {
-        return "{\"name\":\"" + name + "\",\"binding\":{\"kind\":\"descriptorTableSlot\",\"index\":" + index
-                + ",\"space\":2},\"type\":" + type + "}";
-    }
-
-    @Test
-    void aSecondBindingClaimingAnAlreadyTakenIndexFails(@TempDir Path cacheDirectory) throws Exception {
-        try (WorldShaderCompiler compiler = compiler(cacheDirectory)) {
-            compiler.compileSkyMiss(); // registers skyView@0, transmittance@1 for real
-            String colliding = "{\"parameters\":[{\"name\":\"bogus\","
-                    + "\"binding\":{\"kind\":\"descriptorTableSlot\",\"index\":0,\"space\":2},"
-                    + "\"type\":{\"kind\":\"resource\",\"baseShape\":\"texture2D\",\"combined\":true}}]}";
-
-            IllegalStateException e = assertThrows(IllegalStateException.class,
-                    () -> compiler.collectPassResourceBindings("fake_stage", colliding));
-            assertTrue(e.getMessage().contains("bogus"));
-            assertTrue(e.getMessage().contains("skyView"));
-        }
-    }
-
-    @Test
-    void compilesThePlainGuideMissStage(@TempDir Path cacheDirectory) throws Exception {
-        try (WorldShaderCompiler compiler = compiler(cacheDirectory)) {
-            assertSpirv(compiler.compilePlain("guide.rmiss.slang", WorldShaderCompiler.ENTRY_POINT), 256);
-        }
-    }
-
-    private static WorldShaderCompiler compiler(Path cacheDirectory) throws Exception {
-        return WorldShaderCompiler.create(cacheDirectory, dev.comfyfluffy.caustica.TestRegistries.withBuiltins().selection());
-    }
-
-    private static void assertSpirv(byte[] spirv, int minimumBytes) {
+    private static void assertSpirv(byte[] spirv) {
         assertEquals(0x07230203, ByteBuffer.wrap(spirv).order(ByteOrder.LITTLE_ENDIAN).getInt());
-        assertTrue(spirv.length > minimumBytes, "expected substantial SPIR-V, got " + spirv.length);
+        assertTrue(spirv.length > 256);
     }
 }

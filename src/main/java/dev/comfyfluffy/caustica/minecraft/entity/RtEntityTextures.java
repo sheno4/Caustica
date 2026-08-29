@@ -3,10 +3,7 @@ package dev.comfyfluffy.caustica.minecraft.entity;
 import com.mojang.blaze3d.textures.GpuTextureView;
 import com.mojang.blaze3d.vulkan.VulkanGpuTextureView;
 import dev.comfyfluffy.caustica.CausticaMod;
-import dev.comfyfluffy.caustica.api.ResourceId;
-import dev.comfyfluffy.caustica.api.gpu.BorrowedVulkanTexture;
-import dev.comfyfluffy.caustica.api.provider.SceneMesh;
-import dev.comfyfluffy.caustica.api.provider.TextureSink;
+import dev.comfyfluffy.caustica.settings.ResourceId;
 import dev.comfyfluffy.caustica.mixin.RenderSetupAccessor;
 import dev.comfyfluffy.caustica.mixin.RenderTypeAccessor;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialLookup;
@@ -18,9 +15,7 @@ import net.minecraft.client.renderer.texture.DynamicTexture;
 import net.minecraft.resources.Identifier;
 
 import java.lang.reflect.Method;
-import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.WeakHashMap;
 
@@ -43,8 +38,7 @@ public final class RtEntityTextures {
     // stay cached and skip the costly RenderType.prepare().
     private final Map<RenderType, Long> viewCache = new WeakHashMap<>();
     private final Map<RenderType, Identifier> locationCache = new WeakHashMap<>();
-    private final Map<SceneMesh.TextureReference, BorrowedVulkanTexture> contributions = new HashMap<>();
-    private final List<SceneMesh.TextureReference> pendingContributions = new ArrayList<>();
+    private final Map<MinecraftEntityMesh.Texture, BorrowedTextureView> contributions = new HashMap<>();
     private boolean loggedFailure;
     private boolean loggedMaterialFailure;
     // 1x1 solid-white DynamicTexture for untextured geometry (leash/line ribbons).
@@ -58,25 +52,25 @@ public final class RtEntityTextures {
     }
 
     /** Contribute the primary texture of a render type under its stable source-local reference. */
-    public void contribute(RenderType renderType, SceneMesh.TextureReference reference) {
+    public void contribute(RenderType renderType, MinecraftEntityMesh.Texture reference) {
         if (renderType == null || reference == null || contributions.containsKey(reference)) return;
         contribute(reference, resolveView(renderType));
     }
 
     /** Resolve and contribute the stable logical texture used by a render type. */
-    public SceneMesh.TextureReference contribute(RenderType renderType) {
+    public MinecraftEntityMesh.Texture contribute(RenderType renderType) {
         Identifier location = textureLocation(renderType);
         if (location == null) return null;
-        SceneMesh.TextureReference reference = new SceneMesh.StandaloneTexture(
+        MinecraftEntityMesh.Texture reference = MinecraftEntityMesh.Texture.standalone(
                 MinecraftMaterialLookup.logicalTexture(location));
         contribute(renderType, reference);
         return reference;
     }
 
     /** Contribute a Minecraft atlas under the same reference stored in submitted scene meshes. */
-    public SceneMesh.AtlasTexture contributeAtlas(Identifier atlasLocation) {
+    public MinecraftEntityMesh.Texture contributeAtlas(Identifier atlasLocation) {
         if (atlasLocation == null) return null;
-        SceneMesh.AtlasTexture reference = new SceneMesh.AtlasTexture(
+        MinecraftEntityMesh.Texture reference = MinecraftEntityMesh.Texture.atlas(
                 ResourceId.of(atlasLocation.getNamespace(), atlasLocation.getPath()));
         if (!contributions.containsKey(reference)) {
             long view = 0L;
@@ -95,24 +89,22 @@ public final class RtEntityTextures {
         return reference;
     }
 
-    private void contribute(SceneMesh.TextureReference reference, long imageView) {
+    private void contribute(MinecraftEntityMesh.Texture reference, long imageView) {
         if (imageView == 0L) return;
-        contributions.put(reference, new BorrowedVulkanTexture(
-                imageView, org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_GENERAL, () -> { }));
-        pendingContributions.add(reference);
+        contributions.put(reference, new BorrowedTextureView(
+                imageView, org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_GENERAL));
     }
 
-    /** Submit newly discovered views. The renderer assigns and owns all descriptor slots. */
-    public void submitPending(TextureSink sink) {
-        if (pendingContributions.isEmpty()) return;
-        for (SceneMesh.TextureReference reference : pendingContributions) {
-            sink.submit(reference, contributions.get(reference));
-        }
-        pendingContributions.clear();
+    /** Borrow the current Vulkan view for upload-time descriptor allocation, or {@code null} if unresolved. */
+    public BorrowedTextureView borrow(MinecraftEntityMesh.Texture texture) {
+        return contributions.get(texture);
     }
+
+    /** Minecraft-owned image view borrowed only for descriptor encoding in the active resource epoch. */
+    public record BorrowedTextureView(long imageView, int imageLayout) { }
 
     /** Stable source identity for the registered white texture used by untextured geometry. */
-    public SceneMesh.AtlasTexture whiteTexture() {
+    public MinecraftEntityMesh.Texture whiteTexture() {
         ensureWhiteTexture();
         return contributeAtlas(WHITE_LOCATION);
     }
@@ -131,7 +123,6 @@ public final class RtEntityTextures {
         viewCache.clear();
         locationCache.clear();
         contributions.clear();
-        pendingContributions.clear();
     }
 
     /** Recover the resource identifier used to select {@code renderType}'s material, or null. The

@@ -1,33 +1,19 @@
-// Radiance-ray any-hit: the coverage test only. Transmittance is an interface behaviour resolved in
-// closest-hit on this ray type, so nothing here touches the payload — accepted hits fall through.
-//
-// Guide probes trace the radiance records with a cheaper miss, but they must not resolve coverage
-// stochastically: a guide answers "which surface does this reflection/refraction point at", and a
-// coin-flip on that is a flickering control signal rather than a sample that averages out. Taking the
-// deterministic cutoff instead lets a translucent covered surface reach closest-hit as a crossing, which is
-// exactly what the guide loop already knows how to walk through.
-import world_common;
-import bindings;
-import any_hit_common;
-import caustica_api;
-import caustica_pass_resources;
+module radiance_any_hit_rahit;
 
-[shader("anyhit")]
-void main<C : IComposition>(inout Payload payload, in BuiltInTriangleIntersectionAttributes attr) {
-    uint pid = PrimitiveIndex();
-    HitBinding hit = decodeHit(barycentrics(attr.barycentrics), pid);
-    uint coverage = hit.coverage;
-    if (coverage == COVERAGE_OPAQUE) {
-        return;
-    }
-    C.Coverages coverages;
-    float alpha = coverages.evaluateCoverage(
-            bindingSurfaceImpl(hit.binding), hit.coverageInput).a;
-    if (coverage == COVERAGE_STOCHASTIC && (payload.flags & PAYLOAD_GUIDE_RAY) == 0u) {
-        if (stochasticAlphaThreshold(pid) >= alpha) {
-            IgnoreHit();
-        }
-    } else if (alpha < bindingCutoff(hit.binding)) {
+import world_minimal;
+import caustica_api;
+import caustica_coverage;
+
+public void runRadianceAnyHit<TComposition : IComposition>(inout WorldPayload payload,
+        in BuiltInTriangleIntersectionAttributes attributes) {
+    TComposition.Coverages coverages = {};
+    if (coverages.evaluateCoverage(0u, worldCoverageInput(attributes)) < 0.5) {
         IgnoreHit();
     }
+}
+
+[shader("anyhit")]
+void main<TComposition : IComposition>(inout WorldPayload payload,
+        in BuiltInTriangleIntersectionAttributes attributes) {
+    runRadianceAnyHit<TComposition>(payload, attributes);
 }

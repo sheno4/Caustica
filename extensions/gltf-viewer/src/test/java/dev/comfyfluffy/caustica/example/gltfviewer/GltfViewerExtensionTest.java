@@ -1,79 +1,89 @@
 package dev.comfyfluffy.caustica.example.gltfviewer;
 
-import dev.comfyfluffy.caustica.api.CausticaRegistry;
-import dev.comfyfluffy.caustica.api.RuntimeActivation;
-import dev.comfyfluffy.caustica.api.ShaderSource;
-import dev.comfyfluffy.caustica.api.Slots;
+import dev.comfyfluffy.caustica.api.program.EnvironmentDefinition;
+import dev.comfyfluffy.caustica.api.program.EnvironmentId;
+import dev.comfyfluffy.caustica.api.program.ProgramBuilder;
+import dev.comfyfluffy.caustica.api.program.ProgramChannel;
+import dev.comfyfluffy.caustica.api.program.ProgramFailure;
+import dev.comfyfluffy.caustica.api.program.ProgramRegistration;
+import dev.comfyfluffy.caustica.api.program.ProgramTicket;
+import dev.comfyfluffy.caustica.api.program.SurfaceDefinition;
+import dev.comfyfluffy.caustica.api.program.SurfaceId;
+import dev.comfyfluffy.caustica.api.program.VolumeDefinition;
+import dev.comfyfluffy.caustica.api.program.VolumeId;
+import dev.comfyfluffy.caustica.minecraft.api.MinecraftApi;
+import dev.comfyfluffy.caustica.minecraft.api.MinecraftWorldSessionFactory;
 import org.junit.jupiter.api.Test;
 
-import java.lang.reflect.Modifier;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
+import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertSame;
-import static org.junit.jupiter.api.Assertions.assertNotSame;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 final class GltfViewerExtensionTest {
     @Test
-    void registersAlwaysActiveSceneAndMaterialProviders() {
-        CausticaRegistry registry = new CausticaRegistry();
+    void minecraftFactoryUsesOneAtomicProgramSet() {
+        GltfViewerExtension extension = new GltfViewerExtension();
+        AtomicReference<MinecraftWorldSessionFactory> minecraftFactory = new AtomicReference<>();
+        extension.registerMinecraft(new MinecraftApi(factory -> {
+            minecraftFactory.set(factory);
+            return () -> { };
+        }));
+        CaptureProgram programs = new CaptureProgram();
 
-        new GltfViewerExtension().register(registry);
+        ProgramRegistration<GltfProgramExports> registration = GltfViewerExtension.registerPrograms(programs);
 
-        var feature = registry.features().get(GltfViewerExtension.ID);
-        assertEquals(RuntimeActivation.ALWAYS, feature.runtimeActivation());
-        assertTrue(feature.sceneProviders().stream()
-                .anyMatch(provider -> provider.id().equals(GltfViewerSceneProvider.ID)));
-        assertTrue(feature.sceneProviders().stream()
-                .anyMatch(provider -> provider.id().equals(ProceduralSurfaceSceneProvider.ID)));
-        assertTrue(feature.materialSources().stream()
-                .anyMatch(provider -> provider.id().equals(GltfViewerExtension.MATERIAL_SOURCE)));
-        assertSame(GltfViewerExtension.class, feature.shaderSource().resourceAnchor());
-        assertEquals(2, feature.surfaces().size());
-        var material = feature.surfaces().getFirst();
-        assertEquals(GltfViewerExtension.MATERIAL_SURFACE, material.id());
-        assertEquals("caustica_gltf_viewer_material_surface", material.module());
-        assertEquals("GltfViewerMaterialSurface", material.type());
-        assertEquals(GltfViewerExtension.MATERIAL_COVERAGE, material.coverageId());
-        assertEquals("caustica_gltf_viewer_material_coverage", material.coverageModule());
-        assertEquals("GltfViewerMaterialCoverage", material.coverageType());
-        var portal = feature.surfaces().getLast();
-        assertEquals(GltfViewerExtension.PROCEDURAL_SURFACE, portal.id());
-        assertEquals(GltfViewerExtension.MATERIAL_COVERAGE, portal.coverageId());
+        assertNotNull(minecraftFactory.get());
+        assertEquals(1, programs.registrationCount);
+        assertEquals(2, programs.surfaces.size());
+        assertNotNull(programs.surfaces.getFirst().coverage());
+        assertNull(programs.surfaces.getLast().coverage());
+        assertNotNull(programs.surfaces.getFirst().surface().source().openModule(
+                programs.surfaces.getFirst().surface().module()));
+        registration.close();
+        assertFalse(programs.open);
     }
 
-    @Test
-    void sceneAndMaterialShareOneRepositoryPerRuntimeActivationWithoutMutableStaticState() {
-        CausticaRegistry registry = registryWithDefaultSky();
-        new GltfViewerExtension().register(registry);
+    private static final class CaptureProgram implements ProgramChannel, ProgramBuilder {
+        private final List<SurfaceDefinition<?, ?, ?>> surfaces = new ArrayList<>();
+        private int registrationCount;
+        private boolean open = true;
 
-        var first = registry.createRuntimeContributions();
-        var second = registry.createRuntimeContributions();
-        GltfViewerSceneProvider firstScene = (GltfViewerSceneProvider) first.sceneProviders()
-                .get(GltfViewerSceneProvider.ID);
-        GltfViewerMaterialSource firstMaterials = (GltfViewerMaterialSource) first.materialSources()
-                .get(GltfViewerExtension.MATERIAL_SOURCE);
-        GltfViewerSceneProvider secondScene = (GltfViewerSceneProvider) second.sceneProviders()
-                .get(GltfViewerSceneProvider.ID);
-        GltfViewerMaterialSource secondMaterials = (GltfViewerMaterialSource) second.materialSources()
-                .get(GltfViewerExtension.MATERIAL_SOURCE);
+        @Override
+        public <E> ProgramRegistration<E> register(Function<? super ProgramBuilder, ? extends E> declaration) {
+            registrationCount++;
+            E exports = declaration.apply(this);
+            return new ProgramRegistration<>() {
+                @Override public E exports() { return exports; }
+                @Override public ProgramTicket readiness() { return READY; }
+                @Override public void close() { open = false; }
+            };
+        }
 
-        assertSame(firstScene.assets(), firstMaterials.assets());
-        assertSame(secondScene.assets(), secondMaterials.assets());
-        assertNotSame(firstScene.assets(), secondScene.assets());
-        assertTrue(java.util.Arrays.stream(GltfViewerAssetRepository.class.getDeclaredFields())
-                .noneMatch(field -> Modifier.isStatic(field.getModifiers())
-                        && !Modifier.isFinal(field.getModifiers())));
+        @Override public <I, B, N> SurfaceId<B, N> surface(SurfaceDefinition<I, B, N> definition) {
+            surfaces.add(definition);
+            return new SurfaceId<>() { };
+        }
+        @Override public <I, B, N> VolumeId<B, N> volume(VolumeDefinition<I, B, N> definition) {
+            throw new AssertionError();
+        }
+        @Override public <B> EnvironmentId<B> environment(EnvironmentDefinition<B> definition) {
+            throw new AssertionError();
+        }
     }
 
-    private static CausticaRegistry registryWithDefaultSky() {
-        CausticaRegistry registry = new CausticaRegistry();
-        var sky = dev.comfyfluffy.caustica.api.ResourceId.of("test", "sky");
-        registry.feature(sky)
-                .shaderSource(ShaderSource.classpath("/test/shaders"))
-                .bind(Slots.SKY, "test_sky", "TestSky")
-                .register();
-        registry.setDefault(Slots.SKY, sky);
-        return registry;
-    }
+    private static final ProgramTicket READY = new ProgramTicket() {
+        @Override public State state() { return State.READY; }
+        @Override public Optional<ProgramFailure> failure() { return Optional.empty(); }
+        @Override public void whenComplete(Consumer<? super Completion> callback) {
+            callback.accept(new Ready());
+        }
+    };
 }

@@ -9,13 +9,13 @@ import dev.comfyfluffy.caustica.api.pass.CausticaRenderPass;
 import dev.comfyfluffy.caustica.api.pass.PassFrame;
 import dev.comfyfluffy.caustica.api.pass.PassSetup;
 import dev.comfyfluffy.caustica.api.pass.RenderStage;
-import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
 import dev.comfyfluffy.caustica.api.gpu.GpuFrameUse;
-import dev.comfyfluffy.caustica.api.gpu.GpuDebugScope;
 import dev.comfyfluffy.caustica.minecraft.MinecraftUiOverlay;
-import dev.comfyfluffy.caustica.api.gpu.GpuImage;
+import dev.comfyfluffy.caustica.rt.GpuContext;
+import dev.comfyfluffy.caustica.rt.GpuImage;
+import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import net.minecraft.client.Minecraft;
-import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.settings.ResourceId;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.KHRDynamicRendering;
 import org.lwjgl.vulkan.VK10;
@@ -71,7 +71,7 @@ public final class WorldOverlayPass implements CausticaRenderPass {
 
     // Shared world-overlay buffer every feature composites into. uiComposite* blends it into MinecraftUiOverlay's
     // transparent target; MinecraftUiOverlay owns the one final SDR/HDR blend to the real target.
-    private GpuDevice device;
+    private GpuContext device;
     private GpuImage overlayImage;
     private OverlayPipelines.Pipeline uiCompositePipeline;
     private OverlayPipelines.ReadOnlyImageSet uiCompositeSet;
@@ -88,7 +88,7 @@ public final class WorldOverlayPass implements CausticaRenderPass {
 
     @Override
     public void create(PassSetup setup) {
-        device = setup.device();
+        device = (GpuContext) setup.gpu();
         uiCompositeSet = OverlayPipelines.readOnlyImageSet(
                 device, VK10.VK_SHADER_STAGE_FRAGMENT_BIT, "world overlay UI composite");
         // PREMULTIPLIED_ALPHA, not ALPHA: overlayImage ends up holding premultiplied content once more
@@ -158,7 +158,7 @@ public final class WorldOverlayPass implements CausticaRenderPass {
                 VulkanCommandEncoder.memoryBarrier(cmd, stack); // this feature's writes visible to the next / final composite
             }
 
-            try (GpuDebugScope ignored = device.debugScope(cmd, "world overlay UI composite")) {
+            try (RtDebugLabels.Scope ignored = device.debugScope(cmd, "world overlay UI composite")) {
                 beginColorRendering(cmd, stack, targetView, width, height, false); // LOAD the transparent UI image
                 VK10.vkCmdBindPipeline(cmd, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, uiCompositePipeline.handle);
                 VK10.vkCmdBindDescriptorSets(cmd, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, uiCompositePipeline.layout, 0,

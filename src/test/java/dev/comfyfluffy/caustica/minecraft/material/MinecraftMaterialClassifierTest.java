@@ -1,9 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.material;
 
-import dev.comfyfluffy.caustica.minecraft.api.MinecraftMaterialProfile;
-
-import dev.comfyfluffy.caustica.api.ResourceId;
-import dev.comfyfluffy.caustica.api.provider.OpenPbrMaterialDefaults;
+import dev.comfyfluffy.caustica.settings.ResourceId;
 import net.minecraft.SharedConstants;
 import net.minecraft.server.Bootstrap;
 import net.minecraft.world.level.block.Blocks;
@@ -36,13 +33,13 @@ final class MinecraftMaterialClassifierTest {
 
     @Test
     void unknownDielectricsUseTheNeutralTransmissiveDefault() {
-        assertEquals(OpenPbrMaterialDefaults.TRANSMISSIVE_SPECULAR_IOR,
+        assertEquals(OpenPbrDefaults.TRANSMISSIVE_SPECULAR_IOR,
                 MinecraftMaterialClassifier.dielectricIor(ResourceId.parse("minecraft:block/glass")),
                 1.0e-6f);
-        assertEquals(OpenPbrMaterialDefaults.TRANSMISSIVE_SPECULAR_IOR,
+        assertEquals(OpenPbrDefaults.TRANSMISSIVE_SPECULAR_IOR,
                 MinecraftMaterialClassifier.dielectricIor(ResourceId.parse("somemod:block/weird_crystal")),
                 1.0e-6f);
-        assertEquals(OpenPbrMaterialDefaults.TRANSMISSIVE_SPECULAR_IOR,
+        assertEquals(OpenPbrDefaults.TRANSMISSIVE_SPECULAR_IOR,
                 MinecraftMaterialClassifier.dielectricIor(null), 1.0e-6f);
     }
 
@@ -60,6 +57,6 @@ final class MinecraftMaterialClassifierTest {
     void dielectricOrderingRemainsPhysical() {
         assertTrue(MinecraftMaterialClassifier.ICE_IOR < MinecraftMaterialClassifier.WATER_IOR);
         assertTrue(MinecraftMaterialClassifier.WATER_IOR
-                < OpenPbrMaterialDefaults.TRANSMISSIVE_SPECULAR_IOR);
+                < OpenPbrDefaults.TRANSMISSIVE_SPECULAR_IOR);
     }
 }

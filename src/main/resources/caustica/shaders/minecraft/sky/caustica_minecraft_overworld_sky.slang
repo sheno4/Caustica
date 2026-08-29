@@ -2,14 +2,14 @@ module caustica_minecraft_overworld_sky;
 
 import caustica_types;
 import caustica_color;
-import caustica_sky;
+import caustica_environment;
 import caustica_minecraft_sky_atmosphere;
 import caustica_minecraft_celestial_dressing;
 import caustica_minecraft_sky_bindings;
 
 // The Overworld sky owns its textured celestial discs, procedural stars, and night airglow. These
 // dressing choices stay with the Minecraft atmosphere model so the renderer-generic miss shader only
-// evaluates the selected ISkyModel implementation.
+// evaluates the selected IEnvironmentModel implementation.
 
 // This sky's own choice of star look, passed into the shared, parameterized stars() below.
 static const float STAR_CELLS      = 21.0;  // cube-face grid resolution; with the threshold gives ~1500 stars
@@ -18,21 +18,23 @@ static const float3 STAR_COOL      = float3(0.78, 0.60, 0.42);
 static const float3 STAR_WARM      = float3(0.50, 0.62, 0.95);
 
 /** Atmosphere in-scatter for a world direction: both bodies' slices of this frame's sky-view LUT. */
-float3 skyDome(float3 dir, SkyState state) {
+float3 skyDome(float3 dir, SkyState state, MinecraftEnvironmentBinding binding) {
     float2 sunUv = skyViewLutUv(state.viewerRadiusKm, dir.y,
             lightViewCosine(dir, state.sunDir), SKY_VIEW_BODY_SUN);
     float2 moonUv = skyViewLutUv(state.viewerRadiusKm, dir.y,
             lightViewCosine(dir, state.moonDir), SKY_VIEW_BODY_MOON);
-    return skyView.SampleLevel(sunUv, 0.0).rgb + skyView.SampleLevel(moonUv, 0.0).rgb;
+    return sampleMinecraftEnvironment(binding, binding.skyView, sunUv).rgb
+            + sampleMinecraftEnvironment(binding, binding.skyView, moonUv).rgb;
 }
 
 float3 lutSkyEvaluateEnvironment(EnvironmentQuery query) {
     // Derives SkyState from this pass's OWN uniform buffer rather than through EnvironmentQuery — see
     // the module header on why.
-    SkyState state = skyState(skyInputs);
+    MinecraftEnvironmentBinding binding = minecraftEnvironmentBinding(query);
+    SkyState state = skyState(ShaderDataPtr<SkyInputs>(binding.skyInputsAddress)[0]);
     float3 dir = query.direction;
 
-    float3 color = skyDome(dir, state);
+    float3 color = skyDome(dir, state, binding);
     // Airglow plus integrated unresolved starlight: the real floor of a moonless night sky (~1e-3 cd/m²),
     // isotropic because it is emitted by the upper atmosphere itself rather than scattered from a body.
     color += state.airglowLuminance;
@@ -40,7 +42,8 @@ float3 lutSkyEvaluateEnvironment(EnvironmentQuery query) {
     // Extinction along the view ray: stars redden and dim into the horizon on exactly the curve the sky
     // itself follows, because it is the same LUT that produced the sky. Zero angular radius — a star is a
     // point, so it sets at the horizon line.
-    float3 extinction = transmittanceToSpace(transmittance, state.viewerRadiusKm, dir, 0.0);
+    float3 extinction = transmittanceToSpace(binding.transmittance, binding.sampler,
+            state.viewerRadiusKm, dir, 0.0);
     // Negative angle: rotating the LOOKUP direction is the inverse of rotating star geometry, so
     // -starAngle makes the field wheel the SAME way the sun and moon do.
     color += stars(dir, normalize(celestialAxis(state.noonTilt)), state.starAngle, state.starLuminance,
@@ -54,10 +57,11 @@ float3 lutSkyEvaluateEnvironment(EnvironmentQuery query) {
             // lower limb by several stops relative to its upper one — an accurate answer to a question
             // about a body that is 60x too large. The centre keeps the sprite one colour, as vanilla
             // draws it.
-            float3 sunExtinction = transmittanceToSpace(transmittance, state.viewerRadiusKm,
+            float3 sunExtinction = transmittanceToSpace(binding.transmittance, binding.sampler,
+                    state.viewerRadiusKm,
                     state.sunDir, state.sunAngularRadius);
             float2 uv = lerp(state.sunUv.xy, state.sunUv.zw, local * 0.5 + 0.5);
-            float3 texel = celestialsAtlas.SampleLevel(uv, 0.0).rgb;
+            float3 texel = sampleMinecraftEnvironment(binding, binding.celestialsAtlas, uv).rgb;
             // Vanilla's sun sprite bakes a soft glow gradient into its texels; scaling that raw to HDR
             // makes a huge ring around the disc. Raising the texture luminance to a high power keeps only
             // the bright core and collapses the painted halo to ~0 — the real halo comes from the Mie
@@ -67,8 +71,10 @@ float3 lutSkyEvaluateEnvironment(EnvironmentQuery query) {
         }
         if (celestialSquareLocal(dir, state.moonDir, state.moonDiscHalfAngle, local)) {
             float2 uv = lerp(state.moonUv.xy, state.moonUv.zw, local * 0.5 + 0.5);
-            float3 texel = srgbToLinear(celestialsAtlas.SampleLevel(uv, 0.0).rgb);
-            float3 moonExtinction = transmittanceToSpace(transmittance, state.viewerRadiusKm,
+            float3 texel = srgbToLinear(
+                    sampleMinecraftEnvironment(binding, binding.celestialsAtlas, uv).rgb);
+            float3 moonExtinction = transmittanceToSpace(binding.transmittance, binding.sampler,
+                    state.viewerRadiusKm,
                     state.moonDir, state.moonAngularRadius);
             // The phase sprite already carries the lit shape; a contrast ramp suppresses its faint
             // painted halo while keeping that shape.
@@ -85,7 +91,7 @@ float3 lutSkyEvaluateEnvironment(EnvironmentQuery query) {
     return bt709ToAcesCg(max(color, float3(0.0)));
 }
 
-public struct MinecraftOverworldSky : ISkyModel {
+public struct MinecraftOverworldSky : IEnvironmentModel {
     public float3 evaluateEnvironment(EnvironmentQuery query) {
         return lutSkyEvaluateEnvironment(query);
     }

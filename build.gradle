@@ -1,11 +1,12 @@
-import javax.inject.Inject
-import org.gradle.process.ExecOperations
 import groovy.json.JsonOutput
 import java.security.MessageDigest
-import dev.comfyfluffy.caustica.build.GenerateShaderRecords
-import dev.comfyfluffy.caustica.build.GenerateRtBindings
+import dev.comfyfluffy.caustica.slangtooling.CompileSlangShaders
+import dev.comfyfluffy.caustica.slangtooling.GenerateShaderRecords
+import dev.comfyfluffy.caustica.slangtooling.GenerateRtBindings
+import dev.comfyfluffy.caustica.slangtooling.ReflectSlang
 
 plugins {
+	id "dev.comfyfluffy.caustica.slang-tooling"
 	id "fabric-loom" version "${loom_version}" apply false
 	id "net.neoforged.moddev" version "${neogradle_version}" apply false
 	id "maven-publish"
@@ -109,6 +110,12 @@ if (loader == "fabric") {
 			caustica {
 				sourceSet(sourceSets.main)
 				sourceSet(project(":packages:api").sourceSets.main)
+				sourceSet(project(":packages:api-support").sourceSets.main)
+				sourceSet(project(":packages:engine").sourceSets.main)
+				sourceSet(project(":packages:minecraft-api").sourceSets.main)
+				sourceSet(project(":packages:settings-api").sourceSets.main)
+				sourceSet(project(":packages:shader-api").sourceSets.main)
+				sourceSet(project(":packages:vulkan-support").sourceSets.main)
 			}
 		}
 		unitTest {
@@ -126,6 +133,16 @@ sourceSets.main.runtimeClasspath += configurations.apiRuntime
 dependencies {
 	compileOnly project(":packages:api")
 	apiRuntime project(":packages:api")
+	compileOnly project(":packages:api-support")
+	apiRuntime project(":packages:api-support")
+	compileOnly project(":packages:engine")
+	apiRuntime project(":packages:engine")
+	compileOnly project(":packages:minecraft-api")
+	apiRuntime project(":packages:minecraft-api")
+	compileOnly project(":packages:settings-api")
+	apiRuntime project(":packages:settings-api")
+	compileOnly project(":packages:vulkan-support")
+	apiRuntime project(":packages:vulkan-support")
 	if (loader == "fabric") {
 		minecraft "com.mojang:minecraft:${project.minecraft_version}"
 		implementation "net.fabricmc:fabric-loader:${project.loader_version}"
@@ -134,7 +151,17 @@ dependencies {
 	testImplementation platform("org.junit:junit-bom:5.12.2")
 	testImplementation "org.junit.jupiter:junit-jupiter"
 	testImplementation project(":packages:api")
+	testImplementation project(":packages:api-support")
+	testImplementation project(":packages:engine")
+	testImplementation project(":packages:minecraft-api")
+	testImplementation project(":packages:settings-api")
+	testImplementation project(":packages:vulkan-support")
 	testRuntimeOnly project(":packages:api")
+	testRuntimeOnly project(":packages:api-support")
+	testRuntimeOnly project(":packages:engine")
+	testRuntimeOnly project(":packages:minecraft-api")
+	testRuntimeOnly project(":packages:settings-api")
+	testRuntimeOnly project(":packages:vulkan-support")
 	testRuntimeOnly "org.junit.platform:junit-platform-launcher"
 
 	// Layered TOML config (config/caustica.toml) — NightConfig, the same library NeoForge's
@@ -169,121 +196,56 @@ processResources {
 def shaderGenRoot = layout.buildDirectory.dir("generated/shaders") // classpath root -> /caustica/shaders/*.spv
 def runtimeWorldSourceDir = file("src/main/resources/caustica/shaders/world")
 def runtimeBuiltinSourceDir = file("src/main/resources/caustica/shaders/builtin")
-def runtimeApiSourceDir = project(":packages:api").file("src/main/resources/caustica/shaders/api")
+def runtimeApiSourceDir = project(":packages:shader-api").file("src/main/resources/caustica/shaders/api")
 def runtimeMinecraftSourceDir = file("src/main/resources/caustica/shaders/minecraft")
 
-def resolveVulkanTool = { String name ->
-	def exe = org.gradle.internal.os.OperatingSystem.current().windows ? ".exe" : ""
-	def sdk = System.getenv("VULKAN_SDK")
-	if (sdk) {
-		def fromSdk = file("${sdk}/Bin/${name}${exe}")
-		if (fromSdk.exists()) {
-			return fromSdk.absolutePath
-		}
-	}
-	return "${name}${exe}" // fall back to PATH; exec fails with a clear message if absent
-}
-
-def resolveSlangTool = { String name ->
-	def exe = org.gradle.internal.os.OperatingSystem.current().windows ? ".exe" : ""
-	def sdk = System.getenv("SLANG_SDK")
-	if (sdk) {
-		def fromSdk = file("${sdk}/bin/${name}${exe}")
-		if (fromSdk.exists()) {
-			return fromSdk.absolutePath
-		}
-	}
-	return "${name}${exe}"
-}
-
-abstract class CompileShaders extends DefaultTask {
-	@InputDirectory abstract DirectoryProperty getSrcDir()
-	@InputDirectory abstract DirectoryProperty getRuntimeWorldDir()
-	@InputDirectory abstract DirectoryProperty getRuntimeApiDir()
-	@OutputDirectory abstract DirectoryProperty getOutDir()
-	@Input abstract Property<String> getSpirvVal()
-	@Input abstract Property<String> getSlangc()
-
-	@Inject abstract ExecOperations getExecOps()
-
-	// pipelines/display/main.comp.slang -> pipelines/display/main.comp.
-	static String outBase(File root, File src) {
-		def relative = root.toPath().relativize(src.toPath()).toString().replace('\\', '/')
-		return relative.endsWith(".slang") ? relative.substring(0, relative.length() - 6) : relative
-	}
-
-	@TaskAction
-	void compile() {
-		def outDirFile = outDir.get().asFile
-		// Slang stages are named <name>.<stage>.slang (any_hit.rahit.slang -> any_hit.rahit.spv); module files
-		// like world_common.slang match no stage glob and are picked up only via `import`.
-		def stageIncludes = ["rgen", "rchit", "rahit", "rmiss", "rcall", "comp", "vert", "frag"]
-				.collect { stage -> "**/*.${stage}.slang" }
-		def validate = { File spv ->
-			execOps.exec {
-				commandLine spirvVal.get(), "--target-env", "vulkan1.2", spv.absolutePath
-			}
-		}
-		def includeDirs = ([runtimeWorldDir.get().asFile, runtimeApiDir.get().asFile]
-				+ srcDir.get().asFileTree.matching { include "**/*.slang" }.files.collect { it.parentFile })
-				.unique().sort { it.absolutePath }
-		def compileOneSlang = { File src, File spv, List<String> extra ->
-			spv.parentFile.mkdirs()
-			def includes = [src.parentFile] + includeDirs.findAll { it != src.parentFile }
-			execOps.exec {
-				// Embed Slang source and line mappings in SPIR-V for RenderDoc/Nsight source debugging.
-				commandLine([slangc.get(), src.absolutePath, "-target", "spirv",
-						"-profile", "spirv_1_5", "-matrix-layout-column-major",
-						"-warnings-as-errors", "all", "-warnings-disable", "41012", "-g"]
-						+ includes.collectMany { ["-I", it.absolutePath] } + extra
-						+ ["-o", spv.absolutePath])
-			}
-			validate(spv)
-		}
-		def shaderFiles = srcDir.get().asFileTree.matching {
-			include stageIncludes
-		}.files.sort { it.absolutePath }
-		def duplicateOutputs = shaderFiles
-				.groupBy { "${outBase(srcDir.get().asFile, it)}.spv" }
-				.findAll { entry -> entry.value.size() > 1 }
-		if (!duplicateOutputs.isEmpty()) {
-			throw new GradleException("Duplicate shader output name(s): "
-					+ duplicateOutputs.collect { entry -> "${entry.key} from ${entry.value*.path.join(', ')}" }.join("; "))
-		}
-		// Compile into Gradle's task-temporary directory. A compiler or validator failure leaves the last
-		// successful published output intact instead of emptying build/generated/shaders halfway through.
-		def scratchDir = new File(temporaryDir, "spv")
-		if (scratchDir.exists() && !scratchDir.deleteDir()) {
-			throw new GradleException("failed to clear shader scratch directory ${scratchDir}")
-		}
-		scratchDir.mkdirs()
-		shaderFiles.each { src ->
-			def base = outBase(srcDir.get().asFile, src)
-			compileOneSlang(src, new File(scratchDir, "${base}.spv"), [])
-		}
-		if (outDirFile.exists() && !outDirFile.deleteDir()) {
-			throw new GradleException("failed to clear generated shaders under ${outDirFile}")
-		}
-		outDirFile.mkdirs()
-		scratchDir.eachFileRecurse(groovy.io.FileType.FILES) { src ->
-			def relative = scratchDir.toPath().relativize(src.toPath())
-			def destination = outDirFile.toPath().resolve(relative).toFile()
-			destination.parentFile.mkdirs()
-			java.nio.file.Files.move(src.toPath(), destination.toPath(),
-					java.nio.file.StandardCopyOption.REPLACE_EXISTING)
-		}
-	}
-}
-
-def compileShaders = tasks.register("compileShaders", CompileShaders) {
+def compileShaders = tasks.register("compileShaders", CompileSlangShaders) {
 	group = "build"
 	description = "Compiles shaders/** shader sources to SPIR-V and validates them."
-	srcDir = file("shaders")
-	runtimeWorldDir = runtimeWorldSourceDir
-	runtimeApiDir = runtimeApiSourceDir
-	outDir = layout.buildDirectory.dir("generated/shaders/caustica/shaders")
-	spirvVal = resolveVulkanTool("spirv-val")
-	slangc = resolveSlangTool("slangc")
+	sourceDirectory = file("shaders")
+	includeDirectories.from(runtimeWorldSourceDir, runtimeBuiltinSourceDir,
+			runtimeApiSourceDir, runtimeMinecraftSourceDir)
+	aliasSourceDirectory = runtimeWorldSourceDir
+	moduleAliases = [
+			"radiance_any_hit_rahit.slang": "radiance_any_hit.rahit.slang",
+			"shadow_any_hit_rahit.slang": "shadow_any_hit.rahit.slang"
+	]
+	outputDirectory = layout.buildDirectory.dir("generated/shaders/caustica/shaders")
+}
+
+def reflectBloomShader = tasks.register("reflectBloomShader", ReflectSlang) {
+	group = "verification"
+	description = "Reflects and validates the descriptor-heap-native Bloom compute ABI."
+	sourceFile = file("shaders/pipelines/bloom/main.comp.slang")
+	includeDirectories.from(runtimeBuiltinSourceDir, runtimeApiSourceDir)
+	reflectionJson = layout.buildDirectory.file("generated/shader-reflection/bloom.json")
+	spirv = layout.buildDirectory.file("generated/shader-reflection/bloom.spv")
+}
+
+def verifyBloomShaderAbi = tasks.register("verifyBloomShaderAbi") {
+	group = "verification"
+	description = "Checks that Bloom uses only a 40-byte heap-index push-data root."
+	dependsOn(reflectBloomShader)
+	def reflection = reflectBloomShader.flatMap { it.reflectionJson }
+	inputs.file(reflection)
+	doLast {
+		def json = new groovy.json.JsonSlurper().parse(reflection.get().asFile)
+		if (json.parameters*.name != ["pc"] || json.parameters[0].binding.kind != "pushConstantBuffer") {
+			throw new GradleException("Bloom reflection must expose only the push-data parameter")
+		}
+		def fields = json.parameters[0].type.elementType.fields
+		def expected = [destinationImageIndex: 0, sourceImageIndex: 4, samplerIndex: 8,
+				exposureImageIndex: 12, sceneImageIndex: 16, mode: 20, threshold: 24,
+				softKnee: 28, radius: 32, compositeStrength: 36]
+		def actual = fields.collectEntries { [(it.name): it.binding.offset] }
+		if (actual != expected || json.parameters[0].type.elementType.sizes[0].value != 40) {
+			throw new GradleException("Bloom push-data ABI mismatch: ${actual}")
+		}
+		if (json.entryPoints.size() != 1 || json.entryPoints[0].name != "main"
+				|| json.entryPoints[0].threadGroupSize != [8, 8, 1]) {
+			throw new GradleException("Bloom compute entry-point ABI mismatch")
+		}
+	}
 }
 
 def shaderReflectionRoot = layout.buildDirectory.dir("generated/shader-reflection-sources")
@@ -310,9 +272,42 @@ def generateShaderRecords = tasks.register("generateShaderRecords", GenerateShad
 	dependsOn(prepareShaderReflectionSources)
 	shaderRoot = shaderReflectionRoot
 	probeSource = shaderReflectionRoot.map { it.file("layout/layout_probe.slang") }
-	slangc = resolveSlangTool("slangc")
-	spirvVal = resolveVulkanTool("spirv-val")
 	outDir = layout.buildDirectory.dir("generated/sources/shaderRecords")
+}
+
+def compileBloomSlice = tasks.register("compileBloomSlice", JavaCompile) {
+	group = "verification"
+	description = "Compiles the built-in Bloom pass independently of legacy root consumers."
+	dependsOn(generateShaderRecords, project(":packages:api").tasks.named("classes"),
+			project(":packages:settings-api").tasks.named("classes"),
+			project(":packages:vulkan-support").tasks.named("classes"))
+	source(file("src/main/java/dev/comfyfluffy/caustica/builtin/BloomPass.java"),
+			file("src/main/java/dev/comfyfluffy/caustica/builtin/BuiltinExtension.java"),
+			layout.buildDirectory.file(
+					"generated/sources/shaderRecords/dev/comfyfluffy/caustica/builtin/gen/BloomPushData.java"))
+	classpath = sourceSets.main.compileClasspath
+	destinationDirectory = layout.buildDirectory.dir("classes/bloom-slice")
+	options.release = 25
+}
+
+def compileBloomSliceTest = tasks.register("compileBloomSliceTest", JavaCompile) {
+	group = "verification"
+	description = "Compiles the focused Bloom algorithm and push-data tests."
+	dependsOn(compileBloomSlice)
+	source(file("src/test/java/dev/comfyfluffy/caustica/builtin/BloomPassTest.java"))
+	classpath = configurations.testCompileClasspath + files(compileBloomSlice.flatMap { it.destinationDirectory })
+	destinationDirectory = layout.buildDirectory.dir("classes/bloom-slice-test")
+	options.release = 25
+}
+
+tasks.register("bloomSliceTest", Test) {
+	group = "verification"
+	description = "Runs the focused Bloom algorithm and push-data tests."
+	dependsOn(compileBloomSliceTest, verifyBloomShaderAbi, compileShaders)
+	testClassesDirs = files(compileBloomSliceTest.flatMap { it.destinationDirectory })
+	classpath = files(compileBloomSlice.flatMap { it.destinationDirectory },
+			compileBloomSliceTest.flatMap { it.destinationDirectory }) + configurations.testRuntimeClasspath
+	useJUnitPlatform()
 }
 
 def rtBindingsGenRoot = layout.buildDirectory.dir("generated/sources/rtBindings")
@@ -321,8 +316,37 @@ def generateRtBindings = tasks.register("generateRtBindings", GenerateRtBindings
 	description = "Generates Java descriptor bindings from Slang reflection."
 	dependsOn(prepareShaderReflectionSources)
 	shaderRoot = shaderReflectionRoot
-	slangc = resolveSlangTool("slangc")
 	outDir = rtBindingsGenRoot
+}
+
+def verifyRtBindingsGeneration = tasks.register("verifyRtBindingsGeneration") {
+	group = "verification"
+	description = "Verifies the generated descriptor-heap-native world root layout."
+	dependsOn(generateRtBindings)
+	def generatedBindings = rtBindingsGenRoot.map {
+		it.file("dev/comfyfluffy/caustica/rt/pipeline/RtBindings.java")
+	}
+	inputs.file(generatedBindings)
+	doLast {
+		def source = generatedBindings.get().asFile.getText("UTF-8")
+		def required = [
+				"WORLD_PUSH_ADDRESS_OFFSET = 0",
+				"WORLD_COMPOSITION_DATA_ADDRESS_OFFSET = 8",
+				"WORLD_PATH_QUEUE_ADDRESS_OFFSET = 48",
+				"WORLD_TOP_LEVEL_AS_INDEX_OFFSET = 56",
+				"WORLD_SPECULAR_MOTION_GUIDE_INDEX_OFFSET = 84",
+				"WORLD_PUSH_CONSTANT_SIZE = 88"
+		]
+		def missing = required.findAll { !source.contains(it) }
+		if (!missing.empty) {
+			throw new GradleException("generated world root layout is missing ${missing}")
+		}
+		def obsolete = ["WORLD_SET", "WORLD_BINDLESS", "WORLD_PROVIDER_TEXTURES"]
+				.findAll { source.contains(it) }
+		if (!obsolete.empty) {
+			throw new GradleException("generated world root layout retains descriptor-set constants ${obsolete}")
+		}
+	}
 }
 
 tasks.named("test", Test) {
@@ -518,7 +542,7 @@ tasks.named("test", Test) {
 				"caustica/natives/slang/${slangRuntimeVersion}/${currentSlangPlatform}").absolutePath
 		systemProperty "caustica.test.slangRuntimeDir", slangRuntimeDir
 		systemProperty "caustica.test.slangVersion", slangRuntimeVersion
-		systemProperty "caustica.test.spirvVal", resolveVulkanTool("spirv-val")
+		systemProperty "caustica.test.spirvVal", slangTooling.spirvVal.get()
 		// SlangRuntime normally locates its extracted natives through the active loader's game directory,
 		// which does not exist under plain JUnit. The same override players can use to point at a local
 		// Slang build lets tests exercise the real runtime path (session creation, module search paths)
@@ -697,6 +721,12 @@ java {
 
 tasks.named("jar", Jar).configure {
 	from(project(":packages:api").sourceSets.main.output)
+	from(project(":packages:api-support").sourceSets.main.output)
+	from(project(":packages:engine").sourceSets.main.output)
+	from(project(":packages:minecraft-api").sourceSets.main.output)
+	from(project(":packages:settings-api").sourceSets.main.output)
+	from(project(":packages:shader-api").sourceSets.main.output)
+	from(project(":packages:vulkan-support").sourceSets.main.output)
 	from(rootProject.files("LICENSE.md", "COPYING", "COPYING.LESSER", "THIRD_PARTY_NOTICES.md")) {
 		into "META-INF"
 	}
@@ -704,14 +734,32 @@ tasks.named("jar", Jar).configure {
 
 tasks.named("sourcesJar", Jar).configure {
 	from(project(":packages:api").sourceSets.main.allSource)
+	from(project(":packages:api-support").sourceSets.main.allSource)
+	from(project(":packages:engine").sourceSets.main.allSource)
+	from(project(":packages:minecraft-api").sourceSets.main.allSource)
+	from(project(":packages:settings-api").sourceSets.main.allSource)
+	from(project(":packages:shader-api").sourceSets.main.allSource)
+	from(project(":packages:vulkan-support").sourceSets.main.allSource)
 }
 
 def verifyEmbeddedApi = tasks.register("verifyEmbeddedApi") {
 	group = "verification"
-	description = "Verifies that the full mod embeds the standalone API exactly once."
-	dependsOn(tasks.named("jar"), project(":packages:api").tasks.named("jar"))
+	description = "Verifies that the full mod embeds the Java and Slang API artifacts exactly once."
+	dependsOn(tasks.named("jar"), project(":packages:api").tasks.named("jar"),
+			project(":packages:api-support").tasks.named("jar"),
+			project(":packages:engine").tasks.named("jar"),
+			project(":packages:minecraft-api").tasks.named("jar"),
+			project(":packages:settings-api").tasks.named("jar"),
+			project(":packages:shader-api").tasks.named("jar"),
+			project(":packages:vulkan-support").tasks.named("jar"))
 	inputs.file(tasks.named("jar", Jar).flatMap { it.archiveFile })
 	inputs.file(project(":packages:api").tasks.named("jar", Jar).flatMap { it.archiveFile })
+	inputs.file(project(":packages:api-support").tasks.named("jar", Jar).flatMap { it.archiveFile })
+	inputs.file(project(":packages:engine").tasks.named("jar", Jar).flatMap { it.archiveFile })
+	inputs.file(project(":packages:minecraft-api").tasks.named("jar", Jar).flatMap { it.archiveFile })
+	inputs.file(project(":packages:settings-api").tasks.named("jar", Jar).flatMap { it.archiveFile })
+	inputs.file(project(":packages:shader-api").tasks.named("jar", Jar).flatMap { it.archiveFile })
+	inputs.file(project(":packages:vulkan-support").tasks.named("jar", Jar).flatMap { it.archiveFile })
 	doLast {
 		def names = { File artifact ->
 			def result = []
@@ -725,9 +773,22 @@ def verifyEmbeddedApi = tasks.register("verifyEmbeddedApi") {
 		}
 		def rootEntries = names(tasks.named("jar", Jar).get().archiveFile.get().asFile)
 		def apiEntries = names(project(":packages:api").tasks.named("jar", Jar).get().archiveFile.get().asFile)
-		def required = apiEntries.findAll { entry ->
-			entry.endsWith(".class") || entry.startsWith("caustica/shaders/api/")
-		}.findAll { !it.endsWith("/") }
+		def supportEntries = names(project(":packages:api-support").tasks.named("jar", Jar).get().archiveFile.get().asFile)
+		def engineEntries = names(project(":packages:engine").tasks.named("jar", Jar).get().archiveFile.get().asFile)
+		def minecraftApiEntries = names(project(":packages:minecraft-api").tasks.named("jar", Jar).get().archiveFile.get().asFile)
+		def settingsApiEntries = names(project(":packages:settings-api").tasks.named("jar", Jar).get().archiveFile.get().asFile)
+		def shaderApiEntries = names(project(":packages:shader-api").tasks.named("jar", Jar).get().archiveFile.get().asFile)
+		def vulkanSupportEntries = names(project(":packages:vulkan-support").tasks.named("jar", Jar)
+				.get().archiveFile.get().asFile)
+		def required = apiEntries.findAll { it.endsWith(".class") }
+		required.addAll(supportEntries.findAll { it.endsWith(".class") })
+		required.addAll(engineEntries.findAll { it.endsWith(".class") })
+		required.addAll(minecraftApiEntries.findAll { it.endsWith(".class") })
+		required.addAll(settingsApiEntries.findAll { it.endsWith(".class") })
+		required.addAll(shaderApiEntries.findAll { entry ->
+			entry.startsWith("caustica/shaders/api/") && !entry.endsWith("/")
+		})
+		required.addAll(vulkanSupportEntries.findAll { it.endsWith(".class") })
 		def missing = required.findAll { !rootEntries.contains(it) }
 		def duplicated = required.findAll { requiredEntry ->
 			rootEntries.count { it == requiredEntry } != 1
@@ -739,7 +800,8 @@ def verifyEmbeddedApi = tasks.register("verifyEmbeddedApi") {
 }
 
 tasks.named("check") {
-	dependsOn(verifyEmbeddedApi)
+	dependsOn(verifyEmbeddedApi, tasks.named("bloomSliceTest"),
+			project(":packages:vulkan-support").tasks.named("check"))
 }
 
 publishing {

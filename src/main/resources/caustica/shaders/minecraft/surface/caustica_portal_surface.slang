@@ -11,7 +11,8 @@ float portalHash(float2 cell) {
 
 /** Procedural, world-pinned emissive surface used by Minecraft's end-portal material adapter. */
 public struct PortalSurface : ISurfaceModel {
-    public override void evaluateSurface(SurfaceInput input, inout MaterialInput material) {
+    public override OpenPbrSurface evaluateSurface(SurfaceInput input) {
+        OpenPbrSurface material = {};
         float2 world = input.proceduralPosition.xz;
         float2 field = world * 0.45;
         float2 cell = floor(field);
@@ -26,13 +27,14 @@ public struct PortalSurface : ISurfaceModel {
         float3 deep = float3(0.035, 0.008, 0.09);
         float3 violet = float3(0.34, 0.055, 0.72);
         float3 starlight = float3(0.55, 0.78, 1.0);
-        material.baseColor = float3(0.002, 0.001, 0.006);
-        material.baseMetalness = 0.0;
-        material.specularRoughness = 0.42;
-        material.specularIor = 1.35;
-        material.transmissionWeight = 0.0;
-        material.emissionColor = lerp(deep, violet, flow) + starlight * stars;
-        material.emissionLuminance = 24.0 + 160.0 * stars;
+        material.base_color = float3(0.002, 0.001, 0.006);
+        material.base_metalness = 0.0;
+        material.specular_roughness = 0.42;
+        material.specular_ior = 1.35;
+        material.transmission_weight = 0.0;
+        material.emission_color = lerp(deep, violet, flow) + starlight * stars;
+        material.emission_luminance = 24.0 + 160.0 * stars;
+        return material;
     }
 
 };

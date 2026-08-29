@@ -1,7 +1,5 @@
 package dev.comfyfluffy.caustica.minecraft.material;
 
-import dev.comfyfluffy.caustica.api.provider.OpenPbrMaterialDefaults;
-
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -83,8 +81,8 @@ final class MinecraftLabPbrTest {
 
     @Test
     void theDefaultIndexIsTheOneThatGivesTheFamiliarFourPercent() {
-        float amplitude = (OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR - 1.0f)
-                / (OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR + 1.0f);
+        float amplitude = (OpenPbrDefaults.SPECULAR_IOR - 1.0f)
+                / (OpenPbrDefaults.SPECULAR_IOR + 1.0f);
         assertEquals(0.04f, amplitude * amplitude, EPS);
     }
 }

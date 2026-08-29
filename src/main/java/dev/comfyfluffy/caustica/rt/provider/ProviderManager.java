@@ -13,7 +13,7 @@ import dev.comfyfluffy.caustica.api.provider.ProviderLifecycle;
 import dev.comfyfluffy.caustica.api.provider.MaterialSnapshot;
 import dev.comfyfluffy.caustica.api.provider.MaterialDefinition;
 import dev.comfyfluffy.caustica.api.provider.MaterialSink;
-import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.settings.ResourceId;
 import dev.comfyfluffy.caustica.api.provider.SceneProvider;
 import dev.comfyfluffy.caustica.api.provider.SceneGeometrySink;
 import dev.comfyfluffy.caustica.api.provider.SceneScope;

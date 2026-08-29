@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.api;
 
-import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.settings.ResourceId;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;

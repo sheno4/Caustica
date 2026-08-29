@@ -5,7 +5,7 @@ import dev.comfyfluffy.caustica.minecraft.sky.gen.SkyInputsData;
 import dev.comfyfluffy.caustica.api.pass.ComputeDispatch;
 import dev.comfyfluffy.caustica.api.pass.PassShaderCompiler;
 import dev.comfyfluffy.caustica.slang.SlangPassShaderCompiler;
-import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.settings.ResourceId;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 

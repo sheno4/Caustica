@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft;
 
-import dev.comfyfluffy.caustica.api.DisplayText;
+import dev.comfyfluffy.caustica.settings.DisplayText;
 import net.minecraft.network.chat.Component;
 
 /** Converts API display text at the Minecraft UI boundary. */

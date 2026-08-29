@@ -1,6 +1,5 @@
 package dev.comfyfluffy.caustica.rt;
 
-import dev.comfyfluffy.caustica.api.gpu.GpuBuffer;
 import org.lwjgl.util.vma.Vma;
 
 import java.util.Objects;

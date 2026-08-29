@@ -1,9 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.material;
 
-import dev.comfyfluffy.caustica.api.provider.MaterialTextureData;
-
-import dev.comfyfluffy.caustica.api.ResourceId;
-import dev.comfyfluffy.caustica.api.provider.OpenPbrMaterialDefaults;
+import dev.comfyfluffy.caustica.settings.ResourceId;
 import org.junit.jupiter.api.Test;
 
 import java.util.concurrent.atomic.AtomicInteger;
@@ -28,7 +25,7 @@ final class MinecraftMaterialPageCompilerImageLifetimeTest {
             @Override public void close() { closes.incrementAndGet(); }
         }), MaterialUv.IDENTITY, false, false, false,
                 OpenPbrColorBinding.PARAMETER_DEFAULT, OpenPbrColorBinding.PARAMETER_DEFAULT,
-                OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR, 1.0f);
+                OpenPbrDefaults.SPECULAR_IOR, 1.0f);
 
         assertEquals(0, MinecraftMaterialPageCompiler.pageChannels(0));
         assertEquals(MaterialTextureKind.STANDALONE, resource.kind());
@@ -50,7 +47,7 @@ final class MinecraftMaterialPageCompilerImageLifetimeTest {
             @Override public void close() { closes.incrementAndGet(); }
         }), MaterialUv.IDENTITY, false, false, false,
                 OpenPbrColorBinding.PARAMETER_DEFAULT, OpenPbrColorBinding.PARAMETER_DEFAULT,
-                OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR, 1.0f);
+                OpenPbrDefaults.SPECULAR_IOR, 1.0f);
 
         assertThrows(IllegalStateException.class, () -> MaterialTextureAnalyzer.decode(
                 resource.analysisSource(), OpenPbrColorBinding.BASE_COLOR, 0));
@@ -76,14 +73,14 @@ final class MinecraftMaterialPageCompilerImageLifetimeTest {
 
         MaterialTextureAnalyzer.Decoded decoded = MaterialTextureAnalyzer.decode(
                 source, OpenPbrColorBinding.BASE_COLOR, 0);
-        MaterialTextureData.Level level = decoded.levels().getFirst();
+        MaterialTextureLevels.Level level = decoded.levels().getFirst();
 
         assertEquals(0.75f, level.surface0()[2], 1.0e-6f);
-        assertEquals(0.5f * MaterialTextureData.srgbToLinear(0x80),
+        assertEquals(0.5f * MaterialTextureLevels.srgbToLinear(0x80 / 255.0f),
                 level.emissionColor()[0], 1.0e-6f);
-        assertEquals(0.25f * MaterialTextureData.srgbToLinear(0x40),
+        assertEquals(0.25f * MaterialTextureLevels.srgbToLinear(0x40 / 255.0f),
                 level.emissionColor()[1], 1.0e-6f);
-        assertEquals(MaterialTextureData.srgbToLinear(0x20),
+        assertEquals(MaterialTextureLevels.srgbToLinear(0x20 / 255.0f),
                 level.emissionColor()[2], 1.0e-6f);
     }
 
@@ -96,7 +93,7 @@ final class MinecraftMaterialPageCompilerImageLifetimeTest {
             throw new AssertionError("oversized image must not be opened");
         }), MaterialUv.IDENTITY, false, false, false,
                 OpenPbrColorBinding.PARAMETER_DEFAULT, OpenPbrColorBinding.PARAMETER_DEFAULT,
-                OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR, 1.0f);
+                OpenPbrDefaults.SPECULAR_IOR, 1.0f);
 
         assertFalse(MinecraftMaterialPageCompiler.eligibleForPageCompilation(resource));
         assertEquals(0, opens.get());

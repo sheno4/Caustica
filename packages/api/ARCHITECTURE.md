@@ -212,8 +212,8 @@ Callbacks must not block or throw. None of these primitives imply that unrelated
 
 ## Vulkan and descriptor heaps
 
-Every API session has a hard Vulkan 1.4 logical-device baseline including buffer device addresses, dynamic
-rendering, synchronization2, unified image layouts, descriptor heaps, shader objects, untyped pointers,
+Every API session has a hard Vulkan 1.4 logical-device baseline including buffer device addresses, shader
+float16 arithmetic, dynamic rendering, synchronization2, unified image layouts, descriptor heaps, shader objects, untyped pointers,
 acceleration structures, ray-tracing pipelines, ray queries, and position fetch. These are guarantees, not
 runtime capability booleans.
 
@@ -235,6 +235,12 @@ the root-scene TLAS expose typed immutable `GpuImageDescriptor` and
 `GpuAccelerationStructureDescriptor` views whose entries and resources the engine retains through the
 current frame. `GpuDescriptorHeapProperties` exposes the unified resource and sampler strides required
 when independently compiling pass shaders for `spvDescriptorHeapEXT`.
+
+Heap-native pipelines use a null pipeline layout. Data declared in Slang's push-constant storage class is
+recorded with `vkCmdPushDataEXT`, not `vkCmdPushConstants`: ordinary push constants depend on descriptor-set
+pipeline-layout state, and either command family invalidates state from the other. Passes must not record
+descriptor-set, descriptor-buffer, push-descriptor, or ordinary push-constant commands while using the
+renderer-bound heaps.
 
 Submitted descriptor bytes are immutable. Updating a descriptor therefore means:
 

@@ -51,8 +51,10 @@ public interface GeometryChannel {
      *
      * <p>Acceptance is synchronous, so callers may update their bookkeeping after this method returns.
      *
-     * <p>Asynchronous GPU build failures are not reported by this method. A failed mesh remains unpublished,
-     * and its batch's retirement callback runs after its buffers are no longer in use.
+     * <p>Native allocation, command construction, and GPU-submit acceptance are part of synchronous
+     * validation. A failure there rejects the whole batch. A device or execution failure discovered after
+     * the GPU accepted the work is terminal for the render session; it is not recovered as a per-mesh
+     * rejection.
      *
      * @throws IllegalArgumentException if an operation mutates a mesh or instance id not issued by this
      *         contribution, names a stale selection reference, uses an identity from another render session,

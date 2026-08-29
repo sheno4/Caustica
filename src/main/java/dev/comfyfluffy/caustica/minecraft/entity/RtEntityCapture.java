@@ -1,9 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.entity;
 
 import com.mojang.blaze3d.vertex.VertexConsumer;
-import dev.comfyfluffy.caustica.api.ColorSpaces;
-import dev.comfyfluffy.caustica.api.ResourceId;
-import dev.comfyfluffy.caustica.api.provider.SceneMesh;
+import dev.comfyfluffy.caustica.support.ColorSpaces;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 import net.minecraft.client.resources.model.geometry.BakedQuad;
@@ -31,10 +29,10 @@ public final class RtEntityCapture implements VertexConsumer {
     final FloatArrayList verts = new FloatArrayList(DEFAULT_VERTEX_CAPACITY * 3);   // 3 floats/vertex (capture-space position)
     final IntArrayList idx = new IntArrayList(indexCapacity(DEFAULT_VERTEX_CAPACITY)); // 3 indices/triangle
     final FloatArrayList uvList = new FloatArrayList(DEFAULT_VERTEX_CAPACITY * 2);  // 2 floats/vertex (entity-texture UV)
-    final List<SceneMesh.TriangleSurface> surfaces = new ArrayList<>();
+    final List<MinecraftEntityMesh.Triangle> surfaces = new ArrayList<>();
     // Reset to the diagnostic material so a producer path that omits material selection fails visibly.
-    SceneMesh.MaterialReference currentMaterial = new SceneMesh.FallbackMaterial(null);
-    SceneMesh.Coverage currentCoverage = SceneMesh.Coverage.CUTOUT;
+    MinecraftEntityMesh.Material currentMaterial = fallbackMaterial();
+    MinecraftEntityMesh.Coverage currentCoverage = MinecraftEntityMesh.Coverage.CUTOUT;
     // Decal-stacking rank for the current submission (0 = no offset). Set by the collector from
     // SubmitNodeCollector#order(int) — see emitQuad's coincident-layer push.
     int currentOrder;
@@ -59,8 +57,8 @@ public final class RtEntityCapture implements VertexConsumer {
         uvList.clear();
         surfaces.clear();
         n = 0;
-        currentMaterial = new SceneMesh.FallbackMaterial(null);
-        currentCoverage = SceneMesh.Coverage.CUTOUT;
+        currentMaterial = fallbackMaterial();
+        currentCoverage = MinecraftEntityMesh.Coverage.CUTOUT;
         currentOrder = 0;
         uvRemap = false;
     }
@@ -104,15 +102,14 @@ public final class RtEntityCapture implements VertexConsumer {
         return idx.isEmpty();
     }
 
-    SceneMesh sceneMesh() {
-        return sceneMesh(null);
+    MinecraftEntityMesh entityMesh() {
+        return entityMesh(0L);
     }
 
-    SceneMesh sceneMesh(SceneMesh.TopologyRevision topologyRevision) {
-        return new SceneMesh(java.util.Arrays.copyOf(verts.elements(), verts.size()),
-                java.util.Arrays.copyOf(idx.elements(), idx.size()), SceneMesh.UvLayout.PER_VERTEX,
-                java.util.Arrays.copyOf(uvList.elements(), uvList.size()), new float[0], new float[0],
-                surfaces, java.util.Set.of(), topologyRevision);
+    MinecraftEntityMesh entityMesh(long indexRevision) {
+        return new MinecraftEntityMesh(java.util.Arrays.copyOf(verts.elements(), verts.size()),
+                java.util.Arrays.copyOf(idx.elements(), idx.size()),
+                java.util.Arrays.copyOf(uvList.elements(), uvList.size()), surfaces, indexRevision);
     }
 
     @Override
@@ -236,13 +233,13 @@ public final class RtEntityCapture implements VertexConsumer {
         idx.add(base);
         idx.add(base + 2);
         idx.add(base + 3);
-        // Minecraft submission colours are encoded sRGB; SceneMesh accepts scene-linear ACEScg.
+        // Minecraft submission colours are encoded sRGB; the shader ABI consumes scene-linear ACEScg.
         int c = color;
         float[] tint = ColorSpaces.srgbToAcesCg(
                 ((c >> 16) & 0xFF) * (1f / 255f),
                 ((c >> 8) & 0xFF) * (1f / 255f),
                 (c & 0xFF) * (1f / 255f));
-        SceneMesh.TriangleSurface surface = new SceneMesh.TriangleSurface(
+        MinecraftEntityMesh.Triangle surface = new MinecraftEntityMesh.Triangle(
                 currentMaterial, currentCoverage, nx, ny, nz, emission, tint[0], tint[1], tint[2]);
         surfaces.add(surface);
         surfaces.add(surface);
@@ -250,6 +247,11 @@ public final class RtEntityCapture implements VertexConsumer {
 
     private static int positionIndex(int[] corners, int vertex) {
         return corners == null ? vertex : corners[vertex];
+    }
+
+    private static MinecraftEntityMesh.Material fallbackMaterial() {
+        return new MinecraftEntityMesh.Material(MinecraftEntityMesh.PARTICLE_BILLBOARD_MATERIAL, null,
+                MinecraftEntityMesh.Program.MATERIAL);
     }
 
     // Unused VertexConsumer surface — ModelPart.Cube.compile only calls the bulk addVertex above.

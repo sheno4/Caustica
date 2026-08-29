@@ -3,11 +3,12 @@ package dev.comfyfluffy.caustica;
 import com.electronwill.nightconfig.core.file.CommentedFileConfig;
 import com.electronwill.nightconfig.core.file.FileNotFoundAction;
 import com.electronwill.nightconfig.toml.TomlFormat;
-import dev.comfyfluffy.caustica.api.Feature;
-import dev.comfyfluffy.caustica.api.Option;
-import dev.comfyfluffy.caustica.api.OptionLookup;
-import dev.comfyfluffy.caustica.api.OptionValues;
-import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.settings.FeatureSettings;
+import dev.comfyfluffy.caustica.settings.Option;
+import dev.comfyfluffy.caustica.settings.OptionLookup;
+import dev.comfyfluffy.caustica.settings.OptionValues;
+import dev.comfyfluffy.caustica.settings.ResourceId;
+import dev.comfyfluffy.caustica.settings.SettingsRegistry;
 
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
@@ -15,25 +16,10 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * TOML-backed storage for extension-declared {@link Option} values ({@code config/caustica-options.toml}),
- * the concrete store behind every {@link OptionValues} view.
+ * TOML-backed storage for settings declared in a {@link SettingsRegistry}.
  *
- * <p>Lives next to {@link CausticaConfig} rather than under {@code rt/pass/} because it is not a render
- * pass concern: it holds every registered {@link Feature}'s options, including features that declare no
- * render pass at all (a scene-provider-only extension), and — once feature enable/disable lands — it is
- * what answers "is this extension on?" before the engine decides which passes, providers, and Slang
- * modules to instantiate. Its lifetime is therefore the process's, not the Vulkan device's: it is loaded
- * once from {@code CausticaApi.initialize()} so a settings screen opened from the title menu, before any
- * GPU context exists, reads the same values the renderer will.
- *
- * <p>Deliberately a separate file from {@code config/caustica.toml}: that file's schema is a fixed,
- * hand-curated set of engine settings ({@link CausticaConfig}); this one's key space is whatever the
- * currently-registered extensions declared, so it needs no schema of its own and must never collide with
- * the engine's.
- *
- * <p>Values are keyed by {@code <featureId>.<optionId>}, so one extension's options live under its own
- * feature namespace and can never collide with another's — the point of the option being declared on a
- * {@link Feature} in the first place. Precedence matches {@link CausticaConfig}: a
+ * <p>The store has process lifetime and is independent of Vulkan device recreation. Values are keyed by
+ * {@code <featureId>.<optionId>}; precedence is a
  * {@code -Dcaustica.option.<namespace>.<path>.<optionId>} system property, then the file, then the
  * {@link Option}'s own declared default.
  *
@@ -67,7 +53,7 @@ public final class CausticaOptions implements OptionLookup {
     }
 
     /** Loads the option store at the host-selected path. */
-    public static CausticaOptions load(Path path, Map<ResourceId, Feature> features) {
+    public static CausticaOptions load(Path path, SettingsRegistry registry) {
         CommentedFileConfig file = CommentedFileConfig.builder(path, TomlFormat.instance())
                 .onFileNotFound(FileNotFoundAction.CREATE_EMPTY)
                 .preserveInsertionOrder()
@@ -80,7 +66,7 @@ public final class CausticaOptions implements OptionLookup {
         }
         Map<ResourceId, Map<String, Option<?>>> declared = new LinkedHashMap<>();
         Map<String, Object> values = new LinkedHashMap<>();
-        for (Feature feature : features.values()) {
+        for (FeatureSettings feature : registry.all()) {
             Map<String, Option<?>> byId = new LinkedHashMap<>();
             for (Option<?> option : feature.options()) {
                 byId.put(option.id(), option);

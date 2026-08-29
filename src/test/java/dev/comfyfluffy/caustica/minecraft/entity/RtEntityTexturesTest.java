@@ -1,7 +1,5 @@
 package dev.comfyfluffy.caustica.minecraft.entity;
 
-import dev.comfyfluffy.caustica.api.provider.SceneMesh;
-import dev.comfyfluffy.caustica.minecraft.provider.MinecraftMaterialSource;
 import net.minecraft.SharedConstants;
 import net.minecraft.client.renderer.rendertype.RenderSetup;
 import net.minecraft.client.renderer.rendertype.RenderType;
@@ -15,7 +13,6 @@ import java.lang.reflect.Field;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -34,9 +31,9 @@ final class RtEntityTexturesTest {
     @Test
     void endPortalRenderTypesUseTheTexturelessProceduralMaterial() {
         for (RenderType renderType : new RenderType[]{RenderTypes.endPortal(), RenderTypes.endGateway()}) {
-            SceneMesh.NamedMaterial material = assertInstanceOf(SceneMesh.NamedMaterial.class,
-                    standaloneMaterial(renderType));
-            assertEquals(MinecraftMaterialSource.END_PORTAL, material.material().id());
+            MinecraftEntityMesh.Material material = standaloneMaterial(renderType);
+            assertEquals(MinecraftEntityMesh.END_PORTAL_MATERIAL, material.material());
+            assertEquals(MinecraftEntityMesh.Program.PORTAL, material.program());
             assertNull(material.texture());
         }
     }
@@ -63,11 +60,11 @@ final class RtEntityTexturesTest {
         }
     }
 
-    private static SceneMesh.MaterialReference standaloneMaterial(RenderType renderType) {
+    private static MinecraftEntityMesh.Material standaloneMaterial(RenderType renderType) {
         try {
             var method = RtEntityCollectorBase.class.getDeclaredMethod("standaloneMaterial", RenderType.class);
             assertTrue(method.trySetAccessible(), "standaloneMaterial must be accessible to the test");
-            return (SceneMesh.MaterialReference) method.invoke(null, renderType);
+            return (MinecraftEntityMesh.Material) method.invoke(null, renderType);
         } catch (ReflectiveOperationException exception) {
             throw new AssertionError("failed to resolve the entity material", exception);
         }

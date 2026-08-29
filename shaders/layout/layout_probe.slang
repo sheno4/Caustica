@@ -5,6 +5,7 @@ import world_common;
 import display_common;
 import caustica_bloom_types;
 import caustica_minecraft_sky_atmosphere;
+import caustica_minecraft_material;
 
 struct WorldPushLayoutProbe {
     WorldPush values[2]; // array stride is the complete, tail-padded WorldPush byte size
@@ -22,10 +23,19 @@ struct ExposureStateLayoutProbe {
     ExposureState values[2]; // array stride is the complete, tail-padded ExposureState byte size
 };
 
+struct MinecraftImplementationLayoutProbe { MinecraftImplementationData values[2]; };
+struct MinecraftMaterialLayoutProbe { MinecraftMaterialRecord values[2]; };
+struct MinecraftPrimitiveLayoutProbe { MinecraftPrimitiveData values[2]; };
+struct MinecraftInstanceLayoutProbe { MinecraftInstanceData values[2]; };
+
 [[vk::binding(0, 0)]] StructuredBuffer<WorldPushLayoutProbe, Std430DataLayout> worldPushLayoutProbe;
 [[vk::binding(1, 0)]] StructuredBuffer<MaterialBindingLayoutProbe, Std430DataLayout> materialBindingLayoutProbe;
 [[vk::binding(2, 0)]] StructuredBuffer<SurfaceMaterialLayoutProbe, Std430DataLayout> surfaceMaterialLayoutProbe;
 [[vk::binding(3, 0)]] StructuredBuffer<ExposureStateLayoutProbe, Std430DataLayout> exposureStateLayoutProbe;
+[[vk::binding(4, 0)]] StructuredBuffer<MinecraftImplementationLayoutProbe, Std430DataLayout> minecraftImplementationLayoutProbe;
+[[vk::binding(5, 0)]] StructuredBuffer<MinecraftMaterialLayoutProbe, Std430DataLayout> minecraftMaterialLayoutProbe;
+[[vk::binding(6, 0)]] StructuredBuffer<MinecraftPrimitiveLayoutProbe, Std430DataLayout> minecraftPrimitiveLayoutProbe;
+[[vk::binding(7, 0)]] StructuredBuffer<MinecraftInstanceLayoutProbe, Std430DataLayout> minecraftInstanceLayoutProbe;
 [[vk::push_constant]] WorldPushConstants pushConstantsLayoutProbe;
 
 [shader("compute")]
@@ -37,6 +47,10 @@ void main(uint3 id : SV_DispatchThreadID) {
                 + float(materialBindingLayoutProbe[0].values[0].packed0)
                 + surfaceMaterialLayoutProbe[0].values[0].specularRoughness
                 + exposureStateLayoutProbe[0].values[0].previous
+                + float(minecraftImplementationLayoutProbe[0].values[0].materialsAddress)
+                + minecraftMaterialLayoutProbe[0].values[0].specularRoughness
+                + minecraftPrimitiveLayoutProbe[0].values[0].primitiveEmission
+                + minecraftInstanceLayoutProbe[0].values[0].damageStrength
                 + float(pushConstantsLayoutProbe.frameIndex);
     }
 }
@@ -97,6 +111,8 @@ void probeSkyLutPush(uint3 id : SV_DispatchThreadID) {
 [numthreads(1, 1, 1)]
 void probeBloomPush(uint3 id : SV_DispatchThreadID) {
     if (id.x == 0xFFFFFFFFu) {
-        float sink = float(bloomPushProbe.mode) + bloomPushProbe.radius;
+        float sink = float(bloomPushProbe.destinationImageIndex)
+                + float(bloomPushProbe.samplerIndex)
+                + float(bloomPushProbe.mode) + bloomPushProbe.radius;
     }
 }

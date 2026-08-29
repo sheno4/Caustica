@@ -3,7 +3,7 @@ package dev.comfyfluffy.caustica.minecraft.material;
 import com.mojang.blaze3d.platform.NativeImage;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.minecraft.MinecraftLightingCalibration;
-import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.settings.ResourceId;
 import dev.comfyfluffy.caustica.mixin.SpriteContentsAccessor;
 import dev.comfyfluffy.caustica.mixin.TextureAtlasAccessor;
 import net.minecraft.client.Minecraft;

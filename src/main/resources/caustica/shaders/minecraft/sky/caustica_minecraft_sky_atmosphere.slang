@@ -20,6 +20,8 @@
 // significand and the horizon row of the sky-view LUT visibly quantises.
 module caustica_minecraft_sky_atmosphere;
 
+import caustica_resources;
+
 
 public static const float SKY_PI = 3.14159265359;
 
@@ -164,6 +166,13 @@ public float3 sampleTransmittance(Sampler2D lut, float radiusKm, float cosZenith
     return lut.SampleLevel(uv, 0.0).rgb;
 }
 
+public float3 sampleTransmittance(SampledTexture2DIndex lut, SamplerIndex samplerIndex,
+        float radiusKm, float cosZenith) {
+    float2 uv = transmittanceLutUv(radiusKm, cosZenith);
+    uv = unitToSubUv(saturate(uv), float2(float(TRANSMITTANCE_LUT_W), float(TRANSMITTANCE_LUT_H)));
+    return sampleTexture2DLod(lut, samplerIndex, uv, 0.0).rgb;
+}
+
 /**
  * Transmittance from the viewer to space along a world direction (world up = +Y), zero below the local
  * horizon.
@@ -185,6 +194,14 @@ public float3 transmittanceToSpace(Sampler2D lut, float viewerRadiusKm, float3 d
     float softness = max(sin(angularRadius), 1.0e-4);
     float aboveHorizon = smoothstep(horizonCos - softness, horizonCos + softness, dir.y);
     return sampleTransmittance(lut, viewerRadiusKm, dir.y) * aboveHorizon;
+}
+
+public float3 transmittanceToSpace(SampledTexture2DIndex lut, SamplerIndex samplerIndex,
+        float viewerRadiusKm, float3 dir, float angularRadius) {
+    float horizonCos = horizonZenithCos(viewerRadiusKm);
+    float softness = max(sin(angularRadius), 1.0e-4);
+    float aboveHorizon = smoothstep(horizonCos - softness, horizonCos + softness, dir.y);
+    return sampleTransmittance(lut, samplerIndex, viewerRadiusKm, dir.y) * aboveHorizon;
 }
 
 // ---- Multiple-scattering LUT parameterisation: linear in cos(sun zenith) and in altitude. The stored

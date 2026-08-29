@@ -1,6 +1,5 @@
 package dev.comfyfluffy.caustica.client.screen;
 
-import dev.comfyfluffy.caustica.api.CausticaApi;
 import dev.comfyfluffy.caustica.CausticaOptions;
 import dev.comfyfluffy.caustica.client.screen.widget.CausticaGroupHeader;
 import dev.comfyfluffy.caustica.client.screen.widget.CausticaDropdown;
@@ -9,14 +8,13 @@ import dev.comfyfluffy.caustica.client.screen.widget.CausticaPaint;
 import dev.comfyfluffy.caustica.client.screen.widget.CausticaScrollPane;
 import dev.comfyfluffy.caustica.client.screen.widget.CausticaSlider;
 import dev.comfyfluffy.caustica.client.screen.widget.CausticaTextButton;
-import dev.comfyfluffy.caustica.client.screen.widget.CausticaSummaryWidget;
 import dev.comfyfluffy.caustica.client.screen.widget.CausticaToggle;
 import dev.comfyfluffy.caustica.client.settings.CausticaSections;
-import dev.comfyfluffy.caustica.client.settings.CompositionSummary;
 import dev.comfyfluffy.caustica.client.settings.SettingControl;
 import dev.comfyfluffy.caustica.client.settings.SettingGroup;
 import dev.comfyfluffy.caustica.client.settings.SettingsCommit;
 import dev.comfyfluffy.caustica.client.settings.SettingsSection;
+import dev.comfyfluffy.caustica.settings.CausticaSettings;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.screens.Screen;
@@ -29,7 +27,7 @@ import java.util.List;
 /**
  * The Caustica settings screen: a header, a sidebar of sections, a scrolling content pane, and a footer.
  *
- * <p>Every row comes from {@link CausticaSections}, which derives them from the registry and the two config
+ * <p>Every row comes from {@link CausticaSections}, which derives them from the settings registry and the config
  * stores, so an installed extension gets a page without contributing any UI code.
  *
  * <p>Writes are in-memory as they happen — the renderer picks them up on the next frame — and reach disk
@@ -49,7 +47,7 @@ public final class CausticaOptionsScreen extends Screen {
         this.parent = parent;
         CausticaOptions options = CausticaOptions.installed();
         this.commit = new SettingsCommit(options);
-        this.sections = CausticaSections.build(CausticaApi.registry(), options);
+        this.sections = CausticaSections.build(CausticaSettings.getInstance().registry(), options);
     }
 
     private SettingsSection section() {
@@ -81,7 +79,7 @@ public final class CausticaOptionsScreen extends Screen {
             int target = index;
             SettingsSection entry = sections.get(index);
             // A heading before the first feature page separates the engine's own pages from extensions'.
-            if (index == 2) {
+            if (index == 1) {
                 navY += CausticaTheme.NAV_HEADING_HEIGHT;
             }
             CausticaNavItem item = new CausticaNavItem(entry, font, () -> selectedSection == target,
@@ -134,10 +132,6 @@ public final class CausticaOptionsScreen extends Screen {
     private void rebuildContent() {
         closeDropdown();
         List<CausticaScrollPane.Entry> entries = new ArrayList<>();
-        if (section().id().equals(CausticaSections.COMPOSITION_ID)) {
-            entries.add(new CausticaScrollPane.Entry(new CausticaSummaryWidget(
-                    CompositionSummary.of(CausticaApi.registry()), font, section().accent())));
-        }
         boolean first = true;
         for (SettingGroup group : section().groups()) {
             CausticaGroupHeader header =
@@ -266,9 +260,9 @@ public final class CausticaOptionsScreen extends Screen {
         wordmark(graphics);
         graphics.text(font, Component.translatable("caustica.nav.engine"), 6,
                 contentTop() + 4, CausticaTheme.TEXT_DISABLED, false);
-        if (sections.size() > 2) {
+        if (sections.size() > 1) {
             graphics.text(font, Component.translatable("caustica.nav.extensions"), 6,
-                    contentTop() + CausticaTheme.NAV_HEADING_HEIGHT + 2 * CausticaTheme.NAV_ITEM_HEIGHT + 4,
+                    contentTop() + CausticaTheme.NAV_HEADING_HEIGHT + CausticaTheme.NAV_ITEM_HEIGHT + 4,
                     CausticaTheme.TEXT_DISABLED, false);
         }
 

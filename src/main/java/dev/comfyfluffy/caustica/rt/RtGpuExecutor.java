@@ -9,6 +9,7 @@ import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VK12;
+import org.lwjgl.vulkan.VK13;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkCommandBufferAllocateInfo;
 import org.lwjgl.vulkan.VkCommandBufferBeginInfo;
@@ -32,8 +33,8 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 
 import static org.lwjgl.vulkan.KHRSynchronization2.VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
-import static org.lwjgl.vulkan.KHRSynchronization2.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT_KHR;
 import static org.lwjgl.vulkan.KHRSynchronization2.VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
 
 /**
  * Single-owner asynchronous GPU submission lane on a queue reserved by Caustica at device creation.
@@ -150,7 +151,7 @@ public final class RtGpuExecutor {
     }
 
     static void enqueueGraphicsSignal(GraphicsSubmission submission, long semaphore, long value) {
-        submission.signalSemaphore(semaphore, value, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT_KHR);
+        submission.signalSemaphore(semaphore, value, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
     }
 
     /** Create a waiter that shares one completed-value snapshot across several resource reuse checks. */
@@ -180,6 +181,11 @@ public final class RtGpuExecutor {
     public void retireAfterGraphics(TrackedGraphicsUse trackedUse, Runnable destroy) {
         assertRenderThread();
         enqueueDestroyAfterGraphicsValue(trackedUse.value, destroy);
+    }
+
+    /** Retire extension-owned state after the latest graphics token reserved before this call. */
+    public void retireAfterLatestGraphicsUse(Runnable destroy) {
+        enqueueDestroyAfterGraphicsValue(latestGraphicsUseValue.get(), destroy);
     }
 
     private void enqueueDestroyAfterGraphicsValue(long lastUseValue, Runnable destroy) {
@@ -446,7 +452,7 @@ public final class RtGpuExecutor {
                     // Jobs also contain pure transfer uploads (for example the device-local light
                     // proposal tables). Signal only after every command in the batch, not merely the
                     // AS-build stage, so a graphics wait cannot overtake such a copy.
-                    .stageMask(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT_KHR);
+                    .stageMask(VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
             long graphicsWait = maxGraphicsWait(batch.stream().map(Job::graphicsWaitValue).toList());
             VkSubmitInfo2.Buffer submit = VkSubmitInfo2.calloc(1, stack).sType$Default()
                     .pCommandBufferInfos(command).pSignalSemaphoreInfos(signal);
@@ -458,8 +464,8 @@ public final class RtGpuExecutor {
             }
             VulkanDiagnostics.noteQueueSubmission(computeQueue.queue(), "Caustica compute queue");
             synchronized (ctx.deviceQueueHostLock()) {
-                GpuContext.check(org.lwjgl.vulkan.KHRSynchronization2.vkQueueSubmit2KHR(
-                        computeQueue.queue(), submit, 0L), "vkQueueSubmit2KHR(RT GPU executor)");
+                GpuContext.check(VK13.vkQueueSubmit2(
+                        computeQueue.queue(), submit, 0L), "vkQueueSubmit2(RT GPU executor)");
             }
             submitted = true;
             synchronized (submissionLock) {
@@ -564,7 +570,6 @@ public final class RtGpuExecutor {
             this.value = value;
         }
 
-        @Override
         public void awaitCompletion() {
             owner.assertRenderThread();
             owner.graphicsUseWaiter().awaitValue(value);

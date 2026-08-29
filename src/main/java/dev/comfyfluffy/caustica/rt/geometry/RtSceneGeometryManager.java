@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.rt.geometry;
 
-import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.settings.ResourceId;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import dev.comfyfluffy.caustica.api.provider.SceneGeometryKey;
@@ -9,7 +9,7 @@ import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtFrameStats;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor.GraphicsUse;
 import dev.comfyfluffy.caustica.rt.RtGpuExecutor.TrackedGraphicsUse;
-import dev.comfyfluffy.caustica.api.gpu.GpuBuffer;
+import dev.comfyfluffy.caustica.rt.GpuBuffer;
 import dev.comfyfluffy.caustica.rt.accel.RtAccel;
 import dev.comfyfluffy.caustica.rt.accel.RtOpacityMicromapPipeline;
 import dev.comfyfluffy.caustica.rt.accel.TlasBuilder;

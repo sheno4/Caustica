@@ -1,8 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.material;
 
-import dev.comfyfluffy.caustica.api.ResourceId;
-import dev.comfyfluffy.caustica.api.provider.OpenPbrMaterialDefaults;
-import dev.comfyfluffy.caustica.minecraft.api.MinecraftMaterialProfile;
+import dev.comfyfluffy.caustica.settings.ResourceId;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
@@ -54,9 +52,9 @@ public final class MinecraftMaterialClassifier {
     }
 
     public static float dielectricIor(ResourceId material) {
-        if (material == null) return OpenPbrMaterialDefaults.TRANSMISSIVE_SPECULAR_IOR;
+        if (material == null) return OpenPbrDefaults.TRANSMISSIVE_SPECULAR_IOR;
         return IOR_BY_MATERIAL.getOrDefault(material.path(),
-                OpenPbrMaterialDefaults.TRANSMISSIVE_SPECULAR_IOR);
+                OpenPbrDefaults.TRANSMISSIVE_SPECULAR_IOR);
     }
 
     private static boolean isMetal(SoundType sound) {

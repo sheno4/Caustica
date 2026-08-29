@@ -1,7 +1,7 @@
 package dev.comfyfluffy.caustica.api;
 
-import dev.comfyfluffy.caustica.api.DisplayText;
-import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.settings.DisplayText;
+import dev.comfyfluffy.caustica.settings.ResourceId;
 import dev.comfyfluffy.caustica.api.provider.SceneProvider;
 import dev.comfyfluffy.caustica.api.pass.RenderStage;
 import dev.comfyfluffy.caustica.api.pass.CausticaRenderPass;

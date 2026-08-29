@@ -4,15 +4,9 @@ import com.mojang.blaze3d.vertex.PoseStack;
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.mixin.ParticleEngineAccessor;
 import dev.comfyfluffy.caustica.mixin.ParticleGroupAccessor;
-import dev.comfyfluffy.caustica.minecraft.provider.MinecraftMaterialSource;
-import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialSnapshot;
 import dev.comfyfluffy.caustica.minecraft.MinecraftTelemetry;
-import dev.comfyfluffy.caustica.api.provider.GeometryTransform;
-import dev.comfyfluffy.caustica.api.ResourceId;
-import dev.comfyfluffy.caustica.api.provider.SceneFrameContext;
-import dev.comfyfluffy.caustica.api.provider.SceneGeometrySink;
-import dev.comfyfluffy.caustica.api.provider.SceneGeometryKey;
-import dev.comfyfluffy.caustica.api.provider.SceneMesh;
+import dev.comfyfluffy.caustica.api.geometry.GeometryTransform;
+import dev.comfyfluffy.caustica.settings.ResourceId;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
@@ -58,22 +52,20 @@ import java.util.UUID;
 /**
  * Dynamic entities as real ray-traced {@code ModelPart} geometry. Each frame, every model entity is
  * re-posed and captured ({@link RtEntityCollector} + {@link RtEntityCapture}) into neutral scene meshes.
- * The engine-owned scene geometry manager owns their resident GPU geometry, acceleration
- * structures, table records, instances, and graphics lifetime. This source retains only Minecraft
+ * {@link MinecraftEntityGeometry} owns their retained mesh and instance identities while the uploader
+ * owns source buffers until their introducing retained batches retire. This producer retains Minecraft
  * capture state, mesh change detection, and stale-entry eviction state.
  * Non-model entities (items/arrows — geometry via submitItem/submitBlockModel, which the collector
  * ignores) are skipped.
  *
- * <p>Per-frame capture is capped by {@code -Dcaustica.rt.maxEntities}. The geometry manager derives
- * compatible acceleration updates from retained mesh topology.
+ * <p>Per-frame capture is capped by {@code -Dcaustica.rt.maxEntities}. Stable index revisions allow the
+ * retained backend to derive compatible acceleration updates.
  */
 public final class RtEntities {
     public static final RtEntities INSTANCE = new RtEntities();
     private static final long ENTITY_GEOMETRY = 1L;
     private static final long BLOCK_ENTITY_GEOMETRY = 2L;
     private static final long PARTICLE_GEOMETRY = 3L;
-    private static final long ENTITY_TRANSFORM = 4L;
-    private static final long ENTITY_LIFECYCLE = 5L;
     private static final long PARTICLE_KEY = 0L;
     public static boolean enabled() {
         return CausticaConfig.Rt.Entities.ENABLED.value();
@@ -127,7 +119,7 @@ public final class RtEntities {
     }
 
     // Block entities keep a keyed cached mesh. Each frame the BE is re-meshed (cheap) and its mesh hashed;
-    // the manager replaces GPU geometry only when it changed, so static
+    // the retained owner replaces GPU geometry only when it changed, so static
     // BEs cost no GPU work while animating ones (chest lid, spawner, …) rebuild every frame. New/changed
     // rebuilds are capped per frame so a burst of newly loaded chunks can't stall (over-budget BEs keep
     // their last geometry / pop in over later frames, like terrain's worker dispatch budget).
@@ -149,7 +141,7 @@ public final class RtEntities {
     private final PoseStack blockEntityPoseStack = new PoseStack();
     private CameraRenderState cameraState;
     // Particle capture funnels MC billboard quads into the shared entity mesh. Rebuilt particle topology
-    // has no stable vertex correspondence, so the scene manager resets its object-motion history.
+    // has no stable vertex correspondence, so each upload carries no cross-frame vertex history.
     private final RtParticleCapture particleCapture = new RtParticleCapture(capture);
     private final QuadParticleRenderState particleScratch = new QuadParticleRenderState();
     private final float[] particleCenterScratch = new float[3];
@@ -194,7 +186,7 @@ public final class RtEntities {
         return cameraState.orientation;
     }
 
-    // CPU capture state for engine-owned dynamic residents.
+    // CPU capture state for directly retained dynamic residents.
     private final Int2ObjectOpenHashMap<EntityState> entityStates = new Int2ObjectOpenHashMap<>(entityMapCapacity());
 
     // Persistent per-block-entity geometry, keyed by BlockPos.asLong().
@@ -203,17 +195,19 @@ public final class RtEntities {
     private final ArrayDeque<BeCandidate> beCandidatePool = new ArrayDeque<>();
     // (Re)builds recorded so far this frame, reset each beginFrame; gates new BE builds to BE_BUILDS_PER_FRAME.
     private int beBuildsThisFrame;
-    private final Set<SceneGeometryKey> pendingDrops = new java.util.LinkedHashSet<>();
+    private final Set<MinecraftEntityGeometry.Key> pendingDrops = new java.util.LinkedHashSet<>();
+    private MinecraftEntityGeometry geometry;
 
     private RtEntities() {
     }
 
-    public void publishMaterials(MinecraftMaterialSnapshot.Published materials) {
-        collector.publishMaterials(java.util.Objects.requireNonNull(materials, "materials"));
+    public synchronized void bindGeometry(MinecraftEntityGeometry geometry) {
+        if (this.geometry != null) throw new IllegalStateException("entity geometry is already bound");
+        this.geometry = java.util.Objects.requireNonNull(geometry, "geometry");
     }
 
-    public void clearMaterials() {
-        collector.publishMaterials(null);
+    public synchronized void unbindGeometry(MinecraftEntityGeometry geometry) {
+        if (this.geometry == geometry) this.geometry = null;
     }
 
     /**
@@ -226,7 +220,7 @@ public final class RtEntities {
         long lastSeen;                           // last frame this BE was in the scan window — for eviction
     }
 
-    /** CPU-only capture state for one entity; the manager owns its resident. */
+    /** CPU-only capture state for one entity; MinecraftEntityGeometry owns its resident. */
     static final class EntityState {
         final UUID identity;
         long lastSeen;
@@ -358,14 +352,14 @@ public final class RtEntities {
 
     /** Mutable per-frame build state shared by the entity + block-entity capture passes. */
     private final class FrameBuild {
-        final SceneGeometrySink geometry;
+        final MinecraftEntityGeometry geometry;
         final SceneOrigin origin;
         final long frameIndex;
         final MinecraftTelemetry.Instrumentation telemetry;
-        int count;        // geometry-table entries / TLAS instances
+        int count;        // retained scene instances
         int logicalCount; // ordinary entities + block entities + individual particles
 
-        FrameBuild(SceneGeometrySink geometry, SceneOrigin origin, long frameIndex,
+        FrameBuild(MinecraftEntityGeometry geometry, SceneOrigin origin, long frameIndex,
                    MinecraftTelemetry.Instrumentation telemetry) {
             this.geometry = geometry;
             this.origin = origin;
@@ -373,25 +367,26 @@ public final class RtEntities {
             this.telemetry = telemetry;
         }
 
-        void submit(SceneGeometryKey key, List<SceneGeometrySink.Operation> operations, Runnable acknowledgment) {
+        void put(MinecraftEntityGeometry.Key key, MinecraftEntityMesh mesh, GeometryTransform transform,
+                 int mask, Runnable acknowledgment) {
             pendingDrops.remove(key);
-            int putCount = 0;
-            int transformCount = 0;
-            for (SceneGeometrySink.Operation operation : operations) {
-                if (operation instanceof SceneGeometrySink.Put) {
-                    putCount++;
-                } else if (operation instanceof SceneGeometrySink.Transform) {
-                    transformCount++;
-                }
-            }
-            int sampleCount = putCount + transformCount;
-            MinecraftTelemetry.GeometrySource kind = transformCount == 0
-                    ? sourceKind(key) : MinecraftTelemetry.GeometrySource.ENTITY_PLACEMENT;
-            Object extraction = sampleCount == 0 ? null : telemetry.extraction(kind, sampleCount);
-            geometry.submit(key, operations, () -> {
-                telemetry.published(extraction);
-                if (acknowledgment != null) acknowledgment.run();
-            });
+            Object extraction = telemetry.extraction(sourceKind(key), 1);
+            geometry.put(key, mesh, transform, mask);
+            telemetry.published(extraction);
+            if (acknowledgment != null) acknowledgment.run();
+        }
+
+        void transform(MinecraftEntityGeometry.Key key, GeometryTransform transform, int mask) {
+            pendingDrops.remove(key);
+            Object extraction = telemetry.extraction(MinecraftTelemetry.GeometrySource.ENTITY_PLACEMENT, 1);
+            geometry.transform(key, transform, mask);
+            telemetry.published(extraction);
+        }
+
+        void drop(MinecraftEntityGeometry.Key key, Runnable acknowledgment) {
+            pendingDrops.remove(key);
+            geometry.drop(key);
+            if (acknowledgment != null) acknowledgment.run();
         }
 
         boolean full() {
@@ -404,15 +399,15 @@ public final class RtEntities {
      * Dynamic entity coordinates are local and placed by instances; particles remain captured relative to
      * the authored scene origin with an identity instance.
      */
-    public void submitGeometry(SceneFrameContext frame) {
-        SceneOrigin origin = new SceneOrigin(frame.originX(), frame.originY(), frame.originZ());
-        var camera = frame.camera();
-        beginFrame(frame.geometry(), origin,
-                camera.x(), camera.y(), camera.z(), new Matrix4f().set(camera.projection()),
-                new Matrix4f().set(camera.viewRotation()), frame.frameIndex());
+    public void submitFrame(SceneOrigin origin, double cameraX, double cameraY, double cameraZ,
+                            Matrix4f projection, Matrix4f viewRotation, long frameIndex) {
+        MinecraftEntityGeometry current = geometry;
+        if (current == null) return;
+        beginFrame(current, origin, cameraX, cameraY, cameraZ,
+                new Matrix4f(projection), new Matrix4f(viewRotation), frameIndex);
     }
 
-    private void beginFrame(SceneGeometrySink geometry, SceneOrigin origin,
+    private void beginFrame(MinecraftEntityGeometry geometry, SceneOrigin origin,
                            double camX, double camY, double camZ, Matrix4f projection, Matrix4f viewRotation,
                            long frameIndex) {
         FrameBuild build = new FrameBuild(geometry, origin, frameIndex, MinecraftTelemetry.current());
@@ -462,13 +457,13 @@ public final class RtEntities {
     }
 
     private void finishFrame(FrameBuild build) {
-        List<SceneGeometryKey> drops = List.copyOf(pendingDrops);
+        List<MinecraftEntityGeometry.Key> drops = List.copyOf(pendingDrops);
         pendingDrops.clear();
-        for (SceneGeometryKey key : drops) {
+        for (MinecraftEntityGeometry.Key key : drops) {
             if (key.domain() == ENTITY_GEOMETRY) {
                 submitEntityRemoval(build, key, null);
             } else {
-                build.submit(key, List.of(new SceneGeometrySink.Remove(key), new SceneGeometrySink.Drop(key)), null);
+                build.drop(key, null);
             }
         }
     }
@@ -640,9 +635,9 @@ public final class RtEntities {
             submitParticles(build);
             return;
         }
-        capture.currentMaterial = new SceneMesh.NamedMaterial(
-                new dev.comfyfluffy.caustica.api.provider.MaterialHandle(MinecraftMaterialSource.PARTICLE_BILLBOARD));
-        capture.currentCoverage = SceneMesh.Coverage.CUTOUT;
+        capture.currentMaterial = new MinecraftEntityMesh.Material(MinecraftEntityMesh.PARTICLE_BILLBOARD_MATERIAL,
+                null, MinecraftEntityMesh.Program.MATERIAL);
+        capture.currentCoverage = MinecraftEntityMesh.Coverage.CUTOUT;
         // extract() emits camera-relative positions; shift them into rebased space (identity instance).
         Vec3 camPos = cam.position();
         particleCapture.setOffset((float) (camPos.x - rbx), (float) (camPos.y - rby), (float) (camPos.z - rbz));
@@ -673,10 +668,11 @@ public final class RtEntities {
                     sq.extract(particleScratch, cam, partial);
                     for (SingleQuadParticle.Layer layer : particleScratch.layers()) {
                         RtEntityTextures.INSTANCE.contributeAtlas(layer.textureAtlasLocation());
-                        capture.currentMaterial = new SceneMesh.NamedMaterial(
-                                new dev.comfyfluffy.caustica.api.provider.MaterialHandle(MinecraftMaterialSource.PARTICLE_BILLBOARD),
-                                new SceneMesh.AtlasTexture(ResourceId.of(
-                                        layer.textureAtlasLocation().getNamespace(), layer.textureAtlasLocation().getPath())));
+                        capture.currentMaterial = new MinecraftEntityMesh.Material(
+                                MinecraftEntityMesh.PARTICLE_BILLBOARD_MATERIAL,
+                                MinecraftEntityMesh.Texture.atlas(ResourceId.of(
+                                        layer.textureAtlasLocation().getNamespace(), layer.textureAtlasLocation().getPath())),
+                                MinecraftEntityMesh.Program.MATERIAL);
                         particleScratch.buildLayer(layer, particleCapture);
                         particleCapture.flush();
                     }
@@ -711,17 +707,12 @@ public final class RtEntities {
 
     /** Replaces the one merged particle resident, or removes it when the capture is empty. */
     private void submitParticles(FrameBuild build) {
-        List<SceneGeometrySink.Operation> operations;
-        SceneGeometryKey particleKey = key(PARTICLE_GEOMETRY, PARTICLE_KEY);
+        MinecraftEntityGeometry.Key particleKey = key(PARTICLE_GEOMETRY, PARTICLE_KEY);
         if (capture.isEmpty()) {
-            operations = List.of(new SceneGeometrySink.Remove(particleKey),
-                    new SceneGeometrySink.Drop(particleKey));
+            build.drop(particleKey, null);
         } else {
-            operations = List.of(
-                    new SceneGeometrySink.Put(particleKey, capture.sceneMesh()),
-                    new SceneGeometrySink.Place(particleKey, particleKey, transform(IDENTITY, build.origin), PARTICLE_MASK));
+            build.put(particleKey, capture.entityMesh(), transform(IDENTITY, build.origin), PARTICLE_MASK, null);
         }
-        build.submit(particleKey, operations, null);
     }
 
     /** Average (rebase-space) position of a captured particle's verts — approximates the particle center. */
@@ -741,7 +732,7 @@ public final class RtEntities {
 
     /**
      * Capture block entities (chests, signs, …). Each BE keeps a cached mesh keyed by BlockPos.
-     * Every frame the BE is re-meshed (cheap) and its mesh hashed; the manager replaces its resident only when
+     * Every frame the BE is re-meshed (cheap) and its mesh hashed; the owner replaces its resident only when
      * the mesh actually changed — so static BEs cost no GPU work while animating ones (chest lid, spawner,
      * …) rebuild every frame and stay smooth. New/changed rebuilds are capped at {@link
      * #BE_BUILDS_PER_FRAME} per frame so a burst of newly loaded chunks can't stall; over-budget BEs keep
@@ -846,29 +837,20 @@ public final class RtEntities {
         BlockPos p = be.getBlockPos();
         beBuildsThisFrame++;
 
-        boolean initial = entry == null;
         BeEntry e = entry != null ? entry : new BeEntry();
         e.bx = p.getX();
         e.by = p.getY();
         e.bz = p.getZ();
         e.meshHash = fingerprint.contentHash();
         long key = p.asLong();
-        SceneGeometryKey geometryKey = key(BLOCK_ENTITY_GEOMETRY, key);
-        build.submit(geometryKey, blockEntityMeshUpdate(geometryKey,
-                capture.sceneMesh(fingerprint.topologyRevision()),
-                GeometryTransform.translation(p.getX(), p.getY(), p.getZ()), initial), null);
+        MinecraftEntityGeometry.Key geometryKey = key(BLOCK_ENTITY_GEOMETRY, key);
+        build.put(geometryKey, capture.entityMesh(fingerprint.topologyRevision()),
+                GeometryTransform.translation(p.getX(), p.getY(), p.getZ()), MASK_ALL, null);
         build.telemetry.count("blockEntityGeometrySubmissions", 1);
         return e;
     }
 
-    static List<SceneGeometrySink.Operation> blockEntityMeshUpdate(SceneGeometryKey key, SceneMesh mesh,
-                                                                   GeometryTransform initialTransform,
-                                                                   boolean initial) {
-        SceneGeometrySink.Put put = new SceneGeometrySink.Put(key, mesh);
-        return initial ? List.of(put, new SceneGeometrySink.Place(key, key, initialTransform, MASK_ALL)) : List.of(put);
-    }
-
-    record MeshFingerprint(long contentHash, SceneMesh.TopologyRevision topologyRevision) { }
+    record MeshFingerprint(long contentHash, long topologyRevision) { }
 
     /** Computes content and topology fingerprints together during the capture's required change scan. */
     static MeshFingerprint meshFingerprint(RtEntityCapture capture) {
@@ -893,13 +875,12 @@ public final class RtEntities {
             long value = Float.floatToRawIntBits(uv[i]) & 0xffffffffL;
             content = (content ^ value) * 1099511628211L;
         }
-        topology = (topology ^ SceneMesh.UvLayout.PER_VERTEX.ordinal()) * 1099511628211L;
         topology = (topology ^ uvn) * 1099511628211L;
-        for (SceneMesh.TriangleSurface surface : capture.surfaces) {
+        for (MinecraftEntityMesh.Triangle surface : capture.surfaces) {
             long value = surface.hashCode() & 0xffffffffL;
             content = (content ^ value) * 1099511628211L;
         }
-        return new MeshFingerprint(content, new SceneMesh.TopologyRevision(topology));
+        return new MeshFingerprint(content, topology);
     }
 
     /** Counts one selected cached block entity without resubmitting its unchanged retained state. */
@@ -922,9 +903,8 @@ public final class RtEntities {
                 continue;
             }
             long key = BlockPos.asLong(e.bx, e.by, e.bz);
-            SceneGeometryKey geometryKey = key(BLOCK_ENTITY_GEOMETRY, key);
-            build.submit(geometryKey, List.of(
-                    new SceneGeometrySink.Remove(geometryKey), new SceneGeometrySink.Drop(geometryKey)), null);
+            MinecraftEntityGeometry.Key geometryKey = key(BLOCK_ENTITY_GEOMETRY, key);
+            build.drop(geometryKey, null);
             it.remove();
         }
     }
@@ -933,11 +913,11 @@ public final class RtEntities {
         return new float[] {1, 0, 0, x, 0, 1, 0, y, 0, 0, 1, z};
     }
 
-    private static SceneGeometryKey key(long domain, long value) {
-        return new SceneGeometryKey(domain, value);
+    private static MinecraftEntityGeometry.Key key(long domain, long value) {
+        return new MinecraftEntityGeometry.Key(domain, value);
     }
 
-    private static MinecraftTelemetry.GeometrySource sourceKind(SceneGeometryKey key) {
+    private static MinecraftTelemetry.GeometrySource sourceKind(MinecraftEntityGeometry.Key key) {
         if (key.domain() == BLOCK_ENTITY_GEOMETRY) {
             return MinecraftTelemetry.GeometrySource.BLOCK_ENTITY;
         }
@@ -955,7 +935,7 @@ public final class RtEntities {
 
     private void appendCapture(FrameBuild build, int entityId, UUID identity, int mask,
                                float[] instanceTransform) {
-        SceneGeometryKey key = key(ENTITY_GEOMETRY, Integer.toUnsignedLong(entityId));
+        MinecraftEntityGeometry.Key key = key(ENTITY_GEOMETRY, Integer.toUnsignedLong(entityId));
         EntityState state = entityStates.get(entityId);
         if (state != null && !state.identity.equals(identity)) {
             submitEntityRemoval(build, key, state);
@@ -973,23 +953,18 @@ public final class RtEntities {
         if (state.beginInitialSubmission(capturedMeshHash)) {
             build.telemetry.count("entityPlacementInitialSubmissions", 1);
             EntityState submitted = state;
-            List<SceneGeometrySink.Operation> operations = List.of(
-                    new SceneGeometrySink.Put(key, capture.sceneMesh(fingerprint.topologyRevision())),
-                    new SceneGeometrySink.Place(key, key, transform, mask));
             if (build.telemetry.enabled()) {
                 long version = state.profileMeshSubmission();
                 long sourceFrame = build.telemetry.frameSerial();
                 long visibilityToken = state.meshVisibilityToken;
                 MinecraftTelemetry.Instrumentation telemetry = build.telemetry;
-                build.submit(key, operations,
+                build.put(key, capture.entityMesh(fingerprint.topologyRevision()), transform, mask,
                         () -> submitted.meshPublicationAccepted(version, sourceFrame, visibilityToken, telemetry));
             } else {
-                build.submit(key, operations, null);
+                build.put(key, capture.entityMesh(fingerprint.topologyRevision()), transform, mask, null);
             }
         } else {
             build.telemetry.count("entityPlacementFreshnessEligible", 1);
-            build.submit(key(ENTITY_TRANSFORM, Integer.toUnsignedLong(entityId)),
-                    List.of(new SceneGeometrySink.Transform(key, transform, mask)), null);
             if (state.requiresPut(capturedMeshHash)) {
                 state.meshSubmitted(capturedMeshHash);
                 build.telemetry.count("entityMeshOnlyUpdates", 1);
@@ -999,13 +974,13 @@ public final class RtEntities {
                     long visibilityToken = state.meshVisibilityToken;
                     EntityState submitted = state;
                     MinecraftTelemetry.Instrumentation telemetry = build.telemetry;
-                    build.submit(key, List.of(new SceneGeometrySink.Put(key,
-                                    capture.sceneMesh(fingerprint.topologyRevision()))),
+                    build.put(key, capture.entityMesh(fingerprint.topologyRevision()), transform, mask,
                             () -> submitted.meshPublicationAccepted(version, sourceFrame, visibilityToken, telemetry));
                 } else {
-                    build.submit(key, List.of(new SceneGeometrySink.Put(key,
-                            capture.sceneMesh(fingerprint.topologyRevision()))), null);
+                    build.put(key, capture.entityMesh(fingerprint.topologyRevision()), transform, mask, null);
                 }
+            } else {
+                build.transform(key, transform, mask);
             }
         }
         build.count++;
@@ -1018,33 +993,29 @@ public final class RtEntities {
             var entry = it.next();
             if (now - entry.getValue().lastSeen < KEEP_FRAMES) continue;
             int id = entry.getIntKey();
-            SceneGeometryKey key = key(ENTITY_GEOMETRY, Integer.toUnsignedLong(id));
+            MinecraftEntityGeometry.Key key = key(ENTITY_GEOMETRY, Integer.toUnsignedLong(id));
             submitEntityRemoval(build, key, entry.getValue());
             it.remove();
         }
     }
 
-    private void submitEntityRemoval(FrameBuild build, SceneGeometryKey key, EntityState retiring) {
-        build.submit(key(ENTITY_LIFECYCLE, key.value()), List.of(
-                new SceneGeometrySink.Remove(key), new SceneGeometrySink.Drop(key)),
-                retiring != null ? retiring::invalidateMeshVisibility : null);
+    private void submitEntityRemoval(FrameBuild build, MinecraftEntityGeometry.Key key, EntityState retiring) {
+        build.drop(key, retiring != null ? retiring::invalidateMeshVisibility : null);
     }
 
-    /** Remove every source-owned resident when this capture path is disabled. */
+    /** Remove every retained resident when this capture path is disabled. */
     private void clearResidents(FrameBuild build) {
         entityStates.values().forEach(EntityState::invalidateMeshVisibility);
         for (int id : entityStates.keySet()) {
-            SceneGeometryKey key = key(ENTITY_GEOMETRY, Integer.toUnsignedLong(id));
+            MinecraftEntityGeometry.Key key = key(ENTITY_GEOMETRY, Integer.toUnsignedLong(id));
             submitEntityRemoval(build, key, null);
         }
         for (long value : beCache.keySet()) {
-            SceneGeometryKey key = key(BLOCK_ENTITY_GEOMETRY, value);
-            build.submit(key, List.of(
-                    new SceneGeometrySink.Remove(key), new SceneGeometrySink.Drop(key)), null);
+            MinecraftEntityGeometry.Key key = key(BLOCK_ENTITY_GEOMETRY, value);
+            build.drop(key, null);
         }
-        SceneGeometryKey particleKey = key(PARTICLE_GEOMETRY, PARTICLE_KEY);
-        build.submit(particleKey, List.of(
-                new SceneGeometrySink.Remove(particleKey), new SceneGeometrySink.Drop(particleKey)), null);
+        MinecraftEntityGeometry.Key particleKey = key(PARTICLE_GEOMETRY, PARTICLE_KEY);
+        build.drop(particleKey, null);
         entityStates.clear();
         beCache.clear();
     }
@@ -1077,12 +1048,12 @@ public final class RtEntities {
         collector.clearCaches();
     }
 
-    /** Prevent deferred profiling callbacks from outliving this provider's retained-scene ownership. */
+    /** Prevent deferred profiling callbacks from outliving this contribution's retained-scene ownership. */
     public void onSourceStopped() {
         entityStates.values().forEach(EntityState::invalidateMeshVisibility);
     }
 
-    /** Clears this source's published snapshot before entity IDs can be reused by a new world. */
+    /** Clears CPU capture state before entity IDs can be reused by a new world. */
     public void resetWorldState() {
         entityStates.values().forEach(EntityState::invalidateMeshVisibility);
         entityStates.clear();
@@ -1091,7 +1062,7 @@ public final class RtEntities {
         collector.clearCaches();
     }
 
-    /** Clear capture state; the geometry manager owns and tears down all GPU residents. */
+    /** Clear capture state; the bound geometry contribution tears down all GPU residents. */
     public void shutdown() {
         entityStates.values().forEach(EntityState::invalidateMeshVisibility);
         entityStates.clear();

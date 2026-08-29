@@ -1,9 +1,9 @@
 package dev.comfyfluffy.caustica.client.settings;
 
 import dev.comfyfluffy.caustica.CausticaOptions;
-import dev.comfyfluffy.caustica.api.Option;
+import dev.comfyfluffy.caustica.settings.Option;
 import net.minecraft.network.chat.Component;
-import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.settings.ResourceId;
 
 /**
  * Adapts an extension's declared {@link Option}s to {@link SettingControl}. Reads go through the live view
@@ -11,7 +11,7 @@ import dev.comfyfluffy.caustica.api.ResourceId;
  * in-memory, leaving {@link SettingsCommit} to decide when anything reaches disk.
  *
  * <p>Only {@code BOOL} and {@code RANGE} appear here because those are the only kinds the store backs, and
- * {@code Feature} rejects the others at registration.
+ * {@code SettingsBuilder} rejects the others at registration.
  */
 public final class OptionControls {
     private OptionControls() {
@@ -22,7 +22,7 @@ public final class OptionControls {
             case BOOL -> new BoolRow(store, featureId, cast(option));
             case RANGE -> new RangeRow(store, featureId, cast(option));
             case ENUM, COLOR -> throw new IllegalStateException(
-                    "unreachable: Feature rejects " + option.kind() + " at registration");
+                    "unreachable: SettingsBuilder rejects " + option.kind() + " at registration");
         };
     }
 

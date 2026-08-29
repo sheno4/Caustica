@@ -1,12 +1,10 @@
 package dev.comfyfluffy.caustica.minecraft.material;
 
-import dev.comfyfluffy.caustica.api.provider.MaterialTextureData;
-
 import java.util.List;
 
 /** Decodes source images into canonical page levels. */
 final class MaterialTextureAnalyzer {
-    record Decoded(List<MaterialTextureData.Level> levels) { }
+    record Decoded(List<MaterialTextureLevels.Level> levels) { }
 
     private MaterialTextureAnalyzer() { }
 
@@ -23,9 +21,9 @@ final class MaterialTextureAnalyzer {
             for (int y = 0; y < height; y++) for (int x = 0; x < width; x++) {
                 int i = (y * width + x) * 4;
                 int pixel = sample(texture, x, y, width, height);
-                float r = MaterialTextureData.srgbToLinear(red(pixel));
-                float g = MaterialTextureData.srgbToLinear(green(pixel));
-                float b = MaterialTextureData.srgbToLinear(blue(pixel));
+                float r = MaterialTextureLevels.srgbToLinear(red(pixel));
+                float g = MaterialTextureLevels.srgbToLinear(green(pixel));
+                float b = MaterialTextureLevels.srgbToLinear(blue(pixel));
                 texel.reset();
                 texture.readOpenPbr(x, y, texel);
                 emissionColor[i] = texel.emissionColorR * (emissionUsesBase ? r : 1);
@@ -44,7 +42,7 @@ final class MaterialTextureAnalyzer {
                 surface1[i + 2] = texel.metalBaseColorB;
                 surface1[i + 3] = MaterialPagePacker.encodeIor(texel.specularIor);
             }
-            return new Decoded(MaterialTextureData.mipChain(new MaterialTextureData.Level(width, height,
+            return new Decoded(MaterialTextureLevels.mipChain(new MaterialTextureLevels.Level(width, height,
                     surface0, normal, surface1, emissionColor), maxLod));
         }
     }

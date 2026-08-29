@@ -14,7 +14,8 @@ import org.lwjgl.vulkan.VkDevice;
  * not expose device discovery, queues, submission, or renderer lifecycle.
  *
  * <p>The logical device is Vulkan 1.4. The renderer enables the features required for buffer device
- * addresses, dynamic rendering, synchronization2, unified {@code GENERAL} image layouts, descriptor
+ * addresses, 16-bit floating-point shader arithmetic, dynamic rendering, synchronization2,
+ * unified {@code GENERAL} image layouts, descriptor
  * heaps, shader objects, untyped pointers, acceleration structures, ray-tracing pipelines, ray queries,
  * and ray-tracing position fetch. The corresponding device extensions are
  * {@code VK_KHR_unified_image_layouts}, {@code VK_EXT_descriptor_heap},

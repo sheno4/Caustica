@@ -1,31 +1,42 @@
 package dev.comfyfluffy.caustica.rt.shader;
 
-import dev.comfyfluffy.caustica.api.CausticaRegistry;
+import dev.comfyfluffy.caustica.engine.program.ProgramComposition;
+import dev.comfyfluffy.caustica.engine.program.ProgramKey;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.TreeMap;
 
-/** One immutable slot selection and the complete source identity compiled for it. */
-public record Composition(CausticaRegistry.Selection selection, String rootModule, String rootType,
+/** Immutable engine-program input and generated Slang composition identity. */
+public record Composition(ProgramComposition program, Map<ProgramKey, Integer> implementationIndices,
+                          List<Long> implementationData, String rootModule, String rootType,
                           String rootSource, String contentHash) {
     public Composition {
-        Objects.requireNonNull(selection, "selection");
+        Objects.requireNonNull(program, "program");
+        implementationIndices = Map.copyOf(implementationIndices);
+        implementationData = List.copyOf(implementationData);
         Objects.requireNonNull(rootModule, "rootModule");
         Objects.requireNonNull(rootType, "rootType");
         Objects.requireNonNull(rootSource, "rootSource");
         Objects.requireNonNull(contentHash, "contentHash");
     }
 
-    static Composition create(CausticaRegistry.Selection selection, String rootModule, String rootType,
+    public int implementationIndex(ProgramKey key) {
+        Integer index = implementationIndices.get(Objects.requireNonNull(key, "key"));
+        if (index == null) throw new IllegalArgumentException("program key is not in this composition: " + key);
+        return index;
+    }
+
+    static Composition create(ProgramComposition program, Map<ProgramKey, Integer> indices,
+                              List<Long> implementationData, String rootModule, String rootType,
                               String rootSource, Map<String, byte[]> sources) {
         TreeMap<String, byte[]> ordered = new TreeMap<>(sources);
-        ordered.put("generated/" + rootModule + ".slang",
-                rootSource.getBytes(StandardCharsets.UTF_8));
+        ordered.put("generated/" + rootModule + ".slang", rootSource.getBytes(StandardCharsets.UTF_8));
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             for (Map.Entry<String, byte[]> entry : ordered.entrySet()) {
@@ -34,7 +45,7 @@ public record Composition(CausticaRegistry.Selection selection, String rootModul
                 digest.update(entry.getValue());
                 digest.update((byte) 0);
             }
-            return new Composition(selection, rootModule, rootType, rootSource,
+            return new Composition(program, indices, implementationData, rootModule, rootType, rootSource,
                     HexFormat.of().formatHex(digest.digest()));
         } catch (NoSuchAlgorithmException e) {
             throw new AssertionError("SHA-256 is required by the Java platform", e);

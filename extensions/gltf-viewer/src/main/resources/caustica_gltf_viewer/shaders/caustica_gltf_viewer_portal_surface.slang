@@ -9,9 +9,8 @@ float viewerPortalHash(float2 cell) {
     return frac((p.x + p.y) * p.z);
 }
 
-/** World-pinned animated portal surface supplied entirely by the standalone extension. */
 public struct GltfViewerPortalSurface : ISurfaceModel {
-    public override void evaluateSurface(SurfaceInput input, inout MaterialInput material) {
+    public override OpenPbrSurface evaluateSurface(SurfaceInput input) {
         float3 position = input.proceduralPosition;
         float2 facePosition = abs(input.geometricNormal.y) > 0.8 ? position.xz
                 : abs(input.geometricNormal.x) > 0.8 ? position.zy : position.xy;
@@ -19,20 +18,18 @@ public struct GltfViewerPortalSurface : ISurfaceModel {
         float2 cell = floor(field);
         float2 local = frac(field) - 0.5;
         float seed = viewerPortalHash(cell);
-        float starShape = pow(saturate(1.0 - 2.0 * length(local)), 18.0);
-        float stars = starShape * smoothstep(0.91, 1.0, seed);
+        float stars = pow(saturate(1.0 - 2.0 * length(local)), 18.0) * smoothstep(0.91, 1.0, seed);
         float flow = 0.5 + 0.5 * sin(facePosition.x * 1.7 + facePosition.y * 1.2
                 + input.time * 0.55 + seed * 6.2831853);
-
         float3 deep = float3(0.008, 0.0015, 0.026);
         float3 violet = float3(0.32, 0.025, 0.78);
         float3 starlight = float3(0.48, 0.75, 1.0);
-        material.baseColor = deep;
-        material.baseMetalness = 0.0;
-        material.specularRoughness = 0.38;
-        material.specularIor = 1.35;
-        material.transmissionWeight = 0.0;
-        material.emissionColor = lerp(deep, violet, flow) + starlight * stars;
-        material.emissionLuminance = 90.0 + 900.0 * stars;
+        OpenPbrSurface surface = {};
+        surface.base_color = deep;
+        surface.specular_roughness = 0.38;
+        surface.specular_ior = 1.35;
+        surface.emission_color = lerp(deep, violet, flow) + starlight * stars;
+        surface.emission_luminance = 90.0 + 900.0 * stars;
+        return surface;
     }
 };

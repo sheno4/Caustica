@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.spi.vulkan;
 
-import dev.comfyfluffy.caustica.api.gpu.GpuRasterCapabilities;
+import dev.comfyfluffy.caustica.rt.GpuRasterCapabilities;
 import org.lwjgl.vulkan.VK10;
 
 /** Immutable result of host Vulkan-device negotiation and entry-point validation. */

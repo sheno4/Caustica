@@ -1,14 +1,11 @@
 package dev.comfyfluffy.caustica.minecraft.material;
 
-import dev.comfyfluffy.caustica.api.ResourceId;
-import dev.comfyfluffy.caustica.api.provider.MaterialTopology;
-import dev.comfyfluffy.caustica.minecraft.api.MinecraftMaterialProfile;
-
+import dev.comfyfluffy.caustica.settings.ResourceId;
 import java.util.Objects;
 
 /** Complete Minecraft-owned selector for one submitted named material definition. */
 public record MinecraftMaterialKey(ResourceId material, ResourceId geometry,
-                                   MinecraftMaterialProfile profile, MaterialTopology topology) {
+                                   MinecraftMaterialProfile profile, MinecraftMaterialTopology topology) {
     public MinecraftMaterialKey {
         Objects.requireNonNull(material, "material");
         Objects.requireNonNull(profile, "profile");

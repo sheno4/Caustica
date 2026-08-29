@@ -7,7 +7,9 @@ import org.lwjgl.vulkan.VkCommandBuffer;
  * What every pass gets while recording one frame, whatever stage it records in.
  *
  * <p>The command buffer is mid-recording: the engine owns submission and the barriers into and out of each
- * stage, but barriers <em>between one pass's own dispatches</em> are that pass's job.
+ * stage, but barriers <em>between one pass's own dispatches</em> are that pass's job. The renderer's one
+ * resource descriptor heap and one sampler descriptor heap are already bound before each pass records and
+ * remain bound for the callback. A pass indexes those heaps directly and must not replace their bindings.
  *
  * <p>Subtypes expose stage-specific resources: {@link PostEffectFrame} provides the scene image and effect
  * chain, while {@link UiFrame} provides the UI layer and camera.

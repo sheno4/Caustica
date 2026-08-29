@@ -12,11 +12,11 @@ import java.util.List;
 
 import com.mojang.blaze3d.vulkan.VulkanCommandEncoder;
 
-import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
 import dev.comfyfluffy.caustica.api.gpu.GpuFrameUse;
-import dev.comfyfluffy.caustica.api.gpu.GpuDebugScope;
-import dev.comfyfluffy.caustica.api.gpu.GpuBuffer;
-import dev.comfyfluffy.caustica.api.gpu.GpuImage;
+import dev.comfyfluffy.caustica.rt.GpuBuffer;
+import dev.comfyfluffy.caustica.rt.GpuContext;
+import dev.comfyfluffy.caustica.rt.GpuImage;
+import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import dev.comfyfluffy.caustica.minecraft.entity.RtEntities;
 
 /**
@@ -38,7 +38,7 @@ final class GlowOutlineFeature implements OverlayFeature {
     private static final int MASK_PUSH_BYTES = 96;
     private static final int MASK_FORMAT = VK10.VK_FORMAT_R8G8B8A8_UNORM;
 
-    private GpuDevice device;
+    private GpuContext device;
     private OverlayPipelines.Pipeline maskPipeline;
     private OverlayPipelines.Pipeline compositePipeline;
     private OverlayPipelines.ReadOnlyImageSet compositeSet;
@@ -55,7 +55,7 @@ final class GlowOutlineFeature implements OverlayFeature {
     private int drawCount;
 
     @Override
-    public boolean prepare(GpuDevice device, OverlayFramePool pool, GpuFrameUse gpuUse,
+    public boolean prepare(GpuContext device, OverlayFramePool pool, GpuFrameUse gpuUse,
                            long worldTlas, Matrix4fc worldViewProjection, int width, int height) {
         if (!RtEntities.glowEnabled()) {
             return false;
@@ -117,7 +117,7 @@ final class GlowOutlineFeature implements OverlayFeature {
         return true;
     }
 
-    private void ensureResources(GpuDevice device, int width, int height) {
+    private void ensureResources(GpuContext device, int width, int height) {
         this.device = device;
         if (maskPipeline == null) {
             maskPipeline = new OverlayPipelines.Spec("entity_glow/vertex.vert.spv", "entity_glow/fragment.frag.spv")
@@ -145,7 +145,7 @@ final class GlowOutlineFeature implements OverlayFeature {
     @Override
     public void record(VkCommandBuffer cmd, long targetView, int width, int height) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            try (GpuDebugScope ignored = device.debugScope(cmd, "glow entity mask")) {
+            try (RtDebugLabels.Scope ignored = device.debugScope(cmd, "glow entity mask")) {
                 WorldOverlayPass.beginColorRendering(cmd, stack, maskImage.view(), width, height, true);
                 VK10.vkCmdBindPipeline(cmd, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, maskPipeline.handle);
                 VK10.vkCmdBindVertexBuffers(cmd, 0, stack.longs(vbo.handle()), stack.longs(0L));
@@ -165,7 +165,7 @@ final class GlowOutlineFeature implements OverlayFeature {
 
             VulkanCommandEncoder.memoryBarrier(cmd, stack); // mask attachment writes visible to the composite's reads
 
-            try (GpuDebugScope ignored = device.debugScope(cmd, "glow entity composite")) {
+            try (RtDebugLabels.Scope ignored = device.debugScope(cmd, "glow entity composite")) {
                 WorldOverlayPass.beginColorRendering(cmd, stack, targetView, width, height, false);
                 VK10.vkCmdBindPipeline(cmd, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, compositePipeline.handle);
                 VK10.vkCmdBindDescriptorSets(cmd, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, compositePipeline.layout, 0,

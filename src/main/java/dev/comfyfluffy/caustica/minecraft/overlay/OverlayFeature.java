@@ -3,8 +3,8 @@ package dev.comfyfluffy.caustica.minecraft.overlay;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.joml.Matrix4fc;
 
-import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
 import dev.comfyfluffy.caustica.api.gpu.GpuFrameUse;
+import dev.comfyfluffy.caustica.rt.GpuContext;
 
 /**
  * One world-space overlay effect (glow outline today; block outline, nametags, leash planned) rendered by
@@ -19,7 +19,7 @@ public interface OverlayFeature {
      * {@code graphicsUse} is the exact completion token for resources referenced by the recorded commands.
      * {@code width}/{@code height} are the composite target's (display-res) extent.
      */
-    boolean prepare(GpuDevice device, OverlayFramePool pool, GpuFrameUse gpuUse,
+    boolean prepare(GpuContext device, OverlayFramePool pool, GpuFrameUse gpuUse,
                     long worldTlas, Matrix4fc worldViewProjection, int width, int height);
 
     /**

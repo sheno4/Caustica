@@ -1,92 +1,137 @@
 package dev.comfyfluffy.caustica.minecraft;
 
-import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.CausticaOptions;
-import dev.comfyfluffy.caustica.api.CausticaApi;
 import dev.comfyfluffy.caustica.api.CausticaExtension;
-import dev.comfyfluffy.caustica.api.CausticaRegistry;
-import dev.comfyfluffy.caustica.api.Feature;
-import dev.comfyfluffy.caustica.api.ResourceId;
-import dev.comfyfluffy.caustica.api.Slot;
-import dev.comfyfluffy.caustica.api.Slots;
 import dev.comfyfluffy.caustica.builtin.BuiltinExtension;
-import dev.comfyfluffy.caustica.minecraft.api.MinecraftApiExtension;
-import dev.comfyfluffy.caustica.minecraft.api.MinecraftExtensionRegistry;
+import dev.comfyfluffy.caustica.engine.session.RenderSessionHost;
+import dev.comfyfluffy.caustica.engine.session.MinecraftWorldSessionHost;
+import dev.comfyfluffy.caustica.minecraft.api.MinecraftExtension;
 import dev.comfyfluffy.caustica.platform.CausticaPlatform;
 import dev.comfyfluffy.caustica.rt.RtRuntime;
-import dev.comfyfluffy.caustica.slang.SlangPassShaderCompiler;
+import dev.comfyfluffy.caustica.settings.CausticaSettings;
+import dev.comfyfluffy.caustica.settings.CausticaSettingsExtension;
+import dev.comfyfluffy.caustica.settings.SettingsRegistry;
 
-/** Loader-neutral extension discovery, config paths, and Minecraft provider installation. */
+import java.util.ArrayList;
+import java.util.List;
+
+/** Loader-neutral process extension discovery and settings installation. */
 public final class MinecraftApiBootstrap {
-    private static MinecraftExtensionRegistry minecraftExtensions;
+    private static RenderSessionHost sessionHost;
+    private static MinecraftWorldSessionHost minecraftSessionHost;
+    private static SettingsRegistry settings;
 
-    private MinecraftApiBootstrap() {
-    }
+    private MinecraftApiBootstrap() { }
 
     public static void initialize() {
         MinecraftTelemetry.install(RtRuntime.INSTANCE.telemetry());
-        CausticaRegistry registry = new CausticaRegistry();
-        new BuiltinExtension().register(registry);
-        new MinecraftProvidersExtension().register(registry);
-        MinecraftExtensionRegistry minecraftRegistry = new MinecraftExtensionRegistry();
-        registerExtensions(registry, minecraftRegistry, CausticaPlatform.current().extensions());
-        minecraftExtensions = minecraftRegistry;
-        applyPersistedSelection(registry, Slots.SKY, CausticaConfig.Rt.Composition.SKY.get(),
-                MinecraftProvidersExtension.ID);
+        RenderSessionHost host = new RenderSessionHost();
+        MinecraftWorldSessionHost minecraftHost = new MinecraftWorldSessionHost();
+        SettingsRegistry settingsRegistry = new SettingsRegistry();
+        List<CausticaExtension> extensions = new ArrayList<>();
+        extensions.add(new BuiltinExtension());
+        extensions.addAll(CausticaPlatform.current().extensions());
+        registerExtensions(host, minecraftHost, settingsRegistry, extensions);
+        registerMinecraftExtensions(minecraftHost, settingsRegistry,
+                CausticaPlatform.current().minecraftExtensions(), extensions);
+        registerMinecraftExtension(minecraftHost, settingsRegistry, new MinecraftProvidersExtension());
+
         var shaderCache = CausticaPlatform.current().gameDir().resolve("caustica-shaders");
-        SlangPassShaderCompiler.install(shaderCache.resolve("passes"));
         RtRuntime.INSTANCE.configureShaderCache(shaderCache.resolve("sources"));
         RtRuntime.INSTANCE.telemetry().configure(CausticaPlatform.current().gameDir()
                 .resolve("rt-frame-stats"), MinecraftFrameMetrics.schema());
         CausticaOptions options = CausticaOptions.load(
                 CausticaPlatform.current().configDir().resolve("caustica-options.toml"),
-                registry.features());
-        CausticaApi.initialize(registry, options);
-        CausticaMod.LOGGER.info("Caustica extension API {} initialized with {} feature(s)",
-                CausticaApi.VERSION, registry.features().size());
+                settingsRegistry);
+        CausticaSettings.initialize(settingsRegistry, options);
+
+        sessionHost = host;
+        minecraftSessionHost = minecraftHost;
+        settings = settingsRegistry;
+        RtRuntime.INSTANCE.installApiHost(host);
+        CausticaMod.LOGGER.info("Caustica extension API {} initialized with {} settings feature(s)",
+                dev.comfyfluffy.caustica.api.CausticaApi.VERSION, settingsRegistry.all().size());
     }
 
-    static void registerExtensions(CausticaRegistry registry, MinecraftExtensionRegistry minecraftRegistry,
-                                   java.util.List<CausticaExtension> extensions) {
-        for (CausticaExtension extension : extensions) {
-            try {
-                extension.register(registry);
-            } catch (RuntimeException e) {
-                CausticaMod.LOGGER.error("Caustica feature registration failed: {}",
-                        extension.getClass().getName(), e);
-            }
-            if (extension instanceof MinecraftApiExtension minecraftExtension) {
+    static void registerMinecraftExtensions(MinecraftWorldSessionHost host, SettingsRegistry settingsRegistry,
+                                            List<MinecraftExtension> extensions,
+                                            List<CausticaExtension> genericExtensions) {
+        for (MinecraftExtension extension : extensions) {
+            if (genericExtensions.stream().anyMatch(generic -> generic == extension)) continue;
+            registerMinecraftSessionExtension(host, extension);
+            if (extension instanceof CausticaSettingsExtension settingsExtension) {
                 try {
-                    minecraftExtension.registerMinecraft(minecraftRegistry);
-                } catch (RuntimeException e) {
-                    CausticaMod.LOGGER.error("Minecraft host registration failed: {}",
-                            extension.getClass().getName(), e);
+                    settingsExtension.registerSettings(settingsRegistry);
+                } catch (RuntimeException failure) {
+                    CausticaMod.LOGGER.error("Caustica settings registration failed: {}",
+                            extension.getClass().getName(), failure);
                 }
             }
         }
-        minecraftRegistry.freeze();
     }
 
-    public static MinecraftExtensionRegistry minecraftExtensions() {
-        MinecraftExtensionRegistry current = minecraftExtensions;
-        if (current == null) throw new IllegalStateException("Minecraft extension API is not initialized");
+    static void registerExtensions(RenderSessionHost host, MinecraftWorldSessionHost minecraftHost,
+                                   SettingsRegistry settingsRegistry,
+                                   List<CausticaExtension> extensions) {
+        for (CausticaExtension extension : extensions) {
+            try {
+                extension.register(host.api());
+            } catch (RuntimeException failure) {
+                CausticaMod.LOGGER.error("Caustica session registration failed: {}",
+                        extension.getClass().getName(), failure);
+            }
+            if (extension instanceof MinecraftExtension minecraftExtension) {
+                registerMinecraftSessionExtension(minecraftHost, minecraftExtension);
+            }
+            if (extension instanceof CausticaSettingsExtension settingsExtension) {
+                try {
+                    settingsExtension.registerSettings(settingsRegistry);
+                } catch (RuntimeException failure) {
+                    CausticaMod.LOGGER.error("Caustica settings registration failed: {}",
+                            extension.getClass().getName(), failure);
+                }
+            }
+        }
+    }
+
+    private static void registerMinecraftExtension(MinecraftWorldSessionHost host,
+                                                   SettingsRegistry settingsRegistry,
+                                                   MinecraftProvidersExtension extension) {
+        registerMinecraftSessionExtension(host, extension);
+        try {
+            extension.registerSettings(settingsRegistry);
+        } catch (RuntimeException failure) {
+            CausticaMod.LOGGER.error("Caustica settings registration failed: {}",
+                    extension.getClass().getName(), failure);
+        }
+    }
+
+    private static void registerMinecraftSessionExtension(MinecraftWorldSessionHost host,
+                                                          MinecraftExtension extension) {
+        try {
+            extension.registerMinecraft(host.api());
+        } catch (RuntimeException failure) {
+            CausticaMod.LOGGER.error("Minecraft world-session registration failed: {}",
+                    extension.getClass().getName(), failure);
+        }
+    }
+
+    public static RenderSessionHost sessionHost() {
+        RenderSessionHost current = sessionHost;
+        if (current == null) throw new IllegalStateException("Caustica extension API is not initialized");
         return current;
     }
 
-    static void applyPersistedSelection(CausticaRegistry registry, Slot slot, String saved,
-                                        ResourceId hostDefault) {
-        if (saved == null) {
-            registry.select(slot, hostDefault);
-            return;
-        }
-        ResourceId featureId = ResourceId.tryParse(saved);
-        Feature feature = featureId != null ? registry.features().get(featureId) : null;
-        if (feature == null || !feature.bindings().containsKey(slot)) {
-            CausticaMod.LOGGER.warn("Slot {} is saved as '{}', which is not installed or does not bind it; "
-                    + "using the default", slot.id(), saved);
-            return;
-        }
-        registry.select(slot, featureId);
+    public static SettingsRegistry settings() {
+        SettingsRegistry current = settings;
+        if (current == null) throw new IllegalStateException("Caustica settings are not initialized");
+        return current;
+    }
+
+    public static MinecraftWorldSessionHost minecraftSessionHost() {
+        MinecraftWorldSessionHost current = minecraftSessionHost;
+        if (current == null) throw new IllegalStateException("Minecraft session API is not initialized");
+        return current;
     }
 }

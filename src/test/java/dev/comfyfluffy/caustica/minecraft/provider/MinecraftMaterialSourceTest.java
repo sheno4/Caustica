@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.provider;
 
-import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.settings.ResourceId;
 import dev.comfyfluffy.caustica.api.provider.CpuTextureResource;
 import dev.comfyfluffy.caustica.api.provider.MaterialDefinition;
 import dev.comfyfluffy.caustica.api.provider.MaterialSink;

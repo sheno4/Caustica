@@ -1,62 +1,91 @@
 package dev.comfyfluffy.caustica.minecraft;
 
-import dev.comfyfluffy.caustica.api.CausticaExtension;
-import dev.comfyfluffy.caustica.api.CausticaRegistry;
-import dev.comfyfluffy.caustica.api.DisplayText;
-import dev.comfyfluffy.caustica.api.ResourceId;
-import dev.comfyfluffy.caustica.api.RuntimeActivation;
-import dev.comfyfluffy.caustica.api.ShaderSource;
-import dev.comfyfluffy.caustica.api.Slots;
-import dev.comfyfluffy.caustica.api.pass.RenderStage;
-import dev.comfyfluffy.caustica.minecraft.overlay.WorldOverlayPass;
-import dev.comfyfluffy.caustica.minecraft.cloud.MinecraftCloudSceneProvider;
-import dev.comfyfluffy.caustica.minecraft.damage.MinecraftDamageModifierPass;
-import dev.comfyfluffy.caustica.minecraft.provider.MinecraftLightProvider;
-import dev.comfyfluffy.caustica.minecraft.provider.MinecraftMaterialSource;
-import dev.comfyfluffy.caustica.minecraft.provider.MinecraftSceneProvider;
-import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialState;
-import dev.comfyfluffy.caustica.minecraft.sky.SkyLutPass;
+import dev.comfyfluffy.caustica.api.program.EnvironmentDefinition;
+import dev.comfyfluffy.caustica.api.program.EnvironmentId;
+import dev.comfyfluffy.caustica.api.program.ProgramRegistration;
+import dev.comfyfluffy.caustica.api.program.ShaderDataType;
+import dev.comfyfluffy.caustica.api.program.ShaderDefinition;
+import dev.comfyfluffy.caustica.api.program.ShaderSource;
+import dev.comfyfluffy.caustica.api.program.SurfaceDefinition;
+import dev.comfyfluffy.caustica.api.program.SurfaceId;
+import dev.comfyfluffy.caustica.api.program.VolumeDefinition;
+import dev.comfyfluffy.caustica.api.program.VolumeId;
+import dev.comfyfluffy.caustica.minecraft.api.MinecraftApi;
+import dev.comfyfluffy.caustica.minecraft.api.MinecraftExtension;
+import dev.comfyfluffy.caustica.minecraft.api.MinecraftWorldSessionContribution;
+import dev.comfyfluffy.caustica.settings.CausticaSettingsExtension;
+import dev.comfyfluffy.caustica.settings.DisplayText;
+import dev.comfyfluffy.caustica.settings.ResourceId;
+import dev.comfyfluffy.caustica.settings.SettingsRegistry;
 
-/** Installs Minecraft scene, light, and material input into the renderer API. */
-public final class MinecraftProvidersExtension implements CausticaExtension {
+/** Registers Minecraft's world program implementations and settings. */
+public final class MinecraftProvidersExtension implements MinecraftExtension, CausticaSettingsExtension {
     public static final ResourceId ID = ResourceId.of("caustica", "minecraft");
-    public static final ResourceId MATERIAL_SURFACE = ResourceId.of("caustica", "minecraft_material");
-    public static final ResourceId MATERIAL_COVERAGE = ResourceId.of("caustica", "minecraft_coverage");
-    public static final ResourceId END_PORTAL_SURFACE = ResourceId.of("caustica", "end_portal");
-    public static final ResourceId WATER_SURFACE = ResourceId.of("caustica", "minecraft_water");
+
+    public interface ImplementationData { }
+    public interface PrimitiveData { }
+    public interface InstanceData { }
+    public interface EnvironmentBindingData { }
+
+    public static final ShaderDataType<ImplementationData> IMPLEMENTATION_DATA =
+            ShaderDataType.create("Minecraft implementation data");
+    public static final ShaderDataType<PrimitiveData> PRIMITIVE_DATA =
+            ShaderDataType.create("Minecraft primitive data");
+    public static final ShaderDataType<InstanceData> INSTANCE_DATA =
+            ShaderDataType.create("Minecraft instance data");
+    public static final ShaderDataType<EnvironmentBindingData> ENVIRONMENT_BINDING_DATA =
+            ShaderDataType.create("Minecraft environment binding data");
+
+    private static final ShaderSource SHADERS = ShaderSource.classpath(
+            MinecraftProvidersExtension.class, "/caustica/shaders/minecraft", "surface", "sky");
 
     @Override
-    public void register(CausticaRegistry registry) {
+    public void registerMinecraft(MinecraftApi api) {
+        api.sessions().add(context -> {
+            ProgramRegistration<Programs> registration = context.renderSession().program().register(builder -> {
+                var coverage = shader("caustica_minecraft_coverage", "MinecraftCoverage");
+                var implementationData = IMPLEMENTATION_DATA.data(0);
+                return new Programs(
+                        builder.surface(SurfaceDefinition.of(
+                                shader("caustica_minecraft_surface", "MinecraftSurface"), coverage,
+                                implementationData, PRIMITIVE_DATA, INSTANCE_DATA)),
+                        builder.surface(SurfaceDefinition.of(
+                                shader("caustica_water_surface", "WaterSurface"), coverage,
+                                implementationData, PRIMITIVE_DATA, INSTANCE_DATA)),
+                        builder.surface(SurfaceDefinition.of(
+                                shader("caustica_portal_surface", "PortalSurface"), coverage,
+                                implementationData, PRIMITIVE_DATA, INSTANCE_DATA)),
+                        builder.volume(VolumeDefinition.of(
+                                shader("caustica_water_surface", "WaterVolume"), implementationData,
+                                PRIMITIVE_DATA, INSTANCE_DATA)),
+                        builder.environment(new EnvironmentDefinition<>(
+                                shader("caustica_minecraft_overworld_sky", "MinecraftOverworldSky"),
+                                ENVIRONMENT_BINDING_DATA)));
+            });
+            return contribution(registration);
+        });
+    }
+
+    @Override
+    public void registerSettings(SettingsRegistry registry) {
         registry.feature(ID)
                 .title(DisplayText.literal("Minecraft"))
-                .shaderSource(ShaderSource.classpath(
-                        "/caustica/shaders/minecraft", "surface", "sky", "modifier"))
-                .runtimeActivation(RuntimeActivation.ALWAYS)
-                .bind(Slots.SKY, "caustica_minecraft_overworld_sky", "MinecraftOverworldSky")
-                .surface(MATERIAL_SURFACE, "caustica_minecraft_surface", "MinecraftSurface",
-                        MATERIAL_COVERAGE, "caustica_minecraft_coverage", "MinecraftCoverage")
-                .surface(END_PORTAL_SURFACE, "caustica_portal_surface", "PortalSurface",
-                        MATERIAL_COVERAGE, "caustica_minecraft_coverage", "MinecraftCoverage")
-                .surface(WATER_SURFACE, "caustica_water_surface", "WaterSurface",
-                        MATERIAL_COVERAGE, "caustica_minecraft_coverage", "MinecraftCoverage")
-                .passResourceModule("caustica_minecraft_sky_bindings")
-                .surfaceModifier(MinecraftDamageModifierPass.MODIFIER_ID,
-                        "caustica_minecraft_damage_modifier", "MinecraftDamageModifier")
-                .passResourceModule("caustica_minecraft_damage_bindings")
-                .group(SkyLutPass.GROUP)
-                .options(SkyLutPass.OPTIONS)
-                .renderPass(SkyLutPass.ID, RenderStage.ENVIRONMENT_PREPARE, SkyLutPass::new)
-                .renderPass(MinecraftDamageModifierPass.ID, RenderStage.BEFORE_TRACE,
-                        MinecraftDamageModifierPass::new)
-                .renderPass(WorldOverlayPass.ID, RenderStage.OVERLAY, WorldOverlayPass::new)
-                .sceneProviderContextual(MinecraftSceneProvider.ID, context -> new MinecraftSceneProvider(
-                        context.getOrCreate(MinecraftMaterialState.CONTEXT_KEY,
-                                MinecraftMaterialState::new)))
-                .sceneProvider(MinecraftCloudSceneProvider.ID, MinecraftCloudSceneProvider::new)
-                .lightProvider(MinecraftLightProvider.ID, MinecraftLightProvider::new)
-                .materialSourceContextual(MinecraftMaterialSource.ID, context -> new MinecraftMaterialSource(
-                        context.getOrCreate(MinecraftMaterialState.CONTEXT_KEY,
-                                MinecraftMaterialState::new)))
                 .register();
     }
+
+    private static ShaderDefinition shader(String module, String type) {
+        return new ShaderDefinition(SHADERS, module, type);
+    }
+
+    private static MinecraftWorldSessionContribution contribution(ProgramRegistration<?> registration) {
+        return new MinecraftWorldSessionContribution() {
+            @Override public void stop() { registration.close(); }
+        };
+    }
+
+    public record Programs(SurfaceId<PrimitiveData, InstanceData> materialSurface,
+                           SurfaceId<PrimitiveData, InstanceData> waterSurface,
+                           SurfaceId<PrimitiveData, InstanceData> portalSurface,
+                           VolumeId<PrimitiveData, InstanceData> waterVolume,
+                           EnvironmentId<EnvironmentBindingData> environment) { }
 }

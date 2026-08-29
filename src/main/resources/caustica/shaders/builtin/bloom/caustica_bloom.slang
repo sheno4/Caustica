@@ -1,7 +1,7 @@
 // Scene-referred bloom: a downsample/upsample mip pyramid (Jimenez, "Next Generation Post Processing in
-// Call of Duty: Advanced Warfare", SIGGRAPH 2014). One dispatch per pyramid step; the step's source and
-// destination are bound as a dedicated descriptor set by the render-pass engine, so nothing here indexes a
-// descriptor array. A final MODE_COMPOSITE dispatch adds the finished pyramid onto the post chain.
+// Call of Duty: Advanced Warfare", SIGGRAPH 2014). One dispatch per pyramid step resolves its images and
+// sampler from the renderer-bound heaps. A final MODE_COMPOSITE dispatch adds the finished pyramid onto the
+// post chain.
 //
 // Each level samples only its immediate neighbour, keeping the kernel dense at every scale. Summing
 // progressively wider levels produces a monotonic highlight skirt without a hard support edge. The
@@ -9,14 +9,6 @@
 module caustica_bloom;
 
 import caustica_bloom_types;
-
-[[vk::binding(0, 0)]] [format("rgba16f")] RWTexture2D<float4> dstImage;
-[[vk::binding(1, 0)]] Sampler2D srcImage;
-[[vk::binding(2, 0)]] [format("r32f")] RWTexture2D<float> exposureImage;
-// The incoming link of the post chain, read 1:1 by MODE_COMPOSITE and ignored by the pyramid steps. Bound
-// on every dispatch regardless: one descriptor layout serves all four modes, which is cheaper than a
-// second pipeline for one extra step.
-[[vk::binding(3, 0)]] [format("rgba16f")] RWTexture2D<float4> sceneImage;
 
 [[vk::push_constant]] BloomPush pc;
 
@@ -31,7 +23,9 @@ static const int MODE_UPSAMPLE = 2;
 static const int MODE_COMPOSITE = 3;
 
 float3 tap(float2 uv, float2 offset) {
-    return srcImage.SampleLevel(uv + offset, 0.0).rgb;
+    Texture2D<float4> source = ResourceDescriptorHeap[NonUniformResourceIndex(pc.sourceImageIndex)];
+    SamplerState samplerState = SamplerDescriptorHeap[NonUniformResourceIndex(pc.samplerIndex)];
+    return source.SampleLevel(samplerState, uv + offset, 0.0).rgb;
 }
 
 float rollOffBloomContribution(float contribution) {
@@ -112,9 +106,11 @@ float3 upsample(float2 uv, float2 srcTexel, float radius) {
     return sum * (1.0 / 16.0);
 }
 
-[shader("compute")]
-[numthreads(8, 8, 1)]
-void main(uint3 dispatchId : SV_DispatchThreadID) {
+public void runBloom(uint3 dispatchId) {
+    RWTexture2D<float4> dstImage =
+            ResourceDescriptorHeap[NonUniformResourceIndex(pc.destinationImageIndex)];
+    Texture2D<float4> srcImage =
+            ResourceDescriptorHeap[NonUniformResourceIndex(pc.sourceImageIndex)];
     int2 pixel = int2(dispatchId.xy);
     uint width, height;
     dstImage.GetDimensions(width, height);
@@ -130,8 +126,11 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
         // Full-res chain link: the pyramid's base added onto whatever the previous pass left, at the
         // strength this pass alone decides. Bilinear because the pyramid is half-res; 1:1 for the scene,
         // which is why sceneImage can be a storage read rather than another sampler.
-        float3 bloom = srcImage.SampleLevel(uv, 0.0).rgb * pc.compositeStrength;
-        dstImage[pixel] = float4(sceneImage[pixel].rgb + bloom, 1.0);
+        SamplerState samplerState = SamplerDescriptorHeap[NonUniformResourceIndex(pc.samplerIndex)];
+        float3 bloom = srcImage.SampleLevel(samplerState, uv, 0.0).rgb * pc.compositeStrength;
+        Texture2D<float4> sceneImage =
+                ResourceDescriptorHeap[NonUniformResourceIndex(pc.sceneImageIndex)];
+        dstImage[pixel] = float4(sceneImage.Load(int3(pixel, 0)).rgb + bloom, 1.0);
         return;
     }
 
@@ -139,7 +138,9 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
     if (pc.mode == MODE_PREFILTER) {
         // The pyramid works on EXPOSED values so the threshold is a display-referred decision (how far
         // above mid-grey a highlight has to be), not one that drifts with the scene's absolute level.
-        float exposure = max(exposureImage[int2(0, 0)], 0.0);
+        Texture2D<float> exposureImage =
+                ResourceDescriptorHeap[NonUniformResourceIndex(pc.exposureImageIndex)];
+        float exposure = max(exposureImage.Load(int3(0, 0, 0)), 0.0);
         result = prefilter(downsample(uv, srcTexel, true) * exposure);
     } else if (pc.mode == MODE_DOWNSAMPLE) {
         result = downsample(uv, srcTexel, false);

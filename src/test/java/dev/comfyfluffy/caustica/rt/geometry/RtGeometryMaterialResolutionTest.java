@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.rt.geometry;
 
-import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.settings.ResourceId;
 import dev.comfyfluffy.caustica.api.provider.MaterialHandle;
 import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import org.junit.jupiter.api.Test;

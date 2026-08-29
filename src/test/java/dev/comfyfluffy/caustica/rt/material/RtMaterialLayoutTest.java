@@ -38,7 +38,7 @@ final class RtMaterialLayoutTest {
         assertEquals(128, SurfaceMaterialData.BYTE_SIZE);
         ByteBuffer data = ByteBuffer.allocateDirect(SurfaceMaterialData.BYTE_SIZE)
                 .order(ByteOrder.nativeOrder());
-        new SurfaceMaterialData(new SurfaceMaterialData.MaterialProviderData(
+        new SurfaceMaterialData(new SurfaceMaterialData.SurfaceMaterialWords(
                         new Int4(11, 12, 13, 14),
                         new Int4(15, 16, 17, 18),
                         new Int4(19, 20, 21, 22)),

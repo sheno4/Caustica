@@ -1,7 +1,5 @@
 package dev.comfyfluffy.caustica.minecraft.material;
 
-import dev.comfyfluffy.caustica.api.provider.OpenPbrMaterialDefaults;
-
 /**
  * Reusable semantic output for one canonical OpenPBR texture texel. Color fields are linear BT.709;
  * scalar fields are physical OpenPBR values except the tangent normal, whose x/y components are signed.
@@ -21,7 +19,7 @@ public final class OpenPbrTextureTexel {
     public float metalBaseColorR = 1.0f;
     public float metalBaseColorG = 1.0f;
     public float metalBaseColorB = 1.0f;
-    public float specularIor = OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR;
+    public float specularIor = OpenPbrDefaults.SPECULAR_IOR;
 
     public void reset() {
         specularRoughness = 1.0f;
@@ -37,6 +35,6 @@ public final class OpenPbrTextureTexel {
         metalBaseColorR = 1.0f;
         metalBaseColorG = 1.0f;
         metalBaseColorB = 1.0f;
-        specularIor = OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR;
+        specularIor = OpenPbrDefaults.SPECULAR_IOR;
     }
 }

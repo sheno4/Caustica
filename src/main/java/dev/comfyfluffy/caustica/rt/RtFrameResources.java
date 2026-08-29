@@ -1,8 +1,6 @@
 package dev.comfyfluffy.caustica.rt;
 
 import dev.comfyfluffy.caustica.CausticaConfig;
-import dev.comfyfluffy.caustica.api.gpu.GpuBuffer;
-import dev.comfyfluffy.caustica.api.gpu.GpuImage;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDebugPresentPipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDisplayPipeline;
 import dev.comfyfluffy.caustica.rt.pipeline.RtExposure;

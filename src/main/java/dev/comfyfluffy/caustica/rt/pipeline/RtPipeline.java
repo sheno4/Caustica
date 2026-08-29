@@ -1,680 +1,334 @@
 package dev.comfyfluffy.caustica.rt.pipeline;
 
-import org.lwjgl.system.MemoryStack;
-import org.lwjgl.system.MemoryUtil;
-import org.lwjgl.vulkan.VK10;
-import org.lwjgl.vulkan.VK12;
-import org.lwjgl.vulkan.VkCommandBuffer;
-import org.lwjgl.vulkan.VkDescriptorBufferInfo;
-import org.lwjgl.vulkan.VkDescriptorImageInfo;
-import org.lwjgl.vulkan.VkDescriptorPoolCreateInfo;
-import org.lwjgl.vulkan.VkDescriptorPoolSize;
-import org.lwjgl.vulkan.VkDescriptorSetAllocateInfo;
-import org.lwjgl.vulkan.VkDescriptorSetLayoutBinding;
-import org.lwjgl.vulkan.VkDescriptorSetLayoutBindingFlagsCreateInfo;
-import org.lwjgl.vulkan.VkDescriptorSetLayoutCreateInfo;
-import org.lwjgl.vulkan.VkDevice;
-import org.lwjgl.vulkan.VkPipelineShaderStageCreateInfo;
-import org.lwjgl.vulkan.VkPipelineLayoutCreateInfo;
-import org.lwjgl.vulkan.VkPushConstantRange;
-import org.lwjgl.vulkan.VkRayTracingPipelineCreateInfoKHR;
-import org.lwjgl.vulkan.VkRayTracingShaderGroupCreateInfoKHR;
-import org.lwjgl.vulkan.VkShaderModuleCreateInfo;
-import org.lwjgl.vulkan.VkStridedDeviceAddressRegionKHR;
-import org.lwjgl.vulkan.VkWriteDescriptorSet;
-import org.lwjgl.vulkan.VkWriteDescriptorSetAccelerationStructureKHR;
-
-import java.nio.ByteBuffer;
-import java.nio.LongBuffer;
-import java.util.Map;
-
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
-import dev.comfyfluffy.caustica.rt.RtGpuExecutor;
-import dev.comfyfluffy.caustica.rt.accel.RtAccel;
-import dev.comfyfluffy.caustica.api.gpu.GpuBuffer;
-import dev.comfyfluffy.caustica.rt.shader.WorldShaderCompiler;
+import dev.comfyfluffy.caustica.rt.scene.RtRetainedGeometryPlan;
+import org.lwjgl.PointerBuffer;
+import org.lwjgl.system.MemoryStack;
+import org.lwjgl.system.MemoryUtil;
+import org.lwjgl.util.vma.Vma;
+import org.lwjgl.util.vma.VmaAllocationCreateInfo;
+import org.lwjgl.util.vma.VmaAllocationInfo;
+import org.lwjgl.vulkan.*;
+
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.LongBuffer;
+import java.util.List;
 
 import static dev.comfyfluffy.caustica.rt.GpuContext.check;
-import static dev.comfyfluffy.caustica.rt.pipeline.RtBindings.*;
 import static org.lwjgl.vulkan.EXTOpacityMicromap.VK_PIPELINE_CREATE_RAY_TRACING_OPACITY_MICROMAP_BIT_EXT;
-import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
-import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR;
-import static org.lwjgl.vulkan.KHRRayTracingPipeline.VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR;
-import static org.lwjgl.vulkan.KHRRayTracingPipeline.VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR;
-import static org.lwjgl.vulkan.KHRRayTracingPipeline.VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR;
-import static org.lwjgl.vulkan.KHRRayTracingPipeline.VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR;
-import static org.lwjgl.vulkan.KHRRayTracingPipeline.VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
-import static org.lwjgl.vulkan.KHRRayTracingPipeline.VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-import static org.lwjgl.vulkan.KHRRayTracingPipeline.VK_SHADER_STAGE_MISS_BIT_KHR;
-import static org.lwjgl.vulkan.KHRRayTracingPipeline.VK_SHADER_STAGE_RAYGEN_BIT_KHR;
-import static org.lwjgl.vulkan.KHRRayTracingPipeline.VK_SHADER_UNUSED_KHR;
-import static org.lwjgl.vulkan.KHRRayTracingPipeline.vkCmdTraceRaysKHR;
-import static org.lwjgl.vulkan.KHRRayTracingPipeline.vkCreateRayTracingPipelinesKHR;
-import static org.lwjgl.vulkan.KHRRayTracingPipeline.vkGetRayTracingShaderGroupHandlesKHR;
+import static org.lwjgl.vulkan.KHRRayTracingPipeline.*;
 
-/**
- * An RT pipeline with an SBT of {raygen + N miss + triangle hit groups} and a descriptor
- * set of {binding 0 = TLAS, binding 1 = storage image}. Built from SPIR-V resources. Update the
- * bindings with {@link #setTlas}/{@link #setStorageImage}, then {@link #trace}. Multiple miss shaders
- * (for example, a primary environment miss and a shadow-visibility miss) are supported by passing an
- * array; {@code traceRayEXT}'s {@code missIndex} selects among them.
- */
+/** Descriptor-heap-native world ray-tracing pipeline and shader binding table. */
 public final class RtPipeline {
-    // A ring of descriptor sets: setTlas waits for the selected slot's exact prior graphics use before
-    // rewriting it. Ring depth is only a performance choice that avoids routine host waits.
-    private static final int RING = 6;
-
-    private final GpuContext ctx;
-    private final long descriptorSetLayout;
-    private final long descriptorPool;
-    private final long[] descriptorSets;
-    private final RtGpuExecutor.TrackedGraphicsUse[] descriptorSetUses;
-    private int currentSet;
-    private final long pipelineLayout;
+    private final GpuContext context;
     private final long pipeline;
-    private final GpuBuffer sbt;
-    private final long sbtStride;
+    private final SbtBuffer sbt;
+    private final long stride;
+    private final int handleSize;
     private final int raygenCount;
     private final int missCount;
-    private final int hitGroupCount;
-    private final int pushConstantSize;
-    private final int pushConstantStages;
-    // Optional second descriptor set (set 1) holding base-color and canonical material-page arrays.
-    // Only base color is update-after-bind: its producer texture-to-slot registry is append-only. Material
-    // pages are populated once at the resource-epoch boundary. 0 when created without bindless textures.
-    private final long bindlessLayout;
-    private final long bindlessPool;
-    private final long bindlessSet;
-    // Optional third descriptor set (set 2): pass-declared resources (e.g. SkyLutPass's own sky-view/
-    // transmittance samplers), one COMBINED_IMAGE_SAMPLER per binding index the active composition's own
-    // Slang reflected at WorldShaderCompiler.PASS_RESOURCE_SET — the engine never names these itself. Not
-    // ring-buffered: a pass rewrites its own binding only when its resource changes (create, resize, or a
-    // replaced host handle), after prior device use completes. 0 when the composition declares none.
-    private final long passResourceLayout;
-    private final long passResourcePool;
-    private final long passResourceSet;
-    /** Binding index → VkDescriptorType, so setPassResource/setPassResourceBuffer know which write shape to use. */
-    private final Map<Integer, Integer> passResourceDescriptorTypes;
+    private final int hitCount;
     private boolean destroyed;
 
-    private RtPipeline(GpuContext ctx, long dsl, long pool, long[] sets, long layout, long pipeline,
-                       GpuBuffer sbt, long stride, int raygenCount, int missCount, int hitGroupCount,
-                       int pushConstantSize, int pushConstantStages, long bindlessLayout,
-                       long bindlessPool, long bindlessSet, long passResourceLayout,
-                       long passResourcePool, long passResourceSet,
-                       Map<Integer, Integer> passResourceDescriptorTypes) {
-        this.ctx = ctx;
-        this.descriptorSetLayout = dsl;
-        this.descriptorPool = pool;
-        this.descriptorSets = sets;
-        this.descriptorSetUses = new RtGpuExecutor.TrackedGraphicsUse[sets.length];
-        for (int i = 0; i < descriptorSetUses.length; i++) {
-            descriptorSetUses[i] = new RtGpuExecutor.TrackedGraphicsUse();
-        }
-        this.currentSet = 0;
-        this.pipelineLayout = layout;
+    private RtPipeline(GpuContext context, long pipeline, SbtBuffer sbt, long stride, int handleSize,
+                       int raygenCount, int missCount, int hitCount) {
+        this.context = context;
         this.pipeline = pipeline;
         this.sbt = sbt;
-        this.sbtStride = stride;
+        this.stride = stride;
+        this.handleSize = handleSize;
         this.raygenCount = raygenCount;
         this.missCount = missCount;
-        this.hitGroupCount = hitGroupCount;
-        this.pushConstantSize = pushConstantSize;
-        this.pushConstantStages = pushConstantStages;
-        this.bindlessLayout = bindlessLayout;
-        this.bindlessPool = bindlessPool;
-        this.bindlessSet = bindlessSet;
-        this.passResourceLayout = passResourceLayout;
-        this.passResourcePool = passResourcePool;
-        this.passResourceSet = passResourceSet;
-        this.passResourceDescriptorTypes = passResourceDescriptorTypes;
+        this.hitCount = hitCount;
     }
 
-    /**
-     * Builds the RT pipeline. {@code rahit} (nullable) adds any-hit-capable triangle hit records. The world
-     * pipeline's hit SBT region matches {@link RtAccel}'s fixed class/ray-type constants: radiance class
-     * records first, followed by shadow class records. The fixed world descriptor layout is declared in
-     * {@code shaders/rt_bindings.slang}.
-     *
-     * <p>{@code rgen} may hold several raygen shaders. They share this pipeline's descriptor set, miss
-     * table and hit table; {@link #trace(VkCommandBuffer, int, int, ByteBuffer, int)} picks one per
-     * dispatch by index.
-     */
-    public static RtPipeline create(GpuContext ctx, RtShaderCode[] rgen, RtShaderCode[] rmiss,
-                                    RtShaderCode rchit, RtShaderCode radianceAhit, RtShaderCode shadowAhit,
-                                    int pushConstantSize,
-                                    int bindlessTextures,
-                                    Map<String, WorldShaderCompiler.PassResourceBinding> passResourceBindings) {
-        VkDevice vk = ctx.vk();
-        boolean hasAhit = radianceAhit != null;
-        String label = "world RT pipeline";
-        if (!passResourceBindings.isEmpty() && bindlessTextures <= 0) {
-            // Set indices in the pipeline layout are positional (pSetLayouts[i] == set i in the shader),
-            // so set 2 (pass resources) can only be added once set 1 (bindless) is also present — in
-            // practice bindless textures are always configured, so this only guards a degenerate case
-            // rather than something the running game hits.
-            throw new UnsupportedOperationException(
-                    "world pass resources (" + passResourceBindings.keySet()
-                            + ") require the bindless descriptor set to also be present");
+    /** Creates a KHR ray-tracing pipeline whose shaders directly address the two descriptor heaps. */
+    public static RtPipeline create(GpuContext context, RtShaderCode[] raygen, RtShaderCode[] miss,
+                                    RtShaderCode closestHit, RtShaderCode radianceAnyHit,
+                                    RtShaderCode shadowAnyHit) {
+        if (raygen.length == 0 || miss.length == 0) throw new IllegalArgumentException("empty RT stage array");
+        boolean anyHit = radianceAnyHit != null || shadowAnyHit != null;
+        if (anyHit && (radianceAnyHit == null || shadowAnyHit == null)) {
+            throw new IllegalArgumentException("both any-hit shaders are required");
         }
-        if (bindlessTextures > 0) {
-            long requiredCombinedSamplers = Math.multiplyExact((long) bindlessTextures, WORLD_BINDLESS_COUNT);
-            long deviceLimit = ctx.updateAfterBindCombinedImageSamplerLimit();
-            if (requiredCombinedSamplers > deviceLimit) {
-                throw new UnsupportedOperationException("Configured bindless texture capacity " + bindlessTextures
-                        + " requires " + requiredCombinedSamplers + " combined image samplers, device limit is "
-                        + deviceLimit);
-            }
+        for (RtShaderCode shader : raygen) requireDescriptorHeapCompatible(shader);
+        for (RtShaderCode shader : miss) requireDescriptorHeapCompatible(shader);
+        requireDescriptorHeapCompatible(closestHit);
+        if (anyHit) {
+            requireDescriptorHeapCompatible(radianceAnyHit);
+            requireDescriptorHeapCompatible(shadowAnyHit);
         }
+        VkDevice device = context.vk();
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkDescriptorSetLayoutBinding.Buffer binds = VkDescriptorSetLayoutBinding.calloc(
-                    WORLD_SET_DESCRIPTOR_COUNT, stack);
-            int worldBinding = 0;
-            binds.get(worldBinding++).binding(WORLD_TLAS).descriptorType(VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR)
-                    .descriptorCount(1).stageFlags(VK_SHADER_STAGE_RAYGEN_BIT_KHR);
-            binds.get(worldBinding++).binding(WORLD_OUTPUT).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)
-                    .descriptorCount(1).stageFlags(VK_SHADER_STAGE_RAYGEN_BIT_KHR);
-            for (int binding = WORLD_G_NORMAL; binding <= WORLD_G_SPEC_MOTION; binding++) {
-                binds.get(worldBinding++).binding(binding).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)
-                        .descriptorCount(1).stageFlags(VK_SHADER_STAGE_RAYGEN_BIT_KHR);
-            }
-            VkDescriptorSetLayoutCreateInfo dslci = VkDescriptorSetLayoutCreateInfo.calloc(stack).sType$Default().pBindings(binds);
-            LongBuffer p = stack.mallocLong(1);
-            check(VK10.vkCreateDescriptorSetLayout(vk, dslci, null, p), "vkCreateDescriptorSetLayout");
-            long dsl = p.get(0);
-            RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT, dsl, label + " descriptor set layout");
-
-            VkDescriptorPoolSize.Buffer poolSizes = VkDescriptorPoolSize.calloc(2, stack);
-            poolSizes.get(0).type(VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR).descriptorCount(RING);
-            poolSizes.get(1).type(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)
-                    .descriptorCount(RING * WORLD_SET_STORAGE_IMAGE_COUNT);
-            VkDescriptorPoolCreateInfo dpci = VkDescriptorPoolCreateInfo.calloc(stack).sType$Default().maxSets(RING).pPoolSizes(poolSizes);
-            check(VK10.vkCreateDescriptorPool(vk, dpci, null, p), "vkCreateDescriptorPool");
-            long pool = p.get(0);
-            RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_DESCRIPTOR_POOL, pool, label + " descriptor pool");
-            LongBuffer layouts = stack.mallocLong(RING);
-            for (int i = 0; i < RING; i++) {
-                layouts.put(i, dsl);
-            }
-            VkDescriptorSetAllocateInfo dsai = VkDescriptorSetAllocateInfo.calloc(stack).sType$Default()
-                    .descriptorPool(pool).pSetLayouts(layouts);
-            LongBuffer pSet = stack.mallocLong(RING);
-            check(VK10.vkAllocateDescriptorSets(vk, dsai, pSet), "vkAllocateDescriptorSets");
-            long[] sets = new long[RING];
-            pSet.get(sets);
-            for (int i = 0; i < RING; i++) {
-                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_DESCRIPTOR_SET, sets[i], label + " descriptor set " + i);
-            }
-
-            // Optional bindless set (set 1): provider textures.
-            long bindlessLayout = 0L, bindlessPool = 0L, bindlessSet = 0L;
-            if (bindlessTextures > 0) {
-                int nb = WORLD_BINDLESS_COUNT;
-                VkDescriptorSetLayoutBinding.Buffer bl = VkDescriptorSetLayoutBinding.calloc(nb, stack);
-                java.nio.IntBuffer bindFlags = stack.mallocInt(nb);
-                for (int b = 0; b < nb; b++) {
-                    int stages = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
-                    if (b == WORLD_PROVIDER_TEXTURES && hasAhit) stages |= VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
-                    bl.get(b).binding(b).descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
-                            .descriptorCount(bindlessTextures).stageFlags(stages);
-                    int flags = VK12.VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
-                    if (b == WORLD_PROVIDER_TEXTURES) flags |= VK12.VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
-                    bindFlags.put(b, flags);
+            int raygenCount = raygen.length;
+            int missCount = miss.length;
+            int hitCount = anyHit ? dev.comfyfluffy.caustica.rt.accel.RtAccel.SBT_HIT_GROUP_COUNT : 1;
+            int closestStage = raygenCount + missCount;
+            int radianceStage = closestStage + 1;
+            int shadowStage = closestStage + 2;
+            int stageCount = closestStage + 1 + (anyHit ? 2 : 0);
+            int groupCount = raygenCount + missCount + hitCount;
+            long[] modules = new long[stageCount];
+            try {
+                for (int i = 0; i < raygenCount; i++) modules[i] = module(device, stack, raygen[i]);
+                for (int i = 0; i < missCount; i++) modules[raygenCount + i] = module(device, stack, miss[i]);
+                modules[closestStage] = module(device, stack, closestHit);
+                if (anyHit) {
+                    modules[radianceStage] = module(device, stack, radianceAnyHit);
+                    modules[shadowStage] = module(device, stack, shadowAnyHit);
                 }
-                VkDescriptorSetLayoutBindingFlagsCreateInfo bf = VkDescriptorSetLayoutBindingFlagsCreateInfo.calloc(stack).sType$Default()
-                        .pBindingFlags(bindFlags);
-                VkDescriptorSetLayoutCreateInfo bdslci = VkDescriptorSetLayoutCreateInfo.calloc(stack).sType$Default()
-                        .pNext(bf.address()).flags(VK12.VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT).pBindings(bl);
-                check(VK10.vkCreateDescriptorSetLayout(vk, bdslci, null, p), "vkCreateDescriptorSetLayout(bindless)");
-                bindlessLayout = p.get(0);
-                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT, bindlessLayout, label + " bindless descriptor set layout");
-                VkDescriptorPoolSize.Buffer bps = VkDescriptorPoolSize.calloc(1, stack);
-                bps.get(0).type(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).descriptorCount(bindlessTextures * nb);
-                VkDescriptorPoolCreateInfo bdpci = VkDescriptorPoolCreateInfo.calloc(stack).sType$Default()
-                        .flags(VK12.VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT).maxSets(1).pPoolSizes(bps);
-                check(VK10.vkCreateDescriptorPool(vk, bdpci, null, p), "vkCreateDescriptorPool(bindless)");
-                bindlessPool = p.get(0);
-                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_DESCRIPTOR_POOL, bindlessPool, label + " bindless descriptor pool");
-                VkDescriptorSetAllocateInfo bdsai = VkDescriptorSetAllocateInfo.calloc(stack).sType$Default()
-                        .descriptorPool(bindlessPool).pSetLayouts(stack.longs(bindlessLayout));
-                LongBuffer bpSet = stack.mallocLong(1);
-                check(VK10.vkAllocateDescriptorSets(vk, bdsai, bpSet), "vkAllocateDescriptorSets(bindless)");
-                bindlessSet = bpSet.get(0);
-                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_DESCRIPTOR_SET, bindlessSet, label + " bindless descriptor set");
-            }
 
-            // Optional third descriptor set (set 2): pass-declared resources. One COMBINED_IMAGE_SAMPLER
-            // per binding index the composition's own Slang reflected — not a fixed engine layout, and
-            // not update-after-bind: a pass rewrites its own binding only when its image changes.
-            long passResourceLayout = 0L, passResourcePool = 0L, passResourceSet = 0L;
-            Map<Integer, Integer> passResourceDescriptorTypes = new java.util.LinkedHashMap<>();
-            if (!passResourceBindings.isEmpty()) {
-                int prCount = passResourceBindings.size();
-                VkDescriptorSetLayoutBinding.Buffer prBinds = VkDescriptorSetLayoutBinding.calloc(prCount, stack);
-                int prStages = VK_SHADER_STAGE_MISS_BIT_KHR | VK_SHADER_STAGE_RAYGEN_BIT_KHR
-                        | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR | (hasAhit ? VK_SHADER_STAGE_ANY_HIT_BIT_KHR : 0);
-                Map<Integer, Integer> countsByType = new java.util.LinkedHashMap<>();
-                for (WorldShaderCompiler.PassResourceBinding binding : passResourceBindings.values()) {
-                    int index = binding.index();
-                    int descriptorType = vkDescriptorType(binding.kind());
-                    passResourceDescriptorTypes.put(index, descriptorType);
-                    prBinds.get(index).binding(index).descriptorType(descriptorType)
-                            .descriptorCount(1).stageFlags(prStages);
-                    countsByType.merge(descriptorType, 1, Integer::sum);
+                ByteBuffer entry = stack.UTF8("main");
+                VkPipelineShaderStageCreateInfo.Buffer stages = VkPipelineShaderStageCreateInfo.calloc(stageCount, stack);
+                for (int i = 0; i < raygenCount; i++) stage(stages.get(i), VK_SHADER_STAGE_RAYGEN_BIT_KHR, modules[i], entry);
+                for (int i = 0; i < missCount; i++) stage(stages.get(raygenCount + i), VK_SHADER_STAGE_MISS_BIT_KHR,
+                        modules[raygenCount + i], entry);
+                stage(stages.get(closestStage), VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR, modules[closestStage], entry);
+                if (anyHit) {
+                    stage(stages.get(radianceStage), VK_SHADER_STAGE_ANY_HIT_BIT_KHR, modules[radianceStage], entry);
+                    stage(stages.get(shadowStage), VK_SHADER_STAGE_ANY_HIT_BIT_KHR, modules[shadowStage], entry);
                 }
-                VkDescriptorSetLayoutCreateInfo prdslci = VkDescriptorSetLayoutCreateInfo.calloc(stack)
-                        .sType$Default().pBindings(prBinds);
-                check(VK10.vkCreateDescriptorSetLayout(vk, prdslci, null, p), "vkCreateDescriptorSetLayout(pass resources)");
-                passResourceLayout = p.get(0);
-                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT, passResourceLayout,
-                        label + " pass resource descriptor set layout");
-                VkDescriptorPoolSize.Buffer prps = VkDescriptorPoolSize.calloc(countsByType.size(), stack);
-                int poolIndex = 0;
-                for (Map.Entry<Integer, Integer> entry : countsByType.entrySet()) {
-                    prps.get(poolIndex++).type(entry.getKey()).descriptorCount(entry.getValue());
+
+                VkRayTracingShaderGroupCreateInfoKHR.Buffer groups = VkRayTracingShaderGroupCreateInfoKHR.calloc(groupCount, stack);
+                for (int i = 0; i < raygenCount + missCount; i++) {
+                    groups.get(i).sType$Default().type(VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR)
+                            .generalShader(i).closestHitShader(VK_SHADER_UNUSED_KHR)
+                            .anyHitShader(VK_SHADER_UNUSED_KHR).intersectionShader(VK_SHADER_UNUSED_KHR);
                 }
-                VkDescriptorPoolCreateInfo prdpci = VkDescriptorPoolCreateInfo.calloc(stack).sType$Default()
-                        .maxSets(1).pPoolSizes(prps);
-                check(VK10.vkCreateDescriptorPool(vk, prdpci, null, p), "vkCreateDescriptorPool(pass resources)");
-                passResourcePool = p.get(0);
-                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_DESCRIPTOR_POOL, passResourcePool,
-                        label + " pass resource descriptor pool");
-                VkDescriptorSetAllocateInfo prdsai = VkDescriptorSetAllocateInfo.calloc(stack).sType$Default()
-                        .descriptorPool(passResourcePool).pSetLayouts(stack.longs(passResourceLayout));
-                LongBuffer prSet = stack.mallocLong(1);
-                check(VK10.vkAllocateDescriptorSets(vk, prdsai, prSet), "vkAllocateDescriptorSets(pass resources)");
-                passResourceSet = prSet.get(0);
-                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_DESCRIPTOR_SET, passResourceSet,
-                        label + " pass resource descriptor set");
-            }
+                int firstHit = raygenCount + missCount;
+                for (int i = 0; i < hitCount; i++) {
+                    groups.get(firstHit + i).sType$Default().type(VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR)
+                            .generalShader(VK_SHADER_UNUSED_KHR).closestHitShader(closestStage)
+                            .anyHitShader(anyHitStage(anyHit, i, radianceStage, shadowStage))
+                            .intersectionShader(VK_SHADER_UNUSED_KHR);
+                }
 
-            VkPipelineLayoutCreateInfo plci = VkPipelineLayoutCreateInfo.calloc(stack).sType$Default()
-                    .pSetLayouts(passResourceLayout != 0L ? stack.longs(dsl, bindlessLayout, passResourceLayout)
-                            : bindlessTextures > 0 ? stack.longs(dsl, bindlessLayout) : stack.longs(dsl));
-            // Push constants are visible to raygen + closest-hit + miss (+ any-hit when present).
-            // vkCmdPushConstants must be called with exactly these stages, so store them for trace().
-            // Miss reads pc for the dynamic sky; widening the stage mask is the whole cost — no gotcha #3.
-            int pcStages = VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR
-                    | VK_SHADER_STAGE_MISS_BIT_KHR
-                    | (hasAhit ? VK_SHADER_STAGE_ANY_HIT_BIT_KHR : 0);
-            if (pushConstantSize > 0) {
-                VkPushConstantRange.Buffer pcr = VkPushConstantRange.calloc(1, stack)
-                        .stageFlags(pcStages)
-                        .offset(0).size(pushConstantSize);
-                plci.pPushConstantRanges(pcr);
+                long flags = EXTDescriptorHeap.VK_PIPELINE_CREATE_2_DESCRIPTOR_HEAP_BIT_EXT;
+                if (context.backend().capabilities().opacityMicromaps()) {
+                    flags |= Integer.toUnsignedLong(VK_PIPELINE_CREATE_RAY_TRACING_OPACITY_MICROMAP_BIT_EXT);
+                }
+                VkPipelineCreateFlags2CreateInfo flags2 = VkPipelineCreateFlags2CreateInfo.calloc(stack)
+                        .sType$Default().flags(flags);
+                VkRayTracingPipelineCreateInfoKHR.Buffer info = VkRayTracingPipelineCreateInfoKHR.calloc(1, stack);
+                info.get(0).sType$Default().pNext(flags2.address()).pStages(stages).pGroups(groups)
+                        .maxPipelineRayRecursionDepth(1).layout(VK10.VK_NULL_HANDLE);
+                LongBuffer out = stack.mallocLong(1);
+                check(vkCreateRayTracingPipelinesKHR(device, VK10.VK_NULL_HANDLE, VK10.VK_NULL_HANDLE,
+                        info, null, out), "vkCreateRayTracingPipelinesKHR");
+                long pipeline = out.get(0);
+                RtDebugLabels.name(context, VK10.VK_OBJECT_TYPE_PIPELINE, pipeline, "world RT pipeline");
+                SbtBuffer sbt = null;
+                try {
+                    int handleSize = context.shaderGroupHandleSize();
+                    ByteBuffer handles = stack.malloc(groupCount * handleSize);
+                    check(vkGetRayTracingShaderGroupHandlesKHR(device, pipeline, 0, groupCount, handles),
+                            "vkGetRayTracingShaderGroupHandlesKHR");
+                    long stride = align(handleSize, Math.max(context.shaderGroupBaseAlignment(),
+                            context.shaderGroupHandleAlignment()));
+                    if (stride > Integer.toUnsignedLong(context.maxShaderGroupStride())) {
+                        throw new UnsupportedOperationException("SBT stride exceeds maxShaderGroupStride");
+                    }
+                    sbt = SbtBuffer.create(context, stride * groupCount, context.shaderGroupBaseAlignment());
+                    for (int i = 0; i < groupCount; i++) {
+                        MemoryUtil.memCopy(MemoryUtil.memAddress(handles) + (long) i * handleSize,
+                                sbt.mapped + i * stride, handleSize);
+                    }
+                    Vma.vmaFlushAllocation(context.vmaAllocator(), sbt.allocation, 0, VK10.VK_WHOLE_SIZE);
+                    return new RtPipeline(context, pipeline, sbt, stride, handleSize,
+                            raygenCount, missCount, hitCount);
+                } catch (RuntimeException | Error failure) {
+                    if (sbt != null) sbt.destroy(context.vmaAllocator());
+                    VK10.vkDestroyPipeline(device, pipeline, null);
+                    throw failure;
+                }
+            } finally {
+                for (long module : modules) if (module != 0L) VK10.vkDestroyShaderModule(device, module, null);
             }
-            check(VK10.vkCreatePipelineLayout(vk, plci, null, p), "vkCreatePipelineLayout");
-            long layout = p.get(0);
-            RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_PIPELINE_LAYOUT, layout, label + " pipeline layout");
-
-            // Stages: one per rgen entry, one miss per rmiss entry, the closest-hit, then (optionally)
-            // the any-hit. Groups are N raygen + M miss + the hit records selected by traceRayEXT's SBT
-            // offset/stride. Multiple raygens share one pipeline and are selected at dispatch by pointing
-            // the raygen SBT region at a different record — that is how the primary/guide pass and the
-            // indirect pass coexist without duplicating the hit and miss tables.
-            int raygenCount = rgen.length;
-            int missCount = rmiss.length;
-            int hitGroupCount = hasAhit ? RtAccel.SBT_HIT_GROUP_COUNT : 1;
-            int groupCount = raygenCount + missCount + hitGroupCount;
-            int hitGroupIdx = raygenCount + missCount;
-            int chitStage = raygenCount + missCount;
-            // Radiance and shadow any-hit are separate stages so neither carries the other's register
-            // allocation; RtAccel.anyHitRayType picks which one each hit record uses.
-            int radianceAhitStage = chitStage + 1;
-            int shadowAhitStage = chitStage + 2;
-            int stageCount = raygenCount + missCount + 1 + (hasAhit ? 2 : 0);
-            long[] mGen = new long[raygenCount];
-            for (int g = 0; g < raygenCount; g++) {
-                mGen[g] = loadModule(vk, stack, rgen[g]);
-                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_SHADER_MODULE, mGen[g],
-                        label + " " + rgen[g].debugName());
-            }
-            long[] mMiss = new long[missCount];
-            for (int m = 0; m < missCount; m++) {
-                mMiss[m] = loadModule(vk, stack, rmiss[m]);
-                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_SHADER_MODULE, mMiss[m],
-                        label + " " + rmiss[m].debugName());
-            }
-            long mHit = loadModule(vk, stack, rchit);
-            RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_SHADER_MODULE, mHit,
-                    label + " " + rchit.debugName());
-            long mRadianceAhit = hasAhit ? loadModule(vk, stack, radianceAhit) : 0L;
-            long mShadowAhit = hasAhit ? loadModule(vk, stack, shadowAhit) : 0L;
-            if (hasAhit) {
-                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_SHADER_MODULE, mRadianceAhit,
-                        label + " " + radianceAhit.debugName());
-                RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_SHADER_MODULE, mShadowAhit,
-                        label + " " + shadowAhit.debugName());
-            }
-            ByteBuffer entry = stack.UTF8("main");
-            VkPipelineShaderStageCreateInfo.Buffer stages = VkPipelineShaderStageCreateInfo.calloc(stageCount, stack);
-            for (int g = 0; g < raygenCount; g++) {
-                stages.get(g).sType$Default().stage(VK_SHADER_STAGE_RAYGEN_BIT_KHR).module(mGen[g]).pName(entry);
-            }
-            for (int m = 0; m < missCount; m++) {
-                stages.get(raygenCount + m).sType$Default().stage(VK_SHADER_STAGE_MISS_BIT_KHR).module(mMiss[m]).pName(entry);
-            }
-            stages.get(chitStage).sType$Default().stage(VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR).module(mHit).pName(entry);
-            if (hasAhit) {
-                stages.get(radianceAhitStage).sType$Default().stage(VK_SHADER_STAGE_ANY_HIT_BIT_KHR)
-                        .module(mRadianceAhit).pName(entry);
-                stages.get(shadowAhitStage).sType$Default().stage(VK_SHADER_STAGE_ANY_HIT_BIT_KHR)
-                        .module(mShadowAhit).pName(entry);
-            }
-
-            VkRayTracingShaderGroupCreateInfoKHR.Buffer groups = VkRayTracingShaderGroupCreateInfoKHR.calloc(groupCount, stack);
-            for (int g = 0; g < raygenCount; g++) {
-                groups.get(g).sType$Default().type(VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR)
-                        .generalShader(g).closestHitShader(VK_SHADER_UNUSED_KHR).anyHitShader(VK_SHADER_UNUSED_KHR).intersectionShader(VK_SHADER_UNUSED_KHR);
-            }
-            for (int m = 0; m < missCount; m++) {
-                groups.get(raygenCount + m).sType$Default().type(VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR)
-                        .generalShader(raygenCount + m).closestHitShader(VK_SHADER_UNUSED_KHR).anyHitShader(VK_SHADER_UNUSED_KHR).intersectionShader(VK_SHADER_UNUSED_KHR);
-            }
-            for (int h = 0; h < hitGroupCount; h++) {
-                groups.get(hitGroupIdx + h).sType$Default().type(VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR)
-                        .generalShader(VK_SHADER_UNUSED_KHR).closestHitShader(chitStage)
-                        .anyHitShader(anyHitStage(hasAhit, h, radianceAhitStage, shadowAhitStage))
-                        .intersectionShader(VK_SHADER_UNUSED_KHR);
-            }
-
-            VkRayTracingPipelineCreateInfoKHR.Buffer rtpci = VkRayTracingPipelineCreateInfoKHR.calloc(1, stack);
-            // Depth 1: secondary shadow/visibility rays are issued sequentially from raygen (not
-            // nested in closest-hit), so each traceRayEXT is depth 1 — no recursion budget needed.
-            rtpci.get(0).sType$Default().pStages(stages).pGroups(groups).maxPipelineRayRecursionDepth(1).layout(layout);
-            if (ctx.backend().capabilities().opacityMicromaps()) {
-                rtpci.get(0).flags(VK_PIPELINE_CREATE_RAY_TRACING_OPACITY_MICROMAP_BIT_EXT);
-            }
-            LongBuffer pPipeline = stack.mallocLong(1);
-            check(vkCreateRayTracingPipelinesKHR(vk, VK10.VK_NULL_HANDLE, VK10.VK_NULL_HANDLE, rtpci, null, pPipeline),
-                    "vkCreateRayTracingPipelinesKHR");
-            long pipeline = pPipeline.get(0);
-            RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_PIPELINE, pipeline, label);
-
-            for (int g = 0; g < raygenCount; g++) {
-                VK10.vkDestroyShaderModule(vk, mGen[g], null);
-            }
-            for (int m = 0; m < missCount; m++) {
-                VK10.vkDestroyShaderModule(vk, mMiss[m], null);
-            }
-            VK10.vkDestroyShaderModule(vk, mHit, null);
-            if (hasAhit) {
-                VK10.vkDestroyShaderModule(vk, mRadianceAhit, null);
-                VK10.vkDestroyShaderModule(vk, mShadowAhit, null);
-            }
-
-            // SBT: one record per group. Over-align the stride so every region start is base-aligned and
-            // every individual record satisfies shaderGroupHandleAlignment.
-            int handleSize = ctx.shaderGroupHandleSize();
-            ByteBuffer handles = stack.malloc(groupCount * handleSize);
-            check(vkGetRayTracingShaderGroupHandlesKHR(vk, pipeline, 0, groupCount, handles), "vkGetRayTracingShaderGroupHandlesKHR");
-            long stride = align(handleSize,
-                    Math.max(ctx.shaderGroupBaseAlignment(), ctx.shaderGroupHandleAlignment()));
-            if (stride > Integer.toUnsignedLong(ctx.maxShaderGroupStride())) {
-                throw new UnsupportedOperationException("SBT stride " + stride + " exceeds maxShaderGroupStride "
-                        + Integer.toUnsignedLong(ctx.maxShaderGroupStride()));
-            }
-            GpuBuffer sbt = ctx.createAlignedBuffer(stride * groupCount,
-                    VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR, true,
-                    label + " shader binding table", ctx.shaderGroupBaseAlignment());
-            for (int g = 0; g < groupCount; g++) {
-                MemoryUtil.memCopy(MemoryUtil.memAddress(handles) + (long) g * handleSize, sbt.mapped() + g * stride, handleSize);
-            }
-            sbt.flush();
-            return new RtPipeline(ctx, dsl, pool, sets, layout, pipeline, sbt, stride,
-                    raygenCount, missCount, hitGroupCount, pushConstantSize, pcStages,
-                    bindlessLayout, bindlessPool, bindlessSet,
-                    passResourceLayout, passResourcePool, passResourceSet,
-                    Map.copyOf(passResourceDescriptorTypes));
         }
     }
 
-    private static int vkDescriptorType(WorldShaderCompiler.PassResourceKind kind) {
-        return switch (kind) {
-            case SAMPLED_IMAGE -> VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            case STORAGE_IMAGE -> VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            case STORAGE_BUFFER -> VK10.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            case UNIFORM_BUFFER -> VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        };
-    }
-
-    /**
-     * Which any-hit stage a hit record uses, or {@code VK_SHADER_UNUSED_KHR}. Retained and frame-varying
-     * classified geometry share the same {@link RtAccel#SBT_CLASSES}-sized record space. Masked geometry
-     * alpha-tests on both ray types; transmissive geometry runs any-hit only on shadow rays, where it tints
-     * and lets traversal continue, and uses a closest-hit-only record for radiance.
-     */
-    private static int anyHitStage(boolean hasAhit, int relativeHitGroup,
-                                   int radianceAhitStage, int shadowAhitStage) {
-        if (!hasAhit) {
-            return VK_SHADER_UNUSED_KHR;
+    /** Binds both heaps, publishes the complete world root with push data, and dispatches rays. */
+    public void trace(VkCommandBuffer commandBuffer, int width, int height, ByteBuffer roots, int raygenIndex) {
+        if (destroyed) throw new IllegalStateException("pipeline is destroyed");
+        if (raygenIndex < 0 || raygenIndex >= raygenCount) throw new IllegalArgumentException("raygen index out of range");
+        if (roots.remaining() != RtBindings.WORLD_PUSH_CONSTANT_SIZE) {
+            throw new IllegalArgumentException("world binding root must be exactly "
+                    + RtBindings.WORLD_PUSH_CONSTANT_SIZE + " bytes");
         }
-        int rayType = relativeHitGroup / RtAccel.SBT_CLASSES;
-        int cls = relativeHitGroup % RtAccel.SBT_CLASSES;
-        boolean usesAnyHit = rayType == RtAccel.SBT_RAY_RADIANCE
-                ? cls == RtAccel.CLASS_MASKED
-                : cls != RtAccel.CLASS_OPAQUE;
-        if (!usesAnyHit) {
-            return VK_SHADER_UNUSED_KHR;
-        }
-        return rayType == RtAccel.SBT_RAY_RADIANCE ? radianceAhitStage : shadowAhitStage;
-    }
-
-    /** Bind a new TLAS after the selected descriptor slot's exact prior graphics use completes. */
-    public void setTlas(long tlas, RtGpuExecutor.GraphicsUse graphicsUse,
-                        RtGpuExecutor.GraphicsUseWaiter graphicsUseWaiter) {
-        currentSet = (currentSet + 1) % RING;
-        RtGpuExecutor.TrackedGraphicsUse slotUse = descriptorSetUses[currentSet];
-        graphicsUseWaiter.await(slotUse);
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkWriteDescriptorSetAccelerationStructureKHR asWrite = VkWriteDescriptorSetAccelerationStructureKHR.calloc(stack)
-                    .sType(VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR).pAccelerationStructures(stack.longs(tlas));
-            VkWriteDescriptorSet.Buffer write = VkWriteDescriptorSet.calloc(1, stack);
-            write.get(0).sType$Default().pNext(asWrite.address()).dstSet(descriptorSets[currentSet])
-                    .dstBinding(WORLD_TLAS)
-                    .descriptorCount(1).descriptorType(VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR);
-            VK10.vkUpdateDescriptorSets(ctx.vk(), write, null);
-        }
-        slotUse.mark(graphicsUse);
-    }
-
-    /** Write the storage image into every ring slot (set once at init / on resize, when idle). */
-    public void setStorageImage(long imageView) {
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkDescriptorImageInfo.Buffer imgInfo = VkDescriptorImageInfo.calloc(1, stack);
-            imgInfo.get(0).imageView(imageView).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
-            VkWriteDescriptorSet.Buffer write = VkWriteDescriptorSet.calloc(RING, stack);
-            for (int i = 0; i < RING; i++) {
-                write.get(i).sType$Default().dstSet(descriptorSets[i]).dstBinding(WORLD_OUTPUT)
-                        .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).pImageInfo(imgInfo);
-            }
-            VK10.vkUpdateDescriptorSets(ctx.vk(), write, null);
-        }
-    }
-
-    /** Write one DLSS-RR guide image into its canonical world binding across every ring slot. */
-    public void setExtraStorageImage(int slot, long imageView) {
-        if (slot < 0 || slot >= WORLD_GUIDE_COUNT) {
-            throw new IllegalArgumentException("Guide slot out of range: " + slot);
-        }
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkDescriptorImageInfo.Buffer imgInfo = VkDescriptorImageInfo.calloc(1, stack);
-            imgInfo.get(0).imageView(imageView).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
-            VkWriteDescriptorSet.Buffer write = VkWriteDescriptorSet.calloc(RING, stack);
-            for (int i = 0; i < RING; i++) {
-                write.get(i).sType$Default().dstSet(descriptorSets[i]).dstBinding(WORLD_G_NORMAL + slot)
-                        .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE).pImageInfo(imgInfo);
-            }
-            VK10.vkUpdateDescriptorSets(ctx.vk(), write, null);
-        }
-    }
-
-    /**
-     * Write one pass-declared image resource (sampled or storage — whichever the reflected Slang
-     * declared) into the pass-resource set (set 2) at {@code bindingIndex} — resolved by the caller from
-     * {@link dev.comfyfluffy.caustica.rt.shader.WorldShaderCompiler#passResourceBindings()} by the name
-     * the owning pass's own Slang declared. {@code sampler} is ignored (and may be 0) for a storage
-     * image. See the class-level note on {@code passResourceSet}, and {@link #setPassResourceBuffer} for
-     * the buffer case.
-     */
-    public void setPassResource(int bindingIndex, long imageView, long sampler) {
-        int descriptorType = passResourceDescriptorType(bindingIndex);
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkDescriptorImageInfo.Buffer info = VkDescriptorImageInfo.calloc(1, stack);
-            info.get(0).sampler(descriptorType == VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER ? sampler : 0L)
-                    .imageView(imageView).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
-            VkWriteDescriptorSet.Buffer write = VkWriteDescriptorSet.calloc(1, stack);
-            write.get(0).sType$Default().dstSet(passResourceSet).dstBinding(bindingIndex)
-                    .descriptorCount(1).descriptorType(descriptorType).pImageInfo(info);
-            VK10.vkUpdateDescriptorSets(ctx.vk(), write, null);
-        }
-    }
-
-    /**
-     * Write one pass-declared buffer resource ({@code StructuredBuffer}/{@code RWStructuredBuffer} as
-     * {@code STORAGE_BUFFER}, {@code ConstantBuffer} as {@code UNIFORM_BUFFER}) into the pass-resource set
-     * at {@code bindingIndex}. See {@link #setPassResource} for the image case.
-     */
-    public void setPassResourceBuffer(int bindingIndex, long bufferHandle, long size) {
-        int descriptorType = passResourceDescriptorType(bindingIndex);
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkDescriptorBufferInfo.Buffer info = VkDescriptorBufferInfo.calloc(1, stack);
-            info.get(0).buffer(bufferHandle).offset(0).range(size);
-            VkWriteDescriptorSet.Buffer write = VkWriteDescriptorSet.calloc(1, stack);
-            write.get(0).sType$Default().dstSet(passResourceSet).dstBinding(bindingIndex)
-                    .descriptorCount(1).descriptorType(descriptorType).pBufferInfo(info);
-            VK10.vkUpdateDescriptorSets(ctx.vk(), write, null);
-        }
-    }
-
-    private int passResourceDescriptorType(int bindingIndex) {
-        if (passResourceSet == 0L) {
-            throw new IllegalStateException("this pipeline was created with no pass resource descriptor set");
-        }
-        Integer descriptorType = passResourceDescriptorTypes.get(bindingIndex);
-        if (descriptorType == null) {
-            throw new IllegalArgumentException("no pass resource binding at index " + bindingIndex);
-        }
-        return descriptorType;
-    }
-
-    private void writeAtlasBinding(int binding, long imageView, long sampler) {
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkDescriptorImageInfo.Buffer info = VkDescriptorImageInfo.calloc(1, stack);
-            info.get(0).sampler(sampler).imageView(imageView).imageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
-            VkWriteDescriptorSet.Buffer write = VkWriteDescriptorSet.calloc(RING, stack);
-            for (int i = 0; i < RING; i++) {
-                write.get(i).sType$Default().dstSet(descriptorSets[i]).dstBinding(binding)
-                        .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).pImageInfo(info);
-            }
-            VK10.vkUpdateDescriptorSets(ctx.vk(), write, null);
-        }
-    }
-
-    /** Write one provider texture using the layout declared by its renderer-owned or borrowed resource. */
-    public void setProviderTexture(int textureIndex, long imageView, int imageLayout, long sampler) {
-        setBindlessTexture(WORLD_PROVIDER_TEXTURES, textureIndex, imageView, imageLayout, sampler);
-    }
-
-    private void setBindlessTexture(int binding, int slot, long imageView, int imageLayout, long sampler) {
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkDescriptorImageInfo.Buffer info = VkDescriptorImageInfo.calloc(1, stack);
-            info.get(0).sampler(sampler).imageView(imageView).imageLayout(imageLayout);
-            VkWriteDescriptorSet.Buffer write = VkWriteDescriptorSet.calloc(1, stack);
-            write.get(0).sType$Default().dstSet(bindlessSet).dstBinding(binding).dstArrayElement(slot)
-                    .descriptorCount(1).descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER).pImageInfo(info);
-            VK10.vkUpdateDescriptorSets(ctx.vk(), write, null);
-        }
-    }
-
-    /** True if this pipeline was created with a bindless texture set. */
-    public boolean hasBindless() {
-        return bindlessSet != 0L;
-    }
-
-    public void trace(VkCommandBuffer cmd, int width, int height) {
-        trace(cmd, width, height, null, 0);
-    }
-
-    public void trace(VkCommandBuffer cmd, int width, int height, java.nio.ByteBuffer pushConstants) {
-        trace(cmd, width, height, pushConstants, 0);
-    }
-
-    /**
-     * Record bind (+ optional raygen push constants) + trace into the given command buffer.
-     * {@code raygenIndex} selects which raygen record of the SBT this dispatch launches; the miss and
-     * hit regions are shared, so passes over the same scene differ only in this index.
-     */
-    public void trace(VkCommandBuffer cmd, int width, int height, java.nio.ByteBuffer pushConstants, int raygenIndex) {
-        if (raygenIndex < 0 || raygenIndex >= raygenCount) {
-            throw new IllegalArgumentException("raygen index " + raygenIndex + " out of range [0, " + raygenCount + ")");
-        }
-        try (MemoryStack stack = MemoryStack.stackPush(); RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "trace rays")) {
-            VK10.vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, pipeline);
-            java.nio.LongBuffer boundSets = passResourceSet != 0L
-                    ? stack.longs(descriptorSets[currentSet], bindlessSet, passResourceSet)
-                    : bindlessSet != 0L
-                            ? stack.longs(descriptorSets[currentSet], bindlessSet)
-                            : stack.longs(descriptorSets[currentSet]);
-            VK10.vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, pipelineLayout, 0, boundSets, null);
-            if (pushConstants != null && pushConstantSize > 0) {
-                VK10.vkCmdPushConstants(cmd, pipelineLayout, pushConstantStages, 0, pushConstants);
-            }
-            // The raygen region must name exactly one record (size == stride), so selecting a pass is a
-            // matter of which record it points at.
-            VkStridedDeviceAddressRegionKHR raygen = VkStridedDeviceAddressRegionKHR.calloc(stack)
-                    .deviceAddress(sbt.deviceAddress() + (long) raygenIndex * sbtStride).stride(sbtStride).size(sbtStride);
-            VkStridedDeviceAddressRegionKHR miss = VkStridedDeviceAddressRegionKHR.calloc(stack)
-                    .deviceAddress(sbt.deviceAddress() + (long) raygenCount * sbtStride).stride(sbtStride).size((long) missCount * sbtStride);
-            VkStridedDeviceAddressRegionKHR hit = VkStridedDeviceAddressRegionKHR.calloc(stack)
-                    .deviceAddress(sbt.deviceAddress() + (long) (raygenCount + missCount) * sbtStride).stride(sbtStride).size((long) hitGroupCount * sbtStride);
-            VkStridedDeviceAddressRegionKHR callable = VkStridedDeviceAddressRegionKHR.calloc(stack);
-            vkCmdTraceRaysKHR(cmd, raygen, miss, hit, callable, width, height, 1);
+        try (MemoryStack stack = MemoryStack.stackPush();
+             RtDebugLabels.Scope ignored = RtDebugLabels.scope(context, commandBuffer, "trace rays")) {
+            context.bindDescriptorHeaps(commandBuffer);
+            context.pushData(commandBuffer, 0, roots);
+            VK10.vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, pipeline);
+            VkStridedDeviceAddressRegionKHR rgen = region(stack,
+                    sbt.address + (long) raygenIndex * stride, stride, stride);
+            VkStridedDeviceAddressRegionKHR rmiss = region(stack,
+                    sbt.address + (long) raygenCount * stride, stride, (long) missCount * stride);
+            VkStridedDeviceAddressRegionKHR hit = region(stack,
+                    sbt.address + (long) (raygenCount + missCount) * stride, stride, (long) hitCount * stride);
+            vkCmdTraceRaysKHR(commandBuffer, rgen, rmiss, hit,
+                    VkStridedDeviceAddressRegionKHR.calloc(stack), width, height, 1);
         }
     }
 
     public void destroy() {
-        if (destroyed) {
-            return;
-        }
-        VkDevice vk = ctx.vk();
-        sbt.destroy();
-        VK10.vkDestroyPipeline(vk, pipeline, null);
-        VK10.vkDestroyPipelineLayout(vk, pipelineLayout, null);
-        VK10.vkDestroyDescriptorPool(vk, descriptorPool, null);
-        VK10.vkDestroyDescriptorSetLayout(vk, descriptorSetLayout, null);
-        if (bindlessPool != 0L) {
-            VK10.vkDestroyDescriptorPool(vk, bindlessPool, null);
-        }
-        if (bindlessLayout != 0L) {
-            VK10.vkDestroyDescriptorSetLayout(vk, bindlessLayout, null);
-        }
-        if (passResourcePool != 0L) {
-            VK10.vkDestroyDescriptorPool(vk, passResourcePool, null);
-        }
-        if (passResourceLayout != 0L) {
-            VK10.vkDestroyDescriptorSetLayout(vk, passResourceLayout, null);
-        }
+        if (destroyed) return;
+        sbt.destroy(context.vmaAllocator());
+        VK10.vkDestroyPipeline(context.vk(), pipeline, null);
         destroyed = true;
     }
 
-    private static long align(long v, long a) {
-        return (v + a - 1) & ~(a - 1);
+    /** CPU image for a scene-specific hit table; the caller owns uploading and retiring its SBT buffer. */
+    public ByteBuffer retainedHitRecords(List<RtRetainedGeometryPlan.HitGroup> groups) {
+        if (destroyed) throw new IllegalStateException("pipeline is destroyed");
+        if (hitCount != dev.comfyfluffy.caustica.rt.accel.RtAccel.SBT_HIT_GROUP_COUNT) {
+            throw new IllegalStateException("pipeline has no coverage-class hit groups");
+        }
+        ByteBuffer handles = ByteBuffer.allocate(hitCount * handleSize);
+        long firstHit = sbt.mapped + (long) (raygenCount + missCount) * stride;
+        for (int group = 0; group < hitCount; group++) {
+            for (int byteIndex = 0; byteIndex < handleSize; byteIndex++) {
+                handles.put(group * handleSize + byteIndex,
+                        MemoryUtil.memGetByte(firstHit + group * stride + byteIndex));
+            }
+        }
+        return packRetainedHitRecords(handles, handleSize, Math.toIntExact(stride), groups);
     }
 
-    private static long loadModule(VkDevice vk, MemoryStack stack, RtShaderCode shader) {
-        byte[] bytes = shader.spirv();
-        ByteBuffer code = MemoryUtil.memAlloc(bytes.length).put(bytes);
-        code.flip();
+    static ByteBuffer packRetainedHitRecords(ByteBuffer fixedHitHandles, int handleSize, int recordStride,
+                                             List<RtRetainedGeometryPlan.HitGroup> groups) {
+        if (recordStride < handleSize) throw new IllegalArgumentException("record stride is smaller than a handle");
+        ByteBuffer packed = ByteBuffer.allocate(Math.multiplyExact(recordStride, groups.size()));
+        for (int record = 0; record < groups.size(); record++) {
+            int source = fixedHitGroupIndex(groups.get(record)) * handleSize;
+            int target = record * recordStride;
+            for (int byteIndex = 0; byteIndex < handleSize; byteIndex++) {
+                packed.put(target + byteIndex, fixedHitHandles.get(source + byteIndex));
+            }
+        }
+        return packed;
+    }
+
+    static int fixedHitGroupIndex(RtRetainedGeometryPlan.HitGroup group) {
+        return switch (group) {
+            case RADIANCE_OPAQUE -> dev.comfyfluffy.caustica.rt.accel.RtAccel.SBT_RADIANCE_OFFSET
+                    + dev.comfyfluffy.caustica.rt.accel.RtAccel.CLASS_OPAQUE;
+            case RADIANCE_CUTOUT -> dev.comfyfluffy.caustica.rt.accel.RtAccel.SBT_RADIANCE_OFFSET
+                    + dev.comfyfluffy.caustica.rt.accel.RtAccel.CLASS_MASKED;
+            case SHADOW_OPAQUE -> dev.comfyfluffy.caustica.rt.accel.RtAccel.SBT_SHADOW_OFFSET
+                    + dev.comfyfluffy.caustica.rt.accel.RtAccel.CLASS_OPAQUE;
+            case SHADOW_CUTOUT -> dev.comfyfluffy.caustica.rt.accel.RtAccel.SBT_SHADOW_OFFSET
+                    + dev.comfyfluffy.caustica.rt.accel.RtAccel.CLASS_MASKED;
+        };
+    }
+
+    static long align(long value, long alignment) {
+        if (value < 0 || alignment <= 0) throw new IllegalArgumentException("invalid alignment input");
+        long remainder = value % alignment;
+        return remainder == 0 ? value : Math.addExact(value, alignment - remainder);
+    }
+
+    static void requireDescriptorHeapCompatible(RtShaderCode shader) {
+        byte[] code = shader.spirv();
+        if (code.length < 5 * Integer.BYTES || (code.length & 3) != 0) {
+            throw new IllegalArgumentException(shader.debugName() + " is not a complete SPIR-V module");
+        }
+        ByteBuffer words = ByteBuffer.wrap(code).order(ByteOrder.LITTLE_ENDIAN);
+        if (words.getInt(0) != 0x07230203) {
+            throw new IllegalArgumentException(shader.debugName() + " has an invalid SPIR-V magic number");
+        }
+        int word = 5;
+        int wordCount = code.length / Integer.BYTES;
+        while (word < wordCount) {
+            int instruction = words.getInt(word * Integer.BYTES);
+            int instructionWords = instruction >>> 16;
+            int opcode = instruction & 0xffff;
+            if (instructionWords == 0 || instructionWords > wordCount - word) {
+                throw new IllegalArgumentException(shader.debugName() + " has a malformed SPIR-V instruction");
+            }
+            if (opcode == 71 && instructionWords >= 3) { // OpDecorate
+                int decoration = words.getInt((word + 2) * Integer.BYTES);
+                if (decoration == 33 || decoration == 34) { // Binding, DescriptorSet
+                    throw new IllegalArgumentException(shader.debugName()
+                            + " contains descriptor-set decorations; heap-native RT stages require direct heap access");
+                }
+            }
+            word += instructionWords;
+        }
+    }
+
+    private static VkStridedDeviceAddressRegionKHR region(MemoryStack stack, long address, long stride, long size) {
+        return VkStridedDeviceAddressRegionKHR.calloc(stack).deviceAddress(address).stride(stride).size(size);
+    }
+
+    private static void stage(VkPipelineShaderStageCreateInfo info, int stage, long module, ByteBuffer entry) {
+        info.sType$Default().stage(stage).module(module).pName(entry);
+    }
+
+    private static int anyHitStage(boolean enabled, int hitGroup, int radiance, int shadow) {
+        if (!enabled) return VK_SHADER_UNUSED_KHR;
+        int rayType = hitGroup / dev.comfyfluffy.caustica.rt.accel.RtAccel.SBT_CLASSES;
+        int geometryClass = hitGroup % dev.comfyfluffy.caustica.rt.accel.RtAccel.SBT_CLASSES;
+        boolean used = rayType == dev.comfyfluffy.caustica.rt.accel.RtAccel.SBT_RAY_RADIANCE
+                ? geometryClass == dev.comfyfluffy.caustica.rt.accel.RtAccel.CLASS_MASKED
+                : geometryClass != dev.comfyfluffy.caustica.rt.accel.RtAccel.CLASS_OPAQUE;
+        if (!used) return VK_SHADER_UNUSED_KHR;
+        return rayType == dev.comfyfluffy.caustica.rt.accel.RtAccel.SBT_RAY_RADIANCE ? radiance : shadow;
+    }
+
+    private static long module(VkDevice device, MemoryStack stack, RtShaderCode shader) {
+        ByteBuffer code = MemoryUtil.memAlloc(shader.spirv().length).put(shader.spirv()).flip();
         try {
-            VkShaderModuleCreateInfo smci = VkShaderModuleCreateInfo.calloc(stack).sType$Default().pCode(code);
-            LongBuffer pModule = stack.mallocLong(1);
-            check(VK10.vkCreateShaderModule(vk, smci, null, pModule),
-                    "vkCreateShaderModule(" + shader.debugName() + ")");
-            return pModule.get(0);
+            LongBuffer out = stack.mallocLong(1);
+            check(VK10.vkCreateShaderModule(device,
+                    VkShaderModuleCreateInfo.calloc(stack).sType$Default().pCode(code), null, out),
+                    "vkCreateShaderModule(" + shader.debugName() + ')');
+            return out.get(0);
         } finally {
             MemoryUtil.memFree(code);
         }
+    }
+
+    private static final class SbtBuffer {
+        final long buffer;
+        final long allocation;
+        final long address;
+        final long mapped;
+
+        private SbtBuffer(long buffer, long allocation, long address, long mapped) {
+            this.buffer = buffer;
+            this.allocation = allocation;
+            this.address = address;
+            this.mapped = mapped;
+        }
+
+        static SbtBuffer create(GpuContext context, long size, long alignment) {
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                VkBufferCreateInfo bufferInfo = VkBufferCreateInfo.calloc(stack).sType$Default().size(size)
+                        .usage(VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR | VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT)
+                        .sharingMode(VK10.VK_SHARING_MODE_EXCLUSIVE);
+                VmaAllocationCreateInfo allocationInfo = VmaAllocationCreateInfo.calloc(stack)
+                        .usage(Vma.VMA_MEMORY_USAGE_AUTO)
+                        .flags(Vma.VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
+                                | Vma.VMA_ALLOCATION_CREATE_MAPPED_BIT);
+                LongBuffer outBuffer = stack.mallocLong(1);
+                PointerBuffer outAllocation = stack.mallocPointer(1);
+                VmaAllocationInfo allocation = VmaAllocationInfo.calloc(stack);
+                check(Vma.vmaCreateBufferWithAlignment(context.vmaAllocator(), bufferInfo, allocationInfo,
+                        alignment, outBuffer, outAllocation, allocation), "vmaCreateBufferWithAlignment(SBT)");
+                long buffer = outBuffer.get(0);
+                long address = VK12.vkGetBufferDeviceAddress(context.vk(),
+                        VkBufferDeviceAddressInfo.calloc(stack).sType$Default().buffer(buffer));
+                if (address == 0L || allocation.pMappedData() == 0L) {
+                    Vma.vmaDestroyBuffer(context.vmaAllocator(), buffer, outAllocation.get(0));
+                    throw new IllegalStateException("SBT buffer is not addressable and mapped");
+                }
+                return new SbtBuffer(buffer, outAllocation.get(0), address, allocation.pMappedData());
+            }
+        }
+
+        void destroy(long vma) { Vma.vmaDestroyBuffer(vma, buffer, allocation); }
     }
 }

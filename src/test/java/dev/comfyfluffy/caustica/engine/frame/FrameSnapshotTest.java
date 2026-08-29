@@ -2,24 +2,43 @@ package dev.comfyfluffy.caustica.engine.frame;
 
 import org.joml.Matrix4f;
 import org.junit.jupiter.api.Test;
-import dev.comfyfluffy.caustica.api.ResourceId;
-import dev.comfyfluffy.caustica.api.provider.MaterialHandle;
+import dev.comfyfluffy.caustica.api.program.ShaderDataType;
+import dev.comfyfluffy.caustica.api.program.VolumeId;
+import dev.comfyfluffy.caustica.api.scene.SceneId;
+import dev.comfyfluffy.caustica.api.view.Camera;
+import dev.comfyfluffy.caustica.api.view.SceneView;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class FrameSnapshotTest {
     @Test
+    void permitsZeroForTypedNonAddressVolumeData() {
+        ShaderDataType<Object> bindingType = ShaderDataType.create("binding");
+        ShaderDataType<Object> instanceType = ShaderDataType.create("instance");
+        VolumeId<Object, Object> volume = new VolumeId<>() {};
+
+        assertDoesNotThrow(() -> new FrameSnapshot.InitialVolume<>(
+                volume, bindingType.data(0L), instanceType.data(0L)));
+    }
+
+    @Test
     void ownsMatrixCopies() {
         Matrix4f projection = new Matrix4f().perspective(1.0f, 1.5f, 0.1f, 1000.0f);
         Matrix4f view = new Matrix4f().rotateY(0.4f);
         SceneOrigin origin = new SceneOrigin(16, 32, 48);
-        FrameSnapshot snapshot = new FrameSnapshot(projection, view, 1.0, 2.0, 3.0, origin,
-                new FrameSnapshot.CameraMedium(new MaterialHandle(ResourceId.of("test", "medium")),
-                        new FrameSnapshot.LinearRgb(0.1f, 0.2f, 0.3f)), true, 4.0, 1.0, 7L);
+        ShaderDataType<Object> bindingType = ShaderDataType.create("binding");
+        ShaderDataType<Object> instanceType = ShaderDataType.create("instance");
+        VolumeId<Object, Object> volume = new VolumeId<>() {};
+        SceneId scene = new SceneId() {};
+        FrameSnapshot snapshot = new FrameSnapshot(new SceneView(scene,
+                new Camera(1.0, 2.0, 3.0, projection.get(new float[16]), view.get(new float[16]))), origin,
+                new FrameSnapshot.InitialVolume<>(volume, bindingType.data(11L), instanceType.data(12L)),
+                true, 4.0, 1.0);
 
         float capturedProjectionM00 = snapshot.copyProjection().m00();
         float capturedViewM00 = snapshot.copyViewRotation().m00();
@@ -32,9 +51,9 @@ class FrameSnapshotTest {
         assertNotSame(firstProjectionCopy, secondProjectionCopy);
         assertEquals(capturedProjectionM00, secondProjectionCopy.m00());
         assertEquals(capturedViewM00, snapshot.copyViewRotation().m00());
-        assertEquals(ResourceId.of("test", "medium"), snapshot.cameraMedium().material().id());
-        assertEquals(new FrameSnapshot.LinearRgb(0.1f, 0.2f, 0.3f),
-                snapshot.cameraMedium().sourceColor());
+        assertEquals(scene, snapshot.view().rootScene());
+        assertEquals(11L, snapshot.initialVolume().bindingData().bits());
+        assertEquals(12L, snapshot.initialVolume().instanceData().bits());
         assertEquals(origin, snapshot.sceneOrigin());
         assertTrue(snapshot.proceduralSurfaceAnimationEnabled());
     }

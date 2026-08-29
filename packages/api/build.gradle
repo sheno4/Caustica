@@ -16,6 +16,7 @@ repositories {
 }
 
 dependencies {
+    api project(":packages:shader-api")
     api "org.joml:joml:${project.joml_version}"
     api "org.lwjgl:lwjgl:${project.lwjgl_version}"
     api "org.lwjgl:lwjgl-vulkan:${project.lwjgl_version}"
@@ -50,7 +51,7 @@ tasks.named("jar", Jar).configure {
 
 def verifyApiJar = tasks.register("verifyApiJar") {
     group = "verification"
-    description = "Verifies that the API artifact contains only public Caustica packages and shader modules."
+    description = "Verifies that the Java API artifact contains only public Caustica classes."
     dependsOn(tasks.named("jar"))
     inputs.file(tasks.named("jar", Jar).flatMap { it.archiveFile })
     doLast {
@@ -70,19 +71,9 @@ def verifyApiJar = tasks.register("verifyApiJar") {
         if (!implementationClasses.empty) {
             throw new GradleException("caustica-api contains implementation classes: ${implementationClasses}")
         }
-        def expectedShaderModules = [
-                "caustica_api.slang",
-                "caustica_color.slang",
-                "caustica_coverage.slang",
-                "caustica_environment.slang",
-                "caustica_resources.slang",
-                "caustica_surface.slang",
-                "caustica_volume.slang",
-                "caustica_types.slang"
-        ].collect { "caustica/shaders/api/${it}".toString() }
-        def missingShaderModules = expectedShaderModules.findAll { !entries.contains(it) }
-        if (!missingShaderModules.empty) {
-            throw new GradleException("caustica-api is missing shader modules: ${missingShaderModules}")
+        def shaderModules = entries.findAll { entry -> entry.startsWith("caustica/shaders/api/") && !entry.endsWith("/") }
+        if (!shaderModules.empty) {
+            throw new GradleException("caustica-api duplicates shader-api resources: ${shaderModules}")
         }
     }
 }

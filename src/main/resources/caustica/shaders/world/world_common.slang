@@ -196,10 +196,16 @@ public uint bindingFlags(MaterialBinding binding) { return binding.packed0 & 255
 public uint bindingSurfaceImpl(MaterialBinding binding) { return binding.packed0 >> 24; }
 public float bindingCutoff(MaterialBinding binding) { return float(binding.packed1 & 255u) * (1.0 / 255.0); }
 
-// Closest-hit-only surface parameters, shared by every binding that names them. Provider data is opaque
-// to the engine; the remaining fields are the uniform OpenPBR vocabulary it initializes before dispatch.
+// Private storage layout for the closest-hit material table. This is not part of the public shader ABI.
+public struct SurfaceMaterialWords {
+    public uint4 words0;
+    public uint4 words1;
+    public uint4 words2;
+};
+
+// Closest-hit-only surface parameters, shared by every binding that names them.
 public struct SurfaceMaterial {
-    public MaterialProviderData providerData;
+    public SurfaceMaterialWords providerData;
     // OpenPBR names, OpenPBR meanings. specularRoughness is PERCEPTUAL r: the GGX alpha every lobe wants
     // is its square, computed where the lobe is evaluated. Nothing in the pipeline stores alpha.
     public float specularRoughness;

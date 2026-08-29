@@ -1,25 +1,13 @@
 package dev.comfyfluffy.caustica.builtin;
 
-import dev.comfyfluffy.caustica.api.ShaderSource;
-import dev.comfyfluffy.caustica.api.pass.ComputeDispatch;
-import dev.comfyfluffy.caustica.api.pass.PassShaderCompiler;
-import dev.comfyfluffy.caustica.slang.SlangPassShaderCompiler;
 import dev.comfyfluffy.caustica.builtin.gen.BloomPushData;
-import dev.comfyfluffy.caustica.api.ResourceId;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertSame;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class BloomPassTest {
     @Test
@@ -65,7 +53,7 @@ final class BloomPassTest {
     }
 
     @Test
-    void pyramidSizingMatchesThePreviousBloomExtentPolicy() {
+    void pyramidSizingStopsAtTheConfiguredDepthOrMinimumExtent() {
         assertEquals(8, BloomPass.levelCount(1920, 1080, 8, 8));
         assertEquals(4, BloomPass.levelCount(64, 64, 8, 8));
         assertEquals(1, BloomPass.levelCount(8, 64, 8, 8));
@@ -73,26 +61,17 @@ final class BloomPassTest {
     }
 
     @Test
-    void runtimeShaderCompilesAndBuildDoesNotPackageABloomSpirv(@TempDir Path cache) throws Exception {
-        ResourceId id = ResourceId.of("caustica", "bloom");
-        SlangPassShaderCompiler compiler = new SlangPassShaderCompiler(cache);
-        PassShaderCompiler.CompiledProgram compiled = compiler.compile(id,
-                ShaderSource.classpath("/caustica/shaders/builtin", "bloom"), "caustica_bloom", "main");
-        PassShaderCompiler.CompiledProgram cached = compiler.compile(id,
-                ShaderSource.classpath("/caustica/shaders/builtin", "bloom"), "caustica_bloom", "main");
+    void generatedPushDataPublishesTypedHeapIndicesAtTheReflectedOffsets() {
+        ByteBuffer data = ByteBuffer.allocate(BloomPushData.BYTE_SIZE).order(ByteOrder.nativeOrder());
+        new BloomPushData(11, 12, 13, 14, 15, 2, 3.0f, 4.0f, 5.0f, 6.0f).write(data);
 
-        assertEquals(0x07230203, ByteBuffer.wrap(compiled.spirv())
-                .order(ByteOrder.LITTLE_ENDIAN).getInt());
-        assertSame(compiled, cached);
-        assertTrue(Files.isRegularFile(cache.resolve("caustica/bloom/caustica_bloom.slang")));
-        assertNotNull(getClass().getResource(
-                "/caustica/shaders/builtin/bloom/caustica_bloom.slang"));
-        assertNull(getClass().getResource(
-                "/caustica/shaders/pipelines/bloom/main.comp.spv"));
-
-        compiler.validateBindings(id, compiled.reflectionJson(),
-                List.of(ComputeDispatch.Binding.STORAGE, ComputeDispatch.Binding.SAMPLED,
-                        ComputeDispatch.Binding.STORAGE, ComputeDispatch.Binding.STORAGE),
-                BloomPushData.BYTE_SIZE, "main", 8, 8, 1);
+        assertEquals(40, BloomPushData.BYTE_SIZE);
+        assertEquals(11, data.getInt(0));
+        assertEquals(12, data.getInt(4));
+        assertEquals(13, data.getInt(8));
+        assertEquals(14, data.getInt(12));
+        assertEquals(15, data.getInt(16));
+        assertEquals(2, data.getInt(20));
+        assertEquals(6.0f, data.getFloat(36));
     }
 }

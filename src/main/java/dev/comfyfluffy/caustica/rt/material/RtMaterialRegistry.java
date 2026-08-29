@@ -1,11 +1,11 @@
 package dev.comfyfluffy.caustica.rt.material;
 
 import dev.comfyfluffy.caustica.CausticaMod;
-import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.settings.ResourceId;
 import dev.comfyfluffy.caustica.api.provider.MaterialDefinition;
 import dev.comfyfluffy.caustica.api.provider.MaterialTopology;
 import dev.comfyfluffy.caustica.rt.GpuContext;
-import dev.comfyfluffy.caustica.api.gpu.GpuBuffer;
+import dev.comfyfluffy.caustica.rt.GpuBuffer;
 import dev.comfyfluffy.caustica.rt.accel.RtAccel;
 import dev.comfyfluffy.caustica.rt.gen.MaterialBindingData;
 import dev.comfyfluffy.caustica.rt.gen.SurfaceMaterialData;
@@ -276,7 +276,7 @@ public final class RtMaterialRegistry {
     }
 
     private static SurfaceMaterialData surfaceData(RtMaterialDesc desc,
-                                                   SurfaceMaterialData.MaterialProviderData providerData,
+                                                   SurfaceMaterialData.SurfaceMaterialWords providerData,
                                                    Float4 baseColorFactor) {
         return new SurfaceMaterialData(providerData, desc.specularRoughness(), desc.baseMetalness(),
                 desc.specularIor(), desc.transmissionWeight(), baseColorFactor,
@@ -288,9 +288,9 @@ public final class RtMaterialRegistry {
                         Math.min(MAX_EMISSION_LUMINANCE, desc.emissionLuminance())));
     }
 
-    private static SurfaceMaterialData.MaterialProviderData providerData(
+    private static SurfaceMaterialData.SurfaceMaterialWords providerData(
             dev.comfyfluffy.caustica.api.provider.MaterialProviderData source) {
-        return new SurfaceMaterialData.MaterialProviderData(
+        return new SurfaceMaterialData.SurfaceMaterialWords(
                 new Int4(source.word(0), source.word(1), source.word(2), source.word(3)),
                 new Int4(source.word(4), source.word(5), source.word(6), source.word(7)),
                 new Int4(source.word(8), source.word(9), source.word(10), source.word(11)));

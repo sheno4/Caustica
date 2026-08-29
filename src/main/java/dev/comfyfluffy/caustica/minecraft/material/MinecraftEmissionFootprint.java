@@ -1,7 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.material;
 
-/** Immutable footprint implementation used by the Minecraft emission catalog. */
-final class MinecraftEmissionFootprint implements dev.comfyfluffy.caustica.minecraft.api.MinecraftEmissionFootprint {
+/** Immutable, downsampled emission footprint used by Minecraft terrain light extraction. */
+public final class MinecraftEmissionFootprint {
     private static final int SAMPLE_FLOATS = 4;
 
     private final int resolution;
@@ -12,33 +12,27 @@ final class MinecraftEmissionFootprint implements dev.comfyfluffy.caustica.minec
         this.samples = samples;
     }
 
-    @Override
     public int resolution() {
         return resolution;
     }
 
-    @Override
     public int sampleIndex(float coordinate) {
         int index = (int) (coordinate * resolution);
         return Math.max(0, Math.min(resolution - 1, index));
     }
 
-    @Override
     public float r(int x, int y) {
         return samples[offset(x, y)];
     }
 
-    @Override
     public float g(int x, int y) {
         return samples[offset(x, y) + 1];
     }
 
-    @Override
     public float b(int x, int y) {
         return samples[offset(x, y) + 2];
     }
 
-    @Override
     public float weight(int x, int y) {
         return samples[offset(x, y) + 3];
     }

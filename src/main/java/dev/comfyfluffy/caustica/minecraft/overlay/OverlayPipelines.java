@@ -36,7 +36,7 @@ import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.LongBuffer;
 
-import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
+import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.api.gpu.GpuFrameUse;
 
 /**
@@ -183,7 +183,7 @@ public final class OverlayPipelines {
             return this;
         }
 
-        public Pipeline build(GpuDevice ctx, String label) {
+        public Pipeline build(GpuContext ctx, String label) {
             if (attachmentFormat == 0) {
                 throw new IllegalStateException("overlay pipeline '" + label + "' has no attachment format");
             }
@@ -191,7 +191,7 @@ public final class OverlayPipelines {
         }
     }
 
-    private static Pipeline createGraphics(GpuDevice ctx, Spec spec, String label) {
+    private static Pipeline createGraphics(GpuContext ctx, Spec spec, String label) {
         VkDevice vk = ctx.vk();
         try (MemoryStack stack = MemoryStack.stackPush()) {
             LongBuffer p = stack.mallocLong(1);
@@ -343,7 +343,7 @@ public final class OverlayPipelines {
         }
 
         /** Point the overlay image binding at {@code view} (GENERAL layout); no-op when already bound. */
-        public void bind(GpuDevice ctx, long view) {
+        public void bind(GpuContext ctx, long view) {
             if (boundView == view) {
                 return;
             }
@@ -364,7 +364,7 @@ public final class OverlayPipelines {
         }
     }
 
-    public static ReadOnlyImageSet readOnlyImageSet(GpuDevice ctx, int stageFlags, String label) {
+    public static ReadOnlyImageSet readOnlyImageSet(GpuContext ctx, int stageFlags, String label) {
         VkDevice vk = ctx.vk();
         try (MemoryStack stack = MemoryStack.stackPush()) {
             LongBuffer p = stack.mallocLong(1);
@@ -413,7 +413,7 @@ public final class OverlayPipelines {
         }
 
         /** Point binding 0 at {@code view}, sampled with {@code sampler}; no-op when already bound. */
-        public void bind(GpuDevice ctx, long view, long sampler) {
+        public void bind(GpuContext ctx, long view, long sampler) {
             if (boundView == view) {
                 return;
             }
@@ -434,7 +434,7 @@ public final class OverlayPipelines {
         }
     }
 
-    public static SampledImageSet sampledImageSet(GpuDevice ctx, int stageFlags, String label) {
+    public static SampledImageSet sampledImageSet(GpuContext ctx, int stageFlags, String label) {
         VkDevice vk = ctx.vk();
         try (MemoryStack stack = MemoryStack.stackPush()) {
             LongBuffer p = stack.mallocLong(1);
@@ -487,7 +487,7 @@ public final class OverlayPipelines {
         }
 
         /** Allocate a fresh descriptor set from this pool and write {@code view}/{@code sampler} into it once. */
-        public long allocateAndBind(GpuDevice ctx, long view, long sampler) {
+        public long allocateAndBind(GpuContext ctx, long view, long sampler) {
             VkDevice vk = ctx.vk();
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 VkDescriptorSetAllocateInfo dsai = VkDescriptorSetAllocateInfo.calloc(stack).sType$Default()
@@ -513,7 +513,7 @@ public final class OverlayPipelines {
         }
     }
 
-    public static SampledImageSetPool sampledImageSetPool(GpuDevice ctx, int stageFlags, int maxSets, String label) {
+    public static SampledImageSetPool sampledImageSetPool(GpuContext ctx, int stageFlags, int maxSets, String label) {
         VkDevice vk = ctx.vk();
         try (MemoryStack stack = MemoryStack.stackPush()) {
             LongBuffer p = stack.mallocLong(1);
@@ -544,28 +544,37 @@ public final class OverlayPipelines {
      * ({@code TlasBuilder.Ring} cycles it every frame even when it doesn't grow) — rewriting a single set's binding while
      * an earlier frame's command buffer referencing that same set may still be executing on the GPU is the
      * same descriptor-update-while-in-use hazard as the world pipeline's rotating TLAS binding. Exact
-     * graphics completion protects both rings; their depths only avoid routine host waits.
+     * graphics completion releases each slot for reuse; recording never blocks on an incomplete frame.
      */
     public static final class AccelStructureSet {
         private static final int RING = 4;
         public final long layout;
         private final long pool;
         private final long[] sets;
-        private final GpuFrameUse[] uses;
+        private final boolean[] available;
         private int current = -1;
 
         private AccelStructureSet(long layout, long pool, long[] sets) {
             this.layout = layout;
             this.pool = pool;
             this.sets = sets;
-            this.uses = new GpuFrameUse[sets.length];
+            this.available = new boolean[sets.length];
+            java.util.Arrays.fill(available, true);
         }
 
-        /** Wait for the next ring slot's prior use, write {@code tlas}, and return the set for this frame. */
-        public long bind(GpuDevice ctx, long tlas, GpuFrameUse gpuUse) {
-            current = (current + 1) % RING;
-            GpuFrameUse previousUse = uses[current];
-            if (previousUse != null) previousUse.awaitCompletion();
+        /** Claim a retired ring slot, write {@code tlas}, and return the set for this frame. */
+        public long bind(GpuContext ctx, long tlas, GpuFrameUse gpuUse) {
+            int claimed = -1;
+            for (int offset = 1; offset <= RING; offset++) {
+                int candidate = (current + offset) % RING;
+                if (available[candidate]) {
+                    claimed = candidate;
+                    break;
+                }
+            }
+            if (claimed < 0) throw new IllegalStateException("overlay acceleration descriptor ring exhausted");
+            current = claimed;
+            available[current] = false;
             long set = sets[current];
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 VkWriteDescriptorSetAccelerationStructureKHR asWrite = VkWriteDescriptorSetAccelerationStructureKHR.calloc(stack)
@@ -576,7 +585,8 @@ public final class OverlayPipelines {
                         .descriptorCount(1).descriptorType(KHRAccelerationStructure.VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR);
                 VK10.vkUpdateDescriptorSets(ctx.vk(), write, null);
             }
-            uses[current] = gpuUse;
+            int retiredSlot = current;
+            gpuUse.retire(() -> available[retiredSlot] = true);
             return set;
         }
 
@@ -586,7 +596,7 @@ public final class OverlayPipelines {
         }
     }
 
-    public static AccelStructureSet accelStructureSet(GpuDevice ctx, int stageFlags, String label) {
+    public static AccelStructureSet accelStructureSet(GpuContext ctx, int stageFlags, String label) {
         VkDevice vk = ctx.vk();
         try (MemoryStack stack = MemoryStack.stackPush()) {
             LongBuffer p = stack.mallocLong(1);
@@ -624,7 +634,7 @@ public final class OverlayPipelines {
     }
 
     /** A shared nearest/clamp sampler, for overlay passes sampling a real texture (e.g. a font atlas). */
-    public static long createNearestClampSampler(GpuDevice ctx, String label) {
+    public static long createNearestClampSampler(GpuContext ctx, String label) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkSamplerCreateInfo sci = VkSamplerCreateInfo.calloc(stack).sType$Default()
                     .magFilter(VK10.VK_FILTER_NEAREST).minFilter(VK10.VK_FILTER_NEAREST)

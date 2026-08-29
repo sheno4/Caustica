@@ -1,0 +1,35 @@
+plugins {
+    id "groovy-gradle-plugin"
+    id "java-gradle-plugin"
+    id "maven-publish"
+}
+
+group = "dev.comfyfluffy.caustica"
+version = "1.0.0"
+
+repositories {
+    mavenCentral()
+}
+
+gradlePlugin {
+    plugins {
+        slangTooling {
+            id = "dev.comfyfluffy.caustica.slang-tooling"
+            implementationClass = "dev.comfyfluffy.caustica.slangtooling.SlangToolingPlugin"
+            displayName = "Caustica Slang Tooling"
+            description = "Typed Slang compilation and reflection generation tasks"
+        }
+    }
+}
+
+dependencies {
+    implementation localGroovy()
+    testImplementation gradleTestKit()
+    testImplementation platform("org.junit:junit-bom:5.12.2")
+    testImplementation "org.junit.jupiter:junit-jupiter"
+    testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+}
+
+tasks.withType(Test).configureEach {
+    useJUnitPlatform()
+}

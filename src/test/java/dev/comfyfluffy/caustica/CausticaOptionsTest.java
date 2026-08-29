@@ -1,17 +1,15 @@
 package dev.comfyfluffy.caustica;
 
-import dev.comfyfluffy.caustica.api.CausticaRegistry;
-import dev.comfyfluffy.caustica.api.Feature;
-import dev.comfyfluffy.caustica.api.Option;
-import dev.comfyfluffy.caustica.api.OptionValues;
-import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.settings.Option;
+import dev.comfyfluffy.caustica.settings.OptionValues;
+import dev.comfyfluffy.caustica.settings.ResourceId;
+import dev.comfyfluffy.caustica.settings.SettingsRegistry;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -32,22 +30,22 @@ final class CausticaOptionsTest {
     @TempDir
     Path configDir;
 
-    private Map<ResourceId, Feature> features() {
-        CausticaRegistry registry = dev.comfyfluffy.caustica.TestRegistries.withBuiltins();
+    private SettingsRegistry settings() {
+        SettingsRegistry registry = new SettingsRegistry();
         registry.feature(FEATURE).option(ALPHA).option(FLAG).option(NESTED).register();
         // A second feature declaring the *same* option ids, to pin that values are namespaced per feature.
         registry.feature(OTHER_FEATURE).option(ALPHA).register();
-        return registry.features();
+        return registry;
     }
 
     private CausticaOptions load() {
-        return CausticaOptions.load(configDir.resolve("caustica-options.toml"), features());
+        return CausticaOptions.load(configDir.resolve("caustica-options.toml"), settings());
     }
 
     private CausticaOptions loadWithFile(String toml) throws IOException {
         Path path = configDir.resolve("caustica-options.toml");
         Files.writeString(path, toml);
-        return CausticaOptions.load(path, features());
+        return CausticaOptions.load(path, settings());
     }
 
     @Test
@@ -120,12 +118,12 @@ final class CausticaOptionsTest {
     @Test
     void aWriteIsVisibleLiveAndSurvivesAReload() {
         Path path = configDir.resolve("caustica-options.toml");
-        CausticaOptions options = CausticaOptions.load(path, features());
+        CausticaOptions options = CausticaOptions.load(path, settings());
 
         options.set(FEATURE, ALPHA, 0.75);
 
         assertEquals(0.75f, options.options(FEATURE).get(ALPHA));
-        assertEquals(0.75f, CausticaOptions.load(path, features()).options(FEATURE).get(ALPHA),
+        assertEquals(0.75f, CausticaOptions.load(path, settings()).options(FEATURE).get(ALPHA),
                 "a written value must round-trip through the TOML file");
     }
 
@@ -171,17 +169,17 @@ final class CausticaOptionsTest {
     @Test
     void applyIsVisibleImmediatelyButWritesNothingUntilSave() throws IOException {
         Path path = configDir.resolve("caustica-options.toml");
-        CausticaOptions options = CausticaOptions.load(path, features());
+        CausticaOptions options = CausticaOptions.load(path, settings());
 
         options.apply(FEATURE, ALPHA, 0.75);
 
         assertEquals(0.75f, options.options(FEATURE).get(ALPHA), "the live view sees it at once");
-        assertEquals(0.25f, CausticaOptions.load(path, features()).options(FEATURE).get(ALPHA),
+        assertEquals(0.25f, CausticaOptions.load(path, settings()).options(FEATURE).get(ALPHA),
                 "a dragged slider must not reach disk on every tick");
 
         options.save();
 
-        assertEquals(0.75f, CausticaOptions.load(path, features()).options(FEATURE).get(ALPHA));
+        assertEquals(0.75f, CausticaOptions.load(path, settings()).options(FEATURE).get(ALPHA));
         assertTrue(Files.readString(path).contains("0.75"));
     }
 
@@ -192,7 +190,7 @@ final class CausticaOptionsTest {
                 ["test:options"]
                 alpha = 0.5
                 """);
-        CausticaOptions options = CausticaOptions.load(path, features());
+        CausticaOptions options = CausticaOptions.load(path, settings());
         String before = Files.readString(path);
 
         options.save();
@@ -203,13 +201,13 @@ final class CausticaOptionsTest {
     @Test
     void aSecondApplyToTheSameOptionPersistsOnlyTheLastValue() throws IOException {
         Path path = configDir.resolve("caustica-options.toml");
-        CausticaOptions options = CausticaOptions.load(path, features());
+        CausticaOptions options = CausticaOptions.load(path, settings());
 
         options.apply(FEATURE, ALPHA, 0.4);
         options.apply(FEATURE, ALPHA, 0.6);
         options.save();
 
-        assertEquals(0.6f, CausticaOptions.load(path, features()).options(FEATURE).get(ALPHA));
+        assertEquals(0.6f, CausticaOptions.load(path, settings()).options(FEATURE).get(ALPHA));
     }
 
     @Test

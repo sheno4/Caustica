@@ -1,22 +1,19 @@
 package dev.comfyfluffy.caustica.minecraft;
 
 import dev.comfyfluffy.caustica.CausticaConfig;
-import dev.comfyfluffy.caustica.api.provider.MaterialHandle;
+import dev.comfyfluffy.caustica.api.scene.SceneId;
+import dev.comfyfluffy.caustica.api.view.Camera;
+import dev.comfyfluffy.caustica.api.view.SceneView;
 import dev.comfyfluffy.caustica.engine.frame.FrameSnapshot;
 import dev.comfyfluffy.caustica.engine.frame.SceneResources;
 import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
-import dev.comfyfluffy.caustica.api.ColorSpaces;
 import dev.comfyfluffy.caustica.rt.RtRuntime;
-import dev.comfyfluffy.caustica.minecraft.damage.MinecraftDamageModifierPass;
-import dev.comfyfluffy.caustica.minecraft.api.MinecraftSceneReset;
 import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
 import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftVulkanBackend;
-import dev.comfyfluffy.caustica.minecraft.provider.MinecraftMaterialSource;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.LoadingOverlay;
 import net.minecraft.client.multiplayer.ClientLevel;
-import net.minecraft.client.renderer.BiomeColors;
 import net.minecraft.core.BlockPos;
 import net.minecraft.tags.FluidTags;
 import net.minecraft.util.Mth;
@@ -30,9 +27,8 @@ public final class MinecraftFrameAdapter {
     public static final MinecraftFrameAdapter INSTANCE = new MinecraftFrameAdapter();
 
     private static final double METERS_PER_WORLD_UNIT = 1.0;
-    private static final int DEFAULT_WATER_COLOR = 0x3F75E8;
-
     private ClientLevel identifiedLevel;
+    private SceneId fallbackScene;
     private long nextSceneId;
     private long sceneId;
 
@@ -59,30 +55,21 @@ public final class MinecraftFrameAdapter {
         ClientLevel level = client.level;
         BlockPos cameraBlockPos = new BlockPos(Mth.floor(cameraX), Mth.floor(cameraY), Mth.floor(cameraZ));
         boolean submerged = false;
-        int waterColor = DEFAULT_WATER_COLOR;
         if (level != null) {
             FluidState fluid = level.getFluidState(cameraBlockPos);
             submerged = fluid.is(FluidTags.WATER)
                     && cameraY < cameraBlockPos.getY() + fluid.getHeight(level, cameraBlockPos);
-            waterColor = BiomeColors.getAverageWaterColor(level, cameraBlockPos);
         }
-        float[] medium = ColorSpaces.linearBt709ToAcesCg(
-                ColorSpaces.srgbToLinear(((waterColor >> 16) & 0xFF) / 255.0),
-                ColorSpaces.srgbToLinear(((waterColor >> 8) & 0xFF) / 255.0),
-                ColorSpaces.srgbToLinear((waterColor & 0xFF) / 255.0));
-        FrameSnapshot.CameraMedium cameraMedium = submerged
-                ? new FrameSnapshot.CameraMedium(new MaterialHandle(MinecraftMaterialSource.WATER),
-                new FrameSnapshot.LinearRgb(medium[0], medium[1], medium[2])) : null;
-        MinecraftDamageModifierPass damagePass = RtRuntime.INSTANCE.renderPass(
-                MinecraftDamageModifierPass.ID, MinecraftDamageModifierPass.class);
-        if (damagePass != null) {
-            damagePass.capture(level);
-        }
+        MinecraftFrameSelector.Selection selection = MinecraftFrameSelector.select(submerged);
+        SceneId scene = selection != null ? selection.scene() : fallbackScene(level);
+        Camera camera = new Camera(cameraX, cameraY, cameraZ,
+                projection.get(new float[16]), viewRotation.get(new float[16]));
         RtTerrain terrain = RtTerrain.currentOrNull();
         SceneOrigin sceneOrigin = terrain != null ? terrain.sceneOrigin() : SceneOrigin.ZERO;
-        return new FrameSnapshot(projection, viewRotation, cameraX, cameraY, cameraZ,
-                sceneOrigin, cameraMedium, CausticaConfig.Rt.Composite.WATER_WAVES.value(),
-                System.nanoTime() / 1.0e9, METERS_PER_WORLD_UNIT, identify(level));
+        return new FrameSnapshot(new SceneView(scene, camera), sceneOrigin,
+                selection != null ? selection.initialVolume() : null,
+                CausticaConfig.Rt.Composite.WATER_WAVES.value(),
+                System.nanoTime() / 1.0e9, METERS_PER_WORLD_UNIT);
     }
 
     public SceneResources captureSceneResources(Minecraft client) {
@@ -108,11 +95,15 @@ public final class MinecraftFrameAdapter {
     private long identify(ClientLevel level) {
         if (level != identifiedLevel) {
             identifiedLevel = level;
+            fallbackScene = level == null ? null : new SceneId() {};
             sceneId = level == null ? 0L : ++nextSceneId;
-            // tickRuntime calls this before forwarding the new identity to the renderer, so every
-            // Minecraft-aware provider drops old-world CPU state before any scene update can run.
-            MinecraftSceneReset.request();
         }
         return sceneId;
+    }
+
+    private SceneId fallbackScene(ClientLevel level) {
+        identify(level);
+        if (fallbackScene == null) fallbackScene = new SceneId() {};
+        return fallbackScene;
     }
 }

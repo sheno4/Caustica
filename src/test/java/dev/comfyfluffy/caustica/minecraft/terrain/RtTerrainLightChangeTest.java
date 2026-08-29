@@ -43,8 +43,8 @@ final class RtTerrainLightChangeTest {
 
     @Test
     void frameDrainKeepsOnlyTheLatestSubmissionForOneGroupKey() {
-        var first = new dev.comfyfluffy.caustica.api.provider.SceneGeometryKey(10, 7);
-        var other = new dev.comfyfluffy.caustica.api.provider.SceneGeometryKey(10, 8);
+        long first = 7L;
+        long other = 8L;
         assertEquals(java.util.List.of(first, other), RtTerrain.latestGroupKeys(java.util.List.of(first, other, first)));
     }
 

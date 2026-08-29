@@ -7,7 +7,7 @@ import com.mojang.blaze3d.vertex.VertexConsumer;
  * with the chained form {@code addVertex(x,y,z).setUv(u,v).setColor(argb).setLight(packed)} — four verts
  * per billboard quad. This adapter forwards each completed vertex to {@link RtEntityCapture}'s bulk
  * {@code addVertex} (with a zero normal, so {@code emitQuad} derives a geometric one from the quad edges),
- * letting particles reuse the entity mesh layout + BLAS/geometry-table/append path verbatim.
+ * letting particles reuse the entity mesh layout and retained upload path.
  *
  * <p>Positions arrive camera-relative ({@code SingleQuadParticle.extract} subtracts the camera position);
  * a per-frame {@link #setOffset offset} (camPos − rebaseOrigin) shifts them into the renderer's rebased

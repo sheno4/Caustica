@@ -1,4 +1,7 @@
+import dev.comfyfluffy.caustica.slangtooling.CompileSlangShaders
+
 plugins {
+    id "dev.comfyfluffy.caustica.slang-tooling"
     id "fabric-loom" version "${loom_version}" apply false
     id "net.neoforged.moddev" version "${neogradle_version}" apply false
 }
@@ -90,17 +93,19 @@ if (loader == "fabric") {
 dependencies {
     compileOnly project(":packages:api")
     runtimeOnly project(":packages:api")
+    compileOnly project(":packages:minecraft-api")
+    runtimeOnly project(":packages:minecraft-api")
     if (loader == "fabric") {
         minecraft "com.mojang:minecraft:${project.minecraft_version}"
         implementation "net.fabricmc:fabric-loader:${project.loader_version}"
         implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
-        runtimeOnly rootProject
+        localRuntime rootProject
     }
 
     testImplementation platform("org.junit:junit-bom:5.12.2")
     testImplementation "org.junit.jupiter:junit-jupiter"
     testImplementation project(":packages:api")
-    testImplementation rootProject
+    testImplementation project(":packages:minecraft-api")
     testRuntimeOnly "org.junit.platform:junit-platform-launcher"
 }
 
@@ -131,7 +136,7 @@ def checkApiBoundary = tasks.register("checkApiBoundary") {
         sourceSets.main.allJava.files.sort().each { source ->
             source.eachLine { line, number ->
                 def packageDeclaration = line =~ /^\s*package\s+dev\.comfyfluffy\.caustica\.example\.gltfviewer\s*;/
-                def implementationReference = line =~ /dev\.comfyfluffy\.caustica\.(?!api(?:\.|;))/
+                def implementationReference = line =~ /dev\.comfyfluffy\.caustica\.(?!api(?:\.|;)|minecraft\.api(?:\.|;))/
                 if (!packageDeclaration.matches() && implementationReference.find()) {
                     violations.add("${project.relativePath(source)}:${number}: ${line.trim()}")
                 }
@@ -158,26 +163,21 @@ def checkApiBoundary = tasks.register("checkApiBoundary") {
     }
 }
 
+def validateExtensionShaders = tasks.register("validateExtensionShaders", CompileSlangShaders) {
+    sourceDirectory = layout.projectDirectory.dir("src/shaderValidation")
+    includeDirectories.from(layout.projectDirectory.dir("src/main/resources"),
+            rootProject.layout.projectDirectory.dir("packages/shader-api/src/main/resources"))
+    aliasSourceDirectory = layout.projectDirectory.dir("src/shaderValidation")
+    sourcePatterns = ["**/*.comp.slang"]
+    outputDirectory = layout.buildDirectory.dir("validated-shaders")
+}
+
 tasks.named("test", Test) {
     useJUnitPlatform()
-    dependsOn(rootProject.tasks.named("bundleSlangRuntime"))
-    doFirst {
-        def os = org.gradle.internal.os.OperatingSystem.current()
-        def arch = System.getProperty("os.arch", "").toLowerCase(Locale.ROOT)
-        def platform = os.windows && arch in ["x86_64", "amd64"] ? "windows-x64"
-                : os.linux && arch in ["x86_64", "amd64"] ? "linux-x64" : null
-        if (platform == null) {
-            throw new GradleException("Unsupported Slang test platform ${os}/${arch}")
-        }
-        def runtime = new File(rootProject.layout.buildDirectory.get().asFile,
-                "generated/slang-runtime/caustica/natives/slang/"
-                        + "${rootProject.property('slang_runtime_version')}/${platform}")
-        systemProperty "caustica.slang.path", runtime.absolutePath
-    }
 }
 
 tasks.named("check") {
-    dependsOn(checkApiBoundary)
+    dependsOn(checkApiBoundary, validateExtensionShaders)
 }
 
 tasks.withType(JavaCompile).configureEach {

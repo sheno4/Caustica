@@ -25,7 +25,7 @@ import java.nio.LongBuffer;
 
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
-import dev.comfyfluffy.caustica.api.gpu.GpuBuffer;
+import dev.comfyfluffy.caustica.rt.GpuBuffer;
 import dev.comfyfluffy.caustica.rt.gen.ExposureHistPushData;
 import dev.comfyfluffy.caustica.rt.gen.ExposureResolvePushData;
 

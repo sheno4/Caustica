@@ -10,6 +10,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.lwjgl.vulkan.KHRSynchronization2.VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
 import static org.lwjgl.vulkan.KHRSynchronization2.VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
 
 final class GraphicsSubmissionOrderTest {
     @Test
@@ -33,7 +34,7 @@ final class GraphicsSubmissionOrderTest {
                 "wait:21:3:" + (VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR
                         | VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR),
                 "execute",
-                "signal:22:4:65536"), submission.calls);
+                "signal:22:4:" + VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT), submission.calls);
     }
 
     private static final class RecordingSubmission implements GraphicsSubmission {

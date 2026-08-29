@@ -15,7 +15,7 @@ import dev.comfyfluffy.caustica.api.provider.RetainedLightCollection;
 import dev.comfyfluffy.caustica.api.provider.LightDescriptor;
 import dev.comfyfluffy.caustica.api.provider.MaterialSource;
 import dev.comfyfluffy.caustica.api.provider.MaterialDefinition;
-import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.settings.ResourceId;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.geometry.RtGeometryAbi;

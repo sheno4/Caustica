@@ -1,10 +1,9 @@
 module indirect_ser;
 
+import primary_rgen;
 import caustica_api;
-import indirect_core;
-import trace_reordered;
 
 [shader("raygeneration")]
-void main<TC : IComposition>() {
-    runIndirect<TC, ReorderedRadianceTrace>();
+void main<TComposition : IComposition>() {
+    runPrimary<TComposition>();
 }

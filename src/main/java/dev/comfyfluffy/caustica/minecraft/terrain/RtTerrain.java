@@ -4,10 +4,6 @@ package dev.comfyfluffy.caustica.minecraft.terrain;
 
 import com.mojang.blaze3d.vertex.QuadInstance;
 import com.mojang.blaze3d.vertex.VertexConsumer;
-import dev.comfyfluffy.caustica.api.provider.GeometryTransform;
-import dev.comfyfluffy.caustica.api.provider.SceneGeometryKey;
-import dev.comfyfluffy.caustica.api.provider.SceneGeometrySink;
-import dev.comfyfluffy.caustica.api.provider.SceneMesh;
 import dev.comfyfluffy.caustica.api.provider.RetainedLightCollection;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialSnapshot;
 import dev.comfyfluffy.caustica.CausticaConfig;
@@ -75,8 +71,6 @@ import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrainMesher.WorkerTessStat
  * immutable scene meshes. The scene manager owns all GPU preparation, publication, and retirement.
  */
 public final class RtTerrain {
-    private static final long SECTION_DOMAIN = 10L;
-    private static final long DIRTY_GROUP_DOMAIN = 11L;
     // The render thread snapshots and publishes; workers only mesh immutable CPU results. The streaming
     // pass is bounded so render-thread bookkeeping stays flat.
     private static int asyncDispatchPerPass() {
@@ -108,6 +102,7 @@ public final class RtTerrain {
     }
 
     private static final RtTerrain INSTANCE = new RtTerrain();
+    private MinecraftTerrainGeometry retainedGeometry;
 
     private boolean sceneInitialized;
     private volatile MinecraftMaterialSnapshot.Published materials;
@@ -256,6 +251,16 @@ public final class RtTerrain {
     public static void frame() {
         MinecraftTelemetry.current().max("terrainPendingGeometryGroups", INSTANCE.pendingGeometryGroups.size());
         if (INSTANCE.materials != null) INSTANCE.frameStream();
+        INSTANCE.submitPendingGeometry();
+    }
+
+    public static void bindGeometry(MinecraftTerrainGeometry geometry) {
+        if (INSTANCE.retainedGeometry != null) throw new IllegalStateException("terrain geometry is already bound");
+        INSTANCE.retainedGeometry = java.util.Objects.requireNonNull(geometry, "geometry");
+    }
+
+    public static void unbindGeometry(MinecraftTerrainGeometry geometry) {
+        if (INSTANCE.retainedGeometry == geometry) INSTANCE.retainedGeometry = null;
     }
 
     public static void publishMaterials(MinecraftMaterialSnapshot.Published materials) {
@@ -1041,7 +1046,7 @@ public final class RtTerrain {
                         completeEmptyTask(task);
                         return;
                     }
-                    SceneMesh mesh = cpu.mesh();
+                    MinecraftTerrainMesh mesh = cpu.mesh();
                     if (mesh == null) {
                         completeEmptyTask(task);
                     } else {
@@ -1267,10 +1272,10 @@ public final class RtTerrain {
         }
     }
 
-    private record SectionResult(SectionTask task, SceneMesh geometry, float[] lights, Throwable failure,
+    private record SectionResult(SectionTask task, MinecraftTerrainMesh geometry, float[] lights, Throwable failure,
                                  long workerCompletedNanos,
                                  Object readyStamp) {
-        SectionResult(SectionTask task, SceneMesh geometry, float[] lights, Throwable failure) {
+        SectionResult(SectionTask task, MinecraftTerrainMesh geometry, float[] lights, Throwable failure) {
             this(task, geometry, lights, failure, 0L, null);
         }
 
@@ -1279,7 +1284,7 @@ public final class RtTerrain {
         }
     }
 
-    private record PendingGeometryGroup(SceneGeometryKey groupKey, List<SceneGeometrySink.Operation> operations,
+    private record PendingGeometryGroup(long groupKey, List<MinecraftTerrainGeometry.Change> operations,
                                         PendingPublication publication, long enqueuedNanos) { }
 
     private record PendingPublication(List<PublishedPut> puts, List<PublishedDrop> drops) { }
@@ -1313,48 +1318,43 @@ public final class RtTerrain {
     }
 
     private void submitDirtyGroup(DirtyGroup group) {
-        ArrayList<SceneGeometrySink.Operation> operations = new ArrayList<>();
+        ArrayList<MinecraftTerrainGeometry.Change> operations = new ArrayList<>();
         ArrayList<SectionResult> puts = new ArrayList<>();
         LongArrayList drops = new LongArrayList();
         for (SectionResult result : group.prepared) appendPut(operations, puts, result);
         for (LongIterator it = group.removed.iterator(); it.hasNext(); ) appendDrop(operations, drops, it.nextLong());
-        if (!operations.isEmpty()) enqueueGroup(new SceneGeometryKey(DIRTY_GROUP_DOMAIN, group.id), operations, puts, drops);
+        if (!operations.isEmpty()) enqueueGroup(group.id, operations, puts, drops);
     }
 
     private void submitSection(SectionResult result) {
-        ArrayList<SceneGeometrySink.Operation> operations = new ArrayList<>(2);
+        ArrayList<MinecraftTerrainGeometry.Change> operations = new ArrayList<>(1);
         ArrayList<SectionResult> puts = new ArrayList<>(1);
         appendPut(operations, puts, result);
-        enqueueGroup(sectionGeometryKey(result.task().key), operations, puts, new LongArrayList());
+        enqueueGroup(result.task().key, operations, puts, new LongArrayList());
     }
 
     private void submitDrop(long key) {
         if (pendingDrops.contains(key)) return;
-        ArrayList<SceneGeometrySink.Operation> operations = new ArrayList<>(2);
+        ArrayList<MinecraftTerrainGeometry.Change> operations = new ArrayList<>(1);
         LongArrayList drops = new LongArrayList(1);
         appendDrop(operations, drops, key);
-        enqueueGroup(sectionGeometryKey(key), operations, new ArrayList<>(), drops);
+        enqueueGroup(key, operations, new ArrayList<>(), drops);
     }
 
-    private void appendPut(List<SceneGeometrySink.Operation> operations, List<SectionResult> puts, SectionResult result) {
+    private void appendPut(List<MinecraftTerrainGeometry.Change> operations, List<SectionResult> puts, SectionResult result) {
         SectionTask task = result.task();
         long key = task.key;
-        SceneGeometryKey geometryKey = sectionGeometryKey(key);
-        operations.add(new SceneGeometrySink.Put(geometryKey, result.geometry()));
-        operations.add(new SceneGeometrySink.Place(geometryKey, geometryKey,
-                GeometryTransform.translation(task.sox, task.soy, task.soz), 0xff));
+        operations.add(new MinecraftTerrainGeometry.Put(key, task.sox, task.soy, task.soz, result.geometry()));
         puts.add(result);
     }
 
-    private void appendDrop(List<SceneGeometrySink.Operation> operations, LongArrayList drops, long key) {
+    private void appendDrop(List<MinecraftTerrainGeometry.Change> operations, LongArrayList drops, long key) {
         if (pendingDrops.contains(key)) return;
-        SceneGeometryKey geometryKey = sectionGeometryKey(key);
-        operations.add(new SceneGeometrySink.Remove(geometryKey));
-        operations.add(new SceneGeometrySink.Drop(geometryKey));
+        operations.add(new MinecraftTerrainGeometry.Drop(key));
         drops.add(key);
     }
 
-    private void enqueueGroup(SceneGeometryKey groupKey, List<SceneGeometrySink.Operation> operations,
+    private void enqueueGroup(long groupKey, List<MinecraftTerrainGeometry.Change> operations,
                               List<SectionResult> puts, LongArrayList drops) {
         for (SectionResult put : puts) {
             long key = put.task().key;
@@ -1390,32 +1390,27 @@ public final class RtTerrain {
         MinecraftTelemetry.current().max("terrainPendingGeometryGroups", pendingGeometryGroups.size());
     }
 
-    /** Drain completed terrain transactions through the provider-owned retained-scene sink. */
-    public static void submitGeometry(SceneGeometrySink sink) {
-        INSTANCE.submitPendingGeometry(sink);
-    }
-
-    private void submitPendingGeometry(SceneGeometrySink sink) {
-        if (pendingGeometryGroups.isEmpty()) return;
-        LinkedHashMap<SceneGeometryKey, PendingGeometryGroup> latest = new LinkedHashMap<>();
+    private void submitPendingGeometry() {
+        if (pendingGeometryGroups.isEmpty() || retainedGeometry == null) return;
+        LinkedHashMap<Long, PendingGeometryGroup> latest = new LinkedHashMap<>();
         for (PendingGeometryGroup group : pendingGeometryGroups) {
             latest.put(group.groupKey(), group);
         }
-        pendingGeometryGroups.clear();
         for (PendingGeometryGroup group : latest.values()) {
             long submittedNanos = System.nanoTime();
             int putCount = group.publication().puts().size();
             for (int i = 0; i < putCount; i++) {
                 recordTerrainLatency("terrainPendingToSubmit", group.enqueuedNanos(), submittedNanos);
             }
-            sink.submit(group.groupKey(), group.operations(),
-                    () -> acknowledgePublication(group.publication(), submittedNanos));
+            retainedGeometry.submit(group.operations());
+            acknowledgePublication(group.publication(), submittedNanos);
+            pendingGeometryGroups.removeIf(pending -> pending.groupKey() == group.groupKey());
         }
     }
 
-    static List<SceneGeometryKey> latestGroupKeys(List<SceneGeometryKey> keys) {
-        LinkedHashMap<SceneGeometryKey, SceneGeometryKey> latest = new LinkedHashMap<>();
-        for (SceneGeometryKey key : keys) latest.put(key, key);
+    static List<Long> latestGroupKeys(List<Long> keys) {
+        LinkedHashMap<Long, Long> latest = new LinkedHashMap<>();
+        for (Long key : keys) latest.put(key, key);
         return List.copyOf(latest.keySet());
     }
 
@@ -1458,10 +1453,6 @@ public final class RtTerrain {
         pendingPublicationToken.remove(key);
         pendingPublications.remove(key);
         pendingDrops.remove(key);
-    }
-
-    private static SceneGeometryKey sectionGeometryKey(long key) {
-        return new SceneGeometryKey(SECTION_DOMAIN, key);
     }
 
     private static boolean hasLights(float[] lights) {

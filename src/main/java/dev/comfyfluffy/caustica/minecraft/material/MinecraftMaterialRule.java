@@ -1,11 +1,9 @@
 package dev.comfyfluffy.caustica.minecraft.material;
 
-import dev.comfyfluffy.caustica.api.ResourceId;
-import dev.comfyfluffy.caustica.api.provider.MaterialTopology;
-
+import dev.comfyfluffy.caustica.settings.ResourceId;
 import java.util.Objects;
 
-/** Ordered Minecraft resource-pack override resolved before named materials are submitted. */
+/** Ordered Minecraft resource-pack override applied while the epoch material table is built. */
 public record MinecraftMaterialRule(ResourceId id, ResourceId material, ResourceId geometry,
                                     Parameters parameters) {
     public MinecraftMaterialRule {
@@ -21,8 +19,7 @@ public record MinecraftMaterialRule(ResourceId id, ResourceId material, Resource
 
     public record Parameters(Float specularRoughness, Float baseMetalness,
                              Float specularIor, Float transmissionWeight,
-                             Float emissionLuminanceCdM2, ResourceId surface,
-                             MaterialTopology topology) {
+                             Float emissionLuminanceCdM2, MinecraftMaterialTopology topology) {
         public Parameters {
             unit("specularRoughness", specularRoughness);
             unit("baseMetalness", baseMetalness);

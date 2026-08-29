@@ -1,12 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.material;
 
 import dev.comfyfluffy.caustica.CausticaMod;
-import dev.comfyfluffy.caustica.api.ResourceId;
-import dev.comfyfluffy.caustica.api.provider.CpuTextureResource;
-import dev.comfyfluffy.caustica.api.provider.MaterialProviderData;
-import dev.comfyfluffy.caustica.api.provider.MaterialTextureData;
-import dev.comfyfluffy.caustica.api.provider.OpenPbrMaterialDefaults;
-import dev.comfyfluffy.caustica.api.provider.TextureRegistrar;
+import dev.comfyfluffy.caustica.settings.ResourceId;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -16,44 +11,46 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-/** Compiles Minecraft OpenPBR texture inputs into provider-owned canonical texture pages and material blobs. */
+/** Compiles Minecraft OpenPBR inputs into immutable CPU texture pages for one resource-pack epoch. */
 public final class MinecraftMaterialPageCompiler {
     public static final int FEATURE_SPEC = 1;
     public static final int FEATURE_NORMAL = 2;
     public static final int FEATURE_EMISSION_MASK = 4;
     public static final int FEATURE_SUBSURFACE_COLOR_BASE = 8;
     public static final int FEATURE_EMISSION_COLOR_BASE = 16;
-
+    public static final int FEATURE_UNIFORM_EMISSION = 32;
     private static final int DEFAULT_PAGE_SIZE = 2048;
     private static final int MAX_PAGE_SIZE = 8192;
     private static final int GUTTER = 8;
     private static final int MAX_VALID_LOD = 3;
-    private static final int MAX_SLOT = 0xFFFF;
-    private static final int MAX_LOD_SHIFT = 24;
-    private static final int FEATURE_MASK = 0x00FFFFFF;
     private static final int PACK_ALIGNMENT = 1 << MAX_VALID_LOD;
     private static final int MATERIAL_TEXTURE_FEATURES = FEATURE_SPEC | FEATURE_NORMAL | FEATURE_EMISSION_MASK;
 
-    private MinecraftMaterialPageCompiler() {
-    }
+    private MinecraftMaterialPageCompiler() { }
 
-    /** Provider data and CPU-visible feature bits for one material. */
-    public record CompiledMaterial(MaterialProviderData providerData, int features) {
+    /** Texture ordinals and UV transforms used to build a generated GPU material record. */
+    public record CompiledMaterial(int features, int maxLod, int surface0Texture,
+                                   int surface1Texture, int normalTexture, int emissionTexture,
+                                   MaterialUv materialUv, MaterialUv baseColorUv) {
         public CompiledMaterial {
-            java.util.Objects.requireNonNull(providerData, "providerData");
+            if (maxLod < 0 || maxLod > MAX_VALID_LOD) throw new IllegalArgumentException("invalid max LOD");
+            if (surface0Texture < 0 || surface1Texture < 0 || normalTexture < 0 || emissionTexture < 0) {
+                throw new IllegalArgumentException("texture ordinals must be non-negative");
+            }
+            java.util.Objects.requireNonNull(materialUv, "materialUv");
+            java.util.Objects.requireNonNull(baseColorUv, "baseColorUv");
         }
     }
 
-    /** Immutable compiled records keyed by material identifier, plus the textureless fallback record. */
-    public record Result(Map<ResourceId, CompiledMaterial> materials, CompiledMaterial fallback) {
+    /** CPU upload batch and its material placements. */
+    public record Result(Map<ResourceId, CompiledMaterial> materials, CompiledMaterial fallback,
+                         List<MinecraftMaterialTexture> textures) {
         public Result {
             materials = Map.copyOf(materials);
             java.util.Objects.requireNonNull(fallback, "fallback");
+            textures = List.copyOf(textures);
         }
-
-        public CompiledMaterial material(ResourceId id) {
-            return materials.getOrDefault(id, fallback);
-        }
+        public CompiledMaterial material(ResourceId id) { return materials.getOrDefault(id, fallback); }
     }
 
     private static final class Candidate {
@@ -62,59 +59,41 @@ public final class MinecraftMaterialPageCompiler {
         int page = -1;
         int x;
         int y;
-
         Candidate(MaterialTextureResource resource) {
             this.resource = resource;
             int value = 0;
             if (resource.surfaceParameters()) value |= FEATURE_SPEC;
             if (resource.normalMap()) value |= FEATURE_NORMAL;
             if (resource.emissionMask()) value |= FEATURE_EMISSION_MASK;
-            if (resource.subsurfaceColorBinding() == OpenPbrColorBinding.BASE_COLOR) {
-                value |= FEATURE_SUBSURFACE_COLOR_BASE;
-            }
-            if (resource.emissionColorBinding() == OpenPbrColorBinding.BASE_COLOR) {
-                value |= FEATURE_EMISSION_COLOR_BASE;
-            }
+            if (resource.subsurfaceColorBinding() == OpenPbrColorBinding.BASE_COLOR) value |= FEATURE_SUBSURFACE_COLOR_BASE;
+            if (resource.emissionColorBinding() == OpenPbrColorBinding.BASE_COLOR) value |= FEATURE_EMISSION_COLOR_BASE;
             features = value;
         }
-
         int width() { return resource.analysisSource().width(); }
         int height() { return resource.analysisSource().height(); }
         int pageChannels() { return MinecraftMaterialPageCompiler.pageChannels(features); }
     }
 
-    private record PageSlots(int surface0, int normal, int surface1, int emission) {
+    private record PageSlots(int surface0, int normal, int surface1, int emission) { }
+
+    public static Result compile(List<MaterialTextureResource> resources) {
+        return compile(resources, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, GUTTER);
     }
 
-    private record PageUv(float u, float v, float du, float dv) {
-        private static final PageUv IDENTITY = new PageUv(0.0f, 0.0f, 1.0f, 1.0f);
-    }
-
-    /** Compile and register every texture before material definitions that contain the returned slots are submitted. */
-    public static Result compile(List<MaterialTextureResource> resources, TextureRegistrar textures) {
-        return compile(resources, textures, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, GUTTER);
-    }
-
-    static Result compile(List<MaterialTextureResource> resources, TextureRegistrar textures,
-                          int defaultPageSize, int maxPageSize, int gutter) {
-        java.util.Objects.requireNonNull(resources, "resources");
-        java.util.Objects.requireNonNull(textures, "textures");
+    static Result compile(List<MaterialTextureResource> resources, int defaultPageSize, int maxPageSize, int gutter) {
         List<MaterialTextureResource> ordered = new ArrayList<>(List.copyOf(resources));
         ordered.sort(Comparator.comparing(MaterialTextureResource::material));
         Set<ResourceId> ids = new java.util.HashSet<>();
         for (MaterialTextureResource resource : ordered) {
-            if (!ids.add(resource.material())) {
-                throw new IllegalArgumentException("duplicate material texture resource " + resource.material());
-            }
+            if (!ids.add(resource.material())) throw new IllegalArgumentException("duplicate material " + resource.material());
         }
 
+        List<MinecraftMaterialTexture> textures = new ArrayList<>();
         PageSlots neutral = new PageSlots(
-                register(textures, neutral(255, 0, 0, 0)),
-                register(textures, neutral(128, 128, 0, 0)),
-                register(textures, neutral(255, 255, 255,
-                        MaterialTextureData.unorm8(MaterialPagePacker.encodeIor(
-                                OpenPbrMaterialDefaults.DEFAULT_SPECULAR_IOR)))),
-                register(textures, neutral(255, 255, 255, 255)));
+                add(textures, neutral(255, 0, 0, 0)), add(textures, neutral(128, 128, 0, 0)),
+                add(textures, neutral(255, 255, 255,
+                        MaterialTextureLevels.unorm8(MaterialPagePacker.encodeIor(OpenPbrDefaults.SPECULAR_IOR)))),
+                add(textures, neutral(255, 255, 255, 255)));
 
         List<Candidate> candidates = ordered.stream().map(Candidate::new).toList();
         List<MinecraftMaterialPagePlanner.Input> inputs = new ArrayList<>(candidates.size());
@@ -126,8 +105,7 @@ public final class MinecraftMaterialPageCompiler {
         MinecraftMaterialPagePlanner.Plan plan = MinecraftMaterialPagePlanner.plan(inputs, defaultPageSize,
                 maxPageSize, gutter, PACK_ALIGNMENT);
         if (plan.rejectedOversizedInput()) {
-            CausticaMod.LOGGER.warn("RT material asset exceeds canonical page limit {}; oversized maps use neutral fallback",
-                    maxPageSize);
+            CausticaMod.LOGGER.warn("RT material asset exceeds canonical page limit {}; using neutral fallback", maxPageSize);
         }
         int pageSize = plan.pageSize();
         for (MinecraftMaterialPagePlanner.Placement placement : plan.placements()) {
@@ -154,8 +132,7 @@ public final class MinecraftMaterialPageCompiler {
                 pixels[candidate.page].write(candidate.x, candidate.y, decoded.levels());
             } catch (Throwable failure) {
                 if (loggedFailure.compareAndSet(false, true)) {
-                    CausticaMod.LOGGER.warn("RT canonical material decode failed for "
-                            + candidate.resource.material(), failure);
+                    CausticaMod.LOGGER.warn("RT canonical material decode failed for " + candidate.resource.material(), failure);
                 }
                 candidate.page = -1;
             }
@@ -164,38 +141,34 @@ public final class MinecraftMaterialPageCompiler {
         List<PageSlots> pages = new ArrayList<>(pixels.length);
         for (MaterialPagePacker page : pixels) {
             pages.add(new PageSlots(
-                    page.surface0 == null ? neutral.surface0() : register(textures, texture(pageSize, page.surface0)),
-                    page.normal == null ? neutral.normal() : register(textures, texture(pageSize, page.normal)),
-                    page.surface1 == null ? neutral.surface1() : register(textures, texture(pageSize, page.surface1)),
-                    page.emission == null ? neutral.emission() : register(textures, texture(pageSize, page.emission))));
+                    page.surface0 == null ? neutral.surface0() : add(textures, texture(pageSize, page.surface0)),
+                    page.normal == null ? neutral.normal() : add(textures, texture(pageSize, page.normal)),
+                    page.surface1 == null ? neutral.surface1() : add(textures, texture(pageSize, page.surface1)),
+                    page.emission == null ? neutral.emission() : add(textures, texture(pageSize, page.emission))));
         }
 
-        CompiledMaterial fallback = compiled(0, 0, neutral, PageUv.IDENTITY, MaterialUv.IDENTITY);
+        CompiledMaterial fallback = compiled(0, 0, neutral, MaterialUv.IDENTITY, MaterialUv.IDENTITY);
         Map<ResourceId, CompiledMaterial> compiled = new LinkedHashMap<>();
         for (Candidate candidate : candidates) {
             CompiledMaterial material;
             if (candidate.page >= 0) {
-                PageUv materialUv = new PageUv(candidate.x / (float) pageSize,
+                MaterialUv pageUv = new MaterialUv(candidate.x / (float) pageSize,
                         candidate.y / (float) pageSize, candidate.width() / (float) pageSize,
                         candidate.height() / (float) pageSize);
                 material = compiled(candidate.features, maxLodFor(candidate.width(), candidate.height()),
-                        pages.get(candidate.page), materialUv, candidate.resource.albedoUv());
+                        pages.get(candidate.page), pageUv, candidate.resource.albedoUv());
             } else {
-                int features = candidate.features
-                        & (FEATURE_SUBSURFACE_COLOR_BASE | FEATURE_EMISSION_COLOR_BASE);
-                material = compiled(features, 0, neutral, PageUv.IDENTITY, candidate.resource.albedoUv());
+                int features = candidate.features & (FEATURE_SUBSURFACE_COLOR_BASE | FEATURE_EMISSION_COLOR_BASE);
+                material = compiled(features, 0, neutral, MaterialUv.IDENTITY, candidate.resource.albedoUv());
             }
             compiled.put(candidate.resource.material(), material);
         }
-        return new Result(compiled, fallback);
+        return new Result(compiled, fallback, textures);
     }
 
     static int pageChannels(int features) {
-        int channels = (features & MATERIAL_TEXTURE_FEATURES) != 0
-                ? MinecraftMaterialPagePlanner.CHANNEL_MATERIAL : 0;
-        if ((features & FEATURE_EMISSION_MASK) != 0) {
-            channels |= MinecraftMaterialPagePlanner.CHANNEL_EMISSION;
-        }
+        int channels = (features & MATERIAL_TEXTURE_FEATURES) != 0 ? MinecraftMaterialPagePlanner.CHANNEL_MATERIAL : 0;
+        if ((features & FEATURE_EMISSION_MASK) != 0) channels |= MinecraftMaterialPagePlanner.CHANNEL_EMISSION;
         return channels;
     }
 
@@ -209,46 +182,29 @@ public final class MinecraftMaterialPageCompiler {
     }
 
     private static CompiledMaterial compiled(int features, int maxLod, PageSlots slots,
-                                             PageUv materialUv, MaterialUv baseColorUv) {
-        int[] words = new int[MaterialProviderData.WORD_COUNT];
-        words[0] = (features & FEATURE_MASK) | (maxLod << MAX_LOD_SHIFT);
-        words[1] = slots.surface0() | slots.surface1() << 16;
-        words[2] = slots.normal() | slots.emission() << 16;
-        words[3] = Float.floatToRawIntBits(materialUv.u());
-        words[4] = Float.floatToRawIntBits(materialUv.v());
-        words[5] = Float.floatToRawIntBits(materialUv.du());
-        words[6] = Float.floatToRawIntBits(materialUv.dv());
-        putBaseColorUv(words, baseColorUv);
-        return new CompiledMaterial(new MaterialProviderData(words), features);
+                                             MaterialUv materialUv, MaterialUv baseColorUv) {
+        return new CompiledMaterial(features, maxLod, slots.surface0(), slots.surface1(), slots.normal(),
+                slots.emission(), materialUv, baseColorUv);
     }
 
-    private static void putBaseColorUv(int[] words, MaterialUv uv) {
-        words[7] = Float.floatToRawIntBits(uv.u());
-        words[8] = Float.floatToRawIntBits(uv.v());
-        words[9] = Float.floatToRawIntBits(uv.inverseDu());
-        words[10] = Float.floatToRawIntBits(uv.inverseDv());
+    private static int add(List<MinecraftMaterialTexture> textures, MinecraftMaterialTexture texture) {
+        int ordinal = textures.size();
+        textures.add(texture);
+        return ordinal;
     }
 
-    private static int register(TextureRegistrar textures, CpuTextureResource texture) {
-        int slot = textures.register(texture);
-        if (slot < 0 || slot > MAX_SLOT) {
-            throw new IllegalStateException("Minecraft material texture slot exceeds 16-bit provider ABI: " + slot);
-        }
-        return slot;
+    private static MinecraftMaterialTexture neutral(int r, int g, int b, int a) {
+        return new MinecraftMaterialTexture(List.of(new MinecraftMaterialTexture.Mip(1, 1,
+                new byte[]{(byte) r, (byte) g, (byte) b, (byte) a})));
     }
 
-    private static CpuTextureResource neutral(int r, int g, int b, int a) {
-        return new CpuTextureResource(1, 1, CpuTextureResource.Encoding.LINEAR,
-                new byte[] { (byte) r, (byte) g, (byte) b, (byte) a });
-    }
-
-    private static CpuTextureResource texture(int baseSize, List<byte[]> levels) {
-        List<CpuTextureResource.MipLevel> mipLevels = new ArrayList<>(levels.size());
+    private static MinecraftMaterialTexture texture(int baseSize, List<byte[]> levels) {
+        List<MinecraftMaterialTexture.Mip> mipLevels = new ArrayList<>(levels.size());
         int size = baseSize;
         for (byte[] level : levels) {
-            mipLevels.add(new CpuTextureResource.MipLevel(size, size, level));
+            mipLevels.add(new MinecraftMaterialTexture.Mip(size, size, level));
             size = Math.max(1, size / 2);
         }
-        return new CpuTextureResource(CpuTextureResource.Encoding.LINEAR, mipLevels);
+        return new MinecraftMaterialTexture(mipLevels);
     }
 }

@@ -10,6 +10,8 @@ package dev.comfyfluffy.caustica.api.pass;
  *
  * <p>The registration method selects the engine stage. The generic pass type only couples that stage to
  * the frame capabilities valid there; it does not expose an open-ended render graph.
+ * Before every callback the renderer binds the session's shared resource and sampler descriptor heaps.
+ * Passes consume heap indices from their frame or their own allocations and leave those bindings intact.
  * A factory failure leaves no registration and follows {@link PassFactory}'s partial-resource rule.
  */
 public interface PassChannel {

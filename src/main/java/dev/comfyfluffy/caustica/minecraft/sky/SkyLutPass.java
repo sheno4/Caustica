@@ -1,18 +1,18 @@
 package dev.comfyfluffy.caustica.minecraft.sky;
 
-import dev.comfyfluffy.caustica.api.Option;
+import dev.comfyfluffy.caustica.settings.Option;
 import dev.comfyfluffy.caustica.api.ShaderSource;
 import dev.comfyfluffy.caustica.api.pass.CausticaRenderPass;
 import dev.comfyfluffy.caustica.api.pass.PassFrame;
-import dev.comfyfluffy.caustica.api.OptionValues;
-import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.settings.OptionValues;
+import dev.comfyfluffy.caustica.settings.ResourceId;
 import dev.comfyfluffy.caustica.api.pass.PassSetup;
 import dev.comfyfluffy.caustica.api.pass.RenderStage;
 import com.mojang.blaze3d.textures.GpuTextureView;
 import com.mojang.blaze3d.vulkan.VulkanGpuTextureView;
 import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
 import dev.comfyfluffy.caustica.minecraft.MinecraftLightingCalibration;
-import dev.comfyfluffy.caustica.api.gpu.GpuBuffer;
+import dev.comfyfluffy.caustica.rt.GpuBuffer;
 import dev.comfyfluffy.caustica.api.gpu.GpuImage;
 import dev.comfyfluffy.caustica.minecraft.sky.gen.SkyInputsData;
 import dev.comfyfluffy.caustica.api.pass.ComputeDispatch;

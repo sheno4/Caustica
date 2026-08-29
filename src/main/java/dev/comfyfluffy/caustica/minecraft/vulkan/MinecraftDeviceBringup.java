@@ -6,23 +6,33 @@ import com.mojang.blaze3d.vulkan.init.VulkanFeature;
 import com.mojang.blaze3d.vulkan.init.VulkanPNextStruct;
 import dev.comfyfluffy.caustica.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
-import dev.comfyfluffy.caustica.api.gpu.GpuRasterCapabilities;
+import dev.comfyfluffy.caustica.rt.GpuRasterCapabilities;
+import dev.comfyfluffy.caustica.engine.vulkan.VulkanProfileSupport;
+import dev.comfyfluffy.caustica.engine.vulkan.VulkanProfileValidation;
+import dev.comfyfluffy.caustica.engine.vulkan.VulkanRequiredProfile;
 import dev.comfyfluffy.caustica.spi.vulkan.VulkanDeviceCapabilities;
 import dev.comfyfluffy.caustica.spi.vulkan.VulkanQueueReservation;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.EXTHdrMetadata;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VK12;
+import org.lwjgl.vulkan.VK;
 import org.lwjgl.vulkan.VkDeviceCreateInfo;
 import org.lwjgl.vulkan.VkPhysicalDeviceAccelerationStructureFeaturesKHR;
 import org.lwjgl.vulkan.VkPhysicalDeviceFeatures;
 import org.lwjgl.vulkan.VkPhysicalDeviceFeatures2;
+import org.lwjgl.vulkan.VkPhysicalDeviceDescriptorHeapFeaturesEXT;
+import org.lwjgl.vulkan.VkPhysicalDeviceDynamicRenderingFeatures;
 import org.lwjgl.vulkan.VkPhysicalDeviceOpacityMicromapFeaturesEXT;
 import org.lwjgl.vulkan.VkPhysicalDevicePresentIdFeaturesKHR;
 import org.lwjgl.vulkan.VkPhysicalDeviceRayQueryFeaturesKHR;
 import org.lwjgl.vulkan.VkPhysicalDeviceRayTracingInvocationReorderFeaturesEXT;
 import org.lwjgl.vulkan.VkPhysicalDeviceRayTracingPipelineFeaturesKHR;
 import org.lwjgl.vulkan.VkPhysicalDeviceRayTracingPositionFetchFeaturesKHR;
+import org.lwjgl.vulkan.VkPhysicalDeviceShaderObjectFeaturesEXT;
+import org.lwjgl.vulkan.VkPhysicalDeviceShaderUntypedPointersFeaturesKHR;
+import org.lwjgl.vulkan.VkPhysicalDeviceSynchronization2Features;
+import org.lwjgl.vulkan.VkPhysicalDeviceUnifiedImageLayoutsFeaturesKHR;
 import org.lwjgl.vulkan.VkPhysicalDeviceVulkan12Features;
 import org.lwjgl.vulkan.VkDevice;
 import org.lwjgl.vulkan.VkDeviceQueueCreateInfo;
@@ -34,8 +44,8 @@ import org.lwjgl.vulkan.VkPhysicalDeviceRayTracingPipelinePropertiesKHR;
 import org.lwjgl.vulkan.VKCapabilitiesDevice;
 import org.spongepowered.asm.mixin.injection.invoke.arg.Args;
 
-import java.util.ArrayList;
 import java.util.Collection;
+import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -46,27 +56,21 @@ import static org.lwjgl.vulkan.EXTRayTracingInvocationReorder.VK_EXT_RAY_TRACING
 import static org.lwjgl.vulkan.EXTRayTracingInvocationReorder.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_INVOCATION_REORDER_FEATURES_EXT;
 import static org.lwjgl.vulkan.EXTOpacityMicromap.VK_EXT_OPACITY_MICROMAP_EXTENSION_NAME;
 import static org.lwjgl.vulkan.EXTOpacityMicromap.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_OPACITY_MICROMAP_FEATURES_EXT;
-import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME;
+import static org.lwjgl.vulkan.EXTDescriptorHeap.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_HEAP_FEATURES_EXT;
+import static org.lwjgl.vulkan.EXTShaderObject.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_OBJECT_FEATURES_EXT;
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR;
-import static org.lwjgl.vulkan.KHRDeferredHostOperations.VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME;
 import static org.lwjgl.vulkan.KHRPresentId.VK_KHR_PRESENT_ID_EXTENSION_NAME;
 import static org.lwjgl.vulkan.KHRPresentId.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_ID_FEATURES_KHR;
-import static org.lwjgl.vulkan.KHRRayQuery.VK_KHR_RAY_QUERY_EXTENSION_NAME;
 import static org.lwjgl.vulkan.KHRRayQuery.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR;
-import static org.lwjgl.vulkan.KHRRayTracingPipeline.VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME;
 import static org.lwjgl.vulkan.KHRRayTracingPipeline.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR;
-import static org.lwjgl.vulkan.KHRRayTracingPositionFetch.VK_KHR_RAY_TRACING_POSITION_FETCH_EXTENSION_NAME;
 import static org.lwjgl.vulkan.KHRRayTracingPositionFetch.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_POSITION_FETCH_FEATURES_KHR;
+import static org.lwjgl.vulkan.KHRShaderUntypedPointers.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_UNTYPED_POINTERS_FEATURES_KHR;
+import static org.lwjgl.vulkan.KHRUnifiedImageLayouts.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_UNIFIED_IMAGE_LAYOUTS_FEATURES_KHR;
 import static org.lwjgl.vulkan.NVLowLatency2.VK_NV_LOW_LATENCY_2_EXTENSION_NAME;
 
 /** Negotiates renderer Vulkan features and transfers the immutable result to the matching device backend. */
 public final class MinecraftDeviceBringup {
-    private static final List<String> REQUIRED_EXTENSIONS = List.of(
-            VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
-            VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME,
-            VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
-            VK_KHR_RAY_TRACING_POSITION_FETCH_EXTENSION_NAME,
-            VK_KHR_RAY_QUERY_EXTENSION_NAME);
+    private static final VulkanRequiredProfile REQUIRED_PROFILE = VulkanRequiredProfile.CAUSTICA_1_4;
 
     private static final VulkanPNextStruct AS_STRUCT = new VulkanPNextStruct(
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR,
@@ -89,9 +93,29 @@ public final class MinecraftDeviceBringup {
     private static final VulkanPNextStruct OMM_STRUCT = new VulkanPNextStruct(
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_OPACITY_MICROMAP_FEATURES_EXT,
             VkPhysicalDeviceOpacityMicromapFeaturesEXT.SIZEOF);
+    private static final VulkanPNextStruct UNIFIED_LAYOUTS_STRUCT = new VulkanPNextStruct(
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_UNIFIED_IMAGE_LAYOUTS_FEATURES_KHR,
+            VkPhysicalDeviceUnifiedImageLayoutsFeaturesKHR.SIZEOF);
+    private static final VulkanPNextStruct DESCRIPTOR_HEAP_STRUCT = new VulkanPNextStruct(
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_HEAP_FEATURES_EXT,
+            VkPhysicalDeviceDescriptorHeapFeaturesEXT.SIZEOF);
+    private static final VulkanPNextStruct SHADER_OBJECT_STRUCT = new VulkanPNextStruct(
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_OBJECT_FEATURES_EXT,
+            VkPhysicalDeviceShaderObjectFeaturesEXT.SIZEOF);
+    private static final VulkanPNextStruct SHADER_UNTYPED_POINTERS_STRUCT = new VulkanPNextStruct(
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_UNTYPED_POINTERS_FEATURES_KHR,
+            VkPhysicalDeviceShaderUntypedPointersFeaturesKHR.SIZEOF);
 
     private static final VulkanFeature BUFFER_ADDRESS = new VulkanFeature(VulkanBackend.VK12_FEATURES_STRUCT,
             "bufferDeviceAddress", VkPhysicalDeviceVulkan12Features.BUFFERDEVICEADDRESS);
+    private static final VulkanFeature TIMELINE_SEMAPHORE = new VulkanFeature(VulkanBackend.VK12_FEATURES_STRUCT,
+            "timelineSemaphore", VkPhysicalDeviceVulkan12Features.TIMELINESEMAPHORE);
+    private static final VulkanFeature SHADER_FLOAT16 = new VulkanFeature(VulkanBackend.VK12_FEATURES_STRUCT,
+            "shaderFloat16", VkPhysicalDeviceVulkan12Features.SHADERFLOAT16);
+    private static final VulkanFeature SYNCHRONIZATION_2 = new VulkanFeature(VulkanBackend.SYNC2_FEATURES_STRUCT,
+            "synchronization2", VkPhysicalDeviceSynchronization2Features.SYNCHRONIZATION2);
+    private static final VulkanFeature DYNAMIC_RENDERING = new VulkanFeature(VulkanBackend.DYNAMIC_RENDERING_FEATURES_STRUCT,
+            "dynamicRendering", VkPhysicalDeviceDynamicRenderingFeatures.DYNAMICRENDERING);
     private static final VulkanFeature RUNTIME_ARRAY = new VulkanFeature(VulkanBackend.VK12_FEATURES_STRUCT,
             "runtimeDescriptorArray", VkPhysicalDeviceVulkan12Features.RUNTIMEDESCRIPTORARRAY);
     private static final VulkanFeature NON_UNIFORM_IMAGE = new VulkanFeature(VulkanBackend.VK12_FEATURES_STRUCT,
@@ -104,6 +128,14 @@ public final class MinecraftDeviceBringup {
             VkPhysicalDeviceVulkan12Features.DESCRIPTORBINDINGSAMPLEDIMAGEUPDATEAFTERBIND);
     private static final VulkanFeature SHADER_INT64 = new VulkanFeature(VulkanBackend.VK10_FEATURES_STRUCT,
             "shaderInt64", VkPhysicalDeviceFeatures.SHADERINT64);
+    private static final VulkanFeature UNIFIED_IMAGE_LAYOUTS = new VulkanFeature(UNIFIED_LAYOUTS_STRUCT,
+            "unifiedImageLayouts", VkPhysicalDeviceUnifiedImageLayoutsFeaturesKHR.UNIFIEDIMAGELAYOUTS);
+    private static final VulkanFeature DESCRIPTOR_HEAP = new VulkanFeature(DESCRIPTOR_HEAP_STRUCT,
+            "descriptorHeap", VkPhysicalDeviceDescriptorHeapFeaturesEXT.DESCRIPTORHEAP);
+    private static final VulkanFeature SHADER_OBJECT = new VulkanFeature(SHADER_OBJECT_STRUCT,
+            "shaderObject", VkPhysicalDeviceShaderObjectFeaturesEXT.SHADEROBJECT);
+    private static final VulkanFeature SHADER_UNTYPED_POINTERS = new VulkanFeature(SHADER_UNTYPED_POINTERS_STRUCT,
+            "shaderUntypedPointers", VkPhysicalDeviceShaderUntypedPointersFeaturesKHR.SHADERUNTYPEDPOINTERS);
     private static final VulkanFeature ACCELERATION_STRUCTURE = new VulkanFeature(AS_STRUCT,
             "accelerationStructure", VkPhysicalDeviceAccelerationStructureFeaturesKHR.ACCELERATIONSTRUCTURE);
     private static final VulkanFeature RAY_PIPELINE = new VulkanFeature(PIPELINE_STRUCT,
@@ -121,11 +153,30 @@ public final class MinecraftDeviceBringup {
             "opacityMicromap", VkPhysicalDeviceOpacityMicromapFeaturesEXT.MICROMAP);
     private static final VulkanFeature WIDE_LINES = new VulkanFeature(VulkanBackend.VK10_FEATURES_STRUCT,
             "wideLines", VkPhysicalDeviceFeatures.WIDELINES);
-    private static final List<VulkanFeature> REQUIRED_FEATURES = List.of(BUFFER_ADDRESS, RUNTIME_ARRAY,
-            NON_UNIFORM_IMAGE, PARTIALLY_BOUND, UPDATE_AFTER_BIND, SHADER_INT64, ACCELERATION_STRUCTURE,
-            RAY_PIPELINE, POSITION_FETCH, RAY_QUERY);
+    private record ProfileFeature(dev.comfyfluffy.caustica.engine.vulkan.VulkanFeature profile,
+                                  VulkanFeature device) {
+    }
 
-    private static boolean loggedUnavailable;
+    private static final List<ProfileFeature> PROFILE_FEATURES = List.of(
+            new ProfileFeature(dev.comfyfluffy.caustica.engine.vulkan.VulkanFeature.SHADER_INT64, SHADER_INT64),
+            new ProfileFeature(dev.comfyfluffy.caustica.engine.vulkan.VulkanFeature.SHADER_FLOAT16, SHADER_FLOAT16),
+            new ProfileFeature(dev.comfyfluffy.caustica.engine.vulkan.VulkanFeature.BUFFER_DEVICE_ADDRESS, BUFFER_ADDRESS),
+            new ProfileFeature(dev.comfyfluffy.caustica.engine.vulkan.VulkanFeature.TIMELINE_SEMAPHORE, TIMELINE_SEMAPHORE),
+            new ProfileFeature(dev.comfyfluffy.caustica.engine.vulkan.VulkanFeature.SYNCHRONIZATION_2, SYNCHRONIZATION_2),
+            new ProfileFeature(dev.comfyfluffy.caustica.engine.vulkan.VulkanFeature.DYNAMIC_RENDERING, DYNAMIC_RENDERING),
+            new ProfileFeature(dev.comfyfluffy.caustica.engine.vulkan.VulkanFeature.UNIFIED_IMAGE_LAYOUTS, UNIFIED_IMAGE_LAYOUTS),
+            new ProfileFeature(dev.comfyfluffy.caustica.engine.vulkan.VulkanFeature.DESCRIPTOR_HEAP, DESCRIPTOR_HEAP),
+            new ProfileFeature(dev.comfyfluffy.caustica.engine.vulkan.VulkanFeature.SHADER_OBJECT, SHADER_OBJECT),
+            new ProfileFeature(dev.comfyfluffy.caustica.engine.vulkan.VulkanFeature.SHADER_UNTYPED_POINTERS, SHADER_UNTYPED_POINTERS),
+            new ProfileFeature(dev.comfyfluffy.caustica.engine.vulkan.VulkanFeature.ACCELERATION_STRUCTURE, ACCELERATION_STRUCTURE),
+            new ProfileFeature(dev.comfyfluffy.caustica.engine.vulkan.VulkanFeature.RAY_TRACING_PIPELINE, RAY_PIPELINE),
+            new ProfileFeature(dev.comfyfluffy.caustica.engine.vulkan.VulkanFeature.RAY_QUERY, RAY_QUERY),
+            new ProfileFeature(dev.comfyfluffy.caustica.engine.vulkan.VulkanFeature.RAY_TRACING_POSITION_FETCH, POSITION_FETCH));
+    private static final List<VulkanFeature> RENDERER_FEATURES = List.of(
+            RUNTIME_ARRAY, NON_UNIFORM_IMAGE, PARTIALLY_BOUND, UPDATE_AFTER_BIND);
+
+    private static volatile int loaderApiVersion;
+    private static volatile int requestedInstanceApiVersion;
     private static final Map<Long, Negotiation> NEGOTIATIONS = new HashMap<>();
 
     public record NegotiatedDevice(VulkanDeviceCapabilities capabilities, VulkanQueueReservation computeQueue) {
@@ -137,13 +188,27 @@ public final class MinecraftDeviceBringup {
         boolean hdrMetadata;
     }
 
-    private record Support(List<String> missing, boolean ser, boolean omm, boolean presentId, boolean wideLines) {
-        boolean rayTracing() {
-            return missing.isEmpty();
-        }
+    private record Support(VulkanProfileSupport profile, boolean ser, boolean omm,
+                           boolean presentId, boolean wideLines) {
     }
 
     private MinecraftDeviceBringup() {
+    }
+
+    /** Captures the loader version and returns the hard instance version requested from Vulkan. */
+    public static int requestInstanceApiVersion() {
+        return requestInstanceApiVersion(VK.getInstanceVersionSupported());
+    }
+
+    static int requestInstanceApiVersion(int loaderVersion) {
+        loaderApiVersion = loaderVersion;
+        requestedInstanceApiVersion = REQUIRED_PROFILE.apiVersion();
+        VulkanProfileSupport versionSupport = new VulkanProfileSupport(
+                loaderVersion, requestedInstanceApiVersion, requestedInstanceApiVersion,
+                REQUIRED_PROFILE.deviceExtensions(), REQUIRED_PROFILE.features());
+        VulkanProfileValidation validation = VulkanProfileValidation.validate(REQUIRED_PROFILE, versionSupport);
+        if (!validation.supported()) throw new IllegalStateException(validation.diagnostic());
+        return requestedInstanceApiVersion;
     }
 
     private static synchronized Negotiation negotiation(long physicalDevice) {
@@ -152,11 +217,9 @@ public final class MinecraftDeviceBringup {
 
     public static void addExtensions(Collection<String> extensions, VulkanPhysicalDevice device) {
         addHdrExtension(extensions, device);
-        String missingExtension = firstMissingExtension(device);
-        if (missingExtension != null) return;
         Support support = querySupport(device);
-        if (!support.rayTracing()) return;
-        REQUIRED_EXTENSIONS.forEach(extension -> addOnce(extensions, extension));
+        requireProfile(support.profile());
+        REQUIRED_PROFILE.deviceExtensions().forEach(extension -> addOnce(extensions, extension));
         if (support.ser()) addOnce(extensions, VK_EXT_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME);
         if (support.omm()) addOnce(extensions, VK_EXT_OPACITY_MICROMAP_EXTENSION_NAME);
         if (CausticaConfig.Rt.Reflex.ENABLED.value()
@@ -183,18 +246,11 @@ public final class MinecraftDeviceBringup {
     public static void addFeatures(Args args, VulkanPhysicalDevice device) {
         Negotiation negotiation = negotiation(device.vkPhysicalDevice().address());
         negotiation.capabilities = VulkanDeviceCapabilities.unavailable();
-        String missingExtension = firstMissingExtension(device);
-        if (missingExtension != null) {
-            logUnavailable(device, "extension " + missingExtension);
-            return;
-        }
         Support support = querySupport(device);
-        if (!support.rayTracing()) {
-            logUnavailable(device, "features " + support.missing());
-            return;
-        }
+        requireProfile(support.profile());
         Set<VulkanFeature> features = new HashSet<>((Set<VulkanFeature>) args.get(2));
-        features.addAll(REQUIRED_FEATURES);
+        PROFILE_FEATURES.stream().map(ProfileFeature::device).forEach(features::add);
+        features.addAll(RENDERER_FEATURES);
         if (support.ser()) features.add(SER);
         if (support.omm()) features.add(OMM);
         if (support.wideLines()) features.add(WIDE_LINES);
@@ -343,7 +399,9 @@ public final class MinecraftDeviceBringup {
     private static Support querySupport(VulkanPhysicalDevice device) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkPhysicalDeviceFeatures2 available = VkPhysicalDeviceFeatures2.calloc(stack).sType$Default();
-            REQUIRED_FEATURES.forEach(feature -> feature.struct().findOrCreateStructInPNextChain(available, stack));
+            PROFILE_FEATURES.stream().map(ProfileFeature::device).forEach(
+                    feature -> feature.struct().findOrCreateStructInPNextChain(available, stack));
+            RENDERER_FEATURES.forEach(feature -> feature.struct().findOrCreateStructInPNextChain(available, stack));
             boolean querySer = device.hasDeviceExtension(VK_EXT_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME);
             boolean queryOmm = device.hasDeviceExtension(VK_EXT_OPACITY_MICROMAP_EXTENSION_NAME);
             boolean queryPresent = CausticaConfig.Rt.Reflex.ENABLED.value()
@@ -354,27 +412,40 @@ public final class MinecraftDeviceBringup {
             if (queryPresent) PRESENT_ID.struct().findOrCreateStructInPNextChain(available, stack);
             WIDE_LINES.struct().findOrCreateStructInPNextChain(available, stack);
             VK12.vkGetPhysicalDeviceFeatures2(device.vkPhysicalDevice(), available);
-            List<String> missing = new ArrayList<>();
-            REQUIRED_FEATURES.stream().filter(feature -> !feature.get(available))
-                    .map(VulkanFeature::name).forEach(missing::add);
-            return new Support(missing, querySer && SER.get(available), queryOmm && OMM.get(available),
+            Set<String> extensions = new HashSet<>();
+            REQUIRED_PROFILE.deviceExtensions().stream().filter(device::hasDeviceExtension).forEach(extensions::add);
+            EnumSet<dev.comfyfluffy.caustica.engine.vulkan.VulkanFeature> supportedFeatures =
+                    EnumSet.noneOf(dev.comfyfluffy.caustica.engine.vulkan.VulkanFeature.class);
+            PROFILE_FEATURES.stream().filter(feature -> feature.device().get(available))
+                    .map(ProfileFeature::profile).forEach(supportedFeatures::add);
+            int loaderVersion = loaderApiVersion != 0 ? loaderApiVersion : VK.getInstanceVersionSupported();
+            int requestedVersion = requestedInstanceApiVersion != 0
+                    ? requestedInstanceApiVersion : REQUIRED_PROFILE.apiVersion();
+            VulkanProfileSupport profile = new VulkanProfileSupport(loaderVersion, requestedVersion,
+                    device.vkPhysicalDeviceProperties().apiVersion(), extensions, supportedFeatures);
+            return new Support(profile, querySer && SER.get(available), queryOmm && OMM.get(available),
                     queryPresent && PRESENT_ID.get(available), WIDE_LINES.get(available));
         }
     }
 
-    private static String firstMissingExtension(VulkanPhysicalDevice device) {
-        return REQUIRED_EXTENSIONS.stream().filter(extension -> !device.hasDeviceExtension(extension))
-                .findFirst().orElse(null);
+    static VulkanProfileValidation validateProfile(VulkanProfileSupport support) {
+        return VulkanProfileValidation.validate(REQUIRED_PROFILE, support);
+    }
+
+    static Set<dev.comfyfluffy.caustica.engine.vulkan.VulkanFeature> mappedProfileFeatures() {
+        EnumSet<dev.comfyfluffy.caustica.engine.vulkan.VulkanFeature> mapped =
+                EnumSet.noneOf(dev.comfyfluffy.caustica.engine.vulkan.VulkanFeature.class);
+        PROFILE_FEATURES.stream().map(ProfileFeature::profile).forEach(mapped::add);
+        return Set.copyOf(mapped);
+    }
+
+    private static void requireProfile(VulkanProfileSupport support) {
+        VulkanProfileValidation validation = validateProfile(support);
+        if (!validation.supported()) throw new IllegalStateException(validation.diagnostic());
     }
 
     private static void addOnce(Collection<String> extensions, String extension) {
         if (!extensions.contains(extension)) extensions.add(extension);
     }
 
-    private static void logUnavailable(VulkanPhysicalDevice device, String reason) {
-        if (!loggedUnavailable) {
-            loggedUnavailable = true;
-            CausticaMod.LOGGER.warn("Ray tracing unavailable on [{}]: missing {}", device.deviceName(), reason);
-        }
-    }
 }

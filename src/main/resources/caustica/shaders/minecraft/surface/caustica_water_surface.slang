@@ -2,6 +2,7 @@ module caustica_water_surface;
 
 import caustica_surface;
 import caustica_types;
+import caustica_volume;
 import caustica_minecraft_material;
 
 static const float PI = 3.14159265359;
@@ -109,55 +110,60 @@ float2 backsolveCausticSurface(float2 initialSurface, float2 receiver, float t,
 }
 
 public struct WaterSurface : ISurfaceModel {
-    public override void evaluateSurface(SurfaceInput input, inout MaterialInput material) {
-        evaluateMinecraftMaterial(input, material);
-        if ((input.surfaceFlags & SURFACE_ANIMATION_ENABLED) == 0u
-                || abs(input.geometricNormal.y) < 0.5) return;
+    public override OpenPbrSurface evaluateSurface(SurfaceInput input) {
+        OpenPbrSurface material = evaluateMinecraftMaterial(input);
+        if ((input.evaluationFlags & EVALUATION_ANIMATION_ENABLED) == 0u
+                || abs(input.geometricNormal.y) < 0.5) return material;
         float2 domain = input.proceduralPosition.xz;
-        if ((input.surfaceFlags & SURFACE_RECONSTRUCTION_ANCHOR) == 0u) {
+        if ((input.evaluationFlags & SURFACE_RECONSTRUCTION_ANCHOR) == 0u) {
             float2 gradient = waveGradient(domain, input.time, input.textureFootprint);
             float orientation = input.geometricNormal.y >= 0.0 ? 1.0 : -1.0;
-            material.geometryNormal = orientation * normalize(float3(-gradient.x, 1.0, -gradient.y));
-            material.previousGeometryNormal = material.geometryNormal;
-            return;
+            material.geometry_normal = orientation * normalize(float3(-gradient.x, 1.0, -gradient.y));
+            return material;
         }
         float2 currentGradient, previousGradient;
         temporalWaveGradient(domain, input.time, input.previousTime, input.textureFootprint,
                 currentGradient, previousGradient);
         float orientation = input.geometricNormal.y >= 0.0 ? 1.0 : -1.0;
-        material.geometryNormal = orientation
+        material.geometry_normal = orientation
                 * normalize(float3(-currentGradient.x, 1.0, -currentGradient.y));
-        material.previousGeometryNormal = orientation
+        material.previous_geometry_normal = orientation
                 * normalize(float3(-previousGradient.x, 1.0, -previousGradient.y));
+        return material;
     }
+};
 
-    public override MediumProperties evaluateMedium(MediumInput input) {
-        MediumProperties properties;
-        properties.extinction = MEDIUM_ABSORB_FLOOR
-                + MEDIUM_DENSITY * (float3(1.0) - clamp(input.sourceColor, 0.0, 1.0));
-        properties.guideTransmittance = float3(1.0);
-        properties.transmissionRayBias = 0.005;
-        properties.flags = MEDIUM_TERMINATE_ON_MISS | MEDIUM_BOUNDARY_LIGHTING;
+public struct WaterVolume : IVolumeModel {
+    public override VolumeProperties evaluateVolume(VolumeInput input) {
+        VolumeProperties properties = {};
+        MinecraftInstanceData instance = {};
+        if (input.instanceData != 0u) {
+            instance = ShaderDataPtr<MinecraftInstanceData>(input.instanceData)[0];
+        } else {
+            instance.tint = float3(1.0);
+        }
+        properties.absorptionCoefficient = MEDIUM_ABSORB_FLOOR
+                + MEDIUM_DENSITY * (float3(1.0) - clamp(instance.tint, 0.0, 1.0));
         return properties;
     }
 
-    public override float3 evaluateMediumLighting(MediumLightingInput input) {
-        if ((input.surfaceFlags & SURFACE_ANIMATION_ENABLED) == 0u) return float3(1.0);
+    public override float3 evaluateBoundaryLighting(VolumeBoundaryLightingInput input) {
+        if ((input.volume.evaluationFlags & EVALUATION_ANIMATION_ENABLED) == 0u) return float3(1.0);
         float fade = smoothstep(0.06, 0.18, input.lightDirection.y);
         if (fade <= 0.0) return float3(1.0);
         float height = max(input.boundaryDistance * input.lightDirection.y, 0.05);
         float3 incident = -input.lightDirection;
-        float3 receiverPosition = input.boundaryPosition
+        float3 receiverPosition = input.volume.boundaryPosition
                 - input.lightDirection * input.boundaryDistance;
-        float2 receiver = (input.proceduralPosition
-                + receiverPosition - input.boundaryPosition).xz;
-        float2 base = backsolveCausticSurface(input.proceduralPosition.xz, receiver,
-                input.time, incident, height, input.mediumIor);
-        float2 p0 = causticLanding(base, input.time, incident, height, input.mediumIor);
-        float2 px = causticLanding(base + float2(CAUSTIC_EPS, 0.0), input.time,
-                incident, height, input.mediumIor);
-        float2 pz = causticLanding(base + float2(0.0, CAUSTIC_EPS), input.time,
-                incident, height, input.mediumIor);
+        float2 receiver = (input.volume.proceduralPosition
+                + receiverPosition - input.volume.boundaryPosition).xz;
+        float2 base = backsolveCausticSurface(input.volume.proceduralPosition.xz, receiver,
+                input.volume.time, incident, height, input.interiorIor);
+        float2 p0 = causticLanding(base, input.volume.time, incident, height, input.interiorIor);
+        float2 px = causticLanding(base + float2(CAUSTIC_EPS, 0.0), input.volume.time,
+                incident, height, input.interiorIor);
+        float2 pz = causticLanding(base + float2(0.0, CAUSTIC_EPS), input.volume.time,
+                incident, height, input.interiorIor);
         float determinant = abs((px.x - p0.x) * (pz.y - p0.y)
                 - (px.y - p0.y) * (pz.x - p0.x));
         float focus = (CAUSTIC_EPS * CAUSTIC_EPS) / max(determinant, 1.0e-5);

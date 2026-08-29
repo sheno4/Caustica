@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.rt.material;
 
-import dev.comfyfluffy.caustica.api.ResourceId;
+import dev.comfyfluffy.caustica.settings.ResourceId;
 import dev.comfyfluffy.caustica.api.provider.MaterialSnapshot;
 
 import java.util.List;
