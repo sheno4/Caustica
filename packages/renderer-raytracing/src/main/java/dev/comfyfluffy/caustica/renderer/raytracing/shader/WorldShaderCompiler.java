@@ -64,7 +64,7 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
             "caustica_types.slang", "caustica_volume.slang");
     private static final List<String> BUILTIN_MODULES = List.of(
             "surface/caustica_error_surface.slang", "surface/caustica_error_coverage.slang",
-            "sky/caustica_builtin_sky.slang");
+            "sky/caustica_builtin_sky.slang", "sky/caustica_error_environment.slang");
     private static final Set<String> PROVIDED_MODULES = moduleNames(WORLD_MODULES, API_MODULES, BUILTIN_MODULES);
 
     static Set<String> missingBundledWorldImports() throws IOException {
@@ -248,7 +248,7 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
                 .append("import caustica_api;\nimport caustica_types;\nimport caustica_surface;\n")
                 .append("import caustica_coverage;\nimport caustica_volume;\nimport caustica_environment;\n")
                 .append("import caustica_error_surface;\nimport caustica_error_coverage;\n")
-                .append("import caustica_builtin_sky;\n");
+                .append("import caustica_builtin_sky;\nimport caustica_error_environment;\n");
         program.declarations().stream().flatMap(WorldShaderCompiler::definitions).map(ShaderDefinition::module)
                 .distinct().sorted().forEach(module -> source.append("import ").append(module).append(";\n"));
 
@@ -293,13 +293,14 @@ public final class WorldShaderCompiler implements ProgramBackend.CompiledProgram
                 .append("        }\n    }\n};\n\n")
                 .append("public struct EnvironmentDispatch : IEnvironmentDispatch {\n")
                 .append("    public float3 evaluateEnvironment(uint implementation, EnvironmentQuery query) {\n")
-                .append("        switch (implementation) {\n");
+                .append("        switch (implementation) {\n")
+                .append("            case 0u: { BuiltinEnvironment value; return value.evaluateEnvironment(query); }\n");
         for (int i = 0; i < environments.size(); i++) {
             source.append("            case ").append(i + 1).append("u: { ")
                     .append(environments.get(i).definition().implementation().type())
                     .append(" value; return value.evaluateEnvironment(query); }\n");
         }
-        source.append("            default: { BuiltinEnvironment value; return value.evaluateEnvironment(query); }\n")
+        source.append("            default: { ErrorEnvironment value; return value.evaluateEnvironment(query); }\n")
                 .append("        }\n    }\n};\n\n")
                 .append("public struct Composition : IComposition {\n")
                 .append("    public typealias Surfaces = SurfaceDispatch;\n")

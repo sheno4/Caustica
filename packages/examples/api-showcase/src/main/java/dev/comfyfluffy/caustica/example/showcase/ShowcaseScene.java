@@ -15,6 +15,11 @@ import dev.comfyfluffy.caustica.api.scene.SceneId;
 
 import java.util.List;
 
+/**
+ * Geometry and light contribution consuming non-owning program ids. The exports may come from another
+ * contribution in the same render session; this owner retains mutation authority only over its own mesh,
+ * instance, and light ids.
+ */
 final class ShowcaseScene {
     private final ShowcasePrograms.Exports programs;
     private final GeometryChannel geometry;
@@ -33,7 +38,7 @@ final class ShowcaseScene {
         mesh = geometry.newMesh(ShowcasePrograms.INSTANCE);
         instance = geometry.newInstance();
         lightIds = List.of(lights.newLight(), lights.newLight(), lights.newLight());
-        publishLights();
+        publishNeeAtLights();
     }
 
     /**
@@ -69,7 +74,8 @@ final class ShowcaseScene {
                                 new PrimitiveLightMap.Range(0, 1, lightIds.getFirst()))))), retired));
     }
 
-    private void publishLights() {
+    /** Publishes the explicit light candidates consumed by the renderer's scene-local NEE-AT backend. */
+    private void publishNeeAtLights() {
         lights.submit(RetainedBatch.of(List.of(
                 new LightChannel.SetLight(lightIds.get(0), scene, new LightDescriptor.Rectangle(
                         0, 66, 0, 0.5, 0, 0, 0, 0, 0.5, 20, 18, 15)),

@@ -14,8 +14,6 @@ dependencies {
     api project(":packages:api")
     api project(":packages:engine")
     api project(":packages:engine-vulkan")
-    api project(":packages:minecraft-api")
-    api project(":packages:minecraft-adapter")
     api project(":packages:nvidia-ngx")
     api project(":packages:slang-runtime")
     implementation project(":packages:config")
@@ -40,6 +38,7 @@ def verifyRendererRuntimeImports = tasks.register("verifyRendererRuntimeImports"
                 "dev.comfyfluffy.caustica.platform",
                 "dev.comfyfluffy.caustica.fabric",
                 "dev.comfyfluffy.caustica.neoforge",
+                "dev.comfyfluffy.caustica.minecraft",
                 "net.minecraft",
                 "com.mojang",
                 "net.fabricmc",
@@ -48,11 +47,8 @@ def verifyRendererRuntimeImports = tasks.register("verifyRendererRuntimeImports"
         def violations = []
         sourceSets.main.allJava.files.sort().each { source ->
             source.eachLine { line, number ->
-                def minecraftImplementation = line.contains("dev.comfyfluffy.caustica.minecraft.")
-                        && !line.contains("dev.comfyfluffy.caustica.minecraft.api.")
-                        && !line.contains("dev.comfyfluffy.caustica.minecraft.adapter.")
                 if (line.stripLeading().startsWith("import ")
-                        && (forbidden.any { line.contains(it) } || minecraftImplementation)) {
+                        && forbidden.any { line.contains(it) }) {
                     violations += "${source}:${number}: ${line.trim()}"
                 }
             }
@@ -67,8 +63,7 @@ def verifyRendererRuntimeDependencies = tasks.register("verifyRendererRuntimeDep
     group = "verification"
     doLast {
         def allowed = [project.path, ":packages:api", ":packages:config", ":packages:engine",
-                       ":packages:engine-vulkan", ":packages:minecraft-api",
-                       ":packages:minecraft-adapter", ":packages:nvidia-ngx",
+                       ":packages:engine-vulkan", ":packages:nvidia-ngx",
                        ":packages:renderer-presentation", ":packages:renderer-raytracing",
                        ":packages:slang-runtime", ":packages:vulkan-support"] as Set
         def violations = []
@@ -98,7 +93,7 @@ def verifyRendererRuntimeJar = tasks.register("verifyRendererRuntimeJar") {
         def hostRoot = "dev/comfyfluffy/caustica/spi/host/"
         def foreign = names.findAll { it.endsWith(".class")
                 && !it.startsWith(rtRoot) && !it.startsWith(hostRoot) }
-        def required = ["RtRuntime.class", "RtTelemetry.class", "RtTelemetryImpl.class",
+        def required = ["RtFrameRenderer.class", "RtTelemetry.class", "RtTelemetryImpl.class",
                         "RtLifecycleCoordinator.class", "pass/RtPassSchedulerBackend.class",
                         "pipeline/RtJitter.class"].collect { rtRoot + it }
         required += [hostRoot + "RuntimeHost.class"]
@@ -111,7 +106,8 @@ def verifyRendererRuntimeJar = tasks.register("verifyRendererRuntimeJar") {
 def verifyRendererRuntimeOwnership = tasks.register("verifyRendererRuntimeOwnership") {
     group = "verification"
     doLast {
-        def legacyRoots = [rootProject.file("src/main/java/dev/comfyfluffy/caustica/rt"),
+        def legacyRoots = [file("src/main/java/dev/comfyfluffy/caustica/rt/RtRuntime.java"),
+                           rootProject.file("src/main/java/dev/comfyfluffy/caustica/rt"),
                            rootProject.file("src/main/java/dev/comfyfluffy/caustica/spi/host/RuntimeHost.java")]
         def legacy = legacyRoots.findAll { it.isFile() || it.isDirectory() && !fileTree(it).files.empty }
         if (!legacy.empty) {

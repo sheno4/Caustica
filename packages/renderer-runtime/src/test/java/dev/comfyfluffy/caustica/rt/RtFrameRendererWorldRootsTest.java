@@ -1,7 +1,9 @@
 package dev.comfyfluffy.caustica.rt;
 
+import dev.comfyfluffy.caustica.api.program.EnvironmentId;
 import dev.comfyfluffy.caustica.api.program.ShaderDataType;
 import dev.comfyfluffy.caustica.api.program.VolumeId;
+import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
 import dev.comfyfluffy.caustica.api.view.ViewMedium;
 import dev.comfyfluffy.caustica.engine.program.ProgramResolution;
 import dev.comfyfluffy.caustica.renderer.raytracing.layout.RtBindings;
@@ -43,6 +45,40 @@ final class RtFrameRendererWorldRootsTest {
         assertEquals(0L, roots.getLong(RtBindings.WORLD_INITIAL_VOLUME_BINDING_OFFSET));
         assertEquals(0L, roots.getLong(RtBindings.WORLD_INITIAL_VOLUME_INSTANCE_OFFSET));
         assertEquals((byte) 0x5a, roots.get(RtBindings.WORLD_OUTPUT_IMAGE_INDEX_OFFSET));
+    }
+
+    @Test
+    void activeEnvironmentWritesTypedImplementationAndBindingData() {
+        ShaderDataType<Object> type = ShaderDataType.create("environment binding");
+        EnvironmentBinding<Object> binding = EnvironmentBinding.of(
+                new EnvironmentId<>() { }, type.data(0x1234_5678L));
+
+        RtFrameRenderer.EnvironmentPush environment = RtFrameRenderer.environmentPush(binding,
+                new ProgramResolution.ActiveEnvironment(9));
+
+        assertEquals(9, environment.implementation());
+        assertEquals(0x1234_5678L, environment.bindingData());
+    }
+
+    @Test
+    void absentEnvironmentUsesResourceFreeBuiltin() {
+        RtFrameRenderer.EnvironmentPush environment = RtFrameRenderer.environmentPush(null, null);
+
+        assertEquals(0, environment.implementation());
+        assertEquals(0L, environment.bindingData());
+    }
+
+    @Test
+    void staleEnvironmentUsesVisibleErrorWithoutReadingBindingData() {
+        ShaderDataType<Object> type = ShaderDataType.create("stale environment binding");
+        EnvironmentBinding<Object> binding = EnvironmentBinding.of(
+                new EnvironmentId<>() { }, type.data(0x1234_5678L));
+
+        RtFrameRenderer.EnvironmentPush environment = RtFrameRenderer.environmentPush(
+                binding, ProgramResolution.ErrorEnvironment.INSTANCE);
+
+        assertEquals(-1, environment.implementation());
+        assertEquals(0L, environment.bindingData());
     }
 
     private static ByteBuffer roots(byte fill) {

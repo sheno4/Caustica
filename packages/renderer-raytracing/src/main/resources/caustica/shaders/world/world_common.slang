@@ -90,9 +90,6 @@ public struct WorldPush {
     // bit0 camera medium active, bit4 procedural animation, bits8..15 camera medium implementation.
     public uint     flags;
     public uint     maxBounces;
-    // Environment state is deliberately absent: it belongs to the selected sky slot and lives in that
-    // pass's own resources, which engine-generic code cannot reach.
-    //
     // Linear ACEScg source colour of the medium the eye itself is inside. A
     // hit's own medium comes from its per-primitive tint, never from here.
     public float3   cameraMedium;
@@ -108,6 +105,9 @@ public struct WorldPush {
     // near mid-grey at any scene brightness; the display pass divides it back out, so the two cancel
     // exactly and this cannot change the image. 1.0 disables it.
     public float    preExposure;
+    // Scene-selected environment tuple resolved against the currently published shader program.
+    public uint64_t environmentBinding;
+    public uint     environmentImplementation;
 };
 
 // Largest finite half. Producers of fp16 HDR storage clamp to this instead of letting the conversion

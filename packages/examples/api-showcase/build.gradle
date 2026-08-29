@@ -1,4 +1,5 @@
 import dev.comfyfluffy.caustica.slangtooling.CompileSlangShaders
+import dev.comfyfluffy.caustica.slangtooling.GenerateShaderRecords
 
 plugins {
     id "java-library"
@@ -23,6 +24,7 @@ dependencies {
     testRuntimeOnly "org.junit.platform:junit-platform-launcher"
 }
 
+def generatedShaderResources = layout.buildDirectory.dir("generated/resources")
 def validateShowcaseShaders = tasks.register("validateShowcaseShaders", CompileSlangShaders) {
     group = "verification"
     description = "Compiles the showcase world models and pass entry points against the public Slang ABI."
@@ -32,15 +34,41 @@ def validateShowcaseShaders = tasks.register("validateShowcaseShaders", CompileS
             project(":packages:shader-api").layout.projectDirectory.dir("src/main/resources/caustica/shaders/api"))
     aliasSourceDirectory = layout.projectDirectory.dir("src/main/resources/api_showcase/shaders")
     descriptorHeapNative = true
-    outputDirectory = layout.buildDirectory.dir("validated-shaders")
+    mappedDescriptorBindingSources = ["passes/ui_marker.frag.slang"]
+    outputDirectory = generatedShaderResources.map { it.dir("api_showcase/shaders") }
 }
+sourceSets.main.resources.srcDir(files(generatedShaderResources).builtBy(validateShowcaseShaders))
+
+def reflectionRoot = layout.buildDirectory.dir("generated/reflection-sources")
+def prepareShowcaseReflectionSources = tasks.register("prepareShowcaseReflectionSources", Sync) {
+    from(layout.projectDirectory.dir("src/main/resources/api_showcase/shaders"))
+    from(project(":packages:shader-api").layout.projectDirectory.dir("src/main/resources/caustica/shaders/api"))
+    from(layout.projectDirectory.dir("src/shaderReflection")) { into "layout" }
+    into(reflectionRoot)
+}
+
+def generatedRecordRoot = layout.buildDirectory.dir("generated/sources/shaderRecords")
+def generateShowcaseRecords = tasks.register("generateShowcaseRecords", GenerateShaderRecords) {
+    group = "build"
+    description = "Generates reusable showcase push-data records from Slang reflection."
+    dependsOn(prepareShowcaseReflectionSources)
+    shaderRoot = reflectionRoot
+    probeSource = reflectionRoot.map { it.file("layout/showcase_probe.slang") }
+    recordSpecs = [
+            "push|postPushProbe|ShowcasePostPush|dev.comfyfluffy.caustica.example.showcase.gen|ShowcasePostPushData|false",
+            "push|uiPushProbe|ShowcaseUiPush|dev.comfyfluffy.caustica.example.showcase.gen|ShowcaseUiPushData|false"
+    ]
+    outDir = generatedRecordRoot
+}
+
+sourceSets.main.java.srcDir(files(generatedRecordRoot).builtBy(generateShowcaseRecords))
 
 tasks.named("test", Test) {
     useJUnitPlatform()
 }
 
 tasks.named("check") {
-    dependsOn(validateShowcaseShaders)
+    dependsOn(validateShowcaseShaders, generateShowcaseRecords)
 }
 
 tasks.withType(JavaCompile).configureEach {

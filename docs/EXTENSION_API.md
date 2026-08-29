@@ -5,9 +5,9 @@ Status: current experimental 0.8 contract.
 The API is deliberately Vulkan-native. Extensions compile against published projects under `packages/` and
 must not import renderer implementation, Minecraft host, loader, queue, swapchain, or device-negotiation
 classes. See [`packages/api/ARCHITECTURE.md`](../packages/api/ARCHITECTURE.md) for exact ownership rules and
-[`packages/examples/api-showcase`](../packages/examples/api-showcase) for the compile-time Minecraft extension
-consumer. The example is being kept on the real `MinecraftExtension`/world-session lifecycle; its source and
-tests are authoritative while that conversion is completed.
+[`packages/examples/api-showcase`](../packages/examples/api-showcase) for a non-loader Minecraft extension
+consumer on the real `MinecraftExtension`/world-session lifecycle. It has real post/UI recording paths and
+lifecycle tests but no standalone loader entrypoint.
 
 ## Process registration and settings
 
@@ -60,25 +60,31 @@ Declare one coherent surface, coverage, volume, and environment set with
 `ProgramChannel.register(builder -> exports)`. The returned `ProgramRegistration<E>` owns publication state,
 the typed export record, completion notification, and removal of the entire set.
 
-`MeshId`, `InstanceId`, and `LightId` are owner-local mutation capabilities. `SceneId`, `SurfaceId`,
-`VolumeId`, and `EnvironmentId` are same-session, non-owning selection references and may be explicitly handed
-to another contribution. The receiver gains neither removal authority nor a lifetime lease. Stale surface and
-environment references resolve to visible error implementations; stale volumes resolve to vacuum.
+`MeshId`, `InstanceId`, and `LightId` are owner-local mutation capabilities. A same-session `LightId` may also
+be handed to geometry as a non-owning `PrimitiveLightMap` selection; the receiver still cannot set or drop that
+light, and an absent selected light is non-sampleable. `SceneId`, `SurfaceId`, `VolumeId`, and `EnvironmentId`
+are same-session, non-owning selection references and may be explicitly handed to another contribution. The
+receiver gains neither removal authority nor a lifetime lease. Stale surface and environment references resolve
+to visible error implementations; stale volumes resolve to vacuum.
 
 There is no public cross-owner surface-modifier chain. Minecraft block damage uses Minecraft-owned instance
 data. There is also no public scene creation/closure or portal-link API. The engine retains independent scene,
 TLAS, environment, and NEE-AT state for several `SceneId` values, but ray-portal administration waits for a
-complete transform, traversal, hop/cycle, lighting, and teardown contract.
+complete transform, traversal, hop/cycle, lighting, and teardown contract. Current multi-scene compatibility is
+identity and lifetime isolation only: one trace root selects one entry-scene TLAS. Simultaneous portal traversal
+will require a new trace ABI rather than merely another public scene identifier.
 
 Each Minecraft world-session contribution receives its own environment-selection slot for the borrowed scene.
 Every successful selection replaces that owner's slot and moves it to latest precedence. Invalidating the
 active owner restores the most recently selected surviving slot; invalidating a dormant owner does not disturb
 the active selection. Replaced and removed bindings retire only after they have left all owner slots and every
 published GPU snapshot that can reference them has retired. Owner drainage waits for those callbacks.
+A scene with no surviving selection uses built-in environment implementation zero.
 
 ## Views and camera medium
 
-Every `SceneView` contains a host-issued entry scene, a pose-only `Camera`, and a mandatory containing medium:
+Every `SceneView` contains a host-issued entry scene, a pose-only `Camera`, and one mandatory homogeneous
+medium containing the primary-ray origin:
 
 ```java
 SceneView air = new SceneView(scene, camera, ViewMedium.Vacuum.INSTANCE);
@@ -105,10 +111,11 @@ The public retained light set is:
 | circular spot | ACEScg intensity in candela |
 | distant | ACEScg normal illuminance in lux |
 
-The renderer uploads these records into a persistent, double-buffered NEE-AT distribution per scene, samples
-it for next-event estimation, and feeds reverse-MIS outcomes into later updates. This is a clean-room
-implementation of the public RTXPT algorithmic style using Caustica's own ABI and ownership model. Point lights
-are absent because no producer justified a fourth physical shape.
+The renderer implements the publicly described RTXPT-style NEE-AT subset with Caustica-owned code and ABI.
+Each scene has persistent double buffers containing a global discrete distribution and tiled local histograms
+derived from previous-frame light and pixel feedback. The shader combines global and local proposal PDFs,
+selects candidate samples with RIS, and reports reverse-MIS feedback for the next update. Point lights are absent
+because no producer justified a fourth physical shape.
 
 CPU property tests cover global distribution normalization and CDF boundaries, local histogram probing and
 address ranges, history validity and identity continuity, and agreement with the shader's constants and branch
@@ -136,14 +143,23 @@ The factory receives a stage-specific `PassSetup`; the resulting `Pass` records 
 sampler descriptor heaps are already bound and must not be replaced. `GpuFrameUse.whenComplete(...)` and
 `GpuDevice.retireAfterUse(...)` are the non-blocking retirement seams.
 
+Images and samplers may use direct descriptor-heap access. Acceleration structures are the deliberate
+exception: a shader may declare a conventional SPIR-V binding when shader creation maps it to a resource-heap
+index stored in pushed data with `VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_PUSH_INDEX_EXT`. This uses neither a
+descriptor-set layout nor a descriptor-set bind command. `ShaderObjectGraphics.PushIndexedResourceMapping`
+provides that mapping for pass-owned graphics shader objects.
+
 `GpuDescriptorHeapProperties` names byte-valued facts with their units:
 `resourceDescriptorStrideBytes`, `samplerDescriptorStrideBytes`, `resourceHeapAlignmentBytes`, and
 `samplerHeapAlignmentBytes`. Capacities and maximum allocations remain counts of descriptor slots.
 
-The required backend profile is Vulkan 1.4 with `VK_KHR_unified_image_layouts`, descriptor heaps,
-synchronization2, and shader objects for compute/raster. Ray stages remain on
-`VK_KHR_ray_tracing_pipeline`. LWJGL `Vk...` objects are used for dispatchable handles; non-dispatchable Vulkan
-handles remain documented scalar values where LWJGL has no wrapper.
+The required backend profile is Vulkan 1.4. Its complete feature baseline is shader int64/int16/float16,
+storage-image extended formats and formatless reads/writes, shader draw parameters, demote-to-helper invocation,
+buffer device addresses, timeline semaphores, synchronization2, dynamic rendering, unified image layouts,
+descriptor heaps, shader objects, untyped pointers, acceleration structures, ray-tracing pipelines, ray queries,
+and ray-tracing position fetch. Ray stages remain on `VK_KHR_ray_tracing_pipeline`. LWJGL `Vk...` objects are
+used for dispatchable handles; non-dispatchable Vulkan handles remain documented scalar values where LWJGL has
+no wrapper.
 
 Vulkan opacity-micromap acceleration remains part of retained geometry. The obsolete standalone compute
 encoder program has been removed, so extensions should treat opacity-micromap hints as geometry inputs rather
@@ -159,13 +175,14 @@ engine's runtime composition compiler.
 
 ## Minecraft boundary and current acceptance
 
-`packages/minecraft-api` supplies read-only world/resource epochs, dimension-to-scene lookup, and Minecraft
-environment selection without exposing engine scene administration. `packages/minecraft-rendering` owns the
+`packages/minecraft-api` supplies a borrowed scene paired with its dimension key and resource epoch, plus
+Minecraft environment selection without exposing a dimension-to-scene directory or engine scene
+administration. `packages/minecraft-rendering` owns the
 Minecraft-independent terrain/entity/material/light/sky implementation plus the five host-free frame/capture
 types: `MinecraftFrameSelector`, `MinecraftFrameSelectionInstaller`, `MinecraftFrameCaptureInstaller`,
 `MinecraftFrameCaptureState`, and `MinecraftEntityCaptureBinding`.
 
-The root Loom application is the integration exception. It owns mapped Minecraft host/UI access, Vulkan
+The `packages/minecraft-client` Loom application is the integration exception. It owns mapped Minecraft host/UI access, Vulkan
 interception and device integration, loader entrypoints/discovery, mixins, resource loaders, and final
 composition. Its guarded `CausticaClientComposition.current()` bridges entrypoints and mixins. Renderer runtime
 state itself is instance-owned: `packages/renderer-runtime` has no current-composition lookup or mutable static
@@ -173,7 +190,7 @@ service installation.
 
 Rounded clouds are deliberately excluded from this rewrite.
 
-Complete the package, architecture, lifecycle, unit, shader/reflection, ABI, and example-consumer gates first.
-Then perform a physical Minecraft launch with validation layers, screenshot review, and default-resolution
-performance measurement. Those physical gates are still pending; no live visual or frame-rate result is
-claimed here.
+Focused package, lifecycle, shader/reflection, ABI, and example-consumer checks are green. Complete the remaining
+static gates, then perform a physical Minecraft launch with validation layers, screenshot review, and
+default-resolution performance measurement. Those physical gates are still pending; no live visual or
+frame-rate result is claimed here.

@@ -30,41 +30,58 @@ public final class MinecraftTerrainGeometry implements AutoCloseable {
 
     /** Atomically replaces and removes all sections named by one Minecraft extraction transaction. */
     public synchronized void submit(List<Change> changes) {
-        if (closed) throw new IllegalStateException("terrain geometry is closed");
-        if (changes.isEmpty()) return;
-        var latest = new LinkedHashMap<Long, Change>();
-        for (Change change : changes) latest.put(change.sectionKey(), change);
+        submitGroup(List.of(changes));
+    }
 
-        var operations = new ArrayList<GeometryChannel.Operation>();
-        var uploads = new ArrayList<MinecraftTerrainUploader.UploadedSection>();
+    /** Publishes extraction transactions together while retaining each transaction independently. */
+    public synchronized void submitGroup(List<? extends List<Change>> groups) {
+        if (closed) throw new IllegalStateException("terrain geometry is closed");
+        if (groups.isEmpty()) return;
+        var batches = new ArrayList<RetainedBatch<GeometryChannel.Operation>>();
+        var preparedUploads = new ArrayList<MinecraftTerrainUploader.UploadedSection>();
         var committedSections = new LinkedHashMap<>(sections);
         try {
-            for (Change change : latest.values()) {
-                if (change instanceof Put put) {
-                    var ids = committedSections.computeIfAbsent(put.sectionKey(), ignored -> new SectionIds(
-                            channel.newMesh(MinecraftProgramTypes.INSTANCE_DATA), channel.newInstance()));
-                    var uploaded = uploader.upload(put.mesh());
-                    uploads.add(uploaded);
-                    operations.add(new GeometryChannel.SetMesh<>(ids.mesh(), uploaded.build()));
-                    operations.add(new GeometryChannel.SetInstance<>(ids.instance(), scene, ids.mesh(),
-                            GeometryTransform.translation(put.originX(), put.originY(), put.originZ()),
-                            0xff, uploaded.instanceData()));
-                } else if (change instanceof Drop drop) {
-                    var ids = committedSections.remove(drop.sectionKey());
-                    if (ids != null) {
-                        operations.add(new GeometryChannel.DropInstance(ids.instance()));
-                        operations.add(new GeometryChannel.DropMesh<>(ids.mesh()));
-                    }
-                }
+            for (List<Change> changes : groups) {
+                var batch = prepareBatch(changes, committedSections, preparedUploads);
+                if (batch.operations().isEmpty()) continue;
+                batches.add(new RetainedBatch<>(batch.operations(), () -> retireAll(batch.uploads())));
             }
-            if (operations.isEmpty()) return;
-            channel.submit(new RetainedBatch<>(operations, () -> retireAll(uploads)));
+            if (batches.isEmpty()) return;
+            channel.submitGroup(batches);
             sections.clear();
             sections.putAll(committedSections);
         } catch (RuntimeException | Error failure) {
-            releaseRejected(uploads, failure);
+            releaseRejected(preparedUploads, failure);
             throw failure;
         }
+    }
+
+    private PreparedBatch prepareBatch(List<Change> changes, Map<Long, SectionIds> committedSections,
+                                       List<MinecraftTerrainUploader.UploadedSection> preparedUploads) {
+        var latest = new LinkedHashMap<Long, Change>();
+        for (Change change : changes) latest.put(change.sectionKey(), change);
+        var operations = new ArrayList<GeometryChannel.Operation>();
+        var uploads = new ArrayList<MinecraftTerrainUploader.UploadedSection>();
+        for (Change change : latest.values()) {
+            if (change instanceof Put put) {
+                var ids = committedSections.computeIfAbsent(put.sectionKey(), ignored -> new SectionIds(
+                        channel.newMesh(MinecraftProgramTypes.INSTANCE_DATA), channel.newInstance()));
+                var uploaded = uploader.upload(put.mesh());
+                uploads.add(uploaded);
+                preparedUploads.add(uploaded);
+                operations.add(new GeometryChannel.SetMesh<>(ids.mesh(), uploaded.build()));
+                operations.add(new GeometryChannel.SetInstance<>(ids.instance(), scene, ids.mesh(),
+                        GeometryTransform.translation(put.originX(), put.originY(), put.originZ()),
+                        0xff, uploaded.instanceData()));
+            } else if (change instanceof Drop drop) {
+                var ids = committedSections.remove(drop.sectionKey());
+                if (ids != null) {
+                    operations.add(new GeometryChannel.DropInstance(ids.instance()));
+                    operations.add(new GeometryChannel.DropMesh<>(ids.mesh()));
+                }
+            }
+        }
+        return new PreparedBatch(List.copyOf(operations), List.copyOf(uploads));
     }
 
     @Override public synchronized void close() {
@@ -112,6 +129,9 @@ public final class MinecraftTerrainGeometry implements AutoCloseable {
     }
 
     public record Drop(long sectionKey) implements Change { }
+
+    private record PreparedBatch(List<GeometryChannel.Operation> operations,
+                                 List<MinecraftTerrainUploader.UploadedSection> uploads) { }
 
     private record SectionIds(MeshId<MinecraftProgramTypes.InstanceData> mesh, InstanceId instance) { }
 }

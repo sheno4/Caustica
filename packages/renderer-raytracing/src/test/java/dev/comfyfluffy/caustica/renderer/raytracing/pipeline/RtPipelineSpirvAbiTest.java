@@ -1,11 +1,16 @@
 package dev.comfyfluffy.caustica.renderer.raytracing.pipeline;
 
 import org.junit.jupiter.api.Test;
+import org.lwjgl.system.MemoryStack;
+import org.lwjgl.vulkan.EXTDescriptorHeap;
+import org.lwjgl.vulkan.VkDescriptorMappingSourcePushIndexEXT;
+import org.lwjgl.vulkan.VkDescriptorSetAndBindingMappingEXT;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class RtPipelineSpirvAbiTest {
@@ -16,11 +21,44 @@ final class RtPipelineSpirvAbiTest {
     }
 
     @Test
-    void rejectsDescriptorSetAndBindingDecorationsBeforePipelineCreation() {
+    void acceptsOnlyTheMappedWorldTlasDescriptorBinding() {
+        assertDoesNotThrow(() -> RtPipeline.requireDescriptorHeapCompatible(
+                RtShaderCode.of("world-tlas", descriptorBinding(7, 0, 0))));
         assertThrows(IllegalArgumentException.class, () -> RtPipeline.requireDescriptorHeapCompatible(
-                RtShaderCode.of("set", decoration(34))));
+                RtShaderCode.of("wrong-set", descriptorBinding(7, 1, 0))));
         assertThrows(IllegalArgumentException.class, () -> RtPipeline.requireDescriptorHeapCompatible(
-                RtShaderCode.of("binding", decoration(33))));
+                RtShaderCode.of("wrong-binding", descriptorBinding(7, 0, 1))));
+        assertThrows(IllegalArgumentException.class, () -> RtPipeline.requireDescriptorHeapCompatible(
+                RtShaderCode.of("incomplete", decoration(7, 34, 0))));
+    }
+
+    @Test
+    void tlasMappingReadsThePublishedIndexFromWorldPushData() {
+        RtPipeline.TlasPushIndexMapping mapping = RtPipeline.tlasPushIndexMapping(64);
+        assertEquals(0, mapping.descriptorSet());
+        assertEquals(0, mapping.binding());
+        assertEquals(32, mapping.pushOffset());
+        assertEquals(64, mapping.heapIndexStride());
+    }
+
+    @Test
+    void tlasMappingUsesTheHeapPushIndexSource() {
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            VkDescriptorSetAndBindingMappingEXT mapping = VkDescriptorSetAndBindingMappingEXT.calloc(stack);
+            RtPipeline.configureTlasMapping(mapping, RtPipeline.tlasPushIndexMapping(64));
+            assertEquals(0, mapping.descriptorSet());
+            assertEquals(0, mapping.firstBinding());
+            assertEquals(1, mapping.bindingCount());
+            assertEquals(EXTDescriptorHeap.VK_SPIRV_RESOURCE_TYPE_ACCELERATION_STRUCTURE_BIT_EXT,
+                    mapping.resourceMask());
+            assertEquals(EXTDescriptorHeap.VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_PUSH_INDEX_EXT,
+                    mapping.source());
+            VkDescriptorMappingSourcePushIndexEXT pushIndex = mapping.sourceData().pushIndex();
+            assertEquals(0, pushIndex.heapOffset());
+            assertEquals(32, pushIndex.pushOffset());
+            assertEquals(64, pushIndex.heapIndexStride());
+            assertEquals(64, pushIndex.heapArrayStride());
+        }
     }
 
     @Test
@@ -29,8 +67,13 @@ final class RtPipelineSpirvAbiTest {
                 RtShaderCode.of("malformed", words((4 << 16) | 1))));
     }
 
-    private static byte[] decoration(int decoration) {
-        return words((3 << 16) | 71, 1, decoration);
+    private static byte[] descriptorBinding(int target, int descriptorSet, int binding) {
+        return words((4 << 16) | 71, target, 34, descriptorSet,
+                (4 << 16) | 71, target, 33, binding);
+    }
+
+    private static byte[] decoration(int target, int decoration, int value) {
+        return words((4 << 16) | 71, target, decoration, value);
     }
 
     private static byte[] words(int... instructionWords) {

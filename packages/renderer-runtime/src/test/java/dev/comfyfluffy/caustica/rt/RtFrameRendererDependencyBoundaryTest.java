@@ -26,12 +26,20 @@ final class RtFrameRendererDependencyBoundaryTest {
     }
 
     @Test
-    void runtimeOwnsTheFrameActivityGateForExport() throws IOException {
-        String runtime = Files.readString(Path.of(
-                "src/main/java/dev/comfyfluffy/caustica/rt/RtRuntime.java"));
-        int export = runtime.indexOf("boolean exportLatestResidualExposureExr");
-        int nextMethod = runtime.indexOf("public boolean requiresSourceWorldFallback", export);
-        String method = runtime.substring(export, nextMethod);
-        assertTrue(method.contains("return frameActive && session != null && session.renderer != null"));
+    void terminalFailureSkipsUiRecordingBeforeHealthyLifecycleValidation() throws IOException {
+        String renderer = Files.readString(Path.of(
+                "src/main/java/dev/comfyfluffy/caustica/rt/RtFrameRenderer.java"));
+        int method = renderer.indexOf("public void recordUiPasses");
+        int nextMethod = renderer.indexOf("public void finishGraphicsUse", method);
+        String body = renderer.substring(method, nextMethod);
+
+        int terminalFailureGuard = body.indexOf("if (failed)");
+        int missingFrameGuard = body.indexOf(
+                "if (pendingGraphicsUse == null || currentTrace == null || frameSnapshot == null)");
+        assertTrue(terminalFailureGuard >= 0);
+        assertTrue(missingFrameGuard > terminalFailureGuard);
+        assertTrue(body.substring(terminalFailureGuard, missingFrameGuard).contains("return;"));
+        assertTrue(body.substring(missingFrameGuard).contains(
+                "throw new IllegalStateException(\"no retained frame is available for UI recording\")"));
     }
 }

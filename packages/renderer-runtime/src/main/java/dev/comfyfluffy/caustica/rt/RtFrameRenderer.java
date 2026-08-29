@@ -13,6 +13,7 @@ import dev.comfyfluffy.caustica.vulkan.VulkanDiagnostics;
 import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptorKind;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
+import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.api.view.ViewMedium;
 import dev.comfyfluffy.caustica.engine.frame.FrameSnapshot;
@@ -80,7 +81,7 @@ import java.util.Objects;
  * each frame via {@link #captureFrame}); writes nothing until a scene is available.
  * Pipelines/SBT/descriptors are built once; sized images rebuilt on resize.
  */
-final class RtFrameRenderer {
+public final class RtFrameRenderer {
     private static final Logger LOGGER = LoggerFactory.getLogger(RtFrameRenderer.class);
     // WorldPushData and its serializer are generated from Slang's reflected Std430DataLayout. Java never
     // owns or calculates a shader byte offset, struct size, array stride, or fixed-array capacity.
@@ -193,7 +194,7 @@ final class RtFrameRenderer {
     private RtGpuExecutor.GraphicsUse pendingGraphicsUse;
     private RtRetainedSceneBackend.PreparedTrace currentTrace;
 
-    RtFrameRenderer(VulkanDeviceContext context, RtProgramBackend programs, RtRetainedSceneBackend scenes,
+    public RtFrameRenderer(VulkanDeviceContext context, RtProgramBackend programs, RtRetainedSceneBackend scenes,
                     RtPassSchedulerBackend passes, EngineSessionServices services,
                     RtFramePresenter presenter, DlssRayReconstruction rayReconstruction,
                     RtTelemetry telemetry) {
@@ -310,7 +311,7 @@ final class RtFrameRenderer {
                     .srcStageMask(VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT)
                     .srcAccessMask(VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT
                             | VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT)
-                    .dstStageMask(KHRSynchronization2.VK_PIPELINE_STAGE_2_COPY_BIT_KHR)
+                    .dstStageMask(VK13.VK_PIPELINE_STAGE_2_COPY_BIT)
                     .dstAccessMask(VK13.VK_ACCESS_2_TRANSFER_READ_BIT)
                     .srcQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED)
                     .dstQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED)
@@ -322,7 +323,7 @@ final class RtFrameRenderer {
                     .srcStageMask(VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT)
                     .srcAccessMask(VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT
                             | VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT)
-                    .dstStageMask(KHRSynchronization2.VK_PIPELINE_STAGE_2_COPY_BIT_KHR)
+                    .dstStageMask(VK13.VK_PIPELINE_STAGE_2_COPY_BIT)
                     .dstAccessMask(VK13.VK_ACCESS_2_TRANSFER_READ_BIT)
                     .srcQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED)
                     .dstQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED)
@@ -352,7 +353,7 @@ final class RtFrameRenderer {
 
             VkMemoryBarrier2.Buffer hostBarrier = VkMemoryBarrier2.calloc(1, stack);
             hostBarrier.get(0).sType$Default()
-                    .srcStageMask(KHRSynchronization2.VK_PIPELINE_STAGE_2_COPY_BIT_KHR)
+                    .srcStageMask(VK13.VK_PIPELINE_STAGE_2_COPY_BIT)
                     .srcAccessMask(VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT)
                     .dstStageMask(VK13.VK_PIPELINE_STAGE_2_HOST_BIT)
                     .dstAccessMask(VK13.VK_ACCESS_2_HOST_READ_BIT);
@@ -427,6 +428,9 @@ final class RtFrameRenderer {
 
     /** Records UI passes into a host command buffer after the host has made its UI layer available. */
     public void recordUiPasses(VkCommandBuffer commandBuffer, GpuImage uiLayer) {
+        if (failed) {
+            return;
+        }
         Objects.requireNonNull(commandBuffer, "commandBuffer");
         Objects.requireNonNull(uiLayer, "uiLayer");
         if (pendingGraphicsUse == null || currentTrace == null || frameSnapshot == null) {
@@ -693,6 +697,9 @@ final class RtFrameRenderer {
             double proceduralPeriod = PROCEDURAL_ANCHOR_MASK + 1.0;
             Float3 proceduralDomainOffset = new Float3(sceneOrigin.wrappedX(proceduralPeriod),
                     sceneOrigin.wrappedY(proceduralPeriod), sceneOrigin.wrappedZ(proceduralPeriod));
+            EnvironmentBinding<?> environment = scenes.content(entryScene).environment();
+            EnvironmentPush environmentState = environmentPush(environment,
+                    environment == null ? null : services.programs().resolve(environment.implementation()));
 
             new WorldPushData(
                     frameInvViewProj,
@@ -713,7 +720,9 @@ final class RtFrameRenderer {
                     previousTime,
                     // Must be the SAME value the exposure resolve divides out this frame (it reads it
                     // from the same RtExposure accessor), or the two stop cancelling.
-                    presentationResources().exposure().preExposure()
+                    presentationResources().exposure().preExposure(),
+                    environmentState.bindingData(),
+                    environmentState.implementation()
             ).write(push);
             pushBuf.flush(0L, WORLD_PUSH_SIZE);
             TlasBuilder.Prepared frameTlas;
@@ -925,6 +934,18 @@ final class RtFrameRenderer {
                     volume.instanceData().bits());
         }
     }
+
+    static EnvironmentPush environmentPush(EnvironmentBinding<?> binding,
+                                           ProgramResolution.Environment resolution) {
+        if (binding == null) return new EnvironmentPush(0L, 0);
+        Objects.requireNonNull(resolution, "resolution");
+        if (resolution instanceof ProgramResolution.ActiveEnvironment active) {
+            return new EnvironmentPush(binding.bindingData().bits(), active.implementationIndex());
+        }
+        return new EnvironmentPush(0L, -1);
+    }
+
+    record EnvironmentPush(long bindingData, int implementation) { }
 
     private static int storageIndex(GpuImage image) {
         return image.descriptor(GpuImageDescriptorKind.STORAGE).index().value();

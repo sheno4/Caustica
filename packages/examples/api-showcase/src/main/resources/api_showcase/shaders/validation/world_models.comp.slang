@@ -10,5 +10,7 @@ void main() {
     api_showcase.TexturedSurface textured;
     api_showcase.TextureCoverage coverage;
     api_showcase.AbsorbingVolume volume;
-    api_showcase.GradientEnvironment environment;
+    api_showcase.OverworldSky overworld;
+    api_showcase.NetherSky nether;
+    api_showcase.EndSky end;
 }

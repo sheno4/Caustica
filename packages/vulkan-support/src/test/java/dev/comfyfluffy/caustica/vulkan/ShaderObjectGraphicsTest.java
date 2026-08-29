@@ -1,18 +1,53 @@
 package dev.comfyfluffy.caustica.vulkan;
 
 import org.junit.jupiter.api.Test;
+import org.lwjgl.vulkan.EXTDescriptorHeap;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
-import static org.junit.jupiter.api.Assertions.assertThrows;
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.*;
 
 final class ShaderObjectGraphicsTest {
     @Test void descriptorSetDecorationsAreRejectedByTheSharedShaderObjectValidator() {
-        ByteBuffer module = ByteBuffer.allocateDirect(8 * Integer.BYTES).order(ByteOrder.LITTLE_ENDIAN);
-        module.putInt(0x07230203).putInt(0x00010600).putInt(0).putInt(2).putInt(0);
-        module.putInt((3 << 16) | 71).putInt(1).putInt(34).flip();
+        ByteBuffer module = descriptorBinding(1, 0, 0);
         assertThrows(IllegalArgumentException.class,
                 () -> ShaderObjectCompute.validateDescriptorHeapSpirv(module));
+    }
+
+    @Test void mappedValidatorRejectsOverlappingCoverageForOneResourceType() {
+        var mapping = ShaderObjectGraphics.PushIndexedResourceMapping.accelerationStructure(0, 0, 96);
+        assertThrows(IllegalArgumentException.class,
+                () -> ShaderObjectGraphics.validateMappedDescriptorHeapSpirv(
+                        descriptorBinding(7, 0, 0), List.of(mapping, mapping)));
+    }
+
+    @Test void mappedValidatorRequiresEveryStaticDescriptorBindingToBeCovered() {
+        ByteBuffer module = descriptorBinding(7, 0, 0);
+        var mapping = ShaderObjectGraphics.PushIndexedResourceMapping.accelerationStructure(0, 0, 96);
+        assertDoesNotThrow(() -> ShaderObjectGraphics.validateMappedDescriptorHeapSpirv(
+                module, List.of(mapping)));
+        assertThrows(IllegalArgumentException.class,
+                () -> ShaderObjectGraphics.validateMappedDescriptorHeapSpirv(module,
+                        List.of(ShaderObjectGraphics.PushIndexedResourceMapping.accelerationStructure(0, 1, 96))));
+    }
+
+    @Test void accelerationStructureMappingRetainsItsStaticBindingAndPushOffset() {
+        var mapping = ShaderObjectGraphics.PushIndexedResourceMapping.accelerationStructure(0, 0, 96);
+        assertEquals(0, mapping.descriptorSet());
+        assertEquals(0, mapping.binding());
+        assertEquals(96, mapping.pushDataOffset());
+        assertEquals(EXTDescriptorHeap.VK_SPIRV_RESOURCE_TYPE_ACCELERATION_STRUCTURE_BIT_EXT,
+                mapping.resourceMask());
+    }
+
+    private static ByteBuffer descriptorBinding(int target, int descriptorSet, int binding) {
+        ByteBuffer result = ByteBuffer.allocateDirect(13 * Integer.BYTES).order(ByteOrder.LITTLE_ENDIAN);
+        result.putInt(0x07230203).putInt(0x00010600).putInt(0).putInt(8).putInt(0);
+        result.putInt((4 << 16) | 71).putInt(target).putInt(34).putInt(descriptorSet);
+        result.putInt((4 << 16) | 71).putInt(target).putInt(33).putInt(binding);
+        return result.flip();
     }
 }

@@ -46,7 +46,8 @@ progress.
 ## Scenes, views, and ownership
 
 A scene is a retained coordinate space with a stable metres-per-scene-unit scale, placements, lights, an
-acceleration structure, and an environment binding. Multiple scenes may be resident at the same time.
+acceleration structure, and an optional selected environment binding. With no selection the renderer uses its
+built-in environment fallback. Multiple scenes may be resident at the same time.
 
 `SceneId` is an opaque, same-session, non-owning reference. Geometry and light operations may name an id
 explicitly handed to their contribution, but possession grants no creation, environment-selection, or
@@ -61,20 +62,24 @@ SceneView view = new SceneView(entryScene, camera, containingMedium);
 ```
 
 This permits a host to keep several dimensions resident and select one for a camera without moving the
-camera into the scene object. The view also carries the volume or vacuum containing the camera origin.
+camera into the scene object. The view also carries one homogeneous volume or vacuum containing the primary-ray
+origin.
 Host-specific lookup such as `MinecraftDimensionKey -> SceneId` belongs in a
 Minecraft package. The API sees only the resulting `SceneId` and `SceneView`.
 
-The API does not expose traversal links between scenes. Such a contract needs concrete engine behavior for
-visibility, recursion, transforms, lighting, and lifetime before it can earn a public type.
+The API does not expose traversal links between scenes. Current multi-scene support isolates identity and
+lifetime; each trace root still selects exactly one TLAS. Simultaneous portal traversal needs a new trace ABI
+and concrete behavior for visibility, recursion, transforms, lighting, and lifetime before it can earn a
+public type.
 
 ## Retained scene updates
 
 `GeometryChannel` and `LightChannel` hold asynchronous retained state. `MeshId`, `InstanceId`, and `LightId`
-are mutation capabilities local to their issuing contribution. `SceneId`, `SurfaceId`, `VolumeId`, and
-`EnvironmentId` are non-owning selection references which may cross contribution boundaries through an
-explicit typed Java handoff. Such a reference transfers no replacement/removal authority and never pins its
-issuer. A stale program reference selects its documented error/vacuum fallback.
+are mutation capabilities local to their issuing contribution. A same-session `LightId` may additionally cross
+an owner boundary as a non-owning `PrimitiveLightMap` selection; it grants no mutation authority, never pins its
+issuer, and becomes non-sampleable when absent. `SceneId`, `SurfaceId`, `VolumeId`, and `EnvironmentId` are
+non-owning selection references which may cross contribution boundaries through an explicit typed Java handoff.
+A stale program reference selects its documented error/vacuum fallback.
 
 Each accepted `RetainedBatch` publishes as a unit and keeps its source-owned data borrowed until the batch's
 values are replaced, dropped, cascaded, or removed with the contribution. A content worker may submit an
@@ -213,10 +218,11 @@ Callbacks must not block or throw. None of these primitives imply that unrelated
 
 ## Vulkan and descriptor heaps
 
-Every API session has a hard Vulkan 1.4 logical-device baseline including buffer device addresses, shader
-float16 arithmetic, dynamic rendering, synchronization2, unified image layouts, descriptor heaps, shader objects, untyped pointers,
-acceleration structures, ray-tracing pipelines, ray queries, and position fetch. These are guarantees, not
-runtime capability booleans.
+Every API session has a hard Vulkan 1.4 logical-device baseline: shader int64/int16/float16, storage-image
+extended formats and formatless reads/writes, shader draw parameters, demote-to-helper invocation, buffer device
+addresses, timeline semaphores, synchronization2, dynamic rendering, unified image layouts, descriptor heaps,
+shader objects, untyped pointers, acceleration structures, ray-tracing pipelines, ray queries, and ray-tracing
+position fetch. These are guarantees, not runtime capability booleans.
 
 `GpuDevice.vk()` exposes the typed LWJGL `VkDevice`. Extensions obtain its physical device and query Vulkan
 features, properties, formats, and limits directly. A physical-device support query does not reveal which
@@ -234,8 +240,13 @@ rebind either heap. `GpuDescriptorHeap` assigns resource and sampler ranges with
 descriptors for extension-owned resources and makes non-coherent writes visible. Engine-owned images and
 the entry-scene TLAS expose typed immutable `GpuImageDescriptor` and
 `GpuAccelerationStructureDescriptor` views whose entries and resources the engine retains through the
-current frame. `GpuDescriptorHeapProperties` exposes the unified resource and sampler strides required
+current frame. `GpuDescriptorHeapProperties` exposes the separate resource and sampler strides required
 when independently compiling pass shaders for `spvDescriptorHeapEXT`.
+
+Images and samplers may use direct heap access. Acceleration structures are the deliberate exception: SPIR-V
+may declare a conventional binding when shader creation maps it to a resource-heap index stored in pushed data
+with `VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_PUSH_INDEX_EXT`. The mapping still uses a null pipeline layout and
+does not permit descriptor-set bind commands.
 
 Heap-native pipelines use a null pipeline layout. Data declared in Slang's push-constant storage class is
 recorded with `vkCmdPushDataEXT`, not `vkCmdPushConstants`: ordinary push constants depend on descriptor-set

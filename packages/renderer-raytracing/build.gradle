@@ -113,11 +113,12 @@ def verifyRayTracingAbi = tasks.register("verifyRayTracingAbi") {
     description = "Verifies exact host layouts reflected from ray-tracing Slang records."
     dependsOn(generateRayTracingRecords, generateRayTracingBindings)
     def expectedFragments = [
-            WorldPushData: ["BYTE_SIZE = 304", "invViewProj().get(0, dst)",
+            WorldPushData: ["BYTE_SIZE = 320", "invViewProj().get(0, dst)",
                             "putFloat(64, camOffset().x())", "putInt(76, frameIndex())",
                             "prevViewProj().get(80, dst)", "putInt(168, flags())",
                             "putFloat(192, time())", "curViewProj().get(224, dst)",
-                            "putFloat(292, preExposure())"],
+                            "putFloat(292, preExposure())", "putLong(296, environmentBinding())",
+                            "putInt(304, environmentImplementation())"],
             RetainedGeometryRecordData: ["BYTE_SIZE = 160", "putInt(0, surfaceImplementation())",
                     "putLong(16, surfaceBinding())", "putFloat(48, currentRow0().x())",
                     "putFloat(96, previousRow0().x())", "putLong(144, emitterIndexAddress())",

@@ -4,8 +4,9 @@ Status: current implementation. [EXTENSION_API.md](EXTENSION_API.md) is the exte
 
 ## Boundaries
 
-Caustica is a renderer-generic, Minecraft-independent Vulkan path tracer integrated into Minecraft by a Loom
-application root. The extension API is intentionally Vulkan-native; renderer-generic does not mean GPU-neutral.
+Caustica is a renderer-generic, Minecraft-independent Vulkan path tracer integrated into Minecraft by the
+`minecraft-client` Loom application package. The extension API is intentionally Vulkan-native;
+renderer-generic does not mean GPU-neutral.
 
 The physical projects under `packages/` enforce the reusable boundaries:
 
@@ -17,26 +18,27 @@ The physical projects under `packages/` enforce the reusable boundaries:
 | `engine-vulkan`, `vulkan-support` | Vulkan profile/backend SPI, mapped descriptor heaps, VMA resources, submissions, synchronization, and reusable helpers |
 | `renderer-raytracing` | Program composition, retained acceleration structures, path tracing, NEE-AT, and Vulkan opacity-micromap acceleration |
 | `renderer-presentation` | Exposure, reconstruction-facing presentation inputs, HDR/SDR mapping, and display composition |
-| `renderer-runtime` | Live renderer orchestration: runtime/session state, frame recording/resources/statistics, lifecycle coordination, pass scheduling, telemetry, capture, and the host callback SPI |
+| `renderer-runtime` | Generic frame recording/resources/statistics, lifecycle coordination, pass scheduling, telemetry, capture, and the host callback SPI |
 | `nvidia-ngx` | NGX, DLSS Ray Reconstruction, and DLSS Frame Generation integration |
 | `minecraft-api`, `minecraft-adapter` | Loader-neutral Minecraft world/resource epochs, world sessions, scene borrowing, and environment selection |
 | `minecraft-content` | Host-free Minecraft material analysis and texture-page planning/compilation |
 | `minecraft-rendering` | Minecraft-independent terrain/entity/material/light/sky rendering and the host-free frame/capture seams |
+| `minecraft-client` | Minecraft runtime/session coordination, mapped host/UI access, Vulkan interception, loader entrypoints, mixins, resources, and final composition |
 | `features-builtin` | Built-in programs and passes expressed through the same contracts used by extensions |
 | `slang-runtime`, `slang-tooling` | Slang runtime ownership and reusable compile/reflection/generation tooling |
 | `examples/*` | Strict public-contract consumers for API and glTF integration pressure |
 
-The root Loom project is deliberately an application, not another reusable package. It owns mapped Minecraft
-host access, UI, Vulkan interception and device bring-up, Fabric/NeoForge entrypoints and discovery, mixins,
-resource loaders, and final object composition. `CausticaClientComposition.current()` is a guarded publish-once
+The `minecraft-client` Loom project is deliberately an application package rather than a reusable library. It
+owns mapped Minecraft host access, UI, Vulkan interception and device bring-up, Fabric/NeoForge entrypoints and
+discovery, mixins, resource loaders, and final object composition. `CausticaClientComposition.current()` is a guarded publish-once
 bridge for those entrypoints and mixins. It is not a renderer service locator: `packages/renderer-runtime`
-contains no composition/current lookup, and runtime, settings, telemetry, UI-overlay, and terrain state are
+contains no composition/current lookup or Minecraft API/adapter dependency, and runtime, settings, telemetry, UI-overlay, and terrain state are
 instance-owned rather than installed into mutable static service slots.
 
 The five frame/capture types moved out of the root into `minecraft-rendering` are
 `MinecraftFrameSelector`, `MinecraftFrameSelectionInstaller`, `MinecraftFrameCaptureInstaller`,
 `MinecraftFrameCaptureState`, and `MinecraftEntityCaptureBinding`. They contain no Mojang, loader, root-client,
-or renderer-implementation dependency. The root supplies their live Minecraft implementations.
+or renderer-implementation dependency. `minecraft-client` supplies their live Minecraft implementations.
 
 ## Ownership and lifecycle
 
@@ -48,15 +50,17 @@ Program contributions publish one atomic owner-scoped `ProgramRegistration`. Rea
 pending/ready/failed/cancelled for the complete registration; closing it is the owner's only removal authority.
 There is no runtime singleton or renderer-composition lookup involved in publication or frame recording.
 
-Mesh, instance, and light IDs are owner-local mutation capabilities. A handed-off `SceneId`, `SurfaceId`,
-`VolumeId`, or `EnvironmentId` is a same-session non-owning selection reference: it transfers neither removal
-authority nor a lifetime lease.
+Mesh, instance, and light IDs are owner-local mutation capabilities. A same-session `LightId` may also be
+handed to geometry as a non-owning `PrimitiveLightMap` selection without granting light mutation authority or
+extending its lifetime. A handed-off `SceneId`, `SurfaceId`, `VolumeId`, or `EnvironmentId` is likewise a
+same-session non-owning selection reference.
 
 Each environment contribution owns one slot for one scene. Every successful `select` moves that owner to the
 latest position and makes its binding active. Invalidating the active owner restores the most recently selected
 surviving slot deterministically; invalidating a dormant owner leaves the active selection unchanged. Replaced
 or removed bindings retire only after both their slot ownership and every published GPU snapshot reference are
 gone. `invalidate()` stops future selections and `drain()` waits for that owner's retirement callbacks.
+A scene with no surviving selection uses the renderer's built-in environment fallback.
 
 Teardown stops callbacks and producers before invalidating scoped channels. Accepted publications, program
 readiness, pass uses, and GPU retirement callbacks drain before implementations close. Recording callbacks must
@@ -64,17 +68,19 @@ not block on device idle or await their own frame.
 
 ## Frame and scene flow
 
-Each frame uses one `SceneView`: a host-issued entry scene, pose-only camera, and mandatory containing medium.
-The medium is either `ViewMedium.Vacuum` or a typed `ViewMedium.Volume`. Minecraft decides fluid containment;
-ray generation only consumes the renderer-generic selection.
+Each frame uses one `SceneView`: a host-issued entry scene, pose-only camera, and one mandatory homogeneous
+medium containing the primary-ray origin. The medium is either `ViewMedium.Vacuum` or a typed
+`ViewMedium.Volume`. Minecraft decides fluid containment; ray generation only consumes the renderer-generic
+selection.
 
 The engine keeps independent retained geometry, light, environment, TLAS, and NEE-AT state per `SceneId`.
-Public extensions can target a borrowed scene but cannot create, close, or link scenes. Portal administration
-remains internal until transform, traversal, cycle, lighting, and teardown semantics are complete.
+Public extensions can target a borrowed scene but cannot create, close, or link scenes. This is identity and
+lifetime isolation, not simultaneous traversal: each current trace root selects exactly one TLAS. A ray portal
+requires a new multi-scene trace ABI plus transform, hop/cycle, lighting, and teardown semantics.
 
 For a frame:
 
-1. the Minecraft root captures host state through the package-owned frame/capture seams;
+1. `minecraft-client` captures host state through the package-owned frame/capture seams;
 2. the adapter selects the scene and camera medium and advances world-session contributions;
 3. retained geometry, lights, environment, and program state are snapshotted atomically;
 4. reusable BLAS candidates and the scene TLAS are prepared, then the persistent per-scene NEE-AT distribution
@@ -90,6 +96,9 @@ context owns one mapped resource heap and one mapped sampler heap; passes borrow
 `GpuDescriptorHeapProperties` names byte-valued facts explicitly:
 `resourceDescriptorStrideBytes`, `samplerDescriptorStrideBytes`, `resourceHeapAlignmentBytes`, and
 `samplerHeapAlignmentBytes`.
+Images and samplers use direct heap access. Acceleration structures use a conventional SPIR-V binding mapped
+at shader or pipeline creation to a heap index in pushed data. This mapping does not introduce a descriptor-set
+layout or descriptor-set bind command.
 
 ## Programs, materials, and lighting
 
@@ -98,14 +107,15 @@ program registrations. There is no public surface-modifier chain. Minecraft bloc
 Minecraft instance/material data, not a renderer-global modifier lifecycle.
 
 Minecraft material analysis and page compilation are host-free in `minecraft-content`; live registry/atlas
-capture stays in the root. `minecraft-rendering` owns the Minecraft Slang modules, reflected records, material
+capture stays in `minecraft-client`. `minecraft-rendering` owns the Minecraft Slang modules, reflected records, material
 GPU publication, sky LUTs, and terrain/entity/light adapters without importing Minecraft runtime classes.
 
 Rectangle, circular-spot, and distant lights publish through retained engine operations. The ray tracer builds
-a persistent double-buffered NEE-AT distribution per scene and feeds reverse-MIS outcomes into later updates.
-CPU property tests cover global normalization and CDF boundaries, local histogram probing/address ranges,
-history validity and identity continuity, and shader-source constants/branch edges. These static properties do
-not replace physical visual validation.
+persistent per-scene double buffers containing a global discrete distribution and tiled local histograms from
+previous-frame light and pixel feedback. Sampling uses mixture proposal PDFs and candidate RIS; reverse MIS
+feeds the next update. CPU property tests cover global normalization and CDF boundaries, local histogram
+probing/address ranges, history validity and identity continuity, and shader-source constants/branch edges.
+These static properties do not replace physical visual validation.
 
 The obsolete compute encoder for opacity-micromap data has been removed. Vulkan opacity-micromap acceleration
 remains in the retained-geometry backend, consuming producer hints and building the Vulkan acceleration data;

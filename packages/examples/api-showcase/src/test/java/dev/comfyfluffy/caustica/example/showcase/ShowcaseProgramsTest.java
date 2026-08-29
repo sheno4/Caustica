@@ -43,8 +43,11 @@ final class ShowcaseProgramsTest {
                 channel.surfaces.stream().map(value -> value.surface().type()).toList());
         assertEquals("api_showcase.TextureCoverage", channel.surfaces.getLast().coverage().type());
         assertEquals("api_showcase.AbsorbingVolume", channel.volumes.getFirst().implementation().type());
-        assertEquals("api_showcase.GradientEnvironment",
-                channel.environments.getFirst().implementation().type());
+        assertEquals(List.of(
+                        "api_showcase.OverworldSky",
+                        "api_showcase.NetherSky",
+                        "api_showcase.EndSky"),
+                channel.environments.stream().map(value -> value.implementation().type()).toList());
         for (SurfaceDefinition<?, ?> surface : channel.surfaces) {
             try (var module = surface.surface().source().openModule(surface.surface().module())) {
                 assertTrue(module != null);

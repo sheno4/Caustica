@@ -34,6 +34,8 @@ abstract class CompileSlangShaders extends DefaultTask {
     /** Alias filename to source filename, both relative to aliasSourceDirectory. */
     @Input abstract MapProperty<String, String> getModuleAliases()
     @Input abstract ListProperty<String> getSourcePatterns()
+    /** Relative sources whose static bindings are covered by shader-create descriptor mappings. */
+    @Input abstract ListProperty<String> getMappedDescriptorBindingSources()
     @Input abstract Property<String> getSlangc()
     @Input abstract Property<String> getSpirvVal()
     @Input abstract Property<String> getSpirvProfile()
@@ -48,6 +50,7 @@ abstract class CompileSlangShaders extends DefaultTask {
                 "**/*.rmiss.slang", "**/*.rcall.slang", "**/*.comp.slang",
                 "**/*.vert.slang", "**/*.frag.slang"])
         moduleAliases.convention([:])
+        mappedDescriptorBindingSources.convention([])
         descriptorHeapNative.convention(false)
     }
 
@@ -98,7 +101,10 @@ abstract class CompileSlangShaders extends DefaultTask {
                         + includes + ["-o", output.absolutePath])
             }
             execOps.exec { commandLine spirvVal.get(), "--target-env", vulkanTarget.get(), output.absolutePath }
-            if (descriptorHeapNative.get()) DescriptorHeapSpirv.validate(output)
+            if (descriptorHeapNative.get()) {
+                String relativeSource = sourceRoot.toPath().relativize(source.toPath()).toString().replace('\\', '/')
+                DescriptorHeapSpirv.validate(output, mappedDescriptorBindingSources.get().contains(relativeSource))
+            }
         }
 
         File published = outputDirectory.get().asFile

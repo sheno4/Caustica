@@ -15,7 +15,9 @@ import org.lwjgl.vulkan.*;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.LongBuffer;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import static dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext.check;
 import static org.lwjgl.vulkan.EXTOpacityMicromap.VK_PIPELINE_CREATE_RAY_TRACING_OPACITY_MICROMAP_BIT_EXT;
@@ -23,6 +25,8 @@ import static org.lwjgl.vulkan.KHRRayTracingPipeline.*;
 
 /** Descriptor-heap-native world ray-tracing pipeline and shader binding table. */
 public final class RtPipeline {
+    static final int TLAS_DESCRIPTOR_SET = 0;
+    static final int TLAS_DESCRIPTOR_BINDING = 0;
     private final VulkanDeviceContext context;
     private final long pipeline;
     private final VmaMappedBuffer sbt;
@@ -82,14 +86,26 @@ public final class RtPipeline {
                 }
 
                 ByteBuffer entry = stack.UTF8("main");
+                TlasPushIndexMapping tlasMapping = tlasPushIndexMapping(
+                        context.descriptorHeap().properties().resourceDescriptorStrideBytes());
+                VkDescriptorSetAndBindingMappingEXT.Buffer mappings = VkDescriptorSetAndBindingMappingEXT
+                        .calloc(1, stack);
+                configureTlasMapping(mappings.get(0), tlasMapping);
+                VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo =
+                        VkShaderDescriptorSetAndBindingMappingInfoEXT.calloc(stack).sType$Default()
+                                .pMappings(mappings);
                 VkPipelineShaderStageCreateInfo.Buffer stages = VkPipelineShaderStageCreateInfo.calloc(stageCount, stack);
-                for (int i = 0; i < raygenCount; i++) stage(stages.get(i), VK_SHADER_STAGE_RAYGEN_BIT_KHR, modules[i], entry);
+                for (int i = 0; i < raygenCount; i++) stage(stages.get(i), VK_SHADER_STAGE_RAYGEN_BIT_KHR,
+                        modules[i], entry, mappingInfo);
                 for (int i = 0; i < missCount; i++) stage(stages.get(raygenCount + i), VK_SHADER_STAGE_MISS_BIT_KHR,
-                        modules[raygenCount + i], entry);
-                stage(stages.get(closestStage), VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR, modules[closestStage], entry);
+                        modules[raygenCount + i], entry, mappingInfo);
+                stage(stages.get(closestStage), VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR, modules[closestStage], entry,
+                        mappingInfo);
                 if (anyHit) {
-                    stage(stages.get(radianceStage), VK_SHADER_STAGE_ANY_HIT_BIT_KHR, modules[radianceStage], entry);
-                    stage(stages.get(shadowStage), VK_SHADER_STAGE_ANY_HIT_BIT_KHR, modules[shadowStage], entry);
+                    stage(stages.get(radianceStage), VK_SHADER_STAGE_ANY_HIT_BIT_KHR, modules[radianceStage], entry,
+                            mappingInfo);
+                    stage(stages.get(shadowStage), VK_SHADER_STAGE_ANY_HIT_BIT_KHR, modules[shadowStage], entry,
+                            mappingInfo);
                 }
 
                 VkRayTracingShaderGroupCreateInfoKHR.Buffer groups = VkRayTracingShaderGroupCreateInfoKHR.calloc(groupCount, stack);
@@ -265,6 +281,8 @@ public final class RtPipeline {
         }
         int word = 5;
         int wordCount = code.length / Integer.BYTES;
+        Map<Integer, Integer> descriptorSets = new HashMap<>();
+        Map<Integer, Integer> bindings = new HashMap<>();
         while (word < wordCount) {
             int instruction = words.getInt(word * Integer.BYTES);
             int instructionWords = instruction >>> 16;
@@ -273,13 +291,60 @@ public final class RtPipeline {
                 throw new IllegalArgumentException(shader.debugName() + " has a malformed SPIR-V instruction");
             }
             if (opcode == 71 && instructionWords >= 3) { // OpDecorate
+                int target = words.getInt((word + 1) * Integer.BYTES);
                 int decoration = words.getInt((word + 2) * Integer.BYTES);
-                if (decoration == 33 || decoration == 34) { // Binding, DescriptorSet
-                    throw new IllegalArgumentException(shader.debugName()
-                            + " contains descriptor-set decorations; heap-native RT stages require direct heap access");
+                if ((decoration == 33 || decoration == 34) && instructionWords < 4) {
+                    throw new IllegalArgumentException(shader.debugName() + " has an incomplete descriptor decoration");
+                }
+                if (decoration == 33) { // Binding
+                    bindings.put(target, words.getInt((word + 3) * Integer.BYTES));
+                } else if (decoration == 34) { // DescriptorSet
+                    descriptorSets.put(target, words.getInt((word + 3) * Integer.BYTES));
                 }
             }
             word += instructionWords;
+        }
+        for (int target : descriptorSets.keySet()) {
+            if (!bindings.containsKey(target)) rejectUnmappedDescriptor(shader);
+        }
+        for (int target : bindings.keySet()) {
+            if (!descriptorSets.containsKey(target)
+                    || descriptorSets.get(target) != TLAS_DESCRIPTOR_SET
+                    || bindings.get(target) != TLAS_DESCRIPTOR_BINDING) {
+                rejectUnmappedDescriptor(shader);
+            }
+        }
+    }
+
+    private static void rejectUnmappedDescriptor(RtShaderCode shader) {
+        throw new IllegalArgumentException(shader.debugName()
+                + " contains a descriptor binding other than the mapped world TLAS");
+    }
+
+    static TlasPushIndexMapping tlasPushIndexMapping(long resourceDescriptorStride) {
+        return new TlasPushIndexMapping(TLAS_DESCRIPTOR_SET, TLAS_DESCRIPTOR_BINDING,
+                RtBindings.WORLD_TOP_LEVEL_AS_INDEX_OFFSET, Math.toIntExact(resourceDescriptorStride));
+    }
+
+    static void configureTlasMapping(VkDescriptorSetAndBindingMappingEXT mapping,
+                                     TlasPushIndexMapping configuration) {
+        mapping.sType$Default().descriptorSet(configuration.descriptorSet())
+                .firstBinding(configuration.binding()).bindingCount(1)
+                .resourceMask(EXTDescriptorHeap.VK_SPIRV_RESOURCE_TYPE_ACCELERATION_STRUCTURE_BIT_EXT)
+                .source(EXTDescriptorHeap.VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_PUSH_INDEX_EXT)
+                .sourceData(data -> data.pushIndex(pushIndex -> pushIndex
+                        .heapOffset(0).pushOffset(configuration.pushOffset())
+                        .heapIndexStride(configuration.heapIndexStride())
+                        .heapArrayStride(configuration.heapIndexStride())));
+    }
+
+    record TlasPushIndexMapping(int descriptorSet, int binding, int pushOffset, int heapIndexStride) {
+        TlasPushIndexMapping {
+            if (descriptorSet < 0 || binding < 0) throw new IllegalArgumentException("negative descriptor binding");
+            if (pushOffset < 0 || (pushOffset & 3) != 0) {
+                throw new IllegalArgumentException("TLAS push offset must be a non-negative multiple of four");
+            }
+            if (heapIndexStride <= 0) throw new IllegalArgumentException("resource heap stride must be positive");
         }
     }
 
@@ -288,8 +353,9 @@ public final class RtPipeline {
         return VkStridedDeviceAddressRegionKHR.calloc(stack).deviceAddress(address.value()).stride(stride).size(size);
     }
 
-    private static void stage(VkPipelineShaderStageCreateInfo info, int stage, long module, ByteBuffer entry) {
-        info.sType$Default().stage(stage).module(module).pName(entry);
+    private static void stage(VkPipelineShaderStageCreateInfo info, int stage, long module, ByteBuffer entry,
+                              VkShaderDescriptorSetAndBindingMappingInfoEXT mappingInfo) {
+        info.sType$Default().pNext(mappingInfo).stage(stage).module(module).pName(entry);
     }
 
     private static int anyHitStage(boolean enabled, int hitGroup, int radiance, int shadow) {

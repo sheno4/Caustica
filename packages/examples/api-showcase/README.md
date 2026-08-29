@@ -1,6 +1,6 @@
 # Caustica 0.8 API showcase
 
-This module is an additive, compile-only design probe. It is intentionally not a mod and is not wired into
+This module is an additive API-consumer package. It is intentionally not a mod and is not wired into
 Fabric or NeoForge discovery. It tests whether one Minecraft world-session contribution can express the
 current public feature categories without importing renderer implementation packages.
 
@@ -16,27 +16,32 @@ integration at `packages/examples/gltf-viewer-minecraft`.
 | Minecraft registration and world contribution | every client-world epoch creates a fresh `ShowcaseSession` with its own borrowed renderer scope and host scene | Minecraft/Vulkan session ownership | Necessary; process objects must not retain handles from an old device or world. |
 | surface plus coverage | opaque metal and alpha-cut foliage | world-program composition | Separate coverage is necessary for traversal; an opaque surface should not pay for it. |
 | volume | glass boundary with absorption and a volume-only fog boundary | world-program composition | The narrow absorption ABI fits both surface boundaries and volume-only geometry. |
-| initial view medium | explicit vacuum and camera beginning underwater | generic view state plus volume dispatch | `SceneView` carries either `ViewMedium.Vacuum` or the typed volume binding and instance data selected by the host. |
-| environment | publish one exported gradient-sky binding after its program set is ready | Minecraft scene/program boundary | The completion callback publishes only thread-safe readiness; the world-resource pass performs selection at a renderer publication point. |
+| initial view medium | explicit vacuum and camera beginning underwater | generic view state plus volume dispatch | `SceneView` carries one homogeneous medium containing the primary-ray origin: either `ViewMedium.Vacuum` or the typed volume binding and instance data selected by the host. |
+| environment and dimension sky | select exported overworld, Nether, or End sky content after the program set is ready | Minecraft scene/program boundary | Dimension keys and sky policy stay in `ShowcaseMinecraftSky`; core sees only an environment id and binding. |
 | retained geometry | one mesh with opaque, cutout, surface+volume, and volume-only slices | geometry channel | Issued IDs and atomic batches fit shared resident meshes and many placements. |
-| retained lights | rectangle, circular spot, and distant descriptors | light channel | The three shapes map directly to emissive faces, the helmet light, and sun/moon. |
-| world-resource pass | publish a replacement descriptor/table root before tracing | pass/GPU boundary | Stage is necessary for GPU state that tracing must consume in the same frame; `PassFrame` already carries `SceneView` and time for camera-dependent uploads. |
+| retained lights / NEE-AT | rectangle, circular spot, and distant descriptors plus a primitive-to-light map | light channel | `LightChannel` is the complete scene-local light registration contract. NEE-AT remains renderer policy and needs no extension-facing backend token. |
+| world-resource pass | observe program readiness and publish dimension-sky selection before tracing | pass/GPU boundary | The callback timing is real, but this pass currently records no GPU commands; the compiled world-resource compute entry point is validation-only. |
 | post effect | read scene color/exposure, acquire a distinct output, and order after optional bloom | pass boundary | Necessary for bloom and colour grading. Stable ids plus one optional anchor avoid relying on extension discovery order. |
-| UI pass | draw a world marker using camera and entry-scene TLAS | pass boundary | The unplaced overload proves the pass without claiming an engine-owned UI anchor. |
-| descriptor heap and retirement | typed resource/sampler ranges, borrowed descriptors, per-frame and prior-use cleanup | Vulkan boundary | Necessary for independent passes; raw VMA allocation still benefits from an optional Vulkan support package. |
-| shader object | create a pass-owned compute shader from direct SPIR-V | Vulkan support boundary | `ShaderObjectCompute` supplies descriptor-heap validation, creation, binding, push data, dispatch, and destruction without moving shader ownership into the renderer. |
+| UI pass | draw a screen marker whose tint is gated by an inline query against the entry-scene TLAS | pass boundary | The unplaced overload and acceleration-structure push-index mapping are real; the current marker does not consume the camera/WVP. |
+| descriptor heap and retirement | borrowed image/TLAS indices plus typed writer/range API shape | Vulkan boundary | Post/UI recording consumes borrowed descriptors. Owned range allocation, descriptor replacement, and retirement remain shape-only pressure in this probe. |
+| shader objects | create pass-owned compute and graphics shader objects from direct SPIR-V | Vulkan support boundary | The support package supplies descriptor-heap validation, fully dynamic graphics state, push data, dispatch/draw binding, and destruction without moving shader ownership into the renderer. |
+| two-scene selection | construct views and isolated retained operations for two distinct host-issued scene ids | generic view boundary | This proves identity targeting only. One trace still selects one TLAS; a future simultaneous portal renderer needs a new trace ABI. |
 | settings lookup | snapshot one feature-scoped colour-grade option during pass recording | process API plus settings API | Declaration stays process-scoped; the pass reads a stable snapshot without reaching host storage. |
 
 ## Refactor decisions proven by the probe
 
-- `ShowcasePrograms` declares its four shader implementations through one atomic `ProgramRegistration` and
-  exports one typed ID record. The registration itself exposes the complete set's state, failure, and
-  non-blocking completion callback; closing that same capability is the only removal authority.
+- `ShowcasePrograms` exports six typed IDs spanning seven definitions (two surfaces, one coverage, one volume,
+  and three environments) through one atomic `ProgramRegistration`. The registration itself exposes the
+  complete set's state, failure, and non-blocking completion callback; closing that same capability is the only
+  removal authority.
 - `ShowcaseSession` is a `MinecraftWorldSessionContribution`. It takes its renderer scope, host-issued
   `SceneId`, and environment selector directly from one `MinecraftWorldSessionContext`, creates its
   `ShowcaseScene` when that world contribution opens, and drops its retained content from `stop()`.
-- `ShowcaseScene` and `ShowcasePrograms` live in the same contribution. This probe therefore makes no
-  cross-contribution correlation or non-owning-reference claim; those semantics belong to engine tests.
+- `ShowcaseScene` accepts `ShowcasePrograms.Exports` as explicit constructor input. This models the value shape
+  of a cross-contribution handoff, but both objects currently use the same world-session contribution scope.
+  Engine tests, rather than this probe, enforce that surface, volume, environment, and scene IDs are non-owning
+  selections while mesh, instance, and light mutation remains issuer-local. A same-session `LightId` may still
+  be handed to geometry as a non-owning primitive-to-light selection.
 - Mesh streams use retained `VulkanDeviceAddressRange` values instead of four interchangeable primitive
   arguments. Descriptor ranges and borrowed indices preserve resource-versus-sampler type information.
 - `ShowcaseSession.vacuumView` and `underwaterView` reuse the single host-issued scene identity. They vary
@@ -44,10 +49,10 @@ integration at `packages/examples/gltf-viewer-minecraft`.
 - `ApiShowcaseExtension` declares its option independently of render-session creation. The post pass uses
   `OptionLookup.snapshot()` before reading the feature-scoped value used for that frame.
 - `ShowcasePrograms` records readiness in an atomic flag. Its completion callback returns promptly, while
-  the world-resource pass observes the flag and selects the gradient environment exactly once.
-- `GpuFrameUse.whenComplete` is the frame-scoped callback for both resource retirement and positive
-  completion work, such as publishing a mesh after its staging upload completes. It follows this frame's
-  recorded commands, runs once on the renderer thread, and does not wait for later or unrelated GPU work.
+  the world-resource pass observes the flag and selects the current dimension's sky exactly once.
+- `GpuFrameUse.whenComplete` is the frame-scoped callback available for resource retirement and positive
+  completion work. The showcase does not yet allocate and replace an owned GPU resource, so this remains a
+  documented API seam rather than an exercised recording path here.
 - Public scene creation/closing remains absent. The implemented Minecraft host owns the scene and brackets
   `ShowcaseSession` with the world-session contribution lifecycle.
 
@@ -55,46 +60,63 @@ integration at `packages/examples/gltf-viewer-minecraft`.
 
 - Post and UI passes have stable stage-local ids. The showcase colour grade uses the proven optional bloom
   anchor. The marker uses the unplaced UI overload because this probe has no published engine UI anchor to name.
-- The three identity-checked `ShaderDataType` layers prevent implementation/binding/instance word mixups,
+- The five identity-checked `ShaderDataType` layers prevent implementation/binding/instance word mixups,
   which is useful, but they make a multi-material mesh require one deliberately shared instance marker.
   Generated schema tokens tied to reflected Java records would preserve the safety with less handwritten
   phantom-type ceremony.
-- Scene identity remains host-issued. The showcase intentionally demonstrates its one borrowed world scene
-  referenced consistently by geometry, lights, environment bindings, and views, with no scene-control API.
+- Scene identity remains host-issued. The live Minecraft contribution uses its one borrowed world scene.
+  `ShowcaseSceneSwitch` demonstrates type-level selection between two supplied scene ids, while
+  `ShowcaseSceneApiTest` checks isolated operation targeting with test channels. Neither proves backend
+  simultaneous residency or lifecycle. A ray portal needs a new multi-scene trace ABI because the current
+  trace root selects exactly one TLAS.
 - Public `SceneView` carries the typed medium containing the camera origin. It remains separate from `Camera`
   because camera pose/projection and the host's sampled containing medium have different ownership. The host
   selects Minecraft water; no public volume-selection feature channel is needed while only the host creates
   rendered views.
-## Deliberate runtime guards
+## GPU recording
 
-`ShowcasePasses.runtimeGpuRecordingEnabled()` always returns false. The guarded branches touch the borrowed
-image, descriptor, output-chain, settings-snapshot, and retirement APIs but do not record valid Vulkan
-commands. Enabling them would violate the post-effect full-write contract. `createComputeShader` demonstrates
-the supported shader-object construction boundary; a runnable pass still needs packaged SPIR-V, push-data
-records, output writes, and owned Vulkan resources.
+The post and UI pass factories load package-owned SPIR-V and create their shader objects once for the render
+session. The post pass acquires a distinct chain output, writes reflected push data, and dispatches across every
+output pixel with bounds checks. The UI pass begins dynamic rendering with `LOAD`/`STORE` on the borrowed
+`GENERAL` layer, maps its conventional acceleration-structure binding to the pushed entry-scene TLAS heap
+index, performs an inline query, draws a small screen-space marker, and ends rendering. Each pass destroys its
+shader objects from `Pass.close()`, after the host has stopped callbacks and drained their GPU uses. The
+world-resource pass currently owns no shader object and dispatches no compute work.
 
 `ShowcaseScene.publishMesh(...)` accepts externally uploaded device addresses. The main API deliberately
-has no CPU mesh or texture uploader. A real glTF consumer therefore needs to write substantial VMA,
-staging, descriptor, and retirement code before it can submit a `MeshBuild`. That is a strong case for a
-separate reusable upload support package, not for putting upload policy in the main API. Shader-object
-creation is already covered by `vulkan-support` and is consumed directly by this probe.
+has no CPU mesh or texture uploader. A real glTF consumer therefore needs reusable VMA, staging, descriptor,
+and retirement support before it can submit a `MeshBuild`. The showcase only exposes the typed publication
+method and descriptor-writer helper shape; it does not perform those allocations. Shader-object creation is
+covered by `vulkan-support` and is consumed directly by the post and UI passes.
 
 ## Minecraft boundary
 
 The implemented Minecraft API supplies one host-owned `SceneId`, renderer contribution scope, resource epoch,
-and environment-selection slot to each world contribution. The main API continues to know only `SceneId` and
-`SceneView`; Minecraft keys and environment selection stay in the Minecraft package, and extensions receive no
-engine scene-administration capability.
+dimension key, and environment-selection slot to each world contribution. `ShowcaseMinecraftSky` maps that
+Minecraft-owned key to one of three exported sky implementations and carries the applied resource-pack epoch in
+its binding data. The main API continues to know only `SceneId`,
+`SceneView`, and `EnvironmentBinding`; extensions receive no engine scene-administration capability.
+
+The host also owns primary-origin camera-volume classification. `ShowcaseSession.underwaterView` shows the
+result of that classification as one homogeneous typed `ViewMedium.Volume`; it does not query Minecraft blocks
+or choose water itself. A
+standalone execution cannot manufacture the host scene, descriptor heap, command buffer, or world epoch. Once a
+host opens `ShowcaseSession`, however, its registered post/UI passes are real recording paths rather than guarded
+API sketches. The glTF viewer packages provide the independently launchable content/host split.
 
 ## Slang reflection reuse
 
 The independently publishable `dev.comfyfluffy.caustica.slang-tooling` Gradle plugin provides reusable
 compile, reflection, and typed-record generation tasks. This package applies it directly: `check` compiles
-the world-model validation probe and all three pass entry points against the public `shader-api` modules,
-then validates Vulkan 1.4 SPIR-V 1.6. The generated validation binaries remain build outputs and are not
-added to the showcase JAR.
+the world-model validation probe and the world-resource, post, and UI shader entry points against the public `shader-api` modules,
+then validates Vulkan 1.4 SPIR-V 1.6. `GenerateShaderRecords` reflects `ShowcasePostPush` and `ShowcaseUiPush`
+from the package-owned `showcase_pass_types` module into typed Java records consumed by `ShowcasePasses`; no
+hand-maintained byte offsets remain in the example. Generated Java and validation binaries remain build outputs.
 
 Each package owns its probes, generated Java namespace, and concrete record manifest. The tooling plugin
 owns compiler discovery, target/profile conventions, reflection parsing, and reproducible task inputs and
 outputs, so extension packages can reuse compile-time validation without receiving the engine's runtime
 Slang compiler through `RenderSessionContext`.
+
+The compiled world-resource shader remains a validation probe until the corresponding pass owns and dispatches
+it. The post and UI binaries are the shader entry points exercised by live recording code.

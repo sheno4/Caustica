@@ -17,6 +17,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 final class ShowcaseSession implements MinecraftWorldSessionContribution {
     private final MinecraftEnvironmentSelector environment;
     private final ShowcasePrograms programs;
+    private final ShowcaseMinecraftSky sky;
     private final List<PassRegistration> passes;
     private final ShowcaseScene scene;
     private final AtomicBoolean environmentPublished = new AtomicBoolean();
@@ -26,6 +27,7 @@ final class ShowcaseSession implements MinecraftWorldSessionContribution {
         environment = context.environment();
         RenderSessionContext renderSession = context.renderSession();
         programs = new ShowcasePrograms(renderSession.program(), System.err::println);
+        sky = new ShowcaseMinecraftSky(context.dimension(), context.resourcePackEpoch());
         scene = new ShowcaseScene(programs.exports(), context.scene(),
                 renderSession.geometry(), renderSession.lights());
         passes = List.of(
@@ -61,7 +63,7 @@ final class ShowcaseSession implements MinecraftWorldSessionContribution {
 
     private void publishEnvironmentWhenReady() {
         if (programs.ready() && environmentPublished.compareAndSet(false, true)) {
-            environment.select(programs.environmentBinding(0L, () -> { }));
+            environment.select(sky.binding(programs, () -> { }));
         }
     }
 

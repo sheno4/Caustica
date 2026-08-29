@@ -166,39 +166,53 @@ public final class SceneDirectory {
 
     synchronized void submitGeometry(GeometryContributionChannel channel,
                                      RetainedBatch<GeometryChannel.Operation> batch) {
+        submitGeometryGroup(channel, List.of(batch));
+    }
+
+    synchronized void submitGeometryGroup(GeometryContributionChannel channel,
+                                          List<RetainedBatch<GeometryChannel.Operation>> group) {
         requireSubmission(channel);
-        Objects.requireNonNull(batch, "batch");
-        validateGeometry(channel, batch.operations());
-        BatchToken token = new BatchToken(channel, batch.retired());
+        group = List.copyOf(group);
+        if (group.isEmpty()) throw new IllegalArgumentException("a submission group needs at least one batch");
+        List<GeometryChannel.Operation> operations = group.stream()
+                .flatMap(batch -> batch.operations().stream())
+                .toList();
+        validateGeometry(channel, operations);
+        List<BatchToken> tokens = group.stream()
+                .map(batch -> new BatchToken(channel, batch.retired()))
+                .toList();
         Map<MeshRef, MeshValue> nextMeshes = new LinkedHashMap<>(meshes);
         Map<InstanceRef, InstanceValue> nextInstances = new LinkedHashMap<>(instances);
         List<RetainedValue> removed = new ArrayList<>();
-        for (GeometryChannel.Operation operation : batch.operations()) {
-            if (operation instanceof GeometryChannel.SetMesh<?> set) {
-                MeshRef mesh = (MeshRef) set.mesh();
-                replace(nextMeshes, mesh, new MeshValue(token, set.build()), removed);
-            } else if (operation instanceof GeometryChannel.DropMesh<?> drop) {
-                MeshRef mesh = (MeshRef) drop.mesh();
-                remove(nextMeshes, mesh, removed);
-                nextInstances.entrySet().removeIf(entry -> {
-                    if (entry.getValue().mesh != mesh) return false;
-                    removed.add(entry.getValue());
-                    return true;
-                });
-            } else if (operation instanceof GeometryChannel.SetInstance<?> set) {
-                replace(nextInstances, (InstanceRef) set.instance(),
-                        new InstanceValue(token, (SceneRef) set.scene(), (MeshRef) set.mesh(), set), removed);
-            } else if (operation instanceof GeometryChannel.DropInstance drop) {
-                remove(nextInstances, (InstanceRef) drop.instance(), removed);
+        for (int batchIndex = 0; batchIndex < group.size(); batchIndex++) {
+            BatchToken token = tokens.get(batchIndex);
+            for (GeometryChannel.Operation operation : group.get(batchIndex).operations()) {
+                if (operation instanceof GeometryChannel.SetMesh<?> set) {
+                    MeshRef mesh = (MeshRef) set.mesh();
+                    replace(nextMeshes, mesh, new MeshValue(token, set.build()), removed);
+                } else if (operation instanceof GeometryChannel.DropMesh<?> drop) {
+                    MeshRef mesh = (MeshRef) drop.mesh();
+                    remove(nextMeshes, mesh, removed);
+                    nextInstances.entrySet().removeIf(entry -> {
+                        if (entry.getValue().mesh != mesh) return false;
+                        removed.add(entry.getValue());
+                        return true;
+                    });
+                } else if (operation instanceof GeometryChannel.SetInstance<?> set) {
+                    replace(nextInstances, (InstanceRef) set.instance(),
+                            new InstanceValue(token, (SceneRef) set.scene(), (MeshRef) set.mesh(), set), removed);
+                } else if (operation instanceof GeometryChannel.DropInstance drop) {
+                    remove(nextInstances, (InstanceRef) drop.instance(), removed);
+                }
             }
         }
         RetainedSceneSnapshot next = snapshot(revision + 1, nextMeshes, nextInstances, lights);
         backend.publish(next, () -> enqueueRelease(removed));
-        batches.add(token);
+        batches.addAll(tokens);
         meshes = nextMeshes;
         instances = nextInstances;
         revision++;
-        token.seal(this);
+        tokens.forEach(token -> token.seal(this));
     }
 
     synchronized void submitLights(LightContributionChannel channel,

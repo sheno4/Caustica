@@ -6,6 +6,7 @@ import dev.comfyfluffy.caustica.api.program.ShaderDataType;
 import dev.comfyfluffy.caustica.api.session.RenderSessionContext;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -61,6 +62,26 @@ public interface GeometryChannel {
      *         or supplies shader data with a mismatched schema token
      */
     void submit(RetainedBatch<Operation> batch);
+
+    /**
+     * Apply several independently-retired batches as one atomic publication.
+     *
+     * <p>Operations apply in list order and become visible together. Validation and native acceptance cover
+     * the entire group: if anything throws, no batch is applied and no retirement callback is transferred.
+     * Each accepted batch keeps its own retirement lifetime; grouping publications does not make unrelated
+     * resources wait for one another.
+     *
+     * <p>A group must contain at least one batch. Implementations that only provide the single-batch API
+     * reject groups larger than one rather than weakening atomicity or retirement guarantees.
+     */
+    default void submitGroup(List<RetainedBatch<Operation>> batches) {
+        batches = List.copyOf(batches);
+        if (batches.isEmpty()) throw new IllegalArgumentException("a submission group needs at least one batch");
+        if (batches.size() != 1) {
+            throw new UnsupportedOperationException("this geometry channel does not support grouped submission");
+        }
+        submit(batches.getFirst());
+    }
 
     sealed interface Operation permits SetMesh, DropMesh, SetInstance, DropInstance { }
 

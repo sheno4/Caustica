@@ -6,6 +6,8 @@ import dev.comfyfluffy.caustica.api.geometry.MeshId;
 import dev.comfyfluffy.caustica.api.program.ShaderDataType;
 import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
 
+import java.util.List;
+
 /** Owner-scoped geometry mutation capability for one retained scene directory. */
 public final class GeometryContributionChannel implements GeometryChannel {
     final SceneDirectory directory;
@@ -23,6 +25,9 @@ public final class GeometryContributionChannel implements GeometryChannel {
     }
     @Override public InstanceId newInstance() { return directory.newInstance(this); }
     @Override public void submit(RetainedBatch<Operation> batch) { directory.submitGeometry(this, batch); }
+    @Override public void submitGroup(List<RetainedBatch<Operation>> batches) {
+        directory.submitGeometryGroup(this, batches);
+    }
     public void quiesce() { directory.quiesce(this); }
     public void invalidate() { directory.invalidate(this); }
     public void drain() { directory.drain(this); }

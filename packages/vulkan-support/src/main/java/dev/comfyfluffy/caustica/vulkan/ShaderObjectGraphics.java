@@ -7,12 +7,37 @@ import org.lwjgl.vulkan.*;
 import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
 import java.nio.LongBuffer;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 /** Descriptor-heap vertex and fragment shader objects with fully dynamic raster state. */
 public final class ShaderObjectGraphics implements AutoCloseable {
-    public enum VertexFormat { NONE, POSITION, POSITION_TEX_COLOR }
+    public enum VertexFormat { NONE, POSITION, POSITION_TEX_COLOR, EDGE_POSITION_PAIR }
     public enum Blend { NONE, ALPHA }
+
+    /** Maps one statically bound SPIR-V resource to an index stored in pushed shader data. */
+    public record PushIndexedResourceMapping(int descriptorSet, int binding, int resourceMask,
+                                             int pushDataOffset) {
+        public PushIndexedResourceMapping {
+            if (descriptorSet < 0 || binding < 0) {
+                throw new IllegalArgumentException("negative descriptor binding");
+            }
+            if (resourceMask == 0) throw new IllegalArgumentException("resource mask must not be empty");
+            if (pushDataOffset < 0 || (pushDataOffset & 3) != 0) {
+                throw new IllegalArgumentException("push data offset must be a non-negative multiple of four");
+            }
+        }
+
+        public static PushIndexedResourceMapping accelerationStructure(int descriptorSet, int binding,
+                                                                        int pushDataOffset) {
+            return new PushIndexedResourceMapping(descriptorSet, binding,
+                    EXTDescriptorHeap.VK_SPIRV_RESOURCE_TYPE_ACCELERATION_STRUCTURE_BIT_EXT, pushDataOffset);
+        }
+    }
 
     private final VkDevice device;
     private final long vertex;
@@ -38,13 +63,22 @@ public final class ShaderObjectGraphics implements AutoCloseable {
 
     public static ShaderObjectGraphics create(GpuDevice gpu, ByteBuffer vertexSpirv, ByteBuffer fragmentSpirv,
                                               VertexFormat format, int topology, Blend blend, int samples) {
+        return create(gpu, vertexSpirv, fragmentSpirv, format, topology, blend, samples,
+                List.of(), List.of());
+    }
+
+    public static ShaderObjectGraphics create(GpuDevice gpu, ByteBuffer vertexSpirv, ByteBuffer fragmentSpirv,
+                                              VertexFormat format, int topology, Blend blend, int samples,
+                                              List<PushIndexedResourceMapping> vertexMappings,
+                                              List<PushIndexedResourceMapping> fragmentMappings) {
         Objects.requireNonNull(gpu, "gpu");
         Objects.requireNonNull(format, "format");
         Objects.requireNonNull(blend, "blend");
         long vertex = createShader(gpu, vertexSpirv, VK10.VK_SHADER_STAGE_VERTEX_BIT,
-                VK10.VK_SHADER_STAGE_FRAGMENT_BIT);
+                VK10.VK_SHADER_STAGE_FRAGMENT_BIT, vertexMappings);
         try {
-            long fragment = createShader(gpu, fragmentSpirv, VK10.VK_SHADER_STAGE_FRAGMENT_BIT, 0);
+            long fragment = createShader(gpu, fragmentSpirv, VK10.VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                    fragmentMappings);
             return new ShaderObjectGraphics(gpu.vk(), vertex, fragment, format, topology, blend, samples);
         } catch (RuntimeException | Error failure) {
             EXTShaderObject.vkDestroyShaderEXT(gpu.vk(), vertex, null);
@@ -52,21 +86,108 @@ public final class ShaderObjectGraphics implements AutoCloseable {
         }
     }
 
-    private static long createShader(GpuDevice gpu, ByteBuffer spirv, int stage, int nextStage) {
+    private static long createShader(GpuDevice gpu, ByteBuffer spirv, int stage, int nextStage,
+                                     List<PushIndexedResourceMapping> mappings) {
         Objects.requireNonNull(spirv, "spirv");
+        Objects.requireNonNull(mappings, "mappings");
         if (!spirv.isDirect()) throw new IllegalArgumentException("SPIR-V must be direct");
-        ShaderObjectCompute.validateDescriptorHeapSpirv(spirv);
+        if (mappings.isEmpty()) ShaderObjectCompute.validateDescriptorHeapSpirv(spirv);
+        else validateMappedDescriptorHeapSpirv(spirv, mappings);
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkShaderCreateInfoEXT.Buffer info = VkShaderCreateInfoEXT.calloc(1, stack);
             info.get(0).sType$Default().flags(EXTDescriptorHeap.VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT)
                     .stage(stage).nextStage(nextStage).codeType(EXTShaderObject.VK_SHADER_CODE_TYPE_SPIRV_EXT)
                     .pCode(spirv).pName(stack.UTF8("main")).setLayoutCount(0).pushConstantRangeCount(0);
+            if (!mappings.isEmpty()) {
+                int stride = Math.toIntExact(gpu.descriptorHeap().properties().resourceDescriptorStrideBytes());
+                info.get(0).pNext(createMappingInfo(stack, mappings, stride).address());
+            }
             LongBuffer output = stack.mallocLong(1);
             VulkanChecks.check(EXTShaderObject.vkCreateShadersEXT(gpu.vk(), info, null, output),
                     "vkCreateShadersEXT");
             return output.get(0);
         }
     }
+
+    private static VkShaderDescriptorSetAndBindingMappingInfoEXT createMappingInfo(
+            MemoryStack stack, List<PushIndexedResourceMapping> mappings, int resourceDescriptorStride) {
+        if (resourceDescriptorStride <= 0) {
+            throw new IllegalArgumentException("resource descriptor stride must be positive");
+        }
+        VkDescriptorSetAndBindingMappingEXT.Buffer nativeMappings =
+                VkDescriptorSetAndBindingMappingEXT.calloc(mappings.size(), stack);
+        for (int index = 0; index < mappings.size(); index++) {
+            PushIndexedResourceMapping mapping = mappings.get(index);
+            nativeMappings.get(index).sType$Default().descriptorSet(mapping.descriptorSet())
+                    .firstBinding(mapping.binding()).bindingCount(1).resourceMask(mapping.resourceMask())
+                    .source(EXTDescriptorHeap.VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_PUSH_INDEX_EXT)
+                    .sourceData(data -> data.pushIndex(pushIndex -> pushIndex.heapOffset(0)
+                            .pushOffset(mapping.pushDataOffset()).heapIndexStride(resourceDescriptorStride)
+                            .heapArrayStride(resourceDescriptorStride)));
+        }
+        return VkShaderDescriptorSetAndBindingMappingInfoEXT.calloc(stack).sType$Default()
+                .pMappings(nativeMappings);
+    }
+
+    static void validateMappedDescriptorHeapSpirv(ByteBuffer spirv,
+                                                   List<PushIndexedResourceMapping> mappings) {
+        Set<DescriptorBinding> covered = new HashSet<>();
+        for (int index = 0; index < mappings.size(); index++) {
+            PushIndexedResourceMapping mapping = Objects.requireNonNull(mappings.get(index), "mapping");
+            DescriptorBinding binding = new DescriptorBinding(mapping.descriptorSet(), mapping.binding());
+            for (int previous = 0; previous < index; previous++) {
+                PushIndexedResourceMapping other = mappings.get(previous);
+                if (other.descriptorSet() == mapping.descriptorSet() && other.binding() == mapping.binding()
+                        && (other.resourceMask() & mapping.resourceMask()) != 0) {
+                    throw new IllegalArgumentException("overlapping mappings for descriptor set "
+                            + mapping.descriptorSet() + " binding " + mapping.binding());
+                }
+            }
+            covered.add(binding);
+        }
+
+        ByteBuffer words = spirv.duplicate().order(java.nio.ByteOrder.LITTLE_ENDIAN);
+        if (words.remaining() < 5 * Integer.BYTES || (words.remaining() & 3) != 0
+                || words.getInt(words.position()) != 0x07230203) {
+            throw new IllegalArgumentException("shader object code is not a SPIR-V module");
+        }
+        int base = words.position();
+        int wordCount = words.remaining() / Integer.BYTES;
+        Map<Integer, Integer> descriptorSets = new HashMap<>();
+        Map<Integer, Integer> bindings = new HashMap<>();
+        for (int word = 5; word < wordCount;) {
+            int instruction = words.getInt(base + word * Integer.BYTES);
+            int instructionWords = instruction >>> 16;
+            if (instructionWords == 0 || word + instructionWords > wordCount) {
+                throw new IllegalArgumentException("malformed SPIR-V instruction range");
+            }
+            if ((instruction & 0xffff) == 71 && instructionWords >= 3) {
+                int target = words.getInt(base + (word + 1) * Integer.BYTES);
+                int decoration = words.getInt(base + (word + 2) * Integer.BYTES);
+                if (decoration == 34 || decoration == 33) {
+                    if (instructionWords < 4) {
+                        throw new IllegalArgumentException("malformed SPIR-V descriptor decoration");
+                    }
+                    int value = words.getInt(base + (word + 3) * Integer.BYTES);
+                    if (decoration == 34) descriptorSets.put(target, value);
+                    else bindings.put(target, value);
+                }
+            }
+            word += instructionWords;
+        }
+        Set<Integer> targets = new HashSet<>(descriptorSets.keySet());
+        targets.addAll(bindings.keySet());
+        for (int target : targets) {
+            Integer descriptorSet = descriptorSets.get(target);
+            Integer binding = bindings.get(target);
+            if (descriptorSet == null || binding == null
+                    || !covered.contains(new DescriptorBinding(descriptorSet, binding))) {
+                throw new IllegalArgumentException("SPIR-V descriptor binding is not covered by a mapping");
+            }
+        }
+    }
+
+    private record DescriptorBinding(int descriptorSet, int binding) {}
 
     public void bind(VkCommandBuffer commandBuffer, ByteBuffer pushData, int width, int height) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
@@ -125,14 +246,24 @@ public final class ShaderObjectGraphics implements AutoCloseable {
         }
         int stride = format == VertexFormat.POSITION ? 12 : 24;
         VkVertexInputBindingDescription2EXT.Buffer binding = VkVertexInputBindingDescription2EXT.calloc(1, stack);
-        binding.get(0).sType$Default().binding(0).stride(stride).inputRate(VK10.VK_VERTEX_INPUT_RATE_VERTEX)
+        binding.get(0).sType$Default().binding(0).stride(stride).inputRate(
+                        format == VertexFormat.EDGE_POSITION_PAIR
+                                ? VK10.VK_VERTEX_INPUT_RATE_INSTANCE : VK10.VK_VERTEX_INPUT_RATE_VERTEX)
                 .divisor(1);
-        int count = format == VertexFormat.POSITION ? 1 : 3;
+        int count = switch (format) {
+            case POSITION -> 1;
+            case EDGE_POSITION_PAIR -> 2;
+            case POSITION_TEX_COLOR -> 3;
+            case NONE -> throw new AssertionError();
+        };
         VkVertexInputAttributeDescription2EXT.Buffer attributes =
                 VkVertexInputAttributeDescription2EXT.calloc(count, stack);
         attributes.get(0).sType$Default().location(0).binding(0)
                 .format(VK10.VK_FORMAT_R32G32B32_SFLOAT).offset(0);
-        if (count == 3) {
+        if (format == VertexFormat.EDGE_POSITION_PAIR) {
+            attributes.get(1).sType$Default().location(1).binding(0)
+                    .format(VK10.VK_FORMAT_R32G32B32_SFLOAT).offset(12);
+        } else if (count == 3) {
             attributes.get(1).sType$Default().location(1).binding(0)
                     .format(VK10.VK_FORMAT_R32G32_SFLOAT).offset(12);
             attributes.get(2).sType$Default().location(2).binding(0)

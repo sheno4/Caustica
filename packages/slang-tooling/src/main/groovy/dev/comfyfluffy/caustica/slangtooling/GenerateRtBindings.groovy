@@ -33,6 +33,7 @@ abstract class GenerateRtBindings extends DefaultTask {
     private static final List<Map> PIPELINES = [
             [prefix: "WORLD", source: "pipelines/world/primary_reflection.rgen.slang",
              pushParameter: "worldBindings", pushType: "WorldBindingRoots",
+             mappedDescriptors: [worldTopLevelAS: [index: 0, set: 0]],
              addresses: [PUSH: "worldPushAddress", COMPOSITION_DATA: "compositionDataAddress",
                          GEOMETRY_TABLE: "geometryTableAddress", PATH_QUEUE: "pathQueueAddress",
                          NEE_AT_STATE: "neeAtStateAddress"],
@@ -83,8 +84,14 @@ abstract class GenerateRtBindings extends DefaultTask {
             def reflection = reflect(new File(shaderRoot.get().asFile, spec.source as String), scratchDir)
             if (spec.pushParameter != null) {
                 def descriptors = reflection.parameters.findAll { it.binding?.kind == "descriptorTableSlot" }
-                if (!descriptors.isEmpty()) {
-                    throw new GradleException("${spec.source} still declares descriptor-set bindings: ${descriptors*.name}")
+                def expectedDescriptors = spec.mappedDescriptors ?: [:]
+                def reflectedDescriptors = descriptors.collectEntries { descriptor ->
+                    [(descriptor.name): [index: descriptor.binding.index as int,
+                                         set: (descriptor.binding.space ?: 0) as int]]
+                }
+                if (reflectedDescriptors != expectedDescriptors) {
+                    throw new GradleException("${spec.source} descriptor mappings differ; expected="
+                            + "${expectedDescriptors}, actual=${reflectedDescriptors}")
                 }
                 def parameter = reflection.parameters.find { it.name == spec.pushParameter }
                 def root = parameter?.type?.elementType

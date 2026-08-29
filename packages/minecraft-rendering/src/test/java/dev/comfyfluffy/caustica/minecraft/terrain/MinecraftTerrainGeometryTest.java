@@ -58,6 +58,46 @@ final class MinecraftTerrainGeometryTest {
     }
 
     @Test
+    void groupsTransactionsIntoOnePublicationWithIndependentRetirement() {
+        var channel = new RecordingChannel();
+        var first = new Uploaded(0x2100L);
+        var second = new Uploaded(0x2200L);
+        var uploads = new java.util.ArrayDeque<>(List.of(first, second));
+        var terrain = new MinecraftTerrainGeometry(channel, new SceneId() { }, ignored -> uploads.removeFirst());
+
+        terrain.submitGroup(List.of(
+                List.of(new MinecraftTerrainGeometry.Put(2L, 0, 0, 0, mesh())),
+                List.of(new MinecraftTerrainGeometry.Put(3L, 16, 0, 0, mesh()))));
+
+        assertEquals(1, channel.groups.size());
+        assertEquals(2, channel.groups.getFirst().size());
+        channel.groups.getFirst().getFirst().retired().run();
+        assertTrue(first.closed);
+        assertFalse(second.closed);
+        channel.groups.getFirst().getLast().retired().run();
+        assertTrue(second.closed);
+    }
+
+    @Test
+    void rejectedPublicationGroupReleasesEveryUploadAndKeepsSectionStateRetryable() {
+        var channel = new RecordingChannel();
+        var first = new Uploaded(0x2300L);
+        var second = new Uploaded(0x2400L);
+        var uploads = new java.util.ArrayDeque<>(List.of(first, second));
+        var terrain = new MinecraftTerrainGeometry(channel, new SceneId() { }, ignored -> uploads.removeFirst());
+        channel.rejectNext = true;
+
+        assertThrows(IllegalArgumentException.class, () -> terrain.submitGroup(List.of(
+                List.of(new MinecraftTerrainGeometry.Put(2L, 0, 0, 0, mesh())),
+                List.of(new MinecraftTerrainGeometry.Put(3L, 16, 0, 0, mesh())))));
+
+        assertTrue(first.closed);
+        assertTrue(second.closed);
+        terrain.close();
+        assertTrue(channel.batches.isEmpty());
+    }
+
+    @Test
     void malformedCpuGeometryIsRejectedBeforeUpload() {
         assertThrows(IllegalArgumentException.class, () -> new MinecraftTerrainMesh(
                 new float[]{0, 0, 0}, new int[]{0, 0, 0}, new float[0],
@@ -175,6 +215,7 @@ final class MinecraftTerrainGeometryTest {
 
     private static final class RecordingChannel implements GeometryChannel {
         private final List<RetainedBatch<Operation>> batches = new ArrayList<>();
+        private final List<List<RetainedBatch<Operation>>> groups = new ArrayList<>();
         private boolean rejectNext;
 
         @Override public <N> MeshId<N> newMesh(ShaderDataType<N> instanceDataType) { return new MeshId<>() { }; }
@@ -185,6 +226,14 @@ final class MinecraftTerrainGeometryTest {
                 throw new IllegalArgumentException("rejected");
             }
             batches.add(batch);
+        }
+        @Override public void submitGroup(List<RetainedBatch<Operation>> group) {
+            if (rejectNext) {
+                rejectNext = false;
+                throw new IllegalArgumentException("rejected");
+            }
+            groups.add(List.copyOf(group));
+            batches.addAll(group);
         }
     }
 }

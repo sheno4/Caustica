@@ -4,6 +4,11 @@ module bindings;
 import caustica_resources;
 import world_common;
 
+// NVIDIA's descriptor-heap traversal path cannot consume an acceleration structure loaded directly
+// from ResourceHeapEXT. The pipeline maps this conventional binding to the indexed heap slot named by
+// WorldBindingRoots.resources.topLevelAS; images remain direct descriptor-heap accesses.
+[[vk::binding(0, 0)]] RaytracingAccelerationStructure worldTopLevelAS;
+
 public struct StorageImageIndex {
     public uint value;
 };
@@ -37,7 +42,7 @@ public struct WorldBindingRoots {
 };
 
 public RaytracingAccelerationStructure worldAccelerationStructure(WorldBindingRoots roots) {
-    return accelerationStructure(roots.resources.topLevelAS);
+    return worldTopLevelAS;
 }
 
 public RWTexture2D<float4> worldFloat4StorageImage(StorageImageIndex index) {

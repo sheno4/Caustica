@@ -47,6 +47,7 @@ public final class RtGpuExecutor {
     private static final long BUILD_READ_STAGES =
             VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR
                     | VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+    static final long ASYNC_RECORDER_WAIT_STAGES = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
 
     private final VulkanDeviceContext ctx;
     private final VulkanQueueRef computeQueue;
@@ -333,6 +334,7 @@ public final class RtGpuExecutor {
                         finishJob(job, null);
                     }
                 } catch (Throwable t) {
+                    latchFailure(t);
                     for (Job job : executable) {
                         finishJob(job, t);
                     }
@@ -465,7 +467,7 @@ public final class RtGpuExecutor {
             if (graphicsWait != 0L) {
                 VkSemaphoreSubmitInfo.Buffer wait = VkSemaphoreSubmitInfo.calloc(1, stack).sType$Default()
                         .semaphore(graphicsTimeline).value(graphicsWait)
-                        .stageMask(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR);
+                        .stageMask(ASYNC_RECORDER_WAIT_STAGES);
                 submit.pWaitSemaphoreInfos(wait);
             }
             VulkanDiagnostics.noteQueueSubmission(computeQueue.queue(), "Caustica compute queue");

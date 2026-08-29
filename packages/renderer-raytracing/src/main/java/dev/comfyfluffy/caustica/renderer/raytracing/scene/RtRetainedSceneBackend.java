@@ -120,7 +120,9 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     public synchronized void progress() {
         requireOpen();
         CompletedBuild terminal;
-        while ((terminal = completed.poll()) != null) terminal.publication.complete(terminal.failure);
+        while ((terminal = completed.poll()) != null) {
+            terminal.publication.complete(terminal.build, terminal.failure);
+        }
         while (true) {
             Publication head = queued.peekFirst();
             if (head == null || !head.completed) return;
@@ -358,7 +360,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         if (candidate.builds.isEmpty()) {
             candidate.accepted = true;
             candidate.unsubmitted = List.of();
-            completeLater(publication, null);
+            completeLater(publication, null, null);
             return;
         }
         ctx.gpuExecutor().submit(cmd -> RtAccel.recordBlasBuilds(ctx, cmd, candidate.builds),
@@ -366,13 +368,13 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                     RtAccel.freeBlasScratch(candidate.builds);
                     candidate.buildResourcesReleased = true;
                 },
-                (ignored, failure) -> completeLater(publication, failure));
+                (build, failure) -> completeLater(publication, build, failure));
         candidate.accepted = true;
         candidate.unsubmitted = List.of();
     }
 
-    private void completeLater(Publication publication, Throwable failure) {
-        completed.add(new CompletedBuild(publication, failure));
+    private void completeLater(Publication publication, RtGpuExecutor.Build build, Throwable failure) {
+        completed.add(new CompletedBuild(publication, build, failure));
     }
 
     private NativeMesh prepareMesh(RetainedSceneSnapshot.Mesh mesh) {
@@ -426,6 +428,9 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         if (publication.failure != null) {
             fatalFailure = publication.failure;
             throw fatalException();
+        }
+        if (publication.build != null) {
+            ctx.gpuExecutor().markPublished(publication.build);
         }
         queued.removeFirst();
         NativeSnapshot previous = published;
@@ -596,6 +601,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         final RetainedSceneSnapshot snapshot;
         final Runnable previousRetired;
         Candidate candidate;
+        RtGpuExecutor.Build build;
         volatile boolean completed;
         volatile Throwable failure;
         private boolean previousSettled;
@@ -603,7 +609,8 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             this.snapshot = snapshot;
             this.previousRetired = previousRetired;
         }
-        void complete(Throwable failure) {
+        void complete(RtGpuExecutor.Build build, Throwable failure) {
+            this.build = build;
             this.failure = failure;
             completed = true;
         }
@@ -632,7 +639,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     private record NativeInstance(RetainedSceneSnapshot.Instance logical, NativeMesh mesh,
                                   dev.comfyfluffy.caustica.api.geometry.GeometryTransform previousTransform,
                                   int geometryBase, int sbtRecordOffset) { }
-    private record CompletedBuild(Publication publication, Throwable failure) { }
+    private record CompletedBuild(Publication publication, RtGpuExecutor.Build build, Throwable failure) { }
 
     private static class Candidate {
         final long revision;

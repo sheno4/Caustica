@@ -251,6 +251,153 @@ final class SceneDirectoryTest {
     }
 
     @Test
+    void groupedGeometryPublishesOneOrderedRevision() {
+        ProgramFixture programs = new ProgramFixture();
+        SurfaceId<Binding, Instance> surface = programs.surface(new ContributionOwner(1));
+        SceneBackend backend = new SceneBackend();
+        SceneDirectory directory = directory(programs, backend);
+        SceneId scene = directory.createScene();
+        GeometryContributionChannel geometry = directory.openGeometry(new ContributionOwner(2));
+        MeshId<Instance> mesh = geometry.newMesh(INSTANCE);
+        var instance = geometry.newInstance();
+        int publications = backend.snapshots.size();
+        long revision = directory.snapshot().revision();
+        GeometryTransform finalTransform = GeometryTransform.translation(4, 5, 6);
+
+        geometry.submitGroup(List.of(
+                RetainedBatch.of(List.of(new GeometryChannel.SetMesh<>(mesh, mesh(surface)))),
+                RetainedBatch.of(List.of(new GeometryChannel.SetInstance<>(instance, scene, mesh,
+                        GeometryTransform.translation(1, 2, 3), 0xff, INSTANCE.data(7)))),
+                RetainedBatch.of(List.of(new GeometryChannel.SetInstance<>(instance, scene, mesh,
+                        finalTransform, 0xff, INSTANCE.data(8))))));
+
+        assertEquals(publications + 1, backend.snapshots.size());
+        assertEquals(revision + 1, directory.snapshot().revision());
+        assertEquals(1, directory.snapshot().meshes().size());
+        assertEquals(1, directory.snapshot().instances().size());
+        assertEquals(finalTransform, directory.snapshot().instances().getFirst().transform());
+        assertEquals(8, directory.snapshot().instances().getFirst().instanceData().bits());
+    }
+
+    @Test
+    void groupedGeometryPreservesIndependentRetirementLifetimes() {
+        ProgramFixture programs = new ProgramFixture();
+        SurfaceId<Binding, Instance> surface = programs.surface(new ContributionOwner(1));
+        SceneBackend backend = new SceneBackend();
+        SceneDirectory directory = directory(programs, backend);
+        SceneId scene = directory.createScene();
+        GeometryContributionChannel geometry = directory.openGeometry(new ContributionOwner(2));
+        MeshId<Instance> mesh = geometry.newMesh(INSTANCE);
+        var instance = geometry.newInstance();
+        AtomicInteger meshRetired = new AtomicInteger();
+        AtomicInteger instanceRetired = new AtomicInteger();
+
+        geometry.submitGroup(List.of(
+                new RetainedBatch<>(List.of(new GeometryChannel.SetMesh<>(mesh, mesh(surface))),
+                        meshRetired::incrementAndGet),
+                new RetainedBatch<>(List.of(new GeometryChannel.SetInstance<>(instance, scene, mesh,
+                        GeometryTransform.translation(1, 2, 3), 0xff, INSTANCE.data(7))),
+                        instanceRetired::incrementAndGet)));
+
+        geometry.submit(RetainedBatch.of(List.of(new GeometryChannel.DropInstance(instance))));
+        backend.retireLatest();
+        directory.progress();
+        assertEquals(0, meshRetired.get());
+        assertEquals(1, instanceRetired.get());
+
+        geometry.submit(RetainedBatch.of(List.of(new GeometryChannel.DropMesh<>(mesh))));
+        backend.retireLatest();
+        directory.progress();
+        assertEquals(1, meshRetired.get());
+        assertEquals(1, instanceRetired.get());
+    }
+
+    @Test
+    void invalidLaterGroupedBatchRejectsEverythingWithoutTakingCallbacks() {
+        ProgramFixture programs = new ProgramFixture();
+        SurfaceId<Binding, Instance> surface = programs.surface(new ContributionOwner(1));
+        SceneBackend backend = new SceneBackend();
+        SceneDirectory directory = directory(programs, backend);
+        directory.createScene();
+        SceneId foreignScene = directory(programs, new SceneBackend()).createScene();
+        GeometryContributionChannel geometry = directory.openGeometry(new ContributionOwner(2));
+        MeshId<Instance> mesh = geometry.newMesh(INSTANCE);
+        var instance = geometry.newInstance();
+        AtomicInteger retired = new AtomicInteger();
+        int publications = backend.snapshots.size();
+        long revision = directory.snapshot().revision();
+
+        assertThrows(IllegalArgumentException.class, () -> geometry.submitGroup(List.of(
+                new RetainedBatch<>(List.of(new GeometryChannel.SetMesh<>(mesh, mesh(surface))),
+                        retired::incrementAndGet),
+                new RetainedBatch<>(List.of(new GeometryChannel.SetInstance<>(instance, foreignScene, mesh,
+                        GeometryTransform.translation(0, 0, 0), 0xff, INSTANCE.data(0))),
+                        retired::incrementAndGet))));
+
+        assertEquals(publications, backend.snapshots.size());
+        assertEquals(revision, directory.snapshot().revision());
+        assertEquals(0, directory.snapshot().meshes().size());
+        directory.progress();
+        assertEquals(0, retired.get());
+    }
+
+    @Test
+    void backendRejectionOfGroupedGeometryTransfersNothing() {
+        ProgramFixture programs = new ProgramFixture();
+        SurfaceId<Binding, Instance> surface = programs.surface(new ContributionOwner(1));
+        SceneBackend backend = new SceneBackend();
+        SceneDirectory directory = directory(programs, backend);
+        SceneId scene = directory.createScene();
+        GeometryContributionChannel geometry = directory.openGeometry(new ContributionOwner(2));
+        MeshId<Instance> mesh = geometry.newMesh(INSTANCE);
+        var instance = geometry.newInstance();
+        AtomicInteger retired = new AtomicInteger();
+        int publications = backend.snapshots.size();
+        backend.rejectNext = true;
+
+        assertThrows(IllegalStateException.class, () -> geometry.submitGroup(List.of(
+                new RetainedBatch<>(List.of(new GeometryChannel.SetMesh<>(mesh, mesh(surface))),
+                        retired::incrementAndGet),
+                new RetainedBatch<>(List.of(new GeometryChannel.SetInstance<>(instance, scene, mesh,
+                        GeometryTransform.translation(0, 0, 0), 0xff, INSTANCE.data(0))),
+                        retired::incrementAndGet))));
+
+        assertEquals(publications, backend.snapshots.size());
+        assertEquals(0, directory.snapshot().meshes().size());
+        assertEquals(0, directory.snapshot().instances().size());
+        directory.progress();
+        assertEquals(0, retired.get());
+    }
+
+    @Test
+    void groupedGeometryKeepsMutationOwnerLocalAndLightSelectionSessionScoped() {
+        ProgramFixture programs = new ProgramFixture();
+        SurfaceId<Binding, Instance> surface = programs.surface(new ContributionOwner(1));
+        SceneBackend backend = new SceneBackend();
+        SceneDirectory directory = directory(programs, backend);
+        SceneId scene = directory.createScene();
+        GeometryContributionChannel owner = directory.openGeometry(new ContributionOwner(2));
+        GeometryContributionChannel foreign = directory.openGeometry(new ContributionOwner(3));
+        LightContributionChannel lights = directory.openLights(new ContributionOwner(4));
+        MeshId<Instance> mesh = owner.newMesh(INSTANCE);
+        var instance = owner.newInstance();
+        var selectedLight = lights.newLight();
+
+        owner.submitGroup(List.of(
+                RetainedBatch.of(List.of(new GeometryChannel.SetMesh<>(mesh, mesh(surface)))),
+                RetainedBatch.of(List.of(new GeometryChannel.SetInstance<>(instance, scene, mesh,
+                        GeometryTransform.translation(0, 0, 0), 0xff, INSTANCE.data(0),
+                        new PrimitiveLightMap(List.of(new PrimitiveLightMap.Range(0, 1, selectedLight))))))));
+
+        assertEquals(1, directory.snapshot().instances().getFirst().primitiveEmitters().size());
+        assertThrows(IllegalArgumentException.class, () -> foreign.submitGroup(List.of(
+                RetainedBatch.of(List.of(new GeometryChannel.DropMesh<>(mesh))),
+                RetainedBatch.of(List.of(new GeometryChannel.DropInstance(instance))))));
+        assertEquals(1, directory.snapshot().meshes().size());
+        assertEquals(1, directory.snapshot().instances().size());
+    }
+
+    @Test
     void primitiveLightMapsAreSessionScopedPlacementSelectionsBoundedByTheMesh() {
         ProgramFixture programs = new ProgramFixture();
         SurfaceId<Binding, Instance> surface = programs.surface(new ContributionOwner(1));

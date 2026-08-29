@@ -1,7 +1,4 @@
-plugins {
-    id "fabric-loom" version "${loom_version}" apply false
-    id "net.neoforged.moddev" version "${neogradle_version}" apply false
-}
+evaluationDependsOn(":packages:minecraft-client")
 
 def loader = (findProperty("loader") ?: "fabric").toString().toLowerCase(Locale.ROOT)
 if (!(loader in ["fabric", "neoforge"])) {
@@ -75,7 +72,7 @@ if (loader == "fabric") {
         }
         mods {
             caustica {
-                sourceSet(rootProject.sourceSets.main)
+                sourceSet(project(":packages:minecraft-client").sourceSets.main)
                 sourceSet(project(":packages:api").sourceSets.main)
                 sourceSet(project(":packages:minecraft-api").sourceSets.main)
                 sourceSet(project(":packages:settings-api").sourceSets.main)
@@ -97,7 +94,7 @@ dependencies {
         minecraft "com.mojang:minecraft:${project.minecraft_version}"
         implementation "net.fabricmc:fabric-loader:${project.loader_version}"
         implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
-        localRuntime rootProject
+        localRuntime project(":packages:minecraft-client")
     }
 
     testImplementation platform("org.junit:junit-bom:5.12.2")

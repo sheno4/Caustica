@@ -2,7 +2,7 @@
 
 Date: 2026-08-30
 Scope: architecture, API, and implementation reconciliation
-Status: current review and decision record; physical acceptance pending
+Status: current review and decision record; focused package checks are green, physical acceptance pending
 
 ## Executive decision
 
@@ -22,26 +22,25 @@ heaps, and retirement are intentional extension contracts; Minecraft lifecycle a
   retirement, diagnostics, and the renderer-backend SPI.
 - `packages/renderer-raytracing` owns program composition, retained acceleration structures, path transport,
   NEE-AT, and Vulkan opacity-micromap acceleration. `packages/renderer-presentation` owns display composition.
-- `packages/renderer-runtime` now owns live orchestration previously under the root `rt`/`spi.host` trees:
-  runtime/session state, frame renderer/resources/statistics, lifecycle coordination, pass scheduling, telemetry,
-  capture helpers, jitter, and `RuntimeHost`. Its dependency/import gates exclude the root application,
+- `packages/renderer-runtime` owns generic frame renderer/resources/statistics, lifecycle coordination, pass
+  scheduling, telemetry, capture helpers, jitter, and `RuntimeHost`. Its dependency/import gates exclude the `minecraft-client` application,
   loaders, Minecraft runtime, and client composition.
 - `packages/minecraft-api`, `minecraft-adapter`, `minecraft-content`, and `minecraft-rendering` divide Minecraft
   lifecycle, host-free content analysis, and Minecraft-independent rendering logic from the mapped host.
-- the root Loom application remains the necessary exception. It owns mapped Minecraft capture, client UI,
+- the `minecraft-client` Loom application remains the necessary exception. It owns Minecraft runtime/session
+  coordination, mapped Minecraft capture, client UI,
   Vulkan interception/device integration, resource loaders, Fabric/NeoForge entrypoints and discovery, mixins,
   and final composition. Its guarded publish-once `CausticaClientComposition.current()` is the entrypoint/mixin
   bridge; it does not make `renderer-runtime` a service-locator package.
 - `MinecraftFrameSelector`, `MinecraftFrameSelectionInstaller`, `MinecraftFrameCaptureInstaller`,
   `MinecraftFrameCaptureState`, and `MinecraftEntityCaptureBinding` are now host-free types in
-  `minecraft-rendering`; the root implements them against live Minecraft state.
-- the API showcase is a compile-only Minecraft extension consumer being reconciled to the real
-  `MinecraftExtension`/world-session lifecycle. Its purpose is boundary pressure; exact example behavior is
-  intentionally left to its final source and tests.
+  `minecraft-rendering`; `minecraft-client` implements them against live Minecraft state.
+- the API showcase is a non-loader API consumer on the real `MinecraftExtension`/world-session lifecycle.
+  Its post and UI passes own and record shader objects, while its world-resource pass currently performs only
+  pre-trace readiness and environment publication. It cannot launch as a standalone mod.
 
-Device interception, loader entrypoints, mixins, and composition are application responsibilities in the root
-Loom project rather than prospective reusable projects. Moving more application code into packages is not a
-remaining acceptance step.
+Device interception, loader entrypoints, mixins, and composition are application responsibilities in the
+`minecraft-client` Loom package rather than reusable library responsibilities.
 
 ## Contract decisions
 
@@ -57,12 +56,15 @@ set. Its readiness result covers the complete registration and is pending, ready
 Closing the registration removes the entire set. Per-object mutation, exact intermediate composition lookup,
 and feature-slot activation are outside the current lifecycle.
 
-Mesh, instance, and light IDs remain owner-local mutation capabilities. Explicitly handed-off same-session
-scene and program IDs are non-owning selections. They transfer no removal authority and do not pin their issuer.
+Mesh, instance, and light IDs remain owner-local mutation capabilities. A `LightId` may additionally cross an
+owner boundary as a same-session, non-owning `PrimitiveLightMap` selection; it grants no light mutation
+authority and does not pin its issuer. Explicitly handed-off same-session scene and program IDs are likewise
+non-owning selections.
 
 ### Scene views and environments
 
-Every `SceneView` contains a host-issued `SceneId`, a pose-only `Camera`, and a mandatory medium:
+Every `SceneView` contains a host-issued `SceneId`, a pose-only `Camera`, and one mandatory homogeneous medium
+containing the primary-ray origin:
 `ViewMedium.Vacuum` or a typed `ViewMedium.Volume`. Minecraft performs water-containment policy; renderer
 transport only consumes the selected volume. There is no public scene creation, closure, portal-link, or
 arbitrary medium-stack authority.
@@ -76,7 +78,8 @@ Environment selection is an owner-slot model for each scene:
 5. a displaced binding retires only after it is absent from owner slots and no published GPU snapshot can
    still reference it; owner drainage waits for the associated retirement callbacks.
 
-This is selection and restoration, not a global environment registry or hardcoded sky slot.
+This is selection and restoration, not a global environment registry or hardcoded sky slot. A scene with no
+surviving selection uses built-in environment implementation zero.
 
 ### Retained geometry, lights, and passes
 
@@ -85,10 +88,11 @@ resources retire after their tracked GPU use. Producer callbacks describe conten
 renderer owns upload, acceleration policy, TLAS insertion, descriptor publication, and retirement.
 
 The public light set is rectangle radiance in cd/m², circular-spot intensity in candela, and distant normal
-illuminance in lux. The ray tracer consumes all three through a persistent per-scene NEE-AT distribution and
-reverse-MIS feedback. CPU property coverage now checks global normalization and boundary ownership, local
-histogram probing/addressing, history validity and identity continuity, and agreement with shader constants and
-branch edges. This is static algorithmic evidence, not a live lighting result.
+illuminance in lux. The ray tracer consumes all three through persistent per-scene double buffers: a global
+discrete distribution, tiled local histograms derived from previous-frame light and pixel feedback, mixture
+proposal PDFs, candidate RIS, and reverse MIS. CPU property coverage checks global normalization and boundary
+ownership, local histogram probing/addressing, history validity and identity continuity, and agreement with
+shader constants and branch edges. This is static algorithmic evidence, not a live lighting result.
 
 World-resource passes record before tracing. Post and UI passes have stage-local IDs and one optional
 before/after anchor. Missing anchors are unconstrained; acceptance order resolves remaining ties. Duplicate,
@@ -103,8 +107,11 @@ session/package lifecycles.
 
 The required profile is Vulkan 1.4 with unified image layouts, descriptor heaps, synchronization2, and shader
 objects for compute/raster. Ray stages remain `VK_KHR_ray_tracing_pipeline`. One mapped resource heap and one
-mapped sampler heap are bound for renderer command streams; heap-native shaders use direct access and
-`vkCmdPushDataEXT` rather than a descriptor-set compatibility path.
+mapped sampler heap are bound for renderer command streams. Images and samplers use direct heap access. An
+acceleration structure is the deliberate exception: SPIR-V declares a conventional binding and shader or
+pipeline creation maps it to a heap index stored in pushed data with
+`VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_PUSH_INDEX_EXT`. This still uses no descriptor-set layout or bind
+command. Heap-native code records its data with `vkCmdPushDataEXT`.
 
 `GpuDescriptorHeapProperties` uses explicit byte units:
 
@@ -120,8 +127,10 @@ and the Vulkan acceleration-structure path. Documentation should say opacity-mic
 that the deleted encoder is still a program stage.
 
 The fixed and Minecraft world compositions retain the reflected 96-byte `WorldBindingRoots` ABI: four device
-addresses, the TLAS plus seven storage-image heap indices, initial-volume state, and the NEE-AT state address.
-The general surface-modifier and unused speculative roots are absent.
+addresses, the pushed TLAS heap index used by the acceleration-structure binding mapping, seven direct
+storage-image heap indices, initial-volume state, and the NEE-AT state address. The selected environment
+implementation and binding word live in the reflected 320-byte addressable `WorldPush`. The general
+surface-modifier and unused speculative roots are absent.
 
 ## Package decision table
 
@@ -140,13 +149,13 @@ The general surface-modifier and unused speculative roots are absent.
 | `minecraft-api`, `minecraft-adapter` | Minecraft extension/world-session lifecycle and engine bridge |
 | `minecraft-content` | Host-free material analysis and page planning |
 | `minecraft-rendering` | Host-free frame/capture seams and Minecraft-independent rendering/GPU publication |
+| `minecraft-client` | Loom host, mapped Minecraft integration, loaders, mixins, UI, and final composition |
 | `slang-runtime`, `slang-tooling` | Slang runtime and reusable compile/reflection/generation tooling |
 | `examples/*` | Strict public-contract consumers for API and glTF integration pressure |
-| root Loom project | Mapped Minecraft host/UI, Vulkan interception, loaders, mixins, and application composition |
 
 ## Acceptance decision
 
-The repository is still under static reconciliation. The remaining order is:
+Focused package, shader, reflection, ABI, and example checks are green. The remaining order is:
 
 1. complete the package, import/dependency, lifecycle, unit, shader-compilation/reflection, ABI, and example
    consumer gates;
@@ -159,12 +168,13 @@ No physical launch, visual result, validation-layer result, or frame-rate result
 ## Final decisions
 
 - Keep one Vulkan-native extension API and Minecraft lifecycle in separate packages.
-- Keep renderer runtime state instance-owned; retain the root publish-once composition bridge solely for Loom
+- Keep renderer runtime state instance-owned; retain the `minecraft-client` publish-once composition bridge solely for Loom
   host hooks and mixins.
 - Keep atomic owner-scoped program registration and owner-scoped retained retirement.
 - Keep deterministic owner-slot environment precedence, restoration, and drainage semantics.
-- Keep scene targeting but defer public scene administration and portal traversal.
-- Keep mandatory `SceneView.medium()` and Minecraft-owned containment policy.
+- Keep scene targeting but defer public scene administration and portal traversal. Current compatibility is
+  identity and lifetime isolation only; simultaneous portal traversal requires a new multi-scene trace ABI.
+- Keep mandatory `SceneView.medium()` and Minecraft-owned primary-origin containment policy.
 - Keep stage-local pass ordering rather than exposing a general render graph.
 - Keep the three-shape NEE-AT light contract experimental through physical validation.
 - Keep Vulkan opacity-micromap acceleration while removing the unused encoder program.

@@ -75,6 +75,10 @@ final class WorldShaderCompilerTest {
             assertEquals(1, compiler.implementationIndex(environmentKey));
             assertEquals(List.of(41L), compiler.composition().implementationData());
             assertTrue(compiler.composition().rootSource().contains("ShaderDataPtr<uint64_t>"));
+            assertTrue(compiler.composition().rootSource().contains(
+                    "case 0u: { BuiltinEnvironment value;"));
+            assertTrue(compiler.composition().rootSource().contains(
+                    "default: { ErrorEnvironment value;"));
             assertFalse(compiler.composition().rootSource().contains("SurfaceModifier"));
             assertSpirv(compiler.compileClosestHit());
             assertSpirv(compiler.compileRadianceAnyHit());
@@ -151,6 +155,10 @@ final class WorldShaderCompilerTest {
         assertTrue(shadow.contains("evaluateBoundaryLighting"));
         assertTrue(shadow.contains("IgnoreHit()"));
         assertTrue(world.contains("query.showEnvironmentEmitters = showEmitters"));
+        assertTrue(world.contains("query.bindingData = frame[0].environmentBinding"));
+        assertTrue(miss.contains(
+                "environments.evaluateEnvironment(worldEnvironmentImplementation()"));
+        assertFalse(miss.contains("environments.evaluateEnvironment(0u"));
         assertTrue(miss.contains("payload.previousBsdfPdf <= 0.0"));
         assertTrue(closest.contains("abs(dot(closure.shadingNormal, light.direction))"));
         assertTrue(closest.contains("boundaryWeight > 0.0"));

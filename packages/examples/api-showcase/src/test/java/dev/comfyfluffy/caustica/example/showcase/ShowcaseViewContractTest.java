@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 
 final class ShowcaseViewContractTest {
     @Test
@@ -30,6 +31,22 @@ final class ShowcaseViewContractTest {
         assertSame(water, medium.implementation());
         assertEquals(17L, medium.bindingData().bits());
         assertEquals(29L, medium.instanceData().bits());
+    }
+
+    @Test
+    void twoHostScenesCanSwitchWithoutSharingIdentityOrAddingPortalAuthority() {
+        SceneId primary = new SceneId() { };
+        SceneId alternate = new SceneId() { };
+        ShowcaseSceneSwitch scenes = new ShowcaseSceneSwitch(primary, alternate);
+
+        var first = scenes.view(false, Camera.IDENTITY);
+        var second = scenes.view(true, Camera.IDENTITY);
+
+        assertSame(primary, first.entryScene());
+        assertSame(alternate, second.entryScene());
+        assertNotSame(first.entryScene(), second.entryScene());
+        assertSame(ViewMedium.Vacuum.INSTANCE, first.medium());
+        assertSame(ViewMedium.Vacuum.INSTANCE, second.medium());
     }
 
     private interface Binding { }

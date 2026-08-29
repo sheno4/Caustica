@@ -6,6 +6,7 @@ import dev.comfyfluffy.caustica.settings.Option;
 import dev.comfyfluffy.caustica.settings.OptionLookup;
 import dev.comfyfluffy.caustica.settings.OptionValues;
 import dev.comfyfluffy.caustica.vulkan.ShaderObjectCompute;
+import dev.comfyfluffy.caustica.vulkan.ShaderObjectGraphics;
 import org.junit.jupiter.api.Test;
 
 import java.nio.ByteBuffer;
@@ -67,5 +68,17 @@ final class ShowcasePassContractTest {
                 "createComputeShader", GpuDevice.class, ByteBuffer.class));
         assertSame(ShaderObjectCompute.class, ShowcasePasses.class.getDeclaredMethod(
                 "createComputeShader", GpuDevice.class, ByteBuffer.class).getReturnType());
+        assertSame(ShaderObjectGraphics.class, ShowcasePasses.class.getDeclaredMethod(
+                "createGraphicsShaders", GpuDevice.class, ByteBuffer.class, ByteBuffer.class).getReturnType());
+        assertSame(ShaderObjectGraphics.class, ShowcasePasses.class.getDeclaredMethod(
+                "createUiGraphicsShaders", GpuDevice.class, ByteBuffer.class, ByteBuffer.class).getReturnType());
+    }
+
+    @Test
+    void uiSceneBindingReadsTheDescriptorIndexAtTheStartOfPushData() {
+        var mapping = ShowcasePasses.UI_SCENE_MAPPING;
+        assertEquals(0, mapping.descriptorSet());
+        assertEquals(0, mapping.binding());
+        assertEquals(0, mapping.pushDataOffset());
     }
 }

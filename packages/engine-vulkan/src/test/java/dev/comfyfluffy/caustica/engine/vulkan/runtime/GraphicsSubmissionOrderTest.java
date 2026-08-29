@@ -30,6 +30,16 @@ final class GraphicsSubmissionOrderTest {
                 "signal:22:4:" + VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT), submission.calls);
     }
 
+    @Test
+    void publishedBuildWaitCoversTlasBuildAndRayTraversal() {
+        RecordingSubmission submission = new RecordingSubmission();
+
+        RtGpuExecutor.enqueueBuildWait(submission, 31L, 7L);
+
+        assertEquals(List.of("wait:31:7:" + (VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR
+                | VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR)), submission.calls);
+    }
+
     private static final class RecordingSubmission implements GraphicsSubmission {
         private final List<String> calls = new ArrayList<>();
 

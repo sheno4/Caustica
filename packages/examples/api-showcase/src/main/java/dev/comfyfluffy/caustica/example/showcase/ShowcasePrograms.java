@@ -34,7 +34,9 @@ final class ShowcasePrograms {
     record Exports(SurfaceId<SurfaceBindingData, InstanceData> opaque,
                    SurfaceId<SurfaceBindingData, InstanceData> cutout,
                    VolumeId<VolumeBindingData, InstanceData> volume,
-                   EnvironmentId<EnvironmentBindingData> environment) { }
+                   EnvironmentId<EnvironmentBindingData> overworldSky,
+                   EnvironmentId<EnvironmentBindingData> netherSky,
+                   EnvironmentId<EnvironmentBindingData> endSky) { }
 
     private final ProgramRegistration<Exports> registration;
     private final AtomicBoolean ready = new AtomicBoolean();
@@ -52,7 +54,13 @@ final class ShowcasePrograms {
                         SOURCE.definition("showcase_volume", "api_showcase.AbsorbingVolume"),
                         IMPLEMENTATION.data(0L), VOLUME_BINDING, INSTANCE)),
                 builder.environment(new EnvironmentDefinition<>(
-                        SOURCE.definition("showcase_environment", "api_showcase.GradientEnvironment"),
+                        SOURCE.definition("showcase_environment", "api_showcase.OverworldSky"),
+                        ENVIRONMENT_BINDING)),
+                builder.environment(new EnvironmentDefinition<>(
+                        SOURCE.definition("showcase_environment", "api_showcase.NetherSky"),
+                        ENVIRONMENT_BINDING)),
+                builder.environment(new EnvironmentDefinition<>(
+                        SOURCE.definition("showcase_environment", "api_showcase.EndSky"),
                         ENVIRONMENT_BINDING))));
         registration.whenComplete(completion -> {
             if (completion instanceof ProgramRegistration.Ready) {
@@ -71,8 +79,9 @@ final class ShowcasePrograms {
         return ready.get();
     }
 
-    EnvironmentBinding<EnvironmentBindingData> environmentBinding(long bindingWord, Runnable retired) {
-        return new EnvironmentBinding<>(exports().environment(),
+    EnvironmentBinding<EnvironmentBindingData> environmentBinding(
+            EnvironmentId<EnvironmentBindingData> implementation, long bindingWord, Runnable retired) {
+        return new EnvironmentBinding<>(implementation,
                 ENVIRONMENT_BINDING.data(bindingWord), retired);
     }
 
