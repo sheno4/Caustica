@@ -1,13 +1,10 @@
-package dev.comfyfluffy.caustica.rt.pipeline;
+package dev.comfyfluffy.caustica.renderer.presentation;
 
-import dev.comfyfluffy.caustica.config.CausticaConfig;
-import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanBarriers;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtDebugLabels;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtGpuExecutor;
 import dev.comfyfluffy.caustica.renderer.raytracing.RtSceneUnits;
-import dev.comfyfluffy.caustica.rt.RtLookPackage;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuBuffer;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuImage;
 import dev.comfyfluffy.caustica.rt.gen.ExposureStateData;
@@ -28,9 +25,14 @@ import org.lwjgl.vulkan.VkImageSubresourceRange;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.Objects;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /** Owns the display exposure value shared by the RT compositor's display-mapping passes. */
 public final class RtExposure {
+    private static final Logger LOGGER = LoggerFactory.getLogger(RtExposure.class);
+    private final RtLookPackage look;
+    private Settings settings;
     private GpuImage image;
     private GpuBuffer histogram;
     private GpuBuffer state;
@@ -51,6 +53,22 @@ public final class RtExposure {
 
     private static final long DIAG_LOG_INTERVAL_NANOS = 1_000_000_000L;
     private static final int STATE_READBACK_RING = 6;
+
+    public record Settings(String mode, float manualEv, float key,
+            float adaptDarken, float adaptBrighten, float lowPercentile, float highPercentile,
+            int stride, float centerWeightSigma, float centerWeightFloor,
+            float skyWeightCap, float emissiveWeightCap,
+            boolean preExposure, boolean frameStats, float gamma) {
+    }
+
+    public RtExposure(RtLookPackage look, Settings settings) {
+        this.look = Objects.requireNonNull(look, "look");
+        this.settings = Objects.requireNonNull(settings, "settings");
+    }
+
+    public void configure(Settings settings) {
+        this.settings = Objects.requireNonNull(settings, "settings");
+    }
 
     private static final class ReadbackSlot {
         final GpuBuffer buffer;
@@ -211,7 +229,7 @@ public final class RtExposure {
     // Manual mode's exposure scale, also used as the auto-history seed (resetAutoHistory) so the very
     // first auto-exposure frame starts from the dialed-in EV bias instead of a bare 1.0.
     private float manualExposureScale() {
-        return CausticaConfig.Rt.Exposure.clampScale((float) Math.pow(2.0, manualEv()));
+        return Math.clamp((float) Math.pow(2.0, manualEv()), 1.0e-8f, 1.0e8f);
     }
 
     private void recordAuto(VulkanDeviceContext ctx, VkCommandBuffer cmd, MemoryStack stack,
@@ -276,7 +294,7 @@ public final class RtExposure {
      * the GPU, which is sufficient for diagnostics.
      */
     private void logDiagnosticsIfDue() {
-        if (!CausticaConfig.Rt.FrameStats.ENABLED.value() || completedState == null) {
+        if (!settings.frameStats() || completedState == null) {
             return;
         }
         long now = System.nanoTime();
@@ -302,7 +320,7 @@ public final class RtExposure {
         // evScene is EV100; evTarget/evApplied are log2 of the absolute
         // exposure multiplier, i.e. pre-exposure already divided back out, so they stay comparable
         // across frames regardless of what preExposure happened to be.
-        CausticaMod.LOGGER.info(
+        LOGGER.info(
                 "RT exposure diag: evScene(EV100)={} evTarget={}{} evApplied={} preExposure={} "
                         + "clipLow={}% clipHigh={}% skyScale={} skyWeight={}% emissiveScale={} "
                         + "emissiveWeight={}% curveComp={} effectiveSlope={}",
@@ -319,7 +337,7 @@ public final class RtExposure {
     /**
      * One-line summary for the F3 debug screen ({@code RtExposureDebugEntry}). Unlike
      * {@link #logDiagnosticsIfDue()} this is not throttled and not gated on
-     * {@code CausticaConfig.Rt.FrameStats.ENABLED} -- F3 only calls it once the player has enabled
+     * the frame-stat logging setting -- F3 only calls it once the player has enabled
      * that entry, and the game's own render cadence is throttle enough. Returns {@code null} when
      * there is nothing meaningful to show yet (state buffer not created).
      */
@@ -386,37 +404,36 @@ public final class RtExposure {
                 + ", centerWeight=" + autoConfig.centerWeightSigma + "/" + autoConfig.centerWeightFloor
                 + ", skyCap=" + autoConfig.skyWeightCap
                 + ", emissiveCap=" + autoConfig.emissiveWeightCap
-                + ", curve=" + RtLookPackage.current().exposure().curve() + ")"
+                + ", curve=" + look.exposure().curve() + ")"
                 : Float.toString(manualExposureScale());
-        CausticaMod.LOGGER.info("RT display exposure: mode={}, exposure={}, "
+        LOGGER.info("RT display exposure: mode={}, exposure={}, "
                         + "tonemap=aces2.0(lookPackage={},gamma={}), DLSS-RR exposure=NGX auto",
-                mode.configName, exposureText, RtLookPackage.current().id(),
-                CausticaConfig.Rt.Tonemap.GAMMA.value());
+                mode.configName, exposureText, look.id(), settings.gamma());
     }
 
-    private static Mode mode() {
-        return Mode.parse(CausticaConfig.Rt.Exposure.MODE.get());
+    private Mode mode() {
+        return Mode.parse(settings.mode());
     }
 
-    private static float manualEv() {
-        return CausticaConfig.Rt.Exposure.MANUAL_EV.value();
+    private float manualEv() {
+        return settings.manualEv();
     }
 
     private AutoConfig autoConfig() {
         return new AutoConfig(
-                CausticaConfig.Rt.Exposure.KEY.value(),
-                RtLookPackage.current().exposure().minEv(),
-                RtLookPackage.current().exposure().maxEv(),
-                CausticaConfig.Rt.Exposure.ADAPT_DARKEN.value(),
-                CausticaConfig.Rt.Exposure.ADAPT_BRIGHTEN.value(),
+                settings.key(),
+                look.exposure().minEv(),
+                look.exposure().maxEv(),
+                settings.adaptDarken(),
+                settings.adaptBrighten(),
                 manualEv(),
-                CausticaConfig.Rt.Exposure.LOW_PERCENTILE.value(),
-                CausticaConfig.Rt.Exposure.HIGH_PERCENTILE.value(),
-                CausticaConfig.Rt.Exposure.STRIDE.value(),
-                CausticaConfig.Rt.Exposure.CENTER_WEIGHT_SIGMA.value(),
-                CausticaConfig.Rt.Exposure.CENTER_WEIGHT_FLOOR.value(),
-                CausticaConfig.Rt.Exposure.SKY_WEIGHT_CAP.value(),
-                CausticaConfig.Rt.Exposure.EMISSIVE_WEIGHT_CAP.value(),
+                settings.lowPercentile(),
+                settings.highPercentile(),
+                settings.stride(),
+                settings.centerWeightSigma(),
+                settings.centerWeightFloor(),
+                settings.skyWeightCap(),
+                settings.emissiveWeightCap(),
                 curveConfig(),
                 preExposure(),
                 resetSequence);
@@ -479,7 +496,7 @@ public final class RtExposure {
     }
 
     private float computePreExposure() {
-        if (!CausticaConfig.Rt.Exposure.PRE_EXPOSURE.value()) {
+        if (!settings.preExposure()) {
             return 1.0f;
         }
         // Manual mode has a known fixed absolute exposure, so pre-exposing by it makes the residual
@@ -523,7 +540,7 @@ public final class RtExposure {
     }
 
     private ExposureCurve curveConfig() {
-        String spec = RtLookPackage.current().exposure().curve();
+        String spec = look.exposure().curve();
         if (cachedCurve != null && Objects.equals(cachedCurveSpec, spec)) {
             return cachedCurve;
         }
@@ -532,7 +549,7 @@ public final class RtExposure {
             parsed = parseCurve(spec);
         } catch (IllegalArgumentException e) {
             throw new IllegalStateException("Invalid exposure curve in look package '"
-                    + RtLookPackage.current().id() + "': " + spec, e);
+                    + look.id() + "': " + spec, e);
         }
         cachedCurveSpec = spec;
         cachedCurve = parsed;

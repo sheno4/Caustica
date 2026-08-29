@@ -6,11 +6,12 @@ import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtGpuExecutor;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 
 import dev.comfyfluffy.caustica.config.CausticaConfig;
-import dev.comfyfluffy.caustica.rt.pipeline.RtDebugPresentPipeline;
-import dev.comfyfluffy.caustica.rt.pipeline.RtDisplayPipeline;
-import dev.comfyfluffy.caustica.rt.pipeline.RtExposure;
+import dev.comfyfluffy.caustica.renderer.presentation.RtDebugPresentPipeline;
+import dev.comfyfluffy.caustica.renderer.presentation.RtDisplayPipeline;
+import dev.comfyfluffy.caustica.renderer.presentation.RtExposure;
+import dev.comfyfluffy.caustica.renderer.presentation.RtLookPackage;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDlssRr;
-import dev.comfyfluffy.caustica.rt.pipeline.RtToneLut;
+import dev.comfyfluffy.caustica.renderer.presentation.RtToneLut;
 import dev.comfyfluffy.caustica.rt.gen.PackedPathSegmentData;
 import org.lwjgl.vulkan.VK10;
 
@@ -19,6 +20,7 @@ import java.io.IOException;
 /** Owns images, buffers, LUTs, and pipelines whose validity is tied to the current frame extent. */
 final class RtFrameResources {
     private final RtFramePresenter presenter;
+    private final RtLookPackage look;
     private static final int PATH_QUEUE_RING = 6;
     private static final int PATH_RECORDS_PER_PIXEL = 2;
     RtDisplayPipeline displayPipeline;
@@ -43,7 +45,7 @@ final class RtFrameResources {
     GpuImage rrOutput;
     GpuImage postColorA;
     GpuImage postColorB;
-    final RtExposure exposure = new RtExposure();
+    final RtExposure exposure;
 
     int displayW = -1;
     int displayH = -1;
@@ -52,14 +54,16 @@ final class RtFrameResources {
     boolean renderSizeRrEnabled;
     int renderSizeRrQuality = Integer.MIN_VALUE;
 
-    RtFrameResources(RtFramePresenter presenter) {
+    RtFrameResources(RtFramePresenter presenter, RtLookPackage look, RtExposure.Settings exposureSettings) {
         this.presenter = presenter;
+        this.look = look;
+        this.exposure = new RtExposure(look, exposureSettings);
         for (int i = 0; i < continuationUses.length; i++) {
             continuationUses[i] = new RtGpuExecutor.TrackedGraphicsUse();
         }
     }
 
-    void ensurePresentationPipelines(VulkanDeviceContext context, RtLookPackage look) throws IOException {
+    void ensurePresentationPipelines(VulkanDeviceContext context) throws IOException {
         if (displayPipeline == null) {
             displayPipeline = RtDisplayPipeline.create(context);
         }

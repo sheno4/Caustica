@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.rt;
+package dev.comfyfluffy.caustica.renderer.presentation;
 
 import com.google.gson.JsonParser;
 import org.junit.jupiter.api.Test;

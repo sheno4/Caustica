@@ -1,5 +1,5 @@
 // Push-constant structs shared between the display-chain compute passes and
-// layout/layout_probe.slang's build-time reflection probe (see GenerateShaderRecords.groovy).
+// presentation_probe.slang's build-time reflection probe generates the matching Java records.
 // Each struct is imported into exactly one production shader AND probed here so its Java writer is
 // generated from the compiler's reflected offsets, preventing Java/shader ABI drift when fields move.
 //

@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.rt.pipeline;
+package dev.comfyfluffy.caustica.renderer.presentation;
 
 
 import dev.comfyfluffy.caustica.api.vulkan.GpuImage;

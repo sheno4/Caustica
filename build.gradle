@@ -12,6 +12,7 @@ plugins {
 }
 
 evaluationDependsOn(":packages:api")
+evaluationDependsOn(":packages:renderer-presentation")
 evaluationDependsOn(":packages:renderer-raytracing")
 evaluationDependsOn(":packages:slang-runtime")
 
@@ -119,6 +120,7 @@ if (loader == "fabric") {
 				sourceSet(project(":packages:minecraft-api").sourceSets.main)
 				sourceSet(project(":packages:minecraft-adapter").sourceSets.main)
 				sourceSet(project(":packages:minecraft-content").sourceSets.main)
+				sourceSet(project(":packages:renderer-presentation").sourceSets.main)
 				sourceSet(project(":packages:renderer-raytracing").sourceSets.main)
 				sourceSet(project(":packages:settings-api").sourceSets.main)
 				sourceSet(project(":packages:shader-api").sourceSets.main)
@@ -157,6 +159,8 @@ dependencies {
 	apiRuntime project(":packages:minecraft-adapter")
 	compileOnly project(":packages:minecraft-content")
 	apiRuntime project(":packages:minecraft-content")
+	compileOnly project(":packages:renderer-presentation")
+	apiRuntime project(":packages:renderer-presentation")
 	compileOnly project(":packages:renderer-raytracing")
 	apiRuntime project(":packages:renderer-raytracing")
 	compileOnly project(":packages:settings-api")
@@ -182,6 +186,7 @@ dependencies {
 	testImplementation project(":packages:minecraft-adapter")
 	testImplementation project(":packages:minecraft-content")
 	testImplementation(testFixtures(project(":packages:minecraft-content")))
+	testImplementation project(":packages:renderer-presentation")
 	testImplementation project(":packages:renderer-raytracing")
 	testImplementation project(":packages:settings-api")
 	testImplementation project(":packages:slang-runtime")
@@ -195,6 +200,7 @@ dependencies {
 	testRuntimeOnly project(":packages:minecraft-api")
 	testRuntimeOnly project(":packages:minecraft-adapter")
 	testRuntimeOnly project(":packages:minecraft-content")
+	testRuntimeOnly project(":packages:renderer-presentation")
 	testRuntimeOnly project(":packages:renderer-raytracing")
 	testRuntimeOnly project(":packages:settings-api")
 	testRuntimeOnly project(":packages:slang-runtime")
@@ -276,17 +282,11 @@ def generateShaderRecords = tasks.register("generateShaderRecords", GenerateShad
 	shaderRoot = shaderReflectionRoot
 	probeSource = shaderReflectionRoot.map { it.file("layout/layout_probe.slang") }
 	recordSpecs = [
-			"buffer|exposureStateLayoutProbe|ExposureState|dev.comfyfluffy.caustica.rt.gen|ExposureStateData|true",
 			"buffer|minecraftImplementationLayoutProbe|MinecraftImplementationData|dev.comfyfluffy.caustica.minecraft.gen|MinecraftImplementationData|false",
 			"buffer|minecraftMaterialLayoutProbe|MinecraftMaterialRecord|dev.comfyfluffy.caustica.minecraft.gen|MinecraftMaterialData|false",
 			"buffer|minecraftPrimitiveLayoutProbe|MinecraftPrimitiveData|dev.comfyfluffy.caustica.minecraft.gen|MinecraftPrimitiveData|false",
 			"buffer|minecraftInstanceLayoutProbe|MinecraftInstanceData|dev.comfyfluffy.caustica.minecraft.gen|MinecraftInstanceData|false",
 			"buffer|minecraftEnvironmentBindingLayoutProbe|MinecraftEnvironmentBinding|dev.comfyfluffy.caustica.minecraft.sky.gen|MinecraftEnvironmentBindingData|false",
-			"push|exposureHistPushProbe|ExposureHistPush|dev.comfyfluffy.caustica.rt.gen|ExposureHistPushData|false",
-			"push|exposureResolvePushProbe|ExposureResolvePush|dev.comfyfluffy.caustica.rt.gen|ExposureResolvePushData|false",
-			"push|displayPushProbe|DisplayPush|dev.comfyfluffy.caustica.rt.gen|DisplayPushData|false",
-			"push|debugPresentPushProbe|DebugPresentPush|dev.comfyfluffy.caustica.rt.gen|DebugPresentPushData|false",
-			"push|presentPushProbe|PresentPush|dev.comfyfluffy.caustica.rt.gen|PresentPushData|false",
 			"push|skyLutPushProbe|SkyInputs|dev.comfyfluffy.caustica.minecraft.sky.gen|SkyInputsData|false",
 			"push|skyDispatchPushProbe|SkyLutPush|dev.comfyfluffy.caustica.minecraft.sky.gen|SkyLutPushData|false",
 	]
@@ -609,6 +609,7 @@ tasks.named("jar", Jar).configure {
 	from(project(":packages:minecraft-api").sourceSets.main.output)
 	from(project(":packages:minecraft-adapter").sourceSets.main.output)
 	from(project(":packages:minecraft-content").sourceSets.main.output)
+	from(project(":packages:renderer-presentation").sourceSets.main.output)
 	from(project(":packages:renderer-raytracing").sourceSets.main.output)
 	from(project(":packages:settings-api").sourceSets.main.output)
 	from(project(":packages:shader-api").sourceSets.main.output)
@@ -630,6 +631,8 @@ tasks.named("sourcesJar", Jar).configure {
 	from(project(":packages:minecraft-api").sourceSets.main.allSource)
 	from(project(":packages:minecraft-adapter").sourceSets.main.allSource)
 	from(project(":packages:minecraft-content").sourceSets.main.allSource)
+	from(project(":packages:renderer-presentation").sourceSets.main.allSource)
+	from(project(":packages:renderer-presentation").file("shaders")) { into "shaders/presentation" }
 	from(project(":packages:renderer-raytracing").sourceSets.main.allSource)
 	from(project(":packages:settings-api").sourceSets.main.allSource)
 	from(project(":packages:shader-api").sourceSets.main.allSource)
@@ -650,6 +653,7 @@ def verifyEmbeddedApi = tasks.register("verifyEmbeddedApi") {
 			project(":packages:minecraft-api").tasks.named("jar"),
 			project(":packages:minecraft-adapter").tasks.named("jar"),
 			project(":packages:minecraft-content").tasks.named("jar"),
+			project(":packages:renderer-presentation").tasks.named("jar"),
 			project(":packages:renderer-raytracing").tasks.named("jar"),
 			project(":packages:settings-api").tasks.named("jar"),
 			project(":packages:shader-api").tasks.named("jar"),
@@ -665,6 +669,7 @@ def verifyEmbeddedApi = tasks.register("verifyEmbeddedApi") {
 	inputs.file(project(":packages:minecraft-api").tasks.named("jar", Jar).flatMap { it.archiveFile })
 	inputs.file(project(":packages:minecraft-adapter").tasks.named("jar", Jar).flatMap { it.archiveFile })
 	inputs.file(project(":packages:minecraft-content").tasks.named("jar", Jar).flatMap { it.archiveFile })
+	inputs.file(project(":packages:renderer-presentation").tasks.named("jar", Jar).flatMap { it.archiveFile })
 	inputs.file(project(":packages:renderer-raytracing").tasks.named("jar", Jar).flatMap { it.archiveFile })
 	inputs.file(project(":packages:settings-api").tasks.named("jar", Jar).flatMap { it.archiveFile })
 	inputs.file(project(":packages:shader-api").tasks.named("jar", Jar).flatMap { it.archiveFile })
@@ -692,6 +697,8 @@ def verifyEmbeddedApi = tasks.register("verifyEmbeddedApi") {
 		def minecraftApiEntries = names(project(":packages:minecraft-api").tasks.named("jar", Jar).get().archiveFile.get().asFile)
 		def minecraftAdapterEntries = names(project(":packages:minecraft-adapter").tasks.named("jar", Jar).get().archiveFile.get().asFile)
 		def minecraftContentEntries = names(project(":packages:minecraft-content").tasks.named("jar", Jar).get().archiveFile.get().asFile)
+		def rendererPresentationEntries = names(project(":packages:renderer-presentation").tasks.named("jar", Jar)
+				.get().archiveFile.get().asFile)
 		def rendererRayTracingEntries = names(project(":packages:renderer-raytracing").tasks.named("jar", Jar)
 				.get().archiveFile.get().asFile)
 		def settingsApiEntries = names(project(":packages:settings-api").tasks.named("jar", Jar).get().archiveFile.get().asFile)
@@ -710,6 +717,9 @@ def verifyEmbeddedApi = tasks.register("verifyEmbeddedApi") {
 		required.addAll(minecraftApiEntries.findAll { it.endsWith(".class") })
 		required.addAll(minecraftAdapterEntries.findAll { it.endsWith(".class") })
 		required.addAll(minecraftContentEntries.findAll { it.endsWith(".class") })
+		required.addAll(rendererPresentationEntries.findAll { it.endsWith(".class")
+				|| it.startsWith("caustica/shaders/pipelines/") && !it.endsWith("/")
+				|| it.startsWith("caustica/color/") && !it.endsWith("/") })
 		required.addAll(rendererRayTracingEntries.findAll { it.endsWith(".class")
 				|| it.startsWith("caustica/shaders/world/") && !it.endsWith("/")
 				|| it.startsWith("caustica/shaders/pipelines/nee_at/") && !it.endsWith("/")
@@ -758,6 +768,7 @@ tasks.named("check") {
 			project(":packages:config").tasks.named("check"),
 			project(":packages:engine-vulkan").tasks.named("check"),
 			project(":packages:minecraft-content").tasks.named("check"),
+			project(":packages:renderer-presentation").tasks.named("check"),
 			project(":packages:renderer-raytracing").tasks.named("check"),
 			project(":packages:slang-runtime").tasks.named("check"),
 			project(":packages:vulkan-support").tasks.named("check"))

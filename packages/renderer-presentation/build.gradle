@@ -1,0 +1,240 @@
+import dev.comfyfluffy.caustica.slangtooling.CompileSlangShaders
+import dev.comfyfluffy.caustica.slangtooling.GenerateShaderRecords
+
+plugins {
+    id "java-library"
+    id "maven-publish"
+    id "dev.comfyfluffy.caustica.slang-tooling"
+}
+
+version = project.api_version
+group = project.maven_group
+java.toolchain.languageVersion = JavaLanguageVersion.of(25)
+base { archivesName = "caustica-renderer-presentation" }
+repositories { mavenCentral() }
+
+dependencies {
+    api project(":packages:renderer-raytracing")
+    implementation project(":packages:engine-vulkan")
+    implementation project(":packages:vulkan-support")
+    implementation "com.google.code.gson:gson:2.14.0"
+    implementation "org.slf4j:slf4j-api:2.0.17"
+    testImplementation platform("org.junit:junit-bom:5.12.2")
+    testImplementation "org.junit.jupiter:junit-jupiter"
+    testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+}
+
+def shaderSources = file("shaders")
+def generatedShaderResources = layout.buildDirectory.dir("generated/resources")
+def compilePresentationShaders = tasks.register("compilePresentationShaders", CompileSlangShaders) {
+    group = "build"
+    description = "Compiles and validates the presentation shader-object pipelines."
+    sourceDirectory = shaderSources
+    includeDirectories.from(file("shaders/common"))
+    aliasSourceDirectory = shaderSources
+    outputDirectory = generatedShaderResources.map { it.dir("caustica/shaders") }
+}
+sourceSets.main.resources.srcDir(files(generatedShaderResources).builtBy(compilePresentationShaders))
+
+def reflectionRoot = layout.buildDirectory.dir("generated/reflection-sources")
+def preparePresentationReflectionSources = tasks.register("preparePresentationReflectionSources", Sync) {
+    from(file("shaders/common")) { into "common" }
+    from(file("src/shaderReflection")) { into "layout" }
+    into(reflectionRoot)
+}
+def presentationRecordSpecs = [
+        "buffer|exposureStateLayoutProbe|ExposureState|dev.comfyfluffy.caustica.rt.gen|ExposureStateData|true",
+        "push|exposureHistPushProbe|ExposureHistPush|dev.comfyfluffy.caustica.rt.gen|ExposureHistPushData|false",
+        "push|exposureResolvePushProbe|ExposureResolvePush|dev.comfyfluffy.caustica.rt.gen|ExposureResolvePushData|false",
+        "push|displayPushProbe|DisplayPush|dev.comfyfluffy.caustica.rt.gen|DisplayPushData|false",
+        "push|debugPresentPushProbe|DebugPresentPush|dev.comfyfluffy.caustica.rt.gen|DebugPresentPushData|false",
+        "push|presentPushProbe|PresentPush|dev.comfyfluffy.caustica.rt.gen|PresentPushData|false"
+]
+def generatedRecordRoot = layout.buildDirectory.dir("generated/sources/shaderRecords")
+def generatePresentationRecords = tasks.register("generatePresentationRecords", GenerateShaderRecords) {
+    group = "build"
+    description = "Generates presentation host records from Slang reflection."
+    dependsOn(preparePresentationReflectionSources)
+    shaderRoot = reflectionRoot
+    probeSource = reflectionRoot.map { it.file("layout/presentation_probe.slang") }
+    recordSpecs = presentationRecordSpecs
+    outDir = generatedRecordRoot
+}
+sourceSets.main.java.srcDir(files(generatedRecordRoot).builtBy(generatePresentationRecords))
+
+def verifyPresentationAbi = tasks.register("verifyPresentationAbi") {
+    group = "verification"
+    dependsOn(generatePresentationRecords)
+    def expected = [
+            ExposureStateData: ["BYTE_SIZE = 56", "putFloat(0, previous())", "putInt(28, resetSeq())",
+                    "putFloat(48, meteringEmissiveScale())", "getFloat(52)"],
+            ExposureHistPushData: ["BYTE_SIZE = 40", "putInt(0, colorImageIndex())",
+                    "putLong(16, histogramAddress())", "putFloat(32, centerWeightFloor())"],
+            ExposureResolvePushData: ["BYTE_SIZE = 112", "putLong(0, histogramAddress())",
+                    "putInt(16, exposureImageIndex())", "putFloat(60, curveScene0())",
+                    "putFloat(100, preExposure())", "putInt(104, resetSeq())"],
+            DisplayPushData: ["BYTE_SIZE = 64", "putInt(0, outputImageIndex())",
+                    "putInt(40, hdrEnabled())", "putFloat(52, hdrPeakNits())", "putFloat(60, lookLutSize())"],
+            DebugPresentPushData: ["BYTE_SIZE = 64", "putInt(0, outputImageIndex())",
+                    "putLong(40, exposureStateAddress())", "putInt(48, debugView())",
+                    "putFloat(56, centerWeightFloor())"],
+            PresentPushData: ["BYTE_SIZE = 12", "putInt(0, outputImageIndex())",
+                    "putInt(4, sourceImageIndex())", "putFloat(8, uiNits())"]
+    ]
+    inputs.dir(generatedRecordRoot)
+    doLast {
+        expected.each { name, fragments ->
+            def source = generatedRecordRoot.get().file(
+                    "dev/comfyfluffy/caustica/rt/gen/${name}.java").asFile.getText("UTF-8")
+            def missing = fragments.findAll { !source.contains(it) }
+            if (!missing.empty) throw new GradleException("${name} ABI drifted: ${missing}")
+        }
+    }
+}
+
+def reproducibleRecordRoot = layout.buildDirectory.dir("generated/reproducibility/shaderRecords")
+def reproducePresentationRecords = tasks.register("reproducePresentationRecords", GenerateShaderRecords) {
+    dependsOn(preparePresentationReflectionSources)
+    shaderRoot = reflectionRoot
+    probeSource = reflectionRoot.map { it.file("layout/presentation_probe.slang") }
+    recordSpecs = presentationRecordSpecs
+    outDir = reproducibleRecordRoot
+}
+def verifyPresentationGenerationReproducible = tasks.register("verifyPresentationGenerationReproducible") {
+    group = "verification"
+    dependsOn(generatePresentationRecords, reproducePresentationRecords)
+    doLast {
+        def relative = { File root -> fileTree(root).files.collect {
+            root.toPath().relativize(it.toPath()).toString().replace('\\', '/')
+        }.sort() }
+        def firstRoot = generatedRecordRoot.get().asFile
+        def secondRoot = reproducibleRecordRoot.get().asFile
+        def first = relative(firstRoot)
+        def second = relative(secondRoot)
+        if (first != second) throw new GradleException("presentation generated file sets differ")
+        first.each { path ->
+            if (!java.util.Arrays.equals(new File(firstRoot, path).bytes, new File(secondRoot, path).bytes)) {
+                throw new GradleException("presentation generation is not reproducible: ${path}")
+            }
+        }
+    }
+}
+
+def verifyPresentationSpirvTarget = tasks.register("verifyPresentationSpirvTarget") {
+    group = "verification"
+    dependsOn(compilePresentationShaders, generatePresentationRecords)
+    doLast {
+        [compilePresentationShaders.get(), generatePresentationRecords.get()].each { task ->
+            if (task.spirvProfile.get() != "spirv_1_6" || task.vulkanTarget.get() != "vulkan1.4") {
+                throw new GradleException("${task.name} targets ${task.spirvProfile.get()}/${task.vulkanTarget.get()}")
+            }
+        }
+    }
+}
+
+def expectedPipelines = ["debug_present", "display", "exposure_hist", "exposure_resolve",
+                         "hdr_composite", "sdr_present"] as Set
+def verifyRendererPresentationJar = tasks.register("verifyRendererPresentationJar") {
+    group = "verification"
+    dependsOn(tasks.named("jar"))
+    doLast {
+        def names = []
+        new java.util.jar.JarFile(tasks.named("jar", Jar).get().archiveFile.get().asFile).withCloseable { jar ->
+            def entries = jar.entries()
+            while (entries.hasMoreElements()) names.add(entries.nextElement().name)
+        }
+        def generated = ["ExposureStateData", "ExposureHistPushData", "ExposureResolvePushData",
+                         "DisplayPushData", "DebugPresentPushData", "PresentPushData"].collect {
+            "dev/comfyfluffy/caustica/rt/gen/${it}.class"
+        } as Set
+        def actualGenerated = names.findAll { it.startsWith("dev/comfyfluffy/caustica/rt/gen/")
+                && it.endsWith("Data.class") } as Set
+        def pipelines = names.findAll { it.startsWith("caustica/shaders/pipelines/")
+                && it.endsWith("/main.comp.spv") }.collect { it.split('/')[3] } as Set
+        def colors = names.findAll { it.startsWith("caustica/color/") && !it.endsWith('/') }
+        if (actualGenerated != generated || pipelines != expectedPipelines || colors.size() != 7) {
+            throw new GradleException("presentation JAR mismatch: generated=${actualGenerated}, pipelines=${pipelines}, colors=${colors}")
+        }
+    }
+}
+
+def verifyRendererPresentationImports = tasks.register("verifyRendererPresentationImports") {
+    group = "verification"
+    inputs.files(sourceSets.main.allJava)
+    doLast {
+        def forbidden = ["dev.comfyfluffy.caustica.CausticaMod", "dev.comfyfluffy.caustica.config",
+                "dev.comfyfluffy.caustica.minecraft", "dev.comfyfluffy.caustica.platform",
+                "dev.comfyfluffy.caustica.rt.RtRuntime", "net.minecraft", "net.fabricmc", "net.neoforged"]
+        def violations = []
+        sourceSets.main.allJava.files.sort().each { source ->
+            source.eachLine { line, number ->
+                if (line.stripLeading().startsWith("import ") && forbidden.any { line.contains(it) }) {
+                    violations.add("${source}:${number}: ${line.trim()}")
+                }
+            }
+        }
+        if (!violations.empty) throw new GradleException("renderer-presentation import violations:\n${violations.join('\n')}")
+    }
+}
+
+def verifyRendererPresentationDependencies = tasks.register("verifyRendererPresentationDependencies") {
+    group = "verification"
+    doLast {
+        def allowed = [project.path, ":packages:renderer-raytracing", ":packages:engine-vulkan",
+                       ":packages:vulkan-support"] as Set
+        def violations = []
+        configurations.matching { it.canBeResolved }.each { configuration ->
+            configuration.allDependencies.withType(ProjectDependency).each { dependency ->
+                if (!allowed.contains(dependency.path)) violations.add("${configuration.name}: ${dependency.path}")
+            }
+        }
+        if (!violations.empty) throw new GradleException("renderer-presentation dependency violations:\n${violations.join('\n')}")
+    }
+}
+
+def verifyRendererPresentationResources = tasks.register("verifyRendererPresentationResources") {
+    group = "verification"
+    doLast {
+        def actualPipelines = fileTree(file("shaders/pipelines")) { include "*/main.comp.slang" }
+                .files.collect { it.parentFile.name } as Set
+        def actualCommon = fileTree(file("shaders/common")) { include "*.slang" }
+                .files.collect { it.name } as Set
+        def rootDuplicates = expectedPipelines.findAll {
+            rootProject.file("shaders/pipelines/${it}/main.comp.slang").exists()
+        }
+        def rootCommonDuplicates = ["display_common.slang", "presentation_common.slang"].findAll {
+            rootProject.file("shaders/common/${it}").exists()
+        }
+        if (actualPipelines != expectedPipelines
+                || actualCommon != ["display_common.slang", "presentation_common.slang"] as Set
+                || !rootDuplicates.empty || !rootCommonDuplicates.empty) {
+            throw new GradleException("presentation resource ownership mismatch: pipelines=${actualPipelines}, "
+                    + "common=${actualCommon}, rootPipelines=${rootDuplicates}, rootCommon=${rootCommonDuplicates}")
+        }
+    }
+}
+
+tasks.named("test", Test) { useJUnitPlatform() }
+tasks.named("check") {
+    dependsOn(verifyPresentationAbi, verifyPresentationGenerationReproducible,
+            verifyPresentationSpirvTarget, verifyRendererPresentationJar,
+            verifyRendererPresentationImports, verifyRendererPresentationDependencies,
+            verifyRendererPresentationResources)
+}
+tasks.withType(JavaCompile).configureEach { options.release = 25 }
+java {
+    sourceCompatibility = JavaVersion.VERSION_25
+    targetCompatibility = JavaVersion.VERSION_25
+    withSourcesJar()
+}
+tasks.named("jar", Jar).configure {
+    from(rootProject.files("LICENSE.md", "COPYING", "COPYING.LESSER", "THIRD_PARTY_NOTICES.md")) { into "META-INF" }
+}
+publishing {
+    publications {
+        create("mavenJava", MavenPublication) {
+            artifactId = "caustica-renderer-presentation"
+            from components.java
+        }
+    }
+}

@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.rt;
+package dev.comfyfluffy.caustica.renderer.presentation;
 
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -26,10 +26,8 @@ public record RtLookPackage(
     public static final int SCHEMA_VERSION = 5;
     public static final String DEFAULT_ID = "default";
     public static final String DEFAULT_JSON = "/caustica/color/looks/default/look.json";
-    private static final RtLookPackage DEFAULT = load(DEFAULT_JSON);
-
-    public static RtLookPackage current() {
-        return DEFAULT;
+    public static RtLookPackage loadDefault() {
+        return load(DEFAULT_JSON);
     }
 
     static RtLookPackage parse(JsonObject root, String jsonResource) {

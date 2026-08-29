@@ -225,6 +225,9 @@ only generated dispatch interfaces and reflected resources. Java records generat
 layouts are emitted by the physical package that owns the layout. The ray-tracing package publishes its
 private host serializers and reflected world-root constants under the existing `rt.gen` and `rt.pipeline`
 Java namespaces; those namespaces do not imply root-project generation or public API ownership.
+The presentation package likewise owns exposure, display mapping, HDR composition, its six reflected host
+records, compiled shader objects, and authored look/LUT assets. Root composition supplies an immutable
+exposure-settings snapshot and owns the selected look instance; presentation code has no config singleton.
 
 ## Render passes and resources
 

@@ -42,13 +42,14 @@ import dev.comfyfluffy.caustica.renderer.raytracing.accel.TlasBuilder;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDlssRr;
 import dev.comfyfluffy.caustica.rt.pipeline.RtJitter;
-import dev.comfyfluffy.caustica.rt.pipeline.RtExposure;
+import dev.comfyfluffy.caustica.renderer.presentation.RtExposure;
+import dev.comfyfluffy.caustica.renderer.presentation.RtLookPackage;
 import dev.comfyfluffy.caustica.rt.pass.RtPassSchedulerBackend;
 import dev.comfyfluffy.caustica.renderer.raytracing.pipeline.RtPipeline;
 import dev.comfyfluffy.caustica.renderer.raytracing.scene.RtRetainedSceneBackend;
 import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
 import dev.comfyfluffy.caustica.rt.pipeline.RtBindings;
-import dev.comfyfluffy.caustica.rt.pipeline.RtToneLut;
+import dev.comfyfluffy.caustica.renderer.presentation.RtToneLut;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -84,6 +85,25 @@ final class RtFrameRenderer {
         return CausticaConfig.Rt.Composite.DEBUG_VIEW.value();
     }
 
+    private static RtExposure.Settings exposureSettings() {
+        return new RtExposure.Settings(
+                CausticaConfig.Rt.Exposure.MODE.get(),
+                CausticaConfig.Rt.Exposure.MANUAL_EV.value(),
+                CausticaConfig.Rt.Exposure.KEY.value(),
+                CausticaConfig.Rt.Exposure.ADAPT_DARKEN.value(),
+                CausticaConfig.Rt.Exposure.ADAPT_BRIGHTEN.value(),
+                CausticaConfig.Rt.Exposure.LOW_PERCENTILE.value(),
+                CausticaConfig.Rt.Exposure.HIGH_PERCENTILE.value(),
+                CausticaConfig.Rt.Exposure.STRIDE.value(),
+                CausticaConfig.Rt.Exposure.CENTER_WEIGHT_SIGMA.value(),
+                CausticaConfig.Rt.Exposure.CENTER_WEIGHT_FLOOR.value(),
+                CausticaConfig.Rt.Exposure.SKY_WEIGHT_CAP.value(),
+                CausticaConfig.Rt.Exposure.EMISSIVE_WEIGHT_CAP.value(),
+                CausticaConfig.Rt.Exposure.PRE_EXPOSURE.value(),
+                CausticaConfig.Rt.FrameStats.ENABLED.value(),
+                CausticaConfig.Rt.Tonemap.GAMMA.value());
+    }
+
     private static int maxBounces() {
         return CausticaConfig.Rt.Composite.MAX_BOUNCES.value();
     }
@@ -92,7 +112,7 @@ final class RtFrameRenderer {
     // tunable: a very low-frequency field could alias across it where the wave spectrum does not.
     private static final int PROCEDURAL_ANCHOR_MASK = 4095;
     // Renderer look metadata is exposure/LMT only; scene providers own their photometric calibration.
-    private static final RtLookPackage LOOK = RtLookPackage.current();
+    private static final RtLookPackage LOOK = RtLookPackage.loadDefault();
     // Sign of the sub-pixel jitter as reported to DLSS-RR + applied to the primary ray, mirroring the
     // validated DLSS-SR convention (Vulkan flipped clip space wants Y negated).
     private static float jitterSignX() {
@@ -171,7 +191,7 @@ final class RtFrameRenderer {
         this.services = Objects.requireNonNull(services, "services");
         this.rootScene = Objects.requireNonNull(rootScene, "rootScene");
         this.presenter = Objects.requireNonNull(presenter, "presenter");
-        this.frameResources = new RtFrameResources(presenter);
+        this.frameResources = new RtFrameResources(presenter, LOOK, exposureSettings());
     }
 
     public boolean hasFailed() {
@@ -476,7 +496,8 @@ final class RtFrameRenderer {
 
     private boolean ensurePresentationResources(VulkanDeviceContext ctx, int width, int height)
             throws IOException {
-        frameResources.ensurePresentationPipelines(ctx, LOOK);
+        frameResources.exposure.configure(exposureSettings());
+        frameResources.ensurePresentationPipelines(ctx);
         if (frameResources.ensureSized(ctx, width, height)) {
             mvHasPrev = false;
             proceduralTimeValid = false;

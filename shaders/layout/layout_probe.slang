@@ -1,16 +1,10 @@
 // Build-time reflection probe only. This file is not packaged as a runtime shader.
 // Exposing WorldPush as a structured-buffer element makes Slang's JSON reflection include the
 // complete Std430DataLayout: field types, byte offsets, total size, matrix mode, and array counts.
-import display_common;
 import caustica_minecraft_sky_atmosphere;
 import caustica_minecraft_sky_bindings;
 import caustica_minecraft_sky_lut_types;
 import caustica_minecraft_material;
-import presentation_common;
-
-struct ExposureStateLayoutProbe {
-    ExposureState values[2]; // array stride is the complete, tail-padded ExposureState byte size
-};
 
 struct MinecraftImplementationLayoutProbe { MinecraftImplementationData values[2]; };
 struct MinecraftMaterialLayoutProbe { MinecraftMaterialRecord values[2]; };
@@ -18,7 +12,6 @@ struct MinecraftPrimitiveLayoutProbe { MinecraftPrimitiveData values[2]; };
 struct MinecraftInstanceLayoutProbe { MinecraftInstanceData values[2]; };
 struct MinecraftEnvironmentBindingLayoutProbe { MinecraftEnvironmentBinding values[2]; };
 
-[[vk::binding(3, 0)]] StructuredBuffer<ExposureStateLayoutProbe, Std430DataLayout> exposureStateLayoutProbe;
 [[vk::binding(4, 0)]] StructuredBuffer<MinecraftImplementationLayoutProbe, Std430DataLayout> minecraftImplementationLayoutProbe;
 [[vk::binding(5, 0)]] StructuredBuffer<MinecraftMaterialLayoutProbe, Std430DataLayout> minecraftMaterialLayoutProbe;
 [[vk::binding(6, 0)]] StructuredBuffer<MinecraftPrimitiveLayoutProbe, Std430DataLayout> minecraftPrimitiveLayoutProbe;
@@ -29,8 +22,7 @@ struct MinecraftEnvironmentBindingLayoutProbe { MinecraftEnvironmentBinding valu
 void main(uint3 id : SV_DispatchThreadID) {
     // Keep the parameter reachable without requiring a writable output resource.
     if (id.x == 0xFFFFFFFFu) {
-        float sink = exposureStateLayoutProbe[0].values[0].previous
-                + float(minecraftImplementationLayoutProbe[0].values[0].materialsAddress)
+        float sink = float(minecraftImplementationLayoutProbe[0].values[0].materialsAddress)
                 + minecraftMaterialLayoutProbe[0].values[0].specularRoughness
                 + minecraftPrimitiveLayoutProbe[0].values[0].primitiveEmission
                 + minecraftInstanceLayoutProbe[0].values[0].damageStrength
@@ -43,42 +35,6 @@ void main(uint3 id : SV_DispatchThreadID) {
 // still reported in the same reflection-json pass because
 // reflection parameters are enumerated module-wide, not per-entry-point -- see the main() probe
 // above for the equivalent structured-buffer case.
-
-[[vk::push_constant]] ExposureHistPush exposureHistPushProbe;
-[shader("compute")]
-[numthreads(1, 1, 1)]
-void probeExposureHistPush(uint3 id : SV_DispatchThreadID) {
-    if (id.x == 0xFFFFFFFFu) {
-        float sink = float(exposureHistPushProbe.stride);
-    }
-}
-
-[[vk::push_constant]] ExposureResolvePush exposureResolvePushProbe;
-[shader("compute")]
-[numthreads(1, 1, 1)]
-void probeExposureResolvePush(uint3 id : SV_DispatchThreadID) {
-    if (id.x == 0xFFFFFFFFu) {
-        float sink = exposureResolvePushProbe.key + exposureResolvePushProbe.preExposure;
-    }
-}
-
-[[vk::push_constant]] DisplayPush displayPushProbe;
-[shader("compute")]
-[numthreads(1, 1, 1)]
-void probeDisplayPush(uint3 id : SV_DispatchThreadID) {
-    if (id.x == 0xFFFFFFFFu) {
-        float sink = float(displayPushProbe.hdrEnabled) + displayPushProbe.hdrPeakNits;
-    }
-}
-
-[[vk::push_constant]] DebugPresentPush debugPresentPushProbe;
-[shader("compute")]
-[numthreads(1, 1, 1)]
-void probeDebugPresentPush(uint3 id : SV_DispatchThreadID) {
-    if (id.x == 0xFFFFFFFFu) {
-        float sink = float(debugPresentPushProbe.debugView) + debugPresentPushProbe.centerWeightFloor;
-    }
-}
 
 [[vk::push_constant]] SkyInputs skyLutPushProbe;
 [shader("compute")]
@@ -96,14 +52,5 @@ void probeSkyDispatchPush(uint3 id : SV_DispatchThreadID) {
     if (id.x == 0xFFFFFFFFu) {
         float sink = float(skyDispatchPushProbe.destinationImageIndex)
                 + skyDispatchPushProbe.inputs.celestial.x;
-    }
-}
-
-[[vk::push_constant]] PresentPush presentPushProbe;
-[shader("compute")]
-[numthreads(1, 1, 1)]
-void probePresentPush(uint3 id : SV_DispatchThreadID) {
-    if (id.x == 0xFFFFFFFFu) {
-        float sink = float(presentPushProbe.outputImageIndex) + presentPushProbe.uiNits;
     }
 }

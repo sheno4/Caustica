@@ -4,7 +4,7 @@ import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuImage;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 
 import dev.comfyfluffy.caustica.config.CausticaConfig;
-import dev.comfyfluffy.caustica.rt.pipeline.RtSdrPresentPipeline;
+import dev.comfyfluffy.caustica.renderer.presentation.RtSdrPresentPipeline;
 import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VK14;
