@@ -44,6 +44,11 @@ public final class MinecraftMaterialLookup {
         records.add(MinecraftMaterialRecord.fallback());
         Map<MinecraftMaterialKey, MinecraftMaterialResolution> resolutions = new LinkedHashMap<>();
         Map<ResourceId, MinecraftMaterialResolution> defaults = new LinkedHashMap<>();
+        int waterIndex = records.size();
+        records.add(MinecraftMaterialRecord.waterBoundary());
+        defaults.put(MinecraftMaterialIds.WATER, new MinecraftMaterialResolution(waterIndex,
+                MinecraftMaterialIds.WATER, MinecraftMaterialTopology.MEDIUM_BOUNDARY,
+                MinecraftMaterialEmission.NONE, null));
         Map<ResourceId, MinecraftMaterialEmissionAnalyzer.Scan> scans = scan(resources);
         Map<ResourceId, Set<ResourceId>> geometries = geometryCases(rules);
         List<MaterialTextureResource> ordered = new ArrayList<>(resources);

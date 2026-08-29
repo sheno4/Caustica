@@ -142,6 +142,7 @@ final class RtPassSchedulerBackendTest {
 
     private static final class FakeUse implements GpuFrameUse {
         final ArrayDeque<Runnable> pending = new ArrayDeque<>();
+        @Override public void whenSubmitted(Runnable callback) { callback.run(); }
         @Override public void whenComplete(Runnable callback) { pending.add(callback); }
         void drainOne() { pending.remove().run(); }
     }

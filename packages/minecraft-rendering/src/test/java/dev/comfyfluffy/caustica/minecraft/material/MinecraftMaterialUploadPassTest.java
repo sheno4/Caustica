@@ -6,8 +6,17 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class MinecraftMaterialUploadPassTest {
+    @Test
+    void preparedTableCoversEveryRealMaterialOrdinalWithFallbackData() {
+        var records = MinecraftProgramResources.fallbackRecords(37);
+
+        assertEquals(37, records.size());
+        assertTrue(records.stream().allMatch(record -> record.equals(MinecraftMaterialRecord.fallback())));
+    }
+
     @Test
     void packsEveryMipContiguouslyIntoTheStagingBuffer() {
         MinecraftMaterialTexture texture = new MinecraftMaterialTexture(List.of(

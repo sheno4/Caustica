@@ -7,6 +7,7 @@ import dev.comfyfluffy.caustica.vulkan.VmaImageAllocation;
 import dev.comfyfluffy.caustica.vulkan.VmaMappedHostBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VkBufferImageCopy2;
+import org.lwjgl.vulkan.VkBufferMemoryBarrier2;
 import org.lwjgl.vulkan.VkCopyBufferToImageInfo2;
 import org.lwjgl.vulkan.VkImageCreateInfo;
 import org.lwjgl.vulkan.VkDependencyInfo;
@@ -16,14 +17,16 @@ import org.lwjgl.vulkan.VK14;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.function.Consumer;
 
 import static org.lwjgl.vulkan.VK10.*;
 import static org.lwjgl.vulkan.KHRSynchronization2.VK_PIPELINE_STAGE_2_COPY_BIT_KHR;
 import static org.lwjgl.vulkan.KHRSynchronization2.VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
 import static org.lwjgl.vulkan.VK13.VK_ACCESS_2_NONE;
+import static org.lwjgl.vulkan.VK13.VK_ACCESS_2_HOST_WRITE_BIT;
 import static org.lwjgl.vulkan.VK13.VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+import static org.lwjgl.vulkan.VK13.VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
 import static org.lwjgl.vulkan.VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT;
+import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_HOST_BIT;
 import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_NONE;
 
 /** One-shot transfer pass for an immutable Minecraft material lookup. */
@@ -31,19 +34,30 @@ final class MinecraftMaterialUploadPass implements Pass<PassFrame> {
     private final GpuDevice gpu;
     private final MinecraftProgramResources resources;
     private final MinecraftMaterialLookup lookup;
-    private final Consumer<MinecraftProgramResources.PublishedEpoch> published;
+    private final MinecraftProgramResources.Epoch epoch;
+    private final Runnable submitted;
     private List<ImageUpload> uploads;
     private boolean recorded;
 
     MinecraftMaterialUploadPass(GpuDevice gpu, MinecraftProgramResources resources,
                                 MinecraftMaterialLookup lookup,
-                                Consumer<MinecraftProgramResources.PublishedEpoch> published) {
+                                Runnable submitted) {
         this.gpu = java.util.Objects.requireNonNull(gpu, "gpu");
         this.resources = java.util.Objects.requireNonNull(resources, "resources");
         this.lookup = java.util.Objects.requireNonNull(lookup, "lookup");
-        this.published = java.util.Objects.requireNonNull(published, "published");
-        uploads = allocateUploads(lookup.textures());
+        this.submitted = java.util.Objects.requireNonNull(submitted, "submitted");
+        List<ImageUpload> allocated = allocateUploads(lookup.textures());
+        try {
+            epoch = resources.createPreparedEpoch(lookup, allocated.stream()
+                    .map(upload -> (MinecraftProgramResources.UploadedImage) upload.image()).toList());
+            uploads = allocated;
+        } catch (RuntimeException | Error failure) {
+            allocated.forEach(ImageUpload::destroy);
+            throw failure;
+        }
     }
+
+    MinecraftProgramResources.Epoch epoch() { return epoch; }
 
     @Override
     public void record(PassFrame frame) {
@@ -51,18 +65,13 @@ final class MinecraftMaterialUploadPass implements Pass<PassFrame> {
         recorded = true;
         recordCopies(frame);
 
-        List<MinecraftProgramResources.UploadedImage> images = uploads.stream()
-                .map(upload -> (MinecraftProgramResources.UploadedImage) upload.image()).toList();
-        MinecraftProgramResources.Epoch epoch = resources.createEpoch(lookup, images);
         List<VmaMappedHostBuffer> staging = uploads.stream().map(ImageUpload::staging).toList();
         uploads = List.of();
         frame.gpuUse().whenComplete(() -> staging.forEach(VmaMappedHostBuffer::close));
-        try {
-            published.accept(new MinecraftProgramResources.PublishedEpoch(lookup, epoch));
-        } catch (RuntimeException | Error failure) {
-            frame.gpuUse().whenComplete(epoch.retirement());
-            throw failure;
-        }
+        frame.gpuUse().whenSubmitted(() -> {
+            resources.publishMaterialRecords(epoch, lookup);
+            submitted.run();
+        });
     }
 
     private void recordCopies(PassFrame frame) {
@@ -122,8 +131,17 @@ final class MinecraftMaterialUploadPass implements Pass<PassFrame> {
                 toRead.get(index).subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
                         .baseMipLevel(0).levelCount(image.mipLevels()).baseArrayLayer(0).layerCount(1);
             }
+            VkBufferMemoryBarrier2.Buffer tableToRead = VkBufferMemoryBarrier2.calloc(1, stack);
+            tableToRead.get(0).sType$Default()
+                    .srcStageMask(VK_PIPELINE_STAGE_2_HOST_BIT)
+                    .srcAccessMask(VK_ACCESS_2_HOST_WRITE_BIT)
+                    .dstStageMask(VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR)
+                    .dstAccessMask(VK_ACCESS_2_SHADER_STORAGE_READ_BIT)
+                    .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+                    .dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+                    .buffer(epoch.materialTableBuffer()).offset(0L).size(VK_WHOLE_SIZE);
             VK14.vkCmdPipelineBarrier2(frame.commandBuffer(), VkDependencyInfo.calloc(stack)
-                    .sType$Default().pImageMemoryBarriers(toRead));
+                    .sType$Default().pImageMemoryBarriers(toRead).pBufferMemoryBarriers(tableToRead));
         }
     }
 
@@ -197,11 +215,12 @@ final class MinecraftMaterialUploadPass implements Pass<PassFrame> {
 
     @Override
     public void close() {
-        uploads.forEach(ImageUpload::destroy);
+        uploads.forEach(ImageUpload::destroyStaging);
         uploads = List.of();
     }
 
     private record ImageUpload(MinecraftMaterialTexture texture, Image image, VmaMappedHostBuffer staging) {
+        void destroyStaging() { staging.close(); }
         void destroy() {
             staging.close();
             image.close();

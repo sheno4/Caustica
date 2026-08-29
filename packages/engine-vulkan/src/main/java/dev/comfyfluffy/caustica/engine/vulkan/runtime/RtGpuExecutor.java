@@ -561,10 +561,63 @@ public final class RtGpuExecutor {
     public static final class GraphicsUse implements GpuFrameUse {
         private final RtGpuExecutor owner;
         private final long value;
+        private final ArrayList<Runnable> submittedCallbacks = new ArrayList<>();
+        private boolean commandsAccepted;
+        private boolean submittedResolved;
 
-        private GraphicsUse(RtGpuExecutor owner, long value) {
+        GraphicsUse(RtGpuExecutor owner, long value) {
             this.owner = owner;
             this.value = value;
+        }
+
+        @Override
+        public void whenSubmitted(Runnable callback) {
+            if (submittedResolved) throw new IllegalStateException("graphics submission callbacks are resolved");
+            submittedCallbacks.add(java.util.Objects.requireNonNull(callback, "callback"));
+        }
+
+        public void commandsAccepted() {
+            if (commandsAccepted || submittedResolved) {
+                throw new IllegalStateException("graphics commands are already resolved");
+            }
+            commandsAccepted = true;
+        }
+
+        public void resolveSubmission() {
+            if (commandsAccepted) fireSubmittedCallbacks();
+            else discardSubmittedCallbacks();
+        }
+
+        private void fireSubmittedCallbacks() {
+            if (!commandsAccepted || submittedResolved) {
+                throw new IllegalStateException("graphics commands were not accepted exactly once");
+            }
+            submittedResolved = true;
+            runSubmittedCallbacks();
+        }
+
+        private void discardSubmittedCallbacks() {
+            if (commandsAccepted || submittedResolved) {
+                throw new IllegalStateException("graphics commands are already resolved");
+            }
+            submittedResolved = true;
+            submittedCallbacks.clear();
+        }
+
+        private void runSubmittedCallbacks() {
+            Throwable failure = null;
+            for (Runnable callback : submittedCallbacks) {
+                try {
+                    callback.run();
+                } catch (Throwable callbackFailure) {
+                    if (failure == null) failure = callbackFailure;
+                    else failure.addSuppressed(callbackFailure);
+                }
+            }
+            submittedCallbacks.clear();
+            if (failure instanceof RuntimeException runtime) throw runtime;
+            if (failure instanceof Error error) throw error;
+            if (failure != null) throw new IllegalStateException("graphics submission callback failed", failure);
         }
 
         public void awaitCompletion() {

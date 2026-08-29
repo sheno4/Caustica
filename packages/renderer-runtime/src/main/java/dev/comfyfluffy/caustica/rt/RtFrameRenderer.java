@@ -449,9 +449,13 @@ final class RtFrameRenderer {
             return;
         }
         GraphicsSubmission submission = context.backend().createGraphicsSubmission();
-        context.gpuExecutor().endGraphicsUse(submission, graphicsUse);
-        pendingGraphicsUse = null;
-        currentTrace = null;
+        try {
+            graphicsUse.resolveSubmission();
+        } finally {
+            context.gpuExecutor().endGraphicsUse(submission, graphicsUse);
+            pendingGraphicsUse = null;
+            currentTrace = null;
+        }
     }
 
     public void endFrame() {
@@ -841,6 +845,7 @@ final class RtFrameRenderer {
             throw new IllegalStateException("vkEndCommandBuffer(rt composite) failed");
         }
         submission.execute(cmd);
+        graphicsUse.commandsAccepted();
         // Submission makes every frame-owned address reachable until the final overlay consumer.
         framePushSlot.graphicsUse.mark(graphicsUse);
         traceResources().markContinuationUse(graphicsUse);

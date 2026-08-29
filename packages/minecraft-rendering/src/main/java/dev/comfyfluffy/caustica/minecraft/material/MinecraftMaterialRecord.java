@@ -40,6 +40,14 @@ public record MinecraftMaterialRecord(int features, float maxLod,
                 OpenPbrDefaults.SPECULAR_IOR, 0.0f, 0.0f, Color3.WHITE, 0.0f);
     }
 
+    static MinecraftMaterialRecord waterBoundary() {
+        return from(new MinecraftMaterialPageCompiler.CompiledMaterial(0, 0, 0, 0, 0, 0,
+                MaterialUv.IDENTITY, MaterialUv.IDENTITY), Color3.WHITE, 0.0f,
+                OpenPbrDefaults.TRANSMISSIVE_SPECULAR_ROUGHNESS,
+                OpenPbrDefaults.TRANSMISSIVE_SPECULAR_IOR, 1.0f, 0.0f,
+                Color3.WHITE, 0.0f);
+    }
+
     static MinecraftMaterialRecord from(MinecraftMaterialPageCompiler.CompiledMaterial page,
                                         Color3 baseColor, float metalness, float roughness, float ior,
                                         float transmission, float subsurface, Color3 emissionColor,

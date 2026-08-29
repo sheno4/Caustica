@@ -28,6 +28,27 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class MinecraftProgramSessionTest {
     @Test
+    void preparedEpochRegistersProgramsBeforeItsUploadPassRecords() {
+        CapturingChannel channel = new CapturingChannel();
+        List<String> events = new ArrayList<>();
+        var roots = new MinecraftProgramSession.Roots(
+                MinecraftProgramTypes.IMPLEMENTATION_DATA.data(11L),
+                MinecraftProgramTypes.PRIMITIVE_DATA.data(22L),
+                MinecraftProgramTypes.INSTANCE_DATA.data(33L), () -> { });
+        Pass<PassFrame> upload = new Pass<>() {
+            @Override public void record(PassFrame frame) { events.add("upload"); }
+            @Override public void close() { }
+        };
+
+        MinecraftProgramSession.registerPrograms(channel, roots);
+        events.add("registered");
+        upload.record(null);
+
+        assertEquals(1, channel.registrations);
+        assertEquals(List.of("registered", "upload"), events);
+    }
+
+    @Test
     void declaresOneAtomicSetWithNonzeroRootsAndOneEpochRetirement() {
         CapturingChannel channel = new CapturingChannel();
         AtomicInteger retirements = new AtomicInteger();

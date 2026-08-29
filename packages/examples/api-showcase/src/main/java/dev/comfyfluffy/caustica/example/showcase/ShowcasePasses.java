@@ -36,6 +36,7 @@ final class ShowcasePasses {
                     var view = frame.view();
                     double shaderTime = frame.timeSeconds();
                     double metresPerUnit = frame.metersPerSceneUnit();
+                    frame.gpuUse().whenSubmitted(() -> { });
                     frame.gpuUse().whenComplete(() -> { });
                     gpu.retireAfterUse(() -> { });
                     throw missingCommands(view.entryScene(), shaderTime, metresPerUnit,

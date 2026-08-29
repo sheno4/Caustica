@@ -30,6 +30,20 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class PassSessionTest {
     @Test
+    void worldResourceUploadRecordsBeforeTheRendererStartsTracing() {
+        ManualBackend backend = new ManualBackend();
+        PassSession session = new PassSession(backend, (pass, failure) -> { });
+        List<String> events = new ArrayList<>();
+        session.openChannel("materials").addWorldResourcePass(
+                setup -> pass(frame -> events.add("upload"), () -> { }));
+
+        session.recordWorldResources();
+        events.add("trace");
+
+        assertEquals(List.of("upload", "trace"), events);
+    }
+
+    @Test
     void dispatchesEachStageInGlobalAcceptanceOrder() {
         ManualBackend backend = new ManualBackend();
         PassSession session = new PassSession(backend, (pass, failure) -> { });

@@ -124,7 +124,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         if (!stopped) beginReplacement(epoch);
     }
 
-    private void beginReplacement(ResourcePackEpoch resourcePack) {
+    private synchronized void beginReplacement(ResourcePackEpoch resourcePack) {
         MinecraftMaterialLookup lookup;
         try {
             lookup = materialEpochs.compile(resourcePack, List.of());
@@ -134,41 +134,35 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
             return;
         }
         Pending request = new Pending(resourcePack.generation(), lookup);
+        MinecraftProgramResources.PreparedUpload[] prepared = new MinecraftProgramResources.PreparedUpload[1];
         try {
             request.upload = context.renderSession().passes().addWorldResourcePass(
-                    setup -> resources.createUploadPass(lookup, published -> uploaded(request, published)));
+                    setup -> {
+                        prepared[0] = resources.prepareUpload(lookup, () -> uploadSubmitted(request));
+                        return prepared[0].pass();
+                    });
+            request.prepared = java.util.Objects.requireNonNull(prepared[0], "upload factory result").epoch();
+            request.registration = registerPrograms(
+                    context.renderSession().program(), roots(request.prepared.gpu()));
         } catch (RuntimeException | Error failure) {
-            CausticaMod.LOGGER.error("Minecraft material epoch {} could not start uploading",
+            if (request.prepared == null && prepared[0] != null) {
+                request.prepared = prepared[0].epoch();
+            }
+            request.close();
+            CausticaMod.LOGGER.error("Minecraft material epoch {} could not be prepared",
                     resourcePack.generation(), failure);
             return;
         }
         Pending displaced = pending;
         pending = request;
         if (displaced != null) displaced.close();
+        request.registration.whenComplete(completion -> completed(request, completion));
     }
 
-    private void uploaded(Pending request, MinecraftProgramResources.PublishedEpoch published) {
-        ProgramRegistration<MinecraftPrograms> registration;
-        try {
-            registration = registerPrograms(context.renderSession().program(), roots(published.gpu()));
-        } catch (RuntimeException | Error failure) {
-            synchronized (this) {
-                if (pending == request) pending = null;
-            }
-            CausticaMod.LOGGER.error("Minecraft program epoch {} could not be registered",
-                    request.generation, failure);
-            throw failure;
-        }
-        synchronized (this) {
+    private synchronized void uploadSubmitted(Pending request) {
+        if (request.upload != null) {
             request.upload.close();
             request.upload = null;
-            request.registration = registration;
-            request.published = published;
-            if (stopped || pending != request) {
-                request.close();
-                return;
-            }
-            registration.whenComplete(completion -> completed(request, completion));
         }
     }
 
@@ -209,8 +203,8 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
             terrainSession.bind(programs, context.renderSession().geometry(), context.scene());
             terrainSession.publishMaterialLookup(request.lookup);
             frameSelector = new MinecraftFrameSelector(context.scene(), programs.waterVolume(),
-                    request.published.gpu().fallbackBindingData(),
-                    request.published.gpu().fallbackInstanceData());
+                    request.prepared.gpu().fallbackBindingData(),
+                    request.prepared.gpu().fallbackInstanceData());
             frameSelection = java.util.Objects.requireNonNull(frameSelections.install(frameSelector),
                     "frame selection lease");
             entityGeometry = new MinecraftEntityGeometry(context.renderSession().geometry(), context.scene(),
@@ -235,7 +229,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         Active replacement = new Active(request.generation, registration, terrainSession,
                 frameSelector, frameSelection, entityGeometry, entityLease, sky, delayed);
         request.registration = null;
-        request.published = null;
+        request.prepared = null;
         pending = null;
         active = replacement;
         if (sky == null) replacement.releaseDisplacedPrograms();
@@ -302,7 +296,6 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         frameCapture.close();
         overlayRegistration.close();
         lightRegistration.close();
-        if (pending != null && pending.upload != null) pending.upload.close();
         if (active != null && active.sky != null) active.sky.close();
         if (active != null) active.stopSceneProducers();
         lights.close();
@@ -334,17 +327,21 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         final MinecraftMaterialLookup lookup;
         PassRegistration upload;
         ProgramRegistration<MinecraftPrograms> registration;
-        MinecraftProgramResources.PublishedEpoch published;
+        MinecraftProgramResources.PreparedEpoch prepared;
         Pending(long generation, MinecraftMaterialLookup lookup) {
             this.generation = generation;
             this.lookup = lookup;
         }
         void close() {
             if (upload != null) upload.close();
-            if (registration != null) registration.close();
+            if (registration != null) {
+                registration.close();
+            } else if (prepared != null) {
+                prepared.gpu().close();
+            }
             upload = null;
             registration = null;
-            published = null;
+            prepared = null;
         }
     }
 
