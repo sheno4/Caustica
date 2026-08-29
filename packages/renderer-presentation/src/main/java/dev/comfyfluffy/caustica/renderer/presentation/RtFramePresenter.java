@@ -1,57 +1,63 @@
-package dev.comfyfluffy.caustica.rt;
+package dev.comfyfluffy.caustica.renderer.presentation;
 
 
-import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
 import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.nvidia.ngx.DlssFrameGeneration;
 import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
-import it.unimi.dsi.fastutil.longs.LongList;
 import org.joml.Matrix4f;
 import org.lwjgl.vulkan.VkDevice;
 import org.lwjgl.vulkan.VkQueue;
 
+import java.util.Objects;
+import java.util.function.Supplier;
+
 /** Coordinates the presentation components owned by one renderer activation. */
-final class RtFramePresenter {
+public final class RtFramePresenter {
     private final DlssFrameGeneration dlssFrameGeneration;
+    private final Supplier<Settings> settings;
     private final GeneratedFrameQueue generatedFrames = new GeneratedFrameQueue();
     private final FrameGeneration frameGeneration;
     private final HdrPresentation hdrPresentation;
     private final SdrPqPresentation sdrPqPresentation;
     private RenderedFrame renderedFrame;
 
-    record RenderedFrame(GpuImage hdrDisplayImage, GpuImage motion, GpuImage depth,
+    public record Settings(boolean hdrEnabled, boolean pqSwapchainActive, float uiNits) {}
+
+    public record RenderedFrame(GpuImage hdrDisplayImage, GpuImage motion, GpuImage depth,
             int renderWidth, int renderHeight, Matrix4f currentViewProjection,
             Matrix4f previousViewProjection, boolean hdrReady) {
-        RenderedFrame {
+        public RenderedFrame {
             currentViewProjection = new Matrix4f(currentViewProjection);
             previousViewProjection = new Matrix4f(previousViewProjection);
         }
     }
 
-    RtFramePresenter(VulkanDeviceContext context, DlssFrameGeneration dlssFrameGeneration) {
-        this.dlssFrameGeneration = dlssFrameGeneration;
+    public RtFramePresenter(VulkanDeviceContext context, DlssFrameGeneration dlssFrameGeneration,
+            Supplier<Settings> settings) {
+        this.dlssFrameGeneration = Objects.requireNonNull(dlssFrameGeneration, "dlssFrameGeneration");
+        this.settings = Objects.requireNonNull(settings, "settings");
         this.frameGeneration = new FrameGeneration(context, dlssFrameGeneration);
-        this.hdrPresentation = new HdrPresentation(frameGeneration);
-        this.sdrPqPresentation = new SdrPqPresentation();
+        this.hdrPresentation = new HdrPresentation(context, frameGeneration, this.settings);
+        this.sdrPqPresentation = new SdrPqPresentation(context, this.settings);
     }
 
-    void beginFrame() {
+    public void beginFrame() {
         invalidateRenderedFrame();
     }
 
-    void invalidateRenderedFrame() {
+    public void invalidateRenderedFrame() {
         renderedFrame = null;
         frameGeneration.invalidate();
     }
 
-    void resetSceneHistory() {
+    public void resetSceneHistory() {
         renderedFrame = null;
         frameGeneration.resetHistory();
     }
 
-    void publish(RenderedFrame frame) {
+    public void publish(RenderedFrame frame) {
         renderedFrame = frame;
         frameGeneration.publish(frame);
     }
@@ -62,7 +68,7 @@ final class RtFramePresenter {
     }
 
     public void prepareGeneratedFrame(GraphicsSubmission submission, VkDevice device, long swapchain,
-            LongList swapchainImages, long[] presentSemaphores, int swapWidth, int swapHeight,
+            long[] swapchainImages, long[] presentSemaphores, int swapWidth, int swapHeight,
             long backbufferView, long sourceImage,
             boolean hdrBackbuffer, UiPresentationResources ui) {
         generatedFrames.prepare(submission, device, swapchain, swapchainImages, presentSemaphores,
@@ -88,7 +94,11 @@ final class RtFramePresenter {
     }
 
     public boolean isHdrPresentActive() {
-        return CausticaConfig.Rt.Hdr.enabled() && renderedFrame != null
+        return isHdrPresentActive(settings.get());
+    }
+
+    private boolean isHdrPresentActive(Settings current) {
+        return current.hdrEnabled() && renderedFrame != null
                 && renderedFrame.hdrReady() && renderedFrame.hdrDisplayImage() != null;
     }
 
@@ -113,8 +123,8 @@ final class RtFramePresenter {
     }
 
     public boolean isPqSdrPresentActive() {
-        return CausticaConfig.Rt.Hdr.swapchainPqActive()
-                && RtRuntime.hasSession() && !isHdrPresentActive();
+        Settings current = settings.get();
+        return current.pqSwapchainActive() && !isHdrPresentActive(current);
     }
 
     public boolean presentSdrToPq(GraphicsSubmission submission, long swapchainImage,

@@ -1,10 +1,8 @@
-package dev.comfyfluffy.caustica.rt;
+package dev.comfyfluffy.caustica.renderer.presentation;
 
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuImage;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 
-import dev.comfyfluffy.caustica.config.CausticaConfig;
-import dev.comfyfluffy.caustica.renderer.presentation.RtSdrPresentPipeline;
 import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VK14;
@@ -14,21 +12,24 @@ import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkDependencyInfo;
 import org.lwjgl.vulkan.VkMemoryBarrier2;
 
+import java.util.function.Supplier;
+
 /** Converts an SDR host frame to PQ and submits its swapchain blit. */
 final class SdrPqPresentation {
+    private final VulkanDeviceContext context;
+    private final Supplier<RtFramePresenter.Settings> settings;
     private RtSdrPresentPipeline pipeline;
     private GpuImage image;
 
-    SdrPqPresentation() {}
+    SdrPqPresentation(VulkanDeviceContext context, Supplier<RtFramePresenter.Settings> settings) {
+        this.context = context;
+        this.settings = settings;
+    }
 
     boolean present(GraphicsSubmission submission, long swapchainImage, int swapWidth, int swapHeight,
             dev.comfyfluffy.caustica.api.vulkan.GpuImage source,
             long acquireSemaphore, long presentSemaphore) {
-        if (!RtRuntime.hasSession() || source == null) {
-            return false;
-        }
-        VulkanDeviceContext context = RtRuntime.INSTANCE.requireVulkanContext();
-        if (context == null) {
+        if (source == null) {
             return false;
         }
         if (pipeline == null) {
@@ -57,7 +58,7 @@ final class SdrPqPresentation {
 
             pipeline.dispatch(commandBuffer, image,
                     source.descriptor(dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptorKind.SAMPLED).index(),
-                    CausticaConfig.Rt.Hdr.uiNits());
+                    settings.get().uiNits());
             HdrPresentation.recordSwapchainBlit(
                     commandBuffer, stack, image.image(), swapchainImage, copyWidth, copyHeight);
             if (VK10.vkEndCommandBuffer(commandBuffer) != VK10.VK_SUCCESS) {

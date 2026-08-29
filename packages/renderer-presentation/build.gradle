@@ -15,7 +15,9 @@ repositories { mavenCentral() }
 
 dependencies {
     api project(":packages:api")
+    implementation project(":packages:engine")
     implementation project(":packages:engine-vulkan")
+    implementation project(":packages:nvidia-ngx")
     implementation project(":packages:vulkan-support")
     implementation "com.google.code.gson:gson:2.14.0"
     implementation "org.slf4j:slf4j-api:2.0.17"
@@ -145,7 +147,7 @@ def verifyRendererPresentationJar = tasks.register("verifyRendererPresentationJa
         }
         def generated = ["ExposureStateData", "ExposureHistPushData", "ExposureResolvePushData",
                          "DisplayPushData", "DebugPresentPushData", "PresentPushData"].collect {
-            "dev/comfyfluffy/caustica/renderer/presentation/gen/${it}.class"
+            "dev/comfyfluffy/caustica/renderer/presentation/gen/" + it + ".class"
         } as Set
         def actualGenerated = names.findAll { it.startsWith("dev/comfyfluffy/caustica/renderer/presentation/gen/")
                 && it.endsWith("Data.class") } as Set
@@ -154,11 +156,14 @@ def verifyRendererPresentationJar = tasks.register("verifyRendererPresentationJa
         def pipelines = names.findAll { it.startsWith("caustica/shaders/pipelines/")
                 && it.endsWith("/main.comp.spv") }.collect { it.split('/')[3] } as Set
         def colors = names.findAll { it.startsWith("caustica/color/") && !it.endsWith('/') }
-        def presentationResources = "dev/comfyfluffy/caustica/renderer/presentation/PresentationResources.class"
-        if (!foreignClasses.empty || actualGenerated != generated || !names.contains(presentationResources)
+        def presentationClasses = ["PresentationResources", "RtFramePresenter", "FrameGeneration",
+                "GeneratedFrameQueue", "HdrPresentation", "SdrPqPresentation"].collect {
+            "dev/comfyfluffy/caustica/renderer/presentation/" + it + ".class"
+        }
+        if (!foreignClasses.empty || actualGenerated != generated || !names.containsAll(presentationClasses)
                 || pipelines != expectedPipelines || colors.size() != 7) {
             throw new GradleException("presentation JAR mismatch: foreignClasses=${foreignClasses}, "
-                    + "generated=${actualGenerated}, presentationResources=${names.contains(presentationResources)}, "
+                    + "generated=${actualGenerated}, presentationClasses=${presentationClasses.findAll { !names.contains(it) }}, "
                     + "pipelines=${pipelines}, colors=${colors}")
         }
     }
@@ -170,7 +175,7 @@ def verifyRendererPresentationImports = tasks.register("verifyRendererPresentati
     doLast {
         def forbidden = ["dev.comfyfluffy.caustica.CausticaMod", "dev.comfyfluffy.caustica.config",
                 "dev.comfyfluffy.caustica.minecraft", "dev.comfyfluffy.caustica.platform",
-                "dev.comfyfluffy.caustica.rt.RtRuntime", "dev.comfyfluffy.caustica.rt.gen",
+                "dev.comfyfluffy.caustica.rt", "dev.comfyfluffy.caustica.rt.gen",
                 "dev.comfyfluffy.caustica.rt.pipeline.RtBindings",
                 "dev.comfyfluffy.caustica.renderer.raytracing",
                 "net.minecraft", "net.fabricmc", "net.neoforged"]
@@ -189,7 +194,8 @@ def verifyRendererPresentationImports = tasks.register("verifyRendererPresentati
 def verifyRendererPresentationDependencies = tasks.register("verifyRendererPresentationDependencies") {
     group = "verification"
     doLast {
-        def allowed = [project.path, ":packages:api", ":packages:engine-vulkan",
+        def allowed = [project.path, ":packages:api", ":packages:engine",
+                       ":packages:engine-vulkan", ":packages:nvidia-ngx",
                        ":packages:vulkan-support"] as Set
         def violations = []
         configurations.matching { it.canBeResolved }.each { configuration ->
@@ -223,12 +229,35 @@ def verifyRendererPresentationResources = tasks.register("verifyRendererPresenta
     }
 }
 
+def verifyPresentationRuntimeOwnership = tasks.register("verifyPresentationRuntimeOwnership") {
+    group = "verification"
+    def runtimeTypes = ["RtFramePresenter", "FrameGeneration", "GeneratedFrameQueue",
+                        "HdrPresentation", "SdrPqPresentation"]
+    inputs.files(sourceSets.main.allJava)
+    doLast {
+        def legacy = runtimeTypes.collect {
+            rootProject.file("src/main/java/dev/comfyfluffy/caustica/rt/${it}.java")
+        }.findAll { it.exists() }
+        def missing = runtimeTypes.findAll {
+            !file("src/main/java/dev/comfyfluffy/caustica/renderer/presentation/${it}.java").exists()
+        }
+        def forbiddenText = ["CausticaConfig", "RtRuntime", "CausticaMod", "fastutil", "LongList"]
+        def violations = sourceSets.main.allJava.files.findAll { source ->
+            forbiddenText.any { source.getText("UTF-8").contains(it) }
+        }
+        if (!legacy.empty || !missing.empty || !violations.empty) {
+            throw new GradleException("presentation runtime ownership mismatch: legacy=${legacy}, "
+                    + "missing=${missing}, forbiddenReferences=${violations}")
+        }
+    }
+}
+
 tasks.named("test", Test) { useJUnitPlatform() }
 tasks.named("check") {
     dependsOn(verifyPresentationAbi, verifyPresentationGenerationReproducible,
             verifyPresentationSpirvTarget, verifyRendererPresentationJar,
             verifyRendererPresentationImports, verifyRendererPresentationDependencies,
-            verifyRendererPresentationResources)
+            verifyRendererPresentationResources, verifyPresentationRuntimeOwnership)
 }
 tasks.withType(JavaCompile).configureEach { options.release = 25 }
 java {

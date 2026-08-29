@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.rt;
+package dev.comfyfluffy.caustica.renderer.presentation;
 
 import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
 import org.junit.jupiter.api.Test;

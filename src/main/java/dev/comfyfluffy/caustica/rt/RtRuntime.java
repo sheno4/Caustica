@@ -24,12 +24,12 @@ import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
 import dev.comfyfluffy.caustica.spi.vulkan.VulkanRendererBackend;
 import dev.comfyfluffy.caustica.spi.host.RuntimeHost;
 import dev.comfyfluffy.caustica.renderer.presentation.RtExposure;
+import dev.comfyfluffy.caustica.renderer.presentation.RtFramePresenter;
 import dev.comfyfluffy.caustica.slang.SlangRuntime;
 
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Optional;
-import it.unimi.dsi.fastutil.longs.LongList;
 import org.lwjgl.vulkan.VkDevice;
 import org.lwjgl.vulkan.VkQueue;
 
@@ -154,6 +154,11 @@ public final class RtRuntime {
 
     private static DlssFrameGeneration.Settings frameGenerationSettings() {
         return new DlssFrameGeneration.Settings(CausticaConfig.Rt.Fg.ENABLED.value());
+    }
+
+    private static RtFramePresenter.Settings presentationSettings() {
+        return new RtFramePresenter.Settings(CausticaConfig.Rt.Hdr.enabled(),
+                CausticaConfig.Rt.Hdr.swapchainPqActive(), CausticaConfig.Rt.Hdr.uiNits());
     }
 
     public void installHost(RuntimeHost installedHost) {
@@ -303,7 +308,7 @@ public final class RtRuntime {
     }
 
     public void prepareGeneratedFrame(GraphicsSubmission submission, VkDevice device, long swapchain,
-            LongList swapchainImages, long[] presentSemaphores, int swapWidth, int swapHeight,
+            long[] swapchainImages, long[] presentSemaphores, int swapWidth, int swapHeight,
             long backbufferView, long sourceImage,
             boolean hdrBackbuffer, UiPresentationResources ui) {
         if (session != null) {
@@ -500,7 +505,8 @@ public final class RtRuntime {
             DlssFrameGeneration frameGeneration = new DlssFrameGeneration(
                     requireNgxRuntime(), frameGenerationSettings());
             session = new Session(renderSessionEpoch, activationEpoch,
-                    context, frameGeneration, new RtFramePresenter(context, frameGeneration),
+                    context, frameGeneration,
+                    new RtFramePresenter(context, frameGeneration, RtRuntime::presentationSettings),
                     java.util.Objects.requireNonNull(
                     shaderCacheRoot, "shader cache is not configured"));
             state = State.STARTING;

@@ -1,11 +1,11 @@
-package dev.comfyfluffy.caustica.rt;
+package dev.comfyfluffy.caustica.renderer.presentation;
 
 
-import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
 import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
 import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
-import it.unimi.dsi.fastutil.longs.LongList;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.KHRSwapchain;
 import org.lwjgl.vulkan.VK14;
@@ -24,6 +24,7 @@ import java.nio.LongBuffer;
 
 /** Owns extra swapchain-image acquisition and the generated-before-real deferred present queue. */
 final class GeneratedFrameQueue {
+    private static final Logger LOGGER = LoggerFactory.getLogger(GeneratedFrameQueue.class);
     private static final long ACQUIRE_TIMEOUT_NS = 5_000_000_000L;
 
     private long[] acquireSemaphores = new long[0];
@@ -37,7 +38,7 @@ final class GeneratedFrameQueue {
     }
 
     void prepare(GraphicsSubmission submission, VkDevice device, long swapchain,
-            LongList swapchainImages, long[] presentSemaphores, int swapW, int swapH,
+            long[] swapchainImages, long[] presentSemaphores, int swapW, int swapH,
             long backbufferView, long srcImage,
             boolean hdrBackbuffer, UiPresentationResources ui, FrameGeneration generation) {
         pendingImageIndex = -1;
@@ -46,7 +47,7 @@ final class GeneratedFrameQueue {
             return;
         }
         try {
-            ensureCapacity(device, swapchainImages.size() + 1);
+            ensureCapacity(device, swapchainImages.length + 1);
             GpuImage interpolation = generation.interpolate(submission, backbufferView, srcImage,
                     swapW, swapH, hdrBackbuffer, ui);
             if (interpolation == null) {
@@ -68,13 +69,13 @@ final class GeneratedFrameQueue {
                 pendingImageIndex = imageIndex.get(0);
             }
             pendingPresentSemaphore = presentSemaphores[pendingImageIndex];
-            recordBlit(submission, blitSource, swapchainImages.getLong(pendingImageIndex),
+            recordBlit(submission, blitSource, swapchainImages[pendingImageIndex],
                     copyWidth, copyHeight, acquireSemaphore, pendingPresentSemaphore);
         } catch (Throwable error) {
             failed = true;
             pendingImageIndex = -1;
             pendingPresentSemaphore = 0L;
-            CausticaMod.LOGGER.error("DLSS-FG present-record failed; frame generation disabled", error);
+            LOGGER.error("DLSS-FG present-record failed; frame generation disabled", error);
         }
     }
 
@@ -89,7 +90,7 @@ final class GeneratedFrameQueue {
                 KHRSwapchain.vkQueuePresentKHR(presentQueue, present);
             } catch (Throwable error) {
                 failed = true;
-                CausticaMod.LOGGER.error("DLSS-FG present failed; frame generation disabled", error);
+                LOGGER.error("DLSS-FG present failed; frame generation disabled", error);
             } finally {
                 pendingImageIndex = -1;
                 pendingPresentSemaphore = 0L;

@@ -1,11 +1,9 @@
-package dev.comfyfluffy.caustica.rt;
+package dev.comfyfluffy.caustica.renderer.presentation;
 
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 
-import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
 import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
-import dev.comfyfluffy.caustica.renderer.presentation.RtHdrCompositePipeline;
 import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VK14;
@@ -20,13 +18,20 @@ import org.lwjgl.vulkan.VkMemoryBarrier2;
 import org.lwjgl.vulkan.KHRSwapchain;
 import org.lwjgl.vulkan.KHRSynchronization2;
 
+import java.util.function.Supplier;
+
 /** Composites the UI into a rendered PQ frame and submits its swapchain blit. */
 final class HdrPresentation {
+    private final VulkanDeviceContext context;
     private final FrameGeneration generation;
+    private final Supplier<RtFramePresenter.Settings> settings;
     private RtHdrCompositePipeline pipeline;
 
-    HdrPresentation(FrameGeneration generation) {
+    HdrPresentation(VulkanDeviceContext context, FrameGeneration generation,
+            Supplier<RtFramePresenter.Settings> settings) {
+        this.context = context;
         this.generation = generation;
+        this.settings = settings;
     }
 
     void present(GraphicsSubmission submission, RtFramePresenter.RenderedFrame frame,
@@ -37,7 +42,6 @@ final class HdrPresentation {
         int copyHeight = Math.min(swapHeight, source.height());
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkCommandBuffer commandBuffer = submission.beginTransientCommandBuffer();
-            VulkanDeviceContext context = RtRuntime.INSTANCE.requireVulkanContext();
             context.bindDescriptorHeaps(commandBuffer);
             if (generation.enabled()) {
                 generation.captureHdrHudless(commandBuffer, stack, source);
@@ -56,7 +60,7 @@ final class HdrPresentation {
                             VkDependencyInfo.calloc(stack).sType$Default().pMemoryBarriers(barrier));
                     pipeline.dispatch(commandBuffer, source,
                             overlay.descriptor(dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptorKind.SAMPLED).index(),
-                            CausticaConfig.Rt.Hdr.uiNits());
+                            settings.get().uiNits());
                 }
             }
             recordSwapchainBlit(commandBuffer, stack, source.image(), swapchainImage, copyWidth, copyHeight);
@@ -70,10 +74,6 @@ final class HdrPresentation {
 
     private void ensurePipeline() {
         if (pipeline != null) {
-            return;
-        }
-        VulkanDeviceContext context = RtRuntime.INSTANCE.requireVulkanContext();
-        if (context == null) {
             return;
         }
         pipeline = RtHdrCompositePipeline.create(context);

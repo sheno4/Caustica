@@ -423,7 +423,7 @@ public abstract class VulkanGpuSurfaceMixin {
 		RtRuntime presentation = RtRuntime.INSTANCE;
 		presentation.prepareGeneratedFrame(
 				MinecraftVulkanBackend.wrap((VulkanCommandEncoder) commandEncoder), this.device.vkDevice(),
-				this.swapchain, this.swapchainImages, this.presentSemaphores,
+				this.swapchain, this.swapchainImages.toLongArray(), this.presentSemaphores,
 				this.swapchainWidth, this.swapchainHeight,
 				srcView, srcImage, false,
 				MinecraftFrameAdapter.INSTANCE.captureUiPresentation());
@@ -449,7 +449,8 @@ public abstract class VulkanGpuSurfaceMixin {
 		if (hdrImage == 0L) {
 			return;
 		}
-		presentation.prepareGeneratedFrame(submission, this.device.vkDevice(), this.swapchain, this.swapchainImages,
+		presentation.prepareGeneratedFrame(submission, this.device.vkDevice(), this.swapchain,
+				this.swapchainImages.toLongArray(),
 				this.presentSemaphores, this.swapchainWidth, this.swapchainHeight,
 				hdrView, hdrImage, true, ui);
 	}
