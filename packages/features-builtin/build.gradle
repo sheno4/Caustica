@@ -49,7 +49,7 @@ def generateBloomPushData = tasks.register("generateBloomPushData", GenerateShad
     dependsOn(prepareBloomReflectionSources)
     shaderRoot = bloomReflectionRoot
     probeSource = bloomReflectionRoot.map { it.file("layout/bloom_probe.slang") }
-    includedRecords = ["BloomPushData"]
+    recordSpecs = ["push|bloomPushProbe|BloomPush|dev.comfyfluffy.caustica.builtin.gen|BloomPushData|false"]
     outDir = layout.buildDirectory.dir("generated/sources/shaderRecords")
 }
 

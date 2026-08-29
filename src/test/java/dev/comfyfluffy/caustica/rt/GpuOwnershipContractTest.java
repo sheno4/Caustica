@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.rt;
 
-import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import org.junit.jupiter.api.Test;
 import org.lwjgl.vulkan.VK10;
 
@@ -19,7 +19,7 @@ final class GpuOwnershipContractTest {
                 .map(method -> method.getName()).collect(Collectors.toSet());
 
         assertEquals(Set.of("vk", "vmaAllocator", "descriptorHeap", "retireAfterUse"), deviceMethods);
-        assertFalse(Arrays.stream(dev.comfyfluffy.caustica.api.gpu.GpuImage.class.getMethods())
+        assertFalse(Arrays.stream(dev.comfyfluffy.caustica.api.vulkan.GpuImage.class.getMethods())
                 .anyMatch(method -> method.getName().equals("destroy")));
         assertTrue(Arrays.stream(GpuImage.class.getMethods())
                 .anyMatch(method -> method.getName().equals("destroy")));

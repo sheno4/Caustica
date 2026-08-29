@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.api.gpu;
+package dev.comfyfluffy.caustica.api.vulkan;
 
 /**
  * Suballocator for the one resource heap and one sampler heap the renderer binds to command buffers.

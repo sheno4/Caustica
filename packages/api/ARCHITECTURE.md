@@ -33,7 +33,7 @@ Session shutdown has one defined order:
 3. Unschedule passes and logically invalidate objects still owned by the session scope. Stale surface and
    environment references resolve to visible error implementations, stale volumes resolve to vacuum, and
    none of those references pin the owner.
-4. Cancel pending program tickets, drain submitted GPU uses, return ticket and retirement callbacks, then
+4. Cancel pending program registrations, drain submitted GPU uses, return readiness and retirement callbacks, then
    close pass instances.
 5. Invoke `RenderSessionContribution.close()` before destroying the device.
 
@@ -132,7 +132,7 @@ The opaque 64-bit vocabulary follows ownership depth consistently:
 | `bindingData` | `ShaderData<B>` in a typed surface/volume slot or environment binding | State for one geometry slot or scene environment binding |
 | `instanceData` | `ShaderData<N>` in `GeometryChannel.SetInstance<N>` | State for one mesh placement; `newMesh(ShaderDataType<N>)` fixes the ID's runtime schema and `MeshId<N>` ensures all slots accept it |
 
-Each ticket describes one complete accepted registration. It becomes `READY` only when an active world
+Each registration describes one complete accepted program set. It becomes `READY` only when an active world
 program contains the whole set, `FAILED` when none of the set can publish, or `CANCELLED` when the owner
 closes it or its contribution ends first. Failed declarations keep permanent fallback IDs and retire their
 accepted roots. Failure leaves the last ready composition active. Every callback registered before teardown
@@ -204,7 +204,7 @@ resources when they differ. `Pass.close()` is final and occurs only after that p
 
 Retirement is callback-based:
 
-- `GpuFrameUse.retire` follows commands recorded for the current frame.
+- `GpuFrameUse.whenComplete` follows commands recorded for the current frame.
 - `GpuDevice.retireAfterUse` follows device work submitted before the call.
 - retained batch callbacks follow the particular values introduced by the batch.
 
@@ -279,7 +279,7 @@ The main artifact is Vulkan-native while remaining independent of Minecraft and 
 - `api.view`: immutable camera state associated with one root scene.
 - `api.program`: composed-world Slang inputs and non-blocking compilation observation.
 - `api.pass`: GPU frame-recording stages, including post effects and UI.
-- `api.gpu`: Vulkan services an extension cannot recreate independently.
+- `api.vulkan`: Vulkan services an extension cannot recreate independently.
 
 Minecraft dimension identifiers, level lifetime, camera capture, origin selection, resource reloads, and
 dimension-to-scene directories belong to Minecraft integration packages. Presentation policy, DLSS,

@@ -3,7 +3,7 @@ package dev.comfyfluffy.caustica.api.geometry;
 import dev.comfyfluffy.caustica.api.program.SurfaceId;
 import dev.comfyfluffy.caustica.api.program.ShaderData;
 import dev.comfyfluffy.caustica.api.program.VolumeId;
-import dev.comfyfluffy.caustica.api.gpu.VulkanDeviceAddressRange;
+import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
 
 import java.util.List;
 import java.util.Objects;

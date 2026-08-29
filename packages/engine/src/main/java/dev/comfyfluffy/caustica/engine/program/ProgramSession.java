@@ -5,7 +5,6 @@ import dev.comfyfluffy.caustica.api.program.EnvironmentId;
 import dev.comfyfluffy.caustica.api.program.ProgramBuilder;
 import dev.comfyfluffy.caustica.api.program.ProgramFailure;
 import dev.comfyfluffy.caustica.api.program.ProgramRegistration;
-import dev.comfyfluffy.caustica.api.program.ProgramTicket;
 import dev.comfyfluffy.caustica.api.program.ShaderDefinition;
 import dev.comfyfluffy.caustica.api.program.ShaderData;
 import dev.comfyfluffy.caustica.api.program.ShaderDataType;
@@ -59,7 +58,7 @@ public final class ProgramSession {
     }
 
     /**
-     * Advances compilation/publication and runs queued ticket and retirement callbacks in FIFO order.
+     * Advances compilation/publication and runs queued readiness and retirement callbacks in FIFO order.
      * Call only from the render session's callback/control thread.
      */
     public void progress() {
@@ -73,7 +72,7 @@ public final class ProgramSession {
     }
 
     /**
-     * Whether this owner has no accepted registration, compiler candidate, ticket callback, or retirement
+     * Whether this owner has no accepted registration, compiler candidate, readiness callback, or retirement
      * callback left. Session teardown waits for this before invoking the contribution's final close.
      */
     public synchronized boolean isDrained(ProgramContributionChannel channel) {
@@ -204,7 +203,7 @@ public final class ProgramSession {
                 target = retained;
             } else {
                 introduced = accepted.stream()
-                        .filter(registration -> registration.ticket.state == ProgramTicket.State.PENDING
+                        .filter(registration -> registration.state == ProgramRegistration.State.PENDING
                                 && !registration.closed && !published.contains(registration))
                         .findFirst().orElse(null);
                 if (introduced == null) return;
@@ -249,7 +248,7 @@ public final class ProgramSession {
             if (event.result instanceof ProgramBackend.Compilation.Failed failed) {
                 if (event.request.introduced != null) {
                     Registration<?> registration = event.request.introduced;
-                    if (!registration.closed && registration.ticket.state == ProgramTicket.State.PENDING) {
+                    if (!registration.closed && registration.state == ProgramRegistration.State.PENDING) {
                         registration.fail(failed.failure());
                         accepted.remove(registration);
                         retire(registration);
@@ -282,7 +281,7 @@ public final class ProgramSession {
     private boolean valid(BuildRequest request) {
         if (request.target.stream().anyMatch(registration -> registration.closed)) return false;
         if (request.introduced != null) {
-            return request.introduced.ticket.state == ProgramTicket.State.PENDING
+            return request.introduced.state == ProgramRegistration.State.PENDING
                     && request.target.equals(append(published, request.introduced));
         }
         return request.target.equals(published.stream().filter(registration -> !registration.closed).toList());
@@ -492,7 +491,10 @@ public final class ProgramSession {
         private final long acceptanceSequence;
         private final E exports;
         private final List<Declaration> declarations;
-        private final Ticket ticket;
+        private final List<Consumer<? super Completion>> observers = new ArrayList<>();
+        private State state = State.PENDING;
+        private ProgramFailure failure;
+        private Completion completion;
         private boolean closed;
         private boolean retired;
 
@@ -503,46 +505,9 @@ public final class ProgramSession {
             this.acceptanceSequence = acceptanceSequence;
             this.exports = exports;
             this.declarations = List.copyOf(declarations);
-            this.ticket = new Ticket(session, channel);
         }
 
         @Override public E exports() { return exports; }
-        @Override public ProgramTicket readiness() { return ticket; }
-
-        @Override
-        public void close() {
-            synchronized (session) {
-                if (closed) return;
-                closed = true;
-                if (ticket.state == ProgramTicket.State.PENDING) {
-                    ticket.complete(ProgramTicket.State.CANCELLED, null, new ProgramTicket.Cancelled());
-                    session.retire(this);
-                }
-            }
-        }
-
-        private void ready() {
-            ticket.complete(ProgramTicket.State.READY, null, new ProgramTicket.Ready());
-        }
-
-        private void fail(ProgramFailure failure) {
-            ticket.complete(ProgramTicket.State.FAILED, failure, new ProgramTicket.Failed(failure));
-        }
-    }
-
-    private static final class Ticket implements ProgramTicket {
-        private final ProgramSession session;
-        private final ProgramContributionChannel channel;
-        private final List<Consumer<? super Completion>> observers = new ArrayList<>();
-        private State state = State.PENDING;
-        private ProgramFailure failure;
-        private Completion completion;
-
-        private Ticket(ProgramSession session, ProgramContributionChannel channel) {
-            this.session = session;
-            this.channel = channel;
-        }
-
         @Override public State state() { synchronized (session) { return state; } }
         @Override public Optional<ProgramFailure> failure() {
             synchronized (session) { return Optional.ofNullable(failure); }
@@ -555,6 +520,26 @@ public final class ProgramSession {
                 if (completion == null) observers.add(observer);
                 else session.enqueue(channel, () -> observer.accept(completion));
             }
+        }
+
+        @Override
+        public void close() {
+            synchronized (session) {
+                if (closed) return;
+                closed = true;
+                if (state == State.PENDING) {
+                    complete(State.CANCELLED, null, new Cancelled());
+                    session.retire(this);
+                }
+            }
+        }
+
+        private void ready() {
+            complete(State.READY, null, new Ready());
+        }
+
+        private void fail(ProgramFailure failure) {
+            complete(State.FAILED, failure, new Failed(failure));
         }
 
         private void complete(State state, ProgramFailure failure, Completion completion) {

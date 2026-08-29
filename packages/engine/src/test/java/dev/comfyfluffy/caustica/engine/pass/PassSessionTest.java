@@ -1,8 +1,8 @@
 package dev.comfyfluffy.caustica.engine.pass;
 
-import dev.comfyfluffy.caustica.api.gpu.GpuDescriptorHeap;
-import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
-import dev.comfyfluffy.caustica.api.gpu.GpuFrameUse;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorHeap;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
+import dev.comfyfluffy.caustica.api.vulkan.GpuFrameUse;
 import dev.comfyfluffy.caustica.api.pass.Pass;
 import dev.comfyfluffy.caustica.api.pass.PassFrame;
 import dev.comfyfluffy.caustica.api.pass.PostEffectFrame;
@@ -304,9 +304,9 @@ final class PassSessionTest {
     };
 
     private static final PostEffectFrame POST_FRAME = new PostEffectFrame() {
-        @Override public dev.comfyfluffy.caustica.api.gpu.GpuImage sceneColor() { return null; }
-        @Override public dev.comfyfluffy.caustica.api.gpu.GpuImage acquireSceneColorOutput() { return null; }
-        @Override public dev.comfyfluffy.caustica.api.gpu.GpuImage exposureImage() { return null; }
+        @Override public dev.comfyfluffy.caustica.api.vulkan.GpuImage sceneColor() { return null; }
+        @Override public dev.comfyfluffy.caustica.api.vulkan.GpuImage acquireSceneColorOutput() { return null; }
+        @Override public dev.comfyfluffy.caustica.api.vulkan.GpuImage exposureImage() { return null; }
         @Override public VkCommandBuffer commandBuffer() { return null; }
         @Override public GpuFrameUse gpuUse() { return null; }
         @Override public long frameIndex() { return 1; }
@@ -318,10 +318,10 @@ final class PassSessionTest {
     };
 
     private static final UiFrame UI_FRAME = new UiFrame() {
-        @Override public dev.comfyfluffy.caustica.api.gpu.GpuImage layer() { return null; }
+        @Override public dev.comfyfluffy.caustica.api.vulkan.GpuImage layer() { return null; }
         @Override public float[] worldViewProjection() { return new float[16]; }
         @Override public dev.comfyfluffy.caustica.api.view.SceneView view() { return null; }
-        @Override public dev.comfyfluffy.caustica.api.gpu.GpuAccelerationStructureDescriptor rootSceneTlasDescriptor() { return null; }
+        @Override public dev.comfyfluffy.caustica.api.vulkan.GpuAccelerationStructureDescriptor rootSceneTlasDescriptor() { return null; }
         @Override public VkCommandBuffer commandBuffer() { return null; }
         @Override public GpuFrameUse gpuUse() { return null; }
         @Override public long frameIndex() { return 1; }

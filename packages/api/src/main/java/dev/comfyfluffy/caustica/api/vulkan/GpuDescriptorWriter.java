@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.api.gpu;
+package dev.comfyfluffy.caustica.api.vulkan;
 
 import org.lwjgl.vulkan.VkResourceDescriptorInfoEXT;
 import org.lwjgl.vulkan.VkSamplerCreateInfo;

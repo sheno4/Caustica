@@ -10,8 +10,8 @@ import org.lwjgl.vulkan.VkCommandBuffer;
 import java.nio.ByteBuffer;
 import java.util.List;
 
-import dev.comfyfluffy.caustica.api.gpu.GpuFrameUse;
-import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
+import dev.comfyfluffy.caustica.api.vulkan.GpuFrameUse;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.vulkan.VmaImage2D;
 import dev.comfyfluffy.caustica.minecraft.entity.RtEntities;
 
@@ -129,7 +129,7 @@ final class GlowOutlineFeature implements OverlayFeature {
         if (maskImage == null || maskImage.width() != width || maskImage.height() != height) {
             if (maskImage != null) {
                 VmaImage2D retired = maskImage;
-                gpuUse.retire(retired::close);
+                gpuUse.whenComplete(retired::close);
             }
             maskImage = VmaImage2D.create(device, width, height, MASK_FORMAT,
                     VK10.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,

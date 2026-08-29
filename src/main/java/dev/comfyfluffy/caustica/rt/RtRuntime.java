@@ -209,7 +209,7 @@ public final class RtRuntime {
     }
 
     public boolean presentSdrToPq(GraphicsSubmission submission, long swapchainImage, int width, int height,
-            dev.comfyfluffy.caustica.api.gpu.GpuImage source,
+            dev.comfyfluffy.caustica.api.vulkan.GpuImage source,
             long acquireSemaphore, long presentSemaphore) {
         return session != null && session.presenter.presentSdrToPq(submission, swapchainImage, width, height,
                 source, acquireSemaphore, presentSemaphore);

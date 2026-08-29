@@ -1,8 +1,8 @@
 package dev.comfyfluffy.caustica.minecraft.overlay;
 
 import dev.comfyfluffy.caustica.config.CausticaConfig;
-import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
-import dev.comfyfluffy.caustica.api.gpu.GpuFrameUse;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
+import dev.comfyfluffy.caustica.api.vulkan.GpuFrameUse;
 import dev.comfyfluffy.caustica.minecraft.entity.RtEntities;
 import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
 import dev.comfyfluffy.caustica.vulkan.VmaImage2D;
@@ -80,7 +80,7 @@ final class BlockOutlineFeature implements OverlayFeature {
                     .blend(OverlayPipelines.Blend.ALPHA).attachment(WorldOverlayPass.TARGET_FORMAT).build(gpu, "block outline composite");
         }
         if (mask == null || mask.width() != width || mask.height() != height) {
-            if (mask != null) { VmaImage2D old = mask; use.retire(old::close); }
+            if (mask != null) { VmaImage2D old = mask; use.whenComplete(old::close); }
             mask = VmaImage2D.create(gpu, width, height, WorldOverlayPass.TARGET_FORMAT,
                     VK10.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, "block outline mask");
             maskNeedsInitialization = true;

@@ -1,19 +1,19 @@
 package dev.comfyfluffy.caustica.minecraft.material;
 
-import com.mojang.blaze3d.platform.NativeImage;
+import java.util.function.IntBinaryOperator;
 
-/** Zero-copy material image view over Minecraft's native image storage. */
+/** Zero-copy material image view over host-owned pixel storage. */
 final class MinecraftMaterialImage implements MaterialImage {
-    private final NativeImage image;
+    private final IntBinaryOperator pixels;
     private final int width;
     private final int height;
-    private final boolean owned;
+    private final Runnable closeAction;
 
-    MinecraftMaterialImage(NativeImage image, int width, int height, boolean owned) {
-        this.image = image;
+    MinecraftMaterialImage(IntBinaryOperator pixels, int width, int height, Runnable closeAction) {
+        this.pixels = pixels;
         this.width = width;
         this.height = height;
-        this.owned = owned;
+        this.closeAction = closeAction;
     }
 
     @Override
@@ -28,15 +28,15 @@ final class MinecraftMaterialImage implements MaterialImage {
 
     @Override
     public int argb(int x, int y) {
-        return image.getPixel(x, y);
+        return pixels.applyAsInt(x, y);
     }
 
     int rawArgb(int x, int y) {
-        return image.getPixel(x, y);
+        return pixels.applyAsInt(x, y);
     }
 
     @Override
     public void close() {
-        if (owned) image.close();
+        closeAction.run();
     }
 }

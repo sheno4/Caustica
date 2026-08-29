@@ -4,7 +4,6 @@ import dev.comfyfluffy.caustica.api.program.EnvironmentDefinition;
 import dev.comfyfluffy.caustica.api.program.EnvironmentId;
 import dev.comfyfluffy.caustica.api.program.ProgramFailure;
 import dev.comfyfluffy.caustica.api.program.ProgramRegistration;
-import dev.comfyfluffy.caustica.api.program.ProgramTicket;
 import dev.comfyfluffy.caustica.api.program.ShaderDataType;
 import dev.comfyfluffy.caustica.api.program.ShaderDefinition;
 import dev.comfyfluffy.caustica.api.program.ShaderSource;
@@ -62,19 +61,19 @@ final class ProgramSessionTest {
                 builder.volume(volume("sample::Volume", () -> events.add("volume-retired"))),
                 builder.environment(new EnvironmentDefinition<>(
                         shader("environment", "sample::Environment"), ENVIRONMENT_BINDING))));
-        registration.readiness().whenComplete(completion -> {
+        registration.whenComplete(completion -> {
             assertTrue(backend.active != null);
             events.add("ready");
         });
 
-        assertEquals(ProgramTicket.State.PENDING, registration.readiness().state());
+        assertEquals(ProgramRegistration.State.PENDING, registration.state());
         assertInstanceOf(ProgramResolution.ErrorSurface.class, session.resolve(registration.exports().surface()));
         session.progress();
         assertEquals(3, backend.pending.composition.registrations().getFirst().declarations().size());
         backend.succeed();
         session.progress();
 
-        assertEquals(ProgramTicket.State.READY, registration.readiness().state());
+        assertEquals(ProgramRegistration.State.READY, registration.state());
         assertEquals(List.of("ready"), events);
         assertInstanceOf(ProgramResolution.ActiveSurface.class, session.resolve(registration.exports().surface()));
         assertInstanceOf(ProgramResolution.ActiveVolume.class, session.resolve(registration.exports().volume()));
@@ -83,8 +82,8 @@ final class ProgramSessionTest {
         assertTrue(failures.isEmpty());
 
         AtomicInteger lateCallbacks = new AtomicInteger();
-        registration.readiness().whenComplete(ignored -> lateCallbacks.incrementAndGet());
-        assertEquals(0, lateCallbacks.get(), "completed tickets must not invoke callbacks inline");
+        registration.whenComplete(ignored -> lateCallbacks.incrementAndGet());
+        assertEquals(0, lateCallbacks.get(), "completed registrations must not invoke callbacks inline");
         session.progress();
         assertEquals(1, lateCallbacks.get());
     }
@@ -105,13 +104,13 @@ final class ProgramSessionTest {
         session.progress();
         backend.succeed();
         session.progress();
-        assertEquals(ProgramTicket.State.READY, first.readiness().state());
+        assertEquals(ProgramRegistration.State.READY, first.state());
         assertEquals(2, backend.pendingRegistrationCount());
 
         backend.fail("broken shader");
         session.progress();
-        assertEquals(ProgramTicket.State.FAILED, broken.readiness().state());
-        assertEquals("broken shader", broken.readiness().failure().orElseThrow().summary());
+        assertEquals(ProgramRegistration.State.FAILED, broken.state());
+        assertEquals("broken shader", broken.failure().orElseThrow().summary());
         assertEquals(List.of("broken"), retired);
         assertInstanceOf(ProgramResolution.ErrorSurface.class, session.resolve(broken.exports()));
         assertInstanceOf(ProgramResolution.ActiveSurface.class, session.resolve(first.exports()));
@@ -120,7 +119,7 @@ final class ProgramSessionTest {
 
         backend.succeed();
         session.progress();
-        assertEquals(ProgramTicket.State.READY, later.readiness().state());
+        assertEquals(ProgramRegistration.State.READY, later.state());
         assertEquals(2, backend.activeComposition.registrations().size());
         assertInstanceOf(ProgramResolution.ActiveSurface.class, session.resolve(later.exports()));
     }
@@ -137,7 +136,7 @@ final class ProgramSessionTest {
         session.progress();
         backend.succeed();
         cancelled.close();
-        assertEquals(ProgramTicket.State.CANCELLED, cancelled.readiness().state());
+        assertEquals(ProgramRegistration.State.CANCELLED, cancelled.state());
         assertFalse(session.isDrained(channel), "the stale compiler completion still belongs to this owner");
         session.progress();
         assertEquals(1, backend.discarded);
@@ -151,7 +150,7 @@ final class ProgramSessionTest {
         backend.succeed();
         session.progress();
         ready.close();
-        assertEquals(ProgramTicket.State.READY, ready.readiness().state());
+        assertEquals(ProgramRegistration.State.READY, ready.state());
         assertInstanceOf(ProgramResolution.ActiveSurface.class, session.resolve(ready.exports()));
 
         session.progress();
@@ -233,7 +232,7 @@ final class ProgramSessionTest {
 
         channel.invalidate();
 
-        assertEquals(ProgramTicket.State.CANCELLED, registration.readiness().state());
+        assertEquals(ProgramRegistration.State.CANCELLED, registration.state());
         assertFalse(session.isDrained(channel));
         assertThrows(IllegalStateException.class, () -> channel.register(builder -> "late"));
         session.progress();
@@ -254,17 +253,17 @@ final class ProgramSessionTest {
             }));
             return builder.volume(volume("sample::Following", () -> callbacks.add("retirement")));
         });
-        registration.readiness().whenComplete(ignored -> {
-            throw new IllegalStateException("ticket");
+        registration.whenComplete(ignored -> {
+            throw new IllegalStateException("readiness");
         });
-        registration.readiness().whenComplete(ignored -> callbacks.add("ticket"));
+        registration.whenComplete(ignored -> callbacks.add("registration"));
 
         session.progress();
         backend.fail("compile");
         session.progress();
 
-        assertEquals(List.of("ticket", "retirement"), callbacks);
-        assertEquals(List.of("ticket", "retirement"),
+        assertEquals(List.of("registration", "retirement"), callbacks);
+        assertEquals(List.of("readiness", "retirement"),
                 failures.stream().map(Throwable::getMessage).toList());
         assertTrue(session.isDrained(channel));
     }

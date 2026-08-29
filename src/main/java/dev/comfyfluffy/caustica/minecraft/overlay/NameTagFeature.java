@@ -3,7 +3,7 @@ package dev.comfyfluffy.caustica.minecraft.overlay;
 import com.mojang.blaze3d.textures.GpuTextureView;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.mojang.blaze3d.vulkan.VulkanGpuTextureView;
-import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.vulkan.VulkanSampler;
 
 import org.joml.Matrix4f;
@@ -30,7 +30,7 @@ import net.minecraft.client.gui.font.TextRenderable;
 import net.minecraft.client.renderer.entity.EntityRenderer;
 import net.minecraft.util.ARGB;
 
-import dev.comfyfluffy.caustica.api.gpu.GpuFrameUse;
+import dev.comfyfluffy.caustica.api.vulkan.GpuFrameUse;
 import dev.comfyfluffy.caustica.minecraft.entity.RtEntities;
 
 /**

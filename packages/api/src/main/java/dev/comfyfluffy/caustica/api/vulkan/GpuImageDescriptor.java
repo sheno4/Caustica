@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.api.gpu;
+package dev.comfyfluffy.caustica.api.vulkan;
 
 /** Borrowed shader-visible descriptor whose resource is an image. */
 public interface GpuImageDescriptor extends GpuResourceDescriptor {

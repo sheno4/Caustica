@@ -19,7 +19,7 @@ final class SdrPqPresentation {
     SdrPqPresentation() {}
 
     boolean present(GraphicsSubmission submission, long swapchainImage, int swapWidth, int swapHeight,
-            dev.comfyfluffy.caustica.api.gpu.GpuImage source,
+            dev.comfyfluffy.caustica.api.vulkan.GpuImage source,
             long acquireSemaphore, long presentSemaphore) {
         if (!RtRuntime.hasSession() || source == null) {
             return false;
@@ -53,7 +53,7 @@ final class SdrPqPresentation {
                     VkDependencyInfo.calloc(stack).sType$Default().pMemoryBarriers(pre));
 
             pipeline.dispatch(commandBuffer, image,
-                    source.descriptor(dev.comfyfluffy.caustica.api.gpu.GpuImageDescriptorKind.SAMPLED).index(),
+                    source.descriptor(dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptorKind.SAMPLED).index(),
                     CausticaConfig.Rt.Hdr.uiNits());
             HdrPresentation.recordSwapchainBlit(
                     commandBuffer, stack, image.image(), swapchainImage, copyWidth, copyHeight);

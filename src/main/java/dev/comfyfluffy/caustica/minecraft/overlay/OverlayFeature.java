@@ -3,8 +3,8 @@ package dev.comfyfluffy.caustica.minecraft.overlay;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.joml.Matrix4fc;
 
-import dev.comfyfluffy.caustica.api.gpu.GpuFrameUse;
-import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
+import dev.comfyfluffy.caustica.api.vulkan.GpuFrameUse;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 
 /**
  * One world-space overlay effect rendered by {@link WorldOverlayPass} into the display-resolution UI

@@ -1,9 +1,9 @@
 package dev.comfyfluffy.caustica.rt;
 
-import dev.comfyfluffy.caustica.api.gpu.GpuDescriptorIndex;
-import dev.comfyfluffy.caustica.api.gpu.GpuDescriptorRange;
-import dev.comfyfluffy.caustica.api.gpu.GpuImageDescriptor;
-import dev.comfyfluffy.caustica.api.gpu.GpuImageDescriptorKind;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorIndex;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorRange;
+import dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptor;
+import dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptorKind;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.util.vma.Vma;
 import org.lwjgl.vulkan.VK10;

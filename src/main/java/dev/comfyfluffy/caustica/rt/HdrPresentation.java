@@ -1,7 +1,7 @@
 package dev.comfyfluffy.caustica.rt;
 
 import dev.comfyfluffy.caustica.config.CausticaConfig;
-import dev.comfyfluffy.caustica.api.gpu.GpuImage;
+import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
 import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
 import dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg;
 import dev.comfyfluffy.caustica.rt.pipeline.RtHdrCompositePipeline;
@@ -54,7 +54,7 @@ final class HdrPresentation {
                     VK14.vkCmdPipelineBarrier2(commandBuffer,
                             VkDependencyInfo.calloc(stack).sType$Default().pMemoryBarriers(barrier));
                     pipeline.dispatch(commandBuffer, source,
-                            overlay.descriptor(dev.comfyfluffy.caustica.api.gpu.GpuImageDescriptorKind.SAMPLED).index(),
+                            overlay.descriptor(dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptorKind.SAMPLED).index(),
                             CausticaConfig.Rt.Hdr.uiNits());
                 }
             }

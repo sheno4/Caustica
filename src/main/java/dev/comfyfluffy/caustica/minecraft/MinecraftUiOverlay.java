@@ -18,7 +18,7 @@ import com.mojang.blaze3d.textures.FilterMode;
 import com.mojang.blaze3d.vulkan.VulkanCommandEncoder;
 import com.mojang.blaze3d.vulkan.VulkanGpuTexture;
 import com.mojang.blaze3d.vulkan.VulkanGpuTextureView;
-import dev.comfyfluffy.caustica.api.gpu.*;
+import dev.comfyfluffy.caustica.api.vulkan.*;
 import dev.comfyfluffy.caustica.mixin.CommandEncoderAccessor;
 import dev.comfyfluffy.caustica.mixin.VulkanCommandEncoderAccessor;
 import dev.comfyfluffy.caustica.rt.GpuContext;

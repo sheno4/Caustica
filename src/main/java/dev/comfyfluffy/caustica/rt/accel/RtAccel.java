@@ -270,7 +270,7 @@ public final class RtAccel {
 
     /**
      * A BLAS whose AS + backing buffer are allocated but whose build command is recorded later, so
-     * many retained builds can be batched into one submission — one {@code vkQueueSubmit} + fence
+     * many retained builds can be batched into one queue submission and fence
      * wait per batch instead of one per geometry (each submit drains the graphics queue).
      * {@code opaque} marks geometry {@code OPAQUE} (solid, no any-hit) vs
      * {@code NO_DUPLICATE_ANY_HIT_INVOCATION} for alpha-tested cutout.

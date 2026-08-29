@@ -1,9 +1,9 @@
 package dev.comfyfluffy.caustica.rt.pass;
 
-import dev.comfyfluffy.caustica.api.gpu.GpuAccelerationStructureDescriptor;
-import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
-import dev.comfyfluffy.caustica.api.gpu.GpuFrameUse;
-import dev.comfyfluffy.caustica.api.gpu.GpuImage;
+import dev.comfyfluffy.caustica.api.vulkan.GpuAccelerationStructureDescriptor;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
+import dev.comfyfluffy.caustica.api.vulkan.GpuFrameUse;
+import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
 import dev.comfyfluffy.caustica.api.pass.PassFrame;
 import dev.comfyfluffy.caustica.api.pass.PostEffectFrame;
 import dev.comfyfluffy.caustica.api.pass.PostEffectSetup;
@@ -230,7 +230,7 @@ public final class RtPassSchedulerBackend implements PassSchedulerBackend {
             commands.passBarrier(state.commandBuffer());
             finished = true;
             active = null;
-            state.gpuUse().retire(drained);
+            state.gpuUse().whenComplete(drained);
         }
     }
 

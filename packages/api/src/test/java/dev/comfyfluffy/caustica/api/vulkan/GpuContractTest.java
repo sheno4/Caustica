@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.api.gpu;
+package dev.comfyfluffy.caustica.api.vulkan;
 
 import org.junit.jupiter.api.Test;
 import org.lwjgl.vulkan.VkCommandBuffer;

@@ -1,11 +1,11 @@
 package dev.comfyfluffy.caustica.example.showcase;
 
-import dev.comfyfluffy.caustica.api.gpu.GpuAccelerationStructureDescriptor;
-import dev.comfyfluffy.caustica.api.gpu.GpuDescriptorRange;
-import dev.comfyfluffy.caustica.api.gpu.GpuDescriptorIndex;
-import dev.comfyfluffy.caustica.api.gpu.GpuDescriptorWriter;
-import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
-import dev.comfyfluffy.caustica.api.gpu.GpuImageDescriptorKind;
+import dev.comfyfluffy.caustica.api.vulkan.GpuAccelerationStructureDescriptor;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorRange;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorIndex;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorWriter;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
+import dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptorKind;
 import dev.comfyfluffy.caustica.api.pass.Pass;
 import dev.comfyfluffy.caustica.api.pass.PassFrame;
 import dev.comfyfluffy.caustica.api.pass.PostEffectFrame;
@@ -24,7 +24,7 @@ final class ShowcasePasses {
                     var view = frame.view();
                     double shaderTime = frame.timeSeconds();
                     double metresPerUnit = frame.metersPerSceneUnit();
-                    frame.gpuUse().retire(() -> { });
+                    frame.gpuUse().whenComplete(() -> { });
                     gpu.retireAfterUse(() -> { });
                     throw missingCommands(view.rootScene(), shaderTime, metresPerUnit,
                             frame.renderWidth(), frame.renderHeight());

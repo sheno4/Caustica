@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.api.pass;
 
-import dev.comfyfluffy.caustica.api.gpu.GpuFrameUse;
+import dev.comfyfluffy.caustica.api.vulkan.GpuFrameUse;
 import dev.comfyfluffy.caustica.api.view.SceneView;
 import org.lwjgl.vulkan.VkCommandBuffer;
 
@@ -27,7 +27,7 @@ public interface PassFrame {
     /**
      * Completion reservation covering every GPU resource this frame's recorded work references.
      *
-     * <p>{@link GpuFrameUse#retire} covers this frame's work even though it has not been submitted yet.
+     * <p>{@link GpuFrameUse#whenComplete} covers this frame's work even though it has not been submitted yet.
      * Register retirement before {@code record} returns. Replacing a resource and retiring the old one is
      * the non-blocking update pattern.
      */

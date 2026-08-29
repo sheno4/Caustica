@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.api.gpu;
+package dev.comfyfluffy.caustica.api.vulkan;
 
 /**
  * Allocation and shader-addressing facts for the renderer's bound Vulkan descriptor heaps.

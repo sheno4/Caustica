@@ -6,7 +6,6 @@ import dev.comfyfluffy.caustica.api.program.ProgramBuilder;
 import dev.comfyfluffy.caustica.api.program.ProgramChannel;
 import dev.comfyfluffy.caustica.api.program.ProgramFailure;
 import dev.comfyfluffy.caustica.api.program.ProgramRegistration;
-import dev.comfyfluffy.caustica.api.program.ProgramTicket;
 import dev.comfyfluffy.caustica.api.program.SurfaceDefinition;
 import dev.comfyfluffy.caustica.api.program.SurfaceId;
 import dev.comfyfluffy.caustica.api.program.VolumeDefinition;
@@ -104,7 +103,10 @@ final class MinecraftProgramSessionTest {
             E exports = declaration.apply(this);
             return new ProgramRegistration<>() {
                 @Override public E exports() { return exports; }
-                @Override public ProgramTicket readiness() { return PENDING; }
+                @Override public State state() { return State.PENDING; }
+                @Override public Optional<ProgramFailure> failure() { return Optional.empty(); }
+                @Override public void whenComplete(
+                        java.util.function.Consumer<? super Completion> callback) { }
                 @Override public void close() { }
             };
         }
@@ -123,9 +125,4 @@ final class MinecraftProgramSessionTest {
         }
     }
 
-    private static final ProgramTicket PENDING = new ProgramTicket() {
-        @Override public State state() { return State.PENDING; }
-        @Override public Optional<ProgramFailure> failure() { return Optional.empty(); }
-        @Override public void whenComplete(java.util.function.Consumer<? super Completion> callback) { }
-    };
 }

@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.api.pass;
 
-import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 
 import java.util.Objects;
 

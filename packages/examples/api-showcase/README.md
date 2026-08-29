@@ -28,13 +28,16 @@ integration at `packages/examples/gltf-viewer-minecraft`.
 ## Refactor decisions proven by the probe
 
 - `ShowcasePrograms` declares its four shader implementations through one atomic `ProgramRegistration` and
-  exports one typed ID record. One readiness result covers the complete set, and closing the registration is
-  the only removal authority.
+  exports one typed ID record. The registration itself exposes the complete set's state, failure, and
+  non-blocking completion callback; closing that same capability is the only removal authority.
 - `ShowcaseScene` receives that export record and a host-issued `SceneId`, proving the intended explicit
   cross-contribution handoff shape. It can select those surface/volume IDs but cannot close their program
   registration or administer the scene.
 - Mesh streams use retained `VulkanDeviceAddressRange` values instead of four interchangeable primitive
   arguments. Descriptor ranges and borrowed indices preserve resource-versus-sampler type information.
+- `GpuFrameUse.whenComplete` is the frame-scoped callback for both resource retirement and positive
+  completion work, such as publishing a mesh after its staging upload completes. It follows this frame's
+  recorded commands, runs once on the renderer thread, and does not wait for later or unrelated GPU work.
 - Public scene creation/closing is absent. `ShowcaseSession.openScene` and `closeScene` model the notifications
   a future Minecraft API supplies, while the environment binding is exported back to the host selector.
 
@@ -47,9 +50,6 @@ integration at `packages/examples/gltf-viewer-minecraft`.
   which is useful, but they make a multi-material mesh require one deliberately shared instance marker.
   Generated schema tokens tied to reflected Java records would preserve the safety with less handwritten
   phantom-type ceremony.
-- `GpuFrameUse.retire` is also the only completion callback available for a staging upload. Using a method
-  named “retire” to publish a newly ready mesh is legal in shape but unclear. A neutral `whenComplete` name,
-  with retirement as a documented use, better represents both cases.
 - Public scene creation remains deferred. A future ray portal justifies keeping `SceneId` in geometry, lights,
   and views, but it will also need a destination transform, lifetime link, hop policy, and shader-visible TLAS
   selection. Add scene creation and a retained portal-link capability together with that implementation.

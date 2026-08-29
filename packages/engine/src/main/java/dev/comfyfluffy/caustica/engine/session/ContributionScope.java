@@ -1,7 +1,7 @@
 package dev.comfyfluffy.caustica.engine.session;
 
 import dev.comfyfluffy.caustica.api.geometry.GeometryChannel;
-import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.api.light.LightChannel;
 import dev.comfyfluffy.caustica.api.pass.PassChannel;
 import dev.comfyfluffy.caustica.api.program.ProgramChannel;
@@ -30,7 +30,7 @@ public interface ContributionScope extends AutoCloseable {
     /** Remove pass registrations and logically invalidate every object still owned by this scope. */
     void invalidate();
 
-    /** Drain accepted submissions, frame uses, tickets, retirements, and pass-instance closes. */
+    /** Drain accepted submissions, frame uses, program readiness, retirements, and pass-instance closes. */
     void drain();
 
     /** Release scope bookkeeping after the contribution's final close callback. */

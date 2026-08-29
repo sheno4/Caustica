@@ -1,10 +1,10 @@
 package dev.comfyfluffy.caustica.rt;
 
-import dev.comfyfluffy.caustica.api.gpu.GpuDescriptorHeap;
-import dev.comfyfluffy.caustica.api.gpu.GpuDescriptorHeapProperties;
-import dev.comfyfluffy.caustica.api.gpu.GpuDescriptorIndex;
-import dev.comfyfluffy.caustica.api.gpu.GpuDescriptorRange;
-import dev.comfyfluffy.caustica.api.gpu.GpuDescriptorWriter;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorHeap;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorHeapProperties;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorIndex;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorRange;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorWriter;
 import dev.comfyfluffy.caustica.engine.vulkan.descriptor.DescriptorHeapAllocationCore;
 import dev.comfyfluffy.caustica.engine.vulkan.descriptor.DescriptorHeapBinding;
 import dev.comfyfluffy.caustica.engine.vulkan.descriptor.DescriptorHeapKind;

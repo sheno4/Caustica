@@ -1,8 +1,8 @@
 package dev.comfyfluffy.caustica.minecraft.material;
 
-import dev.comfyfluffy.caustica.api.gpu.GpuDescriptorIndex;
-import dev.comfyfluffy.caustica.api.gpu.GpuDescriptorRange;
-import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorIndex;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorRange;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.api.program.ShaderData;
 import dev.comfyfluffy.caustica.api.pass.Pass;
 import dev.comfyfluffy.caustica.api.pass.PassFrame;

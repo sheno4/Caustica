@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.engine.vulkan.descriptor;
 
-import dev.comfyfluffy.caustica.api.gpu.GpuDescriptorIndex;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorIndex;
 
 import java.util.HashMap;
 import java.util.Map;

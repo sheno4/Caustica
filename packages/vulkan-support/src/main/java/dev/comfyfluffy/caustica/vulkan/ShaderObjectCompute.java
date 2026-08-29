@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.vulkan;
 
-import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.EXTDescriptorHeap;
 import org.lwjgl.vulkan.EXTShaderObject;

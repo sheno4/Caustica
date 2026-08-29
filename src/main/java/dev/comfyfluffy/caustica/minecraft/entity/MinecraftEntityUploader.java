@@ -1,7 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.entity;
 
 import dev.comfyfluffy.caustica.api.geometry.MeshBuild;
-import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.api.program.ShaderData;
 import dev.comfyfluffy.caustica.minecraft.program.MinecraftPrograms;
 import dev.comfyfluffy.caustica.minecraft.program.MinecraftProgramTypes;

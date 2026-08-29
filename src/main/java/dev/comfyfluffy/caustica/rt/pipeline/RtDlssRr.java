@@ -4,7 +4,7 @@ import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtRuntime;
-import dev.comfyfluffy.caustica.api.gpu.GpuImage;
+import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
 import dev.comfyfluffy.caustica.ngx.NgxLibrary;
 import dev.comfyfluffy.caustica.ngx.NgxRuntime;
 import org.joml.Matrix4fc;

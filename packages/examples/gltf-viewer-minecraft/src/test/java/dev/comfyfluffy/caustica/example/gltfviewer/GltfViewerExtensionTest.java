@@ -6,7 +6,6 @@ import dev.comfyfluffy.caustica.api.program.ProgramBuilder;
 import dev.comfyfluffy.caustica.api.program.ProgramChannel;
 import dev.comfyfluffy.caustica.api.program.ProgramFailure;
 import dev.comfyfluffy.caustica.api.program.ProgramRegistration;
-import dev.comfyfluffy.caustica.api.program.ProgramTicket;
 import dev.comfyfluffy.caustica.api.program.SurfaceDefinition;
 import dev.comfyfluffy.caustica.api.program.SurfaceId;
 import dev.comfyfluffy.caustica.api.program.VolumeDefinition;
@@ -64,7 +63,11 @@ final class GltfViewerExtensionTest {
             E exports = declaration.apply(this);
             return new ProgramRegistration<>() {
                 @Override public E exports() { return exports; }
-                @Override public ProgramTicket readiness() { return READY; }
+                @Override public State state() { return State.READY; }
+                @Override public Optional<ProgramFailure> failure() { return Optional.empty(); }
+                @Override public void whenComplete(Consumer<? super Completion> callback) {
+                    callback.accept(new Ready());
+                }
                 @Override public void close() { open = false; }
             };
         }
@@ -81,11 +84,4 @@ final class GltfViewerExtensionTest {
         }
     }
 
-    private static final ProgramTicket READY = new ProgramTicket() {
-        @Override public State state() { return State.READY; }
-        @Override public Optional<ProgramFailure> failure() { return Optional.empty(); }
-        @Override public void whenComplete(Consumer<? super Completion> callback) {
-            callback.accept(new Ready());
-        }
-    };
 }

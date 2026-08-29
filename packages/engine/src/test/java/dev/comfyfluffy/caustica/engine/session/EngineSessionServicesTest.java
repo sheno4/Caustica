@@ -1,8 +1,8 @@
 package dev.comfyfluffy.caustica.engine.session;
 
-import dev.comfyfluffy.caustica.api.gpu.GpuDescriptorHeap;
-import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
-import dev.comfyfluffy.caustica.api.gpu.GpuFrameUse;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorHeap;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
+import dev.comfyfluffy.caustica.api.vulkan.GpuFrameUse;
 import dev.comfyfluffy.caustica.api.geometry.GeometryChannel;
 import dev.comfyfluffy.caustica.api.program.ShaderDataType;
 import dev.comfyfluffy.caustica.api.retained.RetainedBatch;

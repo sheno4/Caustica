@@ -1,7 +1,7 @@
 package dev.comfyfluffy.caustica.rt.pipeline;
 
-import dev.comfyfluffy.caustica.api.gpu.GpuImage;
-import dev.comfyfluffy.caustica.api.gpu.GpuImageDescriptorKind;
+import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
+import dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptorKind;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.RtDebugLabels;
 import dev.comfyfluffy.caustica.rt.gen.DisplayPushData;

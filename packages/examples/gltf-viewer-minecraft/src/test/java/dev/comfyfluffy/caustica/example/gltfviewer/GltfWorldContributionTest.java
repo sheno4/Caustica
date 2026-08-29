@@ -4,14 +4,14 @@ import dev.comfyfluffy.caustica.api.geometry.GeometryChannel;
 import dev.comfyfluffy.caustica.api.geometry.InstanceId;
 import dev.comfyfluffy.caustica.api.geometry.MeshBuild;
 import dev.comfyfluffy.caustica.api.geometry.MeshId;
-import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
-import dev.comfyfluffy.caustica.api.gpu.VulkanDeviceAddress;
-import dev.comfyfluffy.caustica.api.gpu.VulkanDeviceAddressRange;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
+import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
+import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
 import dev.comfyfluffy.caustica.api.light.LightChannel;
 import dev.comfyfluffy.caustica.api.pass.PassChannel;
 import dev.comfyfluffy.caustica.api.program.ProgramChannel;
 import dev.comfyfluffy.caustica.api.program.ProgramRegistration;
-import dev.comfyfluffy.caustica.api.program.ProgramTicket;
+import dev.comfyfluffy.caustica.api.program.ProgramFailure;
 import dev.comfyfluffy.caustica.api.program.ShaderDataType;
 import dev.comfyfluffy.caustica.api.program.SurfaceId;
 import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
@@ -89,18 +89,13 @@ final class GltfWorldContributionTest {
         GltfProgramExports exports = new GltfProgramExports(new SurfaceId<>() { }, new SurfaceId<>() { });
         return new ProgramRegistration<>() {
             @Override public GltfProgramExports exports() { return exports; }
-            @Override public ProgramTicket readiness() { return TICKET; }
+            @Override public State state() { return State.READY; }
+            @Override public Optional<ProgramFailure> failure() { return Optional.empty(); }
+            @Override public void whenComplete(
+                    java.util.function.Consumer<? super Completion> callback) { }
             @Override public void close() { closes.incrementAndGet(); stopOrder.add("program"); }
         };
     }
-
-    private static final ProgramTicket TICKET = new ProgramTicket() {
-        @Override public State state() { return State.READY; }
-        @Override public Optional<dev.comfyfluffy.caustica.api.program.ProgramFailure> failure() {
-            return Optional.empty();
-        }
-        @Override public void whenComplete(java.util.function.Consumer<? super Completion> callback) { }
-    };
 
     private static long count(RetainedBatch<GeometryChannel.Operation> batch, Class<?> type) {
         return batch.operations().stream().filter(type::isInstance).count();

@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.api.gpu;
+package dev.comfyfluffy.caustica.api.vulkan;
 
 /**
  * A non-zero Vulkan {@code VkDeviceAddress} retained as an ordinary Java value.

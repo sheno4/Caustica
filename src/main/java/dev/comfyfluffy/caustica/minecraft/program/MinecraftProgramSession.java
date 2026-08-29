@@ -114,16 +114,16 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
                 request.close();
                 return;
             }
-            registration.readiness().whenComplete(completion -> completed(request, completion));
+            registration.whenComplete(completion -> completed(request, completion));
         }
     }
 
-    private synchronized void completed(Pending request, ProgramTicket.Completion completion) {
+    private synchronized void completed(Pending request, ProgramRegistration.Completion completion) {
         if (pending != request || stopped) return;
-        if (!(completion instanceof ProgramTicket.Ready)) {
+        if (!(completion instanceof ProgramRegistration.Ready)) {
             pending = null;
             request.close();
-            if (completion instanceof ProgramTicket.Failed failed) {
+            if (completion instanceof ProgramRegistration.Failed failed) {
                 CausticaMod.LOGGER.error("Minecraft program epoch {} failed: {}",
                         request.generation, failed.failure().diagnostics());
             }

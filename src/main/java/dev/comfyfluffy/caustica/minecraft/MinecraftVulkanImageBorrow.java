@@ -2,10 +2,10 @@ package dev.comfyfluffy.caustica.minecraft;
 
 import com.mojang.blaze3d.vulkan.VulkanGpuTexture;
 import com.mojang.blaze3d.vulkan.VulkanGpuTextureView;
-import dev.comfyfluffy.caustica.api.gpu.GpuDescriptorIndex;
-import dev.comfyfluffy.caustica.api.gpu.GpuDescriptorRange;
-import dev.comfyfluffy.caustica.api.gpu.GpuImageDescriptor;
-import dev.comfyfluffy.caustica.api.gpu.GpuImageDescriptorKind;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorIndex;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorRange;
+import dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptor;
+import dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptorKind;
 import dev.comfyfluffy.caustica.rt.GpuContext;
 import dev.comfyfluffy.caustica.rt.GpuImage;
 import org.lwjgl.system.MemoryStack;

@@ -14,8 +14,7 @@ final class SlangToolingPlugin implements Plugin<Project> {
 
         project.tasks.withType(GenerateShaderRecords).configureEach { task ->
             conventions(task, tooling)
-            task.includedRecords.convention([])
-            task.excludedRecords.convention([])
+            task.recordSpecs.convention([])
         }
         project.tasks.withType(GenerateRtBindings).configureEach { task -> conventions(task, tooling) }
         project.tasks.withType(CompileSlangShaders).configureEach { task -> conventions(task, tooling) }

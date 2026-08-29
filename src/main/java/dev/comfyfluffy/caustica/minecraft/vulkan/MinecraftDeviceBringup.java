@@ -38,6 +38,7 @@ import org.lwjgl.vulkan.VkPhysicalDeviceVulkan12Features;
 import org.lwjgl.vulkan.VkDevice;
 import org.lwjgl.vulkan.VkDeviceQueueCreateInfo;
 import org.lwjgl.vulkan.VkQueueFamilyProperties;
+import org.lwjgl.vulkan.VkQueueFamilyProperties2;
 import org.lwjgl.vulkan.VkPhysicalDeviceAccelerationStructurePropertiesKHR;
 import org.lwjgl.vulkan.VkPhysicalDeviceOpacityMicromapPropertiesEXT;
 import org.lwjgl.vulkan.VkPhysicalDeviceProperties2;
@@ -346,9 +347,12 @@ public final class MinecraftDeviceBringup {
         VkDeviceQueueCreateInfo.Buffer requestedQueues = createInfo.pQueueCreateInfos();
         if (requestedQueues == null) return null;
         var count = stack.callocInt(1);
-        VK10.vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, count, null);
-        VkQueueFamilyProperties.Buffer families = VkQueueFamilyProperties.calloc(count.get(0), stack);
-        VK10.vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, count, families);
+        VK12.vkGetPhysicalDeviceQueueFamilyProperties2(physicalDevice, count, null);
+        VkQueueFamilyProperties2.Buffer families = VkQueueFamilyProperties2.calloc(count.get(0), stack);
+        for (int family = 0; family < families.capacity(); family++) {
+            families.get(family).sType$Default();
+        }
+        VK12.vkGetPhysicalDeviceQueueFamilyProperties2(physicalDevice, count, families);
         int[] requestedCounts = new int[families.capacity()];
         for (int i = 0; i < requestedQueues.capacity(); i++) {
             VkDeviceQueueCreateInfo request = requestedQueues.get(i);
@@ -384,12 +388,13 @@ public final class MinecraftDeviceBringup {
         return new VulkanQueueReservation(family, queueIndex);
     }
 
-    static int selectComputeQueueFamily(VkQueueFamilyProperties.Buffer families, int[] requestedCounts) {
+    static int selectComputeQueueFamily(VkQueueFamilyProperties2.Buffer families, int[] requestedCounts) {
         int selected = -1;
         int score = Integer.MAX_VALUE;
         for (int family = 0; family < families.capacity(); family++) {
-            int flags = families.get(family).queueFlags();
-            if ((flags & VK10.VK_QUEUE_COMPUTE_BIT) == 0 || requestedCounts[family] >= families.get(family).queueCount()) continue;
+            VkQueueFamilyProperties properties = families.get(family).queueFamilyProperties();
+            int flags = properties.queueFlags();
+            if ((flags & VK10.VK_QUEUE_COMPUTE_BIT) == 0 || requestedCounts[family] >= properties.queueCount()) continue;
             int candidate = ((flags & VK10.VK_QUEUE_GRAPHICS_BIT) != 0 ? 1_000 : 0)
                     + Integer.bitCount(flags) * 10 + requestedCounts[family];
             if (candidate < score) { selected = family; score = candidate; }

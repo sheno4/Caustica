@@ -1,7 +1,7 @@
 package dev.comfyfluffy.caustica.api.geometry;
 
-import dev.comfyfluffy.caustica.api.gpu.VulkanDeviceAddress;
-import dev.comfyfluffy.caustica.api.gpu.VulkanDeviceAddressRange;
+import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
+import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
 import dev.comfyfluffy.caustica.api.program.SurfaceId;
 import dev.comfyfluffy.caustica.api.program.ShaderDataType;
 import dev.comfyfluffy.caustica.api.program.VolumeId;

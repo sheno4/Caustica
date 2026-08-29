@@ -1,11 +1,11 @@
 package dev.comfyfluffy.caustica.rt.pass;
 
-import dev.comfyfluffy.caustica.api.gpu.GpuDescriptorHeap;
-import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
-import dev.comfyfluffy.caustica.api.gpu.GpuFrameUse;
-import dev.comfyfluffy.caustica.api.gpu.GpuImage;
-import dev.comfyfluffy.caustica.api.gpu.GpuImageDescriptor;
-import dev.comfyfluffy.caustica.api.gpu.GpuImageDescriptorKind;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorHeap;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
+import dev.comfyfluffy.caustica.api.vulkan.GpuFrameUse;
+import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
+import dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptor;
+import dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptorKind;
 import dev.comfyfluffy.caustica.engine.pass.PassKey;
 import dev.comfyfluffy.caustica.engine.pass.PassSchedulerBackend;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
@@ -141,7 +141,7 @@ final class RtPassSchedulerBackendTest {
 
     private static final class FakeUse implements GpuFrameUse {
         final ArrayDeque<Runnable> pending = new ArrayDeque<>();
-        @Override public void retire(Runnable cleanup) { pending.add(cleanup); }
+        @Override public void whenComplete(Runnable callback) { pending.add(callback); }
         void drainOne() { pending.remove().run(); }
     }
 

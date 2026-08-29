@@ -1,0 +1,118 @@
+plugins {
+    id "java-library"
+    id "java-test-fixtures"
+    id "maven-publish"
+}
+
+version = project.api_version
+group = project.maven_group
+java.toolchain.languageVersion = JavaLanguageVersion.of(25)
+
+base { archivesName = "caustica-minecraft-content" }
+repositories { mavenCentral() }
+
+dependencies {
+    api project(":packages:api")
+    api project(":packages:settings-api")
+    testImplementation platform("org.junit:junit-bom:5.12.2")
+    testImplementation "org.junit.jupiter:junit-jupiter"
+    testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+}
+
+def verifyMinecraftContentDependencies = tasks.register("verifyMinecraftContentDependencies") {
+    group = "verification"
+    description = "Verifies that Minecraft content logic depends only on the public API and settings contracts."
+    doLast {
+        def allowedProjects = [project.path, ":packages:api", ":packages:settings-api"] as Set
+        def violations = []
+        configurations.matching { it.canBeResolved }.each { configuration ->
+            configuration.allDependencies.withType(ProjectDependency).each { dependency ->
+                if (!allowedProjects.contains(dependency.path)) {
+                    violations.add("${configuration.name}: ${dependency.path}")
+                }
+            }
+        }
+        if (!violations.empty) {
+            throw new GradleException("minecraft-content dependency violations:\n${violations.join('\n')}")
+        }
+    }
+}
+
+def verifyMinecraftContentImports = tasks.register("verifyMinecraftContentImports") {
+    group = "verification"
+    description = "Verifies that reusable content logic has no Minecraft host, runtime, platform, or loader imports."
+    inputs.files(sourceSets.main.allJava)
+    doLast {
+        def forbidden = [
+                "com.mojang",
+                "net.minecraft",
+                "net.fabricmc",
+                "net.neoforged",
+                "dev.comfyfluffy.caustica.rt",
+                "dev.comfyfluffy.caustica.engine",
+                "dev.comfyfluffy.caustica.platform",
+                "dev.comfyfluffy.caustica.fabric",
+                "dev.comfyfluffy.caustica.neoforge",
+                "dev.comfyfluffy.caustica.CausticaMod",
+                "dev.comfyfluffy.caustica.minecraft.MinecraftApiBootstrap"
+        ]
+        def violations = []
+        sourceSets.main.allJava.files.sort().each { file ->
+            file.eachLine { line, number ->
+                if (line.stripLeading().startsWith("import ") && forbidden.any { line.contains(it) }) {
+                    violations.add("${file}:${number}: ${line.trim()}")
+                }
+            }
+        }
+        if (!violations.empty) {
+            throw new GradleException("minecraft-content import violations:\n${violations.join('\n')}")
+        }
+    }
+}
+
+def verifyMinecraftContentJar = tasks.register("verifyMinecraftContentJar") {
+    group = "verification"
+    description = "Verifies that the artifact contains only reusable Minecraft material content classes."
+    dependsOn(tasks.named("jar"))
+    inputs.file(tasks.named("jar", Jar).flatMap { it.archiveFile })
+    doLast {
+        def jarPath = tasks.named("jar", Jar).get().archiveFile.get().asFile
+        def strays = []
+        new java.util.jar.JarFile(jarPath).withCloseable { jar ->
+            jar.entries().each { entry ->
+                if (entry.name.endsWith(".class")
+                        && !entry.name.startsWith("dev/comfyfluffy/caustica/minecraft/material/")) {
+                    strays.add(entry.name)
+                }
+            }
+        }
+        if (!strays.empty) {
+            throw new GradleException("caustica-minecraft-content contains classes outside its package: ${strays}")
+        }
+    }
+}
+
+tasks.named("test", Test) { useJUnitPlatform() }
+tasks.named("check") {
+    dependsOn(verifyMinecraftContentDependencies, verifyMinecraftContentImports, verifyMinecraftContentJar)
+}
+tasks.withType(JavaCompile).configureEach { options.release = 25 }
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_25
+    targetCompatibility = JavaVersion.VERSION_25
+    withSourcesJar()
+}
+
+tasks.named("jar", Jar).configure {
+    from(rootProject.files("LICENSE.md", "COPYING", "COPYING.LESSER")) { into "META-INF" }
+}
+
+publishing {
+    publications {
+        create("mavenJava", MavenPublication) {
+            artifactId = "caustica-minecraft-content"
+            from components.java
+        }
+    }
+}

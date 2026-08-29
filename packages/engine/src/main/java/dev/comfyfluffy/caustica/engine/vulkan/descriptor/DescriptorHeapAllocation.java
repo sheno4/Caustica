@@ -1,7 +1,7 @@
 package dev.comfyfluffy.caustica.engine.vulkan.descriptor;
 
-import dev.comfyfluffy.caustica.api.gpu.GpuDescriptorIndex;
-import dev.comfyfluffy.caustica.api.gpu.GpuDescriptorRange;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorIndex;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorRange;
 
 /** One live descriptor range. Its identity is never reused, even when its slots are. */
 public final class DescriptorHeapAllocation<I extends GpuDescriptorIndex> implements GpuDescriptorRange<I> {

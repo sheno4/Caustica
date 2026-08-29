@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.api.gpu;
+package dev.comfyfluffy.caustica.api.vulkan;
 
 import org.lwjgl.vulkan.VkDevice;
 
@@ -83,7 +83,7 @@ public interface GpuDevice {
      *
      * <p>Eligible callbacks run on the renderer thread in registration order and must not block or throw.
      * This covers work already submitted, not the frame currently being recorded — for that,
-     * {@link GpuFrameUse#retire} is the tighter reservation. It does not imply that later device work or
+     * {@link GpuFrameUse#whenComplete} is the tighter reservation. It does not imply that later device work or
      * unrelated passes are idle.
      *
      * <p>This method is thread-safe, but thread safety does not create the publication ordering described

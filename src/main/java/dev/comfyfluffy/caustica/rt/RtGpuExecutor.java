@@ -3,7 +3,7 @@ package dev.comfyfluffy.caustica.rt;
 import dev.comfyfluffy.caustica.vulkan.VulkanDiagnostics;
 
 import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
-import dev.comfyfluffy.caustica.api.gpu.GpuFrameUse;
+import dev.comfyfluffy.caustica.api.vulkan.GpuFrameUse;
 import dev.comfyfluffy.caustica.spi.vulkan.VulkanQueueRef;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
@@ -576,8 +576,8 @@ public final class RtGpuExecutor {
         }
 
         @Override
-        public void retire(Runnable cleanup) {
-            owner.retireAfterGraphics(this, cleanup);
+        public void whenComplete(Runnable callback) {
+            owner.retireAfterGraphics(this, callback);
         }
     }
 

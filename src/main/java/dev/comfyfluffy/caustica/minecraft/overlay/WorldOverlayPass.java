@@ -1,11 +1,11 @@
 package dev.comfyfluffy.caustica.minecraft.overlay;
 
 import com.mojang.blaze3d.vulkan.VulkanCommandEncoder;
-import dev.comfyfluffy.caustica.api.gpu.GpuFrameUse;
+import dev.comfyfluffy.caustica.api.vulkan.GpuFrameUse;
 import dev.comfyfluffy.caustica.api.pass.Pass;
 import dev.comfyfluffy.caustica.api.pass.UiFrame;
 import dev.comfyfluffy.caustica.api.pass.UiSetup;
-import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.settings.ResourceId;
 import org.joml.Matrix4f;
 import org.lwjgl.system.MemoryStack;
@@ -19,7 +19,6 @@ import org.lwjgl.vulkan.VkOffset2D;
 import org.lwjgl.vulkan.VkRect2D;
 import org.lwjgl.vulkan.VkRenderingAttachmentInfo;
 import org.lwjgl.vulkan.VkRenderingInfo;
-import org.lwjgl.vulkan.VkViewport;
 import dev.comfyfluffy.caustica.vulkan.VmaImage2D;
 
 import java.util.ArrayList;
@@ -94,9 +93,10 @@ public final class WorldOverlayPass implements Pass<UiFrame> {
     // ---- Recording helpers shared by features ----
 
     /**
-     * Begin a one-attachment dynamic-rendering pass on {@code view} (GENERAL layout) and set the
-     * viewport/scissor. {@code clear} = start from transparent black (mask passes); otherwise the existing
-     * content is loaded (composite passes). Balance with {@link #endRendering}.
+     * Begin a one-attachment dynamic-rendering pass on {@code view} (GENERAL layout).
+     * {@code clear} starts from transparent black (mask passes); otherwise the existing content is loaded
+     * (composite passes). Each draw binds a graphics shader object, which sets viewport and scissor through
+     * the count-based dynamic-state commands. Balance with {@link #endRendering}.
      */
     static void beginColorRendering(VkCommandBuffer cmd, MemoryStack stack, long view, int width, int height, boolean clear) {
         VkRenderingAttachmentInfo.Buffer colorAttach = VkRenderingAttachmentInfo.calloc(1, stack).sType$Default()
@@ -115,13 +115,6 @@ public final class WorldOverlayPass implements Pass<UiFrame> {
                 .renderArea(renderArea).layerCount(1).pColorAttachments(colorAttach);
         VK14.vkCmdBeginRendering(cmd, renderingInfo);
 
-        VkViewport.Buffer viewport = VkViewport.calloc(1, stack);
-        viewport.get(0).x(0).y(0).width(width).height(height).minDepth(0f).maxDepth(1f);
-        VK10.vkCmdSetViewport(cmd, 0, viewport);
-        VkRect2D.Buffer scissor = VkRect2D.calloc(1, stack);
-        scissor.get(0).offset(VkOffset2D.calloc(stack).set(0, 0));
-        scissor.get(0).extent().set(width, height);
-        VK10.vkCmdSetScissor(cmd, 0, scissor);
     }
 
     /**
@@ -150,13 +143,6 @@ public final class WorldOverlayPass implements Pass<UiFrame> {
                 .renderArea(renderArea).layerCount(1).pColorAttachments(colorAttach);
         VK14.vkCmdBeginRendering(cmd, renderingInfo);
 
-        VkViewport.Buffer viewport = VkViewport.calloc(1, stack);
-        viewport.get(0).x(0).y(0).width(width).height(height).minDepth(0f).maxDepth(1f);
-        VK10.vkCmdSetViewport(cmd, 0, viewport);
-        VkRect2D.Buffer scissor = VkRect2D.calloc(1, stack);
-        scissor.get(0).offset(VkOffset2D.calloc(stack).set(0, 0));
-        scissor.get(0).extent().set(width, height);
-        VK10.vkCmdSetScissor(cmd, 0, scissor);
     }
 
     static void endRendering(VkCommandBuffer cmd) {

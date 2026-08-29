@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.api.gpu;
+package dev.comfyfluffy.caustica.api.vulkan;
 
 /** Shader-visible index in one of the two descriptor heaps bound by the renderer. */
 public sealed interface GpuDescriptorIndex {

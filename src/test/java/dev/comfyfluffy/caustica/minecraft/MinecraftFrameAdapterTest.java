@@ -1,9 +1,9 @@
 package dev.comfyfluffy.caustica.minecraft;
 
 import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
-import dev.comfyfluffy.caustica.api.gpu.GpuImage;
-import dev.comfyfluffy.caustica.api.gpu.GpuImageDescriptor;
-import dev.comfyfluffy.caustica.api.gpu.GpuImageDescriptorKind;
+import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
+import dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptor;
+import dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptorKind;
 import org.junit.jupiter.api.Test;
 
 

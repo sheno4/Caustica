@@ -31,8 +31,7 @@ abstract class GenerateShaderRecords extends DefaultTask {
     @Input abstract Property<String> getSpirvVal()
     @Input abstract Property<String> getSpirvProfile()
     @Input abstract Property<String> getVulkanTarget()
-    @Input abstract ListProperty<String> getIncludedRecords()
-    @Input abstract ListProperty<String> getExcludedRecords()
+    @Input abstract ListProperty<String> getRecordSpecs()
     @OutputDirectory abstract DirectoryProperty getOutDir()
 
     @Inject abstract ExecOperations getExecOps()
@@ -231,46 +230,52 @@ abstract class GenerateShaderRecords extends DefaultTask {
         sb.toString()
     }
 
-    private static final String RT_GENERATED_PACKAGE = "dev.comfyfluffy.caustica.rt.gen"
+    private static final Set<String> RECORD_KINDS = ["buffer", "push"] as Set
+    private static final String IDENTIFIER = /[A-Za-z_$][A-Za-z0-9_$]*/
+    private static final String PACKAGE_NAME = /[A-Za-z_$][A-Za-z0-9_$]*(\.[A-Za-z_$][A-Za-z0-9_$]*)*/
 
-    // (reflection parameter name, expected Slang struct name, generated Java package, generated Java class
-    // name, emit a reader)
-    // for every device-buffer struct, which the probe file wraps in a two-element array so the reflected
-    // array stride reports the complete, tail-padded byte size.
-    private static final List<List<Object>> BUFFER_PROBES = [
-            ["worldPushLayoutProbe", "WorldPush", RT_GENERATED_PACKAGE, "WorldPushData", false],
-            ["materialBindingLayoutProbe", "MaterialBinding", RT_GENERATED_PACKAGE, "MaterialBindingData", false],
-            ["retainedGeometryRecordLayoutProbe", "RetainedGeometryRecord", RT_GENERATED_PACKAGE, "RetainedGeometryRecordData", false],
-            ["retainedLightRecordLayoutProbe", "RetainedLightRecord", RT_GENERATED_PACKAGE, "RetainedLightRecordData", false],
-            ["neeAtStateLayoutProbe", "NeeAtState", RT_GENERATED_PACKAGE, "NeeAtStateData", false],
-            ["packedPathSegmentLayoutProbe", "PackedPathSegment", RT_GENERATED_PACKAGE, "PackedPathSegmentData", false],
-            ["exposureStateLayoutProbe", "ExposureState", RT_GENERATED_PACKAGE, "ExposureStateData", true],
-            ["minecraftImplementationLayoutProbe", "MinecraftImplementationData", "dev.comfyfluffy.caustica.minecraft.gen", "MinecraftImplementationData", false],
-            ["minecraftMaterialLayoutProbe", "MinecraftMaterialRecord", "dev.comfyfluffy.caustica.minecraft.gen", "MinecraftMaterialData", false],
-            ["minecraftPrimitiveLayoutProbe", "MinecraftPrimitiveData", "dev.comfyfluffy.caustica.minecraft.gen", "MinecraftPrimitiveData", false],
-            ["minecraftInstanceLayoutProbe", "MinecraftInstanceData", "dev.comfyfluffy.caustica.minecraft.gen", "MinecraftInstanceData", false],
-            ["minecraftEnvironmentBindingLayoutProbe", "MinecraftEnvironmentBinding", "dev.comfyfluffy.caustica.minecraft.sky.gen", "MinecraftEnvironmentBindingData", false],
-    ]
+    /**
+     * Parses {@code kind|probe|struct|package|class|reader} task inputs. Buffer records may enable
+     * scalar readers; push-constant records always use {@code false}.
+     */
+    static List<Map<String, Object>> parseRecordSpecs(List<String> specs) {
+        def parsed = specs.collect { raw ->
+            def fields = raw.split(/\|/, -1) as List<String>
+            if (fields.size() != 6) {
+                throw new GradleException("malformed shader record spec '${raw}': expected kind|probe|struct|package|class|reader")
+            }
+            def (kind, probeName, structName, packageName, className, readerText) = fields
+            if (!RECORD_KINDS.contains(kind)) {
+                throw new GradleException("unknown shader record kind '${kind}' in '${raw}'")
+            }
+            if (!(probeName ==~ IDENTIFIER) || !(structName ==~ IDENTIFIER)
+                    || !(packageName ==~ PACKAGE_NAME) || !(className ==~ IDENTIFIER)) {
+                throw new GradleException("malformed shader record spec '${raw}': invalid identifier")
+            }
+            if (!(readerText in ["true", "false"])) {
+                throw new GradleException("malformed shader record spec '${raw}': reader must be true or false")
+            }
+            boolean emitReader = Boolean.parseBoolean(readerText)
+            if (kind == "push" && emitReader) {
+                throw new GradleException("malformed shader record spec '${raw}': push-constant readers are not supported")
+            }
+            [kind: kind, probeName: probeName, structName: structName, packageName: packageName,
+             className: className, emitReader: emitReader] as Map<String, Object>
+        }
+        def duplicateProbe = parsed.groupBy { it.probeName }.find { it.value.size() > 1 }?.key
+        if (duplicateProbe != null) {
+            throw new GradleException("duplicate shader record probe '${duplicateProbe}'")
+        }
+        def duplicateOutput = parsed.groupBy { "${it.packageName}.${it.className}" }
+                .find { it.value.size() > 1 }?.key
+        if (duplicateOutput != null) {
+            throw new GradleException("duplicate generated shader record '${duplicateOutput}'")
+        }
+        parsed
+    }
 
-    // (reflection parameter name, expected Slang struct name, generated Java package, generated Java class
-    // name) for every
-    // plain push-constant struct probed directly (no structured-buffer array wrapper needed -- see the
-    // probeXxx blocks below main() in the probe file).
-    private static final List<List<String>> PUSH_CONSTANT_PROBES = [
-            ["exposureHistPushProbe", "ExposureHistPush", RT_GENERATED_PACKAGE, "ExposureHistPushData"],
-            ["exposureResolvePushProbe", "ExposureResolvePush", RT_GENERATED_PACKAGE, "ExposureResolvePushData"],
-            ["displayPushProbe", "DisplayPush", RT_GENERATED_PACKAGE, "DisplayPushData"],
-            ["debugPresentPushProbe", "DebugPresentPush", RT_GENERATED_PACKAGE, "DebugPresentPushData"],
-            ["opacityMicromapPushProbe", "OpacityMicromapPush", RT_GENERATED_PACKAGE, "OpacityMicromapPushData"],
-            ["presentPushProbe", "PresentPush", RT_GENERATED_PACKAGE, "PresentPushData"],
-            ["bloomPushProbe", "BloomPush", "dev.comfyfluffy.caustica.builtin.gen", "BloomPushData"],
-            ["skyLutPushProbe", "SkyInputs", "dev.comfyfluffy.caustica.minecraft.sky.gen", "SkyInputsData"],
-            ["skyDispatchPushProbe", "SkyLutPush", "dev.comfyfluffy.caustica.minecraft.sky.gen", "SkyLutPushData"],
-    ]
-
-    // NOT private: Gradle decorates this abstract task with a generated subclass, and Groovy's
-    // dynamic method dispatch from inside the PUSH_CONSTANT_PROBES.each {} closure below fails to
-    // resolve private static methods through that generated subclass.
+    // Gradle decorates this abstract task with a generated subclass, so reflection helpers called
+    // from Groovy closures must remain visible to dynamic dispatch.
     static Map extractPushConstantType(Object reflection, String probeName, String structName) {
         def pushParameter = reflection.parameters.find { it.name == probeName }
         if (pushParameter?.type?.elementType?.name != structName) {
@@ -296,6 +301,7 @@ abstract class GenerateShaderRecords extends DefaultTask {
 
     @TaskAction
     void generate() {
+        def specs = parseRecordSpecs(recordSpecs.get())
         def reflectionFile = new File(temporaryDir, "shader-records-reflection.json")
         def probeSpv = new File(temporaryDir, "shader-layout-probe.spv")
         def includeArgs = shaderRoot.get().asFileTree.matching { include "**/*.slang" }.files
@@ -318,32 +324,25 @@ abstract class GenerateShaderRecords extends DefaultTask {
         if (generatedRoot.exists() && !generatedRoot.deleteDir()) {
             throw new GradleException("failed to clear generated shader record sources under ${generatedRoot}")
         }
-        def knownRecords = (BUFFER_PROBES + PUSH_CONSTANT_PROBES).collect { it[3] as String }.toSet()
-        def requested = includedRecords.get().toSet()
-        def excluded = excludedRecords.get().toSet()
-        def unknown = (requested + excluded) - knownRecords
-        if (!unknown.empty) throw new GradleException("unknown generated shader records: ${unknown.sort()}")
-        def selected = { List<?> probe ->
-            String className = probe[3] as String
-            (requested.empty || requested.contains(className)) && !excluded.contains(className)
-        }
-
-        BUFFER_PROBES.findAll(selected).each { probeName, structName, packageName, className, emitReader ->
-            Map probeArray = extractBufferProbeArray(reflection, probeName as String, structName as String)
-            def packageDir = new File(generatedRoot, (packageName as String).replace('.', '/'))
-            packageDir.mkdirs()
-            new File(packageDir, "${className}.java").setText(
-                    generateJava(probeArray.elementType as Map, probeArray.uniformStride as int,
-                            packageName as String, className as String, emitReader as boolean), "UTF-8")
-        }
-
-        PUSH_CONSTANT_PROBES.findAll(selected).each { probeName, structName, packageName, className ->
-            Map type = extractPushConstantType(reflection, probeName, structName)
-            int byteSize = extractPushConstantByteSize(reflection, probeName)
+        specs.each { spec ->
+            String probeName = spec.probeName as String
+            String structName = spec.structName as String
+            String packageName = spec.packageName as String
+            String className = spec.className as String
+            Map type
+            int byteSize
+            if (spec.kind == "buffer") {
+                Map probeArray = extractBufferProbeArray(reflection, probeName, structName)
+                type = probeArray.elementType as Map
+                byteSize = probeArray.uniformStride as int
+            } else {
+                type = extractPushConstantType(reflection, probeName, structName)
+                byteSize = extractPushConstantByteSize(reflection, probeName)
+            }
             def packageDir = new File(generatedRoot, packageName.replace('.', '/'))
             packageDir.mkdirs()
             new File(packageDir, "${className}.java").setText(
-                    generateJava(type, byteSize, packageName, className), "UTF-8")
+                    generateJava(type, byteSize, packageName, className, spec.emitReader as boolean), "UTF-8")
         }
     }
 }

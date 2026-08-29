@@ -116,6 +116,7 @@ if (loader == "fabric") {
 				sourceSet(project(":packages:features-builtin").sourceSets.main)
 				sourceSet(project(":packages:minecraft-api").sourceSets.main)
 				sourceSet(project(":packages:minecraft-adapter").sourceSets.main)
+				sourceSet(project(":packages:minecraft-content").sourceSets.main)
 				sourceSet(project(":packages:settings-api").sourceSets.main)
 				sourceSet(project(":packages:shader-api").sourceSets.main)
 				sourceSet(project(":packages:vulkan-support").sourceSets.main)
@@ -148,6 +149,8 @@ dependencies {
 	apiRuntime project(":packages:minecraft-api")
 	compileOnly project(":packages:minecraft-adapter")
 	apiRuntime project(":packages:minecraft-adapter")
+	compileOnly project(":packages:minecraft-content")
+	apiRuntime project(":packages:minecraft-content")
 	compileOnly project(":packages:settings-api")
 	apiRuntime project(":packages:settings-api")
 	compileOnly project(":packages:vulkan-support")
@@ -166,6 +169,8 @@ dependencies {
 	testImplementation project(":packages:features-builtin")
 	testImplementation project(":packages:minecraft-api")
 	testImplementation project(":packages:minecraft-adapter")
+	testImplementation project(":packages:minecraft-content")
+	testImplementation(testFixtures(project(":packages:minecraft-content")))
 	testImplementation project(":packages:settings-api")
 	testImplementation project(":packages:vulkan-support")
 	testRuntimeOnly project(":packages:api")
@@ -175,6 +180,7 @@ dependencies {
 	testRuntimeOnly project(":packages:features-builtin")
 	testRuntimeOnly project(":packages:minecraft-api")
 	testRuntimeOnly project(":packages:minecraft-adapter")
+	testRuntimeOnly project(":packages:minecraft-content")
 	testRuntimeOnly project(":packages:settings-api")
 	testRuntimeOnly project(":packages:vulkan-support")
 	testRuntimeOnly "org.junit.platform:junit-platform-launcher"
@@ -252,7 +258,27 @@ def generateShaderRecords = tasks.register("generateShaderRecords", GenerateShad
 	dependsOn(prepareShaderReflectionSources)
 	shaderRoot = shaderReflectionRoot
 	probeSource = shaderReflectionRoot.map { it.file("layout/layout_probe.slang") }
-	excludedRecords = ["BloomPushData"]
+	recordSpecs = [
+			"buffer|worldPushLayoutProbe|WorldPush|dev.comfyfluffy.caustica.rt.gen|WorldPushData|false",
+			"buffer|retainedGeometryRecordLayoutProbe|RetainedGeometryRecord|dev.comfyfluffy.caustica.rt.gen|RetainedGeometryRecordData|false",
+			"buffer|retainedLightRecordLayoutProbe|RetainedLightRecord|dev.comfyfluffy.caustica.rt.gen|RetainedLightRecordData|false",
+			"buffer|neeAtStateLayoutProbe|NeeAtState|dev.comfyfluffy.caustica.rt.gen|NeeAtStateData|false",
+			"buffer|packedPathSegmentLayoutProbe|PackedPathSegment|dev.comfyfluffy.caustica.rt.gen|PackedPathSegmentData|false",
+			"buffer|exposureStateLayoutProbe|ExposureState|dev.comfyfluffy.caustica.rt.gen|ExposureStateData|true",
+			"buffer|minecraftImplementationLayoutProbe|MinecraftImplementationData|dev.comfyfluffy.caustica.minecraft.gen|MinecraftImplementationData|false",
+			"buffer|minecraftMaterialLayoutProbe|MinecraftMaterialRecord|dev.comfyfluffy.caustica.minecraft.gen|MinecraftMaterialData|false",
+			"buffer|minecraftPrimitiveLayoutProbe|MinecraftPrimitiveData|dev.comfyfluffy.caustica.minecraft.gen|MinecraftPrimitiveData|false",
+			"buffer|minecraftInstanceLayoutProbe|MinecraftInstanceData|dev.comfyfluffy.caustica.minecraft.gen|MinecraftInstanceData|false",
+			"buffer|minecraftEnvironmentBindingLayoutProbe|MinecraftEnvironmentBinding|dev.comfyfluffy.caustica.minecraft.sky.gen|MinecraftEnvironmentBindingData|false",
+			"push|exposureHistPushProbe|ExposureHistPush|dev.comfyfluffy.caustica.rt.gen|ExposureHistPushData|false",
+			"push|exposureResolvePushProbe|ExposureResolvePush|dev.comfyfluffy.caustica.rt.gen|ExposureResolvePushData|false",
+			"push|displayPushProbe|DisplayPush|dev.comfyfluffy.caustica.rt.gen|DisplayPushData|false",
+			"push|debugPresentPushProbe|DebugPresentPush|dev.comfyfluffy.caustica.rt.gen|DebugPresentPushData|false",
+			"push|opacityMicromapPushProbe|OpacityMicromapPush|dev.comfyfluffy.caustica.rt.gen|OpacityMicromapPushData|false",
+			"push|presentPushProbe|PresentPush|dev.comfyfluffy.caustica.rt.gen|PresentPushData|false",
+			"push|skyLutPushProbe|SkyInputs|dev.comfyfluffy.caustica.minecraft.sky.gen|SkyInputsData|false",
+			"push|skyDispatchPushProbe|SkyLutPush|dev.comfyfluffy.caustica.minecraft.sky.gen|SkyLutPushData|false",
+	]
 	outDir = layout.buildDirectory.dir("generated/sources/shaderRecords")
 }
 
@@ -901,6 +927,7 @@ tasks.named("jar", Jar).configure {
 	from(project(":packages:features-builtin").sourceSets.main.output)
 	from(project(":packages:minecraft-api").sourceSets.main.output)
 	from(project(":packages:minecraft-adapter").sourceSets.main.output)
+	from(project(":packages:minecraft-content").sourceSets.main.output)
 	from(project(":packages:settings-api").sourceSets.main.output)
 	from(project(":packages:shader-api").sourceSets.main.output)
 	from(project(":packages:vulkan-support").sourceSets.main.output)
@@ -918,6 +945,7 @@ tasks.named("sourcesJar", Jar).configure {
 	from(project(":packages:features-builtin").file("shaders")) { into "shaders" }
 	from(project(":packages:minecraft-api").sourceSets.main.allSource)
 	from(project(":packages:minecraft-adapter").sourceSets.main.allSource)
+	from(project(":packages:minecraft-content").sourceSets.main.allSource)
 	from(project(":packages:settings-api").sourceSets.main.allSource)
 	from(project(":packages:shader-api").sourceSets.main.allSource)
 	from(project(":packages:vulkan-support").sourceSets.main.allSource)
@@ -933,6 +961,7 @@ def verifyEmbeddedApi = tasks.register("verifyEmbeddedApi") {
 			project(":packages:features-builtin").tasks.named("jar"),
 			project(":packages:minecraft-api").tasks.named("jar"),
 			project(":packages:minecraft-adapter").tasks.named("jar"),
+			project(":packages:minecraft-content").tasks.named("jar"),
 			project(":packages:settings-api").tasks.named("jar"),
 			project(":packages:shader-api").tasks.named("jar"),
 			project(":packages:vulkan-support").tasks.named("jar"))
@@ -944,6 +973,7 @@ def verifyEmbeddedApi = tasks.register("verifyEmbeddedApi") {
 	inputs.file(project(":packages:features-builtin").tasks.named("jar", Jar).flatMap { it.archiveFile })
 	inputs.file(project(":packages:minecraft-api").tasks.named("jar", Jar).flatMap { it.archiveFile })
 	inputs.file(project(":packages:minecraft-adapter").tasks.named("jar", Jar).flatMap { it.archiveFile })
+	inputs.file(project(":packages:minecraft-content").tasks.named("jar", Jar).flatMap { it.archiveFile })
 	inputs.file(project(":packages:settings-api").tasks.named("jar", Jar).flatMap { it.archiveFile })
 	inputs.file(project(":packages:shader-api").tasks.named("jar", Jar).flatMap { it.archiveFile })
 	inputs.file(project(":packages:vulkan-support").tasks.named("jar", Jar).flatMap { it.archiveFile })
@@ -966,6 +996,7 @@ def verifyEmbeddedApi = tasks.register("verifyEmbeddedApi") {
 		def builtinEntries = names(project(":packages:features-builtin").tasks.named("jar", Jar).get().archiveFile.get().asFile)
 		def minecraftApiEntries = names(project(":packages:minecraft-api").tasks.named("jar", Jar).get().archiveFile.get().asFile)
 		def minecraftAdapterEntries = names(project(":packages:minecraft-adapter").tasks.named("jar", Jar).get().archiveFile.get().asFile)
+		def minecraftContentEntries = names(project(":packages:minecraft-content").tasks.named("jar", Jar).get().archiveFile.get().asFile)
 		def settingsApiEntries = names(project(":packages:settings-api").tasks.named("jar", Jar).get().archiveFile.get().asFile)
 		def shaderApiEntries = names(project(":packages:shader-api").tasks.named("jar", Jar).get().archiveFile.get().asFile)
 		def vulkanSupportEntries = names(project(":packages:vulkan-support").tasks.named("jar", Jar)
@@ -978,6 +1009,7 @@ def verifyEmbeddedApi = tasks.register("verifyEmbeddedApi") {
 				|| it.startsWith("caustica/shaders/builtin/") || it.startsWith("caustica/shaders/pipelines/bloom/") })
 		required.addAll(minecraftApiEntries.findAll { it.endsWith(".class") })
 		required.addAll(minecraftAdapterEntries.findAll { it.endsWith(".class") })
+		required.addAll(minecraftContentEntries.findAll { it.endsWith(".class") })
 		required.addAll(settingsApiEntries.findAll { it.endsWith(".class") })
 		required.addAll(shaderApiEntries.findAll { entry ->
 			entry.startsWith("caustica/shaders/api/") && !entry.endsWith("/")
@@ -996,6 +1028,7 @@ def verifyEmbeddedApi = tasks.register("verifyEmbeddedApi") {
 tasks.named("check") {
 	dependsOn(verifyEmbeddedApi, project(":packages:features-builtin").tasks.named("check"),
 			project(":packages:config").tasks.named("check"),
+			project(":packages:minecraft-content").tasks.named("check"),
 			project(":packages:vulkan-support").tasks.named("check"))
 }
 

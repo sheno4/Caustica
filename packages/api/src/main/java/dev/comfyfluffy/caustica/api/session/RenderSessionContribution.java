@@ -15,7 +15,7 @@ public interface RenderSessionContribution extends AutoCloseable {
 
     /**
      * Releases shared CPU and GPU state. Before this call, scoped objects have been dropped, accepted work
-     * has drained, and every program-ticket and retirement callback has returned. No session callback can
+     * has drained, and every program-readiness and retirement callback has returned. No session callback can
      * reach the contribution after this method starts. This is not a device-wide idle boundary; it only follows
      * drainage of work and objects in this contribution scope. Called at most once and only if the factory
      * successfully returned this contribution.

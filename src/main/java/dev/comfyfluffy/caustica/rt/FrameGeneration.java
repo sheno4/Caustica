@@ -6,8 +6,10 @@ import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
 import org.joml.Matrix4f;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VK10;
+import org.lwjgl.vulkan.VK13;
 import org.lwjgl.vulkan.VkCommandBuffer;
-import org.lwjgl.vulkan.VkImageCopy;
+import org.lwjgl.vulkan.VkCopyImageInfo2;
+import org.lwjgl.vulkan.VkImageCopy2;
 
 /** Owns DLSS frame-generation captures, interpolation outputs, and temporal evaluation state. */
 final class FrameGeneration {
@@ -55,8 +57,7 @@ final class FrameGeneration {
         VkCommandBuffer commandBuffer = submission.beginTransientCommandBuffer();
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VulkanBarriers.memoryBarrier(commandBuffer, stack);
-            VK10.vkCmdCopyImage(commandBuffer, sourceImage, VK10.VK_IMAGE_LAYOUT_GENERAL,
-                    hudlessImage.image(), VK10.VK_IMAGE_LAYOUT_GENERAL, copyRegion(stack, width, height));
+            copyImage(commandBuffer, stack, sourceImage, hudlessImage.image(), width, height);
             VulkanBarriers.memoryBarrier(commandBuffer, stack);
         }
         if (VK10.vkEndCommandBuffer(commandBuffer) != VK10.VK_SUCCESS) {
@@ -66,7 +67,7 @@ final class FrameGeneration {
     }
 
     void captureHdrHudless(VkCommandBuffer commandBuffer, MemoryStack stack,
-                           dev.comfyfluffy.caustica.api.gpu.GpuImage source) {
+                           dev.comfyfluffy.caustica.api.vulkan.GpuImage source) {
         GpuContext context = GpuContext.currentOrNull();
         if (context == null) {
             return;
@@ -81,9 +82,8 @@ final class FrameGeneration {
                     "FG HDR hudless capture (PQ) " + source.width() + "x" + source.height());
         }
         VulkanBarriers.memoryBarrier(commandBuffer, stack);
-        VK10.vkCmdCopyImage(commandBuffer, source.image(), VK10.VK_IMAGE_LAYOUT_GENERAL,
-                hdrHudlessImage.image(), VK10.VK_IMAGE_LAYOUT_GENERAL,
-                copyRegion(stack, source.width(), source.height()));
+        copyImage(commandBuffer, stack, source.image(), hdrHudlessImage.image(),
+                source.width(), source.height());
         VulkanBarriers.memoryBarrier(commandBuffer, stack);
     }
 
@@ -187,13 +187,18 @@ final class FrameGeneration {
         }
     }
 
-    private static VkImageCopy.Buffer copyRegion(MemoryStack stack, int width, int height) {
-        VkImageCopy.Buffer region = VkImageCopy.calloc(1, stack);
+    private static void copyImage(VkCommandBuffer commandBuffer, MemoryStack stack,
+                                  long source, long destination, int width, int height) {
+        VkImageCopy2.Buffer region = VkImageCopy2.calloc(1, stack);
+        region.get(0).sType$Default();
         region.get(0).srcSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT)
                 .mipLevel(0).baseArrayLayer(0).layerCount(1);
         region.get(0).dstSubresource().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT)
                 .mipLevel(0).baseArrayLayer(0).layerCount(1);
         region.get(0).extent().set(width, height, 1);
-        return region;
+        VK13.vkCmdCopyImage2(commandBuffer, VkCopyImageInfo2.calloc(stack).sType$Default()
+                .srcImage(source).srcImageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL)
+                .dstImage(destination).dstImageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL)
+                .pRegions(region));
     }
 }

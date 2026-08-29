@@ -1,7 +1,7 @@
 package dev.comfyfluffy.caustica.api.pass;
 
-import dev.comfyfluffy.caustica.api.gpu.GpuImage;
-import dev.comfyfluffy.caustica.api.gpu.GpuAccelerationStructureDescriptor;
+import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
+import dev.comfyfluffy.caustica.api.vulkan.GpuAccelerationStructureDescriptor;
 
 /**
  * Passed to a UI-stage {@link Pass} to draw one rendered frame's UI layer. There is no recording callback

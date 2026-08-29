@@ -132,7 +132,7 @@ public final class MinecraftMaterialCatalogBuilder {
 
     private static MaterialImageSource borrowed(NativeImage image, int width, int height) {
         if (image == null) return () -> new NeutralImage(width, height);
-        return () -> new MinecraftMaterialImage(image, width, height, false);
+        return () -> new MinecraftMaterialImage(image::getPixel, width, height, () -> { });
     }
 
     private static MaterialImageSource resourceImage(Resource resource, boolean firstFrameOnly) {
@@ -142,7 +142,7 @@ public final class MinecraftMaterialCatalogBuilder {
                 image = NativeImage.read(input);
             }
             int height = firstFrameOnly ? Math.min(image.getHeight(), image.getWidth()) : image.getHeight();
-            return new MinecraftMaterialImage(image, image.getWidth(), height, true);
+            return new MinecraftMaterialImage(image::getPixel, image.getWidth(), height, image::close);
         };
     }
 

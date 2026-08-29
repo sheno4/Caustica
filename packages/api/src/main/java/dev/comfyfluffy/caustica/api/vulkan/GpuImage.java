@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.api.gpu;
+package dev.comfyfluffy.caustica.api.vulkan;
 
 /**
  * A renderer-owned image lent to a pass for the frame it is recording — the scene colour and its chain

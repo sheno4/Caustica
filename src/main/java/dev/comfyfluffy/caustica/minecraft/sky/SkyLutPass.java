@@ -4,7 +4,7 @@ import com.mojang.blaze3d.GpuFormat;
 import com.mojang.blaze3d.textures.GpuTextureView;
 import com.mojang.blaze3d.vulkan.VulkanGpuTextureView;
 import com.mojang.blaze3d.vulkan.VulkanGpuTexture;
-import dev.comfyfluffy.caustica.api.gpu.*;
+import dev.comfyfluffy.caustica.api.vulkan.*;
 import dev.comfyfluffy.caustica.api.pass.Pass;
 import dev.comfyfluffy.caustica.api.pass.PassFrame;
 import dev.comfyfluffy.caustica.api.program.EnvironmentId;

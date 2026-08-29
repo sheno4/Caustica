@@ -4,7 +4,6 @@ import dev.comfyfluffy.caustica.api.program.EnvironmentDefinition;
 import dev.comfyfluffy.caustica.api.program.EnvironmentId;
 import dev.comfyfluffy.caustica.api.program.ProgramChannel;
 import dev.comfyfluffy.caustica.api.program.ProgramRegistration;
-import dev.comfyfluffy.caustica.api.program.ProgramTicket;
 import dev.comfyfluffy.caustica.api.program.ShaderDataType;
 import dev.comfyfluffy.caustica.api.program.ShaderDefinition;
 import dev.comfyfluffy.caustica.api.program.ShaderSource;
@@ -54,8 +53,8 @@ final class ShowcasePrograms {
                 builder.environment(new EnvironmentDefinition<>(
                         shader("showcase_environment", "api_showcase.GradientEnvironment"),
                         ENVIRONMENT_BINDING))));
-        registration.readiness().whenComplete(completion -> {
-            if (completion instanceof ProgramTicket.Failed failed) {
+        registration.whenComplete(completion -> {
+            if (completion instanceof ProgramRegistration.Failed failed) {
                 diagnosticSink.accept(failed.failure().summary() + "\n" + failed.failure().diagnostics());
             }
         });

@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.api.pass;
 
-import dev.comfyfluffy.caustica.api.gpu.GpuImage;
+import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
 
 /**
  * Frame capabilities for a post-effect registration, adding what the post chain produces for it to read

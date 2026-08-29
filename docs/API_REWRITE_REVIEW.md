@@ -201,11 +201,11 @@ requires it and whether a narrower alternative is worse.
 | Surface + optional coverage | Keep | Opaque and alpha-tested geometry require different traversal cost and inputs. Coverage must stay narrower than full surface evaluation. |
 | Volume implementation | Keep narrow ABI as provisional | Water proves homogeneous absorption and boundary response, but not independent `VolumeId` reuse or volume-only geometry. Prove one volume behind multiple boundaries or an invisible volume boundary before stabilizing the independent slot. Do not publish scattering/phase fields before a participating-medium renderer consumes them. |
 | Environment implementation | Keep shader concept; change selection authority | A registered environment cannot become visible without scene administration. Core owns generic environment dispatch; a Minecraft environment provider/catalog chooses a binding per dimension and the Minecraft adapter applies it to its host-owned scene. |
-| `ProgramTicket` and exact-composition states | Replace with one registration readiness | A complete owner set is pending, ready, failed, or cancelled. `SUPERSEDED` exposes compiler scheduling rather than a useful feature outcome. The compiler may coalesce registrations internally, but a ready result means that complete registration is active and a failed result means none of it published. A standard non-blocking completion abstraction may replace the custom ticket if it preserves callback-thread and teardown guarantees. |
+| Registration readiness and exact-composition states | Keep readiness directly on `ProgramRegistration` | A complete owner set is pending, ready, failed, or cancelled. Compiler scheduling is not a useful feature outcome. The compiler may coalesce registrations internally, but a ready result means that complete registration is active and a failed result means none of it published. The direct non-blocking callback preserves callback-thread and teardown guarantees without a second readiness object. |
 | One-call-at-a-time `ProgramChannel` updates | Replace with atomic `ProgramRegistration` | A synchronous builder declares all surfaces, volumes, and environments for one owner, returns a caller-defined typed export record of IDs, and commits once. Closing the registration removes the entire set; session scope closes it automatically. Hot replacement registers a new set, waits until ready, republishes geometry/environment bindings, then closes the old set. No existing producer proves a need for six independent add/drop operations. |
 | Post/UI passes in registration order | Keep stages, add identities/order constraints | Loader/service discovery order is not a semantic ordering contract. Add stable pass ids and narrow `before`/`after` constraints with cycle diagnostics. Do not expose a general render graph. |
 | World-resource pass | Keep | Sky LUTs, damage tables, material/texture tables, and extension buffers need synchronized work on the engine-owned command stream before trace. Put `SceneView` on its frame so per-view/per-dimension resources are identifiable. |
-| `VkCommandBuffer`, `VkDevice`, VMA, descriptor heaps | Keep in the main API | Vulkan is an intentional API dependency. Use LWJGL `Vk...` wrapper classes for dispatchable handles, expose direct Vulkan recording contracts, and keep Minecraft types in a separate package for lifecycle/ownership reasons rather than GPU neutrality. Rename generic `api.gpu` vocabulary to `api.vulkan` where it describes Vulkan-only behavior. |
+| `VkCommandBuffer`, `VkDevice`, VMA, descriptor heaps | Keep in the main API | Vulkan is an intentional API dependency. Use LWJGL `Vk...` wrapper classes for dispatchable handles, expose direct Vulkan recording contracts through `api.vulkan`, and keep Minecraft types in a separate package for lifecycle/ownership reasons rather than GPU neutrality. |
 | `GpuDescriptorRange` + retirement | Keep | Immutable submitted descriptor bytes plus allocate/publish/retire is the right rule. Use typed heap/index handles and expose capacity/alignment facts needed by real allocators. |
 | `GpuDescriptorWriter.writeResource(VkResourceDescriptorInfoEXT)` | Keep the Vulkan struct; add conveniences only where repeated | The call consumes the struct synchronously, so its native lifetime is tractable and Vulkan dependency is intended. A support package may provide safe builders for common buffer/image cases. Acceleration structures remain raw `long` handles in LWJGL; no `VkAccelerationStructureKHR` wrapper class exists. |
 | `api.host.CausticaBootstrap` | Move internal | It wires a host implementation and is not an extension capability. The same applies to `spi.host`, `spi.vulkan`, queues, swapchain, and device-negotiation types. |
@@ -214,7 +214,7 @@ requires it and whether a narrower alternative is worse.
 
 ### Simpler program ownership
 
-The current channel exposes six add/drop operations, one ID/ticket pair per add, and the exact intermediate
+The previous channel exposed six add/drop operations, one ID/readiness pair per add, and the exact intermediate
 composition state of an internally coalescing compiler. Existing producers instead declare coherent sets of
 shaders: Minecraft registers its related surfaces, coverage, volume, and environment together, and the glTF
 viewer registers its material family together. Model that ownership directly:
@@ -232,7 +232,9 @@ interface ProgramBuilder {
 
 interface ProgramRegistration<E> extends AutoCloseable {
     E exports();
-    ProgramReadiness readiness();
+    State state();
+    Optional<ProgramFailure> failure();
+    void whenComplete(Consumer<? super Completion> callback);
 }
 ```
 
@@ -598,7 +600,7 @@ The example is not proof merely because it compiles. Acceptance for the implemen
 - it submits all four lights and they visibly affect direct lighting;
 - its world-resource, post, and UI passes execute in deterministic order;
 - its Minecraft layer attaches to a dimension scene, handles resource reload, and changes sky binding;
-- every ticket and retirement callback resolves under normal close, failure, and cancellation;
+- every program-readiness and retirement callback resolves under normal close, failure, and cancellation;
 - validation and architecture tests enforce the package boundary.
 
 Until those checks pass, APIs should be labeled experimental rather than retained because they look complete
@@ -658,7 +660,7 @@ rendered Minecraft frame or visual/performance acceptance.
 - Add internal atomic frame ingress and remove the runtime singleton from the target architecture.
 - Make one main extension API explicitly Vulkan-native; split Minecraft lifecycle, settings, shader ABI,
   reusable Vulkan support, and Slang tooling only where they have real ownership/build boundaries.
-- Replace per-object program mutation and exact-composition tickets with one owner-scoped atomic registration
+- Replace per-object program mutation and exact-composition readiness objects with one owner-scoped atomic registration
   and one pending/ready/failed/cancelled readiness result.
 - Allow explicitly handed-off same-session surface, volume, environment, and scene references across
   contributions without transferring removal authority or pinning the issuer.

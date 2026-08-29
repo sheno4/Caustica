@@ -1,7 +1,7 @@
 package dev.comfyfluffy.caustica.engine.vulkan.descriptor;
 
-import dev.comfyfluffy.caustica.api.gpu.GpuDescriptorHeapProperties;
-import dev.comfyfluffy.caustica.api.gpu.GpuDescriptorIndex;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorHeapProperties;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorIndex;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;

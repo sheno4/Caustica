@@ -18,19 +18,19 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 final class ProgramContractTest {
     @Test
     void cancelledIsATerminalCompletionKind() {
-        ProgramTicket.Completion completion = new ProgramTicket.Cancelled();
+        ProgramRegistration.Completion completion = new ProgramRegistration.Cancelled();
 
-        assertInstanceOf(ProgramTicket.Cancelled.class, completion);
-        assertSame(ProgramTicket.State.CANCELLED, ProgramTicket.State.valueOf("CANCELLED"));
+        assertInstanceOf(ProgramRegistration.Cancelled.class, completion);
+        assertSame(ProgramRegistration.State.CANCELLED, ProgramRegistration.State.valueOf("CANCELLED"));
     }
 
     @Test
     void readinessHasOnlyOwnerOutcomes() {
         assertEquals(Set.of("PENDING", "READY", "FAILED", "CANCELLED"),
-                Arrays.stream(ProgramTicket.State.values()).map(Enum::name).collect(Collectors.toSet()));
-        assertEquals(Set.of(ProgramTicket.Ready.class, ProgramTicket.Failed.class,
-                        ProgramTicket.Cancelled.class),
-                Set.of(ProgramTicket.Completion.class.getPermittedSubclasses()));
+                Arrays.stream(ProgramRegistration.State.values()).map(Enum::name).collect(Collectors.toSet()));
+        assertEquals(Set.of(ProgramRegistration.Ready.class, ProgramRegistration.Failed.class,
+                        ProgramRegistration.Cancelled.class),
+                Set.of(ProgramRegistration.Completion.class.getPermittedSubclasses()));
     }
 
     @Test
@@ -48,7 +48,7 @@ final class ProgramContractTest {
         Method exports = ProgramRegistration.class.getMethod("exports");
         assertSame(Object.class, exports.getReturnType());
         assertEquals("E", exports.getGenericReturnType().getTypeName());
-        assertSame(ProgramTicket.class, ProgramRegistration.class.getMethod("readiness").getReturnType());
+        assertSame(ProgramRegistration.State.class, ProgramRegistration.class.getMethod("state").getReturnType());
         assertSame(void.class, ProgramRegistration.class.getMethod("close").getReturnType());
 
         Set<String> channelMethods = Arrays.stream(ProgramChannel.class.getMethods())
@@ -64,9 +64,6 @@ final class ProgramContractTest {
     @Test
     void registrationAndReadinessExposeNoBlockingWait() {
         assertFalse(Arrays.stream(ProgramRegistration.class.getMethods())
-                .map(Method::getName)
-                .anyMatch(name -> name.startsWith("await") || name.startsWith("join")));
-        assertFalse(Arrays.stream(ProgramTicket.class.getMethods())
                 .map(Method::getName)
                 .anyMatch(name -> name.startsWith("await") || name.startsWith("join")));
     }

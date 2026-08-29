@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.material;
 
-import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.api.pass.Pass;
 import dev.comfyfluffy.caustica.api.pass.PassFrame;
 import org.lwjgl.PointerBuffer;
@@ -10,12 +10,12 @@ import org.lwjgl.util.vma.Vma;
 import org.lwjgl.util.vma.VmaAllocationCreateInfo;
 import org.lwjgl.util.vma.VmaAllocationInfo;
 import org.lwjgl.vulkan.VkBufferCreateInfo;
-import org.lwjgl.vulkan.VkBufferImageCopy;
-import org.lwjgl.vulkan.VkExtent3D;
+import org.lwjgl.vulkan.VkBufferImageCopy2;
+import org.lwjgl.vulkan.VkCopyBufferToImageInfo2;
 import org.lwjgl.vulkan.VkImageCreateInfo;
 import org.lwjgl.vulkan.VkDependencyInfo;
 import org.lwjgl.vulkan.VkImageMemoryBarrier2;
-import org.lwjgl.vulkan.VkImageSubresourceLayers;
+import org.lwjgl.vulkan.VK13;
 import org.lwjgl.vulkan.VK14;
 
 import java.nio.ByteBuffer;
@@ -64,11 +64,11 @@ final class MinecraftMaterialUploadPass implements Pass<PassFrame> {
         MinecraftProgramResources.Epoch epoch = resources.createEpoch(lookup, images);
         List<StagingBuffer> staging = uploads.stream().map(ImageUpload::staging).toList();
         uploads = List.of();
-        frame.gpuUse().retire(() -> staging.forEach(StagingBuffer::destroy));
+        frame.gpuUse().whenComplete(() -> staging.forEach(StagingBuffer::destroy));
         try {
             published.accept(new MinecraftProgramResources.PublishedEpoch(lookup, epoch));
         } catch (RuntimeException | Error failure) {
-            frame.gpuUse().retire(epoch.retirement());
+            frame.gpuUse().whenComplete(epoch.retirement());
             throw failure;
         }
     }
@@ -95,21 +95,24 @@ final class MinecraftMaterialUploadPass implements Pass<PassFrame> {
 
             for (ImageUpload upload : uploads) {
                 List<MinecraftMaterialTexture.Mip> levels = upload.texture().levels();
-                VkBufferImageCopy.Buffer copies = VkBufferImageCopy.calloc(levels.size(), stack);
+                VkBufferImageCopy2.Buffer copies = VkBufferImageCopy2.calloc(levels.size(), stack);
                 long[] offsets = mipOffsets(upload.texture());
                 for (int level = 0; level < levels.size(); level++) {
                     MinecraftMaterialTexture.Mip mip = levels.get(level);
-                    VkImageSubresourceLayers layers = copies.get(level).imageSubresource()
+                    copies.get(level).sType$Default();
+                    copies.get(level).imageSubresource()
                             .aspectMask(VK_IMAGE_ASPECT_COLOR_BIT).mipLevel(level)
                             .baseArrayLayer(0).layerCount(1);
-                    VkExtent3D extent = copies.get(level).imageExtent()
-                            .width(mip.width()).height(mip.height()).depth(1);
                     copies.get(level).bufferOffset(offsets[level]).bufferRowLength(0).bufferImageHeight(0)
-                            .imageSubresource(layers).imageOffset().set(0, 0, 0);
-                    copies.get(level).imageExtent(extent);
+                            .imageOffset().set(0, 0, 0);
+                    copies.get(level).imageExtent().set(mip.width(), mip.height(), 1);
                 }
-                vkCmdCopyBufferToImage(frame.commandBuffer(), upload.staging().buffer,
-                        upload.image().image(), VK_IMAGE_LAYOUT_GENERAL, copies);
+                VK13.vkCmdCopyBufferToImage2(frame.commandBuffer(),
+                        VkCopyBufferToImageInfo2.calloc(stack).sType$Default()
+                                .srcBuffer(upload.staging().buffer)
+                                .dstImage(upload.image().image())
+                                .dstImageLayout(VK_IMAGE_LAYOUT_GENERAL)
+                                .pRegions(copies));
             }
 
             VkImageMemoryBarrier2.Buffer toRead = VkImageMemoryBarrier2.calloc(uploads.size(), stack);

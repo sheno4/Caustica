@@ -3,7 +3,7 @@ package dev.comfyfluffy.caustica.minecraft.overlay;
 import com.mojang.blaze3d.GpuFormat;
 import com.mojang.blaze3d.vulkan.VulkanGpuTexture;
 import com.mojang.blaze3d.vulkan.VulkanGpuTextureView;
-import dev.comfyfluffy.caustica.api.gpu.*;
+import dev.comfyfluffy.caustica.api.vulkan.*;
 import dev.comfyfluffy.caustica.vulkan.ShaderObjectGraphics;
 import org.lwjgl.system.*;
 import org.lwjgl.vulkan.*;

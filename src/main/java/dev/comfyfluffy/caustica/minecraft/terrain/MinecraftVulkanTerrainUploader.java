@@ -1,9 +1,9 @@
 package dev.comfyfluffy.caustica.minecraft.terrain;
 
 import dev.comfyfluffy.caustica.api.geometry.MeshBuild;
-import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
-import dev.comfyfluffy.caustica.api.gpu.VulkanDeviceAddress;
-import dev.comfyfluffy.caustica.api.gpu.VulkanDeviceAddressRange;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
+import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
+import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
 import dev.comfyfluffy.caustica.api.program.ShaderData;
 import dev.comfyfluffy.caustica.minecraft.program.MinecraftPrograms;
 import dev.comfyfluffy.caustica.minecraft.program.MinecraftProgramTypes;

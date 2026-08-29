@@ -1,9 +1,9 @@
 package dev.comfyfluffy.caustica.example.gltfcontent;
 
 import dev.comfyfluffy.caustica.api.geometry.MeshBuild;
-import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
-import dev.comfyfluffy.caustica.api.gpu.VulkanDeviceAddress;
-import dev.comfyfluffy.caustica.api.gpu.VulkanDeviceAddressRange;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
+import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
+import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;

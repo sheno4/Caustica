@@ -1,8 +1,8 @@
 package dev.comfyfluffy.caustica.rt;
 
 import dev.comfyfluffy.caustica.CausticaMod;
-import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
-import dev.comfyfluffy.caustica.api.gpu.GpuDescriptorHeap;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorHeap;
 import dev.comfyfluffy.caustica.engine.vulkan.VulkanRequiredProfile;
 import dev.comfyfluffy.caustica.spi.vulkan.VulkanQueueRef;
 import dev.comfyfluffy.caustica.spi.vulkan.VulkanRendererBackend;
@@ -26,11 +26,12 @@ import org.lwjgl.vulkan.VkCommandBufferBeginInfo;
 import org.lwjgl.vulkan.VkCommandPoolCreateInfo;
 import org.lwjgl.vulkan.VkDevice;
 import org.lwjgl.vulkan.VkFenceCreateInfo;
-import org.lwjgl.vulkan.VkFormatProperties;
+import org.lwjgl.vulkan.VkFormatProperties2;
 import org.lwjgl.vulkan.VkImageCreateInfo;
-import org.lwjgl.vulkan.VkImageFormatProperties;
+import org.lwjgl.vulkan.VkImageFormatProperties2;
 import org.lwjgl.vulkan.VkImageViewCreateInfo;
 import org.lwjgl.vulkan.VkPhysicalDevice;
+import org.lwjgl.vulkan.VkPhysicalDeviceImageFormatInfo2;
 import org.lwjgl.vulkan.VkPhysicalDeviceAccelerationStructurePropertiesKHR;
 import org.lwjgl.vulkan.VkPhysicalDeviceDescriptorIndexingProperties;
 import org.lwjgl.vulkan.VkPhysicalDeviceProperties2;
@@ -394,7 +395,7 @@ public final class GpuContext implements GpuDevice {
      * Create a storage image of the given format (STORAGE + TRANSFER_SRC/DST), transitioned to GENERAL.
      * The RT trace target uses an HDR float format (R16G16B16A16_SFLOAT) so radiance values above 1 are
      * preserved for the tonemap seam; the world-target copy stays R8G8B8A8 to match the host LDR target
-     * for the vkCmdCopyImage round-trip (copy requires texel-size-compatible formats).
+     * for the image-copy round-trip (copy requires texel-size-compatible formats).
      */
     public GpuImage createStorageImage(int width, int height, int format, String label) {
         return createStorageImage(width, height, format, label, 0);
@@ -468,8 +469,8 @@ public final class GpuContext implements GpuDevice {
 
     private void requireStorageImageSupport(int width, int height, int format, int usage, String label) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkFormatProperties formatProperties = VkFormatProperties.calloc(stack);
-            VK10.vkGetPhysicalDeviceFormatProperties(vk.getPhysicalDevice(), format, formatProperties);
+            VkFormatProperties2 formatProperties = VkFormatProperties2.calloc(stack).sType$Default();
+            VK11.vkGetPhysicalDeviceFormatProperties2(vk.getPhysicalDevice(), format, formatProperties);
             int required = VK10.VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT | VK10.VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
             if ((usage & VK10.VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0) {
                 required |= VK11.VK_FORMAT_FEATURE_TRANSFER_SRC_BIT;
@@ -480,24 +481,28 @@ public final class GpuContext implements GpuDevice {
             if ((usage & VK10.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) != 0) {
                 required |= VK10.VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT;
             }
-            int supported = formatProperties.optimalTilingFeatures();
+            int supported = formatProperties.formatProperties().optimalTilingFeatures();
             if ((supported & required) != required) {
                 throw new UnsupportedOperationException(label + " format " + format
                         + " lacks optimal-tiling features 0x" + Integer.toHexString(required & ~supported));
             }
 
-            VkImageFormatProperties imageProperties = VkImageFormatProperties.calloc(stack);
-            int result = VK10.vkGetPhysicalDeviceImageFormatProperties(vk.getPhysicalDevice(), format,
-                    VK10.VK_IMAGE_TYPE_2D, VK10.VK_IMAGE_TILING_OPTIMAL, usage, 0, imageProperties);
+            VkPhysicalDeviceImageFormatInfo2 imageInfo = VkPhysicalDeviceImageFormatInfo2.calloc(stack)
+                    .sType$Default().format(format).type(VK10.VK_IMAGE_TYPE_2D)
+                    .tiling(VK10.VK_IMAGE_TILING_OPTIMAL).usage(usage).flags(0);
+            VkImageFormatProperties2 imageProperties = VkImageFormatProperties2.calloc(stack).sType$Default();
+            int result = VK11.vkGetPhysicalDeviceImageFormatProperties2(
+                    vk.getPhysicalDevice(), imageInfo, imageProperties);
             if (result == VK10.VK_ERROR_FORMAT_NOT_SUPPORTED) {
                 throw new UnsupportedOperationException(label + " format " + format
                         + " does not support image usage 0x" + Integer.toHexString(usage));
             }
-            check(result, "vkGetPhysicalDeviceImageFormatProperties");
-            if (width > imageProperties.maxExtent().width() || height > imageProperties.maxExtent().height()) {
+            check(result, "vkGetPhysicalDeviceImageFormatProperties2");
+            if (width > imageProperties.imageFormatProperties().maxExtent().width()
+                    || height > imageProperties.imageFormatProperties().maxExtent().height()) {
                 throw new UnsupportedOperationException(label + " extent " + width + "x" + height
-                        + " exceeds format maximum " + imageProperties.maxExtent().width() + "x"
-                        + imageProperties.maxExtent().height());
+                        + " exceeds format maximum " + imageProperties.imageFormatProperties().maxExtent().width()
+                        + "x" + imageProperties.imageFormatProperties().maxExtent().height());
             }
         }
     }

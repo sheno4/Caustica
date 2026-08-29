@@ -11,7 +11,7 @@ import java.util.function.Function;
  * A rejected declaration does not take any definition retirement callback.
  *
  * <p>Compilation and publication remain asynchronous because all owners' accepted sets form one world
- * program. {@link ProgramRegistration#readiness()} reports whether this complete set became part of an
+ * program. {@link ProgramRegistration#state()} reports whether this complete set became part of an
  * active composition. Accepted registrations have a deterministic logical order. Their observable outcomes
  * are the same as compiling and publishing each set independently in that order: a failing set publishes
  * none of its declarations, while unaffected later sets are retried against the last successful composition.
@@ -22,7 +22,7 @@ import java.util.function.Function;
  * authority: it removes the complete set at a later program publication boundary. Geometry or scene bindings
  * which still name removed ids resolve to their documented fallbacks and do not keep the registration alive.
  *
- * <p>All channel, registration, and ticket methods are thread-safe. Declarations do not overlap for one
+ * <p>All channel and registration methods are thread-safe. Declarations do not overlap for one
  * channel, so validation, acceptance order, and failure isolation are deterministic. Extension code is
  * invoked only by the synchronous {@code declaration} call and by the explicitly registered readiness
  * callbacks; the renderer never invokes the declaration again.

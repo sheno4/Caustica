@@ -90,7 +90,7 @@ public final class MinecraftFrameAdapter {
     }
 
     static UiPresentationResources snapshotUiPresentation(boolean enabled, boolean populated,
-                                                           dev.comfyfluffy.caustica.api.gpu.GpuImage color,
+                                                           dev.comfyfluffy.caustica.api.vulkan.GpuImage color,
                                                            int width, int height) {
         return new UiPresentationResources(enabled, populated, color, width, height);
     }

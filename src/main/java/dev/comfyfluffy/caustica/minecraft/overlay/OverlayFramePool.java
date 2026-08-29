@@ -1,7 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.overlay;
 
-import dev.comfyfluffy.caustica.api.gpu.GpuDevice;
-import dev.comfyfluffy.caustica.api.gpu.GpuFrameUse;
+import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
+import dev.comfyfluffy.caustica.api.vulkan.GpuFrameUse;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.*;
 import org.lwjgl.util.vma.*;
@@ -34,7 +34,7 @@ final class OverlayFramePool {
         if (acquired.isEmpty()) return;
         List<Buffer> retired = List.copyOf(acquired);
         acquired.clear();
-        use.retire(() -> retired.forEach(Buffer::close));
+        use.whenComplete(() -> retired.forEach(Buffer::close));
     }
     void close() { acquired.forEach(Buffer::close); acquired.clear(); }
 
