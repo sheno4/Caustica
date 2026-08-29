@@ -6,7 +6,7 @@ import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
 import dev.comfyfluffy.caustica.api.program.ShaderData;
 import dev.comfyfluffy.caustica.minecraft.program.MinecraftPrograms;
-import dev.comfyfluffy.caustica.minecraft.program.MinecraftProgramTypes;
+import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
 import dev.comfyfluffy.caustica.minecraft.gen.MinecraftInstanceData;
 import dev.comfyfluffy.caustica.minecraft.gen.MinecraftPrimitiveData;
 import org.lwjgl.PointerBuffer;

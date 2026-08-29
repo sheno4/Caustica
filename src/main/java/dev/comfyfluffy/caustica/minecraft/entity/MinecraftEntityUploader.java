@@ -4,7 +4,7 @@ import dev.comfyfluffy.caustica.api.geometry.MeshBuild;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.api.program.ShaderData;
 import dev.comfyfluffy.caustica.minecraft.program.MinecraftPrograms;
-import dev.comfyfluffy.caustica.minecraft.program.MinecraftProgramTypes;
+import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftProgramResources;
 
 /** GPU upload seam for captured entity streams, primitive material records, and texture descriptors. */

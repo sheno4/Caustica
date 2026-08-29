@@ -3,6 +3,7 @@ package dev.comfyfluffy.caustica.minecraft.program;
 import dev.comfyfluffy.caustica.api.program.EnvironmentId;
 import dev.comfyfluffy.caustica.api.program.SurfaceId;
 import dev.comfyfluffy.caustica.api.program.VolumeId;
+import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
 
 /** IDs published together by the atomic Minecraft world program registration. */
 public record MinecraftPrograms(

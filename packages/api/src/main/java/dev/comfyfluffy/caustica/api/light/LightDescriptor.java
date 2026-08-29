@@ -28,10 +28,8 @@ public sealed interface LightDescriptor {
             LightValidation.position(positionX, positionY, positionZ);
             LightValidation.nonzero(halfUx, halfUy, halfUz, "rectangle half-U axis");
             LightValidation.nonzero(halfVx, halfVy, halfVz, "rectangle half-V axis");
-            double cx = halfUy * halfVz - halfUz * halfVy;
-            double cy = halfUz * halfVx - halfUx * halfVz;
-            double cz = halfUx * halfVy - halfUy * halfVx;
-            LightValidation.nonzero(cx, cy, cz, "rectangle axes");
+            LightValidation.perpendicular(halfUx, halfUy, halfUz, halfVx, halfVy, halfVz,
+                    "rectangle axes");
             LightValidation.color(radianceRedCdM2, radianceGreenCdM2, radianceBlueCdM2, "radiance");
         }
     }

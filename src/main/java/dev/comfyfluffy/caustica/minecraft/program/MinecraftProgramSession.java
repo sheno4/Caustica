@@ -6,6 +6,7 @@ import dev.comfyfluffy.caustica.api.program.*;
 import dev.comfyfluffy.caustica.minecraft.MinecraftFrameSelector;
 import dev.comfyfluffy.caustica.minecraft.MinecraftProvidersExtension;
 import dev.comfyfluffy.caustica.minecraft.api.*;
+import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
 import dev.comfyfluffy.caustica.minecraft.material.*;
 import dev.comfyfluffy.caustica.minecraft.overlay.WorldOverlayPass;
 import dev.comfyfluffy.caustica.minecraft.provider.MinecraftLightProvider;

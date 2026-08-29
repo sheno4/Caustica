@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.minecraft.program;
+package dev.comfyfluffy.caustica.minecraft.api.program;
 
 import dev.comfyfluffy.caustica.api.program.ShaderDataType;
 

@@ -1,7 +1,8 @@
 package dev.comfyfluffy.caustica.minecraft.material;
 
-import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.settings.ResourceId;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -13,6 +14,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Compiles Minecraft OpenPBR inputs into immutable CPU texture pages for one resource-pack epoch. */
 public final class MinecraftMaterialPageCompiler {
+    private static final Logger LOGGER = LoggerFactory.getLogger(MinecraftMaterialPageCompiler.class);
     public static final int FEATURE_SPEC = 1;
     public static final int FEATURE_NORMAL = 2;
     public static final int FEATURE_EMISSION_MASK = 4;
@@ -105,7 +107,7 @@ public final class MinecraftMaterialPageCompiler {
         MinecraftMaterialPagePlanner.Plan plan = MinecraftMaterialPagePlanner.plan(inputs, defaultPageSize,
                 maxPageSize, gutter, PACK_ALIGNMENT);
         if (plan.rejectedOversizedInput()) {
-            CausticaMod.LOGGER.warn("RT material asset exceeds canonical page limit {}; using neutral fallback", maxPageSize);
+            LOGGER.warn("RT material asset exceeds canonical page limit {}; using neutral fallback", maxPageSize);
         }
         int pageSize = plan.pageSize();
         for (MinecraftMaterialPagePlanner.Placement placement : plan.placements()) {
@@ -132,7 +134,7 @@ public final class MinecraftMaterialPageCompiler {
                 pixels[candidate.page].write(candidate.x, candidate.y, decoded.levels());
             } catch (Throwable failure) {
                 if (loggedFailure.compareAndSet(false, true)) {
-                    CausticaMod.LOGGER.warn("RT canonical material decode failed for " + candidate.resource.material(), failure);
+                    LOGGER.warn("RT canonical material decode failed for " + candidate.resource.material(), failure);
                 }
                 candidate.page = -1;
             }

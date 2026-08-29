@@ -6,7 +6,7 @@ import dev.comfyfluffy.caustica.api.geometry.InstanceId;
 import dev.comfyfluffy.caustica.api.geometry.MeshId;
 import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
-import dev.comfyfluffy.caustica.minecraft.program.MinecraftProgramTypes;
+import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;

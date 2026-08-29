@@ -1,0 +1,107 @@
+plugins {
+    id "java-library"
+    id "maven-publish"
+}
+
+version = project.api_version
+group = project.maven_group
+java.toolchain.languageVersion = JavaLanguageVersion.of(25)
+
+base { archivesName = "caustica-engine-vulkan" }
+repositories { mavenCentral() }
+
+def osName = System.getProperty("os.name").toLowerCase(Locale.ROOT)
+def osArch = System.getProperty("os.arch").toLowerCase(Locale.ROOT)
+def lwjglTestNatives = null
+if (osName.contains("windows")) {
+    lwjglTestNatives = osArch.contains("aarch64") ? "natives-windows-arm64" : "natives-windows"
+} else if (osName.contains("mac")) {
+    lwjglTestNatives = osArch.contains("aarch64") ? "natives-macos-arm64" : "natives-macos"
+} else if (osName.contains("linux")) {
+    lwjglTestNatives = osArch.contains("aarch64") ? "natives-linux-arm64"
+            : osArch.startsWith("arm") ? "natives-linux-arm32" : "natives-linux"
+}
+
+dependencies {
+    api project(":packages:api")
+    implementation "org.slf4j:slf4j-api:2.0.17"
+
+    testImplementation platform("org.junit:junit-bom:5.12.2")
+    testImplementation "org.junit.jupiter:junit-jupiter"
+    testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+    if (lwjglTestNatives != null) {
+        testRuntimeOnly "org.lwjgl:lwjgl:${project.lwjgl_version}:${lwjglTestNatives}"
+    }
+}
+
+def verifyEngineVulkanDependencies = tasks.register("verifyEngineVulkanDependencies") {
+    group = "verification"
+    description = "Verifies that the Vulkan engine boundary depends only on the public API and native libraries."
+    doLast {
+        def allowedProjects = [project.path, ":packages:api", ":packages:shader-api"] as Set
+        def violations = []
+        configurations.matching { it.canBeResolved }.each { configuration ->
+            configuration.allDependencies.withType(ProjectDependency).each { dependency ->
+                if (!allowedProjects.contains(dependency.path)) {
+                    violations.add("${configuration.name}: ${dependency.path}")
+                }
+            }
+        }
+        if (!violations.empty) {
+            throw new GradleException("engine-vulkan dependency violations:\n${violations.join('\n')}")
+        }
+    }
+}
+
+def verifyEngineVulkanImports = tasks.register("verifyEngineVulkanImports") {
+    group = "verification"
+    description = "Verifies that the Vulkan engine boundary has no Minecraft, loader, or root-mod imports."
+    inputs.files(sourceSets.main.allJava)
+    doLast {
+        def forbidden = [
+                "dev.comfyfluffy.caustica.CausticaMod",
+                "dev.comfyfluffy.caustica.minecraft",
+                "dev.comfyfluffy.caustica.platform",
+                "dev.comfyfluffy.caustica.fabric",
+                "dev.comfyfluffy.caustica.neoforge",
+                "dev.comfyfluffy.caustica.ngx",
+                "net.minecraft",
+                "net.fabricmc",
+                "net.neoforged"
+        ]
+        def violations = []
+        sourceSets.main.allJava.files.sort().each { file ->
+            file.eachLine { line, number ->
+                if (line.stripLeading().startsWith("import ") && forbidden.any { line.contains(it) }) {
+                    violations.add("${file}:${number}: ${line.trim()}")
+                }
+            }
+        }
+        if (!violations.empty) {
+            throw new GradleException("engine-vulkan import violations:\n${violations.join('\n')}")
+        }
+    }
+}
+
+tasks.named("test", Test) { useJUnitPlatform() }
+tasks.named("check") { dependsOn(verifyEngineVulkanDependencies, verifyEngineVulkanImports) }
+tasks.withType(JavaCompile).configureEach { options.release = 25 }
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_25
+    targetCompatibility = JavaVersion.VERSION_25
+    withSourcesJar()
+}
+
+tasks.named("jar", Jar).configure {
+    from(rootProject.files("LICENSE.md", "COPYING", "COPYING.LESSER")) { into "META-INF" }
+}
+
+publishing {
+    publications {
+        create("mavenJava", MavenPublication) {
+            artifactId = "caustica-engine-vulkan"
+            from components.java
+        }
+    }
+}

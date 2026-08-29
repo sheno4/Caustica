@@ -27,9 +27,6 @@ public struct WorldBindingRoots {
     public uint64_t worldPushAddress;
     public uint64_t compositionDataAddress;
     public uint64_t geometryTableAddress;
-    public uint64_t instanceHistoryAddress;
-    public uint64_t materialTableAddress;
-    public uint64_t materialSurfaceAddress;
     public uint64_t pathQueueAddress;
     public WorldResourceIndices resources;
     public uint initialVolumeImplementation;
@@ -37,7 +34,6 @@ public struct WorldBindingRoots {
     public uint64_t initialVolumeBinding;
     public uint64_t initialVolumeInstance;
     public uint64_t neeAtStateAddress;
-    public uint64_t reservedNeeAt;
 };
 
 public RaytracingAccelerationStructure worldAccelerationStructure(WorldBindingRoots roots) {

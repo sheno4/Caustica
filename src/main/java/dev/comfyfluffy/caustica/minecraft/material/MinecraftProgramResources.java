@@ -11,7 +11,7 @@ import dev.comfyfluffy.caustica.minecraft.gen.MinecraftImplementationData;
 import dev.comfyfluffy.caustica.minecraft.gen.MinecraftInstanceData;
 import dev.comfyfluffy.caustica.minecraft.gen.MinecraftMaterialData;
 import dev.comfyfluffy.caustica.minecraft.gen.MinecraftPrimitiveData;
-import dev.comfyfluffy.caustica.minecraft.program.MinecraftProgramTypes;
+import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;

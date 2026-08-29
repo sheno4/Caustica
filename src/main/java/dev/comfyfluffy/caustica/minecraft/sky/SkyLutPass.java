@@ -11,7 +11,7 @@ import dev.comfyfluffy.caustica.api.program.EnvironmentId;
 import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
 import dev.comfyfluffy.caustica.minecraft.MinecraftLightingCalibration;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftEnvironmentSelector;
-import dev.comfyfluffy.caustica.minecraft.program.MinecraftProgramTypes;
+import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
 import dev.comfyfluffy.caustica.minecraft.sky.gen.*;
 import dev.comfyfluffy.caustica.settings.*;
 import dev.comfyfluffy.caustica.vulkan.*;

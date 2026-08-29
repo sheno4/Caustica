@@ -1,7 +1,6 @@
 package dev.comfyfluffy.caustica.vulkan;
 
 
-import dev.comfyfluffy.caustica.CausticaMod;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.Version;
 import org.lwjgl.system.MemoryStack;
@@ -31,6 +30,8 @@ import org.lwjgl.vulkan.VkQueueFamilyProperties;
 import org.lwjgl.vulkan.VkQueueFamilyProperties2;
 import org.lwjgl.vulkan.VkCheckpointDataNV;
 import org.lwjgl.vulkan.VkQueue;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.lang.management.ManagementFactory;
 import java.util.ArrayList;
@@ -44,6 +45,7 @@ import java.util.concurrent.ConcurrentSkipListMap;
 
 /** Startup Vulkan inventory and best-effort {@code VK_EXT_device_fault} reporting. */
 public final class VulkanDiagnostics {
+    private static final Logger LOGGER = LoggerFactory.getLogger(VulkanDiagnostics.class);
     private static final int MAX_FAULT_RECORDS = 64;
     private static final AtomicBoolean FAULT_REPORTED = new AtomicBoolean();
     private static final ConcurrentHashMap<String, String> IN_FLIGHT = new ConcurrentHashMap<>();
@@ -89,18 +91,18 @@ public final class VulkanDiagnostics {
             java.nio.IntBuffer count = stack.callocInt(1);
             int result = VK10.vkEnumerateInstanceLayerProperties(count, null);
             if (result != VK10.VK_SUCCESS) {
-                CausticaMod.LOGGER.warn("vkEnumerateInstanceLayerProperties(count) failed: {}", result);
+                LOGGER.warn("vkEnumerateInstanceLayerProperties(count) failed: {}", result);
             } else {
                 VkLayerProperties.Buffer layers = VkLayerProperties.calloc(count.get(0), stack);
                 result = VK10.vkEnumerateInstanceLayerProperties(count, layers);
                 if (result != VK10.VK_SUCCESS && result != VK10.VK_INCOMPLETE) {
-                    CausticaMod.LOGGER.warn("vkEnumerateInstanceLayerProperties(data) failed: {}", result);
+                    LOGGER.warn("vkEnumerateInstanceLayerProperties(data) failed: {}", result);
                 } else {
                     int layerCount = Math.min(count.get(0), layers.capacity());
-                    CausticaMod.LOGGER.info("Vulkan loader-visible instance layers ({}):", layerCount);
+                    LOGGER.info("Vulkan loader-visible instance layers ({}):", layerCount);
                     for (int i = 0; i < layerCount; i++) {
                         VkLayerProperties layer = layers.get(i);
-                        CausticaMod.LOGGER.info(
+                        LOGGER.info(
                                 "Vulkan instance layer[{}]: name='{}', spec={}, implementation={} (0x{}), description='{}'",
                                 i, layer.layerNameString(), version(layer.specVersion()),
                                 Integer.toUnsignedLong(layer.implementationVersion()),
@@ -110,7 +112,7 @@ public final class VulkanDiagnostics {
                 }
             }
         } catch (Throwable t) {
-            CausticaMod.LOGGER.warn("Failed to enumerate Vulkan instance layers", t);
+            LOGGER.warn("Failed to enumerate Vulkan instance layers", t);
         }
 
         List<String> requested = new ArrayList<>();
@@ -120,7 +122,7 @@ public final class VulkanDiagnostics {
                 requested.add(MemoryUtil.memUTF8(names.get(i)));
             }
         }
-        CausticaMod.LOGGER.info(
+        LOGGER.info(
                 "Vulkan application-requested instance layers ({}): {} (implicit loader layers may still activate)",
                 requested.size(), requested.isEmpty() ? "<none>" : requested);
 
@@ -132,7 +134,7 @@ public final class VulkanDiagnostics {
                 loaderEnvironment.add(key + "=" + value);
             }
         }
-        CausticaMod.LOGGER.info("Vulkan layer/overlay environment: {}",
+        LOGGER.info("Vulkan layer/overlay environment: {}",
                 loaderEnvironment.isEmpty() ? "<none>" : loaderEnvironment);
     }
 
@@ -148,14 +150,14 @@ public final class VulkanDiagnostics {
     public static void logEnabledExtensions(Collection<String> extensions) {
         List<String> sorted = new ArrayList<>(extensions);
         sorted.sort(Comparator.naturalOrder());
-        CausticaMod.LOGGER.info("Vulkan device extensions requested ({}): {}", sorted.size(), sorted);
+        LOGGER.info("Vulkan device extensions requested ({}): {}", sorted.size(), sorted);
     }
 
     /** Verify the entry point after logical-device creation. */
     public static void probe(VkDevice device) {
         deviceFaultEnabled = deviceFaultRequested && device.getCapabilities().vkGetDeviceFaultInfoEXT != 0L;
         if (deviceFaultRequested) {
-            CausticaMod.LOGGER.info("Vulkan device-fault diagnostics {}",
+            LOGGER.info("Vulkan device-fault diagnostics {}",
                     deviceFaultEnabled ? "enabled" : "FAILED: entry point missing");
         }
     }
@@ -189,14 +191,14 @@ public final class VulkanDiagnostics {
         if (!FAULT_REPORTED.compareAndSet(false, true)) {
             return;
         }
-        CausticaMod.LOGGER.error("Vulkan device lost while {}", operation);
+        LOGGER.error("Vulkan device lost while {}", operation);
         VkQueue queue = lastCausticaQueue;
         if (queue != null) {
             logNvQueueCheckpoints(queue, lastCausticaQueueLabel);
         }
         logRuntimeSnapshot();
         if (!deviceFaultEnabled || device == null || device.getCapabilities().vkGetDeviceFaultInfoEXT == 0L) {
-            CausticaMod.LOGGER.error("VK_EXT_device_fault is unavailable; no driver fault details can be queried");
+            LOGGER.error("VK_EXT_device_fault is unavailable; no driver fault details can be queried");
             return;
         }
 
@@ -204,14 +206,14 @@ public final class VulkanDiagnostics {
             VkDeviceFaultCountsEXT counts = VkDeviceFaultCountsEXT.calloc(stack).sType$Default();
             int result = EXTDeviceFault.vkGetDeviceFaultInfoEXT(device, counts, null);
             if (result != VK10.VK_SUCCESS) {
-                CausticaMod.LOGGER.error("vkGetDeviceFaultInfoEXT(counts) failed: {}", result);
+                LOGGER.error("vkGetDeviceFaultInfoEXT(counts) failed: {}", result);
                 return;
             }
 
             int addressCount = Math.min(counts.addressInfoCount(), MAX_FAULT_RECORDS);
             int vendorCount = Math.min(counts.vendorInfoCount(), MAX_FAULT_RECORDS);
             if (addressCount != counts.addressInfoCount() || vendorCount != counts.vendorInfoCount()) {
-                CausticaMod.LOGGER.warn("Capping Vulkan fault records to {} (driver reported address={}, vendor={})",
+                LOGGER.warn("Capping Vulkan fault records to {} (driver reported address={}, vendor={})",
                         MAX_FAULT_RECORDS, counts.addressInfoCount(), counts.vendorInfoCount());
             }
             VkDeviceFaultAddressInfoEXT.Buffer addresses = addressCount == 0
@@ -228,16 +230,16 @@ public final class VulkanDiagnostics {
 
             result = EXTDeviceFault.vkGetDeviceFaultInfoEXT(device, counts, info);
             if (result != VK10.VK_SUCCESS && result != VK10.VK_INCOMPLETE) {
-                CausticaMod.LOGGER.error("vkGetDeviceFaultInfoEXT(info) failed: {}", result);
+                LOGGER.error("vkGetDeviceFaultInfoEXT(info) failed: {}", result);
                 return;
             }
-            CausticaMod.LOGGER.error("Vulkan device fault: description='{}', addresses={}, vendorRecords={}",
+            LOGGER.error("Vulkan device fault: description='{}', addresses={}, vendorRecords={}",
                     info.descriptionString(), counts.addressInfoCount(), counts.vendorInfoCount());
             if (addresses != null) {
                 for (int i = 0; i < Math.min(addressCount, counts.addressInfoCount()); i++) {
                     VkDeviceFaultAddressInfoEXT address = addresses.get(i);
                     String resource = resolveBuffer(address.reportedAddress());
-                    CausticaMod.LOGGER.error("Vulkan fault address[{}]: type={}, address=0x{}, precision=0x{}, resource={}",
+                    LOGGER.error("Vulkan fault address[{}]: type={}, address=0x{}, precision=0x{}, resource={}",
                             i, addressType(address.addressType()), Long.toUnsignedString(address.reportedAddress(), 16),
                             Long.toUnsignedString(address.addressPrecision(), 16), resource);
                 }
@@ -245,20 +247,20 @@ public final class VulkanDiagnostics {
             if (vendors != null) {
                 for (int i = 0; i < Math.min(vendorCount, counts.vendorInfoCount()); i++) {
                     VkDeviceFaultVendorInfoEXT vendor = vendors.get(i);
-                    CausticaMod.LOGGER.error("Vulkan vendor fault[{}]: description='{}', code=0x{}, data=0x{}",
+                    LOGGER.error("Vulkan vendor fault[{}]: description='{}', code=0x{}, data=0x{}",
                             i, vendor.descriptionString(), Long.toUnsignedString(vendor.vendorFaultCode(), 16),
                             Long.toUnsignedString(vendor.vendorFaultData(), 16));
                 }
             }
         } catch (Throwable t) {
-            CausticaMod.LOGGER.error("Failed to query VK_EXT_device_fault after device loss", t);
+            LOGGER.error("Failed to query VK_EXT_device_fault after device loss", t);
         }
     }
 
     private static void logRuntimeSnapshot() {
-        CausticaMod.LOGGER.error("Vulkan in-flight state: {}", IN_FLIGHT);
+        LOGGER.error("Vulkan in-flight state: {}", IN_FLIGHT);
         long totalBytes = BUFFERS.values().stream().mapToLong(BufferRange::size).sum();
-        CausticaMod.LOGGER.error("Caustica live BDA buffers: count={}, bytes={}", BUFFERS.size(), formatBytes(totalBytes));
+        LOGGER.error("Caustica live BDA buffers: count={}, bytes={}", BUFFERS.size(), formatBytes(totalBytes));
         long liveAllocator = allocator;
         if (liveAllocator != 0L && memoryHeapCount > 0) {
             try (MemoryStack stack = MemoryStack.stackPush()) {
@@ -266,14 +268,14 @@ public final class VulkanDiagnostics {
                 Vma.vmaGetHeapBudgets(liveAllocator, budgets);
                 for (int i = 0; i < memoryHeapCount; i++) {
                     VmaBudget budget = budgets.get(i);
-                    CausticaMod.LOGGER.error(
+                    LOGGER.error(
                             "VMA heap[{}]: usage={}, budget={}, blocks={}, allocations={}, blockBytes={}, allocationBytes={}",
                             i, formatBytes(budget.usage()), formatBytes(budget.budget()),
                             budget.statistics().blockCount(), budget.statistics().allocationCount(),
                             formatBytes(budget.statistics().blockBytes()), formatBytes(budget.statistics().allocationBytes()));
                 }
             } catch (Throwable t) {
-                CausticaMod.LOGGER.error("Failed to collect VMA budgets after device loss", t);
+                LOGGER.error("Failed to collect VMA budgets after device loss", t);
             }
         }
     }
@@ -287,7 +289,7 @@ public final class VulkanDiagnostics {
             NVDeviceDiagnosticCheckpoints.vkGetQueueCheckpointDataNV(queue, count, null);
             int checkpointCount = Math.min(count.get(0), MAX_FAULT_RECORDS);
             if (checkpointCount == 0) {
-                CausticaMod.LOGGER.error("NVIDIA checkpoints for {} queue 0x{}: <none>", label,
+                LOGGER.error("NVIDIA checkpoints for {} queue 0x{}: <none>", label,
                         Long.toUnsignedString(queue.address(), 16));
                 return;
             }
@@ -297,17 +299,17 @@ public final class VulkanDiagnostics {
             }
             count.put(0, checkpointCount);
             NVDeviceDiagnosticCheckpoints.vkGetQueueCheckpointDataNV(queue, count, checkpoints);
-            CausticaMod.LOGGER.error("NVIDIA checkpoints for {} queue 0x{} ({}):", label,
+            LOGGER.error("NVIDIA checkpoints for {} queue 0x{} ({}):", label,
                     Long.toUnsignedString(queue.address(), 16), count.get(0));
             for (int i = 0; i < Math.min(checkpointCount, count.get(0)); i++) {
                 VkCheckpointDataNV checkpoint = checkpoints.get(i);
                 long marker = checkpoint.pCheckpointMarker();
-                CausticaMod.LOGGER.error("  stage={} (0x{}), marker=0x{}",
+                LOGGER.error("  stage={} (0x{}), marker=0x{}",
                         pipelineStage(checkpoint.stage()), Integer.toUnsignedString(checkpoint.stage(), 16),
                         Long.toUnsignedString(marker, 16));
             }
         } catch (Throwable t) {
-            CausticaMod.LOGGER.error("Failed to retrieve NVIDIA checkpoints for " + label, t);
+            LOGGER.error("Failed to retrieve NVIDIA checkpoints for " + label, t);
         }
     }
 
@@ -354,7 +356,7 @@ public final class VulkanDiagnostics {
                 loaderVersion = version(version.get(0));
             }
         }
-        CausticaMod.LOGGER.info(
+        LOGGER.info(
                 "System: os='{} {}' arch={}, cpu='{}', logicalProcessors={}, physicalMemory={}, java='{} {}' vm='{}', heapMax={}, LWJGL={}, VulkanLoader={}",
                 System.getProperty("os.name"), System.getProperty("os.version"), System.getProperty("os.arch"),
                 System.getenv().getOrDefault("PROCESSOR_IDENTIFIER", "unknown"), runtime.availableProcessors(),
@@ -365,15 +367,15 @@ public final class VulkanDiagnostics {
             VkPhysicalDeviceProperties2 properties2 = VkPhysicalDeviceProperties2.calloc(stack).sType$Default();
             VK11.vkGetPhysicalDeviceProperties2(physicalDevice, properties2);
             VkPhysicalDeviceProperties properties = properties2.properties();
-            CausticaMod.LOGGER.info(
+            LOGGER.info(
                     "Vulkan GPU: name='{}', vendor={} (0x{}), deviceId=0x{}, type={}, api={}, driver='{}' info='{}' driverId={}, driverVersion=0x{}",
                     info.deviceName(), info.vendorName(), Integer.toHexString(properties.vendorID()),
                     Integer.toHexString(properties.deviceID()), info.deviceType(), version(properties.apiVersion()),
                     info.driverName(), info.driverInfo(), info.driverId(),
                     Integer.toHexString(properties.driverVersion()));
-            CausticaMod.LOGGER.info("Vulkan IDs: deviceUUID={}, driverUUID={}, conformance={}",
+            LOGGER.info("Vulkan IDs: deviceUUID={}, driverUUID={}, conformance={}",
                     info.deviceUuid(), info.driverUuid(), info.conformance());
-            CausticaMod.LOGGER.info(
+            LOGGER.info(
                     "Vulkan limits: maxAllocationCount={}, nonCoherentAtomSize={}, bufferImageGranularity={}, maxStorageBufferRange={}, maxImage2D={}x{}",
                     Integer.toUnsignedLong(properties.limits().maxMemoryAllocationCount()), formatBytesExact(properties.limits().nonCoherentAtomSize()),
                     formatBytesExact(properties.limits().bufferImageGranularity()),
@@ -381,7 +383,7 @@ public final class VulkanDiagnostics {
                     properties.limits().maxImageDimension2D(), properties.limits().maxImageDimension2D());
         }
         logMemoryAndQueues(physicalDevice);
-        CausticaMod.LOGGER.info("Vulkan selected queues: {}", info.selectedQueues());
+        LOGGER.info("Vulkan selected queues: {}", info.selectedQueues());
     }
 
     private static void logMemoryAndQueues(VkPhysicalDevice physicalDevice) {
@@ -392,12 +394,12 @@ public final class VulkanDiagnostics {
             memoryHeapCount = memory.memoryHeapCount();
             for (int i = 0; i < memory.memoryHeapCount(); i++) {
                 var heap = memory.memoryHeaps(i);
-                CausticaMod.LOGGER.info("Vulkan memory heap[{}]: size={}, flags={}", i, formatBytes(heap.size()),
+                LOGGER.info("Vulkan memory heap[{}]: size={}, flags={}", i, formatBytes(heap.size()),
                         memoryHeapFlags(heap.flags()));
             }
             for (int i = 0; i < memory.memoryTypeCount(); i++) {
                 var type = memory.memoryTypes(i);
-                CausticaMod.LOGGER.info("Vulkan memory type[{}]: heap={}, flags={}", i, type.heapIndex(),
+                LOGGER.info("Vulkan memory type[{}]: heap={}, flags={}", i, type.heapIndex(),
                         memoryPropertyFlags(type.propertyFlags()));
             }
 
@@ -408,7 +410,7 @@ public final class VulkanDiagnostics {
             VK11.vkGetPhysicalDeviceQueueFamilyProperties2(physicalDevice, count, queues);
             for (int i = 0; i < queues.capacity(); i++) {
                 VkQueueFamilyProperties queue = queues.get(i).queueFamilyProperties();
-                CausticaMod.LOGGER.info("Vulkan queue family[{}]: count={}, flags={}, timestampBits={}",
+                LOGGER.info("Vulkan queue family[{}]: count={}, flags={}, timestampBits={}",
                         i, queue.queueCount(), queueFlags(queue.queueFlags()), queue.timestampValidBits());
             }
         }

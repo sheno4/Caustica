@@ -8,14 +8,24 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.lwjgl.vulkan.KHRSynchronization2.VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+import static org.lwjgl.vulkan.KHRSynchronization2.VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+
 final class GraphicsSubmissionOrderTest {
     @Test
-    void presentKeepsAcquireExecuteSignalOrder() {
+    void graphicsTimelineDependenciesStayOutsideRecordedFrameWork() {
         RecordingSubmission submission = new RecordingSubmission();
 
-        GeneratedFrameQueue.enqueuePresent(submission, null, 11L, 12L);
+        RtGpuExecutor.enqueueBuildWait(submission, 21L, 3L);
+        submission.execute(null);
+        RtGpuExecutor.enqueueGraphicsSignal(submission, 22L, 4L);
 
-        assertEquals(List.of("wait:11:0:65536", "execute", "signal:12:0:4096"), submission.calls);
+        assertEquals(List.of(
+                "wait:21:3:" + (VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR
+                        | VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR),
+                "execute",
+                "signal:22:4:" + VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT), submission.calls);
     }
 
     private static final class RecordingSubmission implements GraphicsSubmission {

@@ -15,10 +15,6 @@ struct WorldPushLayoutProbe {
     WorldPush values[2]; // array stride is the complete, tail-padded WorldPush byte size
 };
 
-struct MaterialBindingLayoutProbe {
-    MaterialBinding values[2]; // array stride is the complete, tail-padded MaterialBinding byte size
-};
-
 struct RetainedGeometryRecordLayoutProbe { RetainedGeometryRecord values[2]; };
 struct RetainedLightRecordLayoutProbe { RetainedLightRecord values[2]; };
 struct NeeAtStateLayoutProbe { NeeAtState values[2]; };
@@ -35,7 +31,6 @@ struct MinecraftInstanceLayoutProbe { MinecraftInstanceData values[2]; };
 struct MinecraftEnvironmentBindingLayoutProbe { MinecraftEnvironmentBinding values[2]; };
 
 [[vk::binding(0, 0)]] StructuredBuffer<WorldPushLayoutProbe, Std430DataLayout> worldPushLayoutProbe;
-[[vk::binding(1, 0)]] StructuredBuffer<MaterialBindingLayoutProbe, Std430DataLayout> materialBindingLayoutProbe;
 [[vk::binding(3, 0)]] StructuredBuffer<ExposureStateLayoutProbe, Std430DataLayout> exposureStateLayoutProbe;
 [[vk::binding(4, 0)]] StructuredBuffer<MinecraftImplementationLayoutProbe, Std430DataLayout> minecraftImplementationLayoutProbe;
 [[vk::binding(5, 0)]] StructuredBuffer<MinecraftMaterialLayoutProbe, Std430DataLayout> minecraftMaterialLayoutProbe;
@@ -52,7 +47,6 @@ void main(uint3 id : SV_DispatchThreadID) {
     // Keep the parameter reachable without requiring a writable output resource.
     if (id.x == 0xFFFFFFFFu) {
         float sink = worldPushLayoutProbe[0].values[0].invViewProj[0][0]
-                + float(materialBindingLayoutProbe[0].values[0].packed0)
                 + exposureStateLayoutProbe[0].values[0].previous
                 + float(minecraftImplementationLayoutProbe[0].values[0].materialsAddress)
                 + minecraftMaterialLayoutProbe[0].values[0].specularRoughness

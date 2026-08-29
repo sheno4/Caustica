@@ -482,7 +482,6 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                     geometryRecordsAddress);
             target.putInt(base + RtBindings.WORLD_TOP_LEVEL_AS_INDEX_OFFSET, tlasDescriptorIndex);
             target.putLong(base + RtBindings.WORLD_NEE_AT_STATE_ADDRESS_OFFSET, neeAtStateAddress);
-            target.putLong(base + RtBindings.WORLD_RESERVED_NEE_AT_ADDRESS_OFFSET, 0L);
         }
     }
 

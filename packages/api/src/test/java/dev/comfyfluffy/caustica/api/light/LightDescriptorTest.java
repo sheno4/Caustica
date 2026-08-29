@@ -46,5 +46,7 @@ final class LightDescriptorTest {
     void rejectsDegenerateRectangle() {
         assertThrows(IllegalArgumentException.class, () -> new LightDescriptor.Rectangle(
                 0, 0, 0, 1, 0, 0, 2, 0, 0, 1, 1, 1));
+        assertThrows(IllegalArgumentException.class, () -> new LightDescriptor.Rectangle(
+                0, 0, 0, 1, 0, 0, 1, 1, 0, 1, 1, 1));
     }
 }

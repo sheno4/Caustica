@@ -37,6 +37,16 @@ final class LightValidation {
         }
     }
 
+    static void perpendicular(double ax, double ay, double az,
+                              double bx, double by, double bz, String name) {
+        double lengthA = Math.sqrt(ax * ax + ay * ay + az * az);
+        double lengthB = Math.sqrt(bx * bx + by * by + bz * bz);
+        double cosine = (ax * bx + ay * by + az * bz) / (lengthA * lengthB);
+        if (!Double.isFinite(cosine) || Math.abs(cosine) > UNIT_TOLERANCE) {
+            throw new IllegalArgumentException(name + " must be perpendicular");
+        }
+    }
+
     static void positive(double value, String name) {
         gpuFinite(value, name);
         if (value <= 0.0) throw new IllegalArgumentException(name + " must be positive");

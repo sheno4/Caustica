@@ -113,6 +113,7 @@ if (loader == "fabric") {
 				sourceSet(project(":packages:api-support").sourceSets.main)
 				sourceSet(project(":packages:config").sourceSets.main)
 				sourceSet(project(":packages:engine").sourceSets.main)
+				sourceSet(project(":packages:engine-vulkan").sourceSets.main)
 				sourceSet(project(":packages:features-builtin").sourceSets.main)
 				sourceSet(project(":packages:minecraft-api").sourceSets.main)
 				sourceSet(project(":packages:minecraft-adapter").sourceSets.main)
@@ -143,6 +144,8 @@ dependencies {
 	apiRuntime project(":packages:config")
 	compileOnly project(":packages:engine")
 	apiRuntime project(":packages:engine")
+	compileOnly project(":packages:engine-vulkan")
+	apiRuntime project(":packages:engine-vulkan")
 	compileOnly project(":packages:features-builtin")
 	apiRuntime project(":packages:features-builtin")
 	compileOnly project(":packages:minecraft-api")
@@ -166,6 +169,7 @@ dependencies {
 	testImplementation project(":packages:api-support")
 	testImplementation project(":packages:config")
 	testImplementation project(":packages:engine")
+	testImplementation project(":packages:engine-vulkan")
 	testImplementation project(":packages:features-builtin")
 	testImplementation project(":packages:minecraft-api")
 	testImplementation project(":packages:minecraft-adapter")
@@ -177,6 +181,7 @@ dependencies {
 	testRuntimeOnly project(":packages:api-support")
 	testRuntimeOnly project(":packages:config")
 	testRuntimeOnly project(":packages:engine")
+	testRuntimeOnly project(":packages:engine-vulkan")
 	testRuntimeOnly project(":packages:features-builtin")
 	testRuntimeOnly project(":packages:minecraft-api")
 	testRuntimeOnly project(":packages:minecraft-adapter")
@@ -291,7 +296,6 @@ def compileSkySlice = tasks.register("compileSkySlice", JavaCompile) {
 			project(":packages:vulkan-support").tasks.named("classes"))
 	source(file("src/main/java/dev/comfyfluffy/caustica/minecraft/sky/SkyLutPass.java"),
 			file("src/main/java/dev/comfyfluffy/caustica/minecraft/MinecraftLightingCalibration.java"),
-			file("src/main/java/dev/comfyfluffy/caustica/minecraft/program/MinecraftProgramTypes.java"),
 			layout.buildDirectory.file("generated/sources/shaderRecords/dev/comfyfluffy/caustica/minecraft/sky/gen/SkyInputsData.java"),
 			layout.buildDirectory.file("generated/sources/shaderRecords/dev/comfyfluffy/caustica/minecraft/sky/gen/SkyLutPushData.java"),
 			layout.buildDirectory.file("generated/sources/shaderRecords/dev/comfyfluffy/caustica/minecraft/sky/gen/MinecraftEnvironmentBindingData.java"))
@@ -357,16 +361,15 @@ def verifyRtBindingsGeneration = tasks.register("verifyRtBindingsGeneration") {
 				"WORLD_PUSH_ADDRESS_OFFSET = 0",
 				"WORLD_COMPOSITION_DATA_ADDRESS_OFFSET = 8",
 				"WORLD_GEOMETRY_TABLE_ADDRESS_OFFSET = 16",
-				"WORLD_PATH_QUEUE_ADDRESS_OFFSET = 48",
-				"WORLD_TOP_LEVEL_AS_INDEX_OFFSET = 56",
-				"WORLD_SPECULAR_MOTION_GUIDE_INDEX_OFFSET = 84",
-				"WORLD_INITIAL_VOLUME_IMPLEMENTATION_OFFSET = 88",
-				"WORLD_INITIAL_VOLUME_ACTIVE_OFFSET = 92",
-				"WORLD_INITIAL_VOLUME_BINDING_OFFSET = 96",
-				"WORLD_INITIAL_VOLUME_INSTANCE_OFFSET = 104",
-				"WORLD_NEE_AT_STATE_ADDRESS_OFFSET = 112",
-				"WORLD_RESERVED_NEE_AT_ADDRESS_OFFSET = 120",
-				"WORLD_PUSH_CONSTANT_SIZE = 128"
+				"WORLD_PATH_QUEUE_ADDRESS_OFFSET = 24",
+				"WORLD_TOP_LEVEL_AS_INDEX_OFFSET = 32",
+				"WORLD_SPECULAR_MOTION_GUIDE_INDEX_OFFSET = 60",
+				"WORLD_INITIAL_VOLUME_IMPLEMENTATION_OFFSET = 64",
+				"WORLD_INITIAL_VOLUME_ACTIVE_OFFSET = 68",
+				"WORLD_INITIAL_VOLUME_BINDING_OFFSET = 72",
+				"WORLD_INITIAL_VOLUME_INSTANCE_OFFSET = 80",
+				"WORLD_NEE_AT_STATE_ADDRESS_OFFSET = 88",
+				"WORLD_PUSH_CONSTANT_SIZE = 96"
 		]
 		def missing = required.findAll { !source.contains(it) }
 		if (!missing.empty) {
@@ -924,6 +927,7 @@ tasks.named("jar", Jar).configure {
 	from(project(":packages:api-support").sourceSets.main.output)
 	from(project(":packages:config").sourceSets.main.output)
 	from(project(":packages:engine").sourceSets.main.output)
+	from(project(":packages:engine-vulkan").sourceSets.main.output)
 	from(project(":packages:features-builtin").sourceSets.main.output)
 	from(project(":packages:minecraft-api").sourceSets.main.output)
 	from(project(":packages:minecraft-adapter").sourceSets.main.output)
@@ -941,6 +945,7 @@ tasks.named("sourcesJar", Jar).configure {
 	from(project(":packages:api-support").sourceSets.main.allSource)
 	from(project(":packages:config").sourceSets.main.allSource)
 	from(project(":packages:engine").sourceSets.main.allSource)
+	from(project(":packages:engine-vulkan").sourceSets.main.allSource)
 	from(project(":packages:features-builtin").sourceSets.main.allSource)
 	from(project(":packages:features-builtin").file("shaders")) { into "shaders" }
 	from(project(":packages:minecraft-api").sourceSets.main.allSource)
@@ -958,6 +963,7 @@ def verifyEmbeddedApi = tasks.register("verifyEmbeddedApi") {
 			project(":packages:api-support").tasks.named("jar"),
 			project(":packages:config").tasks.named("jar"),
 			project(":packages:engine").tasks.named("jar"),
+			project(":packages:engine-vulkan").tasks.named("jar"),
 			project(":packages:features-builtin").tasks.named("jar"),
 			project(":packages:minecraft-api").tasks.named("jar"),
 			project(":packages:minecraft-adapter").tasks.named("jar"),
@@ -970,6 +976,7 @@ def verifyEmbeddedApi = tasks.register("verifyEmbeddedApi") {
 	inputs.file(project(":packages:api-support").tasks.named("jar", Jar).flatMap { it.archiveFile })
 	inputs.file(project(":packages:config").tasks.named("jar", Jar).flatMap { it.archiveFile })
 	inputs.file(project(":packages:engine").tasks.named("jar", Jar).flatMap { it.archiveFile })
+	inputs.file(project(":packages:engine-vulkan").tasks.named("jar", Jar).flatMap { it.archiveFile })
 	inputs.file(project(":packages:features-builtin").tasks.named("jar", Jar).flatMap { it.archiveFile })
 	inputs.file(project(":packages:minecraft-api").tasks.named("jar", Jar).flatMap { it.archiveFile })
 	inputs.file(project(":packages:minecraft-adapter").tasks.named("jar", Jar).flatMap { it.archiveFile })
@@ -993,6 +1000,8 @@ def verifyEmbeddedApi = tasks.register("verifyEmbeddedApi") {
 		def supportEntries = names(project(":packages:api-support").tasks.named("jar", Jar).get().archiveFile.get().asFile)
 		def configEntries = names(project(":packages:config").tasks.named("jar", Jar).get().archiveFile.get().asFile)
 		def engineEntries = names(project(":packages:engine").tasks.named("jar", Jar).get().archiveFile.get().asFile)
+		def engineVulkanEntries = names(project(":packages:engine-vulkan").tasks.named("jar", Jar)
+				.get().archiveFile.get().asFile)
 		def builtinEntries = names(project(":packages:features-builtin").tasks.named("jar", Jar).get().archiveFile.get().asFile)
 		def minecraftApiEntries = names(project(":packages:minecraft-api").tasks.named("jar", Jar).get().archiveFile.get().asFile)
 		def minecraftAdapterEntries = names(project(":packages:minecraft-adapter").tasks.named("jar", Jar).get().archiveFile.get().asFile)
@@ -1005,6 +1014,7 @@ def verifyEmbeddedApi = tasks.register("verifyEmbeddedApi") {
 		required.addAll(supportEntries.findAll { it.endsWith(".class") })
 		required.addAll(configEntries.findAll { it.endsWith(".class") })
 		required.addAll(engineEntries.findAll { it.endsWith(".class") })
+		required.addAll(engineVulkanEntries.findAll { it.endsWith(".class") })
 		required.addAll(builtinEntries.findAll { it.endsWith(".class")
 				|| it.startsWith("caustica/shaders/builtin/") || it.startsWith("caustica/shaders/pipelines/bloom/") })
 		required.addAll(minecraftApiEntries.findAll { it.endsWith(".class") })
@@ -1028,6 +1038,7 @@ def verifyEmbeddedApi = tasks.register("verifyEmbeddedApi") {
 tasks.named("check") {
 	dependsOn(verifyEmbeddedApi, project(":packages:features-builtin").tasks.named("check"),
 			project(":packages:config").tasks.named("check"),
+			project(":packages:engine-vulkan").tasks.named("check"),
 			project(":packages:minecraft-content").tasks.named("check"),
 			project(":packages:vulkan-support").tasks.named("check"))
 }

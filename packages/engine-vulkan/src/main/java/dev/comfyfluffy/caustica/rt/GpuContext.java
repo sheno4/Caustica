@@ -1,6 +1,5 @@
 package dev.comfyfluffy.caustica.rt;
 
-import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorHeap;
 import dev.comfyfluffy.caustica.engine.vulkan.VulkanRequiredProfile;
@@ -38,6 +37,8 @@ import org.lwjgl.vulkan.VkPhysicalDeviceProperties2;
 import org.lwjgl.vulkan.VkPhysicalDeviceRayTracingPipelinePropertiesKHR;
 import org.lwjgl.vulkan.VkCommandBufferSubmitInfo;
 import org.lwjgl.vulkan.VkSubmitInfo2;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.nio.LongBuffer;
 import java.nio.ByteBuffer;
@@ -54,6 +55,7 @@ import static org.lwjgl.vulkan.KHRRayTracingPipeline.VK_STRUCTURE_TYPE_PHYSICAL_
  * Obtained lazily via {@link #get}.
  */
 public final class GpuContext implements GpuDevice {
+    private static final Logger LOGGER = LoggerFactory.getLogger(GpuContext.class);
     private static GpuContext instance;
     private static VulkanRendererBackend backend;
 
@@ -170,7 +172,7 @@ public final class GpuContext implements GpuDevice {
                     descriptorProps.maxDescriptorSetUpdateAfterBindSampledImages(),
                     descriptorProps.maxUpdateAfterBindDescriptorsInAllPools());
 
-            CausticaMod.LOGGER.info(
+            LOGGER.info(
                     "RT portability limits: SBT handleAlignment={}, baseAlignment={}, maxStride={}; "
                             + "AS scratchAlignment={}; update-after-bind combined-sampler limit={}",
                     rtProps.shaderGroupHandleAlignment(), rtProps.shaderGroupBaseAlignment(),
