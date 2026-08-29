@@ -1,31 +1,32 @@
-package dev.comfyfluffy.caustica.rt.pipeline;
-
-import dev.comfyfluffy.caustica.config.CausticaConfig;
-import dev.comfyfluffy.caustica.CausticaMod;
-import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
-import dev.comfyfluffy.caustica.rt.RtRuntime;
-import dev.comfyfluffy.caustica.ngx.NgxLibrary;
-import dev.comfyfluffy.caustica.ngx.NgxRuntime;
+package dev.comfyfluffy.caustica.nvidia.ngx;
 
 import org.joml.Matrix4fc;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkCommandBuffer;
-import org.lwjgl.vulkan.VkDevice;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import java.util.Objects;
 
 /**
  * DLSS Frame Generation (DLSSG) backend. Shares the NGX instance with DLSS-RR via {@link NgxRuntime};
  * owns the DLSSG feature handle, probes availability, and records one interpolated frame per rendered
- * frame. Gated by the active RT session, {@code caustica.rt.fg} (default off), and hardware/driver support.
+ * frame. The owner supplies the activation setting; hardware and driver availability are probed here.
  */
-public final class RtDlssFg {
-    public static final RtDlssFg INSTANCE = new RtDlssFg();
+public final class DlssFrameGeneration {
+    private static final Logger LOGGER = LoggerFactory.getLogger(DlssFrameGeneration.class);
 
-    public static boolean enabled() {
-        return RtRuntime.frameActive() && CausticaConfig.Rt.Fg.ENABLED.value();
+    public record Settings(boolean enabled) {
+    }
+
+    private final NgxRuntime runtime;
+    private Settings settings;
+
+    public boolean enabled() {
+        return settings.enabled() && !failed;
     }
 
     private NgxLibrary lib;
@@ -41,7 +42,13 @@ public final class RtDlssFg {
     private int featureRenderHeight = -1;
     private int featureBackbufferFormat = Integer.MIN_VALUE;
 
-    private RtDlssFg() {
+    public DlssFrameGeneration(NgxRuntime runtime, Settings settings) {
+        this.runtime = Objects.requireNonNull(runtime, "runtime");
+        this.settings = Objects.requireNonNull(settings, "settings");
+    }
+
+    public void configure(Settings settings) {
+        this.settings = Objects.requireNonNull(settings, "settings");
     }
 
     public boolean isAvailable() {
@@ -67,23 +74,18 @@ public final class RtDlssFg {
         if (probed || failed) {
             return;
         }
-        VulkanDeviceContext context = RtRuntime.INSTANCE.vulkanContextOrNull();
-        if (context == null) {
-            return;
-        }
-        NgxLibrary l = NgxRuntime.INSTANCE.acquire(context.vk());
+        NgxLibrary l = runtime.acquire();
         if (l == null) {
-            return; // NGX not up yet; try again next tick
+            return;
         }
         probed = true;
         lib = l;
         if (!l.hasDlssg()) {
-            CausticaMod.LOGGER.warn("DLSS-FG: loaded ngxshim.dll has no DLSSG ABI — rebuild the shim "
-                    + "(cmake --build native/ngx_shim/build --config Release)");
+            LOGGER.warn("DLSS-FG: loaded ngxshim has no DLSSG ABI");
             return;
         }
         available = l.dlssgAvailable();
-        CausticaMod.LOGGER.info("DLSS Frame Generation available: {}", available);
+        LOGGER.info("DLSS Frame Generation available: {}", available);
     }
 
     /**
@@ -95,14 +97,9 @@ public final class RtDlssFg {
         if (!enabled() || failed) {
             return false;
         }
-        VulkanDeviceContext context = RtRuntime.INSTANCE.vulkanContextOrNull();
-        if (context == null) {
-            return false;
-        }
-        VkDevice device = context.vk();
         try {
             if (lib == null) {
-                lib = NgxRuntime.INSTANCE.acquire(device);
+                lib = runtime.acquire();
             }
             if (lib == null || !lib.hasDlssg()) {
                 throw new IllegalStateException("NGX/DLSSG unavailable; cannot create FG feature");
@@ -116,7 +113,7 @@ public final class RtDlssFg {
             if (featureWidth != width || featureHeight != height
                     || featureRenderWidth != renderWidth || featureRenderHeight != renderHeight
                     || featureBackbufferFormat != backbufferFormat || isNull(feature)) {
-                releaseFeature(device);
+                releaseFeature();
                 feature = lib.createDlssg(commandBuffer.address(), width, height,
                         renderWidth, renderHeight, backbufferFormat);
                 if (isNull(feature)) {
@@ -129,13 +126,13 @@ public final class RtDlssFg {
                 featureRenderHeight = renderHeight;
                 featureBackbufferFormat = backbufferFormat;
                 initialized = true;
-                CausticaMod.LOGGER.info("DLSS-FG feature created: {}x{} (render {}x{}, backbuffer format {})",
+                LOGGER.info("DLSS-FG feature created: {}x{} (render {}x{}, backbuffer format {})",
                         width, height, renderWidth, renderHeight, backbufferFormat);
             }
             return true;
         } catch (Throwable t) {
             failed = true;
-            CausticaMod.LOGGER.error("DLSS-FG setup failed; frame generation disabled", t);
+            LOGGER.error("DLSS-FG setup failed; frame generation disabled", t);
             return false;
         }
     }
@@ -185,7 +182,7 @@ public final class RtDlssFg {
             return true;
         } catch (Throwable t) {
             failed = true;
-            CausticaMod.LOGGER.error("DLSS-FG evaluate failed; frame generation disabled", t);
+            LOGGER.error("DLSS-FG evaluate failed; frame generation disabled", t);
             return false;
         }
     }
@@ -215,12 +212,9 @@ public final class RtDlssFg {
         return seg;
     }
 
-    /** Release the FG feature. NGX itself is shut down by {@link NgxRuntime} at device teardown. */
-    public void destroy() {
-        VulkanDeviceContext context = RtRuntime.INSTANCE.vulkanContextOrNull();
-        if (context != null) {
-            releaseFeature(context.vk());
-        }
+    /** Release the FG feature after all submitted work that can reference it has completed. */
+    public void destroyAfterDeviceIdle() {
+        releaseFeature();
         initialized = false;
         failed = false;
         probed = false;
@@ -228,14 +222,8 @@ public final class RtDlssFg {
         lib = null;
     }
 
-    private void releaseFeature(VkDevice device) {
+    private void releaseFeature() {
         if (lib != null && !isNull(feature)) {
-            VulkanDeviceContext ctx = RtRuntime.INSTANCE.vulkanContextOrNull();
-            if (ctx != null && ctx.vk().address() == device.address()) {
-                ctx.waitIdle();
-            } else {
-                VK10.vkDeviceWaitIdle(device);
-            }
             lib.release(feature);
         }
         feature = MemorySegment.NULL;

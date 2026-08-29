@@ -1,37 +1,39 @@
-package dev.comfyfluffy.caustica.rt.pipeline;
+package dev.comfyfluffy.caustica.nvidia.ngx;
 
 
-import dev.comfyfluffy.caustica.config.CausticaConfig;
-import dev.comfyfluffy.caustica.CausticaMod;
-import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
-import dev.comfyfluffy.caustica.rt.RtRuntime;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
-import dev.comfyfluffy.caustica.ngx.NgxLibrary;
-import dev.comfyfluffy.caustica.ngx.NgxRuntime;
 import org.joml.Matrix4fc;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkCommandBuffer;
-import org.lwjgl.vulkan.VkDevice;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import java.util.Objects;
 
 /**
  * DLSS Ray Reconstruction backend for the RT renderer. Runs the DLSSD (Ray Reconstruction) feature
  * over path-traced color + guide buffers (normals/roughness, diffuse/specular albedo, depth, motion
  * vectors, reflection motion vectors), denoising and upscaling (render res → display res) in one pass.
  */
-public final class RtDlssRr {
-    public static final RtDlssRr INSTANCE = new RtDlssRr();
+public final class DlssRayReconstruction {
+    private static final Logger LOGGER = LoggerFactory.getLogger(DlssRayReconstruction.class);
 
-    /** Desired RR mode for session resource sizing, including RT startup frames rendered by the source renderer. */
-    public static boolean configured() {
-        return CausticaConfig.Rt.DlssRr.ENABLED.value();
+    public record Settings(boolean enabled, int quality, int preset) {
     }
 
-    public static boolean enabled() {
-        return RtRuntime.frameActive() && configured();
+    private final NgxRuntime runtime;
+    private Settings settings;
+
+    /** Desired RR mode for session resource sizing, including RT startup frames rendered by the source renderer. */
+    public boolean configured() {
+        return settings.enabled();
+    }
+
+    public boolean enabled() {
+        return configured() && !failed;
     }
 
     // DLSS feature flags. IsHDR (bit 0): color is scene-linear ACEScg HDR (rgba16f) — RR requires it ("HDR Color
@@ -47,12 +49,12 @@ public final class RtDlssRr {
     private static final int FEATURE_FLAGS = FEATURE_FLAG_IS_HDR | FEATURE_FLAG_MV_LOW_RES
             | FEATURE_FLAG_DEPTH_INVERTED | FEATURE_FLAG_AUTO_EXPOSURE;
     // 0 = let the RR DLL pick its per-mode default preset.
-    private static int renderPreset() {
-        return CausticaConfig.Rt.DlssRr.PRESET.value();
+    private int renderPreset() {
+        return settings.preset();
     }
 
-    public static int quality() {
-        return CausticaConfig.Rt.DlssRr.QUALITY.value();
+    public int quality() {
+        return settings.quality();
     }
 
     private NgxLibrary lib;
@@ -71,7 +73,13 @@ public final class RtDlssRr {
     private boolean resetHistory;
     private long lastFrameNanos;
 
-    private RtDlssRr() {
+    public DlssRayReconstruction(NgxRuntime runtime, Settings settings) {
+        this.runtime = Objects.requireNonNull(runtime, "runtime");
+        this.settings = Objects.requireNonNull(settings, "settings");
+    }
+
+    public void configure(Settings settings) {
+        this.settings = Objects.requireNonNull(settings, "settings");
     }
 
     public boolean isReady() {
@@ -133,7 +141,7 @@ public final class RtDlssRr {
             return true;
         } catch (Throwable t) {
             failed = true;
-            CausticaMod.LOGGER.error("DLSS-RR evaluate failed; RT composite continues without it", t);
+            LOGGER.error("DLSS-RR evaluate failed; RT composite continues without it", t);
             return false;
         }
     }
@@ -149,11 +157,7 @@ public final class RtDlssRr {
         if (!configured() || failed) {
             return null;
         }
-        VulkanDeviceContext context = RtRuntime.INSTANCE.vulkanContextOrNull();
-        if (context == null) {
-            return null;
-        }
-        ensureInitialized(context.vk());
+        ensureInitialized();
         if (!lib.hasQueryOptimalDlssd()) {
             throw new IllegalStateException("ngxshim is missing ngxshim_query_optimal_dlssd (stale native shim)");
         }
@@ -185,20 +189,15 @@ public final class RtDlssRr {
         if (!enabled() || failed) {
             return false;
         }
-        VulkanDeviceContext context = RtRuntime.INSTANCE.vulkanContextOrNull();
-        if (context == null) {
-            return false;
-        }
-        VkDevice device = context.vk();
         try {
-            ensureInitialized(device);
+            ensureInitialized();
             int quality = quality();
             int preset = renderPreset();
             if (featureRenderWidth != renderWidth || featureRenderHeight != renderHeight
                     || featureDisplayWidth != displayWidth || featureDisplayHeight != displayHeight
                     || featureQuality != quality || featurePreset != preset
                     || isNull(feature)) {
-                releaseFeature(device);
+                releaseFeature();
                 feature = lib.createDlssd(commandBuffer.address(), renderWidth, renderHeight,
                         displayWidth, displayHeight,
                         quality, FEATURE_FLAGS, preset);
@@ -213,31 +212,31 @@ public final class RtDlssRr {
                 featureQuality = quality;
                 featurePreset = preset;
                 resetHistory = true; // a fresh feature has no temporal history
-                CausticaMod.LOGGER.info("DLSS-RR feature created: {}x{} -> {}x{} (quality {}, preset {})",
+                LOGGER.info("DLSS-RR feature created: {}x{} -> {}x{} (quality {}, preset {})",
                         renderWidth, renderHeight, displayWidth, displayHeight, quality, preset);
             }
             return true;
         } catch (Throwable t) {
             failed = true;
-            CausticaMod.LOGGER.error("DLSS-RR setup failed; RT composite continues without it", t);
+            LOGGER.error("DLSS-RR setup failed; RT composite continues without it", t);
             return false;
         }
     }
 
-    private void ensureInitialized(VkDevice device) {
+    private void ensureInitialized() {
         if (initialized) {
             return;
         }
         // NGX init/shutdown is owned by the shared NgxRuntime so RR and Frame Generation can coexist
         // (releasing the RR feature must not tear NGX down while FG still holds a handle).
-        lib = NgxRuntime.INSTANCE.acquire(device);
+        lib = runtime.acquire();
         if (lib == null) {
             throw new IllegalStateException("NGX runtime unavailable; DLSS-RR cannot initialize");
         }
         boolean available = lib.dlssdAvailable();
         if (!loggedAvailable) {
             loggedAvailable = true;
-            CausticaMod.LOGGER.info("DLSS Ray Reconstruction available: {}", available);
+            LOGGER.info("DLSS Ray Reconstruction available: {}", available);
         }
         if (!available) {
             throw new IllegalStateException("DLSS Ray Reconstruction is not available on this system");
@@ -246,14 +245,10 @@ public final class RtDlssRr {
     }
 
     /**
-     * Release the RR feature. Does NOT shut down NGX — that is the shared {@link NgxRuntime}'s job at device
-     * teardown ({@code NgxRuntime.shutdown()} in {@code CausticaClient.shutdownRt}), so FG can keep using NGX.
+     * Release the RR feature after all submitted work that can reference it has completed.
      */
-    public void destroy() {
-        VulkanDeviceContext context = RtRuntime.INSTANCE.vulkanContextOrNull();
-        if (context != null) {
-            releaseFeature(context.vk());
-        }
+    public void destroyAfterDeviceIdle() {
+        releaseFeature();
         initialized = false;
         failed = false;
         lib = null;
@@ -261,14 +256,8 @@ public final class RtDlssRr {
         lastFrameNanos = 0L;
     }
 
-    private void releaseFeature(VkDevice device) {
+    private void releaseFeature() {
         if (!isNull(feature)) {
-            VulkanDeviceContext ctx = RtRuntime.INSTANCE.vulkanContextOrNull();
-            if (ctx != null && ctx.vk().address() == device.address()) {
-                ctx.waitIdle();
-            } else {
-                VK10.vkDeviceWaitIdle(device);
-            }
             lib.release(feature);
             feature = MemorySegment.NULL;
         }

@@ -5,7 +5,7 @@ import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanBarriers;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 
 import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
-import dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg;
+import dev.comfyfluffy.caustica.nvidia.ngx.DlssFrameGeneration;
 import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
 import org.joml.Matrix4f;
 import org.lwjgl.system.MemoryStack;
@@ -17,6 +17,8 @@ import org.lwjgl.vulkan.VkImageCopy2;
 
 /** Owns DLSS frame-generation captures, interpolation outputs, and temporal evaluation state. */
 final class FrameGeneration {
+    private final VulkanDeviceContext context;
+    private final DlssFrameGeneration backend;
     private RtFramePresenter.RenderedFrame renderedFrame;
     private GpuImage hudlessImage;
     private GpuImage hdrHudlessImage;
@@ -28,6 +30,15 @@ final class FrameGeneration {
     private final Matrix4f clipToPrevious = new Matrix4f();
     private final Matrix4f previousToClip = new Matrix4f();
     private final Matrix4f matrixScratch = new Matrix4f();
+
+    FrameGeneration(VulkanDeviceContext context, DlssFrameGeneration backend) {
+        this.context = context;
+        this.backend = backend;
+    }
+
+    boolean enabled() {
+        return backend.enabled();
+    }
 
     void publish(RtFramePresenter.RenderedFrame frame) {
         renderedFrame = frame;
@@ -43,11 +54,7 @@ final class FrameGeneration {
     }
 
     void captureHudless(long sourceImage, int width, int height, UiPresentationResources ui) {
-        if (!RtDlssFg.enabled() || !ui.enabled() || sourceImage == 0L) {
-            return;
-        }
-        VulkanDeviceContext context = RtRuntime.INSTANCE.vulkanContextOrNull();
-        if (context == null) {
+        if (!backend.enabled() || !ui.enabled() || sourceImage == 0L) {
             return;
         }
         if (hudlessImage == null || hudlessImage.width() != width || hudlessImage.height() != height) {
@@ -72,10 +79,6 @@ final class FrameGeneration {
 
     void captureHdrHudless(VkCommandBuffer commandBuffer, MemoryStack stack,
                            dev.comfyfluffy.caustica.api.vulkan.GpuImage source) {
-        VulkanDeviceContext context = RtRuntime.INSTANCE.vulkanContextOrNull();
-        if (context == null) {
-            return;
-        }
         if (hdrHudlessImage == null
                 || hdrHudlessImage.width() != source.width() || hdrHudlessImage.height() != source.height()) {
             if (hdrHudlessImage != null) {
@@ -98,10 +101,6 @@ final class FrameGeneration {
         if (frame == null || frame.depth() == null || frame.motion() == null) {
             return null;
         }
-        VulkanDeviceContext context = RtRuntime.INSTANCE.vulkanContextOrNull();
-        if (context == null) {
-            return null;
-        }
         int format = hdrBackbuffer
                 ? VK10.VK_FORMAT_R16G16B16A16_SFLOAT : VK10.VK_FORMAT_R8G8B8A8_UNORM;
         if (!ensureFeature(context, swapWidth, swapHeight,
@@ -121,7 +120,7 @@ final class FrameGeneration {
                 && ui.colorView() != 0L && ui.colorImage() != 0L;
 
         VkCommandBuffer commandBuffer = submission.beginTransientCommandBuffer();
-        boolean evaluated = RtDlssFg.INSTANCE.evaluate(commandBuffer,
+        boolean evaluated = backend.evaluate(commandBuffer,
                 backbufferView, backbufferImage, format,
                 frame.depth().view(), frame.depth().image(), VK10.VK_FORMAT_R32_SFLOAT,
                 frame.motion().view(), frame.motion().image(), VK10.VK_FORMAT_R16G16_SFLOAT,
@@ -145,13 +144,13 @@ final class FrameGeneration {
 
     private boolean ensureFeature(VulkanDeviceContext context, int width, int height,
             int renderWidth, int renderHeight, int format) {
-        if (RtDlssFg.INSTANCE.featureReadyFor(width, height, renderWidth, renderHeight, format)) {
+        if (backend.featureReadyFor(width, height, renderWidth, renderHeight, format)) {
             return true;
         }
-        context.submitSync(commandBuffer -> RtDlssFg.INSTANCE.ensureFeature(
+        context.submitSync(commandBuffer -> backend.ensureFeature(
                 commandBuffer, width, height, renderWidth, renderHeight, format));
         reset = true;
-        return RtDlssFg.INSTANCE.featureReadyFor(width, height, renderWidth, renderHeight, format);
+        return backend.featureReadyFor(width, height, renderWidth, renderHeight, format);
     }
 
     private void ensureInterpolationImage(VulkanDeviceContext context, int width, int height, int format) {

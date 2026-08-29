@@ -1,13 +1,13 @@
-package dev.comfyfluffy.caustica.ngx;
+package dev.comfyfluffy.caustica.nvidia.ngx;
 
-import dev.comfyfluffy.caustica.config.CausticaConfig;
-import dev.comfyfluffy.caustica.CausticaMod;
-import dev.comfyfluffy.caustica.platform.CausticaPlatform;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkDevice;
 import org.lwjgl.vulkan.VkInstance;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -30,35 +30,51 @@ import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Stream;
 
 /**
- * Shared NVIDIA NGX lifetime for the mod. Loads the native shim, extracts the bundled NGX feature DLLs,
+ * Shared NVIDIA NGX lifetime for one Vulkan device. Loads the native shim, extracts bundled feature libraries,
  * and runs {@code ngxshim_init} / {@code ngxshim_shutdown} exactly once per Vulkan device. Multiple NGX
- * features (DLSS Ray Reconstruction, and later Frame Generation) share this single initialized
+ * DLSS Ray Reconstruction and Frame Generation share this single initialized
  * {@link NgxLibrary}; each feature owns only its own create/evaluate/release. NGX is shut down only at
  * device teardown (so releasing one feature can't tear NGX down while another still holds a handle).
  */
 public final class NgxRuntime {
-    public static final NgxRuntime INSTANCE = new NgxRuntime();
-
+    private static final Logger LOGGER = LoggerFactory.getLogger(NgxRuntime.class);
     private static final PlatformNatives PLATFORM_NATIVES = PlatformNatives.current();
 
+    private final VulkanDeviceContext context;
+    private final Settings settings;
     private NgxLibrary lib;
     private boolean initialized;
     private boolean failed;
+    private boolean closed;
     private long initializedDevice;
 
-    private NgxRuntime() {
+    public record Settings(Path dataDirectory, Optional<Path> shimOverride) {
+        public Settings {
+            dataDirectory = Objects.requireNonNull(dataDirectory, "dataDirectory").toAbsolutePath().normalize();
+            shimOverride = Objects.requireNonNull(shimOverride, "shimOverride")
+                    .map(path -> path.toAbsolutePath().normalize());
+        }
+    }
+
+    public NgxRuntime(VulkanDeviceContext context, Settings settings) {
+        this.context = Objects.requireNonNull(context, "context");
+        this.settings = Objects.requireNonNull(settings, "settings");
     }
 
     /**
-     * Ensure NGX is loaded and initialized for {@code device}, returning the shared {@link NgxLibrary}, or
-     * {@code null} if it is unavailable. Idempotent; latches failure so it isn't retried every frame
-     * (cleared by {@link #shutdown()} so a fresh device can re-init).
+     * Ensure NGX is loaded and initialized, returning the shared {@link NgxLibrary}, or
+     * {@code null} if it is unavailable. Idempotent; latches failure so it is not retried every frame.
      */
-    public synchronized NgxLibrary acquire(VkDevice device) {
+    synchronized NgxLibrary acquire() {
+        if (closed) {
+            throw new IllegalStateException("NGX runtime is shut down");
+        }
         if (initialized) {
             return lib;
         }
@@ -66,24 +82,15 @@ public final class NgxRuntime {
             return null;
         }
         try {
-            init(device);
+            init(context.vk());
             initialized = true;
             return lib;
         } catch (Throwable t) {
             failed = true;
             lib = null;
-            CausticaMod.LOGGER.error("NGX init failed; DLSS features disabled", t);
+            LOGGER.error("NGX init failed; DLSS features disabled", t);
             return null;
         }
-    }
-
-    public synchronized boolean isInitialized() {
-        return initialized;
-    }
-
-    /** The shared library once {@link #acquire} has succeeded, else {@code null}. */
-    public NgxLibrary library() {
-        return lib;
     }
 
     /**
@@ -91,11 +98,15 @@ public final class NgxRuntime {
      * initialized device handle captured by {@link #acquire}; no-op if NGX was never initialized.
      */
     public synchronized void shutdown() {
+        if (closed) {
+            return;
+        }
+        closed = true;
         if (lib != null && initialized) {
             try {
                 lib.shutdown(initializedDevice);
             } catch (Throwable t) {
-                CausticaMod.LOGGER.warn("NGX shutdown failed", t);
+                LOGGER.warn("NGX shutdown failed", t);
             }
         }
         initialized = false;
@@ -105,7 +116,7 @@ public final class NgxRuntime {
     }
 
     /** NVSDK_NGX_Result: failure when the top 12 bits == 0xBAD. Shared by all NGX feature wrappers. */
-    public static boolean ngxFailed(int result) {
+    static boolean ngxFailed(int result) {
         return (result & 0xFFF00000) == 0xBAD00000;
     }
 
@@ -116,24 +127,24 @@ public final class NgxRuntime {
         Path shim = locateShim();
         if (shim == null) {
             throw new IllegalStateException(PLATFORM_NATIVES.shimName()
-                    + " not found (bundled natives or -Dcaustica.ngx.path)");
+                    + " not found (bundled natives or Settings.shimOverride)");
         }
         Path nativesDir = shim.getParent();
         if (nativesDir != null) {
             List<String> missingFeatures = missingFeatureLibraries(nativesDir);
             if (!missingFeatures.isEmpty()) {
-                CausticaMod.LOGGER.warn("NGX feature libraries {} not found next to {}; those features will be unavailable",
+                LOGGER.warn("NGX feature libraries {} not found next to {}; those features will be unavailable",
                         missingFeatures, PLATFORM_NATIVES.shimName());
             }
         }
 
         lib = NgxLibrary.load(shim);
 
-        Path dataPath = CausticaPlatform.current().gameDir().resolve("caustica-ngx");
+        Path dataPath = settings.dataDirectory();
         try {
             Files.createDirectories(dataPath);
         } catch (Exception e) {
-            CausticaMod.LOGGER.warn("Could not create NGX data path {}", dataPath, e);
+            LOGGER.warn("Could not create NGX data path {}", dataPath, e);
         }
 
         VkInstance instance = device.getPhysicalDevice().getInstance();
@@ -151,13 +162,12 @@ public final class NgxRuntime {
             }
         }
         initializedDevice = device.address();
-        CausticaMod.LOGGER.info("NGX initialized (shim {})", shim);
+        LOGGER.info("NGX initialized (shim {})", shim);
     }
 
-    private static Path locateShim() {
-        String override = CausticaConfig.Ngx.PATH.get();
-        if (override != null && !override.isBlank()) {
-            Path p = Path.of(override);
+    private Path locateShim() {
+        if (settings.shimOverride().isPresent()) {
+            Path p = settings.shimOverride().orElseThrow();
             if (Files.isDirectory(p)) {
                 p = p.resolve(PLATFORM_NATIVES.shimName());
             }
@@ -166,18 +176,18 @@ public final class NgxRuntime {
         return extractBundledNatives();
     }
 
-    private static Path extractBundledNatives() {
+    private Path extractBundledNatives() {
         List<BundledNative> natives;
         try {
             natives = bundledNatives();
         } catch (IOException e) {
-            CausticaMod.LOGGER.warn("Could not read bundled NGX natives", e);
+            LOGGER.warn("Could not read bundled NGX natives", e);
             return null;
         }
         if (natives.stream().noneMatch(nativeFile -> nativeFile.name().equals(PLATFORM_NATIVES.shimName()))) {
             return null;
         }
-        Path dir = CausticaPlatform.current().gameDir().resolve("caustica-ngx")
+        Path dir = settings.dataDirectory()
                 .resolve("natives").resolve(PLATFORM_NATIVES.platformDir()).resolve(bundleHash(natives));
         try {
             Files.createDirectories(dir);
@@ -187,7 +197,7 @@ public final class NgxRuntime {
             }
             return dir.resolve(PLATFORM_NATIVES.shimName());
         } catch (IOException e) {
-            CausticaMod.LOGGER.warn("Could not extract bundled NGX natives to {}", dir, e);
+            LOGGER.warn("Could not extract bundled NGX natives to {}", dir, e);
             return null;
         }
     }
@@ -262,7 +272,7 @@ public final class NgxRuntime {
                         .forEach(names::add);
             }
         } catch (IOException e) {
-            CausticaMod.LOGGER.warn("Could not read bundled NGX feature index {}", resource, e);
+            LOGGER.warn("Could not read bundled NGX feature index {}", resource, e);
         }
         return names;
     }

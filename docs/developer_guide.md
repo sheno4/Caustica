@@ -25,7 +25,7 @@
 4. Configure and build the native shims:
 
 ```powershell
-cmake -S native/ngx_shim -B build/cmake/ngx_shim/release -DCMAKE_BUILD_TYPE=Release
+cmake -S packages/nvidia-ngx/native/ngx_shim -B build/cmake/ngx_shim/release -DCMAKE_BUILD_TYPE=Release
 cmake --build build/cmake/ngx_shim/release --config Release
 cmake -S packages/slang-runtime/native -B build/cmake/slang_shim -G "Visual Studio 17 2022" -A x64
 cmake --build build/cmake/slang_shim --config Release
@@ -66,7 +66,7 @@ contain Vulkan headers.
 Then configure and build the native shims:
 
 ```bash
-cmake -S native/ngx_shim -B build/cmake/ngx_shim/release -DCMAKE_BUILD_TYPE=Release
+cmake -S packages/nvidia-ngx/native/ngx_shim -B build/cmake/ngx_shim/release -DCMAKE_BUILD_TYPE=Release
 cmake --build build/cmake/ngx_shim/release
 cmake -S packages/slang-runtime/native -B build/cmake/slang_shim -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build/cmake/slang_shim
@@ -77,7 +77,7 @@ the toolchain by hand:
 
 ```bash
 nix develop
-cmake -S native/ngx_shim -B build/cmake/ngx_shim/release -DCMAKE_BUILD_TYPE=Release
+cmake -S packages/nvidia-ngx/native/ngx_shim -B build/cmake/ngx_shim/release -DCMAKE_BUILD_TYPE=Release
 cmake --build build/cmake/ngx_shim/release
 cmake -S packages/slang-runtime/native -B build/cmake/slang_shim -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build/cmake/slang_shim

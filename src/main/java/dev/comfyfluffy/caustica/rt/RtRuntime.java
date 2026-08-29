@@ -13,19 +13,22 @@ import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
 import dev.comfyfluffy.caustica.minecraft.MinecraftApiBootstrap;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftDimensionKey;
 import dev.comfyfluffy.caustica.minecraft.api.ResourcePackEpoch;
-import dev.comfyfluffy.caustica.ngx.NgxRuntime;
+import dev.comfyfluffy.caustica.nvidia.ngx.NgxRuntime;
+import dev.comfyfluffy.caustica.nvidia.ngx.DlssFrameGeneration;
+import dev.comfyfluffy.caustica.nvidia.ngx.DlssRayReconstruction;
+import dev.comfyfluffy.caustica.platform.CausticaPlatform;
 import dev.comfyfluffy.caustica.rt.pass.RtPassSchedulerBackend;
 import dev.comfyfluffy.caustica.renderer.raytracing.RtProgramBackend;
 import dev.comfyfluffy.caustica.renderer.raytracing.scene.RtRetainedSceneBackend;
 import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
 import dev.comfyfluffy.caustica.spi.vulkan.VulkanRendererBackend;
 import dev.comfyfluffy.caustica.spi.host.RuntimeHost;
-import dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg;
 import dev.comfyfluffy.caustica.renderer.presentation.RtExposure;
 import dev.comfyfluffy.caustica.slang.SlangRuntime;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.Optional;
 import it.unimi.dsi.fastutil.longs.LongList;
 import org.lwjgl.vulkan.VkDevice;
 import org.lwjgl.vulkan.VkQueue;
@@ -59,6 +62,7 @@ public final class RtRuntime {
     private SlangRuntime slangRuntime;
     private VulkanRendererBackend vulkanBackend;
     private VulkanDeviceContext vulkanContext;
+    private NgxRuntime ngxRuntime;
     private final RtLifecycleCoordinator lifecycle = new RtLifecycleCoordinator(
             new RtLifecycleCoordinator.Listener() {
                 @Override
@@ -117,12 +121,39 @@ public final class RtRuntime {
         VulkanDeviceContext created = VulkanDeviceContext.create(backend);
         try {
             lifecycle.observeDevice(created);
+            NgxRuntime createdNgxRuntime = new NgxRuntime(created, ngxRuntimeSettings());
+            vulkanContext = created;
+            ngxRuntime = createdNgxRuntime;
+            return created;
         } catch (Throwable failure) {
-            created.destroy();
+            try {
+                lifecycle.closeDevice(created);
+            } finally {
+                created.destroy();
+            }
             throw failure;
         }
-        vulkanContext = created;
-        return created;
+    }
+
+    private NgxRuntime requireNgxRuntime() {
+        requireVulkanContext();
+        return java.util.Objects.requireNonNull(ngxRuntime, "NGX runtime was not created with the Vulkan device");
+    }
+
+    private static NgxRuntime.Settings ngxRuntimeSettings() {
+        String configuredPath = CausticaConfig.Ngx.PATH.get();
+        Optional<Path> override = configuredPath == null || configuredPath.isBlank()
+                ? Optional.empty() : Optional.of(Path.of(configuredPath));
+        return new NgxRuntime.Settings(CausticaPlatform.current().gameDir().resolve("caustica-ngx"), override);
+    }
+
+    private static DlssRayReconstruction.Settings rayReconstructionSettings() {
+        return new DlssRayReconstruction.Settings(CausticaConfig.Rt.DlssRr.ENABLED.value(),
+                CausticaConfig.Rt.DlssRr.QUALITY.value(), CausticaConfig.Rt.DlssRr.PRESET.value());
+    }
+
+    private static DlssFrameGeneration.Settings frameGenerationSettings() {
+        return new DlssFrameGeneration.Settings(CausticaConfig.Rt.Fg.ENABLED.value());
     }
 
     public void installHost(RuntimeHost installedHost) {
@@ -260,7 +291,7 @@ public final class RtRuntime {
     }
 
     public boolean frameGenerationActive(boolean sceneAvailable) {
-        return session != null && session.presenter.isActive(sceneAvailable);
+        return frameActive && session != null && session.presenter.isActive(sceneAvailable);
     }
 
     public long hdrBackbufferView() {
@@ -376,12 +407,19 @@ public final class RtRuntime {
             session = null;
             try {
                 VulkanDeviceContext context = vulkanContext;
+                NgxRuntime closingNgxRuntime = ngxRuntime;
                 vulkanContext = null;
+                ngxRuntime = null;
                 if (context != null) {
                     try {
-                        lifecycle.closeDevice(context);
+                        context.waitIdle();
+                        if (closingNgxRuntime != null) closingNgxRuntime.shutdown();
                     } finally {
-                        context.destroy();
+                        try {
+                            lifecycle.closeDevice(context);
+                        } finally {
+                            context.destroy();
+                        }
                     }
                 }
             } finally {
@@ -389,15 +427,11 @@ public final class RtRuntime {
                     lifecycle.stopProcess();
                 } finally {
                     try {
-                        NgxRuntime.INSTANCE.shutdown();
+                        SlangRuntime compilerRuntime = slangRuntime;
+                        if (compilerRuntime != null) compilerRuntime.shutdown();
                     } finally {
-                        try {
-                            SlangRuntime compilerRuntime = slangRuntime;
-                            if (compilerRuntime != null) compilerRuntime.shutdown();
-                        } finally {
-                            vulkanBackend = null;
-                            state = State.OFF;
-                        }
+                        vulkanBackend = null;
+                        state = State.OFF;
                     }
                 }
             }
@@ -462,8 +496,12 @@ public final class RtRuntime {
     private void startRuntimeActivation(RtLifecycleCoordinator.RenderSessionEpoch renderSessionEpoch) {
         RtLifecycleCoordinator.RuntimeActivationEpoch activationEpoch = lifecycle.beginRuntimeActivation();
         try {
+            VulkanDeviceContext context = requireVulkanContext();
+            DlssFrameGeneration frameGeneration = new DlssFrameGeneration(
+                    requireNgxRuntime(), frameGenerationSettings());
             session = new Session(renderSessionEpoch, activationEpoch,
-                    new RtFramePresenter(), java.util.Objects.requireNonNull(
+                    context, frameGeneration, new RtFramePresenter(context, frameGeneration),
+                    java.util.Objects.requireNonNull(
                     shaderCacheRoot, "shader cache is not configured"));
             state = State.STARTING;
             CausticaMod.LOGGER.info("RT runtime starting; source presentation remains active");
@@ -527,21 +565,26 @@ public final class RtRuntime {
     private static final class Session {
         private final RtLifecycleCoordinator.RenderSessionEpoch renderSessionEpoch;
         private final RtLifecycleCoordinator.RuntimeActivationEpoch activationEpoch;
+        private final DlssFrameGeneration frameGeneration;
         private final RtFramePresenter presenter;
         private final Path shaderCacheRoot;
         private VulkanDeviceContext context;
         private RtProgramBackend programs;
         private RtRetainedSceneBackend scenes;
         private RtPassSchedulerBackend passes;
+        private DlssRayReconstruction rayReconstruction;
         private MinecraftEngineWorldSession world;
         private RtFrameRenderer renderer;
         private long worldEpoch;
 
         private Session(RtLifecycleCoordinator.RenderSessionEpoch renderSessionEpoch,
                         RtLifecycleCoordinator.RuntimeActivationEpoch activationEpoch,
+                        VulkanDeviceContext context, DlssFrameGeneration frameGeneration,
                         RtFramePresenter presenter, Path shaderCacheRoot) {
             this.renderSessionEpoch = renderSessionEpoch;
             this.activationEpoch = activationEpoch;
+            this.context = context;
+            this.frameGeneration = frameGeneration;
             this.presenter = presenter;
             this.shaderCacheRoot = shaderCacheRoot;
         }
@@ -557,9 +600,7 @@ public final class RtRuntime {
         boolean tick(SceneResources sceneResources, long requestedWorldEpoch,
                      MinecraftDimensionKey dimension, int displayWidth, int displayHeight,
                      boolean starting) {
-            if (context == null) {
-                context = INSTANCE.requireVulkanContext();
-            }
+            frameGeneration.configure(frameGenerationSettings());
             RtLifecycleCoordinator.ResourcePackEpoch applied = INSTANCE.lifecycle.resourcePackEpoch();
             if (requestedWorldEpoch == 0L || dimension == null || applied == null) {
                 closeWorld();
@@ -569,6 +610,7 @@ public final class RtRuntime {
                 closeWorld();
                 openWorld(requestedWorldEpoch, dimension, new ResourcePackEpoch(applied.generation()));
             }
+            rayReconstruction.configure(rayReconstructionSettings());
 
             world.progress();
             scenes.progress();
@@ -584,8 +626,8 @@ public final class RtRuntime {
                     context, requestedWorldEpoch, displayWidth, displayHeight))) {
                 return false;
             }
-            if (CausticaConfig.Rt.Fg.ENABLED.value()) {
-                RtDlssFg.INSTANCE.probeAvailabilityOnce();
+            if (frameGeneration.enabled()) {
+                frameGeneration.probeAvailabilityOnce();
             }
             return resourcesReady;
         }
@@ -600,13 +642,15 @@ public final class RtRuntime {
                     org.lwjgl.vulkan.VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
                     org.lwjgl.vulkan.VK10.VK_FORMAT_R32_SFLOAT,
                     org.lwjgl.vulkan.VK10.VK_FORMAT_R8G8B8A8_UNORM);
+            rayReconstruction = new DlssRayReconstruction(
+                    INSTANCE.requireNgxRuntime(), rayReconstructionSettings());
             try {
                 world = new MinecraftEngineWorldSession(INSTANCE.apiHost(),
                         MinecraftApiBootstrap.minecraftSessionHost(), context,
                         programs, scenes, passes, dimension, resourcePackEpoch,
                         failure -> CausticaMod.LOGGER.error("Engine world-session failure", failure));
                 renderer = new RtFrameRenderer(programs, scenes, passes,
-                        world.services(), presenter);
+                        world.services(), presenter, rayReconstruction);
                 worldEpoch = epoch;
             } catch (Throwable failure) {
                 closeWorld();
@@ -629,7 +673,8 @@ public final class RtRuntime {
         }
 
         private void closeWorld() {
-            if (world == null && programs == null && scenes == null && renderer == null) return;
+            if (world == null && programs == null && scenes == null
+                    && renderer == null && rayReconstruction == null) return;
             host().resetFrameBridge();
             if (world != null) {
                 world.close();
@@ -639,6 +684,10 @@ public final class RtRuntime {
             if (renderer != null) {
                 renderer.destroy();
                 renderer = null;
+                rayReconstruction = null;
+            } else if (rayReconstruction != null) {
+                rayReconstruction.destroyAfterDeviceIdle();
+                rayReconstruction = null;
             }
             if (scenes != null) {
                 scenes.shutdownAfterDeviceIdle();
@@ -656,7 +705,7 @@ public final class RtRuntime {
             closeWorld();
             host().destroyUiPresentation();
             if (context != null) {
-                RtDlssFg.INSTANCE.destroy();
+                context.waitIdle();
                 presenter.destroy(context.vk());
                 context.backend().lowLatency().destroy(context.vk());
             }

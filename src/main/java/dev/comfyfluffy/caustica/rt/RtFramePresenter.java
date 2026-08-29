@@ -4,7 +4,8 @@ package dev.comfyfluffy.caustica.rt;
 import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
 import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
-import dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg;
+import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
+import dev.comfyfluffy.caustica.nvidia.ngx.DlssFrameGeneration;
 import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
 import it.unimi.dsi.fastutil.longs.LongList;
 import org.joml.Matrix4f;
@@ -13,11 +14,11 @@ import org.lwjgl.vulkan.VkQueue;
 
 /** Coordinates the presentation components owned by one renderer activation. */
 final class RtFramePresenter {
+    private final DlssFrameGeneration dlssFrameGeneration;
     private final GeneratedFrameQueue generatedFrames = new GeneratedFrameQueue();
-    private final FrameGeneration frameGeneration = new FrameGeneration();
-    private final HdrPresentation hdrPresentation =
-            new HdrPresentation(frameGeneration);
-    private final SdrPqPresentation sdrPqPresentation = new SdrPqPresentation();
+    private final FrameGeneration frameGeneration;
+    private final HdrPresentation hdrPresentation;
+    private final SdrPqPresentation sdrPqPresentation;
     private RenderedFrame renderedFrame;
 
     record RenderedFrame(GpuImage hdrDisplayImage, GpuImage motion, GpuImage depth,
@@ -29,7 +30,11 @@ final class RtFramePresenter {
         }
     }
 
-    RtFramePresenter() {
+    RtFramePresenter(VulkanDeviceContext context, DlssFrameGeneration dlssFrameGeneration) {
+        this.dlssFrameGeneration = dlssFrameGeneration;
+        this.frameGeneration = new FrameGeneration(context, dlssFrameGeneration);
+        this.hdrPresentation = new HdrPresentation(frameGeneration);
+        this.sdrPqPresentation = new SdrPqPresentation();
     }
 
     void beginFrame() {
@@ -52,8 +57,8 @@ final class RtFramePresenter {
     }
 
     public boolean isActive(boolean sceneAvailable) {
-        return !generatedFrames.failed() && RtDlssFg.enabled()
-                && RtDlssFg.INSTANCE.isAvailable() && sceneAvailable;
+        return !generatedFrames.failed() && dlssFrameGeneration.enabled()
+                && dlssFrameGeneration.isAvailable() && sceneAvailable;
     }
 
     public void prepareGeneratedFrame(GraphicsSubmission submission, VkDevice device, long swapchain,
@@ -72,9 +77,10 @@ final class RtFramePresenter {
     public void destroy(VkDevice device) {
         destroyGpuResources();
         generatedFrames.destroy(device);
+        dlssFrameGeneration.destroyAfterDeviceIdle();
     }
 
-    void destroyGpuResources() {
+    private void destroyGpuResources() {
         renderedFrame = null;
         frameGeneration.destroy();
         hdrPresentation.destroy();

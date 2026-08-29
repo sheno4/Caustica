@@ -5,7 +5,6 @@ import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
 import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
-import dev.comfyfluffy.caustica.rt.pipeline.RtDlssFg;
 import dev.comfyfluffy.caustica.renderer.presentation.RtHdrCompositePipeline;
 import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
 import org.lwjgl.system.MemoryStack;
@@ -40,7 +39,7 @@ final class HdrPresentation {
             VkCommandBuffer commandBuffer = submission.beginTransientCommandBuffer();
             VulkanDeviceContext context = RtRuntime.INSTANCE.requireVulkanContext();
             context.bindDescriptorHeaps(commandBuffer);
-            if (RtDlssFg.enabled()) {
+            if (generation.enabled()) {
                 generation.captureHdrHudless(commandBuffer, stack, source);
             }
             GpuImage overlay = ui.populated() ? ui.color() : null;

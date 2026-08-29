@@ -41,7 +41,7 @@ import org.lwjgl.vulkan.VkMemoryBarrier2;
 import dev.comfyfluffy.caustica.renderer.raytracing.RtProgramBackend;
 import dev.comfyfluffy.caustica.renderer.raytracing.accel.TlasBuilder;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
-import dev.comfyfluffy.caustica.rt.pipeline.RtDlssRr;
+import dev.comfyfluffy.caustica.nvidia.ngx.DlssRayReconstruction;
 import dev.comfyfluffy.caustica.rt.pipeline.RtJitter;
 import dev.comfyfluffy.caustica.renderer.presentation.RtExposure;
 import dev.comfyfluffy.caustica.renderer.presentation.RtLookPackage;
@@ -69,7 +69,7 @@ import java.util.Objects;
  * end-of-world seam. Gated by {@code -Dcaustica.rt=true}.
  *
  * <p>The path tracer and its guide buffers run at the configured render scale of display res with a per-frame
- * sub-pixel camera jitter; DLSS-RR ({@link RtDlssRr}) reconstructs the display-res image. With RR
+ * sub-pixel camera jitter; DLSS-RR ({@link DlssRayReconstruction}) reconstructs the display-res image. With RR
  * disabled the trace runs at 1:1 and a linear blit stands in for the upscale (a raw, noisy reference).
  *
  * <p>Traces the active retained scene with perspective camera rays (camera matrices captured
@@ -140,6 +140,7 @@ final class RtFrameRenderer {
     private final RtPassSchedulerBackend passes;
     private final EngineSessionServices services;
     private final RtFramePresenter presenter;
+    private final DlssRayReconstruction rayReconstruction;
     // World push data lives in a host-visible BDA ring; only the slot address and a small hot subset are
     // pushed inline (the full generated structure exceeds NVIDIA's 256-byte push-constant ceiling).
     // Exact graphics completion guards host writes; ring depth only avoids routine waits.
@@ -189,13 +190,14 @@ final class RtFrameRenderer {
 
     RtFrameRenderer(RtProgramBackend programs, RtRetainedSceneBackend scenes,
                     RtPassSchedulerBackend passes, EngineSessionServices services,
-                    RtFramePresenter presenter) {
+                    RtFramePresenter presenter, DlssRayReconstruction rayReconstruction) {
         this.programs = Objects.requireNonNull(programs, "programs");
         this.scenes = Objects.requireNonNull(scenes, "scenes");
         this.passes = Objects.requireNonNull(passes, "passes");
         this.services = Objects.requireNonNull(services, "services");
         this.presenter = Objects.requireNonNull(presenter, "presenter");
-        this.frameResources = new RtFrameResources(presenter, LOOK, exposureSettings());
+        this.rayReconstruction = Objects.requireNonNull(rayReconstruction, "rayReconstruction");
+        this.frameResources = new RtFrameResources(presenter, rayReconstruction, LOOK, exposureSettings());
     }
 
     public boolean hasFailed() {
@@ -570,7 +572,7 @@ final class RtFrameRenderer {
     /** Invalidate renderer state that cannot cross a provider-requested scene discontinuity. */
     public void resetSceneHistory() {
         resetExposureHistory();
-        RtDlssRr.INSTANCE.resetHistory();
+        rayReconstruction.resetHistory();
         presenter.resetSceneHistory();
         mvHasPrev = false;
         lastLightingFrame = -1L;
@@ -645,7 +647,7 @@ final class RtFrameRenderer {
         try (MemoryStack stack = MemoryStack.stackPush(); RtDebugLabels.Scope frameLabel = RtDebugLabels.scope(ctx, cmd, "composite frame")) {
             // RR drives the upscale: trace + jitter at render res, DLSS-RR denoises+upscales to display.
             // A debug view observes this ordinary path; it never changes jitter or disables RR.
-            boolean rrPath = RtDlssRr.enabled();
+            boolean rrPath = rayReconstruction.enabled();
             float jitterX = 0f;
             float jitterY = 0f;
             if (rrPath) {
@@ -750,11 +752,11 @@ final class RtFrameRenderer {
             }
             // DLSS-RR denoise + upscale. The RT pass wrote noisy color (render res) + guides;
             // RR reads them and writes the display-res denoised result straight into rrOutput.
-            if (rrPath && RtDlssRr.INSTANCE.ensureFeature(cmd, traceExtent().renderWidth(),
+            if (rrPath && rayReconstruction.ensureFeature(cmd, traceExtent().renderWidth(),
                     traceExtent().renderHeight(), traceExtent().displayWidth(), traceExtent().displayHeight())) {
                 try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "DLSS-RR evaluate");
                      RtFrameStats.Scope ignoredStats = RtFrameStats.FRAME.stage("frame.dlssRr")) {
-                    rrDone = RtDlssRr.INSTANCE.evaluate(cmd, traceImages().traceColor(), traceImages().linearDepth(),
+                    rrDone = rayReconstruction.evaluate(cmd, traceImages().traceColor(), traceImages().linearDepth(),
                             traceImages().motion(), traceImages().diffuseAlbedo(),
                             traceImages().specularAlbedo(), traceImages().normalRoughness(),
                             traceImages().specularMotion(), traceImages().reconstructedColor(),
@@ -917,8 +919,8 @@ final class RtFrameRenderer {
     }
 
     public void destroy() {
-        RtDlssRr.INSTANCE.destroy();
-        presenter.destroyGpuResources();
+        rayReconstruction.destroyAfterDeviceIdle();
+        presenter.invalidateRenderedFrame();
         frameResources.destroy();
         if (pushRing != null) {
             for (PushSlot slot : pushRing) {

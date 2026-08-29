@@ -1,0 +1,218 @@
+plugins {
+    id "java-library"
+    id "maven-publish"
+}
+
+version = project.api_version
+group = project.maven_group
+java.toolchain.languageVersion = JavaLanguageVersion.of(25)
+base { archivesName = "caustica-nvidia-ngx" }
+repositories { mavenCentral() }
+
+dependencies {
+    api project(":packages:engine-vulkan")
+    implementation "org.slf4j:slf4j-api:2.0.17"
+    testImplementation platform("org.junit:junit-bom:5.12.2")
+    testImplementation "org.junit.jupiter:junit-jupiter"
+    testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+}
+
+def nativeResourceRoot = layout.buildDirectory.dir("generated/ngx-natives")
+def requestedTasks = gradle.startParameter.taskNames.collect { it.toLowerCase(Locale.ROOT) }
+def runClient = requestedTasks.any { it == "runclient" || it.endsWith(":runclient") }
+def shimConfig = (findProperty("ngxShimConfig") ?: findProperty("ngxNativeConfig") ?: "release")
+        .toString().toLowerCase(Locale.ROOT)
+def normalizeVendorConfig = { String value ->
+    def normalized = value.toLowerCase(Locale.ROOT)
+    if (normalized == "release") return "rel"
+    if (normalized == "debug") return "dev"
+    if (!(normalized in ["rel", "dev"])) {
+        throw new GradleException("Unknown NGX vendor config '${value}'. Expected 'rel' or 'dev'.")
+    }
+    normalized
+}
+def vendorConfig = normalizeVendorConfig(
+        (findProperty("ngxVendorConfig") ?: (runClient ? "dev" : "rel")).toString())
+def shimInputRoot = rootProject.file(findProperty("ngxShimInputRoot")
+        ?: rootProject.layout.buildDirectory.dir("native/ngx_shim").get().asFile)
+def shimOutput = new File(shimInputRoot, shimConfig)
+def currentPlatform = {
+    def os = org.gradle.internal.os.OperatingSystem.current()
+    def arch = System.getProperty("os.arch", "").toLowerCase(Locale.ROOT)
+    def x64 = arch == "x86_64" || arch == "amd64"
+    if (os.windows && x64) return "windows-x64"
+    if (os.linux && x64) return "linux-x64"
+    null
+}()
+def platforms = [
+        [name: "windows-x64", shimIncludes: ["ngxshim.dll"],
+         vendorRoot: { sdk, config -> new File(sdk, "lib/Windows_x86_64/${config}") },
+         vendorIncludes: ["nvngx_dlssd.dll", "nvngx_dlssg.dll"]],
+        [name: "linux-x64", shimIncludes: ["libngxshim.so"],
+         vendorRoot: { sdk, config -> new File(sdk, "lib/Linux_x86_64/${config}") },
+         vendorIncludes: ["libnvidia-ngx-dlssd.so*", "libnvidia-ngx-dlssg.so*"]]
+]
+def platformByName = platforms.collectEntries { [(it.name): it] }
+def requestedPlatforms = (findProperty("ngxPlatforms") ?: "current").toString().split(",")
+        .collect { it.trim().toLowerCase(Locale.ROOT) }.findAll { !it.empty }
+def selectedPlatforms
+if (requestedPlatforms == ["all"]) {
+    selectedPlatforms = platforms
+} else if (requestedPlatforms == ["current"]) {
+    if (currentPlatform == null) throw new GradleException("No NGX native platform is configured for this host.")
+    selectedPlatforms = [platformByName[currentPlatform]]
+} else {
+    def unknown = requestedPlatforms.findAll { !platformByName.containsKey(it) }
+    if (!unknown.empty) throw new GradleException("Unknown NGX platform(s): ${unknown.join(', ')}")
+    selectedPlatforms = requestedPlatforms.collect { platformByName[it] }
+}
+def sdkRootProvider = providers.environmentVariable("DLSS_SDK").map { file(it) }
+
+def bundleNgxNatives = tasks.register("bundleNgxNatives") {
+    group = "build"
+    description = "Bundles the NGX shim and ${vendorConfig} DLSS native libraries."
+    inputs.property "shimConfig", shimConfig
+    inputs.property "vendorConfig", vendorConfig
+    selectedPlatforms.each { platform ->
+        inputs.files(fileTree(shimOutput) { include platform.shimIncludes })
+                .withPropertyName("ngxNatives.${platform.name}.shim")
+        inputs.files(fileTree(platform.vendorRoot(sdkRootProvider.getOrElse(file("__missing_dlss_sdk__")),
+                vendorConfig)) { include platform.vendorIncludes })
+                .withPropertyName("ngxNatives.${platform.name}.vendor")
+    }
+    outputs.dir(nativeResourceRoot)
+    outputs.upToDateWhen { false }
+    doLast {
+        delete(nativeResourceRoot)
+        def sdkRoot = sdkRootProvider.orNull
+        if (sdkRoot == null) throw new GradleException("DLSS_SDK environment variable is not set.")
+        def missing = []
+        selectedPlatforms.each { platform ->
+            if (fileTree(shimOutput) { include platform.shimIncludes }.files.empty) {
+                missing += "${platform.name} shim library in ${shimOutput}"
+            }
+            def vendorRoot = platform.vendorRoot(sdkRoot, vendorConfig)
+            def missingVendor = platform.vendorIncludes.findAll { vendorInclude ->
+                fileTree(vendorRoot) { include vendorInclude }.files.empty
+            }
+            if (!missingVendor.empty) missing += "${platform.name} vendor libraries ${missingVendor} in ${vendorRoot}"
+        }
+        if (!missing.empty) throw new GradleException("Missing NGX native inputs:\n - " + missing.join("\n - "))
+        copy {
+            selectedPlatforms.each { platform ->
+                from(fileTree(shimOutput) { include platform.shimIncludes }) {
+                    into "caustica/natives/${platform.name}"
+                }
+                from(fileTree(platform.vendorRoot(sdkRoot, vendorConfig)) { include platform.vendorIncludes }) {
+                    into "caustica/natives/${platform.name}"
+                }
+            }
+            into nativeResourceRoot
+        }
+        selectedPlatforms.each { platform ->
+            def names = fileTree(platform.vendorRoot(sdkRoot, vendorConfig)) {
+                include platform.vendorIncludes
+            }.files.collect { it.name }.unique().sort()
+            def index = nativeResourceRoot.get().file("caustica/natives/${platform.name}/features.list").asFile
+            index.parentFile.mkdirs()
+            index.text = names.join("\n") + (names.empty ? "" : "\n")
+        }
+    }
+}
+sourceSets.main.resources.srcDir(files(nativeResourceRoot).builtBy(bundleNgxNatives))
+
+def verifyNvidiaNgxImports = tasks.register("verifyNvidiaNgxImports") {
+    inputs.files(sourceSets.main.allJava)
+    doLast {
+        def forbidden = ["dev.comfyfluffy.caustica.CausticaMod", "dev.comfyfluffy.caustica.config",
+                         "dev.comfyfluffy.caustica.minecraft", "dev.comfyfluffy.caustica.platform",
+                         "dev.comfyfluffy.caustica.rt", "net.minecraft", "net.fabricmc", "net.neoforged"]
+        def violations = []
+        sourceSets.main.allJava.files.sort().each { source ->
+            source.eachLine { line, number ->
+                if (line.stripLeading().startsWith("import ") && forbidden.any { line.contains(it) }) {
+                    violations += "${source}:${number}: ${line.trim()}"
+                }
+                if (line.contains(" static final ") && line.contains(" INSTANCE")) {
+                    violations += "${source}:${number}: ${line.trim()}"
+                }
+            }
+        }
+        if (!violations.empty) throw new GradleException("nvidia-ngx boundary violations:\n${violations.join('\n')}")
+    }
+}
+
+def verifyNvidiaNgxDependencies = tasks.register("verifyNvidiaNgxDependencies") {
+    doLast {
+        def allowed = [project.path, ":packages:engine-vulkan"] as Set
+        def violations = []
+        configurations.matching { it.canBeResolved }.each { configuration ->
+            configuration.allDependencies.withType(ProjectDependency).each { dependency ->
+                if (!allowed.contains(dependency.path)) violations += "${configuration.name}: ${dependency.path}"
+            }
+        }
+        if (!violations.empty) throw new GradleException("nvidia-ngx dependency violations:\n${violations.join('\n')}")
+    }
+}
+
+def verifyNvidiaNgxJar = tasks.register("verifyNvidiaNgxJar") {
+    dependsOn tasks.named("jar")
+    doLast {
+        def entries = []
+        new java.util.jar.JarFile(tasks.named("jar", Jar).get().archiveFile.get().asFile).withCloseable { jar ->
+            def enumeration = jar.entries()
+            while (enumeration.hasMoreElements()) entries += enumeration.nextElement().name
+        }
+        def root = "dev/comfyfluffy/caustica/nvidia/ngx/"
+        def required = ["NgxRuntime.class", "NgxLibrary.class", "DlssRayReconstruction.class",
+                        "DlssFrameGeneration.class"].collect { root + it }
+        def foreign = entries.findAll { it.endsWith(".class") && !it.startsWith(root) }
+        def nativeFiles = entries.findAll { it.startsWith("caustica/natives/") && !it.endsWith("/") }
+        if (!foreign.empty || !entries.containsAll(required) || nativeFiles.empty) {
+            throw new GradleException("nvidia-ngx JAR mismatch: foreign=${foreign}, missing=${required - entries}, natives=${nativeFiles}")
+        }
+    }
+}
+
+def verifyNvidiaNgxOwnership = tasks.register("verifyNvidiaNgxOwnership") {
+    doLast {
+        def legacySources = [rootProject.file("src/main/java/dev/comfyfluffy/caustica/ngx"),
+                             rootProject.file("src/main/java/dev/comfyfluffy/caustica/rt/pipeline/RtDlssRr.java"),
+                             rootProject.file("src/main/java/dev/comfyfluffy/caustica/rt/pipeline/RtDlssFg.java")]
+        def legacyFiles = legacySources.findAll { it.isFile() || it.isDirectory() && !fileTree(it).files.empty }
+        def legacyNativeFiles = [rootProject.file("native/ngx_shim/CMakeLists.txt"),
+                                 rootProject.file("native/ngx_shim/ngx_shim.cpp")].findAll { it.isFile() }
+        if (!legacyFiles.empty || !legacyNativeFiles.empty) {
+            throw new GradleException("legacy NGX ownership remains: sources=${legacyFiles}, natives=${legacyNativeFiles}")
+        }
+    }
+}
+
+tasks.named("test", Test) {
+    useJUnitPlatform()
+    jvmArgs "--enable-native-access=ALL-UNNAMED"
+}
+tasks.named("check") {
+    dependsOn verifyNvidiaNgxImports, verifyNvidiaNgxDependencies, verifyNvidiaNgxJar,
+            verifyNvidiaNgxOwnership
+}
+tasks.withType(JavaCompile).configureEach { options.release = 25 }
+java {
+    sourceCompatibility = JavaVersion.VERSION_25
+    targetCompatibility = JavaVersion.VERSION_25
+    withSourcesJar()
+}
+tasks.named("jar", Jar).configure {
+    from(rootProject.files("LICENSE.md", "COPYING", "COPYING.LESSER", "THIRD_PARTY_NOTICES.md")) { into "META-INF" }
+}
+tasks.named("sourcesJar", Jar).configure {
+    from("native") { into "native" }
+}
+publishing {
+    publications {
+        create("mavenJava", MavenPublication) {
+            artifactId = "caustica-nvidia-ngx"
+            from components.java
+        }
+    }
+}

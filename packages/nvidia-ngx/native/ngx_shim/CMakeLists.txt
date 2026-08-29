@@ -10,7 +10,7 @@ if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
   set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS Debug Release RelWithDebInfo MinSizeRel)
 endif()
 
-get_filename_component(NGX_SHIM_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
+get_filename_component(NGX_SHIM_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../.." ABSOLUTE)
 set(NGX_SHIM_OUTPUT_ROOT "${NGX_SHIM_REPO_ROOT}/build/native/ngx_shim"
     CACHE PATH "Directory for built NGX shim artifacts")
 set(NGX_SHIM_OUTPUT_DIR "${NGX_SHIM_OUTPUT_ROOT}/$<LOWER_CASE:$<CONFIG>>")

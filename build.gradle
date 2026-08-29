@@ -12,6 +12,7 @@ plugins {
 
 evaluationDependsOn(":packages:api")
 evaluationDependsOn(":packages:minecraft-rendering")
+evaluationDependsOn(":packages:nvidia-ngx")
 evaluationDependsOn(":packages:renderer-presentation")
 evaluationDependsOn(":packages:renderer-raytracing")
 evaluationDependsOn(":packages:slang-runtime")
@@ -121,6 +122,7 @@ if (loader == "fabric") {
 				sourceSet(project(":packages:minecraft-adapter").sourceSets.main)
 				sourceSet(project(":packages:minecraft-content").sourceSets.main)
 				sourceSet(project(":packages:minecraft-rendering").sourceSets.main)
+				sourceSet(project(":packages:nvidia-ngx").sourceSets.main)
 				sourceSet(project(":packages:renderer-presentation").sourceSets.main)
 				sourceSet(project(":packages:renderer-raytracing").sourceSets.main)
 				sourceSet(project(":packages:settings-api").sourceSets.main)
@@ -162,6 +164,8 @@ dependencies {
 	apiRuntime project(":packages:minecraft-content")
 	compileOnly project(":packages:minecraft-rendering")
 	apiRuntime project(":packages:minecraft-rendering")
+	compileOnly project(":packages:nvidia-ngx")
+	apiRuntime project(":packages:nvidia-ngx")
 	compileOnly project(":packages:renderer-presentation")
 	apiRuntime project(":packages:renderer-presentation")
 	compileOnly project(":packages:renderer-raytracing")
@@ -190,6 +194,7 @@ dependencies {
 	testImplementation project(":packages:minecraft-content")
 	testImplementation(testFixtures(project(":packages:minecraft-content")))
 	testImplementation project(":packages:minecraft-rendering")
+	testImplementation project(":packages:nvidia-ngx")
 	testImplementation project(":packages:renderer-presentation")
 	testImplementation project(":packages:renderer-raytracing")
 	testImplementation project(":packages:settings-api")
@@ -205,6 +210,7 @@ dependencies {
 	testRuntimeOnly project(":packages:minecraft-adapter")
 	testRuntimeOnly project(":packages:minecraft-content")
 	testRuntimeOnly project(":packages:minecraft-rendering")
+	testRuntimeOnly project(":packages:nvidia-ngx")
 	testRuntimeOnly project(":packages:renderer-presentation")
 	testRuntimeOnly project(":packages:renderer-raytracing")
 	testRuntimeOnly project(":packages:settings-api")
@@ -366,164 +372,6 @@ tasks.named("test", Test) {
 		systemProperty "caustica.slang.path", runtimeDir.absolutePath
 	}
 }
-def ngxNativeGenRoot = layout.buildDirectory.dir("generated/ngx-natives")
-def requestedTaskNames = gradle.startParameter.taskNames.collect { it.toLowerCase(java.util.Locale.ROOT) }
-def isRunClientInvocation = requestedTaskNames.any { it == "runclient" || it.endsWith(":runclient") }
-def ngxShimConfig = (findProperty("ngxShimConfig") ?: findProperty("ngxNativeConfig") ?: "release")
-		.toString().toLowerCase(java.util.Locale.ROOT)
-def normalizeNgxVendorConfig = { String config ->
-	def normalized = config.toLowerCase(java.util.Locale.ROOT)
-	if (normalized == "release") {
-		return "rel"
-	}
-	if (normalized == "debug") {
-		return "dev"
-	}
-	if (normalized != "rel" && normalized != "dev") {
-		throw new GradleException("Unknown NGX vendor config '${config}'. Expected 'rel' or 'dev'.")
-	}
-	return normalized
-}
-def ngxVendorConfig = normalizeNgxVendorConfig(
-		(findProperty("ngxVendorConfig") ?: (isRunClientInvocation ? "dev" : "rel")).toString())
-def ngxShimInputRoot = file(findProperty("ngxShimInputRoot") ?: layout.buildDirectory.dir("native/ngx_shim").get().asFile)
-def ngxShimOutDir = new File(ngxShimInputRoot, ngxShimConfig)
-def currentNgxPlatform = {
-	def os = org.gradle.internal.os.OperatingSystem.current()
-	def arch = System.getProperty("os.arch", "").toLowerCase(java.util.Locale.ROOT)
-	def x64 = arch == "x86_64" || arch == "amd64"
-	if (os.windows && x64) {
-		return "windows-x64"
-	}
-	if (os.linux && x64) {
-		return "linux-x64"
-	}
-	return null
-}()
-def ngxNativePlatforms = [
-	[
-		name: "windows-x64",
-		shimIncludes: [
-			"ngxshim.dll"
-		],
-		vendorRoot: { dlssSdkRoot, vendorConfig -> new File(dlssSdkRoot, "lib/Windows_x86_64/${vendorConfig}") },
-		vendorIncludes: [
-			"nvngx_dlssd.dll",
-			"nvngx_dlssg.dll"
-		]
-	],
-	[
-		name: "linux-x64",
-		shimIncludes: [
-			"libngxshim.so"
-		],
-		vendorRoot: { dlssSdkRoot, vendorConfig -> new File(dlssSdkRoot, "lib/Linux_x86_64/${vendorConfig}") },
-		vendorIncludes: [
-			"libnvidia-ngx-dlssd.so*",
-			"libnvidia-ngx-dlssg.so*"
-		]
-	]
-]
-def ngxNativePlatformByName = ngxNativePlatforms.collectEntries { platform -> [(platform.name): platform] }
-def requestedNgxPlatformsRaw = (findProperty("ngxPlatforms") ?: "current").toString()
-		.split(",")
-		.collect { it.trim() }
-		.findAll { !it.isEmpty() }
-def selectedNgxNativePlatforms
-if (requestedNgxPlatformsRaw.size() == 1 && requestedNgxPlatformsRaw[0].equalsIgnoreCase("all")) {
-	selectedNgxNativePlatforms = ngxNativePlatforms
-} else if (requestedNgxPlatformsRaw.size() == 1 && requestedNgxPlatformsRaw[0].equalsIgnoreCase("current")) {
-	if (currentNgxPlatform == null || !ngxNativePlatformByName.containsKey(currentNgxPlatform)) {
-		throw new GradleException("No NGX native platform is configured for this host.")
-	}
-	selectedNgxNativePlatforms = [ngxNativePlatformByName[currentNgxPlatform]]
-} else {
-	def unknownPlatforms = requestedNgxPlatformsRaw.findAll { !ngxNativePlatformByName.containsKey(it) }
-	if (!unknownPlatforms.empty) {
-		throw new GradleException("Unknown NGX platform(s): ${unknownPlatforms.join(', ')}")
-	}
-	selectedNgxNativePlatforms = requestedNgxPlatformsRaw.collect { ngxNativePlatformByName[it] }
-}
-
-def dlssSdkEnv = providers.environmentVariable("DLSS_SDK")
-def dlssSdkRootProvider = dlssSdkEnv.map { file(it) }
-
-def bundleNgxNatives = tasks.register("bundleNgxNatives") {
-	group = "build"
-	description = "Bundles NGX shim and ${ngxVendorConfig} DLSS native libraries into the mod resources."
-
-	inputs.property "ngxShimConfig", ngxShimConfig
-	inputs.property "ngxVendorConfig", ngxVendorConfig
-
-	selectedNgxNativePlatforms.each { platform ->
-		inputs.files(fileTree(ngxShimOutDir) {
-			include platform.shimIncludes
-		}).withPropertyName("ngxNatives.${platform.name}.shim")
-		inputs.files(fileTree(platform.vendorRoot(dlssSdkRootProvider.getOrElse(file("__missing_dlss_sdk__")), ngxVendorConfig)) {
-			include platform.vendorIncludes
-		}).withPropertyName("ngxNatives.${platform.name}.vendor")
-	}
-	outputs.dir(ngxNativeGenRoot)
-	outputs.upToDateWhen { false }
-
-	doLast {
-		delete(ngxNativeGenRoot)
-		def missing = []
-		def dlssSdkRoot = dlssSdkRootProvider.orNull
-		if (dlssSdkRoot == null) {
-			throw new GradleException("DLSS_SDK environment variable is not set.")
-		}
-		selectedNgxNativePlatforms.each { platform ->
-			def platformShimFiles = fileTree(ngxShimOutDir) {
-				include platform.shimIncludes
-			}.files
-			if (platformShimFiles.empty) {
-				missing += "${platform.name} shim library in ${ngxShimOutDir}"
-			}
-		}
-		selectedNgxNativePlatforms.each { platform ->
-			def platformVendorRoot = platform.vendorRoot(dlssSdkRoot, ngxVendorConfig)
-			def missingVendorIncludes = platform.vendorIncludes.findAll { vendorInclude ->
-				fileTree(platformVendorRoot) {
-					include vendorInclude
-				}.files.empty
-			}
-			if (!missingVendorIncludes.empty) {
-				missing += "${platform.name} vendor libraries ${missingVendorIncludes.join(', ')} in ${platformVendorRoot}"
-			}
-		}
-		if (!missing.empty) {
-			throw new GradleException("Missing NGX native inputs:\n - " + missing.join("\n - "))
-		}
-
-		copy {
-			selectedNgxNativePlatforms.each { platform ->
-				from(fileTree(ngxShimOutDir) {
-					include platform.shimIncludes
-				}) {
-					into "caustica/natives/${platform.name}"
-				}
-				from(fileTree(platform.vendorRoot(dlssSdkRoot, ngxVendorConfig))) {
-					include platform.vendorIncludes
-					into "caustica/natives/${platform.name}"
-				}
-			}
-			into ngxNativeGenRoot
-		}
-		selectedNgxNativePlatforms.each { platform ->
-			def featureNames = fileTree(platform.vendorRoot(dlssSdkRoot, ngxVendorConfig)) {
-				include platform.vendorIncludes
-			}.files.collect { it.name }.unique().sort()
-			def featureIndex = new File(ngxNativeGenRoot.get().asFile,
-					"caustica/natives/${platform.name}/features.list")
-			featureIndex.parentFile.mkdirs()
-			featureIndex.text = featureNames.join("\n") + (featureNames.empty ? "" : "\n")
-		}
-	}
-}
-
-sourceSets.main.resources.srcDir(files(ngxNativeGenRoot).builtBy(bundleNgxNatives))
-
 tasks.withType(JavaCompile).configureEach {
 	it.options.release = 25
 }
@@ -545,6 +393,7 @@ tasks.named("jar", Jar).configure {
 	from(project(":packages:minecraft-adapter").sourceSets.main.output)
 	from(project(":packages:minecraft-content").sourceSets.main.output)
 	from(project(":packages:minecraft-rendering").sourceSets.main.output)
+	from(project(":packages:nvidia-ngx").sourceSets.main.output)
 	from(project(":packages:renderer-presentation").sourceSets.main.output)
 	from(project(":packages:renderer-raytracing").sourceSets.main.output)
 	from(project(":packages:settings-api").sourceSets.main.output)
@@ -569,6 +418,8 @@ tasks.named("sourcesJar", Jar).configure {
 	from(project(":packages:minecraft-content").sourceSets.main.allSource)
 	from(project(":packages:minecraft-rendering").sourceSets.main.allSource)
 	from(project(":packages:minecraft-rendering").file("src/shaderReflection")) { into "shaders/minecraft-rendering" }
+	from(project(":packages:nvidia-ngx").sourceSets.main.allSource)
+	from(project(":packages:nvidia-ngx").file("native")) { into "native/nvidia-ngx" }
 	from(project(":packages:renderer-presentation").sourceSets.main.allSource)
 	from(project(":packages:renderer-presentation").file("shaders")) { into "shaders/presentation" }
 	from(project(":packages:renderer-raytracing").sourceSets.main.allSource)
@@ -592,6 +443,7 @@ def verifyEmbeddedApi = tasks.register("verifyEmbeddedApi") {
 			project(":packages:minecraft-adapter").tasks.named("jar"),
 			project(":packages:minecraft-content").tasks.named("jar"),
 			project(":packages:minecraft-rendering").tasks.named("jar"),
+			project(":packages:nvidia-ngx").tasks.named("jar"),
 			project(":packages:renderer-presentation").tasks.named("jar"),
 			project(":packages:renderer-raytracing").tasks.named("jar"),
 			project(":packages:settings-api").tasks.named("jar"),
@@ -609,6 +461,7 @@ def verifyEmbeddedApi = tasks.register("verifyEmbeddedApi") {
 	inputs.file(project(":packages:minecraft-adapter").tasks.named("jar", Jar).flatMap { it.archiveFile })
 	inputs.file(project(":packages:minecraft-content").tasks.named("jar", Jar).flatMap { it.archiveFile })
 	inputs.file(project(":packages:minecraft-rendering").tasks.named("jar", Jar).flatMap { it.archiveFile })
+	inputs.file(project(":packages:nvidia-ngx").tasks.named("jar", Jar).flatMap { it.archiveFile })
 	inputs.file(project(":packages:renderer-presentation").tasks.named("jar", Jar).flatMap { it.archiveFile })
 	inputs.file(project(":packages:renderer-raytracing").tasks.named("jar", Jar).flatMap { it.archiveFile })
 	inputs.file(project(":packages:settings-api").tasks.named("jar", Jar).flatMap { it.archiveFile })
@@ -638,6 +491,7 @@ def verifyEmbeddedApi = tasks.register("verifyEmbeddedApi") {
 		def minecraftAdapterEntries = names(project(":packages:minecraft-adapter").tasks.named("jar", Jar).get().archiveFile.get().asFile)
 		def minecraftContentEntries = names(project(":packages:minecraft-content").tasks.named("jar", Jar).get().archiveFile.get().asFile)
 		def minecraftRenderingEntries = names(project(":packages:minecraft-rendering").tasks.named("jar", Jar).get().archiveFile.get().asFile)
+		def nvidiaNgxEntries = names(project(":packages:nvidia-ngx").tasks.named("jar", Jar).get().archiveFile.get().asFile)
 		def rendererPresentationEntries = names(project(":packages:renderer-presentation").tasks.named("jar", Jar)
 				.get().archiveFile.get().asFile)
 		def rendererRayTracingEntries = names(project(":packages:renderer-raytracing").tasks.named("jar", Jar)
@@ -660,6 +514,8 @@ def verifyEmbeddedApi = tasks.register("verifyEmbeddedApi") {
 		required.addAll(minecraftContentEntries.findAll { it.endsWith(".class") })
 		required.addAll(minecraftRenderingEntries.findAll { it.endsWith(".class")
 				|| it.startsWith("caustica/shaders/minecraft/") && !it.endsWith("/") })
+		required.addAll(nvidiaNgxEntries.findAll { it.endsWith(".class")
+				|| it.startsWith("caustica/natives/") && !it.endsWith("/") })
 		required.addAll(rendererPresentationEntries.findAll { it.endsWith(".class")
 				|| it.startsWith("caustica/shaders/pipelines/") && !it.endsWith("/")
 				|| it.startsWith("caustica/color/") && !it.endsWith("/") })
@@ -712,6 +568,7 @@ tasks.named("check") {
 			project(":packages:engine-vulkan").tasks.named("check"),
 			project(":packages:minecraft-content").tasks.named("check"),
 			project(":packages:minecraft-rendering").tasks.named("check"),
+			project(":packages:nvidia-ngx").tasks.named("check"),
 			project(":packages:renderer-presentation").tasks.named("check"),
 			project(":packages:renderer-raytracing").tasks.named("check"),
 			project(":packages:slang-runtime").tasks.named("check"),

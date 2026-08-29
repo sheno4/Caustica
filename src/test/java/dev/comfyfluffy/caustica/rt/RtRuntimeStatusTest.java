@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.rt;
 
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
+import dev.comfyfluffy.caustica.nvidia.ngx.NgxRuntime;
 import dev.comfyfluffy.caustica.spi.vulkan.VulkanRendererBackend;
 import org.junit.jupiter.api.Test;
 
@@ -24,10 +25,13 @@ final class RtRuntimeStatusTest {
     void runtimeOwnsBackendAndContextAsInstanceState() throws Exception {
         var backend = RtRuntime.class.getDeclaredField("vulkanBackend");
         var context = RtRuntime.class.getDeclaredField("vulkanContext");
+        var ngxRuntime = RtRuntime.class.getDeclaredField("ngxRuntime");
 
         assertEquals(VulkanRendererBackend.class, backend.getType());
         assertEquals(VulkanDeviceContext.class, context.getType());
+        assertEquals(NgxRuntime.class, ngxRuntime.getType());
         assertFalse(Modifier.isStatic(backend.getModifiers()));
         assertFalse(Modifier.isStatic(context.getModifiers()));
+        assertFalse(Modifier.isStatic(ngxRuntime.getModifiers()));
     }
 }

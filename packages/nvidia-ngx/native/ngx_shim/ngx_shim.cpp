@@ -1,4 +1,4 @@
-// Flat C ABI shim over the NVIDIA NGX DLSS Vulkan API.
+// Flat C ABI shim over the NVIDIA NGX DLSS Vulkan API used by the Java package.
 //
 // The NGX SDK ships only as a static library (nvsdk_ngx_d.lib) plus a C++/macro
 // helper layer that fiddles with parameter blocks and resource structs. Java's

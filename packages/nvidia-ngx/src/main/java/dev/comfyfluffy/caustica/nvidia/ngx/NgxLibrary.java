@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.ngx;
+package dev.comfyfluffy.caustica.nvidia.ngx;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.FunctionDescriptor;
@@ -13,11 +13,11 @@ import java.nio.file.Path;
  * FFM bindings for the NGX DLSS shim ({@code ngxshim.dll}).
  *
  * <p>The shim wraps the static-only NGX SDK behind a flat C ABI (see
- * {@code native/ngx_shim/ngx_shim.cpp}). All Caustica-specific structs and
+ * {@code packages/nvidia-ngx/native/ngx_shim/ngx_shim.cpp}). All Caustica-specific structs and
  * NGX parameter blocks live in the shim; Java only passes primitives and raw
  * Vulkan handles (as {@code long} addresses).
  */
-public final class NgxLibrary {
+final class NgxLibrary {
 	private static final Linker LINKER = Linker.nativeLinker();
 
 	private final MethodHandle requiredExtensions;
