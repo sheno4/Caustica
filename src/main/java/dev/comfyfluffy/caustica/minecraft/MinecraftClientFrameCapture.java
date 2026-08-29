@@ -26,14 +26,17 @@ final class MinecraftClientFrameCapture {
 
     private MinecraftClientFrameCapture() { }
 
-    static MinecraftCapturedFrame capture(Minecraft minecraft, double cameraY, double metersPerSceneUnit) {
-        Optional<MinecraftCapturedFrame.Celestial> celestial = celestial(minecraft, cameraY, metersPerSceneUnit);
+    static MinecraftCapturedFrame capture(Minecraft minecraft, double cameraY, double metersPerSceneUnit,
+                                          MinecraftLightingCalibration calibration) {
+        Optional<MinecraftCapturedFrame.Celestial> celestial = celestial(
+                minecraft, cameraY, metersPerSceneUnit, calibration);
         return new MinecraftCapturedFrame(celestial, celestial.flatMap(value -> atlas(minecraft, value)),
                 helmet(minecraft), RtTerrain.retainedLightSnapshot());
     }
 
     private static Optional<MinecraftCapturedFrame.Celestial> celestial(
-            Minecraft minecraft, double cameraY, double metersPerSceneUnit) {
+            Minecraft minecraft, double cameraY, double metersPerSceneUnit,
+            MinecraftLightingCalibration calibration) {
         if (minecraft.player == null || minecraft.level == null
                 || !Level.OVERWORLD.equals(minecraft.level.dimension())) return Optional.empty();
         float partial = minecraft.getDeltaTracker().getGameTimeDeltaPartialTick(false);
@@ -45,7 +48,7 @@ final class MinecraftClientFrameCapture {
                 probe.getValue(EnvironmentAttributes.STAR_BRIGHTNESS, partial),
                 probe.getValue(EnvironmentAttributes.MOON_PHASE, partial).index(),
                 minecraft.level.getSeaLevel(), cameraY, metersPerSceneUnit,
-                MinecraftLightingCalibration.current()));
+                calibration));
     }
 
     private static Optional<MinecraftCapturedFrame.CelestialAtlas> atlas(

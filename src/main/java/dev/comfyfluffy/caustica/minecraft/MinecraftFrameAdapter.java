@@ -34,7 +34,7 @@ public final class MinecraftFrameAdapter {
     private long nextSceneId;
     private long sceneId;
     private volatile MinecraftFrameSelector frameSelector;
-    private volatile MinecraftFrameCaptureInstaller.Sink frameCapture;
+    private volatile FrameCaptureBinding frameCapture;
 
     private MinecraftFrameAdapter() {
     }
@@ -66,9 +66,10 @@ public final class MinecraftFrameAdapter {
             submerged = fluid.is(FluidTags.WATER)
                     && cameraY < cameraBlockPos.getY() + fluid.getHeight(level, cameraBlockPos);
         }
-        MinecraftFrameCaptureInstaller.Sink capture = frameCapture;
+        FrameCaptureBinding capture = frameCapture;
         if (capture != null) {
-            capture.update(MinecraftClientFrameCapture.capture(client, cameraY, METERS_PER_WORLD_UNIT));
+            capture.sink.update(MinecraftClientFrameCapture.capture(
+                    client, cameraY, METERS_PER_WORLD_UNIT, capture.calibration));
         }
         MinecraftFrameSelector.Selection selection = selection(submerged);
         if (selection == null) return null;
@@ -95,13 +96,19 @@ public final class MinecraftFrameAdapter {
         return selector == null ? null : selector.select(submerged);
     }
 
-    MinecraftFrameCaptureInstaller.Lease installFrameCapture(MinecraftFrameCaptureInstaller.Sink sink) {
+    MinecraftFrameCaptureInstaller.Lease installFrameCapture(MinecraftFrameCaptureInstaller.Sink sink,
+                                                              MinecraftLightingCalibration calibration) {
         java.util.Objects.requireNonNull(sink, "sink");
-        frameCapture = sink;
+        FrameCaptureBinding binding = new FrameCaptureBinding(sink,
+                java.util.Objects.requireNonNull(calibration, "calibration"));
+        frameCapture = binding;
         return () -> {
-            if (frameCapture == sink) frameCapture = null;
+            if (frameCapture == binding) frameCapture = null;
         };
     }
+
+    private record FrameCaptureBinding(MinecraftFrameCaptureInstaller.Sink sink,
+                                       MinecraftLightingCalibration calibration) { }
 
     public SceneResources captureSceneResources(Minecraft client) {
         if (client.level == null) {

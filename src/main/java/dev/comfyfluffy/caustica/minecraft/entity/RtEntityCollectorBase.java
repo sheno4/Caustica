@@ -6,11 +6,11 @@ import com.mojang.blaze3d.pipeline.RenderPipeline;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import dev.comfyfluffy.caustica.settings.ResourceId;
-import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialLookup;
 import dev.comfyfluffy.caustica.mixin.ModelPartAccessor;
 import dev.comfyfluffy.caustica.mixin.RenderSetupAccessor;
 import dev.comfyfluffy.caustica.mixin.RenderTypeAccessor;
 import dev.comfyfluffy.caustica.minecraft.MinecraftTelemetry;
+import dev.comfyfluffy.caustica.minecraft.MinecraftResourceIds;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.font.TextRenderable;
@@ -271,7 +271,8 @@ class RtEntityCollectorBase {
             MinecraftEntityMesh.Texture texture = MinecraftEntityMesh.Texture.atlas(ResourceId.of(
                     sprite.atlasLocation().getNamespace(), sprite.atlasLocation().getPath()));
             if (TextureAtlas.LOCATION_BLOCKS.equals(sprite.atlasLocation())) {
-                capture.currentMaterial = new MinecraftEntityMesh.Material(MinecraftMaterialLookup.material(sprite),
+                capture.currentMaterial = new MinecraftEntityMesh.Material(
+                        MinecraftResourceIds.material(sprite),
                         texture, MinecraftEntityMesh.Program.MATERIAL, profile, transmissive);
             } else {
                 capture.currentMaterial = new MinecraftEntityMesh.Material(
@@ -286,7 +287,7 @@ class RtEntityCollectorBase {
         if (isEndPortal(renderType)) return END_PORTAL_MATERIAL;
         var texture = RtEntityTextures.INSTANCE.textureLocation(renderType);
         if (texture == null) return missingMaterial();
-        ResourceId logicalTexture = MinecraftMaterialLookup.logicalTexture(texture);
+        ResourceId logicalTexture = MinecraftResourceIds.logicalTexture(texture);
         return new MinecraftEntityMesh.Material(MinecraftEntityMesh.PARTICLE_BILLBOARD_MATERIAL,
                 MinecraftEntityMesh.Texture.standalone(logicalTexture), MinecraftEntityMesh.Program.MATERIAL);
     }

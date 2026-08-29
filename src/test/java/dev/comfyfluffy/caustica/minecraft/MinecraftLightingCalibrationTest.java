@@ -27,6 +27,6 @@ final class MinecraftLightingCalibrationTest {
     }
 
     private static MinecraftLightingCalibration parse(String json) {
-        return MinecraftLightingCalibration.parse(JsonParser.parseString(json).getAsJsonObject(), "test");
+        return MinecraftLightingCalibrationLoader.parse(JsonParser.parseString(json).getAsJsonObject(), "test");
     }
 }

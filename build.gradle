@@ -293,7 +293,6 @@ def generateShaderRecords = tasks.register("generateShaderRecords", GenerateShad
 	shaderRoot = shaderReflectionRoot
 	probeSource = shaderReflectionRoot.map { it.file("layout/layout_probe.slang") }
 	recordSpecs = [
-			"buffer|minecraftImplementationLayoutProbe|MinecraftImplementationData|dev.comfyfluffy.caustica.minecraft.gen|MinecraftImplementationData|false",
 			"buffer|minecraftEnvironmentBindingLayoutProbe|MinecraftEnvironmentBinding|dev.comfyfluffy.caustica.minecraft.sky.gen|MinecraftEnvironmentBindingData|false",
 			"push|skyLutPushProbe|SkyInputs|dev.comfyfluffy.caustica.minecraft.sky.gen|SkyInputsData|false",
 			"push|skyDispatchPushProbe|SkyLutPush|dev.comfyfluffy.caustica.minecraft.sky.gen|SkyLutPushData|false",
@@ -309,7 +308,6 @@ def compileSkySlice = tasks.register("compileSkySlice", JavaCompile) {
 			project(":packages:minecraft-api").tasks.named("classes"),
 			project(":packages:vulkan-support").tasks.named("classes"))
 	source(file("src/main/java/dev/comfyfluffy/caustica/minecraft/sky/SkyLutPass.java"),
-			file("src/main/java/dev/comfyfluffy/caustica/minecraft/MinecraftLightingCalibration.java"),
 			layout.buildDirectory.file("generated/sources/rootShaderRecords/dev/comfyfluffy/caustica/minecraft/sky/gen/SkyInputsData.java"),
 			layout.buildDirectory.file("generated/sources/rootShaderRecords/dev/comfyfluffy/caustica/minecraft/sky/gen/SkyLutPushData.java"),
 			layout.buildDirectory.file("generated/sources/rootShaderRecords/dev/comfyfluffy/caustica/minecraft/sky/gen/MinecraftEnvironmentBindingData.java"))

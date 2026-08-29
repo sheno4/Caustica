@@ -8,6 +8,7 @@ import dev.comfyfluffy.caustica.builtin.BuiltinExtension;
 import dev.comfyfluffy.caustica.engine.session.RenderSessionHost;
 import dev.comfyfluffy.caustica.minecraft.adapter.session.MinecraftWorldSessionHost;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftExtension;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftClientMaterialEpochCompiler;
 import dev.comfyfluffy.caustica.platform.CausticaPlatform;
 import dev.comfyfluffy.caustica.rt.RtRuntime;
 import dev.comfyfluffy.caustica.settings.CausticaSettings;
@@ -40,9 +41,11 @@ public final class MinecraftApiBootstrap {
         registerExtensions(host, minecraftHost, settingsRegistry, extensions);
         registerMinecraftExtensions(minecraftHost, settingsRegistry,
                 CausticaPlatform.current().minecraftExtensions(), extensions);
+        MinecraftLightingCalibration calibration = MinecraftLightingCalibrationLoader.loadDefault();
         registerMinecraftExtension(minecraftHost, settingsRegistry,
                 new MinecraftProvidersExtension(MinecraftFrameAdapter.INSTANCE::installFrameSelector,
-                        MinecraftFrameAdapter.INSTANCE::installFrameCapture));
+                        MinecraftFrameAdapter.INSTANCE::installFrameCapture,
+                        new MinecraftClientMaterialEpochCompiler(calibration), calibration));
 
         Path gameDirectory = CausticaPlatform.current().gameDir();
         String configuredSlangPath = CausticaConfig.Slang.PATH.get();

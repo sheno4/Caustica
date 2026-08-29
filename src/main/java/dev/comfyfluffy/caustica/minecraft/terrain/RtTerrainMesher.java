@@ -12,6 +12,7 @@ import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialEmission;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialIds;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialResolution;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialTopology;
+import dev.comfyfluffy.caustica.minecraft.MinecraftResourceIds;
 import dev.comfyfluffy.caustica.support.ColorSpaces;
 import it.unimi.dsi.fastutil.floats.FloatArrayList;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
@@ -432,11 +433,11 @@ final class RtTerrainMesher {
             MinecraftMaterialClassification classification = classifications.computeIfAbsent(
                     state, MinecraftMaterialClassifier::classify);
             MinecraftMaterialKey key = new MinecraftMaterialKey(
-                    MinecraftMaterialLookup.material(sprite), classification.geometry(), classification.profile(),
+                    MinecraftResourceIds.material(sprite), classification.geometry(), classification.profile(),
                     q.translucent ? MinecraftMaterialTopology.MEDIUM_BOUNDARY
                             : MinecraftMaterialTopology.SURFACE);
             SpriteMaterial spriteMaterial = spriteMaterials.computeIfAbsent(sprite, current ->
-                    new SpriteMaterial(MinecraftMaterialLookup.material(current), ResourceId.of(
+                    new SpriteMaterial(MinecraftResourceIds.material(current), ResourceId.of(
                             current.atlasLocation().getNamespace(), current.atlasLocation().getPath())));
             MinecraftMaterialResolution terrainMaterial = materials.resolve(key);
             q.material = new TerrainMaterial(terrainMaterial.materialIndex(), terrainMaterial.material(),

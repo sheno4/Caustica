@@ -8,7 +8,6 @@ import dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptorKind;
 import dev.comfyfluffy.caustica.api.program.ShaderData;
 import dev.comfyfluffy.caustica.api.pass.Pass;
 import dev.comfyfluffy.caustica.api.pass.PassFrame;
-import dev.comfyfluffy.caustica.minecraft.api.ResourcePackEpoch;
 import dev.comfyfluffy.caustica.minecraft.gen.MinecraftImplementationData;
 import dev.comfyfluffy.caustica.minecraft.gen.MinecraftInstanceData;
 import dev.comfyfluffy.caustica.minecraft.gen.MinecraftMaterialData;
@@ -25,6 +24,8 @@ import org.lwjgl.vulkan.VkBufferDeviceAddressInfo;
 import org.lwjgl.vulkan.VkImageDescriptorInfoEXT;
 import org.lwjgl.vulkan.VkImageViewCreateInfo;
 import org.lwjgl.vulkan.VkSamplerCreateInfo;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -40,6 +41,7 @@ import static org.lwjgl.vulkan.VK12.vkGetBufferDeviceAddress;
 
 /** Session-wide sampler and factory for immutable Minecraft program/material epochs. */
 public final class MinecraftProgramResources implements AutoCloseable {
+    private static final Logger LOGGER = LoggerFactory.getLogger(MinecraftProgramResources.class);
     private final GpuDevice gpu;
     private final GpuDescriptorRange<GpuDescriptorIndex.Sampler> sampler;
     private int liveEpochs;
@@ -63,15 +65,6 @@ public final class MinecraftProgramResources implements AutoCloseable {
             sampler.destroy();
             throw failure;
         }
-    }
-
-    /** Compiles the currently loaded Minecraft models and resources into one immutable CPU epoch. */
-    public static MinecraftMaterialLookup compileCurrent(ResourcePackEpoch epoch,
-                                                         List<MinecraftMaterialRule> rules) {
-        List<MinecraftMaterialRule> immutableRules = List.copyOf(rules);
-        List<MaterialTextureResource> catalog = MinecraftMaterialCatalogBuilder.build(immutableRules);
-        MinecraftMaterialPageCompiler.Result pages = MinecraftMaterialPageCompiler.compile(catalog);
-        return MinecraftMaterialLookup.compile(epoch, immutableRules, catalog, pages);
     }
 
     /**
@@ -311,7 +304,7 @@ public final class MinecraftProgramResources implements AutoCloseable {
         private void retire() {
             Throwable failure = release();
             if (failure != null) {
-                dev.comfyfluffy.caustica.CausticaMod.LOGGER.error(
+                LOGGER.error(
                         "Minecraft material epoch retirement cleanup failed", failure);
             }
         }

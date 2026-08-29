@@ -7,6 +7,7 @@ import dev.comfyfluffy.caustica.minecraft.MinecraftFrameSelector;
 import dev.comfyfluffy.caustica.minecraft.MinecraftFrameSelectionInstaller;
 import dev.comfyfluffy.caustica.minecraft.MinecraftFrameCaptureInstaller;
 import dev.comfyfluffy.caustica.minecraft.MinecraftFrameCaptureState;
+import dev.comfyfluffy.caustica.minecraft.MinecraftLightingCalibration;
 import dev.comfyfluffy.caustica.minecraft.MinecraftProvidersExtension;
 import dev.comfyfluffy.caustica.minecraft.api.*;
 import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
@@ -29,6 +30,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
 
     private final MinecraftWorldSessionContext context;
     private final MinecraftProgramResources resources;
+    private final MinecraftMaterialEpochCompiler materialEpochs;
     private final MinecraftFrameSelectionInstaller frameSelections;
     private final MinecraftFrameCaptureState frames;
     private final MinecraftFrameCaptureInstaller.Lease frameCapture;
@@ -40,6 +42,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
     private boolean stopped;
 
     private MinecraftProgramSession(MinecraftWorldSessionContext context, MinecraftProgramResources resources,
+                                    MinecraftMaterialEpochCompiler materialEpochs,
                                     MinecraftFrameSelectionInstaller frameSelections,
                                     MinecraftFrameCaptureState frames,
                                     MinecraftFrameCaptureInstaller.Lease frameCapture,
@@ -47,6 +50,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
                                     PassRegistration overlayRegistration) {
         this.context = context;
         this.resources = resources;
+        this.materialEpochs = materialEpochs;
         this.frameSelections = frameSelections;
         this.frames = frames;
         this.frameCapture = frameCapture;
@@ -57,9 +61,13 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
 
     public static MinecraftProgramSession open(MinecraftWorldSessionContext context,
                                                MinecraftFrameSelectionInstaller frameSelections,
-                                               MinecraftFrameCaptureInstaller frameCaptures) {
+                                               MinecraftFrameCaptureInstaller frameCaptures,
+                                               MinecraftMaterialEpochCompiler materialEpochs,
+                                               MinecraftLightingCalibration calibration) {
         java.util.Objects.requireNonNull(frameSelections, "frameSelections");
         java.util.Objects.requireNonNull(frameCaptures, "frameCaptures");
+        java.util.Objects.requireNonNull(materialEpochs, "materialEpochs");
+        java.util.Objects.requireNonNull(calibration, "calibration");
         MinecraftProgramResources resources = new MinecraftProgramResources(context.renderSession().gpu());
         MinecraftFrameCaptureState frames = new MinecraftFrameCaptureState();
         MinecraftFrameCaptureInstaller.Lease frameCapture = null;
@@ -67,7 +75,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         PassRegistration lightRegistration = null;
         PassRegistration overlayRegistration = null;
         try {
-            frameCapture = java.util.Objects.requireNonNull(frameCaptures.install(frames),
+            frameCapture = java.util.Objects.requireNonNull(frameCaptures.install(frames, calibration),
                     "frame capture lease");
             lights = new MinecraftLightProvider(context.renderSession().lights(), context.scene(),
                     MinecraftProgramSession::celestialSettings, frames::current);
@@ -76,7 +84,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
                     setup -> new LightUpdatePass(installedLights));
             overlayRegistration = context.renderSession().passes().addUiPass(WorldOverlayPass::new);
             MinecraftProgramSession session = new MinecraftProgramSession(
-                    context, resources, frameSelections, frames, frameCapture,
+                    context, resources, materialEpochs, frameSelections, frames, frameCapture,
                     lights, lightRegistration, overlayRegistration);
             session.beginReplacement(context.resourcePackEpoch());
             return session;
@@ -97,7 +105,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
     private void beginReplacement(ResourcePackEpoch resourcePack) {
         MinecraftMaterialLookup lookup;
         try {
-            lookup = MinecraftProgramResources.compileCurrent(resourcePack, List.of());
+            lookup = materialEpochs.compile(resourcePack, List.of());
         } catch (RuntimeException | Error failure) {
             CausticaMod.LOGGER.error("Minecraft material epoch {} could not be compiled",
                     resourcePack.generation(), failure);

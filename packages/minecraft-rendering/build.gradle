@@ -18,7 +18,8 @@ dependencies {
     api project(":packages:minecraft-api")
     api project(":packages:settings-api")
     implementation project(":packages:engine")
-    implementation project(":packages:minecraft-content")
+    api project(":packages:minecraft-content")
+    implementation "org.slf4j:slf4j-api:2.0.17"
 
     testImplementation platform("org.junit:junit-bom:5.12.2")
     testImplementation "org.junit.jupiter:junit-jupiter"
@@ -36,6 +37,7 @@ def prepareMinecraftRenderingReflectionSources = tasks.register("prepareMinecraf
 }
 
 def minecraftRenderingRecordSpecs = [
+        "buffer|minecraftImplementationLayoutProbe|MinecraftImplementationData|dev.comfyfluffy.caustica.minecraft.gen|MinecraftImplementationData|false",
         "buffer|minecraftMaterialLayoutProbe|MinecraftMaterialRecord|dev.comfyfluffy.caustica.minecraft.gen|MinecraftMaterialData|false",
         "buffer|minecraftPrimitiveLayoutProbe|MinecraftPrimitiveData|dev.comfyfluffy.caustica.minecraft.gen|MinecraftPrimitiveData|false",
         "buffer|minecraftInstanceLayoutProbe|MinecraftInstanceData|dev.comfyfluffy.caustica.minecraft.gen|MinecraftInstanceData|false"
@@ -68,6 +70,7 @@ def verifyMinecraftRenderingAbi = tasks.register("verifyMinecraftRenderingAbi") 
     inputs.dir(generatedRecordRoot)
     doLast {
         def expected = [
+                MinecraftImplementationData: ["BYTE_SIZE = 16", "putLong(0, materialsAddress())", "putInt(8, samplerIndex().value())", "putInt(12, reserved())"],
                 MinecraftMaterialData: ["BYTE_SIZE = 112", "putInt(0, features())", "putFloat(32, materialUv().x())", "putFloat(108, emissionLuminance())"],
                 MinecraftPrimitiveData: ["BYTE_SIZE = 144", "putFloat(0 + i0 * 8, textureCoordinates()[i0].x())", "putInt(92, materialIndex())", "putFloat(128, bitangent().x())"],
                 MinecraftInstanceData: ["BYTE_SIZE = 32", "putFloat(0, tint().x())", "putInt(16, damageTexture().value())", "putFloat(20, damageStrength())"]
@@ -143,7 +146,13 @@ def verifyMinecraftRenderingResources = tasks.register("verifyMinecraftRendering
         def files = fileTree(sourceSets.main.output.resourcesDir).matching {
             include "caustica/shaders/minecraft/**"
         }.files.collect { sourceSets.main.output.resourcesDir.toPath().relativize(it.toPath()).toString().replace('\\', '/') }
-        def expected = ["caustica/shaders/minecraft/surface/caustica_minecraft_material.slang"]
+        def expected = [
+                "caustica/shaders/minecraft/surface/caustica_minecraft_coverage.slang",
+                "caustica/shaders/minecraft/surface/caustica_minecraft_material.slang",
+                "caustica/shaders/minecraft/surface/caustica_minecraft_surface.slang",
+                "caustica/shaders/minecraft/surface/caustica_portal_surface.slang",
+                "caustica/shaders/minecraft/surface/caustica_water_surface.slang"
+        ]
         if (files.sort() != expected) throw new GradleException("minecraft-rendering resource ownership mismatch: ${files.sort()}")
     }
 }
@@ -155,6 +164,11 @@ def verifyMinecraftRenderingJar = tasks.register("verifyMinecraftRenderingJar") 
         def allowedClassPrefixes = [
                 "dev/comfyfluffy/caustica/minecraft/program/MinecraftPrograms",
                 "dev/comfyfluffy/caustica/minecraft/material/MinecraftMaterialRecord",
+                "dev/comfyfluffy/caustica/minecraft/material/MinecraftMaterialEpochCompiler",
+                "dev/comfyfluffy/caustica/minecraft/material/MinecraftMaterialLookup",
+                "dev/comfyfluffy/caustica/minecraft/material/MinecraftMaterialUploadPass",
+                "dev/comfyfluffy/caustica/minecraft/material/MinecraftProgramResources",
+                "dev/comfyfluffy/caustica/minecraft/MinecraftLightingCalibration",
                 "dev/comfyfluffy/caustica/minecraft/terrain/MinecraftTerrainGeometry",
                 "dev/comfyfluffy/caustica/minecraft/terrain/MinecraftTerrainLightAdapter",
                 "dev/comfyfluffy/caustica/minecraft/terrain/MinecraftTerrainMesh",
@@ -162,6 +176,7 @@ def verifyMinecraftRenderingJar = tasks.register("verifyMinecraftRenderingJar") 
                 "dev/comfyfluffy/caustica/minecraft/terrain/MinecraftVulkanTerrainUploader",
                 "dev/comfyfluffy/caustica/minecraft/entity/MinecraftEntityMesh",
                 "dev/comfyfluffy/caustica/minecraft/gen/MinecraftMaterialData",
+                "dev/comfyfluffy/caustica/minecraft/gen/MinecraftImplementationData",
                 "dev/comfyfluffy/caustica/minecraft/gen/MinecraftPrimitiveData",
                 "dev/comfyfluffy/caustica/minecraft/gen/MinecraftInstanceData"
         ]
@@ -177,7 +192,13 @@ def verifyMinecraftRenderingJar = tasks.register("verifyMinecraftRenderingJar") 
                 }
             }
         }
-        def expectedResources = ["caustica/shaders/minecraft/surface/caustica_minecraft_material.slang"]
+        def expectedResources = [
+                "caustica/shaders/minecraft/surface/caustica_minecraft_coverage.slang",
+                "caustica/shaders/minecraft/surface/caustica_minecraft_material.slang",
+                "caustica/shaders/minecraft/surface/caustica_minecraft_surface.slang",
+                "caustica/shaders/minecraft/surface/caustica_portal_surface.slang",
+                "caustica/shaders/minecraft/surface/caustica_water_surface.slang"
+        ]
         if (!foreign.empty || shaderResources.sort() != expectedResources) {
             throw new GradleException("minecraft-rendering JAR mismatch; foreign=${foreign}, resources=${shaderResources.sort()}")
         }

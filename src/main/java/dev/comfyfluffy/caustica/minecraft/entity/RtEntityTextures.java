@@ -3,10 +3,10 @@ package dev.comfyfluffy.caustica.minecraft.entity;
 import com.mojang.blaze3d.textures.GpuTextureView;
 import com.mojang.blaze3d.vulkan.VulkanGpuTextureView;
 import dev.comfyfluffy.caustica.CausticaMod;
+import dev.comfyfluffy.caustica.minecraft.MinecraftResourceIds;
 import dev.comfyfluffy.caustica.settings.ResourceId;
 import dev.comfyfluffy.caustica.mixin.RenderSetupAccessor;
 import dev.comfyfluffy.caustica.mixin.RenderTypeAccessor;
-import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialLookup;
 import com.mojang.blaze3d.platform.NativeImage;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.rendertype.PreparedRenderType;
@@ -62,7 +62,7 @@ public final class RtEntityTextures {
         Identifier location = textureLocation(renderType);
         if (location == null) return null;
         MinecraftEntityMesh.Texture reference = MinecraftEntityMesh.Texture.standalone(
-                MinecraftMaterialLookup.logicalTexture(location));
+                MinecraftResourceIds.logicalTexture(location));
         contribute(renderType, reference);
         return reference;
     }

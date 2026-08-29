@@ -4,6 +4,7 @@ import dev.comfyfluffy.caustica.builtin.BuiltinExtension;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftApi;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftWorldSessionFactory;
 import dev.comfyfluffy.caustica.minecraft.sky.SkyLutPass;
+import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialEpochCompiler;
 import dev.comfyfluffy.caustica.settings.SettingsRegistry;
 import org.junit.jupiter.api.Test;
 
@@ -18,7 +19,7 @@ final class MinecraftProvidersExtensionTest {
     void builtinAndMinecraftSettingsUseTheIndependentSettingsRegistry() {
         SettingsRegistry settings = new SettingsRegistry();
         new BuiltinExtension().registerSettings(settings);
-        new MinecraftProvidersExtension(selector -> () -> { }, sink -> () -> { }).registerSettings(settings);
+        extension().registerSettings(settings);
 
         assertTrue(settings.declared(BuiltinExtension.ID));
         assertTrue(settings.declared(MinecraftProvidersExtension.ID));
@@ -33,8 +34,14 @@ final class MinecraftProvidersExtensionTest {
             return () -> { };
         });
 
-        new MinecraftProvidersExtension(selector -> () -> { }, sink -> () -> { }).registerMinecraft(api);
+        extension().registerMinecraft(api);
 
         assertEquals(1, factories.size());
+    }
+
+    private static MinecraftProvidersExtension extension() {
+        MinecraftMaterialEpochCompiler materials = (epoch, rules) -> null;
+        return new MinecraftProvidersExtension(selector -> () -> { }, (sink, calibration) -> () -> { },
+                materials, new MinecraftLightingCalibration(1, 1, 1, 0, 0, 0));
     }
 }

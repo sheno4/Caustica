@@ -3,8 +3,8 @@ package dev.comfyfluffy.caustica.minecraft.material;
 import dev.comfyfluffy.caustica.api.geometry.MeshBuild;
 import dev.comfyfluffy.caustica.minecraft.api.ResourcePackEpoch;
 import dev.comfyfluffy.caustica.settings.ResourceId;
-import net.minecraft.client.renderer.texture.TextureAtlasSprite;
-import net.minecraft.resources.Identifier;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -17,6 +17,7 @@ import java.util.Set;
 
 /** Immutable Minecraft material-table lookup for one resource-pack epoch. */
 public final class MinecraftMaterialLookup {
+    private static final Logger LOGGER = LoggerFactory.getLogger(MinecraftMaterialLookup.class);
     private final ResourcePackEpoch epoch;
     private final Map<MinecraftMaterialKey, MinecraftMaterialResolution> resolutions;
     private final Map<ResourceId, MinecraftMaterialResolution> defaults;
@@ -93,18 +94,6 @@ public final class MinecraftMaterialLookup {
         return value;
     }
 
-    public static ResourceId material(TextureAtlasSprite sprite) {
-        return sprite == null ? null : resourceId(sprite.contents().name());
-    }
-
-    public static ResourceId logicalTexture(Identifier textureLocation) {
-        if (textureLocation == null) return null;
-        String path = textureLocation.getPath();
-        if (path.startsWith("textures/")) path = path.substring("textures/".length());
-        if (path.endsWith(".png")) path = path.substring(0, path.length() - 4);
-        return ResourceId.of(textureLocation.getNamespace(), path);
-    }
-
     private static Map<ResourceId, MinecraftMaterialEmissionAnalyzer.Scan> scan(
             List<MaterialTextureResource> resources) {
         Map<ResourceId, MinecraftMaterialEmissionAnalyzer.Scan> scans = new HashMap<>();
@@ -112,7 +101,7 @@ public final class MinecraftMaterialLookup {
             try {
                 scans.put(resource.material(), MinecraftMaterialEmissionAnalyzer.scan(resource));
             } catch (Throwable failure) {
-                dev.comfyfluffy.caustica.CausticaMod.LOGGER.warn(
+                LOGGER.warn(
                         "Minecraft material semantics scan failed for {}", resource.material(), failure);
             }
         }
@@ -194,10 +183,6 @@ public final class MinecraftMaterialLookup {
             if (rule.geometry() == null && rule.matches(material, geometry)) return rule;
         }
         return null;
-    }
-
-    private static ResourceId resourceId(Identifier id) {
-        return ResourceId.of(id.getNamespace(), id.getPath());
     }
 
     private record Compiled(MinecraftMaterialRecord record, MinecraftMaterialTopology topology,

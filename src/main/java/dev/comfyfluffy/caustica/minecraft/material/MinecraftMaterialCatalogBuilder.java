@@ -3,6 +3,7 @@ package dev.comfyfluffy.caustica.minecraft.material;
 import com.mojang.blaze3d.platform.NativeImage;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.minecraft.MinecraftLightingCalibration;
+import dev.comfyfluffy.caustica.minecraft.MinecraftResourceIds;
 import dev.comfyfluffy.caustica.settings.ResourceId;
 import dev.comfyfluffy.caustica.mixin.SpriteContentsAccessor;
 import dev.comfyfluffy.caustica.mixin.TextureAtlasAccessor;
@@ -27,15 +28,16 @@ public final class MinecraftMaterialCatalogBuilder {
     private MinecraftMaterialCatalogBuilder() {
     }
 
-    public static List<MaterialTextureResource> build(List<MinecraftMaterialRule> rules) {
+    public static List<MaterialTextureResource> build(List<MinecraftMaterialRule> rules,
+                                                       MinecraftLightingCalibration calibration) {
         MaterialEmissionIndex emissions = MinecraftEmissionSemantics.analyze();
-        float uniformEmissionLuminance = MinecraftLightingCalibration.current().blockEmissionLuminanceCdM2();
+        float uniformEmissionLuminance = calibration.blockEmissionLuminanceCdM2();
         List<TextureAtlasSprite> sprites = blockSprites();
         List<MaterialTextureResource> blocks = new ArrayList<>();
         for (TextureAtlasSprite sprite : sprites) {
             if (sprite == null) continue;
             Identifier name = sprite.contents().name();
-            ResourceId material = resourceId(name);
+            ResourceId material = MinecraftResourceIds.resourceId(name);
             Optional<Resource> spec = resource(sibling(name, "_s.png"));
             Optional<Resource> normal = resource(sibling(name, "_n.png"));
             NativeImage original = ((SpriteContentsAccessor) sprite.contents()).caustica$originalImage();
@@ -77,7 +79,7 @@ public final class MinecraftMaterialCatalogBuilder {
             if (albedoResource.isEmpty()) continue;
             try (MaterialImage albedo = resourceImage(albedoResource.get(), false).open()) {
                 if (albedo.width() <= 0 || albedo.height() <= 0) continue;
-                ResourceId material = MinecraftMaterialLookup.logicalTexture(albedoLocation);
+                ResourceId material = MinecraftResourceIds.logicalTexture(albedoLocation);
                 int features = entry.getValue();
                 Optional<Resource> spec = (features & 1) != 0
                         ? resource(siblingTexture(albedoLocation, "_s")) : Optional.empty();
@@ -111,7 +113,7 @@ public final class MinecraftMaterialCatalogBuilder {
             boolean spec = path.endsWith("_s.png");
             Identifier albedo = Identifier.fromNamespaceAndPath(companion.getNamespace(),
                     path.substring(0, path.length() - 6) + ".png");
-            ResourceId material = MinecraftMaterialLookup.logicalTexture(albedo);
+            ResourceId material = MinecraftResourceIds.logicalTexture(albedo);
             if (blockNames.contains(material) || resource(albedo).isEmpty()) continue;
             result.merge(albedo, spec ? 1 : 2, (a, b) -> a | b);
         }
@@ -162,10 +164,6 @@ public final class MinecraftMaterialCatalogBuilder {
 
     private static Identifier textureLocation(ResourceId material) {
         return Identifier.fromNamespaceAndPath(material.namespace(), "textures/" + material.path() + ".png");
-    }
-
-    private static ResourceId resourceId(Identifier id) {
-        return ResourceId.of(id.getNamespace(), id.getPath());
     }
 
     private static float inverseExtent(float extent) {
