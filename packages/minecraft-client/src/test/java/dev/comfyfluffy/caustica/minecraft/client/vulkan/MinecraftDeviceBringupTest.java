@@ -6,9 +6,14 @@ import dev.comfyfluffy.caustica.engine.vulkan.VulkanProfileSupport;
 import dev.comfyfluffy.caustica.engine.vulkan.VulkanProfileValidation;
 import dev.comfyfluffy.caustica.engine.vulkan.VulkanRequiredProfile;
 import org.junit.jupiter.api.Test;
+import org.lwjgl.system.Pointer;
 import org.lwjgl.vulkan.VK10;
+import org.lwjgl.vulkan.VkPhysicalDevice;
 
+import java.lang.reflect.ParameterizedType;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -17,6 +22,17 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class MinecraftDeviceBringupTest {
+    @Test
+    void negotiationStateUsesAddressValuedPhysicalDeviceWrappers() throws NoSuchFieldException {
+        ParameterizedType mapType = (ParameterizedType) MinecraftDeviceBringup.class
+                .getDeclaredField("negotiations").getGenericType();
+        assertEquals(VkPhysicalDevice.class, mapType.getActualTypeArguments()[0]);
+
+        Map<TestPointer, String> values = new HashMap<>();
+        values.put(new TestPointer(0x1234L), "negotiated");
+        assertEquals("negotiated", values.get(new TestPointer(0x1234L)));
+    }
+
     @Test
     void requestsVulkan14AndRejectsAnOlderLoaderWithStructuredDiagnostic() {
         IllegalStateException failure = assertThrows(IllegalStateException.class,
@@ -89,5 +105,11 @@ final class MinecraftDeviceBringupTest {
                 () -> new GpuRasterCapabilities(true, Float.NaN, VK10.VK_SAMPLE_COUNT_4_BIT));
         assertThrows(IllegalArgumentException.class,
                 () -> new GpuRasterCapabilities(true, 4.0f, 3));
+    }
+
+    private static final class TestPointer extends Pointer.Default {
+        private TestPointer(long address) {
+            super(address);
+        }
     }
 }

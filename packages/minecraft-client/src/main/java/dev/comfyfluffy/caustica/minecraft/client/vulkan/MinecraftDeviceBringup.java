@@ -198,7 +198,7 @@ public final class MinecraftDeviceBringup {
             new ProfileFeature(dev.comfyfluffy.caustica.engine.vulkan.VulkanFeature.RAY_TRACING_POSITION_FETCH, POSITION_FETCH));
     private volatile int loaderApiVersion;
     private volatile int requestedInstanceApiVersion;
-    private final Map<Long, Negotiation> negotiations = new HashMap<>();
+    private final Map<VkPhysicalDevice, Negotiation> negotiations = new HashMap<>();
 
     public record NegotiatedDevice(VulkanDeviceCapabilities capabilities, VulkanQueueReservation computeQueue) {
     }
@@ -234,7 +234,7 @@ public final class MinecraftDeviceBringup {
     }
 
     private synchronized Negotiation negotiation(VkPhysicalDevice physicalDevice) {
-        return negotiations.computeIfAbsent(physicalDevice.address(), ignored -> new Negotiation());
+        return negotiations.computeIfAbsent(physicalDevice, ignored -> new Negotiation());
     }
 
     public void addExtensions(Collection<String> extensions, VulkanPhysicalDevice device) {
@@ -349,7 +349,7 @@ public final class MinecraftDeviceBringup {
 
     /** Removes the negotiation result once the matching live backend has captured it. */
     public synchronized NegotiatedDevice consume(VkDevice device) {
-        Negotiation negotiation = negotiations.remove(device.getPhysicalDevice().address());
+        Negotiation negotiation = negotiations.remove(device.getPhysicalDevice());
         if (negotiation == null || negotiation.computeQueue == null) return null;
         return new NegotiatedDevice(negotiation.capabilities, negotiation.computeQueue);
     }

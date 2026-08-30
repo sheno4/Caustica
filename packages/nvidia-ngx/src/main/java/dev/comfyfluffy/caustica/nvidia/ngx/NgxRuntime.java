@@ -52,7 +52,7 @@ public final class NgxRuntime {
     private boolean initialized;
     private boolean failed;
     private boolean closed;
-    private long initializedDevice;
+    private VkDevice initializedDevice;
 
     public record Settings(Path dataDirectory, Optional<Path> shimOverride) {
         public Settings {
@@ -104,7 +104,7 @@ public final class NgxRuntime {
         closed = true;
         if (lib != null && initialized) {
             try {
-                lib.shutdown(initializedDevice);
+                lib.shutdown(initializedDevice.address());
             } catch (Throwable t) {
                 LOGGER.warn("NGX shutdown failed", t);
             }
@@ -112,7 +112,7 @@ public final class NgxRuntime {
         initialized = false;
         failed = false;
         lib = null;
-        initializedDevice = 0L;
+        initializedDevice = null;
     }
 
     /** NVSDK_NGX_Result: failure when the top 12 bits == 0xBAD. Shared by all NGX feature wrappers. */
@@ -161,7 +161,7 @@ public final class NgxRuntime {
                         + " last=0x" + Integer.toHexString(lib.lastResult()));
             }
         }
-        initializedDevice = device.address();
+        initializedDevice = device;
         LOGGER.info("NGX initialized (shim {})", shim);
     }
 
