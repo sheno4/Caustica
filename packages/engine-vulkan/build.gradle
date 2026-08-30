@@ -59,9 +59,9 @@ def verifyEngineVulkanImports = tasks.register("verifyEngineVulkanImports") {
     inputs.files(sourceSets.main.allJava)
     doLast {
         def forbidden = [
-                "dev.comfyfluffy.caustica.CausticaMod",
+                "dev.comfyfluffy.caustica.minecraft.client.CausticaMod",
                 "dev.comfyfluffy.caustica.minecraft",
-                "dev.comfyfluffy.caustica.platform",
+                "dev.comfyfluffy.caustica.minecraft.client.platform",
                 "dev.comfyfluffy.caustica.fabric",
                 "dev.comfyfluffy.caustica.neoforge",
                 "dev.comfyfluffy.caustica.ngx",
@@ -90,7 +90,7 @@ def verifyEngineVulkanRuntimeNamespace = tasks.register("verifyEngineVulkanRunti
     doLast {
         def legacy = sourceSets.main.allJava.files.findAll { file ->
             file.toPath().toString().replace('\\', '/').contains(
-                    '/dev/comfyfluffy/caustica/rt/')
+                    '/dev/comfyfluffy/caustica/renderer/runtime/')
         }
         if (!legacy.empty) {
             throw new GradleException("engine-vulkan runtime classes use the legacy RT namespace: ${legacy}")

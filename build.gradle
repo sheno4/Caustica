@@ -9,12 +9,44 @@ plugins {
 version = project.mod_version
 group = project.maven_group
 
+def productionJavaByArtifact = [:]
+def verifyJavaPackageOwnership = tasks.register("verifyJavaPackageOwnership") {
+	group = "verification"
+	description = "Verifies that each production Java package is owned by exactly one packages artifact."
+	doLast {
+		def owners = [:].withDefault { new TreeSet<String>() }
+		productionJavaByArtifact.each { artifact, sources ->
+			sources.files.findAll { it.isFile() && it.name.endsWith(".java") }.sort().each { source ->
+				def declaration = source.getText("UTF-8") =~ /(?m)^\s*package\s+([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*;/
+				if (declaration.find()) owners[declaration.group(1)].add(artifact)
+			}
+		}
+		def shared = owners.findAll { packageName, artifacts -> artifacts.size() > 1 }
+		if (!shared.isEmpty()) {
+			def violations = shared.keySet().sort().collect { packageName ->
+				"${packageName}: ${shared[packageName].join(', ')}"
+			}
+			throw new GradleException("Production Java packages owned by multiple artifacts:\n${violations.join('\n')}")
+		}
+	}
+}
+
+subprojects { artifact ->
+	artifact.pluginManager.withPlugin("java") {
+		// Generated production Java is registered on main.allJava with builtBy metadata, so the
+		// ownership check observes the same package set and generator dependencies as compilation.
+		def productionJava = artifact.extensions.getByName("sourceSets").named("main").get().allJava
+		productionJavaByArtifact[artifact.path] = productionJava
+		verifyJavaPackageOwnership.configure { inputs.files(productionJava) }
+	}
+}
+
 tasks.named("assemble") {
 	dependsOn(":packages:minecraft-client:assemble")
 }
 
 tasks.named("check") {
-	dependsOn(":packages:minecraft-client:check")
+	dependsOn(":packages:minecraft-client:check", verifyJavaPackageOwnership)
 }
 
 tasks.named("publish") {

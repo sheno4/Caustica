@@ -11,10 +11,10 @@
     "environment": "client",
     "entrypoints": {
         "main": [
-            "dev.comfyfluffy.caustica.FabricCausticaMod"
+            "dev.comfyfluffy.caustica.minecraft.client.FabricCausticaMod"
         ],
         "client": [
-            "dev.comfyfluffy.caustica.client.CausticaClient"
+            "dev.comfyfluffy.caustica.minecraft.client.CausticaClient"
         ]
     },
     "mixins": [

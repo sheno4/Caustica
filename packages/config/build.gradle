@@ -26,7 +26,7 @@ def verifyConfigDependencies = tasks.register("verifyConfigDependencies") {
     inputs.files(sourceSets.main.allJava)
     doLast {
         def forbidden = [
-                "dev.comfyfluffy.caustica.platform",
+                "dev.comfyfluffy.caustica.minecraft.client.platform",
                 "dev.comfyfluffy.caustica.minecraft",
                 "net.minecraft",
                 "net.fabricmc",

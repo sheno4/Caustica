@@ -294,10 +294,10 @@ def verifyRendererRayTracingImports = tasks.register("verifyRendererRayTracingIm
     inputs.files(sourceSets.main.allJava)
     doLast {
         def forbidden = [
-                "dev.comfyfluffy.caustica.CausticaMod",
+                "dev.comfyfluffy.caustica.minecraft.client.CausticaMod",
                 "dev.comfyfluffy.caustica.config",
                 "dev.comfyfluffy.caustica.minecraft",
-                "dev.comfyfluffy.caustica.platform",
+                "dev.comfyfluffy.caustica.minecraft.client.platform",
                 "dev.comfyfluffy.caustica.fabric",
                 "dev.comfyfluffy.caustica.neoforge",
                 "dev.comfyfluffy.caustica.ngx",
@@ -308,7 +308,7 @@ def verifyRendererRayTracingImports = tasks.register("verifyRendererRayTracingIm
         def violations = []
         sourceSets.main.allJava.files.sort().each { file ->
             file.eachLine { line, number ->
-                def rootRayImport = line.contains("dev.comfyfluffy.caustica.rt.")
+                def rootRayImport = line.contains("dev.comfyfluffy.caustica.renderer.runtime.")
                 if (line.stripLeading().startsWith("import ")
                         && (forbidden.any { line.contains(it) } || rootRayImport)) {
                     violations.add("${file}:${number}: ${line.trim()}")

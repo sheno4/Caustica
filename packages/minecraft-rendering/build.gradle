@@ -160,8 +160,8 @@ def verifyMinecraftRenderingImports = tasks.register("verifyMinecraftRenderingIm
     inputs.files(sourceSets.main.allJava)
     doLast {
         def forbidden = ["com.mojang", "net.minecraft", "net.fabricmc", "net.neoforged",
-                         "dev.comfyfluffy.caustica.CausticaMod", "dev.comfyfluffy.caustica.rt",
-                         "dev.comfyfluffy.caustica.platform", "dev.comfyfluffy.caustica.mixin",
+                         "dev.comfyfluffy.caustica.minecraft.client.CausticaMod", "dev.comfyfluffy.caustica.renderer.runtime",
+                         "dev.comfyfluffy.caustica.minecraft.client.platform", "dev.comfyfluffy.caustica.minecraft.client.mixin",
                          "dev.comfyfluffy.caustica.renderer", "dev.comfyfluffy.caustica.engine"]
         def violations = []
         sourceSets.main.allJava.files.sort().each { file ->

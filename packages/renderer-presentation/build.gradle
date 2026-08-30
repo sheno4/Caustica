@@ -174,10 +174,9 @@ def verifyRendererPresentationImports = tasks.register("verifyRendererPresentati
     group = "verification"
     inputs.files(sourceSets.main.allJava)
     doLast {
-        def forbidden = ["dev.comfyfluffy.caustica.CausticaMod", "dev.comfyfluffy.caustica.config",
-                "dev.comfyfluffy.caustica.minecraft", "dev.comfyfluffy.caustica.platform",
-                "dev.comfyfluffy.caustica.rt", "dev.comfyfluffy.caustica.rt.gen",
-                "dev.comfyfluffy.caustica.rt.pipeline.RtBindings",
+        def forbidden = ["dev.comfyfluffy.caustica.minecraft.client.CausticaMod", "dev.comfyfluffy.caustica.config",
+                "dev.comfyfluffy.caustica.minecraft", "dev.comfyfluffy.caustica.minecraft.client.platform",
+                "dev.comfyfluffy.caustica.renderer.runtime",
                 "dev.comfyfluffy.caustica.renderer.raytracing",
                 "net.minecraft", "net.fabricmc", "net.neoforged"]
         def violations = []

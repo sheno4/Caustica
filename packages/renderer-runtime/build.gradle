@@ -33,9 +33,9 @@ def verifyRendererRuntimeImports = tasks.register("verifyRendererRuntimeImports"
     inputs.files(sourceSets.main.allJava)
     doLast {
         def forbidden = [
-                "dev.comfyfluffy.caustica.CausticaMod",
-                "dev.comfyfluffy.caustica.client",
-                "dev.comfyfluffy.caustica.platform",
+                "dev.comfyfluffy.caustica.minecraft.client.CausticaMod",
+                "dev.comfyfluffy.caustica.minecraft.client",
+                "dev.comfyfluffy.caustica.minecraft.client.platform",
                 "dev.comfyfluffy.caustica.fabric",
                 "dev.comfyfluffy.caustica.neoforge",
                 "dev.comfyfluffy.caustica.minecraft",
@@ -89,7 +89,7 @@ def verifyRendererRuntimeJar = tasks.register("verifyRendererRuntimeJar") {
             def entries = jar.entries()
             while (entries.hasMoreElements()) names += entries.nextElement().name
         }
-        def rtRoot = "dev/comfyfluffy/caustica/rt/"
+        def rtRoot = "dev/comfyfluffy/caustica/renderer/runtime/"
         def hostRoot = "dev/comfyfluffy/caustica/spi/host/"
         def foreign = names.findAll { it.endsWith(".class")
                 && !it.startsWith(rtRoot) && !it.startsWith(hostRoot) }
@@ -106,7 +106,7 @@ def verifyRendererRuntimeJar = tasks.register("verifyRendererRuntimeJar") {
 def verifyRendererRuntimeOwnership = tasks.register("verifyRendererRuntimeOwnership") {
     group = "verification"
     doLast {
-        def legacyRoots = [file("src/main/java/dev/comfyfluffy/caustica/rt/RtRuntime.java"),
+        def legacyRoots = [file("src/main/java/dev/comfyfluffy/caustica/rt"),
                            rootProject.file("src/main/java/dev/comfyfluffy/caustica/rt"),
                            rootProject.file("src/main/java/dev/comfyfluffy/caustica/spi/host/RuntimeHost.java")]
         def legacy = legacyRoots.findAll { it.isFile() || it.isDirectory() && !fileTree(it).files.empty }

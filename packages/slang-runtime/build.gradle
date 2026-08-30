@@ -179,11 +179,11 @@ def verifySlangRuntimeImports = tasks.register("verifySlangRuntimeImports") {
     description = "Verifies that the Slang runtime has no host, renderer, or configuration imports."
     inputs.files(sourceSets.main.allJava)
     doLast {
-        def forbidden = ["dev.comfyfluffy.caustica.CausticaMod",
+        def forbidden = ["dev.comfyfluffy.caustica.minecraft.client.CausticaMod",
                          "dev.comfyfluffy.caustica.config",
-                         "dev.comfyfluffy.caustica.platform",
+                         "dev.comfyfluffy.caustica.minecraft.client.platform",
                          "dev.comfyfluffy.caustica.minecraft",
-                         "dev.comfyfluffy.caustica.rt",
+                         "dev.comfyfluffy.caustica.renderer.runtime",
                          "dev.comfyfluffy.caustica.engine"]
         def violations = []
         sourceSets.main.allJava.files.sort().each { source ->

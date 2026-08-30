@@ -94,8 +94,8 @@ def verifyBuiltinDependencies = tasks.register("verifyBuiltinDependencies") {
     inputs.files(sourceSets.main.allJava)
     doLast {
         def forbidden = ["dev.comfyfluffy.caustica.engine", "dev.comfyfluffy.caustica.minecraft",
-                "dev.comfyfluffy.caustica.rt", "dev.comfyfluffy.caustica.ngx",
-                "dev.comfyfluffy.caustica.platform", "net.minecraft", "net.fabricmc", "net.neoforged"]
+                "dev.comfyfluffy.caustica.renderer.runtime", "dev.comfyfluffy.caustica.ngx",
+                "dev.comfyfluffy.caustica.minecraft.client.platform", "net.minecraft", "net.fabricmc", "net.neoforged"]
         def violations = []
         sourceSets.main.allJava.files.sort().each { source ->
             source.eachLine { line, number ->

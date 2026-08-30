@@ -1,7 +1,7 @@
 {
 	"required": true,
 	"minVersion": "0.8",
-	"package": "dev.comfyfluffy.caustica.mixin",
+	"package": "dev.comfyfluffy.caustica.minecraft.client.mixin",
 	"compatibilityLevel": "JAVA_21",
 	"client": [
 		"NeoForgeLevelExtractorBlockEntityMixin"

@@ -1,6 +1,5 @@
 plugins {
     id "java-library"
-    id "java-test-fixtures"
     id "maven-publish"
 }
 
@@ -49,13 +48,13 @@ def verifyMinecraftContentImports = tasks.register("verifyMinecraftContentImport
                 "net.minecraft",
                 "net.fabricmc",
                 "net.neoforged",
-                "dev.comfyfluffy.caustica.rt",
+                "dev.comfyfluffy.caustica.renderer.runtime",
                 "dev.comfyfluffy.caustica.engine",
-                "dev.comfyfluffy.caustica.platform",
+                "dev.comfyfluffy.caustica.minecraft.client.platform",
                 "dev.comfyfluffy.caustica.fabric",
                 "dev.comfyfluffy.caustica.neoforge",
-                "dev.comfyfluffy.caustica.CausticaMod",
-                "dev.comfyfluffy.caustica.minecraft.MinecraftApiBootstrap"
+                "dev.comfyfluffy.caustica.minecraft.client.CausticaMod",
+                "dev.comfyfluffy.caustica.minecraft.client.MinecraftApiBootstrap"
         ]
         def violations = []
         sourceSets.main.allJava.files.sort().each { file ->

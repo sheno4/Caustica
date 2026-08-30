@@ -9,12 +9,23 @@ plugins {
 }
 
 evaluationDependsOn(":packages:api")
+evaluationDependsOn(":packages:api-support")
+evaluationDependsOn(":packages:config")
+evaluationDependsOn(":packages:engine")
+evaluationDependsOn(":packages:engine-vulkan")
+evaluationDependsOn(":packages:features-builtin")
+evaluationDependsOn(":packages:minecraft-api")
+evaluationDependsOn(":packages:minecraft-adapter")
+evaluationDependsOn(":packages:minecraft-content")
 evaluationDependsOn(":packages:minecraft-rendering")
 evaluationDependsOn(":packages:nvidia-ngx")
 evaluationDependsOn(":packages:renderer-presentation")
 evaluationDependsOn(":packages:renderer-raytracing")
 evaluationDependsOn(":packages:renderer-runtime")
+evaluationDependsOn(":packages:settings-api")
+evaluationDependsOn(":packages:shader-api")
 evaluationDependsOn(":packages:slang-runtime")
+evaluationDependsOn(":packages:vulkan-support")
 
 def loader = (findProperty("loader") ?: "fabric").toString().toLowerCase(Locale.ROOT)
 if (!(loader in ["fabric", "neoforge"])) {
@@ -196,7 +207,6 @@ dependencies {
 	testImplementation project(":packages:minecraft-api")
 	testImplementation project(":packages:minecraft-adapter")
 	testImplementation project(":packages:minecraft-content")
-	testImplementation(testFixtures(project(":packages:minecraft-content")))
 	testImplementation project(":packages:minecraft-rendering")
 	testImplementation project(":packages:nvidia-ngx")
 	testImplementation project(":packages:renderer-presentation")
@@ -284,7 +294,7 @@ def compileShaders = tasks.register("compileShaders", CompileSlangShaders) {
 
 def compileOverlayHeapAbiTest = tasks.register("compileOverlayHeapAbiTest", JavaCompile) {
 	group = "verification"
-	source(file("src/test/java/dev/comfyfluffy/caustica/minecraft/overlay/OverlayHeapAbiTest.java"))
+	source(file("src/test/java/dev/comfyfluffy/caustica/minecraft/client/overlay/OverlayHeapAbiTest.java"))
 	classpath = configurations.testCompileClasspath
 	destinationDirectory = layout.buildDirectory.dir("classes/overlay-heap-abi-test")
 	options.release = 25
