@@ -1,0 +1,195 @@
+plugins {
+    id "java-library"
+    id "maven-publish"
+}
+
+version = project.api_version
+group = project.maven_group
+java.toolchain.languageVersion = JavaLanguageVersion.of(25)
+base { archivesName = "caustica-nvidia-nrd" }
+repositories { mavenCentral() }
+
+dependencies {
+    api project(":packages:renderer-denoising")
+    testImplementation platform("org.junit:junit-bom:5.12.2")
+    testImplementation "org.junit.jupiter:junit-jupiter"
+    testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+}
+
+def nrdRevision = "b233cc3ec5b1db2763e45fd18c9bb19793016355"
+def nriRevision = "e87c87b83a6cdaac8f5772c51e857a8ed0f9052c"
+def shaderMakeRevision = "757594f0539314467f74950c8d898e815ecbd383"
+def mathLibRevision = "ca2684e5400368628d46bdf67e2c08e33e2c4939"
+def vulkanHeadersRevision = "2e0a6e699e35c9609bde2ca4abb0d380c0378639"
+def vmaRevision = "1d8f600fd424278486eade7ed3e877c99f0846b1"
+def nativeBuildRoot = layout.buildDirectory.dir("native/nrd_shim-pinned")
+def nativeArtifactRoot = layout.buildDirectory.dir("native/nrd_shim-artifacts")
+def nativeResourceRoot = layout.buildDirectory.dir("generated/nrd-natives")
+def nativeDependencyRoot = layout.buildDirectory.dir("native/exact-deps")
+def nrdSdk = providers.gradleProperty("nrdSdk").orElse(providers.environmentVariable("NRD_SDK"))
+def currentPlatform = {
+    def os = org.gradle.internal.os.OperatingSystem.current()
+    def arch = System.getProperty("os.arch", "").toLowerCase(Locale.ROOT)
+    if (!(arch in ["x86_64", "amd64"])) return null
+    if (os.windows) return [name: "windows-x64", library: "nrdshim.dll"]
+    if (os.linux) return [name: "linux-x64", library: "libnrdshim.so"]
+    null
+}()
+
+tasks.register("configureNrdNative", Exec) {
+    group = "build"
+    description = "Configures the explicit, pinned SPIR-V-only NRD/NRI Vulkan shim build."
+    onlyIf {
+        if (!nrdSdk.present) throw new GradleException("Set -PnrdSdk=<NRD checkout> or NRD_SDK. No SDK is downloaded automatically.")
+        true
+    }
+    inputs.dir("native/nrd_shim")
+    inputs.property("nrdRevision", nrdRevision)
+    inputs.property("nriRevision", nriRevision)
+    inputs.property("shaderMakeRevision", shaderMakeRevision)
+    inputs.property("mathLibRevision", mathLibRevision)
+    inputs.property("vulkanHeadersRevision", vulkanHeadersRevision)
+    inputs.property("vmaRevision", vmaRevision)
+    inputs.property("nrdSdk", nrdSdk.map { file(it).absolutePath })
+    outputs.dir(nativeBuildRoot)
+    outputs.upToDateWhen { false }
+    commandLine "cmake", "-S", file("native/nrd_shim"), "-B", nativeBuildRoot.get().asFile,
+            "-DNRD_SDK=${file(nrdSdk.get()).absolutePath}", "-DCAUSTICA_NRD_REVISION=${nrdRevision}",
+            "-DCAUSTICA_NRI_REVISION=${nriRevision}",
+            "-DCAUSTICA_SHADERMAKE_REVISION=${shaderMakeRevision}",
+            "-DCAUSTICA_MATHLIB_REVISION=${mathLibRevision}",
+            "-DCAUSTICA_VULKAN_HEADERS_REVISION=${vulkanHeadersRevision}",
+            "-DCAUSTICA_VMA_REVISION=${vmaRevision}",
+            "-DCAUSTICA_NRD_OUTPUT_ROOT=${nativeArtifactRoot.get().asFile.absolutePath}",
+            "-DFETCHCONTENT_SOURCE_DIR_SHADERMAKE=${nativeDependencyRoot.get().file('shadermake').asFile.absolutePath}",
+            "-DFETCHCONTENT_SOURCE_DIR_MATHLIB=${nativeDependencyRoot.get().file('mathlib').asFile.absolutePath}",
+            "-DFETCHCONTENT_SOURCE_DIR_NRI=${nativeDependencyRoot.get().file('nri').asFile.absolutePath}",
+            "-DFETCHCONTENT_SOURCE_DIR_VULKAN_HEADERS=${nativeDependencyRoot.get().file('vulkan-headers').asFile.absolutePath}",
+            "-DFETCHCONTENT_SOURCE_DIR_VMA=${nativeDependencyRoot.get().file('vma').asFile.absolutePath}",
+            "-DFETCHCONTENT_SOURCE_DIR_DXC=${nativeDependencyRoot.get().file('dxc').asFile.absolutePath}",
+            "-DSHADERMAKE_DXC_VK_PATH=${nativeDependencyRoot.get().file('dxc/bin/x64/dxc.exe').asFile.absolutePath}",
+            "-DFETCHCONTENT_FULLY_DISCONNECTED=ON",
+            "-DNRD_EMBEDS_DXBC_SHADERS=OFF", "-DNRD_EMBEDS_DXIL_SHADERS=OFF",
+            "-DNRD_EMBEDS_SPIRV_SHADERS=ON", "-DNRD_NRI=ON", "-DNRD_STATIC_LIBRARY=ON"
+}
+
+tasks.register("buildNrdNative", Exec) {
+    group = "build"
+    description = "Builds the NRD Vulkan shim after explicit SDK configuration."
+    dependsOn "configureNrdNative"
+    commandLine "cmake", "--build", nativeBuildRoot.get().asFile, "--config", "Release"
+}
+
+def bundleNrdNative = tasks.register("bundleNrdNative") {
+    group = "build"
+    description = "Builds and stages the current platform NRD shim with the NVIDIA SDK license."
+    dependsOn "buildNrdNative"
+    inputs.property("platform", providers.provider { currentPlatform?.name ?: "unsupported" })
+    inputs.file(providers.provider { new File(nativeArtifactRoot.get().asFile, "release/${currentPlatform?.library ?: '__unsupported__'}") })
+    inputs.file(nrdSdk.map { file(it).toPath().resolve("LICENSE.txt").toFile() })
+    outputs.dir(nativeResourceRoot)
+    doLast {
+        if (currentPlatform == null) throw new GradleException("NRD native packaging supports Windows/Linux x64")
+        def library = new File(nativeArtifactRoot.get().asFile, "release/${currentPlatform.library}")
+        def license = new File(file(nrdSdk.get()), "LICENSE.txt")
+        def nriLicense = nativeDependencyRoot.get().file("nri/LICENSE.txt").asFile
+        if (!library.isFile()) throw new GradleException("Missing built NRD shim: ${library}")
+        if (!license.isFile()) throw new GradleException("Pinned NRD SDK does not contain LICENSE.txt: ${license}")
+        if (!nriLicense.isFile()) throw new GradleException("Built NRD/NRI integration does not contain NRI LICENSE.txt: ${nriLicense}")
+        delete(nativeResourceRoot)
+        copy {
+            from(library)
+            from(license) { rename { "LICENSE.txt" } }
+            from(nriLicense) { rename { "NRI_LICENSE.txt" } }
+            into(nativeResourceRoot.get().dir("caustica/natives/nrd/${nrdRevision}/${currentPlatform.name}"))
+        }
+    }
+}
+
+def nrdNativeJar = tasks.register("nrdNativeJar", Jar) {
+    group = "build"
+    description = "Builds the consumable nvidia-nrd JAR with the current platform native shim."
+    dependsOn bundleNrdNative, tasks.named("classes")
+    archiveClassifier = "${currentPlatform?.name ?: 'unsupported'}"
+    from(sourceSets.main.output)
+    from(nativeResourceRoot)
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+configurations {
+    nrdNatives {
+        canBeConsumed = true
+        canBeResolved = false
+        description = "Pinned current-platform NRD/NRI native runtime artifact"
+    }
+}
+artifacts { nrdNatives(nrdNativeJar) }
+
+def verifyNrdNativeFoundation = tasks.register("verifyNrdNativeFoundation") {
+    inputs.files("build.gradle", "native/nrd_shim/CMakeLists.txt", "native/nrd_shim/nrd_shim.h",
+            "native/nrd_shim/nrd_shim.cpp", "native/nrd_shim/NRD_REVISION", "native/nrd_shim/NRI_REVISION")
+    doLast {
+        def cmake = file("native/nrd_shim/CMakeLists.txt").text
+        def header = file("native/nrd_shim/nrd_shim.h").text
+        def source = file("native/nrd_shim/nrd_shim.cpp").text
+        def build = file("build.gradle").text
+        def revision = file("native/nrd_shim/NRD_REVISION").text.trim()
+        def nri = file("native/nrd_shim/NRI_REVISION").text.trim()
+        if (revision != nrdRevision) throw new GradleException("NRD pin drifted: ${revision}")
+        if (nri != nriRevision) throw new GradleException("NRI pin drifted: ${nri}")
+        ["NRD_EMBEDS_DXBC_SHADERS OFF", "NRD_EMBEDS_DXIL_SHADERS OFF", "NRD_EMBEDS_SPIRV_SHADERS ON",
+         "NRD_NRI ON", "NRI_STATIC_LIBRARY ON", "NRI_ENABLE_D3D11_SUPPORT OFF",
+         "NRI_ENABLE_D3D12_SUPPORT OFF", "NRI_ENABLE_VK_SUPPORT ON",
+         "NRD_NORMAL_ENCODING 4", "NRD_ROUGHNESS_ENCODING 1"].each {
+            if (!cmake.contains(it)) throw new GradleException("Missing native option: ${it}")
+        }
+        ["nrdshim_create", "nrdshim_resize", "nrdshim_record", "nrdshim_destroy", "nrdshim_last_error"].each {
+            if (!header.contains(it) || !source.contains(it)) throw new GradleException("Missing NRD shim export: ${it}")
+        }
+        if (cmake.contains("FetchContent") || cmake.contains("GIT_REPOSITORY")) {
+            throw new GradleException("NRD native build must not fetch dependencies")
+        }
+        ["queueFamily.queueType = nri::QueueType::GRAPHICS",
+         "command.queueType = nri::QueueType::GRAPHICS",
+         "settings.hitDistanceParameters = {3.0f, 0.1f, 20.0f, -25.0f}",
+         "nri::Layout::GENERAL", "catch (...)", "noexcept"].each {
+            if (!source.contains(it)) throw new GradleException("Missing native contract: ${it}")
+        }
+        if (source.contains("QueueType::COMPUTE") || header.contains("computeQueueFamily")) {
+            throw new GradleException("NRD must record on the renderer graphics queue")
+        }
+        if (!build.contains('"-DFETCHCONTENT_FULLY_DISCONNECTED=ON"')) {
+            throw new GradleException("NRD native configuration must keep FetchContent offline")
+        }
+    }
+}
+
+def verifyNvidiaNrdImports = tasks.register("verifyNvidiaNrdImports") {
+    inputs.files(sourceSets.main.allJava)
+    doLast {
+        def forbidden = ["org.lwjgl", "net.minecraft", "dev.comfyfluffy.caustica.minecraft",
+                         "dev.comfyfluffy.caustica.renderer.runtime", "dev.comfyfluffy.caustica.renderer.raytracing",
+                         "dev.comfyfluffy.caustica.nvidia.ngx"]
+        def violations = []
+        sourceSets.main.allJava.files.sort().each { source ->
+            source.eachLine { line, number ->
+                if (line.stripLeading().startsWith("import ") && forbidden.any { line.contains(it) }) {
+                    violations += "${source}:${number}: ${line.trim()}"
+                }
+            }
+        }
+        if (!violations.empty) throw new GradleException("nvidia-nrd boundary violations:\n${violations.join('\n')}")
+    }
+}
+
+tasks.named("test", Test) { useJUnitPlatform(); jvmArgs "--enable-native-access=ALL-UNNAMED" }
+tasks.named("check") { dependsOn verifyNrdNativeFoundation, verifyNvidiaNrdImports }
+tasks.withType(JavaCompile).configureEach { options.release = 25 }
+java { withSourcesJar() }
+tasks.named("jar", Jar).configure {
+    from(rootProject.files("LICENSE.md", "COPYING", "COPYING.LESSER", "THIRD_PARTY_NOTICES.md")) { into "META-INF" }
+    from("native/nrd_shim/NRD_REVISION") { into "META-INF/caustica" }
+}
+tasks.named("sourcesJar", Jar).configure { from("native") { into "native" } }
+publishing {
+    publications { create("mavenJava", MavenPublication) { artifactId = "caustica-nvidia-nrd"; from components.java } }
+}

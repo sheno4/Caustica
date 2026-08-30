@@ -31,6 +31,32 @@ Bundled NVIDIA SDK runtime libraries may include files matching:
 Caustica's `ngxshim` native library is project-owned glue code and follows
 Caustica's project license unless otherwise noted.
 
+## NVIDIA Real-Time Denoisers (NRD) SDK
+
+Caustica can build a platform-specific `nvidia-nrd` artifact containing a
+project-owned native shim that statically incorporates NVIDIA NRD and NRI
+object code. NRD is proprietary third-party software and is not licensed under
+the LGPL. NRI is third-party software licensed under the MIT License.
+
+The integration is pinned to NVIDIA NRD revision
+`b233cc3ec5b1db2763e45fd18c9bb19793016355`. Native artifacts are built only
+from an explicitly supplied checkout and contain that checkout's `LICENSE.txt`
+and NRI's `LICENSE.txt` beside the native library under
+`caustica/natives/nrd/`.
+
+The NVIDIA SDK components remain subject to the NVIDIA RTX SDKs license:
+
+<https://github.com/NVIDIA-RTX/NRD/blob/b233cc3ec5b1db2763e45fd18c9bb19793016355/LICENSE.txt>
+
+The LGPL license grant for Caustica does not grant rights to NVIDIA SDK
+components. Redistribution and use of the native artifact must comply with the
+NVIDIA license, including its object-code incorporation and distribution
+requirements. The NRD SDK may not be redistributed as a stand-alone product.
+
+NRI license and source:
+
+<https://github.com/NVIDIA-RTX/NRI/blob/main/LICENSE.txt>
+
 ## Slang
 
 Caustica bundles the Slang compiler shared libraries and standard module from
