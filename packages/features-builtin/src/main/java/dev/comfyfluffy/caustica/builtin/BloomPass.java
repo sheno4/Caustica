@@ -66,7 +66,7 @@ public final class BloomPass implements Pass<PostEffectFrame> {
     public BloomPass(PostEffectSetup setup, Supplier<OptionValues> options) {
         this.gpu = Objects.requireNonNull(setup, "setup").gpu();
         this.options = Objects.requireNonNull(options, "options");
-        VulkanSampler createdSampler = VulkanSampler.linearClamp(gpu, ID + " sampler");
+        VulkanSampler createdSampler = VulkanSampler.linearClamp(gpu);
         try {
             this.shader = loadShader(gpu);
             this.sampler = createdSampler;

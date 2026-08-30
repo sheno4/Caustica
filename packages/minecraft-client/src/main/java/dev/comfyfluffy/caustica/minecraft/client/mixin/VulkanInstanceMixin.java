@@ -6,6 +6,7 @@ import dev.comfyfluffy.caustica.minecraft.client.CausticaMod;
 import dev.comfyfluffy.caustica.minecraft.client.CausticaClientComposition;
 import dev.comfyfluffy.caustica.engine.vulkan.VulkanDiagnostics;
 import java.util.Set;
+import org.lwjgl.vulkan.KHRGetSurfaceCapabilities2;
 import org.lwjgl.vulkan.VkInstanceCreateInfo;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
@@ -16,17 +17,19 @@ import org.spongepowered.asm.mixin.injection.ModifyArg;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * Enables {@code VK_EXT_swapchain_colorspace} at instance creation when the platform supports it. The
- * extension exposes extended/HDR color spaces to {@code vkGetPhysicalDeviceSurfaceFormatsKHR}, allowing
- * {@code VulkanGpuSurfaceMixin} to select an HDR10/PQ swapchain pair. The extension only adds color-space
- * enum values; swapchain creation still explicitly chooses the active pair.
+ * Requires the modern surface-capability query extension and enables extended swapchain color spaces when
+ * available. Together they expose the format/color-space pairs used by {@code VulkanGpuSurfaceMixin} to
+ * select an HDR10/PQ swapchain. The color-space extension only adds enum values; swapchain creation still
+ * explicitly chooses the active pair.
  *
- * <p>Gated on availability — requesting an unsupported instance extension would fail {@code vkCreateInstance}
- * and crash startup.
+ * <p>The modern query extension is part of the renderer's required instance profile, so startup fails with
+ * a direct error when it is unavailable. The optional color-space extension is enabled only when supported.
  */
 @Mixin(VulkanInstance.class)
 public abstract class VulkanInstanceMixin {
 	private static final String SWAPCHAIN_COLORSPACE = "VK_EXT_swapchain_colorspace";
+	private static final String SURFACE_CAPABILITIES_2 =
+			KHRGetSurfaceCapabilities2.VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME;
 
 	@Shadow
 	@Final
@@ -41,8 +44,12 @@ public abstract class VulkanInstanceMixin {
 	}
 
 	@Inject(method = "<init>", at = @At(value = "INVOKE", target = "Ljava/util/Set;size()I"))
-	private void caustica$addColorSpaceExtension(int debugVerbosity, boolean wantsDebugLabels, boolean validation,
+	private void caustica$addSurfaceExtensions(int debugVerbosity, boolean wantsDebugLabels, boolean validation,
 			CallbackInfo ci, @Local(ordinal = 0) Set<String> availableExtensions) {
+		if (enableRequiredSurfaceQuery(availableExtensions, this.enabledExtensions)) {
+			CausticaMod.LOGGER.info("Enabling instance extension {} for modern surface queries",
+					SURFACE_CAPABILITIES_2);
+		}
 		if (availableExtensions.contains(SWAPCHAIN_COLORSPACE)) {
 			if (this.enabledExtensions.add(SWAPCHAIN_COLORSPACE)) {
 				CausticaMod.LOGGER.info("Enabling instance extension {} for HDR swapchain color spaces", SWAPCHAIN_COLORSPACE);
@@ -50,6 +57,14 @@ public abstract class VulkanInstanceMixin {
 		} else {
 			CausticaMod.LOGGER.warn("Instance extension {} unavailable; HDR color spaces will not be queryable on this platform", SWAPCHAIN_COLORSPACE);
 		}
+	}
+
+	static boolean enableRequiredSurfaceQuery(Set<String> availableExtensions, Set<String> enabledExtensions) {
+		if (!availableExtensions.contains(SURFACE_CAPABILITIES_2)) {
+			throw new IllegalStateException("Required Vulkan instance extension is unavailable: "
+					+ SURFACE_CAPABILITIES_2);
+		}
+		return enabledExtensions.add(SURFACE_CAPABILITIES_2);
 	}
 
 	@ModifyArg(

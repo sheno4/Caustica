@@ -18,31 +18,29 @@ final class RtToneLutOwnershipTest {
         assertFalse(hasField("image"));
         assertFalse(hasField("allocation"));
         assertFalse(hasField("vma"));
+        assertFalse(hasField("vk"));
+        assertFalse(hasField("view"));
+        assertFalse(hasField("sampler"));
     }
 
     @Test
-    void descriptorsAndDependentHandlesCloseBeforeTheImageOwner() throws Exception {
+    void descriptorsCloseBeforeTheImageOwner() throws Exception {
         String source = Files.readString(source());
         int unwind = source.indexOf("catch (Throwable t)");
         int unwindSamplerDescriptor = source.indexOf("samplerDescriptor.destroy();", unwind);
         int unwindSampledDescriptor = source.indexOf("sampledDescriptor.destroy();", unwind);
-        int unwindSampler = source.indexOf("vkDestroySampler", unwind);
-        int unwindView = source.indexOf("vkDestroyImageView", unwind);
         int unwindImage = source.indexOf("createdImage.close();", unwind);
         assertTrue(unwind >= 0 && unwindSamplerDescriptor > unwind
                 && unwindSampledDescriptor > unwindSamplerDescriptor);
-        assertTrue(unwindSampler > unwindSampledDescriptor && unwindView > unwindSampler
-                && unwindImage > unwindView);
+        assertTrue(unwindImage > unwindSampledDescriptor);
 
         int destroy = source.indexOf("public void destroy()");
         int samplerDescriptor = source.indexOf("samplerDescriptor.destroy();", destroy);
         int sampledDescriptor = source.indexOf("sampledDescriptor.destroy();", destroy);
-        int sampler = source.indexOf("vkDestroySampler", destroy);
-        int view = source.indexOf("vkDestroyImageView", destroy);
         int image = source.indexOf("imageAllocation.close();", destroy);
 
         assertTrue(destroy >= 0 && samplerDescriptor > destroy && sampledDescriptor > samplerDescriptor);
-        assertTrue(sampler > sampledDescriptor && view > sampler && image > view);
+        assertTrue(image > sampledDescriptor);
     }
 
     private static boolean hasField(String name) {

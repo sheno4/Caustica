@@ -13,7 +13,6 @@ import org.lwjgl.vulkan.VK13;
 import org.lwjgl.vulkan.VK14;
 import org.lwjgl.vulkan.VkBufferImageCopy2;
 import org.lwjgl.vulkan.VkCopyBufferToImageInfo2;
-import org.lwjgl.vulkan.VkDevice;
 import org.lwjgl.vulkan.VkDependencyInfo;
 import org.lwjgl.vulkan.VkImageCreateInfo;
 import org.lwjgl.vulkan.VkImageMemoryBarrier2;
@@ -26,7 +25,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.nio.LongBuffer;
 
 /**
  * A baked ACES color-pipeline 3D LUT (scene-referred look or display transform; see
@@ -43,34 +41,20 @@ public final class RtToneLut {
     private static final float SHADER_SHAPER_LO_STOPS = -12.0f;
     private static final float SHADER_SHAPER_HI_STOPS = 12.0f;
 
-    private final VkDevice vk;
     private final VmaImageAllocation imageAllocation;
-    private final long view;
-    private final long sampler;
     private final GpuDescriptorRange<GpuDescriptorIndex.Resource> sampledDescriptor;
     private final GpuDescriptorRange<GpuDescriptorIndex.Sampler> samplerDescriptor;
     public final int size;
     private boolean destroyed;
 
-    private RtToneLut(VkDevice vk, VmaImageAllocation imageAllocation, long view, long sampler,
+    private RtToneLut(VmaImageAllocation imageAllocation,
                        GpuDescriptorRange<GpuDescriptorIndex.Resource> sampledDescriptor,
                        GpuDescriptorRange<GpuDescriptorIndex.Sampler> samplerDescriptor,
                        int size) {
-        this.vk = vk;
         this.imageAllocation = imageAllocation;
-        this.view = view;
-        this.sampler = sampler;
         this.sampledDescriptor = sampledDescriptor;
         this.samplerDescriptor = samplerDescriptor;
         this.size = size;
-    }
-
-    public long view() {
-        return view;
-    }
-
-    public long sampler() {
-        return sampler;
     }
 
     public GpuDescriptorIndex.Resource sampledIndex() {
@@ -127,10 +111,7 @@ public final class RtToneLut {
     }
 
     private static RtToneLut upload(VulkanDeviceContext ctx, int size, ByteBuffer texels, String label) {
-        VkDevice vk = ctx.vk();
         VmaImageAllocation createdImage = null;
-        long createdView = 0L;
-        long createdSampler = 0L;
         GpuDescriptorRange<GpuDescriptorIndex.Resource> sampledDescriptor = null;
         GpuDescriptorRange<GpuDescriptorIndex.Sampler> samplerDescriptor = null;
         GpuBuffer staging = null;
@@ -151,12 +132,6 @@ public final class RtToneLut {
                     .format(VK10.VK_FORMAT_R16G16B16A16_SFLOAT);
             viewInfo.subresourceRange().aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT)
                     .baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
-            LongBuffer viewOut = stack.mallocLong(1);
-            VulkanDeviceContext.check(VK10.vkCreateImageView(vk, viewInfo, null, viewOut),
-                    "vkCreateImageView(tone lut " + label + ")");
-            createdView = viewOut.get(0);
-            RtDebugLabels.nameImageView(ctx, createdView, "tone LUT " + label + " view");
-
             // Edge-aligned LUT: the shaper's [0,1] domain maps texel 0's centre to input 0 and texel
             // (size-1)'s centre to input 1 (see tools/bake_display_lut.py). CLAMP_TO_EDGE holds the
             // boundary texel for any exposed value outside the shaper's ±stops range instead of
@@ -168,12 +143,6 @@ public final class RtToneLut {
                     .addressModeV(VK10.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE)
                     .addressModeW(VK10.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE)
                     .minLod(0f).maxLod(0f);
-            LongBuffer samplerOut = stack.mallocLong(1);
-            VulkanDeviceContext.check(VK10.vkCreateSampler(vk, samplerInfo, null, samplerOut),
-                    "vkCreateSampler(tone lut " + label + ")");
-            createdSampler = samplerOut.get(0);
-            RtDebugLabels.name(ctx, VK10.VK_OBJECT_TYPE_SAMPLER, createdSampler, "tone LUT " + label + " sampler");
-
             sampledDescriptor = ctx.descriptorHeap().allocateResources(1);
             samplerDescriptor = ctx.descriptorHeap().allocateSamplers(1);
             VkImageDescriptorInfoEXT imageDescriptor = VkImageDescriptorInfoEXT.calloc(stack).sType$Default()
@@ -241,16 +210,12 @@ public final class RtToneLut {
         } catch (Throwable t) {
             if (samplerDescriptor != null) samplerDescriptor.destroy();
             if (sampledDescriptor != null) sampledDescriptor.destroy();
-            if (createdSampler != 0L) VK10.vkDestroySampler(vk, createdSampler, null);
-            if (createdView != 0L) VK10.vkDestroyImageView(vk, createdView, null);
             if (createdImage != null) createdImage.close();
             throw t;
         } finally {
             if (staging != null) staging.destroy();
         }
-        return new RtToneLut(vk, createdImage, createdView, createdSampler,
-                sampledDescriptor, samplerDescriptor,
-                size);
+        return new RtToneLut(createdImage, sampledDescriptor, samplerDescriptor, size);
     }
 
     public void destroy() {
@@ -259,8 +224,6 @@ public final class RtToneLut {
         }
         samplerDescriptor.destroy();
         sampledDescriptor.destroy();
-        VK10.vkDestroySampler(vk, sampler, null);
-        VK10.vkDestroyImageView(vk, view, null);
         imageAllocation.close();
         destroyed = true;
     }

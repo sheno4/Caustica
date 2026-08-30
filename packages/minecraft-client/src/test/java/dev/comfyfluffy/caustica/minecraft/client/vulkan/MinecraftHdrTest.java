@@ -2,8 +2,10 @@ package dev.comfyfluffy.caustica.minecraft.client.vulkan;
 
 import org.junit.jupiter.api.Test;
 import org.lwjgl.system.MemoryUtil;
+import org.lwjgl.vulkan.KHRGetSurfaceCapabilities2;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkSurfaceFormatKHR;
+import org.lwjgl.vulkan.VkSurfaceFormat2KHR;
 
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -72,8 +74,11 @@ final class MinecraftHdrTest {
         assertEquals(y, actual.y(), EPSILON);
     }
 
-    private static void putFormat(VkSurfaceFormatKHR destination, int format, int colorSpace) {
-        MemoryUtil.memPutInt(destination.address() + VkSurfaceFormatKHR.FORMAT, format);
-        MemoryUtil.memPutInt(destination.address() + VkSurfaceFormatKHR.COLORSPACE, colorSpace);
+    private static void putFormat(VkSurfaceFormat2KHR destination, int format, int colorSpace) {
+        assertEquals(KHRGetSurfaceCapabilities2.VK_STRUCTURE_TYPE_SURFACE_FORMAT_2_KHR,
+                destination.sType());
+        long surfaceFormat = destination.address() + VkSurfaceFormat2KHR.SURFACEFORMAT;
+        MemoryUtil.memPutInt(surfaceFormat + VkSurfaceFormatKHR.FORMAT, format);
+        MemoryUtil.memPutInt(surfaceFormat + VkSurfaceFormatKHR.COLORSPACE, colorSpace);
     }
 }

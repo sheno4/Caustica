@@ -89,8 +89,8 @@ public final class SkyLutPass implements Pass<PassFrame> {
                     VK_FORMAT_R16G16B16A16_SFLOAT, ID + " multiscatter");
             v = VmaImage2D.create(gpu, SKY_VIEW_WIDTH, SKY_VIEW_HEIGHT,
                     VK_FORMAT_R16G16B16A16_SFLOAT, ID + " sky view");
-            ls = VulkanSampler.linearClamp(gpu, ID + " LUT sampler");
-            cs = VulkanSampler.nearestClamp(gpu, ID + " celestial sampler");
+            ls = VulkanSampler.linearClamp(gpu);
+            cs = VulkanSampler.nearestClamp(gpu);
             si = createEmptyBuffer(gpu, SkyInputsData.BYTE_SIZE, "Minecraft sky inputs");
             ts = load(gpu, "transmittance.comp.spv");
             ms = load(gpu, "multiscatter.comp.spv");

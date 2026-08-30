@@ -147,7 +147,7 @@ final class NameTagFeature implements OverlayFeature {
         if (pipeline != null) {
             return;
         }
-        sampler = VulkanSampler.nearestClamp(device, "name tag font atlas");
+        sampler = VulkanSampler.nearestClamp(device);
         pipeline = new OverlayPipelines.Spec("name_tag/vertex.vert.spv", "name_tag/fragment.frag.spv")
                 .vertex(OverlayPipelines.POSITION_TEX_COLOR)
                 .blend(OverlayPipelines.ALPHA_BLEND)
