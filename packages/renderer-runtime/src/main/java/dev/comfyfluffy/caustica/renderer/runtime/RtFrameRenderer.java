@@ -865,6 +865,7 @@ public final class RtFrameRenderer {
                             traceImages().diffuseAlbedo(), traceImages().linearDepth(), traceImages().motion(),
                             traceImages().specularAlbedo(), traceImages().specularMotion(),
                             traceImages().reconstructedColor(), presentationResources().exposure().image(),
+                            traceImages().traceColor(), traceImages().stablePlaneMetadata(),
                             presentationResources().exposure().stateBuffer(), debugView,
                             CausticaConfig.Rt.Exposure.CENTER_WEIGHT_SIGMA.value(),
                             CausticaConfig.Rt.Exposure.CENTER_WEIGHT_FLOOR.value());
@@ -918,6 +919,8 @@ public final class RtFrameRenderer {
         target.putLong(base + RtBindings.WORLD_PATH_QUEUE_ADDRESS_OFFSET,
                 continuationQueue.deviceAddress().value());
         target.putInt(base + RtBindings.WORLD_OUTPUT_IMAGE_INDEX_OFFSET, storageIndex(traceImages().traceColor()));
+        target.putInt(base + RtBindings.WORLD_STABLE_PLANE_METADATA_IMAGE_INDEX_OFFSET,
+                storageIndex(traceImages().stablePlaneMetadata()));
         target.putInt(base + RtBindings.WORLD_NORMAL_GUIDE_INDEX_OFFSET, storageIndex(traceImages().normalRoughness()));
         target.putInt(base + RtBindings.WORLD_ALBEDO_GUIDE_INDEX_OFFSET, storageIndex(traceImages().diffuseAlbedo()));
         target.putInt(base + RtBindings.WORLD_DEPTH_GUIDE_INDEX_OFFSET, storageIndex(traceImages().linearDepth()));

@@ -78,9 +78,11 @@ def verifyPresentationAbi = tasks.register("verifyPresentationAbi") {
                     "putFloat(100, preExposure())", "putInt(104, resetSeq())"],
             DisplayPushData: ["BYTE_SIZE = 64", "putInt(0, outputImageIndex())",
                     "putInt(40, hdrEnabled())", "putFloat(52, hdrPeakNits())", "putFloat(60, lookLutSize())"],
-            DebugPresentPushData: ["BYTE_SIZE = 64", "putInt(0, outputImageIndex())",
-                    "putLong(40, exposureStateAddress())", "putInt(48, debugView())",
-                    "putFloat(56, centerWeightFloor())"],
+            DebugPresentPushData: ["BYTE_SIZE = 72", "putInt(0, outputImageIndex())",
+                    "putInt(36, traceRadianceImageIndex())",
+                    "putInt(40, stablePlaneMetadataImageIndex())",
+                    "putLong(48, exposureStateAddress())", "putInt(56, debugView())",
+                    "putFloat(64, centerWeightFloor())"],
             PresentPushData: ["BYTE_SIZE = 12", "putInt(0, outputImageIndex())",
                     "putInt(4, sourceImageIndex())", "putFloat(8, uiNits())"]
     ]

@@ -53,6 +53,9 @@ public final class TraceResources {
 
         GpuImage traceColor = context.createStorageImage(renderWidth, renderHeight,
                 VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "trace color " + renderWidth + "x" + renderHeight);
+        GpuImage stablePlaneMetadata = context.createStorageImage(renderWidth, renderHeight,
+                VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
+                "stable plane metadata " + renderWidth + "x" + renderHeight);
         long continuationBytes = continuationBytes(renderWidth, renderHeight);
         for (int i = 0; i < continuationQueues.length; i++) {
             continuationQueues[i] = context.createBuffer(continuationBytes,
@@ -75,7 +78,8 @@ public final class TraceResources {
         GpuImage reconstructedColor = context.createStorageImage(displayWidth, displayHeight,
                 VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
                 "reconstruction output " + displayWidth + "x" + displayHeight);
-        images = new TraceImages(traceColor, normalRoughness, diffuseAlbedo, linearDepth, motion,
+        images = new TraceImages(traceColor, stablePlaneMetadata,
+                normalRoughness, diffuseAlbedo, linearDepth, motion,
                 specularAlbedo, specularMotion, reconstructedColor);
         extent = wanted;
     }
@@ -97,6 +101,7 @@ public final class TraceResources {
     private void destroySized() {
         if (images != null) {
             images.traceColor().destroy();
+            images.stablePlaneMetadata().destroy();
             images.normalRoughness().destroy();
             images.diffuseAlbedo().destroy();
             images.linearDepth().destroy();

@@ -31,7 +31,8 @@ public void runShadowAnyHit<TComposition : IComposition>(inout WorldPayload payl
         TComposition.Surfaces surfaces = {};
         OpenPbrSurface surface = surfaces.evaluateSurface(record.surfaceImplementation,
                 worldSurfaceInput(attributes));
-        float transmission = clamp(surface.transmission_weight, 0.0, 1.0);
+        float transmission = (1.0 - clamp(surface.base_metalness, 0.0, 1.0))
+                * clamp(surface.transmission_weight, 0.0, 1.0);
         if (transmission <= 0.0) {
             payload.radiance = float3(0.0);
             return;

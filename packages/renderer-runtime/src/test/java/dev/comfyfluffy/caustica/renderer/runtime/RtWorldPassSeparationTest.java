@@ -18,8 +18,10 @@ final class RtWorldPassSeparationTest {
     @Test
     void indirectRaygensDoNotReusePrimaryOrWriteGuides() throws IOException {
         String primary = Files.readString(WORLD.resolve("primary_rgen.slang"));
-        assertTrue(primary.contains("normalGuide"));
-        assertTrue(primary.contains("depthGuide"));
+        String stablePlanes = Files.readString(WORLD.resolve("stable_planes.slang"));
+        assertTrue(primary.contains("stablePlaneWrite"));
+        assertTrue(stablePlanes.contains("normalGuide"));
+        assertTrue(stablePlanes.contains("depthGuide"));
         for (String name : new String[]{"indirect.slang", "indirect_ser.slang"}) {
             String indirect = Files.readString(WORLD.resolve(name));
             assertFalse(indirect.contains("primary_rgen"), name);

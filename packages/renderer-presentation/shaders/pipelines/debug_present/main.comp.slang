@@ -82,6 +82,8 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
     [format("rg16f")] RWTexture2D<float2> gSpecMotion = ResourceDescriptorHeap[NonUniformResourceIndex(pc.specMotionImageIndex)];
     [format("rgba16f")] RWTexture2D<float4> sceneImage = ResourceDescriptorHeap[NonUniformResourceIndex(pc.sceneImageIndex)];
     [format("r32f")] RWTexture2D<float> exposureImage = ResourceDescriptorHeap[NonUniformResourceIndex(pc.exposureImageIndex)];
+    [format("rgba16f")] RWTexture2D<float4> traceRadiance = ResourceDescriptorHeap[NonUniformResourceIndex(pc.traceRadianceImageIndex)];
+    [format("rgba16f")] RWTexture2D<float4> stablePlaneMetadata = ResourceDescriptorHeap[NonUniformResourceIndex(pc.stablePlaneMetadataImageIndex)];
     int2 pix = int2(dispatchId.xy);
     uint w, h;
     outputImage.GetDimensions(w, h);
@@ -97,7 +99,32 @@ void main(uint3 dispatchId : SV_DispatchThreadID) {
 
     float4 normalRough = gNormal[guidePix];
     float3 dbg;
-    if (pc.debugView == 8u) {
+    if (pc.debugView == 10u) {
+        float validity = stablePlaneMetadata[guidePix].x;
+        dbg = validity > 0.5 ? float3(0.1, 0.9, 0.2) : float3(0.9, 0.05, 0.05);
+    } else if (pc.debugView == 11u) {
+        float4 metadata = stablePlaneMetadata[guidePix];
+        bool reflection = metadata.z > 0.0;
+        bool transmission = metadata.w > 0.5;
+        dbg = metadata.x <= 0.5 ? float3(0.0)
+                : reflection && transmission ? float3(0.8, 0.2, 0.95)
+                : transmission ? float3(0.1, 0.8, 0.9)
+                : reflection ? float3(0.15, 0.35, 1.0) : float3(0.7);
+    } else if (pc.debugView == 12u) {
+        float primaryDepth = max(gDepth[guidePix], 0.0);
+        float mapped = 1.0 - exp(-primaryDepth * 0.05);
+        dbg = float3(mapped, mapped, mapped);
+    } else if (pc.debugView == 13u) {
+        dbg = float3(clamp(0.5 + gMotion[guidePix] * motionToDisplay * 0.05, 0.0, 1.0), 0.5);
+    } else if (pc.debugView == 14u) {
+        float3 radiance = traceRadiance[guidePix].rgb;
+        float luminance = dot(max(radiance, float3(0.0)), ACESCG_LUMA);
+        dbg = acesCgToSrgb(radiance / (1.0 + luminance));
+    } else if (pc.debugView == 15u) {
+        float4 metadata = stablePlaneMetadata[guidePix];
+        dbg = metadata.x > 0.5 ? float3(metadata.z, metadata.w * metadata.y, metadata.y)
+                : float3(0.0);
+    } else if (pc.debugView == 8u) {
         float luminance = dot(max(sceneImage[pix].rgb, float3(0.0)), ACESCG_LUMA);
         float exposedLuminance = luminance * max(exposureImage[int2(0, 0)], 0.0);
         float evFromMidGrey = log2(max(exposedLuminance, 1.0e-6) / 0.18);

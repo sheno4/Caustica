@@ -9,6 +9,7 @@ import static dev.comfyfluffy.caustica.renderer.raytracing.layout.RtBindings.WOR
 import static dev.comfyfluffy.caustica.renderer.raytracing.layout.RtBindings.WORLD_PATH_QUEUE_ADDRESS_OFFSET;
 import static dev.comfyfluffy.caustica.renderer.raytracing.layout.RtBindings.WORLD_PUSH_ADDRESS_OFFSET;
 import static dev.comfyfluffy.caustica.renderer.raytracing.layout.RtBindings.WORLD_PUSH_CONSTANT_SIZE;
+import static dev.comfyfluffy.caustica.renderer.raytracing.layout.RtBindings.WORLD_STABLE_PLANE_METADATA_IMAGE_INDEX_OFFSET;
 import static dev.comfyfluffy.caustica.renderer.raytracing.layout.RtBindings.WORLD_SPECULAR_MOTION_GUIDE_INDEX_OFFSET;
 import static dev.comfyfluffy.caustica.renderer.raytracing.layout.RtBindings.WORLD_TOP_LEVEL_AS_INDEX_OFFSET;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -23,13 +24,14 @@ final class RtPipelineBindingAbiTest {
         assertEquals(24, WORLD_PATH_QUEUE_ADDRESS_OFFSET);
         assertEquals(32, WORLD_TOP_LEVEL_AS_INDEX_OFFSET);
         assertEquals(36, WORLD_OUTPUT_IMAGE_INDEX_OFFSET);
-        assertEquals(60, WORLD_SPECULAR_MOTION_GUIDE_INDEX_OFFSET);
-        assertEquals(64, RtBindings.WORLD_INITIAL_VOLUME_IMPLEMENTATION_OFFSET);
-        assertEquals(68, RtBindings.WORLD_INITIAL_VOLUME_ACTIVE_OFFSET);
-        assertEquals(72, RtBindings.WORLD_INITIAL_VOLUME_BINDING_OFFSET);
-        assertEquals(80, RtBindings.WORLD_INITIAL_VOLUME_INSTANCE_OFFSET);
-        assertEquals(88, RtBindings.WORLD_NEE_AT_STATE_ADDRESS_OFFSET);
-        assertEquals(96, WORLD_PUSH_CONSTANT_SIZE);
+        assertEquals(40, WORLD_STABLE_PLANE_METADATA_IMAGE_INDEX_OFFSET);
+        assertEquals(64, WORLD_SPECULAR_MOTION_GUIDE_INDEX_OFFSET);
+        assertEquals(68, RtBindings.WORLD_INITIAL_VOLUME_IMPLEMENTATION_OFFSET);
+        assertEquals(72, RtBindings.WORLD_INITIAL_VOLUME_ACTIVE_OFFSET);
+        assertEquals(80, RtBindings.WORLD_INITIAL_VOLUME_BINDING_OFFSET);
+        assertEquals(88, RtBindings.WORLD_INITIAL_VOLUME_INSTANCE_OFFSET);
+        assertEquals(96, RtBindings.WORLD_NEE_AT_STATE_ADDRESS_OFFSET);
+        assertEquals(104, WORLD_PUSH_CONSTANT_SIZE);
     }
 
     @Test

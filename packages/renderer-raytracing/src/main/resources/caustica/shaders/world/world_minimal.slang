@@ -30,6 +30,12 @@ public struct WorldPayload {
     public uint guideAlbedo;
     public uint guideSpecularAlbedo;
     public uint queueRecordIndex;
+    public float3 guideContinuationOrigin;
+    public float3 guideContinuationDirection;
+    public float3 guideContinuationAbsorption;
+    public float guideContinuationIor;
+    public uint guideContinuationVolumeActive;
+    public uint guideContinuationEvent;
 };
 
 public static const uint WORLD_PATH_REQUEST_CONTINUATION = 1u;
@@ -39,6 +45,10 @@ public static const uint WORLD_PATH_PRIMARY = 8u;
 public static const uint WORLD_PATH_GUIDE = 16u;
 public static const uint WORLD_PATH_SHADOW = 32u;
 public static const uint WORLD_PATH_EMISSIVE = 64u;
+public static const uint WORLD_PATH_GUIDE_CONTINUATION = 128u;
+public static const uint WORLD_GUIDE_EVENT_NONE = 0u;
+public static const uint WORLD_GUIDE_EVENT_REFLECTION = 1u;
+public static const uint WORLD_GUIDE_EVENT_TRANSMISSION = 2u;
 public static const uint WORLD_RAY_MASK_SECONDARY = 0x01u;
 public static const uint WORLD_RAY_MASK_PRIMARY = 0x02u;
 

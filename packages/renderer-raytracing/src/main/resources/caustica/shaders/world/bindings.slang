@@ -16,6 +16,7 @@ public struct StorageImageIndex {
 public struct WorldResourceIndices {
     public AccelerationStructureIndex topLevelAS;
     public StorageImageIndex outputImage;
+    public StorageImageIndex stablePlaneMetadataImage;
     public StorageImageIndex normalGuide;
     public StorageImageIndex albedoGuide;
     public StorageImageIndex depthGuide;

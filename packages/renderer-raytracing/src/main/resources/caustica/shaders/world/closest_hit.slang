@@ -110,13 +110,103 @@ float retainedDielectricFresnel(float cosine, float etaIncident, float etaTransm
     return 0.5 * (rs * rs + rp * rp);
 }
 
+float retainedVolumeBoundaryWeight(RetainedGeometryRecord record, OpenPbrSurface surface) {
+    if ((record.flags & RETAINED_GEOMETRY_HAS_VOLUME) == 0u) return 0.0;
+    float dielectricWeight = 1.0 - clamp(surface.base_metalness, 0.0, 1.0);
+    return dielectricWeight * clamp(surface.transmission_weight, 0.0, 1.0);
+}
+
+void retainedSelectStablePlaneContinuation<TComposition : IComposition>(inout WorldPayload payload,
+        RetainedGeometryRecord record, SurfaceInput input, OpenPbrSurface surface,
+        SurfaceClosure closure) {
+    payload.pathFlags &= ~WORLD_PATH_GUIDE_CONTINUATION;
+    payload.guideContinuationEvent = WORLD_GUIDE_EVENT_NONE;
+    payload.guideContinuationAbsorption = payload.volumeAbsorption;
+    payload.guideContinuationIor = payload.volumeIor;
+    payload.guideContinuationVolumeActive =
+            (payload.pathFlags & WORLD_PATH_VOLUME_ACTIVE) != 0u ? 1u : 0u;
+    if (surface.specular_roughness > 0.08) return;
+
+    float3 incident = -input.outgoingDirection;
+    bool volumeBoundary = (record.flags & RETAINED_GEOMETRY_HAS_VOLUME) != 0u;
+    float boundaryWeight = retainedVolumeBoundaryWeight(record, surface);
+    float cosine = max(dot(closure.shadingNormal, input.outgoingDirection), 0.0);
+    float reflectionScore;
+    float transmissionScore;
+    float diffuseScore;
+    float3 transmitted = incident;
+    float etaTransmitted = 1.0;
+    VolumeProperties targetVolume = {};
+    if (volumeBoundary) {
+        OpenPbrSurface opaqueSurface = surface;
+        opaqueSurface.transmission_weight = 0.0;
+        SurfaceClosure opaqueClosure = surfaceClosure(opaqueSurface, input.geometricNormal);
+        float4 opaqueProbabilities = surfaceLobeProbabilities(opaqueClosure, cosine);
+        reflectionScore = (1.0 - boundaryWeight) * opaqueProbabilities.x;
+        diffuseScore = (1.0 - boundaryWeight)
+                * (opaqueProbabilities.y + opaqueProbabilities.z);
+        transmissionScore = 0.0;
+
+        bool entering = worldHitEntering();
+        float etaIncident = (payload.pathFlags & WORLD_PATH_VOLUME_ACTIVE) != 0u
+                ? max(payload.volumeIor, 1.0) : 1.0;
+        if (entering) targetVolume = retainedVolumeProperties<TComposition>(record, input);
+        etaTransmitted = entering
+                ? max(targetVolume.indexOfRefraction, 1.0) : 1.0;
+        float fresnel = retainedDielectricFresnel(cosine, etaIncident, etaTransmitted);
+        transmitted = refract(incident, closure.shadingNormal, etaIncident / etaTransmitted);
+        reflectionScore += boundaryWeight * fresnel;
+        float etaScale = (etaIncident * etaIncident) / (etaTransmitted * etaTransmitted);
+        float3 transmissionColor = clamp(surface.transmission_color,
+                float3(0.0), float3(1.0));
+        transmissionScore = dot(transmitted, transmitted) > 0.0
+                ? boundaryWeight * (1.0 - fresnel) * etaScale
+                        * max(transmissionColor.x, max(transmissionColor.y, transmissionColor.z))
+                : 0.0;
+    } else {
+        float4 probabilities = surfaceLobeProbabilities(closure, cosine);
+        reflectionScore = probabilities.x;
+        diffuseScore = probabilities.y + probabilities.z;
+        transmissionScore = probabilities.w;
+    }
+
+    float3 direction;
+    if (reflectionScore >= transmissionScore && reflectionScore >= diffuseScore
+            && reflectionScore > 0.0) {
+        direction = normalize(reflect(incident, closure.shadingNormal));
+        payload.guideContinuationEvent = WORLD_GUIDE_EVENT_REFLECTION;
+    } else if (transmissionScore > reflectionScore && transmissionScore >= diffuseScore) {
+        direction = normalize(transmitted);
+        payload.guideContinuationEvent = WORLD_GUIDE_EVENT_TRANSMISSION;
+        if (volumeBoundary && worldHitEntering()) {
+            payload.guideContinuationAbsorption =
+                    max(targetVolume.absorptionCoefficient, float3(0.0));
+            payload.guideContinuationIor = etaTransmitted;
+            payload.guideContinuationVolumeActive = 1u;
+        } else if (volumeBoundary) {
+            payload.guideContinuationAbsorption = float3(0.0);
+            payload.guideContinuationIor = 1.0;
+            payload.guideContinuationVolumeActive = 0u;
+        }
+    } else {
+        return;
+    }
+
+    float epsilon = 0.002 / max(input.metersPerSceneUnit, 1.0e-8);
+    float3 offsetNormal = dot(input.geometricNormal, direction) >= 0.0
+            ? input.geometricNormal : -input.geometricNormal;
+    payload.guideContinuationOrigin = input.position + offsetNormal * epsilon;
+    payload.guideContinuationDirection = direction;
+    payload.pathFlags |= WORLD_PATH_GUIDE_CONTINUATION;
+}
+
 BsdfSample retainedSampleContinuation<TComposition : IComposition>(inout uint seed, WorldPayload payload,
         RetainedGeometryRecord record, SurfaceInput input, OpenPbrSurface surface,
         SurfaceClosure closure, out bool refractedBoundary, out float reversePdf) {
     refractedBoundary = false;
     reversePdf = 0.0;
-    float boundaryWeight = (record.flags & RETAINED_GEOMETRY_HAS_VOLUME) != 0u
-            ? clamp(surface.transmission_weight, 0.0, 1.0) : 0.0;
+    bool volumeBoundary = (record.flags & RETAINED_GEOMETRY_HAS_VOLUME) != 0u;
+    float boundaryWeight = retainedVolumeBoundaryWeight(record, surface);
     if (boundaryWeight > 0.0 && retainedLightRandom(seed) < boundaryWeight) {
         bool entering = worldHitEntering();
         float etaIncident = (payload.pathFlags & WORLD_PATH_VOLUME_ACTIVE) != 0u
@@ -148,15 +238,15 @@ BsdfSample retainedSampleContinuation<TComposition : IComposition>(inout uint se
         return result;
     }
 
-    OpenPbrSurface opaqueSurface = surface;
-    opaqueSurface.transmission_weight = 0.0;
+    OpenPbrSurface sampledSurface = surface;
+    if (volumeBoundary) sampledSurface.transmission_weight = 0.0;
     BsdfSampleQuery query;
-    query.surface = surfaceClosure(opaqueSurface, input.geometricNormal);
+    query.surface = surfaceClosure(sampledSurface, input.geometricNormal);
     query.outgoingDirection = input.outgoingDirection;
     query.random = float3(retainedLightRandom(seed), retainedLightRandom(seed),
             retainedLightRandom(seed));
     BsdfSample result = sampleBsdf(query);
-    reversePdf = (1.0 - boundaryWeight) * result.pdf;
+    reversePdf = (volumeBoundary ? 1.0 - boundaryWeight : 1.0) * result.pdf;
     return result;
 }
 
@@ -236,10 +326,11 @@ public void runClosestHit<TComposition : IComposition>(inout WorldPayload payloa
     payload.guideAlbedo = retainedPackRgb9e5(clamp(surface.base_color, 0.0, 1.0));
     payload.guideSpecularAlbedo = retainedPackRgb9e5(closure.specularF0);
     payload.pathFlags &= ~WORLD_PATH_MISS;
-    if ((payload.pathFlags & WORLD_PATH_GUIDE) != 0u) return;
+    retainedSelectStablePlaneContinuation<TComposition>(payload, record, input, surface, closure);
     float3 emission = max(surface.emission_color, float3(0.0))
             * max(surface.emission_luminance, 0.0);
     if (any(emission > 0.0)) payload.pathFlags |= WORLD_PATH_EMISSIVE;
+    if ((payload.pathFlags & WORLD_PATH_GUIDE) != 0u) return;
     uint pathSeed = payload.seed;
     float3 directLighting = retainedDirectLighting(surface, input,
                     payload.currentNeeProposalMode == NEE_AT_PROPOSAL_SCREEN_MIXTURE,

@@ -8,6 +8,7 @@ import retained_lights;
 import retained_path_queue;
 import path_queue_types;
 import retained_trace_policy;
+import stable_planes;
 
 public void runRetainedIndirect<TComposition : IComposition,
                                 TTrace : IRetainedRadianceTrace>() {
@@ -78,9 +79,7 @@ public void runRetainedIndirect<TComposition : IComposition,
         recordIndex = linkedRecord;
     }
 
-    RWTexture2D<float4> output = worldFloat4StorageImage(worldBindings.resources.outputImage);
-    float4 primary = output[pixel];
-    float3 accumulated = clamp(max(primary.xyz + indirectRadiance * frame.preExposure,
+    float3 accumulated = clamp(max(indirectRadiance * frame.preExposure,
             float3(0.0)), float3(0.0), float3(HALF_MAX));
-    output[pixel] = float4(accumulated, primary.w);
+    stablePlaneAddRadiance(pixel, accumulated);
 }

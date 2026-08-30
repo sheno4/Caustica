@@ -694,7 +694,7 @@ public final class CausticaConfig {
 
         public static final class Composite {
             public static final IntSetting DEBUG_VIEW =
-                    clampedInt("caustica.rt.debugView", "composite.debug-view", 0, 0, 9).inGroup("debug");
+                    clampedInt("caustica.rt.debugView", "composite.debug-view", 0, 0, 15).inGroup("debug");
             public static final IntSetting MAX_BOUNCES =
                     clampedInt("caustica.rt.maxBounces", "composite.max-bounces", 4, 2, 8).inGroup("quality");
             public static final BooleanSetting WATER_WAVES =

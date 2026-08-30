@@ -137,7 +137,7 @@ public SurfaceClosure surfaceClosure(OpenPbrSurface material, float3 geometryNor
 
 // Probabilities are scalar importance estimates; RGB lobe values remain untouched. Evaluation and
 // sampling call this same function, so changing the heuristic cannot create a value/pdf disagreement.
-float4 surfaceLobeProbabilities(SurfaceClosure surface, float outgoingCosine) {
+public float4 surfaceLobeProbabilities(SurfaceClosure surface, float outgoingCosine) {
     float3 diffuseReflection = max(surface.diffuseAlbedo - surface.diffuseTransmissionAlbedo,
             float3(0.0));
     float3 fresnel = surfaceFresnelSchlick(outgoingCosine, surface.specularF0);

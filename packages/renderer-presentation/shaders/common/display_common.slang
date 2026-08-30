@@ -104,8 +104,10 @@ public struct DebugPresentPush {
     public uint specMotionImageIndex;
     public uint sceneImageIndex;
     public uint exposureImageIndex;
+    public uint traceRadianceImageIndex;
+    public uint stablePlaneMetadataImageIndex;
     public uint64_t exposureStateAddress;
-    public uint debugView;     // 1..9; this pass is only dispatched for debugView != 0
+    public uint debugView;     // 1..15; this pass is only dispatched for debugView != 0
     public float centerWeightSigma;
     public float centerWeightFloor;
 };

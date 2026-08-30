@@ -46,14 +46,17 @@ public final class RtDebugPresentPipeline {
 
     public void dispatch(VkCommandBuffer command, GpuImage output, GpuImage normal, GpuImage albedo,
                          GpuImage depth, GpuImage motion, GpuImage specAlbedo, GpuImage specMotion,
-                         GpuImage scene, GpuImage exposure, GpuBuffer exposureState, int debugView,
+                         GpuImage scene, GpuImage exposure, GpuImage traceRadiance,
+                         GpuImage stablePlaneMetadata,
+                         GpuBuffer exposureState, int debugView,
                          float centerWeightSigma, float centerWeightFloor) {
         try (MemoryStack stack = MemoryStack.stackPush();
              RtDebugLabels.Scope ignored = RtDebugLabels.scope(context, command, "debug present")) {
             ByteBuffer push = stack.malloc(DebugPresentPushData.BYTE_SIZE);
             new DebugPresentPushData(storage(output), storage(normal), storage(albedo), storage(depth),
                     storage(motion), storage(specAlbedo), storage(specMotion), storage(scene),
-                    storage(exposure), exposureState.deviceAddress().value(), debugView,
+                    storage(exposure), storage(traceRadiance), storage(stablePlaneMetadata),
+                    exposureState.deviceAddress().value(), debugView,
                     centerWeightSigma, centerWeightFloor).write(push);
             shader.dispatch(command, push, (output.width() + 15) / 16, (output.height() + 15) / 16, 1);
         }
