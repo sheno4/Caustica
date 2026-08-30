@@ -41,6 +41,27 @@ final class RtTerrainLifecycleArchitectureTest {
     }
 
     @Test
+    void noWorldTicksContinueCompletingTheTeardownPublication() throws IOException {
+        String source = source("terrain/RtTerrain.java");
+        int noWorld = source.indexOf("if (level == null || mc.player == null)");
+        int complete = source.indexOf("completeSubmittedGeometry();", noWorld);
+        int once = source.indexOf("if (!noWorldClearApplied)", noWorld);
+
+        assertTrue(noWorld >= 0 && complete > noWorld && complete < once);
+    }
+
+    @Test
+    void localClearSubmitsResidentDropsImmediately() throws IOException {
+        String source = source("terrain/RtTerrain.java");
+        int clear = source.indexOf("private void clear(boolean shutdown)");
+        int teardown = source.indexOf("GeometryGroupKind.TEARDOWN", clear);
+        int submit = source.indexOf("submitPendingGeometry();", teardown);
+        int end = source.indexOf("\n    }", submit);
+
+        assertTrue(clear >= 0 && teardown > clear && submit > teardown && end > submit);
+    }
+
+    @Test
     void framePublishesPendingTerrainAsOneGroupBeforeAcknowledgingMembers() throws IOException {
         String source = source("terrain/RtTerrain.java");
         int submit = source.indexOf("retainedGeometry.submitGroup(");

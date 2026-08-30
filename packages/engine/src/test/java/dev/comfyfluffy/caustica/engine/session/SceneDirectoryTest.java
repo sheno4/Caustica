@@ -29,6 +29,7 @@ import dev.comfyfluffy.caustica.engine.scene.GeometryContributionChannel;
 import dev.comfyfluffy.caustica.engine.scene.LightContributionChannel;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneBackend;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneContentSnapshot;
+import dev.comfyfluffy.caustica.engine.scene.RetainedInstanceTransform;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot;
 import dev.comfyfluffy.caustica.engine.scene.SceneDirectory;
 import dev.comfyfluffy.caustica.engine.scene.SceneEnvironmentContributionChannel;
@@ -299,6 +300,51 @@ final class SceneDirectoryTest {
         assertEquals(1, directory.snapshot().instances().size());
         assertEquals(finalTransform, directory.snapshot().instances().getFirst().transform());
         assertEquals(8, directory.snapshot().instances().getFirst().instanceData().bits());
+    }
+
+    @Test
+    void latestPlacementUpdatesLogicalAndBackendStateWithoutARevision() {
+        ProgramFixture programs = new ProgramFixture();
+        SurfaceId<Binding, Instance> surface = programs.surface(new ContributionOwner(1));
+        SceneBackend backend = new SceneBackend();
+        SceneDirectory directory = directory(programs, backend);
+        SceneId scene = directory.createScene();
+        GeometryContributionChannel geometry = directory.openGeometry(new ContributionOwner(2));
+        MeshId<Instance> mesh = geometry.newMesh(INSTANCE);
+        var instance = geometry.newInstance();
+        geometry.submit(RetainedBatch.of(List.of(
+                new GeometryChannel.SetMesh<>(mesh, mesh(surface)),
+                new GeometryChannel.SetInstance<>(instance, scene, mesh,
+                        GeometryTransform.translation(0, 0, 0), 0xff, INSTANCE.data(7)))));
+        long revision = directory.snapshot().revision();
+
+        geometry.submitGroupWithLatest(List.of(), List.of(new GeometryChannel.LatestInstance(
+                instance, GeometryTransform.translation(3, 0, 0), 0x01)));
+
+        assertEquals(revision, directory.snapshot().revision());
+        assertEquals(GeometryTransform.translation(3, 0, 0),
+                directory.snapshot().instances().getFirst().transform());
+        assertEquals(0x01, directory.snapshot().instances().getFirst().mask());
+        assertEquals(1, backend.latestTransforms.size());
+        assertEquals(GeometryTransform.translation(3, 0, 0),
+                backend.latestTransforms.getFirst().transform());
+    }
+
+    @Test
+    void latestPlacementRequiresTheIssuingOwnerAndALivePlacement() {
+        ProgramFixture programs = new ProgramFixture();
+        SceneDirectory directory = directory(programs, new SceneBackend());
+        directory.createScene();
+        GeometryContributionChannel first = directory.openGeometry(new ContributionOwner(1));
+        GeometryContributionChannel second = directory.openGeometry(new ContributionOwner(2));
+        var instance = first.newInstance();
+
+        assertThrows(IllegalArgumentException.class, () -> second.submitGroupWithLatest(
+                List.of(), List.of(new GeometryChannel.LatestInstance(
+                        instance, GeometryTransform.translation(1, 0, 0), 0xff))));
+        assertThrows(IllegalArgumentException.class, () -> first.submitGroupWithLatest(
+                List.of(), List.of(new GeometryChannel.LatestInstance(
+                        instance, GeometryTransform.translation(1, 0, 0), 0xff))));
     }
 
     @Test
@@ -754,6 +800,7 @@ final class SceneDirectoryTest {
         private final List<RetainedSceneContentSnapshot> contentSnapshots = new ArrayList<>();
         private final List<Long> revisions = new ArrayList<>();
         private final List<Runnable> retirements = new ArrayList<>();
+        private final List<RetainedInstanceTransform> latestTransforms = new ArrayList<>();
         private boolean rejectNext;
         @Override public void publish(RetainedSceneSnapshot snapshot, Runnable published,
                                       Runnable previousRetired) {
@@ -772,6 +819,9 @@ final class SceneDirectoryTest {
             }
             contentSnapshots.add(snapshot); revisions.add(snapshot.revision());
             published.run(); retirements.add(previousRetired);
+        }
+        @Override public void updateLatestInstanceTransforms(List<RetainedInstanceTransform> transforms) {
+            latestTransforms.addAll(transforms);
         }
         void retire(int publication) { retirements.get(publication).run(); }
         void retireLatest() { retirements.getLast().run(); }

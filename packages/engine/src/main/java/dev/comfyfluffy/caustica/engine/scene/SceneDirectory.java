@@ -171,9 +171,19 @@ public final class SceneDirectory {
 
     synchronized GeometryPublication submitGeometryGroup(GeometryContributionChannel channel,
                                                           List<RetainedBatch<GeometryChannel.Operation>> group) {
+        return submitGeometryGroupWithLatest(channel, group, List.of());
+    }
+
+    synchronized GeometryPublication submitGeometryGroupWithLatest(
+            GeometryContributionChannel channel,
+            List<RetainedBatch<GeometryChannel.Operation>> group,
+            List<GeometryChannel.LatestInstance> latestInstances) {
         requireSubmission(channel);
         group = List.copyOf(group);
-        if (group.isEmpty()) throw new IllegalArgumentException("a submission group needs at least one batch");
+        latestInstances = List.copyOf(latestInstances);
+        if (group.isEmpty() && latestInstances.isEmpty()) {
+            throw new IllegalArgumentException("a submission needs a retained batch or latest placement");
+        }
         List<GeometryChannel.Operation> operations = group.stream()
                 .flatMap(batch -> batch.operations().stream())
                 .toList();
@@ -188,20 +198,52 @@ public final class SceneDirectory {
             applyGeometry(group.get(batchIndex).operations(), tokens.get(batchIndex),
                     nextMeshes, nextInstances, removed);
         }
+        List<RetainedInstanceTransform> latest = applyLatestInstances(
+                channel, latestInstances, nextInstances);
+        if (group.isEmpty()) {
+            backend.updateLatestInstanceTransforms(latest);
+            instances = nextInstances;
+            return GeometryPublication.alreadyVisible();
+        }
         long nextRevision = revision + 1;
-        RetainedSceneGeometryDelta delta = geometryDelta(nextRevision, operations);
+        RetainedSceneGeometryDelta delta = geometryDelta(
+                nextRevision, operations, latestInstances, nextInstances);
         PublicationReceipt receipt = new PublicationReceipt();
         Map<LightRef, LightValue> currentLights = lights;
         Map<SceneRef, EnvironmentValue> currentEnvironments = environments;
         backend.publishGeometry(delta,
                 () -> snapshot(nextRevision, nextMeshes, nextInstances, currentLights, currentEnvironments),
                 receipt::publish, () -> enqueueRelease(removed));
+        backend.updateLatestInstanceTransforms(latest);
         batches.addAll(tokens);
         meshes = nextMeshes;
         instances = nextInstances;
         revision++;
         tokens.forEach(token -> token.seal(this));
         return receipt;
+    }
+
+    private List<RetainedInstanceTransform> applyLatestInstances(
+            GeometryContributionChannel channel,
+            List<GeometryChannel.LatestInstance> latestInstances,
+            Map<InstanceRef, InstanceValue> nextInstances) {
+        List<RetainedInstanceTransform> result = new ArrayList<>(latestInstances.size());
+        for (GeometryChannel.LatestInstance latest : latestInstances) {
+            InstanceRef instance = requireOwnedInstance(channel, latest.instance());
+            InstanceValue current = nextInstances.get(instance);
+            if (current == null) throw new IllegalArgumentException("latest placement names an absent instance");
+            GeometryChannel.SetInstance<?> prior = current.operation;
+            GeometryChannel.SetInstance<?> replacement = withLatestPlacement(prior, latest);
+            nextInstances.put(instance, new InstanceValue(current.token, current.scene, current.mesh, replacement));
+            result.add(new RetainedInstanceTransform(instance.identity, latest.transform(), latest.mask()));
+        }
+        return List.copyOf(result);
+    }
+
+    private static <N> GeometryChannel.SetInstance<N> withLatestPlacement(
+            GeometryChannel.SetInstance<N> prior, GeometryChannel.LatestInstance latest) {
+        return new GeometryChannel.SetInstance<>(prior.instance(), prior.scene(), prior.mesh(),
+                latest.transform(), latest.mask(), prior.instanceData(), prior.primitiveLights());
     }
 
     synchronized GeometryPublication submitGeometryAndLights(
@@ -478,6 +520,13 @@ public final class SceneDirectory {
 
     private RetainedSceneGeometryDelta geometryDelta(
             long nextRevision, List<GeometryChannel.Operation> operations) {
+        return geometryDelta(nextRevision, operations, List.of(), instances);
+    }
+
+    private RetainedSceneGeometryDelta geometryDelta(
+            long nextRevision, List<GeometryChannel.Operation> operations,
+            List<GeometryChannel.LatestInstance> latestInstances,
+            Map<InstanceRef, InstanceValue> finalInstances) {
         List<RetainedSceneGeometryDelta.Mutation> mutations = new ArrayList<>();
         for (GeometryChannel.Operation operation : operations) {
             if (operation instanceof GeometryChannel.SetMesh<?> set) {
@@ -495,6 +544,12 @@ public final class SceneDirectory {
                 mutations.add(new RetainedSceneGeometryDelta.DropInstance(
                         ((InstanceRef) drop.instance()).identity));
             }
+        }
+        for (GeometryChannel.LatestInstance latest : latestInstances) {
+            InstanceRef instance = (InstanceRef) latest.instance();
+            InstanceValue value = finalInstances.get(instance);
+            mutations.add(new RetainedSceneGeometryDelta.SetInstance(
+                    instanceSnapshot(instance, value.scene, value.mesh, value.operation)));
         }
         return new RetainedSceneGeometryDelta(nextRevision, mutations);
     }

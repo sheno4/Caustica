@@ -1,19 +1,19 @@
 package dev.comfyfluffy.caustica.minecraft.client.entity;
 
-import dev.comfyfluffy.caustica.api.geometry.GeometryPublication;
 import org.junit.jupiter.api.Test;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
+
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class RtEntitiesPublicationBackpressureTest {
     @Test
-    void pendingReceiptBlocksTheNextCaptureGroup() {
-        boolean[] visible = {false};
-        GeometryPublication publication = () -> visible[0];
+    void invisibleMeshPublicationDoesNotGateTheNextEntityCapture() throws Exception {
+        String source = Files.readString(Path.of(
+                "packages/minecraft-client/src/main/java/dev/comfyfluffy/caustica/minecraft/client/entity/RtEntities.java"));
 
-        assertTrue(RtEntities.publicationPending(publication));
-        visible[0] = true;
-        assertFalse(RtEntities.publicationPending(publication));
+        assertFalse(source.contains("submittedPublication"));
+        assertFalse(source.contains("publicationPending"));
     }
 }

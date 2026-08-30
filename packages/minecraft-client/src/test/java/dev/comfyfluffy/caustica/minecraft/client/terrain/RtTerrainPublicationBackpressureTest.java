@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.client.terrain;
 
 import dev.comfyfluffy.caustica.api.geometry.GeometryPublication;
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -54,8 +55,11 @@ final class RtTerrainPublicationBackpressureTest {
     void sectionAndDirtyGroupKeysCannotCollide() {
         var section = new RtTerrain.GeometryGroupKey(RtTerrain.GeometryGroupKind.SECTION, 1L);
         var dirty = new RtTerrain.GeometryGroupKey(RtTerrain.GeometryGroupKind.DIRTY, 1L);
+        var teardown = new RtTerrain.GeometryGroupKey(RtTerrain.GeometryGroupKind.TEARDOWN, 1L);
 
         assertFalse(section.equals(dirty));
+        assertFalse(section.equals(teardown));
+        assertFalse(dirty.equals(teardown));
     }
 
     @Test
@@ -68,6 +72,30 @@ final class RtTerrainPublicationBackpressureTest {
     void largeEvictionBacklogHasBoundedPerPassConversion() {
         assertEquals(8, RtTerrain.boundedEvictionCount(14_000, 8));
         assertEquals(3, RtTerrain.boundedEvictionCount(3, 8));
+    }
+
+    @Test
+    void removalBudgetOnlyConsumesSuccessfullyAdmittedDrops() {
+        var removals = new LongOpenHashSet(new long[] {1L, 2L, 3L, 4L});
+
+        int admitted = RtTerrain.admitEvictions(removals, 2, key -> key != 2L);
+
+        assertEquals(2, admitted);
+        assertEquals(2, removals.size());
+        assertTrue(removals.contains(2L));
+    }
+
+    @Test
+    void undesiredStalePublicationRematerializesItsDrop() {
+        assertTrue(RtTerrain.shouldRequeueDropAfterClearedPublication(false, true, false));
+        assertTrue(RtTerrain.shouldRequeueDropAfterClearedPublication(false, false, true));
+        assertFalse(RtTerrain.shouldRequeueDropAfterClearedPublication(true, true, true));
+        assertFalse(RtTerrain.shouldRequeueDropAfterClearedPublication(false, false, false));
+    }
+
+    @Test
+    void laterDropCoalescesAnUnsubmittedPutForTheSameSection() {
+        assertEquals(java.util.List.of(7L), RtTerrain.latestGroupKeys(java.util.List.of(7L, 7L)));
     }
 
     @Test

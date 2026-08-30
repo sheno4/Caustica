@@ -50,8 +50,10 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
         Objects.requireNonNull(mesh, "mesh");
         Objects.requireNonNull(transform, "transform");
         Resident prior = residents.get(key);
-        if (prior != null && prior.mesh.poolKey.revision.equals(revision)
-                && prior.transform.equals(transform) && prior.mask == mask) {
+        if (prior != null && prior.mesh.poolKey.revision.equals(revision)) {
+            submitLatest(prior, transform, mask);
+            prior.transform = transform;
+            prior.mask = mask;
             return;
         }
         Resident target = prior != null ? prior : new Resident(channel.newInstance());
@@ -82,6 +84,7 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
                 else submittedMesh.lease.cancelRetain(failure);
             });
             staged = true;
+            if (prior != null) submitLatest(target, transform, mask);
         } catch (RuntimeException | Error failure) {
             if (!staged) {
                 if (newMesh) targetMesh.lease.reject(failure);
@@ -106,21 +109,16 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
         Resident resident = residents.get(Objects.requireNonNull(key, "key"));
         if (resident == null) return;
         Objects.requireNonNull(transform, "transform");
-        if (resident.transform.equals(transform) && resident.mask == mask) return;
-        Runnable retirement = resident.mesh.lease.retain();
-        boolean staged = false;
-        try {
-            submit(new RetainedBatch<>(java.util.List.of(new GeometryChannel.SetInstance<>(
-                    resident.instance, scene, resident.mesh.mesh, transform, mask,
-                    resident.mesh.lease.uploaded.instanceData())), retirement),
-                    resident.mesh.lease::cancelRetain);
-            staged = true;
-        } catch (RuntimeException | Error failure) {
-            if (!staged) resident.mesh.lease.cancelRetain(failure);
-            throw failure;
-        }
+        submitLatest(resident, transform, mask);
         resident.transform = transform;
         resident.mask = mask;
+    }
+
+    private void submitLatest(Resident resident, GeometryTransform transform, int mask) {
+        GeometryChannel.LatestInstance latest = new GeometryChannel.LatestInstance(
+                resident.instance, Objects.requireNonNull(transform, "transform"), mask);
+        if (pendingGroup != null) pendingGroup.latestInstances.put(resident.instance, latest);
+        else channel.submitGroupWithLatest(List.of(), List.of(latest));
     }
 
     /** Atomically removes the placement and mesh for one logical Minecraft object. */
@@ -182,6 +180,7 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
         final Map<SharedMesh, Integer> meshResidentCounts = new IdentityHashMap<>();
         final List<RetainedBatch<GeometryChannel.Operation>> batches = new ArrayList<>();
         final List<java.util.function.Consumer<Throwable>> rejections = new ArrayList<>();
+        final Map<InstanceId, GeometryChannel.LatestInstance> latestInstances = new IdentityHashMap<>();
         boolean finished;
 
         PendingGroup() {
@@ -194,9 +193,9 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
             synchronized (MinecraftEntityGeometry.this) {
                 requireActive();
                 try {
-                    GeometryPublication publication = batches.isEmpty()
+                    GeometryPublication publication = batches.isEmpty() && latestInstances.isEmpty()
                             ? GeometryPublication.alreadyVisible()
-                            : channel.submitGroup(batches);
+                            : channel.submitGroupWithLatest(batches, List.copyOf(latestInstances.values()));
                     finished = true;
                     pendingGroup = null;
                     return publication;

@@ -48,6 +48,7 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.function.LongPredicate;
 
 import static dev.comfyfluffy.caustica.minecraft.client.terrain.RtTerrainMesher.WORKER_TESS;
 import static dev.comfyfluffy.caustica.minecraft.client.terrain.RtTerrainMesher.buildCpuSection;
@@ -338,8 +339,8 @@ public final class RtTerrain {
         ClientLevel level = mc.level;
         if (level == null || mc.player == null) {
             sceneInitialized = false;
+            completeSubmittedGeometry();
             if (!noWorldClearApplied) {
-                completeSubmittedGeometry();
                 if (submittedGeometryGroup != null
                         && clearMustWait(submittedGeometryGroup.receipt())) return;
                 clear(false);
@@ -1311,7 +1312,7 @@ public final class RtTerrain {
         }
     }
 
-    enum GeometryGroupKind { SECTION, DIRTY }
+    enum GeometryGroupKind { SECTION, DIRTY, TEARDOWN }
 
     record GeometryGroupKey(GeometryGroupKind kind, long value) { }
 
@@ -1346,15 +1347,7 @@ public final class RtTerrain {
             if (result.geometry() == null) submitEmptySection(result);
             else submitSection(result);
         }
-        int evictionLimit = boundedEvictionCount(removed.size(), MAX_PUBLICATION_SECTION_CHANGES);
-        int admittedEvictions = 0;
-        for (LongIterator it = removed.iterator(); it.hasNext()
-                && admittedEvictions < evictionLimit; ) {
-            long key = it.nextLong();
-            it.remove();
-            submitDrop(key);
-            admittedEvictions++;
-        }
+        admitEvictions(removed, MAX_PUBLICATION_SECTION_CHANGES, this::submitDrop);
         if (rebase) {
             blockX = rbx;
             blockY = rby;
@@ -1397,13 +1390,15 @@ public final class RtTerrain {
                 operations, new ArrayList<>(), drops, List.of(result));
     }
 
-    private void submitDrop(long key) {
-        if (pendingDrops.contains(key)) return;
+    private boolean submitDrop(long key) {
+        if (pendingDrops.contains(key)) return true;
         ArrayList<MinecraftTerrainGeometry.Change> operations = new ArrayList<>(1);
         LongArrayList drops = new LongArrayList(1);
         appendDrop(operations, drops, key);
+        if (drops.isEmpty()) return false;
         enqueueGroup(new GeometryGroupKey(GeometryGroupKind.SECTION, key),
                 operations, new ArrayList<>(), drops, List.of());
+        return true;
     }
 
     private void appendPut(List<MinecraftTerrainGeometry.Change> operations, List<SectionResult> puts, SectionResult result) {
@@ -1457,9 +1452,7 @@ public final class RtTerrain {
         for (PublishedPut put : publicationPuts) {
             recordTerrainLatency("terrainWorkerToPending", put.workerCompletedNanos(), enqueuedNanos);
         }
-        ResourcePackEpoch publicationEpoch = puts.isEmpty()
-                ? java.util.Objects.requireNonNull(materialLookup, "materialLookup").epoch()
-                : puts.getFirst().task().materialEpoch;
+        ResourcePackEpoch publicationEpoch = puts.isEmpty() ? null : puts.getFirst().task().materialEpoch;
         pendingGeometryGroups.add(new PendingGeometryGroup(groupKey, publicationEpoch,
                 List.copyOf(operations),
                 new PendingPublication(List.copyOf(publicationPuts), List.copyOf(publicationDrops),
@@ -1473,8 +1466,8 @@ public final class RtTerrain {
         instrumentation.set("terrainPendingGeometryGroups", pendingGeometryGroups.size());
         if (submittedGeometryGroup != null) return;
         MinecraftMaterialLookup lookup = materialLookup;
-        if (pendingGeometryGroups.isEmpty() || lookup == null) return;
-        discardStalePendingGeometry(lookup.epoch());
+        if (pendingGeometryGroups.isEmpty()) return;
+        if (lookup != null) discardStalePendingGeometry(lookup.epoch());
         if (pendingGeometryGroups.isEmpty() || retainedGeometry == null) return;
         LinkedHashMap<GeometryGroupKey, PendingGeometryGroup> latest = new LinkedHashMap<>();
         for (PendingGeometryGroup group : pendingGeometryGroups) {
@@ -1482,10 +1475,14 @@ public final class RtTerrain {
         }
         pendingGeometryGroups.clear();
         pendingGeometryGroups.addAll(latest.values());
-        int admittedGroups = boundedAdmissionGroupCount(pendingGeometryGroups.stream()
+        List<PendingGeometryGroup> eligible = lookup == null
+                ? pendingGeometryGroups.stream().filter(group -> group.materialEpoch() == null).toList()
+                : List.copyOf(pendingGeometryGroups);
+        if (eligible.isEmpty()) return;
+        int admittedGroups = boundedAdmissionGroupCount(eligible.stream()
                 .map(group -> group.operations().size())
                 .toList(), MAX_PUBLICATION_SECTION_CHANGES);
-        List<PendingGeometryGroup> submitted = List.copyOf(pendingGeometryGroups.subList(0, admittedGroups));
+        List<PendingGeometryGroup> submitted = List.copyOf(eligible.subList(0, admittedGroups));
         long submittedNanos = System.nanoTime();
         for (PendingGeometryGroup group : submitted) {
             int putCount = group.publication().puts().size();
@@ -1539,16 +1536,16 @@ public final class RtTerrain {
 
     private void discardStalePendingGeometry(ResourcePackEpoch activeEpoch) {
         pendingGeometryGroups.removeIf(group -> {
-            if (group.materialEpoch().equals(activeEpoch)) return false;
+            if (group.materialEpoch() == null || group.materialEpoch().equals(activeEpoch)) return false;
             PendingPublication publication = group.publication();
             for (PublishedPut put : publication.puts()) {
-                if (clearPendingPublication(put.key(), put.token())) enqueueMissingIfNeeded(put.key());
+                if (clearPendingPublication(put.key(), put.token())) reconcileClearedPublication(put.key());
             }
             for (PublishedDrop drop : publication.drops()) {
-                if (clearPendingPublication(drop.key(), drop.token())) enqueueMissingIfNeeded(drop.key());
+                if (clearPendingPublication(drop.key(), drop.token())) reconcileClearedPublication(drop.key());
             }
             for (PublishedEmpty ready : publication.readyEmpty()) {
-                enqueueMissingIfNeeded(ready.key());
+                reconcileClearedPublication(ready.key());
             }
             instrumentation.count("terrainMaterialEpochRejects", uniqueRejectedSectionCount(
                     publication.puts().stream().map(PublishedPut::key).toList(),
@@ -1573,6 +1570,31 @@ public final class RtTerrain {
 
     static int boundedEvictionCount(int pendingEvictions, int maxChanges) {
         return Math.min(pendingEvictions, maxChanges);
+    }
+
+    static int admitEvictions(LongOpenHashSet removals, int maxChanges, LongPredicate admission) {
+        int limit = boundedEvictionCount(removals.size(), maxChanges);
+        int admitted = 0;
+        for (LongIterator it = removals.iterator(); it.hasNext() && admitted < limit; ) {
+            long key = it.nextLong();
+            if (!admission.test(key)) continue;
+            it.remove();
+            admitted++;
+        }
+        return admitted;
+    }
+
+    static boolean shouldRequeueDropAfterClearedPublication(boolean desired,
+                                                             boolean accepted, boolean published) {
+        return !desired && (accepted || published);
+    }
+
+    private void reconcileClearedPublication(long key) {
+        if (desired.contains(key)) {
+            enqueueMissingIfNeeded(key);
+        } else if (shouldRequeueDropAfterClearedPublication(false, hasAcceptedGeometry(key), isPublished(key))) {
+            removed.add(key);
+        }
     }
 
     private void acknowledgePublication(PendingPublication publication, long submittedNanos) {
@@ -1679,11 +1701,20 @@ public final class RtTerrain {
         windowValid = false;
         empty.clear();
         removed.clear();
-        removed.addAll(acceptedBeforeClear);
         prepared.clear();
         pendingGeometryGroups.clear();
         if (shutdown) submittedGeometryGroup = null;
         nextPublicationToken = 0L;
+        if (!shutdown && retainedGeometry != null && !acceptedBeforeClear.isEmpty()) {
+            ArrayList<MinecraftTerrainGeometry.Change> operations = new ArrayList<>(acceptedBeforeClear.size());
+            LongArrayList drops = new LongArrayList(acceptedBeforeClear.size());
+            for (LongIterator it = acceptedBeforeClear.iterator(); it.hasNext(); ) {
+                appendDrop(operations, drops, it.nextLong());
+            }
+            enqueueGroup(new GeometryGroupKey(GeometryGroupKind.TEARDOWN, terrainEpoch),
+                    operations, new ArrayList<>(), drops, List.of());
+            submitPendingGeometry();
+        }
     }
 
 

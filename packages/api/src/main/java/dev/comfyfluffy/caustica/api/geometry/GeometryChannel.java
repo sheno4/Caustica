@@ -78,6 +78,19 @@ public interface GeometryChannel {
     GeometryPublication submitGroup(List<RetainedBatch<Operation>> batches);
 
     /**
+     * Applies ordered geometry work and coalesced current-frame rigid placements together.
+     *
+     * <p>{@code latestInstances} may only change the transform and visibility mask of a placement which
+     * exists after {@code batches} are applied. It preserves that placement's scene, mesh, shader data,
+     * emitter map, and retained lifetime. Renderers may consume these placements for the current frame
+     * before an ordered mesh publication becomes visible. At least one of the two lists must be non-empty.
+     */
+    default GeometryPublication submitGroupWithLatest(List<RetainedBatch<Operation>> batches,
+                                                      List<LatestInstance> latestInstances) {
+        throw new UnsupportedOperationException("latest rigid placements are not supported by this channel");
+    }
+
+    /**
      * Publishes geometry and its retained lights as one scene revision.
      *
      * <p>Both channels must come from the same contribution in the same render session. Geometry batches
@@ -90,6 +103,17 @@ public interface GeometryChannel {
                                          RetainedBatch<LightChannel.Operation> lightBatch);
 
     sealed interface Operation permits SetMesh, DropMesh, SetInstance, DropInstance { }
+
+    /** A transform-and-mask update for an existing placement; it owns no retained resources. */
+    record LatestInstance(InstanceId instance, GeometryTransform transform, int mask) {
+        public LatestInstance {
+            Objects.requireNonNull(instance, "instance");
+            Objects.requireNonNull(transform, "transform");
+            if ((mask & ~0xFF) != 0) {
+                throw new IllegalArgumentException("visibility mask must fit in eight bits");
+            }
+        }
+    }
 
     /**
      * Retain or replace a mesh. The source keeps every buffer and its contents unchanged until this batch

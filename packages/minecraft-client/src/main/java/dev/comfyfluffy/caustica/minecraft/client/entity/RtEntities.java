@@ -9,7 +9,6 @@ import dev.comfyfluffy.caustica.minecraft.client.mixin.ParticleGroupAccessor;
 import dev.comfyfluffy.caustica.minecraft.client.MinecraftTelemetry;
 import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialIds;
 import dev.comfyfluffy.caustica.api.geometry.GeometryTransform;
-import dev.comfyfluffy.caustica.api.geometry.GeometryPublication;
 import dev.comfyfluffy.caustica.settings.ResourceId;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import net.minecraft.client.Camera;
@@ -204,7 +203,6 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
     private long meshRevisionEpoch;
     private final Set<MinecraftEntityGeometry.Key> pendingDrops = new java.util.LinkedHashSet<>();
     private MinecraftEntityGeometry geometry;
-    private GeometryPublication submittedPublication;
 
     public RtEntities(RtEntityTextures textures, MinecraftTelemetry.Instrumentation instrumentation) {
         this.textures = java.util.Objects.requireNonNull(textures, "textures");
@@ -432,10 +430,6 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
     private void beginFrame(MinecraftEntityGeometry geometry, SceneOrigin origin,
                            double camX, double camY, double camZ, Matrix4f projection, Matrix4f viewRotation,
                            long frameIndex) {
-        if (submittedPublication != null) {
-            if (publicationPending(submittedPublication)) return;
-            submittedPublication = null;
-        }
         FrameBuild build = new FrameBuild(geometry, origin, frameIndex, instrumentation);
         int rbx = (int) origin.x();
         int rby = (int) origin.y();
@@ -489,13 +483,8 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
         }
     }
 
-    private void finishUpdateGroup(MinecraftEntityGeometry.UpdateGroup updates) {
-        GeometryPublication publication = updates.submit();
-        submittedPublication = publicationPending(publication) ? publication : null;
-    }
-
-    static boolean publicationPending(GeometryPublication publication) {
-        return publication != null && !publication.isVisible();
+    static void finishUpdateGroup(MinecraftEntityGeometry.UpdateGroup updates) {
+        updates.submit();
     }
 
     private void finishFrame(FrameBuild build) {
@@ -1121,7 +1110,6 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
         entityStates.clear();
         beCache.clear();
         pendingDrops.clear();
-        submittedPublication = null;
         collector.clearCaches();
     }
 
@@ -1136,7 +1124,6 @@ public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rend
         beCandidates.clear();
         beCandidatePool.clear();
         pendingDrops.clear();
-        submittedPublication = null;
         collector.clearCaches();
     }
 }

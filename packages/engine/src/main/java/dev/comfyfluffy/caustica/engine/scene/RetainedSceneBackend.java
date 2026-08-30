@@ -1,10 +1,14 @@
 package dev.comfyfluffy.caustica.engine.scene;
 
+import java.util.List;
 import java.util.function.Supplier;
 import java.util.Objects;
 
 /** Publication seam for acceleration-structure and light-resource implementations. */
 public interface RetainedSceneBackend {
+    /** Updates current-frame rigid placements without waiting for ordered native geometry publication. */
+    default void updateLatestInstanceTransforms(List<RetainedInstanceTransform> transforms) { }
+
     /**
      * Accepts one complete logical snapshot, reports when it becomes native-visible, and reports when the
      * displaced snapshot is no longer in use.

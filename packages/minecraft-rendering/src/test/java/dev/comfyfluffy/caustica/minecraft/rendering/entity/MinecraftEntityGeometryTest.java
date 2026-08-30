@@ -114,12 +114,9 @@ final class MinecraftEntityGeometryTest {
         geometry.put(key, revision(7), mesh(), GeometryTransform.translation(2, 0, 0), 0xff);
 
         assertEquals(1, uploads[0]);
-        var initialMesh = assertInstanceOf(GeometryChannel.SetMesh.class,
-                channel.batches.get(0).operations().get(0));
-        var replacement = channel.batches.get(1).operations();
-        assertEquals(1, replacement.size());
-        var placement = assertInstanceOf(GeometryChannel.SetInstance.class, replacement.getFirst());
-        assertSame(initialMesh.mesh(), placement.mesh());
+        assertEquals(1, channel.batches.size());
+        assertEquals(GeometryTransform.translation(2, 0, 0),
+                channel.latestGroups.getFirst().getFirst().transform());
     }
 
     @Test
@@ -218,7 +215,7 @@ final class MinecraftEntityGeometryTest {
     }
 
     @Test
-    void transformKeepsUploadAliveUntilTheReplacementPlacementRetires() {
+    void transformUsesLatestPlacementWithoutQueuingOrChangingTheMeshLifetime() {
         RecordingChannel channel = new RecordingChannel();
         Uploaded uploaded = new Uploaded(0x3000L);
         var geometry = new MinecraftEntityGeometry(channel, new SceneId() { }, ignored -> uploaded);
@@ -227,14 +224,58 @@ final class MinecraftEntityGeometryTest {
 
         geometry.transform(key, GeometryTransform.translation(1, 2, 3), 0x01);
 
-        var operation = assertInstanceOf(GeometryChannel.SetInstance.class,
-                channel.batches.get(1).operations().getFirst());
+        assertEquals(1, channel.batches.size());
+        GeometryChannel.LatestInstance operation = channel.latestGroups.getFirst().getFirst();
         assertEquals(GeometryTransform.translation(1, 2, 3), operation.transform());
         assertEquals(0x01, operation.mask());
         channel.batches.getFirst().retired().run();
-        assertFalse(uploaded.closed);
-        channel.batches.get(1).retired().run();
         assertTrue(uploaded.closed);
+    }
+
+    @Test
+    void everyUnchangedMeshFrameSubmitsItsLatestRigidPlacementWithoutUploading() {
+        RecordingChannel channel = new RecordingChannel();
+        int[] uploads = {0};
+        var geometry = new MinecraftEntityGeometry(channel, new SceneId() { }, ignored -> {
+            uploads[0]++;
+            return new Uploaded(0x3100L);
+        });
+        var key = new MinecraftEntityGeometry.Key(1, 10);
+        geometry.put(key, revision(1), mesh(), GeometryTransform.translation(0, 0, 0), 0xff);
+
+        geometry.put(key, revision(1), mesh(), GeometryTransform.translation(1, 0, 0), 0xff);
+        geometry.put(key, revision(1), mesh(), GeometryTransform.translation(2, 0, 0), 0xff);
+
+        assertEquals(1, uploads[0]);
+        assertEquals(1, channel.batches.size());
+        assertEquals(2, channel.latestGroups.size());
+        assertEquals(GeometryTransform.translation(2, 0, 0),
+                channel.latestGroups.getLast().getFirst().transform());
+    }
+
+    @Test
+    void movementContinuesWhileAChangedMeshPublicationIsInvisible() {
+        RecordingChannel channel = new RecordingChannel();
+        var uploads = new ArrayList<>(List.of(new Uploaded(0x3200L), new Uploaded(0x3300L)));
+        var geometry = new MinecraftEntityGeometry(channel, new SceneId() { }, ignored -> uploads.removeFirst());
+        var key = new MinecraftEntityGeometry.Key(1, 11);
+        geometry.put(key, revision(1), mesh(), GeometryTransform.translation(0, 0, 0), 0xff);
+        assertFalse(channel.publication.isVisible());
+
+        try (MinecraftEntityGeometry.UpdateGroup updates = geometry.beginUpdateGroup()) {
+            geometry.put(key, revision(2), mesh(), GeometryTransform.translation(1, 0, 0), 0xff);
+            updates.submit();
+        }
+        try (MinecraftEntityGeometry.UpdateGroup updates = geometry.beginUpdateGroup()) {
+            geometry.put(key, revision(2), mesh(), GeometryTransform.translation(2, 0, 0), 0xff);
+            updates.submit();
+        }
+
+        assertEquals(1, channel.groups.size());
+        assertEquals(GeometryTransform.translation(1, 0, 0),
+                channel.latestGroups.getFirst().getFirst().transform());
+        assertEquals(GeometryTransform.translation(2, 0, 0),
+                channel.latestGroups.getLast().getFirst().transform());
     }
 
     @Test
@@ -279,9 +320,10 @@ final class MinecraftEntityGeometryTest {
         geometry.transform(key, GeometryTransform.translation(4, 5, 6), 0xff);
         geometry.stop();
 
-        assertEquals(3, channel.batches.size());
-        assertInstanceOf(GeometryChannel.SetInstance.class, channel.batches.get(1).operations().getFirst());
-        assertInstanceOf(GeometryChannel.DropInstance.class, channel.batches.get(2).operations().getFirst());
+        assertEquals(2, channel.batches.size());
+        assertEquals(GeometryTransform.translation(4, 5, 6),
+                channel.latestGroups.getFirst().getFirst().transform());
+        assertInstanceOf(GeometryChannel.DropInstance.class, channel.batches.get(1).operations().getFirst());
     }
 
     private static MinecraftEntityMesh mesh() {
@@ -328,6 +370,7 @@ final class MinecraftEntityGeometryTest {
     private static final class RecordingChannel implements GeometryChannel {
         final List<RetainedBatch<Operation>> batches = new ArrayList<>();
         final List<List<RetainedBatch<Operation>>> groups = new ArrayList<>();
+        final List<List<GeometryChannel.LatestInstance>> latestGroups = new ArrayList<>();
         boolean rejectNext;
         boolean rejectNextGroup;
         boolean visible;
@@ -356,6 +399,16 @@ final class MinecraftEntityGeometryTest {
                 throw new IllegalStateException("rejected group");
             }
             groups.add(List.copyOf(group));
+            return publication;
+        }
+        @Override public dev.comfyfluffy.caustica.api.geometry.GeometryPublication submitGroupWithLatest(
+                List<RetainedBatch<Operation>> group, List<GeometryChannel.LatestInstance> latest) {
+            if (rejectNextGroup) {
+                rejectNextGroup = false;
+                throw new IllegalStateException("rejected group");
+            }
+            if (!group.isEmpty()) groups.add(List.copyOf(group));
+            latestGroups.add(List.copyOf(latest));
             return publication;
         }
         @Override public dev.comfyfluffy.caustica.api.geometry.GeometryPublication submitWithLights(

@@ -32,6 +32,10 @@ public final class GeometryContributionChannel implements GeometryChannel {
     @Override public GeometryPublication submitGroup(List<RetainedBatch<Operation>> batches) {
         return directory.submitGeometryGroup(this, batches);
     }
+    @Override public GeometryPublication submitGroupWithLatest(
+            List<RetainedBatch<Operation>> batches, List<LatestInstance> latestInstances) {
+        return directory.submitGeometryGroupWithLatest(this, batches, latestInstances);
+    }
     @Override public GeometryPublication submitWithLights(
             List<RetainedBatch<Operation>> geometryBatches, LightChannel lights,
             RetainedBatch<LightChannel.Operation> lightBatch) {
