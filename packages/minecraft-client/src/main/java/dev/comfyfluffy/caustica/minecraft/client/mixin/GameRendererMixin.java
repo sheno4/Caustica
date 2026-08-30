@@ -7,6 +7,7 @@ import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vulkan.VulkanDevice;
 import com.mojang.blaze3d.vulkan.VulkanGpuTexture;
 import dev.comfyfluffy.caustica.minecraft.client.CausticaClientComposition;
+import dev.comfyfluffy.caustica.minecraft.client.MinecraftDebugCapture;
 import dev.comfyfluffy.caustica.minecraft.client.MinecraftUiOverlay;
 import dev.comfyfluffy.caustica.minecraft.client.vulkan.MinecraftVulkanBackend;
 import dev.comfyfluffy.caustica.renderer.presentation.BorrowedImage;
@@ -68,6 +69,8 @@ public abstract class GameRendererMixin {
 
 	@Inject(method = "render(Lnet/minecraft/client/DeltaTracker;Z)V", at = @At("TAIL"))
 	private void caustica$endRtFrameStats(DeltaTracker deltaTracker, boolean advanceGameTime, CallbackInfo ci) {
+		MinecraftDebugCapture.poll(Minecraft.getInstance(),
+				CausticaClientComposition.current().runtime().frameActive());
 		CausticaClientComposition.current().runtime().endFrame();
 	}
 

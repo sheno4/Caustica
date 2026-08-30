@@ -118,7 +118,7 @@ public OpenPbrSurface evaluateMinecraftMaterial(SurfaceInput input) {
         material.base_color *= geometryTint;
     } else {
         float4 texel = minecraftSample(hit, hit.primitive.baseTexture,
-                hit.textureCoordinate, input.textureFootprint);
+                hit.textureCoordinate, 0.0);
         float3 sampled = (hit.primitive.textureFlags & MINECRAFT_TEXTURE_LINEAR) != 0u
                 ? texel.rgb : srgbToLinear(texel.rgb);
         sampled = bt709ToAcesCg(sampled);

@@ -35,11 +35,9 @@ public final class DlssRayReconstruction {
         return configured() && !failed;
     }
 
-    // DLSS feature flags. IsHDR (bit 0): color is scene-linear ACEScg HDR (rgba16f) — RR requires it ("HDR Color
-    // required"). MVLowRes (bit 1): motion vectors are at render/input resolution, not display — RR
-    // requires it ("Low resolution Motion Vectors required"). RR ignores the DLSS auto-exposure option;
-    // its input pre-exposure is supplied explicitly on every evaluation. MVs are unjittered, so no
-    // MV_JITTERED. The depth guide is positive view-space depth, so no hardware-depth flags apply.
+    // DLSS feature flags. IsHDR (bit 0): color is scene-linear ACEScg HDR (rgba16f). MVLowRes (bit 1):
+    // motion vectors are at render/input resolution, not display. Depth is positive linear view depth
+    // and MVs are unjittered. DLSS-RR does not support the exposure or auto-exposure options.
     private static final int FEATURE_FLAG_IS_HDR = 1 << 0;
     private static final int FEATURE_FLAG_MV_LOW_RES = 1 << 1;
     private static final int FEATURE_FLAGS = FEATURE_FLAG_IS_HDR | FEATURE_FLAG_MV_LOW_RES;
@@ -99,9 +97,9 @@ public final class DlssRayReconstruction {
      */
     public boolean evaluate(VkCommandBuffer commandBuffer, GpuImage color, GpuImage depth, GpuImage motion,
                             GpuImage diffuseAlbedo, GpuImage specularAlbedo, GpuImage normals,
-                             GpuImage specularMotion, GpuImage out,
-                             int renderWidth, int renderHeight, int displayWidth, int displayHeight,
-                             float jitterX, float jitterY, float preExposure) {
+                            GpuImage specularMotion, GpuImage out,
+                            int renderWidth, int renderHeight, int displayWidth, int displayHeight,
+                            float jitterX, float jitterY) {
         if (!isReady()) {
             return false;
         }
@@ -111,8 +109,7 @@ public final class DlssRayReconstruction {
                     : Math.clamp((now - lastFrameNanos) / 1_000_000.0f, 0.1f, 200.0f);
             lastFrameNanos = now;
 
-            int rc;
-            rc = lib.evaluateDlssd(commandBuffer.address(), feature,
+            int rc = lib.evaluateDlssd(commandBuffer.address(), feature,
                     color.view(), color.image(), VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
                     depth.view(), depth.image(), VK10.VK_FORMAT_R32_SFLOAT,
                     motion.view(), motion.image(), VK10.VK_FORMAT_R16G16_SFLOAT,
@@ -124,7 +121,7 @@ public final class DlssRayReconstruction {
                     out.view(), out.image(), VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
                     renderWidth, renderHeight, displayWidth, displayHeight,
                     // Jitter and motion vectors use render-pixel units.
-                    jitterX, jitterY, 1.0f, 1.0f, resetHistory ? 1 : 0, frameMs, preExposure);
+                    jitterX, jitterY, 1.0f, 1.0f, resetHistory ? 1 : 0, frameMs);
             resetHistory = false;
             if (NgxRuntime.ngxFailed(rc)) {
                 throw new IllegalStateException("ngxshim_evaluate_dlssd failed: 0x" + Integer.toHexString(rc)

@@ -1,6 +1,5 @@
 package dev.comfyfluffy.caustica.engine.vulkan.runtime;
 
-import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VK13;
@@ -82,58 +81,6 @@ public final class VulkanBarriers {
                 VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
                 VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
                 VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
-    }
-
-    /**
-     * Makes storage-written images available to an external Vulkan implementation that samples them
-     * through descriptors whose declared layout is {@code SHADER_READ_ONLY_OPTIMAL}.
-     */
-    public static void storageImagesToExternalSampled(VkCommandBuffer commandBuffer, MemoryStack stack,
-                                                       GpuImage... images) {
-        transitionImages(commandBuffer, stack, images,
-                VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-                VK10.VK_IMAGE_LAYOUT_GENERAL,
-                VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    }
-
-    /** Restores externally sampled images to the engine's unified general-layout convention. */
-    public static void externalSampledImagesToStorage(VkCommandBuffer commandBuffer, MemoryStack stack,
-                                                       GpuImage... images) {
-        transitionImages(commandBuffer, stack, images,
-                VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-                PASS_STAGES,
-                PASS_READ_WRITE_ACCESS,
-                VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                VK10.VK_IMAGE_LAYOUT_GENERAL);
-    }
-
-    private static void transitionImages(VkCommandBuffer commandBuffer, MemoryStack stack, GpuImage[] images,
-                                         long sourceStage, long sourceAccess,
-                                         long destinationStage, long destinationAccess,
-                                         int oldLayout, int newLayout) {
-        VkImageMemoryBarrier2.Buffer barriers = VkImageMemoryBarrier2.calloc(images.length, stack);
-        for (int i = 0; i < images.length; i++) {
-            VkImageMemoryBarrier2 barrier = barriers.get(i).sType$Default()
-                    .srcStageMask(sourceStage)
-                    .srcAccessMask(sourceAccess)
-                    .dstStageMask(destinationStage)
-                    .dstAccessMask(destinationAccess)
-                    .oldLayout(oldLayout)
-                    .newLayout(newLayout)
-                    .srcQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED)
-                    .dstQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED)
-                    .image(images[i].image());
-            barrier.subresourceRange()
-                    .aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT)
-                    .levelCount(1)
-                    .layerCount(1);
-        }
-        VK13.vkCmdPipelineBarrier2(commandBuffer,
-                VkDependencyInfo.calloc(stack).sType$Default().pImageMemoryBarriers(barriers));
     }
 
     private static void memoryBarrier(VkCommandBuffer commandBuffer, MemoryStack stack,

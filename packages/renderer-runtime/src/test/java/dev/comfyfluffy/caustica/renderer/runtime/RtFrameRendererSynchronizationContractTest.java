@@ -37,16 +37,27 @@ final class RtFrameRendererSynchronizationContractTest {
         String source = Files.readString(Path.of(
                 "src/main/java/dev/comfyfluffy/caustica/renderer/runtime/RtFrameRenderer.java"));
 
-        int ensure = source.indexOf("rayReconstruction.ensureFeature(");
+        int indirectTrace = source.indexOf("program.pipeline().trace(",
+                source.indexOf("world indirect trace"));
+        int publishInputs = source.indexOf("VulkanBarriers.memoryBarrier(cmd, stack);", indirectTrace);
+        int invalidate = source.indexOf("ctx.invalidateDescriptorHeapsForExternalCommand(cmd);", publishInputs);
+        int ensure = source.indexOf("rayReconstruction.ensureFeature(", invalidate);
         int evaluate = source.indexOf("rrDone = rayReconstruction.evaluate(", ensure);
+        int publishOutput = source.indexOf("VulkanBarriers.memoryBarrier(cmd, stack);", evaluate);
         int restore = source.indexOf("ctx.bindDescriptorHeaps(cmd);", evaluate);
         int fallback = source.indexOf("if (!rrDone)", evaluate);
         int exposure = source.indexOf("presentationResources().exposure().record(", fallback);
 
-        assertTrue(ensure >= 0);
+        assertTrue(indirectTrace >= 0);
+        assertTrue(publishInputs > indirectTrace);
+        assertTrue(invalidate > publishInputs);
+        assertTrue(ensure > invalidate);
         assertTrue(evaluate > ensure);
+        assertTrue(publishOutput > evaluate);
         assertTrue(restore > evaluate);
+        assertTrue(restore > publishOutput);
         assertTrue(fallback > restore);
         assertTrue(exposure > restore);
+        assertFalse(source.contains("storageImagesToExternalSampled"));
     }
 }

@@ -368,10 +368,9 @@ NGX_SHIM_EXPORT void* ngxshim_create_dlssd(VkCommandBuffer cmd,
     return feature;
 }
 
-// Records a DLSS Ray Reconstruction evaluation. Guide buffers: HDR color, linear depth, motion
-// vectors, diffuse albedo, specular albedo, world-space normals (roughness packed in normals.w),
-// and reflection motion vectors. Specular hit distance remains in the ABI/resources for debug and
-// easy A/B, but is disabled by leaving pInSpecularHitDistance null.
+// Records a DLSS Ray Reconstruction evaluation. Guide buffers are HDR color, linear depth, motion
+// vectors, diffuse albedo, specular albedo, world-space normals with roughness packed in normals.w,
+// and reflection motion vectors. Specular hit distance remains optional and is omitted.
 // Output is the only read-write (storage) resource. All non-output images use the color aspect;
 // depth is a linear value carried in a color image, not a depth-aspect attachment.
 NGX_SHIM_EXPORT int ngxshim_evaluate_dlssd(VkCommandBuffer cmd, void* feature,
@@ -387,7 +386,7 @@ NGX_SHIM_EXPORT int ngxshim_evaluate_dlssd(VkCommandBuffer cmd, void* feature,
                                            unsigned int renderWidth, unsigned int renderHeight,
                                            unsigned int displayWidth, unsigned int displayHeight,
                                            float jitterX, float jitterY, float mvScaleX, float mvScaleY,
-                                           int reset, float frameTimeMs, float preExposure) {
+                                           int reset, float frameTimeMs) {
     NGX_LOG("evaluate_dlssd: enter cmd=%p feature=%p render=%ux%u display=%ux%u jitter=(%.3f,%.3f) mvScale=(%.3f,%.3f) reset=%d frameTimeMs=%.3f",
             (void*) cmd, feature, renderWidth, renderHeight, displayWidth, displayHeight,
             jitterX, jitterY, mvScaleX, mvScaleY, reset, frameTimeMs);
@@ -403,7 +402,6 @@ NGX_SHIM_EXPORT int ngxshim_evaluate_dlssd(VkCommandBuffer cmd, void* feature,
     (void) specularHitDistanceImage;
     (void) specularHitDistanceFormat;
 
-    // Inputs are exposed to NGX as sampled resources in read-only layouts; only the output is writable.
     NVSDK_NGX_Resource_VK color = makeImageResource(colorView, colorImage, colorFormat, renderWidth, renderHeight, VK_IMAGE_ASPECT_COLOR_BIT, false);
     NVSDK_NGX_Resource_VK depth = makeImageResource(depthView, depthImage, depthFormat, renderWidth, renderHeight, VK_IMAGE_ASPECT_COLOR_BIT, false);
     NVSDK_NGX_Resource_VK mv = makeImageResource(mvView, mvImage, mvFormat, renderWidth, renderHeight, VK_IMAGE_ASPECT_COLOR_BIT, false);
@@ -435,9 +433,6 @@ NGX_SHIM_EXPORT int ngxshim_evaluate_dlssd(VkCommandBuffer cmd, void* feature,
     eval.InRenderSubrectDimensions.Width = renderWidth;
     eval.InRenderSubrectDimensions.Height = renderHeight;
     eval.InFrameTimeDeltaInMsec = frameTimeMs;
-    eval.InPreExposure = preExposure;
-    eval.InExposureScale = 1.0f;
-
     NGX_LOG("evaluate_dlssd: calling NGX_VULKAN_EVALUATE_DLSSD_EXT");
     NVSDK_NGX_Result r = NGX_VULKAN_EVALUATE_DLSSD_EXT(cmd, f->handle, f->params, &eval);
     g_lastResult = (int) r;

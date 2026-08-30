@@ -778,28 +778,19 @@ public final class RtFrameRenderer {
             }
             // DLSS-RR denoise + upscale. The RT pass wrote noisy color (render res) + guides;
             // RR reads them and writes the display-res denoised result straight into rrOutput.
+            if (rrPath) ctx.invalidateDescriptorHeapsForExternalCommand(cmd);
             if (rrPath && rayReconstruction.ensureFeature(cmd, traceExtent().renderWidth(),
                     traceExtent().renderHeight(), traceExtent().displayWidth(), traceExtent().displayHeight())) {
                 try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "DLSS-RR evaluate");
                      RtTelemetry.Scope ignoredStats = telemetry.frame().stage("frame.dlssRr")) {
-                    GpuImage[] rrInputs = {
-                            traceImages().traceColor(),
-                            traceImages().linearDepth(),
-                            traceImages().motion(),
-                            traceImages().diffuseAlbedo(),
-                            traceImages().specularAlbedo(),
-                            traceImages().normalRoughness(),
-                            traceImages().specularMotion()
-                    };
-                    VulkanBarriers.storageImagesToExternalSampled(cmd, stack, rrInputs);
                     rrDone = rayReconstruction.evaluate(cmd, traceImages().traceColor(), traceImages().linearDepth(),
                             traceImages().motion(), traceImages().diffuseAlbedo(),
                             traceImages().specularAlbedo(), traceImages().normalRoughness(),
                             traceImages().specularMotion(), traceImages().reconstructedColor(),
-                             traceExtent().renderWidth(), traceExtent().renderHeight(),
-                             traceExtent().displayWidth(), traceExtent().displayHeight(),
-                             -jitterX, -jitterY, presentationResources().exposure().preExposure());
-                    VulkanBarriers.externalSampledImagesToStorage(cmd, stack, rrInputs);
+                            traceExtent().renderWidth(), traceExtent().renderHeight(),
+                            traceExtent().displayWidth(), traceExtent().displayHeight(),
+                            -jitterX, -jitterY);
+                    VulkanBarriers.memoryBarrier(cmd, stack);
                 }
             }
             // External reconstruction implementations can invalidate descriptor-heap state even when feature

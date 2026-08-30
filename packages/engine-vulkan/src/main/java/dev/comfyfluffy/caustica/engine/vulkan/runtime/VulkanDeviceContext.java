@@ -191,6 +191,11 @@ public final class VulkanDeviceContext implements GpuDevice {
         descriptorHeap.bind(commandBuffer);
     }
 
+    /** Binds empty conventional descriptor state so external middleware does not inherit descriptor heaps. */
+    public void invalidateDescriptorHeapsForExternalCommand(VkCommandBuffer commandBuffer) {
+        descriptorHeap.invalidateForExternalCommand(commandBuffer);
+    }
+
     /** Populate descriptor-heap push-data storage without introducing pipeline-layout state. */
     public void pushData(VkCommandBuffer commandBuffer, int offset, ByteBuffer data) {
         descriptorHeap.pushData(commandBuffer, offset, data);
