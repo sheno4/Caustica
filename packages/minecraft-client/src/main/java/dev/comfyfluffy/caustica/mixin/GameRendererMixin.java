@@ -9,6 +9,7 @@ import com.mojang.blaze3d.vulkan.VulkanGpuTexture;
 import dev.comfyfluffy.caustica.client.CausticaClientComposition;
 import dev.comfyfluffy.caustica.minecraft.MinecraftUiOverlay;
 import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftVulkanBackend;
+import dev.comfyfluffy.caustica.renderer.presentation.BorrowedImage;
 import dev.comfyfluffy.caustica.spi.vulkan.VulkanLowLatency;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.Minecraft;
@@ -201,8 +202,9 @@ public abstract class GameRendererMixin {
 		// Hand/screen effects, world overlays and GUI are carried by the optional DLSSG UI resource.
         long mainImage = this.mainRenderTarget.getColorTexture() instanceof VulkanGpuTexture texture
                 ? texture.vkImage() : 0L;
-        CausticaClientComposition.current().runtime().captureHudless(mainImage,
-                this.mainRenderTarget.width, this.mainRenderTarget.height,
+        CausticaClientComposition.current().runtime().captureHudless(new BorrowedImage(
+                        mainImage, 0L, org.lwjgl.vulkan.VK10.VK_FORMAT_R8G8B8A8_UNORM,
+                        this.mainRenderTarget.width, this.mainRenderTarget.height),
 				CausticaClientComposition.current().uiOverlay().capturePresentation());
 		CausticaClientComposition.current().uiOverlay().compositeIfUsed();
 	}

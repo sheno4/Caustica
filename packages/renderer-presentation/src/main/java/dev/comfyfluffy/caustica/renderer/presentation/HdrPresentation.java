@@ -34,11 +34,10 @@ final class HdrPresentation {
     }
 
     void present(GraphicsSubmission submission, RtFramePresenter.RenderedFrame frame,
-            long swapchainImage, int swapWidth, int swapHeight,
-            long acquireSemaphore, long presentSemaphore, UiPresentationResources ui) {
+            AcquiredSwapchainTarget target, UiPresentationResources ui) {
         GpuImage source = frame.hdrDisplayImage();
-        int copyWidth = Math.min(swapWidth, source.width());
-        int copyHeight = Math.min(swapHeight, source.height());
+        int copyWidth = Math.min(target.width(), source.width());
+        int copyHeight = Math.min(target.height(), source.height());
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkCommandBuffer commandBuffer = submission.beginTransientCommandBuffer();
             context.bindDescriptorHeaps(commandBuffer);
@@ -62,12 +61,12 @@ final class HdrPresentation {
                             settings.get().uiNits());
                 }
             }
-            recordSwapchainBlit(commandBuffer, stack, source.image(), swapchainImage, copyWidth, copyHeight);
+            recordSwapchainBlit(commandBuffer, stack, source.image(), target.image(), copyWidth, copyHeight);
             if (VK10.vkEndCommandBuffer(commandBuffer) != VK10.VK_SUCCESS) {
                 throw new IllegalStateException("vkEndCommandBuffer(hdr present) failed");
             }
             GeneratedFrameQueue.enqueuePresent(
-                    submission, commandBuffer, acquireSemaphore, presentSemaphore);
+                    submission, commandBuffer, target.acquireSemaphore(), target.presentSemaphore());
         }
     }
 

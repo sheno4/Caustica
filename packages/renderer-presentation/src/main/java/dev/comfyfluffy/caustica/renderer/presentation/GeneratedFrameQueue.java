@@ -42,32 +42,32 @@ final class GeneratedFrameQueue {
         return failed;
     }
 
-    void prepare(GraphicsSubmission submission, VkDevice device, long swapchain,
-            long[] swapchainImages, long[] presentSemaphores, int swapW, int swapH,
-            long backbufferView, long srcImage,
-            boolean hdrBackbuffer, UiPresentationResources ui, FrameGeneration generation) {
+    void prepare(GraphicsSubmission submission, PresentationSwapchain swapchain,
+            BorrowedImage source, boolean hdrBackbuffer,
+            UiPresentationResources ui, FrameGeneration generation) {
         pendingImageIndex = -1;
         pendingPresentSemaphore = 0L;
-        if (failed || swapchain == 0L || srcImage == 0L) {
+        if (failed || swapchain.swapchain() == 0L || source.image() == 0L) {
             return;
         }
         try {
-            ensureCapacity(device, swapchainImages.length + 1);
-            GpuImage interpolation = generation.interpolate(submission, backbufferView, srcImage,
-                    swapW, swapH, hdrBackbuffer, ui);
+            ensureCapacity(swapchain.device(), swapchain.images().size() + 1);
+            GpuImage interpolation = generation.interpolate(submission, source,
+                    swapchain.width(), swapchain.height(), hdrBackbuffer, ui);
             if (interpolation == null) {
                 return;
             }
             long blitSource = interpolation.image();
-            int copyWidth = Math.min(swapW, interpolation.width());
-            int copyHeight = Math.min(swapH, interpolation.height());
+            int copyWidth = Math.min(swapchain.width(), interpolation.width());
+            int copyHeight = Math.min(swapchain.height(), interpolation.height());
             long acquireSemaphore = acquireSemaphores[acquireCursor];
             acquireCursor = (acquireCursor + 1) % acquireSemaphores.length;
 
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 IntBuffer imageIndex = stack.callocInt(1);
                 int result = KHRSwapchain.vkAcquireNextImageKHR(
-                        device, swapchain, ACQUIRE_TIMEOUT_NS, acquireSemaphore, 0L, imageIndex);
+                        swapchain.device(), swapchain.swapchain(), ACQUIRE_TIMEOUT_NS,
+                        acquireSemaphore, 0L, imageIndex);
                 if (result == VK_ERROR_OUT_OF_DATE_KHR) {
                     return;
                 }
@@ -76,8 +76,9 @@ final class GeneratedFrameQueue {
                 }
                 pendingImageIndex = imageIndex.get(0);
             }
-            pendingPresentSemaphore = presentSemaphores[pendingImageIndex];
-            recordBlit(submission, blitSource, swapchainImages[pendingImageIndex],
+            PresentationSwapchain.Image target = swapchain.images().get(pendingImageIndex);
+            pendingPresentSemaphore = target.presentSemaphore();
+            recordBlit(submission, blitSource, target.image(),
                     copyWidth, copyHeight, acquireSemaphore, pendingPresentSemaphore);
         } catch (Throwable error) {
             failed = true;
@@ -87,13 +88,13 @@ final class GeneratedFrameQueue {
         }
     }
 
-    void flush(long swapchain, VkQueue presentQueue) {
+    void flush(PresentationSwapchain swapchain, VkQueue presentQueue) {
         if (!failed && pendingImageIndex >= 0) {
             try (MemoryStack stack = MemoryStack.stackPush()) {
                 VkPresentInfoKHR present = VkPresentInfoKHR.calloc(stack).sType$Default();
                 present.pWaitSemaphores(stack.longs(pendingPresentSemaphore));
                 present.swapchainCount(1);
-                present.pSwapchains(stack.longs(swapchain));
+                present.pSwapchains(stack.longs(swapchain.swapchain()));
                 present.pImageIndices(stack.ints(pendingImageIndex));
                 int result = KHRSwapchain.vkQueuePresentKHR(presentQueue, present);
                 if (result != VK10.VK_SUCCESS && result != VK_SUBOPTIMAL_KHR

@@ -15,6 +15,9 @@ import dev.comfyfluffy.caustica.minecraft.MinecraftVulkanImageBorrow;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 import dev.comfyfluffy.caustica.minecraft.vulkan.MinecraftVulkanBackend;
 import dev.comfyfluffy.caustica.engine.frame.UiPresentationResources;
+import dev.comfyfluffy.caustica.renderer.presentation.AcquiredSwapchainTarget;
+import dev.comfyfluffy.caustica.renderer.presentation.BorrowedImage;
+import dev.comfyfluffy.caustica.renderer.presentation.PresentationSwapchain;
 import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
 import dev.comfyfluffy.caustica.spi.vulkan.VulkanLowLatency;
 import it.unimi.dsi.fastutil.longs.LongList;
@@ -43,6 +46,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import java.nio.LongBuffer;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -107,6 +111,8 @@ public abstract class VulkanGpuSurfaceMixin {
 	private int caustica$colorSpace = 0;
 	@Unique
 	private MinecraftVulkanImageBorrow caustica$sdrPresentationSource;
+	@Unique
+	private PresentationSwapchain caustica$presentationSwapchain;
 
 	@Unique
 	private long caustica$metadataSwapchain;
@@ -338,15 +344,11 @@ public abstract class VulkanGpuSurfaceMixin {
 			return;
 		}
 		MinecraftRtRuntime presentation = CausticaClientComposition.current().runtime();
-		long swapchainImage = this.swapchainImages.getLong(this.currentImageIndex);
-		long acquireSem = this.acquireSemaphores[this.currentAcquireSemaphore];
-		long presentSem = this.presentSemaphores[this.currentImageIndex];
 		if (CausticaClientComposition.current().runtime().isHdrPresentActive()) {
 			VulkanCommandEncoder enc = (VulkanCommandEncoder) commandEncoder;
 			GraphicsSubmission submission = MinecraftVulkanBackend.wrap(enc);
 			UiPresentationResources ui = CausticaClientComposition.current().uiOverlay().capturePresentation();
-			presentation.presentHdr(submission, swapchainImage, this.swapchainWidth, this.swapchainHeight,
-					acquireSem, presentSem, ui);
+			presentation.presentHdr(submission, caustica$acquiredTarget(), ui);
 			if (ui.populated() && ui.colorView() != 0L) {
 				CausticaClientComposition.current().uiOverlay().markConsumed();
 			}
@@ -369,9 +371,9 @@ public abstract class VulkanGpuSurfaceMixin {
 					if (old != null) gpu.retireAfterUse(old::destroy);
 				}
 				if (presentation.presentSdrToPq(
-					MinecraftVulkanBackend.wrap((VulkanCommandEncoder) commandEncoder), swapchainImage,
-					this.swapchainWidth, this.swapchainHeight, caustica$sdrPresentationSource,
-					acquireSem, presentSem)) {
+					MinecraftVulkanBackend.wrap((VulkanCommandEncoder) commandEncoder),
+					caustica$acquiredTarget(),
+					caustica$sdrPresentationSource)) {
 				ci.cancel();
 				}
 			}
@@ -421,10 +423,9 @@ public abstract class VulkanGpuSurfaceMixin {
 		}
 		MinecraftRtRuntime presentation = CausticaClientComposition.current().runtime();
 		presentation.prepareGeneratedFrame(
-				MinecraftVulkanBackend.wrap((VulkanCommandEncoder) commandEncoder), this.device.vkDevice(),
-				this.swapchain, this.swapchainImages.toLongArray(), this.presentSemaphores,
-				this.swapchainWidth, this.swapchainHeight,
-				srcView, srcImage, false,
+				MinecraftVulkanBackend.wrap((VulkanCommandEncoder) commandEncoder), caustica$swapchain(),
+				new BorrowedImage(srcImage, srcView, VK10.VK_FORMAT_R8G8B8A8_UNORM,
+						this.swapchainWidth, this.swapchainHeight), false,
 				CausticaClientComposition.current().uiOverlay().capturePresentation());
 	}
 
@@ -443,15 +444,40 @@ public abstract class VulkanGpuSurfaceMixin {
 			return;
 		}
 		MinecraftRtRuntime presentation = CausticaClientComposition.current().runtime();
-		long hdrView = presentation.hdrBackbufferView();
-		long hdrImage = presentation.hdrBackbufferImage();
-		if (hdrImage == 0L) {
+		dev.comfyfluffy.caustica.api.vulkan.GpuImage hdr = presentation.hdrBackbuffer();
+		if (hdr == null) {
 			return;
 		}
-		presentation.prepareGeneratedFrame(submission, this.device.vkDevice(), this.swapchain,
-				this.swapchainImages.toLongArray(),
-				this.presentSemaphores, this.swapchainWidth, this.swapchainHeight,
-				hdrView, hdrImage, true, ui);
+		presentation.prepareGeneratedFrame(submission, caustica$swapchain(), hdr, true, ui);
+	}
+
+	@Unique
+	private PresentationSwapchain caustica$swapchain() {
+		PresentationSwapchain cached = this.caustica$presentationSwapchain;
+		if (cached != null && cached.swapchain() == this.swapchain
+				&& cached.format() == this.swapchainImageFormat
+				&& cached.width() == this.swapchainWidth && cached.height() == this.swapchainHeight
+				&& cached.images().size() == this.swapchainImages.size()) {
+			return cached;
+		}
+		ArrayList<PresentationSwapchain.Image> images = new ArrayList<>(this.swapchainImages.size());
+		for (int i = 0; i < this.swapchainImages.size(); i++) {
+			images.add(new PresentationSwapchain.Image(
+					this.swapchainImages.getLong(i), this.presentSemaphores[i]));
+		}
+		cached = new PresentationSwapchain(this.device.vkDevice(), this.swapchain,
+				this.swapchainImageFormat, this.swapchainWidth, this.swapchainHeight, images);
+		this.caustica$presentationSwapchain = cached;
+		return cached;
+	}
+
+	@Unique
+	private AcquiredSwapchainTarget caustica$acquiredTarget() {
+		return new AcquiredSwapchainTarget(this.swapchain,
+				this.swapchainImages.getLong(this.currentImageIndex), this.currentImageIndex,
+				this.swapchainImageFormat, this.swapchainWidth, this.swapchainHeight,
+				this.acquireSemaphores[this.currentAcquireSemaphore],
+				this.presentSemaphores[this.currentImageIndex]);
 	}
 
 	// Present the FG-generated frame acquired/recorded at blitFromTexture TAIL — at present() HEAD, after
@@ -459,6 +485,6 @@ public abstract class VulkanGpuSurfaceMixin {
 	// presents the real frame, giving display order generated-then-real.
 	@Inject(method = "present", at = @At("HEAD"))
 	private void caustica$flushGeneratedPresent(CallbackInfo ci) {
-		CausticaClientComposition.current().runtime().flushGeneratedPresent(this.swapchain, this.presentQueue);
+		CausticaClientComposition.current().runtime().flushGeneratedPresent(caustica$swapchain(), this.presentQueue);
 	}
 }

@@ -53,10 +53,12 @@ final class FrameGeneration {
         reset = true;
     }
 
-    void captureHudless(long sourceImage, int width, int height, UiPresentationResources ui) {
-        if (!backend.enabled() || !ui.enabled() || sourceImage == 0L) {
+    void captureHudless(BorrowedImage source, UiPresentationResources ui) {
+        if (!backend.enabled() || !ui.enabled() || source.image() == 0L) {
             return;
         }
+        int width = source.width();
+        int height = source.height();
         if (hudlessImage == null || hudlessImage.width() != width || hudlessImage.height() != height) {
             if (hudlessImage != null) {
                 hudlessImage.destroy();
@@ -68,7 +70,7 @@ final class FrameGeneration {
         VkCommandBuffer commandBuffer = submission.beginTransientCommandBuffer();
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VulkanBarriers.memoryBarrier(commandBuffer, stack);
-            copyImage(commandBuffer, stack, sourceImage, hudlessImage.image(), width, height);
+            copyImage(commandBuffer, stack, source.image(), hudlessImage.image(), width, height);
             VulkanBarriers.memoryBarrier(commandBuffer, stack);
         }
         if (VK10.vkEndCommandBuffer(commandBuffer) != VK10.VK_SUCCESS) {
@@ -94,7 +96,7 @@ final class FrameGeneration {
         VulkanBarriers.memoryBarrier(commandBuffer, stack);
     }
 
-    GpuImage interpolate(GraphicsSubmission submission, long backbufferView, long backbufferImage,
+    GpuImage interpolate(GraphicsSubmission submission, BorrowedImage backbuffer,
             int swapWidth, int swapHeight, boolean hdrBackbuffer,
             UiPresentationResources ui) {
         RtFramePresenter.RenderedFrame frame = renderedFrame;
@@ -121,7 +123,7 @@ final class FrameGeneration {
 
         VkCommandBuffer commandBuffer = submission.beginTransientCommandBuffer();
         boolean evaluated = backend.evaluate(commandBuffer,
-                backbufferView, backbufferImage, format,
+                backbuffer.view(), backbuffer.image(), backbuffer.format(),
                 frame.depth().view(), frame.depth().image(), VK10.VK_FORMAT_R32_SFLOAT,
                 frame.motion().view(), frame.motion().image(), VK10.VK_FORMAT_R16G16_SFLOAT,
                 hudlessReady ? hudless.view() : 0L, hudlessReady ? hudless.image() : 0L,

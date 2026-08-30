@@ -25,12 +25,14 @@ import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
 import dev.comfyfluffy.caustica.spi.vulkan.VulkanRendererBackend;
 import dev.comfyfluffy.caustica.spi.host.RuntimeHost;
 import dev.comfyfluffy.caustica.renderer.presentation.RtExposure;
+import dev.comfyfluffy.caustica.renderer.presentation.AcquiredSwapchainTarget;
+import dev.comfyfluffy.caustica.renderer.presentation.BorrowedImage;
+import dev.comfyfluffy.caustica.renderer.presentation.PresentationSwapchain;
 import dev.comfyfluffy.caustica.renderer.presentation.RtFramePresenter;
 import dev.comfyfluffy.caustica.slang.SlangRuntime;
 
 import java.io.IOException;
 import java.nio.file.Path;
-import org.lwjgl.vulkan.VkDevice;
 import org.lwjgl.vulkan.VkQueue;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -266,49 +268,47 @@ public final class MinecraftRtRuntime {
         return session != null && session.presenter.isPqSdrPresentActive();
     }
 
-    public boolean presentHdr(GraphicsSubmission submission, long swapchainImage, int width, int height,
-            long acquireSemaphore, long presentSemaphore, UiPresentationResources ui) {
+    public boolean presentHdr(GraphicsSubmission submission, AcquiredSwapchainTarget target,
+            UiPresentationResources ui) {
         if (session == null || !session.presenter.isHdrPresentActive()) return false;
-        session.presenter.presentHdr(submission, swapchainImage, width, height, acquireSemaphore, presentSemaphore, ui);
+        session.presenter.presentHdr(submission, target, ui);
         return true;
     }
 
-    public boolean presentSdrToPq(GraphicsSubmission submission, long swapchainImage, int width, int height,
-            dev.comfyfluffy.caustica.api.vulkan.GpuImage source,
-            long acquireSemaphore, long presentSemaphore) {
-        return session != null && session.presenter.presentSdrToPq(submission, swapchainImage, width, height,
-                source, acquireSemaphore, presentSemaphore);
+    public boolean presentSdrToPq(GraphicsSubmission submission, AcquiredSwapchainTarget target,
+            dev.comfyfluffy.caustica.api.vulkan.GpuImage source) {
+        return session != null && session.presenter.presentSdrToPq(submission, target, source);
     }
 
     public boolean frameGenerationActive(boolean sceneAvailable) {
         return frameActive && session != null && session.presenter.isActive(sceneAvailable);
     }
 
-    public long hdrBackbufferView() {
-        return session != null ? session.presenter.hdrBackbufferView() : 0L;
+    public dev.comfyfluffy.caustica.api.vulkan.GpuImage hdrBackbuffer() {
+        return session != null ? session.presenter.hdrBackbuffer() : null;
     }
 
-    public long hdrBackbufferImage() {
-        return session != null ? session.presenter.hdrBackbufferImage() : 0L;
-    }
-
-    public void prepareGeneratedFrame(GraphicsSubmission submission, VkDevice device, long swapchain,
-            long[] swapchainImages, long[] presentSemaphores, int swapWidth, int swapHeight,
-            long backbufferView, long sourceImage,
-            boolean hdrBackbuffer, UiPresentationResources ui) {
+    public void prepareGeneratedFrame(GraphicsSubmission submission, PresentationSwapchain swapchain,
+            BorrowedImage source, boolean hdrBackbuffer, UiPresentationResources ui) {
         if (session != null) {
-            session.presenter.prepareGeneratedFrame(submission, device, swapchain, swapchainImages, presentSemaphores,
-                    swapWidth, swapHeight, backbufferView, sourceImage,
-                    hdrBackbuffer, ui);
+            session.presenter.prepareGeneratedFrame(submission, swapchain, source, hdrBackbuffer, ui);
         }
     }
 
-    public void flushGeneratedPresent(long swapchain, VkQueue presentQueue) {
+    public void prepareGeneratedFrame(GraphicsSubmission submission, PresentationSwapchain swapchain,
+            dev.comfyfluffy.caustica.api.vulkan.GpuImage source,
+            boolean hdrBackbuffer, UiPresentationResources ui) {
+        if (session != null) {
+            session.presenter.prepareGeneratedFrame(submission, swapchain, source, hdrBackbuffer, ui);
+        }
+    }
+
+    public void flushGeneratedPresent(PresentationSwapchain swapchain, VkQueue presentQueue) {
         if (session != null) session.presenter.flushPendingPresent(swapchain, presentQueue);
     }
 
-    public void captureHudless(long sourceImage, int width, int height, UiPresentationResources ui) {
-        if (session != null) session.presenter.captureHudless(sourceImage, width, height, ui);
+    public void captureHudless(BorrowedImage source, UiPresentationResources ui) {
+        if (session != null) session.presenter.captureHudless(source, ui);
     }
 
     public RuntimeHost host() {

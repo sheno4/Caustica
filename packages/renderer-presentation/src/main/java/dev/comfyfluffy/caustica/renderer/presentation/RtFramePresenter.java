@@ -67,16 +67,17 @@ public final class RtFramePresenter {
                 && dlssFrameGeneration.isAvailable() && sceneAvailable;
     }
 
-    public void prepareGeneratedFrame(GraphicsSubmission submission, VkDevice device, long swapchain,
-            long[] swapchainImages, long[] presentSemaphores, int swapWidth, int swapHeight,
-            long backbufferView, long sourceImage,
-            boolean hdrBackbuffer, UiPresentationResources ui) {
-        generatedFrames.prepare(submission, device, swapchain, swapchainImages, presentSemaphores,
-                swapWidth, swapHeight, backbufferView, sourceImage,
-                hdrBackbuffer, ui, frameGeneration);
+    public void prepareGeneratedFrame(GraphicsSubmission submission, PresentationSwapchain swapchain,
+            BorrowedImage source, boolean hdrBackbuffer, UiPresentationResources ui) {
+        generatedFrames.prepare(submission, swapchain, source, hdrBackbuffer, ui, frameGeneration);
     }
 
-    public void flushPendingPresent(long swapchain, VkQueue presentQueue) {
+    public void prepareGeneratedFrame(GraphicsSubmission submission, PresentationSwapchain swapchain,
+            GpuImage source, boolean hdrBackbuffer, UiPresentationResources ui) {
+        prepareGeneratedFrame(submission, swapchain, BorrowedImage.of(source), hdrBackbuffer, ui);
+    }
+
+    public void flushPendingPresent(PresentationSwapchain swapchain, VkQueue presentQueue) {
         generatedFrames.flush(swapchain, presentQueue);
     }
 
@@ -102,24 +103,18 @@ public final class RtFramePresenter {
                 && renderedFrame.hdrReady() && renderedFrame.hdrDisplayImage() != null;
     }
 
-    public long hdrBackbufferView() {
+    public GpuImage hdrBackbuffer() {
         RenderedFrame frame = renderedFrame;
-        return frame != null && frame.hdrDisplayImage() != null ? frame.hdrDisplayImage().view() : 0L;
+        return frame == null ? null : frame.hdrDisplayImage();
     }
 
-    public long hdrBackbufferImage() {
-        RenderedFrame frame = renderedFrame;
-        return frame != null && frame.hdrDisplayImage() != null ? frame.hdrDisplayImage().image() : 0L;
-    }
-
-    public void presentHdr(GraphicsSubmission submission, long swapchainImage, int swapWidth, int swapHeight,
-            long acquireSemaphore, long presentSemaphore, UiPresentationResources ui) {
+    public void presentHdr(GraphicsSubmission submission, AcquiredSwapchainTarget target,
+            UiPresentationResources ui) {
         RenderedFrame frame = renderedFrame;
         if (frame == null || !frame.hdrReady()) {
             throw new IllegalStateException("No rendered HDR frame is available for presentation");
         }
-        hdrPresentation.present(submission, frame, swapchainImage, swapWidth, swapHeight,
-                acquireSemaphore, presentSemaphore, ui);
+        hdrPresentation.present(submission, frame, target, ui);
     }
 
     public boolean isPqSdrPresentActive() {
@@ -127,15 +122,13 @@ public final class RtFramePresenter {
         return current.pqSwapchainActive() && !isHdrPresentActive(current);
     }
 
-    public boolean presentSdrToPq(GraphicsSubmission submission, long swapchainImage,
-            int swapWidth, int swapHeight, GpuImage source,
-            long acquireSemaphore, long presentSemaphore) {
-        return sdrPqPresentation.present(submission, swapchainImage, swapWidth, swapHeight,
-                source, acquireSemaphore, presentSemaphore);
+    public boolean presentSdrToPq(GraphicsSubmission submission, AcquiredSwapchainTarget target,
+            GpuImage source) {
+        return sdrPqPresentation.present(submission, target, source);
     }
 
-    public void captureHudless(long sourceImage, int width, int height, UiPresentationResources ui) {
-        frameGeneration.captureHudless(sourceImage, width, height, ui);
+    public void captureHudless(BorrowedImage source, UiPresentationResources ui) {
+        frameGeneration.captureHudless(source, ui);
     }
 
 }

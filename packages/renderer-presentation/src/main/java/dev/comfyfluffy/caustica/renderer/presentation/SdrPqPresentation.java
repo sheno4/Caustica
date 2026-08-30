@@ -26,24 +26,23 @@ final class SdrPqPresentation {
         this.settings = settings;
     }
 
-    boolean present(GraphicsSubmission submission, long swapchainImage, int swapWidth, int swapHeight,
-            dev.comfyfluffy.caustica.api.vulkan.GpuImage source,
-            long acquireSemaphore, long presentSemaphore) {
+    boolean present(GraphicsSubmission submission, AcquiredSwapchainTarget target,
+            dev.comfyfluffy.caustica.api.vulkan.GpuImage source) {
         if (source == null) {
             return false;
         }
         if (pipeline == null) {
             pipeline = RtSdrPresentPipeline.create(context);
         }
-        if (image == null || image.width() != swapWidth || image.height() != swapHeight) {
+        if (image == null || image.width() != target.width() || image.height() != target.height()) {
             if (image != null) {
                 image.destroy();
             }
-            image = context.createStorageImage(swapWidth, swapHeight, VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
-                    "RT SDR->PQ present image " + swapWidth + "x" + swapHeight);
+            image = context.createStorageImage(target.width(), target.height(), VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
+                    "RT SDR->PQ present image " + target.width() + "x" + target.height());
         }
-        int copyWidth = Math.min(swapWidth, image.width());
-        int copyHeight = Math.min(swapHeight, image.height());
+        int copyWidth = Math.min(target.width(), image.width());
+        int copyHeight = Math.min(target.height(), image.height());
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkCommandBuffer commandBuffer = submission.beginTransientCommandBuffer();
             context.bindDescriptorHeaps(commandBuffer);
@@ -60,12 +59,12 @@ final class SdrPqPresentation {
                     source.descriptor(dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptorKind.SAMPLED).index(),
                     settings.get().uiNits());
             HdrPresentation.recordSwapchainBlit(
-                    commandBuffer, stack, image.image(), swapchainImage, copyWidth, copyHeight);
+                    commandBuffer, stack, image.image(), target.image(), copyWidth, copyHeight);
             if (VK10.vkEndCommandBuffer(commandBuffer) != VK10.VK_SUCCESS) {
                 throw new IllegalStateException("vkEndCommandBuffer(sdr present) failed");
             }
             GeneratedFrameQueue.enqueuePresent(
-                    submission, commandBuffer, acquireSemaphore, presentSemaphore);
+                    submission, commandBuffer, target.acquireSemaphore(), target.presentSemaphore());
         }
         return true;
     }
