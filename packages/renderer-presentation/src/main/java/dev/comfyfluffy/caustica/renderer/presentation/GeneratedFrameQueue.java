@@ -22,6 +22,11 @@ import org.lwjgl.vulkan.VkSemaphoreCreateInfo;
 import java.nio.IntBuffer;
 import java.nio.LongBuffer;
 
+import static org.lwjgl.vulkan.KHRSwapchain.VK_ERROR_OUT_OF_DATE_KHR;
+import static org.lwjgl.vulkan.KHRSwapchain.VK_SUBOPTIMAL_KHR;
+import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT;
+
 /** Owns extra swapchain-image acquisition and the generated-before-real deferred present queue. */
 final class GeneratedFrameQueue {
     private static final Logger LOGGER = LoggerFactory.getLogger(GeneratedFrameQueue.class);
@@ -63,8 +68,11 @@ final class GeneratedFrameQueue {
                 IntBuffer imageIndex = stack.callocInt(1);
                 int result = KHRSwapchain.vkAcquireNextImageKHR(
                         device, swapchain, ACQUIRE_TIMEOUT_NS, acquireSemaphore, 0L, imageIndex);
-                if (result != VK10.VK_SUCCESS && result != 1000001003) {
+                if (result == VK_ERROR_OUT_OF_DATE_KHR) {
                     return;
+                }
+                if (result != VK10.VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
+                    throw new IllegalStateException("vkAcquireNextImageKHR(FG) failed: " + result);
                 }
                 pendingImageIndex = imageIndex.get(0);
             }
@@ -87,7 +95,11 @@ final class GeneratedFrameQueue {
                 present.swapchainCount(1);
                 present.pSwapchains(stack.longs(swapchain));
                 present.pImageIndices(stack.ints(pendingImageIndex));
-                KHRSwapchain.vkQueuePresentKHR(presentQueue, present);
+                int result = KHRSwapchain.vkQueuePresentKHR(presentQueue, present);
+                if (result != VK10.VK_SUCCESS && result != VK_SUBOPTIMAL_KHR
+                        && result != VK_ERROR_OUT_OF_DATE_KHR) {
+                    throw new IllegalStateException("vkQueuePresentKHR(FG) failed: " + result);
+                }
             } catch (Throwable error) {
                 failed = true;
                 LOGGER.error("DLSS-FG present failed; frame generation disabled", error);
@@ -112,9 +124,9 @@ final class GeneratedFrameQueue {
 
     static void enqueuePresent(GraphicsSubmission submission, VkCommandBuffer commandBuffer,
             long acquireSemaphore, long presentSemaphore) {
-        submission.waitSemaphore(acquireSemaphore, 0L, 65536L);
+        submission.waitSemaphore(acquireSemaphore, 0L, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
         submission.execute(commandBuffer);
-        submission.signalSemaphore(presentSemaphore, 0L, 4096L);
+        submission.signalSemaphore(presentSemaphore, 0L, VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT);
     }
 
     private void ensureCapacity(VkDevice device, int semaphoreCount) {
