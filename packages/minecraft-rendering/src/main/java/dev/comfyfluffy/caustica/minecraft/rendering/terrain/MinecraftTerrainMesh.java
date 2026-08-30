@@ -7,6 +7,7 @@ public record MinecraftTerrainMesh(float[] positions, int[] indices, float[] cor
                                    float[] primitiveData, List<Geometry> geometries,
                                    long indexRevision) {
     public static final int PRIMITIVE_FLOATS = 12;
+    static final int PRIMITIVE_ATLAS_PRESENT_OFFSET = 9;
 
     public MinecraftTerrainMesh {
         positions = positions.clone();

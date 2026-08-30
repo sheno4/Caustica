@@ -6,8 +6,10 @@ import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
 
 /** GPU upload seam between Minecraft's CPU section extraction and retained engine geometry. */
 @FunctionalInterface
-public interface MinecraftTerrainUploader {
+public interface MinecraftTerrainUploader extends AutoCloseable {
     UploadedSection upload(MinecraftTerrainMesh source);
+
+    @Override default void close() { }
 
     /**
      * Source-owned GPU buffers and shader records borrowed by one retained mesh/placement batch.

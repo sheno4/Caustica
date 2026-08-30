@@ -18,6 +18,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -137,15 +138,18 @@ final class MinecraftTerrainGeometryTest {
     @Test
     void rejectedCloseKeepsSectionStateSoCloseCanBeRetried() {
         var channel = new RecordingChannel();
-        var terrain = new MinecraftTerrainGeometry(channel, new SceneId() { }, ignored -> new Uploaded(0x3000L));
+        var uploader = new RecordingUploader();
+        var terrain = new MinecraftTerrainGeometry(channel, new SceneId() { }, uploader);
         terrain.submit(List.of(new MinecraftTerrainGeometry.Put(9L, 0, 0, 0, mesh())));
         channel.rejectNext = true;
 
         assertThrows(IllegalArgumentException.class, terrain::close);
+        assertEquals(0, uploader.closeCount);
         terrain.close();
 
         assertEquals(2, channel.batches.size());
         assertEquals(2, channel.batches.getLast().operations().size());
+        assertEquals(1, uploader.closeCount);
     }
 
     @Test
@@ -157,9 +161,10 @@ final class MinecraftTerrainGeometryTest {
         primitive[5] = 0.5f;
         primitive[6] = 1f;
         primitive[8] = 19f;
+        primitive[MinecraftTerrainMesh.PRIMITIVE_ATLAS_PRESENT_OFFSET] = 1f;
 
         MinecraftVulkanTerrainUploader.writePrimitiveRecords(bytes, 1,
-                new float[]{0, 0, 1, 0, 0, 1}, primitive);
+                new float[]{0, 0, 1, 0, 0, 1}, primitive, 37);
 
         assertEquals(MinecraftPrimitiveData.BYTE_SIZE, bytes.position());
         assertEquals(1f, bytes.getFloat(8));
@@ -167,9 +172,42 @@ final class MinecraftTerrainGeometryTest {
         assertEquals(0.5f, bytes.getFloat(84));
         assertEquals(1f, bytes.getFloat(88));
         assertEquals(19, bytes.getInt(92));
+        assertEquals(37, bytes.getInt(96));
+        assertEquals(1, bytes.getInt(100));
         assertEquals(0.75f, bytes.getFloat(104));
         assertEquals(2L * MinecraftPrimitiveData.BYTE_SIZE,
                 MinecraftVulkanTerrainUploader.primitiveRecordOffset(6));
+    }
+
+    @Test
+    void untexturedTerrainPrimitiveDoesNotReadTheAtlasDescriptor() {
+        ByteBuffer bytes = ByteBuffer.allocate(MinecraftPrimitiveData.BYTE_SIZE).order(ByteOrder.LITTLE_ENDIAN);
+        MinecraftVulkanTerrainUploader.writePrimitiveRecords(bytes, 1,
+                new float[6], new float[MinecraftTerrainMesh.PRIMITIVE_FLOATS], 37);
+
+        assertEquals(0, bytes.getInt(96));
+        assertEquals(0, bytes.getInt(100));
+    }
+
+    @Test
+    void sharedAtlasDefersExactOnceCleanupUntilOwnerAndEveryUploadRetire() {
+        AtomicInteger cleanups = new AtomicInteger();
+        var atlas = new MinecraftVulkanTerrainUploader.SharedAtlas(37, () -> {
+            cleanups.incrementAndGet();
+            throw new IllegalStateException("cleanup failure must not escape retirement");
+        });
+        var first = atlas.retain();
+        var second = atlas.retain();
+
+        atlas.close();
+        first.close();
+        first.close();
+        assertEquals(0, cleanups.get());
+
+        assertDoesNotThrow(second::close);
+        second.close();
+        assertEquals(1, cleanups.get());
+        assertThrows(IllegalStateException.class, atlas::retain);
     }
 
     @Test
@@ -239,6 +277,18 @@ final class MinecraftTerrainGeometryTest {
         }
 
         @Override public void close() { closed = true; }
+    }
+
+    private static final class RecordingUploader implements MinecraftTerrainUploader {
+        private int closeCount;
+
+        @Override public UploadedSection upload(MinecraftTerrainMesh source) {
+            return new Uploaded(0x3000L);
+        }
+
+        @Override public void close() {
+            closeCount++;
+        }
     }
 
     private static final class RecordingChannel implements GeometryChannel {

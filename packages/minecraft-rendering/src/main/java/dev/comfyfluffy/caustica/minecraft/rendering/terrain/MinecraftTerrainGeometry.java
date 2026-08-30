@@ -100,6 +100,7 @@ public final class MinecraftTerrainGeometry implements AutoCloseable {
         if (closed) return;
         if (sections.isEmpty()) {
             closed = true;
+            uploader.close();
             return;
         }
         var operations = new ArrayList<GeometryChannel.Operation>(sections.size() * 2);
@@ -110,6 +111,7 @@ public final class MinecraftTerrainGeometry implements AutoCloseable {
         channel.submit(RetainedBatch.of(operations));
         sections.clear();
         closed = true;
+        uploader.close();
     }
 
     private static void retireAll(List<? extends MinecraftTerrainUploader.UploadedSection> resources) {

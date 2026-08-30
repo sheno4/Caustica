@@ -2,6 +2,7 @@ package dev.comfyfluffy.caustica.minecraft.client.entity;
 
 import dev.comfyfluffy.caustica.minecraft.rendering.entity.EntityTextureResolver;
 import dev.comfyfluffy.caustica.minecraft.rendering.entity.MinecraftEntityMesh;
+import dev.comfyfluffy.caustica.minecraft.rendering.texture.BorrowedMinecraftTexture;
 import com.mojang.blaze3d.textures.GpuTextureView;
 import com.mojang.blaze3d.vulkan.VulkanGpuTextureView;
 import com.mojang.blaze3d.GpuFormat;
@@ -97,7 +98,7 @@ public final class RtEntityTextures implements EntityTextureResolver {
     }
 
     /** Borrow the current Vulkan view for upload-time descriptor allocation, or {@code null} if unresolved. */
-    @Override public BorrowedTexture resolve(MinecraftEntityMesh.Texture texture) {
+    @Override public BorrowedMinecraftTexture resolve(MinecraftEntityMesh.Texture texture) {
         VulkanGpuTextureView view = contributions.get(texture);
         if (view == null) return null;
         view.texture().addViews();
@@ -206,7 +207,7 @@ public final class RtEntityTextures implements EntityTextureResolver {
         return view instanceof VulkanGpuTextureView vulkanView ? vulkanView : null;
     }
 
-    private static final class Borrow implements BorrowedTexture {
+    private static final class Borrow implements BorrowedMinecraftTexture {
         private final VulkanGpuTextureView view;
         private boolean closed;
         private Borrow(VulkanGpuTextureView view) { this.view = view; }

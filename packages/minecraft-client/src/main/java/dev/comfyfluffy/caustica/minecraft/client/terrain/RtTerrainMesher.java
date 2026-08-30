@@ -283,7 +283,8 @@ final class RtTerrainMesher {
         // aligned with `idx`'s triangle order so the hit shader reads cornerUv[3*pid + k] directly with no
         // index->vertex-UV gather. The index buffer is still emitted (above) for the BLAS build.
         final FloatArrayList cornerUv;
-        // 12 CPU lanes/triangle: normal/emission float4, tint float4, then reserved scratch lanes.
+        // 12 CPU lanes/triangle: normal/emission float4, tint float4, material index, atlas presence,
+        // then two reserved lanes.
         final FloatArrayList prim;
         final List<TerrainSurface> surfaces;
         // One sprite per triangle for CPU light extraction.
@@ -634,7 +635,7 @@ final class RtTerrainMesher {
                 prim.add(q.tb);
                 prim.add(0f);
                 prim.add(q.material.materialIndex());
-                prim.add(0f); // flags
+                prim.add(q.material.texture() != null ? 1f : 0f);
                 prim.add(0f); // aux0
                 prim.add(0f); // aux1
                 g.lightSprites.add(q.sprite);
@@ -810,7 +811,7 @@ final class RtTerrainMesher {
                 prim.add(tb);
                 prim.add(0f);
                 prim.add(material.materialIndex());
-                prim.add(0f);
+                prim.add(material.texture() != null ? 1f : 0f);
                 prim.add(0f);
                 prim.add(0f);
                 g.lightSprites.add(null);

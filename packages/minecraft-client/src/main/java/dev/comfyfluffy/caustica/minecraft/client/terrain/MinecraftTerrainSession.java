@@ -7,16 +7,20 @@ import dev.comfyfluffy.caustica.minecraft.rendering.material.MinecraftMaterialLo
 import dev.comfyfluffy.caustica.minecraft.rendering.program.MinecraftPrograms;
 import dev.comfyfluffy.caustica.minecraft.rendering.terrain.MinecraftTerrainGeometry;
 import dev.comfyfluffy.caustica.minecraft.rendering.terrain.MinecraftVulkanTerrainUploader;
+import dev.comfyfluffy.caustica.minecraft.client.entity.RtEntityTextures;
+import net.minecraft.client.renderer.texture.TextureAtlas;
 
 /** Session-owned construction hook for the retained terrain producer. */
 public final class MinecraftTerrainSession {
     private final GpuDevice gpu;
     private final RtTerrain terrain;
+    private final RtEntityTextures textures;
     private MinecraftTerrainGeometry geometry;
 
-    public MinecraftTerrainSession(GpuDevice gpu, RtTerrain terrain) {
+    public MinecraftTerrainSession(GpuDevice gpu, RtTerrain terrain, RtEntityTextures textures) {
         this.gpu = java.util.Objects.requireNonNull(gpu, "gpu");
         this.terrain = java.util.Objects.requireNonNull(terrain, "terrain");
+        this.textures = java.util.Objects.requireNonNull(textures, "textures");
     }
 
     /**
@@ -35,9 +39,18 @@ public final class MinecraftTerrainSession {
     /** Installs the atomic program exports and begins targeting the borrowed world scene. */
     public void bind(MinecraftPrograms programs, GeometryChannel channel, SceneId scene) {
         if (geometry != null) throw new IllegalStateException("terrain session is already bound");
-        var uploader = new MinecraftVulkanTerrainUploader(gpu, programs);
-        geometry = new MinecraftTerrainGeometry(channel, scene, uploader);
-        terrain.bindGeometry(geometry);
+        var atlas = textures.contributeAtlas(TextureAtlas.LOCATION_BLOCKS);
+        var borrowed = java.util.Objects.requireNonNull(textures.resolve(atlas),
+                "Minecraft block atlas must be available to terrain");
+        var uploader = new MinecraftVulkanTerrainUploader(gpu, programs, borrowed);
+        try {
+            var next = new MinecraftTerrainGeometry(channel, scene, uploader);
+            terrain.bindGeometry(next);
+            geometry = next;
+        } catch (RuntimeException | Error failure) {
+            uploader.close();
+            throw failure;
+        }
     }
 
     /** Stops publication and atomically removes every retained terrain section. */

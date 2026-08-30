@@ -203,7 +203,8 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         Active displaced = active;
         if (displaced != null) displaced.stopSceneProducers();
 
-        MinecraftTerrainSession terrainSession = new MinecraftTerrainSession(context.renderSession().gpu(), terrain);
+        MinecraftTerrainSession terrainSession = new MinecraftTerrainSession(
+                context.renderSession().gpu(), terrain, entityTextures);
         MinecraftFrameSelectionInstaller.Lease frameSelection = null;
         MinecraftEntityGeometry entityGeometry = null;
         dev.comfyfluffy.caustica.minecraft.rendering.MinecraftEntityCaptureBinding.Lease entityLease = null;

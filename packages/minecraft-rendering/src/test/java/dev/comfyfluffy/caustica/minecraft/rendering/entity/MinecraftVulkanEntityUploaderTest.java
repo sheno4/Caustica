@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.rendering.entity;
 
 import dev.comfyfluffy.caustica.minecraft.rendering.gen.MinecraftPrimitiveData;
+import dev.comfyfluffy.caustica.minecraft.rendering.texture.BorrowedMinecraftTexture;
 import dev.comfyfluffy.caustica.settings.ResourceId;
 import org.junit.jupiter.api.Test;
 
@@ -61,8 +62,8 @@ final class MinecraftVulkanEntityUploaderTest {
             @Override public int descriptorCount() { return 1; }
             @Override public void destroy() { closed.add("descriptor"); throw new IllegalStateException("descriptor"); }
         };
-        EntityTextureResolver.BorrowedTexture first = lease(closed, "first", true);
-        EntityTextureResolver.BorrowedTexture second = lease(closed, "second", false);
+        BorrowedMinecraftTexture first = lease(closed, "first", true);
+        BorrowedMinecraftTexture second = lease(closed, "second", false);
         var set = new MinecraftVulkanEntityUploader.TextureSet(range, Map.of(), List.of(first, second));
 
         IllegalStateException failure = assertThrows(IllegalStateException.class, set::close);
@@ -70,9 +71,9 @@ final class MinecraftVulkanEntityUploaderTest {
         assertEquals(1, failure.getSuppressed().length);
     }
 
-    private static EntityTextureResolver.BorrowedTexture lease(
+    private static BorrowedMinecraftTexture lease(
             List<String> closed, String name, boolean fail) {
-        return new EntityTextureResolver.BorrowedTexture() {
+        return new BorrowedMinecraftTexture() {
             @Override public long vkImage() { return 1; }
             @Override public int format() { return 37; }
             @Override public int baseMipLevel() { return 0; }

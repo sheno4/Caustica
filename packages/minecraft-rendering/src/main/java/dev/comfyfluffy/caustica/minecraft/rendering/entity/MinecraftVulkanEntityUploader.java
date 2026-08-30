@@ -9,6 +9,7 @@ import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
 import dev.comfyfluffy.caustica.minecraft.rendering.gen.MinecraftInstanceData;
 import dev.comfyfluffy.caustica.minecraft.rendering.gen.MinecraftPrimitiveData;
 import dev.comfyfluffy.caustica.minecraft.rendering.material.MinecraftMaterialLookup;
+import dev.comfyfluffy.caustica.minecraft.rendering.texture.BorrowedMinecraftTexture;
 import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialKey;
 import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialProfile;
 import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialTopology;
@@ -195,7 +196,7 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
     }
 
     private TextureSet resolveTextures(MinecraftEntityMesh source) {
-        LinkedHashMap<MinecraftEntityMesh.Texture, EntityTextureResolver.BorrowedTexture> leases = new LinkedHashMap<>();
+        LinkedHashMap<MinecraftEntityMesh.Texture, BorrowedMinecraftTexture> leases = new LinkedHashMap<>();
         try {
             for (var triangle : source.triangles()) {
                 if (triangle.material().texture() != null) {
@@ -215,7 +216,7 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
             int offset = 0;
             Map<MinecraftEntityMesh.Texture, Integer> indices = new LinkedHashMap<>();
             for (var entry : leases.entrySet()) {
-                EntityTextureResolver.BorrowedTexture borrowed = entry.getValue();
+                BorrowedMinecraftTexture borrowed = entry.getValue();
                 VkImageViewCreateInfo view = VkImageViewCreateInfo.calloc(stack).sType$Default()
                         .image(borrowed.vkImage()).viewType(VK_IMAGE_VIEW_TYPE_2D)
                         .format(borrowed.format());
@@ -268,10 +269,10 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
     static final class TextureSet implements AutoCloseable {
         final GpuDescriptorRange<GpuDescriptorIndex.Resource> range;
         final Map<MinecraftEntityMesh.Texture, Integer> indices;
-        final List<EntityTextureResolver.BorrowedTexture> leases;
+        final List<BorrowedMinecraftTexture> leases;
         TextureSet(GpuDescriptorRange<GpuDescriptorIndex.Resource> range,
                    Map<MinecraftEntityMesh.Texture, Integer> indices,
-                   List<EntityTextureResolver.BorrowedTexture> leases) {
+                   List<BorrowedMinecraftTexture> leases) {
             this.range = range;
             this.indices = indices;
             this.leases = leases;
