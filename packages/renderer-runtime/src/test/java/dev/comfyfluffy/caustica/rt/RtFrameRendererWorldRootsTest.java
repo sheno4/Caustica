@@ -5,7 +5,6 @@ import dev.comfyfluffy.caustica.api.program.ShaderDataType;
 import dev.comfyfluffy.caustica.api.program.VolumeId;
 import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
 import dev.comfyfluffy.caustica.api.view.ViewMedium;
-import dev.comfyfluffy.caustica.engine.program.ProgramResolution;
 import dev.comfyfluffy.caustica.renderer.raytracing.layout.RtBindings;
 import org.junit.jupiter.api.Test;
 
@@ -23,8 +22,7 @@ final class RtFrameRendererWorldRootsTest {
                 new VolumeId<>() { }, binding.data(0x1234L), instance.data(0x5678L));
         ByteBuffer roots = roots((byte) 0x5a);
 
-        RtFrameRenderer.writeInitialVolumeRoots(roots, initial,
-                new ProgramResolution.ActiveVolume(7));
+        RtFrameRenderer.writeInitialVolumeRoots(roots, initial, 7);
 
         assertEquals(7, roots.getInt(RtBindings.WORLD_INITIAL_VOLUME_IMPLEMENTATION_OFFSET));
         assertEquals(1, roots.getInt(RtBindings.WORLD_INITIAL_VOLUME_ACTIVE_OFFSET));
@@ -38,7 +36,7 @@ final class RtFrameRendererWorldRootsTest {
         ByteBuffer roots = roots((byte) 0x5a);
 
         RtFrameRenderer.writeInitialVolumeRoots(
-                roots, ViewMedium.Vacuum.INSTANCE, ProgramResolution.Vacuum.INSTANCE);
+                roots, ViewMedium.Vacuum.INSTANCE, 0);
 
         assertEquals(0, roots.getInt(RtBindings.WORLD_INITIAL_VOLUME_IMPLEMENTATION_OFFSET));
         assertEquals(0, roots.getInt(RtBindings.WORLD_INITIAL_VOLUME_ACTIVE_OFFSET));
@@ -53,8 +51,7 @@ final class RtFrameRendererWorldRootsTest {
         EnvironmentBinding<Object> binding = EnvironmentBinding.of(
                 new EnvironmentId<>() { }, type.data(0x1234_5678L));
 
-        RtFrameRenderer.EnvironmentPush environment = RtFrameRenderer.environmentPush(binding,
-                new ProgramResolution.ActiveEnvironment(9));
+        RtFrameRenderer.EnvironmentPush environment = RtFrameRenderer.environmentPush(binding, 9);
 
         assertEquals(9, environment.implementation());
         assertEquals(0x1234_5678L, environment.bindingData());
@@ -62,7 +59,7 @@ final class RtFrameRendererWorldRootsTest {
 
     @Test
     void absentEnvironmentUsesResourceFreeBuiltin() {
-        RtFrameRenderer.EnvironmentPush environment = RtFrameRenderer.environmentPush(null, null);
+        RtFrameRenderer.EnvironmentPush environment = RtFrameRenderer.environmentPush(null, 0);
 
         assertEquals(0, environment.implementation());
         assertEquals(0L, environment.bindingData());
@@ -74,10 +71,9 @@ final class RtFrameRendererWorldRootsTest {
         EnvironmentBinding<Object> binding = EnvironmentBinding.of(
                 new EnvironmentId<>() { }, type.data(0x1234_5678L));
 
-        RtFrameRenderer.EnvironmentPush environment = RtFrameRenderer.environmentPush(
-                binding, ProgramResolution.ErrorEnvironment.INSTANCE);
+        RtFrameRenderer.EnvironmentPush environment = RtFrameRenderer.environmentPush(binding, 0);
 
-        assertEquals(-1, environment.implementation());
+        assertEquals(0, environment.implementation());
         assertEquals(0L, environment.bindingData());
     }
 

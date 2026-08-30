@@ -12,7 +12,6 @@ import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
 import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.engine.program.ProgramSession;
-import dev.comfyfluffy.caustica.engine.program.ProgramResolution;
 import dev.comfyfluffy.caustica.engine.session.ContributionOwner;
 
 import java.util.ArrayDeque;
@@ -427,10 +426,10 @@ public final class SceneDirectory {
                 build.geometries().stream().map(geometry ->
                         new RetainedSceneSnapshot.GeometryPrograms(
                                 geometry.surface() == null
-                                        ? ProgramResolution.ErrorSurface.INSTANCE
+                                        ? 0
                                         : programs.resolve(geometry.surface().surface()),
                                 geometry.volume() == null
-                                        ? ProgramResolution.Vacuum.INSTANCE
+                                        ? 0
                                         : programs.resolve(geometry.volume().volume())))
                         .toList());
     }
@@ -518,10 +517,10 @@ public final class SceneDirectory {
                                 entry.getValue().build.geometries().stream().map(geometry ->
                                         new RetainedSceneSnapshot.GeometryPrograms(
                                                 geometry.surface() == null
-                                                        ? ProgramResolution.ErrorSurface.INSTANCE
+                                                        ? 0
                                                         : programs.resolve(geometry.surface().surface()),
                                                 geometry.volume() == null
-                                                        ? ProgramResolution.Vacuum.INSTANCE
+                                                        ? 0
                                                         : programs.resolve(geometry.volume().volume())))
                                         .toList())).toList(),
                 instanceValues.entrySet().stream().map(entry -> new RetainedSceneSnapshot.Instance(

@@ -15,7 +15,6 @@ import dev.comfyfluffy.caustica.engine.program.ProgramBackend;
 import dev.comfyfluffy.caustica.engine.program.ProgramComposition;
 import dev.comfyfluffy.caustica.engine.program.ProgramContributionChannel;
 import dev.comfyfluffy.caustica.engine.program.ProgramKey;
-import dev.comfyfluffy.caustica.engine.program.ProgramResolution;
 import dev.comfyfluffy.caustica.engine.program.ProgramSession;
 import org.junit.jupiter.api.Test;
 
@@ -68,7 +67,7 @@ final class ProgramSessionTest {
         });
 
         assertTrue(events.isEmpty());
-        assertInstanceOf(ProgramResolution.ErrorSurface.class, session.resolve(registration.exports().surface()));
+        assertEquals(0, session.resolve(registration.exports().surface()));
         session.progress();
         assertEquals(3, backend.pending.composition.declarations().size());
         assertThrows(UnsupportedOperationException.class,
@@ -77,10 +76,9 @@ final class ProgramSessionTest {
         session.progress();
 
         assertEquals(List.of("ready"), events);
-        assertInstanceOf(ProgramResolution.ActiveSurface.class, session.resolve(registration.exports().surface()));
-        assertInstanceOf(ProgramResolution.ActiveVolume.class, session.resolve(registration.exports().volume()));
-        assertInstanceOf(ProgramResolution.ActiveEnvironment.class,
-                session.resolve(registration.exports().environment()));
+        assertEquals(1, session.resolve(registration.exports().surface()));
+        assertEquals(1, session.resolve(registration.exports().volume()));
+        assertEquals(1, session.resolve(registration.exports().environment()));
         assertTrue(failures.isEmpty());
 
         AtomicInteger lateCallbacks = new AtomicInteger();
@@ -121,8 +119,8 @@ final class ProgramSessionTest {
                 ProgramRegistration.Failed.class, brokenCompletion.getFirst());
         assertEquals("broken shader", failed.failure().summary());
         assertEquals(List.of("broken"), retired);
-        assertInstanceOf(ProgramResolution.ErrorSurface.class, session.resolve(broken.exports()));
-        assertInstanceOf(ProgramResolution.ActiveSurface.class, session.resolve(first.exports()));
+        assertEquals(0, session.resolve(broken.exports()));
+        assertEquals(1, session.resolve(first.exports()));
         assertEquals(2, backend.pendingRegistrationCount(),
                 "the later candidate must exclude the failed registration");
 
@@ -130,7 +128,7 @@ final class ProgramSessionTest {
         session.progress();
         assertInstanceOf(ProgramRegistration.Ready.class, laterCompletion.getFirst());
         assertEquals(2, backend.activeComposition.declarations().size());
-        assertInstanceOf(ProgramResolution.ActiveSurface.class, session.resolve(later.exports()));
+        assertEquals(2, session.resolve(later.exports()));
     }
 
     @Test
@@ -154,7 +152,7 @@ final class ProgramSessionTest {
         assertEquals(1, backend.closedCandidates);
         assertEquals(List.of("cancelled"), retired);
         assertTrue(session.isDrained(channel));
-        assertInstanceOf(ProgramResolution.ErrorSurface.class, session.resolve(cancelled.exports()));
+        assertEquals(0, session.resolve(cancelled.exports()));
 
         ProgramRegistration<SurfaceId<Binding, Instance>> ready = channel.register(
                 builder -> builder.surface(surface("sample.Ready", () -> retired.add("ready"))));
@@ -165,12 +163,12 @@ final class ProgramSessionTest {
         session.progress();
         assertInstanceOf(ProgramRegistration.Ready.class, readyCompletion.getFirst());
         ready.close();
-        assertInstanceOf(ProgramResolution.ActiveSurface.class, session.resolve(ready.exports()));
+        assertEquals(1, session.resolve(ready.exports()));
 
         session.progress();
         backend.succeed();
         session.progress();
-        assertInstanceOf(ProgramResolution.ErrorSurface.class, session.resolve(ready.exports()));
+        assertEquals(0, session.resolve(ready.exports()));
         assertEquals(List.of("cancelled"), retired, "active roots wait for displaced GPU use");
         backend.retireLatestPrevious();
         session.progress();
@@ -368,7 +366,9 @@ final class ProgramSessionTest {
 
             private TestProgram(ProgramComposition composition) {
                 this.composition = composition;
-                composition.declarations().forEach(declaration -> indices.put(declaration.key(), indices.size()));
+                composition.declarations().forEach(declaration -> indices.put(declaration.key(),
+                        Math.toIntExact(indices.keySet().stream()
+                                .filter(key -> key.kind() == declaration.key().kind()).count() + 1)));
             }
 
             @Override

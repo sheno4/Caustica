@@ -6,10 +6,8 @@ import dev.comfyfluffy.caustica.api.light.LightDescriptor;
 import dev.comfyfluffy.caustica.api.program.ShaderData;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
-import dev.comfyfluffy.caustica.engine.program.ProgramResolution;
 
 import java.util.List;
-import java.util.Objects;
 
 /** Immutable logical world publication consumed by later BLAS, TLAS, and light-upload backends. */
 public record RetainedSceneSnapshot(long revision, List<Scene> scenes, List<Mesh> meshes,
@@ -30,10 +28,12 @@ public record RetainedSceneSnapshot(long revision, List<Scene> scenes, List<Mesh
             }
         }
     }
-    public record GeometryPrograms(ProgramResolution.Surface surface, ProgramResolution.Volume volume) {
+    /** Zero selects the built-in error surface or vacuum volume. */
+    public record GeometryPrograms(int surfaceImplementation, int volumeImplementation) {
         public GeometryPrograms {
-            Objects.requireNonNull(surface, "surface");
-            Objects.requireNonNull(volume, "volume");
+            if (surfaceImplementation < 0 || volumeImplementation < 0) {
+                throw new IllegalArgumentException("program implementation indices must be non-negative");
+            }
         }
     }
     public record Instance(long identity, SceneId scene, long meshIdentity,

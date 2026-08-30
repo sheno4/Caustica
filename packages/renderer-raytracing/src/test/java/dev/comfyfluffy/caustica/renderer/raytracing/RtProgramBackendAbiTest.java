@@ -94,7 +94,7 @@ final class RtProgramBackendAbiTest {
             @Override public VulkanDeviceAddress compositionDataAddress() {
                 return new VulkanDeviceAddress(address);
             }
-            @Override public int implementationIndex(ProgramKey key) { return 0; }
+            @Override public int implementationIndex(ProgramKey key) { return 1; }
             @Override public void close() { }
         };
     }

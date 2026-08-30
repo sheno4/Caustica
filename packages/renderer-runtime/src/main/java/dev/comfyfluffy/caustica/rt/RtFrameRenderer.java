@@ -17,7 +17,6 @@ import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.api.view.ViewMedium;
 import dev.comfyfluffy.caustica.engine.frame.FrameSnapshot;
-import dev.comfyfluffy.caustica.engine.program.ProgramResolution;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.engine.session.EngineSessionServices;
 import dev.comfyfluffy.caustica.renderer.raytracing.gen.WorldPushData;
@@ -702,7 +701,7 @@ public final class RtFrameRenderer {
                     sceneOrigin.wrappedY(proceduralPeriod), sceneOrigin.wrappedZ(proceduralPeriod));
             EnvironmentBinding<?> environment = scenes.content(entryScene).environment();
             EnvironmentPush environmentState = environmentPush(environment,
-                    environment == null ? null : services.programs().resolve(environment.implementation()));
+                    environment == null ? 0 : services.programs().resolve(environment.implementation()));
 
             new WorldPushData(
                     frameInvViewProj,
@@ -925,16 +924,16 @@ public final class RtFrameRenderer {
         target.putInt(base + RtBindings.WORLD_SPECULAR_MOTION_GUIDE_INDEX_OFFSET,
                 storageIndex(traceImages().specularMotion()));
         ViewMedium medium = snapshot.view().medium();
-        ProgramResolution.Volume resolution = medium instanceof ViewMedium.Volume<?, ?> volume
-                ? services.programs().resolve(volume.implementation()) : ProgramResolution.Vacuum.INSTANCE;
-        writeInitialVolumeRoots(roots, medium, resolution);
+        int implementation = medium instanceof ViewMedium.Volume<?, ?> volume
+                ? services.programs().resolve(volume.implementation()) : 0;
+        writeInitialVolumeRoots(roots, medium, implementation);
     }
 
     static void writeInitialVolumeRoots(ByteBuffer roots, ViewMedium medium,
-                                        ProgramResolution.Volume resolution) {
+                                        int implementation) {
         Objects.requireNonNull(roots, "roots");
         Objects.requireNonNull(medium, "medium");
-        Objects.requireNonNull(resolution, "resolution");
+        if (implementation < 0) throw new IllegalArgumentException("volume implementation must be non-negative");
         if (roots.remaining() != RtBindings.WORLD_PUSH_CONSTANT_SIZE) {
             throw new IllegalArgumentException("world binding root has the wrong size");
         }
@@ -944,12 +943,12 @@ public final class RtFrameRenderer {
         target.putInt(base + RtBindings.WORLD_INITIAL_VOLUME_ACTIVE_OFFSET, 0);
         target.putLong(base + RtBindings.WORLD_INITIAL_VOLUME_BINDING_OFFSET, 0L);
         target.putLong(base + RtBindings.WORLD_INITIAL_VOLUME_INSTANCE_OFFSET, 0L);
-        if (resolution instanceof ProgramResolution.ActiveVolume active) {
+        if (implementation != 0) {
             if (!(medium instanceof ViewMedium.Volume<?, ?> volume)) {
                 throw new IllegalArgumentException("active initial volume has no typed data");
             }
             target.putInt(base + RtBindings.WORLD_INITIAL_VOLUME_IMPLEMENTATION_OFFSET,
-                    active.implementationIndex());
+                    implementation);
             target.putInt(base + RtBindings.WORLD_INITIAL_VOLUME_ACTIVE_OFFSET, 1);
             target.putLong(base + RtBindings.WORLD_INITIAL_VOLUME_BINDING_OFFSET,
                     volume.bindingData().bits());
@@ -959,13 +958,12 @@ public final class RtFrameRenderer {
     }
 
     static EnvironmentPush environmentPush(EnvironmentBinding<?> binding,
-                                           ProgramResolution.Environment resolution) {
+                                           int implementation) {
         if (binding == null) return new EnvironmentPush(0L, 0);
-        Objects.requireNonNull(resolution, "resolution");
-        if (resolution instanceof ProgramResolution.ActiveEnvironment active) {
-            return new EnvironmentPush(binding.bindingData().bits(), active.implementationIndex());
-        }
-        return new EnvironmentPush(0L, -1);
+        if (implementation < 0) throw new IllegalArgumentException("environment implementation must be non-negative");
+        return implementation == 0
+                ? new EnvironmentPush(0L, 0)
+                : new EnvironmentPush(binding.bindingData().bits(), implementation);
     }
 
     record EnvironmentPush(long bindingData, int implementation) { }

@@ -25,7 +25,7 @@ public interface ProgramBackend {
 
     /** Caller-owned successful compilation. Publication transfers ownership to the backend. */
     interface CompiledProgram extends AutoCloseable {
-        /** Renderer-assigned dispatch index for a declaration in this exact composition. */
+        /** Renderer-assigned positive dispatch index for a declaration in this exact composition; zero is reserved. */
         int implementationIndex(ProgramKey key);
 
         /** Releases a candidate which was not published. */

@@ -94,28 +94,31 @@ public final class ProgramSession {
         }
     }
 
-    public synchronized ProgramResolution.Surface resolve(SurfaceId<?, ?> id) {
+    /** Returns the published implementation index, or zero for a stale/foreign surface. */
+    public synchronized int resolve(SurfaceId<?, ?> id) {
         if (!(id instanceof SurfaceReference reference) || reference.session != this
-                || !published.contains(reference.registration) || activeProgram == null) {
-            return ProgramResolution.ErrorSurface.INSTANCE;
+                || !reference.registration.published || activeProgram == null) {
+            return 0;
         }
-        return new ProgramResolution.ActiveSurface(activeProgram.implementationIndex(reference.key));
+        return activeProgram.implementationIndex(reference.key);
     }
 
-    public synchronized ProgramResolution.Volume resolve(VolumeId<?, ?> id) {
+    /** Returns the published implementation index, or zero for vacuum. */
+    public synchronized int resolve(VolumeId<?, ?> id) {
         if (!(id instanceof VolumeReference reference) || reference.session != this
-                || !published.contains(reference.registration) || activeProgram == null) {
-            return ProgramResolution.Vacuum.INSTANCE;
+                || !reference.registration.published || activeProgram == null) {
+            return 0;
         }
-        return new ProgramResolution.ActiveVolume(activeProgram.implementationIndex(reference.key));
+        return activeProgram.implementationIndex(reference.key);
     }
 
-    public synchronized ProgramResolution.Environment resolve(EnvironmentId<?> id) {
+    /** Returns the published implementation index, or zero for the error environment. */
+    public synchronized int resolve(EnvironmentId<?> id) {
         if (!(id instanceof EnvironmentReference reference) || reference.session != this
-                || !published.contains(reference.registration) || activeProgram == null) {
-            return ProgramResolution.ErrorEnvironment.INSTANCE;
+                || !reference.registration.published || activeProgram == null) {
+            return 0;
         }
-        return new ProgramResolution.ActiveEnvironment(activeProgram.implementationIndex(reference.key));
+        return activeProgram.implementationIndex(reference.key);
     }
 
     /** Validates a surface reference and its erased geometry-slot schemas for this session. */
@@ -267,6 +270,8 @@ public final class ProgramSession {
             List<Registration<?>> removed = previous.stream()
                     .filter(registration -> !event.request.target.contains(registration)).toList();
             backend.publish(candidate, () -> enqueue(null, () -> removed.forEach(this::retire)));
+            removed.forEach(registration -> registration.published = false);
+            event.request.target.forEach(registration -> registration.published = true);
             activeProgram = candidate;
             published = event.request.target;
             if (event.request.introduced != null) event.request.introduced.ready();
@@ -491,6 +496,7 @@ public final class ProgramSession {
         private Completion completion;
         private boolean closed;
         private boolean retired;
+        private boolean published;
 
         private Registration(ProgramSession session, ProgramContributionChannel channel,
                              E exports, List<Declaration> declarations) {

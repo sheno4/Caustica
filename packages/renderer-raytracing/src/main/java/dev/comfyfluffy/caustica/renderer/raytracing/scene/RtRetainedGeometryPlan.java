@@ -3,7 +3,6 @@ package dev.comfyfluffy.caustica.renderer.raytracing.scene;
 import dev.comfyfluffy.caustica.api.geometry.GeometryTransform;
 import dev.comfyfluffy.caustica.api.geometry.MeshBuild;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
-import dev.comfyfluffy.caustica.engine.program.ProgramResolution;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.renderer.raytracing.accel.RtAccel;
@@ -61,11 +60,11 @@ public final class RtRetainedGeometryPlan {
         for (int i = 0; i < mesh.build().geometries().size(); i++) {
             MeshBuild.Geometry<?> geometry = mesh.build().geometries().get(i);
             RetainedSceneSnapshot.GeometryPrograms programs = mesh.geometryPrograms().get(i);
-            int surface = surfaceIndex(programs.surface());
+            int surface = programs.surfaceImplementation();
             boolean cutout = geometry.surface() != null
                     && geometry.surface().coverage() instanceof MeshBuild.CoveragePolicy.Cutout;
             int coverage = cutout ? surface : 0;
-            int volume = volumeIndex(programs.volume());
+            int volume = programs.volumeImplementation();
             int flags = (geometry.surface() == null ? 0 : HAS_SURFACE)
                     | (geometry.volume() == null ? 0 : HAS_VOLUME)
                     | (cutout ? CUTOUT : 0);
@@ -120,14 +119,6 @@ public final class RtRetainedGeometryPlan {
     private static boolean isOpaque(MeshBuild.Geometry<?> geometry) {
         return geometry.volume() != null || geometry.surface() == null
                 || geometry.surface().coverage() instanceof MeshBuild.CoveragePolicy.Opaque;
-    }
-
-    private static int surfaceIndex(ProgramResolution.Surface resolution) {
-        return resolution instanceof ProgramResolution.ActiveSurface active ? active.implementationIndex() : 0;
-    }
-
-    private static int volumeIndex(ProgramResolution.Volume resolution) {
-        return resolution instanceof ProgramResolution.ActiveVolume active ? active.implementationIndex() : 0;
     }
 
     public record GeometryRecord(int surfaceImplementation, int coverageImplementation,
