@@ -153,10 +153,11 @@ final class MinecraftTerrainGeometryTest {
     }
 
     @Test
-    void primitiveUploadMatchesTheShaderRecordStrideAndCarriesUvTintAndEmission() {
+    void primitiveUploadCarriesUvTintEmissionAndAnOutwardTangentBasis() {
         ByteBuffer bytes = ByteBuffer.allocate(MinecraftPrimitiveData.BYTE_SIZE).order(ByteOrder.LITTLE_ENDIAN);
         float[] primitive = new float[MinecraftTerrainMesh.PRIMITIVE_FLOATS];
         primitive[3] = 0.75f;
+        primitive[2] = 1f;
         primitive[4] = 0.25f;
         primitive[5] = 0.5f;
         primitive[6] = 1f;
@@ -164,7 +165,8 @@ final class MinecraftTerrainGeometryTest {
         primitive[MinecraftTerrainMesh.PRIMITIVE_ATLAS_PRESENT_OFFSET] = 1f;
 
         MinecraftVulkanTerrainUploader.writePrimitiveRecords(bytes, 1,
-                new float[]{0, 0, 1, 0, 0, 1}, primitive, 37);
+                new float[]{0, 0, 0, 1, 0, 0, 0, 1, 0}, new int[]{0, 1, 2},
+                new float[]{0, 1, 1, 1, 0, 0}, primitive, 37);
 
         assertEquals(MinecraftPrimitiveData.BYTE_SIZE, bytes.position());
         assertEquals(1f, bytes.getFloat(8));
@@ -175,6 +177,12 @@ final class MinecraftTerrainGeometryTest {
         assertEquals(37, bytes.getInt(96));
         assertEquals(1, bytes.getInt(100));
         assertEquals(0.75f, bytes.getFloat(104));
+        assertEquals(1f, bytes.getFloat(112));
+        assertEquals(0f, bytes.getFloat(116));
+        assertEquals(0f, bytes.getFloat(120));
+        assertEquals(0f, bytes.getFloat(128));
+        assertEquals(1f, bytes.getFloat(132));
+        assertEquals(0f, bytes.getFloat(136));
         assertEquals(2L * MinecraftPrimitiveData.BYTE_SIZE,
                 MinecraftVulkanTerrainUploader.primitiveRecordOffset(6));
     }
@@ -183,7 +191,8 @@ final class MinecraftTerrainGeometryTest {
     void untexturedTerrainPrimitiveDoesNotReadTheAtlasDescriptor() {
         ByteBuffer bytes = ByteBuffer.allocate(MinecraftPrimitiveData.BYTE_SIZE).order(ByteOrder.LITTLE_ENDIAN);
         MinecraftVulkanTerrainUploader.writePrimitiveRecords(bytes, 1,
-                new float[6], new float[MinecraftTerrainMesh.PRIMITIVE_FLOATS], 37);
+                new float[]{0, 0, 0, 1, 0, 0, 0, 1, 0}, new int[]{0, 1, 2},
+                new float[]{0, 0, 1, 0, 0, 1}, new float[MinecraftTerrainMesh.PRIMITIVE_FLOATS], 37);
 
         assertEquals(0, bytes.getInt(96));
         assertEquals(0, bytes.getInt(100));

@@ -70,8 +70,8 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
                     bytes -> { for (int index : indices) bytes.putInt(index); });
             primitiveBuffer = create((long) source.triangleCount() * MinecraftPrimitiveData.BYTE_SIZE,
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                    bytes -> writePrimitiveRecords(bytes, source.triangleCount(), cornerUvs, primitive,
-                            atlas.descriptorIndex()));
+                    bytes -> writePrimitiveRecords(bytes, source.triangleCount(), positions, indices,
+                            cornerUvs, primitive, atlas.descriptorIndex()));
             instanceBuffer = create(MinecraftInstanceData.BYTE_SIZE, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                     bytes -> new MinecraftInstanceData(new MinecraftInstanceData.Float3(1f, 1f, 1f), 0,
                             new MinecraftInstanceData.SampledTexture2DIndex(0), 0f).write(bytes));
@@ -125,8 +125,8 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
         return new Uploaded(build, instanceData, positions, indices, primitive, instance, atlasLease);
     }
 
-    static void writePrimitiveRecords(ByteBuffer bytes, int triangles, float[] uvs, float[] primitive,
-                                      int atlasDescriptor) {
+    static void writePrimitiveRecords(ByteBuffer bytes, int triangles, float[] positions, int[] indices,
+                                      float[] uvs, float[] primitive, int atlasDescriptor) {
         for (int triangle = 0; triangle < triangles; triangle++) {
             int uv = triangle * 6;
             int data = triangle * MinecraftTerrainMesh.PRIMITIVE_FLOATS;
@@ -136,19 +136,59 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
                     new MinecraftPrimitiveData.Float2(uvs[uv + 4], uvs[uv + 5])};
             var white = new MinecraftPrimitiveData.Float4(1f, 1f, 1f, 1f);
             boolean textured = primitive[data + MinecraftTerrainMesh.PRIMITIVE_ATLAS_PRESENT_OFFSET] != 0.0f;
+            TangentBasis basis = tangentBasis(positions, indices, uvs, triangle,
+                    primitive[data], primitive[data + 1], primitive[data + 2]);
             var record = new MinecraftPrimitiveData(uvValues, new MinecraftPrimitiveData.Float4[]{white, white, white},
                     new MinecraftPrimitiveData.Float3(primitive[data + 4], primitive[data + 5], primitive[data + 6]),
                     (int) primitive[data + 8],
                     new MinecraftPrimitiveData.SampledTexture2DIndex(textured ? atlasDescriptor : 0),
                     textured ? TEXTURE_PRESENT : 0,
                     primitive[data + 3],
-                    new MinecraftPrimitiveData.Float3(0f, 0f, 0f),
-                    new MinecraftPrimitiveData.Float3(0f, 0f, 0f));
+                    basis.tangent(), basis.bitangent());
             record.write(bytes.slice(triangle * MinecraftPrimitiveData.BYTE_SIZE,
                     MinecraftPrimitiveData.BYTE_SIZE).order(ByteOrder.LITTLE_ENDIAN));
         }
         bytes.position(triangles * MinecraftPrimitiveData.BYTE_SIZE);
     }
+
+    static TangentBasis tangentBasis(float[] positions, int[] indices, float[] uvs, int triangle,
+                                     float normalX, float normalY, float normalZ) {
+        int indexOffset = triangle * 3;
+        int uvOffset = triangle * 6;
+        int p0 = indices[indexOffset] * 3;
+        int p1 = indices[indexOffset + 1] * 3;
+        int p2 = indices[indexOffset + 2] * 3;
+        float x1 = positions[p1] - positions[p0];
+        float y1 = positions[p1 + 1] - positions[p0 + 1];
+        float z1 = positions[p1 + 2] - positions[p0 + 2];
+        float x2 = positions[p2] - positions[p0];
+        float y2 = positions[p2 + 1] - positions[p0 + 1];
+        float z2 = positions[p2 + 2] - positions[p0 + 2];
+        float u1 = uvs[uvOffset + 2] - uvs[uvOffset];
+        float v1 = uvs[uvOffset + 3] - uvs[uvOffset + 1];
+        float u2 = uvs[uvOffset + 4] - uvs[uvOffset];
+        float v2 = uvs[uvOffset + 5] - uvs[uvOffset + 1];
+        float inverse = 1.0f / (u1 * v2 - u2 * v1);
+        MinecraftPrimitiveData.Float3 tangent = normalized((x1 * v2 - x2 * v1) * inverse,
+                (y1 * v2 - y2 * v1) * inverse, (z1 * v2 - z2 * v1) * inverse);
+        MinecraftPrimitiveData.Float3 bitangent = normalized((x2 * u1 - x1 * u2) * inverse,
+                (y2 * u1 - y1 * u2) * inverse, (z2 * u1 - z1 * u2) * inverse);
+        float basisNormalX = tangent.y() * bitangent.z() - tangent.z() * bitangent.y();
+        float basisNormalY = tangent.z() * bitangent.x() - tangent.x() * bitangent.z();
+        float basisNormalZ = tangent.x() * bitangent.y() - tangent.y() * bitangent.x();
+        if (basisNormalX * normalX + basisNormalY * normalY + basisNormalZ * normalZ < 0.0f) {
+            bitangent = new MinecraftPrimitiveData.Float3(
+                    -bitangent.x(), -bitangent.y(), -bitangent.z());
+        }
+        return new TangentBasis(tangent, bitangent);
+    }
+
+    private static MinecraftPrimitiveData.Float3 normalized(float x, float y, float z) {
+        float inverseLength = 1.0f / (float) Math.sqrt(x * x + y * y + z * z);
+        return new MinecraftPrimitiveData.Float3(x * inverseLength, y * inverseLength, z * inverseLength);
+    }
+
+    record TangentBasis(MinecraftPrimitiveData.Float3 tangent, MinecraftPrimitiveData.Float3 bitangent) { }
 
     private VmaMappedBuffer create(long size, int extraUsage, Writer writer) {
         VmaMappedBuffer buffer = VmaMappedBuffer.create(gpu, size, extraUsage, "Minecraft terrain upload");
