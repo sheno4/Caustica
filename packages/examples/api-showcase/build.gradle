@@ -12,6 +12,13 @@ repositories {
     mavenCentral()
 }
 
+configurations {
+    slangShaderModules {
+        canBeConsumed = false
+        canBeResolved = true
+    }
+}
+
 dependencies {
     compileOnly project(":packages:api")
     compileOnly project(":packages:minecraft-api")
@@ -22,6 +29,7 @@ dependencies {
     testImplementation platform("org.junit:junit-bom:5.12.2")
     testImplementation "org.junit.jupiter:junit-jupiter"
     testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+    slangShaderModules project(path: ":packages:shader-api", configuration: "runtimeElements")
 }
 
 def generatedShaderResources = layout.buildDirectory.dir("generated/resources")
@@ -31,7 +39,7 @@ def validateShowcaseShaders = tasks.register("validateShowcaseShaders", CompileS
     sourceDirectory = layout.projectDirectory.dir("src/main/resources/api_showcase/shaders")
     includeDirectories.from(
             layout.projectDirectory.dir("src/main/resources/api_showcase/shaders"),
-            project(":packages:shader-api").layout.projectDirectory.dir("src/main/resources/caustica/shaders/api"))
+            configurations.slangShaderModules)
     aliasSourceDirectory = layout.projectDirectory.dir("src/main/resources/api_showcase/shaders")
     descriptorHeapNative = true
     mappedDescriptorBindingSources = ["passes/ui_marker.frag.slang"]
@@ -42,7 +50,6 @@ sourceSets.main.resources.srcDir(files(generatedShaderResources).builtBy(validat
 def reflectionRoot = layout.buildDirectory.dir("generated/reflection-sources")
 def prepareShowcaseReflectionSources = tasks.register("prepareShowcaseReflectionSources", Sync) {
     from(layout.projectDirectory.dir("src/main/resources/api_showcase/shaders"))
-    from(project(":packages:shader-api").layout.projectDirectory.dir("src/main/resources/caustica/shaders/api"))
     from(layout.projectDirectory.dir("src/shaderReflection")) { into "layout" }
     into(reflectionRoot)
 }
@@ -54,6 +61,7 @@ def generateShowcaseRecords = tasks.register("generateShowcaseRecords", Generate
     dependsOn(prepareShowcaseReflectionSources)
     shaderRoot = reflectionRoot
     probeSource = reflectionRoot.map { it.file("layout/showcase_probe.slang") }
+    includeDirectories.from(configurations.slangShaderModules)
     recordSpecs = [
             "push|postPushProbe|ShowcasePostPush|dev.comfyfluffy.caustica.example.showcase.gen|ShowcasePostPushData|false",
             "push|uiPushProbe|ShowcaseUiPush|dev.comfyfluffy.caustica.example.showcase.gen|ShowcaseUiPushData|false"

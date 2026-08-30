@@ -191,7 +191,7 @@ than depend on an encoder-program lifecycle.
 
 `packages/slang-tooling` is an independently usable Gradle plugin/tool. Each package owns its shader probes,
 generated Java namespace, and record manifest. The tooling owns compiler discovery, the Vulkan 1.4/SPIR-V 1.6
-profile, reflection parsing, typed serializers/schema tokens, declaration validation, and reproducible task
+profile, reflection parsing, typed serializers, declaration validation, and reproducible task
 inputs. Extensions can therefore validate and generate their own shader records without receiving the
 engine's runtime composition compiler.
 

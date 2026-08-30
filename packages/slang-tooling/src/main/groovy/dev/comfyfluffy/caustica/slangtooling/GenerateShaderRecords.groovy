@@ -4,12 +4,14 @@ import groovy.json.JsonSlurper
 import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
 import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.file.ConfigurableFileCollection
 import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.provider.ListProperty
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputDirectory
 import org.gradle.api.tasks.InputFile
+import org.gradle.api.tasks.InputFiles
 import org.gradle.api.tasks.OutputDirectory
 import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
@@ -22,6 +24,11 @@ abstract class GenerateShaderRecords extends DefaultTask {
     @InputDirectory
     @PathSensitive(PathSensitivity.RELATIVE)
     abstract DirectoryProperty getShaderRoot()
+
+    /** Additional include roots supplied as directories or JARs containing {@code .slang} resources. */
+    @InputFiles
+    @PathSensitive(PathSensitivity.RELATIVE)
+    abstract ConfigurableFileCollection getIncludeDirectories()
 
     @InputFile
     @PathSensitive(PathSensitivity.RELATIVE)
@@ -304,9 +311,12 @@ abstract class GenerateShaderRecords extends DefaultTask {
         def specs = parseRecordSpecs(recordSpecs.get())
         def reflectionFile = new File(temporaryDir, "shader-records-reflection.json")
         def probeSpv = new File(temporaryDir, "shader-layout-probe.spv")
-        def includeArgs = shaderRoot.get().asFileTree.matching { include "**/*.slang" }.files
+        def externalRoots = SlangIncludeRoots.materialize(
+                includeDirectories.files, new File(temporaryDir, "jar-includes"))
+        def includeArgs = (shaderRoot.get().asFileTree.matching { include "**/*.slang" }.files
                 .collect { it.parentFile }.unique().sort { it.absolutePath }
-                .collectMany { ["-I", it.absolutePath] }
+                + externalRoots.collectMany { CompileSlangShaders.directoryTree(it) })
+                .unique().sort { it.absolutePath }.collectMany { ["-I", it.absolutePath] }
         execOps.exec {
             commandLine([slangc.get(), probeSource.get().asFile.absolutePath] + includeArgs +
                     [

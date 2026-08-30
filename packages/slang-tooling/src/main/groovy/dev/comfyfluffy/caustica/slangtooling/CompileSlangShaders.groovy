@@ -25,6 +25,7 @@ abstract class CompileSlangShaders extends DefaultTask {
     @InputDirectory @PathSensitive(PathSensitivity.RELATIVE)
     abstract DirectoryProperty getSourceDirectory()
 
+    /** Include roots supplied as directories or JARs containing {@code .slang} resources. */
     @InputFiles @PathSensitive(PathSensitivity.RELATIVE)
     abstract ConfigurableFileCollection getIncludeDirectories()
 
@@ -69,7 +70,9 @@ abstract class CompileSlangShaders extends DefaultTask {
             java.nio.file.Files.copy(input.toPath(), output.toPath())
         }
 
-        List<File> includeRoots = ([aliases] + includeDirectories.files.collectMany { File root ->
+        List<File> materializedIncludes = SlangIncludeRoots.materialize(
+                includeDirectories.files, new File(temporaryDir, "jar-includes"))
+        List<File> includeRoots = ([aliases] + materializedIncludes.collectMany { File root ->
             directoryTree(root)
         } + directoryTree(sourceRoot))
                 .unique().sort { it.absolutePath }

@@ -7,6 +7,9 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
+import java.util.jar.JarEntry;
+import java.util.jar.JarOutputStream;
 
 import static org.gradle.testkit.runner.TaskOutcome.SUCCESS;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -86,5 +89,45 @@ final class SlangToolingPluginTest {
                         "push|secondProbe|SecondRecord|example.gen|RecordData|false")));
 
         assertTrue(error.getMessage().contains("duplicate generated shader record 'example.gen.RecordData'"));
+    }
+
+    @Test
+    void extractsOnlySlangModulesFromJarIncludes(@TempDir Path project) throws Exception {
+        var archive = project.resolve("shader-api.jar");
+        try (var output = new JarOutputStream(Files.newOutputStream(archive))) {
+            writeEntry(output, "caustica/shaders/api/z.slang", "module z;");
+            writeEntry(output, "META-INF/NOTICE.txt", "not a shader");
+            writeEntry(output, "caustica/shaders/api/a.slang", "module a;");
+        }
+
+        var roots = SlangIncludeRoots.materialize(List.of(archive.toFile()), project.resolve("includes").toFile());
+
+        assertEquals(1, roots.size());
+        assertTrue(roots.get(0).toPath().endsWith(Path.of("includes", "0000")));
+        assertEquals("module a;", Files.readString(
+                roots.get(0).toPath().resolve("caustica/shaders/api/a.slang")));
+        assertEquals("module z;", Files.readString(
+                roots.get(0).toPath().resolve("caustica/shaders/api/z.slang")));
+        assertTrue(Files.notExists(roots.get(0).toPath().resolve("META-INF/NOTICE.txt")));
+    }
+
+    @Test
+    void rejectsEscapingJarIncludeEntries(@TempDir Path project) throws Exception {
+        var archive = project.resolve("unsafe.jar");
+        try (var output = new JarOutputStream(Files.newOutputStream(archive))) {
+            writeEntry(output, "../escape.slang", "module escape;");
+        }
+
+        var error = assertThrows(GradleException.class, () -> SlangIncludeRoots.materialize(
+                List.of(archive.toFile()), project.resolve("includes").toFile()));
+
+        assertTrue(error.getMessage().contains("escapes its include root"));
+        assertTrue(Files.notExists(project.resolve("escape.slang")));
+    }
+
+    private static void writeEntry(JarOutputStream output, String name, String contents) throws Exception {
+        output.putNextEntry(new JarEntry(name));
+        output.write(contents.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        output.closeEntry();
     }
 }

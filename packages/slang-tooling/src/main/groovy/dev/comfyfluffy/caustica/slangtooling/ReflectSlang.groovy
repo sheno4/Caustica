@@ -20,6 +20,7 @@ import javax.inject.Inject
 abstract class ReflectSlang extends DefaultTask {
     @InputFile @PathSensitive(PathSensitivity.RELATIVE)
     abstract RegularFileProperty getSourceFile()
+    /** Include roots supplied as directories or JARs containing {@code .slang} resources. */
     @InputFiles @PathSensitive(PathSensitivity.RELATIVE)
     abstract ConfigurableFileCollection getIncludeDirectories()
     @Input abstract Property<String> getSlangc()
@@ -40,7 +41,7 @@ abstract class ReflectSlang extends DefaultTask {
     void reflect() {
         File source = sourceFile.get().asFile
         List<File> directories = [source.parentFile]
-        includeDirectories.files.findAll { it.isDirectory() }.each { root ->
+        SlangIncludeRoots.materialize(includeDirectories.files, new File(temporaryDir, "jar-includes")).each { root ->
             directories.add(root)
             root.eachFileRecurse(FileType.DIRECTORIES) { directories.add(it) }
         }
