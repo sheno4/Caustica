@@ -153,6 +153,11 @@ if (loader == "fabric") {
 
 configurations {
 	apiRuntime
+	slangShaderModules {
+		canBeConsumed = false
+		canBeResolved = true
+		transitive = false
+	}
 }
 sourceSets.main.runtimeClasspath += configurations.apiRuntime
 
@@ -191,6 +196,10 @@ dependencies {
 	apiRuntime project(":packages:slang-runtime")
 	compileOnly project(":packages:vulkan-support")
 	apiRuntime project(":packages:vulkan-support")
+	slangShaderModules project(path: ":packages:shader-api", configuration: "runtimeElements")
+	slangShaderModules project(path: ":packages:features-builtin", configuration: "runtimeElements")
+	slangShaderModules project(path: ":packages:renderer-raytracing", configuration: "runtimeElements")
+	slangShaderModules project(path: ":packages:minecraft-rendering", configuration: "runtimeElements")
 	if (loader == "fabric") {
 		minecraft "com.mojang:minecraft:${project.minecraft_version}"
 		implementation "net.fabricmc:fabric-loader:${project.loader_version}"
@@ -264,24 +273,18 @@ processResources {
 // Compile Slang sources to SPIR-V at build time instead of tracking binaries. Requires slangc and
 // spirv-val from the Vulkan SDK or PATH.
 def shaderGenRoot = layout.buildDirectory.dir("generated/shaders") // classpath root -> /caustica/shaders/*.spv
-def runtimeWorldSourceDir = project(":packages:renderer-raytracing")
-		.file("src/main/resources/caustica/shaders/world")
-def runtimeBuiltinSourceDir = project(":packages:features-builtin").file("src/main/resources/caustica/shaders/builtin")
-def runtimeApiSourceDir = project(":packages:shader-api").file("src/main/resources/caustica/shaders/api")
 def runtimeMinecraftSourceDir = file("src/main/resources/caustica/shaders/minecraft")
-def runtimeMinecraftRenderingSourceDir = project(":packages:minecraft-rendering")
-		.file("src/main/resources/caustica/shaders/minecraft")
 
 def compileShaders = tasks.register("compileShaders", CompileSlangShaders) {
 	group = "build"
 	description = "Compiles shaders/** shader sources to SPIR-V and validates them."
 	sourceDirectory = file("shaders")
-	includeDirectories.from(runtimeWorldSourceDir, runtimeBuiltinSourceDir,
-			runtimeApiSourceDir, runtimeMinecraftSourceDir, runtimeMinecraftRenderingSourceDir)
-	aliasSourceDirectory = runtimeWorldSourceDir
+	includeDirectories.from(runtimeMinecraftSourceDir, configurations.slangShaderModules)
 	moduleAliases = [
-			"radiance_any_hit_rahit.slang": "radiance_any_hit.rahit.slang",
-			"shadow_any_hit_rahit.slang": "shadow_any_hit.rahit.slang"
+			"radiance_any_hit_rahit.slang":
+					"caustica/shaders/world/radiance_any_hit.rahit.slang",
+			"shadow_any_hit_rahit.slang":
+					"caustica/shaders/world/shadow_any_hit.rahit.slang"
 	]
 	descriptorHeapNative = true
 	mappedDescriptorBindingSources = [

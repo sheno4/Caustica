@@ -108,6 +108,8 @@ final class SlangToolingPluginTest {
                 roots.get(0).toPath().resolve("caustica/shaders/api/a.slang")));
         assertEquals("module z;", Files.readString(
                 roots.get(0).toPath().resolve("caustica/shaders/api/z.slang")));
+        assertEquals(roots.get(0).toPath().resolve("caustica/shaders/api/a.slang").toFile(),
+                CompileSlangShaders.resolveAliasSource(null, "caustica/shaders/api/a.slang", roots));
         assertTrue(Files.notExists(roots.get(0).toPath().resolve("META-INF/NOTICE.txt")));
     }
 

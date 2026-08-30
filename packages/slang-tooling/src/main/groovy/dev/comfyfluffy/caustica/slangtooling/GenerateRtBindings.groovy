@@ -4,9 +4,11 @@ import groovy.json.JsonSlurper
 import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
 import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.file.ConfigurableFileCollection
 import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputDirectory
+import org.gradle.api.tasks.InputFiles
 import org.gradle.api.tasks.OutputDirectory
 import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
@@ -20,6 +22,11 @@ abstract class GenerateRtBindings extends DefaultTask {
     @InputDirectory
     @PathSensitive(PathSensitivity.RELATIVE)
     abstract DirectoryProperty getShaderRoot()
+
+    /** Additional include roots supplied as directories or JARs containing {@code .slang} resources. */
+    @InputFiles
+    @PathSensitive(PathSensitivity.RELATIVE)
+    abstract ConfigurableFileCollection getIncludeDirectories()
 
     @Input abstract Property<String> getSlangc()
     @Input abstract Property<String> getSpirvVal()
@@ -55,12 +62,13 @@ abstract class GenerateRtBindings extends DefaultTask {
     }
 
     // Gradle decorates task classes; this must remain non-private for Groovy dispatch inside PIPELINES.each.
-    Map reflect(File source, File scratchDir) {
+    Map reflect(File source, File scratchDir, List<File> externalRoots) {
         def stem = source.name.replaceAll(/\W+/, "-")
         def reflectionFile = new File(scratchDir, "${stem}.json")
         def spvFile = new File(scratchDir, "${stem}.spv")
-        def includeDirs = shaderRoot.get().asFileTree.matching { include "**/*.slang" }.files
-                .collect { it.parentFile }.unique().sort { it.absolutePath }
+        def includeDirs = (shaderRoot.get().asFileTree.matching { include "**/*.slang" }.files
+                .collect { it.parentFile } + externalRoots.collectMany { CompileSlangShaders.directoryTree(it) })
+                .unique().sort { it.absolutePath }
         def includes = [source.parentFile] + includeDirs.findAll { it != source.parentFile }
         execOps.exec {
             commandLine([slangc.get(), source.absolutePath] + includes.collectMany { ["-I", it.absolutePath] } + [
@@ -79,9 +87,12 @@ abstract class GenerateRtBindings extends DefaultTask {
         def constants = new LinkedHashMap<String, Integer>()
         def scratchDir = new File(temporaryDir, "reflection")
         scratchDir.mkdirs()
+        def externalRoots = SlangIncludeRoots.materialize(
+                includeDirectories.files, new File(temporaryDir, "jar-includes"))
 
         PIPELINES.each { spec ->
-            def reflection = reflect(new File(shaderRoot.get().asFile, spec.source as String), scratchDir)
+            def reflection = reflect(new File(shaderRoot.get().asFile, spec.source as String), scratchDir,
+                    externalRoots)
             if (spec.pushParameter != null) {
                 def descriptors = reflection.parameters.findAll { it.binding?.kind == "descriptorTableSlot" }
                 def expectedDescriptors = spec.mappedDescriptors ?: [:]

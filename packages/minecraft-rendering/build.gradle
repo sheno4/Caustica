@@ -14,11 +14,20 @@ java.toolchain.languageVersion = JavaLanguageVersion.of(25)
 base { archivesName = "caustica-minecraft-rendering" }
 repositories { mavenCentral() }
 
+configurations {
+    slangShaderModules {
+        canBeConsumed = false
+        canBeResolved = true
+        transitive = false
+    }
+}
+
 dependencies {
     api project(":packages:api")
     api project(":packages:minecraft-api")
     api project(":packages:settings-api")
     implementation project(":packages:vulkan-support")
+    slangShaderModules project(path: ":packages:shader-api", configuration: "runtimeElements")
     api project(":packages:minecraft-content")
     implementation "org.slf4j:slf4j-api:2.0.17"
 
@@ -28,14 +37,13 @@ dependencies {
 }
 
 def minecraftShaderModules = file("src/main/resources/caustica/shaders/minecraft")
-def apiShaderModules = project(":packages:shader-api").file("src/main/resources/caustica/shaders/api")
 def reflectionRoot = layout.buildDirectory.dir("generated/reflection-sources")
 
 def generatedShaderResources = layout.buildDirectory.dir("generated/resources")
 def compileMinecraftSkyShaders = tasks.register("compileMinecraftSkyShaders", CompileSlangShaders) {
     group = "build"
     sourceDirectory = file("shaders/pipelines/sky")
-    includeDirectories.from(minecraftShaderModules, apiShaderModules)
+    includeDirectories.from(minecraftShaderModules, configurations.slangShaderModules)
     aliasSourceDirectory = file("shaders/pipelines/sky")
     descriptorHeapNative = true
     outputDirectory = generatedShaderResources.map { it.dir("caustica/shaders/pipelines/sky") }
@@ -58,7 +66,6 @@ def verifyMinecraftSkyShaders = tasks.register("verifyMinecraftSkyShaders") {
 }
 def prepareMinecraftRenderingReflectionSources = tasks.register("prepareMinecraftRenderingReflectionSources", Sync) {
     from(minecraftShaderModules) { into "minecraft" }
-    from(apiShaderModules) { into "api" }
     from(file("src/shaderReflection")) { into "layout" }
     into(reflectionRoot)
 }
@@ -79,6 +86,7 @@ def generateMinecraftRenderingRecords = tasks.register("generateMinecraftRenderi
     dependsOn(prepareMinecraftRenderingReflectionSources)
     shaderRoot = reflectionRoot
     probeSource = reflectionRoot.map { it.file("layout/minecraft_rendering_probe.slang") }
+    includeDirectories.from(configurations.slangShaderModules)
     recordSpecs = minecraftRenderingRecordSpecs
     outDir = generatedRecordRoot
 }
@@ -88,6 +96,7 @@ def reproduceMinecraftRenderingRecords = tasks.register("reproduceMinecraftRende
     dependsOn(prepareMinecraftRenderingReflectionSources)
     shaderRoot = reflectionRoot
     probeSource = reflectionRoot.map { it.file("layout/minecraft_rendering_probe.slang") }
+    includeDirectories.from(configurations.slangShaderModules)
     recordSpecs = minecraftRenderingRecordSpecs
     outDir = reproducedRecordRoot
 }

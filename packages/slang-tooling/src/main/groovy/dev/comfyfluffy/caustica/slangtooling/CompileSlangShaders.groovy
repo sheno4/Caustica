@@ -11,6 +11,7 @@ import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputDirectory
 import org.gradle.api.tasks.InputFiles
+import org.gradle.api.tasks.Optional
 import org.gradle.api.tasks.OutputDirectory
 import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
@@ -29,10 +30,10 @@ abstract class CompileSlangShaders extends DefaultTask {
     @InputFiles @PathSensitive(PathSensitivity.RELATIVE)
     abstract ConfigurableFileCollection getIncludeDirectories()
 
-    @InputDirectory @PathSensitive(PathSensitivity.RELATIVE)
+    @Optional @InputDirectory @PathSensitive(PathSensitivity.RELATIVE)
     abstract DirectoryProperty getAliasSourceDirectory()
 
-    /** Alias filename to source filename, both relative to aliasSourceDirectory. */
+    /** Alias filename to a source relative to aliasSourceDirectory, or to one resolved include root. */
     @Input abstract MapProperty<String, String> getModuleAliases()
     @Input abstract ListProperty<String> getSourcePatterns()
     /** Relative sources whose static bindings are covered by shader-create descriptor mappings. */
@@ -58,20 +59,21 @@ abstract class CompileSlangShaders extends DefaultTask {
     @TaskAction
     void compile() {
         File sourceRoot = sourceDirectory.get().asFile
+        List<File> materializedIncludes = SlangIncludeRoots.materialize(
+                includeDirectories.files, new File(temporaryDir, "jar-includes"))
         File aliases = new File(temporaryDir, "module-aliases")
         if (aliases.exists() && !aliases.deleteDir()) {
             throw new GradleException("failed to clear Slang module aliases ${aliases}")
         }
         aliases.mkdirs()
         moduleAliases.get().each { alias, source ->
-            File input = aliasSourceDirectory.file(source).get().asFile
+            File input = resolveAliasSource(aliasSourceDirectory.isPresent()
+                    ? aliasSourceDirectory.get().asFile : null, source, materializedIncludes)
             File output = new File(aliases, alias)
             output.parentFile.mkdirs()
             java.nio.file.Files.copy(input.toPath(), output.toPath())
         }
 
-        List<File> materializedIncludes = SlangIncludeRoots.materialize(
-                includeDirectories.files, new File(temporaryDir, "jar-includes"))
         List<File> includeRoots = ([aliases] + materializedIncludes.collectMany { File root ->
             directoryTree(root)
         } + directoryTree(sourceRoot))
@@ -121,6 +123,18 @@ abstract class CompileSlangShaders extends DefaultTask {
             destination.parentFile.mkdirs()
             java.nio.file.Files.move(file.toPath(), destination.toPath())
         }
+    }
+
+    static File resolveAliasSource(File localRoot, String relativePath, List<File> materializedIncludes) {
+        if (localRoot != null) {
+            return new File(localRoot, relativePath)
+        }
+        List<File> matches = materializedIncludes.collect { new File(it, relativePath) }.findAll { it.isFile() }
+        if (matches.size() != 1) {
+            throw new GradleException("Slang alias source must resolve from exactly one include input: "
+                    + "${relativePath} -> ${matches}")
+        }
+        matches[0]
     }
 
     static String outputBase(File root, File source) {

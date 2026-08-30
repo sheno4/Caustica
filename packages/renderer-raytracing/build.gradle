@@ -15,6 +15,14 @@ java.toolchain.languageVersion = JavaLanguageVersion.of(25)
 base { archivesName = "caustica-renderer-raytracing" }
 repositories { mavenCentral() }
 
+configurations {
+    slangShaderModules {
+        canBeConsumed = false
+        canBeResolved = true
+        transitive = false
+    }
+}
+
 def osName = System.getProperty("os.name").toLowerCase(Locale.ROOT)
 def osArch = System.getProperty("os.arch").toLowerCase(Locale.ROOT)
 def lwjglTestNatives = null
@@ -36,6 +44,8 @@ dependencies {
 
     runtimeOnly project(":packages:shader-api")
     runtimeOnly project(":packages:features-builtin")
+    slangShaderModules project(path: ":packages:shader-api", configuration: "runtimeElements")
+    slangShaderModules project(path: ":packages:features-builtin", configuration: "runtimeElements")
 
     testImplementation platform("org.junit:junit-bom:5.12.2")
     testImplementation "org.junit.jupiter:junit-jupiter"
@@ -55,23 +65,19 @@ def worldShaderNames = [
         "surface_bsdf.slang", "world_common.slang", "world_minimal.slang"
 ] as Set
 
-def apiShaderModules = project(":packages:shader-api").file("src/main/resources/caustica/shaders/api")
-def builtinShaderModules = project(":packages:features-builtin").file("src/main/resources/caustica/shaders/builtin")
 def worldShaderModules = file("src/main/resources/caustica/shaders/world")
 def generatedShaderResources = layout.buildDirectory.dir("generated/resources")
 def compileRayTracingShaders = tasks.register("compileRayTracingShaders", CompileSlangShaders) {
     group = "build"
     description = "Compiles and validates the ray renderer's compute shaders."
     sourceDirectory = file("shaders")
-    includeDirectories.from(worldShaderModules, apiShaderModules, builtinShaderModules)
+    includeDirectories.from(worldShaderModules, configurations.slangShaderModules)
     aliasSourceDirectory = worldShaderModules
     outputDirectory = generatedShaderResources.map { it.dir("caustica/shaders") }
 }
 def reflectionRoot = layout.buildDirectory.dir("generated/reflection-sources")
 def prepareRayTracingReflectionSources = tasks.register("prepareRayTracingReflectionSources", Sync) {
     from(worldShaderModules) { into "pipelines/world" }
-    from(apiShaderModules) { into "api" }
-    from(builtinShaderModules) { into "builtin" }
     from(file("src/shaderReflection")) { into "layout" }
     into(reflectionRoot)
 }
@@ -90,6 +96,7 @@ def generateRayTracingRecords = tasks.register("generateRayTracingRecords", Gene
     dependsOn(prepareRayTracingReflectionSources)
     shaderRoot = reflectionRoot
     probeSource = reflectionRoot.map { it.file("layout/raytracing_probe.slang") }
+    includeDirectories.from(configurations.slangShaderModules)
     recordSpecs = rayTracingRecordSpecs
     outDir = generatedRecordRoot
 }
@@ -100,6 +107,7 @@ def generateRayTracingBindings = tasks.register("generateRayTracingBindings", Ge
     description = "Generates the descriptor-heap world roots from primary ray reflection."
     dependsOn(prepareRayTracingReflectionSources)
     shaderRoot = reflectionRoot
+    includeDirectories.from(configurations.slangShaderModules)
     javaPackage = "dev.comfyfluffy.caustica.renderer.raytracing.layout"
     outDir = generatedBindingsRoot
 }
@@ -166,6 +174,7 @@ def reproduceRayTracingRecords = tasks.register("reproduceRayTracingRecords", Ge
     dependsOn(prepareRayTracingReflectionSources)
     shaderRoot = reflectionRoot
     probeSource = reflectionRoot.map { it.file("layout/raytracing_probe.slang") }
+    includeDirectories.from(configurations.slangShaderModules)
     recordSpecs = rayTracingRecordSpecs
     outDir = reproducibleRecordRoot
 }
@@ -173,6 +182,7 @@ def reproducibleBindingsRoot = layout.buildDirectory.dir("generated/reproducibil
 def reproduceRayTracingBindings = tasks.register("reproduceRayTracingBindings", GenerateRtBindings) {
     dependsOn(prepareRayTracingReflectionSources)
     shaderRoot = reflectionRoot
+    includeDirectories.from(configurations.slangShaderModules)
     javaPackage = "dev.comfyfluffy.caustica.renderer.raytracing.layout"
     outDir = reproducibleBindingsRoot
 }

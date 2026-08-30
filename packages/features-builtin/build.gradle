@@ -14,24 +14,32 @@ java.toolchain.languageVersion = JavaLanguageVersion.of(25)
 base { archivesName = "caustica-features-builtin" }
 repositories { mavenCentral() }
 
+configurations {
+    slangShaderModules {
+        canBeConsumed = false
+        canBeResolved = true
+        transitive = false
+    }
+}
+
 dependencies {
     api project(":packages:api")
     api project(":packages:settings-api")
     implementation project(":packages:vulkan-support")
+    slangShaderModules project(path: ":packages:shader-api", configuration: "runtimeElements")
     testImplementation platform("org.junit:junit-bom:5.12.2")
     testImplementation "org.junit.jupiter:junit-jupiter"
     testRuntimeOnly "org.junit.platform:junit-platform-launcher"
 }
 
 def builtinShaderModules = file("src/main/resources/caustica/shaders/builtin")
-def apiShaderModules = project(":packages:shader-api").file("src/main/resources/caustica/shaders/api")
 def generatedShaderResources = layout.buildDirectory.dir("generated/resources")
 
 def compileBloomShaders = tasks.register("compileBloomShaders", CompileSlangShaders) {
     group = "build"
     description = "Compiles and validates the built-in Bloom compute shader."
     sourceDirectory = file("shaders")
-    includeDirectories.from(builtinShaderModules, apiShaderModules)
+    includeDirectories.from(builtinShaderModules, configurations.slangShaderModules)
     aliasSourceDirectory = file("shaders")
     descriptorHeapNative = true
     outputDirectory = generatedShaderResources.map { it.dir("caustica/shaders") }
@@ -50,6 +58,7 @@ def generateBloomPushData = tasks.register("generateBloomPushData", GenerateShad
     dependsOn(prepareBloomReflectionSources)
     shaderRoot = bloomReflectionRoot
     probeSource = bloomReflectionRoot.map { it.file("layout/bloom_probe.slang") }
+    includeDirectories.from(configurations.slangShaderModules)
     recordSpecs = ["push|bloomPushProbe|BloomPush|dev.comfyfluffy.caustica.builtin.gen|BloomPushData|false"]
     outDir = layout.buildDirectory.dir("generated/sources/shaderRecords")
 }
@@ -58,7 +67,7 @@ def reflectBloomShader = tasks.register("reflectBloomShader", ReflectSlang) {
     group = "verification"
     description = "Reflects and validates the descriptor-heap-native Bloom compute ABI."
     sourceFile = file("shaders/pipelines/bloom/main.comp.slang")
-    includeDirectories.from(builtinShaderModules, apiShaderModules)
+    includeDirectories.from(builtinShaderModules, configurations.slangShaderModules)
     descriptorHeapNative = true
     reflectionJson = layout.buildDirectory.file("generated/shader-reflection/bloom.json")
     spirv = layout.buildDirectory.file("generated/shader-reflection/bloom.spv")

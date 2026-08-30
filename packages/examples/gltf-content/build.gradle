@@ -17,10 +17,19 @@ repositories {
     mavenCentral()
 }
 
+configurations {
+    slangShaderModules {
+        canBeConsumed = false
+        canBeResolved = true
+        transitive = false
+    }
+}
+
 dependencies {
     api project(":packages:api")
     implementation project(":packages:vulkan-support")
     implementation "com.google.code.gson:gson:2.14.0"
+    slangShaderModules project(path: ":packages:shader-api", configuration: "runtimeElements")
 
     testImplementation platform("org.junit:junit-bom:5.12.2")
     testImplementation "org.junit.jupiter:junit-jupiter"
@@ -30,7 +39,7 @@ dependencies {
 def validateContentShaders = tasks.register("validateContentShaders", CompileSlangShaders) {
     sourceDirectory = layout.projectDirectory.dir("src/shaderValidation")
     includeDirectories.from(layout.projectDirectory.dir("src/main/resources"),
-            rootProject.layout.projectDirectory.dir("packages/shader-api/src/main/resources"))
+            configurations.slangShaderModules)
     aliasSourceDirectory = layout.projectDirectory.dir("src/shaderValidation")
     sourcePatterns = ["**/*.comp.slang"]
     outputDirectory = layout.buildDirectory.dir("validated-shaders")
@@ -42,7 +51,8 @@ def checkContentBoundary = tasks.register("checkContentBoundary") {
     inputs.files(sourceSets.main.allJava)
     doLast {
         def violations = []
-        def allowedProjects = [project.path, ":packages:api", ":packages:vulkan-support"] as Set
+        def allowedProjects = [project.path, ":packages:api", ":packages:shader-api",
+                               ":packages:vulkan-support"] as Set
         configurations.matching { it.canBeResolved }.each { configuration ->
             configuration.allDependencies.withType(ProjectDependency).each { dependency ->
                 if (!allowedProjects.contains(dependency.path)) {

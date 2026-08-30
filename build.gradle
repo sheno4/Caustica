@@ -31,6 +31,32 @@ def verifyJavaPackageOwnership = tasks.register("verifyJavaPackageOwnership") {
 	}
 }
 
+def verifyShaderArtifactBoundaries = tasks.register("verifyShaderArtifactBoundaries") {
+	group = "verification"
+	description = "Rejects Gradle reads of another package's production shader source tree."
+	def buildScripts = fileTree("packages") { include "**/build.gradle" }.files.sort()
+	inputs.files(buildScripts)
+	doLast {
+		def crossProjectSource = ~/project\s*\([^)]*\)\s*\.(?:file|layout\.projectDirectory\.dir)\s*\(\s*["']src\/main\/resources/
+		def rootedPackageSource = ~/rootProject(?:\.layout\.projectDirectory\.dir|\.file)\s*\(\s*["']packages\/[^"']+\/src\/main\/resources/
+		def violations = []
+		buildScripts.each { script ->
+			def source = script.getText("UTF-8")
+			[crossProjectSource, rootedPackageSource].each { pattern ->
+				def matcher = source =~ pattern
+				while (matcher.find()) {
+					def line = source.substring(0, matcher.start()).count('\n') + 1
+					violations.add("${relativePath(script)}:${line}: ${matcher.group().replaceAll(/\s+/, ' ')}")
+				}
+			}
+		}
+		if (!violations.isEmpty()) {
+			throw new GradleException("Shader consumers must resolve package artifacts, not sibling sources:\n"
+					+ violations.join("\n"))
+		}
+	}
+}
+
 subprojects { artifact ->
 	artifact.pluginManager.withPlugin("java") {
 		// Generated production Java is registered on main.allJava with builtBy metadata, so the
@@ -46,7 +72,7 @@ tasks.named("assemble") {
 }
 
 tasks.named("check") {
-	dependsOn(":packages:minecraft-client:check", verifyJavaPackageOwnership)
+	dependsOn(":packages:minecraft-client:check", verifyJavaPackageOwnership, verifyShaderArtifactBoundaries)
 }
 
 tasks.named("publish") {
