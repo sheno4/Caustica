@@ -239,7 +239,7 @@ def verifyRetainedLightShader = tasks.register("verifyRetainedLightShader") {
         def worldSource = worldMinimal.getText("UTF-8")
         def bakeSource = bake.getText("UTF-8")
         def required = [
-                "RETAINED_LIGHT_RECTANGLE", "RETAINED_LIGHT_SPOT", "RETAINED_LIGHT_DISTANT",
+                "RETAINED_LIGHT_PARALLELOGRAM", "RETAINED_LIGHT_SPOT", "RETAINED_LIGHT_DISTANT",
                 "distance * state.metersPerSceneUnit > light.rangeMeters",
                 "neeAtSampleGlobal", "neeAtSampleLocal", "neeAtLocalPdf",
                 "radianceOverShapePdf", "neeAtWriteFeedback", "neeAtSaturatingAdd",
