@@ -714,8 +714,6 @@ public final class RtFrameRenderer {
                     new Float2(jitterX, jitterY),
                     flags,
                     maxBounces(),
-                    new Float3(0.0f, 0.0f, 0.0f),
-                    0,
                     time,
                     proceduralDomainOffset,
                     mvCurProjView,

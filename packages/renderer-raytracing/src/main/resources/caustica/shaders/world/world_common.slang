@@ -87,13 +87,9 @@ public struct WorldPush {
     public float4x4 prevViewProj;
     public float3   camDelta;
     public float2   jitter;
-    // bit0 camera medium active, bit4 procedural animation, bits8..15 camera medium implementation.
+    // bit4 procedural animation.
     public uint     flags;
     public uint     maxBounces;
-    // Linear ACEScg source colour of the medium the eye itself is inside. A
-    // hit's own medium comes from its per-primitive tint, never from here.
-    public float3   cameraMedium;
-    public uint     cameraMediumIorTransmission; // packHalf2(specular IOR, transmission weight)
     public float    time;                   // animation time (s), wrapped
     // World-pinned offset for procedural evaluation: the 3D rebase origin reduced mod a fixed power of
     // two, so (rebased position + this) stays fixed in scene space at usable precision.
