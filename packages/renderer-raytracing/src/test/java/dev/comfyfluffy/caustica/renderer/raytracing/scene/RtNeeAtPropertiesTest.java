@@ -1,10 +1,12 @@
 package dev.comfyfluffy.caustica.renderer.raytracing.scene;
 
+import dev.comfyfluffy.caustica.api.light.LightDescriptor;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Random;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -112,6 +114,41 @@ final class RtNeeAtPropertiesTest {
         assertFalse(RtNeeAtBackend.historyValid(
                 new RtNeeAtBackend.FrameInput(1920, 1080, 42, 1.0f, false),
                 true, 41, 1920, 1080));
+    }
+
+    @Test
+    void telemetryCountsEveryRetainedDescriptorShape() {
+        List<RtRetainedSceneBackend.SceneLight> lights = List.of(
+                light(1, new LightDescriptor.Rectangle(
+                        0, 0, 0, 1, 0, 0, 0, 1, 0, 4, 5, 6)),
+                light(2, new LightDescriptor.Spot(
+                        0, 0, 0, 0, 0, 1, 10, 0.5, 7, 8, 9)),
+                light(3, new LightDescriptor.Distant(
+                        0, 1, 0, 10, 11, 12, 0.01, true)));
+
+        RtNeeAtBackend.Telemetry telemetry = RtNeeAtBackend.telemetry(lights, true);
+
+        assertEquals(RtNeeAtBackend.CANDIDATES, telemetry.candidates());
+        assertTrue(telemetry.historyValid());
+        assertEquals(1, telemetry.rectangles());
+        assertEquals(1, telemetry.spots());
+        assertEquals(1, telemetry.distants());
+        assertEquals(3, telemetry.lightCount());
+    }
+
+    @Test
+    void telemetryReportsStateChangesResetsAndPeriodicStableState() {
+        var stable = new RtNeeAtBackend.Telemetry(RtNeeAtBackend.CANDIDATES, true, 1, 1, 1);
+        var resetHistory = new RtNeeAtBackend.Telemetry(RtNeeAtBackend.CANDIDATES, false, 1, 1, 1);
+
+        assertTrue(RtNeeAtBackend.shouldLogTelemetry(stable, null, 10, Long.MIN_VALUE));
+        assertFalse(RtNeeAtBackend.shouldLogTelemetry(stable, stable, 11, 10));
+        assertTrue(RtNeeAtBackend.shouldLogTelemetry(resetHistory, stable, 11, 10));
+        assertTrue(RtNeeAtBackend.shouldLogTelemetry(stable, stable, 9, 10));
+        assertFalse(RtNeeAtBackend.shouldLogTelemetry(stable, stable,
+                10 + RtNeeAtBackend.TELEMETRY_INTERVAL_FRAMES - 1, 10));
+        assertTrue(RtNeeAtBackend.shouldLogTelemetry(stable, stable,
+                10 + RtNeeAtBackend.TELEMETRY_INTERVAL_FRAMES, 10));
     }
 
     @Test
@@ -249,6 +286,10 @@ final class RtNeeAtPropertiesTest {
             }
         }
         return result;
+    }
+
+    private static RtRetainedSceneBackend.SceneLight light(long identity, LightDescriptor descriptor) {
+        return new RtRetainedSceneBackend.SceneLight(identity, descriptor);
     }
 
     private static int divideRoundUp(int value, int divisor) {

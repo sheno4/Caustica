@@ -19,6 +19,8 @@ import org.lwjgl.vulkan.VK13;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkDependencyInfo;
 import org.lwjgl.vulkan.VkMemoryBarrier2;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -34,9 +36,11 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /** Persistent per-scene adaptive light distributions and visible-contribution feedback. */
 final class RtNeeAtBackend {
+    private static final Logger LOGGER = LoggerFactory.getLogger(RtNeeAtBackend.class);
     static final int TILE_SIZE = 8;
     static final int LOCAL_SLOTS = 128;
     static final int CANDIDATES = 8;
+    static final long TELEMETRY_INTERVAL_FRAMES = 600;
     static final int HISTORY_VALID = 1;
     static final int ENVIRONMENT_EMITTERS_SAMPLED = 2;
     private static final int GLOBAL_ENTRY_BYTES = 2 * Float.BYTES;
@@ -68,6 +72,16 @@ final class RtNeeAtBackend {
                 Math.max(lights.size(), state.previousLights.size()));
         boolean continuous = historyValid(input, state.hasHistory, state.lastFrameIndex,
                 state.width, state.height);
+        Telemetry telemetry = telemetry(lights, continuous);
+        if (shouldLogTelemetry(telemetry, state.lastLoggedTelemetry,
+                input.frameIndex(), state.lastTelemetryFrameIndex)) {
+            LOGGER.info("NEE-AT runtime: scene={}, frame={}, candidates={}, historyValid={}, "
+                            + "retainedLights={} [Rectangle={}, Spot={}, Distant={}]",
+                    scene, input.frameIndex(), telemetry.candidates(), telemetry.historyValid(),
+                    telemetry.lightCount(), telemetry.rectangles(), telemetry.spots(), telemetry.distants());
+            state.lastLoggedTelemetry = telemetry;
+            state.lastTelemetryFrameIndex = input.frameIndex();
+        }
         int targetIndex = state.cursor ^ 1;
         Frame target = state.frames[targetIndex];
         Frame previous = state.frames[state.cursor];
@@ -201,6 +215,32 @@ final class RtNeeAtBackend {
                 && input.width() == historyWidth && input.height() == historyHeight;
     }
 
+    static Telemetry telemetry(List<RtRetainedSceneBackend.SceneLight> lights, boolean historyValid) {
+        int rectangles = 0;
+        int spots = 0;
+        int distants = 0;
+        for (RtRetainedSceneBackend.SceneLight light : lights) {
+            switch (light.descriptor()) {
+                case LightDescriptor.Rectangle ignored -> rectangles++;
+                case LightDescriptor.Spot ignored -> spots++;
+                case LightDescriptor.Distant ignored -> distants++;
+            }
+        }
+        return new Telemetry(CANDIDATES, historyValid, rectangles, spots, distants);
+    }
+
+    static boolean shouldLogTelemetry(Telemetry current, Telemetry previous,
+                                      long frameIndex, long previousFrameIndex) {
+        return previous == null || !current.equals(previous) || frameIndex < previousFrameIndex
+                || frameIndex - previousFrameIndex >= TELEMETRY_INTERVAL_FRAMES;
+    }
+
+    record Telemetry(int candidates, boolean historyValid, int rectangles, int spots, int distants) {
+        int lightCount() {
+            return Math.addExact(Math.addExact(rectangles, spots), distants);
+        }
+    }
+
     private static void computeBarrier(VkCommandBuffer commandBuffer) {
         barrier(commandBuffer, VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                 VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
@@ -283,7 +323,9 @@ final class RtNeeAtBackend {
         int height;
         int lightCapacity;
         long lastFrameIndex = Long.MIN_VALUE;
+        long lastTelemetryFrameIndex = Long.MIN_VALUE;
         boolean hasHistory;
+        Telemetry lastLoggedTelemetry;
         List<RtRetainedSceneBackend.SceneLight> previousLights = List.of();
         Prepared active;
 
