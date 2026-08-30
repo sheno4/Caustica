@@ -26,24 +26,67 @@ import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 final class ShowcaseSessionLifecycleTest {
     @Test
-    void hostWorldEpochRunsReadyPublicationThenStopsAndClosesTheContribution() {
+    void sameWorldSessionHandsSelectionsFromOneOwnerToAnotherThenDrainsBoth() {
         Programs programs = new Programs();
         Geometry geometry = new Geometry();
         Lights lights = new Lights();
         Passes passes = new Passes();
         AtomicReference<EnvironmentBinding<?>> selected = new AtomicReference<>();
         SceneId scene = new SceneId() { };
-        RenderSessionContext renderer = new RenderSessionContext() {
+        RenderSessionContext selectionOwner = new RenderSessionContext() {
             @Override public GpuDevice gpu() { return GPU; }
             @Override public ProgramChannel program() { return programs; }
-            @Override public PassChannel passes() { return passes; }
-            @Override public GeometryChannel geometry() { return geometry; }
+            @Override public PassChannel passes() { throw new AssertionError("selection owner has no passes"); }
+            @Override public GeometryChannel geometry() {
+                throw new AssertionError("selection owner has no geometry mutation authority");
+            }
             @Override public LightChannel lights() { return lights; }
         };
-        MinecraftWorldSessionContext world = new MinecraftWorldSessionContext() {
+        RenderSessionContext geometryOwner = new RenderSessionContext() {
+            @Override public GpuDevice gpu() { return GPU; }
+            @Override public ProgramChannel program() {
+                throw new AssertionError("geometry owner consumes handed-off program ids");
+            }
+            @Override public PassChannel passes() { return passes; }
+            @Override public GeometryChannel geometry() { return geometry; }
+            @Override public LightChannel lights() {
+                throw new AssertionError("geometry owner cannot mutate handed-off lights");
+            }
+        };
+        MinecraftWorldSessionContext selectionWorld = world(selectionOwner, scene, selected);
+        MinecraftWorldSessionContext geometryWorld = world(geometryOwner, scene, selected);
+        ShowcaseHandoff handoff = new ShowcaseHandoff();
+
+        ShowcaseSelectionContribution selectionContribution =
+                new ShowcaseSelectionContribution(selectionWorld, handoff);
+        ShowcaseSession session = new ShowcaseSession(
+                geometryWorld, null, handoff.require(scene));
+        programs.completeReady();
+
+        assertSame(programs.exports.netherSky(), selected.get().implementation());
+        assertEquals(11L, selected.get().bindingData().bits());
+        assertEquals(3, lights.batches.getFirst().operations().size());
+
+        selectionContribution.stop();
+        session.stop();
+        selectionContribution.close();
+        session.close();
+
+        assertThrows(IllegalStateException.class, () -> handoff.require(scene));
+        assertEquals(3, passes.closed.get());
+        assertEquals(1, geometry.batches.size());
+        assertEquals(2, lights.batches.size());
+        assertEquals(3, lights.batches.getLast().operations().size());
+        assertEquals(1, programs.closed.get());
+    }
+
+    private static MinecraftWorldSessionContext world(RenderSessionContext renderer, SceneId scene,
+                                                       AtomicReference<EnvironmentBinding<?>> selected) {
+        return new MinecraftWorldSessionContext() {
             @Override public RenderSessionContext renderSession() { return renderer; }
             @Override public SceneId scene() { return scene; }
             @Override public MinecraftDimensionKey dimension() {
@@ -52,26 +95,10 @@ final class ShowcaseSessionLifecycleTest {
             @Override public ResourcePackEpoch resourcePackEpoch() { return new ResourcePackEpoch(11L); }
             @Override public MinecraftEnvironmentSelector environment() { return selected::set; }
         };
-
-        ShowcaseSession session = new ShowcaseSession(world, null);
-        programs.completeReady();
-
-        assertSame(programs.exports.netherSky(), selected.get().implementation());
-        assertEquals(11L, selected.get().bindingData().bits());
-        assertEquals(3, lights.batches.getFirst().operations().size());
-
-        session.stop();
-        session.close();
-
-        assertEquals(3, passes.closed.get());
-        assertEquals(1, geometry.batches.size());
-        assertEquals(2, lights.batches.size());
-        assertEquals(3, lights.batches.getLast().operations().size());
-        assertEquals(1, programs.closed.get());
     }
 
     private static final GpuDevice GPU = new GpuDevice() {
-        @Override public VkDevice vk() { throw new AssertionError("world pass does not create Vulkan objects"); }
+        @Override public VkDevice vk() { throw new AssertionError("test does not instantiate pass factories"); }
         @Override public long vmaAllocator() { throw new AssertionError(); }
         @Override public GpuDescriptorHeap descriptorHeap() { throw new AssertionError(); }
         @Override public void retireAfterUse(Runnable cleanup) { throw new AssertionError(); }

@@ -6,34 +6,27 @@ import dev.comfyfluffy.caustica.api.session.RenderSessionContext;
 import dev.comfyfluffy.caustica.api.view.Camera;
 import dev.comfyfluffy.caustica.api.view.SceneView;
 import dev.comfyfluffy.caustica.api.view.ViewMedium;
-import dev.comfyfluffy.caustica.minecraft.api.MinecraftEnvironmentSelector;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftWorldSessionContext;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftWorldSessionContribution;
 import dev.comfyfluffy.caustica.settings.OptionLookup;
 
 import java.util.List;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 final class ShowcaseSession implements MinecraftWorldSessionContribution {
-    private final MinecraftEnvironmentSelector environment;
-    private final ShowcasePrograms programs;
-    private final ShowcaseMinecraftSky sky;
+    private final ShowcaseHandoff.Selections selections;
     private final List<PassRegistration> passes;
     private final ShowcaseScene scene;
-    private final AtomicBoolean environmentPublished = new AtomicBoolean();
     private boolean stopped;
 
-    ShowcaseSession(MinecraftWorldSessionContext context, OptionLookup options) {
-        environment = context.environment();
+    ShowcaseSession(MinecraftWorldSessionContext context, OptionLookup options,
+                    ShowcaseHandoff.Selections selections) {
+        this.selections = java.util.Objects.requireNonNull(selections, "selections");
         RenderSessionContext renderSession = context.renderSession();
-        programs = new ShowcasePrograms(renderSession.program(), System.err::println);
-        sky = new ShowcaseMinecraftSky(context.dimension(), context.resourcePackEpoch());
-        scene = new ShowcaseScene(programs.exports(), context.scene(),
-                renderSession.geometry(), renderSession.lights());
-        programs.whenReady(this::publishEnvironment);
+        scene = new ShowcaseScene(selections.programs(), selections.lights(),
+                context.scene(), renderSession.geometry());
         passes = List.of(
                 renderSession.passes().addWorldResourcePass(
-                        setup -> ShowcasePasses.worldResource(setup.gpu(), programs::ready, scene)),
+                        setup -> ShowcasePasses.worldResource(setup.gpu(), selections::ready, scene)),
                 renderSession.passes().addPostEffectPass(
                         ShowcasePasses.POST_EFFECT, ShowcasePasses.POST_EFFECT_PLACEMENT,
                         setup -> ShowcasePasses.postEffect(setup.gpu(), options)),
@@ -46,7 +39,7 @@ final class ShowcaseSession implements MinecraftWorldSessionContribution {
     }
 
     SceneView underwaterView(Camera camera, long volumeBindingWord, long volumeInstanceWord) {
-        return volumeView(scene.identity(), camera, programs.exports().volume(),
+        return volumeView(scene.identity(), camera, selections.programs().volume(),
                 ShowcasePrograms.VOLUME_BINDING.data(volumeBindingWord),
                 ShowcasePrograms.INSTANCE.data(volumeInstanceWord));
     }
@@ -62,17 +55,10 @@ final class ShowcaseSession implements MinecraftWorldSessionContribution {
         return new SceneView(scene, camera, new ViewMedium.Volume<>(volume, bindingData, instanceData));
     }
 
-    private void publishEnvironment() {
-        if (environmentPublished.compareAndSet(false, true)) {
-            environment.select(sky.binding(programs, () -> { }));
-        }
-    }
-
     @Override
     public void stop() {
         passes.forEach(PassRegistration::close);
         scene.stop();
-        programs.close();
         stopped = true;
     }
 

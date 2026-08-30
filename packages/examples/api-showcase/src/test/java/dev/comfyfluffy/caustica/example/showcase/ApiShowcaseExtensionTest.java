@@ -6,8 +6,10 @@ import dev.comfyfluffy.caustica.minecraft.api.MinecraftWorldSessionFactory;
 import dev.comfyfluffy.caustica.settings.SettingsRegistry;
 import org.junit.jupiter.api.Test;
 
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.ArrayList;
+import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -15,10 +17,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class ApiShowcaseExtensionTest {
     @Test
-    void registersOneMinecraftWorldSessionFactory() {
-        AtomicReference<MinecraftWorldSessionFactory> factory = new AtomicReference<>();
+    void registersOrderedSelectionOwnerAndGeometryConsumerFactories() {
+        List<MinecraftWorldSessionFactory> factories = new ArrayList<>();
         var api = new MinecraftApi(accepted -> {
-            factory.set(accepted);
+            factories.add(accepted);
             return () -> { };
         }, id -> { throw new AssertionError(id); });
 
@@ -26,7 +28,9 @@ final class ApiShowcaseExtensionTest {
         extension.registerMinecraft(api);
 
         assertInstanceOf(MinecraftExtension.class, extension);
-        assertNotNull(factory.get());
+        assertEquals(2, factories.size());
+        assertNotNull(factories.get(0));
+        assertNotNull(factories.get(1));
     }
 
     @Test

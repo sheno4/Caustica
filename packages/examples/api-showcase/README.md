@@ -1,7 +1,7 @@
 # Caustica 0.8 API showcase
 
 This module is an additive API-consumer package. It is intentionally not a mod and is not wired into
-Fabric or NeoForge discovery. It tests whether one Minecraft world-session contribution can express the
+Fabric or NeoForge discovery. It tests whether cooperating Minecraft world-session contributions can express the
 current public feature categories without importing renderer implementation packages.
 
 It cannot run as a standalone extension today: the session, scene, program, pass, geometry, light, and
@@ -13,13 +13,13 @@ integration at `packages/examples/gltf-viewer-minecraft`.
 
 | API surface | Concrete case in this probe | Why it belongs where it is | Pressure-test result |
 |---|---|---|---|
-| Minecraft registration and world contribution | every client-world epoch creates a fresh `ShowcaseSession` with its own borrowed renderer scope and host scene | Minecraft/Vulkan session ownership | Necessary; process objects must not retain handles from an old device or world. |
+| Minecraft registration and world contribution | every client-world epoch creates a selection owner and a geometry/pass consumer with distinct borrowed renderer scopes over one host scene | Minecraft/Vulkan session ownership | Necessary; process objects retain only a CPU rendezvous, never handles from an old device or world. |
 | surface plus coverage | opaque metal and alpha-cut foliage | world-program composition | Separate coverage is necessary for traversal; an opaque surface should not pay for it. |
 | volume | glass boundary with absorption and a volume-only fog boundary | world-program composition | The narrow absorption ABI fits both surface boundaries and volume-only geometry. |
 | initial view medium | explicit vacuum and camera beginning underwater | generic view state plus volume dispatch | `SceneView` carries one homogeneous medium containing the primary-ray origin: either `ViewMedium.Vacuum` or the typed volume binding and instance data selected by the host. |
 | environment and dimension sky | select exported overworld, Nether, or End sky content after the program set is ready | Minecraft scene/program boundary | Dimension keys and sky policy stay in `ShowcaseMinecraftSky`; core sees only an environment id and binding. |
 | retained geometry | upload one shared vertex/index allocation, then atomically publish its mesh and first placement as independently retired batches | geometry channel | Mandatory grouped publication is necessary when placement must never observe an absent mesh but the mesh allocation must not inherit placement lifetime. |
-| retained lights / NEE-AT | rectangle, circular spot, and distant descriptors plus a primitive-to-light map | light channel | `LightChannel` is the complete scene-local light registration contract. NEE-AT remains renderer policy and needs no extension-facing backend token. |
+| retained lights / NEE-AT | contribution A owns rectangle, circular spot, and distant descriptors; contribution B selects one through a primitive-to-light map | light channel | A handed `LightId` is useful without transferring set/drop authority. NEE-AT remains renderer policy and needs no extension-facing backend token. |
 | world-resource pass | record a device-addressable world-mesh upload, then publish it after that frame completes | pass/GPU boundary | This is the real asynchronous handoff needed by a producer that owns upload work while the renderer owns acceleration construction. |
 | post effect | read scene color/exposure, acquire a distinct output, and order after optional bloom | pass boundary | Necessary for bloom and colour grading. Stable ids plus one optional anchor avoid relying on extension discovery order. |
 | UI pass | draw a screen marker whose tint is gated by an inline query against the entry-scene TLAS | pass boundary | The unplaced overload and acceleration-structure push-index mapping are real; the current marker does not consume the camera/WVP. |
@@ -34,14 +34,14 @@ integration at `packages/examples/gltf-viewer-minecraft`.
   and three environments) through one atomic `ProgramRegistration`. The registration itself exposes the
   complete set's state, failure, and non-blocking completion callback; closing that same capability is the only
   removal authority.
-- `ShowcaseSession` is a `MinecraftWorldSessionContribution`. It takes its renderer scope, host-issued
-  `SceneId`, and environment selector directly from one `MinecraftWorldSessionContext`, creates its
-  `ShowcaseScene` when that world contribution opens, and drops its retained content from `stop()`.
-- `ShowcaseScene` accepts `ShowcasePrograms.Exports` as explicit constructor input. This models the value shape
-  of a cross-contribution handoff, but both objects currently use the same world-session contribution scope.
-  Engine tests, rather than this probe, enforce that surface, volume, environment, and scene IDs are non-owning
-  selections while mesh, instance, and light mutation remains issuer-local. A same-session `LightId` may still
-  be handed to geometry as a non-owning primitive-to-light selection.
+- `ApiShowcaseExtension` registers two factories in dependency order. `ShowcaseSelectionContribution` owns
+  program and light mutation in contribution A. `ShowcaseSession` owns geometry and passes in contribution B.
+  `ShowcaseHandoff` keys their ordinary Java value handoff by the host-issued scene identity and removes the
+  rendezvous when A stops; it is not renderer state or a new public registry.
+- `ShowcaseScene` receives A's surface, volume, environment, and light IDs as non-owning selections. Its
+  `GeometryChannel` can set/drop only B's mesh and instance IDs; it has no `ProgramChannel` or `LightChannel`
+  with which to mutate A's objects. Lifecycle tests construct distinct renderer scopes and make those forbidden
+  capabilities fail immediately if B attempts to access them.
 - Mesh streams use retained `VulkanDeviceAddressRange` values instead of four interchangeable primitive
   arguments. Descriptor ranges and borrowed indices preserve resource-versus-sampler type information.
 - `ShowcaseSession.vacuumView` and `underwaterView` reuse the single host-issued scene identity. They vary
@@ -57,8 +57,11 @@ integration at `packages/examples/gltf-viewer-minecraft`.
   shader objects, so it has no honest resize-driven resource replacement to demonstrate. The built-in bloom
   pass provides that example: replacement `VmaImage2D` levels own populated descriptor ranges, become reachable
   through newly recorded push data, and displace old levels through `GpuDevice.retireAfterUse`.
+- `GeometryPublication` provides native-publication backpressure independently of upload completion. The world
+  pass retains the receipt returned by `submitGroup`, polls `isVisible()` on later renderer callbacks, and does
+  not report its handoff published until the native scene commit becomes visible.
 - Public scene creation/closing remains absent. The implemented Minecraft host owns the scene and brackets
-  `ShowcaseSession` with the world-session contribution lifecycle.
+  both showcase contributions with the world-session lifecycle.
 
 ## Remaining API pressure
 
@@ -86,7 +89,8 @@ output pixel with bounds checks. The UI pass begins dynamic rendering with `LOAD
 index, performs an inline query, draws a small screen-space marker, and ends rendering. Each pass destroys its
 shader objects from `Pass.close()`, after the host has stopped callbacks and drained their GPU uses. The
 world-resource pass needs no shader object: it records a buffer update and synchronization2 barrier. A later
-world-resource callback publishes the typed buffer ranges after that upload frame has completed.
+world-resource callback submits the typed buffer ranges after that upload frame has completed, then continues
+polling the returned publication receipt until the native scene commit is visible.
 
 `ShowcasePasses.worldResource(...)` allocates one device-addressable VMA buffer and records its tiny demonstration
 mesh with `vkCmdUpdateBuffer`. Its frame-completion callback only marks the upload ready; a later pass callback

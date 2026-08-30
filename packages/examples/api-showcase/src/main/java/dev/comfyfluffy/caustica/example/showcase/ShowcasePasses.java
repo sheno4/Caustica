@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.example.showcase;
 
+import dev.comfyfluffy.caustica.api.geometry.GeometryPublication;
 import dev.comfyfluffy.caustica.api.vulkan.GpuAccelerationStructureDescriptor;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
@@ -66,7 +67,9 @@ final class ShowcasePasses {
     }
 
     interface WorldMeshHandoff extends AutoCloseable {
+        /** True only after the accepted geometry publication is visible in the native scene. */
         boolean published();
+        /** Advances upload, submission, or receipt polling without submitting the retained mesh twice. */
         void recordAndPublish(PassFrame frame);
         @Override void close();
     }
@@ -83,25 +86,27 @@ final class ShowcasePasses {
         private VmaMappedBuffer upload;
         private boolean uploadRecorded;
         private boolean uploadComplete;
-        private boolean published;
+        private GeometryPublication publication;
 
         private VulkanWorldMeshHandoff(GpuDevice gpu, ShowcaseScene scene) {
             this.gpu = java.util.Objects.requireNonNull(gpu, "gpu");
             this.scene = java.util.Objects.requireNonNull(scene, "scene");
         }
 
-        @Override public boolean published() { return published; }
+        @Override public boolean published() {
+            return publication != null && publication.isVisible();
+        }
 
         @Override
         public void recordAndPublish(PassFrame frame) {
+            if (publication != null) return;
             if (uploadRecorded) {
                 if (!uploadComplete) return;
                 VmaMappedBuffer accepted = upload;
-                scene.publishMesh(accepted.deviceRange().slice(0, POSITION_BYTES),
+                publication = scene.publishMesh(accepted.deviceRange().slice(0, POSITION_BYTES),
                         accepted.deviceRange().slice(PREVIOUS_OFFSET, POSITION_BYTES),
                         accepted.deviceRange().slice(INDEX_OFFSET, INDEX_BYTES), accepted::close);
                 upload = null;
-                published = true;
                 return;
             }
             upload = VmaMappedBuffer.create(gpu, TOTAL_BYTES,

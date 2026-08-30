@@ -8,8 +8,6 @@ import dev.comfyfluffy.caustica.api.geometry.MeshBuild;
 import dev.comfyfluffy.caustica.api.geometry.MeshId;
 import dev.comfyfluffy.caustica.api.geometry.PrimitiveLightMap;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
-import dev.comfyfluffy.caustica.api.light.LightChannel;
-import dev.comfyfluffy.caustica.api.light.LightDescriptor;
 import dev.comfyfluffy.caustica.api.light.LightId;
 import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
@@ -17,29 +15,25 @@ import dev.comfyfluffy.caustica.api.scene.SceneId;
 import java.util.List;
 
 /**
- * Geometry and light contribution consuming non-owning program ids. The exports may come from another
- * contribution in the same render session; this owner retains mutation authority only over its own mesh,
- * instance, and light ids.
+ * Geometry contribution consuming program and light selections from another contribution in the same
+ * render session. This owner has mutation authority only over its own mesh and instance ids.
  */
 final class ShowcaseScene {
     private final ShowcasePrograms.Exports programs;
     private final GeometryChannel geometry;
-    private final LightChannel lights;
     private final SceneId scene;
     private final MeshId<ShowcasePrograms.InstanceData> mesh;
     private final InstanceId instance;
     private final List<LightId> lightIds;
 
-    ShowcaseScene(ShowcasePrograms.Exports programs, SceneId scene,
-                  GeometryChannel geometry, LightChannel lights) {
+    ShowcaseScene(ShowcasePrograms.Exports programs, List<LightId> lightIds,
+                  SceneId scene, GeometryChannel geometry) {
         this.programs = programs;
+        this.lightIds = List.copyOf(lightIds);
         this.scene = scene;
         this.geometry = geometry;
-        this.lights = lights;
         mesh = geometry.newMesh(ShowcasePrograms.INSTANCE);
         instance = geometry.newInstance();
-        lightIds = List.of(lights.newLight(), lights.newLight(), lights.newLight());
-        publishNeeAtLights();
     }
 
     /**
@@ -75,17 +69,6 @@ final class ShowcaseScene {
                                 new PrimitiveLightMap.Range(0, 1, lightIds.getFirst()))))))));
     }
 
-    /** Publishes the explicit light candidates consumed by the renderer's scene-local NEE-AT backend. */
-    private void publishNeeAtLights() {
-        lights.submit(RetainedBatch.of(List.of(
-                new LightChannel.SetLight(lightIds.get(0), scene, new LightDescriptor.Rectangle(
-                        0, 66, 0, 0.5, 0, 0, 0, 0, 0.5, 20, 18, 15)),
-                new LightChannel.SetLight(lightIds.get(1), scene, new LightDescriptor.Spot(
-                        0, 66, 0, 0, -1, 0, 24, 0.35, 500, 450, 400)),
-                new LightChannel.SetLight(lightIds.get(2), scene, new LightDescriptor.Distant(
-                        0, 1, 0, 100_000, 95_000, 90_000, 0.00465, false)))));
-    }
-
     SceneId identity() {
         return scene;
     }
@@ -94,9 +77,5 @@ final class ShowcaseScene {
         geometry.submit(RetainedBatch.of(List.of(
                 new GeometryChannel.DropInstance(instance),
                 new GeometryChannel.DropMesh<>(mesh))));
-        lights.submit(RetainedBatch.of(lightIds.stream()
-                .map(LightChannel.DropLight::new)
-                .map(LightChannel.Operation.class::cast)
-                .toList()));
     }
 }

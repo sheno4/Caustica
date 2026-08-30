@@ -16,7 +16,10 @@ public final class ApiShowcaseExtension implements MinecraftExtension, CausticaS
 
     @Override
     public void registerMinecraft(MinecraftApi api) {
-        api.sessions().add(context -> new ShowcaseSession(context, api.options()));
+        ShowcaseHandoff handoff = new ShowcaseHandoff();
+        api.sessions().add(context -> new ShowcaseSelectionContribution(context, handoff));
+        api.sessions().add(context -> new ShowcaseSession(
+                context, api.options(), handoff.require(context.scene())));
     }
 
     @Override

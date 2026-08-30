@@ -5,7 +5,6 @@ import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 import dev.comfyfluffy.caustica.api.geometry.GeometryChannel;
 import dev.comfyfluffy.caustica.api.geometry.InstanceId;
 import dev.comfyfluffy.caustica.api.geometry.MeshId;
-import dev.comfyfluffy.caustica.api.light.LightChannel;
 import dev.comfyfluffy.caustica.api.light.LightId;
 import dev.comfyfluffy.caustica.api.program.EnvironmentId;
 import dev.comfyfluffy.caustica.api.program.ShaderDataType;
@@ -36,12 +35,16 @@ final class ShowcaseSceneApiTest {
     void meshAndPlacementPublishAsOneGroupWithIndependentRetirement() {
         var exports = exports();
         RecordingGeometry geometry = new RecordingGeometry();
-        ShowcaseScene scene = new ShowcaseScene(exports, new SceneId() { }, geometry, new RecordingLights());
+        ShowcaseScene scene = new ShowcaseScene(exports, lights(), new SceneId() { }, geometry);
         AtomicBoolean retired = new AtomicBoolean();
 
-        scene.publishMesh(range(0x1000, 48), range(0x2000, 48), range(0x3000, 48),
+        var publication = scene.publishMesh(range(0x1000, 48), range(0x2000, 48), range(0x3000, 48),
                 () -> retired.set(true));
 
+        assertSame(geometry.publication, publication);
+        org.junit.jupiter.api.Assertions.assertFalse(publication.isVisible());
+        geometry.visible.set(true);
+        assertTrue(publication.isVisible());
         assertEquals(1, geometry.groups.size());
         var group = geometry.groups.getFirst();
         assertEquals(2, group.size());
@@ -56,7 +59,7 @@ final class ShowcaseSceneApiTest {
     }
 
     @Test
-    void handedOffProgramsDriveTwoIsolatedSceneContributionsThroughStop() {
+    void handedOffProgramsAndLightAreSelectionsWhileGeometryMutationStaysLocal() {
         SurfaceId<ShowcasePrograms.SurfaceBindingData, ShowcasePrograms.InstanceData> opaque =
                 new SurfaceId<>() { };
         SurfaceId<ShowcasePrograms.SurfaceBindingData, ShowcasePrograms.InstanceData> cutout =
@@ -70,28 +73,25 @@ final class ShowcaseSceneApiTest {
         SceneId alternate = new SceneId() { };
         RecordingGeometry primaryGeometry = new RecordingGeometry();
         RecordingGeometry alternateGeometry = new RecordingGeometry();
-        RecordingLights primaryLights = new RecordingLights();
-        RecordingLights alternateLights = new RecordingLights();
+        List<LightId> sharedLights = lights();
 
-        ShowcaseScene first = new ShowcaseScene(exports, primary, primaryGeometry, primaryLights);
-        ShowcaseScene second = new ShowcaseScene(exports, alternate, alternateGeometry, alternateLights);
+        ShowcaseScene first = new ShowcaseScene(exports, sharedLights, primary, primaryGeometry);
+        ShowcaseScene second = new ShowcaseScene(exports, sharedLights, alternate, alternateGeometry);
 
-        assertEquals(3, primaryLights.operations.getFirst().size());
-        assertEquals(3, alternateLights.operations.getFirst().size());
-        primaryLights.operations.getFirst().stream().map(LightChannel.SetLight.class::cast)
-                .forEach(light -> assertSame(primary, light.scene()));
-        alternateLights.operations.getFirst().stream().map(LightChannel.SetLight.class::cast)
-                .forEach(light -> assertSame(alternate, light.scene()));
+        first.publishMesh(range(0x1000, 48), range(0x2000, 48), range(0x3000, 48), () -> { });
+        second.publishMesh(range(0x4000, 48), range(0x5000, 48), range(0x6000, 48), () -> { });
+        var firstPlacement = (GeometryChannel.SetInstance<?>) primaryGeometry.operations.getFirst().get(1);
+        var secondPlacement = (GeometryChannel.SetInstance<?>) alternateGeometry.operations.getFirst().get(1);
+        assertSame(sharedLights.getFirst(), firstPlacement.primitiveLights().ranges().getFirst().light());
+        assertSame(sharedLights.getFirst(), secondPlacement.primitiveLights().ranges().getFirst().light());
+        assertSame(primary, firstPlacement.scene());
+        assertSame(alternate, secondPlacement.scene());
 
         first.stop();
         second.stop();
 
-        assertEquals(1, primaryGeometry.operations.size());
-        assertEquals(1, alternateGeometry.operations.size());
-        assertEquals(2, primaryLights.operations.size());
-        assertEquals(2, alternateLights.operations.size());
-        assertEquals(3, primaryLights.operations.getLast().size());
-        assertEquals(3, alternateLights.operations.getLast().size());
+        assertEquals(2, primaryGeometry.operations.size());
+        assertEquals(2, alternateGeometry.operations.size());
     }
 
     private static ShowcasePrograms.Exports exports() {
@@ -109,9 +109,15 @@ final class ShowcaseSceneApiTest {
         return new VulkanDeviceAddressRange(new VulkanDeviceAddress(address), bytes);
     }
 
+    private static List<LightId> lights() {
+        return List.of(new LightId() { }, new LightId() { }, new LightId() { });
+    }
+
     private static final class RecordingGeometry implements GeometryChannel {
         private final List<List<Operation>> operations = new ArrayList<>();
         private final List<List<RetainedBatch<Operation>>> groups = new ArrayList<>();
+        private final AtomicBoolean visible = new AtomicBoolean();
+        private final dev.comfyfluffy.caustica.api.geometry.GeometryPublication publication = visible::get;
 
         @Override public <N> MeshId<N> newMesh(ShaderDataType<N> instanceDataType) {
             return new MeshId<>() { };
@@ -124,26 +130,14 @@ final class ShowcaseSceneApiTest {
         @Override public dev.comfyfluffy.caustica.api.geometry.GeometryPublication submit(
                 RetainedBatch<Operation> batch) {
             operations.add(batch.operations());
-            return dev.comfyfluffy.caustica.api.geometry.GeometryPublication.alreadyVisible();
+            return publication;
         }
 
         @Override public dev.comfyfluffy.caustica.api.geometry.GeometryPublication submitGroup(
                 List<RetainedBatch<Operation>> batches) {
             groups.add(List.copyOf(batches));
             operations.add(batches.stream().flatMap(batch -> batch.operations().stream()).toList());
-            return dev.comfyfluffy.caustica.api.geometry.GeometryPublication.alreadyVisible();
-        }
-    }
-
-    private static final class RecordingLights implements LightChannel {
-        private final List<List<Operation>> operations = new ArrayList<>();
-
-        @Override public LightId newLight() {
-            return new LightId() { };
-        }
-
-        @Override public void submit(RetainedBatch<Operation> batch) {
-            operations.add(batch.operations());
+            return publication;
         }
     }
 }

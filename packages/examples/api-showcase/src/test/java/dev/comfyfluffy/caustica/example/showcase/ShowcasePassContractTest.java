@@ -26,29 +26,33 @@ final class ShowcasePassContractTest {
     }
 
     @Test
-    void worldResourcePassWaitsForProgramsThenPublishesOnceAndClosesUntransferredResources() {
+    void worldResourcePassWaitsForProgramsAndPublicationVisibility() {
         AtomicBoolean ready = new AtomicBoolean();
-        AtomicBoolean published = new AtomicBoolean();
+        AtomicBoolean submitted = new AtomicBoolean();
+        AtomicBoolean visible = new AtomicBoolean();
         AtomicBoolean closed = new AtomicBoolean();
         java.util.concurrent.atomic.AtomicInteger publishCalls = new java.util.concurrent.atomic.AtomicInteger();
         ShowcasePasses.WorldMeshHandoff handoff = new ShowcasePasses.WorldMeshHandoff() {
-            @Override public boolean published() { return published.get(); }
+            @Override public boolean published() { return submitted.get() && visible.get(); }
             @Override public void recordAndPublish(dev.comfyfluffy.caustica.api.pass.PassFrame frame) {
-                publishCalls.incrementAndGet();
-                published.set(true);
+                if (submitted.compareAndSet(false, true)) publishCalls.incrementAndGet();
             }
             @Override public void close() { closed.set(true); }
         };
         var pass = ShowcasePasses.worldResource(ready::get, handoff);
 
         pass.record(null);
-        org.junit.jupiter.api.Assertions.assertFalse(published.get());
+        org.junit.jupiter.api.Assertions.assertFalse(submitted.get());
         ready.set(true);
         pass.record(null);
         pass.record(null);
+        assertTrue(submitted.get());
+        org.junit.jupiter.api.Assertions.assertFalse(handoff.published());
+        visible.set(true);
+        pass.record(null);
         pass.close();
 
-        assertTrue(published.get());
+        assertTrue(handoff.published());
         org.junit.jupiter.api.Assertions.assertEquals(1, publishCalls.get());
         assertTrue(closed.get());
     }
