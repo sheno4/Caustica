@@ -46,7 +46,7 @@ public abstract class VulkanInstanceMixin {
 	@Inject(method = "<init>", at = @At(value = "INVOKE", target = "Ljava/util/Set;size()I"))
 	private void caustica$addSurfaceExtensions(int debugVerbosity, boolean wantsDebugLabels, boolean validation,
 			CallbackInfo ci, @Local(ordinal = 0) Set<String> availableExtensions) {
-		if (enableRequiredSurfaceQuery(availableExtensions, this.enabledExtensions)) {
+		if (caustica$enableRequiredSurfaceQuery(availableExtensions, this.enabledExtensions)) {
 			CausticaMod.LOGGER.info("Enabling instance extension {} for modern surface queries",
 					SURFACE_CAPABILITIES_2);
 		}
@@ -59,7 +59,8 @@ public abstract class VulkanInstanceMixin {
 		}
 	}
 
-	static boolean enableRequiredSurfaceQuery(Set<String> availableExtensions, Set<String> enabledExtensions) {
+	private static boolean caustica$enableRequiredSurfaceQuery(
+			Set<String> availableExtensions, Set<String> enabledExtensions) {
 		if (!availableExtensions.contains(SURFACE_CAPABILITIES_2)) {
 			throw new IllegalStateException("Required Vulkan instance extension is unavailable: "
 					+ SURFACE_CAPABILITIES_2);
