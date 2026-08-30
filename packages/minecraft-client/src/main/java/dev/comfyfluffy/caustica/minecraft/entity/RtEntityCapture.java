@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.entity;
 
+import dev.comfyfluffy.caustica.minecraft.rendering.entity.MinecraftEntityMesh;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import dev.comfyfluffy.caustica.support.ColorSpaces;
 import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialIds;

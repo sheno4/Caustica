@@ -3,8 +3,10 @@ package dev.comfyfluffy.caustica.minecraft.terrain;
 import dev.comfyfluffy.caustica.api.geometry.GeometryChannel;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
-import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialLookup;
-import dev.comfyfluffy.caustica.minecraft.program.MinecraftPrograms;
+import dev.comfyfluffy.caustica.minecraft.rendering.material.MinecraftMaterialLookup;
+import dev.comfyfluffy.caustica.minecraft.rendering.program.MinecraftPrograms;
+import dev.comfyfluffy.caustica.minecraft.rendering.terrain.MinecraftTerrainGeometry;
+import dev.comfyfluffy.caustica.minecraft.rendering.terrain.MinecraftVulkanTerrainUploader;
 
 /** Session-owned construction hook for the retained terrain producer. */
 public final class MinecraftTerrainSession {

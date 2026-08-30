@@ -1,5 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.entity;
 
+import dev.comfyfluffy.caustica.minecraft.rendering.entity.MinecraftEntityGeometry;
+import dev.comfyfluffy.caustica.minecraft.rendering.entity.MinecraftEntityMesh;
 import com.mojang.blaze3d.vertex.PoseStack;
 import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.mixin.ParticleEngineAccessor;
@@ -63,7 +65,7 @@ import java.util.UUID;
  * <p>Per-frame capture is capped by {@code -Dcaustica.rt.maxEntities}. Stable index revisions allow the
  * retained backend to derive compatible acceleration updates.
  */
-public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.MinecraftEntityCaptureBinding {
+public final class RtEntities implements dev.comfyfluffy.caustica.minecraft.rendering.MinecraftEntityCaptureBinding {
     private static final long ENTITY_GEOMETRY = 1L;
     private static final long BLOCK_ENTITY_GEOMETRY = 2L;
     private static final long PARTICLE_GEOMETRY = 3L;

@@ -64,13 +64,13 @@ def prepareMinecraftRenderingReflectionSources = tasks.register("prepareMinecraf
 }
 
 def minecraftRenderingRecordSpecs = [
-        "buffer|minecraftImplementationLayoutProbe|MinecraftImplementationData|dev.comfyfluffy.caustica.minecraft.gen|MinecraftImplementationData|false",
-        "buffer|minecraftMaterialLayoutProbe|MinecraftMaterialRecord|dev.comfyfluffy.caustica.minecraft.gen|MinecraftMaterialData|false",
-        "buffer|minecraftPrimitiveLayoutProbe|MinecraftPrimitiveData|dev.comfyfluffy.caustica.minecraft.gen|MinecraftPrimitiveData|false",
-        "buffer|minecraftInstanceLayoutProbe|MinecraftInstanceData|dev.comfyfluffy.caustica.minecraft.gen|MinecraftInstanceData|false",
-        "buffer|minecraftEnvironmentBindingLayoutProbe|MinecraftEnvironmentBinding|dev.comfyfluffy.caustica.minecraft.sky.gen|MinecraftEnvironmentBindingData|false",
-        "push|skyLutPushProbe|SkyInputs|dev.comfyfluffy.caustica.minecraft.sky.gen|SkyInputsData|false",
-        "push|skyDispatchPushProbe|SkyLutPush|dev.comfyfluffy.caustica.minecraft.sky.gen|SkyLutPushData|false"
+        "buffer|minecraftImplementationLayoutProbe|MinecraftImplementationData|dev.comfyfluffy.caustica.minecraft.rendering.gen|MinecraftImplementationData|false",
+        "buffer|minecraftMaterialLayoutProbe|MinecraftMaterialRecord|dev.comfyfluffy.caustica.minecraft.rendering.gen|MinecraftMaterialData|false",
+        "buffer|minecraftPrimitiveLayoutProbe|MinecraftPrimitiveData|dev.comfyfluffy.caustica.minecraft.rendering.gen|MinecraftPrimitiveData|false",
+        "buffer|minecraftInstanceLayoutProbe|MinecraftInstanceData|dev.comfyfluffy.caustica.minecraft.rendering.gen|MinecraftInstanceData|false",
+        "buffer|minecraftEnvironmentBindingLayoutProbe|MinecraftEnvironmentBinding|dev.comfyfluffy.caustica.minecraft.rendering.sky.gen|MinecraftEnvironmentBindingData|false",
+        "push|skyLutPushProbe|SkyInputs|dev.comfyfluffy.caustica.minecraft.rendering.sky.gen|SkyInputsData|false",
+        "push|skyDispatchPushProbe|SkyLutPush|dev.comfyfluffy.caustica.minecraft.rendering.sky.gen|SkyLutPushData|false"
 ]
 def generatedRecordRoot = layout.buildDirectory.dir("generated/sources/shaderRecords")
 def generateMinecraftRenderingRecords = tasks.register("generateMinecraftRenderingRecords", GenerateShaderRecords) {
@@ -111,8 +111,8 @@ def verifyMinecraftRenderingAbi = tasks.register("verifyMinecraftRenderingAbi") 
         expected.each { name, fragments ->
             def source = generatedRecordRoot.get().file(
                     (name.startsWith("Sky") || name.startsWith("MinecraftEnvironment")
-                            ? "dev/comfyfluffy/caustica/minecraft/sky/gen/${name}.java"
-                            : "dev/comfyfluffy/caustica/minecraft/gen/${name}.java")).asFile.getText("UTF-8")
+                            ? "dev/comfyfluffy/caustica/minecraft/rendering/sky/gen/${name}.java"
+                            : "dev/comfyfluffy/caustica/minecraft/rendering/gen/${name}.java")).asFile.getText("UTF-8")
             def missing = fragments.findAll { !source.contains(it) }
             if (!missing.empty) throw new GradleException("${name} ABI drifted: ${missing}")
         }
@@ -206,42 +206,42 @@ def verifyMinecraftRenderingJar = tasks.register("verifyMinecraftRenderingJar") 
     dependsOn(tasks.named("jar"))
     doLast {
         def allowedClassPrefixes = [
-                "dev/comfyfluffy/caustica/minecraft/program/MinecraftPrograms",
-                "dev/comfyfluffy/caustica/minecraft/material/MinecraftMaterialRecord",
-                "dev/comfyfluffy/caustica/minecraft/material/MinecraftMaterialEpochCompiler",
-                "dev/comfyfluffy/caustica/minecraft/material/MinecraftMaterialLookup",
-                "dev/comfyfluffy/caustica/minecraft/material/MinecraftMaterialUploadPass",
-                "dev/comfyfluffy/caustica/minecraft/material/MinecraftProgramResources",
-                "dev/comfyfluffy/caustica/minecraft/MinecraftLightingCalibration",
-                "dev/comfyfluffy/caustica/minecraft/MinecraftFrameSelector",
-                "dev/comfyfluffy/caustica/minecraft/MinecraftFrameSelectionInstaller",
-                "dev/comfyfluffy/caustica/minecraft/MinecraftFrameCaptureInstaller",
-                "dev/comfyfluffy/caustica/minecraft/MinecraftFrameCaptureState",
-                "dev/comfyfluffy/caustica/minecraft/MinecraftEntityCaptureBinding",
-                "dev/comfyfluffy/caustica/minecraft/terrain/MinecraftTerrainGeometry",
-                "dev/comfyfluffy/caustica/minecraft/terrain/MinecraftTerrainLightAdapter",
-                "dev/comfyfluffy/caustica/minecraft/terrain/MinecraftTerrainMesh",
-                "dev/comfyfluffy/caustica/minecraft/terrain/MinecraftTerrainUploader",
-                "dev/comfyfluffy/caustica/minecraft/terrain/MinecraftVulkanTerrainUploader",
-                "dev/comfyfluffy/caustica/minecraft/entity/MinecraftEntityMesh",
-                "dev/comfyfluffy/caustica/minecraft/entity/MinecraftEntityGeometry",
-                "dev/comfyfluffy/caustica/minecraft/entity/MinecraftEntityUploader",
-                "dev/comfyfluffy/caustica/minecraft/entity/EntityTextureResolver",
-                "dev/comfyfluffy/caustica/minecraft/entity/MinecraftVulkanEntityUploader",
-                "dev/comfyfluffy/caustica/minecraft/gen/MinecraftMaterialData",
-                "dev/comfyfluffy/caustica/minecraft/gen/MinecraftImplementationData",
-                "dev/comfyfluffy/caustica/minecraft/gen/MinecraftPrimitiveData",
-                "dev/comfyfluffy/caustica/minecraft/gen/MinecraftInstanceData"
-                ,"dev/comfyfluffy/caustica/minecraft/CelestialAtlasImage"
-                ,"dev/comfyfluffy/caustica/minecraft/MinecraftCapturedFrame"
-                ,"dev/comfyfluffy/caustica/minecraft/MinecraftCelestialFrame"
-                ,"dev/comfyfluffy/caustica/minecraft/MinecraftLightFrame"
-                ,"dev/comfyfluffy/caustica/minecraft/MinecraftSkyFrame"
-                ,"dev/comfyfluffy/caustica/minecraft/light/"
-                ,"dev/comfyfluffy/caustica/minecraft/provider/MinecraftLightProvider"
-                ,"dev/comfyfluffy/caustica/minecraft/sky/MinecraftSkyCatalog"
-                ,"dev/comfyfluffy/caustica/minecraft/sky/SkyLutPass"
-                ,"dev/comfyfluffy/caustica/minecraft/sky/gen/"
+                "dev/comfyfluffy/caustica/minecraft/rendering/program/MinecraftPrograms",
+                "dev/comfyfluffy/caustica/minecraft/rendering/material/MinecraftMaterialRecord",
+                "dev/comfyfluffy/caustica/minecraft/rendering/material/MinecraftMaterialEpochCompiler",
+                "dev/comfyfluffy/caustica/minecraft/rendering/material/MinecraftMaterialLookup",
+                "dev/comfyfluffy/caustica/minecraft/rendering/material/MinecraftMaterialUploadPass",
+                "dev/comfyfluffy/caustica/minecraft/rendering/material/MinecraftProgramResources",
+                "dev/comfyfluffy/caustica/minecraft/rendering/MinecraftLightingCalibration",
+                "dev/comfyfluffy/caustica/minecraft/rendering/MinecraftFrameSelector",
+                "dev/comfyfluffy/caustica/minecraft/rendering/MinecraftFrameSelectionInstaller",
+                "dev/comfyfluffy/caustica/minecraft/rendering/MinecraftFrameCaptureInstaller",
+                "dev/comfyfluffy/caustica/minecraft/rendering/MinecraftFrameCaptureState",
+                "dev/comfyfluffy/caustica/minecraft/rendering/MinecraftEntityCaptureBinding",
+                "dev/comfyfluffy/caustica/minecraft/rendering/terrain/MinecraftTerrainGeometry",
+                "dev/comfyfluffy/caustica/minecraft/rendering/terrain/MinecraftTerrainLightAdapter",
+                "dev/comfyfluffy/caustica/minecraft/rendering/terrain/MinecraftTerrainMesh",
+                "dev/comfyfluffy/caustica/minecraft/rendering/terrain/MinecraftTerrainUploader",
+                "dev/comfyfluffy/caustica/minecraft/rendering/terrain/MinecraftVulkanTerrainUploader",
+                "dev/comfyfluffy/caustica/minecraft/rendering/entity/MinecraftEntityMesh",
+                "dev/comfyfluffy/caustica/minecraft/rendering/entity/MinecraftEntityGeometry",
+                "dev/comfyfluffy/caustica/minecraft/rendering/entity/MinecraftEntityUploader",
+                "dev/comfyfluffy/caustica/minecraft/rendering/entity/EntityTextureResolver",
+                "dev/comfyfluffy/caustica/minecraft/rendering/entity/MinecraftVulkanEntityUploader",
+                "dev/comfyfluffy/caustica/minecraft/rendering/gen/MinecraftMaterialData",
+                "dev/comfyfluffy/caustica/minecraft/rendering/gen/MinecraftImplementationData",
+                "dev/comfyfluffy/caustica/minecraft/rendering/gen/MinecraftPrimitiveData",
+                "dev/comfyfluffy/caustica/minecraft/rendering/gen/MinecraftInstanceData"
+                ,"dev/comfyfluffy/caustica/minecraft/rendering/CelestialAtlasImage"
+                ,"dev/comfyfluffy/caustica/minecraft/rendering/MinecraftCapturedFrame"
+                ,"dev/comfyfluffy/caustica/minecraft/rendering/MinecraftCelestialFrame"
+                ,"dev/comfyfluffy/caustica/minecraft/rendering/MinecraftLightFrame"
+                ,"dev/comfyfluffy/caustica/minecraft/rendering/MinecraftSkyFrame"
+                ,"dev/comfyfluffy/caustica/minecraft/rendering/light/"
+                ,"dev/comfyfluffy/caustica/minecraft/rendering/provider/MinecraftLightProvider"
+                ,"dev/comfyfluffy/caustica/minecraft/rendering/sky/MinecraftSkyCatalog"
+                ,"dev/comfyfluffy/caustica/minecraft/rendering/sky/SkyLutPass"
+                ,"dev/comfyfluffy/caustica/minecraft/rendering/sky/gen/"
         ]
         def foreign = []
         def shaderResources = []

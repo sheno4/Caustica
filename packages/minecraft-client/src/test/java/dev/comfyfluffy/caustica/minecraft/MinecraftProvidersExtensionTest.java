@@ -1,10 +1,11 @@
 package dev.comfyfluffy.caustica.minecraft;
 
+import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftLightingCalibration;
 import dev.comfyfluffy.caustica.builtin.BuiltinExtension;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftApi;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftWorldSessionFactory;
-import dev.comfyfluffy.caustica.minecraft.sky.SkyLutPass;
-import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialEpochCompiler;
+import dev.comfyfluffy.caustica.minecraft.rendering.sky.SkyLutPass;
+import dev.comfyfluffy.caustica.minecraft.rendering.material.MinecraftMaterialEpochCompiler;
 import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
 import dev.comfyfluffy.caustica.minecraft.terrain.RtWorkerPool;
 import dev.comfyfluffy.caustica.settings.SettingsRegistry;

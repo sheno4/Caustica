@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.entity;
 
+import dev.comfyfluffy.caustica.minecraft.rendering.entity.MinecraftEntityMesh;
 import dev.comfyfluffy.caustica.minecraft.MinecraftTelemetry;
 import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialIds;
 import net.minecraft.SharedConstants;

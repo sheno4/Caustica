@@ -7,7 +7,8 @@ import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialClas
 import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialKey;
 import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialProfile;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialClassifier;
-import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialLookup;
+import dev.comfyfluffy.caustica.minecraft.rendering.material.MinecraftMaterialLookup;
+import dev.comfyfluffy.caustica.minecraft.rendering.terrain.MinecraftTerrainMesh;
 import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialEmission;
 import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialIds;
 import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftMaterialResolution;

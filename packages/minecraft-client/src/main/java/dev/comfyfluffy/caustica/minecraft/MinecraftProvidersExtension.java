@@ -1,10 +1,14 @@
 package dev.comfyfluffy.caustica.minecraft;
 
+import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftEntityCaptureBinding;
+import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftFrameCaptureInstaller;
+import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftFrameSelectionInstaller;
+import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftLightingCalibration;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftApi;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftExtension;
-import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialEpochCompiler;
+import dev.comfyfluffy.caustica.minecraft.rendering.material.MinecraftMaterialEpochCompiler;
 import dev.comfyfluffy.caustica.minecraft.program.MinecraftProgramSession;
-import dev.comfyfluffy.caustica.minecraft.sky.SkyLutPass;
+import dev.comfyfluffy.caustica.minecraft.rendering.sky.SkyLutPass;
 import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
 import dev.comfyfluffy.caustica.settings.CausticaSettingsExtension;
 import dev.comfyfluffy.caustica.settings.DisplayText;

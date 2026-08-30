@@ -1,5 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.entity;
 
+import dev.comfyfluffy.caustica.minecraft.rendering.entity.EntityTextureResolver;
+import dev.comfyfluffy.caustica.minecraft.rendering.entity.MinecraftEntityMesh;
 import com.mojang.blaze3d.textures.GpuTextureView;
 import com.mojang.blaze3d.vulkan.VulkanGpuTextureView;
 import com.mojang.blaze3d.GpuFormat;

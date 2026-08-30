@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.entity;
 
+import dev.comfyfluffy.caustica.minecraft.rendering.entity.MinecraftEntityMesh;
 import com.mojang.blaze3d.PrimitiveTopology;
 import com.mojang.blaze3d.pipeline.ColorTargetState;
 import com.mojang.blaze3d.pipeline.RenderPipeline;

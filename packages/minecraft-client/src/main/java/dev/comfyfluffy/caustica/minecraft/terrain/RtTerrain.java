@@ -6,10 +6,13 @@ import dev.comfyfluffy.caustica.api.geometry.GeometryPublication;
 
 import com.mojang.blaze3d.vertex.QuadInstance;
 import com.mojang.blaze3d.vertex.VertexConsumer;
-import dev.comfyfluffy.caustica.minecraft.light.MinecraftTerrainLightBatch;
-import dev.comfyfluffy.caustica.minecraft.light.MinecraftTerrainLightSnapshot;
+import dev.comfyfluffy.caustica.minecraft.rendering.light.MinecraftTerrainLightBatch;
+import dev.comfyfluffy.caustica.minecraft.rendering.light.MinecraftTerrainLightSnapshot;
 import dev.comfyfluffy.caustica.minecraft.api.ResourcePackEpoch;
-import dev.comfyfluffy.caustica.minecraft.material.MinecraftMaterialLookup;
+import dev.comfyfluffy.caustica.minecraft.rendering.material.MinecraftMaterialLookup;
+import dev.comfyfluffy.caustica.minecraft.rendering.terrain.MinecraftTerrainGeometry;
+import dev.comfyfluffy.caustica.minecraft.rendering.terrain.MinecraftTerrainLightAdapter;
+import dev.comfyfluffy.caustica.minecraft.rendering.terrain.MinecraftTerrainMesh;
 import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;

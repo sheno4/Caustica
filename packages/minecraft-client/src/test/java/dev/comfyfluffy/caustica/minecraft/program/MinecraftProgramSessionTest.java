@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.program;
 
+import dev.comfyfluffy.caustica.minecraft.rendering.program.MinecraftPrograms;
 import dev.comfyfluffy.caustica.api.light.LightChannel;
 import dev.comfyfluffy.caustica.api.light.LightId;
 import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
@@ -15,10 +16,10 @@ import dev.comfyfluffy.caustica.api.program.VolumeDefinition;
 import dev.comfyfluffy.caustica.api.program.VolumeId;
 import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
 import dev.comfyfluffy.caustica.minecraft.MinecraftTelemetry;
-import dev.comfyfluffy.caustica.minecraft.provider.MinecraftLightProvider;
+import dev.comfyfluffy.caustica.minecraft.rendering.provider.MinecraftLightProvider;
 import dev.comfyfluffy.caustica.api.pass.Pass;
 import dev.comfyfluffy.caustica.api.pass.PassFrame;
-import dev.comfyfluffy.caustica.minecraft.sky.SkyLutPass;
+import dev.comfyfluffy.caustica.minecraft.rendering.sky.SkyLutPass;
 import dev.comfyfluffy.caustica.settings.Option;
 import dev.comfyfluffy.caustica.settings.OptionValues;
 import org.junit.jupiter.api.Test;

@@ -18,7 +18,7 @@ final class SourceDependencyArchitectureTest {
     private static final Path MAIN_JAVA = PROJECT_ROOT.resolve("packages/minecraft-client/src/main/java");
     private static final Path MINECRAFT = MAIN_JAVA.resolve("dev/comfyfluffy/caustica/minecraft");
     private static final Path MINECRAFT_RENDERING = PROJECT_ROOT.resolve(
-            "packages/minecraft-rendering/src/main/java/dev/comfyfluffy/caustica/minecraft");
+            "packages/minecraft-rendering/src/main/java/dev/comfyfluffy/caustica/minecraft/rendering");
     private static final Path API = PROJECT_ROOT.resolve(
             "packages/api/src/main/java/dev/comfyfluffy/caustica/api");
 

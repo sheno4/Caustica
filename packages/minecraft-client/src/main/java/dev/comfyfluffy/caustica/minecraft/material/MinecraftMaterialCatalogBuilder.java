@@ -2,7 +2,7 @@ package dev.comfyfluffy.caustica.minecraft.material;
 
 import com.mojang.blaze3d.platform.NativeImage;
 import dev.comfyfluffy.caustica.CausticaMod;
-import dev.comfyfluffy.caustica.minecraft.MinecraftLightingCalibration;
+import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftLightingCalibration;
 import dev.comfyfluffy.caustica.minecraft.MinecraftResourceIds;
 import dev.comfyfluffy.caustica.minecraft.content.material.MaterialEmissionIndex;
 import dev.comfyfluffy.caustica.minecraft.content.material.MaterialImage;

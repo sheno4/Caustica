@@ -3,20 +3,26 @@ package dev.comfyfluffy.caustica.minecraft.program;
 import dev.comfyfluffy.caustica.CausticaMod;
 import dev.comfyfluffy.caustica.api.pass.*;
 import dev.comfyfluffy.caustica.api.program.*;
-import dev.comfyfluffy.caustica.minecraft.MinecraftFrameSelector;
-import dev.comfyfluffy.caustica.minecraft.MinecraftFrameSelectionInstaller;
-import dev.comfyfluffy.caustica.minecraft.MinecraftFrameCaptureInstaller;
-import dev.comfyfluffy.caustica.minecraft.MinecraftFrameCaptureState;
-import dev.comfyfluffy.caustica.minecraft.MinecraftLightingCalibration;
+import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftFrameSelector;
+import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftFrameSelectionInstaller;
+import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftFrameCaptureInstaller;
+import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftFrameCaptureState;
+import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftLightingCalibration;
 import dev.comfyfluffy.caustica.minecraft.MinecraftProvidersExtension;
 import dev.comfyfluffy.caustica.minecraft.MinecraftTelemetry;
 import dev.comfyfluffy.caustica.minecraft.api.*;
 import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
 import dev.comfyfluffy.caustica.minecraft.material.*;
 import dev.comfyfluffy.caustica.minecraft.overlay.WorldOverlayPass;
-import dev.comfyfluffy.caustica.minecraft.provider.MinecraftLightProvider;
-import dev.comfyfluffy.caustica.minecraft.sky.SkyLutPass;
-import dev.comfyfluffy.caustica.minecraft.sky.MinecraftSkyCatalog;
+import dev.comfyfluffy.caustica.minecraft.rendering.entity.MinecraftEntityGeometry;
+import dev.comfyfluffy.caustica.minecraft.rendering.entity.MinecraftVulkanEntityUploader;
+import dev.comfyfluffy.caustica.minecraft.rendering.material.MinecraftMaterialEpochCompiler;
+import dev.comfyfluffy.caustica.minecraft.rendering.material.MinecraftMaterialLookup;
+import dev.comfyfluffy.caustica.minecraft.rendering.material.MinecraftProgramResources;
+import dev.comfyfluffy.caustica.minecraft.rendering.program.MinecraftPrograms;
+import dev.comfyfluffy.caustica.minecraft.rendering.provider.MinecraftLightProvider;
+import dev.comfyfluffy.caustica.minecraft.rendering.sky.SkyLutPass;
+import dev.comfyfluffy.caustica.minecraft.rendering.sky.MinecraftSkyCatalog;
 import dev.comfyfluffy.caustica.minecraft.terrain.MinecraftTerrainSession;
 import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
 import dev.comfyfluffy.caustica.minecraft.entity.*;
@@ -40,7 +46,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
     private final MinecraftLightProvider lights;
     private final PassRegistration lightRegistration;
     private final PassRegistration overlayRegistration;
-    private final dev.comfyfluffy.caustica.minecraft.MinecraftEntityCaptureBinding entityCapture;
+    private final dev.comfyfluffy.caustica.minecraft.rendering.MinecraftEntityCaptureBinding entityCapture;
     private final dev.comfyfluffy.caustica.minecraft.entity.RtEntityTextures entityTextures;
     private final RtTerrain terrain;
     private final OptionLookup options;
@@ -55,7 +61,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
                                     MinecraftFrameCaptureInstaller.Lease frameCapture,
                                     MinecraftLightProvider lights, PassRegistration lightRegistration,
                                     PassRegistration overlayRegistration,
-                                    dev.comfyfluffy.caustica.minecraft.MinecraftEntityCaptureBinding entityCapture,
+                                    dev.comfyfluffy.caustica.minecraft.rendering.MinecraftEntityCaptureBinding entityCapture,
                                     dev.comfyfluffy.caustica.minecraft.entity.RtEntityTextures entityTextures,
                                     RtTerrain terrain, OptionLookup options) {
         this.context = context;
@@ -78,7 +84,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
                                                MinecraftFrameCaptureInstaller frameCaptures,
                                                MinecraftMaterialEpochCompiler materialEpochs,
                                                MinecraftLightingCalibration calibration,
-                                               dev.comfyfluffy.caustica.minecraft.MinecraftEntityCaptureBinding entityCapture,
+                                               dev.comfyfluffy.caustica.minecraft.rendering.MinecraftEntityCaptureBinding entityCapture,
                                                dev.comfyfluffy.caustica.minecraft.entity.RtEntityTextures entityTextures,
                                                dev.comfyfluffy.caustica.minecraft.entity.RtEntities entities,
                                                RtTerrain terrain, OptionLookup options,
@@ -200,7 +206,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         MinecraftTerrainSession terrainSession = new MinecraftTerrainSession(context.renderSession().gpu(), terrain);
         MinecraftFrameSelectionInstaller.Lease frameSelection = null;
         MinecraftEntityGeometry entityGeometry = null;
-        dev.comfyfluffy.caustica.minecraft.MinecraftEntityCaptureBinding.Lease entityLease = null;
+        dev.comfyfluffy.caustica.minecraft.rendering.MinecraftEntityCaptureBinding.Lease entityLease = null;
         MinecraftFrameSelector frameSelector = null;
         try {
             terrainSession.bind(programs, context.renderSession().geometry(), context.scene());
@@ -355,7 +361,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         final MinecraftFrameSelector frameSelector;
         final MinecraftFrameSelectionInstaller.Lease frameSelection;
         final MinecraftEntityGeometry entityGeometry;
-        final dev.comfyfluffy.caustica.minecraft.MinecraftEntityCaptureBinding.Lease entityLease;
+        final dev.comfyfluffy.caustica.minecraft.rendering.MinecraftEntityCaptureBinding.Lease entityLease;
         final PassRegistration sky;
         final ArrayList<RetiredPrograms> delayed;
         boolean producersStopped;
@@ -363,7 +369,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
                MinecraftTerrainSession terrain, MinecraftFrameSelector frameSelector,
                MinecraftFrameSelectionInstaller.Lease frameSelection,
                MinecraftEntityGeometry entityGeometry,
-               dev.comfyfluffy.caustica.minecraft.MinecraftEntityCaptureBinding.Lease entityLease,
+               dev.comfyfluffy.caustica.minecraft.rendering.MinecraftEntityCaptureBinding.Lease entityLease,
                PassRegistration sky, ArrayList<RetiredPrograms> delayed) {
             this.generation = generation;
             this.registration = registration;

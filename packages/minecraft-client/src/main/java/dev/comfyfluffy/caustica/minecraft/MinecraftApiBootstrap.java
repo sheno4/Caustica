@@ -9,6 +9,7 @@ import dev.comfyfluffy.caustica.engine.session.RenderSessionHost;
 import dev.comfyfluffy.caustica.minecraft.adapter.session.MinecraftWorldSessionHost;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftExtension;
 import dev.comfyfluffy.caustica.minecraft.material.MinecraftClientMaterialEpochCompiler;
+import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftLightingCalibration;
 import dev.comfyfluffy.caustica.minecraft.terrain.RtTerrain;
 import dev.comfyfluffy.caustica.platform.CausticaPlatform;
 import dev.comfyfluffy.caustica.rt.RtTelemetry;

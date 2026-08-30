@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft;
 
 import com.mojang.blaze3d.vulkan.VulkanGpuTexture;
+import dev.comfyfluffy.caustica.minecraft.rendering.CelestialAtlasImage;
 
 import java.util.Objects;
 

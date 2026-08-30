@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft;
 
+import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftLightingCalibration;
 import com.google.gson.JsonParser;
 import org.junit.jupiter.api.Test;
 

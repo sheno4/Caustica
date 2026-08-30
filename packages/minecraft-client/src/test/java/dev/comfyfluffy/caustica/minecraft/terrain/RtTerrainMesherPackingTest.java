@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.terrain;
 
+import dev.comfyfluffy.caustica.minecraft.rendering.terrain.MinecraftTerrainMesh;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;

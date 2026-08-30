@@ -1,5 +1,9 @@
 package dev.comfyfluffy.caustica.minecraft;
 
+import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftFrameCaptureInstaller;
+import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftFrameSelectionInstaller;
+import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftFrameSelector;
+import dev.comfyfluffy.caustica.minecraft.rendering.MinecraftLightingCalibration;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.GpuImage;
 
 import dev.comfyfluffy.caustica.config.CausticaConfig;

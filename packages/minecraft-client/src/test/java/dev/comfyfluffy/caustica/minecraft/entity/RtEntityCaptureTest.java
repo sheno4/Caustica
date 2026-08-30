@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.minecraft.entity;
 
+import dev.comfyfluffy.caustica.minecraft.rendering.entity.MinecraftEntityMesh;
 import dev.comfyfluffy.caustica.settings.ResourceId;
 import dev.comfyfluffy.caustica.support.ColorSpaces;
 import org.junit.jupiter.api.Test;
