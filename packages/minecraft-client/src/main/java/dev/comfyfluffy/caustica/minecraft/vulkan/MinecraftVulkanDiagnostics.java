@@ -6,7 +6,7 @@ import com.mojang.blaze3d.vulkan.VulkanUtils;
 import com.mojang.blaze3d.vulkan.init.VulkanFeature;
 import com.mojang.blaze3d.vulkan.init.VulkanPNextStruct;
 import dev.comfyfluffy.caustica.CausticaMod;
-import dev.comfyfluffy.caustica.vulkan.VulkanDiagnostics;
+import dev.comfyfluffy.caustica.engine.vulkan.VulkanDiagnostics;
 import org.lwjgl.vulkan.EXTDeviceFault;
 import org.lwjgl.vulkan.VkPhysicalDeviceFaultFeaturesEXT;
 import org.spongepowered.asm.mixin.injection.invoke.arg.Args;

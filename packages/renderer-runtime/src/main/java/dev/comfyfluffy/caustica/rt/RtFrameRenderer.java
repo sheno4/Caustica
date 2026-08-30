@@ -8,7 +8,7 @@ import dev.comfyfluffy.caustica.engine.vulkan.runtime.RtGpuExecutor;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanBarriers;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
 
-import dev.comfyfluffy.caustica.vulkan.VulkanDiagnostics;
+import dev.comfyfluffy.caustica.engine.vulkan.VulkanDiagnostics;
 
 import dev.comfyfluffy.caustica.config.CausticaConfig;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptorKind;

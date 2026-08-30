@@ -1,4 +1,4 @@
-package dev.comfyfluffy.caustica.vulkan;
+package dev.comfyfluffy.caustica.engine.vulkan;
 
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;

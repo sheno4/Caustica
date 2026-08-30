@@ -7,7 +7,7 @@ import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
 import dev.comfyfluffy.caustica.engine.vulkan.VulkanRequiredProfile;
 import dev.comfyfluffy.caustica.spi.vulkan.VulkanQueueRef;
 import dev.comfyfluffy.caustica.spi.vulkan.VulkanRendererBackend;
-import dev.comfyfluffy.caustica.vulkan.VulkanDiagnostics;
+import dev.comfyfluffy.caustica.engine.vulkan.VulkanDiagnostics;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.util.vma.Vma;

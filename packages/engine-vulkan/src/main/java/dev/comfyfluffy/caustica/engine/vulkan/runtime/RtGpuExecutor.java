@@ -1,6 +1,6 @@
 package dev.comfyfluffy.caustica.engine.vulkan.runtime;
 
-import dev.comfyfluffy.caustica.vulkan.VulkanDiagnostics;
+import dev.comfyfluffy.caustica.engine.vulkan.VulkanDiagnostics;
 
 import dev.comfyfluffy.caustica.spi.vulkan.GraphicsSubmission;
 import dev.comfyfluffy.caustica.api.vulkan.GpuFrameUse;
