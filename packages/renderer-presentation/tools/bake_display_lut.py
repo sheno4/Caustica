@@ -13,8 +13,8 @@ output LUTs.
 Requires: pip install opencolorio numpy  (tested with opencolorio 2.5.2 / numpy 2.5.1, Python 3.14)
 
 Usage:
-    python tools/bake_display_lut.py
-    python tools/bake_display_lut.py --import-lmt path/to/resolve-export.cube
+    python packages/renderer-presentation/tools/bake_display_lut.py
+    python packages/renderer-presentation/tools/bake_display_lut.py --import-lmt path/to/resolve-export.cube
 
 Regenerate whenever SHAPER_LO/HI, LUT_SIZE, or the OCIO config/view below changes. The baked
 .bin files are committed binary resources. The display transforms live in
@@ -44,7 +44,7 @@ SHAPER_HI_STOPS = 12.0
 
 LUT_SIZE = 65  # samples per axis; N^3 total
 PRESENTATION_RESOURCES = (
-    Path(__file__).resolve().parent.parent / "packages/renderer-presentation/src/main/resources"
+    Path(__file__).resolve().parent.parent / "src/main/resources"
 )
 OUT_DIR = PRESENTATION_RESOURCES / "caustica/color/luts"
 LOOK_PACKAGE_DIR = (

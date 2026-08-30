@@ -16,10 +16,10 @@ import org.lwjgl.vulkan.VkDevice;
  * <p>The logical device is Vulkan 1.4. The renderer enables the features required for buffer device
  * addresses, 16-bit integer and floating-point shader arithmetic, dynamic rendering, synchronization2,
  * unified {@code GENERAL} image layouts, descriptor
- * heaps, shader objects, untyped pointers, acceleration structures, ray-tracing pipelines, ray queries,
- * and ray-tracing position fetch. The corresponding device extensions are
+ * heaps, push descriptors, shader objects, untyped pointers, acceleration structures, ray-tracing pipelines,
+ * ray queries, and ray-tracing position fetch. The corresponding device extensions are
  * {@code VK_KHR_unified_image_layouts}, {@code VK_EXT_descriptor_heap},
- * {@code VK_EXT_shader_object}, {@code VK_KHR_shader_untyped_pointers},
+ * {@code VK_KHR_push_descriptor}, {@code VK_EXT_shader_object}, {@code VK_KHR_shader_untyped_pointers},
  * {@code VK_KHR_acceleration_structure}, {@code VK_KHR_deferred_host_operations},
  * {@code VK_KHR_ray_tracing_pipeline}, {@code VK_KHR_ray_query}, and
  * {@code VK_KHR_ray_tracing_position_fetch}.

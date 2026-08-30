@@ -142,6 +142,10 @@ def verifyNrdNativeFoundation = tasks.register("verifyNrdNativeFoundation") {
          "NRD_NORMAL_ENCODING 4", "NRD_ROUGHNESS_ENCODING 1"].each {
             if (!cmake.contains(it)) throw new GradleException("Missing native option: ${it}")
         }
+        if (cmake.count("StdAllocator=NriStdAllocator") != 3
+                || !cmake.contains('"${FETCHCONTENT_SOURCE_DIR_NRI}/Include"')) {
+            throw new GradleException("NRD/NRI static-link allocator boundary is not isolated")
+        }
         ["nrdshim_create", "nrdshim_resize", "nrdshim_record", "nrdshim_destroy", "nrdshim_last_error"].each {
             if (!header.contains(it) || !source.contains(it)) throw new GradleException("Missing NRD shim export: ${it}")
         }
@@ -150,8 +154,15 @@ def verifyNrdNativeFoundation = tasks.register("verifyNrdNativeFoundation") {
         }
         ["queueFamily.queueType = nri::QueueType::GRAPHICS",
          "command.queueType = nri::QueueType::GRAPHICS",
+         "VK_KHR_push_descriptor",
+         "deviceCreation.vkExtensions.deviceExtensions = enabledDeviceExtensions",
          "settings.hitDistanceParameters = {3.0f, 0.1f, 20.0f, -25.0f}",
+         "settings.hitDistanceReconstructionMode = nrd::HitDistanceReconstructionMode::OFF",
          "settings.hitDistanceReconstructionMode = nrd::HitDistanceReconstructionMode::AREA_5X5",
+         "settings.enableAntiFirefly = true",
+         "settings.maxAccumulatedFrameNum = 50",
+         "settings.diffusePrepassBlurRadius = 15.0f",
+         "settings.specularPrepassBlurRadius = 40.0f",
          "nri::Layout::GENERAL", "catch (...)", "noexcept"].each {
             if (!source.contains(it)) throw new GradleException("Missing native contract: ${it}")
         }
@@ -161,8 +172,9 @@ def verifyNrdNativeFoundation = tasks.register("verifyNrdNativeFoundation") {
         if (source.contains("SHADER_READ_ONLY_OPTIMAL")) {
             throw new GradleException("NRD must accept only unified or GENERAL image layouts")
         }
-        if (source.count("settings.hitDistanceReconstructionMode = nrd::HitDistanceReconstructionMode::AREA_5X5") != 2) {
-            throw new GradleException("RELAX and REBLUR must both reconstruct stratified hit distances")
+        if (source.count("settings.hitDistanceReconstructionMode = nrd::HitDistanceReconstructionMode::OFF") != 1
+                || source.count("settings.hitDistanceReconstructionMode = nrd::HitDistanceReconstructionMode::AREA_5X5") != 1) {
+            throw new GradleException("NRD method-specific hit-distance reconstruction drifted")
         }
         if (!build.contains('"-DFETCHCONTENT_FULLY_DISCONNECTED=ON"')) {
             throw new GradleException("NRD native configuration must keep FetchContent offline")

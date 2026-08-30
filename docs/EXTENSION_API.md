@@ -162,6 +162,25 @@ Once any sampled distant light sets it, non-camera miss queries ask the environm
 emitter lobes. The scene must supply a sampled distant descriptor for every lobe hidden in that mode; the
 environment keeps continuous background radiance visible.
 
+## Reconstruction routes
+
+Reconstruction is renderer-owned rather than an extension contribution point. The three mutually exclusive
+routes are `RAY_RECONSTRUCTION`, `TEMPORAL_DENOISER`, and `RAW`. Ray Reconstruction is the default and the only
+route that calls NGX. The temporal route uses the `renderer-denoising` contract with the bundled `nvidia-nrd`
+backend; REBLUR is its default method and RELAX is selectable. RAW copies traced scene colour exactly. NRD and
+RAW do not load or depend on Streamline.
+
+The Ray Reconstruction guide contract keeps normal, depth, and dense motion attached to the primary surface.
+A bounded stable-plane traversal follows the dominant deterministic delta chain and produces separate virtual
+reflection motion metadata without replacing primary depth or primary motion. Transmission uses the optical
+motion fallback rather than reflection unfolding.
+
+NRD receives demodulated diffuse and specular radiance/hit-distance signals, view-space depth,
+normal/roughness, and normalized screen motion. RELAX uses linear RGB with absolute hit distance; REBLUR uses
+YCoCg with the corresponding normalized hit-distance parameters. The renderer remodulates denoised lobes,
+adds explicit primary emission/environment residual, and applies pre-exposure once. Scene/history changes,
+camera cuts, resizes, method changes, and route changes reset the temporal backend.
+
 ## Passes and Vulkan resources
 
 `PassChannel` exposes three engine-defined stages:
@@ -204,10 +223,11 @@ range and one sampler range, publishes their indices, then retires the displaced
 The required backend profile is Vulkan 1.4. Its complete feature baseline is shader int64/int16/float16,
 storage-image extended formats and formatless reads/writes, shader draw parameters, demote-to-helper invocation,
 buffer device addresses, timeline semaphores, synchronization2, dynamic rendering, unified image layouts,
-descriptor heaps, shader objects, untyped pointers, acceleration structures, ray-tracing pipelines, ray queries,
-and ray-tracing position fetch. Ray stages remain on `VK_KHR_ray_tracing_pipeline`. LWJGL `Vk...` objects are
-used for dispatchable handles; non-dispatchable Vulkan handles remain documented scalar values where LWJGL has
-no wrapper.
+descriptor heaps, push descriptors, shader objects, untyped pointers, acceleration structures, ray-tracing
+pipelines, ray queries, and ray-tracing position fetch. Push descriptors are required by the wrapped NRI
+backend; renderer-owned shader resources remain descriptor-heap-native. Ray stages remain on
+`VK_KHR_ray_tracing_pipeline`. LWJGL `Vk...` objects are used for dispatchable handles; non-dispatchable Vulkan
+handles remain documented scalar values where LWJGL has no wrapper.
 
 The Minecraft integration additionally requires `VK_KHR_get_surface_capabilities2` at instance creation and
 enumerates format/color-space pairs with `vkGetPhysicalDeviceSurfaceFormats2KHR`,
@@ -277,23 +297,16 @@ service installation.
 
 Rounded clouds are deliberately excluded from this rewrite.
 
-The final static gates are green for the current checkout: the Fabric check completed 190 actionable tasks,
-and the NeoForge `minecraft-client` plus glTF viewer checks completed 162 actionable tasks. The final
-RR-disabled Fabric run reached `ray-tracing-test-place` with `VK_LAYER_KHRONOS_validation` active, produced no
-actionable Vulkan validation diagnostic, device loss, or fatal renderer output, and shut down normally.
+Static package, dependency/import, lifecycle, shader/reflection, ABI, native NRD, and example-consumer gates are
+green. Direct Fabric launches into `ray-tracing-test-place` cover exact RAW output, NRD RELAX, NRD REBLUR, and
+the release DLSS Ray Reconstruction library. Route telemetry shows `frame.rawCopy`, `frame.nrd`, and
+`frame.dlssRr` are mutually exclusive. Final and stable-plane debug captures contain the rendered world, and
+the tested routes shut down without an actionable Vulkan, NRI, NRD, or NGX failure.
 
-At the default 854 x 480 test resolution with validation and RR disabled, a 1,000-frame active renderer sample
-measured 2.930 ms median, 3.733 ms p95, 4.183 ms p99, and 2.686 ms mean. The median corresponds to roughly 341
-frames per second of renderer throughput rather than a guarantee about host presentation cadence.
-
-Visual review covered first-person player-body exclusion and the ordinary hand/UI path. Camera eye-volume A/B
-captures prove water-volume activation. Camera containment and fluid meshing share the same corner-height and
-two-triangle surface rule; quantitative absorption/refraction and physical flowing-fluid edge behavior remain
-unaccepted. Runtime telemetry simultaneously retained Parallelogram, Spot, and Distant
-lights with eight NEE-AT candidates and valid history; raw 1-spp captures do not yet accept their appearance.
-The high-contrast captures reflect the quartz/floor composition plus raw 1-spp output and do not establish an
-exposure bug. DLSS Ray Reconstruction is explicitly deferred and not accepted: attempted RR captures produced
-a black output without the renderer debug overlay, while RR-disabled captures rendered the world and overlay.
+Visual validation covers first-person player-body exclusion, the ordinary hand/UI path, Minecraft nearest
+atlas sampling and cutout alpha, coloured material-derived emitters, and temporally continuous retained-light
+publication. Camera containment and fluid meshing share the same corner-height and two-triangle surface rule;
+quantitative absorption/refraction and physical flowing-fluid edge behavior remain separate validation work.
 
 The executable API showcase additionally covers program ready/failure/cancellation outcomes, same-session
 cross-owner program/light selection, owner-local mutation, grouped mesh/placement publication, retained mesh

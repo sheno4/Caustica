@@ -75,11 +75,18 @@ set(NRI_ENABLE_VK_SUPPORT ON CACHE BOOL "" FORCE)
 set(NRI_ENABLE_VALIDATION_SUPPORT OFF CACHE BOOL "" FORCE)
 add_subdirectory("${NRD_SDK}" "${CMAKE_CURRENT_BINARY_DIR}/nrd" EXCLUDE_FROM_ALL)
 
+# NRD and NRI both expose a global StdAllocator template with incompatible
+# storage. Keep NRI's private symbols distinct so static linking cannot merge
+# vector methods compiled for NRD's allocator layout.
+target_compile_definitions(NRI PRIVATE StdAllocator=NriStdAllocator)
+target_compile_definitions(NRI_Shared PRIVATE StdAllocator=NriStdAllocator)
+target_compile_definitions(NRI_VK PRIVATE StdAllocator=NriStdAllocator)
+
 add_library(nrdshim SHARED nrd_shim.cpp)
 target_include_directories(nrdshim PRIVATE
     "${NRD_SDK}/Include"
     "${NRD_SDK}/Integration"
-    "${NRD_SDK}/External/NRI/Include")
+    "${FETCHCONTENT_SOURCE_DIR_NRI}/Include")
 target_link_libraries(nrdshim PRIVATE NRD NRDIntegration NRI)
 target_compile_definitions(nrdshim PRIVATE NRD_STATIC_LIBRARY)
 set_target_properties(nrdshim PROPERTIES OUTPUT_NAME "nrdshim")

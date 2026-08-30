@@ -132,7 +132,7 @@ StablePlaneEndpoint stablePlaneEndpoint(WorldPayload primary, WorldPush frame) {
 }
 
 void writePrimaryStablePlane<TComposition : IComposition>(uint2 pixel, uint2 extent,
-        WorldPush frame, WorldPayload primary, float3 radiance, float3 unexposedRadiance,
+        WorldPush frame, WorldPayload primary, float3 radiance, float3 unexposedStableRadiance,
         float3 unexposedDiffuse, float3 unexposedSpecular) {
     StablePlaneEndpoint endpoint = stablePlaneEndpoint(primary, frame);
     float3 normal = float3(0.0);
@@ -183,10 +183,8 @@ void writePrimaryStablePlane<TComposition : IComposition>(uint2 pixel, uint2 ext
     plane.reflectionCount = endpoint.reflectionCount;
     plane.containsTransmission = endpoint.containsTransmission;
     stablePlaneWrite(pixel, plane);
-    float3 stableRadiance = max(unexposedRadiance - unexposedDiffuse - unexposedSpecular,
-            float3(0.0));
     nrdWritePrimarySignals(pixel, primaryValid, depth, primary.roughness,
-            unexposedDiffuse, unexposedSpecular, stableRadiance,
+            unexposedDiffuse, unexposedSpecular, unexposedStableRadiance,
             primary.diffuseHitDistance, 0.0, albedo, specularAlbedo);
 }
 
@@ -243,12 +241,14 @@ public void runPrimary<TComposition : IComposition>() {
         queue[pixelIndex] = packRetainedPath(continuation, queued.nextRecord);
     }
     float3 unexposedRadiance = max(payload.radiance * transmittance, float3(0.0));
+    float3 unexposedStableRadiance = max(
+            payload.primaryStableRadiance * transmittance, float3(0.0));
     float3 unexposedDiffuse = max(payload.diffuseRadiance * transmittance, float3(0.0));
     float3 unexposedSpecular = max(payload.specularRadiance * transmittance, float3(0.0));
     float3 radiance = clamp(unexposedRadiance * frame.preExposure,
             float3(0.0), float3(HALF_MAX));
     writePrimaryStablePlane<TComposition>(pixel, extent, frame, payload, radiance,
-            unexposedRadiance, unexposedDiffuse, unexposedSpecular);
+            unexposedStableRadiance, unexposedDiffuse, unexposedSpecular);
 }
 
 [shader("raygeneration")]

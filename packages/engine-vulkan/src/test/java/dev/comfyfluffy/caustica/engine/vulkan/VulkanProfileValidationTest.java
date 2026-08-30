@@ -19,6 +19,7 @@ final class VulkanProfileValidationTest {
         VulkanProfileValidation validation = VulkanProfileValidation.validate(required, support);
         assertTrue(validation.supported());
         assertEquals("Vulkan profile supported", validation.diagnostic());
+        assertTrue(required.deviceExtensions().contains("VK_KHR_push_descriptor"));
     }
 
     @Test

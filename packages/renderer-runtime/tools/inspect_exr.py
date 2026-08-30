@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Inspect a Caustica F2 EXR and print its exposure/recovery metadata."""
+"""Inspect a renderer-runtime F2 EXR and print its exposure/recovery metadata."""
 
 from __future__ import annotations
 

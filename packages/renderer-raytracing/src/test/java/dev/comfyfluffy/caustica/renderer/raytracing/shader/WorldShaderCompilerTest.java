@@ -207,7 +207,8 @@ final class WorldShaderCompilerTest {
         assertTrue(primary.contains("plane.primaryMotion = motion"));
         assertTrue(stablePlanes.contains("point - 2.0 * dot(point - planePosition, planeNormal)"));
         assertFalse(stablePlanes.contains("direction - 2.0 * dot(direction, planeNormal)"));
-        assertTrue(primary.contains("unexposedRadiance - unexposedDiffuse - unexposedSpecular"));
+        assertTrue(primary.contains("payload.primaryStableRadiance * transmittance"));
+        assertFalse(primary.contains("unexposedRadiance - unexposedDiffuse - unexposedSpecular"));
         assertTrue(primary.contains("primary.diffuseHitDistance, 0.0, albedo, specularAlbedo"));
         assertTrue(closest.contains("evaluation.diffuseValue"));
         assertTrue(closest.contains("evaluation.specularValue"));
@@ -216,8 +217,9 @@ final class WorldShaderCompilerTest {
         assertTrue(closest.contains("sample.eventFlags"));
         assertTrue(closest.contains("selected.maximumDistance"));
         assertTrue(closest.contains("pattern & 15u"));
-        assertTrue(core.contains("state.firstLobeEvent & EVENT_DIFFUSE"));
-        assertTrue(core.contains("state.firstLobeEvent & EVENT_GLOSSY"));
+        assertTrue(core.contains("state.firstLobeEvent & (EVENT_DIFFUSE | EVENT_GLOSSY)"));
+        assertTrue(core.contains("firstLobe != EVENT_DIFFUSE && firstLobe != EVENT_GLOSSY"));
+        assertFalse(core.contains("nrdAddStableRadiance"));
         assertTrue(core.contains("nrdAddIndirectSignals"));
         assertTrue(nrdSignals.contains("NRD_REBLUR_HIT_DISTANCE_PARAMETERS = float4(3.0, 0.1, 20.0, -25.0)"));
         assertTrue(nrdSignals.contains("nrdLinearToYCoCg"));

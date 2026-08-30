@@ -51,6 +51,8 @@ public final class RtFrameStats {
             new StageMetric("frame.traceIndirect", true),
             new StageMetric("frame.exposure", true),
             new StageMetric("frame.dlssRr", true),
+            new StageMetric("frame.nrd", true),
+            new StageMetric("frame.rawCopy", true),
             new StageMetric("frame.upscale", true),
             new StageMetric("frame.postChain", true),
             new StageMetric("frame.displayMap", true),

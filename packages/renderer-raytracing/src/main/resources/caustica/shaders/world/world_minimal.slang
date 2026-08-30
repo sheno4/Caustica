@@ -11,6 +11,7 @@ public struct WorldPayload {
     public float3 radiance;
     public float3 diffuseRadiance;
     public float3 specularRadiance;
+    public float3 primaryStableRadiance;
     public float diffuseHitDistance;
     public float hitDistance;
     public float3 feedbackThroughput;

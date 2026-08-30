@@ -255,7 +255,8 @@ def verifyRetainedLightShader = tasks.register("verifyRetainedLightShader") {
                 "neeAtSampleGlobal", "neeAtSampleLocal", "neeAtLocalPdf",
                 "radianceOverShapePdf", "neeAtWriteFeedback", "pixelFeedback[pixelIndex] = event",
                 "(pixel + jitter) % (tileCount * tileSize)",
-                "neeAtProposalPdf", "candidateCount / 2u", "NEE_AT_PROPOSAL_SCREEN_MIXTURE"
+                "neeAtProposalPdf", "neeAtLocalCandidateCount(state, candidateCount)",
+                "globalFraction * neeAtGlobalPdf", "NEE_AT_PROPOSAL_SCREEN_MIXTURE"
         ].findAll { !samplerSource.contains(it) }
         required += [
                 "1u, 2u, 1u, ray, shadow", "evaluateBsdf(query)",
@@ -269,10 +270,11 @@ def verifyRetainedLightShader = tasks.register("verifyRetainedLightShader") {
         required += [
                 "state.localSlotCount", "state.tileSize * state.tileSize",
                 "previousToCurrent", "InterlockedAdd(localMasses[slot], 1u)",
-                "InterlockedAdd(counts[currentLight], 1u)", "+ paddedExtent - jitter) % paddedExtent",
+                "InterlockedAdd(counts[slot], 1u)", "+ paddedExtent - jitter) % paddedExtent",
                 "GroupMemoryBarrierWithGroupSync", "uint2(localLights[slot], localScan[slot])",
-                "globalPowerSums[lane]", "chunk += 64u", "globalScanNext[lane]",
-                "index + 1u == state.lightCount ? 1.0"
+                "blockSums[group] = blockScan[0]", "chunk += 64u", "blockScanNext[lane]",
+                "distribution[state.lightCount] = uint2(0u, blockCarry)",
+                "count = max(1u, uint(ceil(budget * pdf)))"
         ].findAll { !bakeSource.contains(it) }
         if (samplerSource.contains("InterlockedCompareExchange")) required += "no tracing-path CAS feedback"
         if (!worldSource.contains("records[worldInstanceCustomIndex() + GeometryIndex()]")) {

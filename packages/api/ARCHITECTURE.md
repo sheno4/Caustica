@@ -221,8 +221,8 @@ Callbacks must not block or throw. None of these primitives imply that unrelated
 Every API session has a hard Vulkan 1.4 logical-device baseline: shader int64/int16/float16, storage-image
 extended formats and formatless reads/writes, shader draw parameters, demote-to-helper invocation, buffer device
 addresses, timeline semaphores, synchronization2, dynamic rendering, unified image layouts, descriptor heaps,
-shader objects, untyped pointers, acceleration structures, ray-tracing pipelines, ray queries, and ray-tracing
-position fetch. These are guarantees, not runtime capability booleans.
+push descriptors, shader objects, untyped pointers, acceleration structures, ray-tracing pipelines, ray queries,
+and ray-tracing position fetch. These are guarantees, not runtime capability booleans.
 
 `GpuDevice.vk()` exposes the typed LWJGL `VkDevice`. Extensions obtain its physical device and query Vulkan
 features, properties, formats, and limits directly. A physical-device support query does not reveal which

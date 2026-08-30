@@ -380,7 +380,11 @@ public void runClosestHit<TComposition : IComposition>(inout WorldPayload payloa
     payload.diffuseRadiance = diffuseLighting;
     payload.specularRadiance = specularLighting;
     payload.diffuseHitDistance = any(diffuseLighting > 0.0) ? directHitDistance : 0.0;
-    payload.radiance = emission * retainedEmissionMis(payload, record, input.position) + directLighting;
+    float3 emittedRadiance = emission * retainedEmissionMis(payload, record, input.position);
+    payload.radiance = emittedRadiance + directLighting;
+    if ((payload.pathFlags & WORLD_PATH_PRIMARY) != 0u) {
+        payload.primaryStableRadiance = emittedRadiance;
+    }
     retainedWriteContinuation<TComposition>(payload, record, input, surface, closure);
 }
 

@@ -71,6 +71,11 @@ struct State {
         queueFamily.familyIndex = description.graphicsQueueFamily;
 
         nri::DeviceCreationVKDesc deviceCreation{};
+        constexpr const char* enabledDeviceExtensions[] = {
+            "VK_KHR_push_descriptor"
+        };
+        deviceCreation.vkExtensions.deviceExtensions = enabledDeviceExtensions;
+        deviceCreation.vkExtensions.deviceExtensionNum = 1;
         deviceCreation.vkInstance = reinterpret_cast<void*>(description.instance);
         deviceCreation.vkPhysicalDevice = reinterpret_cast<void*>(description.physicalDevice);
         deviceCreation.vkDevice = reinterpret_cast<void*>(description.device);
@@ -83,15 +88,34 @@ struct State {
 
         if (description.method == 0) {
             nrd::RelaxSettings settings{};
+            settings.enableAntiFirefly = true;
             settings.checkerboardMode = nrd::CheckerboardMode::OFF;
-            settings.hitDistanceReconstructionMode = nrd::HitDistanceReconstructionMode::AREA_5X5;
+            settings.hitDistanceReconstructionMode = nrd::HitDistanceReconstructionMode::OFF;
+            settings.diffusePrepassBlurRadius = 0.0f;
+            settings.specularPrepassBlurRadius = 0.0f;
+            settings.atrousIterationNum = 5;
+            settings.lobeAngleFraction = 0.7f;
+            settings.specularLobeAngleSlack = 0.2f;
+            settings.depthThreshold = 0.004f;
+            settings.diffuseMaxAccumulatedFrameNum = 25;
+            settings.specularMaxAccumulatedFrameNum = 40;
+            settings.diffuseMaxFastAccumulatedFrameNum = 5;
+            settings.specularMaxFastAccumulatedFrameNum = 6;
+            settings.antilagSettings.accelerationAmount = 0.55f;
+            settings.antilagSettings.spatialSigmaScale = 2.5f;
+            settings.antilagSettings.temporalSigmaScale = 0.3f;
+            settings.antilagSettings.resetAmount = 0.5f;
             return integration.SetDenoiserSettings(kDenoiser, &settings) == nrd::Result::SUCCESS;
         }
 
         nrd::ReblurSettings settings{};
+        settings.enableAntiFirefly = true;
         settings.hitDistanceParameters = {3.0f, 0.1f, 20.0f, -25.0f};
         settings.checkerboardMode = nrd::CheckerboardMode::OFF;
         settings.hitDistanceReconstructionMode = nrd::HitDistanceReconstructionMode::AREA_5X5;
+        settings.maxAccumulatedFrameNum = 50;
+        settings.diffusePrepassBlurRadius = 15.0f;
+        settings.specularPrepassBlurRadius = 40.0f;
         return integration.SetDenoiserSettings(kDenoiser, &settings) == nrd::Result::SUCCESS;
     }
 };

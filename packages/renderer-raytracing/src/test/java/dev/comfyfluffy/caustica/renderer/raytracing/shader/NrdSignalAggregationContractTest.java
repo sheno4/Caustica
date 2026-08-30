@@ -45,6 +45,23 @@ final class NrdSignalAggregationContractTest {
         assertTrue(signals.contains("viewZ, roughness, true"));
     }
 
+    @Test
+    void stableRadianceIsExplicitAndPrimaryCoverageDoesNotVaryByFrame() throws Exception {
+        String primary = shader("primary_rgen.slang");
+        String closest = shader("closest_hit.slang");
+        String miss = shader("sky_miss.slang");
+        String anyHit = shader("radiance_any_hit.rahit.slang");
+        String indirect = shader("retained_indirect.slang");
+        assertTrue(primary.contains("payload.primaryStableRadiance * transmittance"));
+        assertFalse(primary.contains("unexposedRadiance - unexposedDiffuse - unexposedSpecular"));
+        assertTrue(closest.contains("payload.primaryStableRadiance = emittedRadiance"));
+        assertTrue(miss.contains("payload.primaryStableRadiance = payload.radiance"));
+        assertTrue(anyHit.contains("WORLD_PATH_GUIDE | WORLD_PATH_PRIMARY"));
+        assertTrue(indirect.contains("firstLobe != EVENT_DIFFUSE && firstLobe != EVENT_GLOSSY"));
+        assertFalse(indirect.contains("stableRadiance += contribution"));
+        assertFalse(indirect.contains("nrdAddStableRadiance"));
+    }
+
     private static String shader(String name) throws IOException {
         try (var input = NrdSignalAggregationContractTest.class.getResourceAsStream(
                 "/caustica/shaders/world/" + name)) {

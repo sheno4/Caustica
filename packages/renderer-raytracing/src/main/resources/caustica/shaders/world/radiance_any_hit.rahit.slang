@@ -13,7 +13,7 @@ public void runRadianceAnyHit<TComposition : IComposition>(inout WorldPayload pa
     float coverage = clamp(coverages.evaluateCoverage(record.coverageImplementation,
             worldCoverageInput(attributes)), 0.0, 1.0);
     bool stochastic = (record.flags & RETAINED_GEOMETRY_STOCHASTIC) != 0u
-            && (payload.pathFlags & WORLD_PATH_GUIDE) == 0u;
+            && (payload.pathFlags & (WORLD_PATH_GUIDE | WORLD_PATH_PRIMARY)) == 0u;
     if (stochastic ? worldCoverageRandom(payload.seed, worldInstanceCustomIndex(),
             GeometryIndex(), PrimitiveIndex()) >= coverage : coverage < record.alphaCutoff) {
         IgnoreHit();

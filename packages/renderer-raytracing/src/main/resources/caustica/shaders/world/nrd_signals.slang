@@ -111,9 +111,3 @@ public void nrdAddIndirectSignals(uint2 pixel, float3 diffuseRadiance, float dif
             nrdDemodulate(specularRadiance, specularBsdfEstimate), specularHitDistance,
             viewZ, roughness, true);
 }
-
-public void nrdAddStableRadiance(uint2 pixel, float3 radiance) {
-    RWTexture2D<float4> stable = worldFloat4StorageImage(worldBindings.resources.nrdStableRadiance);
-    stable[pixel] = float4(clamp(stable[pixel].xyz + max(radiance, float3(0.0)),
-            float3(0.0), float3(65504.0)), 1.0);
-}

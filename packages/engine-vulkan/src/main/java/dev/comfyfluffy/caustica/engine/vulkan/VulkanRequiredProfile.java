@@ -12,6 +12,7 @@ public record VulkanRequiredProfile(int apiVersion, Set<String> deviceExtensions
                     "VK_KHR_unified_image_layouts",
                     "VK_EXT_descriptor_heap",
                     "VK_EXT_shader_object",
+                    "VK_KHR_push_descriptor",
                     "VK_KHR_shader_untyped_pointers",
                     "VK_KHR_acceleration_structure",
                     "VK_KHR_deferred_host_operations",

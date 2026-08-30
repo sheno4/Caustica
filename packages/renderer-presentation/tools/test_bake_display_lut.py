@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 
-from tools import bake_display_lut as baker
+import bake_display_lut as baker
 
 
 class BakedLookResourceTest(unittest.TestCase):

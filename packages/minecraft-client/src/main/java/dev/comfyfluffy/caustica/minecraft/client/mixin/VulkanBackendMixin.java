@@ -61,8 +61,7 @@ public abstract class VulkanBackendMixin {
 			// extension VK_KHR_get_physical_device_properties2 needs an instance hook;
 			// DLSS relies on it being core/enabled at instance level.)
 			"VK_NVX_binary_import",
-			"VK_NVX_image_view_handle",
-			"VK_KHR_push_descriptor");
+			"VK_NVX_image_view_handle");
 
 	private static final Set<String> loggedMissingSdkFeatures = new HashSet<>();
 

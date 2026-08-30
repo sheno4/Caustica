@@ -801,7 +801,7 @@ public final class CausticaConfig {
                     "caustica.rt.denoisingRoute", "denoising.route", "ray_reconstruction",
                     List.of("ray_reconstruction", "temporal_denoiser", "raw")).inGroup("upscaling");
             public static final StringSetting METHOD = stringChoice(
-                    "caustica.rt.denoisingMethod", "denoising.method", "relax",
+                    "caustica.rt.denoisingMethod", "denoising.method", "reblur",
                     List.of("relax", "reblur")).inGroup("upscaling");
 
             private Denoising() {

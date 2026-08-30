@@ -29,7 +29,6 @@ public void runRetainedIndirect<TComposition : IComposition,
     float3 indirectRadiance = float3(0.0);
     float3 diffuseRadiance = float3(0.0);
     float3 specularRadiance = float3(0.0);
-    float3 stableRadiance = float3(0.0);
     float diffuseHitDistanceSum = 0.0;
     float specularHitDistance = 0.0;
     float diffuseHitDistanceWeight = 0.0;
@@ -40,6 +39,11 @@ public void runRetainedIndirect<TComposition : IComposition,
         uint linkedRecord = initialPacked.nextRecord;
         RetainedPathState state = unpackRetainedPath(initialPacked);
         if (!state.valid) { recordIndex = linkedRecord; continue; }
+        uint firstLobe = state.firstLobeEvent & (EVENT_DIFFUSE | EVENT_GLOSSY);
+        if (firstLobe != EVENT_DIFFUSE && firstLobe != EVENT_GLOSSY) {
+            recordIndex = linkedRecord;
+            continue;
+        }
         float3 throughput = state.throughput;
 
         for (uint bounce = 1u; bounce <= frame.maxBounces; bounce++) {
@@ -81,20 +85,18 @@ public void runRetainedIndirect<TComposition : IComposition,
             indirectRadiance += contribution;
             float signalHitDistance = missed
                     ? 0.0 : state.signalHitDistance + max(payload.hitDistance, 0.0);
-            if ((state.firstLobeEvent & EVENT_DIFFUSE) != 0u) {
+            if (firstLobe == EVENT_DIFFUSE) {
                 diffuseRadiance += contribution;
                 float contributionWeight = nrdLuminance(
                         nrdDemodulate(contribution, diffuseBsdfEstimate));
                 diffuseHitDistanceSum += contributionWeight * signalHitDistance;
                 diffuseHitDistanceWeight += contributionWeight;
-            } else if ((state.firstLobeEvent & EVENT_GLOSSY) != 0u) {
+            } else {
                 specularRadiance += contribution;
                 if (signalHitDistance > 0.0 && any(contribution > 0.0)) {
                     specularHitDistance = specularHitDistance > 0.0
                             ? min(specularHitDistance, signalHitDistance) : signalHitDistance;
                 }
-            } else {
-                stableRadiance += contribution;
             }
             if (missed || bounce == frame.maxBounces) break;
 
@@ -121,5 +123,4 @@ public void runRetainedIndirect<TComposition : IComposition,
     nrdAddIndirectSignals(pixel, diffuseRadiance, diffuseHitDistance,
             specularRadiance, specularHitDistance, diffuseBsdfEstimate,
             specularBsdfEstimate, normalRoughness.w);
-    nrdAddStableRadiance(pixel, stableRadiance);
 }

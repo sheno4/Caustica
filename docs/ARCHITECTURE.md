@@ -19,7 +19,9 @@ The physical projects under `packages/` enforce the reusable boundaries:
 | `renderer-raytracing` | Program composition, retained acceleration structures, path tracing, and NEE-AT |
 | `renderer-presentation` | Exposure, reconstruction-facing presentation inputs, HDR/SDR mapping, and display composition |
 | `renderer-runtime` | Generic frame recording/resources/statistics, lifecycle coordination, pass scheduling, telemetry, capture, and the host callback SPI |
+| `renderer-denoising` | Renderer-owned temporal-denoiser contracts, frame inputs, reset semantics, and borrowed Vulkan resource descriptions |
 | `nvidia-ngx` | NGX, DLSS Ray Reconstruction, and DLSS Frame Generation integration |
+| `nvidia-nrd` | Pinned NRD/NRI Vulkan backend and native packaging |
 | `minecraft-api`, `minecraft-adapter` | Loader-neutral Minecraft world/resource epochs, world sessions, scene borrowing, and environment selection |
 | `minecraft-content` | Host-free Minecraft material analysis and texture-page planning/compilation |
 | `minecraft-rendering` | Minecraft-independent terrain/entity/material/light/sky rendering and the host-free frame/capture seams |
@@ -86,14 +88,15 @@ For a frame:
 3. retained geometry, lights, environment, and program state are snapshotted atomically;
 4. reusable BLAS candidates and the scene TLAS are prepared, then the persistent per-scene NEE-AT distribution
    is updated;
-5. world-resource passes record, the ray pipeline traces, post effects chain scene colour, UI passes record to
-   the display-resolution layer, and presentation maps to SDR or HDR;
+5. world-resource passes record and the ray pipeline traces; the selected raw, NRD, or Ray Reconstruction route
+   reconstructs scene colour before post effects, UI, and SDR/HDR presentation;
 6. successful submission attaches exact graphics-timeline retirement to every referenced resource.
 
-The active Vulkan profile is Vulkan 1.4 with unified image layouts, descriptor heaps, synchronization2, and
-shader objects for compute/raster. Ray stages remain on `VK_KHR_ray_tracing_pipeline`. The renderer device
-context owns one mapped resource heap and one mapped sampler heap; passes borrow the bound heaps and live
-`VkCommandBuffer`.
+The active Vulkan profile is Vulkan 1.4 with unified image layouts, descriptor heaps, push descriptors,
+synchronization2, and shader objects for compute/raster. Push descriptors are required by the wrapped NRI
+backend; renderer shaders otherwise use descriptor heaps. Ray stages remain on `VK_KHR_ray_tracing_pipeline`.
+The renderer device context owns one mapped resource heap and one mapped sampler heap; passes borrow the bound
+heaps and live `VkCommandBuffer`.
 `GpuDescriptorHeapProperties` exposes the resource descriptor stride in bytes plus the maximum resource and
 sampler allocation sizes in slots. Sampler stride, heap alignment, and total capacity remain backend details.
 Images and samplers use direct heap access. Acceleration structures use a conventional SPIR-V binding mapped
@@ -121,6 +124,25 @@ These static properties do not replace physical visual validation.
 Opacity micromaps are not active in the current geometry or acceleration path and have no public contract.
 Cutout coverage remains a surface-program and any-hit concern.
 
+## Reconstruction and denoising
+
+The renderer has three mutually exclusive reconstruction routes. `RAY_RECONSTRUCTION` is the default and is
+the only route that invokes NGX DLSS Ray Reconstruction. `TEMPORAL_DENOISER` runs the bundled NRD backend at
+display resolution, using REBLUR by default with RELAX as the alternate method. `RAW` performs an exact copy
+of the traced image and is the minimal reference route. Neither NRD nor RAW depends on Streamline.
+
+Ray Reconstruction consumes primary-surface normal, depth, albedo, roughness, and dense motion guides. A
+bounded deterministic stable-plane traversal follows the dominant delta chain for reflection reconstruction
+metadata. It keeps primary normal/depth/motion attached to the primary surface and supplies a separately
+unfolded virtual endpoint only for eligible reflection motion; transmission retains the optical fallback.
+
+NRD consumes separate demodulated diffuse and specular radiance/hit-distance signals, view-space depth,
+primary normal/roughness, and screen-space motion. RELAX uses linear RGB and absolute hit distance. REBLUR uses
+YCoCg and normalized hit distance with the matching backend parameters. Primary emission and environment
+radiance remain an explicit unfiltered residual, and composition remodulates the two denoised lobes before
+applying pre-exposure once. Camera cuts, scene/history discontinuities, resizes, route changes, and method
+changes reset or recreate temporal state.
+
 ## Passes and validation
 
 World-resource passes run before tracing. Post and UI passes use stage-local `PassId` values and at most one
@@ -129,7 +151,8 @@ same stage and grants ordering only. Missing anchors are unconstrained and accep
 ties. The same textual ID in another stage is unrelated; duplicate live IDs within one stage, self-anchors,
 and cycles are rejected.
 
-Static package, dependency/import, lifecycle, shader/reflection, ABI, and example-consumer gates are green.
-RR-disabled Minecraft bring-up with Vulkan validation, screenshot review, camera-volume activation, retained
-light telemetry, default-resolution performance measurement, and clean shutdown is complete. Raw 1-spp images
-remain transport evidence rather than accepted denoised appearance; DLSS Ray Reconstruction is deferred.
+Static package, dependency/import, lifecycle, shader/reflection, ABI, native NRD, and example-consumer gates are
+green. Direct Fabric launches into `ray-tracing-test-place` validate raw, RELAX, REBLUR, and release-DLL Ray
+Reconstruction routes. Route-specific telemetry confirms that only the selected reconstruction backend records
+work, and the captured final/debug views contain the rendered world without an actionable Vulkan, NRI, NRD, or
+NGX failure.

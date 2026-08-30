@@ -44,6 +44,8 @@ final class RtFrameStatsBoundaryTest {
         MetricSchema schema = RtFrameStats.rendererFrameMetrics();
         assertTrue(schema.stages().stream().anyMatch(stage -> stage.name().equals("geometry.packMaterial")));
         assertTrue(schema.stages().stream().anyMatch(stage -> stage.name().equals("geometry.schedulerValidate")));
+        assertTrue(schema.stages().stream().anyMatch(stage -> stage.name().equals("frame.nrd")));
+        assertTrue(schema.stages().stream().anyMatch(stage -> stage.name().equals("frame.rawCopy")));
         assertTrue(schema.stages().stream().filter(stage -> stage.name().startsWith("frame."))
                 .allMatch(StageMetric::contributesToAccountedTime));
         assertTrue(schema.counters().contains("geometryTrianglesSubmitted"));

@@ -1,14 +1,14 @@
 # Caustica rewrite API review
 
-Date: 2026-08-30
+Date: 2026-08-31
 Scope: architecture, API, and implementation reconciliation
-Status: non-RR rewrite and integration accepted; denoised visual-quality and RR work remain deferred
+Status: rewrite, Ray Reconstruction, and NRD integration accepted for the current experimental API
 
 ## Executive decision
 
-Continue against the implemented experimental API. Its static integration gates and RR-disabled physical
-bring-up are complete. Keep the contract experimental until denoised visual-quality work is available, without
-holding the package/lifecycle rewrite open on the deferred RR investigation.
+Continue against the implemented experimental API. Package/lifecycle gates, Minecraft material and retained
+lighting integration, stable-plane Ray Reconstruction, and the independent NRD route are complete. Keep the
+contract experimental while quantitative transport tuning continues; no structural rewrite blocker remains.
 
 The main API remains deliberately Vulkan-native. Reusable code should be described as renderer-generic or
 Minecraft-independent rather than GPU-neutral. Vulkan command buffers, device addresses, descriptor
@@ -177,11 +177,11 @@ wrapper. Its immutable state describes dynamic vertex bindings and attributes, t
 multisampling, depth, and attachment-zero blending. Either stage may additionally map conventional SPIR-V
 resources to pushed descriptor-heap indices; the showcase exercises the acceleration-structure mapping.
 
-The fixed and Minecraft world compositions retain the reflected 96-byte `WorldBindingRoots` ABI: four device
-addresses, the pushed TLAS heap index used by the acceleration-structure binding mapping, seven direct
-storage-image heap indices, initial-volume state, and the NEE-AT state address. The selected environment
-implementation and binding word live in the reflected 304-byte addressable `WorldPush`. The general
-surface-modifier and unused speculative roots are absent.
+The fixed and Minecraft world compositions share the reflected 136-byte `WorldBindingRoots` ABI: four device
+addresses, the pushed TLAS heap index used by the acceleration-structure binding mapping, fourteen direct
+storage-image heap indices, initial-volume state, the NEE-AT state address, and NRD signal encoding. The
+selected environment implementation and binding word live in the reflected addressable `WorldPush`. The
+general surface-modifier and unused speculative roots are absent.
 
 Presentation handoffs use semantic records rather than positional handle lists. `BorrowedImage` keeps an
 image, view, format, and extent together; `PresentationSwapchain` carries the immutable borrowed image table; and
@@ -219,7 +219,9 @@ configured by the consumer; no public marker repository is claimed here.
 | `renderer-raytracing` | Program composition, retained scene acceleration, transport, and NEE-AT |
 | `renderer-presentation` | Exposure and SDR/HDR presentation |
 | `renderer-runtime` | Instance-owned live renderer orchestration and host callback SPI |
+| `renderer-denoising` | Temporal-denoiser frame contract and borrowed Vulkan resource boundary |
 | `nvidia-ngx` | NGX/DLSS integration |
+| `nvidia-nrd` | Pinned NRD/NRI Vulkan backend and native packaging |
 | `features-builtin` | Built-in programs and passes through extension-facing contracts |
 | `minecraft-api`, `minecraft-adapter` | Minecraft extension/world-session lifecycle and engine bridge |
 | `minecraft-content` | Host-free material analysis and page planning |
@@ -230,37 +232,25 @@ configured by the consumer; no public marker repository is claimed here.
 
 ## Acceptance decision
 
-The final static gates are green for the current checkout: the Fabric check completed 190 actionable tasks,
-and the NeoForge `minecraft-client` plus glTF viewer checks completed 162 actionable tasks. The final Fabric
-run reached `ray-tracing-test-place` with `VK_LAYER_KHRONOS_validation` active and produced no actionable Vulkan
-validation diagnostic, device loss, or fatal renderer output. Shutdown completed normally. Unrelated optional
-mixin, host telemetry, offline-authentication, and external resource-pack messages are not Vulkan acceptance
-failures.
+Static package, dependency/import, lifecycle, shader/reflection, ABI, native NRD, and example-consumer gates are
+green. Direct Fabric launches enter `ray-tracing-test-place` and exercise exact RAW, NRD RELAX, NRD REBLUR, and
+release-DLL DLSS Ray Reconstruction routes. `frame.rawCopy`, `frame.nrd`, and `frame.dlssRr` telemetry confirms
+route exclusivity. Final and stable-plane debug captures contain the rendered world, and the tested routes shut
+down without an actionable Vulkan validation, NRI, NRD, device-loss, or NGX failure.
 
-With validation enabled, RR disabled, and the default 854 x 480 test resolution, a 1,000-frame active renderer
-sample measured 2.930 ms median, 3.733 ms p95, 4.183 ms p99, and 2.686 ms mean. The median corresponds to about
-341 frames per second of renderer throughput; it is not a promise about host presentation cadence.
+Visual review covers Minecraft nearest atlas sampling, authored cutout alpha, material-derived coloured
+emission, primary-emission/NEE separation, temporally continuous light publication, first-person player-body
+exclusion, and the ordinary hand/UI path. Primary cutout visibility is deterministic so unfiltered environment
+and emission residuals do not flicker, while secondary stochastic coverage remains part of path transport.
 
-Visual review confirms that first-person capture excludes the enclosing player body from primary rays and that
-the ordinary Minecraft hand remains visible through the UI/composition path. Camera eye-volume A/B captures
-prove that entering water activates the volume path. Camera containment now samples the same two sloped
-surface triangles emitted by the fluid mesher, removing the known CPU/geometry mismatch. The captures do not
-yet establish quantitative absorption, refraction, or physical behavior at flowing-fluid edges. The final light telemetry simultaneously retained
-Parallelogram, Spot, and Distant lights with eight NEE-AT candidates and valid history, but the raw 1-spp
-captures do not accept their appearance. The high-contrast frames are explained by the quartz/floor
-composition plus raw 1-spp output; they are not evidence of an exposure defect. Local exposure/tone mapping and
-a better HDR shoulder remain presentation options, while Ray Reconstruction is not a highlight-clipping fix.
+NEE-AT legitimately converges faster when the camera approaches a lit surface because the emitter occupies a
+larger solid angle and the screen-space proposal has more useful local history. That should reduce variance,
+not change the estimator's mean. Atomic geometry/light publication and stable retained-light identities remove
+the renderer-side cause of several-frame black-light refreshes.
 
-DLSS Ray Reconstruction remains deferred and is not part of the accepted physical feature set. Several
-launch-and-capture attempts produced a zero/black RR output
-without the renderer debug overlay, while the same path with RR disabled rendered the world and overlay. The
-rewrite therefore does not claim RR physical acceptance yet.
-
-The remaining physical order is:
-
-1. obtain denoised/stable material and Parallelogram, Spot, and Distant appearance captures;
-2. validate quantitative water absorption/refraction and flowing-fluid boundary behavior;
-3. diagnose RR as a separate presentation/NGX task.
+Camera containment and fluid meshing share the same corner-height and two-triangle surface rule. Quantitative
+water absorption/refraction and physical flowing-fluid edge behavior remain separate validation work rather
+than a package/API rewrite blocker.
 
 ## Final decisions
 
@@ -277,8 +267,8 @@ The remaining physical order is:
   material model and does not switch ray scenes.
 - Keep mandatory `SceneView.medium()` and Minecraft-owned primary-origin containment policy.
 - Keep stage-local pass ordering rather than exposing a general render graph.
-- Keep the three-shape NEE-AT light contract experimental until its physical result coverage is complete.
+- Keep the three-shape NEE-AT light contract experimental while quantitative convergence tuning continues.
 - Keep opacity micromaps outside the active contract until a concrete producer and retained-build use case
   justify reintroducing them.
-- Keep RR outside the accepted physical feature set until the NGX output contains both the rendered world and
-  renderer debug overlay.
+- Keep the default route on stable-plane DLSS Ray Reconstruction; keep RAW and NRD as independent routes with no
+  Streamline dependency.

@@ -9,6 +9,9 @@ public void runEnvironmentMiss<TComposition : IComposition>(inout WorldPayload p
     payload.radiance = max(environments.evaluateEnvironment(worldEnvironmentImplementation(),
             worldEnvironmentQuery((payload.pathFlags & WORLD_PATH_PRIMARY) != 0u
                     || payload.previousBsdfPdf <= 0.0)), float3(0.0));
+    if ((payload.pathFlags & WORLD_PATH_PRIMARY) != 0u) {
+        payload.primaryStableRadiance = payload.radiance;
+    }
     payload.hitDistance = -1.0;
     payload.pathFlags |= WORLD_PATH_MISS;
 }
