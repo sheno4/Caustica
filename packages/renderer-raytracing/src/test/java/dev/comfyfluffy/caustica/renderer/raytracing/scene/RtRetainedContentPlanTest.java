@@ -5,11 +5,15 @@ import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot;
 import org.junit.jupiter.api.Test;
 
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class RtRetainedContentPlanTest {
     @Test
@@ -37,5 +41,31 @@ final class RtRetainedContentPlanTest {
         assertEquals(1, RtRetainedSceneBackend.emitterIndex(emitters, 3, Map.of(42L, 1)));
         assertEquals(-1, RtRetainedSceneBackend.emitterIndex(emitters, 3, Map.of()));
         assertEquals(-1, RtRetainedSceneBackend.emitterIndex(emitters, 1, Map.of(42L, 1)));
+    }
+
+    @Test
+    void consecutiveEmitterIndicesUseSortedRangesAndTrackLinkedLights() {
+        var ranges = List.of(new RetainedSceneSnapshot.PrimitiveEmitter(2, 2, 42L),
+                new RetainedSceneSnapshot.PrimitiveEmitter(5, 2, 84L));
+        ByteBuffer output = ByteBuffer.allocate(7 * Integer.BYTES).order(ByteOrder.nativeOrder());
+        boolean[] linked = new boolean[2];
+
+        RtRetainedSceneBackend.putEmitterIndices(output, 0, 7, ranges,
+                Map.of(42L, 0, 84L, 1), linked);
+        output.flip();
+
+        assertEquals(List.of(-1, -1, 0, 0, -1, 1, 1),
+                java.util.stream.IntStream.range(0, 7).map(ignored -> output.getInt()).boxed().toList());
+        assertEquals(List.of(true, true), List.of(linked[0], linked[1]));
+    }
+
+    @Test
+    void emitterTablesAreOmittedForGeometryOutsideEveryMappedRange() {
+        var ranges = List.of(new RetainedSceneSnapshot.PrimitiveEmitter(4, 2, 42L));
+
+        assertFalse(RtRetainedSceneBackend.hasEmitterMapping(ranges, 0, 4));
+        assertTrue(RtRetainedSceneBackend.hasEmitterMapping(ranges, 4, 1));
+        assertTrue(RtRetainedSceneBackend.hasEmitterMapping(ranges, 3, 2));
+        assertFalse(RtRetainedSceneBackend.hasEmitterMapping(ranges, 6, 3));
     }
 }

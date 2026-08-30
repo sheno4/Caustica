@@ -736,14 +736,20 @@ public final class RtFrameRenderer {
                 TlasBuilder.record(ctx, cmd, frameTlas);
             }
             VulkanBarriers.memoryBarrier(cmd, stack);
-            RtRetainedSceneBackend.PreparedLighting lighting = scenes.prepareLighting(entryScene,
-                    new RtRetainedSceneBackend.LightingFrame(traceExtent().renderWidth(), traceExtent().renderHeight(),
-                            frameCounter, (float) snapshot.metersPerWorldUnit(),
-                            lightingHistoryContinuous), cmd, graphicsUse);
+            RtRetainedSceneBackend.PreparedLighting lighting;
+            try (RtTelemetry.Scope ignored = telemetry.frame().stage("frame.prepareLighting")) {
+                lighting = scenes.prepareLighting(entryScene,
+                        new RtRetainedSceneBackend.LightingFrame(traceExtent().renderWidth(), traceExtent().renderHeight(),
+                                frameCounter, (float) snapshot.metersPerWorldUnit(),
+                                lightingHistoryContinuous), cmd, graphicsUse);
+            }
             boolean lightingFinished = false;
             try {
-                RtRetainedSceneBackend.PreparedTrace trace = scenes.prepareTrace(entryScene, sceneOrigin,
-                        program.pipeline(), frameTlas.accel.handle, graphicsUse);
+                RtRetainedSceneBackend.PreparedTrace trace;
+                try (RtTelemetry.Scope ignored = telemetry.frame().stage("frame.prepareTrace")) {
+                    trace = scenes.prepareTrace(entryScene, sceneOrigin,
+                            program.pipeline(), frameTlas.accel.handle, graphicsUse);
+                }
                 currentTrace = trace;
                 ByteBuffer roots = stack.calloc(RtBindings.WORLD_PUSH_CONSTANT_SIZE).order(ByteOrder.nativeOrder());
                 writeFrameRoots(roots, pushBuf.deviceAddress(), snapshot, continuationQueue);

@@ -44,6 +44,8 @@ public final class RtFrameStats {
             new StageMetric("geometry.snapshotAppend", true),
             new StageMetric("frame.prepareTlas", true),
             new StageMetric("frame.recordTlas", true),
+            new StageMetric("frame.prepareLighting", true),
+            new StageMetric("frame.prepareTrace", true),
             new StageMetric("frame.skyLut", true),
             new StageMetric("frame.tracePrimary", true),
             new StageMetric("frame.traceIndirect", true),

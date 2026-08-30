@@ -272,9 +272,16 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                     instance.mesh.logical, instance.logical, instance.previousTransform);
             for (int geometryIndex = 0; geometryIndex < instanceRecords.size(); geometryIndex++) {
                 records.add(instanceRecords.get(geometryIndex));
-                emitterOffsets.add(emitterBytes);
-                int triangles = instance.mesh.logical.build().geometries().get(geometryIndex).triangleCount();
-                emitterBytes = Math.addExact(emitterBytes, Math.multiplyExact(triangles, Integer.BYTES));
+                MeshBuild.Geometry<?> geometry = instance.mesh.logical.build().geometries().get(geometryIndex);
+                int primitiveBase = geometry.firstIndex() / 3;
+                if (hasEmitterMapping(instance.logical.primitiveEmitters(), primitiveBase,
+                        geometry.triangleCount())) {
+                    emitterOffsets.add(emitterBytes);
+                    emitterBytes = Math.addExact(emitterBytes,
+                            Math.multiplyExact(geometry.triangleCount(), Integer.BYTES));
+                } else {
+                    emitterOffsets.add(-1);
+                }
             }
         }
         List<RtRetainedGeometryPlan.HitGroup> groups = RtRetainedGeometryPlan.hitGroups(records);
@@ -285,8 +292,9 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         TraceSlot slot = ring.next(ctx, geometryBytes, hits.remaining(), lightBytes, emitterBytes, pipeline);
         List<RtRetainedGeometryPlan.GeometryRecord> addressedRecords = new ArrayList<>(records.size());
         for (int index = 0; index < records.size(); index++) {
-            addressedRecords.add(records.get(index).withEmitterIndex(
-                    slot.emitters.deviceAddress().addBytes(emitterOffsets.get(index)), 0));
+            int emitterOffset = emitterOffsets.get(index);
+            addressedRecords.add(emitterOffset < 0 ? records.get(index) : records.get(index).withEmitterIndex(
+                    slot.emitters.deviceAddress().addBytes(emitterOffset), 0));
         }
         ByteBuffer geometry = RtRetainedGeometryPlan.pack(addressedRecords, origin);
         ByteBuffer emitters = ByteBuffer.allocate(emitterBytes).order(ByteOrder.nativeOrder());
@@ -294,11 +302,10 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         for (NativeInstance instance : current.geometry.instances.get(scene)) {
             for (MeshBuild.Geometry<?> meshGeometry : instance.mesh.logical.build().geometries()) {
                 int primitiveBase = meshGeometry.firstIndex() / 3;
-                for (int localPrimitive = 0; localPrimitive < meshGeometry.triangleCount(); localPrimitive++) {
-                    int dense = emitterIndex(instance.logical.primitiveEmitters(),
-                            primitiveBase + localPrimitive, lightIndices);
-                    emitters.putInt(dense);
-                    if (dense >= 0) linkedEmitters[dense] = true;
+                if (hasEmitterMapping(instance.logical.primitiveEmitters(), primitiveBase,
+                        meshGeometry.triangleCount())) {
+                    putEmitterIndices(emitters, primitiveBase, meshGeometry.triangleCount(),
+                            instance.logical.primitiveEmitters(), lightIndices, linkedEmitters);
                 }
             }
         }
@@ -342,6 +349,46 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             }
         }
         return -1;
+    }
+
+    static boolean hasEmitterMapping(List<RetainedSceneSnapshot.PrimitiveEmitter> ranges,
+                                     int firstPrimitive, int primitiveCount) {
+        long end = Math.addExact((long) firstPrimitive, primitiveCount);
+        for (RetainedSceneSnapshot.PrimitiveEmitter range : ranges) {
+            long rangeEnd = Math.addExact((long) range.firstPrimitive(), range.primitiveCount());
+            if (rangeEnd <= firstPrimitive) continue;
+            return range.firstPrimitive() < end;
+        }
+        return false;
+    }
+
+    /** Packs a consecutive primitive range in one forward pass over the sorted, disjoint emitter ranges. */
+    static void putEmitterIndices(ByteBuffer output, int firstPrimitive, int primitiveCount,
+                                  List<RetainedSceneSnapshot.PrimitiveEmitter> ranges,
+                                  Map<Long, Integer> lightIndices, boolean[] linkedEmitters) {
+        int rangeIndex = 0;
+        while (rangeIndex < ranges.size()) {
+            RetainedSceneSnapshot.PrimitiveEmitter range = ranges.get(rangeIndex);
+            if ((long) range.firstPrimitive() + range.primitiveCount() > firstPrimitive) break;
+            rangeIndex++;
+        }
+        for (int primitive = firstPrimitive, end = Math.addExact(firstPrimitive, primitiveCount);
+             primitive < end; primitive++) {
+            while (rangeIndex < ranges.size()) {
+                RetainedSceneSnapshot.PrimitiveEmitter range = ranges.get(rangeIndex);
+                if ((long) range.firstPrimitive() + range.primitiveCount() > primitive) break;
+                rangeIndex++;
+            }
+            int dense = -1;
+            if (rangeIndex < ranges.size()) {
+                RetainedSceneSnapshot.PrimitiveEmitter range = ranges.get(rangeIndex);
+                if (primitive >= range.firstPrimitive()) {
+                    dense = lightIndices.getOrDefault(range.lightIdentity(), -1);
+                }
+            }
+            output.putInt(dense);
+            if (dense >= 0) linkedEmitters[dense] = true;
+        }
     }
 
     /** Releases all native state after the GPU executor has stopped and the device has been made idle. */

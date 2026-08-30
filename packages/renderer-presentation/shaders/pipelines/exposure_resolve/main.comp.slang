@@ -70,12 +70,12 @@ void main() {
     float emissiveCap = clamp(pc.emissiveWeightCap, 0.0, 1.0);
     float skyScale = 1.0;
     float emissiveScale = 1.0;
-    // Preserve the previous behavior for views containing no ordinary surface: with no neutral
-    // population to meter against, suppressing a sky-only or lava-only frame would leave no signal.
-    // Otherwise solve the two final-share constraints exactly. If both raw populations exceed their
-    // caps, both constraints are active and ordinary surfaces occupy the remaining share.
+    // A cap is fully active only once ordinary surfaces fill the share left by that cap. Before then,
+    // blend continuously from uncapped metering. This keeps a sky-dominant view exposed for the sky and
+    // avoids a discontinuity when the first ordinary pixel enters an all-sky or all-emissive view.
     if (surfacePopulation > 0.0) {
         float rawTotal = surfacePopulation + skyPopulation + emissivePopulation;
+        float surfaceShare = surfacePopulation / max(rawTotal, 1.0);
         bool capSky = skyPopulation > skyCap * rawTotal;
         bool capEmissive = emissivePopulation > emissiveCap * rawTotal;
         float weightedSky = skyPopulation;
@@ -92,6 +92,10 @@ void main() {
             weightedEmissive = emissiveCap <= 0.0 ? 0.0
                     : emissiveCap * (surfacePopulation + skyPopulation) / max(1.0 - emissiveCap, 1.0e-6);
         }
+        float skyCapStrength = smoothstep(0.0, max(1.0 - skyCap, 1.0e-6), surfaceShare);
+        float emissiveCapStrength = smoothstep(0.0, max(1.0 - emissiveCap, 1.0e-6), surfaceShare);
+        weightedSky = lerp(skyPopulation, weightedSky, skyCapStrength);
+        weightedEmissive = lerp(emissivePopulation, weightedEmissive, emissiveCapStrength);
         skyScale = skyPopulation > 0.0 ? min(1.0, weightedSky / skyPopulation) : 1.0;
         emissiveScale = emissivePopulation > 0.0
                 ? min(1.0, weightedEmissive / emissivePopulation) : 1.0;

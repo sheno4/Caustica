@@ -2,12 +2,12 @@
 
 Date: 2026-08-30
 Scope: architecture, API, and implementation reconciliation
-Status: current review and decision record; focused package checks are green, physical acceptance pending
+Status: current review and decision record; focused package checks and the first physical acceptance pass are green
 
 ## Executive decision
 
-Continue integration against the implemented experimental API. Complete every static gate, then perform the
-physical Minecraft validation-layer, visual, and performance gates before stabilizing the contract.
+Continue integration against the implemented experimental API. The first physical Minecraft validation-layer,
+visual, and performance pass is complete; broaden feature coverage before stabilizing the contract.
 
 The main API remains deliberately Vulkan-native. Reusable code should be described as renderer-generic or
 Minecraft-independent rather than GPU-neutral. Vulkan command buffers, device addresses, descriptor
@@ -171,15 +171,33 @@ surface-modifier and unused speculative roots are absent.
 
 ## Acceptance decision
 
-Focused package, shader, reflection, ABI, and example checks are green. The remaining order is:
+Focused package, shader, reflection, ABI, and example checks are green. The Fabric integration suite completed
+successfully after the retained-scene and exposure changes. A Minecraft run in `ray-tracing-test-place` also
+completed with Vulkan 1.4 core validation enabled and no VUID, validation warning, device-loss, or fatal output.
 
-1. complete the package, import/dependency, lifecycle, unit, shader-compilation/reflection, ABI, and example
-   consumer gates;
-2. launch Minecraft with Vulkan validation enabled and resolve validation/runtime errors;
-3. review deterministic screenshots for geometry, sky, materials, water, UI overlays, and all three light types;
-4. run without validation and measure default-resolution performance.
+With validation disabled, RR disabled, the default 854 x 480 test resolution, and the configured 260 FPS game
+limit, a 500-frame renderer sample measured 2.007 ms median and 2.793 ms p95. The F3 counter reached 429 FPS
+when the game-side limit was not constraining presentation. Retained trace preparation fell from roughly
+20 ms to 0.665 ms median by generating primitive-to-emitter tables only for geometries whose primitive ranges
+actually intersect an emitter range.
 
-No physical launch, visual result, validation-layer result, or frame-rate result is asserted by this review.
+Visual review confirms that first-person capture excludes the enclosing player body from primary rays. The
+ordinary Minecraft hand remains visible through the UI/composition path. Auto exposure preserves the blue-gray
+atmosphere in a sky-dominant view. A manual -12 EV control view independently confirms the atmosphere LUT and
+display transform. Bright exterior openings can still clip white in the dark interior because the current
+global exposure cannot preserve both ends of that range without RR or a local tone mapper; this is a known
+presentation limitation rather than evidence of a missing sky render.
+
+DLSS Ray Reconstruction remains deferred. Several launch-and-capture attempts produced a zero/black RR output
+without the renderer debug overlay, while the same path with RR disabled rendered the world and overlay. The
+rewrite therefore does not claim RR physical acceptance yet.
+
+The remaining order is:
+
+1. broaden deterministic screenshot coverage for materials, water, UI overlays, and all three light types;
+2. complete a physical NEE-AT result review before stabilizing the light contract;
+3. close the remaining package/API example gaps and repeat Fabric and NeoForge integration gates;
+4. diagnose RR as a separate presentation/NGX task after the rest of the rewrite is stable.
 
 ## Final decisions
 
@@ -193,6 +211,7 @@ No physical launch, visual result, validation-layer result, or frame-rate result
   traversal requires a new multi-scene trace ABI and is not implemented or demonstrated by the examples.
 - Keep mandatory `SceneView.medium()` and Minecraft-owned primary-origin containment policy.
 - Keep stage-local pass ordering rather than exposing a general render graph.
-- Keep the three-shape NEE-AT light contract experimental through physical validation.
+- Keep the three-shape NEE-AT light contract experimental until its physical result coverage is complete.
 - Keep Vulkan opacity-micromap acceleration while removing the unused encoder program.
-- Complete static gates before claiming any physical acceptance.
+- Keep RR outside the accepted physical feature set until the NGX output contains both the rendered world and
+  renderer debug overlay.
