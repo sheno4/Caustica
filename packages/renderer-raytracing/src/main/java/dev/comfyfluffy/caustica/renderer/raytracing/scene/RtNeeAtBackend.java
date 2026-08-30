@@ -231,7 +231,12 @@ final class RtNeeAtBackend {
 
     static boolean shouldLogTelemetry(Telemetry current, Telemetry previous,
                                       long frameIndex, long previousFrameIndex) {
-        return previous == null || !current.equals(previous) || frameIndex < previousFrameIndex
+        return previous == null || current.candidates() != previous.candidates()
+                || current.historyValid() != previous.historyValid()
+                || current.rectanglesPresent() != previous.rectanglesPresent()
+                || current.spotsPresent() != previous.spotsPresent()
+                || current.distantsPresent() != previous.distantsPresent()
+                || frameIndex < previousFrameIndex
                 || frameIndex - previousFrameIndex >= TELEMETRY_INTERVAL_FRAMES;
     }
 
@@ -239,6 +244,10 @@ final class RtNeeAtBackend {
         int lightCount() {
             return Math.addExact(Math.addExact(rectangles, spots), distants);
         }
+
+        boolean rectanglesPresent() { return rectangles != 0; }
+        boolean spotsPresent() { return spots != 0; }
+        boolean distantsPresent() { return distants != 0; }
     }
 
     private static void computeBarrier(VkCommandBuffer commandBuffer) {
