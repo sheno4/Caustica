@@ -39,6 +39,17 @@ import static org.lwjgl.vulkan.KHRSynchronization2.VK_ACCESS_2_ACCELERATION_STRU
 import static org.lwjgl.vulkan.KHRSynchronization2.VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
 
 final class ShowcasePasses {
+    private static final int COLOR_WRITE_RGBA = VK10.VK_COLOR_COMPONENT_R_BIT | VK10.VK_COLOR_COMPONENT_G_BIT
+            | VK10.VK_COLOR_COMPONENT_B_BIT | VK10.VK_COLOR_COMPONENT_A_BIT;
+    private static final ShaderObjectGraphics.GraphicsState FULLSCREEN_ALPHA =
+            new ShaderObjectGraphics.GraphicsState(ShaderObjectGraphics.VertexInput.NONE,
+                    VK10.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, false, VK10.VK_POLYGON_MODE_FILL,
+                    VK10.VK_CULL_MODE_NONE, VK10.VK_FRONT_FACE_COUNTER_CLOCKWISE,
+                    VK10.VK_SAMPLE_COUNT_1_BIT, ~0, false, false, VK10.VK_COMPARE_OP_ALWAYS,
+                    new ShaderObjectGraphics.ColorBlend(true, VK10.VK_BLEND_FACTOR_SRC_ALPHA,
+                            VK10.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA, VK10.VK_BLEND_OP_ADD,
+                            VK10.VK_BLEND_FACTOR_ONE, VK10.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+                            VK10.VK_BLEND_OP_ADD, COLOR_WRITE_RGBA));
     static final PassId BLOOM = PassId.of("caustica", "bloom");
     static final PassId POST_EFFECT = PassId.of("caustica_showcase", "colour_grade");
     static final PassId UI = PassId.of("caustica_showcase", "world_marker");
@@ -187,16 +198,14 @@ final class ShowcasePasses {
     static ShaderObjectGraphics createGraphicsShaders(GpuDevice gpu, ByteBuffer vertexSpirv,
                                                        ByteBuffer fragmentSpirv) {
         return ShaderObjectGraphics.create(gpu, vertexSpirv, fragmentSpirv,
-                ShaderObjectGraphics.VertexFormat.NONE, VK10.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
-                ShaderObjectGraphics.Blend.ALPHA, VK10.VK_SAMPLE_COUNT_1_BIT);
+                "main", "main", FULLSCREEN_ALPHA);
     }
 
     /** Creates the UI shaders with its static scene binding sourced from pushed descriptor index zero. */
     static ShaderObjectGraphics createUiGraphicsShaders(GpuDevice gpu, ByteBuffer vertexSpirv,
                                                          ByteBuffer fragmentSpirv) {
         return ShaderObjectGraphics.create(gpu, vertexSpirv, fragmentSpirv,
-                ShaderObjectGraphics.VertexFormat.NONE, VK10.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
-                ShaderObjectGraphics.Blend.ALPHA, VK10.VK_SAMPLE_COUNT_1_BIT,
+                "main", "main", FULLSCREEN_ALPHA,
                 List.of(), List.of(UI_SCENE_MAPPING));
     }
 

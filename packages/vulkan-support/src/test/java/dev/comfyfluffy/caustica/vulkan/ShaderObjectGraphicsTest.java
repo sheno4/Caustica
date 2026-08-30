@@ -2,15 +2,50 @@ package dev.comfyfluffy.caustica.vulkan;
 
 import org.junit.jupiter.api.Test;
 import org.lwjgl.vulkan.EXTDescriptorHeap;
+import org.lwjgl.vulkan.VK10;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 final class ShaderObjectGraphicsTest {
+    @Test void vertexInputRetainsCallerSuppliedVulkanLayout() {
+        var bindings = new ArrayList<>(List.of(new ShaderObjectGraphics.VertexBinding(
+                3, 40, VK10.VK_VERTEX_INPUT_RATE_INSTANCE, 2)));
+        var attributes = new ArrayList<>(List.of(new ShaderObjectGraphics.VertexAttribute(
+                7, 3, VK10.VK_FORMAT_R16G16_SFLOAT, 12)));
+
+        var input = new ShaderObjectGraphics.VertexInput(bindings, attributes);
+        bindings.clear();
+        attributes.clear();
+
+        assertEquals(3, input.bindings().getFirst().binding());
+        assertEquals(40, input.bindings().getFirst().stride());
+        assertEquals(VK10.VK_VERTEX_INPUT_RATE_INSTANCE, input.bindings().getFirst().inputRate());
+        assertEquals(2, input.bindings().getFirst().divisor());
+        assertEquals(VK10.VK_FORMAT_R16G16_SFLOAT, input.attributes().getFirst().format());
+    }
+
+    @Test void blendContractRetainsCompleteVulkanEquation() {
+        int mask = VK10.VK_COLOR_COMPONENT_R_BIT | VK10.VK_COLOR_COMPONENT_G_BIT;
+
+        var alpha = new ShaderObjectGraphics.ColorBlend(true, VK10.VK_BLEND_FACTOR_SRC_ALPHA,
+                VK10.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA, VK10.VK_BLEND_OP_MAX,
+                VK10.VK_BLEND_FACTOR_SRC_ALPHA, VK10.VK_BLEND_FACTOR_DST_ALPHA,
+                VK10.VK_BLEND_OP_MIN, mask);
+
+        assertTrue(alpha.enabled());
+        assertEquals(VK10.VK_BLEND_FACTOR_SRC_ALPHA, alpha.srcColorFactor());
+        assertEquals(VK10.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA, alpha.dstColorFactor());
+        assertEquals(VK10.VK_BLEND_OP_MAX, alpha.colorOp());
+        assertEquals(VK10.VK_BLEND_OP_MIN, alpha.alphaOp());
+        assertEquals(mask, alpha.writeMask());
+    }
+
     @Test void descriptorSetDecorationsAreRejectedByTheSharedShaderObjectValidator() {
         ByteBuffer module = descriptorBinding(1, 0, 0);
         assertThrows(IllegalArgumentException.class,

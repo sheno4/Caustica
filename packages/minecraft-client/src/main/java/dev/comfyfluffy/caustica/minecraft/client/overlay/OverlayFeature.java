@@ -9,7 +9,7 @@ import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 /**
  * One world-space overlay effect rendered by {@link WorldOverlayPass} into the display-resolution UI
  * layer. Implementations create their pipelines through
- * {@link OverlayPipelines} (reusing an existing vertex-format/blend combination where one fits) and take
+ * {@link OverlayPipelines} (reusing an existing vertex-input/blend state where one fits) and take
  * per-frame vertex scratch from the shared {@link OverlayFramePool} — never own one-off pools.
  */
 public interface OverlayFeature {

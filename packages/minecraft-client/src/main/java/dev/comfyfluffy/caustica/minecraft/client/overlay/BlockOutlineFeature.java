@@ -82,11 +82,11 @@ final class BlockOutlineFeature implements OverlayFeature {
         device = gpu;
         if (pipeline == null) {
             pipeline = new OverlayPipelines.Spec("block_outline/vertex.vert.spv", "block_outline/fragment.frag.spv")
-                    .vertex(OverlayPipelines.VertexFormat.EDGE_POSITION_PAIR)
+                    .vertex(OverlayPipelines.EDGE_POSITION_PAIR)
                     .fragmentAccelerationStructure(0, 0, TLAS_INDEX_OFFSET)
                     .attachment(WorldOverlayPass.TARGET_FORMAT).build(gpu, "block outline");
             compositePipeline = new OverlayPipelines.Spec("overlay_composite/vertex.vert.spv", "overlay_composite/passthrough.frag.spv")
-                    .blend(OverlayPipelines.Blend.ALPHA).attachment(WorldOverlayPass.TARGET_FORMAT).build(gpu, "block outline composite");
+                    .blend(OverlayPipelines.ALPHA_BLEND).attachment(WorldOverlayPass.TARGET_FORMAT).build(gpu, "block outline composite");
         }
         if (mask == null || mask.width() != width || mask.height() != height) {
             if (mask != null) { VmaImage2D old = mask; use.whenComplete(old::close); }

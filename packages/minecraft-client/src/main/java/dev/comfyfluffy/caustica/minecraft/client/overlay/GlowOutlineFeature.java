@@ -119,12 +119,12 @@ final class GlowOutlineFeature implements OverlayFeature {
         this.device = device;
         if (maskPipeline == null) {
             maskPipeline = new OverlayPipelines.Spec("entity_glow/vertex.vert.spv", "entity_glow/fragment.frag.spv")
-                    .vertex(OverlayPipelines.VertexFormat.POSITION)
+                    .vertex(OverlayPipelines.POSITION)
                     .attachment(MASK_FORMAT)
                     .push(MASK_PUSH_BYTES, VK10.VK_SHADER_STAGE_VERTEX_BIT | VK10.VK_SHADER_STAGE_FRAGMENT_BIT)
                     .build(device, "glow mask");
             compositePipeline = new OverlayPipelines.Spec("overlay_composite/vertex.vert.spv", "overlay_composite/glow.frag.spv")
-                    .blend(OverlayPipelines.Blend.ALPHA)
+                    .blend(OverlayPipelines.ALPHA_BLEND)
                     .attachment(WorldOverlayPass.TARGET_FORMAT)
                     .build(device, "glow composite");
         }

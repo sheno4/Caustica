@@ -16,8 +16,49 @@ import java.util.Set;
 
 /** Descriptor-heap vertex and fragment shader objects with fully dynamic raster state. */
 public final class ShaderObjectGraphics implements AutoCloseable {
-    public enum VertexFormat { NONE, POSITION, POSITION_TEX_COLOR, EDGE_POSITION_PAIR }
-    public enum Blend { NONE, ALPHA }
+    /** One dynamic vertex binding expressed directly in Vulkan terms. */
+    public record VertexBinding(int binding, int stride, int inputRate, int divisor) {
+        public VertexBinding {
+            if (binding < 0 || stride < 0 || divisor < 0) {
+                throw new IllegalArgumentException("negative vertex binding field");
+            }
+        }
+    }
+
+    /** One dynamic vertex attribute expressed directly in Vulkan terms. */
+    public record VertexAttribute(int location, int binding, int format, int offset) {
+        public VertexAttribute {
+            if (location < 0 || binding < 0 || offset < 0) {
+                throw new IllegalArgumentException("negative vertex attribute field");
+            }
+        }
+    }
+
+    /** Complete dynamic vertex input for a draw. */
+    public record VertexInput(List<VertexBinding> bindings, List<VertexAttribute> attributes) {
+        public static final VertexInput NONE = new VertexInput(List.of(), List.of());
+
+        public VertexInput {
+            bindings = List.copyOf(bindings);
+            attributes = List.copyOf(attributes);
+        }
+    }
+
+    /** Dynamic blend state for color attachment zero. */
+    public record ColorBlend(boolean enabled, int srcColorFactor, int dstColorFactor, int colorOp,
+                             int srcAlphaFactor, int dstAlphaFactor, int alphaOp, int writeMask) {}
+
+    /** Vulkan-native dynamic state that is stable for this shader pair. */
+    public record GraphicsState(VertexInput vertexInput, int primitiveTopology, boolean primitiveRestart,
+                                int polygonMode, int cullMode, int frontFace,
+                                int rasterizationSamples, int sampleMask,
+                                boolean depthTest, boolean depthWrite, int depthCompareOp,
+                                ColorBlend colorBlend) {
+        public GraphicsState {
+            Objects.requireNonNull(vertexInput, "vertexInput");
+            Objects.requireNonNull(colorBlend, "colorBlend");
+        }
+    }
 
     /** Maps one statically bound SPIR-V resource to an index stored in pushed shader data. */
     public record PushIndexedResourceMapping(int descriptorSet, int binding, int resourceMask,
@@ -42,53 +83,49 @@ public final class ShaderObjectGraphics implements AutoCloseable {
     private final VkDevice device;
     private final long vertex;
     private final long fragment;
-    private final VertexFormat format;
-    private final int topology;
-    private final Blend blend;
-    private final int samples;
+    private final GraphicsState state;
     private final ResourceLifetime lifetime;
 
-    private ShaderObjectGraphics(VkDevice device, long vertex, long fragment, VertexFormat format,
-                                 int topology, Blend blend, int samples) {
+    private ShaderObjectGraphics(VkDevice device, long vertex, long fragment, GraphicsState state) {
         this.device = device;
         this.vertex = vertex;
         this.fragment = fragment;
-        this.format = format;
-        this.topology = topology;
-        this.blend = blend;
-        this.samples = samples;
+        this.state = state;
         lifetime = new ResourceLifetime(() -> EXTShaderObject.vkDestroyShaderEXT(device, fragment, null),
                 () -> EXTShaderObject.vkDestroyShaderEXT(device, vertex, null));
     }
 
     public static ShaderObjectGraphics create(GpuDevice gpu, ByteBuffer vertexSpirv, ByteBuffer fragmentSpirv,
-                                              VertexFormat format, int topology, Blend blend, int samples) {
-        return create(gpu, vertexSpirv, fragmentSpirv, format, topology, blend, samples,
+                                              String vertexEntryPoint, String fragmentEntryPoint,
+                                              GraphicsState state) {
+        return create(gpu, vertexSpirv, fragmentSpirv, vertexEntryPoint, fragmentEntryPoint, state,
                 List.of(), List.of());
     }
 
     public static ShaderObjectGraphics create(GpuDevice gpu, ByteBuffer vertexSpirv, ByteBuffer fragmentSpirv,
-                                              VertexFormat format, int topology, Blend blend, int samples,
+                                              String vertexEntryPoint, String fragmentEntryPoint,
+                                              GraphicsState state,
                                               List<PushIndexedResourceMapping> vertexMappings,
                                               List<PushIndexedResourceMapping> fragmentMappings) {
         Objects.requireNonNull(gpu, "gpu");
-        Objects.requireNonNull(format, "format");
-        Objects.requireNonNull(blend, "blend");
+        Objects.requireNonNull(state, "state");
         long vertex = createShader(gpu, vertexSpirv, VK10.VK_SHADER_STAGE_VERTEX_BIT,
-                VK10.VK_SHADER_STAGE_FRAGMENT_BIT, vertexMappings);
+                VK10.VK_SHADER_STAGE_FRAGMENT_BIT, vertexEntryPoint, vertexMappings);
         try {
             long fragment = createShader(gpu, fragmentSpirv, VK10.VK_SHADER_STAGE_FRAGMENT_BIT, 0,
-                    fragmentMappings);
-            return new ShaderObjectGraphics(gpu.vk(), vertex, fragment, format, topology, blend, samples);
+                    fragmentEntryPoint, fragmentMappings);
+            return new ShaderObjectGraphics(gpu.vk(), vertex, fragment, state);
         } catch (RuntimeException | Error failure) {
             EXTShaderObject.vkDestroyShaderEXT(gpu.vk(), vertex, null);
             throw failure;
         }
     }
 
-    private static long createShader(GpuDevice gpu, ByteBuffer spirv, int stage, int nextStage,
+    private static long createShader(GpuDevice gpu, ByteBuffer spirv, int stage, int nextStage, String entryPoint,
                                      List<PushIndexedResourceMapping> mappings) {
         Objects.requireNonNull(spirv, "spirv");
+        Objects.requireNonNull(entryPoint, "entryPoint");
+        if (entryPoint.isBlank()) throw new IllegalArgumentException("shader entry point must not be blank");
         Objects.requireNonNull(mappings, "mappings");
         if (!spirv.isDirect()) throw new IllegalArgumentException("SPIR-V must be direct");
         if (mappings.isEmpty()) ShaderObjectCompute.validateDescriptorHeapSpirv(spirv);
@@ -97,7 +134,7 @@ public final class ShaderObjectGraphics implements AutoCloseable {
             VkShaderCreateInfoEXT.Buffer info = VkShaderCreateInfoEXT.calloc(1, stack);
             info.get(0).sType$Default().flags(EXTDescriptorHeap.VK_SHADER_CREATE_DESCRIPTOR_HEAP_BIT_EXT)
                     .stage(stage).nextStage(nextStage).codeType(EXTShaderObject.VK_SHADER_CODE_TYPE_SPIRV_EXT)
-                    .pCode(spirv).pName(stack.UTF8("main")).setLayoutCount(0).pushConstantRangeCount(0);
+                    .pCode(spirv).pName(stack.UTF8(entryPoint)).setLayoutCount(0).pushConstantRangeCount(0);
             if (!mappings.isEmpty()) {
                 int stride = Math.toIntExact(gpu.descriptorHeap().properties().resourceDescriptorStrideBytes());
                 info.get(0).pNext(createMappingInfo(stack, mappings, stride).address());
@@ -194,35 +231,34 @@ public final class ShaderObjectGraphics implements AutoCloseable {
             EXTShaderObject.vkCmdBindShadersEXT(commandBuffer,
                     stack.ints(VK10.VK_SHADER_STAGE_VERTEX_BIT, VK10.VK_SHADER_STAGE_FRAGMENT_BIT),
                     stack.longs(vertex, fragment));
-            VK14.vkCmdSetPrimitiveTopology(commandBuffer, topology);
-            VK14.vkCmdSetPrimitiveRestartEnable(commandBuffer, false);
-            VK14.vkCmdSetCullMode(commandBuffer, VK10.VK_CULL_MODE_NONE);
-            VK14.vkCmdSetFrontFace(commandBuffer, VK10.VK_FRONT_FACE_COUNTER_CLOCKWISE);
+            VK14.vkCmdSetPrimitiveTopology(commandBuffer, state.primitiveTopology());
+            VK14.vkCmdSetPrimitiveRestartEnable(commandBuffer, state.primitiveRestart());
+            VK14.vkCmdSetCullMode(commandBuffer, state.cullMode());
+            VK14.vkCmdSetFrontFace(commandBuffer, state.frontFace());
             VK14.vkCmdSetRasterizerDiscardEnable(commandBuffer, false);
-            VK14.vkCmdSetDepthTestEnable(commandBuffer, false);
-            VK14.vkCmdSetDepthWriteEnable(commandBuffer, false);
+            VK14.vkCmdSetDepthTestEnable(commandBuffer, state.depthTest());
+            VK14.vkCmdSetDepthWriteEnable(commandBuffer, state.depthWrite());
+            VK14.vkCmdSetDepthCompareOp(commandBuffer, state.depthCompareOp());
             VK14.vkCmdSetDepthBoundsTestEnable(commandBuffer, false);
             VK14.vkCmdSetStencilTestEnable(commandBuffer, false);
             EXTShaderObject.vkCmdSetDepthClampEnableEXT(commandBuffer, false);
             EXTShaderObject.vkCmdSetDepthBiasEnableEXT(commandBuffer, false);
-            EXTShaderObject.vkCmdSetPolygonModeEXT(commandBuffer, VK10.VK_POLYGON_MODE_FILL);
-            EXTShaderObject.vkCmdSetRasterizationSamplesEXT(commandBuffer, samples);
-            EXTShaderObject.vkCmdSetSampleMaskEXT(commandBuffer, samples, stack.ints(~0));
+            EXTShaderObject.vkCmdSetPolygonModeEXT(commandBuffer, state.polygonMode());
+            EXTShaderObject.vkCmdSetRasterizationSamplesEXT(commandBuffer, state.rasterizationSamples());
+            EXTShaderObject.vkCmdSetSampleMaskEXT(commandBuffer, state.rasterizationSamples(),
+                    stack.ints(state.sampleMask()));
             EXTShaderObject.vkCmdSetAlphaToCoverageEnableEXT(commandBuffer, false);
             EXTShaderObject.vkCmdSetAlphaToOneEnableEXT(commandBuffer, false);
             EXTShaderObject.vkCmdSetLogicOpEnableEXT(commandBuffer, false);
+            ColorBlend blend = state.colorBlend();
             EXTShaderObject.vkCmdSetColorBlendEnableEXT(commandBuffer, 0,
-                    stack.ints(blend == Blend.ALPHA ? VK10.VK_TRUE : VK10.VK_FALSE));
+                    stack.ints(blend.enabled() ? VK10.VK_TRUE : VK10.VK_FALSE));
             VkColorBlendEquationEXT.Buffer equation = VkColorBlendEquationEXT.calloc(1, stack)
-                    .srcColorBlendFactor(VK10.VK_BLEND_FACTOR_SRC_ALPHA)
-                    .dstColorBlendFactor(VK10.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA)
-                    .colorBlendOp(VK10.VK_BLEND_OP_ADD).srcAlphaBlendFactor(VK10.VK_BLEND_FACTOR_ONE)
-                    .dstAlphaBlendFactor(VK10.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA)
-                    .alphaBlendOp(VK10.VK_BLEND_OP_ADD);
+                    .srcColorBlendFactor(blend.srcColorFactor()).dstColorBlendFactor(blend.dstColorFactor())
+                    .colorBlendOp(blend.colorOp()).srcAlphaBlendFactor(blend.srcAlphaFactor())
+                    .dstAlphaBlendFactor(blend.dstAlphaFactor()).alphaBlendOp(blend.alphaOp());
             EXTShaderObject.vkCmdSetColorBlendEquationEXT(commandBuffer, 0, equation);
-            EXTShaderObject.vkCmdSetColorWriteMaskEXT(commandBuffer, 0, stack.ints(
-                    VK10.VK_COLOR_COMPONENT_R_BIT | VK10.VK_COLOR_COMPONENT_G_BIT
-                            | VK10.VK_COLOR_COMPONENT_B_BIT | VK10.VK_COLOR_COMPONENT_A_BIT));
+            EXTShaderObject.vkCmdSetColorWriteMaskEXT(commandBuffer, 0, stack.ints(blend.writeMask()));
             setVertexInput(commandBuffer, stack);
             VkViewport.Buffer viewport = VkViewport.calloc(1, stack);
             viewport.get(0).set(0, 0, width, height, 0, 1);
@@ -240,36 +276,26 @@ public final class ShaderObjectGraphics implements AutoCloseable {
     }
 
     private void setVertexInput(VkCommandBuffer commandBuffer, MemoryStack stack) {
-        if (format == VertexFormat.NONE) {
+        VertexInput input = state.vertexInput();
+        if (input.bindings().isEmpty() && input.attributes().isEmpty()) {
             EXTVertexInputDynamicState.vkCmdSetVertexInputEXT(commandBuffer, null, null);
             return;
         }
-        int stride = format == VertexFormat.POSITION ? 12 : 24;
-        VkVertexInputBindingDescription2EXT.Buffer binding = VkVertexInputBindingDescription2EXT.calloc(1, stack);
-        binding.get(0).sType$Default().binding(0).stride(stride).inputRate(
-                        format == VertexFormat.EDGE_POSITION_PAIR
-                                ? VK10.VK_VERTEX_INPUT_RATE_INSTANCE : VK10.VK_VERTEX_INPUT_RATE_VERTEX)
-                .divisor(1);
-        int count = switch (format) {
-            case POSITION -> 1;
-            case EDGE_POSITION_PAIR -> 2;
-            case POSITION_TEX_COLOR -> 3;
-            case NONE -> throw new AssertionError();
-        };
-        VkVertexInputAttributeDescription2EXT.Buffer attributes =
-                VkVertexInputAttributeDescription2EXT.calloc(count, stack);
-        attributes.get(0).sType$Default().location(0).binding(0)
-                .format(VK10.VK_FORMAT_R32G32B32_SFLOAT).offset(0);
-        if (format == VertexFormat.EDGE_POSITION_PAIR) {
-            attributes.get(1).sType$Default().location(1).binding(0)
-                    .format(VK10.VK_FORMAT_R32G32B32_SFLOAT).offset(12);
-        } else if (count == 3) {
-            attributes.get(1).sType$Default().location(1).binding(0)
-                    .format(VK10.VK_FORMAT_R32G32_SFLOAT).offset(12);
-            attributes.get(2).sType$Default().location(2).binding(0)
-                    .format(VK10.VK_FORMAT_R8G8B8A8_UNORM).offset(20);
+        VkVertexInputBindingDescription2EXT.Buffer bindings =
+                VkVertexInputBindingDescription2EXT.calloc(input.bindings().size(), stack);
+        for (int index = 0; index < input.bindings().size(); index++) {
+            VertexBinding source = input.bindings().get(index);
+            bindings.get(index).sType$Default().binding(source.binding()).stride(source.stride())
+                    .inputRate(source.inputRate()).divisor(source.divisor());
         }
-        EXTVertexInputDynamicState.vkCmdSetVertexInputEXT(commandBuffer, binding, attributes);
+        VkVertexInputAttributeDescription2EXT.Buffer attributes =
+                VkVertexInputAttributeDescription2EXT.calloc(input.attributes().size(), stack);
+        for (int index = 0; index < input.attributes().size(); index++) {
+            VertexAttribute source = input.attributes().get(index);
+            attributes.get(index).sType$Default().location(source.location()).binding(source.binding())
+                    .format(source.format()).offset(source.offset());
+        }
+        EXTVertexInputDynamicState.vkCmdSetVertexInputEXT(commandBuffer, bindings, attributes);
     }
 
     @Override public void close() { lifetime.close(); }
