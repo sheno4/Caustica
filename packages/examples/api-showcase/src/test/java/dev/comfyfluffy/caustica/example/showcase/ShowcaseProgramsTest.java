@@ -5,6 +5,7 @@ import dev.comfyfluffy.caustica.api.program.EnvironmentId;
 import dev.comfyfluffy.caustica.api.program.ProgramBuilder;
 import dev.comfyfluffy.caustica.api.program.ProgramChannel;
 import dev.comfyfluffy.caustica.api.program.ProgramRegistration;
+import dev.comfyfluffy.caustica.api.program.ProgramFailure;
 import dev.comfyfluffy.caustica.api.program.SurfaceDefinition;
 import dev.comfyfluffy.caustica.api.program.SurfaceId;
 import dev.comfyfluffy.caustica.api.program.VolumeDefinition;
@@ -29,6 +30,32 @@ final class ShowcaseProgramsTest {
         assertFalse(programs.ready());
         channel.complete(new ProgramRegistration.Ready());
         assertTrue(programs.ready());
+        assertEquals(ShowcasePrograms.State.READY, programs.state());
+    }
+
+    @Test
+    void reportsCompositionFailureAndKeepsTheProgramUnavailable() {
+        CapturePrograms channel = new CapturePrograms();
+        List<String> diagnostics = new ArrayList<>();
+        ShowcasePrograms programs = new ShowcasePrograms(channel, diagnostics::add);
+
+        channel.complete(new ProgramRegistration.Failed(
+                new ProgramFailure("showcase composition failed", "surface type was not found")));
+
+        assertFalse(programs.ready());
+        assertEquals(ShowcasePrograms.State.FAILED, programs.state());
+        assertEquals(List.of("showcase composition failed\nsurface type was not found"), diagnostics);
+    }
+
+    @Test
+    void observesCancellationWhenTheOwnerClosesBeforePublication() {
+        CapturePrograms channel = new CapturePrograms();
+        ShowcasePrograms programs = new ShowcasePrograms(channel, message -> { });
+
+        programs.close();
+
+        assertFalse(programs.ready());
+        assertEquals(ShowcasePrograms.State.CANCELLED, programs.state());
     }
 
     @Test
@@ -64,6 +91,7 @@ final class ShowcaseProgramsTest {
         private final List<EnvironmentDefinition<?>> environments = new ArrayList<>();
         private Consumer<ProgramRegistration.Completion> completionCallback;
         private boolean closed;
+        private boolean terminal;
 
         @Override
         public <E> ProgramRegistration<E> register(Function<? super ProgramBuilder, ? extends E> declaration) {
@@ -73,11 +101,18 @@ final class ShowcaseProgramsTest {
                 @Override public void whenComplete(Consumer<? super Completion> callback) {
                     completionCallback = callback::accept;
                 }
-                @Override public void close() { closed = true; }
+                @Override public void close() {
+                    closed = true;
+                    if (!terminal && completionCallback != null) {
+                        terminal = true;
+                        completionCallback.accept(new Cancelled());
+                    }
+                }
             };
         }
 
         private void complete(ProgramRegistration.Completion completion) {
+            terminal = true;
             completionCallback.accept(completion);
         }
 

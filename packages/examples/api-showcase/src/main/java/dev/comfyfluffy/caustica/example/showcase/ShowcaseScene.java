@@ -42,6 +42,31 @@ final class ShowcaseScene {
     GeometryPublication publishMesh(VulkanDeviceAddressRange currentPositions,
                                     VulkanDeviceAddressRange previousPositions,
                                     VulkanDeviceAddressRange indices, Runnable retired) {
+        MeshBuild<ShowcasePrograms.InstanceData> build = meshBuild(
+                currentPositions, previousPositions, indices, 1L);
+        return geometry.submitGroup(List.of(
+                new RetainedBatch<>(List.of(new GeometryChannel.SetMesh<>(mesh, build)), retired),
+                RetainedBatch.of(List.of(placement(scene, GeometryTransform.translation(0.0, 64.0, 0.0))))));
+    }
+
+    /** Replaces the retained mesh streams while every existing placement remains resident. */
+    GeometryPublication replaceMesh(VulkanDeviceAddressRange currentPositions,
+                                    VulkanDeviceAddressRange previousPositions,
+                                    VulkanDeviceAddressRange indices, long indexRevision,
+                                    Runnable retired) {
+        return geometry.submit(new RetainedBatch<>(List.of(new GeometryChannel.SetMesh<>(mesh,
+                meshBuild(currentPositions, previousPositions, indices, indexRevision))), retired));
+    }
+
+    /** Moves the existing placement, including between simultaneously resident scenes. */
+    GeometryPublication moveInstance(SceneId target, GeometryTransform transform) {
+        return geometry.submit(RetainedBatch.of(List.of(placement(target, transform))));
+    }
+
+    private MeshBuild<ShowcasePrograms.InstanceData> meshBuild(VulkanDeviceAddressRange currentPositions,
+                                                               VulkanDeviceAddressRange previousPositions,
+                                                               VulkanDeviceAddressRange indices,
+                                                               long indexRevision) {
         var opaque = new MeshBuild.SurfaceSlot<>(programs.opaque(),
                 ShowcasePrograms.SURFACE_BINDING.data(0L), new MeshBuild.CoveragePolicy.Opaque());
         var cutout = new MeshBuild.SurfaceSlot<>(programs.cutout(),
@@ -49,23 +74,24 @@ final class ShowcaseScene {
                 new MeshBuild.CoveragePolicy.Cutout(0.5f));
         var volume = new MeshBuild.VolumeSlot<>(programs.volume(),
                 ShowcasePrograms.VOLUME_BINDING.data(0L));
-        var build = new MeshBuild<>(
+        return new MeshBuild<>(
                 new MeshBuild.Stream(currentPositions, 12),
                 new MeshBuild.Stream(previousPositions, 12),
                 new MeshBuild.Stream(indices, 4),
-                4, new MeshBuild.IndexRevision(1L),
+                4, new MeshBuild.IndexRevision(indexRevision),
                 List.of(
                         new MeshBuild.Geometry<>(opaque, null, 0, 3),
                         new MeshBuild.Geometry<>(cutout, null, 3, 3),
                         new MeshBuild.Geometry<>(opaque, volume, 6, 3),
                         new MeshBuild.Geometry<>(null, volume, 9, 3)));
-        return geometry.submitGroup(List.of(
-                new RetainedBatch<>(List.of(new GeometryChannel.SetMesh<>(mesh, build)), retired),
-                RetainedBatch.of(List.of(new GeometryChannel.SetInstance<>(instance, scene, mesh,
-                        GeometryTransform.translation(0.0, 64.0, 0.0), 0xff,
-                        ShowcasePrograms.INSTANCE.data(7L),
-                        new PrimitiveLightMap(List.of(
-                                new PrimitiveLightMap.Range(0, 1, lightIds.getFirst()))))))));
+    }
+
+    private GeometryChannel.SetInstance<ShowcasePrograms.InstanceData> placement(
+            SceneId target, GeometryTransform transform) {
+        return new GeometryChannel.SetInstance<>(instance, target, mesh, transform, 0xff,
+                ShowcasePrograms.INSTANCE.data(7L),
+                new PrimitiveLightMap(List.of(
+                        new PrimitiveLightMap.Range(0, 1, lightIds.getFirst()))));
     }
 
     SceneId identity() {

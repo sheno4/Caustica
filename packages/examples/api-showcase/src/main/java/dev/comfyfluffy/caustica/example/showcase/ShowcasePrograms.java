@@ -12,10 +12,10 @@ import dev.comfyfluffy.caustica.api.program.VolumeDefinition;
 import dev.comfyfluffy.caustica.api.program.VolumeId;
 import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
 
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 final class ShowcasePrograms {
+    enum State { PENDING, READY, FAILED, CANCELLED }
     interface ImplementationData { }
     interface SurfaceBindingData { }
     interface VolumeBindingData { }
@@ -39,7 +39,7 @@ final class ShowcasePrograms {
                    EnvironmentId<EnvironmentBindingData> endSky) { }
 
     private final ProgramRegistration<Exports> registration;
-    private final AtomicBoolean ready = new AtomicBoolean();
+    private volatile State state = State.PENDING;
 
     ShowcasePrograms(ProgramChannel programs, Consumer<String> diagnosticSink) {
         registration = programs.register(builder -> new Exports(
@@ -64,9 +64,12 @@ final class ShowcasePrograms {
                         ENVIRONMENT_BINDING))));
         registration.whenComplete(completion -> {
             if (completion instanceof ProgramRegistration.Ready) {
-                ready.set(true);
+                state = State.READY;
             } else if (completion instanceof ProgramRegistration.Failed failed) {
+                state = State.FAILED;
                 diagnosticSink.accept(failed.failure().summary() + "\n" + failed.failure().diagnostics());
+            } else if (completion instanceof ProgramRegistration.Cancelled) {
+                state = State.CANCELLED;
             }
         });
     }
@@ -76,7 +79,11 @@ final class ShowcasePrograms {
     }
 
     boolean ready() {
-        return ready.get();
+        return state == State.READY;
+    }
+
+    State state() {
+        return state;
     }
 
     void whenReady(Runnable callback) {

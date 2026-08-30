@@ -12,6 +12,18 @@ repositories {
     mavenCentral()
 }
 
+def osName = System.getProperty("os.name").toLowerCase(Locale.ROOT)
+def osArch = System.getProperty("os.arch").toLowerCase(Locale.ROOT)
+def lwjglTestNatives = null
+if (osName.contains("windows")) {
+    lwjglTestNatives = osArch.contains("aarch64") ? "natives-windows-arm64" : "natives-windows"
+} else if (osName.contains("mac")) {
+    lwjglTestNatives = osArch.contains("aarch64") ? "natives-macos-arm64" : "natives-macos"
+} else if (osName.contains("linux")) {
+    lwjglTestNatives = osArch.contains("aarch64") ? "natives-linux-arm64"
+            : osArch.startsWith("arm") ? "natives-linux-arm32" : "natives-linux"
+}
+
 configurations {
     slangShaderModules {
         canBeConsumed = false
@@ -29,6 +41,9 @@ dependencies {
     testImplementation platform("org.junit:junit-bom:5.12.2")
     testImplementation "org.junit.jupiter:junit-jupiter"
     testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+    if (lwjglTestNatives != null) {
+        testRuntimeOnly "org.lwjgl:lwjgl:${project.lwjgl_version}:${lwjglTestNatives}"
+    }
     slangShaderModules project(path: ":packages:shader-api", configuration: "runtimeElements")
 }
 

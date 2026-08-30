@@ -3,6 +3,7 @@ package dev.comfyfluffy.caustica.example.showcase;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddressRange;
 import dev.comfyfluffy.caustica.api.vulkan.VulkanDeviceAddress;
 import dev.comfyfluffy.caustica.api.geometry.GeometryChannel;
+import dev.comfyfluffy.caustica.api.geometry.GeometryTransform;
 import dev.comfyfluffy.caustica.api.geometry.InstanceId;
 import dev.comfyfluffy.caustica.api.geometry.MeshId;
 import dev.comfyfluffy.caustica.api.light.LightId;
@@ -19,9 +20,11 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 
 final class ShowcaseSceneApiTest {
     @Test
@@ -94,6 +97,36 @@ final class ShowcaseSceneApiTest {
         assertEquals(2, alternateGeometry.operations.size());
     }
 
+    @Test
+    void retainedMeshCanBeReplacedAndItsPlacementMovedAcrossResidentScenes() {
+        RecordingGeometry geometry = new RecordingGeometry();
+        SceneId primary = new SceneId() { };
+        SceneId portalDestination = new SceneId() { };
+        ShowcaseScene scene = new ShowcaseScene(exports(), lights(), primary, geometry);
+        AtomicBoolean originalRetired = new AtomicBoolean();
+        AtomicBoolean replacementRetired = new AtomicBoolean();
+
+        scene.publishMesh(range(0x1000, 48), range(0x2000, 48), range(0x3000, 48),
+                () -> originalRetired.set(true));
+        scene.replaceMesh(range(0x4000, 48), range(0x5000, 48), range(0x6000, 48), 2L,
+                () -> replacementRetired.set(true));
+        scene.moveInstance(portalDestination, GeometryTransform.translation(4.0, 70.0, -3.0));
+
+        var replacement = assertInstanceOf(GeometryChannel.SetMesh.class,
+                geometry.operations.get(1).getFirst());
+        assertEquals(2L, replacement.build().indexRevision().value());
+        var moved = assertInstanceOf(GeometryChannel.SetInstance.class,
+                geometry.operations.get(2).getFirst());
+        assertSame(portalDestination, moved.scene());
+        assertFalse(originalRetired.get());
+        assertFalse(replacementRetired.get());
+
+        geometry.groups.getFirst().getFirst().retired().run();
+        geometry.batches.getFirst().retired().run();
+        assertTrue(originalRetired.get());
+        assertTrue(replacementRetired.get());
+    }
+
     private static ShowcasePrograms.Exports exports() {
         SurfaceId<ShowcasePrograms.SurfaceBindingData, ShowcasePrograms.InstanceData> opaque =
                 new SurfaceId<>() { };
@@ -115,6 +148,7 @@ final class ShowcaseSceneApiTest {
 
     private static final class RecordingGeometry implements GeometryChannel {
         private final List<List<Operation>> operations = new ArrayList<>();
+        private final List<RetainedBatch<Operation>> batches = new ArrayList<>();
         private final List<List<RetainedBatch<Operation>>> groups = new ArrayList<>();
         private final AtomicBoolean visible = new AtomicBoolean();
         private final dev.comfyfluffy.caustica.api.geometry.GeometryPublication publication = visible::get;
@@ -129,6 +163,7 @@ final class ShowcaseSceneApiTest {
 
         @Override public dev.comfyfluffy.caustica.api.geometry.GeometryPublication submit(
                 RetainedBatch<Operation> batch) {
+            batches.add(batch);
             operations.add(batch.operations());
             return publication;
         }
