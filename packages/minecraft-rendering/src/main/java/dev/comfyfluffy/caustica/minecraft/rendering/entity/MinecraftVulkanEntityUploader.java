@@ -27,7 +27,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.function.Function;
 
 import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
 import static org.lwjgl.vulkan.VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
@@ -86,15 +85,14 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
                                     VmaMappedBuffer indices, VmaMappedBuffer primitive,
                                     VmaMappedBuffer instance, TextureSet textureSet) {
         List<MeshBuild.Geometry<MinecraftProgramTypes.InstanceData>> geometries = new ArrayList<>();
-        for (GeometryRange range : geometryRanges(source,
-                material -> materials.resolve(materialKey(material)).opacityMicromap())) {
+        for (GeometryRange range : geometryRanges(source)) {
             int first = range.firstTriangle(), end = range.endTriangle();
             MinecraftEntityMesh.Triangle triangle = source.triangles().get(first);
             ShaderData<MinecraftProgramTypes.PrimitiveData> binding = MinecraftProgramTypes.PRIMITIVE_DATA.data(
                     primitive.deviceAddressAt((long) first * MinecraftPrimitiveData.BYTE_SIZE).value());
             MeshBuild.CoveragePolicy policy = triangle.coverage() == MinecraftEntityMesh.Coverage.OPAQUE
                     ? new MeshBuild.CoveragePolicy.Opaque()
-                    : new MeshBuild.CoveragePolicy.Cutout(.5f, range.opacityMicromap());
+                    : new MeshBuild.CoveragePolicy.Cutout(.5f);
             var surface = triangle.material().program() == MinecraftEntityMesh.Program.PORTAL
                     ? new MeshBuild.SurfaceSlot<>(programs.portalSurface(), binding, policy)
                     : new MeshBuild.SurfaceSlot<>(programs.materialSurface(), binding, policy);
@@ -110,34 +108,19 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
     }
 
     static List<GeometryRange> geometryRanges(MinecraftEntityMesh source) {
-        return geometryRanges(source, ignored -> null);
-    }
-
-    static List<GeometryRange> geometryRanges(
-            MinecraftEntityMesh source,
-            Function<MinecraftEntityMesh.Material, MeshBuild.OpacityMicromapHint> opacity) {
         ArrayList<GeometryRange> ranges = new ArrayList<>();
         int first = 0;
         while (first < source.triangleCount()) {
             MinecraftEntityMesh.Triangle firstTriangle = source.triangles().get(first);
-            MeshBuild.OpacityMicromapHint hint = effectiveHint(firstTriangle, opacity);
             int end = first + 1;
             while (end < source.triangleCount()
-                    && compatible(firstTriangle, source.triangles().get(end))
-                    && Objects.equals(hint, effectiveHint(source.triangles().get(end), opacity))) {
+                    && compatible(firstTriangle, source.triangles().get(end))) {
                 end++;
             }
-            ranges.add(new GeometryRange(first, end, hint));
+            ranges.add(new GeometryRange(first, end));
             first = end;
         }
         return List.copyOf(ranges);
-    }
-
-    private static MeshBuild.OpacityMicromapHint effectiveHint(
-            MinecraftEntityMesh.Triangle triangle,
-            Function<MinecraftEntityMesh.Material, MeshBuild.OpacityMicromapHint> opacity) {
-        return triangle.coverage() == MinecraftEntityMesh.Coverage.CUTOUT
-                ? opacity.apply(triangle.material()) : null;
     }
 
     private static boolean compatible(MinecraftEntityMesh.Triangle a, MinecraftEntityMesh.Triangle b) {
@@ -306,7 +289,7 @@ public final class MinecraftVulkanEntityUploader implements MinecraftEntityUploa
             throwIfFailed(closeAll(textures, instance, primitive, indices, positions));
         }
     }
-    record GeometryRange(int firstTriangle, int endTriangle, MeshBuild.OpacityMicromapHint opacityMicromap) { }
+    record GeometryRange(int firstTriangle, int endTriangle) { }
     record TangentBasis(MinecraftPrimitiveData.Float3 tangent, MinecraftPrimitiveData.Float3 bitangent) {
         static final TangentBasis ZERO = new TangentBasis(new MinecraftPrimitiveData.Float3(0, 0, 0),
                 new MinecraftPrimitiveData.Float3(0, 0, 0));

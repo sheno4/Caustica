@@ -12,12 +12,11 @@ final class RtTerrainMesherPackingTest {
     @Test
     void packsTrianglesIntoStableVulkanRoutingBuckets() {
         var material = route(MinecraftTerrainMesh.ProgramCategory.MATERIAL,
-                MinecraftTerrainMesh.Coverage.OPAQUE, 0.5f, null);
+                MinecraftTerrainMesh.Coverage.OPAQUE, 0.5f);
         var water = route(MinecraftTerrainMesh.ProgramCategory.WATER,
-                MinecraftTerrainMesh.Coverage.OPAQUE, 0.5f, null);
-        var micromap = new MinecraftTerrainMesh.OpacityMicromap(0.25f, 0.75f, 2);
+                MinecraftTerrainMesh.Coverage.OPAQUE, 0.5f);
         var cutout = route(MinecraftTerrainMesh.ProgramCategory.MATERIAL,
-                MinecraftTerrainMesh.Coverage.CUTOUT, 0.5f, micromap);
+                MinecraftTerrainMesh.Coverage.CUTOUT, 0.5f);
 
         int[] indices = integerTriangleLanes(4, 3);
         float[] cornerUvs = triangleLanes(4, 6);
@@ -34,38 +33,34 @@ final class RtTerrainMesherPackingTest {
         assertEquals(208f, packed.primitiveData()[MinecraftTerrainMesh.PRIMITIVE_FLOATS + 8]);
         assertEquals(List.of(
                 new MinecraftTerrainMesh.Geometry(MinecraftTerrainMesh.ProgramCategory.MATERIAL,
-                        MinecraftTerrainMesh.Coverage.OPAQUE, 0, 6, 0.5f, null),
+                        MinecraftTerrainMesh.Coverage.OPAQUE, 0, 6, 0.5f),
                 new MinecraftTerrainMesh.Geometry(MinecraftTerrainMesh.ProgramCategory.WATER,
-                        MinecraftTerrainMesh.Coverage.OPAQUE, 6, 3, 0.5f, null),
+                        MinecraftTerrainMesh.Coverage.OPAQUE, 6, 3, 0.5f),
                 new MinecraftTerrainMesh.Geometry(MinecraftTerrainMesh.ProgramCategory.MATERIAL,
-                        MinecraftTerrainMesh.Coverage.CUTOUT, 9, 3, 0.5f, micromap)),
+                        MinecraftTerrainMesh.Coverage.CUTOUT, 9, 3, 0.5f)),
                 packed.geometries());
     }
 
     @Test
-    void keepsDistinctCutoffAndMicromapRoutesSeparate() {
-        var firstMicromap = new MinecraftTerrainMesh.OpacityMicromap(0.1f, 0.9f, 2);
-        var secondMicromap = new MinecraftTerrainMesh.OpacityMicromap(0.2f, 0.8f, 2);
+    void keepsDistinctCutoffRoutesSeparate() {
         var packed = RtTerrainMesher.bucketTriangles(integerTriangleLanes(3, 3), triangleLanes(3, 6),
                 triangleLanes(3, MinecraftTerrainMesh.PRIMITIVE_FLOATS), List.of(
                         route(MinecraftTerrainMesh.ProgramCategory.MATERIAL,
-                                MinecraftTerrainMesh.Coverage.CUTOUT, 0.4f, firstMicromap),
+                                MinecraftTerrainMesh.Coverage.CUTOUT, 0.4f),
                         route(MinecraftTerrainMesh.ProgramCategory.MATERIAL,
-                                MinecraftTerrainMesh.Coverage.CUTOUT, 0.6f, firstMicromap),
+                                MinecraftTerrainMesh.Coverage.CUTOUT, 0.6f),
                         route(MinecraftTerrainMesh.ProgramCategory.MATERIAL,
-                                MinecraftTerrainMesh.Coverage.CUTOUT, 0.4f, secondMicromap)));
+                                MinecraftTerrainMesh.Coverage.CUTOUT, 0.4f)));
 
-        assertEquals(3, packed.geometries().size());
+        assertEquals(2, packed.geometries().size());
         assertEquals(0.4f, packed.geometries().get(0).alphaCutoff());
         assertEquals(0.6f, packed.geometries().get(1).alphaCutoff());
-        assertEquals(secondMicromap, packed.geometries().get(2).opacityMicromap());
     }
 
     private static RtTerrainMesher.TriangleRouting route(MinecraftTerrainMesh.ProgramCategory program,
                                                           MinecraftTerrainMesh.Coverage coverage,
-                                                          float alphaCutoff,
-                                                          MinecraftTerrainMesh.OpacityMicromap micromap) {
-        return new RtTerrainMesher.TriangleRouting(program, coverage, alphaCutoff, micromap);
+                                                          float alphaCutoff) {
+        return new RtTerrainMesher.TriangleRouting(program, coverage, alphaCutoff);
     }
 
     private static int[] integerTriangleLanes(int triangles, int lanes) {

@@ -70,7 +70,7 @@ public record MinecraftTerrainMesh(float[] positions, int[] indices, float[] cor
 
     /** One shader-homogeneous range in the source index stream. */
     public record Geometry(ProgramCategory program, Coverage coverage, int firstIndex, int indexCount,
-                           float alphaCutoff, OpacityMicromap opacityMicromap) {
+                           float alphaCutoff) {
         public Geometry {
             java.util.Objects.requireNonNull(program, "program");
             java.util.Objects.requireNonNull(coverage, "coverage");
@@ -79,21 +79,6 @@ public record MinecraftTerrainMesh(float[] positions, int[] indices, float[] cor
             }
             if (!Float.isFinite(alphaCutoff) || alphaCutoff < 0f || alphaCutoff > 1f) {
                 throw new IllegalArgumentException("alphaCutoff must be in [0,1]");
-            }
-            if (coverage == Coverage.OPAQUE && opacityMicromap != null) {
-                throw new IllegalArgumentException("opaque geometry cannot carry an opacity micromap");
-            }
-        }
-    }
-
-    public record OpacityMicromap(float transparentAlpha, float opaqueAlpha, int subdivisionLevel) {
-        public OpacityMicromap {
-            if (!Float.isFinite(transparentAlpha) || !Float.isFinite(opaqueAlpha)
-                    || transparentAlpha < 0f || opaqueAlpha > 1f || transparentAlpha > opaqueAlpha) {
-                throw new IllegalArgumentException("opacity thresholds must be finite, ordered, and in [0,1]");
-            }
-            if (subdivisionLevel < 0 || subdivisionLevel > 12) {
-                throw new IllegalArgumentException("subdivisionLevel must be in [0,12]");
             }
         }
     }

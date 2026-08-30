@@ -1,6 +1,5 @@
 package dev.comfyfluffy.caustica.minecraft.rendering.material;
 
-import dev.comfyfluffy.caustica.api.geometry.MeshBuild;
 import dev.comfyfluffy.caustica.minecraft.api.ResourcePackEpoch;
 import dev.comfyfluffy.caustica.minecraft.content.material.MaterialTextureResource;
 import dev.comfyfluffy.caustica.minecraft.content.material.MinecraftEmissionFootprint;
@@ -61,7 +60,7 @@ public final class MinecraftMaterialLookup {
         records.add(MinecraftMaterialRecord.waterBoundary());
         defaults.put(MinecraftMaterialIds.WATER, new MinecraftMaterialResolution(waterIndex,
                 MinecraftMaterialIds.WATER, MinecraftMaterialTopology.MEDIUM_BOUNDARY,
-                MinecraftMaterialEmission.NONE, null));
+                MinecraftMaterialEmission.NONE));
         Map<ResourceId, MinecraftMaterialEmissionAnalyzer.Scan> scans = scan(resources);
         Map<ResourceId, Set<ResourceId>> geometries = geometryCases(rules);
         List<MaterialTextureResource> ordered = new ArrayList<>(resources);
@@ -82,7 +81,7 @@ public final class MinecraftMaterialLookup {
                         int index = records.size();
                         records.add(resolved.record());
                         MinecraftMaterialResolution resolution = new MinecraftMaterialResolution(index,
-                                resource.material(), resolved.topology(), resolved.emission(), resolved.opacityHint());
+                                resource.material(), resolved.topology(), resolved.emission());
                         resolutions.put(key, resolution);
                         if (geometry == null && profile == MinecraftMaterialProfile.ROUGH_DIELECTRIC
                                 && topology == MinecraftMaterialTopology.SURFACE) {
@@ -94,7 +93,7 @@ public final class MinecraftMaterialLookup {
         }
         for (ResourceId material : MinecraftMaterialIds.CAPTURE_SURFACES) {
             MinecraftMaterialResolution resolution = new MinecraftMaterialResolution(0, material,
-                    MinecraftMaterialTopology.SURFACE, MinecraftMaterialEmission.NONE, null);
+                    MinecraftMaterialTopology.SURFACE, MinecraftMaterialEmission.NONE);
             resolutions.put(new MinecraftMaterialKey(material, null,
                     MinecraftMaterialProfile.ROUGH_DIELECTRIC, MinecraftMaterialTopology.SURFACE), resolution);
             defaults.put(material, resolution);
@@ -180,11 +179,10 @@ public final class MinecraftMaterialLookup {
                 ? scan.masked() : scan.uniform();
         MinecraftMaterialEmission emission = luminance > 0.0f && footprint != null
                 ? new MinecraftMaterialEmission(luminance, true, footprint) : MinecraftMaterialEmission.NONE;
-        MeshBuild.OpacityMicromapHint hint = scan == null ? null : scan.opacityHint();
         MinecraftMaterialRecord record = MinecraftMaterialRecord.from(page,
                 MinecraftMaterialRecord.Color3.WHITE, metalness, roughness, ior, transmission, 0.0f,
                 MinecraftMaterialRecord.Color3.WHITE, luminance);
-        return new Compiled(record, topology, emission, hint);
+        return new Compiled(record, topology, emission);
     }
 
     private static float roughness(MinecraftMaterialProfile profile) {
@@ -211,5 +209,5 @@ public final class MinecraftMaterialLookup {
     }
 
     private record Compiled(MinecraftMaterialRecord record, MinecraftMaterialTopology topology,
-                            MinecraftMaterialEmission emission, MeshBuild.OpacityMicromapHint opacityHint) { }
+                            MinecraftMaterialEmission emission) { }
 }

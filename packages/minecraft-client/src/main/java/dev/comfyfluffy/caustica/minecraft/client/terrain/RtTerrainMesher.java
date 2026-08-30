@@ -131,13 +131,10 @@ final class RtTerrainMesher {
             TerrainSurface surface = geom.surfaces.get(triangle);
             var coverage = surface.coverage() == Coverage.CUTOUT
                     ? MinecraftTerrainMesh.Coverage.CUTOUT : MinecraftTerrainMesh.Coverage.OPAQUE;
-            var range = surface.opacityRange();
-            var micromap = range == null ? null : new MinecraftTerrainMesh.OpacityMicromap(
-                    range.transparentAlpha(), range.opaqueAlpha(), 2);
             var program = surface.material().material().equals(MinecraftMaterialIds.WATER)
                     ? MinecraftTerrainMesh.ProgramCategory.WATER
                     : MinecraftTerrainMesh.ProgramCategory.MATERIAL;
-            routing.add(new TriangleRouting(program, coverage, 0.5f, micromap));
+            routing.add(new TriangleRouting(program, coverage, 0.5f));
         }
         var packed = bucketTriangles(
                 java.util.Arrays.copyOf(geom.idx.elements(), geom.idx.size()),
@@ -150,8 +147,7 @@ final class RtTerrainMesher {
     /** Vulkan routing shared by triangles that may occupy one contiguous acceleration-geometry range. */
     record TriangleRouting(MinecraftTerrainMesh.ProgramCategory program,
                            MinecraftTerrainMesh.Coverage coverage,
-                           float alphaCutoff,
-                           MinecraftTerrainMesh.OpacityMicromap opacityMicromap) { }
+                           float alphaCutoff) { }
 
     /** Triangle streams packed in stable routing-bucket order. */
     record PackedTriangles(int[] indices, float[] cornerUvs, float[] primitiveData,
@@ -183,7 +179,7 @@ final class RtTerrainMesher {
             }
             TriangleRouting route = bucket.getKey();
             geometries.add(new MinecraftTerrainMesh.Geometry(route.program(), route.coverage(), firstIndex,
-                    sourceTriangles.size() * 3, route.alphaCutoff(), route.opacityMicromap()));
+                    sourceTriangles.size() * 3, route.alphaCutoff()));
         }
         return new PackedTriangles(indices, cornerUvs, primitiveData, geometries);
     }
@@ -275,11 +271,9 @@ final class RtTerrainMesher {
 
     private enum Coverage { OPAQUE, CUTOUT }
 
-    private record OpacityRange(float transparentAlpha, float opaqueAlpha) { }
-
     private record TerrainMaterial(int materialIndex, ResourceId material, ResourceId texture) { }
 
-    private record TerrainSurface(TerrainMaterial material, Coverage coverage, OpacityRange opacityRange) { }
+    private record TerrainSurface(TerrainMaterial material, Coverage coverage) { }
 
     /** One geometry class's packed, section-local mesh data. */
     private static final class Geom {
@@ -475,9 +469,6 @@ final class RtTerrainMesher {
                     spriteMaterial.texture());
             q.coverage = q.cutout && !q.translucent ? Coverage.CUTOUT : Coverage.OPAQUE;
             q.materialEmission = terrainMaterial.emission();
-            q.opacityMicromapRange = q.coverage == Coverage.CUTOUT && terrainMaterial.opacityMicromap() != null
-                    ? new OpacityRange(terrainMaterial.opacityMicromap().transparentAlpha(),
-                    terrainMaterial.opacityMicromap().opaqueAlpha()) : null;
         }
 
         /** Returns true when vanilla's nominal face should be discarded. */
@@ -648,7 +639,7 @@ final class RtTerrainMesher {
                 prim.add(0f); // aux1
                 g.lightSprites.add(q.sprite);
                 g.materialEmissions.add(q.materialEmission);
-                g.surfaces.add(new TerrainSurface(q.material, q.coverage, q.opacityMicromapRange));
+                g.surfaces.add(new TerrainSurface(q.material, q.coverage));
             }
         }
     }
@@ -665,7 +656,6 @@ final class RtTerrainMesher {
         MinecraftMaterialEmission materialEmission;
         TerrainMaterial material;
         Coverage coverage;
-        OpacityRange opacityMicromapRange;
         TextureAtlasSprite sprite;
     }
 
@@ -825,7 +815,7 @@ final class RtTerrainMesher {
                 prim.add(0f);
                 g.lightSprites.add(null);
                 g.materialEmissions.add(materialEmission);
-                g.surfaces.add(new TerrainSurface(material, Coverage.OPAQUE, null));
+                g.surfaces.add(new TerrainSurface(material, Coverage.OPAQUE));
             }
         }
 

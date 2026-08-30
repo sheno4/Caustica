@@ -89,7 +89,7 @@ final class GltfWorldContribution implements MinecraftWorldSessionContribution {
                 MeshId<GltfProgramExports.InstanceData> mesh = geometry.newMesh(GltfProgramExports.INSTANCE);
                 meshes.add(mesh);
                 MeshBuild.CoveragePolicy coverage = primitive.cutout()
-                        ? new MeshBuild.CoveragePolicy.Cutout(primitive.alphaCutoff(), null)
+                        ? new MeshBuild.CoveragePolicy.Cutout(primitive.alphaCutoff())
                         : new MeshBuild.CoveragePolicy.Opaque();
                 MeshBuild.SurfaceSlot<GltfProgramExports.PrimitiveData, GltfProgramExports.InstanceData> slot =
                         new MeshBuild.SurfaceSlot<>(programs.material(),

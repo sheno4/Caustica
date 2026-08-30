@@ -93,27 +93,6 @@ public record MeshBuild<N>(Stream positions,
         public long byteSize() { return bytes.byteSize(); }
     }
 
-    /**
-     * Optional renderer hint for building a four-state opacity micromap from the geometry's public
-     * coverage implementation. Alpha at or below {@code transparentAlpha} is fully transparent; alpha at
-     * or above {@code opaqueAlpha} is fully opaque; the interval remains unknown and executes any-hit.
-     *
-     * <p>The renderer may ignore this hint when opacity micromaps are unavailable or unprofitable. Coverage
-     * evaluation therefore remains the required, behavior-defining fallback.
-     */
-    public record OpacityMicromapHint(float transparentAlpha, float opaqueAlpha, int subdivisionLevel) {
-        public OpacityMicromapHint {
-            if (!Float.isFinite(transparentAlpha) || !Float.isFinite(opaqueAlpha)
-                    || transparentAlpha < 0.0f || opaqueAlpha > 1.0f
-                    || transparentAlpha > opaqueAlpha) {
-                throw new IllegalArgumentException("opacity thresholds must be finite, ordered, and in [0,1]");
-            }
-            if (subdivisionLevel < 0 || subdivisionLevel > 12) {
-                throw new IllegalArgumentException("subdivisionLevel must be in [0,12]");
-            }
-        }
-    }
-
     /** Traversal behavior for a surface slot, independent of the surface's optical transmission. */
     public sealed interface CoveragePolicy {
         /** Coverage is uniformly one, so traversal may skip any-hit. */
@@ -121,9 +100,9 @@ public record MeshBuild<N>(Stream positions,
 
         /**
          * Coverage is evaluated by the surface's coverage implementation and compared with
-         * {@code alphaCutoff}. The nullable micromap is only an acceleration of that required fallback.
+         * {@code alphaCutoff}.
          */
-        record Cutout(float alphaCutoff, OpacityMicromapHint opacityMicromap) implements CoveragePolicy {
+        record Cutout(float alphaCutoff) implements CoveragePolicy {
             public Cutout {
                 if (!Float.isFinite(alphaCutoff) || alphaCutoff < 0.0f || alphaCutoff > 1.0f) {
                     throw new IllegalArgumentException("alphaCutoff must be in [0,1]");

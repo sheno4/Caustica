@@ -33,7 +33,7 @@ final class RtRetainedGeometryPlanTest {
         MeshBuild<Instance> build = build(new MeshBuild.IndexRevision(7), 0x1000,
                 new MeshBuild.SurfaceSlot<>(SURFACE, BINDING.data(11), new MeshBuild.CoveragePolicy.Opaque()),
                 new MeshBuild.SurfaceSlot<>(SURFACE, BINDING.data(22),
-                        new MeshBuild.CoveragePolicy.Cutout(0.4f, null)));
+                        new MeshBuild.CoveragePolicy.Cutout(0.4f)));
 
         var ranges = RtRetainedGeometryPlan.blasRanges(build);
 
@@ -47,15 +47,15 @@ final class RtRetainedGeometryPlanTest {
         MeshBuild<Instance> first = build(new MeshBuild.IndexRevision(9), 0x1000,
                 new MeshBuild.SurfaceSlot<>(SURFACE, BINDING.data(1), new MeshBuild.CoveragePolicy.Opaque()),
                 new MeshBuild.SurfaceSlot<>(SURFACE, BINDING.data(2),
-                        new MeshBuild.CoveragePolicy.Cutout(0.25f, null)));
+                        new MeshBuild.CoveragePolicy.Cutout(0.25f)));
         MeshBuild<Instance> bindingOnly = build(new MeshBuild.IndexRevision(9), 0x1000,
                 new MeshBuild.SurfaceSlot<>(SURFACE, BINDING.data(10), new MeshBuild.CoveragePolicy.Opaque()),
                 new MeshBuild.SurfaceSlot<>(SURFACE, BINDING.data(20),
-                        new MeshBuild.CoveragePolicy.Cutout(0.75f, null)));
+                        new MeshBuild.CoveragePolicy.Cutout(0.75f)));
         MeshBuild<Instance> movedPositions = build(new MeshBuild.IndexRevision(9), 0x3000,
                 new MeshBuild.SurfaceSlot<>(SURFACE, BINDING.data(10), new MeshBuild.CoveragePolicy.Opaque()),
                 new MeshBuild.SurfaceSlot<>(SURFACE, BINDING.data(20),
-                        new MeshBuild.CoveragePolicy.Cutout(0.75f, null)));
+                        new MeshBuild.CoveragePolicy.Cutout(0.75f)));
 
         assertTrue(RtRetainedGeometryPlan.canReuseBlas(first, bindingOnly));
         assertFalse(RtRetainedGeometryPlan.canReuseBlas(first, movedPositions));
@@ -64,7 +64,7 @@ final class RtRetainedGeometryPlanTest {
                         new MeshBuild.SurfaceSlot<>(SURFACE, BINDING.data(10),
                                 new MeshBuild.CoveragePolicy.Opaque()),
                         new MeshBuild.SurfaceSlot<>(SURFACE, BINDING.data(20),
-                                new MeshBuild.CoveragePolicy.Cutout(0.75f, null)))));
+                                new MeshBuild.CoveragePolicy.Cutout(0.75f)))));
     }
 
     @Test
@@ -108,7 +108,7 @@ final class RtRetainedGeometryPlanTest {
         MeshBuild<Instance> build = new MeshBuild<>(positions, null, indices, 8,
                 new MeshBuild.IndexRevision(1), List.of(new MeshBuild.Geometry<>(
                 new MeshBuild.SurfaceSlot<>(SURFACE, BINDING.data(1),
-                        new MeshBuild.CoveragePolicy.Cutout(0.5f, null)),
+                        new MeshBuild.CoveragePolicy.Cutout(0.5f)),
                 new MeshBuild.VolumeSlot<>(VOLUME, BINDING.data(2)), 0, 6)));
         var range = RtRetainedGeometryPlan.blasRanges(build).getFirst();
         var record = new RtRetainedGeometryPlan.GeometryRecord(1, 1, 2,

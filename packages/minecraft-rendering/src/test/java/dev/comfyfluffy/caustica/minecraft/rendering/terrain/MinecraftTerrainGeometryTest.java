@@ -131,7 +131,7 @@ final class MinecraftTerrainGeometryTest {
                 new float[]{0, 0, 0}, new int[]{0, 0, 0}, new float[0],
                 new float[MinecraftTerrainMesh.PRIMITIVE_FLOATS],
                 List.of(new MinecraftTerrainMesh.Geometry(MinecraftTerrainMesh.ProgramCategory.MATERIAL,
-                        MinecraftTerrainMesh.Coverage.OPAQUE, 0, 3, 0.5f, null)), 1L));
+                        MinecraftTerrainMesh.Coverage.OPAQUE, 0, 3, 0.5f)), 1L));
     }
 
     @Test
@@ -175,9 +175,9 @@ final class MinecraftTerrainGeometryTest {
     @Test
     void uploaderPreservesEveryProgramRangeAsOneNativeGeometry() {
         var first = new MinecraftTerrainMesh.Geometry(MinecraftTerrainMesh.ProgramCategory.MATERIAL,
-                MinecraftTerrainMesh.Coverage.OPAQUE, 0, 3, 0.5f, null);
+                MinecraftTerrainMesh.Coverage.OPAQUE, 0, 3, 0.5f);
         var second = new MinecraftTerrainMesh.Geometry(MinecraftTerrainMesh.ProgramCategory.WATER,
-                MinecraftTerrainMesh.Coverage.OPAQUE, 3, 3, 0.5f, null);
+                MinecraftTerrainMesh.Coverage.OPAQUE, 3, 3, 0.5f);
         var source = new MinecraftTerrainMesh(new float[]{0, 0, 0, 1, 0, 0, 0, 1, 0},
                 new int[]{0, 1, 2, 0, 2, 1}, new float[12],
                 new float[2 * MinecraftTerrainMesh.PRIMITIVE_FLOATS], List.of(first, second), 0L);
@@ -211,7 +211,7 @@ final class MinecraftTerrainGeometryTest {
         return new MinecraftTerrainMesh(new float[]{0, 0, 0, 1, 0, 0, 0, 1, 0}, new int[]{0, 1, 2},
                 new float[6], new float[MinecraftTerrainMesh.PRIMITIVE_FLOATS],
                 List.of(new MinecraftTerrainMesh.Geometry(MinecraftTerrainMesh.ProgramCategory.MATERIAL,
-                        MinecraftTerrainMesh.Coverage.OPAQUE, 0, 3, 0.5f, null)), 3L);
+                        MinecraftTerrainMesh.Coverage.OPAQUE, 0, 3, 0.5f)), 3L);
     }
 
     private static final class Uploaded implements MinecraftTerrainUploader.UploadedSection {

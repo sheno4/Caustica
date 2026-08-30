@@ -72,9 +72,7 @@ public final class MinecraftVulkanTerrainUploader implements MinecraftTerrainUpl
                     primitiveAddress.addBytes(primitiveOffset).value());
             var policy = geometry.coverage() == MinecraftTerrainMesh.Coverage.OPAQUE
                     ? (MeshBuild.CoveragePolicy) new MeshBuild.CoveragePolicy.Opaque()
-                    : new MeshBuild.CoveragePolicy.Cutout(geometry.alphaCutoff(), geometry.opacityMicromap() == null
-                    ? null : new MeshBuild.OpacityMicromapHint(geometry.opacityMicromap().transparentAlpha(),
-                    geometry.opacityMicromap().opaqueAlpha(), geometry.opacityMicromap().subdivisionLevel()));
+                    : new MeshBuild.CoveragePolicy.Cutout(geometry.alphaCutoff());
             var surface = switch (geometry.program()) {
                 case MATERIAL -> new MeshBuild.SurfaceSlot<>(programs.materialSurface(), binding, policy);
                 case WATER -> new MeshBuild.SurfaceSlot<>(programs.waterSurface(), binding, policy);

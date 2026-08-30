@@ -46,8 +46,7 @@ final class ShowcaseScene {
                 ShowcasePrograms.SURFACE_BINDING.data(0L), new MeshBuild.CoveragePolicy.Opaque());
         var cutout = new MeshBuild.SurfaceSlot<>(programs.cutout(),
                 ShowcasePrograms.SURFACE_BINDING.data(1L),
-                new MeshBuild.CoveragePolicy.Cutout(0.5f,
-                        new MeshBuild.OpacityMicromapHint(0.05f, 0.95f, 2)));
+                new MeshBuild.CoveragePolicy.Cutout(0.5f));
         var volume = new MeshBuild.VolumeSlot<>(programs.volume(),
                 ShowcasePrograms.VOLUME_BINDING.data(0L));
         var build = new MeshBuild<>(

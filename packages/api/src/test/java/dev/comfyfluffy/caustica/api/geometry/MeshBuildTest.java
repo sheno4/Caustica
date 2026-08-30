@@ -63,18 +63,10 @@ final class MeshBuildTest {
     }
 
     @Test
-    void opacityHintAlwaysHasCoverageFallback() {
-        assertThrows(IllegalArgumentException.class,
-                () -> new MeshBuild.OpacityMicromapHint(0.8f, 0.2f, 2));
-        assertThrows(IllegalArgumentException.class,
-                () -> new MeshBuild.OpacityMicromapHint(0.2f, 0.8f, 13));
-    }
-
-    @Test
     void geometryRejectsInvalidTraversalCutoff() {
         SurfaceId<Binding, Instance> surface = new SurfaceId<>() { };
         assertThrows(IllegalArgumentException.class,
-                () -> new MeshBuild.CoveragePolicy.Cutout(Float.NaN, null));
+                () -> new MeshBuild.CoveragePolicy.Cutout(Float.NaN));
     }
 
     @Test
@@ -121,7 +113,7 @@ final class MeshBuildTest {
             SurfaceId<Binding, Instance> surface, int first, int count) {
         return new MeshBuild.Geometry<>(new MeshBuild.SurfaceSlot<>(surface,
                 BINDING.data(0L),
-                new MeshBuild.CoveragePolicy.Cutout(0.5f, null)),
+                new MeshBuild.CoveragePolicy.Cutout(0.5f)),
                 null, first, count);
     }
 }

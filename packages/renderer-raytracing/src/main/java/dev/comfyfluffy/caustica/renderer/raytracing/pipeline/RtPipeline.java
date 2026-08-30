@@ -20,7 +20,6 @@ import java.util.List;
 import java.util.Map;
 
 import static dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext.check;
-import static org.lwjgl.vulkan.EXTOpacityMicromap.VK_PIPELINE_CREATE_RAY_TRACING_OPACITY_MICROMAP_BIT_EXT;
 import static org.lwjgl.vulkan.KHRRayTracingPipeline.*;
 
 /** Descriptor-heap-native world ray-tracing pipeline and shader binding table. */
@@ -123,9 +122,6 @@ public final class RtPipeline {
                 }
 
                 long flags = EXTDescriptorHeap.VK_PIPELINE_CREATE_2_DESCRIPTOR_HEAP_BIT_EXT;
-                if (context.backend().capabilities().opacityMicromaps()) {
-                    flags |= Integer.toUnsignedLong(VK_PIPELINE_CREATE_RAY_TRACING_OPACITY_MICROMAP_BIT_EXT);
-                }
                 VkPipelineCreateFlags2CreateInfo flags2 = VkPipelineCreateFlags2CreateInfo.calloc(stack)
                         .sType$Default().flags(flags);
                 VkRayTracingPipelineCreateInfoKHR.Buffer info = VkRayTracingPipelineCreateInfoKHR.calloc(1, stack);

@@ -21,9 +21,9 @@ final class MinecraftVulkanEntityUploaderTest {
                 triangle(material, MinecraftEntityMesh.Coverage.CUTOUT),
                 triangle(portal, MinecraftEntityMesh.Coverage.CUTOUT)));
 
-        assertEquals(List.of(new MinecraftVulkanEntityUploader.GeometryRange(0, 2, null),
-                new MinecraftVulkanEntityUploader.GeometryRange(2, 3, null),
-                new MinecraftVulkanEntityUploader.GeometryRange(3, 4, null)),
+        assertEquals(List.of(new MinecraftVulkanEntityUploader.GeometryRange(0, 2),
+                new MinecraftVulkanEntityUploader.GeometryRange(2, 3),
+                new MinecraftVulkanEntityUploader.GeometryRange(3, 4)),
                 MinecraftVulkanEntityUploader.geometryRanges(mesh));
     }
 
@@ -93,24 +93,17 @@ final class MinecraftVulkanEntityUploaderTest {
         assertEquals(1, basis.bitangent().y());
     }
 
-    @Test void cutoutRangesSplitWhenOpacityHintsDifferButStochasticIgnoresHints() {
+    @Test void adjacentCutoutTrianglesWithTheSameProgramShareOneRange() {
         var a = material("a", MinecraftEntityMesh.Program.MATERIAL);
         var b = material("b", MinecraftEntityMesh.Program.MATERIAL);
-        var hintA = new dev.comfyfluffy.caustica.api.geometry.MeshBuild.OpacityMicromapHint(0, 1, 2);
-        var hintB = new dev.comfyfluffy.caustica.api.geometry.MeshBuild.OpacityMicromapHint(.1f, .9f, 2);
         MinecraftEntityMesh mesh = mesh(List.of(triangle(a, MinecraftEntityMesh.Coverage.CUTOUT),
                 triangle(b, MinecraftEntityMesh.Coverage.CUTOUT)));
-        var ranges = MinecraftVulkanEntityUploader.geometryRanges(mesh,
-                material -> material.material().path().equals("a") ? hintA : hintB);
-        assertEquals(2, ranges.size());
-        assertEquals(hintA, ranges.getFirst().opacityMicromap());
+        assertEquals(1, MinecraftVulkanEntityUploader.geometryRanges(mesh).size());
 
         MinecraftEntityMesh stochastic = mesh(List.of(
                 triangle(a, MinecraftEntityMesh.Coverage.STOCHASTIC),
                 triangle(b, MinecraftEntityMesh.Coverage.STOCHASTIC)));
-        assertEquals(1, MinecraftVulkanEntityUploader.geometryRanges(stochastic,
-                material -> material.material().path().equals("a") ? hintA : hintB).size());
-
+        assertEquals(1, MinecraftVulkanEntityUploader.geometryRanges(stochastic).size());
     }
 
     @Test void materialKeyPreservesOpticalProfileAndMediumBoundary() {
