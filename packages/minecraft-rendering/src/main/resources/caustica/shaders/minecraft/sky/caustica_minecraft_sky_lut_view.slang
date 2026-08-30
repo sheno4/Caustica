@@ -14,12 +14,16 @@ import caustica_minecraft_sky_atmosphere;
 import caustica_minecraft_sky_lut_types;
 
 [[vk::push_constant]] SkyLutPush pc;
+typealias WritableSkyInputsPtr = Ptr<SkyInputs, Access.ReadWrite, AddressSpace.Device, Std430DataLayout>;
 
 public void runSkyView(uint3 tid) {
     RWTexture2D<float4> skyViewImage =
             ResourceDescriptorHeap[NonUniformResourceIndex(pc.destinationImageIndex)];
     if (tid.x >= uint(SKY_VIEW_LUT_W) || tid.y >= uint(SKY_VIEW_LUT_TOTAL_H)) {
         return;
+    }
+    if (all(tid == uint3(0u))) {
+        WritableSkyInputsPtr(pc.skyInputsAddress)[0] = pc.inputs;
     }
     SkyState sky = skyState(pc.inputs);
 

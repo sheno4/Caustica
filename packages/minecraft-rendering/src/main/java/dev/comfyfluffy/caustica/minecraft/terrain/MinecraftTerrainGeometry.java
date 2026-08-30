@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.minecraft.terrain;
 
 import dev.comfyfluffy.caustica.api.geometry.GeometryChannel;
+import dev.comfyfluffy.caustica.api.geometry.GeometryPublication;
 import dev.comfyfluffy.caustica.api.geometry.GeometryTransform;
 import dev.comfyfluffy.caustica.api.geometry.InstanceId;
 import dev.comfyfluffy.caustica.api.geometry.MeshId;
@@ -29,14 +30,14 @@ public final class MinecraftTerrainGeometry implements AutoCloseable {
     }
 
     /** Atomically replaces and removes all sections named by one Minecraft extraction transaction. */
-    public synchronized void submit(List<Change> changes) {
-        submitGroup(List.of(changes));
+    public synchronized GeometryPublication submit(List<Change> changes) {
+        return submitGroup(List.of(changes));
     }
 
     /** Publishes extraction transactions together while retaining each transaction independently. */
-    public synchronized void submitGroup(List<? extends List<Change>> groups) {
+    public synchronized GeometryPublication submitGroup(List<? extends List<Change>> groups) {
         if (closed) throw new IllegalStateException("terrain geometry is closed");
-        if (groups.isEmpty()) return;
+        if (groups.isEmpty()) return GeometryPublication.alreadyVisible();
         var batches = new ArrayList<RetainedBatch<GeometryChannel.Operation>>();
         var preparedUploads = new ArrayList<MinecraftTerrainUploader.UploadedSection>();
         var committedSections = new LinkedHashMap<>(sections);
@@ -46,14 +47,25 @@ public final class MinecraftTerrainGeometry implements AutoCloseable {
                 if (batch.operations().isEmpty()) continue;
                 batches.add(new RetainedBatch<>(batch.operations(), () -> retireAll(batch.uploads())));
             }
-            if (batches.isEmpty()) return;
-            channel.submitGroup(batches);
+            if (batches.isEmpty()) return GeometryPublication.alreadyVisible();
+            GeometryPublication publication = channel.submitGroup(batches);
             sections.clear();
             sections.putAll(committedSections);
+            return publication;
         } catch (RuntimeException | Error failure) {
             releaseRejected(preparedUploads, failure);
             throw failure;
         }
+    }
+
+    /** Whether an accepted retained-scene transaction currently owns geometry for this section. */
+    public synchronized boolean hasSection(long sectionKey) {
+        return sections.containsKey(sectionKey);
+    }
+
+    /** Snapshot of section keys owned by accepted retained-scene transactions. */
+    public synchronized List<Long> sectionKeys() {
+        return List.copyOf(sections.keySet());
     }
 
     private PreparedBatch prepareBatch(List<Change> changes, Map<Long, SectionIds> committedSections,

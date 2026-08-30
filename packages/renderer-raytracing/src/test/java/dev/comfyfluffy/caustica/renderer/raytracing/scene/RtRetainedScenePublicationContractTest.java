@@ -29,4 +29,31 @@ final class RtRetainedScenePublicationContractTest {
         int completion = source.indexOf("completeLater(publication, null, null);", emptyBuilds);
         assertTrue(emptyBuilds >= 0 && completion > emptyBuilds);
     }
+
+    @Test
+    void contentPublicationSharesOneNativeGeometryReferenceAndUsesTheOrderedQueue() throws Exception {
+        String source = Files.readString(Path.of(
+                "src/main/java/dev/comfyfluffy/caustica/renderer/raytracing/scene/RtRetainedSceneBackend.java"));
+
+        int method = source.indexOf("void publishContent(RetainedSceneContentSnapshot snapshot");
+        int end = source.indexOf("private long tailRevision()", method);
+        String body = source.substring(method, end);
+        assertTrue(body.contains("predecessor.geometry.retain();"));
+        assertTrue(body.contains("queued.addLast(publication);"));
+        assertTrue(body.contains("assembleContent(snapshot.scenes(), snapshot.lights())"));
+        assertTrue(!body.contains("geometry.meshes"));
+        assertTrue(!body.contains("geometry.instances"));
+    }
+
+    @Test
+    void productionGeometryPublicationNeverMaterializesTheFallbackSnapshot() throws Exception {
+        String source = Files.readString(Path.of(
+                "src/main/java/dev/comfyfluffy/caustica/renderer/raytracing/scene/RtRetainedSceneBackend.java"));
+
+        int method = source.indexOf("void publishGeometry(RetainedSceneGeometryDelta delta");
+        int end = source.indexOf("void publishContent(RetainedSceneContentSnapshot snapshot", method);
+        String body = source.substring(method, end);
+        assertTrue(body.contains("prepare(delta, predecessor)"));
+        assertTrue(!body.contains("fallbackSnapshot.get("));
+    }
 }

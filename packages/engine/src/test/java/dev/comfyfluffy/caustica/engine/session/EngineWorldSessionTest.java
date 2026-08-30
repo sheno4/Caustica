@@ -14,6 +14,8 @@ import dev.comfyfluffy.caustica.engine.program.ProgramBackend;
 import dev.comfyfluffy.caustica.engine.program.ProgramComposition;
 import dev.comfyfluffy.caustica.engine.program.ProgramKey;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot;
+import dev.comfyfluffy.caustica.engine.scene.RetainedSceneBackend;
+import dev.comfyfluffy.caustica.engine.scene.RetainedSceneContentSnapshot;
 import org.junit.jupiter.api.Test;
 import org.lwjgl.vulkan.VkDevice;
 
@@ -32,8 +34,19 @@ final class EngineWorldSessionTest {
         RenderSessionHost renderHost = new RenderSessionHost(OPTIONS);
         renderHost.api().sessions().add(context -> contribution("core", events));
 
-        EngineWorldSession session = new EngineWorldSession(renderHost, GPU, PROGRAMS,
-                (snapshot, retired) -> { snapshots.add(snapshot); retired.run(); }, PASSES,
+        RetainedSceneBackend scenes = new RetainedSceneBackend() {
+            @Override public void publish(RetainedSceneSnapshot snapshot, Runnable published, Runnable retired) {
+                snapshots.add(snapshot);
+                published.run();
+                retired.run();
+            }
+            @Override public void publishContent(RetainedSceneContentSnapshot snapshot, Runnable published,
+                                                 Runnable retired) {
+                published.run();
+                retired.run();
+            }
+        };
+        EngineWorldSession session = new EngineWorldSession(renderHost, GPU, PROGRAMS, scenes, PASSES,
                 failure -> { throw new AssertionError(failure); });
 
         assertEquals(1, session.services().scenes().snapshot().scenes().size());

@@ -11,18 +11,26 @@ import dev.comfyfluffy.caustica.api.program.VolumeId;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Modifier;
+import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class RetainedChannelContractTest {
     @Test
-    void eachSubmitAcceptsExactlyOneBatch() throws ReflectiveOperationException {
-        assertSame(void.class, GeometryChannel.class.getMethod("submit", RetainedBatch.class).getReturnType());
+    void geometrySupportsAtomicIndependentRetirementGroupsWhileLightsStaySingleBatch()
+            throws ReflectiveOperationException {
+        assertSame(dev.comfyfluffy.caustica.api.geometry.GeometryPublication.class,
+                GeometryChannel.class.getMethod("submit", RetainedBatch.class).getReturnType());
+        var submitGroup = GeometryChannel.class.getMethod("submitGroup", List.class);
+        assertSame(dev.comfyfluffy.caustica.api.geometry.GeometryPublication.class,
+                submitGroup.getReturnType());
+        assertTrue(Modifier.isAbstract(submitGroup.getModifiers()));
         assertSame(void.class, LightChannel.class.getMethod("submit", RetainedBatch.class).getReturnType());
         assertThrows(NoSuchMethodException.class,
-                () -> GeometryChannel.class.getMethod("submit", java.util.List.class));
-        assertThrows(NoSuchMethodException.class,
-                () -> LightChannel.class.getMethod("submit", java.util.List.class));
+                () -> LightChannel.class.getMethod("submitGroup", List.class));
     }
 
     @Test

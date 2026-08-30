@@ -407,7 +407,7 @@ public final class RtExposure {
                 + ", curve=" + look.exposure().curve() + ")"
                 : Float.toString(manualExposureScale());
         LOGGER.info("RT display exposure: mode={}, exposure={}, "
-                        + "tonemap=aces2.0(lookPackage={},gamma={}), DLSS-RR exposure=NGX auto",
+                        + "tonemap=aces2.0(lookPackage={},gamma={}), DLSS-RR pre-exposure=renderer",
                 mode.configName, exposureText, look.id(), settings.gamma());
     }
 

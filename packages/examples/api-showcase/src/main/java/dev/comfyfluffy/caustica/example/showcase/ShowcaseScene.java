@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.example.showcase;
 
 import dev.comfyfluffy.caustica.api.geometry.GeometryChannel;
+import dev.comfyfluffy.caustica.api.geometry.GeometryPublication;
 import dev.comfyfluffy.caustica.api.geometry.GeometryTransform;
 import dev.comfyfluffy.caustica.api.geometry.InstanceId;
 import dev.comfyfluffy.caustica.api.geometry.MeshBuild;
@@ -44,9 +45,9 @@ final class ShowcaseScene {
     /**
      * Publishes GPU data uploaded by a world-resource pass. The caller owns all streams until retired runs.
      */
-    void publishMesh(VulkanDeviceAddressRange currentPositions,
-                     VulkanDeviceAddressRange previousPositions,
-                     VulkanDeviceAddressRange indices, Runnable retired) {
+    GeometryPublication publishMesh(VulkanDeviceAddressRange currentPositions,
+                                    VulkanDeviceAddressRange previousPositions,
+                                    VulkanDeviceAddressRange indices, Runnable retired) {
         var opaque = new MeshBuild.SurfaceSlot<>(programs.opaque(),
                 ShowcasePrograms.SURFACE_BINDING.data(0L), new MeshBuild.CoveragePolicy.Opaque());
         var cutout = new MeshBuild.SurfaceSlot<>(programs.cutout(),
@@ -65,13 +66,13 @@ final class ShowcaseScene {
                         new MeshBuild.Geometry<>(cutout, null, 3, 3),
                         new MeshBuild.Geometry<>(opaque, volume, 6, 3),
                         new MeshBuild.Geometry<>(null, volume, 9, 3)));
-        geometry.submit(new RetainedBatch<>(List.of(
-                new GeometryChannel.SetMesh<>(mesh, build),
-                new GeometryChannel.SetInstance<>(instance, scene, mesh,
+        return geometry.submitGroup(List.of(
+                new RetainedBatch<>(List.of(new GeometryChannel.SetMesh<>(mesh, build)), retired),
+                RetainedBatch.of(List.of(new GeometryChannel.SetInstance<>(instance, scene, mesh,
                         GeometryTransform.translation(0.0, 64.0, 0.0), 0xff,
                         ShowcasePrograms.INSTANCE.data(7L),
                         new PrimitiveLightMap(List.of(
-                                new PrimitiveLightMap.Range(0, 1, lightIds.getFirst()))))), retired));
+                                new PrimitiveLightMap.Range(0, 1, lightIds.getFirst()))))))));
     }
 
     /** Publishes the explicit light candidates consumed by the renderer's scene-local NEE-AT backend. */

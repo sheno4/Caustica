@@ -103,6 +103,13 @@ Geometry uses issued mesh/instance IDs and atomic retained batches. Mesh streams
 target a host-issued scene and preserve double-precision translation until renderer rebasing. Publication and
 replacement callbacks must obey the session's GPU-retirement contract.
 
+`GeometryChannel.submitGroup(...)` is mandatory when separately owned batches must enter one native
+publication. Operations validate and become visible together, but each batch keeps its own retirement callback.
+The API showcase uses this to publish an uploaded mesh and its first placement atomically without making the
+mesh buffer wait for that placement's independent lifetime. Its world-resource pass records the buffer upload,
+marks it ready from the frame-completion callback, and performs grouped publication from a later pass callback;
+the acceleration build therefore cannot race the upload submission.
+
 The public retained light set is:
 
 | Shape | Units |
@@ -111,7 +118,15 @@ The public retained light set is:
 | circular spot | ACEScg intensity in candela |
 | distant | ACEScg normal illuminance in lux |
 
-The renderer implements the publicly described RTXPT-style NEE-AT subset with Caustica-owned code and ABI.
+The renderer implements a publicly described RTXPT-style NEE-AT subset with a Caustica-owned implementation
+and ABI. "RTXPT-style" names the algorithm family; it is not a source-compatibility, binary-compatibility,
+conformance, or output-equivalence claim. The implementation boundary is public algorithm descriptions only:
+no NVIDIA source, shader code, private headers, or binary-derived implementation detail forms part of the
+Caustica implementation. Caustica independently defines its light records, feedback quantization, identity
+remapping, tiled histogram layout, proposal mixture, candidate RIS estimator, and reverse-MIS integration.
+The repository tests those local contracts rather than comparing private implementation details or golden
+output from another renderer.
+
 Each scene has persistent double buffers containing a global discrete distribution and tiled local histograms
 derived from previous-frame light and pixel feedback. The shader combines global and local proposal PDFs,
 selects candidate samples with RIS, and reports reverse-MIS feedback for the next update. Point lights are absent
@@ -152,6 +167,13 @@ provides that mapping for pass-owned graphics shader objects.
 `GpuDescriptorHeapProperties` names byte-valued facts with their units:
 `resourceDescriptorStrideBytes`, `samplerDescriptorStrideBytes`, `resourceHeapAlignmentBytes`, and
 `samplerHeapAlignmentBytes`. Capacities and maximum allocations remain counts of descriptor slots.
+
+`features-builtin/BloomPass` is the concrete owned-descriptor lifecycle example. Its resize path allocates
+replacement `VmaImage2D` levels, which allocate and populate resource-heap ranges, records initialization before
+publishing their indices to shader work, then calls `GpuDevice.retireAfterUse(...)` for the displaced levels.
+Its final `Pass.close()` releases the currently published levels directly because that callback runs only after
+the pass's submitted uses have drained. This is the intended replace-publish-retire pattern; allocating an
+otherwise unused descriptor solely to demonstrate the allocator would not exercise the publication invariant.
 
 The required backend profile is Vulkan 1.4. Its complete feature baseline is shader int64/int16/float16,
 storage-image extended formats and formatless reads/writes, shader draw parameters, demote-to-helper invocation,

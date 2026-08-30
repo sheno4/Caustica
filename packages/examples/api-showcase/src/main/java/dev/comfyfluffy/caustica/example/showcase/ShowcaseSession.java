@@ -30,9 +30,10 @@ final class ShowcaseSession implements MinecraftWorldSessionContribution {
         sky = new ShowcaseMinecraftSky(context.dimension(), context.resourcePackEpoch());
         scene = new ShowcaseScene(programs.exports(), context.scene(),
                 renderSession.geometry(), renderSession.lights());
+        programs.whenReady(this::publishEnvironment);
         passes = List.of(
                 renderSession.passes().addWorldResourcePass(
-                        setup -> ShowcasePasses.worldResource(setup.gpu(), this::publishEnvironmentWhenReady)),
+                        setup -> ShowcasePasses.worldResource(setup.gpu(), programs::ready, scene)),
                 renderSession.passes().addPostEffectPass(
                         ShowcasePasses.POST_EFFECT, ShowcasePasses.POST_EFFECT_PLACEMENT,
                         setup -> ShowcasePasses.postEffect(setup.gpu(), options)),
@@ -61,8 +62,8 @@ final class ShowcaseSession implements MinecraftWorldSessionContribution {
         return new SceneView(scene, camera, new ViewMedium.Volume<>(volume, bindingData, instanceData));
     }
 
-    private void publishEnvironmentWhenReady() {
-        if (programs.ready() && environmentPublished.compareAndSet(false, true)) {
+    private void publishEnvironment() {
+        if (environmentPublished.compareAndSet(false, true)) {
             environment.select(sky.binding(programs, () -> { }));
         }
     }

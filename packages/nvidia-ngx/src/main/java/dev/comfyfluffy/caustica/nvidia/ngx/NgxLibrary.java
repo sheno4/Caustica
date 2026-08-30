@@ -20,7 +20,6 @@ import java.nio.file.Path;
 final class NgxLibrary {
 	private static final Linker LINKER = Linker.nativeLinker();
 
-	private final MethodHandle requiredExtensions;
 	private final MethodHandle init;
 	private final MethodHandle dlssAvailable;
 	private final MethodHandle queryOptimal;
@@ -38,9 +37,6 @@ final class NgxLibrary {
 	private final MethodHandle lastResult;
 
 	private NgxLibrary(SymbolLookup lookup) {
-		// int ngxshim_required_extensions(int wantDevice, char* outBuf, int bufLen)
-		this.requiredExtensions = handle(lookup, "ngxshim_required_extensions",
-				FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
 		// int ngxshim_init(u64 appId, wchar* dataPath, VkInstance, VkPhysicalDevice, VkDevice, void* gipa, void* gdpa, wchar* dllPath)
 		this.init = handle(lookup, "ngxshim_init",
 				FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS,
@@ -78,7 +74,7 @@ final class NgxLibrary {
 		this.createDlssd = handle(lookup, "ngxshim_create_dlssd",
 				FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT,
 						ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
-		// int ngxshim_evaluate_dlssd(cmd, feature, [color/depth/mv/diffAlbedo/specAlbedo/normals/specMotion/specHit/out: view,img,fmt]*9, rw,rh,dw,dh, jx,jy,mvsx,mvsy, reset, frameMs, matrices)
+		// int ngxshim_evaluate_dlssd(cmd, feature, [color/depth/mv/diffAlbedo/specAlbedo/normals/specMotion/specHit/out: view,img,fmt]*9, rw,rh,dw,dh, jx,jy,mvsx,mvsy, reset, frameMs, preExposure)
 		this.evaluateDlssd = handle(lookup, "ngxshim_evaluate_dlssd",
 				FunctionDescriptor.of(ValueLayout.JAVA_INT,
 						ValueLayout.JAVA_LONG, ValueLayout.ADDRESS,
@@ -93,7 +89,7 @@ final class NgxLibrary {
 						ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT,
 						ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT,
 						ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT,
-						ValueLayout.JAVA_INT, ValueLayout.JAVA_FLOAT, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+						ValueLayout.JAVA_INT, ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_FLOAT));
 		// DLSS Frame Generation (DLSSG). Optional: a stale shim without these exports still loads (FG off).
 		this.dlssgAvailable = optionalHandle(lookup, "ngxshim_dlssg_available",
 				FunctionDescriptor.of(ValueLayout.JAVA_INT));
@@ -135,19 +131,9 @@ final class NgxLibrary {
 				desc);
 	}
 
-	// For exports added later than the core ABI (e.g. DLSSG): a stale locally-built ngxshim.dll (the DLL is
-	// not rebuilt by gradle, only copied) must still load so DLSS-RR keeps working — the newer feature just
-	// reports unavailable. Returns null when the symbol is absent.
+	// Optional feature exports may be absent from a selected shim and report that feature unavailable.
 	private static MethodHandle optionalHandle(SymbolLookup lookup, String name, FunctionDescriptor desc) {
 		return lookup.find(name).map(sym -> LINKER.downcallHandle(sym, desc)).orElse(null);
-	}
-
-	public int requiredExtensions(boolean wantDevice, MemorySegment outBuf, int bufLen) {
-		try {
-			return (int) this.requiredExtensions.invokeExact(wantDevice ? 1 : 0, outBuf, bufLen);
-		} catch (Throwable t) {
-			throw new RuntimeException("ngxshim_required_extensions failed", t);
-		}
 	}
 
 	public int init(long appId, MemorySegment dataPath, long vkInstance, long vkPhysicalDevice, long vkDevice,
@@ -257,8 +243,7 @@ final class NgxLibrary {
 	                         long outputView, long outputImage, int outputFormat,
 	                         int renderWidth, int renderHeight, int displayWidth, int displayHeight,
 	                         float jitterX, float jitterY, float mvScaleX, float mvScaleY,
-	                         int reset, float frameTimeMs,
-	                         MemorySegment worldToViewMatrix, MemorySegment viewToClipMatrix) {
+	                         int reset, float frameTimeMs, float preExposure) {
 		try {
 			return (int) this.evaluateDlssd.invokeExact(cmd, feature,
 					colorView, colorImage, colorFormat,
@@ -271,8 +256,7 @@ final class NgxLibrary {
 					specularHitDistanceView, specularHitDistanceImage, specularHitDistanceFormat,
 					outputView, outputImage, outputFormat,
 					renderWidth, renderHeight, displayWidth, displayHeight,
-					jitterX, jitterY, mvScaleX, mvScaleY, reset, frameTimeMs,
-					worldToViewMatrix, viewToClipMatrix);
+					jitterX, jitterY, mvScaleX, mvScaleY, reset, frameTimeMs, preExposure);
 		} catch (Throwable t) {
 			throw new RuntimeException("ngxshim_evaluate_dlssd failed", t);
 		}

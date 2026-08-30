@@ -50,7 +50,8 @@ public interface GeometryChannel {
      * <p>See {@link RetainedBatch} for what a batch guarantees, how to choose its granularity, and how its
      * retirement callback follows the retained data that batch introduces.
      *
-     * <p>Acceptance is synchronous, so callers may update their bookkeeping after this method returns.
+     * <p>Acceptance is synchronous. The returned receipt becomes visible only after the renderer commits
+     * the accepted native scene publication.
      *
      * <p>Native allocation, command construction, and GPU-submit acceptance are part of synchronous
      * validation. A failure there rejects the whole batch. A device or execution failure discovered after
@@ -61,7 +62,7 @@ public interface GeometryChannel {
      *         contribution, names a stale selection reference, uses an identity from another render session,
      *         or supplies shader data with a mismatched schema token
      */
-    void submit(RetainedBatch<Operation> batch);
+    GeometryPublication submit(RetainedBatch<Operation> batch);
 
     /**
      * Apply several independently-retired batches as one atomic publication.
@@ -71,17 +72,9 @@ public interface GeometryChannel {
      * Each accepted batch keeps its own retirement lifetime; grouping publications does not make unrelated
      * resources wait for one another.
      *
-     * <p>A group must contain at least one batch. Implementations that only provide the single-batch API
-     * reject groups larger than one rather than weakening atomicity or retirement guarantees.
+     * <p>A group must contain at least one batch.
      */
-    default void submitGroup(List<RetainedBatch<Operation>> batches) {
-        batches = List.copyOf(batches);
-        if (batches.isEmpty()) throw new IllegalArgumentException("a submission group needs at least one batch");
-        if (batches.size() != 1) {
-            throw new UnsupportedOperationException("this geometry channel does not support grouped submission");
-        }
-        submit(batches.getFirst());
-    }
+    GeometryPublication submitGroup(List<RetainedBatch<Operation>> batches);
 
     sealed interface Operation permits SetMesh, DropMesh, SetInstance, DropInstance { }
 

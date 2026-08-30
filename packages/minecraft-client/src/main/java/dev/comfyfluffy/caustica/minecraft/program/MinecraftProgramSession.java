@@ -9,6 +9,7 @@ import dev.comfyfluffy.caustica.minecraft.MinecraftFrameCaptureInstaller;
 import dev.comfyfluffy.caustica.minecraft.MinecraftFrameCaptureState;
 import dev.comfyfluffy.caustica.minecraft.MinecraftLightingCalibration;
 import dev.comfyfluffy.caustica.minecraft.MinecraftProvidersExtension;
+import dev.comfyfluffy.caustica.minecraft.MinecraftTelemetry;
 import dev.comfyfluffy.caustica.minecraft.api.*;
 import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
 import dev.comfyfluffy.caustica.minecraft.material.*;
@@ -80,13 +81,15 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
                                                dev.comfyfluffy.caustica.minecraft.MinecraftEntityCaptureBinding entityCapture,
                                                dev.comfyfluffy.caustica.minecraft.entity.RtEntityTextures entityTextures,
                                                dev.comfyfluffy.caustica.minecraft.entity.RtEntities entities,
-                                               RtTerrain terrain, OptionLookup options) {
+                                               RtTerrain terrain, OptionLookup options,
+                                               MinecraftTelemetry.Instrumentation instrumentation) {
         java.util.Objects.requireNonNull(frameSelections, "frameSelections");
         java.util.Objects.requireNonNull(frameCaptures, "frameCaptures");
         java.util.Objects.requireNonNull(materialEpochs, "materialEpochs");
         java.util.Objects.requireNonNull(calibration, "calibration");
         java.util.Objects.requireNonNull(terrain, "terrain");
         java.util.Objects.requireNonNull(options, "options");
+        java.util.Objects.requireNonNull(instrumentation, "instrumentation");
         MinecraftProgramResources resources = new MinecraftProgramResources(context.renderSession().gpu());
         MinecraftFrameCaptureState frames = new MinecraftFrameCaptureState();
         MinecraftFrameCaptureInstaller.Lease frameCapture = null;
@@ -101,7 +104,7 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
                     frames::lightFrame);
             MinecraftLightProvider installedLights = lights;
             lightRegistration = context.renderSession().passes().addWorldResourcePass(
-                    setup -> new LightUpdatePass(installedLights));
+                    setup -> new LightUpdatePass(installedLights, instrumentation));
             overlayRegistration = context.renderSession().passes().addUiPass(
                     WorldOverlayPass.ID, setup -> new WorldOverlayPass(setup, entities, terrain));
             MinecraftProgramSession session = new MinecraftProgramSession(
@@ -399,10 +402,21 @@ public final class MinecraftProgramSession implements MinecraftWorldSessionContr
         }
     }
 
-    private static final class LightUpdatePass implements Pass<PassFrame> {
+    static final class LightUpdatePass implements Pass<PassFrame> {
         private final MinecraftLightProvider lights;
-        LightUpdatePass(MinecraftLightProvider lights) { this.lights = lights; }
-        @Override public void record(PassFrame frame) { lights.update(); }
+        private final MinecraftTelemetry.Instrumentation instrumentation;
+        LightUpdatePass(MinecraftLightProvider lights, MinecraftTelemetry.Instrumentation instrumentation) {
+            this.lights = lights;
+            this.instrumentation = instrumentation;
+        }
+        @Override public void record(PassFrame frame) {
+            long started = instrumentation.startStage();
+            try {
+                lights.update();
+            } finally {
+                instrumentation.endStage("terrain.lightScenePublish", started);
+            }
+        }
         @Override public void close() { }
     }
 

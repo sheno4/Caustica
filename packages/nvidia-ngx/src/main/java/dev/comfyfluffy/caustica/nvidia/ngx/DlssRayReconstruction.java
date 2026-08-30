@@ -2,7 +2,6 @@ package dev.comfyfluffy.caustica.nvidia.ngx;
 
 
 import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
-import org.joml.Matrix4fc;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkCommandBuffer;
 import org.slf4j.Logger;
@@ -38,16 +37,12 @@ public final class DlssRayReconstruction {
 
     // DLSS feature flags. IsHDR (bit 0): color is scene-linear ACEScg HDR (rgba16f) — RR requires it ("HDR Color
     // required"). MVLowRes (bit 1): motion vectors are at render/input resolution, not display — RR
-    // requires it ("Low resolution Motion Vectors required"). DepthInverted (bit 3): the depth guide is
-    // HW reversed-Z (near=1, far=0). AutoExposure (bit 6): in HDR mode DLSS needs the scene exposure
-    // (exposure texture or auto-estimate); without it the output is black, so let DLSS estimate exposure
-    // from the color itself. MVs are unjittered, so no MV_JITTERED.
+    // requires it ("Low resolution Motion Vectors required"). RR ignores the DLSS auto-exposure option;
+    // its input pre-exposure is supplied explicitly on every evaluation. MVs are unjittered, so no
+    // MV_JITTERED. The depth guide is positive view-space depth, so no hardware-depth flags apply.
     private static final int FEATURE_FLAG_IS_HDR = 1 << 0;
     private static final int FEATURE_FLAG_MV_LOW_RES = 1 << 1;
-    private static final int FEATURE_FLAG_DEPTH_INVERTED = 1 << 3;
-    private static final int FEATURE_FLAG_AUTO_EXPOSURE = 1 << 6;
-    private static final int FEATURE_FLAGS = FEATURE_FLAG_IS_HDR | FEATURE_FLAG_MV_LOW_RES
-            | FEATURE_FLAG_DEPTH_INVERTED | FEATURE_FLAG_AUTO_EXPOSURE;
+    private static final int FEATURE_FLAGS = FEATURE_FLAG_IS_HDR | FEATURE_FLAG_MV_LOW_RES;
     // 0 = let the RR DLL pick its per-mode default preset.
     private int renderPreset() {
         return settings.preset();
@@ -79,7 +74,11 @@ public final class DlssRayReconstruction {
     }
 
     public void configure(Settings settings) {
-        this.settings = Objects.requireNonNull(settings, "settings");
+        Settings next = Objects.requireNonNull(settings, "settings");
+        if (!next.equals(this.settings)) {
+            resetHistory();
+        }
+        this.settings = next;
     }
 
     public boolean isReady() {
@@ -100,9 +99,9 @@ public final class DlssRayReconstruction {
      */
     public boolean evaluate(VkCommandBuffer commandBuffer, GpuImage color, GpuImage depth, GpuImage motion,
                             GpuImage diffuseAlbedo, GpuImage specularAlbedo, GpuImage normals,
-                            GpuImage specularMotion, GpuImage out,
-                            int renderWidth, int renderHeight, int displayWidth, int displayHeight,
-                            float jitterX, float jitterY, Matrix4fc worldToView, Matrix4fc viewToClip) {
+                             GpuImage specularMotion, GpuImage out,
+                             int renderWidth, int renderHeight, int displayWidth, int displayHeight,
+                             float jitterX, float jitterY, float preExposure) {
         if (!isReady()) {
             return false;
         }
@@ -113,26 +112,19 @@ public final class DlssRayReconstruction {
             lastFrameNanos = now;
 
             int rc;
-            try (Arena arena = Arena.ofConfined()) {
-                MemorySegment worldToViewMatrix = arena.allocate(ValueLayout.JAVA_FLOAT, 16);
-                MemorySegment viewToClipMatrix = arena.allocate(ValueLayout.JAVA_FLOAT, 16);
-                putNgxLeftMultiplyMatrix(worldToView, worldToViewMatrix);
-                putNgxLeftMultiplyMatrix(viewToClip, viewToClipMatrix);
-                rc = lib.evaluateDlssd(commandBuffer.address(), feature,
-                        color.view(), color.image(), VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
-                        depth.view(), depth.image(), VK10.VK_FORMAT_R32_SFLOAT,
-                        motion.view(), motion.image(), VK10.VK_FORMAT_R16G16_SFLOAT,
-                        diffuseAlbedo.view(), diffuseAlbedo.image(), VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
-                        specularAlbedo.view(), specularAlbedo.image(), VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
-                        normals.view(), normals.image(), VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
-                        specularMotion.view(), specularMotion.image(), VK10.VK_FORMAT_R16G16_SFLOAT,
-                        0L, 0L, 0,
-                        out.view(), out.image(), VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
-                        renderWidth, renderHeight, displayWidth, displayHeight,
-                        // jitter in render pixels; MVs are already in render-pixel units, so MV scale = 1.
-                        jitterX, jitterY, 1.0f, 1.0f, resetHistory ? 1 : 0, frameMs,
-                        worldToViewMatrix, viewToClipMatrix);
-            }
+            rc = lib.evaluateDlssd(commandBuffer.address(), feature,
+                    color.view(), color.image(), VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
+                    depth.view(), depth.image(), VK10.VK_FORMAT_R32_SFLOAT,
+                    motion.view(), motion.image(), VK10.VK_FORMAT_R16G16_SFLOAT,
+                    diffuseAlbedo.view(), diffuseAlbedo.image(), VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
+                    specularAlbedo.view(), specularAlbedo.image(), VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
+                    normals.view(), normals.image(), VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
+                    specularMotion.view(), specularMotion.image(), VK10.VK_FORMAT_R16G16_SFLOAT,
+                    0L, 0L, 0,
+                    out.view(), out.image(), VK10.VK_FORMAT_R16G16B16A16_SFLOAT,
+                    renderWidth, renderHeight, displayWidth, displayHeight,
+                    // Jitter and motion vectors use render-pixel units.
+                    jitterX, jitterY, 1.0f, 1.0f, resetHistory ? 1 : 0, frameMs, preExposure);
             resetHistory = false;
             if (NgxRuntime.ngxFailed(rc)) {
                 throw new IllegalStateException("ngxshim_evaluate_dlssd failed: 0x" + Integer.toHexString(rc)
@@ -165,7 +157,8 @@ public final class DlssRayReconstruction {
             MemorySegment outWidth = arena.allocate(ValueLayout.JAVA_INT);
             MemorySegment outHeight = arena.allocate(ValueLayout.JAVA_INT);
             MemorySegment outSharpness = arena.allocate(ValueLayout.JAVA_FLOAT);
-            int rc = lib.queryOptimalDlssd(displayWidth, displayHeight, quality(), outWidth, outHeight, outSharpness);
+            int rc = lib.queryOptimalDlssd(displayWidth, displayHeight, quality(),
+                    outWidth, outHeight, outSharpness);
             if (NgxRuntime.ngxFailed(rc)) {
                 throw new IllegalStateException("ngxshim_query_optimal_dlssd failed: 0x" + Integer.toHexString(rc));
             }
@@ -199,8 +192,7 @@ public final class DlssRayReconstruction {
                     || isNull(feature)) {
                 releaseFeature();
                 feature = lib.createDlssd(commandBuffer.address(), renderWidth, renderHeight,
-                        displayWidth, displayHeight,
-                        quality, FEATURE_FLAGS, preset);
+                        displayWidth, displayHeight, quality, FEATURE_FLAGS, preset);
                 if (isNull(feature)) {
                     throw new IllegalStateException("ngxshim_create_dlssd failed: last=0x"
                             + Integer.toHexString(lib.lastResult()));
@@ -273,25 +265,4 @@ public final class DlssRayReconstruction {
         return segment == null || segment.equals(MemorySegment.NULL);
     }
 
-    private static void putNgxLeftMultiplyMatrix(Matrix4fc m, MemorySegment dst) {
-        // NGX wants row-major matrices used with left-multiplied row vectors. Our JOML/GLSL matrices are
-        // used with column vectors, so the equivalent NGX matrix is the transpose; JOML's normal storage
-        // order is exactly row-major storage of that transpose.
-        dst.setAtIndex(ValueLayout.JAVA_FLOAT, 0, m.m00());
-        dst.setAtIndex(ValueLayout.JAVA_FLOAT, 1, m.m01());
-        dst.setAtIndex(ValueLayout.JAVA_FLOAT, 2, m.m02());
-        dst.setAtIndex(ValueLayout.JAVA_FLOAT, 3, m.m03());
-        dst.setAtIndex(ValueLayout.JAVA_FLOAT, 4, m.m10());
-        dst.setAtIndex(ValueLayout.JAVA_FLOAT, 5, m.m11());
-        dst.setAtIndex(ValueLayout.JAVA_FLOAT, 6, m.m12());
-        dst.setAtIndex(ValueLayout.JAVA_FLOAT, 7, m.m13());
-        dst.setAtIndex(ValueLayout.JAVA_FLOAT, 8, m.m20());
-        dst.setAtIndex(ValueLayout.JAVA_FLOAT, 9, m.m21());
-        dst.setAtIndex(ValueLayout.JAVA_FLOAT, 10, m.m22());
-        dst.setAtIndex(ValueLayout.JAVA_FLOAT, 11, m.m23());
-        dst.setAtIndex(ValueLayout.JAVA_FLOAT, 12, m.m30());
-        dst.setAtIndex(ValueLayout.JAVA_FLOAT, 13, m.m31());
-        dst.setAtIndex(ValueLayout.JAVA_FLOAT, 14, m.m32());
-        dst.setAtIndex(ValueLayout.JAVA_FLOAT, 15, m.m33());
-    }
 }

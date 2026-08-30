@@ -52,6 +52,7 @@ final class MinecraftProvidersExtensionTest {
         return new MinecraftProvidersExtension(selector -> () -> { }, (sink, calibration) -> () -> { },
                 materials, new MinecraftLightingCalibration(1, 1, 1, 0, 0, 0),
                 entities, textures, entities,
-                new RtTerrain(new RtWorkerPool(), MinecraftTelemetry.disabled()));
+                new RtTerrain(new RtWorkerPool(), MinecraftTelemetry.disabled()),
+                MinecraftTelemetry.disabled());
     }
 }

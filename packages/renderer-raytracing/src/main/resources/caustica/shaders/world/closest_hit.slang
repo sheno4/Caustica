@@ -73,7 +73,7 @@ float3 retainedDirectLighting(OpenPbrSurface material, SurfaceInput input, bool 
     ray.TMax = selected.maximumDistance;
     TraceRay(worldAccelerationStructure(worldBindings),
             RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
-            0xFFu, 1u, 2u, 1u, ray, shadow);
+            WORLD_RAY_MASK_SECONDARY, 1u, 2u, 1u, ray, shadow);
     if (shadow.hitDistance >= 0.0 || !any(shadow.radiance > 0.0)) return float3(0.0);
     estimator *= shadow.radiance;
     float feedback = dot(max(estimator, float3(0.0)),
@@ -239,6 +239,7 @@ public void runClosestHit<TComposition : IComposition>(inout WorldPayload payloa
     if ((payload.pathFlags & WORLD_PATH_GUIDE) != 0u) return;
     float3 emission = max(surface.emission_color, float3(0.0))
             * max(surface.emission_luminance, 0.0);
+    if (any(emission > 0.0)) payload.pathFlags |= WORLD_PATH_EMISSIVE;
     payload.radiance = emission * retainedEmissionMis(payload, record, input.position)
             + retainedDirectLighting(surface, input,
                     payload.currentNeeProposalMode == NEE_AT_PROPOSAL_SCREEN_MIXTURE,

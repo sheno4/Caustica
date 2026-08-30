@@ -1,6 +1,7 @@
 package dev.comfyfluffy.caustica.engine.scene;
 
 import dev.comfyfluffy.caustica.api.geometry.GeometryChannel;
+import dev.comfyfluffy.caustica.api.geometry.GeometryPublication;
 import dev.comfyfluffy.caustica.api.geometry.InstanceId;
 import dev.comfyfluffy.caustica.api.geometry.MeshBuild;
 import dev.comfyfluffy.caustica.api.geometry.MeshId;
@@ -164,13 +165,13 @@ public final class SceneDirectory {
         return new LightRef(this, channel, ++nextIdentity);
     }
 
-    synchronized void submitGeometry(GeometryContributionChannel channel,
-                                     RetainedBatch<GeometryChannel.Operation> batch) {
-        submitGeometryGroup(channel, List.of(batch));
+    synchronized GeometryPublication submitGeometry(GeometryContributionChannel channel,
+                                                     RetainedBatch<GeometryChannel.Operation> batch) {
+        return submitGeometryGroup(channel, List.of(batch));
     }
 
-    synchronized void submitGeometryGroup(GeometryContributionChannel channel,
-                                          List<RetainedBatch<GeometryChannel.Operation>> group) {
+    synchronized GeometryPublication submitGeometryGroup(GeometryContributionChannel channel,
+                                                          List<RetainedBatch<GeometryChannel.Operation>> group) {
         requireSubmission(channel);
         group = List.copyOf(group);
         if (group.isEmpty()) throw new IllegalArgumentException("a submission group needs at least one batch");
@@ -206,13 +207,20 @@ public final class SceneDirectory {
                 }
             }
         }
-        RetainedSceneSnapshot next = snapshot(revision + 1, nextMeshes, nextInstances, lights);
-        backend.publish(next, () -> enqueueRelease(removed));
+        long nextRevision = revision + 1;
+        RetainedSceneGeometryDelta delta = geometryDelta(nextRevision, operations);
+        PublicationReceipt receipt = new PublicationReceipt();
+        Map<LightRef, LightValue> currentLights = lights;
+        Map<SceneRef, EnvironmentValue> currentEnvironments = environments;
+        backend.publishGeometry(delta,
+                () -> snapshot(nextRevision, nextMeshes, nextInstances, currentLights, currentEnvironments),
+                receipt::publish, () -> enqueueRelease(removed));
         batches.addAll(tokens);
         meshes = nextMeshes;
         instances = nextInstances;
         revision++;
         tokens.forEach(token -> token.seal(this));
+        return receipt;
     }
 
     synchronized void submitLights(LightContributionChannel channel,
@@ -242,8 +250,8 @@ public final class SceneDirectory {
                 remove(nextLights, (LightRef) drop.light(), removed);
             }
         }
-        RetainedSceneSnapshot next = snapshot(revision + 1, meshes, instances, nextLights);
-        backend.publish(next, () -> enqueueRelease(removed));
+        RetainedSceneContentSnapshot next = contentSnapshot(revision + 1, nextLights, environments);
+        backend.publishContent(next, () -> { }, () -> enqueueRelease(removed));
         batches.add(token);
         lights = nextLights;
         revision++;
@@ -271,9 +279,9 @@ public final class SceneDirectory {
         Map<SceneRef, EnvironmentValue> nextEnvironments = new LinkedHashMap<>(environments);
         nextEnvironments.put(scene, selected);
         List<RetainedValue> removed = previous != null ? List.of(previous) : List.of();
-        RetainedSceneSnapshot next = snapshot(revision + 1, meshes, instances, lights, nextEnvironments);
+        RetainedSceneContentSnapshot next = contentSnapshot(revision + 1, lights, nextEnvironments);
         try {
-            backend.publish(next, () -> enqueueRelease(removed));
+            backend.publishContent(next, () -> { }, () -> enqueueRelease(removed));
         } catch (Throwable failure) {
             if (previousSurvives) previous.token.release(this);
             throw failure;
@@ -315,7 +323,7 @@ public final class SceneDirectory {
         });
         if (removed.isEmpty()) return;
         RetainedSceneSnapshot next = snapshot(revision + 1, nextMeshes, nextInstances, lights);
-        backend.publish(next, () -> enqueueRelease(removed));
+        backend.publish(next, () -> { }, () -> enqueueRelease(removed));
         meshes = nextMeshes; instances = nextInstances; revision++;
     }
 
@@ -329,8 +337,8 @@ public final class SceneDirectory {
             removed.add(entry.getValue()); return true;
         });
         if (removed.isEmpty()) return;
-        RetainedSceneSnapshot next = snapshot(revision + 1, meshes, instances, nextLights);
-        backend.publish(next, () -> enqueueRelease(removed));
+        RetainedSceneContentSnapshot next = contentSnapshot(revision + 1, nextLights, environments);
+        backend.publishContent(next, () -> { }, () -> enqueueRelease(removed));
         lights = nextLights; revision++;
     }
 
@@ -358,9 +366,9 @@ public final class SceneDirectory {
         EnvironmentValue restored = lastValue(nextSceneSelections);
         if (restored == null) nextEnvironments.remove(scene);
         else nextEnvironments.put(scene, restored);
-        RetainedSceneSnapshot next = snapshot(revision + 1, meshes, instances, lights, nextEnvironments);
+        RetainedSceneContentSnapshot next = contentSnapshot(revision + 1, lights, nextEnvironments);
         try {
-            backend.publish(next, () -> enqueueRelease(List.of(current)));
+            backend.publishContent(next, () -> { }, () -> enqueueRelease(List.of(current)));
         } catch (Throwable failure) {
             channel.accepting = true;
             throw failure;
@@ -391,32 +399,78 @@ public final class SceneDirectory {
         notifyAll();
     }
 
+    private RetainedSceneGeometryDelta geometryDelta(
+            long nextRevision, List<GeometryChannel.Operation> operations) {
+        List<RetainedSceneGeometryDelta.Mutation> mutations = new ArrayList<>();
+        for (GeometryChannel.Operation operation : operations) {
+            if (operation instanceof GeometryChannel.SetMesh<?> set) {
+                MeshRef mesh = (MeshRef) set.mesh();
+                mutations.add(new RetainedSceneGeometryDelta.SetMesh(
+                        meshSnapshot(mesh, set.build())));
+            } else if (operation instanceof GeometryChannel.DropMesh<?> drop) {
+                mutations.add(new RetainedSceneGeometryDelta.DropMesh(
+                        ((MeshRef<?>) drop.mesh()).identity));
+            } else if (operation instanceof GeometryChannel.SetInstance<?> set) {
+                mutations.add(new RetainedSceneGeometryDelta.SetInstance(
+                        instanceSnapshot((InstanceRef) set.instance(), (SceneRef) set.scene(),
+                                (MeshRef) set.mesh(), set)));
+            } else if (operation instanceof GeometryChannel.DropInstance drop) {
+                mutations.add(new RetainedSceneGeometryDelta.DropInstance(
+                        ((InstanceRef) drop.instance()).identity));
+            }
+        }
+        return new RetainedSceneGeometryDelta(nextRevision, mutations);
+    }
+
+    private RetainedSceneSnapshot.Mesh meshSnapshot(MeshRef mesh, MeshBuild<?> build) {
+        return new RetainedSceneSnapshot.Mesh(mesh.identity, build,
+                build.geometries().stream().map(geometry ->
+                        new RetainedSceneSnapshot.GeometryPrograms(
+                                geometry.surface() == null
+                                        ? ProgramResolution.ErrorSurface.INSTANCE
+                                        : programs.resolve(geometry.surface().surface()),
+                                geometry.volume() == null
+                                        ? ProgramResolution.Vacuum.INSTANCE
+                                        : programs.resolve(geometry.volume().volume())))
+                        .toList());
+    }
+
+    private RetainedSceneSnapshot.Instance instanceSnapshot(
+            InstanceRef instance, SceneRef scene, MeshRef mesh, GeometryChannel.SetInstance<?> set) {
+        return new RetainedSceneSnapshot.Instance(instance.identity, scene, mesh.identity,
+                set.transform(), set.mask(), set.instanceData(),
+                set.primitiveLights().ranges().stream().map(range ->
+                        new RetainedSceneSnapshot.PrimitiveEmitter(range.firstPrimitive(),
+                                range.primitiveCount(), ((LightRef) range.light()).identity)).toList());
+    }
+
     private void validateGeometry(GeometryContributionChannel channel, List<GeometryChannel.Operation> operations) {
-        Map<MeshRef, MeshBuild<?>> simulatedMeshes = new LinkedHashMap<>();
-        meshes.forEach((mesh, value) -> simulatedMeshes.put(mesh, value.build));
-        Map<InstanceRef, MeshRef> simulatedInstances = new LinkedHashMap<>();
-        instances.forEach((id, value) -> simulatedInstances.put(id, value.mesh));
+        Map<MeshRef, MeshBuild<?>> changedMeshes = new LinkedHashMap<>();
+        Set<MeshRef> droppedMeshes = new LinkedHashSet<>();
         for (GeometryChannel.Operation operation : operations) {
             if (operation instanceof GeometryChannel.SetMesh<?> set) {
                 MeshRef<?> mesh = requireOwnedMesh(channel, set.mesh());
                 validateBuild(mesh, set.build());
-                simulatedMeshes.put(mesh, set.build());
+                droppedMeshes.remove(mesh);
+                changedMeshes.put(mesh, set.build());
             } else if (operation instanceof GeometryChannel.DropMesh<?> drop) {
                 MeshRef<?> mesh = requireOwnedMesh(channel, drop.mesh());
-                simulatedMeshes.remove(mesh);
-                simulatedInstances.entrySet().removeIf(entry -> entry.getValue() == mesh);
+                changedMeshes.remove(mesh);
+                droppedMeshes.add(mesh);
             } else if (operation instanceof GeometryChannel.SetInstance<?> set) {
-                InstanceRef instance = requireOwnedInstance(channel, set.instance());
-                SceneRef scene = requireLiveScene(set.scene());
+                requireOwnedInstance(channel, set.instance());
+                requireLiveScene(set.scene());
                 MeshRef<?> mesh = requireOwnedMesh(channel, set.mesh());
-                MeshBuild<?> build = simulatedMeshes.get(mesh);
+                MeshBuild<?> build = changedMeshes.containsKey(mesh)
+                        ? changedMeshes.get(mesh)
+                        : droppedMeshes.contains(mesh) ? null
+                        : meshes.containsKey(mesh) ? meshes.get(mesh).build : null;
                 if (build == null) throw new IllegalArgumentException("instance names an absent mesh");
                 mesh.instanceType.require(set.instanceData());
                 set.primitiveLights().ranges().forEach(range -> requireLightSelection(range.light()));
                 validatePrimitiveLights(build, set.primitiveLights());
-                simulatedInstances.put(instance, mesh);
             } else if (operation instanceof GeometryChannel.DropInstance drop) {
-                simulatedInstances.remove(requireOwnedInstance(channel, drop.instance()));
+                requireOwnedInstance(channel, drop.instance());
             }
         }
     }
@@ -481,9 +535,20 @@ public final class SceneDirectory {
                         entry.getKey().identity, entry.getValue().scene, entry.getValue().descriptor)).toList());
     }
 
+    private RetainedSceneContentSnapshot contentSnapshot(long revision,
+                                                          Map<LightRef, LightValue> lightValues,
+                                                          Map<SceneRef, EnvironmentValue> environmentValues) {
+        return new RetainedSceneContentSnapshot(revision,
+                scenes.keySet().stream().map(scene -> new RetainedSceneSnapshot.Scene(
+                        scene, environmentValues.containsKey(scene)
+                                ? environmentValues.get(scene).binding : null)).toList(),
+                lightValues.entrySet().stream().map(entry -> new RetainedSceneSnapshot.Light(
+                        entry.getKey().identity, entry.getValue().scene, entry.getValue().descriptor)).toList());
+    }
+
     private void publish(List<RetainedValue> removed, BatchToken token) {
         RetainedSceneSnapshot next = snapshot(revision + 1);
-        backend.publish(next, () -> enqueueRelease(removed));
+        backend.publish(next, () -> { }, () -> enqueueRelease(removed));
         revision++;
         if (token != null) token.seal(this);
     }
@@ -593,6 +658,11 @@ public final class SceneDirectory {
                 directory.enqueue(this, callback);
             }
         }
+    }
+    private static final class PublicationReceipt implements GeometryPublication {
+        private volatile boolean visible;
+        @Override public boolean isVisible() { return visible; }
+        void publish() { visible = true; }
     }
     private record CallbackTask(BatchToken completed, Runnable callback) { }
     private abstract static class RetainedValue { final BatchToken token; RetainedValue(BatchToken token) { this.token = token; } }

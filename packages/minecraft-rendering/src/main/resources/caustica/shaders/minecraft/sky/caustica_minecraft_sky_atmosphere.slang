@@ -497,8 +497,9 @@ public bool celestialSquareLocal(float3 dir, float3 bodyDir, float halfAngle, ou
 // the CPU.
 //
 // SkyLutPass fills one of these per frame and publishes it two ways: inline in its LUT dispatch push data
-// and in the immutable device-address buffer captured by the environment binding. Both consumers read the
-// same fields, so the baked LUTs and the frame they shade cannot disagree. None of it is engine state
+// and through the stable LUT-lifetime device buffer referenced by every live environment binding. The
+// sky-view dispatch updates that buffer before world tracing in queue order, so both consumers read the
+// same fields without republishing the retained scene. None of it is engine state
 // — a sky for another dimension needs none of these fields — so it lives with the pass that owns it.
 //
 // SkyInputsData.java is generated from this reflected type, including its serializer and byte size.
@@ -524,7 +525,7 @@ public struct SkyInputs {
 // SkyInputs carries only what the CPU alone can know: Minecraft's four eased celestial
 // angles, its star brightness, the moon phase, the photometric anchors, and SkyLutPass's sky.* options.
 // Every direction, colour, level, and transmittance is derived here so atmospheric physics has one
-// implementation — shared by the LUT bakes and the sky slot's binding-owned device-address buffer.
+// implementation — shared by the LUT bakes and the sky slot's LUT-lifetime device-address buffer.
 
 public struct SkyState {
     public float3 sunDir;

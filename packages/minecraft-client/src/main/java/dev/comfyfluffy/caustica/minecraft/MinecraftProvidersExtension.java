@@ -22,6 +22,7 @@ public final class MinecraftProvidersExtension implements MinecraftExtension, Ca
     private final dev.comfyfluffy.caustica.minecraft.entity.RtEntityTextures entityTextures;
     private final dev.comfyfluffy.caustica.minecraft.entity.RtEntities entities;
     private final RtTerrain terrain;
+    private final MinecraftTelemetry.Instrumentation instrumentation;
 
     public MinecraftProvidersExtension(MinecraftFrameSelectionInstaller frameSelections,
                                        MinecraftFrameCaptureInstaller frameCaptures,
@@ -30,7 +31,7 @@ public final class MinecraftProvidersExtension implements MinecraftExtension, Ca
                                        MinecraftEntityCaptureBinding entityCapture,
                                        dev.comfyfluffy.caustica.minecraft.entity.RtEntityTextures entityTextures,
                                        dev.comfyfluffy.caustica.minecraft.entity.RtEntities entities,
-                                       RtTerrain terrain) {
+                                       RtTerrain terrain, MinecraftTelemetry.Instrumentation instrumentation) {
         this.frameSelections = java.util.Objects.requireNonNull(frameSelections, "frameSelections");
         this.frameCaptures = java.util.Objects.requireNonNull(frameCaptures, "frameCaptures");
         this.materialEpochs = java.util.Objects.requireNonNull(materialEpochs, "materialEpochs");
@@ -39,12 +40,13 @@ public final class MinecraftProvidersExtension implements MinecraftExtension, Ca
         this.entityTextures = entityTextures;
         this.entities = entities;
         this.terrain = java.util.Objects.requireNonNull(terrain, "terrain");
+        this.instrumentation = java.util.Objects.requireNonNull(instrumentation, "instrumentation");
     }
 
     @Override public void registerMinecraft(MinecraftApi api) {
         api.sessions().add(context -> MinecraftProgramSession.open(
                 context, frameSelections, frameCaptures, materialEpochs, calibration,
-                entityCapture, entityTextures, entities, terrain, api.options()));
+                entityCapture, entityTextures, entities, terrain, api.options(), instrumentation));
     }
 
     @Override public void registerSettings(SettingsRegistry registry) {

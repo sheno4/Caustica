@@ -29,6 +29,7 @@ import dev.comfyfluffy.caustica.engine.program.ProgramSession;
 import dev.comfyfluffy.caustica.engine.scene.GeometryContributionChannel;
 import dev.comfyfluffy.caustica.engine.scene.LightContributionChannel;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneBackend;
+import dev.comfyfluffy.caustica.engine.scene.RetainedSceneContentSnapshot;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot;
 import dev.comfyfluffy.caustica.engine.scene.SceneDirectory;
 import dev.comfyfluffy.caustica.engine.scene.SceneEnvironmentContributionChannel;
@@ -280,6 +281,51 @@ final class SceneDirectoryTest {
     }
 
     @Test
+    void lightContentInterleavesWithFullGeometryInOneRevisionOrder() {
+        ProgramFixture programs = new ProgramFixture();
+        SurfaceId<Binding, Instance> surface = programs.surface(new ContributionOwner(1));
+        SceneBackend backend = new SceneBackend();
+        SceneDirectory directory = directory(programs, backend);
+        SceneId scene = directory.createScene();
+        GeometryContributionChannel geometry = directory.openGeometry(new ContributionOwner(2));
+        LightContributionChannel lights = directory.openLights(new ContributionOwner(3));
+        MeshId<Instance> mesh = geometry.newMesh(INSTANCE);
+        var light = lights.newLight();
+
+        geometry.submit(RetainedBatch.of(List.of(new GeometryChannel.SetMesh<>(mesh, mesh(surface)))));
+        lights.submit(RetainedBatch.of(List.of(new LightChannel.SetLight(light, scene,
+                new LightDescriptor.Spot(0, 1, 0, 0, -1, 0, 10, 0.5, 1, 1, 1)))));
+        geometry.submit(RetainedBatch.of(List.of(new GeometryChannel.DropMesh<>(mesh))));
+
+        assertEquals(List.of(1L, 2L, 3L, 4L), backend.revisions);
+        assertEquals(3, backend.snapshots.size());
+        assertEquals(1, backend.contentSnapshots.size());
+        assertEquals(scene, backend.contentSnapshots.getFirst().scenes().getFirst().id());
+        assertEquals(1, backend.contentSnapshots.getFirst().lights().size());
+    }
+
+    @Test
+    void geometryReceiptBecomesVisibleOnlyWhenAsyncBackendPublishes() {
+        ProgramFixture programs = new ProgramFixture();
+        SurfaceId<Binding, Instance> surface = programs.surface(new ContributionOwner(1));
+        AsyncSceneBackend backend = new AsyncSceneBackend();
+        SceneDirectory directory = directory(programs, backend);
+        directory.createScene();
+        backend.completeAll();
+        directory.progress();
+        GeometryContributionChannel geometry = directory.openGeometry(new ContributionOwner(2));
+        MeshId<Instance> mesh = geometry.newMesh(INSTANCE);
+
+        var publication = geometry.submit(RetainedBatch.of(List.of(
+                new GeometryChannel.SetMesh<>(mesh, mesh(surface)))));
+
+        assertFalse(publication.isVisible());
+        backend.completeAll();
+        directory.progress();
+        assertTrue(publication.isVisible());
+    }
+
+    @Test
     void groupedGeometryPreservesIndependentRetirementLifetimes() {
         ProgramFixture programs = new ProgramFixture();
         SurfaceId<Binding, Instance> surface = programs.surface(new ContributionOwner(1));
@@ -489,6 +535,27 @@ final class SceneDirectoryTest {
     }
 
     @Test
+    void rejectedContentPublicationKeepsLightStateAndRetirementRetryable() {
+        ProgramFixture programs = new ProgramFixture();
+        SceneBackend backend = new SceneBackend();
+        SceneDirectory directory = directory(programs, backend);
+        SceneId scene = directory.createScene();
+        LightContributionChannel lights = directory.openLights(new ContributionOwner(1));
+        var light = lights.newLight();
+        AtomicInteger retired = new AtomicInteger();
+        backend.rejectNext = true;
+
+        assertThrows(IllegalStateException.class, () -> lights.submit(new RetainedBatch<>(List.of(
+                new LightChannel.SetLight(light, scene,
+                        new LightDescriptor.Spot(0, 1, 0, 0, -1, 0, 10, 0.5, 1, 1, 1))),
+                retired::incrementAndGet)));
+
+        assertEquals(0, directory.snapshot().lights().size());
+        directory.progress();
+        assertEquals(0, retired.get());
+    }
+
+    @Test
     void meshAndSceneCascadesRetireWholeBatchesOnlyAfterBackendAcknowledgment() {
         ProgramFixture programs = new ProgramFixture();
         SurfaceId<Binding, Instance> surface = programs.surface(new ContributionOwner(1));
@@ -591,14 +658,27 @@ final class SceneDirectoryTest {
 
     private static final class SceneBackend implements RetainedSceneBackend {
         private final List<RetainedSceneSnapshot> snapshots = new ArrayList<>();
+        private final List<RetainedSceneContentSnapshot> contentSnapshots = new ArrayList<>();
+        private final List<Long> revisions = new ArrayList<>();
         private final List<Runnable> retirements = new ArrayList<>();
         private boolean rejectNext;
-        @Override public void publish(RetainedSceneSnapshot snapshot, Runnable previousRetired) {
+        @Override public void publish(RetainedSceneSnapshot snapshot, Runnable published,
+                                      Runnable previousRetired) {
             if (rejectNext) {
                 rejectNext = false;
                 throw new IllegalStateException("rejected native publication");
             }
-            snapshots.add(snapshot); retirements.add(previousRetired);
+            snapshots.add(snapshot); revisions.add(snapshot.revision());
+            published.run(); retirements.add(previousRetired);
+        }
+        @Override public void publishContent(RetainedSceneContentSnapshot snapshot, Runnable published,
+                                             Runnable previousRetired) {
+            if (rejectNext) {
+                rejectNext = false;
+                throw new IllegalStateException("rejected native publication");
+            }
+            contentSnapshots.add(snapshot); revisions.add(snapshot.revision());
+            published.run(); retirements.add(previousRetired);
         }
         void retire(int publication) { retirements.get(publication).run(); }
         void retireLatest() { retirements.getLast().run(); }
@@ -612,8 +692,21 @@ final class SceneDirectoryTest {
         private Throwable fatalFailure;
 
         @Override
-        public synchronized void publish(RetainedSceneSnapshot snapshot, Runnable previousRetired) {
-            pending.add(previousRetired);
+        public synchronized void publish(RetainedSceneSnapshot snapshot, Runnable published,
+                                         Runnable previousRetired) {
+            pending.add(() -> {
+                published.run();
+                previousRetired.run();
+            });
+        }
+
+        @Override
+        public synchronized void publishContent(RetainedSceneContentSnapshot snapshot, Runnable published,
+                                                Runnable previousRetired) {
+            pending.add(() -> {
+                published.run();
+                previousRetired.run();
+            });
         }
 
         @Override

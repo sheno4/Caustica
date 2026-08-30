@@ -95,14 +95,14 @@ final class RtRetainedGeometryPlanTest {
         assertEquals(0x4444, packed.getLong(RtRetainedGeometryPlan.EMITTER_INDEX_ADDRESS_OFFSET));
         assertEquals(6, packed.getInt(RtRetainedGeometryPlan.EMITTER_PRIMITIVE_BASE_OFFSET));
         assertEquals(List.of(RtRetainedGeometryPlan.HitGroup.RADIANCE_OPAQUE,
-                        RtRetainedGeometryPlan.HitGroup.SHADOW_OPAQUE,
+                        RtRetainedGeometryPlan.HitGroup.SHADOW_TRANSMISSIVE,
                         RtRetainedGeometryPlan.HitGroup.RADIANCE_OPAQUE,
                         RtRetainedGeometryPlan.HitGroup.SHADOW_OPAQUE),
                 RtRetainedGeometryPlan.hitGroups(List.of(first, second)));
     }
 
     @Test
-    void volumeBoundaryStaysOpaqueWhileRetainingVisibleSurfaceCutoutData() {
+    void volumeBoundaryUsesOpaqueRadianceAndTransmissiveShadowRouting() {
         MeshBuild.Stream positions = stream(0x1000, 256, 12);
         MeshBuild.Stream indices = stream(0x2000, 64, 4);
         MeshBuild<Instance> build = new MeshBuild<>(positions, null, indices, 8,
@@ -119,7 +119,7 @@ final class RtRetainedGeometryPlanTest {
 
         assertTrue(range.opaque());
         assertEquals(List.of(RtRetainedGeometryPlan.HitGroup.RADIANCE_OPAQUE,
-                        RtRetainedGeometryPlan.HitGroup.SHADOW_OPAQUE),
+                        RtRetainedGeometryPlan.HitGroup.SHADOW_TRANSMISSIVE),
                 RtRetainedGeometryPlan.hitGroups(List.of(record)));
         assertTrue((record.flags() & RtRetainedGeometryPlan.CUTOUT) != 0);
     }

@@ -27,6 +27,24 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class MinecraftEntityGeometryTest {
     @Test
+    void updateGroupReturnsTheNativePublicationReceipt() {
+        RecordingChannel channel = new RecordingChannel();
+        var geometry = new MinecraftEntityGeometry(channel, new SceneId() { }, ignored -> new Uploaded(0x900L));
+        var key = new MinecraftEntityGeometry.Key(2, 1);
+
+        dev.comfyfluffy.caustica.api.geometry.GeometryPublication publication;
+        try (MinecraftEntityGeometry.UpdateGroup updates = geometry.beginUpdateGroup()) {
+            geometry.put(key, revision(1), mesh(), GeometryTransform.translation(1, 2, 3), 0xff);
+            publication = updates.submit();
+        }
+
+        assertSame(channel.publication, publication);
+        assertFalse(publication.isVisible());
+        channel.visible = true;
+        assertTrue(publication.isVisible());
+    }
+
+    @Test
     void replacementAndPlacementAreOneAtomicBatch() {
         RecordingChannel channel = new RecordingChannel();
         Uploaded first = new Uploaded(0x1000L);
@@ -311,6 +329,8 @@ final class MinecraftEntityGeometryTest {
         final List<List<RetainedBatch<Operation>>> groups = new ArrayList<>();
         boolean rejectNext;
         boolean rejectNextGroup;
+        boolean visible;
+        final dev.comfyfluffy.caustica.api.geometry.GeometryPublication publication = () -> visible;
 
         @Override public <N> MeshId<N> newMesh(dev.comfyfluffy.caustica.api.program.ShaderDataType<N> type) {
             return new MeshId<>() { };
@@ -318,20 +338,24 @@ final class MinecraftEntityGeometryTest {
 
         @Override public InstanceId newInstance() { return new InstanceId() { }; }
 
-        @Override public void submit(RetainedBatch<Operation> batch) {
+        @Override public dev.comfyfluffy.caustica.api.geometry.GeometryPublication submit(
+                RetainedBatch<Operation> batch) {
             if (rejectNext) {
                 rejectNext = false;
                 throw new IllegalStateException("rejected");
             }
             batches.add(batch);
+            return publication;
         }
 
-        @Override public void submitGroup(List<RetainedBatch<Operation>> group) {
+        @Override public dev.comfyfluffy.caustica.api.geometry.GeometryPublication submitGroup(
+                List<RetainedBatch<Operation>> group) {
             if (rejectNextGroup) {
                 rejectNextGroup = false;
                 throw new IllegalStateException("rejected group");
             }
             groups.add(List.copyOf(group));
+            return publication;
         }
     }
 }

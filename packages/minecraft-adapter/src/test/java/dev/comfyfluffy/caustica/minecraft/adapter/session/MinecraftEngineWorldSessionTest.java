@@ -49,7 +49,11 @@ final class MinecraftEngineWorldSessionTest {
         });
 
         MinecraftEngineWorldSession session = new MinecraftEngineWorldSession(renderHost, minecraftHost, GPU,
-                PROGRAMS, (snapshot, retired) -> { snapshots.add(snapshot); retired.run(); }, PASSES,
+                PROGRAMS, (snapshot, published, retired) -> {
+                    snapshots.add(snapshot);
+                    published.run();
+                    retired.run();
+                }, PASSES,
                 MinecraftDimensionKey.of("minecraft", "overworld"), new ResourcePackEpoch(2),
                 failure -> { throw new AssertionError(failure); });
 

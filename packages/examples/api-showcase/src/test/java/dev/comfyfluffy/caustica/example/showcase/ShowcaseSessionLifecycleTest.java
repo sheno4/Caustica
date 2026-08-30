@@ -55,8 +55,6 @@ final class ShowcaseSessionLifecycleTest {
 
         ShowcaseSession session = new ShowcaseSession(world, null);
         programs.completeReady();
-        Pass<PassFrame> worldPass = passes.worldFactory.create(new WorldResourceSetup(GPU));
-        worldPass.record(null);
 
         assertSame(programs.exports.netherSky(), selected.get().implementation());
         assertEquals(11L, selected.get().bindingData().bits());
@@ -104,7 +102,16 @@ final class ShowcaseSessionLifecycleTest {
             return new MeshId<>() { };
         }
         @Override public InstanceId newInstance() { return new InstanceId() { }; }
-        @Override public void submit(RetainedBatch<Operation> batch) { batches.add(batch); }
+        @Override public dev.comfyfluffy.caustica.api.geometry.GeometryPublication submit(
+                RetainedBatch<Operation> batch) {
+            batches.add(batch);
+            return dev.comfyfluffy.caustica.api.geometry.GeometryPublication.alreadyVisible();
+        }
+        @Override public dev.comfyfluffy.caustica.api.geometry.GeometryPublication submitGroup(
+                List<RetainedBatch<Operation>> accepted) {
+            batches.addAll(accepted);
+            return dev.comfyfluffy.caustica.api.geometry.GeometryPublication.alreadyVisible();
+        }
     }
 
     private static final class Lights implements LightChannel {
@@ -115,7 +122,7 @@ final class ShowcaseSessionLifecycleTest {
 
     private static final class Programs implements ProgramChannel, ProgramBuilder {
         private final AtomicInteger closed = new AtomicInteger();
-        private Consumer<ProgramRegistration.Completion> completion;
+        private final List<Consumer<ProgramRegistration.Completion>> completions = new ArrayList<>();
         private ShowcasePrograms.Exports exports;
 
         @Override public <E> ProgramRegistration<E> register(
@@ -125,13 +132,16 @@ final class ShowcaseSessionLifecycleTest {
             return new ProgramRegistration<>() {
                 @Override public E exports() { return value; }
                 @Override public void whenComplete(Consumer<? super Completion> callback) {
-                    completion = callback::accept;
+                    completions.add(callback::accept);
                 }
                 @Override public void close() { closed.incrementAndGet(); }
             };
         }
 
-        void completeReady() { completion.accept(new ProgramRegistration.Ready()); }
+        void completeReady() {
+            var ready = new ProgramRegistration.Ready();
+            List.copyOf(completions).forEach(callback -> callback.accept(ready));
+        }
         @Override public <B, N> SurfaceId<B, N> surface(SurfaceDefinition<B, N> definition) {
             return new SurfaceId<>() { };
         }

@@ -18,12 +18,16 @@ final class RtPipelineRetainedHitPackingTest {
                 RtRetainedGeometryPlan.HitGroup.RADIANCE_CUTOUT,
                 RtRetainedGeometryPlan.HitGroup.SHADOW_CUTOUT,
                 RtRetainedGeometryPlan.HitGroup.RADIANCE_OPAQUE,
-                RtRetainedGeometryPlan.HitGroup.SHADOW_OPAQUE));
+                RtRetainedGeometryPlan.HitGroup.SHADOW_OPAQUE,
+                RtRetainedGeometryPlan.HitGroup.RADIANCE_OPAQUE,
+                RtRetainedGeometryPlan.HitGroup.SHADOW_TRANSMISSIVE));
 
         assertEquals(101, packed.getInt(0));
         assertEquals(104, packed.getInt(8));
         assertEquals(100, packed.getInt(16));
         assertEquals(103, packed.getInt(24));
+        assertEquals(100, packed.getInt(32));
+        assertEquals(105, packed.getInt(40));
         assertEquals(0, packed.getInt(4));
     }
 }

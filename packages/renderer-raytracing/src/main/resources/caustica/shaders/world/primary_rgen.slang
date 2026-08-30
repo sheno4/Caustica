@@ -57,7 +57,7 @@ float2 primarySpecularMotion<TComposition : IComposition>(uint2 pixel, uint2 ext
     secondary.previousNeeProposalMode = NEE_AT_PROPOSAL_GLOBAL;
     secondary.previousNeeCandidateCount = 1u;
     secondary.pathFlags = WORLD_PATH_GUIDE;
-    TraceRay(worldAccelerationStructure(worldBindings), RAY_FLAG_NONE, 0xffu,
+    TraceRay(worldAccelerationStructure(worldBindings), RAY_FLAG_NONE, WORLD_RAY_MASK_SECONDARY,
             0u, 2u, 1u, ray, secondary);
     if ((secondary.pathFlags & WORLD_PATH_MISS) != 0u || secondary.hitDistance < 0.0) {
         return float2(0.0);
@@ -85,7 +85,7 @@ void writePrimaryGuides<TComposition : IComposition>(uint2 pixel, uint2 extent,
         specularAlbedo = retainedUnpackRgb9e5(payload.guideSpecularAlbedo);
         float3 currentCameraRelative = payload.hitPosition - frame.camOffset;
         float4 currentClip = mul(frame.curViewProj, float4(currentCameraRelative, 1.0));
-        if (currentClip.w > 0.0) depth = currentClip.z / currentClip.w;
+        if (currentClip.w > 0.0) depth = currentClip.w;
         float3 previousCameraRelative = payload.previousHitPosition - frame.camOffset + frame.camDelta;
         float4 previousClip = mul(frame.prevViewProj, float4(previousCameraRelative, 1.0));
         if (previousClip.w > 0.0 && currentClip.w > 0.0) {
@@ -97,7 +97,8 @@ void writePrimaryGuides<TComposition : IComposition>(uint2 pixel, uint2 extent,
     }
     worldFloat4StorageImage(worldBindings.resources.normalGuide)[pixel] =
             float4(normal, payload.roughness);
-    worldFloat4StorageImage(worldBindings.resources.albedoGuide)[pixel] = float4(albedo, 1.0);
+    float emissive = (payload.pathFlags & WORLD_PATH_EMISSIVE) != 0u ? 1.0 : 0.0;
+    worldFloat4StorageImage(worldBindings.resources.albedoGuide)[pixel] = float4(albedo, emissive);
     worldFloatStorageImage(worldBindings.resources.depthGuide)[pixel] = depth;
     worldFloat2StorageImage(worldBindings.resources.motionGuide)[pixel] = motion;
     worldFloat4StorageImage(worldBindings.resources.specularAlbedoGuide)[pixel] =
@@ -113,15 +114,14 @@ public void runPrimary<TComposition : IComposition>() {
     uint pixelIndex = pixel.y * extent.x + pixel.x;
 
     float2 uv = (float2(pixel) + 0.5) / float2(extent);
-    float2 clip = uv * 2.0 - 1.0;
-    float4 nearPoint = mul(frame.invViewProj, float4(clip, 1.0, 1.0));
+    float2 clip = uv * 2.0 - 1.0 + frame.jitter * (2.0 / float2(extent));
     float4 farPoint = mul(frame.invViewProj, float4(clip, 0.0, 1.0));
-    nearPoint.xyz /= nearPoint.w;
     farPoint.xyz /= farPoint.w;
 
     RayDesc ray;
-    ray.Origin = nearPoint.xyz + frame.camOffset;
-    ray.Direction = normalize(farPoint.xyz - nearPoint.xyz);
+    // SceneView.medium describes the camera point, which is therefore the primary transport origin.
+    ray.Origin = frame.camOffset;
+    ray.Direction = normalize(farPoint.xyz);
     ray.TMin = 0.001 / max(neeAtState(worldBindings.neeAtStateAddress)[0].metersPerSceneUnit, 1.0e-8);
     ray.TMax = 10000.0;
 
@@ -146,7 +146,7 @@ public void runPrimary<TComposition : IComposition>() {
     payload.queueRecordIndex = pixelIndex;
     payload.pathFlags = WORLD_PATH_REQUEST_CONTINUATION | WORLD_PATH_PRIMARY
             | (worldBindings.initialVolumeActive != 0u ? WORLD_PATH_VOLUME_ACTIVE : 0u);
-    TraceRay(worldAccelerationStructure(worldBindings), RAY_FLAG_NONE, 0xFFu,
+    TraceRay(worldAccelerationStructure(worldBindings), RAY_FLAG_NONE, WORLD_RAY_MASK_PRIMARY,
             0u, 2u, 0u, ray, payload);
 
     float travel = payload.hitDistance >= 0.0 ? payload.hitDistance : ray.TMax;

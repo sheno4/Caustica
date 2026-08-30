@@ -37,6 +37,9 @@ public static const uint WORLD_PATH_MISS = 4u;
 public static const uint WORLD_PATH_PRIMARY = 8u;
 public static const uint WORLD_PATH_GUIDE = 16u;
 public static const uint WORLD_PATH_SHADOW = 32u;
+public static const uint WORLD_PATH_EMISSIVE = 64u;
+public static const uint WORLD_RAY_MASK_SECONDARY = 0x01u;
+public static const uint WORLD_RAY_MASK_PRIMARY = 0x02u;
 
 public ShaderRootData worldShaderRoot() {
     ShaderRootData root = {};

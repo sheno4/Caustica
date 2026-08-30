@@ -98,6 +98,34 @@ final class SourceDependencyArchitectureTest {
         assertFalse(production.contains("CausticaSettings.getInstance()"));
     }
 
+    @Test
+    void roundedCloudProductionCodeAndResourcesStayExcluded() throws IOException {
+        List<String> violations = new ArrayList<>();
+        try (var files = Files.walk(PROJECT_ROOT.resolve("packages"))) {
+            for (Path file : files.filter(Files::isRegularFile).toList()) {
+                String relative = PROJECT_ROOT.relativize(file).toString().replace('\\', '/');
+                if (!isProductionPath(relative)) continue;
+                String lowerPath = relative.toLowerCase(java.util.Locale.ROOT);
+                if (lowerPath.contains("/cloud/") || lowerPath.contains("rounded_cloud")
+                        || lowerPath.contains("roundedcloud") || lowerPath.contains("rtcloud")) {
+                    violations.add(relative);
+                    continue;
+                }
+                if (!isProductionText(file)) continue;
+                String text = Files.readString(file);
+                if (text.contains("RoundedCloud") || text.contains("roundedCloud")
+                        || text.contains("rounded_cloud") || text.contains("RtCloud")
+                        || text.contains("package dev.comfyfluffy.caustica.minecraft.cloud")) {
+                    violations.add(relative);
+                }
+            }
+        }
+        if (!violations.isEmpty()) {
+            fail("Rounded-cloud production code and resources must stay excluded; found: "
+                    + String.join(", ", violations));
+        }
+    }
+
     private static int occurrences(String text, String value) {
         int count = 0;
         for (int offset = 0; (offset = text.indexOf(value, offset)) >= 0; offset += value.length()) count++;
@@ -113,6 +141,19 @@ final class SourceDependencyArchitectureTest {
             }
         }
         return combined.toString();
+    }
+
+    private static boolean isProductionText(Path file) {
+        String name = file.getFileName().toString().toLowerCase(java.util.Locale.ROOT);
+        return name.endsWith(".java") || name.endsWith(".slang") || name.endsWith(".json")
+                || name.endsWith(".toml") || name.endsWith(".properties") || name.endsWith(".mcmeta");
+    }
+
+    private static boolean isProductionPath(String relative) {
+        return !relative.contains("/build/") && !relative.contains("/src/test/")
+                && !relative.contains("/src/testFixtures/") && !relative.contains("/src/toolingTest/")
+                && !relative.contains("/src/shaderReflection/")
+                && !relative.contains("/src/shaderValidation/");
     }
 
     private static void assertNoImports(List<Path> sourceRoots, List<String> forbiddenPackages)

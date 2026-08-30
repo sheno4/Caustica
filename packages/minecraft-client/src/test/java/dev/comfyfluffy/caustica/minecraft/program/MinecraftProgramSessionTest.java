@@ -1,5 +1,9 @@
 package dev.comfyfluffy.caustica.minecraft.program;
 
+import dev.comfyfluffy.caustica.api.light.LightChannel;
+import dev.comfyfluffy.caustica.api.light.LightId;
+import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
+import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.api.program.EnvironmentDefinition;
 import dev.comfyfluffy.caustica.api.program.EnvironmentId;
 import dev.comfyfluffy.caustica.api.program.ProgramBuilder;
@@ -10,6 +14,8 @@ import dev.comfyfluffy.caustica.api.program.SurfaceId;
 import dev.comfyfluffy.caustica.api.program.VolumeDefinition;
 import dev.comfyfluffy.caustica.api.program.VolumeId;
 import dev.comfyfluffy.caustica.minecraft.api.program.MinecraftProgramTypes;
+import dev.comfyfluffy.caustica.minecraft.MinecraftTelemetry;
+import dev.comfyfluffy.caustica.minecraft.provider.MinecraftLightProvider;
 import dev.comfyfluffy.caustica.api.pass.Pass;
 import dev.comfyfluffy.caustica.api.pass.PassFrame;
 import dev.comfyfluffy.caustica.minecraft.sky.SkyLutPass;
@@ -20,6 +26,7 @@ import org.junit.jupiter.api.Test;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.LongConsumer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -130,6 +137,20 @@ final class MinecraftProgramSessionTest {
         assertEquals(0.7, settings.moonAngularRadiusDegrees(), 1.0e-6);
     }
 
+    @Test
+    void lightUpdateTimingBracketsTheCapturedFrameUpdate() {
+        List<String> events = new ArrayList<>();
+        MinecraftLightProvider lights = new MinecraftLightProvider(new NoopLightChannel(), new SceneId() { },
+                () -> new MinecraftLightProvider.CelestialSettings(30, 0.6, 1.5),
+                () -> { events.add("update"); return null; });
+        var pass = new MinecraftProgramSession.LightUpdatePass(lights,
+                new RecordingInstrumentation(events));
+
+        pass.record(null);
+
+        assertEquals(List.of("start", "update", "end:terrain.lightScenePublish:17"), events);
+    }
+
     private static final class CapturingChannel implements ProgramChannel, ProgramBuilder {
         final List<SurfaceDefinition<?, ?>> surfaces = new ArrayList<>();
         final List<VolumeDefinition<?, ?>> volumes = new ArrayList<>();
@@ -161,6 +182,29 @@ final class MinecraftProgramSessionTest {
             environments.add(definition);
             return (EnvironmentId<B>) environmentId;
         }
+    }
+
+    private static final class NoopLightChannel implements LightChannel {
+        @Override public LightId newLight() { return new LightId() { }; }
+        @Override public void submit(RetainedBatch<Operation> batch) { }
+    }
+
+    private record RecordingInstrumentation(List<String> events)
+            implements MinecraftTelemetry.Instrumentation {
+        @Override public boolean enabled() { return true; }
+        @Override public long frameSerial() { return 0; }
+        @Override public long startStage() { events.add("start"); return 17; }
+        @Override public void endStage(String name, long startedNanos) {
+            events.add("end:" + name + ':' + startedNanos);
+        }
+        @Override public void count(String name, long delta) { }
+        @Override public void set(String name, long value) { }
+        @Override public void max(String name, long value) { }
+        @Override public Object extraction(MinecraftTelemetry.GeometrySource source, int geometryCount) {
+            return null;
+        }
+        @Override public void published(Object stamp) { }
+        @Override public void afterPublicationVisible(LongConsumer action) { }
     }
 
 }

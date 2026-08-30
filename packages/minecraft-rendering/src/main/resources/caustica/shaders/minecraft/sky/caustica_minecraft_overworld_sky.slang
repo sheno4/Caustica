@@ -28,7 +28,7 @@ float3 skyDome(float3 dir, SkyState state, MinecraftEnvironmentBinding binding) 
 }
 
 float3 lutSkyEvaluateEnvironment(EnvironmentQuery query) {
-    // Derives SkyState from the immutable device-address buffer captured by this environment binding.
+    // Derives SkyState from the queue-ordered LUT-lifetime buffer referenced by this environment binding.
     MinecraftEnvironmentBinding binding = minecraftEnvironmentBinding(query);
     SkyState state = skyState(ShaderDataPtr<SkyInputs>(binding.skyInputsAddress)[0]);
     float3 dir = query.direction;

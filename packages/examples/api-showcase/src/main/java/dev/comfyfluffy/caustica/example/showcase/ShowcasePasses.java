@@ -1,9 +1,6 @@
 package dev.comfyfluffy.caustica.example.showcase;
 
 import dev.comfyfluffy.caustica.api.vulkan.GpuAccelerationStructureDescriptor;
-import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorRange;
-import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorIndex;
-import dev.comfyfluffy.caustica.api.vulkan.GpuDescriptorWriter;
 import dev.comfyfluffy.caustica.api.vulkan.GpuDevice;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
 import dev.comfyfluffy.caustica.api.vulkan.GpuImageDescriptorKind;
@@ -18,20 +15,27 @@ import dev.comfyfluffy.caustica.example.showcase.gen.ShowcaseUiPushData;
 import dev.comfyfluffy.caustica.settings.OptionLookup;
 import dev.comfyfluffy.caustica.vulkan.ShaderObjectCompute;
 import dev.comfyfluffy.caustica.vulkan.ShaderObjectGraphics;
+import dev.comfyfluffy.caustica.vulkan.VmaMappedBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VkOffset2D;
 import org.lwjgl.vulkan.VkRect2D;
 import org.lwjgl.vulkan.VkRenderingAttachmentInfo;
 import org.lwjgl.vulkan.VkRenderingInfo;
-import org.lwjgl.vulkan.VkResourceDescriptorInfoEXT;
-import org.lwjgl.vulkan.VkSamplerCreateInfo;
+import org.lwjgl.vulkan.VkDependencyInfo;
+import org.lwjgl.vulkan.VkMemoryBarrier2;
 import org.lwjgl.vulkan.VK10;
+import org.lwjgl.vulkan.VK13;
 import org.lwjgl.vulkan.VK14;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.util.List;
+import java.util.function.BooleanSupplier;
+
+import static org.lwjgl.vulkan.KHRAccelerationStructure.VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
+import static org.lwjgl.vulkan.KHRSynchronization2.VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+import static org.lwjgl.vulkan.KHRSynchronization2.VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
 
 final class ShowcasePasses {
     static final PassId BLOOM = PassId.of("caustica", "bloom");
@@ -43,16 +47,104 @@ final class ShowcasePasses {
 
     private ShowcasePasses() { }
 
-    static Pass<PassFrame> worldResource(GpuDevice gpu, Runnable publishReadyEnvironment) {
+    static Pass<PassFrame> worldResource(GpuDevice gpu, BooleanSupplier programReady, ShowcaseScene scene) {
+        return worldResource(programReady, new VulkanWorldMeshHandoff(gpu, scene));
+    }
+
+    static Pass<PassFrame> worldResource(BooleanSupplier programReady, WorldMeshHandoff handoff) {
         return new Pass<>() {
             @Override
             public void record(PassFrame frame) {
-                publishReadyEnvironment.run();
+                if (programReady.getAsBoolean() && !handoff.published()) handoff.recordAndPublish(frame);
             }
 
             @Override
-            public void close() { }
+            public void close() {
+                handoff.close();
+            }
         };
+    }
+
+    interface WorldMeshHandoff extends AutoCloseable {
+        boolean published();
+        void recordAndPublish(PassFrame frame);
+        @Override void close();
+    }
+
+    private static final class VulkanWorldMeshHandoff implements WorldMeshHandoff {
+        private static final int POSITION_BYTES = 4 * 3 * Float.BYTES;
+        private static final int INDEX_BYTES = 12 * Integer.BYTES;
+        private static final int PREVIOUS_OFFSET = POSITION_BYTES;
+        private static final int INDEX_OFFSET = POSITION_BYTES * 2;
+        private static final int TOTAL_BYTES = INDEX_OFFSET + INDEX_BYTES;
+
+        private final GpuDevice gpu;
+        private final ShowcaseScene scene;
+        private VmaMappedBuffer upload;
+        private boolean uploadRecorded;
+        private boolean uploadComplete;
+        private boolean published;
+
+        private VulkanWorldMeshHandoff(GpuDevice gpu, ShowcaseScene scene) {
+            this.gpu = java.util.Objects.requireNonNull(gpu, "gpu");
+            this.scene = java.util.Objects.requireNonNull(scene, "scene");
+        }
+
+        @Override public boolean published() { return published; }
+
+        @Override
+        public void recordAndPublish(PassFrame frame) {
+            if (uploadRecorded) {
+                if (!uploadComplete) return;
+                VmaMappedBuffer accepted = upload;
+                scene.publishMesh(accepted.deviceRange().slice(0, POSITION_BYTES),
+                        accepted.deviceRange().slice(PREVIOUS_OFFSET, POSITION_BYTES),
+                        accepted.deviceRange().slice(INDEX_OFFSET, INDEX_BYTES), accepted::close);
+                upload = null;
+                published = true;
+                return;
+            }
+            upload = VmaMappedBuffer.create(gpu, TOTAL_BYTES,
+                    VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT
+                            | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+                    "API showcase retained mesh");
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                ByteBuffer data = stack.calloc(TOTAL_BYTES);
+                putTrianglePositions(data, 0);
+                putTrianglePositions(data, PREVIOUS_OFFSET);
+                for (int triangle = 0; triangle < 4; triangle++) {
+                    int base = INDEX_OFFSET + triangle * 3 * Integer.BYTES;
+                    data.putInt(base, 0).putInt(base + Integer.BYTES, 1)
+                            .putInt(base + Integer.BYTES * 2, 2);
+                }
+                VK10.vkCmdUpdateBuffer(frame.commandBuffer(), upload.buffer(), 0L, data);
+                VkMemoryBarrier2.Buffer barrier = VkMemoryBarrier2.calloc(1, stack).sType$Default()
+                        .srcStageMask(VK13.VK_PIPELINE_STAGE_2_COPY_BIT)
+                        .srcAccessMask(VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT)
+                        .dstStageMask(VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR)
+                        .dstAccessMask(VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
+                VK14.vkCmdPipelineBarrier2(frame.commandBuffer(),
+                        VkDependencyInfo.calloc(stack).sType$Default().pMemoryBarriers(barrier));
+            }
+            uploadRecorded = true;
+            frame.gpuUse().whenComplete(() -> uploadComplete = true);
+        }
+
+        private static void putTrianglePositions(ByteBuffer target, int offset) {
+            float[] positions = { -0.75f, 0.0f, 0.0f, 0.75f, 0.0f, 0.0f,
+                    0.0f, 1.25f, 0.0f, 0.0f, 0.0f, 0.0f };
+            for (int index = 0; index < positions.length; index++) {
+                target.putFloat(offset + index * Float.BYTES, positions[index]);
+            }
+        }
+
+        @Override
+        public void close() {
+            if (upload != null) {
+                upload.close();
+                upload = null;
+            }
+        }
     }
 
     static Pass<PostEffectFrame> postEffect(GpuDevice gpu, OptionLookup options) {
@@ -131,18 +223,6 @@ final class ShowcasePasses {
                 shaders.close();
             }
         };
-    }
-
-    /** Shape of raw descriptor writes needed by an extension-owned texture table. */
-    static void writeDescriptors(GpuDescriptorWriter writer,
-                                 GpuDescriptorRange<GpuDescriptorIndex.Resource> resources,
-                                 GpuDescriptorRange<GpuDescriptorIndex.Sampler> samplers,
-                                 VkResourceDescriptorInfoEXT resource,
-                                 VkSamplerCreateInfo sampler,
-                                 long accelerationStructure) {
-        writer.writeResource(resources, 0, resource);
-        writer.writeAccelerationStructure(resources, 1, accelerationStructure);
-        writer.writeSampler(samplers, 0, sampler);
     }
 
     private static void beginColorRendering(org.lwjgl.vulkan.VkCommandBuffer commandBuffer,

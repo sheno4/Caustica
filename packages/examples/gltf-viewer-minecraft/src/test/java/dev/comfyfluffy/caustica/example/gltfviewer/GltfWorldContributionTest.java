@@ -107,9 +107,17 @@ final class GltfWorldContributionTest {
         private CaptureGeometry(List<String> order) { this.order = order; }
         @Override public <N> MeshId<N> newMesh(ShaderDataType<N> type) { return new MeshId<>() { }; }
         @Override public InstanceId newInstance() { return new InstanceId() { }; }
-        @Override public void submit(RetainedBatch<Operation> batch) {
+        @Override public dev.comfyfluffy.caustica.api.geometry.GeometryPublication submit(
+                RetainedBatch<Operation> batch) {
             batches.add(batch);
             order.add("geometry");
+            return dev.comfyfluffy.caustica.api.geometry.GeometryPublication.alreadyVisible();
+        }
+        @Override public dev.comfyfluffy.caustica.api.geometry.GeometryPublication submitGroup(
+                List<RetainedBatch<Operation>> accepted) {
+            batches.addAll(accepted);
+            order.add("geometry");
+            return dev.comfyfluffy.caustica.api.geometry.GeometryPublication.alreadyVisible();
         }
         RetainedBatch<Operation> last() { return batches.getLast(); }
     }

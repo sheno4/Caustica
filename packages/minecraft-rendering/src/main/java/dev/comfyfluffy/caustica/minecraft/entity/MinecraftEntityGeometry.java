@@ -2,6 +2,7 @@ package dev.comfyfluffy.caustica.minecraft.entity;
 
 import dev.comfyfluffy.caustica.api.geometry.GeometryChannel;
 import dev.comfyfluffy.caustica.api.geometry.GeometryTransform;
+import dev.comfyfluffy.caustica.api.geometry.GeometryPublication;
 import dev.comfyfluffy.caustica.api.geometry.InstanceId;
 import dev.comfyfluffy.caustica.api.geometry.MeshId;
 import dev.comfyfluffy.caustica.api.retained.RetainedBatch;
@@ -171,7 +172,7 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
     }
 
     public interface UpdateGroup extends AutoCloseable {
-        void submit();
+        GeometryPublication submit();
         @Override void close();
     }
 
@@ -189,17 +190,20 @@ public final class MinecraftEntityGeometry implements MinecraftWorldSessionContr
             meshes.values().forEach(mesh -> meshResidentCounts.put(mesh, mesh.residents));
         }
 
-        @Override public void submit() {
+        @Override public GeometryPublication submit() {
             synchronized (MinecraftEntityGeometry.this) {
                 requireActive();
                 try {
-                    if (!batches.isEmpty()) channel.submitGroup(batches);
+                    GeometryPublication publication = batches.isEmpty()
+                            ? GeometryPublication.alreadyVisible()
+                            : channel.submitGroup(batches);
+                    finished = true;
+                    pendingGroup = null;
+                    return publication;
                 } catch (RuntimeException | Error failure) {
                     rollback(failure);
                     throw failure;
                 }
-                finished = true;
-                pendingGroup = null;
             }
         }
 

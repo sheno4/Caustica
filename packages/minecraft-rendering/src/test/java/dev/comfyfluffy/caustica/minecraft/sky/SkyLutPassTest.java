@@ -10,9 +10,13 @@ import dev.comfyfluffy.caustica.settings.Option;
 import dev.comfyfluffy.caustica.settings.OptionValues;
 import dev.comfyfluffy.caustica.settings.ResourceId;
 import org.junit.jupiter.api.Test;
+import org.lwjgl.vulkan.KHRSynchronization2;
+import org.lwjgl.vulkan.VK13;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.charset.StandardCharsets;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -37,10 +41,46 @@ final class SkyLutPassTest {
     }
 
     @Test void generatedRootsMatchDescriptorHeapAbi() {
-        assertEquals(128, SkyLutPushData.BYTE_SIZE);
+        assertEquals(144, SkyLutPushData.BYTE_SIZE);
         assertEquals(32, MinecraftEnvironmentBindingData.BYTE_SIZE);
         assertEquals(1, SkyLutPass.groups(1));
         assertEquals(2, SkyLutPass.groups(9));
+    }
+
+    @Test void environmentBindingChangesOnlyWithAtlasIdentityOrEpoch() {
+        assertTrue(SkyLutPass.sameBindingEpoch(7, 11, 7, 11));
+        assertFalse(SkyLutPass.sameBindingEpoch(7, 11, 8, 11));
+        assertFalse(SkyLutPass.sameBindingEpoch(7, 11, 7, 12));
+    }
+
+    @Test void persistentSkyResourcesWaitForPriorRayReadsBeforeComputeWrites() {
+        assertEquals(KHRSynchronization2.VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                SkyLutPass.PRIOR_SKY_READ_STAGE);
+        assertEquals(VK13.VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK13.VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                SkyLutPass.PRIOR_SKY_READ_ACCESS);
+        assertEquals(VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, SkyLutPass.SKY_WRITE_STAGE);
+        assertEquals(VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, SkyLutPass.SKY_WRITE_ACCESS);
+    }
+
+    @Test void selectedBindingLeaseDefersLutResourceClosure() {
+        AtomicInteger closes = new AtomicInteger();
+        var lifetime = new SkyLutPass.ResourceLifetime(closes::incrementAndGet);
+        var bindingLease = lifetime.retain();
+
+        lifetime.release();
+        assertEquals(0, closes.get());
+        bindingLease.release();
+        assertEquals(1, closes.get());
+    }
+
+    @Test void skyViewPublishesBindingInputsFromItsQueueOrderedDispatch() throws Exception {
+        String source;
+        try (var input = SkyLutPassTest.class.getResourceAsStream(
+                "/caustica/shaders/minecraft/sky/caustica_minecraft_sky_lut_view.slang")) {
+            source = new String(input.readAllBytes(), StandardCharsets.UTF_8);
+        }
+        assertTrue(source.contains("Access.ReadWrite, AddressSpace.Device, Std430DataLayout"));
+        assertTrue(source.contains("WritableSkyInputsPtr(pc.skyInputsAddress)[0] = pc.inputs"));
     }
 
     @Test void lutDimensionsMatchAtmosphereConstants() {

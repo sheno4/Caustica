@@ -10,4 +10,6 @@ public struct SkyLutPush {
     public SampledTexture2DIndex multiScatterImage;
     public SamplerIndex sampler;
     public SkyInputs inputs;
+    /** Stable LUT-lifetime destination updated by the sky-view dispatch before world tracing. */
+    public uint64_t skyInputsAddress;
 };

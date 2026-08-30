@@ -105,8 +105,10 @@ public final class RtRetainedGeometryPlan {
         List<HitGroup> groups = new ArrayList<>(Math.multiplyExact(records.size(), HIT_RECORDS_PER_GEOMETRY));
         for (GeometryRecord record : records) {
             boolean cutout = (record.flags() & CUTOUT) != 0 && (record.flags() & HAS_VOLUME) == 0;
+            boolean volume = (record.flags() & HAS_VOLUME) != 0;
             groups.add(cutout ? HitGroup.RADIANCE_CUTOUT : HitGroup.RADIANCE_OPAQUE);
-            groups.add(cutout ? HitGroup.SHADOW_CUTOUT : HitGroup.SHADOW_OPAQUE);
+            groups.add(volume ? HitGroup.SHADOW_TRANSMISSIVE
+                    : cutout ? HitGroup.SHADOW_CUTOUT : HitGroup.SHADOW_OPAQUE);
         }
         return List.copyOf(groups);
     }
@@ -153,6 +155,7 @@ public final class RtRetainedGeometryPlan {
         RADIANCE_OPAQUE,
         RADIANCE_CUTOUT,
         SHADOW_OPAQUE,
-        SHADOW_CUTOUT
+        SHADOW_CUTOUT,
+        SHADOW_TRANSMISSIVE
     }
 }

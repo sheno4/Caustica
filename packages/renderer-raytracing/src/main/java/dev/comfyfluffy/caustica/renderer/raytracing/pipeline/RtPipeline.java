@@ -261,6 +261,7 @@ public final class RtPipeline {
             case RADIANCE_CUTOUT -> RtAccel.SBT_RADIANCE_OFFSET + RtAccel.CLASS_MASKED;
             case SHADOW_OPAQUE -> RtAccel.SBT_SHADOW_OFFSET + RtAccel.CLASS_OPAQUE;
             case SHADOW_CUTOUT -> RtAccel.SBT_SHADOW_OFFSET + RtAccel.CLASS_MASKED;
+            case SHADOW_TRANSMISSIVE -> RtAccel.SBT_SHADOW_OFFSET + RtAccel.CLASS_TRANSMISSIVE;
         };
     }
 

@@ -71,4 +71,26 @@ final class VulkanBarriersTest {
             assertEquals(1, barrier.subresourceRange().layerCount());
         }
     }
+
+    @Test
+    void worldResourcesMakeComputeAndClearWritesVisibleToPrimaryRayTracing() {
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            VkDependencyInfo dependency = VulkanBarriers.worldResourcesToPrimaryDependency(stack);
+            VkMemoryBarrier2.Buffer barriers = dependency.pMemoryBarriers();
+
+            assertNotNull(barriers);
+            assertEquals(1, barriers.remaining());
+            VkMemoryBarrier2 barrier = barriers.get(0);
+            assertEquals(VK13.VK_PIPELINE_STAGE_2_CLEAR_BIT | VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                    barrier.srcStageMask());
+            assertEquals(VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT | VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                    barrier.srcAccessMask());
+            assertEquals(org.lwjgl.vulkan.KHRSynchronization2.VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                    barrier.dstStageMask());
+            assertEquals(VK13.VK_ACCESS_2_SHADER_SAMPLED_READ_BIT
+                            | VK13.VK_ACCESS_2_SHADER_STORAGE_READ_BIT
+                            | VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                    barrier.dstAccessMask());
+        }
+    }
 }

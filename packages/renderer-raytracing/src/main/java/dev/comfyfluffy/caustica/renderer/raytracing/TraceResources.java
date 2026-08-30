@@ -65,7 +65,7 @@ public final class TraceResources {
         GpuImage diffuseAlbedo = context.createStorageImage(renderWidth, renderHeight,
                 VK10.VK_FORMAT_R16G16B16A16_SFLOAT, "guide diffuse albedo " + renderWidth + "x" + renderHeight);
         GpuImage linearDepth = context.createStorageImage(renderWidth, renderHeight,
-                VK10.VK_FORMAT_R32_SFLOAT, "guide linear depth " + renderWidth + "x" + renderHeight);
+                VK10.VK_FORMAT_R32_SFLOAT, "guide view depth " + renderWidth + "x" + renderHeight);
         GpuImage motion = context.createStorageImage(renderWidth, renderHeight,
                 VK10.VK_FORMAT_R16G16_SFLOAT, "guide motion " + renderWidth + "x" + renderHeight);
         GpuImage specularAlbedo = context.createStorageImage(renderWidth, renderHeight,

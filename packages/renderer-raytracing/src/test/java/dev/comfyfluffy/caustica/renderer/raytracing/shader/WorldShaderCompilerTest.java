@@ -98,6 +98,8 @@ final class WorldShaderCompilerTest {
         String primary = shaderSource("primary_rgen.slang");
         String indirect = shaderSource("indirect.slang");
         String reordered = shaderSource("indirect_ser.slang");
+        String ordinaryTrace = shaderSource("retained_trace_ordinary.slang");
+        String reorderedTrace = shaderSource("retained_trace_reordered.slang");
         String core = shaderSource("retained_indirect.slang");
         String closest = shaderSource("closest_hit.slang");
         String queue = shaderSource("path_queue_types.slang");
@@ -113,6 +115,16 @@ final class WorldShaderCompilerTest {
         assertTrue(reordered.contains("RetainedReorderedTrace"));
         assertTrue(primary.contains("queue[pixelIndex] = packRetainedPath(emptyState, PATH_NO_NEXT)"));
         assertTrue(primary.contains("continuation.throughput *= transmittance"));
+        assertTrue(primary.contains("ray.Origin = frame.camOffset"));
+        assertTrue(primary.contains("ray.Direction = normalize(farPoint.xyz)"));
+        assertTrue(primary.contains("frame.jitter * (2.0 / float2(extent))"));
+        assertTrue(primary.contains("depth = currentClip.w"));
+        assertFalse(primary.contains("depth = currentClip.z / currentClip.w"));
+        assertTrue(primary.contains("RAY_FLAG_NONE, WORLD_RAY_MASK_PRIMARY"));
+        assertTrue(primary.contains("RAY_FLAG_NONE, WORLD_RAY_MASK_SECONDARY"));
+        assertTrue(ordinaryTrace.contains("RAY_FLAG_NONE, WORLD_RAY_MASK_SECONDARY"));
+        assertTrue(reorderedTrace.contains("RAY_FLAG_NONE,\n                WORLD_RAY_MASK_SECONDARY"));
+        assertFalse(primary.contains("ray.Origin = nearPoint.xyz + frame.camOffset"));
         assertTrue(closest.contains("queue[payload.queueRecordIndex]"));
         assertTrue(core.contains("payload.queueRecordIndex = recordIndex"));
         assertTrue(core.contains("payload.previousNeeProposalMode = state.proposalMode"));
@@ -128,6 +140,8 @@ final class WorldShaderCompilerTest {
         assertTrue(primary.contains("primarySpecularMotion"));
         assertTrue(primary.contains("primary.roughness >= 0.35"));
         assertTrue(primary.contains("secondary.pathFlags = WORLD_PATH_GUIDE"));
+        assertTrue(primary.contains("payload.pathFlags & WORLD_PATH_EMISSIVE"));
+        assertTrue(closest.contains("payload.pathFlags |= WORLD_PATH_EMISSIVE"));
         assertFalse(primary.contains("specularMotionGuide)[pixel] = motion"));
 
         assertTrue(lights.contains("pixelIndex * 2u + 1u"));
@@ -150,12 +164,15 @@ final class WorldShaderCompilerTest {
         assertTrue(lights.contains("neeAtLocalAvailable(state, pixel)"));
         assertTrue(closest.contains("volumeIor = max(volume.indexOfRefraction, 1.0)"));
         assertTrue(closest.contains("shadow.pathFlags = WORLD_PATH_SHADOW"));
+        assertTrue(closest.contains("WORLD_RAY_MASK_SECONDARY, 1u, 2u, 1u"));
         assertTrue(closest.contains("shadow.volumeIor = currentMediumIor"));
         assertTrue(lights.contains("isfinite(contribution)"));
         assertTrue(shadow.contains("evaluateBoundaryLighting"));
         assertTrue(shadow.contains("IgnoreHit()"));
         assertTrue(world.contains("query.showEnvironmentEmitters = showEmitters"));
         assertTrue(world.contains("query.bindingData = frame[0].environmentBinding"));
+        assertTrue(world.contains("WORLD_RAY_MASK_SECONDARY = 0x01u"));
+        assertTrue(world.contains("WORLD_RAY_MASK_PRIMARY = 0x02u"));
         assertTrue(miss.contains(
                 "environments.evaluateEnvironment(worldEnvironmentImplementation()"));
         assertFalse(miss.contains("environments.evaluateEnvironment(0u"));

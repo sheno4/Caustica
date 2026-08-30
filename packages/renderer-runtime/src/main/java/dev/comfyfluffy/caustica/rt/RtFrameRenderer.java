@@ -491,6 +491,9 @@ public final class RtFrameRenderer {
             SceneOrigin lightingOrigin = snapshot.sceneOrigin();
             boolean lightingHistoryContinuous = mvHasPrev && lastLightingFrame + 1L == frameCounter
                     && Objects.equals(lastLightingOrigin, lightingOrigin) && !isLightingCameraCut(snapshot);
+            if (!lightingHistoryContinuous) {
+                rayReconstruction.resetHistory();
+            }
             updateMotion(snapshot);
             recordFrame(context, active, nativeColorImage, snapshot, lightingHistoryContinuous);
             lastLightingFrame = frameCounter;
@@ -750,7 +753,7 @@ public final class RtFrameRenderer {
                 passes.beginFrame(passFrame(cmd, graphicsUse, null));
                 passFrameOpen = true;
                 services.passes().recordWorldResources();
-                VulkanBarriers.continuationUploadToPrimary(cmd, stack);
+                VulkanBarriers.worldResourcesToPrimary(cmd, stack);
 
                 try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "world primary trace");
                      RtTelemetry.Scope ignoredStats = telemetry.frame().stage("frame.tracePrimary")) {
@@ -776,15 +779,29 @@ public final class RtFrameRenderer {
                     traceExtent().renderHeight(), traceExtent().displayWidth(), traceExtent().displayHeight())) {
                 try (RtDebugLabels.Scope ignored = RtDebugLabels.scope(ctx, cmd, "DLSS-RR evaluate");
                      RtTelemetry.Scope ignoredStats = telemetry.frame().stage("frame.dlssRr")) {
+                    GpuImage[] rrInputs = {
+                            traceImages().traceColor(),
+                            traceImages().linearDepth(),
+                            traceImages().motion(),
+                            traceImages().diffuseAlbedo(),
+                            traceImages().specularAlbedo(),
+                            traceImages().normalRoughness(),
+                            traceImages().specularMotion()
+                    };
+                    VulkanBarriers.storageImagesToExternalSampled(cmd, stack, rrInputs);
                     rrDone = rayReconstruction.evaluate(cmd, traceImages().traceColor(), traceImages().linearDepth(),
                             traceImages().motion(), traceImages().diffuseAlbedo(),
                             traceImages().specularAlbedo(), traceImages().normalRoughness(),
                             traceImages().specularMotion(), traceImages().reconstructedColor(),
-                            traceExtent().renderWidth(), traceExtent().renderHeight(),
-                            traceExtent().displayWidth(), traceExtent().displayHeight(),
-                            -jitterX, -jitterY, frameViewRotation, frameProjection);
+                             traceExtent().renderWidth(), traceExtent().renderHeight(),
+                             traceExtent().displayWidth(), traceExtent().displayHeight(),
+                             -jitterX, -jitterY, presentationResources().exposure().preExposure());
+                    VulkanBarriers.externalSampledImagesToStorage(cmd, stack, rrInputs);
                 }
             }
+            // External reconstruction implementations can invalidate descriptor-heap state even when feature
+            // creation or evaluation fails. Establish the engine heaps before any heap-native post work.
+            ctx.bindDescriptorHeaps(cmd);
 
             // When DLSS-RR did not produce the display-res image (disabled or a runtime failure), bring
             // the render-res trace up to display res with a linear blit so the display mapper and

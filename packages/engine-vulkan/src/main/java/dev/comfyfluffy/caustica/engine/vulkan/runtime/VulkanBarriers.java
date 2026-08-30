@@ -1,5 +1,6 @@
 package dev.comfyfluffy.caustica.engine.vulkan.runtime;
 
+import dev.comfyfluffy.caustica.api.vulkan.GpuImage;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VK13;
@@ -28,6 +29,7 @@ import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_
 import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
 import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
 import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
 import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_NONE;
 import static org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
 
@@ -62,11 +64,17 @@ public final class VulkanBarriers {
         VK13.vkCmdPipelineBarrier2(commandBuffer, passDependency(stack));
     }
 
-    public static void continuationUploadToPrimary(VkCommandBuffer commandBuffer, MemoryStack stack) {
-        memoryBarrier(commandBuffer, stack,
-                VK_PIPELINE_STAGE_2_CLEAR_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+    public static void worldResourcesToPrimary(VkCommandBuffer commandBuffer, MemoryStack stack) {
+        VK13.vkCmdPipelineBarrier2(commandBuffer, worldResourcesToPrimaryDependency(stack));
+    }
+
+    static VkDependencyInfo worldResourcesToPrimaryDependency(MemoryStack stack) {
+        return dependency(stack,
+                VK_PIPELINE_STAGE_2_CLEAR_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_TRANSFER_WRITE_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
                 VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
-                VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT
+                        | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
     }
 
     public static void primaryToIndirect(VkCommandBuffer commandBuffer, MemoryStack stack) {
@@ -76,14 +84,71 @@ public final class VulkanBarriers {
                 VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
     }
 
+    /**
+     * Makes storage-written images available to an external Vulkan implementation that samples them
+     * through descriptors whose declared layout is {@code SHADER_READ_ONLY_OPTIMAL}.
+     */
+    public static void storageImagesToExternalSampled(VkCommandBuffer commandBuffer, MemoryStack stack,
+                                                       GpuImage... images) {
+        transitionImages(commandBuffer, stack, images,
+                VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                VK10.VK_IMAGE_LAYOUT_GENERAL,
+                VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    }
+
+    /** Restores externally sampled images to the engine's unified general-layout convention. */
+    public static void externalSampledImagesToStorage(VkCommandBuffer commandBuffer, MemoryStack stack,
+                                                       GpuImage... images) {
+        transitionImages(commandBuffer, stack, images,
+                VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+                PASS_STAGES,
+                PASS_READ_WRITE_ACCESS,
+                VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK10.VK_IMAGE_LAYOUT_GENERAL);
+    }
+
+    private static void transitionImages(VkCommandBuffer commandBuffer, MemoryStack stack, GpuImage[] images,
+                                         long sourceStage, long sourceAccess,
+                                         long destinationStage, long destinationAccess,
+                                         int oldLayout, int newLayout) {
+        VkImageMemoryBarrier2.Buffer barriers = VkImageMemoryBarrier2.calloc(images.length, stack);
+        for (int i = 0; i < images.length; i++) {
+            VkImageMemoryBarrier2 barrier = barriers.get(i).sType$Default()
+                    .srcStageMask(sourceStage)
+                    .srcAccessMask(sourceAccess)
+                    .dstStageMask(destinationStage)
+                    .dstAccessMask(destinationAccess)
+                    .oldLayout(oldLayout)
+                    .newLayout(newLayout)
+                    .srcQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED)
+                    .dstQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED)
+                    .image(images[i].image());
+            barrier.subresourceRange()
+                    .aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT)
+                    .levelCount(1)
+                    .layerCount(1);
+        }
+        VK13.vkCmdPipelineBarrier2(commandBuffer,
+                VkDependencyInfo.calloc(stack).sType$Default().pImageMemoryBarriers(barriers));
+    }
+
     private static void memoryBarrier(VkCommandBuffer commandBuffer, MemoryStack stack,
                                       long sourceStage, long sourceAccess,
                                       long destinationStage, long destinationAccess) {
+        VK13.vkCmdPipelineBarrier2(commandBuffer,
+                dependency(stack, sourceStage, sourceAccess, destinationStage, destinationAccess));
+    }
+
+    private static VkDependencyInfo dependency(MemoryStack stack, long sourceStage, long sourceAccess,
+                                               long destinationStage, long destinationAccess) {
         VkMemoryBarrier2.Buffer barrier = VkMemoryBarrier2.calloc(1, stack).sType$Default()
                 .srcStageMask(sourceStage).srcAccessMask(sourceAccess)
                 .dstStageMask(destinationStage).dstAccessMask(destinationAccess);
-        VK13.vkCmdPipelineBarrier2(commandBuffer,
-                VkDependencyInfo.calloc(stack).sType$Default().pMemoryBarriers(barrier));
+        return VkDependencyInfo.calloc(stack).sType$Default().pMemoryBarriers(barrier);
     }
 
     static VkDependencyInfo passDependency(MemoryStack stack) {

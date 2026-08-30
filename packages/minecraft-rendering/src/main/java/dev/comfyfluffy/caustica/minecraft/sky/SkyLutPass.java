@@ -35,6 +35,11 @@ public final class SkyLutPass implements Pass<PassFrame> {
     static final int TRANSMITTANCE_WIDTH = 256, TRANSMITTANCE_HEIGHT = 64;
     static final int MULTISCATTER_WIDTH = 32, MULTISCATTER_HEIGHT = 32;
     static final int SKY_VIEW_WIDTH = 192, SKY_VIEW_HEIGHT = 216;
+    static final long PRIOR_SKY_READ_STAGE = KHRSynchronization2.VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+    static final long PRIOR_SKY_READ_ACCESS = VK13.VK_ACCESS_2_SHADER_STORAGE_READ_BIT
+            | VK13.VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+    static final long SKY_WRITE_STAGE = VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    static final long SKY_WRITE_ACCESS = VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
 
     public static final String GROUP = "sky";
     public static final Option<Float> SUN_NOON_SOUTH_TILT_DEGREES = option("sun-noon-south-tilt-degrees", -89, 89, 30);
@@ -55,12 +60,13 @@ public final class SkyLutPass implements Pass<PassFrame> {
     private final MinecraftEnvironmentSelector selector;
     private final VmaImage2D transmittance, multiScatter, skyView;
     private final VulkanSampler lutSampler, celestialSampler;
+    private final VmaMappedBuffer skyInputs;
     private final ShaderObjectCompute transmittanceShader, multiScatterShader, skyViewShader;
+    private final ResourceLifetime resources;
     private final AtomicLong resourcePackEpoch;
     private AtlasEntry atlas;
     private boolean initialized, baked;
     private float bakedGroundAlbedo;
-    private int liveBindings;
 
     public SkyLutPass(GpuDevice gpu, Supplier<OptionValues> options,
                       Supplier<MinecraftSkyFrame> frames,
@@ -74,6 +80,7 @@ public final class SkyLutPass implements Pass<PassFrame> {
         resourcePackEpoch = new AtomicLong(epoch);
         VmaImage2D t = null, m = null, v = null;
         VulkanSampler ls = null, cs = null;
+        VmaMappedBuffer si = null;
         ShaderObjectCompute ts = null, ms = null, vs = null;
         try {
             t = VmaImage2D.create(gpu, TRANSMITTANCE_WIDTH, TRANSMITTANCE_HEIGHT,
@@ -84,85 +91,111 @@ public final class SkyLutPass implements Pass<PassFrame> {
                     VK_FORMAT_R16G16B16A16_SFLOAT, ID + " sky view");
             ls = VulkanSampler.linearClamp(gpu, ID + " LUT sampler");
             cs = VulkanSampler.nearestClamp(gpu, ID + " celestial sampler");
+            si = createEmptyBuffer(gpu, SkyInputsData.BYTE_SIZE, "Minecraft sky inputs");
             ts = load(gpu, "transmittance.comp.spv");
             ms = load(gpu, "multiscatter.comp.spv");
             vs = load(gpu, "view.comp.spv");
         } catch (RuntimeException | Error failure) {
-            closeAll(vs, ms, ts, cs, ls, v, m, t);
+            closeAll(vs, ms, ts, si, cs, ls, v, m, t);
             throw failure;
         }
         transmittance = t; multiScatter = m; skyView = v;
         lutSampler = ls; celestialSampler = cs;
+        skyInputs = si;
         transmittanceShader = ts; multiScatterShader = ms; skyViewShader = vs;
+        resources = new ResourceLifetime(si, v, m, t, cs, ls);
     }
 
     public void invalidate(long epoch) { resourcePackEpoch.accumulateAndGet(epoch, Math::max); }
 
     @Override public void record(PassFrame frame) {
+        boolean hasPriorGpuUse = initialized;
         if (!initialized) { initializeImages(frame.commandBuffer()); initialized = true; }
         MinecraftSkyFrame captured = frames.get();
         if (captured == null) return;
+        if (hasPriorGpuUse) priorRayReadsToSkyWrites(frame.commandBuffer());
         SkyState state = gather(options.get(), captured.celestial());
         AtlasSnapshot snapshot = atlasSnapshot(captured.atlas());
-        ensureAtlas(snapshot);
         SkyInputsData inputs = skyInputs(state, snapshot);
+        ensureBinding(snapshot);
         if (baked && Float.compare(bakedGroundAlbedo, state.groundAlbedo()) != 0) baked = false;
         if (!baked) {
-            dispatch(transmittanceShader, frame, transmittance, inputs);
+            dispatch(transmittanceShader, frame, transmittance, inputs, skyInputsAddress());
             barrier(frame.commandBuffer());
-            dispatch(multiScatterShader, frame, multiScatter, inputs);
+            dispatch(multiScatterShader, frame, multiScatter, inputs, skyInputsAddress());
             barrier(frame.commandBuffer());
             bakedGroundAlbedo = state.groundAlbedo();
             baked = true;
         }
-        dispatch(skyViewShader, frame, skyView, inputs);
-        BindingGeneration binding = createBinding(inputs, atlas.retain());
+        dispatch(skyViewShader, frame, skyView, inputs, skyInputsAddress());
+    }
+
+    private void ensureBinding(AtlasSnapshot snapshot) {
+        long epoch = resourcePackEpoch.get();
+        if (atlas != null && sameBindingEpoch(atlas.image.vkImage(), atlas.epoch,
+                snapshot.image().vkImage(), epoch)) return;
+        AtlasEntry replacement = AtlasEntry.create(
+                gpu, snapshot.image(), snapshot.baseMipLevel(), snapshot.mipLevels(), epoch);
+        BindingGeneration binding = null;
         try {
+            binding = createBinding(replacement.retain());
             selector.select(new EnvironmentBinding<>(environment,
                     MinecraftProgramTypes.ENVIRONMENT_BINDING_DATA.data(
                             binding.root.deviceRange().address().value()), binding::retire));
             binding.published = true;
         } finally {
-            if (!binding.published) binding.closeStrict();
+            if (binding == null || !binding.published) {
+                if (binding != null) binding.closeStrict();
+                replacement.release();
+            }
         }
-    }
-
-    private void ensureAtlas(AtlasSnapshot snapshot) {
-        long epoch = resourcePackEpoch.get();
-        if (atlas != null && atlas.image.vkImage() == snapshot.image().vkImage() && atlas.epoch == epoch) return;
-        AtlasEntry replacement = AtlasEntry.create(
-                gpu, snapshot.image(), snapshot.baseMipLevel(), snapshot.mipLevels(), epoch);
         AtlasEntry previous = atlas;
         atlas = replacement;
         baked = false;
         if (previous != null) previous.release();
     }
 
-    private BindingGeneration createBinding(SkyInputsData inputs, AtlasEntry atlasLease) {
-        VmaMappedBuffer inputBuffer = null, root = null;
+    static boolean sameBindingEpoch(long image, long epoch, long nextImage, long nextEpoch) {
+        return image == nextImage && epoch == nextEpoch;
+    }
+
+    private BindingGeneration createBinding(AtlasEntry atlasLease) {
+        VmaMappedBuffer root = null;
         try {
-            inputBuffer = createBuffer(SkyInputsData.BYTE_SIZE, inputs::write);
-            VmaMappedBuffer captured = inputBuffer;
             root = createBuffer(MinecraftEnvironmentBindingData.BYTE_SIZE, bytes ->
                     new MinecraftEnvironmentBindingData(
                             sampled(skyView.sampledIndex()), sampled(transmittance.sampledIndex()),
                             sampled(atlasLease.index()), sampler(lutSampler.index()),
                             sampler(celestialSampler.index()),
-                            captured.deviceRange().address().value()).write(bytes));
-            liveBindings++;
-            return new BindingGeneration(root, inputBuffer, atlasLease);
+                            skyInputsAddress()).write(bytes));
+            return new BindingGeneration(root, atlasLease, resources.retain());
         } catch (RuntimeException | Error failure) {
-            closeAll(root, inputBuffer);
+            closeAll(root);
             atlasLease.release();
             throw failure;
         }
     }
+
+    private long skyInputsAddress() { return skyInputs.deviceRange().address().value(); }
 
     private VmaMappedBuffer createBuffer(int size, java.util.function.Consumer<ByteBuffer> writer) {
         VmaMappedBuffer buffer = VmaMappedBuffer.create(
                 gpu, size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "Minecraft sky buffer");
         try {
             writer.accept(buffer.mapped().order(ByteOrder.LITTLE_ENDIAN));
+            buffer.flush(0, size);
+            return buffer;
+        } catch (RuntimeException | Error failure) {
+            buffer.close();
+            throw failure;
+        }
+    }
+
+    private static VmaMappedBuffer createEmptyBuffer(GpuDevice gpu, int size, String name) {
+        VmaMappedBuffer buffer = VmaMappedBuffer.create(gpu, size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, name);
+        try {
+            ByteBuffer bytes = buffer.mapped();
+            for (int i = 0; i < size; i++) bytes.put(i, (byte) 0);
             buffer.flush(0, size);
             return buffer;
         } catch (RuntimeException | Error failure) {
@@ -178,13 +211,15 @@ public final class SkyLutPass implements Pass<PassFrame> {
         return new MinecraftEnvironmentBindingData.SamplerIndex(index.value());
     }
 
-    private void dispatch(ShaderObjectCompute shader, PassFrame frame, VmaImage2D destination, SkyInputsData inputs) {
+    private void dispatch(ShaderObjectCompute shader, PassFrame frame, VmaImage2D destination,
+                          SkyInputsData inputs, long skyInputsAddress) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             ByteBuffer push = stack.malloc(SkyLutPushData.BYTE_SIZE).order(ByteOrder.LITTLE_ENDIAN);
             new SkyLutPushData(destination.storageIndex().value(),
                     new SkyLutPushData.SampledTexture2DIndex(transmittance.sampledIndex().value()),
                     new SkyLutPushData.SampledTexture2DIndex(multiScatter.sampledIndex().value()),
-                    new SkyLutPushData.SamplerIndex(lutSampler.index().value()), pushInputs(inputs)).write(push);
+                    new SkyLutPushData.SamplerIndex(lutSampler.index().value()), pushInputs(inputs),
+                    skyInputsAddress).write(push);
             shader.dispatch(frame.commandBuffer(), push, groups(destination.width()), groups(destination.height()), 1);
         }
     }
@@ -281,12 +316,41 @@ public final class SkyLutPass implements Pass<PassFrame> {
         }
     }
 
+    private void priorRayReadsToSkyWrites(VkCommandBuffer commandBuffer) {
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            VK14.vkCmdPipelineBarrier2(commandBuffer,
+                    priorRayReadsToSkyWritesDependency(stack, skyView));
+        }
+    }
+
+    private static VkDependencyInfo priorRayReadsToSkyWritesDependency(MemoryStack stack, VmaImage2D skyView) {
+        VkMemoryBarrier2.Buffer buffers = VkMemoryBarrier2.calloc(1, stack);
+        buffers.get(0).sType$Default()
+                .srcStageMask(PRIOR_SKY_READ_STAGE)
+                .srcAccessMask(PRIOR_SKY_READ_ACCESS)
+                .dstStageMask(SKY_WRITE_STAGE)
+                .dstAccessMask(SKY_WRITE_ACCESS);
+        VkImageMemoryBarrier2.Buffer images = VkImageMemoryBarrier2.calloc(1, stack);
+        images.get(0).sType$Default()
+                .srcStageMask(PRIOR_SKY_READ_STAGE)
+                .srcAccessMask(VK13.VK_ACCESS_2_SHADER_SAMPLED_READ_BIT)
+                .dstStageMask(SKY_WRITE_STAGE)
+                .dstAccessMask(SKY_WRITE_ACCESS)
+                .oldLayout(VK_IMAGE_LAYOUT_GENERAL).newLayout(VK_IMAGE_LAYOUT_GENERAL)
+                .srcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED).dstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+                .image(skyView.image());
+        images.get(0).subresourceRange().aspectMask(VK_IMAGE_ASPECT_COLOR_BIT)
+                .baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
+        return VkDependencyInfo.calloc(stack).sType$Default()
+                .pMemoryBarriers(buffers).pImageMemoryBarriers(images);
+    }
+
     @Override public void close() {
-        if (liveBindings != 0) LOGGER.error("Sky pass closed with {} live environment bindings", liveBindings);
         if (atlas != null) try { atlas.release(); }
         catch (Throwable failure) { LOGGER.error("Sky atlas cleanup failed", failure); }
-        closeAll(skyViewShader, multiScatterShader, transmittanceShader, celestialSampler, lutSampler,
-                skyView, multiScatter, transmittance);
+        atlas = null;
+        closeAll(skyViewShader, multiScatterShader, transmittanceShader);
+        resources.release();
     }
     private static void closeAll(AutoCloseable... resources) {
         for (AutoCloseable r : resources) if (r != null) try { r.close(); }
@@ -294,10 +358,10 @@ public final class SkyLutPass implements Pass<PassFrame> {
     }
 
     private final class BindingGeneration {
-        final VmaMappedBuffer root, skyInputs; final AtlasEntry atlas;
+        final VmaMappedBuffer root; final AtlasEntry atlas; final ResourceLifetime resources;
         boolean published, closed;
-        BindingGeneration(VmaMappedBuffer root, VmaMappedBuffer skyInputs, AtlasEntry atlas) {
-            this.root = root; this.skyInputs = skyInputs; this.atlas = atlas;
+        BindingGeneration(VmaMappedBuffer root, AtlasEntry atlas, ResourceLifetime resources) {
+            this.root = root; this.atlas = atlas; this.resources = resources;
         }
         void closeStrict() {
             Throwable failure = release();
@@ -312,10 +376,19 @@ public final class SkyLutPass implements Pass<PassFrame> {
             if (closed) return null;
             closed = true;
             Throwable failure = cleanup(null, root::close);
-            failure = cleanup(failure, skyInputs::close);
             failure = cleanup(failure, atlas::release);
-            liveBindings--;
+            failure = cleanup(failure, resources::release);
             return failure;
+        }
+    }
+
+    static final class ResourceLifetime {
+        private final AutoCloseable[] resources;
+        private int references = 1;
+        ResourceLifetime(AutoCloseable... resources) { this.resources = resources; }
+        synchronized ResourceLifetime retain() { references++; return this; }
+        synchronized void release() {
+            if (--references == 0) closeAll(resources);
         }
     }
 

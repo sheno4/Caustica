@@ -79,6 +79,12 @@ final class ShowcasePrograms {
         return ready.get();
     }
 
+    void whenReady(Runnable callback) {
+        registration.whenComplete(completion -> {
+            if (completion instanceof ProgramRegistration.Ready) callback.run();
+        });
+    }
+
     EnvironmentBinding<EnvironmentBindingData> environmentBinding(
             EnvironmentId<EnvironmentBindingData> implementation, long bindingWord, Runnable retired) {
         return new EnvironmentBinding<>(implementation,

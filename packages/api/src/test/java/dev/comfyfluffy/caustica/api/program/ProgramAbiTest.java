@@ -69,7 +69,8 @@ final class ProgramAbiTest {
         assertTrue(!types.contains("BsdfQuery"));
         assertTrue(resources.contains("ResourceDescriptorHeap[NonUniformResourceIndex(index.value)]"));
         assertTrue(resources.contains("SamplerDescriptorHeap[NonUniformResourceIndex(index.value)]"));
-        assertTrue(resources.contains("RaytracingAccelerationStructure accelerationStructure"));
+        assertTrue(resources.contains("public struct AccelerationStructureIndex"));
+        assertTrue(!resources.contains("RaytracingAccelerationStructure accelerationStructure"));
         assertEquals(Set.of("compositionData", "implementationData", "bindingData", "instanceData"),
                 uint64FieldNames(types));
         assertEquals(Set.of("implementationData", "bindingData", "instanceData"),

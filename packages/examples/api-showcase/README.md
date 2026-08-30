@@ -18,12 +18,12 @@ integration at `packages/examples/gltf-viewer-minecraft`.
 | volume | glass boundary with absorption and a volume-only fog boundary | world-program composition | The narrow absorption ABI fits both surface boundaries and volume-only geometry. |
 | initial view medium | explicit vacuum and camera beginning underwater | generic view state plus volume dispatch | `SceneView` carries one homogeneous medium containing the primary-ray origin: either `ViewMedium.Vacuum` or the typed volume binding and instance data selected by the host. |
 | environment and dimension sky | select exported overworld, Nether, or End sky content after the program set is ready | Minecraft scene/program boundary | Dimension keys and sky policy stay in `ShowcaseMinecraftSky`; core sees only an environment id and binding. |
-| retained geometry | one mesh with opaque, cutout, surface+volume, and volume-only slices | geometry channel | Issued IDs and atomic batches fit shared resident meshes and many placements. |
+| retained geometry | upload one shared vertex/index allocation, then atomically publish its mesh and first placement as independently retired batches | geometry channel | Mandatory grouped publication is necessary when placement must never observe an absent mesh but the mesh allocation must not inherit placement lifetime. |
 | retained lights / NEE-AT | rectangle, circular spot, and distant descriptors plus a primitive-to-light map | light channel | `LightChannel` is the complete scene-local light registration contract. NEE-AT remains renderer policy and needs no extension-facing backend token. |
-| world-resource pass | observe program readiness and publish dimension-sky selection before tracing | pass/GPU boundary | The callback timing is real, but this pass currently records no GPU commands; the compiled world-resource compute entry point is validation-only. |
+| world-resource pass | record a device-addressable world-mesh upload, then publish it after that frame completes | pass/GPU boundary | This is the real asynchronous handoff needed by a producer that owns upload work while the renderer owns acceleration construction. |
 | post effect | read scene color/exposure, acquire a distinct output, and order after optional bloom | pass boundary | Necessary for bloom and colour grading. Stable ids plus one optional anchor avoid relying on extension discovery order. |
 | UI pass | draw a screen marker whose tint is gated by an inline query against the entry-scene TLAS | pass boundary | The unplaced overload and acceleration-structure push-index mapping are real; the current marker does not consume the camera/WVP. |
-| descriptor heap and retirement | borrowed image/TLAS indices plus typed writer/range API shape | Vulkan boundary | Post/UI recording consumes borrowed descriptors. Owned range allocation, descriptor replacement, and retirement remain shape-only pressure in this probe. |
+| descriptor heap and retirement | borrowed image/TLAS indices plus a retained world buffer | Vulkan boundary | Post/UI recording consumes borrowed descriptors. The mesh buffer transfers to geometry retirement after grouped publication; bloom remains the replacement-and-retire example for owned descriptor ranges. |
 | shader objects | create pass-owned compute and graphics shader objects from direct SPIR-V | Vulkan support boundary | The support package supplies descriptor-heap validation, fully dynamic graphics state, push data, dispatch/draw binding, and destruction without moving shader ownership into the renderer. |
 | two-scene selection | construct views and isolated retained operations for two distinct host-issued scene ids | generic view boundary | This proves identity targeting only. One trace still selects one TLAS; a future simultaneous portal renderer needs a new trace ABI. |
 | settings lookup | snapshot one feature-scoped colour-grade option during pass recording | process API plus settings API | Declaration stays process-scoped; the pass reads a stable snapshot without reaching host storage. |
@@ -48,11 +48,15 @@ integration at `packages/examples/gltf-viewer-minecraft`.
   only the camera's containing medium and do not imply scene creation, selection, or portal authority.
 - `ApiShowcaseExtension` declares its option independently of render-session creation. The post pass uses
   `OptionLookup.snapshot()` before reading the feature-scoped value used for that frame.
-- `ShowcasePrograms` records readiness in an atomic flag. Its completion callback returns promptly, while
-  the world-resource pass observes the flag and selects the current dimension's sky exactly once.
+- `ShowcasePrograms` records readiness in an atomic flag and supports multiple lightweight readiness consumers.
+  Environment selection runs from that completion seam, while the world-resource pass waits for the same
+  coherent program set before uploading and publishing program-referencing geometry exactly once.
 - `GpuFrameUse.whenComplete` is the frame-scoped callback available for resource retirement and positive
-  completion work. The showcase does not yet allocate and replace an owned GPU resource, so this remains a
-  documented API seam rather than an exercised recording path here.
+  completion work. The world mesh hands its allocation to the first grouped geometry batch and receives it
+  through that batch's retirement callback after drop/session teardown. This showcase owns only session-long
+  shader objects, so it has no honest resize-driven resource replacement to demonstrate. The built-in bloom
+  pass provides that example: replacement `VmaImage2D` levels own populated descriptor ranges, become reachable
+  through newly recorded push data, and displace old levels through `GpuDevice.retireAfterUse`.
 - Public scene creation/closing remains absent. The implemented Minecraft host owns the scene and brackets
   `ShowcaseSession` with the world-session contribution lifecycle.
 
@@ -81,13 +85,17 @@ output pixel with bounds checks. The UI pass begins dynamic rendering with `LOAD
 `GENERAL` layer, maps its conventional acceleration-structure binding to the pushed entry-scene TLAS heap
 index, performs an inline query, draws a small screen-space marker, and ends rendering. Each pass destroys its
 shader objects from `Pass.close()`, after the host has stopped callbacks and drained their GPU uses. The
-world-resource pass currently owns no shader object and dispatches no compute work.
+world-resource pass needs no shader object: it records a buffer update and synchronization2 barrier. A later
+world-resource callback publishes the typed buffer ranges after that upload frame has completed.
 
-`ShowcaseScene.publishMesh(...)` accepts externally uploaded device addresses. The main API deliberately
-has no CPU mesh or texture uploader. A real glTF consumer therefore needs reusable VMA, staging, descriptor,
-and retirement support before it can submit a `MeshBuild`. The showcase only exposes the typed publication
-method and descriptor-writer helper shape; it does not perform those allocations. Shader-object creation is
-covered by `vulkan-support` and is consumed directly by the post and UI passes.
+`ShowcasePasses.worldResource(...)` allocates one device-addressable VMA buffer and records its tiny demonstration
+mesh with `vkCmdUpdateBuffer`. Its frame-completion callback only marks the upload ready; a later pass callback
+publishes the typed vertex/current/previous/index ranges. The mesh and placement arrive in one `submitGroup`,
+while only the mesh batch owns the buffer retirement callback. The main API
+deliberately has no CPU mesh or texture uploader; a larger glTF consumer still needs reusable staging and
+texture upload support. `vulkan-support.VmaImage2D` and `features-builtin.BloomPass` cover the useful
+owned-image/descriptor allocation and replace-retire path.
+Shader-object creation is covered by `vulkan-support` and is consumed directly by the post and UI passes.
 
 ## Minecraft boundary
 
@@ -118,5 +126,6 @@ owns compiler discovery, target/profile conventions, reflection parsing, and rep
 outputs, so extension packages can reuse compile-time validation without receiving the engine's runtime
 Slang compiler through `RenderSessionContext`.
 
-The compiled world-resource shader remains a validation probe until the corresponding pass owns and dispatches
-it. The post and UI binaries are the shader entry points exercised by live recording code.
+The world-resource shader remains compile-validation coverage for package-owned compute entry points; the
+corresponding pass uses transfer commands because its concrete resource handoff does not require computation.
+The post and UI binaries are shader entry points exercised by live recording code.

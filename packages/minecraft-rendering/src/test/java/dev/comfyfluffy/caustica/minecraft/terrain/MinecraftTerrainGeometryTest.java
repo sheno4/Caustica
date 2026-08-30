@@ -79,6 +79,34 @@ final class MinecraftTerrainGeometryTest {
     }
 
     @Test
+    void returnsTheGroupedNativePublicationReceipt() {
+        var channel = new RecordingChannel();
+        var terrain = new MinecraftTerrainGeometry(channel, new SceneId() { }, ignored -> new Uploaded(0x2250L));
+
+        var publication = terrain.submitGroup(List.of(
+                List.of(new MinecraftTerrainGeometry.Put(2L, 0, 0, 0, mesh()))));
+
+        assertSame(channel.publication, publication);
+        assertFalse(publication.isVisible());
+        channel.visible = true;
+        assertTrue(publication.isVisible());
+    }
+
+    @Test
+    void acceptedSectionStateTracksSubmissionBeforeNativeVisibility() {
+        var channel = new RecordingChannel();
+        var terrain = new MinecraftTerrainGeometry(channel, new SceneId() { }, ignored -> new Uploaded(0x2260L));
+
+        terrain.submit(List.of(new MinecraftTerrainGeometry.Put(7L, 0, 0, 0, mesh())));
+        assertTrue(terrain.hasSection(7L));
+        assertEquals(List.of(7L), terrain.sectionKeys());
+
+        terrain.submit(List.of(new MinecraftTerrainGeometry.Drop(7L)));
+        assertFalse(terrain.hasSection(7L));
+        assertTrue(terrain.sectionKeys().isEmpty());
+    }
+
+    @Test
     void rejectedPublicationGroupReleasesEveryUploadAndKeepsSectionStateRetryable() {
         var channel = new RecordingChannel();
         var first = new Uploaded(0x2300L);
@@ -217,23 +245,29 @@ final class MinecraftTerrainGeometryTest {
         private final List<RetainedBatch<Operation>> batches = new ArrayList<>();
         private final List<List<RetainedBatch<Operation>>> groups = new ArrayList<>();
         private boolean rejectNext;
+        private boolean visible;
+        private final dev.comfyfluffy.caustica.api.geometry.GeometryPublication publication = () -> visible;
 
         @Override public <N> MeshId<N> newMesh(ShaderDataType<N> instanceDataType) { return new MeshId<>() { }; }
         @Override public InstanceId newInstance() { return new InstanceId() { }; }
-        @Override public void submit(RetainedBatch<Operation> batch) {
+        @Override public dev.comfyfluffy.caustica.api.geometry.GeometryPublication submit(
+                RetainedBatch<Operation> batch) {
             if (rejectNext) {
                 rejectNext = false;
                 throw new IllegalArgumentException("rejected");
             }
             batches.add(batch);
+            return publication;
         }
-        @Override public void submitGroup(List<RetainedBatch<Operation>> group) {
+        @Override public dev.comfyfluffy.caustica.api.geometry.GeometryPublication submitGroup(
+                List<RetainedBatch<Operation>> group) {
             if (rejectNext) {
                 rejectNext = false;
                 throw new IllegalArgumentException("rejected");
             }
             groups.add(List.copyOf(group));
             batches.addAll(group);
+            return publication;
         }
     }
 }

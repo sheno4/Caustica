@@ -36,8 +36,10 @@ heaps, and retirement are intentional extension contracts; Minecraft lifecycle a
   `MinecraftFrameCaptureState`, and `MinecraftEntityCaptureBinding` are now host-free types in
   `minecraft-rendering`; `minecraft-client` implements them against live Minecraft state.
 - the API showcase is a non-loader API consumer on the real `MinecraftExtension`/world-session lifecycle.
-  Its post and UI passes own and record shader objects, while its world-resource pass currently performs only
-  pre-trace readiness and environment publication. It cannot launch as a standalone mod.
+  Its post and UI passes own and record shader objects. Its world-resource pass records a device-addressable
+  buffer upload and barrier, waits for frame completion, then atomically publishes a mesh and placement with
+  independent retirement. It
+  cannot launch as a standalone mod.
 
 Device interception, loader entrypoints, mixins, and composition are application responsibilities in the
 `minecraft-client` Loom package rather than reusable library responsibilities.
@@ -83,9 +85,12 @@ surviving selection uses built-in environment implementation zero.
 
 ### Retained geometry, lights, and passes
 
-Retained geometry and light batches publish atomically. Accepted snapshots are ordered by revision; displaced
-resources retire after their tracked GPU use. Producer callbacks describe content and lifetime while the
-renderer owns upload, acceleration policy, TLAS insertion, descriptor publication, and retirement.
+Retained geometry and light batches publish atomically. Geometry additionally requires grouped publication:
+several independently retired batches validate, enter the accepted native publication, and become visible
+together. The showcase proves the use case by grouping a resident mesh buffer with its first placement while
+attaching buffer ownership only to the mesh batch. Accepted snapshots are ordered by revision; displaced
+resources retire after their tracked GPU use. Producers own and synchronize resident input buffers; the
+renderer owns acceleration policy, TLAS insertion, descriptor publication, and retirement tracking.
 
 The public light set is rectangle radiance in cd/m², circular-spot intensity in candela, and distant normal
 illuminance in lux. The ray tracer consumes all three through persistent per-scene double buffers: a global
@@ -93,6 +98,12 @@ discrete distribution, tiled local histograms derived from previous-frame light 
 proposal PDFs, candidate RIS, and reverse MIS. CPU property coverage checks global normalization and boundary
 ownership, local histogram probing/addressing, history validity and identity continuity, and agreement with
 shader constants and branch edges. This is static algorithmic evidence, not a live lighting result.
+
+"RTXPT-style" identifies the public algorithm family only. The Caustica NEE-AT records, feedback encoding,
+identity remapping, tiled distributions, proposal mixture, RIS estimator, and reverse-MIS integration are an
+independent implementation derived from public algorithm descriptions. No NVIDIA source, shader code, private
+headers, or binary-derived implementation detail is part of this implementation, and the review does not claim
+source, binary, conformance, or output equivalence with RTXPT.
 
 World-resource passes record before tracing. Post and UI passes have stage-local IDs and one optional
 before/after anchor. Missing anchors are unconstrained; acceptance order resolves remaining ties. Duplicate,
@@ -102,6 +113,11 @@ bound descriptor heaps, and close after submitted uses drain.
 There is no public or internal lifecycle built around a global surface-modifier chain. Block damage travels
 through explicit Minecraft instance/material data; program, material, and pass resources follow their owning
 session/package lifecycles.
+
+The showcase's retained world buffer proves producer-to-renderer GPU-resource handoff and retirement. The
+owned descriptor replacement pattern is exercised separately by `features-builtin/BloomPass`: resize allocates
+and writes replacement `VmaImage2D` heap ranges, publishes those indices through recorded work, and retires
+the displaced levels through `GpuDevice.retireAfterUse`.
 
 ## Vulkan and shader decisions
 
@@ -172,8 +188,9 @@ No physical launch, visual result, validation-layer result, or frame-rate result
   host hooks and mixins.
 - Keep atomic owner-scoped program registration and owner-scoped retained retirement.
 - Keep deterministic owner-slot environment precedence, restoration, and drainage semantics.
-- Keep scene targeting but defer public scene administration and portal traversal. Current compatibility is
-  identity and lifetime isolation only; simultaneous portal traversal requires a new multi-scene trace ABI.
+- Keep scene targeting but defer public scene administration and portal traversal. The compatibility claim ends
+  at identity and lifetime isolation: each trace still selects exactly one entry-scene TLAS. Simultaneous portal
+  traversal requires a new multi-scene trace ABI and is not implemented or demonstrated by the examples.
 - Keep mandatory `SceneView.medium()` and Minecraft-owned primary-origin containment policy.
 - Keep stage-local pass ordering rather than exposing a general render graph.
 - Keep the three-shape NEE-AT light contract experimental through physical validation.

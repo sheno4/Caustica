@@ -32,6 +32,9 @@ public final class MinecraftLightProvider implements AutoCloseable {
     private final LightId sunLight;
     private final LightId moonLight;
     private final Map<Long, TerrainSection> terrainSections = new HashMap<>();
+    private Optional<LightDescriptor.Distant> publishedSun;
+    private Optional<LightDescriptor.Distant> publishedMoon;
+    private Optional<LightDescriptor.Spot> publishedHelmet;
     private long terrainGeneration = Long.MIN_VALUE;
 
     public MinecraftLightProvider(LightChannel lights, SceneId scene,
@@ -59,14 +62,27 @@ public final class MinecraftLightProvider implements AutoCloseable {
     void publish(CelestialLights celestial, Optional<LightDescriptor.Spot> helmet,
                  MinecraftTerrainLightSnapshot terrain) {
         ArrayList<LightChannel.Operation> operations = new ArrayList<>();
-        setOrDrop(operations, sunLight, celestial.sun());
-        setOrDrop(operations, moonLight, celestial.moon());
-        setOrDrop(operations, helmetLight, helmet);
+        boolean sunChanged = !java.util.Objects.equals(publishedSun, celestial.sun());
+        boolean moonChanged = !java.util.Objects.equals(publishedMoon, celestial.moon());
+        boolean helmetChanged = !java.util.Objects.equals(publishedHelmet, helmet);
+        if (sunChanged) {
+            setOrDrop(operations, sunLight, celestial.sun());
+        }
+        if (moonChanged) {
+            setOrDrop(operations, moonLight, celestial.moon());
+        }
+        if (helmetChanged) {
+            setOrDrop(operations, helmetLight, helmet);
+        }
         if (terrain.generation() != terrainGeneration) {
             reconcileTerrain(operations, terrain.batches());
             terrainGeneration = terrain.generation();
         }
+        if (operations.isEmpty()) return;
         lights.submit(RetainedBatch.of(operations));
+        if (sunChanged) publishedSun = celestial.sun();
+        if (moonChanged) publishedMoon = celestial.moon();
+        if (helmetChanged) publishedHelmet = helmet;
     }
 
     private void reconcileTerrain(List<LightChannel.Operation> operations,

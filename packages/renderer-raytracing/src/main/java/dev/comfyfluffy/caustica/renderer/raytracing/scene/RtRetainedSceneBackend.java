@@ -12,6 +12,8 @@ import dev.comfyfluffy.caustica.api.light.LightDescriptor;
 import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
 import dev.comfyfluffy.caustica.api.scene.SceneId;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneBackend;
+import dev.comfyfluffy.caustica.engine.scene.RetainedSceneContentSnapshot;
+import dev.comfyfluffy.caustica.engine.scene.RetainedSceneGeometryDelta;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.engine.vulkan.runtime.VulkanDeviceContext;
@@ -35,6 +37,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.Supplier;
 
 import static org.lwjgl.vulkan.KHRRayTracingPipeline.VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR;
 
@@ -49,6 +52,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     private NativeSnapshot published;
     private Throwable fatalFailure;
     private boolean closed;
+    private long nextPlacementOrdinal;
 
     public RtRetainedSceneBackend(VulkanDeviceContext ctx) {
         this.ctx = Objects.requireNonNull(ctx, "ctx");
@@ -60,9 +64,10 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                                                           GraphicsUse graphicsUse) {
         NativeSnapshot current = requirePublishedScene(scene);
         current.graphicsUse.mark(graphicsUse);
+        SceneContent content = current.content.get(scene);
         var input = new RtNeeAtBackend.FrameInput(frame.width(), frame.height(), frame.frameIndex(),
                 frame.metersPerSceneUnit(), frame.historyContinuous());
-        return new PreparedLighting(neeAt.prepare(scene, current.content.get(scene).lights(), input,
+        return new PreparedLighting(neeAt.prepare(scene, content.lights(), input,
                 commandBuffer, graphicsUse));
     }
 
@@ -87,18 +92,18 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
 
     /** Accepts a complete logical version. GPU publication remains ordered and atomic. */
     @Override
-    public synchronized void publish(RetainedSceneSnapshot snapshot, Runnable previousRetired) {
+    public synchronized void publish(RetainedSceneSnapshot snapshot, Runnable onPublished,
+                                     Runnable previousRetired) {
         if (closed) throw new IllegalStateException("retained scene backend is closed");
         if (fatalFailure != null) throw fatalException();
         Objects.requireNonNull(snapshot, "snapshot");
+        Objects.requireNonNull(onPublished, "onPublished");
         Objects.requireNonNull(previousRetired, "previousRetired");
-        long tailRevision = queued.isEmpty()
-                ? published != null ? published.revision : -1L
-                : queued.getLast().snapshot.revision();
+        long tailRevision = tailRevision();
         if (snapshot.revision() <= tailRevision) {
             throw new IllegalArgumentException("scene revisions must increase");
         }
-        Publication publication = new Publication(snapshot, previousRetired);
+        Publication publication = new Publication(snapshot.revision(), onPublished, previousRetired);
         Candidate predecessor = queued.isEmpty() ? published : queued.getLast().candidate;
         try {
             publication.candidate = prepare(snapshot, predecessor);
@@ -108,6 +113,71 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             if (publication.candidate != null) publication.candidate.releaseRejected();
             throw failure;
         }
+    }
+
+    /** Accepts geometry without rematerializing or revalidating the unchanged logical world. */
+    @Override
+    public synchronized void publishGeometry(RetainedSceneGeometryDelta delta,
+                                             Supplier<RetainedSceneSnapshot> fallbackSnapshot,
+                                             Runnable onPublished, Runnable previousRetired) {
+        if (closed) throw new IllegalStateException("retained scene backend is closed");
+        if (fatalFailure != null) throw fatalException();
+        Objects.requireNonNull(delta, "delta");
+        Objects.requireNonNull(fallbackSnapshot, "fallbackSnapshot");
+        Objects.requireNonNull(onPublished, "onPublished");
+        Objects.requireNonNull(previousRetired, "previousRetired");
+        if (delta.revision() <= tailRevision()) {
+            throw new IllegalArgumentException("scene revisions must increase");
+        }
+        Candidate predecessor = queued.isEmpty() ? published : queued.getLast().candidate;
+        if (predecessor == null) {
+            throw new IllegalStateException("geometry delta needs a preceding scene publication");
+        }
+        Publication publication = new Publication(delta.revision(), onPublished, previousRetired);
+        try {
+            publication.candidate = prepare(delta, predecessor);
+            accept(publication);
+            queued.addLast(publication);
+        } catch (Throwable failure) {
+            if (publication.candidate != null) publication.candidate.releaseRejected();
+            throw failure;
+        }
+    }
+
+    /** Accepts content in the same revision queue while sharing the preceding native geometry generation. */
+    @Override
+    public synchronized void publishContent(RetainedSceneContentSnapshot snapshot, Runnable onPublished,
+                                            Runnable previousRetired) {
+        if (closed) throw new IllegalStateException("retained scene backend is closed");
+        if (fatalFailure != null) throw fatalException();
+        Objects.requireNonNull(snapshot, "snapshot");
+        Objects.requireNonNull(onPublished, "onPublished");
+        Objects.requireNonNull(previousRetired, "previousRetired");
+        if (snapshot.revision() <= tailRevision()) {
+            throw new IllegalArgumentException("scene revisions must increase");
+        }
+        Candidate predecessor = queued.isEmpty() ? published : queued.getLast().candidate;
+        if (predecessor == null) {
+            throw new IllegalStateException("content publication needs preceding scene geometry");
+        }
+        Publication publication = new Publication(snapshot.revision(), onPublished, previousRetired);
+        try {
+            predecessor.geometry.retain();
+            publication.candidate = new Candidate(snapshot.revision(), predecessor.geometry,
+                    assembleContent(snapshot.scenes(), snapshot.lights()), true);
+            accept(publication);
+            queued.addLast(publication);
+        } catch (Throwable failure) {
+            if (publication.candidate != null) publication.candidate.releaseRejected();
+            else predecessor.geometry.release();
+            throw failure;
+        }
+    }
+
+    private long tailRevision() {
+        return queued.isEmpty()
+                ? published != null ? published.revision : -1L
+                : queued.getLast().revision;
     }
 
     @Override
@@ -146,7 +216,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         Objects.requireNonNull(origin, "origin");
         Objects.requireNonNull(graphicsUse, "graphicsUse");
         NativeSnapshot current = requirePublishedScene(scene);
-        List<NativeInstance> source = current.instances.get(scene);
+        List<NativeInstance> source = current.geometry.instances.get(scene);
         TlasBuilder.InstanceBatch instances = new TlasBuilder.InstanceBatch();
         instances.reset(source.size());
         for (NativeInstance instance : source) {
@@ -164,7 +234,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         Objects.requireNonNull(origin, "origin");
         NativeSnapshot current = requirePublishedScene(scene);
         List<RtRetainedGeometryPlan.GeometryRecord> records = new ArrayList<>();
-        for (NativeInstance instance : current.instances.get(scene)) {
+        for (NativeInstance instance : current.geometry.instances.get(scene)) {
             records.addAll(RtRetainedGeometryPlan.records(instance.mesh.logical, instance.logical,
                     instance.previousTransform));
         }
@@ -175,7 +245,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     public synchronized List<RtRetainedGeometryPlan.HitGroup> hitGroups(SceneId scene) {
         NativeSnapshot current = requirePublishedScene(scene);
         List<RtRetainedGeometryPlan.GeometryRecord> records = new ArrayList<>();
-        for (NativeInstance instance : current.instances.get(scene)) {
+        for (NativeInstance instance : current.geometry.instances.get(scene)) {
             records.addAll(RtRetainedGeometryPlan.records(instance.mesh.logical, instance.logical,
                     instance.previousTransform));
         }
@@ -197,7 +267,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         List<RtRetainedGeometryPlan.GeometryRecord> records = new ArrayList<>();
         List<Integer> emitterOffsets = new ArrayList<>();
         int emitterBytes = 0;
-        for (NativeInstance instance : current.instances.get(scene)) {
+        for (NativeInstance instance : current.geometry.instances.get(scene)) {
             List<RtRetainedGeometryPlan.GeometryRecord> instanceRecords = RtRetainedGeometryPlan.records(
                     instance.mesh.logical, instance.logical, instance.previousTransform);
             for (int geometryIndex = 0; geometryIndex < instanceRecords.size(); geometryIndex++) {
@@ -221,7 +291,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         ByteBuffer geometry = RtRetainedGeometryPlan.pack(addressedRecords, origin);
         ByteBuffer emitters = ByteBuffer.allocate(emitterBytes).order(ByteOrder.nativeOrder());
         boolean[] linkedEmitters = new boolean[sceneLights.size()];
-        for (NativeInstance instance : current.instances.get(scene)) {
+        for (NativeInstance instance : current.geometry.instances.get(scene)) {
             for (MeshBuild.Geometry<?> meshGeometry : instance.mesh.logical.build().geometries()) {
                 int primitiveBase = meshGeometry.firstIndex() / 3;
                 for (int localPrimitive = 0; localPrimitive < meshGeometry.triangleCount(); localPrimitive++) {
@@ -263,8 +333,8 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
                 slot.tlasDescriptor.firstIndex().value(), hitTable);
     }
 
-    private static int emitterIndex(List<RetainedSceneSnapshot.PrimitiveEmitter> ranges,
-                                    int primitive, Map<Long, Integer> lightIndices) {
+    static int emitterIndex(List<RetainedSceneSnapshot.PrimitiveEmitter> ranges,
+                            int primitive, Map<Long, Integer> lightIndices) {
         for (RetainedSceneSnapshot.PrimitiveEmitter range : ranges) {
             if (primitive < range.firstPrimitive()) break;
             if (primitive < range.firstPrimitive() + range.primitiveCount()) {
@@ -330,7 +400,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         List<RtAccel.PreparedBlas> builds = new ArrayList<>();
         try {
             for (RetainedSceneSnapshot.Mesh mesh : snapshot.meshes()) {
-                NativeMesh reused = predecessor == null ? null : predecessor.meshes.get(mesh.identity());
+                NativeMesh reused = predecessor == null ? null : predecessor.geometry.meshes.get(mesh.identity());
                 if (reused != null && RtRetainedGeometryPlan.canReuseBlas(reused.logical.build(), mesh.build())) {
                     reused.retain();
                     reused = reused.withLogical(mesh);
@@ -344,6 +414,85 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             }
             Candidate candidate = assemble(snapshot, meshes, predecessor);
             candidate.unsubmitted = created;
+            candidate.builds = List.copyOf(builds);
+            return candidate;
+        } catch (Throwable failure) {
+            for (NativeMesh mesh : meshes.values()) {
+                if (created.contains(mesh)) RtAccel.releaseTransientBlas(mesh.buildOperation);
+                else mesh.release();
+            }
+            throw failure;
+        }
+    }
+
+    private Candidate prepare(RetainedSceneGeometryDelta delta, Candidate predecessor) {
+        Map<Long, NativeMesh> meshes = new LinkedHashMap<>();
+        predecessor.geometry.meshes.forEach((identity, mesh) -> {
+            mesh.retain();
+            meshes.put(identity, mesh);
+        });
+        List<NativeMesh> created = new ArrayList<>();
+        List<RtAccel.PreparedBlas> builds = new ArrayList<>();
+        try {
+            Map<Long, RetainedSceneSnapshot.Mesh> finalMeshSets = new LinkedHashMap<>();
+            Map<Long, Boolean> finalMeshDrops = new LinkedHashMap<>();
+            for (RetainedSceneGeometryDelta.Mutation mutation : delta.mutations()) {
+                if (mutation instanceof RetainedSceneGeometryDelta.SetMesh set) {
+                    long identity = set.mesh().identity();
+                    finalMeshDrops.remove(identity);
+                    finalMeshSets.remove(identity);
+                    finalMeshSets.put(identity, set.mesh());
+                } else if (mutation instanceof RetainedSceneGeometryDelta.DropMesh drop) {
+                    finalMeshSets.remove(drop.identity());
+                    finalMeshDrops.remove(drop.identity());
+                    finalMeshDrops.put(drop.identity(), Boolean.TRUE);
+                }
+            }
+            for (long identity : finalMeshDrops.keySet()) {
+                NativeMesh removed = meshes.remove(identity);
+                if (removed != null) removed.release();
+            }
+            for (RetainedSceneSnapshot.Mesh mesh : finalMeshSets.values()) {
+                NativeMesh previous = meshes.get(mesh.identity());
+                if (previous != null && RtRetainedGeometryPlan.canReuseBlas(
+                        previous.logical.build(), mesh.build())) {
+                    meshes.put(mesh.identity(), previous.withLogical(mesh));
+                    continue;
+                }
+                NativeMesh replacement = prepareMesh(mesh);
+                created.add(replacement);
+                builds.add(replacement.buildOperation);
+                NativeMesh removed = meshes.put(mesh.identity(), replacement);
+                if (removed != null) removed.release();
+            }
+
+            RtRetainedInstanceState instanceState = new RtRetainedInstanceState();
+            predecessor.geometry.instances.values().forEach(values -> values.forEach(instance -> {
+                instanceState.retain(instance.logical, instance.placementOrdinal);
+            }));
+            instanceState.apply(delta.mutations(), () -> ++nextPlacementOrdinal);
+
+            Map<SceneId, List<NativeInstance>> instances = new IdentityHashMap<>();
+            Map<SceneId, Integer> geometryBases = new IdentityHashMap<>();
+            predecessor.content.keySet().forEach(scene -> {
+                instances.put(scene, new ArrayList<>());
+                geometryBases.put(scene, 0);
+            });
+            instanceState.orderedInstances().forEach(instance -> {
+                NativeMesh mesh = meshes.get(instance.meshIdentity());
+                int geometryBase = geometryBases.get(instance.scene());
+                instances.get(instance.scene()).add(new NativeInstance(instance, mesh,
+                        instanceState.previousTransform(instance),
+                        geometryBase, Math.multiplyExact(geometryBase,
+                                RtRetainedGeometryPlan.HIT_RECORDS_PER_GEOMETRY),
+                        instanceState.ordinal(instance.identity())));
+                geometryBases.put(instance.scene(), Math.addExact(geometryBase,
+                        mesh.logical.build().geometries().size()));
+            });
+            instances.replaceAll((ignored, value) -> List.copyOf(value));
+            Candidate candidate = new Candidate(delta.revision(), new NativeGeometry(meshes, instances),
+                    predecessor.content, false);
+            candidate.unsubmitted = List.copyOf(created);
             candidate.builds = List.copyOf(builds);
             return candidate;
         } catch (Throwable failure) {
@@ -389,36 +538,48 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     private Candidate assemble(RetainedSceneSnapshot snapshot, Map<Long, NativeMesh> meshes,
                                Candidate predecessor) {
         Map<SceneId, List<NativeInstance>> instances = new IdentityHashMap<>();
-        Map<SceneId, MutableSceneContent> mutableContent = new IdentityHashMap<>();
         Map<Long, NativeInstance> previousInstances = new LinkedHashMap<>();
         if (predecessor != null) {
-            predecessor.instances.values().forEach(values -> values.forEach(
+            predecessor.geometry.instances.values().forEach(values -> values.forEach(
                     instance -> previousInstances.put(instance.logical.identity(), instance)));
         }
         Map<SceneId, Integer> geometryBases = new IdentityHashMap<>();
         for (RetainedSceneSnapshot.Scene scene : snapshot.scenes()) {
             instances.put(scene.id(), new ArrayList<>());
-            mutableContent.put(scene.id(), new MutableSceneContent(scene.environment()));
             geometryBases.put(scene.id(), 0);
         }
         for (RetainedSceneSnapshot.Instance instance : snapshot.instances()) {
             NativeMesh mesh = meshes.get(instance.meshIdentity());
             int geometryBase = geometryBases.get(instance.scene());
             NativeInstance previous = previousInstances.get(instance.identity());
+            long placementOrdinal = previous == null ? ++nextPlacementOrdinal : previous.placementOrdinal;
             instances.get(instance.scene()).add(new NativeInstance(instance, mesh,
                     previous == null ? instance.transform() : previous.logical.transform(), geometryBase,
-                    Math.multiplyExact(geometryBase, RtRetainedGeometryPlan.HIT_RECORDS_PER_GEOMETRY)));
+                    Math.multiplyExact(geometryBase, RtRetainedGeometryPlan.HIT_RECORDS_PER_GEOMETRY),
+                    placementOrdinal));
             geometryBases.put(instance.scene(), Math.addExact(geometryBase,
                     mesh.logical.build().geometries().size()));
         }
-        for (RetainedSceneSnapshot.Light light : snapshot.lights()) {
-            mutableContent.get(light.scene()).lights.add(new SceneLight(light.identity(), light.descriptor()));
+        instances.replaceAll((ignored, value) -> List.copyOf(value));
+        return new Candidate(snapshot.revision(), new NativeGeometry(meshes, instances),
+                assembleContent(snapshot.scenes(), snapshot.lights()), false);
+    }
+
+    static Map<SceneId, SceneContent> assembleContent(
+            List<RetainedSceneSnapshot.Scene> scenes, List<RetainedSceneSnapshot.Light> lights) {
+        Map<SceneId, MutableSceneContent> mutable = new IdentityHashMap<>();
+        for (RetainedSceneSnapshot.Scene scene : scenes) {
+            mutable.put(scene.id(), new MutableSceneContent(scene.environment()));
+        }
+        for (RetainedSceneSnapshot.Light light : lights) {
+            MutableSceneContent content = mutable.get(light.scene());
+            if (content == null) throw new IllegalArgumentException("light names an absent scene");
+            content.lights.add(new SceneLight(light.identity(), light.descriptor()));
         }
         Map<SceneId, SceneContent> content = new IdentityHashMap<>();
-        mutableContent.forEach((scene, value) -> content.put(scene,
+        mutable.forEach((scene, value) -> content.put(scene,
                 new SceneContent(value.environment, List.copyOf(value.lights))));
-        instances.replaceAll((ignored, value) -> List.copyOf(value));
-        return new Candidate(snapshot.revision(), meshes, instances, content);
+        return content;
     }
 
     private void finishBuild(Publication publication) {
@@ -436,6 +597,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         NativeSnapshot previous = published;
         published = publication.candidate.publish();
         neeAt.retainScenes(published.content.keySet());
+        publication.published.run();
         if (previous == null) {
             publication.retirePrevious(null);
         } else {
@@ -598,15 +760,17 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     }
 
     private static final class Publication {
-        final RetainedSceneSnapshot snapshot;
+        final long revision;
+        final Runnable published;
         final Runnable previousRetired;
         Candidate candidate;
         RtGpuExecutor.Build build;
         volatile boolean completed;
         volatile Throwable failure;
         private boolean previousSettled;
-        Publication(RetainedSceneSnapshot snapshot, Runnable previousRetired) {
-            this.snapshot = snapshot;
+        Publication(long revision, Runnable published, Runnable previousRetired) {
+            this.revision = revision;
+            this.published = published;
             this.previousRetired = previousRetired;
         }
         void complete(RtGpuExecutor.Build build, Throwable failure) {
@@ -638,30 +802,34 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     }
     private record NativeInstance(RetainedSceneSnapshot.Instance logical, NativeMesh mesh,
                                   dev.comfyfluffy.caustica.api.geometry.GeometryTransform previousTransform,
-                                  int geometryBase, int sbtRecordOffset) { }
+                                  int geometryBase, int sbtRecordOffset, long placementOrdinal) { }
     private record CompletedBuild(Publication publication, RtGpuExecutor.Build build, Throwable failure) { }
 
     private static class Candidate {
         final long revision;
-        final Map<Long, NativeMesh> meshes;
-        final Map<SceneId, List<NativeInstance>> instances;
+        final NativeGeometry geometry;
         final Map<SceneId, SceneContent> content;
+        final boolean contentOnly;
         List<NativeMesh> unsubmitted = List.of();
         List<RtAccel.PreparedBlas> builds = List.of();
         boolean accepted;
         volatile boolean buildResourcesReleased;
-        Candidate(long revision, Map<Long, NativeMesh> meshes, Map<SceneId, List<NativeInstance>> instances,
-                  Map<SceneId, SceneContent> content) {
+        Candidate(long revision, NativeGeometry geometry, Map<SceneId, SceneContent> content,
+                  boolean contentOnly) {
             this.revision = revision;
-            this.meshes = Map.copyOf(meshes);
-            this.instances = Map.copyOf(instances);
+            this.geometry = geometry;
             this.content = Map.copyOf(content);
+            this.contentOnly = contentOnly;
         }
-        NativeSnapshot publish() { return new NativeSnapshot(revision, meshes, instances, content); }
-        void release() { meshes.values().forEach(NativeMesh::release); }
+        NativeSnapshot publish() { return new NativeSnapshot(revision, geometry, content); }
+        void release() { geometry.release(); }
         void releaseRejected() {
             if (accepted) return;
-            for (NativeMesh mesh : meshes.values()) {
+            if (contentOnly) {
+                geometry.release();
+                return;
+            }
+            for (NativeMesh mesh : geometry.meshes.values()) {
                 if (unsubmitted.contains(mesh)) RtAccel.releaseTransientBlas(mesh.buildOperation);
                 else mesh.release();
             }
@@ -677,9 +845,25 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
 
     private static final class NativeSnapshot extends Candidate {
         final TrackedGraphicsUse graphicsUse = new TrackedGraphicsUse();
-        NativeSnapshot(long revision, Map<Long, NativeMesh> meshes,
-                       Map<SceneId, List<NativeInstance>> instances, Map<SceneId, SceneContent> content) {
-            super(revision, meshes, instances, content);
+        NativeSnapshot(long revision, NativeGeometry geometry, Map<SceneId, SceneContent> content) {
+            super(revision, geometry, content, false);
+        }
+    }
+
+    private static final class NativeGeometry {
+        final Map<Long, NativeMesh> meshes;
+        final Map<SceneId, List<NativeInstance>> instances;
+        private int references = 1;
+
+        NativeGeometry(Map<Long, NativeMesh> meshes, Map<SceneId, List<NativeInstance>> instances) {
+            this.meshes = Map.copyOf(meshes);
+            this.instances = Map.copyOf(instances);
+        }
+
+        synchronized void retain() { references++; }
+
+        synchronized void release() {
+            if (--references == 0) meshes.values().forEach(NativeMesh::release);
         }
     }
 

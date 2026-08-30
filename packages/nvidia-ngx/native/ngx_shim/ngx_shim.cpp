@@ -24,11 +24,7 @@
 #include <cstdlib>
 #include <cstdio>
 
-// Lightweight diagnostic logging. The shim is loaded into the JVM via FFM and a
-// crash here surfaces only as a bare SIGSEGV on the Java side, so we can trace every
-// exported entry/exit to stderr (unbuffered + flushed) to localize the fault. This is
-// off by default (it logs per-frame in evaluate); set NGXSHIM_VERBOSE=1 to enable it
-// and the NGX core's own verbose logging sink.
+// NGXSHIM_VERBOSE enables unbuffered shim and NGX-core diagnostics for native failures.
 static const bool g_verbose = std::getenv("NGXSHIM_VERBOSE") != nullptr;
 #define NGX_LOG(...)                                       \
     do {                                                   \
@@ -46,9 +42,7 @@ static NVSDK_NGX_Parameter* g_capabilityParams = nullptr;
 static VkDevice g_device = VK_NULL_HANDLE;
 static int g_lastResult = 0;
 
-// Logging sink wired into NVSDK_NGX_FeatureCommonInfo so the (closed) NGX core/SDK pipes its own
-// init diagnostics back to us. NGX init crashes deep inside the driver core on this setup; the core's
-// last log line before the fault is the best clue to *why*. Flush every line so nothing is lost.
+// The NGX callback is flushed immediately because failures may terminate the hosting JVM.
 static void NVSDK_CONV ngxshim_log_callback(const char* message,
                                             NVSDK_NGX_Logging_Level level,
                                             NVSDK_NGX_Feature component) {
@@ -63,7 +57,7 @@ static void NVSDK_CONV ngxshim_log_callback(const char* message,
 struct DlssFeature {
     NVSDK_NGX_Handle* handle;
     NVSDK_NGX_Parameter* params;
-    bool ownsParams; // false when params is the shared capability block (DLSS-RR), so release leaves it
+    bool ownsParams;
 };
 
 static NVSDK_NGX_Resource_VK makeImageResource(VkImageView view, VkImage image, int format,
@@ -92,44 +86,6 @@ NGX_SHIM_EXPORT int ngxshim_last_result() {
     return g_lastResult;
 }
 
-// Required Vulkan extensions for NGX (deprecated-but-simple API; needs no device
-// or prior init, so it is callable at mod-init before device creation). Writes
-// the names newline-joined into outBuf. wantDevice != 0 -> device extensions,
-// else instance extensions. Returns the count, or -1 on failure.
-NGX_SHIM_EXPORT int ngxshim_required_extensions(int wantDevice, char* outBuf, int bufLen) {
-    NGX_LOG("required_extensions: enter wantDevice=%d outBuf=%p bufLen=%d", wantDevice, (void*) outBuf, bufLen);
-    unsigned int instanceCount = 0, deviceCount = 0;
-    const char** instanceExts = nullptr;
-    const char** deviceExts = nullptr;
-
-    NVSDK_NGX_Result r = NVSDK_NGX_VULKAN_RequiredExtensions(&instanceCount, &instanceExts, &deviceCount, &deviceExts);
-    g_lastResult = (int) r;
-    NGX_LOG("required_extensions: RequiredExtensions r=0x%08x instanceCount=%u deviceCount=%u", (unsigned) r, instanceCount, deviceCount);
-    if (NVSDK_NGX_FAILED(r)) {
-        NGX_LOG("required_extensions: FAILED, returning -1");
-        return -1;
-    }
-
-    unsigned int count = wantDevice ? deviceCount : instanceCount;
-    const char** exts = wantDevice ? deviceExts : instanceExts;
-
-    int pos = 0;
-    for (unsigned int i = 0; i < count && exts; i++) {
-        int n = (int) std::strlen(exts[i]);
-        if (pos + n + 1 >= bufLen) {
-            break;
-        }
-        std::memcpy(outBuf + pos, exts[i], n);
-        pos += n;
-        outBuf[pos++] = '\n';
-    }
-    if (pos < bufLen) {
-        outBuf[pos] = 0;
-    }
-    NGX_LOG("required_extensions: exit count=%u bytesWritten=%d", count, pos);
-    return (int) count;
-}
-
 // Initializes NGX against the live device. featureDllPath is the directory that
 // contains nvngx_dlss.dll (added to the NGX feature DLL search paths).
 NGX_SHIM_EXPORT int ngxshim_init(unsigned long long appId, const wchar_t* dataPath,
@@ -147,8 +103,7 @@ NGX_SHIM_EXPORT int ngxshim_init(unsigned long long appId, const wchar_t* dataPa
     info.PathListInfo.Path = paths;
     info.PathListInfo.Length = featureDllPath ? 1u : 0u;
 
-    // Route the NGX core/SDK's own logging to our callback at the most verbose level so we capture
-    // exactly what it does (and the last thing it does before crashing) during init.
+    // Verbose mode routes NGX diagnostics through the shim's unbuffered callback.
     if (g_verbose) {
         info.LoggingInfo.LoggingCallback = &ngxshim_log_callback;
         info.LoggingInfo.MinimumLoggingLevel = NVSDK_NGX_LOGGING_LEVEL_VERBOSE;
@@ -225,15 +180,15 @@ NGX_SHIM_EXPORT void* ngxshim_create_dlss(VkCommandBuffer cmd,
         return nullptr;
     }
 
-    if (renderPreset != 0) {
-        unsigned int preset = (unsigned int) renderPreset;
-        NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_DLAA, preset);
-        NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Quality, preset);
-        NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Balanced, preset);
-        NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Performance, preset);
-        NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraPerformance, preset);
-        NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraQuality, preset);
-    }
+    unsigned int preset = renderPreset != 0
+            ? (unsigned int) renderPreset
+            : (unsigned int) NVSDK_NGX_DLSS_Hint_Render_Preset_Default;
+    NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_DLAA, preset);
+    NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Quality, preset);
+    NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Balanced, preset);
+    NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Performance, preset);
+    NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraPerformance, preset);
+    NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraQuality, preset);
 
     NVSDK_NGX_DLSS_Create_Params createParams;
     std::memset(&createParams, 0, sizeof(createParams));
@@ -346,42 +301,37 @@ NGX_SHIM_EXPORT int ngxshim_query_optimal_dlssd(unsigned int displayWidth, unsig
     return (int) r;
 }
 
-// Creates a DLSS Ray Reconstruction (DLSSD) feature. Configured for our path tracer: DL-unified
-// denoise, roughness packed into normals.w, and HW (non-linear, reversed-Z) depth — the rgen writes
-// ndc z/w, shared with Frame Generation. renderPreset is an NVSDK_NGX_RayReconstruction_Hint_Render_Preset
-// value (0 = DLL default).
+// Creates a DLSS Ray Reconstruction feature for DL-unified denoising, packed roughness, and linear
+// view depth. Each feature owns its mutable parameter block; the capability block remains query-only.
 NGX_SHIM_EXPORT void* ngxshim_create_dlssd(VkCommandBuffer cmd,
                                            unsigned int renderWidth, unsigned int renderHeight,
                                            unsigned int displayWidth, unsigned int displayHeight,
                                            int quality, int featureFlags, int renderPreset) {
     NGX_LOG("create_dlssd: enter cmd=%p render=%ux%u display=%ux%u quality=%d featureFlags=0x%x renderPreset=%d g_device=%p",
             (void*) cmd, renderWidth, renderHeight, displayWidth, displayHeight, quality, featureFlags, renderPreset, (void*) g_device);
-    // DLSS Ray Reconstruction must be created with the capability parameter block (it carries the
-    // snippet/preset callbacks the feature needs); a fresh AllocateParameters block fails with
-    // FAIL_InvalidParameter. The block is shared (freed at shutdown), so the feature does not own it.
-    NVSDK_NGX_Parameter* params = g_capabilityParams;
-    if (!params) {
-        NGX_LOG("create_dlssd: no capability params, returning null");
-        g_lastResult = (int) NVSDK_NGX_Result_FAIL_NotInitialized;
+    NVSDK_NGX_Parameter* params = nullptr;
+    NVSDK_NGX_Result r = NVSDK_NGX_VULKAN_AllocateParameters(&params);
+    g_lastResult = (int) r;
+    NGX_LOG("create_dlssd: AllocateParameters r=0x%08x params=%p", (unsigned) r, (void*) params);
+    if (NVSDK_NGX_FAILED(r) || !params) {
         return nullptr;
     }
-    NVSDK_NGX_Result r = NVSDK_NGX_Result_Success;
 
-    if (renderPreset != 0) {
-        unsigned int preset = (unsigned int) renderPreset;
-        NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_DLAA, preset);
-        NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_Quality, preset);
-        NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_Balanced, preset);
-        NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_Performance, preset);
-        NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_UltraPerformance, preset);
-        NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_UltraQuality, preset);
-    }
+    unsigned int preset = renderPreset != 0
+            ? (unsigned int) renderPreset
+            : (unsigned int) NVSDK_NGX_RayReconstruction_Hint_Render_Preset_Default;
+    NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_DLAA, preset);
+    NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_Quality, preset);
+    NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_Balanced, preset);
+    NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_Performance, preset);
+    NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_UltraPerformance, preset);
+    NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_Parameter_RayReconstruction_Hint_Render_Preset_UltraQuality, preset);
 
     NVSDK_NGX_DLSSD_Create_Params createParams;
     std::memset(&createParams, 0, sizeof(createParams));
     createParams.InDenoiseMode = NVSDK_NGX_DLSS_Denoise_Mode_DLUnified;
     createParams.InRoughnessMode = NVSDK_NGX_DLSS_Roughness_Mode_Packed; // roughness from normals.w
-    createParams.InUseHWDepth = NVSDK_NGX_DLSS_Depth_Type_HW;            // rgen writes ndc reversed-Z depth
+    createParams.InUseHWDepth = NVSDK_NGX_DLSS_Depth_Type_Linear;
     createParams.InWidth = renderWidth;
     createParams.InHeight = renderHeight;
     createParams.InTargetWidth = displayWidth;
@@ -392,6 +342,7 @@ NGX_SHIM_EXPORT void* ngxshim_create_dlssd(VkCommandBuffer cmd,
             ? NVSDK_NGX_PerfQuality_Value_DLAA
             : (NVSDK_NGX_PerfQuality_Value) quality;
     createParams.InFeatureCreateFlags = featureFlags;
+    createParams.InEnableOutputSubrects = false;
 
     NVSDK_NGX_Handle* handle = nullptr;
     NGX_LOG("create_dlssd: calling NGX_VULKAN_CREATE_DLSSD_EXT1 perfQuality=%d", (int) createParams.InPerfQualityValue);
@@ -399,13 +350,20 @@ NGX_SHIM_EXPORT void* ngxshim_create_dlssd(VkCommandBuffer cmd,
     g_lastResult = (int) r;
     NGX_LOG("create_dlssd: CREATE_DLSSD_EXT1 r=0x%08x handle=%p", (unsigned) r, (void*) handle);
     if (NVSDK_NGX_FAILED(r)) {
-        return nullptr; // params is the shared capability block; do not destroy it
+        NVSDK_NGX_VULKAN_DestroyParameters(params);
+        return nullptr;
     }
 
     DlssFeature* feature = (DlssFeature*) std::malloc(sizeof(DlssFeature));
+    if (!feature) {
+        NVSDK_NGX_VULKAN_ReleaseFeature(handle);
+        NVSDK_NGX_VULKAN_DestroyParameters(params);
+        g_lastResult = (int) NVSDK_NGX_Result_FAIL_OutOfGPUMemory;
+        return nullptr;
+    }
     feature->handle = handle;
     feature->params = params;
-    feature->ownsParams = false; // shared capability block, freed at shutdown
+    feature->ownsParams = true;
     NGX_LOG("create_dlssd: exit feature=%p", (void*) feature);
     return feature;
 }
@@ -429,8 +387,7 @@ NGX_SHIM_EXPORT int ngxshim_evaluate_dlssd(VkCommandBuffer cmd, void* feature,
                                            unsigned int renderWidth, unsigned int renderHeight,
                                            unsigned int displayWidth, unsigned int displayHeight,
                                            float jitterX, float jitterY, float mvScaleX, float mvScaleY,
-                                           int reset, float frameTimeMs,
-                                           float* worldToViewMatrix, float* viewToClipMatrix) {
+                                           int reset, float frameTimeMs, float preExposure) {
     NGX_LOG("evaluate_dlssd: enter cmd=%p feature=%p render=%ux%u display=%ux%u jitter=(%.3f,%.3f) mvScale=(%.3f,%.3f) reset=%d frameTimeMs=%.3f",
             (void*) cmd, feature, renderWidth, renderHeight, displayWidth, displayHeight,
             jitterX, jitterY, mvScaleX, mvScaleY, reset, frameTimeMs);
@@ -446,6 +403,7 @@ NGX_SHIM_EXPORT int ngxshim_evaluate_dlssd(VkCommandBuffer cmd, void* feature,
     (void) specularHitDistanceImage;
     (void) specularHitDistanceFormat;
 
+    // Inputs are exposed to NGX as sampled resources in read-only layouts; only the output is writable.
     NVSDK_NGX_Resource_VK color = makeImageResource(colorView, colorImage, colorFormat, renderWidth, renderHeight, VK_IMAGE_ASPECT_COLOR_BIT, false);
     NVSDK_NGX_Resource_VK depth = makeImageResource(depthView, depthImage, depthFormat, renderWidth, renderHeight, VK_IMAGE_ASPECT_COLOR_BIT, false);
     NVSDK_NGX_Resource_VK mv = makeImageResource(mvView, mvImage, mvFormat, renderWidth, renderHeight, VK_IMAGE_ASPECT_COLOR_BIT, false);
@@ -464,12 +422,11 @@ NGX_SHIM_EXPORT int ngxshim_evaluate_dlssd(VkCommandBuffer cmd, void* feature,
     eval.pInDiffuseAlbedo = &diffuseAlbedo;
     eval.pInSpecularAlbedo = &specularAlbedo;
     eval.pInNormals = &normals;
+    eval.pInRoughness = nullptr;
     eval.pInMotionVectorsReflections = &specularMotion;
     eval.pInSpecularHitDistance = nullptr;
-    // HW depth needs the projection so DLSS can linearize it (jitter-free; NGX left-multiply layout).
-    eval.pInWorldToViewMatrix = worldToViewMatrix;
-    eval.pInViewToClipMatrix = viewToClipMatrix;
-    // pInRoughness left null: InRoughnessMode_Packed reads roughness from normals.w.
+    eval.pInWorldToViewMatrix = nullptr;
+    eval.pInViewToClipMatrix = nullptr;
     eval.InJitterOffsetX = jitterX;
     eval.InJitterOffsetY = jitterY;
     eval.InMVScaleX = mvScaleX;
@@ -478,6 +435,8 @@ NGX_SHIM_EXPORT int ngxshim_evaluate_dlssd(VkCommandBuffer cmd, void* feature,
     eval.InRenderSubrectDimensions.Width = renderWidth;
     eval.InRenderSubrectDimensions.Height = renderHeight;
     eval.InFrameTimeDeltaInMsec = frameTimeMs;
+    eval.InPreExposure = preExposure;
+    eval.InExposureScale = 1.0f;
 
     NGX_LOG("evaluate_dlssd: calling NGX_VULKAN_EVALUATE_DLSSD_EXT");
     NVSDK_NGX_Result r = NGX_VULKAN_EVALUATE_DLSSD_EXT(cmd, f->handle, f->params, &eval);
@@ -519,14 +478,7 @@ NGX_SHIM_EXPORT void* ngxshim_create_dlssg(VkCommandBuffer cmd,
     createParams.RenderHeight = renderHeight;
     createParams.DynamicResolutionScaling = false;
 
-    // User Interface Recomposition (UIR): a create-time-only decision (per
-    // nvsdk_ngx_defs_dlssg.h) that must be enabled here for ngxshim_evaluate_dlssg_2x's optional
-    // HUDless/UI resources to actually be used by the algorithm. Without this, feeding HUDless+UI
-    // at eval time with UIR still off produces corrupted/undefined results specifically on fast-
-    // changing UI content (confirmed: F3 debug overlay / inventory tooltips visibly warped) rather
-    // than a clean no-op. Harmless to always enable: when eval doesn't supply HUDless/UI (both
-    // null), the algorithm just behaves like plain frame generation per the header's own docs
-    // ("generate output frames using the HUDless and UI textures if present").
+    // UI recomposition is a create-time feature. Evaluation supplies HUDless/UI resources when available.
     NVSDK_NGX_Parameter_SetUI(params, NVSDK_NGX_DLSSG_Parameter_UserInterfaceRecompositionEnabled, 1);
 
     NVSDK_NGX_Handle* handle = nullptr;
