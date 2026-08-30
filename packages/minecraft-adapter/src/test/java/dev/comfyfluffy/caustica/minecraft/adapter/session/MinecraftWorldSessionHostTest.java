@@ -116,6 +116,26 @@ final class MinecraftWorldSessionHostTest {
                 "live:close", "1:scope-close"), events);
     }
 
+    @Test
+    void compositeCloseCanSettleSceneWorkBetweenInvalidationAndOwnerDrain() {
+        List<String> events = new ArrayList<>();
+        MinecraftWorldSessionHost host = new MinecraftWorldSessionHost(OPTIONS);
+        host.api().sessions().add(context -> contribution("live", events, false));
+        MinecraftWorldSession session = host.openSession(
+                owner -> new TestScope(Long.toString(owner.sequence()), events),
+                (owner, borrowedScene) -> environmentScope(new ArrayList<>()),
+                new SceneId() { }, MinecraftDimensionKey.of("minecraft", "overworld"),
+                new ResourcePackEpoch(0), failure -> { throw new AssertionError(failure); });
+        session.processPendingChanges();
+
+        session.beginClose();
+        events.add("scene:settle");
+        session.finishClose();
+
+        assertEquals(List.of("1:quiesce", "live:stop", "1:invalidate", "scene:settle",
+                "1:drain", "live:close", "1:scope-close"), events);
+    }
+
     private static MinecraftWorldSessionContribution contribution(
             String name, List<String> events, boolean failPack) {
         return new MinecraftWorldSessionContribution() {

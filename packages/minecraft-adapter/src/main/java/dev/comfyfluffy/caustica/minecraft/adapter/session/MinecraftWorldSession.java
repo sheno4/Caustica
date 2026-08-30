@@ -34,6 +34,7 @@ public final class MinecraftWorldSession implements AutoCloseable {
     private final MinecraftSessionFailureHandler failures;
     private final Map<MinecraftWorldSessionHost.Channel.Registration, ActiveContribution> active =
             new LinkedHashMap<>();
+    private List<ActiveContribution> closing = List.of();
     private final Set<MinecraftWorldSessionHost.Channel.Registration> attempted = new LinkedHashSet<>();
     private ResourcePackEpoch resourcePackEpoch;
     private long nextOwnerSequence;
@@ -96,14 +97,30 @@ public final class MinecraftWorldSession implements AutoCloseable {
     public int contributionCount() { return active.size(); }
     public ResourcePackEpoch resourcePackEpoch() { return resourcePackEpoch; }
 
+    /**
+     * Closes a standalone session whose supplied scopes can complete their own drain operations.
+     * Engine-owned scopes are closed by {@link MinecraftEngineWorldSession}, which inserts the shared
+     * retained-scene settlement boundary between invalidation and drain.
+     */
     @Override
     public void close() {
+        beginClose();
+        finishClose();
+    }
+
+    void beginClose() {
         if (closed) return;
         closed = true;
         channel.detach(this);
-        List<ActiveContribution> closing = new ArrayList<>(active.values());
+        closing = new ArrayList<>(active.values());
         active.clear();
-        teardown(closing, true);
+        quiesceAndInvalidate(closing, true);
+    }
+
+    void finishClose() {
+        if (!closed) beginClose();
+        drainAndClose(closing, true);
+        closing = List.of();
     }
 
     private void open(MinecraftWorldSessionHost.Channel.Registration registration) {
@@ -120,8 +137,8 @@ public final class MinecraftWorldSession implements AutoCloseable {
             environment = Objects.requireNonNull(environments.create(owner, scene),
                     "environment scope factory returned null");
         } catch (Throwable failure) {
-            report(owner, MinecraftSessionFailure.Stage.CREATE_SCOPE, failure);
             teardown(List.of(new ActiveContribution(owner, scope, null, null)), false);
+            report(owner, MinecraftSessionFailure.Stage.CREATE_SCOPE, failure);
             return;
         }
         MinecraftWorldSessionContribution contribution;
@@ -130,14 +147,20 @@ public final class MinecraftWorldSession implements AutoCloseable {
                     new Context(new CoreContext(scope), scene, dimension, resourcePackEpoch, environment)),
                     "Minecraft world-session factory returned null");
         } catch (Throwable failure) {
-            report(owner, MinecraftSessionFailure.Stage.OPEN_CONTRIBUTION, failure);
             teardown(List.of(new ActiveContribution(owner, scope, environment, null)), false);
+            report(owner, MinecraftSessionFailure.Stage.OPEN_CONTRIBUTION, failure);
             return;
         }
         active.put(registration, new ActiveContribution(owner, scope, environment, contribution));
     }
 
     private void teardown(List<ActiveContribution> contributions, boolean invokeContributionHooks) {
+        quiesceAndInvalidate(contributions, invokeContributionHooks);
+        drainAndClose(contributions, invokeContributionHooks);
+    }
+
+    private void quiesceAndInvalidate(List<ActiveContribution> contributions,
+                                      boolean invokeContributionHooks) {
         for (ActiveContribution contribution : contributions)
             invoke(contribution, MinecraftSessionFailure.Stage.QUIESCE, contribution.scope::quiesce);
         if (invokeContributionHooks) {
@@ -152,6 +175,10 @@ public final class MinecraftWorldSession implements AutoCloseable {
         }
         for (ActiveContribution contribution : contributions)
             invoke(contribution, MinecraftSessionFailure.Stage.INVALIDATE, contribution.scope::invalidate);
+    }
+
+    private void drainAndClose(List<ActiveContribution> contributions,
+                               boolean invokeContributionHooks) {
         for (ActiveContribution contribution : contributions) {
             if (contribution.environment != null)
                 invoke(contribution, MinecraftSessionFailure.Stage.DRAIN, contribution.environment::drain);

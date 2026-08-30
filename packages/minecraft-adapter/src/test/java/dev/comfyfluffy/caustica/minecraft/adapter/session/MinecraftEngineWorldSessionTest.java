@@ -13,7 +13,8 @@ import dev.comfyfluffy.caustica.engine.pass.PassKey;
 import dev.comfyfluffy.caustica.engine.pass.PassSchedulerBackend;
 import dev.comfyfluffy.caustica.engine.program.ProgramBackend;
 import dev.comfyfluffy.caustica.engine.program.ProgramComposition;
-import dev.comfyfluffy.caustica.engine.program.ProgramKey;
+import dev.comfyfluffy.caustica.engine.scene.RetainedSceneBackend;
+import dev.comfyfluffy.caustica.engine.scene.RetainedSceneContentSnapshot;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot;
 import dev.comfyfluffy.caustica.engine.session.RenderSessionHost;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftDimensionKey;
@@ -48,12 +49,20 @@ final class MinecraftEngineWorldSessionTest {
             return minecraftContribution("minecraft", events);
         });
 
+        RetainedSceneBackend sceneBackend = new RetainedSceneBackend() {
+            @Override public void publish(RetainedSceneSnapshot snapshot, Runnable published, Runnable retired) {
+                snapshots.add(snapshot);
+                published.run();
+                retired.run();
+            }
+            @Override public void publishContent(RetainedSceneContentSnapshot snapshot, Runnable published,
+                                                 Runnable retired) {
+                published.run();
+                retired.run();
+            }
+        };
         MinecraftEngineWorldSession session = new MinecraftEngineWorldSession(renderHost, minecraftHost, GPU,
-                PROGRAMS, (snapshot, published, retired) -> {
-                    snapshots.add(snapshot);
-                    published.run();
-                    retired.run();
-                }, PASSES,
+                PROGRAMS, sceneBackend, PASSES,
                 MinecraftDimensionKey.of("minecraft", "overworld"), new ResourcePackEpoch(2),
                 failure -> { throw new AssertionError(failure); });
 
@@ -63,10 +72,43 @@ final class MinecraftEngineWorldSessionTest {
         assertEquals(new ResourcePackEpoch(3), session.resourcePackEpoch());
         session.close();
 
-        assertEquals(List.of("minecraft:pack:3", "minecraft:stop", "minecraft:close",
-                "core:stop", "core:close"), events);
+        assertEquals(List.of("minecraft:pack:3", "minecraft:stop", "core:stop",
+                "minecraft:close", "core:close"), events);
         assertEquals(0, snapshots.getLast().scenes().size());
         assertThrows(IllegalStateException.class, session::progress);
+    }
+
+    @Test
+    void creationFailureInvalidatesMinecraftBeforeSceneSettlementAndAggregatesCleanup() {
+        List<String> events = new ArrayList<>();
+        RenderSessionHost renderHost = new RenderSessionHost(OPTIONS);
+        MinecraftWorldSessionHost minecraftHost = new MinecraftWorldSessionHost(OPTIONS);
+        renderHost.api().sessions().add(context -> contribution("core", events));
+        minecraftHost.api().sessions().add(context -> minecraftContribution("minecraft", events));
+        minecraftHost.api().sessions().add(context -> { throw new IllegalStateException("minecraft-open"); });
+        RetainedSceneBackend scenes = new RetainedSceneBackend() {
+            @Override public void publish(RetainedSceneSnapshot snapshot, Runnable published, Runnable retired) {
+                published.run(); retired.run();
+            }
+            @Override public void publishContent(RetainedSceneContentSnapshot snapshot, Runnable published,
+                                                 Runnable retired) {
+                published.run(); retired.run();
+            }
+            @Override public void prepareForSessionClose() {
+                events.add("scene:settle");
+                throw new IllegalArgumentException("settle");
+            }
+        };
+
+        IllegalStateException failure = assertThrows(IllegalStateException.class,
+                () -> new MinecraftEngineWorldSession(renderHost, minecraftHost, GPU, PROGRAMS, scenes, PASSES,
+                        MinecraftDimensionKey.of("minecraft", "overworld"), new ResourcePackEpoch(0),
+                        reported -> { throw (RuntimeException) reported; }));
+
+        assertEquals("minecraft-open", failure.getMessage());
+        assertEquals(List.of("minecraft:stop", "core:stop", "scene:settle",
+                "minecraft:close", "core:close"), events);
+        assertEquals("settle", failure.getSuppressed()[0].getMessage());
     }
 
     private static RenderSessionContribution contribution(String name, List<String> events) {
@@ -103,7 +145,6 @@ final class MinecraftEngineWorldSessionTest {
 
         private CompiledProgram program() {
             return new CompiledProgram() {
-                @Override public int implementationIndex(ProgramKey key) { return (int) key.sequence(); }
                 @Override public void close() { }
             };
         }

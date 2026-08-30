@@ -12,7 +12,6 @@ import dev.comfyfluffy.caustica.engine.pass.PassKey;
 import dev.comfyfluffy.caustica.engine.pass.PassSchedulerBackend;
 import dev.comfyfluffy.caustica.engine.program.ProgramBackend;
 import dev.comfyfluffy.caustica.engine.program.ProgramComposition;
-import dev.comfyfluffy.caustica.engine.program.ProgramKey;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneSnapshot;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneBackend;
 import dev.comfyfluffy.caustica.engine.scene.RetainedSceneContentSnapshot;
@@ -58,6 +57,112 @@ final class EngineWorldSessionTest {
         assertThrows(IllegalStateException.class, session::progress);
     }
 
+    @Test
+    void closeSettlesAcceptedSceneWorkWithoutAnotherFrame() {
+        RenderSessionHost renderHost = new RenderSessionHost(OPTIONS);
+        AsyncSceneBackend scenes = new AsyncSceneBackend();
+        EngineWorldSession session = new EngineWorldSession(renderHost, GPU, PROGRAMS, scenes, PASSES,
+                failure -> { throw new AssertionError(failure); });
+
+        session.close();
+
+        assertEquals(true, scenes.prepared);
+    }
+
+    @Test
+    void closeContinuesAfterSceneSettlementFailureAndSuppressesLaterFailures() {
+        List<String> events = new ArrayList<>();
+        RenderSessionHost renderHost = new RenderSessionHost(OPTIONS);
+        renderHost.api().sessions().add(context -> contribution("core", events));
+        RetainedSceneBackend scenes = new RetainedSceneBackend() {
+            @Override public void publish(RetainedSceneSnapshot snapshot, Runnable published, Runnable retired) {
+                published.run(); retired.run();
+            }
+            @Override public void publishContent(RetainedSceneContentSnapshot snapshot, Runnable published,
+                                                 Runnable retired) {
+                published.run(); retired.run();
+            }
+            @Override public void prepareForSessionClose() { throw new IllegalStateException("settle"); }
+        };
+        EngineWorldSession session = new EngineWorldSession(renderHost, GPU, PROGRAMS, scenes, PASSES,
+                failure -> { throw new AssertionError(failure); });
+
+        IllegalStateException failure = assertThrows(IllegalStateException.class,
+                () -> session.close(new EngineWorldSession.CloseParticipant() {
+                    @Override public void invalidate() { }
+                    @Override public void drain() { throw new IllegalArgumentException("participant"); }
+                }));
+
+        assertEquals("settle", failure.getMessage());
+        assertEquals("participant", failure.getSuppressed()[0].getMessage());
+        assertEquals(List.of("core:stop", "core:close"), events);
+    }
+
+    @Test
+    void creationFailureStillCrossesSceneSettlementBoundary() {
+        RenderSessionHost renderHost = new RenderSessionHost(OPTIONS);
+        renderHost.api().sessions().add(context -> { throw new IllegalStateException("open"); });
+        AsyncSceneBackend scenes = new AsyncSceneBackend();
+
+        IllegalStateException failure = assertThrows(IllegalStateException.class,
+                () -> new EngineWorldSession(renderHost, GPU, PROGRAMS, scenes, PASSES,
+                        reported -> { throw (RuntimeException) reported; }));
+
+        assertEquals("open", failure.getMessage());
+        assertEquals(true, scenes.prepared);
+    }
+
+    @Test
+    void creationFailureRemainsPrimaryWhenSettlementAlsoFails() {
+        RenderSessionHost renderHost = new RenderSessionHost(OPTIONS);
+        renderHost.api().sessions().add(context -> { throw new IllegalStateException("open"); });
+        RetainedSceneBackend scenes = new RetainedSceneBackend() {
+            @Override public void publish(RetainedSceneSnapshot snapshot, Runnable published, Runnable retired) {
+                published.run(); retired.run();
+            }
+            @Override public void publishContent(RetainedSceneContentSnapshot snapshot, Runnable published,
+                                                 Runnable retired) {
+                published.run(); retired.run();
+            }
+            @Override public void prepareForSessionClose() { throw new IllegalArgumentException("settle"); }
+        };
+
+        IllegalStateException failure = assertThrows(IllegalStateException.class,
+                () -> new EngineWorldSession(renderHost, GPU, PROGRAMS, scenes, PASSES,
+                        reported -> { throw (RuntimeException) reported; }));
+
+        assertEquals("open", failure.getMessage());
+        assertEquals("settle", failure.getSuppressed()[0].getMessage());
+    }
+
+    private static final class AsyncSceneBackend implements RetainedSceneBackend {
+        private final List<Runnable> pending = new ArrayList<>();
+        private final List<Runnable> completed = new ArrayList<>();
+        private boolean prepared;
+
+        @Override public synchronized void publish(RetainedSceneSnapshot snapshot, Runnable published,
+                                                   Runnable retired) {
+            pending.add(() -> { published.run(); retired.run(); });
+        }
+        @Override public synchronized void publishContent(RetainedSceneContentSnapshot snapshot,
+                                                          Runnable published, Runnable retired) {
+            pending.add(() -> { published.run(); retired.run(); });
+        }
+        @Override public synchronized void prepareForSessionClose() {
+            prepared = true;
+            completed.addAll(pending);
+            pending.clear();
+        }
+        @Override public void progress() {
+            List<Runnable> ready;
+            synchronized (this) {
+                ready = List.copyOf(completed);
+                completed.clear();
+            }
+            ready.forEach(Runnable::run);
+        }
+    }
+
     private static RenderSessionContribution contribution(String name, List<String> events) {
         return new RenderSessionContribution() {
             @Override public void stop() { events.add(name + ":stop"); }
@@ -82,7 +187,6 @@ final class EngineWorldSessionTest {
 
         private CompiledProgram program() {
             return new CompiledProgram() {
-                @Override public int implementationIndex(ProgramKey key) { return (int) key.sequence(); }
                 @Override public void close() { }
             };
         }

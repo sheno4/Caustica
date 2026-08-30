@@ -20,6 +20,7 @@ public final class EngineRenderSession implements AutoCloseable {
     private final SessionFailureHandler failures;
     private final Map<EngineRenderSessionChannel.Registration, ActiveContribution> active =
             new LinkedHashMap<>();
+    private List<ActiveContribution> closing = List.of();
     private long nextOwnerSequence;
     private volatile boolean reconcileRequested;
     private boolean closed;
@@ -68,12 +69,23 @@ public final class EngineRenderSession implements AutoCloseable {
 
     @Override
     public void close() {
+        beginClose();
+        finishClose();
+    }
+
+    void beginClose() {
         if (closed) return;
         closed = true;
         channel.detach(this);
-        List<ActiveContribution> closing = new ArrayList<>(active.values());
+        closing = new ArrayList<>(active.values());
         active.clear();
-        teardown(closing, true);
+        quiesceAndInvalidate(closing, true);
+    }
+
+    void finishClose() {
+        if (!closed) beginClose();
+        drainAndClose(closing, true);
+        closing = List.of();
     }
 
     private void open(EngineRenderSessionChannel.Registration registration) {
@@ -91,14 +103,20 @@ public final class EngineRenderSession implements AutoCloseable {
             contribution = java.util.Objects.requireNonNull(
                     registration.factory().open(new Context(scope)), "session factory returned null");
         } catch (Throwable failure) {
-            report(owner, SessionFailure.Stage.OPEN_CONTRIBUTION, failure);
             teardown(List.of(new ActiveContribution(owner, scope, null)), false);
+            report(owner, SessionFailure.Stage.OPEN_CONTRIBUTION, failure);
             return;
         }
         active.put(registration, new ActiveContribution(owner, scope, contribution));
     }
 
     private void teardown(List<ActiveContribution> contributions, boolean invokeContributionHooks) {
+        quiesceAndInvalidate(contributions, invokeContributionHooks);
+        drainAndClose(contributions, invokeContributionHooks);
+    }
+
+    private void quiesceAndInvalidate(List<ActiveContribution> contributions,
+                                      boolean invokeContributionHooks) {
         for (ActiveContribution contribution : contributions) {
             invoke(contribution, SessionFailure.Stage.QUIESCE, contribution.scope::quiesce);
         }
@@ -110,6 +128,10 @@ public final class EngineRenderSession implements AutoCloseable {
         for (ActiveContribution contribution : contributions) {
             invoke(contribution, SessionFailure.Stage.INVALIDATE, contribution.scope::invalidate);
         }
+    }
+
+    private void drainAndClose(List<ActiveContribution> contributions,
+                               boolean invokeContributionHooks) {
         for (ActiveContribution contribution : contributions) {
             invoke(contribution, SessionFailure.Stage.DRAIN, contribution.scope::drain);
         }

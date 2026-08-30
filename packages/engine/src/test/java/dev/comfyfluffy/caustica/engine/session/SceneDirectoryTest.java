@@ -24,7 +24,6 @@ import dev.comfyfluffy.caustica.api.scene.EnvironmentBinding;
 import dev.comfyfluffy.caustica.engine.program.ProgramBackend;
 import dev.comfyfluffy.caustica.engine.program.ProgramComposition;
 import dev.comfyfluffy.caustica.engine.program.ProgramContributionChannel;
-import dev.comfyfluffy.caustica.engine.program.ProgramKey;
 import dev.comfyfluffy.caustica.engine.program.ProgramSession;
 import dev.comfyfluffy.caustica.engine.scene.GeometryContributionChannel;
 import dev.comfyfluffy.caustica.engine.scene.LightContributionChannel;
@@ -39,6 +38,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -59,6 +59,27 @@ final class SceneDirectoryTest {
     private static final ShaderDataType<Instance> INSTANCE = ShaderDataType.create("instance");
     private static final ShaderDataType<EnvironmentBindingData> ENVIRONMENT_BINDING =
             ShaderDataType.create("environment binding");
+
+    @Test
+    void sessionCloseSettlesAcceptedOwnerWorkWithoutAnotherFrame() {
+        ProgramFixture programs = new ProgramFixture();
+        SurfaceId<Binding, Instance> surface = programs.surface(new ContributionOwner(1));
+        AsyncSceneBackend backend = new AsyncSceneBackend();
+        SceneDirectory directory = directory(programs, backend);
+        directory.createScene();
+        GeometryContributionChannel geometry = directory.openGeometry(new ContributionOwner(2));
+        MeshId<Instance> mesh = geometry.newMesh(INSTANCE);
+        AtomicBoolean retired = new AtomicBoolean();
+        geometry.submit(new RetainedBatch<>(
+                List.of(new GeometryChannel.SetMesh<>(mesh, mesh(surface))),
+                () -> retired.set(true)));
+        geometry.invalidate();
+
+        directory.prepareForSessionClose();
+        geometry.drain();
+
+        assertTrue(retired.get());
+    }
 
     @Test
     void ownerDrainWakesAndProgressesAcceptedBackendPublications() throws InterruptedException {
@@ -650,7 +671,6 @@ final class SceneDirectoryTest {
 
         private static CompiledProgram program() {
             return new CompiledProgram() {
-                @Override public int implementationIndex(ProgramKey key) { return (int) key.sequence(); }
                 @Override public void close() { }
             };
         }
@@ -712,6 +732,11 @@ final class SceneDirectoryTest {
         @Override
         public synchronized void onProgressAvailable(Runnable wakeup) {
             progressAvailable = wakeup;
+        }
+
+        @Override
+        public void prepareForSessionClose() {
+            completeAll();
         }
 
         @Override

@@ -11,6 +11,16 @@ import java.util.function.Consumer;
 
 /** Generic render-session and root-scene epoch, closed before its injected device is destroyed. */
 public final class EngineWorldSession implements AutoCloseable {
+    /** Additional session owner which must cross the retained-scene close boundary with this engine. */
+    public interface CloseParticipant {
+        void invalidate();
+        void drain();
+    }
+
+    private static final CloseParticipant NO_CLOSE_PARTICIPANT = new CloseParticipant() {
+        @Override public void invalidate() { }
+        @Override public void drain() { }
+    };
     private final EngineSessionServices services;
     private final SceneId rootScene;
     private final EngineRenderSession renderSession;
@@ -33,13 +43,8 @@ public final class EngineWorldSession implements AutoCloseable {
             openedRender = renderHost.openSession(services, failure -> failures.accept(failure.cause()));
             openedRender.processPendingChanges();
         } catch (Throwable failure) {
-            if (openedRender != null) openedRender.close();
-            services.scenes().dropScene(rootScene);
-            services.progress();
-            services.close();
-            if (failure instanceof RuntimeException runtime) throw runtime;
-            if (failure instanceof Error error) throw error;
-            throw new IllegalStateException("engine world session creation failed", failure);
+            throw propagate(closeResources(failure, NO_CLOSE_PARTICIPANT, openedRender),
+                    "engine world session creation failed");
         }
         renderSession = openedRender;
     }
@@ -67,12 +72,45 @@ public final class EngineWorldSession implements AutoCloseable {
 
     @Override
     public void close() {
+        close(NO_CLOSE_PARTICIPANT);
+    }
+
+    /** Invalidates every owner, settles native work once, then drains and destroys the session. */
+    public void close(CloseParticipant participant) {
         if (closed) return;
+        Objects.requireNonNull(participant, "participant");
         closed = true;
-        renderSession.close();
-        services.scenes().dropScene(rootScene);
-        services.progress();
-        services.close();
+        Throwable failure = closeResources(null, participant, renderSession);
+        if (failure != null) throw propagate(failure, "engine world-session close failed");
+    }
+
+    private Throwable closeResources(Throwable failure, CloseParticipant participant,
+                                     EngineRenderSession render) {
+        failure = runClosing(failure, participant::invalidate);
+        if (render != null) failure = runClosing(failure, render::beginClose);
+        failure = runClosing(failure, services.scenes()::prepareForSessionClose);
+        failure = runClosing(failure, participant::drain);
+        if (render != null) failure = runClosing(failure, render::finishClose);
+        failure = runClosing(failure, () -> services.scenes().dropScene(rootScene));
+        failure = runClosing(failure, services::progress);
+        failure = runClosing(failure, services::close);
+        return failure;
+    }
+
+    private static Throwable runClosing(Throwable primary, Runnable action) {
+        try {
+            action.run();
+        } catch (Throwable failure) {
+            if (primary == null) return failure;
+            if (primary != failure) primary.addSuppressed(failure);
+        }
+        return primary;
+    }
+
+    private static RuntimeException propagate(Throwable failure, String message) {
+        if (failure instanceof RuntimeException runtime) return runtime;
+        if (failure instanceof Error error) throw error;
+        return new IllegalStateException(message, failure);
     }
 
     private void requireOpen() {

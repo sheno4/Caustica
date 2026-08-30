@@ -381,6 +381,12 @@ public final class SceneDirectory {
     public void drain(LightContributionChannel channel) { drainOwner(channel); }
     public void drain(SceneEnvironmentContributionChannel channel) { drainOwner(channel); }
 
+    /** Establishes the terminal no-more-frames boundary before owner retirement drains. */
+    public void prepareForSessionClose() {
+        backend.prepareForSessionClose();
+        progress();
+    }
+
     private void drainOwner(Object owner) {
         while (true) {
             progress();

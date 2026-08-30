@@ -4,10 +4,27 @@ import org.junit.jupiter.api.Test;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class RtRetainedScenePublicationContractTest {
+    @Test
+    void sessionCloseSettlesOnceAndRetiresWithoutAnotherGraphicsFrame() {
+        List<String> events = new ArrayList<>();
+
+        boolean closing = RtRetainedSceneBackend.enterSessionClose(false,
+                () -> events.add("idle"));
+        closing = RtRetainedSceneBackend.enterSessionClose(closing,
+                () -> events.add("idle-again"));
+        RtRetainedSceneBackend.retirePreviousPublication(closing,
+                () -> events.add("graphics"), () -> events.add("retire"));
+
+        assertTrue(closing);
+        org.junit.jupiter.api.Assertions.assertEquals(List.of("idle", "retire"), events);
+    }
+
     @Test
     void completedBlasBuildIsMarkedBeforeItsSnapshotBecomesVisible() throws Exception {
         String source = Files.readString(Path.of(

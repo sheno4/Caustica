@@ -43,4 +43,10 @@ public interface RetainedSceneBackend {
      * signals the session-control thread and must not publish or retire resources itself.
      */
     default void onProgressAvailable(Runnable wakeup) { }
+
+    /**
+     * Settles accepted GPU work after every session contribution has been invalidated and before its
+     * retirement drain begins. No later frame may consume this backend after the boundary returns.
+     */
+    default void prepareForSessionClose() { }
 }

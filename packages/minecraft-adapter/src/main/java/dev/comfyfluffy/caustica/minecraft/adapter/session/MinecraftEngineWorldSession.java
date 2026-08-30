@@ -42,8 +42,19 @@ public final class MinecraftEngineWorldSession implements AutoCloseable {
                     failure -> failures.accept(failure.cause()));
             openedMinecraft.processPendingChanges();
         } catch (Throwable failure) {
-            if (openedMinecraft != null) openedMinecraft.close();
-            openedEngine.close();
+            try {
+                if (openedMinecraft == null) {
+                    openedEngine.close();
+                } else {
+                    MinecraftWorldSession closingMinecraft = openedMinecraft;
+                    openedEngine.close(new EngineWorldSession.CloseParticipant() {
+                        @Override public void invalidate() { closingMinecraft.beginClose(); }
+                        @Override public void drain() { closingMinecraft.finishClose(); }
+                    });
+                }
+            } catch (Throwable cleanupFailure) {
+                if (failure != cleanupFailure) failure.addSuppressed(cleanupFailure);
+            }
             if (failure instanceof RuntimeException runtime) throw runtime;
             if (failure instanceof Error error) throw error;
             throw new IllegalStateException("Minecraft engine world session creation failed", failure);
@@ -73,8 +84,10 @@ public final class MinecraftEngineWorldSession implements AutoCloseable {
     public void close() {
         if (closed) return;
         closed = true;
-        minecraft.close();
-        engine.close();
+        engine.close(new EngineWorldSession.CloseParticipant() {
+            @Override public void invalidate() { minecraft.beginClose(); }
+            @Override public void drain() { minecraft.finishClose(); }
+        });
     }
 
     private void requireOpen() {

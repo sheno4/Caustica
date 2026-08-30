@@ -52,6 +52,7 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
     private NativeSnapshot published;
     private Throwable fatalFailure;
     private boolean closed;
+    private boolean sessionClosing;
     private long nextPlacementOrdinal;
 
     public RtRetainedSceneBackend(VulkanDeviceContext ctx) {
@@ -198,6 +199,18 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
             if (head == null || !head.completed) return;
             finishBuild(head);
         }
+    }
+
+    @Override
+    public synchronized void prepareForSessionClose() {
+        requireOpen();
+        sessionClosing = enterSessionClose(sessionClosing, ctx.gpuExecutor()::drainAndWaitIdle);
+    }
+
+    static boolean enterSessionClose(boolean closing, Runnable settleAcceptedWork) {
+        if (closing) return true;
+        settleAcceptedWork.run();
+        return true;
     }
 
     public synchronized long publishedRevision() {
@@ -648,9 +661,16 @@ public final class RtRetainedSceneBackend implements RetainedSceneBackend {
         if (previous == null) {
             publication.retirePrevious(null);
         } else {
-            ctx.gpuExecutor().retireAfterGraphics(previous.graphicsUse,
+            retirePreviousPublication(sessionClosing,
+                    () -> ctx.gpuExecutor().retireAfterGraphics(previous.graphicsUse,
+                            () -> publication.retirePrevious(previous::release)),
                     () -> publication.retirePrevious(previous::release));
         }
+    }
+
+    static void retirePreviousPublication(boolean closing, Runnable afterGraphics, Runnable afterIdle) {
+        if (closing) afterIdle.run();
+        else afterGraphics.run();
     }
 
     private NativeSnapshot requirePublishedScene(SceneId scene) {
