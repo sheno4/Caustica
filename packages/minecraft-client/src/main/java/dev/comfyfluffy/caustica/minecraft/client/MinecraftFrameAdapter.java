@@ -14,6 +14,7 @@ import dev.comfyfluffy.caustica.engine.frame.SceneResources;
 import dev.comfyfluffy.caustica.engine.scene.SceneOrigin;
 import dev.comfyfluffy.caustica.minecraft.api.MinecraftDimensionKey;
 import dev.comfyfluffy.caustica.minecraft.client.CausticaClientComposition;
+import dev.comfyfluffy.caustica.minecraft.client.terrain.MinecraftFluidSurface;
 import dev.comfyfluffy.caustica.minecraft.client.terrain.RtTerrain;
 import dev.comfyfluffy.caustica.minecraft.client.entity.RtEntities;
 import dev.comfyfluffy.caustica.minecraft.client.entity.RtEntityTextures;
@@ -24,6 +25,7 @@ import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.tags.FluidTags;
 import net.minecraft.util.Mth;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.material.FluidState;
 import org.joml.Matrix4fc;
 
@@ -72,9 +74,12 @@ public final class MinecraftFrameAdapter {
         BlockPos cameraBlockPos = new BlockPos(Mth.floor(cameraX), Mth.floor(cameraY), Mth.floor(cameraZ));
         boolean submerged = false;
         if (level != null) {
-            FluidState fluid = level.getFluidState(cameraBlockPos);
-            submerged = isSubmergedInWater(fluid.is(FluidTags.WATER), cameraY,
-                    cameraBlockPos.getY(), fluid.getHeight(level, cameraBlockPos));
+            BlockState blockState = level.getBlockState(cameraBlockPos);
+            FluidState fluid = blockState.getFluidState();
+            if (fluid.is(FluidTags.WATER)) {
+                submerged = MinecraftFluidSurface.contains(
+                        level, cameraBlockPos, blockState, fluid, cameraX, cameraY, cameraZ);
+            }
         }
         FrameCaptureBinding capture = frameCapture;
         if (capture != null) {
@@ -111,10 +116,6 @@ public final class MinecraftFrameAdapter {
     MinecraftFrameSelector.Selection selection(boolean submerged) {
         MinecraftFrameSelector selector = frameSelector;
         return selector == null ? null : selector.select(submerged);
-    }
-
-    static boolean isSubmergedInWater(boolean water, double cameraY, int blockY, float fluidHeight) {
-        return water && cameraY < blockY + fluidHeight;
     }
 
     MinecraftFrameCaptureInstaller.Lease installFrameCapture(MinecraftFrameCaptureInstaller.Sink sink,

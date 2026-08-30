@@ -15,28 +15,10 @@ import org.junit.jupiter.api.Test;
 
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 final class MinecraftFrameAdapterTest {
-    @Test
-    void cameraBelowWaterSurfaceIsSubmerged() {
-        assertTrue(MinecraftFrameAdapter.isSubmergedInWater(true, 63.749, 63, 0.75f));
-    }
-
-    @Test
-    void cameraExactlyAtWaterSurfaceIsNotSubmerged() {
-        assertFalse(MinecraftFrameAdapter.isSubmergedInWater(true, 63.75, 63, 0.75f));
-    }
-
-    @Test
-    void dryAndNonWaterCellsAreNotSubmerged() {
-        assertFalse(MinecraftFrameAdapter.isSubmergedInWater(true, 63.0, 63, 0.0f));
-        assertFalse(MinecraftFrameAdapter.isSubmergedInWater(false, 63.1, 63, 1.0f));
-    }
-
     @Test
     void epochLeasePublishesAndRemovesOnlyItsOwnSelection() {
         MinecraftFrameAdapter adapter = adapter();

@@ -12,11 +12,12 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.util.Mth;
 import net.minecraft.world.level.block.state.BlockState;
-import net.minecraft.world.level.material.Fluid;
 import net.minecraft.world.level.material.FluidState;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.phys.shapes.Shapes;
 import net.minecraft.world.phys.shapes.VoxelShape;
+
+import static dev.comfyfluffy.caustica.minecraft.client.terrain.MinecraftFluidSurface.neighborOccludesFace;
 
 /**
  * Custom fluid mesher used in place of vanilla {@link FluidRenderer} for every fluid in the RT terrain
@@ -85,21 +86,6 @@ final class RtFluidMesher {
         return !isNeighborSameFluid(fluidState, neighborFluidState) && !isFaceOccludedBySelf(blockState, direction);
     }
 
-    /** Does {@code neighborState}'s REAL (collision/visual) shape occlude the fluid face pointing at it
-     *  in {@code towardNeighbor}? This is the fix over vanilla's occlusion-shape-based check: glass,
-     *  ice, slime, honey and tinted glass all report an empty render occlusion shape ({@code
-     *  noOcclusion()}) but keep a full-cube real shape (they're still solid to walk into), so this
-     *  correctly culls the fluid face against them while vanilla's check does not. */
-    private static boolean neighborOccludesFace(BlockAndTintGetter level, BlockPos neighborPos, BlockState neighborState,
-                                                Direction towardNeighbor, float faceHeight) {
-        VoxelShape neighborShape = neighborState.getShape(level, neighborPos);
-        if (neighborShape.isEmpty()) {
-            return false;
-        }
-        VoxelShape faceShape = Shapes.box(0.0, 0.0, 0.0, 1.0, faceHeight, 1.0);
-        return Shapes.blockOccludes(faceShape, neighborShape, towardNeighbor);
-    }
-
     static void tesselate(BlockAndTintGetter level, BlockPos pos, FluidRenderer.Output output,
                           FluidStateModelSet fluidModels, BlockState blockState, FluidState fluidState) {
         BlockPos posDown = pos.below();
@@ -130,27 +116,12 @@ final class RtFluidMesher {
         var builder = output.getBuilder(model.layer());
         BlockTintSource tintSource = model.tintSource();
         int tintColor = tintSource != null ? tintSource.colorInWorld(blockState, level, pos) : -1;
-        Fluid type = fluidState.getType();
-        float heightSelf = getHeight(level, type, pos, blockState, fluidState);
-        float heightNorthEast;
-        float heightNorthWest;
-        float heightSouthEast;
-        float heightSouthWest;
-        if (heightSelf >= 1.0F) {
-            heightNorthEast = 1.0F;
-            heightNorthWest = 1.0F;
-            heightSouthEast = 1.0F;
-            heightSouthWest = 1.0F;
-        } else {
-            float heightNorth = getHeight(level, type, pos.north(), blockStateNorth, fluidStateNorth);
-            float heightSouth = getHeight(level, type, pos.south(), blockStateSouth, fluidStateSouth);
-            float heightEast = getHeight(level, type, pos.east(), blockStateEast, fluidStateEast);
-            float heightWest = getHeight(level, type, pos.west(), blockStateWest, fluidStateWest);
-            heightNorthEast = calculateAverageHeight(level, type, heightSelf, heightNorth, heightEast, pos.relative(Direction.NORTH).relative(Direction.EAST));
-            heightNorthWest = calculateAverageHeight(level, type, heightSelf, heightNorth, heightWest, pos.relative(Direction.NORTH).relative(Direction.WEST));
-            heightSouthEast = calculateAverageHeight(level, type, heightSelf, heightSouth, heightEast, pos.relative(Direction.SOUTH).relative(Direction.EAST));
-            heightSouthWest = calculateAverageHeight(level, type, heightSelf, heightSouth, heightWest, pos.relative(Direction.SOUTH).relative(Direction.WEST));
-        }
+        MinecraftFluidSurface.CornerHeights heights = MinecraftFluidSurface.cornerHeights(
+                level, pos, blockState, fluidState);
+        float heightNorthWest = heights.northWest();
+        float heightSouthWest = heights.southWest();
+        float heightSouthEast = heights.southEast();
+        float heightNorthEast = heights.northEast();
 
         float x = pos.getX() & 15;
         float y = pos.getY() & 15;
@@ -307,59 +278,4 @@ final class RtFluidMesher {
         builder.addVertex(x, y, z, color, u, v, OverlayTexture.NO_OVERLAY, 0, 0.0F, 1.0F, 0.0F);
     }
 
-    private static float calculateAverageHeight(BlockAndTintGetter level, Fluid type, float heightSelf,
-                                                float height2, float height1, BlockPos cornerPos) {
-        if (!(height1 >= 1.0F) && !(height2 >= 1.0F)) {
-            float[] weightedHeight = new float[2];
-            if (height1 > 0.0F || height2 > 0.0F) {
-                float heightCorner = getHeight(level, type, cornerPos);
-                if (heightCorner >= 1.0F) {
-                    return 1.0F;
-                }
-
-                addWeightedHeight(weightedHeight, heightCorner);
-            }
-
-            addWeightedHeight(weightedHeight, heightSelf);
-            addWeightedHeight(weightedHeight, height1);
-            addWeightedHeight(weightedHeight, height2);
-            return weightedHeight[0] / weightedHeight[1];
-        } else {
-            return 1.0F;
-        }
-    }
-
-    private static void addWeightedHeight(float[] weightedHeight, float height) {
-        if (height >= 0.8F) {
-            weightedHeight[0] += height * 10.0F;
-            weightedHeight[1] += 10.0F;
-        } else if (height >= 0.0F) {
-            weightedHeight[0] += height;
-            weightedHeight[1]++;
-        }
-    }
-
-    private static float getHeight(BlockAndTintGetter level, Fluid fluidType, BlockPos pos) {
-        BlockState state = level.getBlockState(pos);
-        return getHeight(level, fluidType, pos, state, state.getFluidState());
-    }
-
-    /** Vanilla plus one addition: a cell covered by ANY real-shape-occluding neighbour above (not just
-     *  the same fluid) reports full height, so the mesh has no phantom top face / sliver under a solid
-     *  or glass-like ceiling — see the class doc's third bullet. */
-    private static float getHeight(BlockAndTintGetter level, Fluid fluidType, BlockPos pos, BlockState state,
-                                   FluidState fluidState) {
-        if (!fluidType.isSame(fluidState.getType())) {
-            return !state.isSolid() ? 0.0F : -1.0F;
-        }
-        BlockPos abovePos = pos.above();
-        BlockState aboveState = level.getBlockState(abovePos);
-        if (fluidType.isSame(aboveState.getFluidState().getType())) {
-            return 1.0F;
-        }
-        if (neighborOccludesFace(level, abovePos, aboveState, Direction.UP, 1.0F)) {
-            return 1.0F;
-        }
-        return fluidState.getOwnHeight();
-    }
 }
