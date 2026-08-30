@@ -19,11 +19,11 @@ integration at `packages/examples/gltf-viewer-minecraft`.
 | initial view medium | explicit vacuum and camera beginning underwater | generic view state plus volume dispatch | `SceneView` carries one homogeneous medium containing the primary-ray origin: either `ViewMedium.Vacuum` or the typed volume binding and instance data selected by the host. |
 | environment and dimension sky | select exported overworld, Nether, or End sky content after the program set is ready | Minecraft scene/program boundary | Dimension keys and sky policy stay in `ShowcaseMinecraftSky`; core sees only an environment id and binding. |
 | retained geometry | upload one shared vertex/index allocation, then atomically publish its mesh and first placement as independently retired batches | geometry channel | Mandatory grouped publication is necessary when placement must never observe an absent mesh but the mesh allocation must not inherit placement lifetime. |
-| retained lights / NEE-AT | contribution A owns rectangle, circular spot, and distant descriptors; contribution B selects one through a primitive-to-light map | light channel | A handed `LightId` is useful without transferring set/drop authority. NEE-AT remains renderer policy and needs no extension-facing backend token. |
+| retained lights / NEE-AT | contribution A owns parallelogram, circular spot, and distant descriptors; contribution B selects one through a primitive-to-light map | light channel | A handed `LightId` is useful without transferring set/drop authority. NEE-AT remains renderer policy and needs no extension-facing backend token. |
 | world-resource pass | record a device-addressable world-mesh upload, then publish it after that frame completes | pass/GPU boundary | This is the real asynchronous handoff needed by a producer that owns upload work while the renderer owns acceleration construction. |
 | post effect | read scene color/exposure, acquire a distinct output, and order after optional bloom | pass boundary | Necessary for bloom and colour grading. Stable ids plus one optional anchor avoid relying on extension discovery order. |
 | UI pass | draw a screen marker whose tint is gated by an inline query against the entry-scene TLAS | pass boundary | The unplaced overload and acceleration-structure push-index mapping are real; the current marker does not consume the camera/WVP. |
-| descriptor heap and retirement | borrowed image/TLAS indices plus a retained world buffer | Vulkan boundary | Post/UI recording consumes borrowed descriptors. The mesh buffer transfers to geometry retirement after grouped publication; bloom remains the replacement-and-retire example for owned descriptor ranges. |
+| descriptor heap and retirement | borrowed image/TLAS indices, an owned resource/sampler table, and a retained world buffer | Vulkan boundary | Post/UI recording consumes borrowed descriptors. The descriptor fixture proves write, publish-before-retire replacement, and typed range cleanup; the mesh buffer transfers to geometry retirement after grouped publication. |
 | shader objects | create pass-owned compute and graphics shader objects from direct SPIR-V | Vulkan support boundary | The support package supplies descriptor-heap validation, fully dynamic graphics state, push data, dispatch/draw binding, and destruction without moving shader ownership into the renderer. |
 | two-scene selection | construct views and isolated retained operations for two distinct host-issued scene ids | generic view boundary | This proves identity targeting only. One trace still selects one TLAS; a future simultaneous portal renderer needs a new trace ABI. |
 | settings lookup | snapshot one feature-scoped colour-grade option during pass recording | process API plus settings API | Declaration stays process-scoped; the pass reads a stable snapshot without reaching host storage. |
@@ -53,10 +53,10 @@ integration at `packages/examples/gltf-viewer-minecraft`.
   coherent program set before uploading and publishing program-referencing geometry exactly once.
 - `GpuFrameUse.whenComplete` is the frame-scoped callback available for resource retirement and positive
   completion work. The world mesh hands its allocation to the first grouped geometry batch and receives it
-  through that batch's retirement callback after drop/session teardown. This showcase owns only session-long
-  shader objects, so it has no honest resize-driven resource replacement to demonstrate. The built-in bloom
-  pass provides that example: replacement `VmaImage2D` levels own populated descriptor ranges, become reachable
-  through newly recorded push data, and displace old levels through `GpuDevice.retireAfterUse`.
+  through that batch's retirement callback after drop/session teardown. `ShowcaseDescriptorTable` separately
+  allocates and writes typed resource/sampler ranges, publishes the replacement generation, and retires the
+  displaced ranges with `GpuDevice.retireAfterUse`. Built-in bloom applies the same rule to resize-driven
+  `VmaImage2D` replacement.
 - `GeometryPublication` provides native-publication backpressure independently of upload completion. The world
   pass retains the receipt returned by `submitGroup`, polls `isVisible()` on later renderer callbacks, and does
   not report its handoff published until the native scene commit becomes visible.
@@ -73,9 +73,10 @@ integration at `packages/examples/gltf-viewer-minecraft`.
   phantom-type ceremony.
 - Scene identity remains host-issued. The live Minecraft contribution uses its one borrowed world scene.
   `ShowcaseSceneSwitch` demonstrates type-level selection between two supplied scene ids, while
-  `ShowcaseSceneApiTest` checks isolated operation targeting with test channels. Neither proves backend
-  simultaneous residency or lifecycle. A ray portal needs a new multi-scene trace ABI because the current
-  trace root selects exactly one TLAS.
+  `ShowcaseSceneApiTest` checks isolated operation targeting, retained replacement, and cross-scene placement
+  movement with test channels. Renderer tests separately verify per-scene content partitioning. These prove
+  future-compatible identity boundaries, not simultaneous portal rendering. A ray portal needs a new
+  multi-scene trace ABI because the current trace root selects exactly one TLAS.
 - Public `SceneView` carries the typed medium containing the camera origin. It remains separate from `Camera`
   because camera pose/projection and the host's sampled containing medium have different ownership. The host
   selects Minecraft water; no public volume-selection feature channel is needed while only the host creates

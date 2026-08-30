@@ -2,12 +2,13 @@
 
 Date: 2026-08-30
 Scope: architecture, API, and implementation reconciliation
-Status: current review and decision record; focused package checks and the first physical acceptance pass are green
+Status: non-RR rewrite and integration accepted; denoised visual-quality and RR work remain deferred
 
 ## Executive decision
 
-Continue integration against the implemented experimental API. The first physical Minecraft validation-layer,
-visual, and performance pass is complete; broaden feature coverage before stabilizing the contract.
+Continue against the implemented experimental API. Its static integration gates and RR-disabled physical
+bring-up are complete. Keep the contract experimental until denoised visual-quality work is available, without
+holding the package/lifecycle rewrite open on the deferred RR investigation.
 
 The main API remains deliberately Vulkan-native. Reusable code should be described as renderer-generic or
 Minecraft-independent rather than GPU-neutral. Vulkan command buffers, device addresses, descriptor
@@ -21,7 +22,7 @@ heaps, and retirement are intentional extension contracts; Minecraft lifecycle a
   state. `packages/engine-vulkan` owns Vulkan profile validation, mapped heaps, VMA resources, submission
   retirement, diagnostics, and the renderer-backend SPI.
 - `packages/renderer-raytracing` owns program composition, retained acceleration structures, path transport,
-  NEE-AT, and Vulkan opacity-micromap acceleration. `packages/renderer-presentation` owns display composition.
+  and NEE-AT. `packages/renderer-presentation` owns display composition.
 - `packages/renderer-runtime` owns generic frame renderer/resources/statistics, lifecycle coordination, pass
   scheduling, telemetry, capture helpers, jitter, and `RuntimeHost`. Its dependency/import gates exclude the `minecraft-client` application,
   loaders, Minecraft runtime, and client composition.
@@ -38,8 +39,17 @@ heaps, and retirement are intentional extension contracts; Minecraft lifecycle a
 - the API showcase is a non-loader API consumer on the real `MinecraftExtension`/world-session lifecycle.
   Its post and UI passes own and record shader objects. Its world-resource pass records a device-addressable
   buffer upload and barrier, waits for frame completion, then atomically publishes a mesh and placement with
-  independent retirement. It
+  independent retirement. Its executable fixtures also cover resource/sampler descriptor allocation and
+  writes, publish-before-retire replacement through `GpuDevice.retireAfterUse`, program ready/failure/cancel
+  outcomes, retained mesh replacement, cross-scene instance movement, and independent multi-scene targeting. It
   cannot launch as a standalone mod.
+
+Artifact ownership is also visible in Java namespaces. Host-free material content lives under
+`dev.comfyfluffy.caustica.minecraft.content`, reusable Minecraft rendering lives under
+`dev.comfyfluffy.caustica.minecraft.rendering`, the mapped application lives under
+`dev.comfyfluffy.caustica.minecraft.client`, and live renderer orchestration lives under
+`dev.comfyfluffy.caustica.renderer.runtime`. This prevents separate artifacts from appearing to co-own one
+flat implementation namespace; the host SPI remains under `dev.comfyfluffy.caustica.spi.host`.
 
 Device interception, loader entrypoints, mixins, and composition are application responsibilities in the
 `minecraft-client` Loom package rather than reusable library responsibilities.
@@ -53,10 +63,23 @@ session-owned and must not be cached in process-lived extension objects. Runtime
 construction and ownership; `packages/renderer-runtime` has no runtime singleton, current-composition lookup,
 or renderer-composition locator.
 
+Shutdown stops producers and pass callbacks, invalidates contribution-owned state, then crosses one explicit
+retained-scene settlement boundary before owner drains. That boundary lets the backend accept or complete
+native retained publications after the ordinary frame loop has stopped; drainage no longer depends on another
+render frame arriving. Pass uses, program callbacks, retained retirements, and final contribution close follow.
+
 One `ProgramRegistration` atomically declares an owner's coherent surface, coverage, volume, and environment
 set. Its readiness result covers the complete registration and is pending, ready, failed, or cancelled.
 Closing the registration removes the entire set. Per-object mutation, exact intermediate composition lookup,
 and feature-slot activation are outside the current lifecycle.
+
+Typed surface, volume, and environment IDs remain at the public boundary. After a composition is published,
+the engine resolves them directly to plain non-negative implementation indices for retained snapshots and hot
+rendering paths. Index zero is reserved for the built-in error surface, vacuum volume, or error environment as
+appropriate. A declaration receives a stable session-lifetime slot in its program kind; removing another
+owner leaves that slot unchanged rather than compacting or retargeting retained scene data. Each registration
+carries its current published-membership bit, so resolution does not scan the published registration list.
+There is no parallel object hierarchy for an already-resolved program index.
 
 Mesh, instance, and light IDs remain owner-local mutation capabilities. A `LightId` may additionally cross an
 owner boundary as a same-session, non-owning `PrimitiveLightMap` selection; it grants no light mutation
@@ -92,8 +115,11 @@ attaching buffer ownership only to the mesh batch. Accepted snapshots are ordere
 resources retire after their tracked GPU use. Producers own and synchronize resident input buffers; the
 renderer owns acceleration policy, TLAS insertion, descriptor publication, and retirement tracking.
 
-The public light set is rectangle radiance in cd/m², circular-spot intensity in candela, and distant normal
-illuminance in lux. The ray tracer consumes all three through persistent per-scene double buffers: a global
+The public light set is one-sided parallelogram radiance in cd/m², circular-spot intensity in candela, and
+distant normal illuminance in lux. `LightDescriptor.Parallelogram` names the geometry actually sampled by the
+GPU: two non-collinear half-axis spans need not be perpendicular, which is required for skewed emissive faces
+such as transformed lava surfaces. Calling this shape a rectangle would impose a false public invariant. The
+ray tracer consumes all three through persistent per-scene double buffers: a global
 discrete distribution, tiled local histograms derived from previous-frame light and pixel feedback, mixture
 proposal PDFs, candidate RIS, and reverse MIS. CPU property coverage checks global normalization and boundary
 ownership, local histogram probing/addressing, history validity and identity continuity, and agreement with
@@ -106,18 +132,20 @@ headers, or binary-derived implementation detail is part of this implementation,
 source, binary, conformance, or output equivalence with RTXPT.
 
 World-resource passes record before tracing. Post and UI passes have stage-local IDs and one optional
-before/after anchor. Missing anchors are unconstrained; acceptance order resolves remaining ties. Duplicate,
-self, cross-stage, and cyclic constraints are rejected. Pass instances borrow the live command buffer and
-bound descriptor heaps, and close after submitted uses drain.
+before/after anchor. An anchor may name a pass owned by another contribution in the same stage; it conveys
+ordering only, not ownership or lifetime. Missing anchors are unconstrained and acceptance order resolves
+remaining ties. The same textual ID in another stage is unrelated, not a cross-stage edge. Duplicate live IDs
+within one stage, self-anchors, and cycles are rejected. Pass instances borrow the live command buffer and bound
+descriptor heaps, and close after submitted uses drain.
 
 There is no public or internal lifecycle built around a global surface-modifier chain. Block damage travels
 through explicit Minecraft instance/material data; program, material, and pass resources follow their owning
 session/package lifecycles.
 
-The showcase's retained world buffer proves producer-to-renderer GPU-resource handoff and retirement. The
-owned descriptor replacement pattern is exercised separately by `features-builtin/BloomPass`: resize allocates
-and writes replacement `VmaImage2D` heap ranges, publishes those indices through recorded work, and retires
-the displaced levels through `GpuDevice.retireAfterUse`.
+The showcase's retained world buffer proves producer-to-renderer GPU-resource handoff and retirement. Its
+descriptor-table fixture allocates and writes typed resource/sampler ranges, publishes replacement indices,
+and retires displaced ranges through `GpuDevice.retireAfterUse`. `features-builtin/BloomPass` exercises the
+same rule with live `VmaImage2D` levels.
 
 ## Vulkan and shader decisions
 
@@ -129,24 +157,55 @@ pipeline creation maps it to a heap index stored in pushed data with
 `VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_PUSH_INDEX_EXT`. This still uses no descriptor-set layout or bind
 command. Heap-native code records its data with `vkCmdPushDataEXT`.
 
-`GpuDescriptorHeapProperties` uses explicit byte units:
+The Minecraft host also requires the instance extension `VK_KHR_get_surface_capabilities2` and queries
+format/color-space pairs with `vkGetPhysicalDeviceSurfaceFormats2KHR`,
+`VkPhysicalDeviceSurfaceInfo2KHR`, and `VkSurfaceFormat2KHR`. `VK_EXT_swapchain_colorspace` remains optional;
+when available it exposes the extended color-space enums used to select HDR-capable pairs.
 
-- `resourceDescriptorStrideBytes` and `samplerDescriptorStrideBytes`;
-- `resourceHeapAlignmentBytes` and `samplerHeapAlignmentBytes`.
+`GpuDescriptorHeapProperties` exposes only the implementation facts an extension currently needs:
+`resourceDescriptorStrideBytes`, `maximumResourceAllocation`, and `maximumSamplerAllocation`. The stride is
+in bytes and both maximum allocations are descriptor-slot counts. Sampler stride, heap alignments, and total
+capacities remain backend details. Descriptor indices remain 32-bit shader values; device-address ranges carry
+a typed address plus explicit byte size.
 
-Capacities and maximum allocation counts remain slot counts. Descriptor indices remain 32-bit shader values;
-device-address ranges carry a typed address plus explicit byte size.
+Opacity micromaps are not an active geometry or acceleration path in this checkout. The old compute encoder,
+shader, reflected record, pipeline wrapper, producer hints, and retained-build integration are absent. Cutout
+coverage remains a surface-program/any-hit concern; no public OMM contract should be inferred from it.
 
-The dead opacity-micromap compute encoder program, its shader, reflected push record, and pipeline wrapper have
-been removed. Vulkan opacity-micromap acceleration remains active in retained geometry through producer hints
-and the Vulkan acceleration-structure path. Documentation should say opacity-micromap acceleration, not imply
-that the deleted encoder is still a program stage.
+`ShaderObjectGraphics` is a general Vulkan-native vertex/fragment shader-object helper, not a fullscreen-only
+wrapper. Its immutable state describes dynamic vertex bindings and attributes, topology, rasterization,
+multisampling, depth, and attachment-zero blending. Either stage may additionally map conventional SPIR-V
+resources to pushed descriptor-heap indices; the showcase exercises the acceleration-structure mapping.
 
 The fixed and Minecraft world compositions retain the reflected 96-byte `WorldBindingRoots` ABI: four device
 addresses, the pushed TLAS heap index used by the acceleration-structure binding mapping, seven direct
 storage-image heap indices, initial-volume state, and the NEE-AT state address. The selected environment
-implementation and binding word live in the reflected 320-byte addressable `WorldPush`. The general
+implementation and binding word live in the reflected 304-byte addressable `WorldPush`. The general
 surface-modifier and unused speculative roots are absent.
+
+Presentation handoffs use semantic records rather than positional handle lists. `BorrowedImage` keeps an
+image, view, format, and extent together; `PresentationSwapchain` carries the immutable borrowed image table; and
+`AcquiredSwapchainTarget` keeps the selected image and extent with its acquire/present synchronization.
+LWJGL `Vk...` wrappers are used for dispatchable handles such as `VkDevice`. Vulkan swapchains, images, image
+views, samplers, and semaphores remain `long` values where an actual non-dispatchable handle is required or
+borrowed because LWJGL represents those handles as scalars; their semantic record supplies the missing
+type-level context. Descriptor-heap-native resources do not manufacture handles solely to encode a descriptor:
+`VulkanSampler` writes `VkSamplerCreateInfo` directly into a sampler range and owns no `VkSampler`, while
+`RtToneLut` writes a sampled-image descriptor from `VkImageViewCreateInfo` and owns no `VkImageView`. The LUT
+retains only its VMA image allocation and sampled/sampler descriptor ranges.
+
+## Compile-time Slang decision
+
+`packages/slang-tooling` is build infrastructure and is separate from the engine's in-process
+`slang-runtime`. Its compile, raw-reflection, and typed-record tasks accept directory includes and packaged
+shader-module JARs. JAR inputs are deterministically expanded into task-local include roots containing only
+`.slang` resources, so an extension can consume an artifact-backed shader package without reading another
+project's source tree or depending on its checkout layout. The API showcase resolves the
+`caustica-shader-api` runtime artifact for both shader compilation and reflection/record generation.
+
+A source checkout can make the Gradle plugin available with `pluginManagement.includeBuild`.
+Normal versioned plugin-marker resolution additionally requires that the marker be published to a repository
+configured by the consumer; no public marker repository is claimed here.
 
 ## Package decision table
 
@@ -157,7 +216,7 @@ surface-modifier and unused speculative roots are absent.
 | `config` | Root-facing persisted renderer configuration |
 | `engine`, `engine-vulkan` | Renderer-generic ownership plus Vulkan execution/backend ownership |
 | `vulkan-support` | Reusable VMA/upload/synchronization helpers |
-| `renderer-raytracing` | Program composition, retained scene acceleration, transport, NEE-AT, opacity micromaps |
+| `renderer-raytracing` | Program composition, retained scene acceleration, transport, and NEE-AT |
 | `renderer-presentation` | Exposure and SDR/HDR presentation |
 | `renderer-runtime` | Instance-owned live renderer orchestration and host callback SPI |
 | `nvidia-ngx` | NGX/DLSS integration |
@@ -171,33 +230,37 @@ surface-modifier and unused speculative roots are absent.
 
 ## Acceptance decision
 
-Focused package, shader, reflection, ABI, and example checks are green. The Fabric integration suite completed
-successfully after the retained-scene and exposure changes. A Minecraft run in `ray-tracing-test-place` also
-completed with Vulkan 1.4 core validation enabled and no VUID, validation warning, device-loss, or fatal output.
+The final static gates are green for the current checkout: the Fabric check completed 190 actionable tasks,
+and the NeoForge `minecraft-client` plus glTF viewer checks completed 162 actionable tasks. The final Fabric
+run reached `ray-tracing-test-place` with `VK_LAYER_KHRONOS_validation` active and produced no actionable Vulkan
+validation diagnostic, device loss, or fatal renderer output. Shutdown completed normally. Unrelated optional
+mixin, host telemetry, offline-authentication, and external resource-pack messages are not Vulkan acceptance
+failures.
 
-With validation disabled, RR disabled, the default 854 x 480 test resolution, and the configured 260 FPS game
-limit, a 500-frame renderer sample measured 2.007 ms median and 2.793 ms p95. The F3 counter reached 429 FPS
-when the game-side limit was not constraining presentation. Retained trace preparation fell from roughly
-20 ms to 0.665 ms median by generating primitive-to-emitter tables only for geometries whose primitive ranges
-actually intersect an emitter range.
+With validation enabled, RR disabled, and the default 854 x 480 test resolution, a 1,000-frame active renderer
+sample measured 2.930 ms median, 3.733 ms p95, 4.183 ms p99, and 2.686 ms mean. The median corresponds to about
+341 frames per second of renderer throughput; it is not a promise about host presentation cadence.
 
-Visual review confirms that first-person capture excludes the enclosing player body from primary rays. The
-ordinary Minecraft hand remains visible through the UI/composition path. Auto exposure preserves the blue-gray
-atmosphere in a sky-dominant view. A manual -12 EV control view independently confirms the atmosphere LUT and
-display transform. Bright exterior openings can still clip white in the dark interior because the current
-global exposure cannot preserve both ends of that range without RR or a local tone mapper; this is a known
-presentation limitation rather than evidence of a missing sky render.
+Visual review confirms that first-person capture excludes the enclosing player body from primary rays and that
+the ordinary Minecraft hand remains visible through the UI/composition path. Camera eye-volume A/B captures
+prove that entering water activates the volume path. Camera containment now samples the same two sloped
+surface triangles emitted by the fluid mesher, removing the known CPU/geometry mismatch. The captures do not
+yet establish quantitative absorption, refraction, or physical behavior at flowing-fluid edges. The final light telemetry simultaneously retained
+Parallelogram, Spot, and Distant lights with eight NEE-AT candidates and valid history, but the raw 1-spp
+captures do not accept their appearance. The high-contrast frames are explained by the quartz/floor
+composition plus raw 1-spp output; they are not evidence of an exposure defect. Local exposure/tone mapping and
+a better HDR shoulder remain presentation options, while Ray Reconstruction is not a highlight-clipping fix.
 
-DLSS Ray Reconstruction remains deferred. Several launch-and-capture attempts produced a zero/black RR output
+DLSS Ray Reconstruction remains deferred and is not part of the accepted physical feature set. Several
+launch-and-capture attempts produced a zero/black RR output
 without the renderer debug overlay, while the same path with RR disabled rendered the world and overlay. The
 rewrite therefore does not claim RR physical acceptance yet.
 
-The remaining order is:
+The remaining physical order is:
 
-1. broaden deterministic screenshot coverage for materials, water, UI overlays, and all three light types;
-2. complete a physical NEE-AT result review before stabilizing the light contract;
-3. close the remaining package/API example gaps and repeat Fabric and NeoForge integration gates;
-4. diagnose RR as a separate presentation/NGX task after the rest of the rewrite is stable.
+1. obtain denoised/stable material and Parallelogram, Spot, and Distant appearance captures;
+2. validate quantitative water absorption/refraction and flowing-fluid boundary behavior;
+3. diagnose RR as a separate presentation/NGX task.
 
 ## Final decisions
 
@@ -209,9 +272,13 @@ The remaining order is:
 - Keep scene targeting but defer public scene administration and portal traversal. The compatibility claim ends
   at identity and lifetime isolation: each trace still selects exactly one entry-scene TLAS. Simultaneous portal
   traversal requires a new multi-scene trace ABI and is not implemented or demonstrated by the examples.
+  Showcase targeting plus renderer content-partition tests prove only that independent scene state can coexist;
+  they do not render both scenes through a portal. Minecraft's current `PortalSurface` is an emissive end-portal
+  material model and does not switch ray scenes.
 - Keep mandatory `SceneView.medium()` and Minecraft-owned primary-origin containment policy.
 - Keep stage-local pass ordering rather than exposing a general render graph.
 - Keep the three-shape NEE-AT light contract experimental until its physical result coverage is complete.
-- Keep Vulkan opacity-micromap acceleration while removing the unused encoder program.
+- Keep opacity micromaps outside the active contract until a concrete producer and retained-build use case
+  justify reintroducing them.
 - Keep RR outside the accepted physical feature set until the NGX output contains both the rendered world and
   renderer debug overlay.

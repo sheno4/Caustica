@@ -2,7 +2,8 @@
 
 Status: current experimental 0.8 contract.
 
-The API is deliberately Vulkan-native. Extensions compile against published projects under `packages/` and
+The API is deliberately Vulkan-native. Extensions compile against the package artifacts defined under
+`packages/` and
 must not import renderer implementation, Minecraft host, loader, queue, swapchain, or device-negotiation
 classes. See [`packages/api/ARCHITECTURE.md`](../packages/api/ARCHITECTURE.md) for exact ownership rules and
 [`packages/examples/api-showcase`](../packages/examples/api-showcase) for a non-loader Minecraft extension
@@ -49,8 +50,10 @@ The host teardown order is:
 1. stop new pass callbacks;
 2. call `RenderSessionContribution.stop()` so producers join and registrations/drop operations finish;
 3. invalidate remaining scoped objects at a publication boundary;
-4. drain accepted work, program readiness, pass uses, and retirement callbacks;
-5. close drained pass instances and call `RenderSessionContribution.close()`.
+4. cross the retained-scene settlement boundary once, allowing the backend to accept or finish native work
+   after the ordinary frame loop has stopped;
+5. drain accepted work, program readiness, pass uses, and retirement callbacks;
+6. close drained pass instances and call `RenderSessionContribution.close()`.
 
 Do not block on device idle or wait for the current frame from a recording callback.
 
@@ -66,6 +69,18 @@ light, and an absent selected light is non-sampleable. `SceneId`, `SurfaceId`, `
 are same-session, non-owning selection references and may be explicitly handed to another contribution. The
 receiver gains neither removal authority nor a lifetime lease. Stale surface and environment references resolve
 to visible error implementations; stale volumes resolve to vacuum.
+
+The API showcase exercises this boundary with two independent same-session contributions. One owns program
+and light mutation; the other receives selected program and light IDs through an ordinary Java handoff and
+uses them for geometry without receiving either mutation channel. The handoff grants neither ownership nor a
+lifetime lease and is removed when its producer stops.
+
+The engine resolves published typed program IDs to plain non-negative implementation indices before retaining
+or rendering scene state. Zero is reserved for the built-in error surface, vacuum volume, or error environment
+as appropriate. Every declaration receives a stable slot for its kind for the lifetime of the session;
+removing an unrelated registration does not renumber it or retarget retained scene data. Published membership
+is stored directly on each registration, so hot resolution does not scan the published registration list.
+These indices are internal values, not an additional public program API.
 
 There is no public cross-owner surface-modifier chain. Minecraft block damage uses Minecraft-owned instance
 data. There is also no public scene creation/closure or portal-link API. The engine retains independent scene,
@@ -114,9 +129,14 @@ The public retained light set is:
 
 | Shape | Units |
 |---|---|
-| rectangle | ACEScg radiance in cd/m² |
+| one-sided parallelogram | ACEScg radiance in cd/m² |
 | circular spot | ACEScg intensity in candela |
 | distant | ACEScg normal illuminance in lux |
+
+`LightDescriptor.Parallelogram` takes two non-collinear half-axis spans. They need not be perpendicular: the
+GPU sampler already uses their cross product for area and emitting normal, and skewed emissive faces such as
+transformed lava surfaces require that generality. The public name therefore matches the accepted geometry
+rather than promising a rectangle invariant the renderer does not enforce.
 
 The renderer implements a publicly described RTXPT-style NEE-AT subset with a Caustica-owned implementation
 and ABI. "RTXPT-style" names the algorithm family; it is not a source-compatibility, binary-compatibility,
@@ -150,8 +170,10 @@ environment keeps continuous background radiance visible.
 - `addUiPass(PassId, PassPlacement, ...)` records into the separate display-resolution UI layer.
 
 Post/UI IDs are stage-local. A pass may declare one optional `before` or `after` anchor. A missing anchor leaves
-it unconstrained; acceptance order breaks remaining ties. Duplicate IDs, self/cross-stage anchors, and cycles
-are rejected. This is intentionally narrower than a public render graph.
+it unconstrained; acceptance order breaks remaining ties. An anchor can refer to another contribution's pass
+in the same stage and grants only an ordering relationship. The same ID in the other stage is unrelated, so it
+does not form a cross-stage anchor. Duplicate live IDs within a stage, self-anchors, and cycles are rejected.
+This is intentionally narrower than a public render graph.
 
 The factory receives a stage-specific `PassSetup`; the resulting `Pass` records through the borrowed
 `VkCommandBuffer` in `PassFrame` and closes only after its submitted uses drain. The session's resource and
@@ -164,9 +186,9 @@ index stored in pushed data with `VK_DESCRIPTOR_MAPPING_SOURCE_HEAP_WITH_PUSH_IN
 descriptor-set layout nor a descriptor-set bind command. `ShaderObjectGraphics.PushIndexedResourceMapping`
 provides that mapping for pass-owned graphics shader objects.
 
-`GpuDescriptorHeapProperties` names byte-valued facts with their units:
-`resourceDescriptorStrideBytes`, `samplerDescriptorStrideBytes`, `resourceHeapAlignmentBytes`, and
-`samplerHeapAlignmentBytes`. Capacities and maximum allocations remain counts of descriptor slots.
+`GpuDescriptorHeapProperties` exposes `resourceDescriptorStrideBytes`, `maximumResourceAllocation`, and
+`maximumSamplerAllocation`. The stride is a byte count; the allocation maxima are descriptor-slot counts.
+Sampler stride, heap alignments, and total capacities are backend details rather than extension contracts.
 
 `features-builtin/BloomPass` is the concrete owned-descriptor lifecycle example. Its resize path allocates
 replacement `VmaImage2D` levels, which allocate and populate resource-heap ranges, records initialization before
@@ -174,6 +196,9 @@ publishing their indices to shader work, then calls `GpuDevice.retireAfterUse(..
 Its final `Pass.close()` releases the currently published levels directly because that callback runs only after
 the pass's submitted uses have drained. This is the intended replace-publish-retire pattern; allocating an
 otherwise unused descriptor solely to demonstrate the allocator would not exercise the publication invariant.
+The API showcase provides a smaller executable version as well: it allocates and writes one typed resource
+range and one sampler range, publishes their indices, then retires the displaced generation with
+`GpuDevice.retireAfterUse`.
 
 The required backend profile is Vulkan 1.4. Its complete feature baseline is shader int64/int16/float16,
 storage-image extended formats and formatless reads/writes, shader draw parameters, demote-to-helper invocation,
@@ -183,9 +208,30 @@ and ray-tracing position fetch. Ray stages remain on `VK_KHR_ray_tracing_pipelin
 used for dispatchable handles; non-dispatchable Vulkan handles remain documented scalar values where LWJGL has
 no wrapper.
 
-Vulkan opacity-micromap acceleration remains part of retained geometry. The obsolete standalone compute
-encoder program has been removed, so extensions should treat opacity-micromap hints as geometry inputs rather
-than depend on an encoder-program lifecycle.
+The Minecraft integration additionally requires `VK_KHR_get_surface_capabilities2` at instance creation and
+enumerates format/color-space pairs with `vkGetPhysicalDeviceSurfaceFormats2KHR`,
+`VkPhysicalDeviceSurfaceInfo2KHR`, and `VkSurfaceFormat2KHR`. `VK_EXT_swapchain_colorspace` is optional and,
+when present, exposes the extended color-space enums used for HDR-capable surface selection.
+
+Presentation boundaries group related non-dispatchable handles into semantic records:
+`BorrowedImage` carries image/view/format/extent, `PresentationSwapchain` carries the immutable borrowed image
+table, and `AcquiredSwapchainTarget` carries one acquired image with its acquire/present synchronization.
+Dispatchable handles use LWJGL `Vk...` wrappers where those wrappers exist. Swapchains, images, image views,
+samplers, and semaphores remain `long` where a real non-dispatchable handle is required or borrowed because
+LWJGL exposes those handles as scalar values; the containing record supplies their role and ownership context.
+Descriptor-heap-native objects need not create those handles: `VulkanSampler` encodes
+`VkSamplerCreateInfo` directly into its sampler range and owns no `VkSampler`; `RtToneLut` encodes a sampled
+image from `VkImageViewCreateInfo` and owns no `VkImageView`. A tone LUT retains its VMA image allocation and
+sampled/sampler descriptor ranges only.
+
+Opacity micromaps are not active in the current retained geometry path and have no public API contract. The
+old encoder and producer/build integration are absent; cutout coverage continues through the surface coverage
+program and any-hit path.
+
+`ShaderObjectGraphics` supports general pass-owned vertex/fragment shader objects with Vulkan-native dynamic
+vertex input, topology, rasterization, multisampling, depth, and attachment-zero blend state. Optional
+per-stage mappings source conventional SPIR-V resources from descriptor-heap indices stored in pushed data;
+the acceleration-structure helper is one use, not the limit of the graphics wrapper.
 
 ## Reusable Slang tooling
 
@@ -194,6 +240,17 @@ generated Java namespace, and record manifest. The tooling owns compiler discove
 profile, reflection parsing, typed serializers, declaration validation, and reproducible task
 inputs. Extensions can therefore validate and generate their own shader records without receiving the
 engine's runtime composition compiler.
+
+Compile, raw-reflection, and typed-record tasks accept both directory includes and shader-module JARs. JAR
+inputs are deterministically extracted into task-local include roots containing only `.slang` resources. The
+API showcase resolves the artifact-backed `caustica-shader-api` JAR for both compilation and record reflection
+instead of reading the shader API project's source directory. An independently built extension can therefore
+consume the shader ABI as a package artifact rather than depending on the repository layout.
+
+A source consumer can apply the tooling through `pluginManagement.includeBuild` pointing at
+`packages/slang-tooling`. Normal versioned plugin-marker resolution requires the marker to be published in a
+repository configured by the consumer; this documentation does not claim that a public marker repository is
+currently available.
 
 ## Minecraft boundary and current acceptance
 
@@ -204,6 +261,13 @@ Minecraft-independent terrain/entity/material/light/sky implementation plus the 
 types: `MinecraftFrameSelector`, `MinecraftFrameSelectionInstaller`, `MinecraftFrameCaptureInstaller`,
 `MinecraftFrameCaptureState`, and `MinecraftEntityCaptureBinding`.
 
+The corresponding Java namespaces make artifact ownership explicit: host-free material content is under
+`dev.comfyfluffy.caustica.minecraft.content`, reusable rendering is under
+`dev.comfyfluffy.caustica.minecraft.rendering`, mapped application code is under
+`dev.comfyfluffy.caustica.minecraft.client`, and generic live renderer orchestration is under
+`dev.comfyfluffy.caustica.renderer.runtime`. The renderer host SPI remains separately named under
+`dev.comfyfluffy.caustica.spi.host`.
+
 The `packages/minecraft-client` Loom application is the integration exception. It owns mapped Minecraft host/UI access, Vulkan
 interception and device integration, loader entrypoints/discovery, mixins, resource loaders, and final
 composition. Its guarded `CausticaClientComposition.current()` bridges entrypoints and mixins. Renderer runtime
@@ -212,7 +276,32 @@ service installation.
 
 Rounded clouds are deliberately excluded from this rewrite.
 
-Focused package, lifecycle, shader/reflection, ABI, and example-consumer checks are green. Complete the remaining
-static gates, then perform a physical Minecraft launch with validation layers, screenshot review, and
-default-resolution performance measurement. Those physical gates are still pending; no live visual or
-frame-rate result is claimed here.
+The final static gates are green for the current checkout: the Fabric check completed 190 actionable tasks,
+and the NeoForge `minecraft-client` plus glTF viewer checks completed 162 actionable tasks. The final
+RR-disabled Fabric run reached `ray-tracing-test-place` with `VK_LAYER_KHRONOS_validation` active, produced no
+actionable Vulkan validation diagnostic, device loss, or fatal renderer output, and shut down normally.
+
+At the default 854 x 480 test resolution with validation and RR disabled, a 1,000-frame active renderer sample
+measured 2.930 ms median, 3.733 ms p95, 4.183 ms p99, and 2.686 ms mean. The median corresponds to roughly 341
+frames per second of renderer throughput rather than a guarantee about host presentation cadence.
+
+Visual review covered first-person player-body exclusion and the ordinary hand/UI path. Camera eye-volume A/B
+captures prove water-volume activation. Camera containment and fluid meshing share the same corner-height and
+two-triangle surface rule; quantitative absorption/refraction and physical flowing-fluid edge behavior remain
+unaccepted. Runtime telemetry simultaneously retained Parallelogram, Spot, and Distant
+lights with eight NEE-AT candidates and valid history; raw 1-spp captures do not yet accept their appearance.
+The high-contrast captures reflect the quartz/floor composition plus raw 1-spp output and do not establish an
+exposure bug. DLSS Ray Reconstruction is explicitly deferred and not accepted: attempted RR captures produced
+a black output without the renderer debug overlay, while RR-disabled captures rendered the world and overlay.
+
+The executable API showcase additionally covers program ready/failure/cancellation outcomes, same-session
+cross-owner program/light selection, owner-local mutation, grouped mesh/placement publication, retained mesh
+replacement, cross-scene placement movement, independent multi-scene targeting, descriptor resource/sampler writes,
+and publish-before-retire cleanup. Engine tests, rather than a fake consumer implementation, verify pass-cycle
+rejection and deterministic multi-owner environment restoration because those results are not observable
+through the contribution-facing interfaces.
+
+Simultaneous residency means independent scene/TLAS state can coexist and an entry view can select either one.
+It does not render both scenes through a portal. Portal traversal still needs an explicit multi-scene trace ABI,
+transform and hop/cycle rules, lighting behavior, and teardown semantics. Minecraft's current `PortalSurface`
+is an emissive end-portal material model, not a ray-scene switch.

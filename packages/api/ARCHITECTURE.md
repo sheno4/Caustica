@@ -240,8 +240,9 @@ rebind either heap. `GpuDescriptorHeap` assigns resource and sampler ranges with
 descriptors for extension-owned resources and makes non-coherent writes visible. Engine-owned images and
 the entry-scene TLAS expose typed immutable `GpuImageDescriptor` and
 `GpuAccelerationStructureDescriptor` views whose entries and resources the engine retains through the
-current frame. `GpuDescriptorHeapProperties` exposes the separate resource and sampler strides required
-when independently compiling pass shaders for `spvDescriptorHeapEXT`.
+current frame. `GpuDescriptorHeapProperties` exposes the resource stride required when shader or pipeline
+creation maps a conventional resource binding to a pushed heap index, plus maximum resource and sampler
+allocation sizes. Sampler stride, heap alignment, and total capacity are backend details.
 
 Images and samplers may use direct heap access. Acceleration structures are the deliberate exception: SPIR-V
 may declare a conventional binding when shader creation maps it to a resource-heap index stored in pushed data
